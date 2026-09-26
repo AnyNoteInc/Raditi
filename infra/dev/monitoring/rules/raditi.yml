@@ -1,0 +1,28 @@
+# Стартовые алерты по spec §19. Без Alertmanager они видны только в интерфейсе Prometheus;
+# Alertmanager с доставкой на почту — в проде (M9).
+groups:
+  - name: raditi
+    rules:
+      - alert: TaskQueuedTooLong
+        expr: max(raditi_task_oldest_queued_age_seconds) > 600
+        for: 1m
+        annotations: { summary: 'Задача ждёт в очереди дольше 10 минут' }
+      - alert: DeployFailed
+        expr: sum(increase(raditi_deploys_total{result="failed"}[15m])) > 0
+        annotations: { summary: 'Ошибка выкладки' }
+      - alert: DeployRolledBack
+        expr: sum(increase(raditi_deploys_total{result="rolled_back"}[15m])) > 0
+        annotations: { summary: 'Выкладка откатилась' }
+      - alert: LlmProviderErrors
+        expr: sum by (api_provider) (rate(litellm_deployment_failure_responses_total[5m])) > 0.1
+        for: 5m
+        annotations: { summary: 'Провайдер моделей отвечает ошибками' }
+      - alert: ServiceDown
+        expr: up{job=~"postgres|redis|seaweedfs|openbao|gitea"} == 0
+        for: 2m
+        annotations: { summary: 'Сервис инфраструктуры недоступен' }
+      - alert: EndpointDown
+        # Дополнительные compose-профили проверяются отдельно (monitoring/README.md).
+        expr: probe_success{compose_profile=""} == 0
+        for: 2m
+        annotations: { summary: 'Проверка доступности не проходит' }

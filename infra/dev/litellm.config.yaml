@@ -1,29 +1,99 @@
-# LiteLLM для разработки: классы моделей роутера (spec §9).
-# Только российские провайдеры. В проде ключи читаются из Vault (kv/llm/<provider>).
-# ВАЖНО: ID моделей и адреса API сверьте с каталогами провайдеров перед запуском —
-# ниже заглушки в угловых скобках.
+# LiteLLM для разработки (spec §9). Только российские провайдеры. В проде ключи читаются из Vault
+# (kv/llm/<provider>).
+#
+# model_name = llm_models.slug из сидов (packages/db/prisma/seed/data.ts): роутер оркестратора
+# выбирает модель по классу в базе и зовёт её по slug. Совпадение проверяет тест
+# packages/db/prisma/seed/litellm-config.test.ts.
+#
+# Цены в model_info — рубли с НДС за 1 токен (цена за 1 млн из сидов / 1e6). LiteLLM считает их
+# долларами, но это рубли: его spend — только для бюджета ключа хода. Счёт клиенту и себестоимость
+# считаем по нашей token_usage и llm_model_prices, а не по spend LiteLLM.
+#
+# ВАЖНО: ID моделей и адреса API сверьте с каталогами провайдеров перед запуском — ниже заглушки
+# в угловых скобках.
 
 model_list:
+  # ─── Yandex AI Studio ──────────────────────────────────────────────────────
   # Лёгкий класс: разбор просьбы, тексты, простые правки контента.
-  - model_name: light
+  - model_name: qwen3.6-35b
     litellm_params:
-      model: openai/<ID модели YandexGPT Pro 5.1 или Qwen3.6 35B в Yandex AI Studio>
+      model: openai/<ID модели Qwen3.6 35B в Yandex AI Studio>
       api_base: https://llm.api.cloud.yandex.net/v1
       api_key: os.environ/YANDEX_API_KEY
+    model_info:
+      input_cost_per_token: 0.0002
+      cache_read_input_token_cost: 0.00005
+      output_cost_per_token: 0.0003
 
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: openai/<ID модели DeepSeek V4 Flash в Yandex AI Studio>
+      api_base: https://llm.api.cloud.yandex.net/v1
+      api_key: os.environ/YANDEX_API_KEY
+    model_info:
+      input_cost_per_token: 0.0003
+      cache_read_input_token_cost: 0.000075
+      output_cost_per_token: 0.0005
+
+  # Тяжёлый: новые страницы, сложная вёрстка, повтор после неудачи.
+  - model_name: qwen3-235b
+    litellm_params:
+      model: openai/<ID модели Qwen3 235B в Yandex AI Studio>
+      api_base: https://llm.api.cloud.yandex.net/v1
+      api_key: os.environ/YANDEX_API_KEY
+    model_info:
+      input_cost_per_token: 0.0005
+      cache_read_input_token_cost: 0.0005
+      output_cost_per_token: 0.0005
+
+  # ─── Cloud.ru Evolution Foundation Models (цен кэша нет) ───────────────────
   # Стандарт: обычные правки кода и контента.
-  - model_name: standard
+  - model_name: qwen3-coder-next
     litellm_params:
       model: openai/<ID модели Qwen3-Coder-Next в Cloud.ru>
       api_base: <адрес OpenAI-совместимого API Cloud.ru Foundation Models>
       api_key: os.environ/CLOUDRU_API_KEY
+    model_info:
+      input_cost_per_token: 0.000122
+      output_cost_per_token: 0.000244
 
-  # Тяжёлый: новые страницы, сложная вёрстка, повтор после неудачи.
-  - model_name: heavy
+  - model_name: kimi-k2.6
+    litellm_params:
+      model: openai/<ID модели Kimi-K2.6 в Cloud.ru>
+      api_base: <адрес OpenAI-совместимого API Cloud.ru Foundation Models>
+      api_key: os.environ/CLOUDRU_API_KEY
+    model_info:
+      input_cost_per_token: 0.00017568
+      output_cost_per_token: 0.0007259
+
+  # Тяжёлый класс.
+  - model_name: glm-5.1
     litellm_params:
       model: openai/<ID модели GLM-5.1 в Cloud.ru>
       api_base: <адрес OpenAI-совместимого API Cloud.ru Foundation Models>
       api_key: os.environ/CLOUDRU_API_KEY
+    model_info:
+      input_cost_per_token: 0.00019886
+      output_cost_per_token: 0.0008296
+
+  - model_name: deepseek-v4-pro
+    litellm_params:
+      model: openai/<ID модели DeepSeek-V4-Pro в Cloud.ru>
+      api_base: <адрес OpenAI-совместимого API Cloud.ru Foundation Models>
+      api_key: os.environ/CLOUDRU_API_KEY
+    model_info:
+      input_cost_per_token: 0.000183
+      output_cost_per_token: 0.000732
+
+  # Служебный класс: классификация задачи, сообщения клиенту, краткое содержание ходов.
+  - model_name: gpt-oss-120b
+    litellm_params:
+      model: openai/<ID модели gpt-oss-120b в Cloud.ru>
+      api_base: <адрес OpenAI-совместимого API Cloud.ru Foundation Models>
+      api_key: os.environ/CLOUDRU_API_KEY
+    model_info:
+      input_cost_per_token: 0.00001586
+      output_cost_per_token: 0.000061
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
@@ -31,3 +101,18 @@ general_settings:
 
 litellm_settings:
   drop_params: true
+  # Метрики Prometheus (открытая функция, отдельный порт 4001). Ни хэшей ключей хода, ни
+  # пользователей в метках; тот же список отбрасывает Prometheus (monitoring/prometheus.yml).
+  callbacks: ['prometheus']
+  prometheus_exclude_labels:
+    - hashed_api_key
+    - api_key_alias
+    - user
+    - user_email
+    - user_alias
+    - end_user
+    - team
+    - team_alias
+    - tag
+    - client_ip
+    - user_agent

@@ -1,0 +1,205 @@
+{
+  "uid": "raditi-overview",
+  "title": "Радити — обзор",
+  "tags": ["raditi"],
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Обязательные сервисы",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "up{compose_profile=\"\"}", "legendFormat": "{{job}}" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "НЕТ", "color": "red", "index": 0 },
+                "1": { "text": "ОК", "color": "green", "index": 1 }
+              }
+            }
+          ]
+        }
+      },
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Обязательные проверки доступности",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "probe_success{compose_profile=\"\"}", "legendFormat": "{{instance}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "НЕТ", "color": "red", "index": 0 },
+                "1": { "text": "ОК", "color": "green", "index": 1 }
+              }
+            }
+          ]
+        }
+      },
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Задачи по статусам",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (raditi_tasks)", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "LLM: запросы в секунду по модели",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (requested_model) (rate(litellm_proxy_total_requests_metric_total[5m]))",
+          "legendFormat": "{{requested_model}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "LLM: токены за час",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model) (increase(litellm_total_tokens_metric_total[1h]))",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "LLM: задержка p95, с",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(litellm_request_total_latency_metric_bucket[5m])))",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "PostgreSQL: соединения",
+      "gridPos": { "x": 0, "y": 22, "w": 6, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (datname) (pg_stat_activity_count)", "legendFormat": "{{datname}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Redis: память",
+      "gridPos": { "x": 6, "y": 22, "w": 6, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [{ "refId": "A", "expr": "redis_memory_used_bytes", "legendFormat": "used" }]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "S3: запросы в секунду",
+      "gridPos": { "x": 12, "y": 22, "w": 6, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (type) (rate(SeaweedFS_s3_request_total[5m]))", "legendFormat": "{{type}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Node.js: задержка event loop p99, с",
+      "gridPos": { "x": 18, "y": 22, "w": 6, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "nodejs_eventloop_lag_p99_seconds", "legendFormat": "{{app}}" }]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Дополнительные профили: метрики",
+      "description": "Выключенные профили имеют значение НЕТ. При включении профиля проверьте значение ОК. Алерты доступности для этих целей выключены.",
+      "gridPos": { "x": 0, "y": 29, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{compose_profile!=\"\",job!=\"blackbox-http\"}",
+          "legendFormat": "{{job}} ({{compose_profile}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "НЕТ", "color": "gray", "index": 0 },
+                "1": { "text": "ОК", "color": "green", "index": 1 }
+              }
+            }
+          ]
+        }
+      },
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Дополнительные профили: доступность",
+      "description": "Выключенные профили имеют значение НЕТ. При включении профиля проверьте значение ОК. Алерты доступности для этих целей выключены.",
+      "gridPos": { "x": 12, "y": 29, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "probe_success{compose_profile!=\"\"}",
+          "legendFormat": "{{instance}} ({{compose_profile}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "НЕТ", "color": "gray", "index": 0 },
+                "1": { "text": "ОК", "color": "green", "index": 1 }
+              }
+            }
+          ]
+        }
+      },
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    }
+  ]
+}

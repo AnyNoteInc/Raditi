@@ -17,7 +17,9 @@
 
 ## Состояние
 
-Кода пока нет. Первая команда в новой сессии — `/bootstrap`: она собирает монорепозиторий по образцу AnyNote. После неё обнови в этом файле разделы «Состояние», «Команды» и «Структура».
+Каркас готов (`/bootstrap`, B0–B5, 26.09.2026): монорепозиторий, пакеты-порты и адаптеры, `apps/web`, `apps/orchestrator` (роли `core` и `mcp`; `runner` — заглушка до P2), `apps/e2e`, схема данных v1 с миграциями и сидами, локальная инфраструктура с мониторингом. Работают вход по почте и паролю с согласиями, юридические страницы, health и метрики, outbox → BullMQ → письма. Бизнес-логики задач, песочниц, драйверов, git-провайдеров и оплаты ещё нет — это задачи этапа P (`docs/plan/roadmap.md`). Реквизиты оператора в юридических текстах — заглушки (`apps/web/content/legal/README.md`).
+
+Локальные проверки и границы результата — `docs/plan/01-bootstrap-verification.md`; GitHub Actions нужно подтвердить после отправки ветки.
 
 ## Стек
 
@@ -40,12 +42,34 @@
 
 ## Команды
 
-Появятся после `/bootstrap`. Уже работает:
+Node 26.10 (`nvm use`) и pnpm 12.6. `npm` и `npx` внутри репозитория не работают (`devEngines`), вместо них — `pnpm` и `pnpm dlx`.
 
-- `docker compose --env-file .env -f infra/dev/docker-compose.yml up -d` — PostgreSQL, Redis, S3 (SeaweedFS + бакеты `raditi-*`), OpenBao dev, Gitea.
-- Профили: `--profile site` — тестовый WordPress на :8080, `--profile llm` — LiteLLM на :4000, `--profile ci` — act_runner.
+- `cp .env.example .env` и задать `BETTER_AUTH_SECRET` (`openssl rand -base64 48`); `pnpm install`.
+- `pnpm infra:up` / `infra:down` / `infra:logs` — PostgreSQL, Redis, SeaweedFS (+ бакеты `raditi-*`), OpenBao dev, Gitea. Профили (`--profile` или `COMPOSE_PROFILES` в `.env`): `site` — тестовый WordPress на :8080, `llm` — LiteLLM на :4000, `ci` — gitea/runner, `monitoring` — Prometheus :9090 и Grafana :3030, `monitoring-host` — cAdvisor (только Linux). Если `docker compose` висит на «Error getting credentials» — ответьте на запрос связки ключей macOS.
+- `pnpm db:migrate` (новая миграция в dev), `pnpm db:deploy` (применить), `pnpm db:seed` (справочники, повторный запуск безопасен), `pnpm db:generate`.
+- `pnpm dev` — web :3000, orchestrator :8081 (core) и :8082 (mcp). Останавливать Ctrl-C (SIGINT): SIGTERM оставляет дочерние процессы.
+- `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm check-architecture`, `pnpm check-env`; всё сразу — `pnpm gates`.
+- Тесты `@repo/db` с базой: `DATABASE_URL=postgresql://raditi:raditi@localhost:5432/raditi pnpm --filter @repo/db test` (без переменной они пропускаются).
+- `pnpm e2e` — smoke на поднятой инфраструктуре (web на :3100, core на :8181, mcp на :8182); `pnpm dev` перед этим остановить.
+- Health: web `/api/health`, orchestrator `/health` — публично только status; подробности web и core — с `Authorization: Bearer $METRICS_TOKEN`, MCP всегда только status. Метрики — `/api/metrics` и `/metrics` с тем же токеном.
 
-Ожидаемые после `/bootstrap`: `pnpm dev`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm check-architecture`, миграции и сиды — как принято в AnyNote.
+## Структура
+
+```
+apps/
+  web/            Next.js: (about) и /terms (MDX из content/legal), (auth), (protected), onboarding, api/{auth,trpc,health,metrics,webhooks/yookassa}
+  orchestrator/   NestJS: config, roles (core, mcp, runner), health, metrics, queue (BullMQ), outbox relay, notifications, tasks, drivers, sandbox, mcp
+  e2e/            Playwright smoke
+packages/
+  domain/         ядро: порты, общие события и итог хода (zod), статусы §7, политика песочницы и путей диффа, реестр юридических документов, APP_ENV
+  db/             Prisma: схема v1, миграции, сиды, клиент PrismaPg, outbox
+  storage vault git-providers sandbox-providers agent-drivers site-adapters yookassa mail telegram — адаптеры
+  auth notifications — сервисы; trpc — транспорт; ui — MUI-тема, формы входа, SmartCaptcha
+  eslint-config typescript-config — общие конфиги
+infra/dev/        docker compose, конфиги LiteLLM, раннера, Prometheus и Grafana
+docs/             spec, business, план, исследования, лендинг
+.github/          CI и релизы (GitHub Actions)
+```
 
 ## Правила, которые нельзя нарушать
 
@@ -74,6 +98,7 @@
 - Бакеты — `raditi-inbox`, `raditi-sessions`, `raditi-logs`, `raditi-artifacts`, `raditi-backups`, `raditi-platform` (§14).
 - Метрики — `@prometheus-io/client`. В метки не кладём `task_id`, `user_id` и другие идентификаторы; Prometheus — не источник для биллинга.
 - Тесты рядом с кодом (Vitest). Всё, что трогает деньги, квоты, Vault, выкладку и откат, — только с тестами.
+- Применённые миграции не редактируем: изменения схемы и CHECK-ограничений — следующей миграцией с сохранением данных.
 - Коммиты — Conventional Commits на английском (релизы собирает semantic-release), по одной задаче из roadmap.
 - Язык: общение и документы — русский; код, идентификаторы и комментарии — английский; тексты интерфейса — русский.
 

@@ -1,0 +1,13 @@
+# Дашборды — классический JSON (v1): файловое provisioning в Grafana 13 не принимает экспорт v2.
+apiVersion: 1
+providers:
+  - name: raditi
+    orgId: 1
+    folder: Радити
+    folderUid: raditi
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards
