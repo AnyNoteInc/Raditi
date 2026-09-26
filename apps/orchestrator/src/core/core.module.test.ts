@@ -1,0 +1,171 @@
+import type { INestApplication, LoggerService } from '@nestjs/common'
+import { Test } from '@nestjs/testing'
+import type { AgentDriverRegistry } from '@repo/agent-drivers'
+import type { JobQueue, SandboxProvider } from '@repo/domain'
+import request from 'supertest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { OutboxRelayService } from '../outbox/outbox-relay.service.ts'
+import { TaskLifecycleService } from '../tasks/task-lifecycle.service.ts'
+import { AGENT_DRIVERS, JOB_QUEUE, SANDBOX_PROVIDER } from '../infra/tokens.ts'
+import {
+  fakeInfra,
+  overrideCoreInfra,
+  TEST_METRICS_TOKEN,
+  testCoreConfig,
+  type FakeInfra,
+} from '../testing/fakes.ts'
+import { CoreModule } from './core.module.ts'
+
+let app: INestApplication | undefined
+
+async function startCore(
+  infra: FakeInfra,
+  logger: LoggerService | false = false,
+): Promise<INestApplication> {
+  const builder = Test.createTestingModule({
+    imports: [CoreModule.forRoot({ config: testCoreConfig(), background: false })],
+  })
+  const moduleRef = await overrideCoreInfra(builder, infra).compile()
+  app = moduleRef.createNestApplication({ logger })
+  await app.init()
+  return app
+}
+
+afterEach(async () => {
+  await app?.close()
+  app = undefined
+})
+
+describe('CoreModule', () => {
+  it('answers /health 200 with public status only and disables caching', async () => {
+    const server = (await startCore(fakeInfra())).getHttpServer()
+
+    const res = await request(server).get('/health')
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ status: 'ok' })
+    expect(res.headers['cache-control']).toBe('no-store')
+  })
+
+  it('answers /health 503 without exposing dependencies to anonymous callers', async () => {
+    const infra = fakeInfra({ database: false, missingBuckets: ['logs'], vault: 'sealed' })
+    const server = (await startCore(infra)).getHttpServer()
+
+    const res = await request(server).get('/health')
+
+    expect(res.status).toBe(503)
+    expect(res.body).toEqual({ status: 'degraded' })
+    expect(res.headers['cache-control']).toBe('no-store')
+  })
+
+  it.each([false, true])(
+    'reveals health details only with METRICS_TOKEN (degraded=%s)',
+    async (degraded) => {
+      const server = (await startCore(fakeInfra({ database: !degraded }))).getHttpServer()
+
+      for (const token of ['Bearer wrong-token', `Basic ${TEST_METRICS_TOKEN}`]) {
+        const res = await request(server).get('/health').set('Authorization', token)
+        expect(res.status).toBe(degraded ? 503 : 200)
+        expect(res.body).toEqual({ status: degraded ? 'degraded' : 'ok' })
+        expect(res.headers['cache-control']).toBe('no-store')
+      }
+
+      const res = await request(server)
+        .get('/health')
+        .set('Authorization', `Bearer ${TEST_METRICS_TOKEN}`)
+      expect(res.status).toBe(degraded ? 503 : 200)
+      expect(res.body).toEqual({
+        status: degraded ? 'degraded' : 'ok',
+        checks: { database: degraded ? 'fail' : 'ok', redis: 'ok', s3: 'ok', vault: 'ok' },
+      })
+      expect(res.headers['cache-control']).toBe('no-store')
+    },
+  )
+
+  it('checks only the buckets of the core role on /health', async () => {
+    const infra = fakeInfra({ missingBuckets: ['backups', 'platform'] })
+    const server = (await startCore(infra)).getHttpServer()
+
+    const res = await request(server)
+      .get('/health')
+      .set('Authorization', `Bearer ${TEST_METRICS_TOKEN}`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.checks.s3).toBe('ok')
+    expect(infra.storage.checkBuckets).toHaveBeenCalledWith([
+      'inbox',
+      'sessions',
+      'logs',
+      'artifacts',
+    ])
+  })
+
+  it('answers /health 503 with every check failed when nothing is reachable', async () => {
+    const infra = fakeInfra({
+      database: false,
+      redis: false,
+      missingBuckets: ['inbox'],
+      vault: 'down',
+    })
+    const server = (await startCore(infra)).getHttpServer()
+
+    const res = await request(server)
+      .get('/health')
+      .set('Authorization', `Bearer ${TEST_METRICS_TOKEN}`)
+
+    expect(res.status).toBe(503)
+    expect(res.body.checks).toEqual({ database: 'fail', redis: 'fail', s3: 'fail', vault: 'fail' })
+  })
+
+  it('protects /metrics with the bearer METRICS_TOKEN', async () => {
+    const server = (await startCore(fakeInfra())).getHttpServer()
+
+    expect((await request(server).get('/metrics')).status).toBe(401)
+    expect(
+      (await request(server).get('/metrics').set('Authorization', 'Bearer wrong-token')).status,
+    ).toBe(401)
+
+    const res = await request(server)
+      .get('/metrics')
+      .set('Authorization', `Bearer ${TEST_METRICS_TOKEN}`)
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toMatch(/^text\/plain/)
+    expect(res.text).toMatch(/process_cpu_user_seconds_total\{app="orchestrator"\}/)
+  })
+
+  it('does not serve the MCP endpoint', async () => {
+    const server = (await startCore(fakeInfra())).getHttpServer()
+
+    expect((await request(server).post('/mcp').send({})).status).toBe(404)
+  })
+
+  it('wires the ports: job queue, agent drivers, sandbox provider, task lifecycle, relay', async () => {
+    const infra = fakeInfra()
+    const core = await startCore(infra)
+
+    const drivers = core.get<AgentDriverRegistry>(AGENT_DRIVERS)
+    expect(drivers.list().map((driver) => driver.id)).toEqual(['codex', 'kimi'])
+    expect(drivers.has('qwen')).toBe(false)
+    expect(core.get<SandboxProvider>(SANDBOX_PROVIDER).kind).toBe('docker')
+    expect(core.get(TaskLifecycleService).canTransition('queued', 'preparing')).toBe(true)
+    expect(core.get(OutboxRelayService)).toBeInstanceOf(OutboxRelayService)
+
+    await core.get<JobQueue>(JOB_QUEUE).enqueue('notifications', 'auth.welcome', { a: 1 })
+    expect(infra.queue.add).toHaveBeenCalledWith('auth.welcome', { a: 1 }, {})
+  })
+
+  it('closes its connections on shutdown without errors', async () => {
+    const infra = fakeInfra()
+    // Nest logs (and swallows) errors thrown by shutdown hooks.
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    const core = await startCore(infra, logger)
+
+    await core.close()
+    app = undefined
+
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(infra.prisma.$disconnect).toHaveBeenCalledOnce()
+    expect(infra.redis.quit).toHaveBeenCalledOnce()
+  })
+})
