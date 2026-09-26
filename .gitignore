@@ -1,0 +1,26 @@
+# Зависимости и сборка
+node_modules/
+.pnpm-store/
+.next/
+dist/
+build/
+out/
+.turbo/
+coverage/
+playwright-report/
+test-results/
+
+# Окружение и секреты
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Личные заметки для Claude Code
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Системное
+.DS_Store
+*.log

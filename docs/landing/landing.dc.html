@@ -1,0 +1,1265 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Радити — правки сайта через чат</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#15171A}
+@media (prefers-reduced-motion: no-preference){
+html{scroll-behavior:smooth}
+}
+.page{--accent:#2A36D6;--paper:#F4F5F1;--paper-2:#EAECE5;--card:#FBFBF8;--ink:#15171A;--ink-2:#1F2227;--graphite:#565C66;--rule:#D5D8CF;--marker:#F1DF4A;--on-ink:#A3A9B3;--rule-ink:#33373E;--ok:#1F7A4D;--accent-soft:color-mix(in oklab,var(--accent) 16%,transparent);--accent-light:color-mix(in oklab,var(--accent) 42%,white);position:relative;width:100%;min-width:320px;background:var(--paper);color:var(--ink);font-family:'Golos Text','Segoe UI','Helvetica Neue',sans-serif;font-size:18px;line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:clip}
+.page *,.page *::before,.page *::after{box-sizing:border-box}
+.page h1,.page h2,.page h3,.page p,.page figure{margin:0}
+a{color:var(--accent)}
+a:hover{color:var(--ink)}
+.page :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.wrap{width:100%;max-width:1312px;margin:0 auto;padding:0 32px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.skip{position:absolute;left:16px;top:-80px;z-index:60;padding:12px 18px;border-radius:10px;background:var(--ink);color:#FFFFFF;font-weight:600;text-decoration:none}
+.skip:focus{top:12px;color:#FFFFFF}
+.mono{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace}
+.ico{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+.hdr{position:sticky;top:0;z-index:30;background:color-mix(in oklab,var(--paper) 84%,transparent);-webkit-backdrop-filter:blur(14px) saturate(1.3);backdrop-filter:blur(14px) saturate(1.3);border-bottom:1px solid rgba(21,23,26,.08);animation:drop .8s cubic-bezier(.2,.7,.2,1) both}
+.hdr-in{display:flex;align-items:center;gap:40px;height:72px}
+.logo{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font-family:'Unbounded',Verdana,sans-serif;font-size:18px;font-weight:700;letter-spacing:-.02em}
+.logo:hover{color:var(--ink)}
+.logo-mark{display:grid;place-items:center;width:32px;height:32px;flex:none;border-radius:9px;background:var(--ink)}
+.logo-mark i{display:block;width:3px;height:16px;border-radius:2px;background:var(--marker);animation:blink 1.1s steps(1) infinite}
+.nav{display:flex;gap:28px;margin-left:auto}
+.nav a{position:relative;padding:8px 0;color:var(--ink);font-size:15px;font-weight:500;text-decoration:none}
+.nav a::after{content:"";position:absolute;left:0;right:0;bottom:2px;height:2px;background:var(--accent);transform:scaleX(0);transform-origin:right;transition:transform .35s cubic-bezier(.2,.7,.2,1)}
+.nav a:hover::after{transform:scaleX(1);transform-origin:left}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:52px;padding:0 26px;border:1.5px solid transparent;border-radius:999px;font-family:'Golos Text','Segoe UI',sans-serif;font-size:16px;font-weight:600;line-height:1;text-decoration:none;white-space:nowrap;cursor:pointer;transition:background-color .25s,color .25s,border-color .25s}
+.btn .ico{width:18px;height:18px;transition:transform .35s cubic-bezier(.2,.7,.2,1)}
+.btn:hover .ico{transform:translateX(4px)}
+.btn-main{background:var(--accent);color:#FFFFFF}
+.btn-main:hover{background:var(--ink);color:#FFFFFF}
+.btn-line{background:transparent;border-color:var(--ink);color:var(--ink)}
+.btn-line:hover{background:var(--ink);color:var(--paper)}
+.btn-sm{min-height:44px;padding:0 18px;font-size:15px}
+.btn-mark{background:var(--marker);color:var(--ink)}
+.btn-mark:hover{background:#FFFFFF;color:var(--ink)}
+.btn-ink{background:transparent;border-color:#F1F2EE;color:#F1F2EE}
+.btn-ink:hover{background:#F1F2EE;color:var(--ink)}
+
+.hero{position:relative;padding:56px 0 80px;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0;background-image:repeating-linear-gradient(to bottom,transparent 0 39px,rgba(21,23,26,.055) 39px 40px);-webkit-mask-image:linear-gradient(to bottom,#000 55%,transparent);mask-image:linear-gradient(to bottom,#000 55%,transparent);pointer-events:none}
+.hero::after{content:"";position:absolute;top:0;bottom:0;left:max(12px,calc(50% - 672px));width:1px;background:rgba(194,65,12,.32);pointer-events:none}
+.hero-in{position:relative;z-index:1}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;padding:8px 14px 8px 12px;border:1px solid var(--rule);border-radius:999px;background:var(--card);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;animation:rise .8s .1s cubic-bezier(.2,.7,.2,1) both}
+.live{width:8px;height:8px;border-radius:50%;background:#1F9D55;animation:ping 2.2s ease-out infinite}
+.strike{position:relative;display:inline-block;margin:30px 0 14px;color:var(--graphite);font-size:clamp(17px,1.7vw,24px);line-height:1.3;animation:dim .7s 1.25s both}
+.strike svg{position:absolute;left:-8px;top:50%;width:calc(100% + 16px);height:24px;margin-top:-11px;overflow:visible;pointer-events:none}
+.strike path{fill:none;stroke:var(--accent);stroke-width:3.2;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;animation:draw 1s .45s cubic-bezier(.65,.05,.25,1) forwards}
+.h1{font-family:'Unbounded',Verdana,sans-serif;font-size:clamp(34px,5.6vw,82px);font-weight:600;line-height:1.02;letter-spacing:-.035em}
+.h1 .ln{display:block;overflow:hidden;padding:.02em 0 .08em}
+.h1 .ln > span{display:inline-block;animation:lineup 1.05s cubic-bezier(.2,.8,.2,1) both}
+.h1 .ln:nth-child(1) > span{animation-delay:.55s}
+.h1 .ln:nth-child(2) > span{animation-delay:.68s}
+.mark{padding:0 .06em;margin:0 -.03em;background-image:linear-gradient(var(--marker),var(--marker));background-repeat:no-repeat;background-position:0 86%;background-size:0% 44%;animation:sweep .8s 1.4s cubic-bezier(.65,.05,.25,1) forwards}
+.hero-grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:56px;margin-top:52px;align-items:start}
+.hero-copy{display:flex;flex-direction:column;gap:28px;padding-top:8px;animation:rise .9s 1.05s cubic-bezier(.2,.7,.2,1) both}
+.lead{max-width:32em;color:var(--graphite);font-size:20px;line-height:1.5;text-wrap:pretty}
+.lead b{color:var(--ink);font-weight:600}
+.cta-row{display:flex;flex-wrap:wrap;gap:12px}
+.note{color:var(--graphite);font-size:15px}
+.note b{color:var(--ink);font-weight:600}
+.trust{display:grid;gap:12px;margin:0;padding:22px 0 0;border-top:1px solid var(--rule);list-style:none}
+.trust li{display:flex;align-items:center;gap:12px;font-size:15.5px}
+.trust .ico{width:18px;height:18px;color:var(--accent)}
+
+.demo{position:relative;height:548px;animation:demoin 1.2s .85s cubic-bezier(.2,.7,.2,1) both}
+.browser{position:absolute;left:0;top:0;width:60%;height:456px;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--rule);border-radius:16px;background:#F7F1E8;box-shadow:0 34px 70px -34px rgba(21,23,26,.4)}
+.bar{display:flex;align-items:center;gap:7px;height:40px;flex:none;padding:0 14px;border-bottom:1px solid var(--rule);background:var(--paper-2)}
+.bar > i{width:10px;height:10px;border-radius:50%;background:#C8CBC2}
+.url{display:flex;align-items:center;gap:6px;flex:1;height:24px;margin-left:10px;padding:0 10px;border-radius:7px;background:var(--card);color:var(--graphite);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px}
+.url .ico{width:12px;height:12px;stroke-width:2}
+.site{flex:1;display:flex;flex-direction:column;color:#2B2420;font-family:'Golos Text','Segoe UI',sans-serif}
+.promo{display:flex;align-items:center;justify-content:center;height:0;overflow:hidden;padding:0 12px;background:#2B2420;color:#F7F1E8;font-size:12px;font-weight:600;letter-spacing:.02em;text-align:center;transition:height .55s cubic-bezier(.2,.7,.2,1)}
+.promo.on{height:32px}
+.promo.chg{animation:promo 1.8s cubic-bezier(.2,.7,.2,1)}
+.s-nav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 44px 14px 22px;border-bottom:1px solid rgba(43,36,32,.12)}
+.s-logo{font-family:Georgia,'Times New Roman',serif;font-size:16px;font-weight:700;letter-spacing:.2em}
+.s-links{display:flex;gap:14px;color:#6D6058;font-size:12px}
+.s-hero{padding:18px 44px 12px 22px}
+.s-title{margin-bottom:6px;font-family:Georgia,'Times New Roman',serif;font-size:25px;line-height:1.1}
+.s-hero p{color:#6D6058;font-size:13px;line-height:1.4}
+.s-btn{display:inline-flex;align-items:center;height:30px;margin-top:12px;padding:0 14px;border-radius:4px;background:#8A3B12;color:#FFFFFF;font-size:12px;font-weight:600}
+.s-list{display:flex;flex-direction:column;margin:6px 44px 0 16px}
+.s-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:9px 8px;border-bottom:1px dashed rgba(43,36,32,.2);border-radius:6px;font-size:14px}
+.s-row b{font-weight:600;font-variant-numeric:tabular-nums}
+.s-hours{margin-top:auto;padding:11px 44px 11px 22px;border-top:1px solid rgba(43,36,32,.12);color:#4B413B;font-size:12px}
+.s-hours span{padding:1px 3px;border-radius:4px}
+.chg{animation:flash 1.8s cubic-bezier(.2,.7,.2,1)}
+.rev{animation:flash2 1.8s cubic-bezier(.2,.7,.2,1)}
+
+.chat{position:absolute;right:0;top:40px;width:45%;height:500px;display:flex;flex-direction:column;overflow:hidden;border-radius:20px;background:var(--ink);color:#F1F2EE;box-shadow:0 44px 90px -34px rgba(21,23,26,.6)}
+.chat-top{display:flex;align-items:center;gap:10px;flex:none;padding:14px 16px;border-bottom:1px solid var(--rule-ink)}
+.ava{display:grid;place-items:center;width:32px;height:32px;flex:none;border-radius:10px;background:var(--marker)}
+.ava i{display:block;width:3px;height:14px;border-radius:2px;background:var(--ink);animation:blink 1.1s steps(1) infinite}
+.who{display:flex;flex-direction:column;gap:2px}
+.who b{font-size:15px;font-weight:600;line-height:1.1}
+.who span{color:var(--on-ink);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:11.5px}
+.chat-body{flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:10px;overflow:hidden;padding:16px}
+.msg{max-width:90%;padding:10px 14px;border-radius:16px;font-size:14px;line-height:1.45;animation:pop .45s cubic-bezier(.2,.8,.3,1.25) both}
+.me{align-self:flex-end;border-bottom-right-radius:5px;background:var(--accent);color:#FFFFFF}
+.bot{align-self:flex-start;border:1px solid var(--rule-ink);border-bottom-left-radius:5px;background:var(--ink-2)}
+.bot ul{margin:6px 0 0;padding-left:18px}
+.bot li{margin:2px 0}
+.bot-title{color:var(--marker);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase}
+.dots{display:flex;gap:5px;align-self:flex-start;padding:13px 14px;border:1px solid var(--rule-ink);border-radius:16px;border-bottom-left-radius:5px;background:var(--ink-2);animation:pop .35s both}
+.dots i{width:6px;height:6px;border-radius:50%;background:var(--on-ink);animation:bob 1s ease-in-out infinite}
+.dots i:nth-child(2){animation-delay:.15s}
+.dots i:nth-child(3){animation-delay:.3s}
+.steps{display:flex;flex-direction:column;gap:7px;margin:0;padding:2px;list-style:none}
+.stp{display:flex;align-items:center;gap:10px;color:var(--on-ink);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;line-height:1.35;animation:pop .4s both}
+.spin{width:14px;height:14px;flex:none;border:2px solid var(--rule-ink);border-top-color:var(--marker);border-radius:50%;animation:spin .8s linear infinite}
+.tick{width:14px;height:14px;color:#7EE2A8;stroke-width:2.4}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border:1px solid #4A4F57;border-radius:999px;background:transparent;color:#F1F2EE;font-family:'Golos Text','Segoe UI',sans-serif;font-size:13.5px;font-weight:600;cursor:pointer;transition:background-color .2s,color .2s,border-color .2s}
+.chip:hover{border-color:#F1F2EE;background:#F1F2EE;color:var(--ink)}
+.chip .ico{width:15px;height:15px}
+.chip-go{border-color:var(--marker);background:var(--marker);color:var(--ink);animation:nudge 1.6s ease-in-out infinite}
+.chip-go:hover{border-color:#FFFFFF;background:#FFFFFF}
+.composer{display:flex;align-items:center;gap:10px;flex:none;min-height:54px;margin:0 12px 12px;padding:8px 8px 8px 14px;border:1px solid var(--rule-ink);border-radius:14px}
+.typed{flex:1;min-height:19px;font-size:14px;line-height:1.35}
+.ph{color:#80868F}
+.caret{display:inline-block;width:2px;height:16px;margin-left:1px;vertical-align:-3px;background:var(--marker);animation:blink 1s steps(1) infinite}
+.send{display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:11px;background:var(--marker);color:var(--ink)}
+.send .ico{width:18px;height:18px}
+.demo-tabs{position:absolute;left:0;top:476px;width:56%;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.demo-tabs > span{margin-right:4px;color:var(--graphite);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.tab{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 16px;border:1px solid var(--rule);border-radius:999px;background:var(--card);color:var(--ink);font-family:'Golos Text','Segoe UI',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .2s,color .2s,border-color .2s}
+.tab:hover{border-color:var(--ink)}
+.tab.on{border-color:var(--ink);background:var(--ink);color:var(--paper)}
+.tab .ico{width:14px;height:14px}
+.band{overflow:hidden;background:var(--ink);color:#F1F2EE}
+.track{display:flex;width:max-content;animation:marquee 70s linear infinite}
+.band:hover .track{animation-play-state:paused}
+.band ul{display:flex;margin:0;padding:0;list-style:none}
+.band li{display:flex;align-items:center;gap:28px;padding:24px 0 24px 28px;font-size:19px;font-weight:500;white-space:nowrap}
+.band li::after{content:"";width:9px;height:9px;border-radius:2px;background:var(--marker);transform:rotate(45deg)}
+.band q{quotes:"«" "»" "„" "“"}
+
+.sec{padding:100px 0;scroll-margin-top:64px}
+.sec-head{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:24px 64px;align-items:end;margin-bottom:56px}
+.sec-head .lead{font-size:18px}
+.kicker{display:flex;align-items:center;gap:14px;margin-bottom:22px;color:var(--graphite);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12.5px;letter-spacing:.08em;text-transform:uppercase}
+.kicker b{color:var(--ink);font-weight:500}
+.kicker::after{content:"";width:64px;height:1px;background:currentColor;opacity:.6}
+.h2{font-family:'Unbounded',Verdana,sans-serif;font-size:clamp(28px,3.4vw,50px);font-weight:600;line-height:1.08;letter-spacing:-.03em;text-wrap:balance}
+.h3{font-family:'Unbounded',Verdana,sans-serif;font-size:21px;font-weight:600;line-height:1.2;letter-spacing:-.02em}
+.tag{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:var(--marker);color:var(--ink);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+
+.cmp{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;align-items:start}
+.card{display:flex;flex-direction:column;gap:22px;padding:30px;border:1px solid var(--rule);border-radius:22px;background:var(--card)}
+.card-us{margin-top:-18px;border-color:var(--ink);background:var(--ink);color:#F1F2EE;box-shadow:0 40px 80px -40px rgba(21,23,26,.55)}
+.card-name{display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:'Unbounded',Verdana,sans-serif;font-size:19px;font-weight:600}
+.price{font-family:'Unbounded',Verdana,sans-serif;font-size:34px;font-weight:600;line-height:1.05;letter-spacing:-.03em}
+.price small{display:block;margin-top:8px;color:var(--graphite);font-family:'Golos Text','Segoe UI',sans-serif;font-size:15px;font-weight:400;letter-spacing:0}
+.card-us .price small{color:var(--on-ink)}
+.facts{display:flex;flex-direction:column;margin:0}
+.facts div{display:grid;grid-template-columns:96px minmax(0,1fr);gap:14px;padding:14px 0;border-top:1px solid var(--rule)}
+.card-us .facts div{border-top-color:var(--rule-ink)}
+.facts dt{padding-top:3px;color:var(--graphite);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase}
+.card-us .facts dt{color:var(--on-ink)}
+.facts dd{margin:0;font-size:16px;line-height:1.45}
+.src{margin-top:24px;color:var(--graphite);font-size:13.5px}
+
+.how{position:relative;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.rail{position:absolute;left:0;right:0;top:46px;height:1px;background:var(--rule)}
+.rail i{position:absolute;top:-5px;left:0;width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 6px var(--accent-soft);animation:travel 7s cubic-bezier(.65,0,.35,1) infinite}
+.stepx{position:relative;display:flex;flex-direction:column;gap:14px;padding-top:112px}
+.num{position:absolute;top:0;left:0;padding-right:16px;background:var(--paper);color:transparent;-webkit-text-stroke:1.5px var(--ink);font-family:'Unbounded',Verdana,sans-serif;font-size:92px;font-weight:700;line-height:1;letter-spacing:-.05em;transition:color .4s}
+.stepx:hover .num{color:var(--ink)}
+.stepx > p{max-width:26em;color:var(--graphite);font-size:17px}
+.mini{display:flex;flex-direction:column;gap:10px;margin-top:8px;padding:16px;border:1px solid var(--rule);border-radius:16px;background:var(--card);font-size:14px}
+.mini-cap{color:var(--graphite);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase}
+.mini-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.mini-btn{display:inline-flex;align-items:center;height:32px;padding:0 12px;border-radius:8px;background:var(--accent);color:#FFFFFF;font-size:13px;font-weight:600}
+.mini-ghost{display:inline-flex;align-items:center;height:32px;padding:0 12px;border:1px solid var(--rule);border-radius:8px;font-size:13px;font-weight:600}
+.mini-ok{display:flex;align-items:center;gap:8px;color:var(--ok);font-size:13px;font-weight:500}
+.mini-ok .ico{width:16px;height:16px;stroke-width:2.2}
+.mini-msg{align-self:flex-end;max-width:92%;padding:9px 12px;border-radius:12px;border-bottom-right-radius:4px;background:var(--accent);color:#FFFFFF}
+.mini-files{display:flex;justify-content:flex-end;gap:8px}
+.mini-chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid var(--rule);border-radius:999px;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px}
+.mini-chip .ico{width:14px;height:14px}
+.mini-acts{display:flex;gap:8px}
+
+.can{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:48px;border-top:1.5px solid var(--ink)}
+.can-it{display:flex;flex-direction:column;gap:14px;padding:30px 0 32px;border-bottom:1px solid var(--rule)}
+.can-ic{display:grid;place-items:center;width:48px;height:48px;border:1px solid var(--rule);border-radius:14px;background:var(--card);color:var(--ink);transition:background-color .3s,color .3s,border-color .3s,transform .45s cubic-bezier(.2,.7,.2,1)}
+.can-it:hover .can-ic{border-color:var(--accent);background:var(--accent);color:#FFFFFF;transform:rotate(-8deg)}
+.can-ic .ico{width:22px;height:22px}
+.can-it > p{color:var(--graphite);font-size:16.5px}
+.badges{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:auto;padding-top:4px}
+.badge{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+.badge i{width:8px;height:8px;border-radius:50%;background:currentColor}
+.b-now{color:var(--ok)}
+.b-ok{color:var(--accent)}
+.b-ok i{border-radius:1px;transform:rotate(45deg)}
+.b-plan{color:var(--graphite)}
+.b-plan i{width:10px;height:2px;border-radius:0}
+.can-note{display:flex;align-items:center;gap:12px;margin-top:28px;color:var(--graphite);font-size:16px}
+.can-note .ico{color:var(--ink)}
+
+.safe{background:var(--paper-2)}
+.safe-grid{display:grid;grid-template-columns:minmax(0,6fr) minmax(0,5fr);gap:72px;align-items:start}
+.safe-copy .h2{margin-bottom:20px}
+.guar{display:flex;flex-direction:column;margin:36px 0 0;padding:0;list-style:none}
+.guar li{display:grid;grid-template-columns:40px minmax(0,1fr);gap:14px;padding:18px 0;border-top:1px solid var(--rule)}
+.guar .ico{width:22px;height:22px;margin-top:3px;color:var(--accent)}
+.guar b{display:block;margin-bottom:2px;font-size:17.5px;font-weight:600}
+.guar span{color:var(--graphite);font-size:16px}
+.proof{position:sticky;top:104px;display:flex;flex-direction:column;gap:22px;padding:28px;border:1px solid var(--rule);border-radius:24px;background:var(--card);box-shadow:0 30px 70px -40px rgba(21,23,26,.35)}
+.proof-head{display:flex;align-items:center;justify-content:space-between;color:var(--graphite);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.proof-head span{display:inline-flex;align-items:center;gap:8px}
+.proof-head i{width:8px;height:8px;border-radius:50%;background:#1F9D55;animation:ping 2.2s ease-out infinite}
+.proof-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px;border:1px dashed #BFC3B8;border-radius:14px;background:#F7F1E8;color:#2B2420;font-size:18px}
+.proof-row b{padding:2px 8px;border-radius:8px;font-family:'Unbounded',Verdana,sans-serif;font-size:26px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tl{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0;padding:0;list-style:none}
+.tl::before{content:"";position:absolute;left:12px;right:calc(25% - 12px);top:11px;height:2px;background:var(--rule)}
+.tl::after{content:"";position:absolute;left:12px;right:calc(25% - 12px);top:11px;height:2px;background:var(--accent);transform:scaleX(0);transform-origin:left;animation:fill 6s linear infinite}
+.tl li{position:relative;z-index:1;display:flex;flex-direction:column;gap:10px;font-size:13.5px;font-weight:600}
+.tl li i{display:grid;place-items:center;width:24px;height:24px;border:2px solid var(--accent);border-radius:50%;background:var(--card)}
+.tl li i::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);transform:scale(0);animation:n1 6s linear infinite}
+.tl li:nth-child(2) i::after{animation-name:n2}
+.tl li:nth-child(3) i::after{animation-name:n3}
+.tl li:nth-child(4) i::after{animation-name:n4}
+.proof-note{display:flex;align-items:center;gap:10px;color:var(--graphite);font-size:15px}
+.proof-note .ico{color:var(--ok)}
+.proof .btn{align-self:flex-start}
+
+.calc{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:40px;align-items:center;margin-bottom:24px;padding:32px 36px;border-radius:24px;background:var(--ink);color:#F1F2EE}
+.calc label{display:block;font-size:18px;font-weight:600}
+.calc-num{display:flex;align-items:baseline;gap:12px;margin:14px 0 16px}
+.calc-num b{color:var(--marker);font-family:'Unbounded',Verdana,sans-serif;font-size:56px;font-weight:600;line-height:1;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.calc-num span{color:var(--on-ink)}
+.range{display:block;width:100%;height:28px;margin:0;background:linear-gradient(to right,var(--marker) 0 var(--p,0%),#3A3F47 var(--p,0%) 100%) center / 100% 4px no-repeat;cursor:pointer;-webkit-appearance:none;appearance:none}
+.range::-webkit-slider-runnable-track{height:4px;background:transparent}
+.range::-webkit-slider-thumb{width:28px;height:28px;margin-top:-12px;border:4px solid var(--ink);border-radius:50%;background:var(--marker);box-shadow:0 0 0 1.5px var(--marker);-webkit-appearance:none;appearance:none}
+.range::-moz-range-track{height:4px;background:transparent}
+.range::-moz-range-thumb{width:20px;height:20px;border:4px solid var(--ink);border-radius:50%;background:var(--marker)}
+.range:focus-visible{outline:2px solid var(--marker);outline-offset:6px}
+.scale{display:flex;justify-content:space-between;margin-top:6px;color:var(--on-ink);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px}
+.calc-out{display:flex;flex-direction:column;gap:8px;padding-left:40px;border-left:1px solid var(--rule-ink)}
+.calc-out small{color:var(--on-ink);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.calc-plan{font-family:'Unbounded',Verdana,sans-serif;font-size:24px;font-weight:600;line-height:1.2}
+.calc-price{font-size:18px}
+.calc-price b{font-weight:600}
+.calc-vs{color:var(--on-ink);font-size:14.5px;line-height:1.5}
+.calc-vs b{color:#F1F2EE;font-weight:600}
+.plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;align-items:stretch}
+.plan{display:flex;flex-direction:column;gap:18px;padding:30px;border:1.5px solid var(--rule);border-radius:24px;background:var(--card);transition:border-color .35s,box-shadow .35s,transform .45s cubic-bezier(.2,.7,.2,1)}
+.plan.rec{border-color:var(--ink);box-shadow:0 30px 60px -36px rgba(21,23,26,.45);transform:translateY(-8px)}
+.plan-top{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:30px}
+.rec-tag{display:none}
+.plan.rec .rec-tag{display:inline-flex}
+.plan-for{min-height:48px;color:var(--graphite);font-size:15.5px}
+.plan-price{display:flex;align-items:baseline;gap:8px;padding-bottom:18px;border-bottom:1px solid var(--rule)}
+.plan-price b{font-family:'Unbounded',Verdana,sans-serif;font-size:38px;font-weight:600;line-height:1;letter-spacing:-.04em}
+.plan-price span{color:var(--graphite);font-size:15px}
+.plan ul{display:flex;flex-direction:column;gap:11px;flex:1;margin:0;padding:0;list-style:none;font-size:15.5px}
+.plan li{display:grid;grid-template-columns:20px minmax(0,1fr);gap:10px;align-items:start;line-height:1.45}
+.plan li .ico{width:18px;height:18px;margin-top:2px;color:var(--accent);stroke-width:2.2}
+.plan .btn{width:100%}
+.plans-note{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 48px;margin-top:28px;color:var(--graphite);font-size:14.5px}
+.plans-note b{color:var(--ink);font-weight:600}
+
+.faq-grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:64px;align-items:start}
+.faq-side{position:sticky;top:104px;display:flex;flex-direction:column;gap:20px}
+.faq-side .kicker{margin-bottom:0}
+.faq{border-top:1.5px solid var(--ink)}
+.faq details{border-bottom:1px solid var(--rule)}
+.faq summary{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:24px 0;font-size:19px;font-weight:600;line-height:1.35;list-style:none;cursor:pointer}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::marker{content:""}
+.pm{position:relative;width:38px;height:38px;flex:none;border:1.5px solid var(--ink);border-radius:50%;transition:transform .4s cubic-bezier(.2,.7,.2,1),background-color .25s}
+.pm::before,.pm::after{content:"";position:absolute;left:50%;top:50%;width:14px;height:1.5px;margin:-.75px 0 0 -7px;background:var(--ink);transition:background-color .25s}
+.pm::after{transform:rotate(90deg)}
+.faq details[open] .pm{background:var(--ink);transform:rotate(45deg)}
+.faq details[open] .pm::before,.faq details[open] .pm::after{background:var(--paper)}
+.faq details p{max-width:44em;padding:0 64px 26px 0;color:var(--graphite);font-size:17px}
+.faq details[open] p{animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
+
+.buy{position:relative;overflow:hidden;padding:112px 0 104px;background:var(--ink);color:#F1F2EE;scroll-margin-top:64px}
+.buy::before{content:"";position:absolute;inset:0;background-image:repeating-linear-gradient(to bottom,transparent 0 39px,rgba(255,255,255,.045) 39px 40px);pointer-events:none}
+.buy-grid{position:relative;display:grid;grid-template-columns:minmax(0,6fr) minmax(0,6fr);gap:64px;align-items:start}
+.buy .kicker{color:var(--on-ink)}
+.buy .kicker b{color:#F1F2EE}
+.buy-h{font-family:'Unbounded',Verdana,sans-serif;font-size:clamp(34px,4.6vw,68px);font-weight:600;line-height:1.04;letter-spacing:-.035em;text-wrap:balance}
+.buy-h .mark{color:var(--ink)}
+.buy-copy > p{max-width:30em;margin-top:24px;color:var(--on-ink);font-size:19px}
+.buy-points{display:flex;flex-direction:column;gap:12px;margin:32px 0 0;padding:0;list-style:none}
+.buy-points li{display:flex;align-items:center;gap:12px;font-size:16px}
+.buy-points .ico{color:var(--marker)}
+.form{display:flex;flex-direction:column;gap:20px;padding:32px;border:1px solid var(--rule-ink);border-radius:26px;background:#1D2025}
+.form fieldset{display:flex;flex-direction:column;gap:10px;margin:0;padding:0;border:0}
+.form legend{margin-bottom:10px;padding:0;color:var(--on-ink);font-size:14px;font-weight:600}
+.opts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.opt{position:relative;display:flex;flex-direction:column;gap:4px;padding:14px;border:1.5px solid var(--rule-ink);border-radius:14px;cursor:pointer;transition:border-color .2s,background-color .2s}
+.opt:hover{border-color:#6B717A}
+.opt.sel{border-color:var(--marker);background:rgba(241,223,74,.08)}
+.opt:focus-within{outline:2px solid var(--marker);outline-offset:2px}
+.opt input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.opt b{font-size:15px}
+.opt span{color:var(--on-ink);font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12.5px}
+.fld{display:flex;flex-direction:column;gap:8px}
+.fld label{color:var(--on-ink);font-size:14px;font-weight:600}
+.fld input{height:54px;padding:0 16px;border:1.5px solid var(--rule-ink);border-radius:14px;background:var(--ink);color:#F1F2EE;font-family:inherit;font-size:16px;transition:border-color .2s}
+.fld input::placeholder{color:#80868F}
+.fld input:focus{border-color:var(--marker);outline:none}
+.agree{display:grid;grid-template-columns:22px minmax(0,1fr);gap:12px;align-items:start;color:var(--on-ink);font-size:14px;line-height:1.45}
+.agree input{width:20px;height:20px;margin:1px 0 0;accent-color:var(--marker)}
+.agree a{color:#F1F2EE}
+.agree a:hover{color:var(--marker)}
+.form .btn{width:100%;min-height:60px;font-size:17px}
+.form .done-btn{width:auto;min-height:48px;font-size:15px}
+.fine{color:var(--on-ink);font-size:13px;text-align:center}
+.done{align-items:flex-start;gap:16px}
+.done > p{color:var(--on-ink);font-size:17px}
+.done-ic{display:grid;place-items:center;width:56px;height:56px;border-radius:50%;background:var(--marker);color:var(--ink)}
+.done-ic .ico{width:28px;height:28px;stroke-width:2.4;stroke-dasharray:1;stroke-dashoffset:1;animation:draw .7s .2s forwards}
+
+.foot{padding:40px 0 56px;border-top:1px solid var(--rule-ink);background:var(--ink);color:var(--on-ink);font-size:14px}
+.foot-in{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:20px 40px}
+.foot .logo{color:#F1F2EE}
+.foot .logo-mark{background:var(--marker)}
+.foot .logo-mark i{background:var(--ink)}
+.foot nav{display:flex;flex-wrap:wrap;gap:24px}
+.foot a{color:var(--on-ink);text-decoration:none}
+.foot a:hover{color:#F1F2EE}
+
+@keyframes drop{
+from{transform:translateY(-100%)}
+to{transform:none}
+}
+@keyframes rise{
+from{opacity:0;transform:translateY(24px)}
+to{opacity:1;transform:none}
+}
+@keyframes lineup{
+from{transform:translateY(108%)}
+to{transform:none}
+}
+@keyframes draw{
+to{stroke-dashoffset:0}
+}
+@keyframes dim{
+from{color:var(--ink)}
+to{color:var(--graphite)}
+}
+@keyframes sweep{
+to{background-size:100% 44%}
+}
+@keyframes demoin{
+from{opacity:0;transform:translateY(48px)}
+to{opacity:1;transform:none}
+}
+@keyframes blink{
+50%{opacity:0}
+}
+@keyframes ping{
+0%{box-shadow:0 0 0 0 rgba(31,157,85,.55)}
+80%,100%{box-shadow:0 0 0 9px rgba(31,157,85,0)}
+}
+@keyframes pop{
+from{opacity:0;transform:translateY(10px) scale(.97)}
+to{opacity:1;transform:none}
+}
+@keyframes bob{
+0%,60%,100%{opacity:.5;transform:none}
+30%{opacity:1;transform:translateY(-4px)}
+}
+@keyframes spin{
+to{transform:rotate(360deg)}
+}
+@keyframes nudge{
+0%,100%{box-shadow:0 0 0 0 rgba(241,223,74,.5)}
+50%{box-shadow:0 0 0 7px rgba(241,223,74,0)}
+}
+@keyframes flash{
+0%{background-color:rgba(241,223,74,0)}
+14%{background-color:var(--marker)}
+70%{background-color:rgba(241,223,74,.55)}
+100%{background-color:rgba(241,223,74,0)}
+}
+@keyframes flash2{
+0%{background-color:transparent}
+14%{background-color:var(--accent-light)}
+100%{background-color:transparent}
+}
+@keyframes promo{
+0%,30%{background-color:var(--marker);color:var(--ink)}
+100%{background-color:#2B2420;color:#F7F1E8}
+}
+@keyframes marquee{
+to{transform:translateX(-50%)}
+}
+@keyframes travel{
+0%{left:0;opacity:0}
+6%{opacity:1}
+28%,36%{left:calc(33.33% + 8px)}
+62%,70%{left:calc(66.67% + 16px)}
+94%{opacity:1}
+100%{left:calc(100% - 11px);opacity:0}
+}
+@keyframes fill{
+0%{opacity:1;transform:scaleX(0)}
+75%{transform:scaleX(1)}
+92%{opacity:1;transform:scaleX(1)}
+100%{opacity:0;transform:scaleX(1)}
+}
+@keyframes n1{
+0%{transform:scale(0)}
+3%{transform:scale(1.3)}
+6%,92%{transform:scale(1)}
+100%{transform:scale(0)}
+}
+@keyframes n2{
+0%,25%{transform:scale(0)}
+28%{transform:scale(1.3)}
+31%,92%{transform:scale(1)}
+100%{transform:scale(0)}
+}
+@keyframes n3{
+0%,50%{transform:scale(0)}
+53%{transform:scale(1.3)}
+56%,92%{transform:scale(1)}
+100%{transform:scale(0)}
+}
+@keyframes n4{
+0%,75%{transform:scale(0)}
+78%{transform:scale(1.3)}
+81%,92%{transform:scale(1)}
+100%{transform:scale(0)}
+}
+@keyframes rv{
+from{opacity:0;transform:translateY(40px)}
+to{opacity:1;transform:none}
+}
+@media (prefers-reduced-motion: no-preference){
+@supports (animation-timeline: view()){
+.rv{animation:rv linear both;animation-timeline:view();animation-range:entry 0% entry 75%}
+.rv-d1{animation-range:entry 10% entry 85%}
+.rv-d2{animation-range:entry 20% entry 95%}
+.buy .mark{animation:sweep linear both;animation-timeline:view();animation-range:entry 30% cover 40%}
+}
+}
+@media (prefers-reduced-motion: reduce){
+.page *,.page *::before,.page *::after{animation:none !important;transition:none !important}
+.mark{background-size:100% 44%}
+.strike path,.done-ic .ico{stroke-dashoffset:0}
+.tl::after{transform:scaleX(1)}
+.tl li i::after{transform:scale(1)}
+}
+@media (max-width: 1180px){
+.hero-grid{grid-template-columns:minmax(0,1fr);gap:44px}
+.hero-copy{max-width:680px}
+.demo{max-width:900px}
+}
+@media (max-width: 980px){
+.nav{display:none}
+.hdr-in .btn{margin-left:auto}
+.sec{padding:80px 0}
+.sec-head,.safe-grid,.faq-grid,.buy-grid{grid-template-columns:minmax(0,1fr);gap:28px}
+.sec-head{margin-bottom:40px}
+.cmp,.how,.plans{grid-template-columns:minmax(0,1fr)}
+.card-us{margin-top:0}
+.rail{display:none}
+.can{grid-template-columns:repeat(2,minmax(0,1fr))}
+.proof,.faq-side{position:static}
+.calc{grid-template-columns:minmax(0,1fr);gap:24px}
+.calc-out{padding:24px 0 0;border-top:1px solid var(--rule-ink);border-left:0}
+.plan.rec{transform:none}
+.plans-note{grid-template-columns:minmax(0,1fr)}
+.buy{padding:80px 0}
+}
+@media (max-width: 700px){
+.wrap{padding:0 16px}
+.page{font-size:17px}
+.hero{padding:32px 0 56px}
+.hero::after{display:none}
+.lead{font-size:18px}
+.strike svg{display:none}
+.strike{text-decoration:line-through;text-decoration-color:var(--accent);text-decoration-thickness:2px}
+.demo{display:flex;flex-direction:column;gap:14px;height:auto}
+.browser,.chat,.demo-tabs{position:relative;left:auto;right:auto;top:auto;width:100%}
+.browser{order:1;height:430px}
+.demo-tabs{order:2}
+.chat{order:3;height:500px}
+.cta-row .btn{flex:1 1 100%}
+.can{grid-template-columns:minmax(0,1fr)}
+.facts div{grid-template-columns:minmax(0,1fr);gap:4px}
+.opts{grid-template-columns:minmax(0,1fr)}
+.form{padding:22px}
+.faq summary{font-size:17px}
+.faq details p{padding-right:0}
+.calc{padding:24px}
+.calc-num b{font-size:44px}
+.num{font-size:72px}
+.stepx{padding-top:92px}
+.hdr-in{gap:16px}
+.logo{font-size:16px}
+}
+</style>
+</helmet>
+<div class="page" id="top" style="--accent: {{accent}};">
+<a class="skip" href="#main">Перейти к содержимому</a>
+
+<header class="hdr">
+<div class="wrap hdr-in">
+<a class="logo" href="#top"><span class="logo-mark" aria-hidden="true"><i></i></span>Радити</a>
+<nav class="nav" aria-label="Разделы страницы">
+<a href="#how">Как работает</a>
+<a href="#can">Что умеет</a>
+<a href="#safe">Безопасность</a>
+<a href="#pricing">Цены</a>
+<a href="#faq">Вопросы</a>
+</nav>
+<a class="btn btn-main btn-sm" href="#buy">Подключить сайт<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></a>
+</div>
+</header>
+
+<main id="main">
+<section class="hero">
+<div class="wrap hero-in">
+<div class="eyebrow"><span class="live" aria-hidden="true"></span>AI-агент для сайтов на WordPress</div>
+<div><span class="strike">Искать подрядчика, ждать ответа, платить за час<svg viewBox="0 0 400 24" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M4 14 C 70 9, 140 16, 210 12 S 330 9, 396 13"></path></svg></span></div>
+<h1 class="h1"><span class="ln"><span>Напишите в <span class="mark">чат</span>&nbsp;—</span></span><span class="ln"><span>агент поправит сайт</span></span></h1>
+<div class="hero-grid">
+<div class="hero-copy">
+<p class="lead">Поменять цену, заменить фото, поставить баннер, обновить часы работы — просто опишите это в чате. <b>Сайт подключается в один клик</b>, а любую правку можно отменить.</p>
+<div class="cta-row">
+<a class="btn btn-main" href="#buy">Подключить сайт<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></a>
+<a class="btn btn-line" href="#how">Как это работает</a>
+</div>
+<p class="note"><b>от 4&nbsp;900&nbsp;₽ в месяц</b> · 30 правок включено · веб-чат и Telegram</p>
+<ul class="trust">
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg>«Отменить» любую правку в течение 7 дней</li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01"></path><path d="M7 16.5h.01"></path></svg>Модели и данные — на серверах в России</li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5" width="19" height="14" rx="2.5"></rect><path d="M2.5 10h19"></path><path d="M6.5 15h4"></path></svg>Оплата через ЮKassa, чек придёт на почту</li>
+</ul>
+</div>
+
+<figure class="demo">
+<figcaption class="sr">Живое демо: владелец барбершопа пишет в чат, агент меняет его сайт и показывает результат</figcaption>
+<div class="browser" aria-hidden="true">
+<div class="bar"><i></i><i></i><i></i><div class="url"><svg class="ico" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>ваш-сайт.рф</div></div>
+<div class="site">
+<div class="{{bannerCls}}">−20% на моделирование бороды до 30 сентября</div>
+<div class="s-nav"><span class="s-logo">БРИТВА</span><span class="s-links"><span>Услуги</span><span>Цены</span><span>Контакты</span></span></div>
+<div class="s-hero"><div class="s-title">Мужские стрижки и бритьё</div><p>Классика, фейды и уход за бородой. Запись онлайн.</p><span class="s-btn">Записаться</span></div>
+<div class="s-list">
+<div class="{{priceCls}}"><span>Мужская стрижка</span><b>{{priceText}}</b></div>
+<div class="s-row"><span>Стрижка бороды</span><b>800 ₽</b></div>
+<div class="s-row"><span>Отец и сын</span><b>2&nbsp;000&nbsp;₽</b></div>
+</div>
+<div class="s-hours">Пн–Пт 10:00–21:00 · <span class="{{hoursCls}}">Сб 10:00–{{satEnd}}</span> · Вс выходной</div>
+</div>
+</div>
+
+<div class="chat">
+<div class="chat-top">
+<span class="ava" aria-hidden="true"><i></i></span>
+<div class="who"><b>Радити</b><span>ваш-сайт.рф · онлайн</span></div>
+</div>
+<div class="chat-body">
+<sc-if value="{{showUser}}" hint-placeholder-val="{{ true }}">
+<div class="msg me">{{userText}}</div>
+</sc-if>
+<sc-if value="{{thinking}}" hint-placeholder-val="{{ false }}">
+<div class="dots"><i></i><i></i><i></i><span class="sr">Агент думает</span></div>
+</sc-if>
+<sc-if value="{{hasSteps}}" hint-placeholder-val="{{ true }}">
+<ul class="steps">
+<sc-for list="{{steps}}" as="st" hint-placeholder-count="3">
+<li class="stp">
+<sc-if value="{{st.pending}}" hint-placeholder-val="{{ false }}"><span class="spin" aria-hidden="true"></span></sc-if>
+<sc-if value="{{st.done}}" hint-placeholder-val="{{ true }}"><svg class="ico tick" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></sc-if>
+<span>{{st.label}}</span>
+</li>
+</sc-for>
+</ul>
+</sc-if>
+<sc-if value="{{showApprove}}" hint-placeholder-val="{{ false }}">
+<div class="msg bot">
+<div class="bot-title">Что изменится</div>
+<ul>
+<sc-for list="{{approveItems}}" as="ai" hint-placeholder-count="2">
+<li>{{ai.t}}</li>
+</sc-for>
+</ul>
+<div class="acts">
+<button class="chip chip-go" type="button" onClick="{{approve}}">Применить</button>
+<button class="chip" type="button" onClick="{{cancel}}">Отмена</button>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{showReply}}" hint-placeholder-val="{{ true }}">
+<div class="msg bot">
+<div>{{reply}}</div>
+<div class="acts">
+<sc-if value="{{canUndo}}" hint-placeholder-val="{{ true }}">
+<button class="chip" type="button" onClick="{{undo}}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg>Отменить</button>
+</sc-if>
+<button class="chip" type="button" onClick="{{nextDemo}}">Следующий пример<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></button>
+</div>
+</div>
+</sc-if>
+</div>
+<div class="composer" aria-hidden="true">
+<div class="typed">
+<sc-if value="{{typing}}" hint-placeholder-val="{{ false }}"><span>{{typedText}}</span><span class="caret"></span></sc-if>
+<sc-if value="{{notTyping}}" hint-placeholder-val="{{ true }}"><span class="ph">Напишите, что поменять…</span></sc-if>
+</div>
+<span class="send"><svg class="ico" viewBox="0 0 24 24"><path d="M21 3L10 14"></path><path d="M21 3l-7 18-4-7-7-4z"></path></svg></span>
+</div>
+</div>
+
+<div class="demo-tabs">
+<span>Примеры</span>
+<sc-for list="{{tabs}}" as="tb" hint-placeholder-count="3">
+<button class="{{tb.cls}}" type="button" aria-pressed="{{tb.pressed}}" onClick="{{tb.pick}}">{{tb.label}}</button>
+</sc-for>
+<button class="tab" type="button" aria-pressed="{{pausePressed}}" onClick="{{togglePause}}">{{pauseLabel}}</button>
+</div>
+</figure>
+</div>
+</div>
+</section>
+
+<section class="band" aria-label="Примеры просьб к агенту">
+<div class="track">
+<ul>
+<li><q>Поменяй телефон в шапке сайта</q></li>
+<li><q>Добавь фото нового мастера</q></li>
+<li><q>Убери акцию с главной</q></li>
+<li><q>Сделай кнопку записи заметнее</q></li>
+<li><q>Исправь опечатку в разделе «О нас»</q></li>
+<li><q>Поставь плашку про праздничный график</q></li>
+<li><q>Обнови прайс по файлу из вложения</q></li>
+<li><q>Добавь отзыв клиента на главную</q></li>
+</ul>
+<ul aria-hidden="true">
+<li><q>Поменяй телефон в шапке сайта</q></li>
+<li><q>Добавь фото нового мастера</q></li>
+<li><q>Убери акцию с главной</q></li>
+<li><q>Сделай кнопку записи заметнее</q></li>
+<li><q>Исправь опечатку в разделе «О нас»</q></li>
+<li><q>Поставь плашку про праздничный график</q></li>
+<li><q>Обнови прайс по файлу из вложения</q></li>
+<li><q>Добавь отзыв клиента на главную</q></li>
+</ul>
+</div>
+</section>
+<section class="sec" id="compare">
+<div class="wrap">
+<div class="sec-head rv">
+<div>
+<div class="kicker"><b>01</b>Сравнение</div>
+<h2 class="h2">Раньше — подрядчик и переписка. Теперь — одно сообщение.</h2>
+</div>
+<p class="lead">Малому бизнесу обычно нужны мелкие правки: цена, фото, баннер. Платить за них пакетом часов или каждый раз искать исполнителя — дорого и долго.</p>
+</div>
+<div class="cmp">
+<article class="card rv">
+<h3 class="card-name">Веб-студия</h3>
+<div class="price">от 15&nbsp;000&nbsp;₽<small>в месяц за пакет из 3 часов</small></div>
+<dl class="facts">
+<div><dt>Задача</dt><dd>Письмо менеджеру и согласование</dd></div>
+<div><dt>Срок</dt><dd>Реакция по регламенту — от 1 до 4 часов</dd></div>
+<div><dt>Минус</dt><dd>Сверх пакета — от 3&nbsp;500&nbsp;₽ за час</dd></div>
+</dl>
+</article>
+<article class="card rv rv-d1">
+<h3 class="card-name">Фрилансер</h3>
+<div class="price">от 500 ₽<small>за задачу — если найдёте исполнителя</small></div>
+<dl class="facts">
+<div><dt>Задача</dt><dd>Найти исполнителя и объяснить в переписке</dd></div>
+<div><dt>Срок</dt><dd>Когда исполнитель ответит</dd></div>
+<div><dt>Минус</dt><dd>Доступы к сайту у случайных людей</dd></div>
+</dl>
+</article>
+<article class="card card-us rv rv-d2">
+<h3 class="card-name">Радити</h3>
+<div class="price">4&nbsp;900&nbsp;₽<small>в месяц, 30 правок включено</small></div>
+<dl class="facts">
+<div><dt>Задача</dt><dd>Одно сообщение в чате или Telegram</dd></div>
+<div><dt>Срок</dt><dd>Контент — сразу, код — после вашего «Применить»</dd></div>
+<div><dt>Минус</dt><dd>Пока только WordPress</dd></div>
+</dl>
+</article>
+</div>
+<p class="src">Цены студий и фрилансеров — по открытым прайсам российских веб-студий и бирж фриланса, сентябрь 2026.</p>
+</div>
+</section>
+
+<section class="sec" id="how">
+<div class="wrap">
+<div class="sec-head rv">
+<div>
+<div class="kicker"><b>02</b>Как это работает</div>
+<h2 class="h2">Три шага от «надо поправить» до готового сайта</h2>
+</div>
+<p class="lead">Никаких админок, паролей от хостинга и технических слов. Агент сам разберётся, где на сайте нужная строка.</p>
+</div>
+<div class="how rv">
+<div class="rail" aria-hidden="true"><i></i></div>
+<div class="stepx">
+<span class="num" aria-hidden="true">01</span>
+<h3 class="h3">Подключите сайт в один клик</h3>
+<p>Нажмите «Подключить» в админке WordPress — плагин Радити сам передаст доступ. SSH и FTP не нужны.</p>
+<div class="mini" aria-hidden="true">
+<div class="mini-cap">Плагины › Радити</div>
+<div class="mini-row"><span>ваш-сайт.рф</span><span class="mini-btn">Подключить</span></div>
+<div class="mini-ok"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Сайт подключён, агент изучил страницы</div>
+</div>
+</div>
+<div class="stepx">
+<span class="num" aria-hidden="true">02</span>
+<h3 class="h3">Напишите, что поменять</h3>
+<p>Обычными словами — в веб-чате или Telegram. Можно голосом, с фото, файлом или скриншотом.</p>
+<div class="mini" aria-hidden="true">
+<div class="mini-msg">Замените фото мастера на главной, прикладываю</div>
+<div class="mini-files">
+<span class="mini-chip"><svg class="ico" viewBox="0 0 24 24"><path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"></path></svg>master.jpg</span>
+<span class="mini-chip"><svg class="ico" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>0:07</span>
+</div>
+</div>
+</div>
+<div class="stepx">
+<span class="num" aria-hidden="true">03</span>
+<h3 class="h3">Проверьте результат</h3>
+<p>Простые правки агент применяет сразу, сложные — описывает заранее и ждёт «Применить». Не понравилось — «Отменить».</p>
+<div class="mini" aria-hidden="true">
+<div class="mini-cap">Что изменится</div>
+<div>Новый блок «Наши мастера» на главной, три фото с подписями</div>
+<div class="mini-acts"><span class="mini-btn">Применить</span><span class="mini-ghost">Изменить</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<section class="sec" id="can">
+<div class="wrap">
+<div class="sec-head rv">
+<div>
+<div class="kicker"><b>03</b>Что умеет</div>
+<h2 class="h2">Всё, что вы раньше отправляли подрядчику</h2>
+</div>
+<p class="lead">Агент сам понимает, где контент, а где код. Безопасные правки применяет сразу, остальные — после вашего подтверждения.</p>
+</div>
+<div class="can">
+<article class="can-it rv">
+<span class="can-ic" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24"><path d="M3 12V4h8l10 10-8 8z"></path><circle cx="7.5" cy="8.5" r="1.5"></circle></svg></span>
+<h3 class="h3">Цены и тексты</h3>
+<p>Цены, описания услуг, телефоны, адреса и опечатки — на любой странице.</p>
+<div class="badges"><span class="badge b-now"><i></i>Сразу</span></div>
+</article>
+<article class="can-it rv rv-d1">
+<span class="can-ic" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="M21 16l-5-5-9 9"></path></svg></span>
+<h3 class="h3">Фото и файлы</h3>
+<p>Заменит фото, добавит прайс в PDF, обновит галерею или документ.</p>
+<div class="badges"><span class="badge b-now"><i></i>Сразу</span></div>
+</article>
+<article class="can-it rv rv-d2">
+<span class="can-ic" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"></circle><path d="M20 20l-4.2-4.2"></path></svg></span>
+<h3 class="h3">Заголовки для поиска</h3>
+<p>Заголовки и описания страниц для поисковиков, подписи к картинкам.</p>
+<div class="badges"><span class="badge b-now"><i></i>Сразу</span></div>
+</article>
+<article class="can-it rv">
+<span class="can-ic" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24"><path d="M3 10v4h4l6 4V6L7 10z"></path><path d="M17 8.5a5 5 0 0 1 0 7"></path></svg></span>
+<h3 class="h3">Баннеры и акции</h3>
+<p>Плашка о скидке или праздничном графике — и уберёт её, когда скажете.</p>
+<div class="badges"><span class="badge b-ok"><i></i>После «Применить»</span></div>
+</article>
+<article class="can-it rv rv-d1">
+<span class="can-ic" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="6" rx="2"></rect><rect x="3" y="14" width="10" height="5" rx="2.5"></rect></svg></span>
+<h3 class="h3">Кнопки и формы</h3>
+<p>Кнопка «Записаться», новое поле в заявке, ссылка на мессенджер.</p>
+<div class="badges"><span class="badge b-ok"><i></i>После «Применить»</span></div>
+</article>
+<article class="can-it rv rv-d2">
+<span class="can-ic" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4"></path><path d="M9 13h6"></path><path d="M9 17h4"></path></svg></span>
+<h3 class="h3">Новые страницы и блоки</h3>
+<p>Страница услуги или акции, новый блок на главной — в стиле вашего сайта.</p>
+<div class="badges"><span class="badge b-ok"><i></i>После «Применить»</span><span class="badge b-plan"><i></i>С тарифа «Бизнес»</span></div>
+</article>
+</div>
+<p class="can-note rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c1.2-3.6 3.8-5.5 7-5.5s5.8 1.9 7 5.5"></path></svg>Заказы, пользователей и настройки оплаты агент не трогает. Если задача ему не по силам — передаёт специалисту и называет срок.</p>
+</div>
+</section>
+<section class="sec safe" id="safe">
+<div class="wrap safe-grid">
+<div class="safe-copy">
+<div class="kicker rv"><b>04</b>Безопасность</div>
+<h2 class="h2 rv">Любую правку можно отменить</h2>
+<p class="lead rv">Перед изменением агент сохраняет снимок, после — проверяет сайт. Если что-то пошло не так, сайт возвращается к прежней версии.</p>
+<ul class="guar">
+<li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg><div><b>Снимок перед каждой правкой</b><span>Копия всего, что меняется, хранится в облаке.</span></div></li>
+<li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg><div><b>«Отменить» — 7 дней и бесплатно</b><span>Код откатывается, контент возвращается из снимка. Отмена не расходует правки.</span></div></li>
+<li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg><div><b>Проверка после выкладки</b><span>Не прошла — сайт сам возвращается к прежней версии.</span></div></li>
+<li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4"></path><path d="M12 17.5h.01"></path></svg><div><b>Опасное — только с вашего согласия</b><span>Удаление страниц, смена темы и плагинов — только после «Применить». Заказы и пользователей агент не видит.</span></div></li>
+<li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"></path><path d="M4 7.5l8 4.5 8-4.5"></path><path d="M12 12v9"></path></svg><div><b>Изоляция и данные в России</b><span>Агент работает в закрытой песочнице, доступы — в зашифрованном хранилище, модели и серверы — российские.</span></div></li>
+</ul>
+</div>
+<div class="proof rv">
+<div class="proof-head"><span>Задача · контент</span><span><i aria-hidden="true"></i>на сайте</span></div>
+<div class="proof-row"><span>Мужская стрижка</span><b class="{{safeCls}}">{{safePrice}}</b></div>
+<ol class="tl" aria-label="Этапы правки">
+<li><i aria-hidden="true"></i>Снимок</li>
+<li><i aria-hidden="true"></i>Правка</li>
+<li><i aria-hidden="true"></i>Проверка</li>
+<li><i aria-hidden="true"></i>Готово</li>
+</ol>
+<p class="proof-note" aria-live="polite"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>{{safeNote}}</p>
+<button class="btn btn-line" type="button" onClick="{{toggleSafe}}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg>{{safeBtn}}</button>
+</div>
+</div>
+</section>
+
+<section class="sec" id="pricing">
+<div class="wrap">
+<div class="sec-head rv">
+<div>
+<div class="kicker"><b>05</b>Цены</div>
+<h2 class="h2">В три раза дешевле пакета студии</h2>
+</div>
+<p class="lead">Платите помесячно, правки — внутри тарифа. Не хватило — докупите 10 правок за 1&nbsp;990&nbsp;₽.</p>
+</div>
+<div class="calc rv">
+<div>
+<label for="edits">Сколько правок в месяц нужно вашему сайту?</label>
+<div class="calc-num"><b>{{edits}}</b><span>правок в месяц</span></div>
+<input class="range" id="edits" type="range" min="5" max="250" step="5" value="{{edits}}" onChange="{{setEdits}}" style="--p: {{editsPct}}%;">
+<div class="scale" aria-hidden="true"><span>5</span><span>250</span></div>
+</div>
+<div class="calc-out" aria-live="polite">
+<small>Вам подойдёт</small>
+<div class="calc-plan">{{recName}}</div>
+<div class="calc-price"><b>{{recPriceText}} ₽</b> в месяц · около {{perEditText}} ₽ за правку</div>
+<div class="calc-vs">В студии — от <b>{{studioText}} ₽</b>, у фрилансеров — от <b>{{freelanceText}} ₽</b> и время на поиск исполнителя</div>
+</div>
+</div>
+<div class="plans rv">
+<article class="{{startCls}}">
+<div class="plan-top"><h3 class="h3">Старт</h3><span class="tag rec-tag">Вам подойдёт</span></div>
+<p class="plan-for">Один сайт и регулярные мелкие правки</p>
+<div class="plan-price"><b>4&nbsp;900&nbsp;₽</b><span>в месяц</span></div>
+<ul>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>30 правок в месяц, до 5 в день</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>1 сайт на WordPress</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Тексты, цены, фото, баннеры и небольшие правки кода</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Веб-чат и Telegram, голосовые и файлы</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>«Отменить» любую правку 7 дней</span></li>
+</ul>
+<a class="{{startBtn}}" href="#buy" onClick="{{pickStart}}">Выбрать «Старт»</a>
+</article>
+<article class="{{businessCls}}">
+<div class="plan-top"><h3 class="h3">Бизнес</h3><span class="tag rec-tag">Вам подойдёт</span></div>
+<p class="plan-for">Несколько сайтов или частые правки</p>
+<div class="plan-price"><b>12&nbsp;900&nbsp;₽</b><span>в месяц</span></div>
+<ul>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>80 правок в месяц, до 10 в день</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>До 3 сайтов</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Всё из «Старта»</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Сложные задачи: новые страницы, блоки и вёрстка</span></li>
+</ul>
+<a class="{{businessBtn}}" href="#buy" onClick="{{pickBusiness}}">Выбрать «Бизнес»</a>
+</article>
+<article class="{{agencyCls}}">
+<div class="plan-top"><h3 class="h3">Агентство</h3><span class="tag rec-tag">Вам подойдёт</span></div>
+<p class="plan-for">Студиям и сетям: много сайтов клиентов</p>
+<div class="plan-price"><b>39&nbsp;900&nbsp;₽</b><span>в месяц</span></div>
+<ul>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>250 правок в месяц, до 30 в день</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>До 15 сайтов</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Всё из «Бизнеса»</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Приоритет в очереди</span></li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Специалист подключается к сложным задачам</span></li>
+</ul>
+<a class="{{agencyBtn}}" href="#buy" onClick="{{pickAgency}}">Выбрать «Агентство»</a>
+</article>
+</div>
+<div class="plans-note">
+<p><b>Правка</b> — одна задача в чате: «поменяй цену», «добавь баннер». Уточняющие вопросы и «Отменить» не списываются, а неудачная задача возвращается в лимит.</p>
+<p>Оценка для студии — минимальный пакет 15&nbsp;000&nbsp;₽ в месяц или полчаса работы по 1&nbsp;500&nbsp;₽/ч на каждую правку, что больше. Фрилансеры — от 500 ₽ за задачу.</p>
+</div>
+</div>
+</section>
+<section class="sec" id="faq">
+<div class="wrap faq-grid">
+<div class="faq-side rv">
+<div class="kicker"><b>06</b>Вопросы</div>
+<h2 class="h2">Что спрашивают перед подключением</h2>
+<p class="lead">Не нашли ответ — напишите нам: [ПОЧТА ПОДДЕРЖКИ]</p>
+</div>
+<div class="faq rv">
+<details>
+<summary>Мой сайт не на WordPress — подойдёт?<span class="pm" aria-hidden="true"></span></summary>
+<p>Пока агент работает только с WordPress — самой популярной CMS в Рунете. 1С-Битрикс и другие платформы подключим следующими — напишите нам, и мы сообщим, когда дойдём до вашей.</p>
+</details>
+<details>
+<summary>Что, если агент что-то сломает?<span class="pm" aria-hidden="true"></span></summary>
+<p>Перед каждой правкой он сохраняет снимок, а после — проверяет сайт. Если проверка не прошла, сайт сам вернётся к прежней версии. Любую правку можно отменить кнопкой «Отменить» в течение 7 дней.</p>
+</details>
+<details>
+<summary>Что считается правкой?<span class="pm" aria-hidden="true"></span></summary>
+<p>Одна задача в чате: изменить цену, заменить фото, добавить баннер. Уточняющие вопросы и отмена не списываются. Лимит обновляется каждый месяц, а если не хватит — докупите пакет из 10 правок за 1&nbsp;990&nbsp;₽.</p>
+</details>
+<details>
+<summary>Где хранятся данные и доступы?<span class="pm" aria-hidden="true"></span></summary>
+<p>На серверах в России. Доступы к сайту лежат в зашифрованном хранилище, а агент работает в изолированной среде и видит только ваш сайт.</p>
+</details>
+<details>
+<summary>Что, если агент не справится?<span class="pm" aria-hidden="true"></span></summary>
+<p>После двух неудачных попыток задачу получает специалист, а вы — понятный срок. Неудачная задача не расходует правки из тарифа.</p>
+</details>
+<details>
+<summary>Как оплатить и отменить подписку?<span class="pm" aria-hidden="true"></span></summary>
+<p>Банковской картой через ЮKassa, чек по 54-ФЗ придёт на почту. Подписка помесячная: продление можно отключить в личном кабинете в любой момент.</p>
+</details>
+</div>
+</div>
+</section>
+</main>
+
+<section class="buy" id="buy">
+<div class="wrap buy-grid">
+<div class="buy-copy">
+<div class="kicker"><b>07</b>Подключение</div>
+<h2 class="buy-h">Первая правка — <span class="mark">сегодня</span></h2>
+<p>Выберите тариф и оплатите подписку. Потом нажмите «Подключить» в админке WordPress — и пишите агенту, что поменять.</p>
+<ul class="buy-points">
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Подписка помесячно, продление отключается в любой момент</li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>«Отменить» любую правку в течение 7 дней</li>
+<li><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Если подключение не получится, поможет специалист</li>
+</ul>
+</div>
+<div>
+<sc-if value="{{notSubmitted}}" hint-placeholder-val="{{ true }}">
+<form class="form" onSubmit="{{submit}}">
+<fieldset>
+<legend>Тариф</legend>
+<div class="opts">
+<label class="{{optStart}}"><input type="radio" name="plan" value="start" checked="{{isStart}}" onChange="{{pickStart}}"><b>Старт</b><span>4&nbsp;900&nbsp;₽/мес</span></label>
+<label class="{{optBusiness}}"><input type="radio" name="plan" value="business" checked="{{isBusiness}}" onChange="{{pickBusiness}}"><b>Бизнес</b><span>12&nbsp;900&nbsp;₽/мес</span></label>
+<label class="{{optAgency}}"><input type="radio" name="plan" value="agency" checked="{{isAgency}}" onChange="{{pickAgency}}"><b>Агентство</b><span>39&nbsp;900&nbsp;₽/мес</span></label>
+</div>
+</fieldset>
+<div class="fld">
+<label for="site">Адрес сайта</label>
+<input id="site" name="site" type="text" placeholder="например, ваш-сайт.рф" required="required">
+</div>
+<div class="fld">
+<label for="mail">Почта для чеков и уведомлений</label>
+<input id="mail" name="email" type="email" placeholder="имя@почта.рф" required="required">
+</div>
+<label class="agree"><input type="checkbox" name="agree" required="required"><span>Принимаю <a href="#offer">условия оферты</a> и даю согласие на <a href="#privacy">обработку персональных данных</a></span></label>
+<button class="btn btn-mark" type="submit">Перейти к оплате — {{planPriceText}} ₽/мес<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></button>
+<p class="fine">Оплата банковской картой через ЮKassa. Чек по 54-ФЗ придёт на почту.</p>
+</form>
+</sc-if>
+<sc-if value="{{submitted}}" hint-placeholder-val="{{ false }}">
+<div class="form done" aria-live="polite">
+<span class="done-ic" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24"><path pathLength="1" d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>
+<h3 class="h3">Тариф «{{planName}}» выбран</h3>
+<p>Сейчас откроется оплата в ЮKassa. Сразу после неё пришлём на почту ссылку для подключения сайта.</p>
+<button class="btn btn-ink done-btn" type="button" onClick="{{reset}}">Изменить данные</button>
+</div>
+</sc-if>
+</div>
+</div>
+</section>
+
+<footer class="foot">
+<div class="wrap foot-in">
+<a class="logo" href="#top"><span class="logo-mark" aria-hidden="true"><i></i></span>Радити</a>
+<nav aria-label="Документы">
+<a href="#offer">Оферта</a>
+<a href="#privacy">Политика конфиденциальности</a>
+<a href="#faq">Вопросы</a>
+</nav>
+<p>© 2026 Радити, raditi.ru · ООО «[НАЗВАНИЕ]» · ИНН [ИНН] · [ПОЧТА ПОДДЕРЖКИ]</p>
+</div>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#2A36D6","options":["#2A36D6","#0B7A63","#C2410C","#6D28D9"]},"$preview":{"width":1440,"height":8000}}'>
+class Component extends DCLogic {
+  constructor(...args) {
+    super(...args);
+    this.state = {
+      idx: 0, phase: 7, phaseStart: 0, typed: 0,
+      applied: [true, false, false], undone: false, cancelled: false,
+      paused: false, pausedAt: 0, reduced: false,
+      edits: 20, plan: 'start', submitted: false,
+      safeUndone: false, safeFlips: 0
+    };
+    this.tick = this.tick.bind(this);
+  }
+
+  componentDidMount() {
+    let reduced = false;
+    try { reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { reduced = false; }
+    this.last = Date.now();
+    this.setState({ phaseStart: Date.now(), reduced: reduced, typed: this.scenarios()[0].text.length });
+    this.timer = setInterval(this.tick, 60);
+  }
+
+  componentWillUnmount() {
+    clearInterval(this.timer);
+  }
+
+  scenarios() {
+    return [
+      {
+        tab: 'Цена', code: false,
+        text: 'Поменяй цену мужской стрижки на 1 500 ₽',
+        steps: ['Сохраняю снимок страницы «Цены»', 'Нашёл строку «Мужская стрижка»', 'Меняю цену и проверяю страницу'],
+        reply: 'Готово: мужская стрижка теперь стоит 1 500 ₽. Вернуть старую цену можно в течение 7 дней.'
+      },
+      {
+        tab: 'Баннер', code: true,
+        text: 'Добавь сверху баннер: −20% на бороду до 30 сентября',
+        steps: ['Готовлю правку в копии сайта', 'Проверки пройдены', 'Выкладываю и проверяю сайт'],
+        plan: ['Полоса над меню на всех страницах', 'Текст: «−20% на моделирование бороды до 30 сентября»'],
+        reply: 'Баннер на сайте, проверки пройдены. Скажите — и я его уберу.'
+      },
+      {
+        tab: 'Часы работы', code: false,
+        text: 'В субботу теперь работаем до 18:00 — обнови часы',
+        steps: ['Сохраняю снимок подвала сайта', 'Нашёл часы работы', 'Обновляю и проверяю страницы'],
+        reply: 'Готово: по субботам теперь до 18:00. Страницы проверил.'
+      }
+    ];
+  }
+
+  dur(phase, sc) {
+    const d = [700, sc.text.length * 38 + 300, 800, 900, 900, 3400, 1100, 5400];
+    return d[phase];
+  }
+
+  tick() {
+    const now = Date.now();
+    const gap = this.last ? now - this.last : 0;
+    this.last = now;
+    const s = this.state;
+    if (s.reduced || s.paused) return;
+    const hidden = typeof document !== 'undefined' && document.hidden;
+    if (hidden || gap > 800) {
+      this.setState({ phaseStart: s.phaseStart + gap });
+      return;
+    }
+    const sc = this.scenarios()[s.idx];
+    const el = now - s.phaseStart;
+    if (s.phase === 1) {
+      const n = Math.min(sc.text.length, Math.floor(el / 38));
+      if (n !== s.typed) this.setState({ typed: n });
+    }
+    if (el >= this.dur(s.phase, sc)) this.advance();
+  }
+
+  advance() {
+    const s = this.state;
+    const sc = this.scenarios()[s.idx];
+    let p = s.phase + 1;
+    if (p === 5 && !sc.code) p = 6;
+    if (p > 7) {
+      this.go(s.idx + 1);
+      return;
+    }
+    const next = { phase: p, phaseStart: Date.now() };
+    if (p === 2) next.typed = sc.text.length;
+    if (p === 6) {
+      const a = s.applied.slice();
+      a[s.idx] = true;
+      next.applied = a;
+    }
+    this.setState(next);
+  }
+
+  go(i) {
+    const list = this.scenarios();
+    const n = list.length;
+    const idx = ((i % n) + n) % n;
+    const applied = idx === this.state.idx + 1 ? this.state.applied.slice() : list.map((x, j) => j < idx);
+    const base = { idx: idx, applied: applied, phaseStart: Date.now(), undone: false, cancelled: false, paused: false };
+    if (this.state.reduced) {
+      applied[idx] = true;
+      this.setState(Object.assign(base, { phase: 7, typed: list[idx].text.length }));
+    } else {
+      this.setState(Object.assign(base, { phase: 0, typed: 0 }));
+    }
+  }
+
+  undo() {
+    const s = this.state;
+    const a = s.applied.slice();
+    a[s.idx] = false;
+    this.setState({ applied: a, undone: true, phaseStart: Date.now() });
+  }
+
+  approve() {
+    if (this.state.phase === 5) this.advance();
+  }
+
+  cancel() {
+    if (this.state.phase === 5) this.setState({ phase: 7, cancelled: true, phaseStart: Date.now() });
+  }
+
+  togglePause() {
+    const s = this.state;
+    if (s.paused) {
+      this.last = Date.now();
+      this.setState({ paused: false, phaseStart: s.phaseStart + (Date.now() - s.pausedAt) });
+    } else {
+      this.setState({ paused: true, pausedAt: Date.now() });
+    }
+  }
+
+  renderVals() {
+    const s = this.state;
+    const list = this.scenarios();
+    const sc = list[s.idx];
+    const p = s.phase;
+    const fmt = (v) => Math.round(v).toLocaleString('ru-RU');
+    const flash = (j) => {
+      if (j !== s.idx) return '';
+      if (s.undone) return 'rev';
+      return (s.applied[j] && p >= 6) ? 'chg' : '';
+    };
+    const stepAt = [3, 4, 6];
+    const steps = sc.steps.map((label, i) => ({
+      label: label,
+      show: p >= stepAt[i] && !(s.cancelled && i === 2),
+      pending: p === stepAt[i],
+      done: p > stepAt[i]
+    })).filter((x) => x.show);
+
+    const e = s.edits;
+    const tariffs = [
+      { key: 'start', name: 'Старт', price: 4900, quota: 30 },
+      { key: 'business', name: 'Бизнес', price: 12900, quota: 80 },
+      { key: 'agency', name: 'Агентство', price: 39900, quota: 250 }
+    ];
+    const opts = tariffs.map((t) => {
+      const packs = Math.max(0, Math.ceil((e - t.quota) / 10));
+      return { key: t.key, name: t.name, packs: packs, total: t.price + packs * 1990 };
+    });
+    let bi = 0;
+    opts.forEach((o, i) => { if (o.total < opts[bi].total) bi = i; });
+    opts.forEach((o, i) => { if (i > bi && o.total <= opts[bi].total * 1.05) bi = i; });
+    const best = opts[bi];
+    const plural = (n, one, few, many) => {
+      const m10 = n % 10;
+      const m100 = n % 100;
+      if (m10 === 1 && m100 !== 11) return one;
+      if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+      return many;
+    };
+    const recName = best.packs > 0
+      ? best.name + ' + ' + best.packs + ' ' + plural(best.packs, 'пакет', 'пакета', 'пакетов') + ' по 10 правок'
+      : best.name;
+    const planCls = (k) => (best.key === k ? 'plan rec' : 'plan');
+    const btnCls = (k) => (best.key === k ? 'btn btn-main' : 'btn btn-line');
+    const planPrice = { start: 4900, business: 12900, agency: 39900 };
+    const planName = { start: 'Старт', business: 'Бизнес', agency: 'Агентство' };
+    const pick = (k) => () => this.setState({ plan: k });
+    const optCls = (k) => (s.plan === k ? 'opt sel' : 'opt');
+
+    let reply = sc.reply;
+    if (s.cancelled) reply = 'Отменил — на сайте ничего не изменилось.';
+    else if (s.undone) reply = 'Вернул как было — сайт в прежнем виде.';
+
+    return {
+      accent: this.props.accent ?? '#2A36D6',
+      userText: sc.text,
+      typing: p === 1,
+      notTyping: p !== 1,
+      typedText: sc.text.slice(0, s.typed),
+      showUser: p >= 2,
+      thinking: p === 2,
+      hasSteps: steps.length > 0,
+      steps: steps,
+      showApprove: p === 5,
+      approveItems: (sc.plan || []).map((t) => ({ t: t })),
+      approve: () => this.approve(),
+      cancel: () => this.cancel(),
+      showReply: p === 7,
+      reply: reply,
+      canUndo: p === 7 && !s.undone && !s.cancelled,
+      undo: () => this.undo(),
+      nextDemo: () => this.go(s.idx + 1),
+      tabs: list.map((t, i) => ({
+        label: t.tab,
+        cls: i === s.idx ? 'tab on' : 'tab',
+        pressed: i === s.idx ? 'true' : 'false',
+        pick: () => this.go(i)
+      })),
+      pauseLabel: s.paused ? 'Продолжить' : 'Пауза',
+      pausePressed: s.paused ? 'true' : 'false',
+      togglePause: () => this.togglePause(),
+      bannerCls: 'promo' + (s.applied[1] ? ' on' : '') + (flash(1) ? ' ' + flash(1) : ''),
+      priceCls: 's-row' + (flash(0) ? ' ' + flash(0) : ''),
+      priceText: s.applied[0] ? '1 500 ₽' : '1 200 ₽',
+      hoursCls: flash(2),
+      satEnd: s.applied[2] ? '18:00' : '16:00',
+
+      edits: e,
+      editsPct: ((e - 5) / 245 * 100).toFixed(1),
+      setEdits: (ev) => this.setState({ edits: Number(ev.target.value) }),
+      recName: recName,
+      recPriceText: fmt(best.total),
+      perEditText: fmt(best.total / e),
+      studioText: fmt(Math.max(15000, e * 750)),
+      freelanceText: fmt(e * 500),
+      startCls: planCls('start'),
+      businessCls: planCls('business'),
+      agencyCls: planCls('agency'),
+      startBtn: btnCls('start'),
+      businessBtn: btnCls('business'),
+      agencyBtn: btnCls('agency'),
+      pickStart: pick('start'),
+      pickBusiness: pick('business'),
+      pickAgency: pick('agency'),
+
+      isStart: s.plan === 'start',
+      isBusiness: s.plan === 'business',
+      isAgency: s.plan === 'agency',
+      optStart: optCls('start'),
+      optBusiness: optCls('business'),
+      optAgency: optCls('agency'),
+      planName: planName[s.plan],
+      planPriceText: fmt(planPrice[s.plan]),
+      submitted: s.submitted,
+      notSubmitted: !s.submitted,
+      submit: (ev) => {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        this.setState({ submitted: true });
+      },
+      reset: () => this.setState({ submitted: false }),
+
+      safePrice: s.safeUndone ? '1 200 ₽' : '1 500 ₽',
+      safeNote: s.safeUndone ? 'Вернули из снимка — на сайте снова 1 200 ₽' : 'Новая цена на сайте, снимок сохранён',
+      safeBtn: s.safeUndone ? 'Вернуть правку' : 'Отменить правку',
+      safeCls: s.safeFlips === 0 ? '' : (s.safeUndone ? 'rev' : 'chg'),
+      toggleSafe: () => this.setState({ safeUndone: !s.safeUndone, safeFlips: s.safeFlips + 1 })
+    };
+  }
+}
+</script>
+</body>
+</html>

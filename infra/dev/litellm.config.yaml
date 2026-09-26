@@ -1,0 +1,33 @@
+# LiteLLM для разработки: классы моделей роутера (spec §9).
+# Только российские провайдеры. В проде ключи читаются из Vault (kv/llm/<provider>).
+# ВАЖНО: ID моделей и адреса API сверьте с каталогами провайдеров перед запуском —
+# ниже заглушки в угловых скобках.
+
+model_list:
+  # Лёгкий класс: разбор просьбы, тексты, простые правки контента.
+  - model_name: light
+    litellm_params:
+      model: openai/<ID модели YandexGPT Pro 5.1 или Qwen3.6 35B в Yandex AI Studio>
+      api_base: https://llm.api.cloud.yandex.net/v1
+      api_key: os.environ/YANDEX_API_KEY
+
+  # Стандарт: обычные правки кода и контента.
+  - model_name: standard
+    litellm_params:
+      model: openai/<ID модели Qwen3-Coder-Next в Cloud.ru>
+      api_base: <адрес OpenAI-совместимого API Cloud.ru Foundation Models>
+      api_key: os.environ/CLOUDRU_API_KEY
+
+  # Тяжёлый: новые страницы, сложная вёрстка, повтор после неудачи.
+  - model_name: heavy
+    litellm_params:
+      model: openai/<ID модели GLM-5.1 в Cloud.ru>
+      api_base: <адрес OpenAI-совместимого API Cloud.ru Foundation Models>
+      api_key: os.environ/CLOUDRU_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+
+litellm_settings:
+  drop_params: true
