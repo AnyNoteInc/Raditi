@@ -186,7 +186,7 @@
 | Qwen3 235B        | Yandex AI Studio | 500              | 500               | —               | 610               |
 | gpt-oss-120b      | Cloud.ru         | 16               | 61                | —               | служебные вызовы  |
 
-Цены с НДС: Cloud.ru — из [тарифов Evolution Foundation Models](https://cdn.cloud.ru/docs/legal/tariffs/evolution/future-version/foundation-models.pdf) от 15 сентября 2026 (без НДС × 1,22), Yandex — из [правил тарификации AI Studio](https://aistudio.yandex.ru/docs/ru/ai-studio/pricing.html). Самый сильный рычаг — кэш: у Yandex он в 4–6 раз дешевле обычного входа, у Cloud.ru в тарифах его нет.
+Цены с НДС: Cloud.ru — из [тарифов Evolution Foundation Models](https://cdn.cloud.ru/docs/legal/tariffs/evolution/future-version/foundation-models.pdf) от 15 сентября 2026 (без НДС × 1,22), Yandex — из [правил тарификации AI Studio](https://aistudio.yandex.ru/docs/ru/ai-studio/pricing.html). Самый сильный рычаг — кэш: у Yandex он в 4–6 раз дешевле обычного входа, у Cloud.ru в тарифах его нет. В таблице цены Cloud.ru округлены до рубля; точные (Kimi-K2.6 — 175,68 / 725,9, GLM-5.1 — 198,86 / 829,6, gpt-oss-120b — 15,86 / 61) лежат в сидах `llm_model_prices`.
 
 ### Вычисления и хранение
 
