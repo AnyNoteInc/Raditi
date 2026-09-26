@@ -6,14 +6,19 @@ dist/
 build/
 out/
 .turbo/
+.vitest/
 coverage/
 playwright-report/
 test-results/
+*.tsbuildinfo
+next-env.d.ts
+# Prisma client is generated (pnpm db:generate)
+**/src/generated/
 
 # Окружение и секреты
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.pem
 *.key
 

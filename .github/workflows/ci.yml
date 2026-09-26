@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:17.11-alpine3.24
+        env:
+          POSTGRES_USER: raditi
+          POSTGRES_PASSWORD: raditi
+          POSTGRES_DB: raditi
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U raditi -d raditi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:8.10.2-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    # Synthetic CI values only: no real client data on GitHub runners (152-FZ).
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql://raditi:raditi@localhost:5432/raditi
+      REDIS_URL: redis://localhost:6379
+      BETTER_AUTH_SECRET: ci-secret-not-real-0123456789abcdef
+      BETTER_AUTH_URL: http://localhost:3000
+      APP_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+
+      # Squash merges put the PR title into main, and semantic-release reads main.
+      - name: Conventional Commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pnpm exec commitlint --from "$BASE_SHA" --to "$HEAD_SHA"
+          printf '%s\n' "$PR_TITLE" | pnpm exec commitlint
+
+      - name: Env vars are declared for turbo
+        run: pnpm check-env
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Architecture
+        run: pnpm check-architecture
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
