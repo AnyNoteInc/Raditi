@@ -17,7 +17,7 @@
 
 ## Состояние
 
-Каркас готов (`/bootstrap`, B0–B5, 26.09.2026): монорепозиторий, пакеты-порты и адаптеры, `apps/web`, `apps/orchestrator` (роли `core` и `mcp`; `runner` — заглушка до P2), `apps/e2e`, схема данных v1 с миграциями и сидами, локальная инфраструктура с мониторингом. Работают вход по почте и паролю с согласиями, юридические страницы, health и метрики, outbox → BullMQ → письма. Бизнес-логики задач, песочниц, драйверов, git-провайдеров и оплаты ещё нет — это задачи этапа P (`docs/plan/roadmap.md`). Реквизиты оператора в юридических текстах — заглушки (`apps/web/content/legal/README.md`).
+Каркас готов (`/bootstrap`, B0–B5, 26.09.2026): монорепозиторий, пакеты-порты и адаптеры, `apps/web`, `apps/orchestrator` (роли `core` и `mcp`; `runner` — заглушка до P2), `apps/e2e`, схема данных v1 с миграциями и сидами, локальная инфраструктура с мониторингом. Работают вход по почте и паролю с согласиями, юридические страницы, health и метрики, outbox → BullMQ → письма. P1 добавляет парсеры четырёх CLI и выбор файлов сессии, зашифрованные снимки ходов в S3 и проверяемое восстановление через порт Sandbox; отчёт — `docs/plan/02-p1-verification.md`. Следующий шаг — P2: Docker-провайдер и раннер. Запуск CLI с моделями — P4/P5; бизнес-логика задач, git-провайдеры и оплата ещё впереди (`docs/plan/roadmap.md`). Реквизиты оператора в юридических текстах — заглушки (`apps/web/content/legal/README.md`).
 
 Локальные проверки и границы результата — `docs/plan/01-bootstrap-verification.md`; GitHub Actions нужно подтвердить после отправки ветки.
 
@@ -51,6 +51,7 @@ Node 26.10 (`nvm use`) и pnpm 12.6. `npm` и `npx` внутри репозит�
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm check-architecture`, `pnpm check-env`; всё сразу — `pnpm gates`.
 - Тесты `@repo/db` с базой: `DATABASE_URL=postgresql://raditi:raditi@localhost:5432/raditi pnpm --filter @repo/db test` (без переменной они пропускаются).
 - `pnpm e2e` — smoke на поднятой инфраструктуре (web на :3100, core на :8181, mcp на :8182); `pnpm dev` перед этим остановить.
+- `pnpm --filter orchestrator verify:snapshots` — локальная интеграционная проверка P1 на SeaweedFS + OpenBao из `.env`: временные синтетические данные, без моделей; свой Transit-ключ и S3-объекты удаляются после проверки.
 - Health: web `/api/health`, orchestrator `/health` — публично только status; подробности web и core — с `Authorization: Bearer $METRICS_TOKEN`, MCP всегда только status. Метрики — `/api/metrics` и `/metrics` с тем же токеном.
 
 ## Структура

@@ -173,8 +173,8 @@ const secretLikeEnvValues: readonly RegExp[] = [
   /\b(?:AQVN[A-Za-z0-9_-]{30,}|t1\.[A-Za-z0-9_-]{20,}|y[0-3]_[A-Za-z0-9_-]{20,})/,
 ]
 
-/** Everything under /workspace is snapshotted or uploaded (repo, inbox, out). */
-const snapshottedRoot = '/workspace'
+/** Both the working tree and native agent home may be snapshotted or uploaded. */
+const snapshottedRoots = ['/workspace', '/agent-home'] as const
 
 const secretPath = z
   .string()
@@ -191,8 +191,8 @@ const secretPath = z
     'expected a normalized absolute file path',
   )
   .refine(
-    (path) => path !== snapshottedRoot && !path.startsWith(`${snapshottedRoot}/`),
-    `secrets never live under ${snapshottedRoot}: it is snapshotted and uploaded`,
+    (path) => !snapshottedRoots.some((root) => path === root || path.startsWith(`${root}/`)),
+    'secrets never live under /workspace or /agent-home: they may be snapshotted',
   )
 
 const sandboxEnvSchema = z.record(z.string(), z.string().max(4096)).superRefine((env, ctx) => {
@@ -233,7 +233,7 @@ const networkPolicySchema = z.discriminatedUnion('mode', [
 /**
  * The invariants of CLAUDE.md rule 5 as a schema: image pinned by digest, uid/gid 10001,
  * at most 2 vCPU / 4096 MiB / 512 processes / 20 minutes, no network or only sandbox-gw with
- * the llm and mcp routes, no credentials in env, secret files outside /workspace.
+ * the llm and mcp routes, no credentials in env, secret files outside /workspace and /agent-home.
  * Read-only rootfs has no switch at all (see SandboxSpec).
  */
 export const sandboxSpecSchema = z

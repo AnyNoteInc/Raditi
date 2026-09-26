@@ -19,6 +19,13 @@ export interface PutOptions {
 }
 
 export interface ObjectStorage {
+  /** Atomic create for small markers (at most 64 KiB); false means the key already exists. */
+  putIfAbsent(
+    bucket: BucketKind,
+    key: string,
+    body: Uint8Array,
+    opts?: PutOptions,
+  ): Promise<boolean>
   put(
     bucket: BucketKind,
     key: string,
@@ -34,5 +41,5 @@ export interface ObjectStorage {
    * checks only the buckets its own S3 key may access (spec §14).
    */
   checkBuckets(kinds?: readonly BucketKind[]): Promise<Partial<Record<BucketKind, boolean>>>
-  // TODO(P1, M2): presigned GET/PUT for the browser (15 minutes) and multipart upload.
+  // TODO(P2, M2): scoped presigned GET/PUT for runners and browsers, never sandboxes.
 }

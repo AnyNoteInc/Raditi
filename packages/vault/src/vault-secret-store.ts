@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import type { VaultConfig } from './config.ts'
 import { VaultError } from './errors.ts'
+import { createTransitStore } from './transit.ts'
 
 export interface VaultSecretStoreOptions extends VaultConfig {
   fetch?: typeof fetch
@@ -36,7 +37,7 @@ const healthBodySchema = z.object({
 
 /**
  * SecretStore port over the Vault HTTP API (OpenBao or Deckhouse Stronghold, spec §15).
- * Only health() is implemented; KV, Transit, SSH CA, tokens and wrapping arrive with P7.
+ * Health and Transit data keys are implemented. KV, SSH CA, deploy tokens and wrapping are P7.
  * The config is kept in this closure and never logged.
  */
 export function createVaultSecretStore(options: VaultSecretStoreOptions): SecretStore {
@@ -57,10 +58,11 @@ export function createVaultSecretStore(options: VaultSecretStoreOptions): Secret
           method: 'GET',
           headers: { accept: 'application/json' },
           signal: AbortSignal.timeout(timeoutMs),
+          redirect: 'error',
         })
       } catch (err) {
         const reason = err instanceof Error && err.name === 'TimeoutError' ? 'timed out' : 'failed'
-        throw new VaultError(`Vault health request ${reason}`, undefined, { cause: err })
+        throw new VaultError(`Vault health request ${reason}`)
       }
 
       if (!HEALTH_STATUSES.has(res.status)) {
@@ -70,14 +72,12 @@ export function createVaultSecretStore(options: VaultSecretStoreOptions): Secret
       let json: unknown
       try {
         json = await res.json()
-      } catch (err) {
-        throw new VaultError('Vault health response is not JSON', res.status, { cause: err })
+      } catch {
+        throw new VaultError('Vault health response is not JSON', res.status)
       }
       const parsed = healthBodySchema.safeParse(json)
       if (!parsed.success) {
-        throw new VaultError('Unexpected Vault health response body', res.status, {
-          cause: parsed.error,
-        })
+        throw new VaultError('Unexpected Vault health response body', res.status)
       }
       const body = parsed.data
 
@@ -94,8 +94,7 @@ export function createVaultSecretStore(options: VaultSecretStoreOptions): Secret
     kvRead: pending('kvRead'),
     kvWrite: pending('kvWrite'),
     kvDelete: pending('kvDelete'),
-    transitDataKey: pending('transitDataKey'),
-    transitDecryptDataKey: pending('transitDecryptDataKey'),
+    ...createTransitStore(options),
     sshSign: pending('sshSign'),
     createToken: pending('createToken'),
     wrap: pending('wrap'),

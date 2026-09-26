@@ -56,6 +56,7 @@ const run = {
   context: {
     taskId: 't',
     sessionId: 's',
+    nativeSessionId: '01960000-0000-7000-8000-000000000001',
     turn: 1,
     llm: { baseUrl: 'http://gw.sandbox/llm', apiKey: 'k', model: 'm' },
     mcp: { url: 'http://gw.sandbox/mcp', token: 'x' },
@@ -103,8 +104,8 @@ describe.each(expected)('$id driver', ({ create, id, task, capabilities, private
     expect(() => driver.command(run, { prompt: 'p', attachments: [] })).toThrow(
       `${id}.command (${task})`,
     )
-    expect(() => driver.parseEvent('{}')).toThrow(`${id}.parseEvent (${task})`)
-    expect(() => driver.extractResult([], null)).toThrow(`${id}.extractResult (${task})`)
+    expect(driver.parseEvent('{}')).toEqual([])
+    expect(driver.extractResult([], null)).toBeNull()
   })
 
   it('rejects an empty image prefix', () => {

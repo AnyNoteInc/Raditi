@@ -114,6 +114,65 @@ async function collect(body: AsyncIterable<Uint8Array>): Promise<string> {
 }
 
 describe('createS3ObjectStorage', () => {
+  it('claims a small object atomically without a preceding HEAD', async () => {
+    const { client, requests } = fakeS3(() => ({ status: 200, headers: { etag: '"claim"' } }))
+    const storage = createS3ObjectStorage(config, client)
+    expect(
+      await storage.putIfAbsent(
+        'sessions',
+        'sessions/s1/turns/0001/reservation.json',
+        Buffer.from('{}'),
+        {
+          contentType: 'application/json',
+          sizeBytes: 2,
+        },
+      ),
+    ).toBe(true)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({ method: 'PUT', body: Buffer.from('{}') })
+    expect(requests[0]?.headers).toMatchObject({
+      'if-none-match': '*',
+      'content-type': 'application/json',
+      'content-length': '2',
+    })
+  })
+
+  it.each([
+    [412, 'PreconditionFailed'],
+    [409, 'ConditionalRequestConflict'],
+  ])('returns false for the conditional-write conflict %i/%s', async (status, code) => {
+    const { client, requests } = fakeS3(() => ({ status, body: xmlError(code) }))
+    const storage = createS3ObjectStorage(config, client)
+    await expect(storage.putIfAbsent('sessions', 'claim', Buffer.from('{}'))).resolves.toBe(false)
+    expect(requests).toHaveLength(1)
+  })
+
+  it.each([
+    [403, 'AccessDenied'],
+    [409, 'OperationAborted'],
+    [412, 'AccessDenied'],
+    [500, 'PreconditionFailed'],
+  ])('does not mistake %i/%s for an existing claim', async (status, code) => {
+    const { client } = fakeS3(() => ({ status, body: xmlError(code) }))
+    const storage = createS3ObjectStorage(config, client)
+    await expect(storage.putIfAbsent('sessions', 'claim', Buffer.from('{}'))).rejects.toMatchObject(
+      { name: code },
+    )
+  })
+
+  it('bounds a claim to 64 KiB and checks its supplied length before any request', async () => {
+    const { client, requests } = fakeS3(() => ({ status: 200 }))
+    const storage = createS3ObjectStorage(config, client)
+    await expect(storage.putIfAbsent('sessions', 'claim', Buffer.alloc(65_537))).rejects.toSatisfy(
+      isDomainError,
+    )
+    await expect(
+      storage.putIfAbsent('sessions', 'claim', Buffer.from('{}'), { sizeBytes: 1 }),
+    ).rejects.toSatisfy(isDomainError)
+    expect(requests).toHaveLength(0)
+    await expect(storage.putIfAbsent('sessions', 'claim', Buffer.alloc(65_536))).resolves.toBe(true)
+  })
+
   it('puts a byte body into the bucket mapped from its kind', async () => {
     const { client, requests } = fakeS3(() => ({ status: 200, headers: { etag: '"e1"' } }))
     const storage = createS3ObjectStorage(config, client)
@@ -341,6 +400,9 @@ describe('createS3ObjectStorage', () => {
     await expect(storage.exists('inbox', key)).rejects.toSatisfy(isDomainError)
     await expect(storage.delete('inbox', key)).rejects.toSatisfy(isDomainError)
     await expect(storage.put('inbox', key, Buffer.from('x'))).rejects.toSatisfy(isDomainError)
+    await expect(storage.putIfAbsent('inbox', key, Buffer.from('x'))).rejects.toSatisfy(
+      isDomainError,
+    )
     expect(requests).toHaveLength(0)
   })
 

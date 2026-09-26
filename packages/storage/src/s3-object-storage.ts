@@ -6,6 +6,7 @@ import {
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
+  PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
@@ -26,6 +27,7 @@ export interface S3ObjectStorageOptions {
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 3_000
 const MAX_KEY_BYTES = 1024
+const MAX_CONDITIONAL_PUT_BYTES = 64 * 1024
 
 export function createS3Client(config: StorageConfig): S3Client {
   return new S3Client({
@@ -57,6 +59,32 @@ export function createS3ObjectStorage(
   const bucketOf = (kind: BucketKind): string => config.buckets[kind]
 
   return {
+    async putIfAbsent(bucket, key, body, opts?: PutOptions) {
+      assertKey(key)
+      if (!(body instanceof Uint8Array) || body.byteLength > MAX_CONDITIONAL_PUT_BYTES) {
+        throw badRequest('Conditional object writes require at most 65536 bytes')
+      }
+      if (opts?.sizeBytes !== undefined && opts.sizeBytes !== body.byteLength) {
+        throw badRequest('sizeBytes does not match the body length')
+      }
+      try {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketOf(bucket),
+            Key: key,
+            Body: body,
+            ContentType: opts?.contentType,
+            ContentLength: body.byteLength,
+            IfNoneMatch: '*',
+          }),
+        )
+        return true
+      } catch (error) {
+        if (isConditionalWriteConflict(error)) return false
+        throw error
+      }
+    },
+
     async put(bucket, key, body, opts?: PutOptions) {
       assertKey(key)
       const sizeBytes = opts?.sizeBytes
@@ -126,6 +154,16 @@ export function createS3ObjectStorage(
       return Object.fromEntries(results) as Partial<Record<BucketKind, boolean>>
     },
   }
+}
+
+/** Only the documented conditional-write conflicts mean the caller did not win the claim. */
+function isConditionalWriteConflict(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const e = error as { name?: unknown; $metadata?: { httpStatusCode?: unknown } }
+  return (
+    (e.name === 'PreconditionFailed' && e.$metadata?.httpStatusCode === 412) ||
+    (e.name === 'ConditionalRequestConflict' && e.$metadata?.httpStatusCode === 409)
+  )
 }
 
 /** C0 controls and DEL: they break signatures, logs and the proxies in between. */

@@ -1,6 +1,9 @@
 import type { AgentDriver } from '@repo/domain'
 import { notImplemented, SANDBOX_AGENT_HOME } from '@repo/domain'
 import { parseAgentDriverConfig, type AgentDriverConfig } from './config.ts'
+import { extractJsonResult } from './jsonl.ts'
+import { parseKimiEvent } from './kimi-events.ts'
+import { KIMI_WORKDIR_KEY, requireNativeSessionId } from './session-paths.ts'
 
 // Kimi Code CLI (@moonshot-ai/kimi-code 2.1), the second driver — spec §8, §9; verified in P5.
 //   kimi -p <prompt> --output-format stream-json [--session <id>]
@@ -30,17 +33,17 @@ export function createKimiDriver(config: AgentDriverConfig): AgentDriver {
     command() {
       throw todo('command')
     },
-    parseEvent() {
-      throw todo('parseEvent')
+    parseEvent: parseKimiEvent,
+    sessionState(run) {
+      const session = `sessions/${KIMI_WORKDIR_KEY}/${requireNativeSessionId(run)}`
+      // The index is outside sessions/. Capture conversation state and per-agent journals,
+      // never session logs, background process state, credentials or provider/MCP config.
+      return {
+        root: home,
+        include: ['session_index.jsonl', `${session}/state.json`, `${session}/agents`],
+        exclude: [],
+      }
     },
-    sessionState() {
-      // An allowlist, not the whole home minus credentials/, logs/, bin/, updates/: config files
-      // that may carry per-turn tokens never reach the snapshot.
-      // TODO(P5): confirm where session_index.jsonl lives and include it if it is outside sessions/.
-      return { root: home, include: ['sessions'], exclude: [] }
-    },
-    extractResult() {
-      throw todo('extractResult')
-    },
+    extractResult: extractJsonResult,
   }
 }

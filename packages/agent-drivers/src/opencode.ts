@@ -1,6 +1,8 @@
 import type { AgentDriver } from '@repo/domain'
 import { notImplemented, SANDBOX_AGENT_HOME } from '@repo/domain'
 import { parseAgentDriverConfig, type AgentDriverConfig } from './config.ts'
+import { extractJsonResult } from './jsonl.ts'
+import { parseOpencodeEvent } from './opencode-events.ts'
 
 // OpenCode (opencode-ai 1.18), a fallback — spec §8, §9; verified in P5.
 //   opencode run --format json [--session <id>]
@@ -32,15 +34,12 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
     command() {
       throw todo('command')
     },
-    parseEvent() {
-      throw todo('parseEvent')
-    },
+    parseEvent: parseOpencodeEvent,
     sessionState() {
-      // TODO(P5): confirm the file names with 1.18, or pack an `opencode export` file instead.
+      // Stable-channel filenames confirmed in 1.18.32. P5 can use export/import instead.
+      // The CLI must be stopped before taking the db + WAL snapshot.
       return { root: home, include: [...sessionFiles], exclude: [] }
     },
-    extractResult() {
-      throw todo('extractResult')
-    },
+    extractResult: extractJsonResult,
   }
 }

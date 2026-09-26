@@ -1,6 +1,9 @@
 import type { AgentDriver } from '@repo/domain'
 import { notImplemented, SANDBOX_AGENT_HOME } from '@repo/domain'
 import { parseAgentDriverConfig, type AgentDriverConfig } from './config.ts'
+import { extractJsonResult } from './jsonl.ts'
+import { parseQwenEvent } from './qwen-events.ts'
+import { QWEN_PROJECT_KEY, requireNativeSessionId } from './session-paths.ts'
 
 // Qwen Code (@qwen-code/qwen-code 0.24), a fallback — spec §8, §9; verified in P5.
 //   qwen -p <prompt> --output-format stream-json --approval-mode yolo [--resume <id>]
@@ -24,14 +27,14 @@ export function createQwenDriver(config: AgentDriverConfig): AgentDriver {
     command() {
       throw todo('command')
     },
-    parseEvent() {
-      throw todo('parseEvent')
+    parseEvent: parseQwenEvent,
+    sessionState(run) {
+      return {
+        root: home,
+        include: [`.qwen/projects/${QWEN_PROJECT_KEY}/chats/${requireNativeSessionId(run)}.jsonl`],
+        exclude: [],
+      }
     },
-    sessionState() {
-      return { root: home, include: ['.qwen/projects'], exclude: [] }
-    },
-    extractResult() {
-      throw todo('extractResult')
-    },
+    extractResult: extractJsonResult,
   }
 }

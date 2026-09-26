@@ -122,6 +122,8 @@ describe('sandboxSpecSchema', () => {
   it('keeps secret files outside the snapshotted /workspace, absolute and unique', () => {
     for (const path of [
       '/workspace/repo/.env',
+      '/agent-home/codex/auth.json',
+      '/agent-home',
       '/workspace',
       'run/secrets/key',
       '/run/secrets/../key',

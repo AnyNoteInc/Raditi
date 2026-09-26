@@ -1,6 +1,8 @@
 import type { AgentDriver } from '@repo/domain'
 import { notImplemented, SANDBOX_AGENT_HOME } from '@repo/domain'
 import { parseAgentDriverConfig, type AgentDriverConfig } from './config.ts'
+import { parseCodexEvent } from './codex-events.ts'
+import { extractJsonResult } from './jsonl.ts'
 
 // Codex CLI (@openai/codex), the main driver — spec §8, §9; verified in P4.
 //   codex exec --json --output-schema <file> -o <last-message file> <prompt>
@@ -27,15 +29,11 @@ export function createCodexDriver(config: AgentDriverConfig): AgentDriver {
     command() {
       throw todo('command')
     },
-    parseEvent() {
-      throw todo('parseEvent')
-    },
+    parseEvent: parseCodexEvent,
     sessionState() {
       // CODEX_HOME=/agent-home/codex; sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl
       return { root: home, include: ['sessions'], exclude: [] }
     },
-    extractResult() {
-      throw todo('extractResult')
-    },
+    extractResult: extractJsonResult,
   }
 }
