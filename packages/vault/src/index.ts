@@ -1,0 +1,5 @@
+export { vaultConfigFromEnv } from './config.ts'
+export type { VaultAppRole, VaultConfig } from './config.ts'
+export { VaultError } from './errors.ts'
+export { createVaultSecretStore } from './vault-secret-store.ts'
+export type { VaultSecretStoreOptions } from './vault-secret-store.ts'

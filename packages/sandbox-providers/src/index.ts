@@ -1,0 +1,4 @@
+// Sandbox providers (spec §8): Docker with gVisor now, the `runner` role on sandbox VMs later.
+export { sandboxConfigFromEnv, type SandboxConfig } from './config.ts'
+export { createDockerSandboxProvider } from './docker.ts'
+export { defaultSandboxLimits, type SandboxLimits } from './limits.ts'

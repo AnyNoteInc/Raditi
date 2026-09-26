@@ -1,0 +1,15 @@
+// Core of the platform (ports and adapters). Adapters implement the ports below and depend
+// only on this package; apps compose them. Business logic moves here task by task.
+export * from './app-env.ts'
+export * from './errors.ts'
+export * from './legal/documents.ts'
+export * from './ports/agent-driver.ts'
+export * from './ports/git-provider.ts'
+export * from './ports/job-queue.ts'
+export * from './ports/object-storage.ts'
+export * from './ports/sandbox-provider.ts'
+export * from './ports/secret-store.ts'
+export * from './ports/site-adapter.ts'
+export * from './policies/diff-paths.ts'
+export * from './sessions/snapshot-manifest.ts'
+export * from './tasks/task-status.ts'

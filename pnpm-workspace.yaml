@@ -7,6 +7,8 @@ allowBuilds:
   '@prisma/engines': true
   '@swc/core': true
   esbuild: true
+  # Optional native speed-up for msgpackr (BullMQ); the pure JS fallback is enough.
+  msgpackr-extract: false
   prisma: true
 
 # One place for shared versions: packages reference them as "catalog:".
@@ -68,7 +70,7 @@ catalog:
   '@trpc/server': ^11.19.0
   '@trpc/client': ^11.19.0
   '@trpc/tanstack-react-query': ^11.19.0
-  '@tanstack/react-query': ^5.103.3
+  '@tanstack/react-query': ^5.103.2
 
   # UI
   next: 16.3.6
@@ -91,3 +93,40 @@ catalog:
   '@aws-sdk/lib-storage': ^3.1140.0
   undici: ^8.11.2
   sendsay-api: ^2.4.0
+
+  # Orchestrator (NestJS 12, ESM)
+  '@nestjs/core': ^12.1.0
+  '@nestjs/common': ^12.1.0
+  '@nestjs/platform-express': ^12.1.0
+  '@nestjs/microservices': ^12.1.0
+  '@nestjs/testing': ^12.1.0
+  '@nestjs/cli': ^12.0.7
+  '@nestjs/bullmq': ^12.0.0
+  bullmq: ^6.3.0
+  ioredis: ^6.0.0
+  reflect-metadata: ^0.2.2
+  rxjs: ^7.8.2
+  express: ^5.2.1
+  '@types/express': ^5.0.6
+  '@rekog/mcp-nest': ^2.0.7
+  '@modelcontextprotocol/core': ^2.1.0
+  '@modelcontextprotocol/node': ^2.1.0
+  '@modelcontextprotocol/server': ^2.1.0
+  '@prometheus-io/client': ^0.16.1
+  unplugin-swc: ^2.0.0
+  '@swc/core': ^1.16.2
+  supertest: ^7.3.0
+  '@types/supertest': ^7.2.1
+
+  # Web (Next.js 16, MDX) and e2e
+  '@next/mdx': 16.3.6
+  '@mdx-js/loader': ^3.1.1
+  '@mdx-js/react': ^3.1.1
+  '@types/mdx': ^2.0.14
+  remark-gfm: ^4.0.1
+  server-only: ^0.0.1
+  '@playwright/test': ^1.63.0
+  '@next/env': 16.3.6
+  '@fontsource-variable/golos-text': ^5.3.0
+  '@fontsource-variable/unbounded': ^5.3.0
+  '@fontsource-variable/jetbrains-mono': ^5.3.0
