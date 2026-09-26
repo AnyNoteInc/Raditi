@@ -2,6 +2,8 @@ import type { SandboxRuntime } from '@repo/domain'
 import { appEnvSchema, isProduction, sandboxRuntimes } from '@repo/domain'
 import { z } from 'zod'
 
+import { gatewayConfigFromEnv, type GatewayConfig } from './gateway/config.ts'
+
 const emptyAsMissing = (value: unknown) => (value === '' ? undefined : value)
 
 /**
@@ -22,6 +24,16 @@ const sandboxEnvSchema = z
       emptyAsMissing,
       z.string().regex(imagePrefixPattern, 'expected a repository without tag, e.g. raditi/agent'),
     ),
+    SANDBOX_DOCKER_SOCKET: z.preprocess(
+      emptyAsMissing,
+      z
+        .string()
+        .refine(
+          (value) => value.startsWith('/') && !/[\0\r\n]/.test(value),
+          'expected an absolute Unix socket path',
+        )
+        .default('/var/run/docker.sock'),
+    ),
   })
   .refine((env) => !isProduction(env.APP_ENV) || env.SANDBOX_RUNTIME === 'runsc', {
     message: 'production sandboxes run under gVisor: set SANDBOX_RUNTIME=runsc (CLAUDE.md rule 5)',
@@ -32,6 +44,9 @@ export interface SandboxConfig {
   runtime: SandboxRuntime
   /** Agent images are `<prefix>-<driver>`. */
   imagePrefix: string
+  /** Local Unix socket only. Never inferred from DOCKER_HOST. */
+  socketPath?: string
+  gateway?: GatewayConfig
 }
 
 export function sandboxConfigFromEnv(env: Record<string, string | undefined>): SandboxConfig {
@@ -39,5 +54,11 @@ export function sandboxConfigFromEnv(env: Record<string, string | undefined>): S
   if (!parsed.success) {
     throw new Error(`Invalid sandbox configuration:\n${z.prettifyError(parsed.error)}`)
   }
-  return { runtime: parsed.data.SANDBOX_RUNTIME, imagePrefix: parsed.data.SANDBOX_IMAGE_PREFIX }
+  const gateway = gatewayConfigFromEnv(env)
+  return {
+    runtime: parsed.data.SANDBOX_RUNTIME,
+    imagePrefix: parsed.data.SANDBOX_IMAGE_PREFIX,
+    socketPath: parsed.data.SANDBOX_DOCKER_SOCKET,
+    ...(gateway ? { gateway } : {}),
+  }
 }

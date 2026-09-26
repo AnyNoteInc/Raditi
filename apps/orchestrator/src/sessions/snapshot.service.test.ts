@@ -239,6 +239,36 @@ describe('host snapshot lifecycle', () => {
     },
   )
 
+  it.each(['task', 'time', 'removed'])(
+    'authenticates publication recovery metadata: %s',
+    async (kind) => {
+      const f = fixture()
+      await f.service.save(
+        {
+          ...metadata,
+          git: {
+            ...metadata.git,
+            publication: {
+              taskId: 'task-1',
+              committedAt: '2026-09-26T12:00:00.000Z',
+            },
+          },
+        },
+        await parts(),
+      )
+      expect((await f.service.load(reference)).manifest.git.publication?.taskId).toBe('task-1')
+      changeManifest(f, (m) => {
+        const git = m.git as Record<string, unknown>
+        if (kind === 'removed') delete git.publication
+        else
+          (git.publication as Record<string, unknown>)[kind === 'task' ? 'taskId' : 'committedAt'] =
+            kind === 'task' ? 'other-task' : '2026-09-26T13:00:00.000Z'
+      })
+      await expect(f.service.restore(f.sandbox, reference)).rejects.toBeDefined()
+      expect(f.restore).not.toHaveBeenCalled()
+    },
+  )
+
   it('does not commit an unsafe archive or request a data key', async () => {
     const f = fixture()
     const original = await parts()

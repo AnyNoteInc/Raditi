@@ -1,0 +1,23 @@
+name: raditi-sandbox-services
+services:
+  watchdog:
+    image: ${SANDBOX_WATCHDOG_IMAGE:?Set the digest-pinned watchdog image}
+    restart: unless-stopped
+    user: '0:0'
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.25
+    mem_limit: 128m
+    pids_limit: 32
+    environment:
+      SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
+    volumes:
+      - ${SANDBOX_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    logging:
+      driver: local
+      options:
+        max-size: 1m
+        max-file: '1'
+        compress: 'false'

@@ -5,12 +5,27 @@ const base = { APP_ENV: 'development', SANDBOX_IMAGE_PREFIX: 'raditi/agent' }
 
 describe('sandboxConfigFromEnv', () => {
   it('defaults to runc for local development', () => {
-    expect(sandboxConfigFromEnv(base)).toEqual({ runtime: 'runc', imagePrefix: 'raditi/agent' })
+    expect(sandboxConfigFromEnv(base)).toEqual({
+      runtime: 'runc',
+      imagePrefix: 'raditi/agent',
+      socketPath: '/var/run/docker.sock',
+    })
     expect(sandboxConfigFromEnv({ ...base, SANDBOX_RUNTIME: '' }).runtime).toBe('runc')
   })
 
   it('accepts runsc', () => {
     expect(sandboxConfigFromEnv({ ...base, SANDBOX_RUNTIME: 'runsc' }).runtime).toBe('runsc')
+  })
+
+  it('accepts only an explicit local Unix socket path', () => {
+    expect(
+      sandboxConfigFromEnv({ ...base, SANDBOX_DOCKER_SOCKET: '/tmp/docker.sock' }).socketPath,
+    ).toBe('/tmp/docker.sock')
+    for (const socket of ['tcp://localhost:2375', 'docker.sock', '/tmp/socket\0suffix']) {
+      expect(() => sandboxConfigFromEnv({ ...base, SANDBOX_DOCKER_SOCKET: socket })).toThrow(
+        /SANDBOX_DOCKER_SOCKET/,
+      )
+    }
   })
 
   it('rejects any other runtime', () => {

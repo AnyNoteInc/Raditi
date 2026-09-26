@@ -74,6 +74,11 @@ export const snapshotMetadataSchema = snapshotReferenceSchema
           ),
         baseSha: gitSha,
         headSha: gitSha,
+        /** Rebuild the exact trusted candidate from baseSha and the complete saved patch. */
+        publication: z.object({
+          taskId: snapshotIdSchema,
+          committedAt: z.iso.datetime(),
+        }).strict().optional(),
       })
       .strict(),
   })

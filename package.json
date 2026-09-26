@@ -18,11 +18,12 @@
     "db:deploy": "pnpm --filter @repo/db db:deploy",
     "db:seed": "pnpm --filter @repo/db db:seed",
     "e2e": "pnpm --filter e2e test:e2e",
-    "gates": "pnpm check-env && pnpm typecheck && pnpm lint && pnpm check-architecture && pnpm test && pnpm build",
+    "gates": "pnpm check-env && pnpm typecheck && pnpm lint && pnpm check-architecture && pnpm test && pnpm test:sandbox-infra && pnpm build",
     "infra:up": "docker compose --env-file .env -f infra/dev/docker-compose.yml up -d",
     "infra:down": "docker compose --env-file .env -f infra/dev/docker-compose.yml down",
     "infra:logs": "docker compose --env-file .env -f infra/dev/docker-compose.yml logs -f --tail=100",
-    "prepare": "husky || true"
+    "prepare": "husky || true",
+    "test:sandbox-infra": "node --test infra/sandbox/*.test.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",

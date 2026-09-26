@@ -267,7 +267,7 @@ try {
 
   const state = { root: home, include: ['sessions'], exclude: [] }
   const transport = new SandboxSnapshotTransport()
-  const parts = await transport.capture(a, state)
+  const parts = await transport.capture(a, state, head)
   const expectedPatch = (
     await git(
       a,

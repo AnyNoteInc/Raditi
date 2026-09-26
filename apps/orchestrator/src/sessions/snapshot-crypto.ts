@@ -26,6 +26,9 @@ export function snapshotAad(
       [...manifest.home.include].sort(),
       [...manifest.home.exclude].sort(),
       part,
+      ...(manifest.git.publication
+        ? [manifest.git.publication.taskId, manifest.git.publication.committedAt]
+        : []),
     ]),
   )
 }

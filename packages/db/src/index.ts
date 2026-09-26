@@ -9,6 +9,7 @@ export {
   type DbConfig,
 } from './client.ts'
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
+export { PostgresSiteLeaseStore } from './site-leases.ts'
 
 export { Prisma, PrismaClient } from './generated/prisma/client.ts'
 export {

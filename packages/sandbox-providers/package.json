@@ -14,12 +14,14 @@
   },
   "dependencies": {
     "@repo/domain": "workspace:*",
+    "dockerode": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "catalog:",
+    "@types/dockerode": "catalog:",
     "@typescript/native": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",

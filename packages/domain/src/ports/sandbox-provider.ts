@@ -11,6 +11,7 @@ import { badRequest } from '../errors.ts'
 
 export const sandboxRuntimes = ['runsc', 'runc'] as const
 export type SandboxRuntime = (typeof sandboxRuntimes)[number]
+export const SANDBOX_SECRETS_DIR = '/run/raditi/secrets'
 
 export interface SandboxLabels {
   workspaceId: string
@@ -18,6 +19,8 @@ export interface SandboxLabels {
   taskId: string
   sessionId: string
   turn: number
+  /** Site-lease fencing epoch, set by the turn supervisor. */
+  leaseEpoch?: number
 }
 
 export interface SandboxResources {
@@ -74,6 +77,12 @@ export interface ExecChunk {
   data: Uint8Array
 }
 
+/** stdout and stderr have independent byte offsets; neither may be inferred from the other. */
+export interface ExecCursor {
+  stdout: number
+  stderr: number
+}
+
 export interface ExecExit {
   code: number | null
   reason: 'exited' | 'timeout' | 'cancelled' | 'oom' | 'lost'
@@ -106,7 +115,9 @@ export interface Sandbox {
   readonly labels: SandboxLabels
   exec(spec: ExecSpec): Promise<ExecHandle>
   /** Re-attach to a running exec from a byte offset (after an orchestrator restart). */
-  attach(execId: string, fromOffset?: number): Promise<ExecHandle>
+  attach(execId: string, cursor?: ExecCursor): Promise<ExecHandle>
+  /** Stop managed process groups; fail closed if remaining agent processes cannot be stopped. */
+  quiesce(): Promise<void>
   readonly fs: SandboxFs
   destroy(reason: DestroyReason): Promise<void>
 }
@@ -194,8 +205,14 @@ const secretPath = z
     (path) => !snapshottedRoots.some((root) => path === root || path.startsWith(`${root}/`)),
     'secrets never live under /workspace or /agent-home: they may be snapshotted',
   )
+  .refine(
+    (path) => path.startsWith(`${SANDBOX_SECRETS_DIR}/`),
+    'secret files must live in the dedicated /run/raditi/secrets tmpfs',
+  )
 
 const sandboxEnvSchema = z.record(z.string(), z.string().max(4096)).superRefine((env, ctx) => {
+  if (Object.keys(env).length > 64)
+    ctx.addIssue({ code: 'custom', message: 'at most 64 environment variables are allowed' })
   for (const [name, value] of Object.entries(env)) {
     // Messages name the variable, never its value.
     if (!envName.test(name) || name.length > 128) {
@@ -215,6 +232,33 @@ const sandboxEnvSchema = z.record(z.string(), z.string().max(4096)).superRefine(
     }
   }
 })
+
+export const execCursorSchema = z.object({
+  stdout: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  stderr: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+}).strict()
+
+export const execSpecSchema = z.object({
+  argv: z.array(z.string().max(128 * 1024).refine((s) => !s.includes('\0'))).min(1).max(256)
+    .refine((argv) => argv[0] !== '' && argv.reduce((n, s) => n + s.length, 0) <= 256 * 1024,
+      'command must be nonempty and fit the argument budget'),
+  cwd: z.string().max(1024).refine((path) => path.startsWith('/') && !path.includes('\0') &&
+    (path === '/' || path.slice(1).split('/').every((s) => s !== '' && s !== '.' && s !== '..'))).optional(),
+  env: sandboxEnvSchema.optional(),
+  stdin: z.custom<AsyncIterable<Uint8Array>>((value) => value !== null &&
+    typeof value === 'object' && Symbol.asyncIterator in value &&
+    typeof value[Symbol.asyncIterator] === 'function').optional(),
+  timeoutMs: z.number().int().positive().max(MAX_SANDBOX_TURN_MS),
+  signal: z.custom<AbortSignal>((value) => value !== null && typeof value === 'object' &&
+    'aborted' in value && typeof value.aborted === 'boolean' &&
+    'addEventListener' in value && typeof value.addEventListener === 'function').optional(),
+}).strict() satisfies z.ZodType<ExecSpec>
+
+export function assertExecSpec(spec: ExecSpec): ExecSpec {
+  const parsed = execSpecSchema.safeParse(spec)
+  if (!parsed.success) throw badRequest('Invalid sandbox exec specification')
+  return parsed.data
+}
 
 const networkPolicySchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('none') }).strict(),
@@ -249,6 +293,7 @@ export const sandboxSpecSchema = z
         taskId: labelId,
         sessionId: labelId,
         turn: z.number().int().positive(),
+        leaseEpoch: z.number().int().positive().optional(),
       })
       .strict(),
     runtime: z.enum(sandboxRuntimes),

@@ -48,7 +48,9 @@ export class SandboxSnapshotTransport {
     this.#timeoutMs = timeoutMs
   }
 
-  async capture(sandbox: Sandbox, state: SessionState): Promise<SnapshotArchives> {
+  async capture(sandbox: Sandbox, state: SessionState, baseSha: string): Promise<SnapshotArchives> {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha))
+      throw badRequest('Snapshot capture requires the trusted base commit')
     const homeState = this.#state(state)
     const paths: string[] = []
     const checkedAncestors = new Set<string>()
@@ -91,13 +93,15 @@ export class SandboxSnapshotTransport {
       sandbox,
       [
         'git',
+        '--no-replace-objects',
         '-c',
         'core.fsmonitor=false',
         'diff',
         '--binary',
         '--no-ext-diff',
         '--no-textconv',
-        'HEAD',
+        '--no-renames',
+        baseSha,
         '--',
       ],
       snapshotLimits.patchBytes,

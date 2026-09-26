@@ -1,38 +1,397 @@
-import type { SandboxProvider } from '@repo/domain'
-import { assertSandboxSpec, badRequest, notImplemented } from '@repo/domain'
+import { Buffer } from 'node:buffer'
+import {
+  assertSandboxSpec,
+  badRequest,
+  conflict,
+  notImplemented,
+  type NetworkPolicy,
+  type SandboxLabels,
+  type SandboxProvider,
+  type SandboxSpec,
+} from '@repo/domain'
+import Docker from 'dockerode'
+import { z } from 'zod'
+
 import type { SandboxConfig } from './config.ts'
+import { bounded, commandError, helperCommand, isMissing } from './docker-api.ts'
+import { DockerSandbox } from './docker-sandbox.ts'
+import type { DockerGatewayManager } from './gateway-types.ts'
 
-// P2 implements this with dockerode: over the local Docker socket in the PoC (macOS: runc,
-// Linux: runsc), later inside the `runner` role on sandbox VMs. The Docker API is never
-// exposed over TCP. What P2 must hold to (spec §8, CLAUDE.md rule 5):
-// - one container per turn, named raditi-turn-<taskId>-<turn>, labelled for the reconciler;
-//   PID 1 is `tini -- sleep infinity`, everything else is exec;
-// - bytes move only through exec stdin/stdout — never `docker cp` or the archive API
-//   (gVisor overlay changes are invisible to the host, docker cp has a CVE history);
-// - --runtime from SandboxSpec.runtime, --read-only, --cap-drop=ALL, no-new-privileges,
-//   --user 10001:10001, cpu/memory (swap = memory)/pids limits, tmpfs for HOME and secrets
-//   (the rootfs is always read-only: SandboxSpec has no switch for it),
-//   an internal network without DNS whose only exit is sandbox-gw, --log-opt max-size.
+const PREFIX = 'io.raditi.sandbox.'
+const OWNER = 'raditi'
+const PROTOCOL = '1'
+const labelSchema = z
+  .object({
+    workspaceId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
+    siteId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
+    taskId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
+    sessionId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
+    turn: z.number().int().positive(),
+    leaseEpoch: z.number().int().positive().optional(),
+  })
+  .strict()
+const labelNames = ['workspaceId', 'siteId', 'taskId', 'sessionId', 'turn', 'leaseEpoch'] as const
+const tmpfs = {
+  '/workspace': 'rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700',
+  '/agent-home': 'rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
+  '/tmp': 'rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/secrets': 'rw,noexec,nosuid,nodev,size=2m,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/exec': 'rw,noexec,nosuid,nodev,size=192m,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/control': 'rw,noexec,nosuid,nodev,size=1m,uid=0,gid=0,mode=0755',
+}
+const imagePattern =
+  /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+(?=\/))?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$/
+const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
+const labelsOf = (
+  labels: SandboxLabels,
+  deadline: number,
+  policy: NetworkPolicy,
+  gatewayId?: string,
+) => ({
+  ...Object.fromEntries(
+    labelNames
+      .filter((key) => labels[key] !== undefined)
+      .map((key) => [`${PREFIX}${key}`, String(labels[key])]),
+  ),
+  [`${PREFIX}owner`]: OWNER,
+  [`${PREFIX}protocol`]: PROTOCOL,
+  [`${PREFIX}deadline`]: String(deadline),
+  [`${PREFIX}network`]: JSON.stringify(policy),
+  ...(gatewayId ? { [`${PREFIX}gatewayId`]: gatewayId } : {}),
+})
 
-export function createDockerSandboxProvider(config: SandboxConfig): SandboxProvider {
-  const todo = (method: string) => notImplemented(`DockerSandboxProvider.${method} (P2)`)
+function identity(
+  info: Docker.ContainerInspectInfo,
+): { labels: SandboxLabels; deadline: number; policy: NetworkPolicy } | null {
+  const raw = info.Config?.Labels
+  if (!raw || raw[`${PREFIX}owner`] !== OWNER || raw[`${PREFIX}protocol`] !== PROTOCOL) return null
+  const parsed = labelSchema.safeParse(
+    Object.fromEntries(
+      labelNames
+        .filter((key) => raw[`${PREFIX}${key}`] !== undefined)
+        .map((key) => [
+          key,
+          key === 'turn' || key === 'leaseEpoch'
+            ? Number(raw[`${PREFIX}${key}`])
+            : raw[`${PREFIX}${key}`],
+        ]),
+    ),
+  )
+  if (!parsed.success) return null
+  const deadline = Number(raw[`${PREFIX}deadline`])
+  if (!Number.isSafeInteger(deadline) || deadline < 1) return null
+  let policy: NetworkPolicy
+  try {
+    const parsedPolicy = z
+      .discriminatedUnion('mode', [
+        z.object({ mode: z.literal('none') }).strict(),
+        z
+          .object({
+            mode: z.literal('gateway'),
+            routes: z
+              .array(z.enum(['llm', 'mcp']))
+              .min(1)
+              .max(2)
+              .refine((routes) => new Set(routes).size === routes.length),
+          })
+          .strict(),
+      ])
+      .parse(JSON.parse(raw[`${PREFIX}network`] ?? ''))
+    policy = parsedPolicy
+  } catch {
+    return null
+  }
+  const gatewayId = raw[`${PREFIX}gatewayId`]
+  if (
+    policy.mode === 'gateway'
+      ? !/^[A-Za-z0-9_-]{1,128}$/.test(gatewayId ?? '')
+      : gatewayId !== undefined
+  )
+    return null
+  const expected = labelsOf(parsed.data, deadline, policy, gatewayId)
+  const own = Object.fromEntries(Object.entries(raw).filter(([key]) => key.startsWith(PREFIX)))
+  if (
+    Object.keys(own).length !== Object.keys(expected).length ||
+    Object.entries(expected).some(([key, value]) => own[key] !== value)
+  )
+    return null
+  if (info.Name !== `/raditi-turn-${parsed.data.taskId}-${parsed.data.turn}`) return null
+  return { labels: parsed.data, deadline, policy }
+}
+
+export interface DockerSandboxProviderOptions {
+  /** Injection is trusted infrastructure, used for tests and a configured local daemon. */
+  client?: Docker
+  gateway?: DockerGatewayManager
+}
+
+export function createDockerSandboxProvider(
+  config: SandboxConfig,
+  options: DockerSandboxProviderOptions = {},
+): SandboxProvider {
+  const socketPath = config.socketPath ?? '/var/run/docker.sock'
+  if (!socketPath.startsWith('/') || /[\0\r\n]/.test(socketPath))
+    throw badRequest('Docker requires an absolute local Unix socket path')
+  const docker = options.client ?? new Docker({ socketPath })
+
+  const inspectSafe = async (info: Docker.ContainerInspectInfo) => {
+    const meta = identity(info)
+    if (!meta) return null
+    // gVisor netstack emits L2 packets; the current shared-netns OUTPUT filter is a runc
+    // mechanism. Require separately verified host-side enforcement before enabling gateway.
+    if (config.runtime === 'runsc' && meta.policy.mode === 'gateway') return null
+    const host = info.HostConfig
+    const createdAt = new Date(info.Created)
+    if (
+      !Number.isFinite(createdAt.getTime()) ||
+      meta.deadline > createdAt.getTime() + 20 * 60 * 1000 ||
+      meta.deadline < createdAt.getTime() - 30_000
+    )
+      return null
+    if (
+      info.Config.User !== '10001:10001' ||
+      !imagePattern.test(info.Config.Image) ||
+      !same(info.Config.Entrypoint, ['tini', '--']) ||
+      !same(info.Config.Cmd, ['sleep', 'infinity']) ||
+      info.Config.Tty ||
+      info.Config.OpenStdin ||
+      !host.ReadonlyRootfs ||
+      host.Privileged ||
+      host.Runtime !== config.runtime ||
+      !same(host.CapDrop, ['ALL']) ||
+      (host.CapAdd?.length ?? 0) !== 0 ||
+      !host.SecurityOpt?.includes('no-new-privileges') ||
+      host.SecurityOpt.length !== 1 ||
+      (host.Binds?.length ?? 0) !== 0 ||
+      (host.Devices?.length ?? 0) !== 0 ||
+      host.NetworkMode === 'host' ||
+      host.PidMode ||
+      host.IpcMode === 'host' ||
+      host.PublishAllPorts ||
+      Object.keys(host.PortBindings ?? {}).length ||
+      Object.keys(info.Config.Volumes ?? {}).length ||
+      (info.Mounts?.some((mount) => mount.Type !== 'tmpfs' || !(mount.Destination in tmpfs)) ??
+        false)
+    )
+      return null
+    if (
+      !(typeof host.Memory === 'number' && host.Memory > 0 && host.Memory <= 4096 * 1024 * 1024) ||
+      host.MemorySwap !== host.Memory ||
+      !(typeof host.NanoCpus === 'number' && host.NanoCpus > 0 && host.NanoCpus <= 2e9) ||
+      !(
+        host.PidsLimit !== undefined &&
+        host.PidsLimit !== null &&
+        host.PidsLimit > 0 &&
+        host.PidsLimit <= 512
+      )
+    )
+      return null
+    if (
+      Object.keys(host.Tmpfs ?? {}).length !== Object.keys(tmpfs).length ||
+      Object.entries(tmpfs).some(([path, value]) => host.Tmpfs?.[path] !== value)
+    )
+      return null
+    if (
+      host.RestartPolicy?.Name !== 'no' ||
+      host.AutoRemove ||
+      host.LogConfig?.Type !== 'local' ||
+      host.LogConfig.Config?.['max-size'] !== '1m' ||
+      host.LogConfig.Config?.['max-file'] !== '1' ||
+      host.LogConfig.Config?.compress !== 'false'
+    )
+      return null
+    if (meta.policy.mode === 'none') {
+      if (host.NetworkMode !== 'none') return null
+    } else if (!options.gateway || !(await options.gateway.validate(info, meta.policy))) return null
+    return { ...meta, createdAt }
+  }
+
+  const wrap = (
+    container: Docker.Container,
+    info: Docker.ContainerInspectInfo,
+    meta: NonNullable<Awaited<ReturnType<typeof inspectSafe>>>,
+  ) => {
+    const originalLabels = info.Config.Labels
+    return new DockerSandbox(container, docker, meta.labels, meta.deadline, {
+      originalInspect: structuredClone(info),
+      assertOwned: async () => {
+        const current = await bounded(container.inspect())
+        if (
+          current.Id !== info.Id ||
+          !identity(current) ||
+          !same(current.Config.Labels, originalLabels)
+        )
+          throw badRequest('Container ownership changed; refusing removal')
+        return current
+      },
+      release: async (inspect) => {
+        if (meta.policy.mode === 'gateway') await options.gateway!.release(inspect)
+      },
+    })
+  }
+
   return {
     kind: 'docker',
-    async create(spec) {
-      // The policy is live before the adapter is: every spec is checked first (CLAUDE.md rule 5).
-      assertSandboxSpec(spec)
-      if (spec.runtime !== config.runtime) {
+    async create(value, signal) {
+      const spec: SandboxSpec = assertSandboxSpec(value)
+      if (signal?.aborted) throw commandError()
+      if (spec.runtime !== config.runtime)
         throw badRequest(
           `Sandbox runtime ${spec.runtime} differs from SANDBOX_RUNTIME=${config.runtime}`,
         )
+      if (spec.runtime === 'runsc' && spec.network.mode === 'gateway')
+        throw notImplemented(
+          'runsc gateway requires verified host-side network enforcement; the current network guard supports runc only',
+        )
+      if (spec.network.mode === 'gateway' && !options.gateway)
+        throw notImplemented('Sandbox gateway requires a trusted network manager')
+      const daemon = await bounded(docker.info(), 10_000, signal)
+      if (!daemon.Runtimes?.[spec.runtime])
+        throw badRequest('Configured sandbox runtime is not available')
+      const image = await bounded(docker.getImage(spec.image).inspect(), 10_000, signal)
+      if (Object.keys(image.Config?.Volumes ?? {}).length)
+        throw badRequest('Sandbox images must not declare volumes')
+      const deadline = Date.now() + spec.hardTimeoutMs
+      const name = `raditi-turn-${spec.labels.taskId}-${spec.labels.turn}`
+      const gateway =
+        spec.network.mode === 'gateway'
+          ? await options.gateway!.prepare(
+              { name, labels: spec.labels, policy: spec.network, deadline },
+              signal,
+            )
+          : undefined
+      let container: Docker.Container | undefined
+      let abandoned = false
+      try {
+        if (signal?.aborted) throw commandError()
+        // A late daemon response cleans up its exact returned id, never the shared turn name.
+        container = await bounded(
+          docker
+            .createContainer({
+              name,
+              Image: spec.image,
+              User: '10001:10001',
+              Entrypoint: ['tini', '--'],
+              Cmd: ['sleep', 'infinity'],
+              WorkingDir: '/workspace',
+              Tty: false,
+              OpenStdin: false,
+              Env: Object.entries({ LANG: 'C.UTF-8', HOME: '/agent-home', ...spec.env }).map(
+                ([key, value]) => `${key}=${value}`,
+              ),
+              Labels: labelsOf(spec.labels, deadline, spec.network, gateway?.resourceId),
+              HostConfig: {
+                Runtime: spec.runtime,
+                ReadonlyRootfs: true,
+                Privileged: false,
+                CapDrop: ['ALL'],
+                SecurityOpt: ['no-new-privileges'],
+                NanoCpus: Math.round(spec.resources.cpu * 1e9),
+                Memory: spec.resources.memoryMiB * 1024 * 1024,
+                MemorySwap: spec.resources.memoryMiB * 1024 * 1024,
+                PidsLimit: spec.resources.pids,
+                NetworkMode: gateway?.networkMode ?? 'none',
+                RestartPolicy: { Name: 'no' },
+                AutoRemove: false,
+                Tmpfs: { ...tmpfs },
+                LogConfig: {
+                  Type: 'local',
+                  Config: { 'max-size': '1m', 'max-file': '1', compress: 'false' },
+                },
+              },
+            })
+            .then(async (created) => {
+              container = created
+              if (abandoned) {
+                await created.remove({ force: true, v: true }).catch(() => {})
+                throw commandError()
+              }
+              return created
+            }),
+          30_000,
+          signal,
+        )
+        if (!container || signal?.aborted) throw commandError()
+        await bounded(container.start(), 10_000, signal)
+        await helperCommand(container, ['bootstrap'], { signal, bootstrap: true })
+        const ready = await helperCommand(container, ['ready'], { signal })
+        if (ready.toString('utf8') !== '{"protocol":1}') throw commandError()
+        const info = await bounded(container.inspect(), 10_000, signal)
+        const meta = await inspectSafe(info)
+        if (!meta) throw commandError()
+        const sandbox = wrap(container, info, meta)
+        try {
+          for (const secret of spec.secrets)
+            await sandbox.fs.write(secret.path, Buffer.from(secret.value), { mode: 0o600 })
+        } catch {
+          await sandbox.destroy('failed')
+          throw commandError()
+        }
+        if (signal?.aborted || Date.now() >= deadline) {
+          await sandbox.destroy('cancelled')
+          throw commandError()
+        }
+        return sandbox
+      } catch (error) {
+        abandoned = true
+        if (container)
+          await bounded(container.remove({ force: true, v: true })).catch((e) => {
+            if (!isMissing(e)) throw commandError()
+          })
+        await gateway?.release()
+        if (
+          typeof error === 'object' &&
+          error !== null &&
+          'statusCode' in error &&
+          error.statusCode === 409
+        )
+          throw conflict('A container already exists for this turn')
+        throw commandError()
       }
-      throw todo('create')
     },
-    async get() {
-      throw todo('get')
+    async get(id) {
+      if (!/^[a-f0-9]{64}$/.test(id)) throw badRequest('Invalid sandbox identifier')
+      const container = docker.getContainer(id)
+      let info: Docker.ContainerInspectInfo
+      try {
+        info = await bounded(container.inspect())
+      } catch (error) {
+        if (isMissing(error)) return null
+        throw commandError()
+      }
+      const meta = await inspectSafe(info)
+      return meta ? wrap(container, info, meta) : null
     },
-    async list() {
-      throw todo('list')
+    async list(filter = {}) {
+      const parsed = labelSchema.partial().safeParse(filter)
+      if (!parsed.success) throw badRequest('Invalid sandbox label filter')
+      const labels = [
+        `${PREFIX}owner=${OWNER}`,
+        `${PREFIX}protocol=${PROTOCOL}`,
+        ...Object.entries(parsed.data).map(([key, value]) => `${PREFIX}${key}=${value}`),
+      ]
+      const containers = await bounded(
+        docker.listContainers({ all: true, filters: { label: labels } }),
+      )
+      const result = []
+      for (const row of containers) {
+        const info = await bounded(docker.getContainer(row.Id).inspect()).catch(
+          (error: unknown) => {
+            if (isMissing(error)) return null
+            throw commandError()
+          },
+        )
+        if (!info) continue
+        const meta = await inspectSafe(info)
+        if (
+          meta &&
+          Object.entries(parsed.data).every(
+            ([key, value]) => meta.labels[key as keyof SandboxLabels] === value,
+          )
+        )
+          result.push({ id: info.Id, labels: meta.labels, createdAt: meta.createdAt })
+      }
+      return result
     },
   }
 }

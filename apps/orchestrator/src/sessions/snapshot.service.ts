@@ -50,7 +50,7 @@ export class SnapshotService {
     assertSandboxScope(sandbox, metadata)
     if (sandbox.labels.turn !== metadata.turn)
       throw badRequest('Snapshot turn differs from sandbox')
-    const parts = await this.transport.capture(sandbox, metadata.home)
+    const parts = await this.transport.capture(sandbox, metadata.home, metadata.git.baseSha)
     return this.save(metadata, parts)
   }
 

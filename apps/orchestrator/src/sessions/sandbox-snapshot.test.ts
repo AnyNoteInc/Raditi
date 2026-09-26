@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { SandboxSnapshotTransport, type SnapshotArchives } from './sandbox-snapshot.ts'
 
+const baseSha = 'a'.repeat(40)
 const state: SessionState = {
   root: '/agent-home/codex',
   include: ['sessions', 'optional'],
@@ -103,7 +104,7 @@ describe('SandboxSnapshotTransport', () => {
   it('captures through argv and NUL lists, skips absent includes and validates native archives', async () => {
     const parts = await fixture()
     const fake = sandboxFixture(parts)
-    const result = await new SandboxSnapshotTransport().capture(fake.sandbox, state)
+    const result = await new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha)
     expect(result).toEqual(parts)
     const tarCalls = fake.calls.filter(({ spec }) => spec.argv.includes('--create'))
     expect(tarCalls).toHaveLength(2)
@@ -124,7 +125,14 @@ describe('SandboxSnapshotTransport', () => {
     const diff = fake.calls.find(({ spec }) => spec.argv.includes('diff'))!
     expect(diff.spec.cwd).toBe('/workspace/repo')
     expect(diff.spec.argv).toEqual(
-      expect.arrayContaining(['--binary', '--no-ext-diff', '--no-textconv', 'HEAD']),
+      expect.arrayContaining([
+        '--no-replace-objects',
+        '--binary',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--no-renames',
+        baseSha,
+      ]),
     )
     expect(fake.calls.every(({ spec }) => spec.argv[0] !== 'sh' && spec.argv[0] !== 'bash')).toBe(
       true,
@@ -133,10 +141,14 @@ describe('SandboxSnapshotTransport', () => {
 
   it('collapses overlapping home include subtrees instead of producing duplicate tar entries', async () => {
     const fake = sandboxFixture(await fixture())
-    await new SandboxSnapshotTransport().capture(fake.sandbox, {
-      ...state,
-      include: ['sessions', 'sessions/run.jsonl'],
-    })
+    await new SandboxSnapshotTransport().capture(
+      fake.sandbox,
+      {
+        ...state,
+        include: ['sessions', 'sessions/run.jsonl'],
+      },
+      baseSha,
+    )
     expect(fake.calls.find(({ spec }) => spec.argv.includes('--create'))!.stdin.toString()).toBe(
       'sessions\0',
     )
@@ -152,9 +164,9 @@ describe('SandboxSnapshotTransport', () => {
     const fake = sandboxFixture(await fixture(), (spec) =>
       spec.argv.includes('ls-files') ? { stdout: Buffer.from(list) } : undefined,
     )
-    await expect(new SandboxSnapshotTransport().capture(fake.sandbox, state)).rejects.toThrow(
-      /command/,
-    )
+    await expect(
+      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
+    ).rejects.toThrow(/command/)
     expect(fake.calls.filter(({ spec }) => spec.argv.includes('--create'))).toHaveLength(1)
   })
 
@@ -171,9 +183,9 @@ describe('SandboxSnapshotTransport', () => {
           }
         : undefined,
     )
-    expect((await new SandboxSnapshotTransport().capture(fake.sandbox, state)).patch).toEqual(
-      parts.patch,
-    )
+    expect(
+      (await new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha)).patch,
+    ).toEqual(parts.patch)
     for (const offset of [1, -1, Number.NaN]) {
       const wrong = sandboxFixture(parts, (spec) =>
         spec.argv.includes('diff')
@@ -182,9 +194,9 @@ describe('SandboxSnapshotTransport', () => {
             }
           : undefined,
       )
-      await expect(new SandboxSnapshotTransport().capture(wrong.sandbox, state)).rejects.toThrow(
-        /command/,
-      )
+      await expect(
+        new SandboxSnapshotTransport().capture(wrong.sandbox, state, baseSha),
+      ).rejects.toThrow(/command/)
       expect(wrong.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
     }
   })
@@ -201,9 +213,9 @@ describe('SandboxSnapshotTransport', () => {
     const fake = sandboxFixture(await fixture(), (spec) =>
       spec.argv.includes('diff') ? reply : undefined,
     )
-    await expect(new SandboxSnapshotTransport().capture(fake.sandbox, state)).rejects.toThrow(
-      'Snapshot sandbox command failed or exceeded its limits',
-    )
+    await expect(
+      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
+    ).rejects.toThrow('Snapshot sandbox command failed or exceeded its limits')
     expect(fake.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
   })
 
@@ -215,9 +227,9 @@ describe('SandboxSnapshotTransport', () => {
       const fake = sandboxFixture(await fixture(), (spec) =>
         spec.argv.includes('diff') ? reply : undefined,
       )
-      await expect(new SandboxSnapshotTransport().capture(fake.sandbox, state)).rejects.toThrow(
-        /command/,
-      )
+      await expect(
+        new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
+      ).rejects.toThrow(/command/)
       expect(fake.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
     }
   })
@@ -227,7 +239,7 @@ describe('SandboxSnapshotTransport', () => {
       spec.argv.includes('diff') ? { waitForever: true } : undefined,
     )
     await expect(
-      new SandboxSnapshotTransport({ timeoutMs: 25 }).capture(fake.sandbox, state),
+      new SandboxSnapshotTransport({ timeoutMs: 25 }).capture(fake.sandbox, state, baseSha),
     ).rejects.toThrow(/command/)
     expect(fake.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
     expect(fake.calls.at(-1)!.spec.signal?.aborted).toBe(true)
@@ -242,7 +254,7 @@ describe('SandboxSnapshotTransport', () => {
         }),
     } as unknown as Sandbox
     await expect(
-      new SandboxSnapshotTransport({ timeoutMs: 10 }).capture(sandbox, state),
+      new SandboxSnapshotTransport({ timeoutMs: 10 }).capture(sandbox, state, baseSha),
     ).rejects.toThrow(/command/)
     const late = handle({})
     release!(late)
@@ -349,7 +361,11 @@ describe('SandboxSnapshotTransport', () => {
   it('refuses a session root outside /agent-home before contacting the sandbox', async () => {
     const fake = sandboxFixture(await fixture())
     await expect(
-      new SandboxSnapshotTransport().capture(fake.sandbox, { ...state, root: '/run/secrets' }),
+      new SandboxSnapshotTransport().capture(
+        fake.sandbox,
+        { ...state, root: '/run/secrets' },
+        baseSha,
+      ),
     ).rejects.toThrow(/session state/)
     expect(fake.exec).not.toHaveBeenCalled()
   })
@@ -363,10 +379,14 @@ describe('SandboxSnapshotTransport', () => {
         : undefined,
     )
     await expect(
-      new SandboxSnapshotTransport().capture(fake.sandbox, {
-        ...state,
-        include: ['sessions/run.jsonl'],
-      }),
+      new SandboxSnapshotTransport().capture(
+        fake.sandbox,
+        {
+          ...state,
+          include: ['sessions/run.jsonl'],
+        },
+        baseSha,
+      ),
     ).rejects.toThrow(/command/)
     expect(fake.calls.some(({ spec }) => spec.argv.includes('--create'))).toBe(false)
   })
