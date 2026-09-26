@@ -1,14 +1,14 @@
-# Радити: AI-поддержка сайтов для малого бизнеса — спецификация v0.2
+# Радити: AI-поддержка сайтов для малого бизнеса — спецификация v0.3
 
-Версия v0.2 · 26.09.2026
+Версия v0.3 · 26.09.2026
 
-> Снимок документа из Claude Docs на 26.09.2026. Если решение меняется — обновите и этот файл, и документ.
+> Снимок v0.2 из Claude Docs, обновлённый до v0.3 по решениям владельца от 26.09.2026 (итог bootstrap); исследования — в [docs/research/2026-09-bootstrap/](research/2026-09-bootstrap/). Если решение меняется — обновите и этот файл, и документ.
 
 ## 1. Коротко
 
-Радити (raditi.ru) ведёт сайты малого бизнеса в России: владелец пишет пожелание в чат, агент меняет сайт. Код меняется через Gitea и Gitea Actions, контент — прямо на сайте. Окружение одно — прод, поэтому каждую выкладку страхуют бэкап, проверка и автоматический откат.
+Радити (raditi.ru) ведёт сайты малого бизнеса в России: владелец пишет пожелание в чат, агент меняет сайт. Код меняется через git-провайдера — нашу Gitea с обязательным пайплайном выкладки, позже и GitHub или GitLab клиента, — контент прямо на сайте. Окружение одно — прод, поэтому каждую выкладку страхуют бэкап, проверка и автоматический откат.
 
-Первый стек — WordPress; Bitrix, Laravel, Node.js и Python подключаются адаптерами без переделки ядра.
+Первый стек — WordPress, следующий — 1С-Битрикс; Laravel, Node.js и Python подключаются адаптерами без переделки ядра.
 
 **Ключевые решения**
 
@@ -16,16 +16,30 @@
 | --- | --- |
 | Клиент | Малый бизнес без своего разработчика (раздел 2) |
 | Каналы | Веб-чат (PWA) — основной, Telegram-бот — второй, MAX — позже |
-| Структура кода | Монорепозиторий по образцу anynote: pnpm, Turborepo, Next.js 16, NestJS, Prisma 7 (раздел 6) |
+| Структура кода | Монорепозиторий по образцу anynote, порты и адаптеры: pnpm 12, Turborepo 2.11, Next.js 16, NestJS 12, Prisma 7 (раздел 6) |
 | Агент | Любой CLI-агент через драйвер: Codex CLI, Kimi Code CLI, Qwen Code, OpenCode (раздел 8) |
 | Модели | Российские провайдеры: Yandex AI Studio, Cloud.ru, GigaChat (раздел 9) |
-| Изоляция | Одноразовая песочница под gVisor на каждую задачу |
-| Код сайтов | Gitea 1.27 и act\_runner, обязательный workflow организации (раздел 10) |
+| Изоляция | Одноразовый контейнер под gVisor на каждый ход агента (раздел 8) |
+| Код сайтов | Gitea 1.27 и gitea/runner, обязательный workflow организации; GitHub и GitLab клиента — через `GitProvider` (раздел 10) |
 | Окружения | Только прод: подтверждение, бэкап, проверка, откат |
 | Файлы, сессии, логи | S3 в российском облаке (раздел 14) |
 | Секреты | OpenBao или Deckhouse Stronghold (раздел 15) |
-| Данные и очереди | PostgreSQL и Prisma 7, Redis и BullMQ |
-| Оплата | ЮKassa: карта, СБП, SberPay, автоплатёж, чеки 54-ФЗ (раздел 17) |
+| Данные и очереди | PostgreSQL и Prisma 7 — истина о задаче; Redis и BullMQ — очередь, таймеры, cron, раздача событий (раздел 7) |
+| Оплата | ЮKassa: карта, СБП, SberPay, автоплатёж, чеки 54-ФЗ; подписка с квотой или оплата за действие из кошелька (раздел 17) |
+| Код платформы | GitHub: CI и релизы в GitHub Actions (раздел 6) |
+| Наблюдаемость | Prometheus и Grafana (раздел 19) |
+
+**Что изменилось в v0.3**
+
+1. `apps/agents` и `apps/engines` объединены в `apps/orchestrator`: один образ, роли `core`, `mcp` и `runner` (разделы 5, 6).
+2. Пакеты устроены как порты и адаптеры: порты — в `packages/domain`, новые пакеты `agent-drivers`, `sandbox-providers`, `git-providers` (разделы 6, 8).
+3. Контейнер песочницы живёт один ход, а не всю задачу; снимки сессии — по ходам; патч публикуется из чистого клона (разделы 7, 8).
+4. Один ход, выкладка или откат на сайт — аренда сайта в PostgreSQL; Redis остаётся для BullMQ, постановка в очередь — через `outbox_events` (раздел 7).
+5. Код сайта может жить в нашей Gitea или в GitHub и GitLab клиента; список запрещённых путей расширен (раздел 10).
+6. Деньги — Decimal, а не целые копейки; новый тариф «Оплата за действие» с кошельком; счёт — по журналу LiteLLM (разделы 9, 16, 17).
+7. Второй стек после WordPress — 1С-Битрикс (разделы 3, 13).
+8. Исправлены флаги драйверов и описана изоляция: dockerd от root, uid 10001 в контейнере, граница — gVisor (разделы 8, 18).
+9. Капча — Yandex SmartCaptcha; мониторинг — Prometheus и Grafana; CI и релизы платформы — GitHub Actions (разделы 6, 18, 19).
 
 **Что изменилось в v0.2**
 
@@ -72,15 +86,16 @@ MVP — WordPress-сайты малого бизнеса в России, одн
 
 | Область | В MVP | Позже |
 | --- | --- | --- |
-| Стеки | WordPress | Bitrix, Laravel, статика, Node.js, Python |
+| Стеки | WordPress | 1С-Битрикс — следующим; Laravel, статика, Node.js, Python |
 | Каналы | Веб-чат (PWA), Telegram-бот | MAX, e-mail |
 | Окружения | Только прод | Staging по запросу клиента |
 | Доступ к серверу | SSH, FTP/FTPS | Панели хостинга через API |
-| Выкладка | Gitea Actions: rsync по SSH, git-ftp | Docker Compose |
+| Git-провайдер сайта | Наша Gitea | GitHub и GitLab клиента через `GitProvider` (раздел 10) |
+| Выкладка | Gitea Actions: rsync по SSH, git-ftp | Docker Compose; для GitHub и GitLab клиента — открытый вопрос (раздел 20) |
 | Контент | WP-CLI, REST API, Playwright | Конструкторы сайтов через браузер |
 | Агенты | Codex CLI, Kimi Code CLI | Qwen Code, OpenCode, GigaCode, SourceCraft |
 | Модели | Yandex AI Studio, Cloud.ru | GigaChat, свои модели на GPU |
-| Оплата | ЮKassa: карта, СБП, SberPay, автоплатёж, чеки | Счета и закрывающие документы для юрлиц |
+| Оплата | ЮKassa: карта, СБП, SberPay, автоплатёж, чеки; подписка с квотой и оплата за действие из кошелька | Счета и закрывающие документы для юрлиц |
 | Секреты и файлы | OpenBao на одном узле, S3 в российском облаке | Stronghold или кластер высокой доступности |
 
 ## 4. Пользовательские сценарии
@@ -94,12 +109,12 @@ MVP — WordPress-сайты малого бизнеса в России, одн
 5. **Уточнение.** Если просьба неясна, агент задаёт один вопрос с вариантами-кнопками; задача ждёт ответа.
 6. **Сессии.** Каждая задача — отдельный диалог в веб-чате и отдельная тема в Telegram. Клиент видит список сессий и может вернуться к любой.
 7. **Отмена.** «Верните как было» или кнопка «Отменить» в течение 7 дней: код откатывается revert-коммитом, контент — из снимка.
-8. **Тариф и оплата.** Остаток задач виден в чате; купить или сменить тариф можно только в кабинете. Бот ничего не продаёт.
+8. **Тариф и оплата.** Остаток правок или баланс кошелька виден в чате; купить или сменить тариф и пополнить кошелёк можно только в кабинете. Бот ничего не продаёт.
 9. **Специалист.** Если агент не справился за две попытки или задача вне тарифа, её получает оператор, а клиент — понятный срок.
 
 ## 5. Архитектура
 
-Платформа устроена как anynote: Next.js-приложение для людей, NestJS-сервисы для агентов и фоновых задач, Gitea для кода сайтов. Агент работает только в одноразовой песочнице и выходит наружу через LLM-шлюз и MCP-шлюз.
+Платформа устроена как anynote: Next.js-приложение для людей, NestJS-оркестратор для задач, агентов и фоновых работ, Gitea для кода сайтов. Агент работает только в одноразовом контейнере на песочной ВМ и выходит наружу только через `sandbox-gw` — к LLM-шлюзу и MCP-шлюзу.
 
 ```mermaid
 flowchart TB
@@ -107,129 +122,183 @@ flowchart TB
     bot["Telegram-бот<br/>через egress-прокси"]
     pay["ЮKassa<br/>платежи и чеки"]
     web["apps/web · Next.js 16<br/>кабинет, веб-чат, API, вебхуки, админка"]
-    orch["apps/agents<br/>оркестратор, роутер"]
-    sandbox["Песочница агента<br/>gVisor, CLI-агент"]
-    engines["apps/engines<br/>MCP-шлюз, воркеры"]
-    gitea["Gitea<br/>act_runner, CI/CD"]
+    subgraph orch["apps/orchestrator · NestJS 12, один образ"]
+        core["core<br/>задачи, BullMQ, cron, публикация в git"]
+        mcp["mcp<br/>MCP-шлюз к сайтам"]
+    end
+    subgraph sbx["Песочная ВМ"]
+        runner["runner<br/>забирает ходы, владеет контейнерами"]
+        turn["Контейнер хода<br/>gVisor, CLI-агент"]
+        gw["sandbox-gw<br/>белый список путей"]
+    end
+    git["Git-провайдер<br/>Gitea · GitHub · GitLab"]
     llm["LLM-шлюз<br/>LiteLLM, модели РФ"]
     site["Сервер сайта<br/>WordPress, SSH/FTP"]
     client <-->|HTTPS, SSE| web
     bot <-->|вебхук, Bot API| web
     pay <-->|API, вебхук| web
-    web -->|задачи| orch
-    orch -->|запуск| sandbox
-    orch -->|push, PR, merge| gitea
-    sandbox -->|MCP| engines
-    sandbox -->|запросы| llm
-    engines -->|контент| site
-    gitea -->|выкладка| site
+    web -->|задача и outbox| core
+    core -.->|события, Redis pub/sub| web
+    runner -->|забирает ход| core
+    runner -->|exec| turn
+    turn --> gw
+    gw -->|responses, chat/completions| llm
+    gw -->|MCP| mcp
+    mcp -->|контент| site
+    core -->|push, PR, merge| git
+    git -->|выкладка| site
     subgraph infra["Инфраструктура — общая для всех сервисов"]
         vault["Vault · OpenBao или Stronghold"]
         s3["S3 · файлы, сессии, логи"]
-        pg["PostgreSQL · Prisma 7"]
-        redis["Redis · очереди BullMQ"]
+        pg["PostgreSQL · задачи, аренды, outbox"]
+        redis["Redis · BullMQ, pub/sub"]
+        mon["Prometheus, Grafana"]
         egress["Egress-прокси · к Telegram и API"]
     end
 ```
 
-Главный путь: сообщение → apps/web → очередь → оркестратор → песочница с агентом → push в Gitea → выкладка на сервер сайта. Правки контента идут из песочницы через MCP-шлюз в apps/engines прямо на сайт.
+Главный путь: сообщение → apps/web (задача и `outbox_events` одной транзакцией) → relay в `core` → BullMQ → ход в контейнере песочницы → патч → публикация в git-провайдер → «Применить» → выкладка на сервер сайта. Правки контента идут из песочницы через `sandbox-gw` в MCP-шлюз (роль `mcp`) прямо на сайт.
 
 | Компонент | Что делает | Технологии |
 | --- | --- | --- |
-| apps/web | Кабинет, веб-чат (SSE), API, вебхуки Telegram, ЮKassa и Gitea, админка оператора | Next.js 16, tRPC, better-auth, MUI |
-| apps/agents | Оркестратор: очередь, квоты, выбор драйвера и модели, запуск песочниц, коммиты и PR | NestJS 11, BullMQ |
-| Песочница | Одноразовый контейнер задачи: CLI-агент, клон сайта, файлы клиента | Docker + gVisor (runsc) |
-| LLM-шлюз | Единая точка к моделям: ключи на задачу, лимиты, учёт токенов, Responses API для Codex | LiteLLM |
-| apps/engines | MCP-шлюз к сайтам (WP-CLI, REST, браузер) и воркеры: продление подписок, уведомления, Telegram, очистка | NestJS 11, @rekog/mcp-nest, Playwright |
-| Gitea | Репозитории сайтов, проверки и выкладка через act\_runner, реестр образов | Gitea 1.27, act\_runner |
-| Vault | Доступы к сайтам, ключи моделей, токены выкладки, SSH-сертификаты | OpenBao или Stronghold |
-| S3 | Файлы клиентов, сессии агентов, логи, бэкапы, скриншоты | Объектное хранилище в российском облаке |
-| PostgreSQL, Redis | Данные платформы; очереди и блокировки | Prisma 7, BullMQ |
+| apps/web | Кабинет, веб-чат (SSE), API, вебхуки Telegram, ЮKassa и git-провайдеров, админка оператора; пишет задачу и `outbox_events` одной транзакцией | Next.js 16.3, tRPC 11, better-auth 1.7, MUI 9 |
+| apps/orchestrator · core | Жизненный цикл задач, квоты и кошелёк, relay outbox → BullMQ, воркеры и cron, выбор драйвера и модели, управление песочницами, публикация в git | NestJS 12, BullMQ 6 |
+| apps/orchestrator · mcp | MCP-шлюз к сайтам: WP-CLI, REST, браузер; отдельный процесс и порт, своя AppRole в Vault и своя роль в PostgreSQL без доступа к биллингу | NestJS 12, @rekog/mcp-nest 2, Playwright |
+| apps/orchestrator · runner | Pull-раннер на песочной ВМ: сам забирает ходы, владеет контейнерами, без входящих портов, аренда хода с эпохой (roadmap P2). В PoC вместо него `core` управляет Docker через локальный сокет | NestJS 12, dockerode |
+| Песочница | Одноразовый контейнер на ход: CLI-агент, рабочая копия сайта, файлы клиента | Docker 29 + gVisor (`runsc`, systrap) |
+| sandbox-gw | Единственный выход песочницы: белый список путей к LiteLLM и MCP-шлюзу | Обратный прокси: Caddy, Envoy или Nginx |
+| LLM-шлюз | Единая точка к моделям: виртуальный ключ на ход с бюджетом и TTL, журнал расходов для биллинга, мост Responses API для Codex | LiteLLM ≥ 1.83.7, один экземпляр |
+| Git-провайдер | Репозитории сайтов, проверки и выкладка: Gitea — наша, GitHub и GitLab — клиента | Gitea 1.27, gitea/runner 4 |
+| Vault | Доступы к сайтам, ключи моделей, токены выкладки, SSH-сертификаты, ключи шифрования | OpenBao или Stronghold |
+| S3 | Файлы клиентов, снимки ходов, логи, бэкапы, скриншоты | Объектное хранилище в российском облаке |
+| PostgreSQL | Данные платформы; истина о задаче (`tasks.status`), аренды сайтов, outbox, история событий | PostgreSQL 17, Prisma 7.10 |
+| Redis | Очереди и таймеры BullMQ, job schedulers для cron, pub/sub событий задачи для реплик web | Redis 8.10: `appendonly`, `maxmemory-policy noeviction` |
+| Мониторинг | Метрики сервисов и инфраструктуры, алерты | Prometheus, Grafana |
 | Egress-прокси | Выход к Telegram и внешним API с отдельного адреса | Как WARP-прокси для Telegram в anynote |
 
 ## 6. Монорепозиторий
 
-Платформа повторяет структуру [anynote](https://github.com/anynoteinc/anynote): pnpm 9 и Turborepo 2, `apps/*` и `packages/*`, а слои пакетов проверяет dependency-cruiser (`pnpm check-architecture`). Отличие одно: `apps/agents` пишем на TypeScript (NestJS), а не на Python — агент теперь внешний CLI, и граф LangGraph не нужен.
+Платформа повторяет структуру [anynote](https://github.com/anynoteinc/anynote): pnpm и Turborepo, `apps/*` и `packages/*`, а слои пакетов проверяет dependency-cruiser (`pnpm check-architecture`). Отличий два: оркестратор пишем на TypeScript (NestJS), а не на Python — агент теперь внешний CLI, и граф LangGraph не нужен; пакеты устроены по схеме «порты и адаптеры».
+
+**Версии** (на 26.09.2026)
+
+| Что | Версия | Оговорка |
+| --- | --- | --- |
+| Node.js | 26.10 | В прод — после перехода 26 в LTS 28.10.2026 |
+| pnpm, Turborepo | 12.6, 2.11 | — |
+| TypeScript | `tsc` 7.0 для проверки типов; пакет `typescript` 6.0 через псевдоним | typescript-eslint, dependency-cruiser и Nest CLI с TS 7 не работают |
+| Next.js, React, MUI | 16.3, 19.3, 9.4 | MUI 9, а не v6 |
+| NestJS | 12.1 | Только ESM |
+| Prisma | 7.10, строго | Генератор `prisma-client`; тег `latest` у CLI указывает на 8.0 RC |
+| better-auth, tRPC, zod | 1.7, 11.19, 4.6 | tRPC — через `@trpc/tanstack-react-query` |
+| Vitest, ESLint, Playwright | 5, 10, 1.63 | Для Nest — unplugin-swc |
+| BullMQ, @nestjs/bullmq, Redis | 6.3, 12, 8.10 | — |
 
 | Путь | Назначение | Из anynote |
 | --- | --- | --- |
-| apps/web | Next.js 16: лендинг `(about)`, вход `(auth)`, кабинет и веб-чат `(protected)`, вебхуки, SSE-поток задачи | Да: route groups, SSE, вебхук ЮKassa |
-| apps/agents | Оркестратор: очередь, квоты, драйверы агентов, песочницы, роутер моделей | Роль та же, стек TypeScript вместо Python |
-| apps/engines | MCP-шлюз к сайтам; cron-воркеры: продление подписок, уведомления, Telegram, очистка | Да |
+| apps/web | Next.js 16: лендинг `(about)`, вход `(auth)`, кабинет и веб-чат `(protected)`, юридические документы в MDX, вебхуки, SSE-поток задачи | Да: route groups, SSE, вебхук ЮKassa, юридические документы |
+| apps/orchestrator | NestJS 12, один код и один образ, три роли запуска: `core` — жизненный цикл задач, воркеры BullMQ, cron, управление песочницами, публикация в git; `mcp` — MCP-шлюз к сайтам; `runner` — pull-раннер на песочной ВМ. В проде роли — отдельные процессы; локально `core` и `mcp` можно запустить в одном процессе на разных портах (`ORCHESTRATOR_ROLES`) | Роль та же, что у бывших agents и engines; стек TypeScript вместо Python |
 | apps/e2e | Playwright-тесты платформы | Да |
+| packages/domain | Ядро: ошибки `DomainError` и порты — `AgentDriver` с общими событиями и zod-схемой итога хода, `SandboxProvider`, `GitProvider`, `SiteAdapter`, `SecretStore`, `ObjectStorage`, `JobQueue`. Бизнес-логики пока нет, со временем вся она будет здесь | Да, роль шире |
 | packages/db | Prisma 7 + PrismaPg: схема, миграции, сиды | Да |
-| packages/domain | Бизнес-логика: задачи, квоты, биллинг; ошибки `DomainError` | Да |
-| packages/auth | better-auth плюс вход через Telegram | Расширить |
-| packages/trpc, packages/ui | tRPC с `createCaller` для RSC; MUI v6 | Да |
-| packages/storage | S3-клиент: добавить presigned URL, multipart, несколько бакетов | Расширить |
+| packages/storage | S3 за портом `ObjectStorage`: добавить presigned URL, multipart, несколько бакетов | Расширить |
+| packages/vault | Клиент Vault API за портом `SecretStore`: KV, Transit, SSH, AppRole, wrapping | Новый |
+| packages/git-providers | `GitProvider`: адаптеры gitea, github, gitlab — репозитории, ветки, PR, секреты и переменные CI, вебхуки | Новый, вместо packages/gitea |
+| packages/sandbox-providers | `SandboxProvider`: адаптер docker | Новый |
+| packages/agent-drivers | `AgentDriver`: codex, kimi, qwen, opencode — запуск, разбор событий, состояние сессии | Новый, вместо packages/agent-runtime |
+| packages/site-adapters | `SiteAdapter`: wordpress, дальше bitrix | Новый |
 | packages/yookassa | Платежи, автоплатёж, возвраты, вебхуки; добавить чеки | Расширить |
-| packages/telegram, mail, notifications | Bot API через прокси, письма через SendSay, уведомления | Да |
-| packages/vault | Клиент Vault API: KV, Transit, SSH, AppRole, wrapping | Новый, слой адаптеров |
-| packages/gitea | Клиент Gitea API: репозитории, секреты и переменные Actions, PR, вебхуки | Новый, слой адаптеров |
-| packages/agent-runtime | Интерфейс драйвера, разбор событий, упаковка сессий в S3 | Новый, слой сервисов |
-| packages/site-adapters | Адаптеры стеков: WordPress, дальше Bitrix и другие | Новый, слой сервисов |
-| agent-kit/ | Образы песочниц и драйверы: Codex, Kimi, Qwen, OpenCode | Новый |
-| ci/ | Обязательные workflow и actions; синхронизируются в `platform/ci` в Gitea | Новый |
+| packages/mail, telegram | Письма через SendSay, Bot API через прокси | Да |
+| packages/auth | better-auth, вход через Telegram, капча SmartCaptcha | Расширить |
+| packages/notifications | Уведомления | Да |
+| packages/trpc, packages/ui | tRPC с `createCaller` для RSC; MUI 9 | Да |
+| agent-kit/ | Образы песочниц: базовый образ на стек с закреплёнными версиями CLI агентов | Новый |
+| ci/ | Обязательные workflow и actions выкладки сайтов; синхронизируются в `platform/ci` в Gitea | Новый |
+| .github/ | CI и релизы платформы в GitHub Actions | Да |
 | ansible/ | Плейбуки подготовки серверов сайтов | Новый |
-| deploy/, docs/ | Compose и Traefik платформы; architecture.md, спецификации, юридические тексты | Да |
+| infra/ | Локальная инфраструктура: `infra/dev/docker-compose.yml` с профилями `site`, `llm`, `ci`, `monitoring`, `monitoring-host` | Новый |
+| deploy/, docs/ | Compose и Traefik платформы; architecture.md, спецификации, исследования, юридические тексты | Да |
 
-Слои те же, что в anynote: приложения → UI → домен → инфраструктурные сервисы → чистые адаптеры, зависимости только вниз. Новые переменные окружения попадают и в `.env.example`, и в `globalEnv` в `turbo.json`. Платформа собирается своими же Gitea Actions: образы — в реестр Gitea, релизы — semantic-release, выкладка — `deploy-stack.sh` по SSH, как в `deploy/` anynote.
+**Слои — порты и адаптеры.** Зависимости идут только вниз; адаптер реализует порт из `packages/domain` и зависит только от него, а какой адаптер подставить, решает приложение.
+
+| Слой | Пакеты |
+| --- | --- |
+| Приложения | apps/web, apps/orchestrator, apps/e2e |
+| UI и транспорт | ui, trpc |
+| Сервисы | auth (better-auth), notifications |
+| Адаптеры | db, storage, vault, git-providers, sandbox-providers, agent-drivers, site-adapters, yookassa, mail, telegram |
+| Ядро | domain: порты и ошибки домена |
+
+Новые переменные окружения попадают и в `.env.example`, и в `globalEnv` в `turbo.json`. Код платформы живёт на GitHub: CI (typecheck, lint, test, check-architecture, build) и релизы через semantic-release с `@semantic-release/github` идут в GitHub Actions; выкладка платформы на ВМ через GitHub Actions — позже (M10). Gitea — только для репозиториев сайтов клиентов и реестра образов.
 
 ## 7. Жизненный цикл задачи
 
-Одна задача — одна песочница и одна ветка в Gitea. Правка кода попадает в прод только после «Применить», правка контента — сразу, но со снимком для отката.
+Одна задача — одна логическая сессия агента и одна ветка задачи; контейнер песочницы живёт один ход. Пока задача ждёт клиента, контейнера нет, а сессия лежит в S3. Правка кода попадает в прод только после «Применить», правка контента — сразу, но со снимком для отката.
 
 ```mermaid
 sequenceDiagram
     participant C as Клиент
     participant W as apps/web
     participant O as Оркестратор
-    participant R as Песочница
-    participant G as Gitea Actions
+    participant R as Контейнер хода
+    participant G as Git-провайдер и CI
     participant S as Сайт
     C->>W: хотелка и файлы
-    W->>O: квота, в очередь
-    O->>R: запуск, сессия из S3
+    W->>O: задача, резерв, outbox
+    O->>O: аренда сайта, ход в BullMQ
+    O->>R: запуск, снимок хода n−1 из S3
     R->>R: правка кода
     R->>S: контент через MCP
-    R-->>O: итог и дифф
-    O->>G: коммит, PR, проверки
+    R-->>O: итог и патч
+    O->>O: снимок хода в S3, контейнер удалён
+    O->>G: чистый клон, проверка диффа, коммит, PR
     O-->>C: «Что изменится»
     C->>W: «Применить»
     W->>O: одобрено
-    O->>G: секрет, merge
+    O->>G: аренда сайта, секрет, merge
     G->>S: бэкап в S3
     G->>S: выкладка, проверка
     G-->>O: статус (вебхук)
     O-->>C: скриншот и «Отменить»
 ```
 
-Прод один, поэтому клиент видит «Что изменится» до merge, а Gitea Actions делает бэкап, выкладку, проверку и при сбое — откат. Секрет выкладки одноразовый: оркестратор кладёт его в репозиторий перед merge и удаляет после (раздел 15).
+Прод один, поэтому клиент видит «Что изменится» до merge, а пайплайн делает бэкап, выкладку, проверку и при сбое — откат. Секрет выкладки одноразовый: оркестратор кладёт его в репозиторий перед merge и удаляет после (раздел 15).
 
-| Статус | Что происходит | Что видит клиент |
-| --- | --- | --- |
-| queued | Задача в очереди, единица квоты зарезервирована | «Приняли, начинаем» |
-| preparing | Поднимается песочница, из S3 восстанавливается сессия | «Готовим» |
-| running | Агент работает, события пишутся в S3 | Прогресс шагами |
-| awaiting\_user | Агент задал вопрос | Вопрос с кнопками |
-| awaiting\_approval | Правка кода готова, проверки прошли | «Что изменится» и кнопки |
-| deploying | Merge в main, Gitea Actions делает бэкап и выкладку | «Выкладываем» |
-| verifying | Проверки после выкладки | «Проверяем» |
-| done | Готово, резерв квоты списан | Скриншот и «Отменить» |
-| failed | Ошибка до выкладки, на сайте ничего не изменилось | Объяснение и «Попробовать ещё» |
-| rolled\_back | Проверка не прошла, прод вернули из бэкапа | «Вернули как было» |
-| cancelled | Клиент отменил до выкладки | «Отменено» |
+**Очередь и сериализация**
+
+- Истина о задаче — `tasks.status` в PostgreSQL. Переход статуса — условный `UPDATE … WHERE status IN (…)` в одной транзакции с записью в `credit_ledger`, поэтому списание и возврат случаются ровно один раз.
+- Постановка в очередь атомарна с записью в базу: web пишет задачу и `outbox_events` одной транзакцией, relay в `core` переносит их в BullMQ.
+- Ходы, выкладки, таймеры и cron — задачи BullMQ через `@nestjs/bullmq`; cron — job schedulers BullMQ. Redis работает с `appendonly` и `maxmemory-policy noeviction`.
+- Долгие ожидания (`awaiting_user`, `awaiting_approval`) — это статус плюс отложенная задача-таймер BullMQ, а не висящий job. Таймер ничего не делает, если статус уже сменился.
+- Ответ клиента и «Изменить» ставят следующий ход той же задачи в очередь (`queued`).
+- На сайте одновременно идёт не больше одной операции — хода, выкладки или отката. Это аренда сайта (site lease) в PostgreSQL; группы BullMQ есть только в платной Pro, поэтому их не берём. Если исход выкладки неизвестен, аренда не снимается до решения оператора.
+- Живой поток задачи: события пишутся в `task_events` (история) и раздаются репликам web через Redis pub/sub; браузер получает SSE и после обрыва досылает пропущенное по `Last-Event-ID`.
+- Запасной путь без Redis — бэкенд BullMQ 6 на PostgreSQL (`createPostgresBackend`, с июля 2026).
+
+| Статус | Что происходит | Контейнер хода | Что видит клиент |
+| --- | --- | --- | --- |
+| queued | Задача в очереди, резерв сделан: единица квоты или сумма в кошельке | Нет | «Приняли, начинаем» |
+| preparing | Аренда сайта, запуск контейнера, восстановление снимка хода n−1 или клон ветки | Создаётся | «Готовим» |
+| running | Агент работает, события пишутся в `task_events` и S3 | Есть | Прогресс шагами |
+| awaiting\_user | Агент задал вопрос, идёт таймер ожидания | Нет | Вопрос с кнопками |
+| awaiting\_approval | Правка кода опубликована в ветку, проверки прошли, идёт таймер ожидания | Нет | «Что изменится» и кнопки |
+| deploying | Merge в main, пайплайн делает бэкап и выкладку; сайт под арендой | Нет | «Выкладываем» |
+| verifying | Проверки после выкладки | Нет | «Проверяем» |
+| done | Готово, резерв списан | Нет | Скриншот и «Отменить» |
+| failed | Ошибка до выкладки, на сайте ничего не изменилось; резерв возвращён | Нет | Объяснение и «Попробовать ещё» |
+| rolled\_back | Проверка не прошла, прод вернули из бэкапа | Нет | «Вернули как было» |
+| cancelled | Клиент отменил до выкладки; резерв возвращён | Удаляется | «Отменено» |
 
 ## 8. Агентный рантайм
 
-Платформа не привязана к одному агенту: любой CLI-агент подключается драйвером, который запускает его без интерфейса, читает поток событий и сохраняет сессию. В MVP два драйвера — Codex CLI и Kimi Code CLI; Qwen Code и OpenCode — запасные.
+Платформа не привязана к одному агенту: любой CLI-агент подключается драйвером (`AgentDriver`), а песочница — провайдером (`SandboxProvider`). Оба порта объявлены в `packages/domain`, адаптеры лежат в `packages/agent-drivers` и `packages/sandbox-providers`. В MVP два драйвера — Codex CLI и Kimi Code CLI; Qwen Code и OpenCode — запасные.
 
 ### Драйвер
 
 ```ts
 interface AgentDriver {
   id: 'codex' | 'kimi' | 'qwen' | 'opencode' | 'gigacode' | 'sourcecraft'
-  image: string                                        // образ песочницы с CLI
+  image: string                                        // образ песочницы с CLI, по дайджесту
   capabilities: {
     resume: boolean                                    // продолжение сессии
     jsonEvents: boolean                                // поток событий JSONL
@@ -237,48 +306,119 @@ interface AgentDriver {
     mcp: boolean
     images: boolean                                    // картинки на вход
   }
-  prepare(ctx: RunContext): Promise<PreparedRun>       // конфиг, ключ шлюза, AGENTS.md
-  command(run: PreparedRun, turn: TurnInput): string[] // argv запуска
-  parseEvent(line: string): AgentEvent | null          // строка stdout → общее событие
-  sessionDirs(run: PreparedRun): string[]              // что упаковать в S3
+  prepare(ctx: RunContext): Promise<PreparedRun>       // конфиг, AGENTS.md, MCP; env; секреты хода
+  command(run: PreparedRun, turn: TurnInput): string[] // argv хода: новая сессия или продолжение
+  parseEvent(line: string): AgentEvent[]               // строка stdout → ноль или несколько общих событий
+  sessionState(run: PreparedRun): {                    // что упаковать в home.tar.zst
+    root: string; include: string[]; exclude: string[]
+  }
+  locateNativeSession?(fs: SandboxFs, run: PreparedRun): Promise<string | null> // id сессии CLI, у Kimi — из session_index.jsonl
   extractResult(events: AgentEvent[]): AgentResult
 }
 ```
 
-Оркестратор, чат и биллинг видят только общие события: `started`, `message`, `command`, `file_change`, `tool_call`, `question`, `usage`, `completed`, `failed`.
+Оркестратор и чат видят только общие события: `started`, `message`, `command`, `file_change`, `tool_call`, `question`, `usage`, `completed`, `failed`. События `usage` печатает процесс под управлением агента, поэтому они идут только в интерфейс; деньги считаются по журналу LiteLLM (раздел 9).
 
-| Драйвер | Запуск без интерфейса | Сессии | Модели |
-| --- | --- | --- | --- |
-| Codex CLI | `codex exec --json --output-schema <файл>` | `codex exec resume <id>`; каталог `CODEX_HOME` | Провайдер с Responses API |
-| Kimi Code CLI | `kimi -p <задача> --output-format stream-json` | `--session <id>`, `--continue`; каталог `KIMI_CODE_HOME` | Kimi-K2.6 и другие через `kimi provider` |
-| Qwen Code | `qwen -p <задача> --output-format stream-json` | `--resume <id>`; чаты в `~/.qwen/projects` | OpenAI-совместимые через `modelProviders` |
-| OpenCode | `opencode run --format json` | `--session <id>`, `opencode export` и `import` | Любые провайдеры из конфига |
+| Драйвер | Запуск без интерфейса | Сессии | Модели | Настройка для песочницы |
+| --- | --- | --- | --- | --- |
+| Codex CLI | `codex exec --json --output-schema <файл>` | `codex exec resume <thread_id>`; rollout-файлы в `CODEX_HOME/sessions`; `--ephemeral` не использовать | Провайдер с Responses API, `wire_api="responses"`; Cloud.ru и GigaChat — через мост LiteLLM `/responses` → chat | Встроенную песочницу и подтверждения выключает `--dangerously-bypass-approvals-and-sandbox`; `check_for_update_on_startup=false`, аналитика выключена |
+| Kimi Code CLI (`@moonshot-ai/kimi-code` 2.1) | `kimi -p <задача> --output-format stream-json`; `-p` нельзя сочетать с `--yolo`, `--auto` и `--plan` | `--session <id>`; каталог `KIMI_CODE_HOME/sessions/<workDirKey>/…`, ключ зависит от пути рабочего каталога | Kimi-K2.6 и другие через `KIMI_MODEL_*`; в `stream-json` нет usage | `KIMI_DISABLE_TELEMETRY=1`, `KIMI_CODE_NO_AUTO_UPDATE=1`; `rg` и `fd` — в образе |
+| Qwen Code 0.24 | `qwen -p <задача> --output-format stream-json` | `--resume <id>`; чаты в `~/.qwen/projects/<cwd>` | OpenAI-совместимые через `modelProviders` | `--approval-mode yolo`; лимиты `--max-wall-time`, `--max-session-turns` |
+| OpenCode 1.18 | `opencode run --format json` | `--session <id>`, `opencode export` и `import` | Любые провайдеры из конфига | Права через `OPENCODE_PERMISSION` |
 
-Флаги взяты из документации [Codex](https://learn.chatgpt.com/docs/non-interactive-mode), [Kimi Code](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html), [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/) и [OpenCode](https://opencode.ai/docs/cli/); работу каждого драйвера подтверждаем в PoC.
+Флаги взяты из документации [Codex](https://learn.chatgpt.com/docs/non-interactive-mode), [Kimi Code](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html) ([переменные окружения](https://github.com/MoonshotAI/kimi-code/blob/main/docs/en/configuration/env-vars.md)), [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/) и [OpenCode](https://opencode.ai/docs/cli/); работу каждого драйвера подтверждаем в PoC. Порядок флагов у `codex exec resume` в документации и в SDK расходится: по документации флаги идут после `resume`, в SDK — до; проверяем в PoC.
+
+### Песочница
+
+Порт `SandboxProvider` прячет, где и как запускается контейнер. В PoC `core` вызывает адаптер `docker` через dockerode и локальный сокет Docker. В пилоте тот же адаптер работает внутри роли `runner` на песочной ВМ: раннер сам забирает ходы, владеет контейнерами и файлом вывода, входящих портов у него нет, а аренда хода с эпохой отсекает устаревшего владельца. Docker API по TCP наружу не выставляем: ключ к нему — это root на ВМ.
+
+```ts
+interface SandboxProvider {
+  kind: 'docker'                                       // в MVP один адаптер
+  create(spec: SandboxSpec, signal?: AbortSignal): Promise<Sandbox>
+  get(id: SandboxId): Promise<Sandbox | null>          // подхватить после рестарта процесса
+  list(filter?: Partial<SandboxLabels>): Promise<SandboxInfo[]> // сироты для сборщика мусора
+}
+
+interface SandboxSpec {
+  image: string                                        // только по дайджесту из своего реестра
+  labels: SandboxLabels                                // workspaceId, siteId, taskId, sessionId, turn
+  runtime: 'runsc' | 'runc'                            // из SANDBOX_RUNTIME; на macOS — runc
+  resources: { cpu: number; memoryMiB: number; pids: number } // 2 / 4096 / 512
+  user: { uid: number; gid: number }                   // 10001, не root
+  readOnlyRootfs: true
+  env: Record<string, string>                          // без секретов
+  secrets: SecretFile[]                                // tmpfs, только на ход, в снимок не попадают
+  network: { mode: 'gateway'; routes: Array<'llm' | 'mcp'> } // зеркала пакетов — позже
+  lifetime: { hardTimeoutMs: number; idleOutputTimeoutMs?: number }
+}
+
+interface Sandbox {
+  id: SandboxId
+  exec(spec: ExecSpec): Promise<ExecHandle>            // всё через exec: агент, git diff, tar
+  attach(execId: ExecId, fromOffset?: number): Promise<ExecHandle> // дочитать вывод после переподключения
+  fs: SandboxFs                                        // чтение и запись; байты — через stdin и stdout exec
+  destroy(reason: 'completed' | 'failed' | 'cancelled' | 'timeout' | 'gc'): Promise<void>
+}
+```
 
 ### Изоляция
 
-- Каждая задача — новый контейнер под [gVisor](https://gvisor.dev/docs/) (`runsc`): rootless, корневая файловая система только для чтения, `HOME` в tmpfs.
-- Лимиты: 2 vCPU, 4 ГБ памяти, 512 процессов, 20 минут на ход агента.
-- Папки: `/workspace/repo` — клон сайта, `/workspace/inbox` — файлы клиента, `/workspace/out` — артефакты, `/agent-home` — сессия агента.
-- Сеть — только по списку: LLM-шлюз, MCP-шлюз, зеркала пакетных реестров. Ни Gitea, ни сервер сайта из песочницы недоступны.
-- Долгоживущих секретов внутри нет: только ключ LLM-шлюза и токен MCP на эту задачу. Если драйвер работает по подписке, её токен кладётся из Vault в tmpfs на время хода.
-- Встроенные песочницы агентов выключены (`--sandbox danger-full-access` у Codex, `--yolo` у Kimi, `--approval-mode yolo` у Qwen): изоляцию даёт контейнер.
-- Супервизор снаружи готовит клон, читает stdout, останавливает по таймауту, проверяет дифф, коммитит и пушит от имени бота.
+- Один контейнер на ход: PID 1 — `tini` и `sleep`, всё остальное — через exec. Агент запускается обёрткой в своей группе процессов и пишет события в файл с оффсетами, поэтому после переподключения вывод дочитывается с места обрыва. Отмена — сигнал группе процессов, запасной путь — остановка контейнера.
+- `docker cp` и archive API не используем: изменения в оверлее корневой ФС gVisor хосту не видны, а сам `docker cp` исторически уязвим.
+- Docker 29 + [gVisor](https://gvisor.dev/docs/) `runsc` в режиме systrap: вложенная виртуализация не нужна. В Yandex Cloud её нет, поэтому Kata и Firecracker там невозможны.
+- dockerd работает от root, в контейнере — uid 10001; границу изоляции держит gVisor. Режим `runsc --rootless` не берём: в нём нет netstack и снимков.
+- Корневая файловая система только для чтения, `--cap-drop=ALL`, `no-new-privileges`, `HOME` и служебные файлы хода — в tmpfs.
+- Лимиты: 2 vCPU, 4 ГБ памяти, 512 процессов, 20 минут на ход агента. Таймаут тишины в выводе — щедрый: Codex в `--json` пишет событие только по завершении элемента.
+- Папки: `/workspace/repo` — рабочая копия сайта, `/workspace/inbox` — файлы клиента, `/workspace/out` — артефакты, `/agent-home` — сессия агента. Пути `/workspace/repo` и `/agent-home` фиксированы: от них зависят сессии Kimi и Qwen.
+- Долгоживущих секретов внутри нет: только виртуальный ключ LiteLLM на этот ход (бюджет и TTL) и токен MCP, ограниченный сайтом и задачей. Учётных данных git, S3 и Vault в песочнице нет. Подписки агентов в песочницу не попадают: если они появятся (§9), ключ подставляет `sandbox-gw`, а не контейнер.
+- Встроенные песочницы и подтверждения агентов выключены (флаги — в таблице драйверов): изоляцию даёт контейнер.
+- Образ — один базовый на стек, например `sbx-wordpress`: PHP CLI, Composer, Node, git, `rg`, `fd`, `jq`, `tini` и CLI агентов с закреплёнными версиями. Хранится по дайджесту в реестре Gitea не меньше срока хранения сессий. Автообновления и телеметрия CLI выключены.
 
-### Сессии, логи и файлы в S3
+### Сеть
 
-- Сессия — каталоги из `sessionDirs()`: после каждого хода они упаковываются в `sessions/<sessionId>/home.tar.zst`, следующий ход восстанавливает их в новой песочнице.
+- У песочницы — своя internal-сеть без DNS и выхода в интернет.
+- Единственный выход — `sandbox-gw` с белым списком путей: LiteLLM `/v1/responses` и `/v1/chat/completions`, MCP-шлюз. Заголовок Host нормализуется.
+- Git-провайдер, S3, Vault и сервер сайта из песочницы недоступны. Зеркала пакетов (npm, Composer) — позже: темам WordPress сборка зависимостей обычно не нужна.
+- Presigned-ссылок S3 внутри песочницы нет: разрешённый S3-эндпоинт — это канал утечки. Файлы клиента в песочницу кладёт и артефакты забирает хост.
+
+### Сессии и снимки по ходам
+
+- Задача — логическая сессия (`sessionId`), ход — один контейнер. Рабочая копия — ветка задачи во внутреннем зеркале Gitea: первый ход клонирует её, следующие продолжают с коммита прошлого хода. Для сайтов в GitHub и GitLab клиента промежуточные ходы в их репозитории не видны.
+- Снимок хода лежит в `raditi-sessions`: `sessions/<sessionId>/turns/<NNNN>/{home.tar.zst, untracked.tar.zst, patch.diff, manifest.json}`.
+  - `home.tar.zst` — только `driver.sessionState()`, без учётных данных, логов и бинарников CLI;
+  - `untracked.tar.zst` — неотслеживаемые файлы рабочей копии;
+  - `patch.diff` — патч хода, чтобы публикацию можно было повторить, когда контейнера уже нет;
+  - `manifest.json` пишется последним: `schemaVersion`, дайджест образа, версия драйвера, id сессии CLI.
+- Архивы собирает `tar --zstd` внутри песочницы, поток идёт через хост в S3. Хеш считает хост, он же шифрует снимок ключом данных из Vault Transit — ключ рабочего пространства в песочницу не попадает. Лимиты размера и числа файлов защищают от архивных бомб.
+- Продолжать сессию можно только тем же образом. При смене образа или драйвера сессия не переносится: новый агент получает краткое содержание прошлых ходов.
+- «Изменить» — возврат к ходу n−1: ветка сбрасывается на его коммит, `home` берётся из его снимка. Перед этим откатываются правки контента хода n (раздел 11).
 - Лог — поток событий частями: `tasks/<taskId>/events/<n>.jsonl.zst` каждые 10 секунд или 256 КБ, плюс сырые stdout и stderr.
-- Файлы клиента лежат в `inbox/`, песочница получает их по presigned-ссылкам только на чтение.
-- Артефакты (скриншоты, отчёты, диффы) агент кладёт в `/workspace/out`, супервизор выгружает их в S3.
-- При смене драйвера сессия не переносится: новый агент получает краткое содержание прошлых ходов.
+- Артефакты (скриншоты, отчёты) агент кладёт в `/workspace/out`, хост выгружает их в `raditi-artifacts` с лимитами по типу и размеру.
 
 Бакеты, сроки хранения и шифрование — в разделе 14.
 
+### Супервизор хода и публикация
+
+1. **Размещение.** Аренда сайта и слот на песочной ВМ; имя контейнера детерминированное (`raditi-turn-<taskId>-<turnNo>`), поэтому второй такой же ход не запустится.
+2. **Подготовка.** Рабочую копию готовит хост: клон ветки задачи с укреплённым git (без хуков и сабмодулей, короткий токен только на чтение, не остаётся в `.git/config`) и восстановление снимка хода n−1. В песочницу копия передаётся архивом через stdin exec — git-провайдер из песочницы недоступен. Конфиг драйвера, AGENTS.md и файлы клиента — через `fs`, секреты хода — в tmpfs.
+   - Роль `runner` не имеет своих доступов к Vault и S3: на каждый ход `core` выдаёт ей presigned-ссылки на ключи снимков, логов и артефактов этого хода и ключ данных Vault Transit (открытый ключ живёт только в памяти runner на время хода).
+3. **Ход.** Команда драйвера через exec, таймаут 20 минут; события → `task_events`, части лога в S3, Redis pub/sub → SSE.
+4. **Дифф и снимок.** `git diff --binary` внутри песочницы → `patch.diff` (недоверенные данные); снимок хода → S3; контейнер удаляется.
+5. **Публикация** — только на доверенной стороне, в роли `core`:
+   - чистый клон без checkout;
+   - предпроверка `git apply --numstat --summary`: отказ на симлинки, сабмодули и смену прав;
+   - `git apply --cached`, `transfer.fsckObjects=true`, свежая версия git;
+   - `DiffPolicy`: запрещённые пути (раздел 10), лимиты на размер и число файлов, поиск секретов gitleaks;
+   - коммит от бота с трейлером `Raditi-Task:` и push через `GitProvider`.
+
+   С `.git` агента учётные данные не встречаются: его хуки и настройки не исполняются.
+6. **Итог.** `extractResult` → zod-схема итога хода; `client_message` проверяется и уходит клиенту.
+7. **Сборщик мусора** раз в минуту удаляет контейнеры без живой аренды или старше TTL.
+
 ### Инструкции агенту
 
-1. Платформенный `AGENTS.md`: роль, язык ответа клиенту, запрет трогать `.gitea/`, секреты и ядро CMS, формат итога.
+1. Платформенный `AGENTS.md`: роль, язык ответа клиенту, запрет трогать файлы CI, защищённые пути CMS и секреты, формат итога.
 2. `AGENTS.md` сайта: стек, тема, где что лежит, особые правила; пишется при онбординге.
 3. Навыки по типовым задачам: цены, баннеры, формы, новые страницы.
 
@@ -296,7 +436,7 @@ interface AgentDriver {
 | `browser_*` | Playwright: открыть, кликнуть, заполнить, скриншот |
 | `request_approval` | Показать клиенту «Что изменится» и ждать решения |
 
-Браузер работает в apps/engines, а не в песочнице, и входит в админку с доступами из Vault ([Playwright MCP](https://github.com/microsoft/playwright-mcp)). Для WordPress подходит и [MCP Adapter](https://github.com/WordPress/mcp-adapter), если плагин можно поставить.
+MCP-шлюз — отдельный процесс (роль `mcp`) со своим портом, своей AppRole в Vault и своей ролью в PostgreSQL без доступа к биллингу. Каждый вызов, который меняет сайт, пишется в журнал MCP-вызовов хода с ключом идемпотентности (раздел 11). Браузер работает в MCP-шлюзе, а не в песочнице, открывает только домен сайта клиента и входит в админку с доступами из Vault ([Playwright MCP](https://github.com/microsoft/playwright-mcp)). Для WordPress подходит и [MCP Adapter](https://github.com/WordPress/mcp-adapter), если плагин можно поставить.
 
 ### Итог хода
 
@@ -312,7 +452,7 @@ interface AgentDriver {
 }
 ```
 
-Итог проверяется zod-схемой; при ошибке агент получает одну попытку исправить. `change_type` — `code`, `content`, `mixed` или `none`; `client_message` уходит клиенту как есть, поэтому пишется простыми словами.
+Итог проверяется zod-схемой; при ошибке агент получает одну попытку исправить. `change_type` — `code`, `content`, `mixed` или `none`; `client_message` уходит клиенту как есть, поэтому пишется простыми словами, а размер его ограничен и перед SSE он экранируется.
 
 ## 9. Агенты и модели в России
 
@@ -322,8 +462,8 @@ ChatGPT, Claude и Gemini в России официально недоступ�
 
 | Агент | Доступ из России | Модели | Роль |
 | --- | --- | --- | --- |
-| [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode) | Открытый код; сторонний провайдер — только через Responses API ([обсуждение](https://github.com/openai/codex/discussions/7782)) | Yandex AI Studio напрямую, GigaChat через [gpt2giga](https://github.com/ai-forever/gpt2giga/blob/main/integrations/codex/README.md), Cloud.ru через LiteLLM | Основной драйвер |
-| [Kimi Code CLI](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html) | CLI работает; [подписку](https://www.kimi.com/code/docs/en/kimi-code/membership.html) из России оплатить можно только через посредников ([vc.ru](https://vc.ru/services/3056116-kak-kupit-kimi-api-i-podpisku-kimi-code-iz-rossii)) | Kimi-K2.6 в Cloud.ru; работу со сторонним провайдером проверяем в PoC | Второй драйвер |
+| [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode) | Открытый код; сторонний провайдер — только через Responses API: `wire_api="chat"` удалён в феврале 2026 ([обсуждение](https://github.com/openai/codex/discussions/7782)) | Yandex AI Studio напрямую; Cloud.ru и GigaChat — через мост LiteLLM `/responses` → chat, для GigaChat есть и [gpt2giga](https://github.com/ai-forever/gpt2giga/blob/main/integrations/codex/README.md) | Основной драйвер |
+| [Kimi Code CLI](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html) | CLI работает; [подписку](https://www.kimi.com/code/docs/en/kimi-code/membership.html) из России оплатить можно только через посредников ([vc.ru](https://vc.ru/services/3056116-kak-kupit-kimi-api-i-podpisku-kimi-code-iz-rossii)) | Kimi-K2.6 в Cloud.ru через `KIMI_MODEL_*`; работу со сторонним провайдером проверяем в PoC | Второй драйвер |
 | [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/) | Apache-2.0; бесплатный вход Qwen OAuth закрыт с 15 апреля 2026 | Любые OpenAI-совместимые | Запасной |
 | [OpenCode](https://opencode.ai/docs/cli/) | Открытый код, есть режим сервера | Любые провайдеры из конфига | Запасной |
 | [GigaCode CLI](https://neuraldeep.ru/gigacode-cli) | Сбер; облако и on-prem, для компаний — по договору | GigaChat | После PoC |
@@ -337,13 +477,18 @@ Claude Code и Gemini CLI не берём: их модели в России н�
 | --- | --- | --- | --- |
 | [Yandex AI Studio](https://aistudio.yandex.ru/docs/en/ai-studio/concepts/generation/models.html) | OpenAI-совместимый, включая Responses ([API](https://aistudio.yandex.ru/docs/en/ai-studio/api/)) | Qwen3 235B, gpt-oss-120b, DeepSeek V4 Flash, YandexGPT Pro 5.1 | Рубли |
 | [Cloud.ru Evolution Foundation Models](https://cloud.ru/docs/foundation-models/ug/topics/overview__available__models) | OpenAI-совместимый, вызов функций, 20 запросов в секунду на ключ | Kimi-K2.6, GLM-5.1, DeepSeek-V4-Pro, Qwen3-Coder-Next, MiniMax-M3 | Рубли |
-| GigaChat API | Свой API; для Codex — прокси gpt2giga | GigaChat-3-Ultra, GigaChat-2-Max | Рубли |
+| GigaChat API | Свой API; для Codex — мост LiteLLM или прокси gpt2giga | GigaChat-3-Ultra, GigaChat-2-Max | Рубли |
 
 У Cloud.ru есть и [«внешние» модели](https://cloud.ru/products/evolution-foundation-models) сторонних поставщиков — для данных клиентов берём только модели на серверах Cloud.ru.
 
 ### Роутер
 
-Роутер — это [LiteLLM](https://docs.litellm.ai/docs/response_api) перед всеми провайдерами и правила в оркестраторе. LiteLLM даёт ключ на задачу, лимиты, учёт токенов и мост `/responses` для провайдеров, где есть только Chat Completions.
+Роутер — это [LiteLLM](https://docs.litellm.ai/docs/response_api) перед всеми провайдерами и правила в оркестраторе. LiteLLM выдаёт виртуальный ключ на ход (`max_budget`, TTL, отзыв после хода), держит лимиты и мост `/responses` для провайдеров, где есть только Chat Completions.
+
+- **Учёт.** Деньги считаются только по журналу LiteLLM на ключ хода: каждый вызов приходит к нам callback'ом и записывается в `token_usage` идемпотентно по id вызова (раздел 17). Связь «ключ → задача и ход» храним у себя. События `usage` от CLI — только для интерфейса.
+- **Ключ на ход, а не на задачу.** Внутри песочницы нет долгоживущих секретов, а ожидание в `awaiting_user` может длиться сколько угодно.
+- **Один экземпляр.** Redis для LiteLLM понадобится только при масштабировании: лимиты нескольких экземпляров синхронизируются через него.
+- **Безопасность.** LiteLLM не ниже 1.83.7 ([CVE-2026-42271](https://www.oligo.security/blog/oligo-detects-and-blocks-rce-in-litellm-cve-2026-42271)), закреплён по digest, в отдельном сегменте сети без доступа к базе платформы и Vault. Для ключей и журнала у него своя база `litellm` и своя роль PostgreSQL.
 
 | Класс | Когда | Кандидаты (гипотеза) |
 | --- | --- | --- |
@@ -365,31 +510,47 @@ Claude Code и Gemini CLI не берём: их модели в России н�
 
 **Подписки.** Тип провайдера «подписка» в модели данных остаётся, но включается только там, где договор разрешает работу на клиентов, — например, корпоративный GigaCode. Подписки ChatGPT, Claude и Kimi для этого не используем: первые две недоступны в России, Kimi не оплатить напрямую.
 
-## 10. Gitea: код и выкладка
+## 10. Git-провайдеры и Gitea: код и выкладка
 
-Код каждого сайта живёт в Gitea 1.27, в организации `sites`; выкладку делает act\_runner по обязательному workflow организации, который агент изменить не может.
+Код сайта живёт у git-провайдера: в MVP — в нашей Gitea 1.27, в организации `sites`; позже — и в GitHub или GitLab клиента. Ядро работает с ними только через порт `GitProvider` (`packages/git-providers`). В Gitea выкладку делает gitea/runner по обязательному workflow организации, который агент изменить не может. Gitea — только для репозиториев сайтов клиентов; код платформы живёт на GitHub (раздел 6).
+
+```ts
+interface GitProvider {
+  id: 'gitea' | 'github' | 'gitlab'
+  cloneToken(repo: RepoRef, scope: 'read' | 'write'): Promise<ShortToken> // короткий токен на клон или push
+  pushBranch(repo: RepoRef, branch: string, commit: CommitRef): Promise<void>
+  openPullRequest(repo: RepoRef, pr: PullRequestInput): Promise<PullRequestRef>
+  merge(pr: PullRequestRef): Promise<CommitRef>
+  setDeployVars(repo: RepoRef, vars: DeployVars): Promise<void>            // параметры выкладки
+  putDeploySecret(repo: RepoRef, name: string, value: string): Promise<void> // одноразовый секрет выкладки
+  deleteDeploySecret(repo: RepoRef, name: string): Promise<void>
+  parseWebhook(req: WebhookRequest): PipelineEvent | null                  // проверка подписи и статус CI
+  pipelineStatus(repo: RepoRef, runId: string): Promise<PipelineStatus>    // запасной путь, если вебхук не пришёл
+}
+```
 
 - [Gitea 1.27](https://blog.gitea.com/release-of-1.27.0/) умеет обязательные workflow уровня организации ([scoped workflows](https://docs.gitea.com/usage/actions/scoped-workflows/)): они лежат в отдельном репозитории `platform/ci` и выполняются в контексте репозитория сайта; обязательный workflow нельзя отключить.
-- В репозиториях сайтов нет `.gitea/workflows`; супервизор отклоняет дифф, который трогает `.gitea/`.
-- Раннеры двух видов ([act\_runner](https://docs.gitea.com/usage/actions/act-runner)): `check` — проверки в Docker, `deploy` — выкладка с постоянного IP, который клиент при необходимости добавляет в белый список хостинга.
-- Выкладки одного сайта идут строго по очереди: `concurrency` есть с [Gitea 1.26](https://blog.gitea.com/release-of-1.26.0/).
+- В репозиториях сайтов нет файлов CI. `DiffPolicy` отклоняет дифф, который трогает запрещённые пути: `.gitea/`, `.github/`, `.gitlab-ci.yml`, `.gitlab/`, `.forgejo/`, `.woodpecker*`, `.drone.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.circleci/`, `.gitmodules`, а также `SiteAdapter.protectedPaths()` — у WordPress `wp-config.php`, `wp-admin/`, `wp-includes/`, у Битрикса `/bitrix/`.
+- Раннеры двух видов ([gitea/runner](https://gitea.com/gitea/runner/releases), бывший act\_runner): `check` — проверки в Docker, `deploy` — выкладка с постоянного IP, который клиент при необходимости добавляет в белый список хостинга.
+- Выкладки одного сайта идут строго по очереди: в Gitea есть `concurrency` с [Gitea 1.26](https://blog.gitea.com/release-of-1.26.0/), а поверх — аренда сайта в PostgreSQL, одна на ход, выкладку и откат для любого провайдера (раздел 7).
 - `GITEA_TOKEN` работает в ограниченном режиме, доступ к чужим репозиториям по умолчанию закрыт ([права токена](https://docs.gitea.com/usage/actions/token-permissions/)).
-- О ходе выкладки платформа узнаёт из вебхуков `workflow_run` и `workflow_job` с подписью `X-Gitea-Signature` ([вебхуки](https://docs.gitea.com/usage/webhooks)).
-- Docker-образы сайтов (после MVP) хранятся во встроенном [реестре Gitea](https://docs.gitea.com/usage/packages/container/).
+- О ходе выкладки платформа узнаёт из вебхуков `workflow_run` и `workflow_job` с подписью `X-Gitea-Signature` ([вебхуки](https://docs.gitea.com/usage/webhooks)); если вебхук не пришёл, оркестратор опрашивает API запусков.
+- Docker-образы песочниц, а после MVP и сайтов, хранятся во встроенном [реестре Gitea](https://docs.gitea.com/usage/packages/container/).
+- **Сайты в GitHub или GitLab клиента.** Ветки и PR — через `GitProvider`, промежуточные ходы — во внутреннем зеркале Gitea. Выкладку там делает пайплайн клиента; как сохранить бэкап, проверку и автооткат — открытый вопрос (раздел 20).
 
 ### Git-флоу
 
-1. Супервизор клонирует `main` в песочницу и создаёт ветку `agent/<taskId>`.
-2. После хода агента супервизор проверяет дифф, коммитит от имени бота и пушит ветку.
+1. Супервизор создаёт ветку `agent/<taskId>` от `main`; хост клонирует её коротким токеном только на чтение и передаёт в песочницу архивом через exec.
+2. После хода патч публикуется на доверенной стороне: чистый клон, предпроверка, `git apply --cached`, `DiffPolicy` и gitleaks, коммит от бота, push через `GitProvider` (раздел 8).
 3. Оркестратор открывает PR; workflow `check` прогоняет проверки.
-4. Клиент нажимает «Применить» — оркестратор кладёт одноразовый секрет выкладки и делает merge.
-5. Push в `main` запускает `deploy`; итог приходит вебхуком, секрет удаляется.
+4. Клиент нажимает «Применить» — оркестратор берёт аренду сайта, кладёт одноразовый секрет выкладки и делает merge.
+5. Push в `main` запускает `deploy`; итог приходит вебхуком, секрет удаляется, аренда снимается.
 
 ### Пайплайн
 
 | Шаг | Что делает | При ошибке |
 | --- | --- | --- |
-| check | Линтер PHP, сборка ассетов, запрет на `.gitea/` и секреты в диффе | PR не мержится, агент получает лог |
+| check | Линтер PHP, сборка ассетов, запрет на запрещённые пути и секреты в диффе | PR не мержится, агент получает лог |
 | drift | Сравнивает файлы на сервере с последней выкладкой | По политике сайта: `sync` или остановка |
 | backup | Архив изменяемых файлов и дамп БД в S3 (`raditi-backups`) | Остановка |
 | deploy | rsync по SSH, git-ftp или Docker — по `vars.DEPLOY_METHOD` | Откат |
@@ -439,6 +600,9 @@ Actions берутся из своей Gitea (`DEFAULT_ACTIONS_URL = self`), а 
 **Правила**
 
 - Перед правкой — снимок объекта (запись, опция, файл медиа) в `raditi-artifacts`; «Отменить» восстанавливает его 7 дней.
+- Каждый вызов MCP, который меняет сайт, пишется в журнал MCP-вызовов хода с ключом идемпотентности: повтор вызова не применяет правку дважды.
+- «Изменить» и повтор хода сначала откатывают правки контента этого хода по снимкам из журнала.
+- Контент одного сайта одновременно меняет только один ход — аренда сайта (раздел 7).
 - Сразу применяются только обратимые правки: текст, цена, фото, запись. Удаление страниц, смена темы, плагины и настройки оплаты — только через «Применить».
 - Массовые правки (больше 20 объектов) — через «Применить» со списком.
 - Агент не трогает пользователей, заказы и настройки платежей.
@@ -470,7 +634,7 @@ Ansible запускается через ansible-runner; доступы он п
 
 ## 13. Адаптеры стеков
 
-Всё, что зависит от CMS или фреймворка, спрятано за адаптером; ядро платформы о WordPress не знает.
+Всё, что зависит от CMS или фреймворка, спрятано за адаптером (`packages/site-adapters`); ядро платформы о WordPress и Битриксе не знает.
 
 ```ts
 interface SiteAdapter {
@@ -481,17 +645,19 @@ interface SiteAdapter {
   backup(site: SiteFacts): BackupPlan                     // файлы и БД
   verify(site: SiteFacts): VerifyPlan                     // страницы, логи, скриншоты
   mcpTools(site: SiteFacts): McpToolSet                   // инструменты контента
+  protectedPaths(site: SiteFacts): string[]               // дифф агента сюда не пускаем: ядро CMS, конфиг с секретами
+  snapshotExcludes(site: SiteFacts): string[]             // что не класть в снимок хода: зависимости, кэши
   agentGuide(site: SiteFacts): string                     // заготовка AGENTS.md
 }
 ```
 
-| Стек | Выкладка | Контент | Этап |
-| --- | --- | --- | --- |
-| WordPress | rsync или git-ftp | WP-CLI, REST, MCP Adapter, браузер | MVP |
-| Статика | rsync или FTP | Правки в коде | 2 |
-| 1С-Битрикс | rsync или git-ftp; только `/local/`, ядро `/bitrix/` не трогаем | REST модулей, браузер | 3 |
-| Laravel | rsync, `composer install`, миграции | Админка через браузер | 3 |
-| Node.js, Python | Docker Compose, образ из реестра Gitea | Через API проекта | 3 |
+| Стек | Выкладка | Контент | Защищённые пути | Этап |
+| --- | --- | --- | --- | --- |
+| WordPress | rsync или git-ftp | WP-CLI, REST, MCP Adapter, браузер | `wp-config.php`, `wp-admin/`, `wp-includes/` | MVP |
+| 1С-Битрикс | rsync или git-ftp; только `/local/`, ядро `/bitrix/` не трогаем | REST модулей, браузер | `/bitrix/` | 3, первым из других стеков |
+| Статика | rsync или FTP | Правки в коде | — | 2 |
+| Laravel | rsync, `composer install`, миграции | Админка через браузер | — | 3 |
+| Node.js, Python | Docker Compose, образ из реестра Gitea | Через API проекта | — | 3 |
 
 Адаптер не пишет свой CI: он отдаёт только переменные для общего workflow `deploy`, поэтому пайплайн один на все стеки и агент не может его изменить.
 
@@ -501,19 +667,19 @@ interface SiteAdapter {
 
 | Бакет | Что лежит | Ключи | Срок | Доступ |
 | --- | --- | --- | --- | --- |
-| raditi-inbox | Файлы клиента из чата | `inbox/<wsId>/<taskId>/<fileId>` | 90 дней | web пишет, песочница читает по presigned |
-| raditi-sessions | Сессии агентов, с версиями | `sessions/<sessionId>/home.tar.zst` | 30 дней после закрытия | Только оркестратор |
-| raditi-logs | События и stdout агентов | `tasks/<taskId>/events/<n>.jsonl.zst` | 180 дней | Оркестратор пишет, админка читает |
-| raditi-artifacts | Скриншоты, снимки контента, диффы | `tasks/<taskId>/…`, `snapshots/<siteId>/…` | 1 год | web и engines |
+| raditi-inbox | Файлы клиента из чата | `inbox/<wsId>/<taskId>/<fileId>` | 90 дней | web пишет; в песочницу файлы кладёт хост хода |
+| raditi-sessions | Снимки ходов, с версиями | `sessions/<sessionId>/turns/<NNNN>/{home.tar.zst, untracked.tar.zst, patch.diff, manifest.json}` | 30 дней после закрытия задачи | Только оркестратор: core; runner — по presigned-ссылкам хода от core |
+| raditi-logs | События и stdout агентов | `tasks/<taskId>/events/<n>.jsonl.zst` | 180 дней | Оркестратор пишет (runner — по presigned-ссылкам хода), админка читает |
+| raditi-artifacts | Скриншоты, снимки контента, диффы | `tasks/<taskId>/…`, `snapshots/<siteId>/…` | 1 год | web, core и mcp; runner — по presigned-ссылкам хода |
 | raditi-backups | Бэкапы сайтов перед выкладкой | `sites/<siteId>/<deployId>/…` | 14 последних или 30 дней | Только раннер `deploy` |
 | raditi-platform | Бэкапы самой платформы | `pg/`, `gitea/`, `vault/` | 30 дней | Только администраторы |
 
-- Сессии, логи и бэкапы шифруются на стороне платформы ключами данных из Vault Transit (ключ на рабочее пространство), поверх шифрования хранилища.
-- У каждого сервиса свой ключ доступа только к своим бакетам; песочница ключей S3 не получает, только presigned-ссылки на 15 минут.
+- Сессии, логи и бэкапы шифруются на стороне платформы ключами данных из Vault Transit (ключ на рабочее пространство), поверх шифрования хранилища. Снимки ходов шифрует хост: ключ в песочницу не попадает.
+- У каждого сервиса свой ключ доступа только к своим бакетам. Песочница не получает ни ключей S3, ни presigned-ссылок: файлы в неё и из неё переносит хост хода.
 - Сроки хранения задаются правилами жизненного цикла бакета; удаление аккаунта стирает его префиксы.
 - `@repo/storage` расширяем: presigned URL, multipart для больших файлов, несколько бакетов.
 - Данные граждан РФ хранятся только в России — требование 152-ФЗ с 1 июля 2025 года (раздел 18).
-- Для разработки — SeaweedFS или Garage вместо MinIO из compose anynote: MinIO Community больше не развивается как открытый проект ([It's FOSS](https://itsfoss.com/news/minio-moves-away-from-open-source/)).
+- Для разработки — SeaweedFS в `infra/dev` вместо MinIO из compose anynote: MinIO Community больше не развивается как открытый проект ([It's FOSS](https://itsfoss.com/news/minio-moves-away-from-open-source/)).
 
 ## 15. Vault: секреты
 
@@ -525,15 +691,16 @@ interface SiteAdapter {
 | KV v2 | `kv/llm/<provider>`, `kv/subscriptions/<accountId>` | Ключи провайдеров моделей и подписок |
 | Transit | `transit/keys/ws-<wsId>` | Ключи шифрования сессий, логов и бэкапов |
 | SSH CA | `ssh/sign/deploy` | Короткие SSH-сертификаты для VPS клиентов |
-| AppRole | `auth/approle/role/<service>` | Вход сервисов платформы |
+| AppRole | `auth/approle/role/<service>` | Вход сервисов платформы: web, core, mcp — у каждого своя роль |
 | Response wrapping | `sys/wrapping/*` | Одноразовые обёртки для токенов выкладки |
 | Audit | Файл и syslog | Журнал всех обращений |
 
 **Политики**
 
 - web — только запись в `kv/sites/*`, чтение запрещено.
-- engines — чтение `kv/sites/*` для MCP-шлюза и онбординга.
-- agents — выдача токенов выкладки, Transit, чтение `kv/llm/*`.
+- mcp — только чтение `kv/sites/*` для MCP-шлюза, браузера и проверок при онбординге; отдельная AppRole, отдельный процесс, доступа к биллингу нет.
+- core — выдача токенов выкладки, Transit, чтение `kv/llm/*`; доступы к сайтам не читает.
+- runner — доступа к Vault нет: на песочной ВМ нет секретов платформы; ключ данных и presigned-ссылки хода выдаёт core (раздел 8).
 - `site-<id>-deploy` — чтение доступов одного сайта и подпись SSH-сертификата; токен живёт 15 минут.
 - Раннер `check` и песочницы агентов доступа к Vault не имеют.
 
@@ -541,7 +708,7 @@ interface SiteAdapter {
 
 1. Перед merge оркестратор создаёт токен с политикой `site-<id>-deploy` на 15 минут.
 2. Оборачивает его ([response wrapping](https://openbao.org/docs/concepts/response-wrapping/)): обёртка одноразовая и живёт 10 минут.
-3. Кладёт обёртку в секрет Actions репозитория через API Gitea и делает merge.
+3. Кладёт обёртку в секрет Actions репозитория через `GitProvider` и делает merge.
 4. Шаг `vault-login` разворачивает токен; второй раз ту же обёртку не развернуть.
 5. После выкладки оркестратор отзывает токен и удаляет секрет.
 
@@ -549,69 +716,104 @@ interface SiteAdapter {
 
 ## 16. Модель данных
 
-Схема лежит в `packages/db` (Prisma 7), как в anynote; центр модели — задача (`tasks`), вокруг неё сессии, события, выкладки и списания.
+Схема лежит в `packages/db` (Prisma 7), как в anynote; центр модели — задача (`tasks`), вокруг неё ходы, события, выкладки и списания.
 
 | Таблица | Ключевые поля | Зачем |
 | --- | --- | --- |
-| users, user\_consents | better-auth; согласия — неизменяемые записи | Вход, 152-ФЗ, оферта |
+| users, user\_consents | better-auth; согласия — неизменяемые записи с видом и редакцией документа | Вход, 152-ФЗ, оферта |
 | workspaces, members | Владелец, роли | Клиент — компания, а не один человек |
 | channel\_identities | `channel` (web, telegram, max), внешний id | Кто пишет и из какого канала |
 | sites | Стек, домен, `drift_policy`, `operator_review` | Сайт клиента |
+| site\_leases | Сайт, операция (ход, выкладка, откат), владелец, эпоха, срок | Строго одна операция на сайт |
+| git\_repositories | Сайт, провайдер (gitea, github, gitlab), адрес, ветка по умолчанию, ссылка на доступ | Где живёт код сайта |
 | environments | Только `prod`; хост, метод выкладки | Задел под staging |
 | credential\_refs | Путь в Vault, тип, `key_version` | Ссылки на секреты, не сами секреты |
-| chat\_sessions | Канал, тема Telegram, `agent_driver`, S3-ключ сессии | Сессия агента |
-| tasks | Статус, тип правки, класс модели, PR, `deployment_id` | Задача |
-| task\_events | Номер части, S3-ключ, счётчики | Индекс логов в S3 |
+| chat\_sessions | Канал, тема Telegram, `agent_driver`, указатель на последний ход | Сессия агента |
+| tasks | Статус, тип правки, класс модели, PR, `deployment_id`, `pricing_rule_id`, себестоимость и цена, `billable` | Задача |
+| task\_turns | Номер хода, статус, образ, id сессии CLI, снимок в S3, хэш ключа LiteLLM, коммит | Ходы задачи |
+| task\_events | Порядковый id, ход, тип, данные, видно ли клиенту; крупное — ссылкой на S3 | История событий для чата и SSE |
+| mcp\_calls | Ход, инструмент, ключ идемпотентности, снимок объекта, результат | Журнал правок сайта: повтор без дублей, откат при «Изменить» |
 | attachments | S3-ключ, тип, размер, источник | Файлы клиента |
 | snapshots | Объект, S3-ключ, срок | Откат контента |
 | deployments | Коммит, запуск workflow, статус, бэкап | Выкладки и откаты |
 | agent\_drivers | id, образ, возможности, включён | Реестр драйверов |
-| llm\_providers, llm\_models | Провайдер, цена за 1 млн токенов в копейках, класс | Роутер и себестоимость |
+| llm\_providers, llm\_models | Провайдер; модель — имя в LiteLLM, класс | Роутер |
+| llm\_model\_prices | Цены за 1 млн токенов с НДС: вход, кэш, запись в кэш, выход; ставка НДС; `effective_from` | История цен, себестоимость |
+| token\_usage | Id вызова LiteLLM (уникальный), задача и ход, токены по категориям, `price_id`, себестоимость | Расход токенов, идемпотентно |
 | subscription\_accounts | Тип, ссылка на Vault, лимиты | Подписки там, где их разрешает договор |
-| plans, subscriptions | Цена в копейках, квоты; `paymentMethodId` | Тарифы, как в anynote |
-| orders | Платёж ЮKassa, `receipt_status` | Оплаты и чеки |
-| credit\_ledger | Резерв, списание, возврат | Учёт квот |
-| outbox\_events | Тип, payload, статус | Надёжная отправка событий |
+| plans | `kind` (QUOTA, PAYG, PACK), цена, квоты, число сайтов | Тарифы |
+| pricing\_rules | Тариф, класс моделей, наценка, фикса, минимум, резерв, `effective_from` | Цена действия на «Оплате за действие» |
+| subscriptions | Тариф, период, `paymentMethodId` | Подписки, как в anynote |
+| billing\_accounts | Рабочее пространство, `unit` (EDIT, RUB), баланс, резерв | Квота в правках и рублёвый кошелёк |
+| credit\_holds | Счёт, задача, сумма, статус, срок | Резервы под задачи |
+| credit\_ledger | Счёт, вид (GRANT, TOPUP, CHARGE, REFUND, EXPIRE, ADJUST), сумма, остаток после, ключ идемпотентности | Единый журнал правок и рублей |
+| orders | Платёж ЮKassa, вид (подписка, пакет, пополнение), сумма, `receipt_status` | Оплаты и чеки |
+| outbox\_events | Тип, payload, статус | Постановка в очередь атомарно с записью в базу |
 | audit\_log | Кто, что, когда | Аудит действий людей и агента |
 
-Квоты считаются по `credit_ledger`: резерв при постановке в очередь, списание при `done`, возврат при `failed` и `cancelled`.
+**Деньги — Decimal** с явной точностью, не float и не целые копейки:
+
+| Что | Тип |
+| --- | --- |
+| Суммы клиента: цены тарифов, заказы, правила цены | `Decimal(12,2)` |
+| Баланс, резерв, записи журнала | `Decimal(14,2)` |
+| Цена провайдера в рублях за 1 млн токенов с НДС | `Decimal(14,6)` |
+| Ставка НДС | `Decimal(5,4)` |
+| Себестоимость вызова, хода, задачи | `Decimal(18,10)` |
+| Наценка | `Decimal(8,4)` |
+
+Округление — HALF\_UP до копеек один раз на действие, от суммы в полной точности. В DTO и API деньги передаются строками. Точность задаём всегда: Prisma `Decimal` без `@db` даёт `decimal(65,30)`. Квоты и кошелёк считаются по `credit_ledger` и `credit_holds` (раздел 17). Роль MCP-шлюза в PostgreSQL не видит биллинг и пользователей.
 
 ## 17. Тарифы и оплата
 
-Клиент платит помесячно за подписку с квотой задач; деньги принимает ЮKassa, чек по 54-ФЗ уходит автоматически.
+Клиент выбирает подписку с месячной квотой правок или «Оплату за действие» из предоплаченного кошелька; деньги принимает ЮKassa, чек по 54-ФЗ уходит автоматически. Цены — в рублях с НДС ([docs/business.md](business.md) §6).
 
-| Тариф | Задач в день | Сайтов | Что включено |
+| Тариф | Цена | Квота | Сайтов |
 | --- | --- | --- | --- |
-| Старт | 10 | 1 | Контент и небольшие правки кода |
-| Бизнес | 30 | 5 | Всё из «Старта» плюс тяжёлый класс моделей |
-| Агентство | 100 | 25 | Всё из «Бизнеса» плюс приоритет и оператор |
+| Старт | 4 900 ₽ в месяц | 30 правок в месяц, до 5 в день | 1 |
+| Бизнес | 12 900 ₽ в месяц | 80 правок в месяц, до 10 в день | 3 |
+| Агентство | 39 900 ₽ в месяц | 250 правок в месяц, до 30 в день | 15 |
+| Пакет «10 правок» | 1 990 ₽ разово | Плюс 10 правок к квоте | — |
 
-Цены назначим после PoC, когда будет известна себестоимость задачи в рублях.
+Квота месячная, дневной лимит только сглаживает пики.
+
+**Оплата за действие**
+
+- Действие — это задача. Уточнение и «Изменить» — та же задача.
+- Цена = clamp(фикса + Σ себестоимость токенов × наценка, минимум, резерв) по правилу цены (`pricing_rules`) для класса моделей; правило закрепляется на задаче при постановке в очередь.
+- Гипотеза для сидов: наценка ×2,0, фикса 30 ₽, минимум 50 ₽, резерв 300, 600 и 1 500 ₽ для лёгкого, стандартного и тяжёлого класса.
+- Клиенту показываем только рубли — оценку до старта и итог.
+- Кошелёк — предоплаченный рублёвый баланс: пополнение через ЮKassa, по желанию автопополнение с сохранённой карты. Автоплатёж на каждое действие не делаем.
 
 **Правила списания**
 
-- Задача резервирует единицу квоты при постановке в очередь.
-- Резерв списывается при `done`; `failed` и `cancelled` возвращают его.
+- Задача резервирует при постановке в очередь: на тарифе с квотой — единицу квоты (счёт `EDIT`), на «Оплате за действие» — сумму резерва для класса моделей (счёт `RUB`). Если квоты или баланса не хватает, задача не ставится.
+- Резерв списывается при `done`; `failed` и `cancelled` возвращают его. Как быть с `rolled_back` — открытый вопрос (раздел 20).
+- На «Оплате за действие» каждый ход получает ключ LiteLLM с бюджетом из остатка резерва. Если бюджет кончился, задача переходит в `awaiting_user`: агент спрашивает, добрать ли резерв; согласие увеличивает резерв и ставит следующий ход. При `done` списывается цена, но не больше резерва: перерасход последнего вызова платформа берёт на себя. Себестоимость неоплаченных задач остаётся в `token_usage`.
+- Квота тарифа начисляется раз в период, остаток в конце периода сгорает; пакет из 10 правок начисляется по оплаченному заказу. Дневной лимит считается по резервам и списаниям за сутки.
 - Уточняющий вопрос и «Изменить» новой задачей не считаются.
 - «Отменить» бесплатно.
-- Остаток квоты виден в чате; докупить пакет задач можно в кабинете.
+- Потерянные попытки хода по вине платформы клиенту не выставляются.
+- Все операции идут через `credit_ledger` с ключом идемпотентности, резервы — через `credit_holds`.
+- Остаток квоты или баланс кошелька виден в чате; докупить пакет или пополнить кошелёк можно в кабинете.
 
 **Оплата через ЮKassa**
 
 - Берём `packages/yookassa` из anynote: `createPayment`, `chargeWithSavedMethod`, возвраты и вебхук `/api/webhooks/yookassa` с проверкой IP.
-- Первый платёж — с `save_payment_method`, дальше продление по cron в apps/engines.
+- Первый платёж — с `save_payment_method`, дальше продление по cron (job scheduler BullMQ в роли `core`).
 - В боевом магазине автоплатежи включает менеджер ЮKassa по запросу; клиент явно соглашается на списания и получает уведомления ([автоплатежи](https://yookassa.ru/developers/payment-acceptance/scenario-extensions/recurring-payments/basics)).
 - Чеки — через «Чеки от ЮKassa» или онлайн-кассу (АТОЛ, Orange Data): в платёж добавляется `receipt` с e-mail или телефоном, позициями, `vat_code`, `payment_subject` и `payment_mode` ([чеки](https://yookassa.ru/developers/payment-acceptance/receipts/basics)).
+- Пополнение кошелька — аванс. «Чеки от ЮKassa» признак «аванс» не поддерживают ([параметры](https://yookassa.ru/developers/payment-acceptance/receipts/54fz/yoomoney/parameters-values)), поэтому схему чеков выбирает бухгалтер (раздел 20).
 - В Telegram-боте ничего не продаём: цифровые товары внутри Telegram оплачиваются только в Stars ([Telegram](https://core.telegram.org/bots/payments-stars)). Оплата — только в кабинете на сайте.
 - Счета юрлицам — после MVP.
 
 **Себестоимость задачи**
 
 ```latex
-\text{cost} = \frac{(t_{in} - t_{cached})\,p_{in} + t_{cached}\,p_{cached} + t_{out}\,p_{out}}{10^{6}} + c_{\text{sandbox}}
+\text{cost} = \sum_{i} \frac{(t_{in,i} - t_{cached,i} - t_{cwrite,i})\,p_{in} + t_{cached,i}\,p_{cached} + t_{cwrite,i}\,p_{cwrite} + t_{out,i}\,p_{out}}{10^{6}} + c_{\text{sandbox}}
 ```
 
-Токены берём из событий `usage` и учёта LiteLLM; цены p — рубли за 1 млн токенов из `llm_models`; c\_sandbox — минуты песочницы и хранение в S3. Гейт 2 требует, чтобы средняя себестоимость была ниже цены задачи в тарифе.
+Сумма идёт по вызовам LLM задачи: токены берём из журнала LiteLLM (`token_usage`), а не из событий `usage` CLI. t\_in — весь вход вызова, включая кэш и запись в кэш; reasoning входит в выход и отдельно не прибавляется. Цены p — рубли за 1 млн токенов с НДС из `llm_model_prices`, действующие на момент вызова; если отдельной цены кэша или записи в кэш у модели нет, берётся цена входа. c\_sandbox — минуты песочницы и хранение в S3. Себестоимость хранится в `Decimal(18,10)`, округляется только цена для клиента. Гейт 2 требует, чтобы средняя себестоимость была ниже цены задачи в тарифе.
 
 ## 18. Безопасность
 
@@ -619,20 +821,30 @@ interface SiteAdapter {
 
 | Угроза | Защита |
 | --- | --- |
-| Промпт-инъекция из контента сайта или файла | Песочница без секретов, сеть по списку, правки кода только через «Применить» |
-| Агент меняет пайплайн, чтобы выкатить что угодно | Обязательный workflow из `platform/ci`, запрет диффов в `.gitea/` |
+| Промпт-инъекция из контента сайта или файла | Песочница без секретов, сеть только через `sandbox-gw`, правки кода только через «Применить» |
+| Агент меняет пайплайн, чтобы выкатить что угодно | Обязательный workflow из `platform/ci`; дифф в файлах CI (`.gitea/`, `.github/`, `.gitlab-ci.yml` и других) и в защищённых путях CMS отклоняется |
+| Вредный патч: симлинки, сабмодули, запись за пределы рабочего дерева | Публикация из чистого клона: предпроверка `git apply --numstat --summary`, `git apply --cached`, `fsckObjects`, gitleaks; хуки и настройки `.git` агента не исполняются |
 | Кража секрета выкладки | Одноразовая обёртка на 10 минут, токен на 15 минут, отзыв после выкладки |
 | Утечка доступов клиента | Vault, форма только на запись, политики, аудит |
-| Побег из контейнера | gVisor, rootless, лимиты, одноразовые контейнеры |
+| Побег из контейнера | gVisor (`runsc`, systrap); dockerd от root, но в контейнере uid 10001, `cap-drop ALL`, `no-new-privileges`, read-only rootfs, лимиты, контейнер на один ход |
+| Атака из песочницы на LLM- или MCP-шлюз | `sandbox-gw` с белым списком путей и нормализацией Host; LiteLLM не ниже 1.83.7 (CVE-2026-42271) в отдельном сегменте без доступа к базе и Vault; MCP-шлюз — отдельный процесс со своей AppRole и ролью PostgreSQL без биллинга; браузер открывает только домен сайта |
+| Утечка через разрешённые адреса | Нет интернета и DNS, нет S3 и presigned-ссылок в песочнице; Docker API по TCP наружу не выставлен |
 | Поломка прода без staging | «Что изменится» до merge, бэкап, проверка, автооткат, «Отменить» 7 дней, оператор на первых задачах |
 | Удаление данных на сайте | Опасные операции только через «Применить»; заказы и пользователи агенту недоступны |
+| Повтор хода дублирует правки на сайте | Журнал MCP-вызовов с ключами идемпотентности, откат контента хода перед повтором, аренда сайта |
 | Чужой пишет в чат от имени клиента | Telegram привязывается через вход в кабинет, роли в рабочем пространстве |
-| Перерасход токенов | Лимиты на ключ задачи в LiteLLM, таймауты, квоты тарифа |
+| Боты на регистрации и входе | Yandex SmartCaptcha, лимит частоты запросов (ниже) |
+| Перерасход токенов | Ключ LiteLLM на ход с бюджетом и TTL, таймауты, квоты и резервы тарифа |
+| Подделка расхода токенов агентом | Счёт только по журналу LiteLLM; `usage` из CLI — только для интерфейса |
 | Утечка данных за рубеж | Модели и хранилища только в России (ниже) |
 
-**152-ФЗ.** С 1 июля 2025 года запись и хранение персональных данных граждан РФ в иностранных базах запрещены ([Лидингс](https://www.lidings.com/ru/media/legalupdates/localization_pd_update/)). Поэтому база, S3, логи и модели — только у российских провайдеров, а внешние модели Cloud.ru для данных клиентов выключены. Нужны уведомление Роскомнадзора об обработке ПДн, согласия (в anynote уже есть `user_consents`) и поручение обработки провайдерам.
+**Капча.** Yandex SmartCaptcha — данные остаются в России. В better-auth 1.7 её нет среди встроенных провайдеров, поэтому пишем свой плагин на `hooks.before`: он срабатывает и на HTTP, и на вызовах `auth.api.*`. Плагин защищает регистрацию, вход, сброс пароля и отправку письма подтверждения; токен приходит в заголовке `x-captcha-response`. Пропускаем без проверки только при сетевой ошибке, 5xx и 429; на 4xx и ответ `failed` — отказ и запись в лог. Ключи — `SMARTCAPTCHA_SERVER_KEY` и `SMARTCAPTCHA_CLIENT_KEY`: пустые в dev выключают капчу, в проде обязательны. Google — ни вход, ни reCAPTCHA — не используем. Sentry — позже и только на своём сервере в России (M9).
 
-Telegram — иностранный сервис: переписка в нём проходит через его серверы, а наша копия хранится в России. Это не юридическая консультация: схему обработки данных стоит проверить с юристом.
+**152-ФЗ.** С 1 июля 2025 года запись и хранение персональных данных граждан РФ в иностранных базах запрещены ([Лидингс](https://www.lidings.com/ru/media/legalupdates/localization_pd_update/)). Поэтому база, S3, логи и модели — только у российских провайдеров, а внешние модели Cloud.ru для данных клиентов выключены. Нужны уведомление Роскомнадзора об обработке ПДн, согласия (в anynote уже есть `user_consents`) и поручение обработки провайдерам, включая Яндекс для SmartCaptcha.
+
+**Юридические документы и согласия.** Пользовательское соглашение, оферту, политику конфиденциальности, согласие на обработку ПДн, согласие на рассылки и сведения об операторе переносим из anynote в MDX и адаптируем под Радити. Налоговые разделы — под ООО с НДС 22% и чеки 54-ФЗ; реквизиты оператора пока заглушки: [НАЗВАНИЕ], [ИНН], [ОГРН], [АДРЕС], [ПОЧТА]. Сервер сам проверяет обязательную галочку согласия, новая редакция документа требует согласия заново, реестр документов один.
+
+Telegram — иностранный сервис: переписка в нём проходит через его серверы, а наша копия хранится в России. Это не юридическая консультация: схему обработки данных и юридические тексты стоит проверить с юристом.
 
 ## 19. Инфраструктура
 
@@ -640,24 +852,31 @@ Telegram — иностранный сервис: переписка в нём �
 
 | Машина | Что работает | Ориентир |
 | --- | --- | --- |
-| app | apps/web, apps/agents, apps/engines, LiteLLM, PostgreSQL, Redis, Traefik | 8 vCPU, 16 ГБ |
-| sandbox | Песочницы агентов под gVisor, браузеры MCP-шлюза | 16 vCPU, 64 ГБ, масштабируется |
-| gitea | Gitea и её PostgreSQL | 4 vCPU, 8 ГБ |
-| ci | act\_runner: `check` и `deploy` с постоянным IP | 4 vCPU, 8 ГБ |
+| app | apps/web; apps/orchestrator в ролях `core` и `mcp`; PostgreSQL, Redis, Traefik; LiteLLM в отдельном сегменте сети; Prometheus и Grafana | 8 vCPU, 16 ГБ |
+| sandbox | Роль `runner` без входящих портов, Docker 29 + gVisor (systrap), контейнеры ходов, `sandbox-gw`; секретов платформы нет. Браузеры MCP-шлюза сюда не ставим: они входят в админки сайтов и работают в изолированных контейнерах рядом с ролью `mcp` | 16 vCPU, 64 ГБ, масштабируется |
+| gitea | Gitea и её PostgreSQL, реестр образов | 4 vCPU, 8 ГБ |
+| ci | gitea/runner: `check` и `deploy` с постоянным IP | 4 vCPU, 8 ГБ |
 | vault | OpenBao или Stronghold | 2 vCPU, 4 ГБ |
 
 S3 — управляемый сервис того же облака. Выход к Telegram — через egress-прокси, как WARP-прокси в anynote ([спецификация](https://github.com/anynoteinc/anynote/blob/main/docs/superpowers/specs/2026-08-01-telegram-warp-proxy-design.md)).
 
+- Docker Hub отвечает 403 на российские IP, поэтому образы — из своего реестра (реестр Gitea), для apt-репозиториев Docker и gVisor — зеркала. gVisor ставим из apt или полным архивом релиза.
+- Код платформы — на GitHub: CI и релизы в GitHub Actions; выкладка платформы на ВМ через GitHub Actions — позже (M10).
+- Образы инфраструктуры закреплены версиями, LiteLLM — ещё и по digest; в dev порты публикуются только на `127.0.0.1`.
+
 **Наблюдаемость**
 
-- Логи и метрики сервисов, трассировка задачи от сообщения до выкладки.
-- Расход токенов и денег по провайдерам и клиентам — из LiteLLM.
+- Prometheus и Grafana. В dev — профиль `monitoring` в `infra/dev/docker-compose.yml`: Prometheus 3.15, Grafana 13.2 без телеметрии наружу, postgres-exporter, redis\_exporter, blackbox-exporter; cAdvisor — профиль `monitoring-host`, только Linux.
+- Метрики отдают SeaweedFS, OpenBao, Gitea, gitea/runner, LiteLLM (отдельный порт метрик), `apps/web` — `/api/metrics`, `apps/orchestrator` — `/metrics`; оба приложения — по `METRICS_TOKEN`. Библиотека — `@prometheus-io/client`: prom-client объявлен устаревшим.
+- В метки не кладём `task_id` и `user_id`. Prometheus — не источник для биллинга: деньги — только из `token_usage`.
+- Логи сервисов, трассировка задачи от сообщения до выкладки.
+- Расход токенов и денег по провайдерам и клиентам — из `token_usage` (журнал LiteLLM).
 - Алерты: задача в очереди дольше 10 минут, ошибки выкладки, откаты, исчерпание лимитов провайдера.
 - Ежедневные бэкапы PostgreSQL и Gitea и снапшоты Vault — в `raditi-platform`.
 
 ## 20. Риски и открытые вопросы
 
-Главные риски v0.2 — качество российских моделей на задачах агента и доступность Telegram; оба проверяются в PoC до пилота.
+Главные риски v0.3 — качество российских моделей на задачах агента, работа Codex через мост Responses на Cloud.ru и GigaChat и доступность Telegram; всё это проверяется в PoC до пилота.
 
 Telegram в России с февраля 2026 года официально замедлен, файлы и голосовые работают с перебоями ([Битрикс24](https://www.bitrix24.ru/journal/blokirovka-telegram/)). Поэтому основной канал — веб-чат, Telegram — второй, а бот в [MAX](https://dev.max.ru/docs/chatbots/bots-coding/prepare) — следующий шаг: MAX требует российское юрлицо, ИП или самозанятого и модерацию бота.
 
@@ -665,12 +884,20 @@ Telegram в России с февраля 2026 года официально з
 | --- | --- | --- |
 | Российские модели хуже справляются с кодом | Высокая | Eval на 30 задачах, тяжёлый класс для повторов, оператор |
 | Codex CLI сломает совместимость со сторонними провайдерами | Средняя | Несколько драйверов, версии CLI закреплены в образах |
+| Мост LiteLLM `/responses` → chat теряет поля для Codex на Cloud.ru и GigaChat | Средняя | Отдельный пункт PoC; на этих провайдерах — Kimi Code, Qwen Code или OpenCode |
 | Kimi Code CLI не заработает с Kimi-K2.6 из Cloud.ru | Средняя | Kimi-K2.6 через Codex, Qwen Code или OpenCode |
+| CLI ломается под gVisor: io_uring, встроенные песочницы, автообновления | Средняя | PoC на каждом драйвере; встроенные песочницы, автообновления и телеметрия выключены; `rg` и `fd` в образе |
+| Формат сессии меняется с версией CLI, и продолжение ломается | Высокая со временем | Дайджест образа в манифесте, продолжение только тем же образом, иначе краткое содержание |
+| Повтор хода дублирует правки контента | Средняя | Журнал MCP-вызовов с идемпотентностью, откат контента хода, аренда сайта |
+| Уязвимость LiteLLM или MCP-шлюза | Средняя | LiteLLM ≥ 1.83.7 по digest, отдельный сегмент, белый список путей, отдельный процесс `mcp` |
+| Сбой Redis | Низкая | `appendonly`, `noeviction`; истина о задаче — в PostgreSQL; запасной путь — бэкенд BullMQ на PostgreSQL |
+| Docker Hub и другие реестры недоступны из России | Факт | Свой реестр и зеркала |
+| Нет вложенной виртуализации (Yandex Cloud) | Факт | gVisor в режиме systrap; microVM — только на выделенных серверах |
 | Замедление или блокировка Telegram | Высокая | Веб-чат основной, MAX, уведомления по e-mail и push |
 | Поломка прода без staging | Средняя | Бэкап, проверка, откат, оператор на первых задачах |
 | Дрейф файлов на сервере | Высокая | drift-check, политики `sync` и `freeze` |
 | Хостинг блокирует IP раннера или не даёт SSH | Средняя | Постоянный IP, git-ftp, инструкции для популярных хостингов |
-| Себестоимость выше цены | Средняя | Роутер по классам, учёт в LiteLLM, лимиты |
+| Себестоимость выше цены | Средняя | Роутер по классам, учёт по журналу LiteLLM, лимиты, наценка на «Оплате за действие» |
 | Требования 152-ФЗ и 54-ФЗ | Средняя | Всё в России, согласия, чеки ЮKassa, юрист |
 | Поставщик Vault или S3 уйдёт с рынка | Низкая | OpenBao и S3 API переносимы |
 
@@ -683,6 +910,19 @@ Telegram в России с февраля 2026 года официально з
 - [ ] Можно ли присылать из Telegram-бота ссылку на оплату в кабинете?
 - [ ] Нужны ли счета юрлицам с первого дня?
 - [ ] Какой срок ответа оператора обещать в тарифах?
+- [ ] Подключение сайта в MVP: мастер с доступами SSH и FTP (раздел 12) или плагин «Радити» в один клик ([docs/business.md](business.md) §2)? Как при плагине выкладывать код?
+- [ ] Выкладка для сайтов в GitHub или GitLab клиента: там работает пайплайн клиента — как сохранить бэкап, проверку и автооткат?
+- [ ] Платит ли клиент за `rolled_back`?
+- [ ] Отмена задачи после правок контента: откатывать снимки или не делать такую отмену бесплатной?
+- [ ] Сколько задача ждёт ответа клиента и «Применить» до автоотмены? Гипотеза — 72 часа и 7 дней.
+- [ ] Сгорает ли остаток кошелька и как возвращаем неиспользованный аванс?
+- [ ] Чеки 54-ФЗ для аванса: касса с признаком `advance` или «Чеки от ЮKassa» с `full_prepayment` и чеки зачёта — на каждое действие или за период?
+- [ ] Налоговый режим: ОСНО с НДС 22% или УСН?
+- [ ] Минимальное пополнение кошелька и порог автопополнения.
+- [ ] Можно ли после исчерпания квоты платить из кошелька? Нужен ли на тарифах с квотой лимит себестоимости одной правки?
+- [ ] Сайты в GitHub или GitLab клиента: это зарубежные сервисы, и коммиты с контентом сайта уходят туда по выбору клиента — проверить с юристом (152-ФЗ).
+- [ ] Выкладка платформы через GitHub Actions (M10): доступы к прод-ВМ окажутся в GitHub Secrets — зарубежном сервисе. Вариант: self-hosted раннер в России и вход в OpenBao по OIDC с коротким токеном.
+- [ ] semantic-release пушит коммит с CHANGELOG прямо в `main`: при защищённой ветке нужно исключение для GitHub Actions или отказ от CHANGELOG в репозитории.
 
 ## 21. План работ
 
@@ -690,10 +930,10 @@ Telegram в России с февраля 2026 года официально з
 
 | Этап | Что делаем | Гейт на выходе |
 | --- | --- | --- |
-| 0 · PoC | Песочница gVisor; агенты на моделях РФ; Gitea, S3, Vault | Гейт 1: 10 задач сквозь без ручных правок |
-| 1 · MVP-пилот | Веб-чат и Telegram; ЮKassa, онбординг; только прод, откат | Гейт 2: пилот платит, себестоимость в ₽ |
+| 0 · PoC | Песочница gVisor, контейнер на ход через локальный сокет Docker; агенты на моделях РФ; Gitea, S3, Vault | Гейт 1: 10 задач сквозь без ручных правок |
+| 1 · MVP-пилот | Веб-чат и Telegram; ЮKassa, онбординг; роль `runner` на песочной ВМ; только прод, откат | Гейт 2: пилот платит, себестоимость в ₽ |
 | 2 · Масштаб | Ещё драйверы агентов; параллельный запуск; MAX, конструкторы | Гейт 3: стабильность и маржа в плюсе |
-| 3 · Другие стеки | Bitrix, Laravel; Node.js, Python; Docker-проекты | — |
+| 3 · Другие стеки | 1С-Битрикс первым, затем Laravel; Node.js, Python; Docker-проекты | — |
 
 Гейт — условие перехода: пока оно не выполнено, следующий этап не начинается.
 
@@ -706,25 +946,40 @@ Telegram в России с февраля 2026 года официально з
 **Что проверить в PoC**
 
 - [ ] Codex CLI на Yandex AI Studio через Responses API
-- [ ] Kimi Code CLI на Kimi-K2.6 из Cloud.ru; если не выйдет — Qwen Code или OpenCode
+- [ ] Codex CLI на Cloud.ru и GigaChat через мост LiteLLM `/responses` → chat: какие поля теряются
 - [ ] Codex CLI на GigaChat через gpt2giga
-- [ ] Агенты под gVisor без встроенной песочницы
-- [ ] Восстановление сессии из S3 в новой песочнице
-- [ ] Обязательный scoped workflow в Gitea 1.27 и запрет на `.gitea/`
+- [ ] Codex: порядок флагов у `codex exec resume` — документация и SDK расходятся; что ещё в `CODEX_HOME` нужно для продолжения
+- [ ] Kimi Code CLI на Kimi-K2.6 из Cloud.ru: `-p --session <id> --output-format stream-json`, id сессии из `session_index.jsonl`; если не выйдет — Qwen Code или OpenCode
+- [ ] Агенты под gVisor (systrap) без встроенной песочницы на ВМ Yandex Cloud; io\_uring под gVisor
+- [ ] Время старта контейнера под `runsc`, восстановление снимка из S3, клон, `git diff`
+- [ ] Продолжение сессии в новом контейнере из `home.tar.zst` по фиксированным путям
+- [ ] Internal-сеть без DNS и выхода наружу, `sandbox-gw` с белым списком путей; пулы адресов Docker для сети на песочницу
+- [ ] Публикация патча: запрещённые пути, симлинки, сабмодули, gitleaks; push в Gitea, GitHub и GitLab
+- [ ] Обязательный scoped workflow в Gitea 1.27 и запрет на файлы CI
 - [ ] Секрет выкладки через обёрнутый токен Vault
+- [ ] Учёт токенов: отдают ли Yandex AI Studio и Cloud.ru кэш и reasoning в usage; сверка `token_usage` с детализацией счёта
 - [ ] Eval: 30 задач на трёх парах «агент + модель»
 - [ ] Telegram через egress-прокси: сообщения, файлы, голос
 - [ ] GigaCode CLI и SourceCraft CLI в режиме без интерфейса
+- [ ] Вложенная виртуализация в Cloud.ru Evolution, Selectel и Timeweb — запрос в поддержку
 
 ## Источники
 
+- Исследования bootstrap (версии, очередь, песочница, биллинг, капча, мониторинг): [docs/research/2026-09-bootstrap/](research/2026-09-bootstrap/)
 - anynote: [репозиторий](https://github.com/anynoteinc/anynote), [спецификация WARP-прокси для Telegram](https://github.com/anynoteinc/anynote/blob/main/docs/superpowers/specs/2026-08-01-telegram-warp-proxy-design.md)
-- Gitea: [релиз 1.27](https://blog.gitea.com/release-of-1.27.0/), [релиз 1.26](https://blog.gitea.com/release-of-1.26.0/), [scoped workflows](https://docs.gitea.com/usage/actions/scoped-workflows/), [права токена Actions](https://docs.gitea.com/usage/actions/token-permissions/), [вебхуки](https://docs.gitea.com/usage/webhooks), [act\_runner](https://docs.gitea.com/usage/actions/act-runner), [реестр контейнеров](https://docs.gitea.com/usage/packages/container/), [issue #33681: OIDC в Actions](https://github.com/go-gitea/gitea/issues/33681)
-- Секреты: [OpenBao 2.6](https://openbao.org/community/release-notes/2-6-0/), [OpenBao: response wrapping](https://openbao.org/docs/concepts/response-wrapping/), [Deckhouse Stronghold и Vault CE](https://deckhouse.ru/blog/ne-prosto-fork-sravnenie-deckhouse-stronghold-s-hashicorp-vault-ce/), [BearPass: альтернативы Vault в России](https://bearpass.ru/blog/hashicorp-vault-alternativy-rossiya-2026-devops-sekrety)
+- Gitea: [релиз 1.27](https://blog.gitea.com/release-of-1.27.0/), [релиз 1.26](https://blog.gitea.com/release-of-1.26.0/), [scoped workflows](https://docs.gitea.com/usage/actions/scoped-workflows/), [права токена Actions](https://docs.gitea.com/usage/actions/token-permissions/), [вебхуки](https://docs.gitea.com/usage/webhooks), [act\_runner](https://docs.gitea.com/usage/actions/act-runner), [gitea/runner: релизы](https://gitea.com/gitea/runner/releases), [реестр контейнеров](https://docs.gitea.com/usage/packages/container/), [issue #33681: OIDC в Actions](https://github.com/go-gitea/gitea/issues/33681)
+- Секреты: [OpenBao 2.6](https://openbao.org/community/release-notes/2-6-0/), [OpenBao: response wrapping](https://openbao.org/docs/concepts/response-wrapping/), [OpenBao: телеметрия](https://openbao.org/docs/configuration/telemetry/), [Deckhouse Stronghold и Vault CE](https://deckhouse.ru/blog/ne-prosto-fork-sravnenie-deckhouse-stronghold-s-hashicorp-vault-ce/), [BearPass: альтернативы Vault в России](https://bearpass.ru/blog/hashicorp-vault-alternativy-rossiya-2026-devops-sekrety)
 - S3: [It's FOSS: MinIO уходит от open source](https://itsfoss.com/news/minio-moves-away-from-open-source/)
 - Доступность и условия: [ChatGPT: поддерживаемые страны](https://help.openai.com/en/articles/7947663-chatgpt-supported-countries), [Anthropic: поддерживаемые страны](https://www.anthropic.com/supported-countries), [Gemini API: регионы](https://ai.google.dev/gemini-api/docs/available-regions), [OpenAI Terms of Use](https://openai.com/policies/row-terms-of-use/)
-- Агенты: [Codex: non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode), [Codex: переход на Responses API](https://github.com/openai/codex/discussions/7782), [Kimi Code CLI: команда kimi](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html), [Kimi Code: подписка](https://www.kimi.com/code/docs/en/kimi-code/membership.html), [vc.ru: Kimi из России](https://vc.ru/services/3056116-kak-kupit-kimi-api-i-podpisku-kimi-code-iz-rossii), [Qwen Code: headless](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/), [Qwen Code: провайдеры моделей](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/), [OpenCode CLI](https://opencode.ai/docs/cli/), [GigaCode CLI](https://neuraldeep.ru/gigacode-cli), [vc.ru: SourceCraft CLI](https://vc.ru/ai/2880355-yandex-b2b-tech-sourcecraft-cli-ii-agent), [gpt2giga для Codex](https://github.com/ai-forever/gpt2giga/blob/main/integrations/codex/README.md)
-- Модели: [Yandex AI Studio: модели](https://aistudio.yandex.ru/docs/en/ai-studio/concepts/generation/models.html), [Yandex AI Studio: API](https://aistudio.yandex.ru/docs/en/ai-studio/api/), [Yandex Cloud: модели в IDE](https://yandex.cloud/en/docs/tutorials/ml-ai/ai-model-ide-integration), [Cloud.ru: доступные модели](https://cloud.ru/docs/foundation-models/ug/topics/overview__available__models), [Cloud.ru Evolution Foundation Models](https://cloud.ru/products/evolution-foundation-models), [LiteLLM: Responses API](https://docs.litellm.ai/docs/response_api)
-- Песочница и инструменты: [gVisor](https://gvisor.dev/docs/), [Playwright MCP](https://github.com/microsoft/playwright-mcp), [WordPress MCP Adapter](https://github.com/WordPress/mcp-adapter)
-- Оплата и право: [ЮKassa: автоплатежи](https://yookassa.ru/developers/payment-acceptance/scenario-extensions/recurring-payments/basics), [ЮKassa: чеки](https://yookassa.ru/developers/payment-acceptance/receipts/basics), [Лидингс: локализация ПДн](https://www.lidings.com/ru/media/legalupdates/localization_pd_update/)
+- Агенты: [Codex: non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode), [Codex: переход на Responses API](https://github.com/openai/codex/discussions/7782), [Kimi Code CLI: команда kimi](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html), [Kimi Code: переменные окружения](https://github.com/MoonshotAI/kimi-code/blob/main/docs/en/configuration/env-vars.md), [Kimi Code: расположение данных](https://github.com/MoonshotAI/kimi-code/blob/main/docs/en/configuration/data-locations.md), [Kimi Code: подписка](https://www.kimi.com/code/docs/en/kimi-code/membership.html), [vc.ru: Kimi из России](https://vc.ru/services/3056116-kak-kupit-kimi-api-i-podpisku-kimi-code-iz-rossii), [Qwen Code: headless](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/), [Qwen Code: провайдеры моделей](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/), [OpenCode CLI](https://opencode.ai/docs/cli/), [GigaCode CLI](https://neuraldeep.ru/gigacode-cli), [vc.ru: SourceCraft CLI](https://vc.ru/ai/2880355-yandex-b2b-tech-sourcecraft-cli-ii-agent), [gpt2giga для Codex](https://github.com/ai-forever/gpt2giga/blob/main/integrations/codex/README.md)
+- Модели: [Yandex AI Studio: модели](https://aistudio.yandex.ru/docs/en/ai-studio/concepts/generation/models.html), [Yandex AI Studio: API](https://aistudio.yandex.ru/docs/en/ai-studio/api/), [Yandex AI Studio: цены](https://aistudio.yandex.ru/docs/ru/ai-studio/pricing.html), [Yandex Cloud: модели в IDE](https://yandex.cloud/en/docs/tutorials/ml-ai/ai-model-ide-integration), [Cloud.ru: доступные модели](https://cloud.ru/docs/foundation-models/ug/topics/overview__available__models), [Cloud.ru Evolution Foundation Models](https://cloud.ru/products/evolution-foundation-models), [Cloud.ru: тариф Foundation Models](https://cloud.ru/documents/tariffs/evolution/foundation-models)
+- LiteLLM: [Responses API](https://docs.litellm.ai/docs/response_api), [виртуальные ключи](https://docs.litellm.ai/docs/proxy/virtual_keys), [свои цены](https://docs.litellm.ai/docs/proxy/custom_pricing), [прод и Redis](https://docs.litellm.ai/docs/proxy/prod), [Prometheus](https://docs.litellm.ai/docs/proxy/prometheus), [issue #24664: мост /responses](https://github.com/BerriAI/litellm/issues/24664), [Oligo: CVE-2026-42271](https://www.oligo.security/blog/oligo-detects-and-blocks-rce-in-litellm-cve-2026-42271)
+- Песочница: [gVisor](https://gvisor.dev/docs/), [gVisor: платформы](https://gvisor.dev/docs/architecture_guide/platforms/), [gVisor: rootless](https://gvisor.dev/docs/user_guide/rootless/), [gVisor: файловая система](https://gvisor.dev/docs/user_guide/filesystem/), [gVisor: установка](https://gvisor.dev/docs/user_guide/install/), [Docker Engine: релизы](https://docs.docker.com/engine/release-notes/), [Docker: защита сокета](https://docs.docker.com/engine/security/protect-access/), [Yandex Cloud: вложенная виртуализация](https://github.com/yandex-cloud/docs/blob/master/ru/_qa/compute/vm.md), [Хабр: Docker Hub в России](https://habr.com/ru/articles/818565/), [gitleaks](https://github.com/gitleaks/gitleaks/releases/latest), [CVE-2023-23946](https://nvd.nist.gov/vuln/detail/CVE-2023-23946), [CVE-2023-25652](https://nvd.nist.gov/vuln/detail/CVE-2023-25652)
+- Инструменты сайта: [Playwright MCP](https://github.com/microsoft/playwright-mcp), [WordPress MCP Adapter](https://github.com/WordPress/mcp-adapter)
+- Очереди: [BullMQ Pro: группы](https://docs.bullmq.io/bullmq-pro/groups/concurrency)
+- Капча: [Yandex SmartCaptcha: проверка токена](https://yandex.cloud/ru/docs/smartcaptcha/concepts/validation), [SmartCaptcha для React](https://yandex.cloud/ru/docs/smartcaptcha/concepts/react), [better-auth: плагин капчи](https://www.better-auth.com/docs/plugins/captcha), [better-auth PR #9136: SmartCaptcha](https://github.com/better-auth/better-auth/pull/9136)
+- Мониторинг: [Prometheus: цикл релизов](https://prometheus.io/docs/introduction/release-cycle/), [Grafana в Docker](https://grafana.com/docs/grafana/latest/setup-grafana/installation/docker/), [Grafana: provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/)
+- Деньги: [Prisma: Decimal](https://www.prisma.io/docs/orm/v7/prisma-client/special-fields-and-types), [PostgreSQL: математические функции](https://www.postgresql.org/docs/17/functions-math.html)
+- Версии: [TypeScript 7.0](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/), [Next.js 16.3](https://nextjs.org/blog/next-16-3), [NestJS: миграция на 12](https://docs.nestjs.com/migration-guide), [pnpm 12](https://pnpm.io/blog/releases/12.0), [Prisma 7](https://www.prisma.io/docs/orm/more/upgrade-guides/upgrading-versions/upgrading-to-prisma-7)
+- Оплата и право: [ЮKassa: автоплатежи](https://yookassa.ru/developers/payment-acceptance/scenario-extensions/recurring-payments/basics), [ЮKassa: чеки](https://yookassa.ru/developers/payment-acceptance/receipts/basics), [ЮKassa: параметры чеков 54-ФЗ](https://yookassa.ru/developers/payment-acceptance/receipts/54fz/yoomoney/parameters-values), [Лидингс: локализация ПДн](https://www.lidings.com/ru/media/legalupdates/localization_pd_update/)
 - Каналы: [Битрикс24: Telegram в России](https://www.bitrix24.ru/journal/blokirovka-telegram/), [MAX: подготовка бота](https://dev.max.ru/docs/chatbots/bots-coding/prepare), [Telegram Bot API](https://core.telegram.org/bots/api), [Telegram: платежи в Stars](https://core.telegram.org/bots/payments-stars)
