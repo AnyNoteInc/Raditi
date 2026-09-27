@@ -1,9 +1,13 @@
 import type { AgentDriver, AgentDriverId } from '@repo/domain'
 import { badRequest, conflict, notFound } from '@repo/domain'
 import type { AgentDriverConfig } from './config.ts'
+import { parseCodexEvent } from './codex-events.ts'
 import { createCodexDriver } from './codex.ts'
+import { parseKimiEvent } from './kimi-events.ts'
 import { createKimiDriver } from './kimi.ts'
+import { parseOpencodeEvent } from './opencode-events.ts'
 import { createOpencodeDriver } from './opencode.ts'
+import { parseQwenEvent } from './qwen-events.ts'
 import { createQwenDriver } from './qwen.ts'
 
 export interface AgentDriverRegistry {
@@ -22,6 +26,23 @@ export function createAgentDrivers(config: AgentDriverConfig): AgentDriver[] {
     createQwenDriver(config),
     createOpencodeDriver(config),
   ]
+}
+
+const eventParsers: Partial<Record<AgentDriverId, AgentDriver['parseEvent']>> = {
+  codex: parseCodexEvent,
+  kimi: parseKimiEvent,
+  qwen: parseQwenEvent,
+  opencode: parseOpencodeEvent,
+}
+
+/**
+ * The stateless event parser of a driver, without its configuration: a runner VM only reads
+ * the agent's output (spec §8). NOT_FOUND for a driver this package does not implement.
+ */
+export function agentEventParser(id: AgentDriverId): Pick<AgentDriver, 'parseEvent'> {
+  const parseEvent = eventParsers[id]
+  if (!parseEvent) throw notFound(`Agent driver "${id}" is not available`)
+  return { parseEvent }
 }
 
 /**

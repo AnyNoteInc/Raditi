@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { createAgentDriverRegistry, createAgentDrivers } from './registry.ts'
+import { agentEventParser, createAgentDriverRegistry, createAgentDrivers } from './registry.ts'
 
 const drivers = createAgentDrivers({ imagePrefix: 'raditi/agent' })
 
 describe('createAgentDrivers', () => {
   it('builds the four drivers of the PoC', () => {
     expect(drivers.map((d) => d.id)).toEqual(['codex', 'kimi', 'qwen', 'opencode'])
+  })
+})
+
+describe('agentEventParser', () => {
+  it('gives every implemented driver its own parser without a configuration', () => {
+    for (const driver of drivers)
+      expect(agentEventParser(driver.id).parseEvent).toBe(driver.parseEvent)
+    expect(() => agentEventParser('gigacode')).toThrow(
+      expect.objectContaining({ code: 'NOT_FOUND' }),
+    )
   })
 })
 

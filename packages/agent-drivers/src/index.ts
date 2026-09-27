@@ -5,6 +5,7 @@ export { createKimiDriver } from './kimi.ts'
 export { createOpencodeDriver } from './opencode.ts'
 export { createQwenDriver } from './qwen.ts'
 export {
+  agentEventParser,
   createAgentDriverRegistry,
   createAgentDrivers,
   type AgentDriverRegistry,
