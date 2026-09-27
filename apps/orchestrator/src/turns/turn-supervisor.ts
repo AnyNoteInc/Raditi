@@ -31,19 +31,17 @@ import {
   type RunContext,
   type Sandbox,
   type SandboxProvider,
-  type SandboxSpec,
   type SiteLeaseStore,
   type SnapshotManifest,
   type SnapshotMetadata,
   type SnapshotReference,
   type TurnEvidence,
-  type TurnInput,
   type TurnJournal,
   type TurnPhase,
   type TurnPublication,
+  type TurnRequest,
   type TurnResult,
   type TurnWorkspace,
-  type TurnWorkspaceSource,
 } from '@repo/domain'
 
 import type { SandboxSnapshotTransport, SnapshotArchives } from '../sessions/sandbox-snapshot.ts'
@@ -51,16 +49,7 @@ import type { LoadedSnapshot } from '../sessions/snapshot.service.ts'
 import { holdForRecovery, LeaseGuard } from './lease-guard.ts'
 import { readTurnOutput } from './turn-output.ts'
 
-export interface TurnRequest {
-  sandbox: SandboxSpec
-  context: RunContext
-  input: TurnInput
-  driverVersion: string
-  workspace: TurnWorkspaceSource
-  /** Trusted persisted time; retries use the identical value for deterministic publication. */
-  committedAt: string
-  previous?: SnapshotReference
-}
+export type { TurnRequest }
 
 export interface TurnSnapshotStore {
   load(reference: SnapshotReference): Promise<LoadedSnapshot>

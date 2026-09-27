@@ -66,6 +66,8 @@ describe('toTRPCError', () => {
     ['SITE_BUSY', 409, 'CONFLICT', 'С сайтом сейчас идёт другая работа'],
     ['SITE_HELD', 409, 'CONFLICT', 'Нужно проверить, что случилось с прошлой работой на сайте'],
     ['SANDBOX_COMMAND_FAILED', 502, 'BAD_GATEWAY', 'технического сбоя'],
+    ['RUNNER_UNAVAILABLE', 503, 'SERVICE_UNAVAILABLE', 'не получается запустить агента'],
+    ['EXEC_LOST', 502, 'BAD_GATEWAY', 'Работа агента прервалась'],
     ['GIT_OPERATION_FAILED', 502, 'BAD_GATEWAY', 'файлы сайта'],
   ] as const)(
     'gives the turn failure %s its own Russian text, without English or jargon',

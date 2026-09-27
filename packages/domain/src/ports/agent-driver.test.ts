@@ -4,6 +4,7 @@ import {
   agentOutputLimits,
   preparedRunExposesSecret,
   preparedRunLimits,
+  preparedFilesSchema,
   preparedRunSchema,
   turnCredentials,
   turnResultSchema,
@@ -230,5 +231,34 @@ describe('prepared run credentials', () => {
     // 170 and 200 files of three pages each: 1.6 MB of content alone would still pass.
     expect(fits(170, 2 * 4096 + 1)).toBe(true)
     expect(fits(200, 2 * 4096 + 1)).toBe(false)
+  })
+})
+
+describe('preparedFilesSchema', () => {
+  it('applies the prepared run rules without the run context', () => {
+    const files = {
+      files: [{ path: '/agent-home/codex/config.toml', content: 'model = "m"' }],
+      env: { CODEX_HOME: '/agent-home/codex' },
+      secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'key' }],
+    }
+    expect(preparedFilesSchema.parse(files)).toEqual(files)
+    for (const invalid of [
+      { ...files, context: {} },
+      { ...files, files: [{ path: '/workspace/repo/AGENTS.md', content: 'x' }] },
+      {
+        ...files,
+        secrets: [...files.secrets, { path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'y' }],
+      },
+      {
+        ...files,
+        secrets: [
+          {
+            path: `${SANDBOX_SECRETS_DIR}/big`,
+            content: 'x'.repeat(SANDBOX_SECRETS_TMPFS_BYTES + 1),
+          },
+        ],
+      },
+    ])
+      expect(preparedFilesSchema.safeParse(invalid).success).toBe(false)
   })
 })

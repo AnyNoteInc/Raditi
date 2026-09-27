@@ -55,6 +55,10 @@ export function isSnapshotCredential(error: unknown): error is DomainError {
 export const leaseLost = (message = 'Site lease is no longer owned'): DomainError =>
   new DomainError('LEASE_LOST', message, 409)
 
+/** The agent's exec or container of a recovered turn is missing or foreign: it is given up. */
+export const execLost = (message = 'The agent process of the turn was lost'): DomainError =>
+  new DomainError('EXEC_LOST', message, 502)
+
 /**
  * A snapshot save that failed this way wrote nothing: its checks, Vault or sealing failed, or
  * it stopped before its reservation. The site is released and the turn may be retried.
@@ -139,6 +143,8 @@ export const turnPhases = [
   'restored',
   'running',
   'output',
+  /** A recovered owner re-attached to the agent's exec from the journal cursor (recoveredFromEpoch). */
+  'resumed',
   'quiesced',
   'checkpointing',
   'checkpointed',
@@ -152,6 +158,15 @@ export const turnPhases = [
 export type TurnPhase = (typeof turnPhases)[number]
 
 const evidenceId = z.uuid()
+
+/** Strips other keys: a SiteLeaseGrant's expiry and server clock are not part of the fence. */
+export const siteLeaseFenceSchema = z.object({
+  siteId: evidenceId,
+  taskId: evidenceId,
+  operation: z.enum(siteLeaseOperations),
+  epoch: z.number().int().positive(),
+}) satisfies z.ZodType<SiteLeaseFence>
+
 const evidenceTextId = z
   .string()
   .min(1)
@@ -161,12 +176,7 @@ const evidenceTextId = z
 /** Bounded operational evidence, with no prepared configs, credentials or raw error strings. */
 export const turnEvidenceSchema = z
   .object({
-    fence: z.object({
-      siteId: evidenceId,
-      taskId: evidenceId,
-      operation: z.enum(siteLeaseOperations),
-      epoch: z.number().int().positive(),
-    }),
+    fence: siteLeaseFenceSchema,
     sessionId: evidenceTextId,
     turn: z.number().int().positive().max(999_999),
     sequence: z.number().int().positive().max(1_000_000),
@@ -195,6 +205,8 @@ export const turnEvidenceSchema = z
         'snapshot_credential',
         'publication_ambiguous',
         'destroy_failed',
+        // Recovery found the agent's exec or container missing or foreign: the turn is given up.
+        'exec_lost',
       ])
       .optional(),
   })

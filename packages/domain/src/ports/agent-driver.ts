@@ -116,29 +116,45 @@ const preparedFileSchema = (root: string) =>
     })
     .strict()
 
+const preparedFilesShape = {
+  files: z.array(preparedFileSchema(SANDBOX_AGENT_HOME)).max(preparedRunLimits.files),
+  env: z.record(z.string(), z.string()),
+  secrets: z.array(preparedFileSchema(SANDBOX_SECRETS_DIR)).max(preparedRunLimits.files),
+}
+
+function checkPreparedFiles(
+  run: Pick<PreparedRun, 'files' | 'secrets'>,
+  ctx: z.RefinementCtx,
+): void {
+  const all = [...run.files, ...run.secrets]
+  if (all.length > preparedRunLimits.files)
+    ctx.addIssue({ code: 'custom', message: 'too many prepared files' })
+  if (all.reduce((sum, file) => sum + utf8Bytes(file.content), 0) > preparedRunLimits.bytes)
+    ctx.addIssue({ code: 'custom', message: 'prepared files are too large' })
+  if (
+    run.secrets.reduce((sum, file) => sum + tmpfsBytes(file.content), 0) >
+    preparedRunLimits.secretBytes
+  )
+    ctx.addIssue({ code: 'custom', message: 'prepared secrets do not fit their tmpfs' })
+  if (new Set(all.map((file) => file.path)).size !== all.length)
+    ctx.addIssue({ code: 'custom', message: 'duplicate prepared file path' })
+}
+
 /** What the orchestrator accepts from AgentDriver.prepare before writing anything. */
 export const preparedRunSchema = z
   .object({
     context: z.custom<RunContext>((value) => typeof value === 'object' && value !== null),
-    files: z.array(preparedFileSchema(SANDBOX_AGENT_HOME)).max(preparedRunLimits.files),
-    env: z.record(z.string(), z.string()),
-    secrets: z.array(preparedFileSchema(SANDBOX_SECRETS_DIR)).max(preparedRunLimits.files),
+    ...preparedFilesShape,
   })
   .strict()
-  .superRefine((run, ctx) => {
-    const all = [...run.files, ...run.secrets]
-    if (all.length > preparedRunLimits.files)
-      ctx.addIssue({ code: 'custom', message: 'too many prepared files' })
-    if (all.reduce((sum, file) => sum + utf8Bytes(file.content), 0) > preparedRunLimits.bytes)
-      ctx.addIssue({ code: 'custom', message: 'prepared files are too large' })
-    if (
-      run.secrets.reduce((sum, file) => sum + tmpfsBytes(file.content), 0) >
-      preparedRunLimits.secretBytes
-    )
-      ctx.addIssue({ code: 'custom', message: 'prepared secrets do not fit their tmpfs' })
-    if (new Set(all.map((file) => file.path)).size !== all.length)
-      ctx.addIssue({ code: 'custom', message: 'duplicate prepared file path' })
-  })
+  .superRefine(checkPreparedFiles)
+
+/** The same rules for what reaches a sandbox without the run context (a runner's prepare). */
+export const preparedFilesSchema = z
+  .object(preparedFilesShape)
+  .strict()
+  .superRefine(checkPreparedFiles)
+export type PreparedFiles = Pick<PreparedRun, 'files' | 'env' | 'secrets'>
 
 /** Every credential of one turn: the LLM key, the MCP token and each secret file's content. */
 export function turnCredentials(

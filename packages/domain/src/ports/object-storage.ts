@@ -1,7 +1,7 @@
 /**
  * Object storage port — spec §14. Buckets are addressed by kind; the adapter maps kinds to
  * the raditi-* bucket names from configuration. Sandboxes never get S3 keys or presigned
- * URLs: the host moves files in and out.
+ * URLs: the host moves files in and out; a runner host gets scoped presigned URLs from core.
  */
 export const bucketKinds = [
   'inbox',
@@ -16,6 +16,38 @@ export type BucketKind = (typeof bucketKinds)[number]
 export interface PutOptions {
   contentType?: string
   sizeBytes?: number
+}
+
+/**
+ * Only turn snapshots are reachable by a presigned URL (P2): a runner restores turn n−1 and
+ * writes home.tar.zst of turn n. Browser uploads (M2) and runner logs (P12) come later.
+ */
+export const presignableBuckets = ['sessions'] as const
+export type PresignableBucket = (typeof presignableBuckets)[number]
+/** A presigned URL lives at most 5 minutes; callers also bound it by the lease (spec §14). */
+export const MAX_PRESIGN_TTL_MS = 5 * 60_000
+
+export type PresignRequest = {
+  bucket: PresignableBucket
+  key: string
+  /** Whole seconds are signed, rounded down; at least one. */
+  ttlMs: number
+} & (
+  | { method: 'GET' }
+  /**
+   * Create-only: the URL signs `If-None-Match: *` and the exact Content-Length, so it can
+   * neither overwrite an existing object nor store anything but `sizeBytes` bytes.
+   */
+  | { method: 'PUT'; sizeBytes: number }
+)
+
+/** A bearer capability: never logged, never handed to a sandbox. */
+export interface PresignedRequest {
+  method: 'GET' | 'PUT'
+  url: string
+  /** Signed headers the request must carry verbatim; Content-Length comes from the body. */
+  headers: Record<string, string>
+  expiresAt: Date
 }
 
 export interface ObjectStorage {

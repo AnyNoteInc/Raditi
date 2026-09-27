@@ -91,7 +91,9 @@ jobs:
         run: pnpm db:seed
 
       - name: Test
-        run: pnpm test
+        # Shared runners are several times slower than a laptop: jsdom renders and real git
+        # processes need more than Vitest's default 5 s per test.
+        run: pnpm test -- --testTimeout=30000
 
       # Sandbox gateway allowlist, watchdog and network guard; the Docker test skips itself.
       - name: Sandbox infrastructure tests

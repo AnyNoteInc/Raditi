@@ -13,12 +13,14 @@ import {
   turnOutputTooLarge,
 } from '../errors.ts'
 import {
+  execLost,
   isSnapshotCredential,
   leaseLost,
   siteBusy,
   siteHeld,
   snapshotHasCredential,
   snapshotSaveWroteNothing,
+  turnEvidenceSchema,
 } from './turn-runner.ts'
 
 describe('turn failure codes', () => {
@@ -72,5 +74,36 @@ describe('turn failure codes', () => {
     ['written', false],
   ])('knows whether a failed save wrote nothing: %s', (error, nothing) => {
     expect(snapshotSaveWroteNothing(error)).toBe(nothing)
+  })
+})
+
+describe('turn evidence', () => {
+  const evidence = {
+    fence: {
+      siteId: '22222222-2222-4222-8222-222222222222',
+      taskId: '11111111-1111-4111-8111-111111111111',
+      operation: 'turn',
+      epoch: 3,
+    },
+    sessionId: 'session-1',
+    turn: 1,
+    sequence: 5,
+    phase: 'resumed',
+    execId: 'exec-1',
+    cursor: { stdout: 120, stderr: 0 },
+    recoveredFromEpoch: 2,
+  } as const
+
+  it('records a resumed exec and a lost one', () => {
+    expect(turnEvidenceSchema.parse(evidence)).toEqual(evidence)
+    expect(
+      turnEvidenceSchema.safeParse({ ...evidence, phase: 'failed', reason: 'exec_lost' }).success,
+    ).toBe(true)
+    expect(execLost()).toMatchObject({ code: 'EXEC_LOST', httpStatus: 502 })
+  })
+
+  it('keeps only the fence of a lease grant', () => {
+    const grant = { ...evidence.fence, expiresAt: new Date(), serverNow: new Date() }
+    expect(turnEvidenceSchema.parse({ ...evidence, fence: grant }).fence).toEqual(evidence.fence)
   })
 })

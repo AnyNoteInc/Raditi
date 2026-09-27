@@ -3,8 +3,9 @@ import { badRequest } from '../errors.ts'
 
 /**
  * Sandbox port — spec §8. One task is a logical session; a container lives for one turn.
- * Adapters: Docker via a local socket (PoC, macOS dev) and the `runner` role on sandbox VMs
- * (pilot). The container starts as `tini -- sleep infinity`; everything else is exec.
+ * The adapter is Docker via a local socket, in core (PoC, macOS dev) or in the `runner` role on
+ * a sandbox VM (pilot): the remote boundary is TurnExecutor, not this port.
+ * The container starts as `tini -- sleep infinity`; everything else is exec.
  * Bytes move only through exec stdin/stdout — never `docker cp` or the archive API.
  * Every SandboxSpec passes sandboxSpecSchema (assertSandboxSpec) before a provider starts it.
  */
@@ -131,7 +132,7 @@ export interface SandboxInfo {
 }
 
 export interface SandboxProvider {
-  readonly kind: 'docker' | 'runner'
+  readonly kind: 'docker'
   create(spec: SandboxSpec, signal?: AbortSignal): Promise<Sandbox>
   get(id: string): Promise<Sandbox | null>
   /** For the reconciler: find orphans by labels and age. */
