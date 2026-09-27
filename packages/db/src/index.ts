@@ -1,4 +1,5 @@
-// PostgreSQL adapter: Prisma client, generated types and enums, outbox helper.
+// PostgreSQL adapter: Prisma client, generated types and enums, outbox, site leases and turn
+// assignments.
 // Explicit re-exports keep the public surface visible and avoid leaking internals.
 export {
   createPrismaClient,
@@ -10,6 +11,7 @@ export {
 } from './client.ts'
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
+export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 
 export { Prisma, PrismaClient } from './generated/prisma/client.ts'
 export {
@@ -42,6 +44,8 @@ export {
   SiteStatus,
   SubscriptionStatus,
   TaskStatus,
+  TurnAssignmentOutcome,
+  TurnExecutorKind,
   TurnStatus,
 } from './generated/prisma/client.ts'
 export type {
@@ -78,6 +82,7 @@ export type {
   TaskEvent,
   TaskTurn,
   TokenUsage,
+  TurnAssignment,
   User,
   UserConsent,
   Verification,

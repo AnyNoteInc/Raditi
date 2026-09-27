@@ -2,7 +2,8 @@
 // Conventions: uuid v7 ids, snake_case tables and columns via @@map/@map, timestamptz(6),
 // enum values in lowercase snake_case, money as Decimal with an explicit precision (spec §16:
 // never float, never integer kopecks). CHECK constraints Prisma cannot express are appended to
-// the init migration; Prisma ignores them when diffing, so later migrations keep them.
+// the migration that creates their table; Prisma ignores them when diffing, so later migrations
+// keep them.
 // onDelete: Restrict for money, usage and history rows; Cascade only for rows that live and die
 // with their parent (membership, channel identities, a task's turns, events and files);
 // SetNull for "who did it" and "latest" pointers.
@@ -12,6 +13,8 @@ generator client {
   output              = "../src/generated/prisma"
   runtime             = "nodejs"
   moduleFormat        = "esm"
+  // One unfinished turn assignment per turn: a partial unique index.
+  previewFeatures     = ["partialIndexes"]
   // .ts imports inside the generated client: plain Node loads it with type stripping
   importFileExtension = "ts"
 }
@@ -233,7 +236,7 @@ model Site {
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   lease           SiteLease?
   gitRepositories GitRepository[]
   environments    Environment[]
@@ -242,6 +245,7 @@ model Site {
   tasks           Task[]
   snapshots       Snapshot[]
   deployments     Deployment[]
+  turnAssignments TurnAssignment[]
 
   @@unique([workspaceId, url])
   @@map("sites")
@@ -467,23 +471,24 @@ model Task {
   updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
   finishedAt    DateTime?   @map("finished_at") @db.Timestamptz(6)
 
-  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  site          Site           @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  chatSession   ChatSession?   @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
-  createdBy     User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  revertsTask   Task?          @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
-  revertedBy    Task[]         @relation("TaskReverts")
-  deployment    Deployment?    @relation("TaskCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
-  pricingRule   PricingRule?   @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
-  deployments   Deployment[]   @relation("TaskDeployments")
-  turns         TaskTurn[]
-  events        TaskEvent[]
-  attachments   Attachment[]
-  snapshots     Snapshot[]
-  tokenUsage    TokenUsage[]
-  creditHolds   CreditHold[]
-  ledgerEntries CreditLedger[]
-  leases        SiteLease[]
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  site            Site             @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  chatSession     ChatSession?     @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
+  createdBy       User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  revertsTask     Task?            @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
+  revertedBy      Task[]           @relation("TaskReverts")
+  deployment      Deployment?      @relation("TaskCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
+  pricingRule     PricingRule?     @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  deployments     Deployment[]     @relation("TaskDeployments")
+  turns           TaskTurn[]
+  events          TaskEvent[]
+  attachments     Attachment[]
+  snapshots       Snapshot[]
+  tokenUsage      TokenUsage[]
+  creditHolds     CreditHold[]
+  ledgerEntries   CreditLedger[]
+  leases          SiteLease[]
+  turnAssignments TurnAssignment[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([siteId, status])
@@ -575,6 +580,59 @@ enum TurnStatus {
   cancelled
   timed_out
   /// The runner or container vanished; never billed to the client (spec §17).
+  lost
+}
+
+/// One turn's hold on an executor (spec §8 «Раннер на песочной ВМ»): core's own Docker or a runner
+/// session, the lease epochs of its journal and the absolute deadline of its container. Recovery
+/// reads the unfinished ones; a turn has at most one.
+model TurnAssignment {
+  id               String                 @id @default(uuid(7)) @db.Uuid
+  taskId           String                 @map("task_id") @db.Uuid
+  siteId           String                 @map("site_id") @db.Uuid
+  /// Sandbox label of the session: sessions/<sessionId>/turns/<NNNN>/ in raditi-sessions.
+  sessionId        String                 @map("session_id") @db.VarChar(64)
+  turnNo           Int                    @map("turn_no")
+  executor         TurnExecutorKind
+  /// The turn request without its LLM key and MCP token (turnPlanSchema in @repo/domain).
+  plan             Json
+  /// The turn lease epoch it started under; recovery moves lease_epoch forward.
+  firstEpoch       Int                    @map("first_epoch")
+  leaseEpoch       Int                    @map("lease_epoch")
+  /// Database time by which the container is gone; recovery never extends it.
+  deadlineAt       DateTime               @map("deadline_at") @db.Timestamptz(6)
+  runnerId         String?                @map("runner_id") @db.VarChar(63)
+  /// A uuid per runner process start: a restarted runner is a new session.
+  runnerSession    String?                @map("runner_session") @db.Uuid
+  claimedAt        DateTime?              @map("claimed_at") @db.Timestamptz(6)
+  /// Last poll of the runner session that listed the assignment as active.
+  runnerSeenAt     DateTime?              @map("runner_seen_at") @db.Timestamptz(6)
+  containerId      String?                @map("container_id") @db.VarChar(200)
+  recoveryAttempts Int                    @default(0) @map("recovery_attempts")
+  outcome          TurnAssignmentOutcome?
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  finishedAt       DateTime?              @map("finished_at") @db.Timestamptz(6)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, turnNo], map: "turn_assignments_active_turn_key", where: raw("finished_at IS NULL"))
+  @@index([siteId])
+  @@index([runnerId, runnerSession])
+  @@map("turn_assignments")
+}
+
+/// Must equal turnExecutorKinds in @repo/domain (checked by a test).
+enum TurnExecutorKind {
+  local
+  runner
+}
+
+/// Must equal turnAssignmentOutcomes in @repo/domain (checked by a test).
+enum TurnAssignmentOutcome {
+  completed
+  failed
   lost
 }
 

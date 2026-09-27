@@ -5,9 +5,19 @@ import {
   gitProviderKinds,
   siteStacks,
   taskStatuses,
+  turnAssignmentOutcomes,
+  turnExecutorKinds,
   turnResultSchema,
 } from '@repo/domain'
-import { ChangeType, ConsentDocumentType, GitProviderKind, SiteStack, TaskStatus } from './index.ts'
+import {
+  ChangeType,
+  ConsentDocumentType,
+  GitProviderKind,
+  SiteStack,
+  TaskStatus,
+  TurnAssignmentOutcome,
+  TurnExecutorKind,
+} from './index.ts'
 
 describe('database enums match the domain', () => {
   it('TaskStatus has exactly the statuses of spec §7', () => {
@@ -28,5 +38,10 @@ describe('database enums match the domain', () => {
 
   it('ChangeType has exactly the change types of the turn result', () => {
     expect(Object.values(ChangeType)).toEqual([...turnResultSchema.shape.change_type.options])
+  })
+
+  it('TurnExecutorKind and TurnAssignmentOutcome match the turn assignment port', () => {
+    expect(Object.values(TurnExecutorKind)).toEqual([...turnExecutorKinds])
+    expect(Object.values(TurnAssignmentOutcome)).toEqual([...turnAssignmentOutcomes])
   })
 })
