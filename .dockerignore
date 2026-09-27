@@ -8,15 +8,19 @@
 # dependencies (images install their own)
 **/node_modules
 
-# tooling
+# tooling; docs and deployment files never go into an image
 .claude
 .husky
 .github
+docs
+infra
+# except the scripts the sandbox images copy (infra/sandbox/Dockerfile)
+!infra/sandbox/*.mjs
 
 # local environment and secrets
-.env
-.env.*
-!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 **/*.pem
 **/*.key
 CLAUDE.local.md
