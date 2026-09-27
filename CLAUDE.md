@@ -17,7 +17,7 @@
 
 ## Состояние
 
-Каркас готов (`/bootstrap`, B0–B5, 26.09.2026): монорепозиторий, пакеты-порты и адаптеры, `apps/web`, `apps/orchestrator` (роли `core` и `mcp`; `runner` — заглушка до P2), `apps/e2e`, схема данных v1 с миграциями и сидами, локальная инфраструктура с мониторингом. Работают вход по почте и паролю с согласиями, юридические страницы, health и метрики, outbox → BullMQ → письма. P1 добавляет парсеры четырёх CLI и выбор файлов сессии, зашифрованные снимки ходов в S3 и проверяемое восстановление через порт Sandbox; отчёт — `docs/plan/02-p1-verification.md`. P2 реализуется: локальный Docker provider, шлюз runc, супервизор, SQL-аренда и доверенная Git-публикация готовы; границы и незакрытые гейты — `docs/plan/03-p2-verification.md`. Сеть под `runsc` проверена в Linux-ВМ: мост попытки без адреса хоста и правило `INPUT DROP` на хосте (spec §8 «Сеть»). Запуск CLI с моделями — P4/P5; бизнес-логика задач, git-провайдеры и оплата ещё впереди (`docs/plan/roadmap.md`). Реквизиты оператора в юридических текстах — заглушки (`apps/web/content/legal/README.md`).
+Каркас готов (`/bootstrap`, B0–B5, 26.09.2026): монорепозиторий, пакеты-порты и адаптеры, `apps/web`, `apps/orchestrator` (роли `core`, `mcp` и `runner`), `apps/e2e`, схема данных v1 с миграциями и сидами, локальная инфраструктура с мониторингом. Работают вход по почте и паролю с согласиями, юридические страницы, health и метрики, outbox → BullMQ → письма. P1 добавляет парсеры четырёх CLI и выбор файлов сессии, зашифрованные снимки ходов в S3 и проверяемое восстановление через порт Sandbox; отчёт — `docs/plan/02-p1-verification.md`. P2 готов (27.09.2026): Docker provider под `runsc` и `runc` со шлюзом (под `runsc` — мост попытки без адреса хоста и правило `INPUT DROP` на хосте, spec §8 «Сеть»), супервизор хода на порту `TurnExecutor`, SQL-аренда, доверенная Git-публикация, роль `runner` (pull без входящих портов, API раннеров в `core` на отдельном порту, presigned-ссылки и ключ данных на ход) и восстановление незавершённого exec. Всё проверено в Linux-ВМ под gVisor, в том числе `kill -9` `core` и раннера. Отчёт, открытые вопросы и остаток для M10 и P3–P12 — `docs/plan/03-p2-verification.md`. Супервизор и recovery подключаются к очереди в P12; четыре решения по умолчанию в spec §20 ждут владельца. Запуск CLI с моделями — P4/P5; бизнес-логика задач, git-провайдеры и оплата ещё впереди (`docs/plan/roadmap.md`). Реквизиты оператора в юридических текстах — заглушки (`apps/web/content/legal/README.md`).
 
 Локальные проверки и границы результата — `docs/plan/01-bootstrap-verification.md`; GitHub Actions нужно подтвердить после отправки ветки.
 
@@ -28,7 +28,7 @@
 - `apps/orchestrator` — NestJS 12.1 (ESM). Один код и один образ, три роли запуска:
   - `core` — жизненный цикл задач, квоты, воркеры BullMQ, cron, управление песочницами, публикация в git;
   - `mcp` — MCP-шлюз к сайтам (WP-CLI, REST, Playwright): отдельный процесс и порт, своя AppRole в Vault и своя роль в PostgreSQL без доступа к биллингу. Кроме LLM-шлюза, это единственное, куда ходит песочница;
-  - `runner` — pull-раннер на песочной ВМ: сам забирает ходы, владеет контейнерами, входящих портов нет, аренда с эпохой (этап P2).
+  - `runner` — pull-раннер на песочной ВМ: сам забирает ходы у API раннеров `core` (`RUNNER_API_PORT`), владеет контейнерами; входящих портов и доступов к базе, Redis, Vault и S3 нет, аренда с эпохой. Где идут ходы, задаёт `TURN_EXECUTOR`: `runner`, а `local` — Docker самого `core`, только не в проде.
 - `apps/e2e` — Playwright 1.63.
 - `packages/*` — порты и адаптеры (см. «Как писать код»): ядро `domain`; адаптеры `db` (Prisma 7.10, генератор `prisma-client`, PrismaPg), `storage`, `vault`, `git-providers`, `sandbox-providers`, `agent-drivers`, `site-adapters`, `yookassa`, `mail`, `telegram`; сервисы `auth`, `notifications`; транспорт `trpc`; `ui`.
 - Очередь — Redis 8.10 + BullMQ 6.3 через `@nestjs/bullmq` 12:
@@ -47,12 +47,14 @@ Node 26.10 (`nvm use`) и pnpm 12.6. `npm` и `npx` внутри репозит�
 - `cp .env.example .env` и задать `BETTER_AUTH_SECRET` (`openssl rand -base64 48`); `pnpm install`.
 - `pnpm infra:up` / `infra:down` / `infra:logs` — PostgreSQL, Redis, SeaweedFS (+ бакеты `raditi-*`), OpenBao dev, Gitea. Профили (`--profile` или `COMPOSE_PROFILES` в `.env`): `site` — тестовый WordPress на :8080, `llm` — LiteLLM на :4000, `ci` — gitea/runner, `monitoring` — Prometheus :9090 и Grafana :3030, `monitoring-host` — cAdvisor (только Linux). Если `docker compose` висит на «Error getting credentials» — ответьте на запрос связки ключей macOS.
 - `pnpm db:migrate` (новая миграция в dev), `pnpm db:deploy` (применить), `pnpm db:seed` (справочники, повторный запуск безопасен), `pnpm db:generate`.
-- `pnpm dev` — web :3000, orchestrator :8081 (core) и :8082 (mcp). Останавливать Ctrl-C (SIGINT): SIGTERM оставляет дочерние процессы.
+- `pnpm dev` — web :3000, orchestrator :8081 (core) и :8082 (mcp); при `TURN_EXECUTOR=runner` — ещё API раннеров :8083. Останавливать Ctrl-C (SIGINT): SIGTERM оставляет дочерние процессы.
+- Роль `runner` — `ORCHESTRATOR_ROLES=runner` с `RUNNER_CORE_URL`, `RUNNER_TOKEN_FILE` и `SANDBOX_*`. Токен ВМ и хеш для `RUNNER_TOKENS` в `core` — `pnpm --filter orchestrator runner-token issue <id> <файл>`.
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm check-architecture`, `pnpm check-env`; всё сразу — `pnpm gates`.
 - Тесты `@repo/db` с базой: `DATABASE_URL=postgresql://raditi:raditi@localhost:5432/raditi pnpm --filter @repo/db test` (без переменной они пропускаются).
 - `pnpm --filter @repo/storage test:s3` — presigned-ссылки на локальном SeaweedFS с `S3_*` из `.env`; в обычном `pnpm test` без `S3_ENDPOINT` на loopback эти тесты пропускаются.
 - `pnpm e2e` — smoke на поднятой инфраструктуре (web на :3100, core на :8181, mcp на :8182); `pnpm dev` перед этим остановить.
 - `pnpm --filter orchestrator verify:snapshots` — локальная интеграционная проверка P1 на SeaweedFS + OpenBao из `.env`: временные синтетические данные, без моделей; свой Transit-ключ и S3-объекты удаляются после проверки.
+- `pnpm --filter orchestrator verify:runner` — гейты 2 и 3 P2: `core` на этой машине, раннер в Linux-ВМ под gVisor (Colima), полный ход с restore, `kill -9` `core` и раннера. Образы собираются в демоне ВМ; переменные `P2_RUNNER_*` и повтор — `docs/plan/03-p2-verification.md`. Всё созданное удаляется.
 - Health: web `/api/health`, orchestrator `/health` — публично только status; подробности web и core — с `Authorization: Bearer $METRICS_TOKEN`, MCP всегда только status. Метрики — `/api/metrics` и `/metrics` с тем же токеном.
 
 ## Структура
@@ -61,7 +63,8 @@ Node 26.10 (`nvm use`) и pnpm 12.6. `npm` и `npx` внутри репозит�
 apps/
   web/            Next.js: (about) и /terms (MDX из content/legal), (auth), (protected), onboarding, api/{auth,trpc,health,metrics,webhooks/yookassa}
   orchestrator/   NestJS: config, roles (core, mcp, runner), health, metrics, queue (BullMQ), outbox relay, notifications, drivers,
-                  sandbox, sessions (снимки ходов), turns (супервизор хода, аренда, журнал, recovery), git-workspace (доверенная публикация), mcp
+                  sandbox, sessions (снимки ходов), turns (супервизор хода, аренда, журнал, recovery), git-workspace (доверенная публикация), mcp,
+                  runner (роль runner: опрос core, Docker ВМ), runner-api (API раннеров в core)
   e2e/            Playwright smoke
 packages/
   domain/         ядро: порты, общие события и итог хода (zod), статусы §7, политика песочницы и путей диффа, реестр юридических документов, APP_ENV, withTimeout, разбор env (parseEnv, envVar, envProblems, Env)
