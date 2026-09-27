@@ -32,6 +32,7 @@ function plan(taskId: string, sessionId: string, siteId: string): TurnPlan {
       instructions: 'Synthetic verification',
     },
     input: { prompt: 'Synthetic turn', attachments: [] },
+    driverId: 'codex',
     driverVersion: '1.0.0',
     workspace: {
       repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },

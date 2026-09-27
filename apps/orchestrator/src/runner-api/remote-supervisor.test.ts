@@ -22,6 +22,7 @@ import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { sealSnapshotPart } from '../sessions/snapshot-parts.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+import { LiveTurns } from '../turns/live-turns.ts'
 import { TurnSupervisor, type TurnRequest } from '../turns/turn-supervisor.ts'
 import { RemoteTurnExecutor } from './remote-turn-executor.ts'
 import { RunnerHub } from './runner-hub.ts'
@@ -289,6 +290,7 @@ describe('TurnSupervisor on a runner', () => {
       workspace,
       snapshots,
       journal,
+      live: new LiveTurns(),
     }).run(request)
 
     expect(finished.result).toEqual(result)

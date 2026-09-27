@@ -55,17 +55,18 @@ const request = (): TurnRequest => ({
 
 describe('turn plan', () => {
   it('keeps everything of the request except its LLM key and MCP token', () => {
-    const plan = toTurnPlan(request())
+    const plan = toTurnPlan(request(), 'kimi')
     expect(JSON.stringify(plan)).not.toMatch(/sk-turn-llm-key|mcp-turn-token/)
     expect(plan.context.llm).toEqual({ baseUrl: 'http://sandbox-gw:8080/llm', model: 'kimi-k2.6' })
     expect(plan.context.mcp).toEqual({ url: 'http://sandbox-gw:8080/mcp' })
+    expect(plan.driverId).toBe('kimi')
     expect(
       withTurnCredentials(plan, { llmApiKey: 'sk-turn-llm-key', mcpToken: 'mcp-turn-token' }),
     ).toEqual(request())
   })
 
   it('refuses to store a credential or an unknown field', () => {
-    const plan = toTurnPlan(request())
+    const plan = toTurnPlan(request(), 'kimi')
     for (const context of [
       { ...plan.context, llm: { ...plan.context.llm, apiKey: 'sk-turn-llm-key' } },
       { ...plan.context, mcp: { ...plan.context.mcp, token: 'mcp-turn-token' } },
@@ -73,6 +74,7 @@ describe('turn plan', () => {
     ])
       expect(turnPlanSchema.safeParse({ ...plan, context }).success).toBe(false)
     expect(turnPlanSchema.safeParse({ ...plan, credentials: ['x'] }).success).toBe(false)
+    expect(turnPlanSchema.safeParse({ ...plan, driverId: 'other' }).success).toBe(false)
   })
 
   it('refuses turn secrets in the sandbox spec and an invalid request without echoing it', () => {
@@ -80,7 +82,7 @@ describe('turn plan', () => {
     withSecret.sandbox.secrets = [{ path: '/run/raditi/secrets/llm', value: 'sk-turn-llm-key' }]
     let error: unknown
     try {
-      toTurnPlan(withSecret)
+      toTurnPlan(withSecret, 'kimi')
     } catch (e) {
       error = e
     }
@@ -88,7 +90,7 @@ describe('turn plan', () => {
     expect(String((error as Error).message)).not.toContain('sk-turn-llm-key')
     const badUrl = request()
     badUrl.context.llm.baseUrl = 'file:///etc/passwd'
-    expect(() => toTurnPlan(badUrl)).toThrow('Invalid turn plan')
+    expect(() => toTurnPlan(badUrl, 'kimi')).toThrow('Invalid turn plan')
   })
 
   it.each([

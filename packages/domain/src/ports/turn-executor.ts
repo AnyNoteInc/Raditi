@@ -9,6 +9,7 @@ import type {
   SnapshotReference,
 } from '../sessions/snapshot-manifest.ts'
 import {
+  agentDriverIds,
   nativeSessionIdSchema,
   SANDBOX_INBOX,
   type AgentDriverId,
@@ -259,6 +260,8 @@ export const turnPlanSchema = z
       })
       .strict(),
     input: turnInputSchema,
+    /** Recovery picks the driver of the turn by it: extractResult, sessionState, the parser. */
+    driverId: z.enum(agentDriverIds),
     driverVersion: snapshotReferenceSchema.shape.driver.shape.version,
     workspace: publicationSourceSchema,
     committedAt: z.iso.datetime(),
@@ -268,10 +271,11 @@ export const turnPlanSchema = z
 export type TurnPlan = z.infer<typeof turnPlanSchema>
 
 /** The request without the LLM key and MCP token; refuses anything the plan cannot hold. */
-export function toTurnPlan(request: TurnRequest): TurnPlan {
+export function toTurnPlan(request: TurnRequest, driverId: AgentDriverId): TurnPlan {
   const { llm, mcp, ...context } = request.context
   const parsed = turnPlanSchema.safeParse({
     ...request,
+    driverId,
     context: { ...context, llm: { baseUrl: llm.baseUrl, model: llm.model }, mcp: { url: mcp.url } },
   })
   // Issues name paths only: the request carries credentials and client text.
@@ -283,8 +287,9 @@ export function withTurnCredentials(
   plan: TurnPlan,
   credentials: TurnCredentialValues,
 ): TurnRequest {
+  const { driverId: _driverId, ...request } = plan
   return {
-    ...plan,
+    ...request,
     context: {
       ...plan.context,
       llm: { ...plan.context.llm, apiKey: credentials.llmApiKey },

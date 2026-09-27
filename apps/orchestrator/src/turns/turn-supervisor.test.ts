@@ -48,6 +48,7 @@ import {
 import { loopbackTransport } from '../testing/runner-loopback.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+import { LiveTurns } from './live-turns.ts'
 import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from './local-turn-executor.ts'
 import { TurnPublicationRecovery, type PublicationRecoveryRequest } from './turn-recovery.ts'
 
@@ -368,6 +369,7 @@ function turnFixture(kind: string) {
     { sandboxes, parser: () => driver, transport, transfer, importBundle },
     { leases, assignments },
   )
+  const live = new LiveTurns()
   const deps: TurnSupervisorDependencies = {
     leases,
     executor,
@@ -376,6 +378,7 @@ function turnFixture(kind: string) {
     workspace,
     snapshots,
     journal,
+    live,
   }
   return {
     request,
@@ -773,6 +776,10 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.driver.prepare).toHaveBeenCalledWith(
       expect.objectContaining({ nativeSessionId: 'prior-native' }),
     )
+    // Recovery derives the session state from the journal: the resumed session is recorded.
+    expect(f.evidence.find((entry) => entry.phase === 'restored')).toMatchObject({
+      nativeSessionId: 'prior-native',
+    })
     expect(f.order.indexOf(`write:${SANDBOX_SECRETS_DIR}/llm`)).toBeGreaterThan(
       f.order.indexOf('restore'),
     )
@@ -1120,11 +1127,23 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     )
     expect(assignment).toMatchObject({
       outcome: 'completed',
-      plan: { committedAt: f.request.committedAt },
+      plan: { committedAt: f.request.committedAt, driverId: 'codex' },
     })
     expect(JSON.stringify(assignment!.plan)).not.toContain('synthetic-llm-secret')
     expect(JSON.stringify(assignment!.plan)).not.toContain('synthetic-mcp-secret')
     expect(prepare.mock.calls[0]![0].assignmentId).toBe(assignment!.id)
+  })
+
+  it('tells recovery the fence it drives from the lease until the turn settled', async () => {
+    const f = fixture()
+    let during = false
+    f.workspace.buildBaseBundle.mockImplementationOnce(async () => {
+      during = f.deps.live.has(f.lease)
+      throw new Error('clone failed')
+    })
+    await expect(f.run()).rejects.toThrow('clone failed')
+    expect(during).toBe(true)
+    expect(f.deps.live.has(f.lease)).toBe(false)
   })
 
   it('finishes a failed turn once its container is gone and keeps a held one assigned', async () => {
@@ -1151,7 +1170,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       sessionId: labels.sessionId,
       turn: 1,
       executor: kind === 'local' ? 'local' : 'runner',
-      plan: toTurnPlan(f.request),
+      plan: toTurnPlan(f.request, 'codex'),
       remainingMs: 60_000,
     })
     await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })

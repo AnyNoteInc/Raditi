@@ -6,7 +6,7 @@ import {
   type PublicationMetadata,
   type PublicationSource,
 } from '../git/publication.ts'
-import { agentEventSchema, turnResultSchema } from './agent-driver.ts'
+import { agentEventSchema, nativeSessionIdSchema, turnResultSchema } from './agent-driver.ts'
 import { execCursorSchema } from './sandbox-provider.ts'
 
 export const siteLeaseOperations = ['turn', 'deploy', 'revert'] as const
@@ -207,6 +207,8 @@ export const turnEvidenceSchema = z
     candidateHeadSha: publicationShaSchema.optional(),
     baseSha: publicationShaSchema.optional(),
     committedAt: z.iso.datetime().optional(),
+    /** The driver session the turn resumed (turn n−1): recovery derives the session state from it. */
+    nativeSessionId: nativeSessionIdSchema.optional(),
     recoveredFromEpoch: z.number().int().positive().optional(),
     result: turnResultSchema.optional(),
     reason: z
