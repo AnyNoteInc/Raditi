@@ -87,7 +87,8 @@ describe('RunnerAuthenticator', () => {
   })
 })
 
-describe('scripts/runner-token.mjs', () => {
+// Each case starts Node several times: slow on a loaded machine, not stuck.
+describe('scripts/runner-token.mjs', { timeout: 30_000 }, () => {
   let dir: string | undefined
   afterEach(async () => {
     if (dir) await rm(dir, { recursive: true, force: true })
@@ -113,6 +114,43 @@ describe('scripts/runner-token.mjs', () => {
     expect(new RunnerAuthenticator(hashes, { warn: vi.fn() }).authenticate(bearer(value), vm)).toBe(
       'sandbox-1',
     )
+    // Outside production only: the entry names no address, and the script says so.
+    expect(issued.stderr).toMatch(/--ip/)
+  })
+
+  it('prints the production entry bound to the private address of the VM', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'raditi-runner-token-'))
+    const file = join(dir, 'runner.token')
+    const issued = await run(process.execPath, [script, 'issue', 'sandbox-1', file, '--ip', vm])
+    const value = await readFile(file, 'utf8')
+    expect(issued.stdout).toBe(`sandbox-1:${hashRunnerToken(value)}@${vm}\n`)
+    expect(issued.stderr).toBe('')
+    // Exactly what production core takes, and the token opens the API only from that address.
+    const { hashes, problems } = parseRunnerTokens(issued.stdout.trim(), true)
+    expect(problems).toEqual([])
+    const auth = new RunnerAuthenticator(hashes, { warn: vi.fn() })
+    expect(auth.authenticate(bearer(value), vm)).toBe('sandbox-1')
+    expect(auth.authenticate(bearer(value), '10.20.0.12')).toBeNull()
+    expect((await run(process.execPath, [script, 'hash', file, '--ip', 'fd00::12'])).stdout).toBe(
+      `sandbox-1:${hashRunnerToken(value)}@[fd00::12]\n`,
+    )
+  })
+
+  it('takes only a private IP address literal for --ip', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'raditi-runner-token-'))
+    const file = join(dir, 'runner.token')
+    for (const address of ['8.8.8.8', '127.0.0.1', 'sandbox-1.internal', `${vm}:8083`, undefined])
+      await expect(
+        run(process.execPath, [
+          script,
+          'issue',
+          'sandbox-1',
+          file,
+          '--ip',
+          ...(address ? [address] : []),
+        ]),
+      ).rejects.toMatchObject({ code: 2, stdout: '' })
+    await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('refuses an invalid runner id', async () => {
