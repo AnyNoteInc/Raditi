@@ -16,6 +16,11 @@ export interface RunnerConfig {
   tokenFile: string
   /** RUNNER_CORE_CA_FILE: a private CA, only for an https:// core. */
   caFile: string | null
+  /**
+   * RUNNER_S3_ORIGIN: the only origin of presigned URLs the runner follows, https:// in
+   * production; null (no pin) only outside production.
+   */
+  s3Origin: string | null
   /** RUNNER_MAX_TURNS: turns at once; one until several runners are supported (stage 2). */
   maxTurns: number
   sandbox: SandboxConfig

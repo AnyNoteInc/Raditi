@@ -127,7 +127,10 @@ export class RunnerApiServer implements OnApplicationShutdown {
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      const runnerId = this.auth.authenticate(request.headers.authorization)
+      const runnerId = this.auth.authenticate(
+        request.headers.authorization,
+        request.socket.remoteAddress,
+      )
       if (!runnerId) throw RunnerApiError.of('UNAUTHORIZED')
       await this.#route(runnerId, request, response)
     } catch (error) {

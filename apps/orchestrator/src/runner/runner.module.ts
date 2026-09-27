@@ -81,6 +81,7 @@ export class RunnerModule {
                 transfer: fetchPresignedTransfer(),
               }),
               maxTurns: config.maxTurns,
+              ...(config.s3Origin === null ? {} : { s3Origin: config.s3Origin }),
               ...(options.onRetired ? { onRetired: options.onRetired } : {}),
             }),
           inject: [HttpRunnerTransport, SANDBOX_PROVIDER],

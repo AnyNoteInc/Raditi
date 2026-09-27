@@ -212,6 +212,7 @@ async function startRunner() {
     ORCHESTRATOR_ROLES: 'runner',
     RUNNER_CORE_URL: `http://${hostAddress}:${port}`,
     RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
+    RUNNER_S3_ORIGIN: new URL(s3RunnerEndpoint).origin,
     RUNNER_MAX_TURNS: '1',
     SANDBOX_RUNTIME: 'runsc',
     SANDBOX_DOCKER_SOCKET: '/var/run/docker.sock',

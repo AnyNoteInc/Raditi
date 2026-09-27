@@ -37,7 +37,11 @@ import {
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { RunnerCallError, type RunnerTransport } from './core-client.ts'
-import { SandboxRunner, type SandboxRunnerDependencies } from './sandbox-runner.ts'
+import {
+  isTurnSnapshotUrl,
+  SandboxRunner,
+  type SandboxRunnerDependencies,
+} from './sandbox-runner.ts'
 
 const signal = new AbortController().signal
 
@@ -558,19 +562,32 @@ describe('SandboxRunner snapshot parts', () => {
       keys.push(key)
       return key
     })
-    startRunner(core.transport, side.executor)
+    startRunner(core.transport, side.executor, { s3Origin: 'https://s3.invalid' })
 
     const foreign = structuredClone(prior.restore)
     foreign.parts.home.url = foreign.parts.home.url.replace('/turns/0001/', '/turns/0002/')
+    // The same object at another origin: a forged core's own store.
+    const elsewhere = structuredClone(prior.restore)
+    elsewhere.parts.untracked.url = elsewhere.parts.untracked.url.replace(
+      'https://s3.invalid/',
+      'https://s3.invalid.example/',
+    )
     await core.send(secondTurn(foreign))
     await vi.waitFor(() => expect(core.types()).toEqual(['failed']))
-    expect(core.reports[0]).toMatchObject({ code: 'SNAPSHOT_LOAD_FAILED' })
+    await core.send(secondTurn(elsewhere))
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'failed']))
+    expect(core.reports).toMatchObject([
+      { code: 'SNAPSHOT_LOAD_FAILED' },
+      { code: 'SNAPSHOT_LOAD_FAILED' },
+    ])
     expect(side.sandboxes.create).not.toHaveBeenCalled()
     expect(side.transfer.get).not.toHaveBeenCalled()
     expect(core.transport.key).not.toHaveBeenCalled()
 
     await core.send(secondTurn(prior.restore))
-    await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'created', 'prepared']))
+    await vi.waitFor(() =>
+      expect(core.types()).toEqual(['failed', 'failed', 'created', 'prepared']),
+    )
     expect(side.snapshot.restore).toHaveBeenCalledWith(side.sandbox, home, expect.anything())
     expect(side.transfer.get).toHaveBeenCalledTimes(3)
     expect(keys).toHaveLength(1)
@@ -594,13 +611,15 @@ describe('SandboxRunner snapshot parts', () => {
       keys.push(key)
       return key
     })
-    const { lines } = startRunner(core.transport, side.executor)
+    const { lines } = startRunner(core.transport, side.executor, {
+      s3Origin: 'https://s3.invalid',
+    })
     await core.send(prepareCommand())
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
     await core.send(command('capture', { home, baseSha }))
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'captured']))
     expect(core.transport.candidate).toHaveBeenCalledTimes(2)
-    const seal = (turn: string) =>
+    const seal = (turn: string, target = url(turn)) =>
       command('seal', {
         base: {
           workspaceId: labels.workspaceId,
@@ -614,21 +633,26 @@ describe('SandboxRunner snapshot parts', () => {
           createdAt: '2026-09-27T00:00:00.000Z',
         },
         sizeBytes: side.archives.home.byteLength,
-        put: { method: 'PUT', url: url(turn), headers: { 'if-none-match': '*' } },
+        put: { method: 'PUT', url: target, headers: { 'if-none-match': '*' } },
       })
 
     await core.send(seal('0002'))
     await vi.waitFor(() => expect(core.types()).toHaveLength(4))
-    expect(core.reports[3]).toMatchObject({ type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' })
+    await core.send(seal('0001', url('0001').replace('//s3.invalid/', '//s3.invalid:8443/')))
+    await vi.waitFor(() => expect(core.types()).toHaveLength(5))
+    expect(core.reports.slice(3)).toMatchObject([
+      { type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' },
+      { type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' },
+    ])
     expect(core.transport.key).not.toHaveBeenCalled()
     expect(side.transfer.put).not.toHaveBeenCalled()
 
     await core.send(seal('0001'))
-    await vi.waitFor(() => expect(core.types()).toHaveLength(5))
-    expect(core.reports[4]).toMatchObject({ type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' })
-    await core.send(seal('0001'))
     await vi.waitFor(() => expect(core.types()).toHaveLength(6))
-    expect(core.reports[5]).toMatchObject({
+    expect(core.reports[5]).toMatchObject({ type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' })
+    await core.send(seal('0001'))
+    await vi.waitFor(() => expect(core.types()).toHaveLength(7))
+    expect(core.reports[6]).toMatchObject({
       type: 'sealed',
       sizeBytes: side.archives.home.byteLength,
     })
@@ -640,5 +664,28 @@ describe('SandboxRunner snapshot parts', () => {
     expect(keys.every((key) => key.every((byte) => byte === 0))).toBe(true)
     expect(lines.length).toBeGreaterThan(0)
     expect(lines.join('\n')).not.toMatch(/s3\.invalid|X-Amz|refused body/)
+  })
+})
+
+describe('isTurnSnapshotUrl', () => {
+  const key = 'sessions/session1/turns/0001/home.tar.zst'
+  it('names this part of this turn, at the pinned origin when one is given', () => {
+    for (const url of [
+      `https://raditi-sessions.storage.yandexcloud.net/${key}?X-Amz-Signature=s`,
+      `https://storage.yandexcloud.net/raditi-sessions/${key}?X-Amz-Signature=s`,
+    ])
+      expect(isTurnSnapshotUrl(url, 'session1', 1, 'home')).toBe(true)
+    const pinned = 'https://raditi-sessions.storage.yandexcloud.net'
+    expect(isTurnSnapshotUrl(`${pinned}:443/${key}`, 'session1', 1, 'home', pinned)).toBe(true)
+    for (const url of [
+      `https://storage.yandexcloud.net/raditi-sessions/${key}`,
+      `http://raditi-sessions.storage.yandexcloud.net/${key}`,
+      `https://raditi-sessions.storage.yandexcloud.net:8443/${key}`,
+      `https://raditi-sessions.storage.yandexcloud.net.example/${key}`,
+      `https://x.raditi-sessions.storage.yandexcloud.net/${key}`,
+    ])
+      expect(isTurnSnapshotUrl(url, 'session1', 1, 'home', pinned)).toBe(false)
+    expect(isTurnSnapshotUrl(`${pinned}/${key}`, 'session1', 1, 'patch', pinned)).toBe(false)
+    expect(isTurnSnapshotUrl(`${pinned}/${key}`, 'session1', 2, 'home', pinned)).toBe(false)
   })
 })

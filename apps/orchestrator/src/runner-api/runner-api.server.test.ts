@@ -36,14 +36,15 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-async function start() {
+/** `binding` is appended to the runner's RUNNER_TOKENS entry: `@<address>` binds it. */
+async function start(binding = '') {
   const assignments = new MemoryTurnAssignments()
   const leases = { assert: vi.fn(async () => true) }
   const warn = vi.fn()
   const hub = new RunnerHub({ assignments, leases, logger: { warn } })
   const executor = new RemoteTurnExecutor(hub, leases, assignments)
-  const { hashes } = parseRunnerTokens(`sandbox-1:${hashRunnerToken(token)}`)
-  const server = new RunnerApiServer(hub, new RunnerAuthenticator(hashes), { warn })
+  const { hashes } = parseRunnerTokens(`sandbox-1:${hashRunnerToken(token)}${binding}`)
+  const server = new RunnerApiServer(hub, new RunnerAuthenticator(hashes, { warn }), { warn })
   servers.push(server)
   const { port } = await server.listen(0, '127.0.0.1')
   const origin = `http://127.0.0.1:${port}`
@@ -206,6 +207,20 @@ describe('RunnerApiServer', () => {
         expect(await response.json()).toEqual({ error: 'UNAUTHORIZED' })
         expect(response.headers.get('cache-control')).toBe('no-store')
       }
+  })
+
+  it('takes a token bound to a VM address only from that address, as the socket reports it', async () => {
+    // A known path would wait for commands: an unknown one answers 404 once the runner is known.
+    const bound = await start('@127.0.0.1')
+    expect((await bound.json('/runner/v1/unknown', {})).status).toBe(404)
+    const elsewhere = await start('@10.20.0.11')
+    const refused = await elsewhere.json('/runner/v1/unknown', {})
+    expect(refused.status).toBe(401)
+    expect(await refused.json()).toEqual({ error: 'UNAUTHORIZED' })
+    expect(elsewhere.warn).toHaveBeenCalledWith(
+      'runner sandbox-1: token from another address 127.0.0.1',
+    )
+    expect(JSON.stringify(elsewhere.warn.mock.calls)).not.toContain(token.slice(token.indexOf('.')))
   })
 
   it('refuses unknown paths, query strings, foreign bodies and oversized requests', async () => {

@@ -45,7 +45,7 @@ const prodEnv = (overrides: Env = {}): Env => ({
   SANDBOX_IMAGE_PREFIX: 'gitea.internal:3300/raditi/agent',
   SENDSAY_API_KEY: 'sendsay-key',
   METRICS_TOKEN: PROD_METRICS_TOKEN,
-  RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}`,
+  RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@10.20.0.11`,
   ...overrides,
 })
 
@@ -148,6 +148,7 @@ describe('loadConfig — development', () => {
       coreUrl: new URL('http://127.0.0.1:8083'),
       tokenFile: '/etc/raditi/runner-token',
       caFile: null,
+      s3Origin: null,
       maxTurns: 1,
       sandbox: { runtime: 'runc', socketPath: '/var/run/docker.sock' },
     })
@@ -213,15 +214,15 @@ describe('loadConfig — development', () => {
     expect(runner?.turnExecutor).toBe('runner')
     expect(runner?.runnerApi?.port).toBe(8083)
     expect([...runner!.runnerApi!.tokens.keys()]).toEqual(['sandbox-1', 'sandbox-2'])
-    expect(runner!.runnerApi!.tokens.get('sandbox-1')!.map((hash) => hash.toString('hex'))).toEqual(
-      [RUNNER_HASH, 'b'.repeat(64)],
-    )
+    expect(
+      runner!.runnerApi!.tokens.get('sandbox-1')!.map((hash) => hash.digest.toString('hex')),
+    ).toEqual([RUNNER_HASH, 'b'.repeat(64)])
   })
 
   it('refuses runner settings it cannot serve, naming entries and never their values', () => {
     const runner = { ...devEnv, TURN_EXECUTOR: 'runner' }
     expect(problemsOf(runner)).toEqual([
-      'RUNNER_TOKENS: at least one runner token hash is required (id:sha256)',
+      'RUNNER_TOKENS: at least one runner token hash is required (id:sha256@ip)',
     ])
     const leaked = 'rnr_sandbox-1.' + 'x'.repeat(43)
     const problems = problemsOf({
@@ -238,10 +239,10 @@ describe('loadConfig — development', () => {
     })
     expect(problems).toEqual([
       'RUNNER_API_PORT: must differ from ORCHESTRATOR_PORT and MCP_PORT',
-      'RUNNER_TOKENS: entry 1 must be <runner id>:<sha256 hex>',
+      'RUNNER_TOKENS: entry 1 must be <runner id>:<sha256 hex>[@<IP address>]',
       'RUNNER_TOKENS: entry 3 repeats a hash of runner sandbox-1',
       'RUNNER_TOKENS: runner sandbox-1 has more than 2 token hashes',
-      'RUNNER_TOKENS: entry 6 must be <runner id>:<sha256 hex>',
+      'RUNNER_TOKENS: entry 6 must be <runner id>:<sha256 hex>[@<IP address>]',
     ])
     expect(problems.join('\n')).not.toContain(leaked)
     expect(problemsOf({ ...runner, TURN_EXECUTOR: 'docker' })[0]).toMatch(/^TURN_EXECUTOR/)
@@ -314,8 +315,37 @@ describe('loadConfig — production', () => {
       'TURN_EXECUTOR: production runs turns only on runner VMs (runner)',
     ])
     expect(problemsOf(prodEnv({ RUNNER_TOKENS: '' }))).toEqual([
-      'RUNNER_TOKENS: at least one runner token hash is required (id:sha256)',
+      'RUNNER_TOKENS: at least one runner token hash is required (id:sha256@ip)',
     ])
+  })
+
+  it('binds every runner token to its VM private address', () => {
+    const tokens = loadConfig(
+      prodEnv({
+        RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@10.20.0.11,sandbox-2:${'b'.repeat(64)}@[fd00::12]`,
+      }),
+    ).core!.runnerApi!.tokens
+    expect(tokens.get('sandbox-1')).toEqual([
+      { digest: Buffer.from(RUNNER_HASH, 'hex'), address: '10.20.0.11' },
+    ])
+    expect(tokens.get('sandbox-2')?.[0]?.address).toBe('fd00::12')
+    const problems = problemsOf(
+      prodEnv({
+        RUNNER_TOKENS: [
+          `sandbox-1:${RUNNER_HASH}`,
+          `sandbox-2:${'b'.repeat(64)}@8.8.8.8`,
+          `sandbox-3:${'c'.repeat(64)}@127.0.0.1`,
+          `sandbox-4:${'d'.repeat(64)}@sandbox-4.internal`,
+        ].join(','),
+      }),
+    )
+    expect(problems).toEqual([
+      'RUNNER_TOKENS: entry 1 needs @<private IP> in production (spec §15)',
+      'RUNNER_TOKENS: entry 2 needs @<private IP> in production (spec §15)',
+      'RUNNER_TOKENS: entry 3 needs @<private IP> in production (spec §15)',
+      'RUNNER_TOKENS: entry 4 must be <runner id>:<sha256 hex>[@<IP address>]',
+    ])
+    expect(problems.join('\n')).not.toMatch(/8\.8\.8\.8|aaaa/)
   })
 
   it('refuses more than one role per process', () => {
@@ -375,6 +405,7 @@ describe('loadConfig — production', () => {
     RUNNER_CORE_URL: 'https://core.internal:8083',
     RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
     RUNNER_CORE_CA_FILE: '/etc/raditi/core-ca.pem',
+    RUNNER_S3_ORIGIN: 'https://raditi-sessions.storage.yandexcloud.net',
     SANDBOX_RUNTIME: 'runsc',
     ...overrides,
   })
@@ -383,6 +414,7 @@ describe('loadConfig — production', () => {
     expect(loadConfig(runnerEnv()).runner).toMatchObject({
       coreUrl: new URL('https://core.internal:8083'),
       caFile: '/etc/raditi/core-ca.pem',
+      s3Origin: 'https://raditi-sessions.storage.yandexcloud.net',
       sandbox: { runtime: 'runsc' },
     })
     expect(problemsOf(runnerEnv({ SANDBOX_RUNTIME: 'runc' }))).toEqual([
@@ -415,6 +447,47 @@ describe('loadConfig — production', () => {
       ])
     // Outside production a local core is fine.
     expect(testRunnerUrl('http://127.0.0.1:8083')).toEqual(new URL('http://127.0.0.1:8083'))
+  })
+
+  it('pins presigned URLs to one https S3 origin, even when core is reached over http', () => {
+    const plainCore = { RUNNER_CORE_URL: 'http://10.10.0.10:8083', RUNNER_CORE_CA_FILE: undefined }
+    expect(
+      loadConfig(runnerEnv({ ...plainCore, RUNNER_S3_ORIGIN: 'https://s3.example.ru:443' })).runner
+        ?.s3Origin,
+    ).toBe('https://s3.example.ru')
+    expect(problemsOf(runnerEnv({ RUNNER_S3_ORIGIN: undefined }))).toEqual([
+      'RUNNER_S3_ORIGIN: required for the runner role in production',
+    ])
+    // The managed S3 is outside the private network: not even a private address goes plain.
+    for (const origin of ['http://10.10.0.20:8333', 'http://storage.yandexcloud.net'])
+      expect(problemsOf(runnerEnv({ ...plainCore, RUNNER_S3_ORIGIN: origin }))).toEqual([
+        'RUNNER_S3_ORIGIN: must use https in production',
+      ])
+    for (const origin of [
+      'https://storage.yandexcloud.net/raditi-sessions',
+      'https://key:secret@storage.yandexcloud.net',
+      'https://storage.yandexcloud.net/?X-Amz-Signature=secret',
+    ]) {
+      const problems = problemsOf(runnerEnv({ RUNNER_S3_ORIGIN: origin }))
+      expect(problems).toEqual([
+        'RUNNER_S3_ORIGIN: expected an origin (no path, credentials or query)',
+      ])
+      expect(problems.join('\n')).not.toContain('secret')
+    }
+    expect(problemsOf(runnerEnv({ RUNNER_S3_ORIGIN: 'ftp://storage.yandexcloud.net' }))).toEqual([
+      'RUNNER_S3_ORIGIN: must be an http(s):// URL',
+    ])
+    // Outside production the pin is optional and local S3 may be plain.
+    const dev = {
+      APP_ENV: 'development',
+      ORCHESTRATOR_ROLES: 'runner',
+      RUNNER_CORE_URL: 'http://127.0.0.1:8083',
+      RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
+    }
+    expect(loadConfig(dev).runner?.s3Origin).toBeNull()
+    expect(
+      loadConfig({ ...dev, RUNNER_S3_ORIGIN: 'http://192.168.5.2:8333' }).runner?.s3Origin,
+    ).toBe('http://192.168.5.2:8333')
   })
 
   it('refuses to start a runner that holds platform credentials, naming only the variables', () => {

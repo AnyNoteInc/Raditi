@@ -106,6 +106,9 @@ const ownEnvSchema = z.object({
   ),
   RUNNER_TOKEN_FILE: envVar(z.string().optional()),
   RUNNER_CORE_CA_FILE: envVar(z.string().optional()),
+  RUNNER_S3_ORIGIN: envVar(
+    z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional(),
+  ),
   RUNNER_MAX_TURNS: envVar(
     z.coerce
       .number()
@@ -181,10 +184,10 @@ export function loadConfig(env: Env): OrchestratorConfig {
     if (turnExecutor === 'runner') {
       if ([own.ORCHESTRATOR_PORT, ...(hasMcp ? [own.MCP_PORT] : [])].includes(own.RUNNER_API_PORT))
         problems.push('RUNNER_API_PORT: must differ from ORCHESTRATOR_PORT and MCP_PORT')
-      const tokens = parseRunnerTokens(own.RUNNER_TOKENS ?? '')
+      const tokens = parseRunnerTokens(own.RUNNER_TOKENS ?? '', production)
       problems.push(...tokens.problems.map((problem) => `RUNNER_TOKENS: ${problem}`))
       if (tokens.problems.length === 0 && tokens.hashes.size === 0)
-        problems.push('RUNNER_TOKENS: at least one runner token hash is required (id:sha256)')
+        problems.push('RUNNER_TOKENS: at least one runner token hash is required (id:sha256@ip)')
       runnerApi = { port: own.RUNNER_API_PORT, tokens: tokens.hashes }
     }
     // /metrics lives on the core port only.
@@ -193,24 +196,30 @@ export function loadConfig(env: Env): OrchestratorConfig {
   }
 
   let coreUrl: URL | undefined
+  let s3Origin: string | null = null
   if (hasRunner) {
     if (own.RUNNER_CORE_URL === undefined)
       problems.push('RUNNER_CORE_URL: required for the runner role')
     else {
       coreUrl = new URL(own.RUNNER_CORE_URL)
-      if (
-        coreUrl.username ||
-        coreUrl.password ||
-        coreUrl.pathname !== '/' ||
-        coreUrl.search ||
-        coreUrl.hash
-      )
+      if (!isOrigin(coreUrl))
         problems.push('RUNNER_CORE_URL: expected an origin (no path, credentials or query)')
       // Inside the perimeter plain http goes to the app VM's private address only (spec §19).
       if (production && coreUrl.protocol === 'http:' && !isPrivateAddress(coreUrl.hostname))
         problems.push(
           'RUNNER_CORE_URL: plain http only to a private IP address in production (spec §19)',
         )
+    }
+    if (own.RUNNER_S3_ORIGIN === undefined) {
+      if (production) problems.push('RUNNER_S3_ORIGIN: required for the runner role in production')
+    } else {
+      const s3 = new URL(own.RUNNER_S3_ORIGIN)
+      if (!isOrigin(s3))
+        problems.push('RUNNER_S3_ORIGIN: expected an origin (no path, credentials or query)')
+      // The cloud's S3 is outside the private network: presigned URLs go there over TLS only.
+      else if (production && s3.protocol !== 'https:')
+        problems.push('RUNNER_S3_ORIGIN: must use https in production')
+      s3Origin = s3.origin
     }
     if (own.RUNNER_TOKEN_FILE === undefined)
       problems.push(
@@ -272,12 +281,16 @@ export function loadConfig(env: Env): OrchestratorConfig {
           coreUrl: present(coreUrl),
           tokenFile: present(own.RUNNER_TOKEN_FILE),
           caFile: own.RUNNER_CORE_CA_FILE ?? null,
+          s3Origin,
           maxTurns: own.RUNNER_MAX_TURNS,
           sandbox: present(sandbox),
         }
       : null,
   }
 }
+
+const isOrigin = (url: URL) =>
+  !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash
 
 /** Every missing section was reported above, so this only narrows the type. */
 function present<T>(value: T | undefined): T {

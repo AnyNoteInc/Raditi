@@ -23,8 +23,9 @@ services:
   # The runner role (spec §8, §19): polls core's runner API and drives this VM's Docker. It opens
   # no port and holds no platform credentials: no PostgreSQL, Redis, Vault or S3 settings reach it,
   # and it refuses to start with them. The VM token (root, 0400) — and core's CA, only for an
-  # https core — come read-only from /etc/raditi on the VM. Started next to the watchdog:
-  # --profile runner.
+  # https core — come read-only from /etc/raditi on the VM. RUNNER_S3_ORIGIN pins presigned URLs
+  # to the platform's S3: a forged core cannot send a turn's snapshot anywhere else. Started next
+  # to the watchdog: --profile runner.
   runner:
     image: ${RUNNER_IMAGE:-}
     profiles: [runner]
@@ -47,6 +48,7 @@ services:
       RUNNER_CORE_URL: ${RUNNER_CORE_URL:-}
       RUNNER_TOKEN_FILE: /etc/raditi/runner-token
       RUNNER_CORE_CA_FILE: ${RUNNER_CORE_CA_FILE:-}
+      RUNNER_S3_ORIGIN: ${RUNNER_S3_ORIGIN:-}
       RUNNER_MAX_TURNS: '1'
       SANDBOX_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock

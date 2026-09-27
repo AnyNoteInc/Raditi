@@ -65,6 +65,8 @@ export interface SandboxRunnerDependencies {
   executor: TurnExecutor
   /** RUNNER_MAX_TURNS. */
   maxTurns: number
+  /** RUNNER_S3_ORIGIN: presigned URLs of any other origin are refused; unset outside production. */
+  s3Origin?: string
   /** Core retired this session (a newer one of this runner polls): restart under a new one. */
   onRetired?: () => void
   logger?: RunnerLogger
@@ -142,17 +144,19 @@ const passes = {
 } satisfies Record<string, RunnerFailureCode[]>
 
 /**
- * The URL names exactly this object of this turn: `sessions/<sid>/turns/<NNNN>/<part>`. Core
- * signs only such URLs; the runner refuses anything else before a byte moves.
+ * The URL names exactly this object of this turn: `sessions/<sid>/turns/<NNNN>/<part>`, at the
+ * platform's S3 when `origin` pins it. Core signs only such URLs; the runner refuses anything
+ * else before a byte moves, so even a forged core cannot send a turn's home elsewhere.
  */
 export function isTurnSnapshotUrl(
   url: string,
   sessionId: string,
   turn: number,
   part: SnapshotPartName,
+  origin?: string,
 ): boolean {
   const parsed = URL.parse(url)
-  if (!parsed) return false
+  if (!parsed || (origin !== undefined && parsed.origin !== origin)) return false
   let path: string
   try {
     path = decodeURIComponent(parsed.pathname)
@@ -497,7 +501,13 @@ export class SandboxRunner {
       if (
         manifest.sessionId !== labels.sessionId ||
         manifest.turn !== labels.turn - 1 ||
-        !isTurnSnapshotUrl(parts[name].url, manifest.sessionId, manifest.turn, name)
+        !isTurnSnapshotUrl(
+          parts[name].url,
+          manifest.sessionId,
+          manifest.turn,
+          name,
+          this.deps.s3Origin,
+        )
       )
         throw new DomainError(
           'SNAPSHOT_LOAD_FAILED',
@@ -686,7 +696,7 @@ export class SandboxRunner {
       if (
         command.base.sessionId !== sessionId ||
         command.base.turn !== turn ||
-        !isTurnSnapshotUrl(command.put.url, sessionId, turn, 'home')
+        !isTurnSnapshotUrl(command.put.url, sessionId, turn, 'home', this.deps.s3Origin)
       )
         throw new Error('Seal target is not this turn')
       const sealed = await held.execution.seal({

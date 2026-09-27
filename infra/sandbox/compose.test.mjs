@@ -17,9 +17,11 @@ test('the runner opens no port and gets no platform credentials, only its read-o
   const runner = service('runner')
   assert.doesNotMatch(runner, /^\s+(ports|expose):/m)
   assert.doesNotMatch(runner, /network_mode:\s*host/)
-  assert.doesNotMatch(runner, /DATABASE_URL|REDIS_URL|VAULT_|S3_/)
+  assert.doesNotMatch(runner, /DATABASE_URL|REDIS_URL|VAULT_|(?<!RUNNER_)S3_/)
   assert.match(runner, /^\s+- \/etc\/raditi:\/etc\/raditi:ro$/m)
   assert.match(runner, /RUNNER_TOKEN_FILE: \/etc\/raditi\/runner-token/)
+  // Presigned URLs only to the platform's S3.
+  assert.match(runner, /RUNNER_S3_ORIGIN: \$\{RUNNER_S3_ORIGIN:-\}/)
   assert.match(runner, /SANDBOX_RUNTIME: runsc/)
   assert.match(runner, /read_only: true/)
   assert.match(runner, /cap_drop: \[ALL\]/)
