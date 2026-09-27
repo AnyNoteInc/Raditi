@@ -1,8 +1,9 @@
 import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
-import { agentDriverIds } from '../ports/agent-driver.ts'
+import { agentDriverIds, nativeSessionIdSchema } from '../ports/agent-driver.ts'
 import { gitProviderKinds } from '../ports/git-provider.ts'
+import { DIGEST_PINNED_IMAGE } from '../ports/sandbox-provider.ts'
 import { sessionStateSchema, snapshotLimits } from './session-state.ts'
 
 /** First persisted format. Hashes and sizes describe stored ciphertext, not plaintext. */
@@ -21,12 +22,7 @@ export const snapshotIdSchema = z
   .max(64)
   .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/)
 const turnSchema = z.number().int().positive().max(999_999)
-const imageSchema = z
-  .string()
-  .max(512)
-  .regex(
-    /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+(?=\/))?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$/,
-  )
+const imageSchema = z.string().max(512).regex(DIGEST_PINNED_IMAGE)
 const versionSchema = z
   .string()
   .min(1)
@@ -48,44 +44,49 @@ export const snapshotReferenceSchema = z
   .strict()
 export type SnapshotReference = z.infer<typeof snapshotReferenceSchema>
 
+const snapshotGitSchema = z
+  .object({
+    provider: z.enum(gitProviderKinds),
+    branch: z
+      .string()
+      .min(1)
+      .max(255)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/)
+      .refine(
+        (s) => !s.includes('..') && !s.includes('//') && !s.endsWith('/') && !s.endsWith('.lock'),
+      ),
+    baseSha: gitSha,
+    headSha: gitSha,
+    /** Rebuild the exact trusted candidate from baseSha and the complete saved patch. */
+    publication: z
+      .object({
+        taskId: snapshotIdSchema,
+        committedAt: z.iso.datetime(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+
 export const snapshotMetadataSchema = snapshotReferenceSchema
   .extend({
-    driver: driverSchema
-      .extend({
-        nativeSessionId: z
-          .string()
-          .min(1)
-          .max(200)
-          .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
-          .optional(),
-      })
-      .strict(),
-    git: z
-      .object({
-        provider: z.enum(gitProviderKinds),
-        branch: z
-          .string()
-          .min(1)
-          .max(255)
-          .regex(/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/)
-          .refine(
-            (s) =>
-              !s.includes('..') && !s.includes('//') && !s.endsWith('/') && !s.endsWith('.lock'),
-          ),
-        baseSha: gitSha,
-        headSha: gitSha,
-        /** Rebuild the exact trusted candidate from baseSha and the complete saved patch. */
-        publication: z.object({
-          taskId: snapshotIdSchema,
-          committedAt: z.iso.datetime(),
-        }).strict().optional(),
-      })
-      .strict(),
+    driver: driverSchema.extend({ nativeSessionId: nativeSessionIdSchema.optional() }).strict(),
+    git: snapshotGitSchema,
   })
   .strict()
 export type SnapshotMetadata = z.infer<typeof snapshotMetadataSchema>
 
-export const snapshotPartSchema = z
+/**
+ * The part of the snapshot metadata known before the agent runs, checked by the same rules as
+ * the manifest. The supervisor validates it before taking the lease, so a turn cannot finish
+ * with a checkpoint that save() would refuse. `home`, the native session and headSha come later.
+ */
+export const snapshotPlanSchema = snapshotMetadataSchema
+  .omit({ home: true })
+  .extend({ git: snapshotGitSchema.omit({ headSha: true }) })
+  .strict()
+
+const snapshotPartSchema = z
   .object({
     name: z.enum(snapshotPartNames),
     key: z.string().min(1).max(256),
@@ -118,6 +119,10 @@ export const snapshotManifestSchema = snapshotMetadataSchema
         path: ['parts'],
         message: 'expected exactly three unique parts',
       })
+    }
+    // One data key per snapshot (spec §8): restore unwraps it with a single Vault call.
+    if (new Set(manifest.parts.map((p) => p.encryption.wrappedKey)).size !== 1) {
+      ctx.addIssue({ code: 'custom', path: ['parts'], message: 'expected one data key' })
     }
     const prefix = turnSnapshotPrefix(manifest.sessionId, manifest.turn)
     for (const [index, part] of manifest.parts.entries()) {

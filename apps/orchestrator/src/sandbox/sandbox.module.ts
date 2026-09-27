@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common'
-import { createDockerGatewayManager, createDockerSandboxProvider } from '@repo/sandbox-providers'
+import { createDockerSandboxProvider } from '@repo/sandbox-providers'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CORE_CONFIG, SANDBOX_PROVIDER } from '../infra/tokens.ts'
@@ -9,16 +9,7 @@ import { CORE_CONFIG, SANDBOX_PROVIDER } from '../infra/tokens.ts'
   providers: [
     {
       provide: SANDBOX_PROVIDER,
-      useFactory: (config: CoreConfig) =>
-        createDockerSandboxProvider(config.sandbox, {
-          ...(config.sandbox.gateway
-            ? {
-                gateway: createDockerGatewayManager(config.sandbox.gateway, {
-                  socketPath: config.sandbox.socketPath,
-                }),
-              }
-            : {}),
-        }),
+      useFactory: (config: CoreConfig) => createDockerSandboxProvider(config.sandbox),
       inject: [CORE_CONFIG],
     },
   ],

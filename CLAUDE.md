@@ -59,13 +59,15 @@ Node 26.10 (`nvm use`) и pnpm 12.6. `npm` и `npx` внутри репозит�
 ```
 apps/
   web/            Next.js: (about) и /terms (MDX из content/legal), (auth), (protected), onboarding, api/{auth,trpc,health,metrics,webhooks/yookassa}
-  orchestrator/   NestJS: config, roles (core, mcp, runner), health, metrics, queue (BullMQ), outbox relay, notifications, tasks, drivers, sandbox, mcp
+  orchestrator/   NestJS: config, roles (core, mcp, runner), health, metrics, queue (BullMQ), outbox relay, notifications, drivers,
+                  sandbox, sessions (снимки ходов), turns (супервизор хода, аренда, журнал, recovery), git-workspace (доверенная публикация), mcp
   e2e/            Playwright smoke
 packages/
-  domain/         ядро: порты, общие события и итог хода (zod), статусы §7, политика песочницы и путей диффа, реестр юридических документов, APP_ENV
+  domain/         ядро: порты, общие события и итог хода (zod), статусы §7, политика песочницы и путей диффа, реестр юридических документов, APP_ENV, withTimeout, разбор env (parseEnv, envVar, envProblems, Env)
   db/             Prisma: схема v1, миграции, сиды, клиент PrismaPg, outbox
   storage vault git-providers sandbox-providers agent-drivers site-adapters yookassa mail telegram — адаптеры
   auth notifications — сервисы; trpc — транспорт; ui — MUI-тема, формы входа, SmartCaptcha
+  observability — общие для приложений health, метрики, проверка bearer-токена, лог ошибок (только сервер)
   eslint-config typescript-config — общие конфиги
 infra/dev/        docker compose, конфиги LiteLLM, раннера, Prometheus и Grafana
 docs/             spec, business, план, исследования, лендинг
@@ -90,6 +92,7 @@ docs/             spec, business, план, исследования, ленди
 - **Порты и адаптеры.** `packages/domain` — ядро: `DomainError`, порты и zod-схемы общих событий и итога хода; бизнес-логика со временем переезжает сюда. domain не зависит ни от одного пакета репозитория.
 - Адаптеры реализуют порты и зависят только от domain: `db`, `storage`, `vault`, `git-providers`, `sandbox-providers`, `agent-drivers`, `site-adapters`, `yookassa`, `mail`, `telegram`. Реализации одного порта — в одном пакете: `git-providers` — gitea, github, gitlab; `sandbox-providers` — docker; `agent-drivers` — codex, kimi, qwen, opencode; `site-adapters` — wordpress, bitrix.
 - Выше адаптеров — сервисы (`auth`, `notifications`), транспорт (`trpc`) и `ui`. Приложения (`web`, `orchestrator`, `e2e`) — точка сборки: создают адаптеры и подставляют их в порты. Зависимости только вниз, пакеты не импортируют приложения; слои проверяет dependency-cruiser.
+- `observability` — сбоку от слоёв, только серверный код приложений: health, метрики, bearer-токен, `errorMessage` и `throttledLogger`. Зависит только от domain и `@prometheus-io/client`; импортируют его только приложения. Чистые помощники без ввода-вывода, нужные и доверенному коду (`withTimeout`, разбор env: `parseEnv`, `envVar`, `envProblems`, `Env`), — в domain.
 - Пакеты называются `@repo/<имя>`.
 - zod на всех границах: вебхуки, tRPC, итог хода агента, события драйверов.
 - Деньги в коде — Decimal (decimal.js), не `number`. В DTO и API — строки с фиксированным числом знаков (`toFixed`), их проверяют zod-схемы.

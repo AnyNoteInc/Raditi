@@ -3,8 +3,8 @@ import 'reflect-metadata'
 
 import { Logger } from '@nestjs/common'
 import { isDomainError } from '@repo/domain'
+import { errorMessage } from '@repo/observability'
 
-import { errorMessage } from './common/async.ts'
 import { ConfigError, loadConfig } from './config/config.ts'
 import { startRoles } from './roles.ts'
 

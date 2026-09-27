@@ -1,22 +1,10 @@
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-import { config as loadEnv } from 'dotenv'
 import { defineConfig } from 'prisma/config'
 
-/** The nearest .env walking up from packages/db (normally the repo root). */
-function findEnvFile(startDir: string): string | undefined {
-  for (let dir = startDir; ; dir = dirname(dir)) {
-    const candidate = join(dir, '.env')
-    if (existsSync(candidate)) return candidate
-    if (dirname(dir) === dir) return undefined
-  }
-}
-
-const envFile = findEnvFile(dirname(fileURLToPath(import.meta.url)))
-// Already exported variables (CI, containers) win over the file.
-if (envFile) loadEnv({ path: envFile, quiet: true })
+// The repo .env; already exported variables (CI, containers) win: loadEnvFile never overrides.
+const envFile = new URL('../../.env', import.meta.url)
+if (existsSync(envFile)) process.loadEnvFile(envFile)
 
 export default defineConfig({
   schema: './prisma/schema.prisma',

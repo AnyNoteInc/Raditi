@@ -60,6 +60,7 @@ const nextConfig: NextConfig = {
     '@repo/domain',
     '@repo/mail',
     '@repo/notifications',
+    '@repo/observability',
     '@repo/storage',
     '@repo/trpc',
     '@repo/ui',

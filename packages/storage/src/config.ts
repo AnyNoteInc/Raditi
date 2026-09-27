@@ -1,4 +1,4 @@
-import type { BucketKind } from '@repo/domain'
+import { envVar, parseEnv, type BucketKind, type Env } from '@repo/domain'
 import { z } from 'zod'
 
 export interface StorageConfig {
@@ -11,21 +11,18 @@ export interface StorageConfig {
   buckets: Record<BucketKind, string>
 }
 
-const blankToUndefined = (value: unknown): unknown =>
-  typeof value === 'string' && value.trim() === '' ? undefined : value
-
 const bucketName = z
   .string()
   .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, 'must be a valid S3 bucket name')
 
-const bucket = (fallback: string) => z.preprocess(blankToUndefined, bucketName.default(fallback))
+const bucket = (fallback: string) => envVar(bucketName.default(fallback))
 
 const envSchema = z.object({
-  S3_ENDPOINT: z.preprocess(blankToUndefined, z.url({ protocol: /^https?$/ })),
-  S3_REGION: z.preprocess(blankToUndefined, z.string().default('ru-central1')),
-  S3_ACCESS_KEY_ID: z.preprocess(blankToUndefined, z.string()),
-  S3_SECRET_ACCESS_KEY: z.preprocess(blankToUndefined, z.string()),
-  S3_FORCE_PATH_STYLE: z.preprocess(blankToUndefined, z.stringbool().default(false)),
+  S3_ENDPOINT: envVar(z.url({ protocol: /^https?$/ })),
+  S3_REGION: envVar(z.string().default('ru-central1')),
+  S3_ACCESS_KEY_ID: envVar(z.string()),
+  S3_SECRET_ACCESS_KEY: envVar(z.string()),
+  S3_FORCE_PATH_STYLE: envVar(z.stringbool().default(false)),
   S3_BUCKET_INBOX: bucket('raditi-inbox'),
   S3_BUCKET_SESSIONS: bucket('raditi-sessions'),
   S3_BUCKET_LOGS: bucket('raditi-logs'),
@@ -38,13 +35,8 @@ const envSchema = z.object({
  * Reads the S3 settings from an env-like object (usually process.env in the composition root).
  * The error lists variable names and reasons only, never values: two of them are credentials.
  */
-export function storageConfigFromEnv(env: Record<string, string | undefined>): StorageConfig {
-  const parsed = envSchema.safeParse(env)
-  if (!parsed.success) {
-    const problems = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
-    throw new Error(`[@repo/storage] invalid S3 configuration: ${problems.join('; ')}`)
-  }
-  const e = parsed.data
+export function storageConfigFromEnv(env: Env): StorageConfig {
+  const e = parseEnv('storage', envSchema, env)
   return {
     endpoint: e.S3_ENDPOINT,
     region: e.S3_REGION,

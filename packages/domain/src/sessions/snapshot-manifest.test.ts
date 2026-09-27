@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { sessionStateSchema } from './session-state.ts'
+import { publicationLimits } from '../git/publication.ts'
+import { sessionStateSchema, snapshotLimits } from './session-state.ts'
 import {
   snapshotManifestSchema,
   snapshotPartFiles,
   snapshotPartNames,
+  snapshotPlanSchema,
   turnSnapshotPrefix,
 } from './snapshot-manifest.ts'
 
@@ -59,6 +61,19 @@ describe('snapshot scope and compatibility metadata', () => {
     for (const value of [missing, duplicate, foreign, otherKey])
       expect(snapshotManifestSchema.safeParse(value).success).toBe(false)
   })
+  it.each(['thread.1', 'ses:1', 'a'.repeat(201)])(
+    'refuses native session id %j that drivers would not accept',
+    (nativeSessionId) => {
+      const value = manifest()
+      value.driver.nativeSessionId = nativeSessionId
+      expect(snapshotManifestSchema.safeParse(value).success).toBe(false)
+    },
+  )
+  it('requires one data key for every part', () => {
+    const value = manifest()
+    value.parts[2]!.encryption.wrappedKey = 'vault:v1:other'
+    expect(snapshotManifestSchema.safeParse(value).success).toBe(false)
+  })
   it('rejects mutable image tags and unsupported encryption', () => {
     expect(
       snapshotManifestSchema.safeParse({ ...manifest(), image: 'raditi:latest' }).success,
@@ -90,4 +105,39 @@ describe('session file allowlist', () => {
   ])('refuses path %j', (path) => {
     expect(sessionStateSchema.safeParse({ ...home, include: [path] }).success).toBe(false)
   })
+})
+
+describe('pre-turn snapshot plan', () => {
+  const plan = () => {
+    const { schemaVersion: _v, createdAt: _c, parts: _p, home: _h, ...rest } = manifest()
+    const { headSha: _head, ...git } = rest.git
+    return {
+      ...rest,
+      driver: { id: 'codex', version: '0.157.1' },
+      git: { ...git, publication: { taskId: 't1', committedAt: '2026-09-26T20:00:00.000Z' } },
+    }
+  }
+  it('accepts what the manifest would accept', () =>
+    expect(snapshotPlanSchema.safeParse(plan()).success).toBe(true))
+  it.each(['', 'bad version', '-1', 'v'.repeat(65)])(
+    'refuses driver version %j exactly as the manifest does',
+    (version) => {
+      const value = plan()
+      value.driver.version = version
+      expect(snapshotPlanSchema.safeParse(value).success).toBe(false)
+      const full = manifest()
+      full.driver.version = version
+      expect(snapshotManifestSchema.safeParse(full).success).toBe(false)
+    },
+  )
+  it('refuses unknown keys, including a premature headSha', () => {
+    expect(snapshotPlanSchema.safeParse({ ...plan(), extra: 1 }).success).toBe(false)
+    const value = plan()
+    expect(
+      snapshotPlanSchema.safeParse({ ...value, git: { ...value.git, headSha: 'c'.repeat(40) } })
+        .success,
+    ).toBe(false)
+  })
+  it('shares one patch limit between the snapshot and the publication', () =>
+    expect(publicationLimits.patchBytes).toBe(snapshotLimits.patchBytes))
 })

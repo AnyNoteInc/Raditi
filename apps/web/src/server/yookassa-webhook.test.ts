@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { handleYookassaWebhook, webhookSenderIp } from './yookassa-webhook'
+import { handleYookassaWebhook, MAX_BODY_BYTES, webhookSenderIp } from './yookassa-webhook'
 
 // Inside 185.71.76.0/27 from the published ЮKassa ranges.
 const YOOKASSA_IP = '185.71.76.10'
@@ -17,12 +17,13 @@ const notification = {
   },
 }
 
-const post = (body: string, ip?: string) =>
+const post = (body: string, ip?: string, headers: Record<string, string> = {}) =>
   new Request('http://localhost:3000/api/webhooks/yookassa', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       ...(ip === undefined ? {} : { 'x-forwarded-for': ip }),
+      ...headers,
     },
     body,
   })
@@ -55,6 +56,50 @@ describe('handleYookassaWebhook', () => {
       expect(res.status).toBe(400)
     }
     expect(onEvent).not.toHaveBeenCalled()
+  })
+
+  it('refuses a declared oversize body without reading it', async () => {
+    const onEvent = vi.fn()
+    const request = post(JSON.stringify(notification), YOOKASSA_IP, {
+      'content-length': String(MAX_BODY_BYTES + 1),
+    })
+
+    const res = await handleYookassaWebhook(request, { requireAllowlist: true, onEvent })
+
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'invalid notification' })
+    expect(request.bodyUsed).toBe(false)
+    expect(onEvent).not.toHaveBeenCalled()
+  })
+
+  it('counts the body in bytes, not in UTF-16 characters', async () => {
+    const onEvent = vi.fn()
+    // Cyrillic takes two bytes a letter: under the limit in characters, over it in bytes.
+    const body = JSON.stringify({
+      ...notification,
+      object: { ...notification.object, description: 'я'.repeat(MAX_BODY_BYTES / 2) },
+    })
+    expect(body.length).toBeLessThan(MAX_BODY_BYTES)
+    expect(Buffer.byteLength(body)).toBeGreaterThan(MAX_BODY_BYTES)
+
+    const res = await handleYookassaWebhook(post(body, YOOKASSA_IP), {
+      requireAllowlist: true,
+      onEvent,
+    })
+
+    expect(res.status).toBe(400)
+    expect(onEvent).not.toHaveBeenCalled()
+  })
+
+  it('checks the body itself when Content-Length is exact or not a number', async () => {
+    const body = JSON.stringify(notification)
+    for (const length of [String(Buffer.byteLength(body)), 'unknown']) {
+      const res = await handleYookassaWebhook(
+        post(body, YOOKASSA_IP, { 'content-length': length }),
+        { requireAllowlist: true },
+      )
+      expect(res.status).toBe(200)
+    }
   })
 
   it('accepts a valid notification from ЮKassa and hands it over', async () => {

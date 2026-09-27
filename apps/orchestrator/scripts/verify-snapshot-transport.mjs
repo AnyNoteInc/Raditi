@@ -1,17 +1,24 @@
-/* global Buffer, clearTimeout, console, process, setTimeout */
-// Local verification fixture; the production Docker provider belongs to P2.
-// Usage: pnpm --filter orchestrator verify:transport sha256:<local-image-id>
-// Requires a disposable Ubuntu image containing git, GNU tar and zstd.
+/* global Buffer, console, process */
+// Local verification on the real P2 exec path: Docker provider (runc, network none), the
+// runtime image, uid 10001 and a read-only rootfs; bytes move only through exec, never docker cp.
+// Usage: P2_SANDBOX_IMAGE=<repository@sha256:…> pnpm --filter orchestrator verify:transport
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
-import { spawn } from 'node:child_process'
-import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
+import { createHash, randomBytes } from 'node:crypto'
+
+import { createDockerSandboxProvider } from '@repo/sandbox-providers'
+
 import { SandboxSnapshotTransport } from '../dist/sessions/sandbox-snapshot.js'
 
-const image = process.argv[2]
-assert.match(image ?? '', /^sha256:[a-f0-9]{64}$/)
-const prefix = `raditi-p1-transport-${process.pid}-${Date.now()}`
+assert.notEqual(process.env.APP_ENV, 'production')
+const image = process.env.P2_SANDBOX_IMAGE
+assert(
+  image && /^[^\s]+@sha256:[a-f0-9]{64}$/.test(image),
+  'P2_SANDBOX_IMAGE must be a repository pinned by digest',
+)
+const provider = createDockerSandboxProvider({
+  runtime: 'runc',
+  socketPath: process.env.SANDBOX_DOCKER_SOCKET ?? '/var/run/docker.sock',
+})
 const created = []
 const metrics = {
   commands: 0,
@@ -22,117 +29,33 @@ const metrics = {
 }
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
-async function docker(argv, stdin) {
-  const child = spawn('docker', argv, { stdio: ['pipe', 'pipe', 'pipe'] })
-  const stdout = []
-  const stderr = []
-  child.stdout.on('data', (data) => stdout.push(data))
-  child.stderr.on('data', (data) => stderr.push(data))
-  const closed = new Promise((resolve, reject) => {
-    child.once('error', reject)
-    child.once('close', (code) => resolve(code))
-  })
-  child.stdin.end(stdin)
-  const code = await closed
-  assert.equal(code, 0, `docker ${argv[0]} failed: ${Buffer.concat(stderr).toString()}`)
-  return Buffer.concat(stdout)
-}
-
-// Implements only the Sandbox.exec surface consumed by this transport. Every byte,
-// including repository seeding, travels through exec stdin/stdout, never docker cp.
-function execSandbox(container) {
+// Counts commands and bytes around the provider's own exec; it does not change the transfer.
+function counted(sandbox) {
   return {
-    id: container,
+    id: sandbox.id,
+    labels: sandbox.labels,
     async exec(spec) {
       metrics.commands += 1
       if (spec.argv[0] === 'tar' && spec.argv.includes('--extract')) metrics.tarExtractCommands += 1
-      const args = ['exec', '-i']
-      if (spec.cwd) args.push('--workdir', spec.cwd)
-      for (const [key, value] of Object.entries(spec.env ?? {}))
-        args.push('--env', `${key}=${value}`)
-      args.push(container, ...spec.argv)
-      const child = spawn('docker', args, { stdio: ['pipe', 'pipe', 'pipe'] })
-      const chunks = []
-      const errorChunks = []
-      const offsets = { stdout: 0, stderr: 0 }
-      let done = false
-      let wake
-      let spawnError
-      let reason = 'exited'
-      let killPromise
-      const notify = () => {
-        wake?.()
-        wake = undefined
-      }
-      for (const stream of ['stdout', 'stderr']) {
-        child[stream].on('data', (bytes) => {
-          const data = Buffer.from(bytes)
-          chunks.push({ stream, offset: offsets[stream], data })
-          offsets[stream] += data.byteLength
-          metrics[`${stream}Bytes`] += data.byteLength
-          if (stream === 'stderr') errorChunks.push(data)
-          notify()
-        })
-      }
-      const stop = (why) => {
-        if (done) return Promise.resolve()
-        reason = why
-        // Killing the entire owned disposable container also stops remote exec;
-        // this intentionally does not claim production ExecHandle kill semantics.
-        killPromise ??= docker(['kill', container]).catch(() => {})
-        child.kill('SIGKILL')
-        return killPromise
-      }
-      const abort = () => {
-        void stop('cancelled')
-      }
-      const timer = setTimeout(() => {
-        void stop('timeout')
-      }, spec.timeoutMs)
-      spec.signal?.addEventListener('abort', abort, { once: true })
-      const wait = new Promise((resolve) => {
-        child.once('error', (error) => {
-          spawnError = error
-        })
-        child.once('close', (code) => {
-          if (code !== 0 && spec.argv[0] !== 'test') {
-            console.error(
-              JSON.stringify({
-                command: spec.argv,
-                code,
-                stderr: Buffer.concat(errorChunks).toString(),
-              }),
-            )
+      const stdin =
+        spec.stdin &&
+        (async function* () {
+          for await (const bytes of spec.stdin) {
+            metrics.stdinBytes += bytes.byteLength
+            yield bytes
           }
-          done = true
-          clearTimeout(timer)
-          spec.signal?.removeEventListener('abort', abort)
-          notify()
-          resolve({ code, reason: spawnError ? 'lost' : reason })
-        })
-      })
-      async function* stdin() {
-        for await (const bytes of spec.stdin ?? []) {
-          metrics.stdinBytes += bytes.byteLength
-          yield bytes
-        }
-      }
-      void pipeline(Readable.from(stdin()), child.stdin).catch(() => {})
-      if (spec.signal?.aborted) abort()
+        })()
+      const handle = await sandbox.exec({ ...spec, stdin })
       return {
-        id: String(child.pid),
+        id: handle.id,
         async *output() {
-          while (!done || chunks.length > 0) {
-            if (chunks.length > 0) yield chunks.shift()
-            else
-              await new Promise((resolve) => {
-                wake = resolve
-              })
+          for await (const chunk of handle.output()) {
+            metrics[`${chunk.stream}Bytes`] += chunk.data.byteLength
+            yield chunk
           }
-          if (spawnError) throw spawnError
         },
-        wait: () => wait,
-        kill: () => stop('cancelled'),
+        wait: () => handle.wait(),
+        kill: (signal) => handle.kill(signal),
       }
     },
   }
@@ -175,45 +98,27 @@ async function absent(sandbox, path) {
   assert.equal((await run(sandbox, ['test', '-e', path], { codes: [0, 1] })).code, 1, path)
 }
 async function create(suffix) {
-  const name = `${prefix}-${suffix}`
-  const id = (
-    await docker([
-      'create',
-      '--name',
-      name,
-      '--network',
-      'none',
-      '--read-only',
-      '--user',
-      '10001:10001',
-      '--cap-drop',
-      'ALL',
-      '--security-opt',
-      'no-new-privileges',
-      '--pids-limit',
-      '64',
-      '--memory',
-      '256m',
-      '--cpus',
-      '1',
-      '--tmpfs',
-      '/workspace:rw,nosuid,nodev,uid=10001,gid=10001,mode=0700,size=32m',
-      '--tmpfs',
-      '/agent-home:rw,nosuid,nodev,uid=10001,gid=10001,mode=0700,size=16m',
-      '--tmpfs',
-      '/tmp:rw,nosuid,nodev,mode=1777,size=16m',
-      '--env',
-      'HOME=/agent-home',
-      image,
-      'sleep',
-      'infinity',
-    ])
-  )
-    .toString()
-    .trim()
-  created.push(id)
-  await docker(['start', id])
-  return execSandbox(id)
+  const unique = randomBytes(8).toString('hex')
+  const sandbox = await provider.create({
+    image,
+    labels: {
+      workspaceId: 'transport-verify',
+      siteId: unique,
+      taskId: unique,
+      sessionId: `${suffix}-${unique}`,
+      turn: 1,
+      leaseEpoch: 1,
+    },
+    runtime: 'runc',
+    resources: { cpu: 1, memoryMiB: 1024, pids: 128 },
+    user: { uid: 10001, gid: 10001 },
+    env: {},
+    secrets: [],
+    network: { mode: 'none' },
+    hardTimeoutMs: 300_000,
+  })
+  created.push(sandbox)
+  return counted(sandbox)
 }
 
 try {
@@ -225,6 +130,10 @@ try {
   const changedBinary = Buffer.from(baseBinary)
   changedBinary.fill(0xff, 101, 239)
   const executable = Buffer.from('#!/bin/sh\nprintf synthetic\\n\n')
+  for (const sandbox of [a, b]) {
+    assert.equal((await run(sandbox, ['id', '-u'])).bytes.toString().trim(), '10001')
+    assert.notEqual((await run(sandbox, ['touch', '/rootfs-probe'], { codes: [1] })).code, 0)
+  }
   await run(a, ['mkdir', '-p', repository])
   await git(a, 'init', '-b', 'main')
   await git(a, 'config', 'user.name', 'Synthetic Transport Fixture')
@@ -267,6 +176,8 @@ try {
 
   const state = { root: home, include: ['sessions'], exclude: [] }
   const transport = new SandboxSnapshotTransport()
+  // As in a turn: agent processes are stopped before capture.
+  await created[0].quiesce()
   const parts = await transport.capture(a, state, head)
   const expectedPatch = (
     await git(
@@ -303,7 +214,7 @@ try {
   // A sentinel differing from archive contents makes non-overwrite observable.
   const sentinel = Buffer.from('existing session must remain intact\n')
   await write(b, `${home}/${sessionName}`, sentinel)
-  await assert.rejects(transport.restore(b, state, parts), { code: 'BAD_REQUEST' })
+  await assert.rejects(transport.restore(b, state, parts), { code: 'SANDBOX_COMMAND_FAILED' })
   assert.deepEqual(await read(b, `${home}/${sessionName}`), sentinel)
   for (const [name, bytes] of untracked)
     assert.deepEqual(await read(b, `${repository}/${name}`), bytes)
@@ -313,7 +224,7 @@ try {
   // An absolute destination symlink must be refused before any tar extraction.
   await run(b, ['ln', '-s', '/workspace/repo', `${home}/sessions/absolute-link`])
   const extractCount = metrics.tarExtractCommands
-  await assert.rejects(transport.restore(b, state, parts), { code: 'BAD_REQUEST' })
+  await assert.rejects(transport.restore(b, state, parts), { code: 'SANDBOX_COMMAND_FAILED' })
   assert.equal(metrics.tarExtractCommands, extractCount)
   assert.deepEqual(await read(b, `${home}/${sessionName}`), sessionBytes)
   await run(b, ['rm', '--', `${home}/sessions/absolute-link`])
@@ -362,6 +273,7 @@ try {
           ]),
         ),
         verified: [
+          'P2 Docker provider exec path: runc, network none, uid 10001, read-only rootfs',
           'session exact bytes',
           'three untracked files including binary, empty and UTF-8 paths',
           'credentials/config omitted by allowlist',
@@ -381,10 +293,15 @@ try {
     ),
   )
 } finally {
-  const cleanup = await Promise.allSettled(created.map((id) => docker(['rm', '-f', id])))
+  const cleanup = await Promise.allSettled(
+    created.map(async (sandbox) => {
+      await sandbox.destroy('completed')
+      assert.equal(await provider.get(sandbox.id), null)
+    }),
+  )
   assert(
     cleanup.every((result) => result.status === 'fulfilled'),
-    `Could not remove all disposable containers: ${created.join(', ')}`,
+    `Could not remove all disposable containers: ${created.map((s) => s.id).join(', ')}`,
   )
   console.log(`Cleaned ${created.length} disposable containers`)
 }

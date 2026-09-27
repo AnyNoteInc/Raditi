@@ -2,77 +2,19 @@ import { Buffer } from 'node:buffer'
 
 import type { PrismaClient } from '@repo/db'
 import {
-  agentEventSchema,
   badRequest,
-  conflict,
-  turnPhases,
-  turnResultSchema,
+  leaseLost,
+  turnEvidenceSchema,
   type TurnEvidence,
   type TurnJournal,
 } from '@repo/domain'
-import { z } from 'zod'
-
-const id = z.uuid()
-const textId = z
-  .string()
-  .min(1)
-  .max(200)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
-const evidenceSchema = z
-  .object({
-    fence: z.object({
-      siteId: id,
-      taskId: id,
-      operation: z.enum(['turn', 'deploy', 'revert']),
-      epoch: z.number().int().positive(),
-    }),
-    sessionId: textId,
-    turn: z.number().int().positive().max(999_999),
-    sequence: z.number().int().positive().max(1_000_000),
-    phase: z.enum(turnPhases),
-    containerId: textId.optional(),
-    execId: textId.optional(),
-    cursor: z
-      .object({ stdout: z.number().int().nonnegative(), stderr: z.number().int().nonnegative() })
-      .optional(),
-    events: z.array(agentEventSchema).max(10_000).optional(),
-    snapshotPrefix: z
-      .string()
-      .max(256)
-      .regex(/^sessions\/[A-Za-z0-9_-]+\/turns\/[0-9]+\/$/)
-      .optional(),
-    candidateHeadSha: z
-      .string()
-      .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
-      .optional(),
-    baseSha: z
-      .string()
-      .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
-      .optional(),
-    committedAt: z.iso.datetime().optional(),
-    recoveredFromEpoch: z.number().int().positive().optional(),
-    result: turnResultSchema.optional(),
-    reason: z
-      .enum([
-        'cancelled',
-        'timeout',
-        'lease_lost',
-        'run_failed',
-        'snapshot_ambiguous',
-        'publication_ambiguous',
-        'destroy_failed',
-        'journal_failed',
-      ])
-      .optional(),
-  })
-  .strict()
 
 /** Operational evidence only. It does not transition tasks, bill customers or dispatch jobs. */
 export class TaskEventTurnJournal implements TurnJournal {
   constructor(private readonly db: Pick<PrismaClient, '$queryRaw'>) {}
 
   async record(input: TurnEvidence): Promise<void> {
-    const evidence = evidenceSchema.parse(input)
+    const evidence = turnEvidenceSchema.parse(input)
     const payload = JSON.stringify(evidence)
     if (Buffer.byteLength(payload) > 1024 * 1024)
       throw badRequest('Turn evidence exceeds its limit')
@@ -96,6 +38,7 @@ export class TaskEventTurnJournal implements TurnJournal {
       WHERE task.id = ${fence.taskId}::uuid AND task.site_id = ${fence.siteId}::uuid
         AND (${recovery} OR (NOT lease.held_for_operator AND lease.expires_at > clock_timestamp()))
       RETURNING id`
-    if (rows.length !== 1) throw conflict('Turn evidence no longer owns its site lease')
+    // Fence lost, not an outage: a failed statement rejects with its own database error.
+    if (rows.length !== 1) throw leaseLost('Turn evidence no longer owns its site lease')
   }
 }

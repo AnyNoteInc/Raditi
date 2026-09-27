@@ -1,5 +1,7 @@
 // Ports and adapters (spec §6, CLAUDE.md «Как писать код»). Dependencies point inward:
 //   apps (composition) → trpc (transport) → services → adapters → domain (core, ports)
+// observability sits beside the layers: server-only helpers of the apps (health, metrics,
+// bearer token, throttled error log) on domain and @prometheus-io/client; only apps import it.
 // `$1` in `pathNot` back-references the package captured in `from.path`, so a package may
 // import itself but not its peers.
 
@@ -8,7 +10,7 @@ const ADAPTERS =
   'db|storage|vault|git-providers|sandbox-providers|agent-drivers|site-adapters|yookassa|mail|telegram'
 const SERVICES = 'auth|notifications'
 // Every package must belong to a layer; an unclassified one would bypass all rules.
-const KNOWN = `^packages/(domain|${ADAPTERS}|${SERVICES}|trpc|ui|eslint-config|typescript-config)/`
+const KNOWN = `^packages/(domain|observability|${ADAPTERS}|${SERVICES}|trpc|ui|eslint-config|typescript-config)/`
 const npm = (names) => [`node_modules/\\.pnpm/(${names})@`, `node_modules/(${names})/`]
 const CORE_DEPS = 'zod|decimal\\.js'
 
@@ -64,6 +66,28 @@ module.exports = {
       severity: 'error',
       from: { path: '^packages/domain/src/.*\\.test\\.ts$' },
       to: { dependencyTypesNot: ['local'], pathNot: npm(`${CORE_DEPS}|vitest`) },
+    },
+    {
+      name: 'observability-imports-only-domain',
+      comment:
+        'packages/observability (health, metrics, error log of the server apps) builds on domain, Node built-ins and the Prometheus client only.',
+      severity: 'error',
+      from: { path: '^packages/observability/' },
+      to: {
+        dependencyTypesNot: ['core'],
+        pathNot: [
+          '^packages/(domain|observability)/',
+          TOOLING,
+          ...npm('@prometheus-io/client|vitest'),
+        ],
+      },
+    },
+    {
+      name: 'observability-only-in-apps',
+      comment: 'Server helpers for the apps: no library package imports packages/observability.',
+      severity: 'error',
+      from: { path: '^packages/([^/]+)/', pathNot: '^packages/observability/' },
+      to: { path: '^packages/observability/' },
     },
     {
       name: 'adapters-depend-on-domain-only',

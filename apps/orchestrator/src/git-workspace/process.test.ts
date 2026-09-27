@@ -99,7 +99,7 @@ describe('trusted native command supervision', () => {
     expect(result).toEqual({ code: 0, stdout: input })
   })
 
-  it('fails closed with a generic error when output exceeds its bound', async () => {
+  it('fails closed with its own generic error when output exceeds its bound', async () => {
     await expect(
       runProcess(process.execPath, ['-e', 'process.stdout.write("synthetic-private-error")'], {
         cwd: tmpdir(),
@@ -107,9 +107,15 @@ describe('trusted native command supervision', () => {
         maxBytes: 2,
       }),
     ).rejects.toMatchObject({
-      code: 'GIT_OPERATION_FAILED',
-      message: 'Trusted repository command failed or exceeded its limits',
+      code: 'PROCESS_OUTPUT_LIMIT',
+      message: 'Trusted command output exceeded its limit',
     })
+  })
+
+  it('keeps a generic infrastructure error for a failing command', async () => {
+    await expect(
+      runProcess('/nonexistent/raditi-binary', [], { cwd: tmpdir(), env }),
+    ).rejects.toMatchObject({ code: 'GIT_OPERATION_FAILED' })
   })
 
   it('rejects deadlines outside the fixed native-command budget before spawning', async () => {

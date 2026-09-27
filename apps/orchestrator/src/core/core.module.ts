@@ -9,7 +9,6 @@ import { OutboxModule } from '../outbox/outbox.module.ts'
 import { QueueModule } from '../queue/queue.module.ts'
 import { SandboxModule } from '../sandbox/sandbox.module.ts'
 import { SessionsModule } from '../sessions/sessions.module.ts'
-import { TasksModule } from '../tasks/tasks.module.ts'
 import { CoreConfigModule, type CoreModuleOptions } from './core-config.module.ts'
 
 /**
@@ -29,7 +28,6 @@ export class CoreModule {
         MetricsModule,
         OutboxModule,
         NotificationsModule,
-        TasksModule,
         DriversModule,
         SandboxModule,
         SessionsModule,

@@ -36,6 +36,9 @@ const MESSAGE_BY_TRPC_CODE: Readonly<Record<TRPC_ERROR_CODE_KEY, string>> = {
   GATEWAY_TIMEOUT: SERVICE_DOWN_MESSAGE,
 }
 
+const SPLIT_TASK = 'Попробуйте разбить задачу на несколько небольших'
+const SAVE_FAILED = 'Не удалось сохранить работу агента'
+
 /**
  * Client text per DomainError code. Domain messages are English and meant for the logs;
  * a code the user may meet gets its Russian text here, any other shows the text of its
@@ -48,6 +51,30 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   CONFLICT: UNAVAILABLE_MESSAGE,
   NOT_IMPLEMENTED: 'Эта возможность ещё в разработке',
   [CONSENT_REQUIRED]: CONSENT_REQUIRED_MESSAGE,
+  // Size and count limits of a turn (spec §8): what the client can do about them.
+  PUBLICATION_TOO_LARGE: `Изменения получились слишком большими, и мы не можем их сохранить. ${SPLIT_TASK}`,
+  SNAPSHOT_TOO_LARGE: `Работа агента заняла слишком много места, и мы не можем её сохранить. ${SPLIT_TASK}`,
+  REPOSITORY_TOO_LARGE:
+    'Файлы сайта занимают слишком много места, и агент пока не может с ними работать',
+  // Turn and snapshot failures (P1, P2).
+  SNAPSHOT_NOT_WRITTEN: `${SAVE_FAILED}. Попробуйте ещё раз`,
+  SNAPSHOT_SAVE_FAILED: `${SAVE_FAILED}. Мы проверим, что случилось, а до тех пор новые задачи для этого сайта недоступны`,
+  SNAPSHOT_LOAD_FAILED:
+    'Не удалось восстановить прошлую работу агента. Попробуйте ещё раз немного позже',
+  TURN_INTERRUPTED: 'Работа агента остановлена. Если вы её не отменяли, попробуйте ещё раз',
+  TURN_EXEC_FAILED: 'Агент не смог закончить работу. Попробуйте ещё раз',
+  TURN_OUTPUT_REJECTED: 'Не удалось принять результат работы агента. Попробуйте ещё раз',
+  TURN_OUTPUT_TOO_LARGE: `Агент написал слишком много, и мы остановили его работу. ${SPLIT_TASK}`,
+  DRIVER_PREPARE_INVALID:
+    'Не удалось подготовить агента к работе. Попробуйте ещё раз немного позже',
+  LEASE_LOST: 'Работа агента прервана. Попробуйте ещё раз',
+  SITE_BUSY: 'С сайтом сейчас идёт другая работа. Попробуйте ещё раз, когда она закончится',
+  SITE_HELD:
+    'Нужно проверить, что случилось с прошлой работой на сайте. Мы напишем, когда можно продолжить',
+  SANDBOX_COMMAND_FAILED:
+    'Агент не смог выполнить работу из-за технического сбоя. Попробуйте ещё раз немного позже',
+  GIT_OPERATION_FAILED:
+    'Не удалось получить или сохранить файлы сайта. Попробуйте ещё раз немного позже',
 }
 
 const CODE_BY_HTTP_STATUS: Readonly<Record<number, TRPC_ERROR_CODE_KEY>> = {
@@ -91,20 +118,6 @@ function textFor(code: TRPC_ERROR_CODE_KEY, domainCode: string | null): string {
 export function toTRPCError(error: DomainError): TRPCError {
   const code = trpcCodeForStatus(error.httpStatus)
   return new TRPCError({ code, message: textFor(code, error.code), cause: error })
-}
-
-/**
- * Runs domain code and turns a DomainError into the matching tRPC error. Procedures get
- * the same mapping from the base middleware; use this where a DomainError must become a
- * TRPCError before it leaves a helper.
- */
-export async function mapDomain<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn()
-  } catch (error) {
-    if (isDomainError(error)) throw toTRPCError(error)
-    throw error
-  }
 }
 
 /**

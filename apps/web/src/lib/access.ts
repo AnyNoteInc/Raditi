@@ -1,10 +1,10 @@
 import 'server-only'
 
 import type { Session } from '@repo/auth'
+import { errorMessage } from '@repo/observability'
 import { redirect, unstable_rethrow } from 'next/navigation'
 import { cache } from 'react'
 
-import { describeError } from '@/server/errors'
 import { getServerCaller } from '@/trpc/server'
 
 import { REQUEST_PATH_HEADER } from './request-path'
@@ -17,7 +17,7 @@ export const UNAVAILABLE = 'unavailable' as const
 function logFailure(what: string, error: unknown) {
   // Next's own control flow (dynamic rendering bailout, redirect) is not a failure.
   unstable_rethrow(error)
-  console.error(`[web] ${what} failed: ${describeError(error)}`)
+  console.error(`[web] ${what} failed: ${errorMessage(error)}`)
 }
 
 /**

@@ -1,7 +1,15 @@
-import { agentDriverConfigSchema, type AgentDriverConfig } from '@repo/agent-drivers'
+import { agentDriverConfigFromEnv, type AgentDriverConfig } from '@repo/agent-drivers'
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
-import { appEnvSchema, isProduction, type AppEnv } from '@repo/domain'
+import {
+  appEnvSchema,
+  envProblems,
+  envVar,
+  isProduction,
+  type AppEnv,
+  type Env,
+} from '@repo/domain'
 import { mailerConfigFromEnv, type MailerConfig } from '@repo/mail'
+import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
 import { sandboxConfigFromEnv, type SandboxConfig } from '@repo/sandbox-providers'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
@@ -11,14 +19,10 @@ import { z } from 'zod'
 export const orchestratorRoles = ['core', 'mcp', 'runner'] as const
 export type OrchestratorRole = (typeof orchestratorRoles)[number]
 
-/** METRICS_TOKEN from .env.example: fine locally, refused in production. */
-export const DEV_METRICS_TOKEN = 'raditi-dev-metrics'
 export const DEFAULT_CORE_PORT = 8081
 export const DEFAULT_MCP_PORT = 8082
 /** Locally both HTTP roles share one process (spec §6). */
 const DEFAULT_DEV_ROLES: OrchestratorRole[] = ['core', 'mcp']
-
-export type Env = Record<string, string | undefined>
 
 /** Everything the core role needs. Holds credentials: never log it. */
 export interface CoreConfig {
@@ -61,20 +65,17 @@ export class ConfigError extends Error {
   }
 }
 
-const blankToUndefined = (value: unknown): unknown =>
-  typeof value === 'string' && value.trim() === '' ? undefined : value
-
 const port = (fallback: number) =>
-  z.preprocess(blankToUndefined, z.coerce.number().int().min(1).max(65_535).default(fallback))
+  envVar(z.coerce.number().int().min(1).max(65_535).default(fallback))
 
 const ownEnvSchema = z.object({
   // Required, never defaulted: a missing APP_ENV must not switch the production checks off.
-  APP_ENV: z.preprocess(blankToUndefined, appEnvSchema),
-  ORCHESTRATOR_ROLES: z.preprocess(blankToUndefined, z.string().optional()),
+  APP_ENV: envVar(appEnvSchema),
+  ORCHESTRATOR_ROLES: envVar(z.string().optional()),
   ORCHESTRATOR_PORT: port(DEFAULT_CORE_PORT),
   MCP_PORT: port(DEFAULT_MCP_PORT),
-  REDIS_URL: z.preprocess(blankToUndefined, z.url({ protocol: /^rediss?$/ }).optional()),
-  METRICS_TOKEN: z.preprocess(blankToUndefined, z.string().optional()),
+  REDIS_URL: envVar(z.url({ protocol: /^rediss?$/, error: 'must be a redis:// URL' }).optional()),
+  METRICS_TOKEN: envVar(z.string().optional()),
 })
 
 function isRole(name: string): name is OrchestratorRole {
@@ -105,9 +106,7 @@ function parseRoles(raw: string | undefined, production: boolean, problems: stri
 /** Builds the configuration once at startup; throws ConfigError listing every problem. */
 export function loadConfig(env: Env): OrchestratorConfig {
   const parsed = ownEnvSchema.safeParse(env)
-  if (!parsed.success) {
-    throw new ConfigError(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`))
-  }
+  if (!parsed.success) throw new ConfigError(envProblems(parsed.error))
   const own = parsed.data
   const appEnv = own.APP_ENV
   const production = isProduction(appEnv)
@@ -122,15 +121,11 @@ export function loadConfig(env: Env): OrchestratorConfig {
     )
   }
 
-  // /metrics lives on the core port only.
-  const metricsToken = own.METRICS_TOKEN ?? (production ? undefined : DEV_METRICS_TOKEN)
   if (hasCore) {
     if (own.REDIS_URL === undefined) problems.push('REDIS_URL: required for the core role')
-    if (production && (metricsToken === undefined || metricsToken === DEV_METRICS_TOKEN)) {
-      problems.push(
-        'METRICS_TOKEN: set a unique token in production (the dev placeholder is refused)',
-      )
-    }
+    // /metrics lives on the core port only.
+    const tokenProblem = metricsTokenProblem(own.METRICS_TOKEN, appEnv)
+    if (tokenProblem) problems.push(`METRICS_TOKEN: ${tokenProblem}`)
   }
 
   const section = <T>(read: () => T): T | undefined => {
@@ -146,9 +141,7 @@ export function loadConfig(env: Env): OrchestratorConfig {
   const storage = hasCore ? section(() => storageConfigFromEnv(env)) : undefined
   const sandbox = hasCore ? section(() => sandboxConfigFromEnv(env)) : undefined
   const mailer = hasCore ? section(() => mailerConfigFromEnv(env)) : undefined
-  const agentDrivers = sandbox
-    ? section(() => agentDriverConfigSchema.parse({ imagePrefix: sandbox.imagePrefix }))
-    : undefined
+  const agentDrivers = hasCore ? section(() => agentDriverConfigFromEnv(env)) : undefined
 
   if (problems.length > 0) throw new ConfigError(problems)
 
@@ -160,7 +153,7 @@ export function loadConfig(env: Env): OrchestratorConfig {
           appEnv,
           port: own.ORCHESTRATOR_PORT,
           redisUrl: present(own.REDIS_URL),
-          metricsToken: present(metricsToken),
+          metricsToken: own.METRICS_TOKEN ?? DEV_METRICS_TOKEN,
           db: present(db),
           storage: present(storage),
           vault: present(vault),

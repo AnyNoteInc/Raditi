@@ -5,18 +5,31 @@ import {
   assertSandboxSpec,
   badRequest,
   conflict,
+  containsCredential,
   DomainError,
-  SANDBOX_SECRETS_DIR,
+  driverPrepareInvalid,
+  isDomainError,
+  isSnapshotCredential,
+  leaseLost,
+  preparedRunExposesSecret,
+  preparedRunSchema,
+  publicationMetadataSchema,
   SANDBOX_WORKDIR,
+  siteBusy,
+  siteHeld,
+  snapshotPlanSchema,
   snapshotReferenceSchema,
+  snapshotSaveWroteNothing,
+  TURN_FINALIZE_RESERVE_MS,
   TURN_PUBLICATION_GRACE_MS,
+  turnCredentials,
   turnResultSchema,
   turnSnapshotPrefix,
+  withTimeout,
   type AgentDriver,
   type PreparedRun,
   type RunContext,
   type Sandbox,
-  type SandboxFile,
   type SandboxProvider,
   type SandboxSpec,
   type SiteLeaseStore,
@@ -35,7 +48,7 @@ import {
 
 import type { SandboxSnapshotTransport, SnapshotArchives } from '../sessions/sandbox-snapshot.ts'
 import type { LoadedSnapshot } from '../sessions/snapshot.service.ts'
-import { LeaseGuard } from './lease-guard.ts'
+import { holdForRecovery, LeaseGuard } from './lease-guard.ts'
 import { readTurnOutput } from './turn-output.ts'
 
 export interface TurnRequest {
@@ -51,7 +64,12 @@ export interface TurnRequest {
 
 export interface TurnSnapshotStore {
   load(reference: SnapshotReference): Promise<LoadedSnapshot>
-  save(metadata: SnapshotMetadata, archives: SnapshotArchives): Promise<SnapshotManifest>
+  /** An aborted `signal` must stop any S3 write that has not started yet (see SnapshotService). */
+  save(
+    metadata: SnapshotMetadata,
+    archives: SnapshotArchives,
+    signal: AbortSignal,
+  ): Promise<SnapshotManifest>
 }
 
 export interface TurnSupervisorDependencies {
@@ -71,33 +89,26 @@ export interface CompletedTurn {
 
 /** PoC execution only: task billing, queue dispatch and product task transitions belong to P12. */
 export class TurnSupervisor {
-  constructor(
-    private readonly deps: TurnSupervisorDependencies,
-    private readonly leaseTtlMs = 60_000,
-  ) {
-    if (!Number.isSafeInteger(leaseTtlMs) || leaseTtlMs < 1_000 || leaseTtlMs > 30 * 60_000)
-      throw badRequest('Invalid turn lease duration')
-  }
+  constructor(private readonly deps: TurnSupervisorDependencies) {}
 
   async run(request: TurnRequest, signal?: AbortSignal): Promise<CompletedTurn> {
     this.validate(request)
     const labels = request.sandbox.labels
-    const leaseTtlMs = Math.max(
-      this.leaseTtlMs,
-      request.sandbox.hardTimeoutMs + TURN_PUBLICATION_GRACE_MS,
-    )
     const acquiredAt = performance.now()
     const lease = await this.deps.leases.acquire({
       siteId: labels.siteId,
       taskId: labels.taskId,
       operation: 'turn',
-      ttlMs: leaseTtlMs,
+      ttlMs: request.sandbox.hardTimeoutMs + TURN_PUBLICATION_GRACE_MS,
     })
-    if (!lease) throw conflict('The site is already running an operation or requires recovery')
+    if (!lease) {
+      // Only to tell the client why; a failed lookup is still just a busy site.
+      const current = await this.deps.leases.inspect(labels.siteId).catch(() => null)
+      throw current?.heldForOperator ? siteHeld() : siteBusy()
+    }
     const guard = new LeaseGuard(
       lease,
       this.deps.leases,
-      leaseTtlMs,
       request.sandbox.hardTimeoutMs,
       signal,
       performance.now() - acquiredAt,
@@ -109,10 +120,12 @@ export class TurnSupervisor {
     let publishStarted = false
     let completed = false
     let sequence = 0
+    let lastPhase: TurnPhase = 'leased'
     let reason: TurnEvidence['reason'] = 'run_failed'
     let execId: string | undefined
     let candidateHeadSha: string | undefined
     const record = async (phase: TurnPhase, extra: Partial<TurnEvidence> = {}) => {
+      lastPhase = phase
       await this.deps.journal.record({
         fence: lease,
         sessionId: labels.sessionId,
@@ -160,12 +173,12 @@ export class TurnSupervisor {
 
       let previous: LoadedSnapshot | undefined
       if (request.previous) {
-        previous = await this.deps.snapshots.load(request.previous)
+        previous = await guard.interruptible(this.deps.snapshots.load(request.previous))
         if (previous.manifest.git.headSha !== request.workspace.expectedBaseSha)
           throw conflict('Previous checkpoint differs from the expected checkout')
       }
       await guard.assertFence()
-      await this.deps.workspace.prepareWorkspace(sandbox, request.workspace)
+      await guard.interruptible(this.deps.workspace.prepareWorkspace(sandbox, request.workspace))
       if (previous) {
         await guard.assertFence()
         await this.deps.transport.restore(sandbox, previous.manifest.home, previous.archives)
@@ -179,13 +192,16 @@ export class TurnSupervisor {
           : {}),
       }
       const prepared = await this.deps.driver.prepare(context)
-      await this.writePrepared(sandbox, prepared, guard)
+      const argv = this.deps.driver.command(prepared, request.input)
+      const credentials = await this.writePrepared(sandbox, context, prepared, argv, guard)
       await guard.assertFence()
       const handle = await sandbox.exec({
-        argv: this.deps.driver.command(prepared, request.input),
+        argv,
         cwd: SANDBOX_WORKDIR,
         env: prepared.env,
-        timeoutMs: guard.remainingMs,
+        // The turn limit includes publication: the agent's exec ends the reserve early, while the
+        // container keeps the whole limit and outlives the agent for capture, save and push.
+        timeoutMs: guard.remainingBeforeReserveMs(TURN_FINALIZE_RESERVE_MS),
         signal: guard.signal,
       })
       execId = handle.id
@@ -203,15 +219,15 @@ export class TurnSupervisor {
               handle,
               this.deps.driver,
               async (cursor, events) => {
-                await guard.assertFence()
+                // Like the periodic probe: only an explicit loss stops the agent here, a read
+                // error just warns. The journal INSERT below is fenced by itself.
+                await guard.checkFence()
+                // Operational evidence, never shown verbatim: a `failed` event's reason is raw
+                // CLI/provider text; the chat shows a Russian text chosen by the event type.
                 await record('output', { cursor, ...(events.length ? { events } : {}) })
               },
               () => guard.assertActive(),
-              [
-                context.llm.apiKey,
-                context.mcp.token,
-                ...prepared.secrets.map((file) => file.content),
-              ],
+              credentials,
             ),
           ]),
         )
@@ -244,25 +260,30 @@ export class TurnSupervisor {
       }
       const home = this.deps.driver.sessionState(prepared)
       await guard.assertFence()
+      // The agent may have copied a turn credential into its home or the site: never save it.
       const archives = await this.deps.transport.capture(
         sandbox,
         home,
         request.workspace.expectedBaseSha,
+        credentials,
       )
       await guard.assertFence()
-      publication = await this.deps.workspace.preparePublication({
-        ...request.workspace,
-        taskId: labels.taskId,
-        turn: labels.turn,
-        createdAt: request.committedAt,
-        patch: archives.patch,
-        untracked: archives.untracked,
-      })
+      publication = await guard.interruptibleResource(
+        this.deps.workspace.preparePublication({
+          ...request.workspace,
+          taskId: labels.taskId,
+          turn: labels.turn,
+          createdAt: request.committedAt,
+          patch: archives.patch,
+          untracked: archives.untracked,
+        }),
+        (late) => late.dispose(),
+      )
       candidateHeadSha = publication.headSha
       await guard.assertFence()
       await record('checkpointing')
       checkpointStarted = true
-      const manifest = await this.deps.snapshots.save(
+      const saving = this.deps.snapshots.save(
         {
           workspaceId: labels.workspaceId,
           sessionId: labels.sessionId,
@@ -285,7 +306,24 @@ export class TurnSupervisor {
           },
         },
         { home: archives.home, patch: publication.patch, untracked: publication.untracked },
+        // Stops a save still pending on Vault from writing after the supervisor gave up on it.
+        guard.signal,
       )
+      const manifest = await guard.interruptible(saving).catch(async (error: unknown) => {
+        let outcome = error
+        if (guard.signal.aborted) {
+          // The save got the abort too: before its reservation it gives up without writing.
+          // Wait for that answer while the lease lasts; a write or no answer keeps the hold.
+          const waitMs = Math.min(TURN_PUBLICATION_GRACE_MS, guard.leaseRemainingMs)
+          outcome = await withTimeout(saving, waitMs, 'Interrupted snapshot save is pending').then(
+            () => 'written',
+            (late: unknown) => late,
+          )
+        }
+        // Nothing reached storage: an ordinary failed turn, the site needs no recovery.
+        if (snapshotSaveWroteNothing(outcome)) checkpointStarted = false
+        throw error
+      })
       await guard.assertFence()
       await record('checkpointed', {
         snapshotPrefix: turnSnapshotPrefix(labels.sessionId, labels.turn),
@@ -295,11 +333,11 @@ export class TurnSupervisor {
       await guard.assertFence()
       await record('publishing')
       publishStarted = true
-      await publication.publish(() => guard.assertFence())
+      await guard.interruptible(publication.publish(() => guard.assertFence()))
       await guard.assertFence()
       await record('completed', { result })
       if (!(await this.deps.leases.release(lease)))
-        throw conflict('Lease was lost before turn completion')
+        throw leaseLost('Lease was lost before turn completion')
       completed = true
       return { result, manifest }
     } catch (error) {
@@ -309,7 +347,11 @@ export class TurnSupervisor {
           ? 'publication_ambiguous'
           : checkpointStarted
             ? 'snapshot_ambiguous'
-            : 'run_failed'
+            : isSnapshotCredential(error)
+              ? 'snapshot_credential'
+              : isDomainError(error) && error.code === 'LEASE_LOST'
+                ? 'lease_lost'
+                : 'run_failed'
       throw error
     } finally {
       let recovery = checkpointStarted && !completed
@@ -320,12 +362,13 @@ export class TurnSupervisor {
         reason = 'destroy_failed'
       }
       if (!completed) {
-        if (recovery) await this.deps.leases.holdForRecovery(lease).catch(() => false)
+        const phase = lastPhase
+        if (recovery) await holdForRecovery(this.deps.leases, lease, phase)
         try {
           await record(recovery ? 'recovery' : 'failed', { reason })
         } catch {
           recovery = true
-          await this.deps.leases.holdForRecovery(lease).catch(() => false)
+          await holdForRecovery(this.deps.leases, lease, phase)
         }
         if (!recovery) await this.deps.leases.release(lease).catch(() => false)
       }
@@ -341,18 +384,42 @@ export class TurnSupervisor {
       throw badRequest('A resumed turn requires the previous checkpoint')
     if (request.sandbox.secrets.length !== 0)
       throw badRequest('Turn secrets are installed only after restore')
+    // Container env is visible in docker inspect: credentials reach the sandbox as files only.
+    if (
+      containsCredential(Object.values(request.sandbox.env), turnCredentials(request.context, []))
+    )
+      throw badRequest('Sandbox env contains a turn credential')
+    if (request.sandbox.hardTimeoutMs <= TURN_FINALIZE_RESERVE_MS)
+      throw badRequest('Turn limit leaves no time for the agent')
     if (
       request.context.taskId !== labels.taskId ||
       request.context.sessionId !== labels.sessionId ||
       request.context.turn !== labels.turn
     )
       throw badRequest('Turn context differs from sandbox identity')
-    if (
-      !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(request.workspace.expectedBaseSha) ||
-      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(request.committedAt) ||
-      !Number.isFinite(Date.parse(request.committedAt))
-    )
-      throw badRequest('Invalid trusted publication metadata')
+    // The same rules preparePublication applies, checked before the lease and the agent's turn.
+    const publication = publicationMetadataSchema.safeParse({
+      ...request.workspace,
+      taskId: labels.taskId,
+      turn: labels.turn,
+      createdAt: request.committedAt,
+    })
+    if (!publication.success) throw badRequest('Invalid trusted publication metadata')
+    // The manifest's own rules: a 20-minute turn must not end with a checkpoint save() refuses.
+    const plan = snapshotPlanSchema.safeParse({
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: labels.turn,
+      image: request.sandbox.image,
+      driver: { id: this.deps.driver.id, version: request.driverVersion },
+      git: {
+        provider: request.workspace.repo.provider,
+        branch: request.workspace.branch,
+        baseSha: request.workspace.expectedBaseSha,
+        publication: { taskId: labels.taskId, committedAt: request.committedAt },
+      },
+    })
+    if (!plan.success) throw badRequest('Invalid turn snapshot metadata')
     if (request.previous) {
       const prior = snapshotReferenceSchema.parse(request.previous)
       if (
@@ -367,49 +434,34 @@ export class TurnSupervisor {
     }
   }
 
+  /**
+   * Returns the turn's credentials, which the output journal and the snapshot must never contain
+   * either. Nothing is written when the driver's run or command is unsafe.
+   */
   private async writePrepared(
     sandbox: Sandbox,
+    context: RunContext,
     prepared: PreparedRun,
+    argv: readonly string[],
     guard: LeaseGuard,
-  ): Promise<void> {
-    const files = [...prepared.files, ...prepared.secrets]
-    if (
-      files.length > 256 ||
-      files.reduce((sum, file) => sum + Buffer.byteLength(file.content), 0) > 4 * 1024 * 1024
-    )
-      throw badRequest('Prepared turn files exceed their limits')
-    const seen = new Set<string>()
-    const write = async (file: SandboxFile, secret: boolean) => {
-      const path = file.path
-      const parts = path.split('/').slice(1)
-      const allowed = secret
-        ? path.startsWith(`${SANDBOX_SECRETS_DIR}/`)
-        : ['/agent-home/', '/workspace/'].some((root) => path.startsWith(root))
-      if (
-        !allowed ||
-        path.length > 1024 ||
-        path.includes('\\') ||
-        [...path].some(
-          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-        ) ||
-        parts.some(
-          (part) => !part || part === '.' || part === '..' || part.toLowerCase() === '.git',
-        ) ||
-        seen.has(path)
-      )
-        throw badRequest('Invalid prepared turn file path')
-      if (
-        file.mode !== undefined &&
-        (!Number.isSafeInteger(file.mode) || file.mode < 0 || file.mode > 0o777)
-      )
-        throw badRequest('Invalid prepared file mode')
-      seen.add(path)
+  ): Promise<string[]> {
+    // Files only under /agent-home and secrets only in their tmpfs, never the working copy:
+    // capture would publish platform files to the client's repository.
+    const parsed = preparedRunSchema.safeParse(prepared)
+    if (!parsed.success) throw driverPrepareInvalid('Invalid prepared turn file path, mode or size')
+    // Credentials only as secret files: /agent-home is packed into the S3 snapshot (rule 2),
+    // env and argv show up in docker inspect and process listings.
+    const credentials = turnCredentials(context, parsed.data.secrets)
+    if (preparedRunExposesSecret(parsed.data, credentials, argv))
+      throw driverPrepareInvalid('Prepared turn files, env or command contain a turn credential')
+    const { files, secrets } = parsed.data
+    for (const [file, mode] of [
+      ...files.map((file) => [file, file.mode ?? 0o600] as const),
+      ...secrets.map((file) => [file, 0o600] as const),
+    ]) {
       await guard.assertFence()
-      await sandbox.fs.write(path, Buffer.from(file.content), {
-        mode: secret ? 0o600 : (file.mode ?? 0o600),
-      })
+      await sandbox.fs.write(file.path, Buffer.from(file.content), { mode })
     }
-    for (const file of prepared.files) await write(file, false)
-    for (const file of prepared.secrets) await write(file, true)
+    return credentials
   }
 }

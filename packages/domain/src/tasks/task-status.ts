@@ -24,9 +24,6 @@ export const terminalTaskStatuses: readonly TaskStatus[] = [
   'cancelled',
 ]
 
-/** Statuses in which the task holds a sandbox container (one container per turn). */
-export const sandboxTaskStatuses: readonly TaskStatus[] = ['preparing', 'running']
-
 const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   queued: ['preparing', 'cancelled'],
   preparing: ['running', 'failed', 'cancelled'],

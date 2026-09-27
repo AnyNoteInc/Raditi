@@ -8,6 +8,7 @@ import type { ExecChunk, Sandbox, SandboxSpec } from '@repo/domain'
 import Docker from 'dockerode'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { helperCommand } from './docker-api.ts'
 import { createDockerSandboxProvider } from './docker.ts'
 
 // Explicit opt-in. Only containers created by this suite are removed; never pull images.
@@ -15,8 +16,7 @@ const image = process.env.RADITI_DOCKER_TEST_IMAGE
 const socketPath = process.env.SANDBOX_DOCKER_SOCKET ?? '/var/run/docker.sock'
 const runtime = process.env.SANDBOX_RUNTIME === 'runsc' ? 'runsc' : 'runc'
 const client = new Docker({ socketPath })
-const provider = () =>
-  createDockerSandboxProvider({ runtime, socketPath, imagePrefix: 'raditi/agent' })
+const provider = () => createDockerSandboxProvider({ runtime, socketPath })
 const owned: Sandbox[] = []
 const spawn = async (patch: Partial<SandboxSpec> = {}) => {
   const unique = randomBytes(8).toString('hex')
@@ -63,12 +63,11 @@ describe.skipIf(!image)('real Docker sandbox provider', () => {
   })
 
   it('starts an immutable, bounded, nonroot container and recovers exact labels', async () => {
-    const sandbox = await spawn({
-      env: {
-        NODE_OPTIONS: '--require=/workspace/untrusted.cjs',
-        LD_PRELOAD: '/workspace/untrusted.so',
-      },
-    })
+    // Container-wide preload hooks are refused up front: every exec resets them for the helper.
+    await expect(
+      spawn({ env: { NODE_OPTIONS: '--require=/workspace/untrusted.cjs' } }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    const sandbox = await spawn()
     const info = await client.getContainer(sandbox.id).inspect()
     expect(info.Config.User).toBe('10001:10001')
     expect(info.HostConfig.ReadonlyRootfs).toBe(true)
@@ -115,6 +114,18 @@ describe.skipIf(!image)('real Docker sandbox provider', () => {
     ])
       await expect(sandbox.fs.read(path)).rejects.toThrow()
     await expect(sandbox.fs.write('/workspace/link/synthetic', bytes)).rejects.toThrow()
+    // A cut stdin (host timeout or abort) reaches the helper as a normal EOF: no rename then.
+    const container = client.getContainer(sandbox.id)
+    const cut = async function* () {
+      yield Buffer.from('cut')
+    }
+    for (const argv of [
+      ['fs', 'write', '/workspace/inbox/cut', '384', '10'],
+      ['fs', 'write', '/workspace/inbox/cut', '384'],
+    ])
+      await expect(helperCommand(container, argv, { stdin: cut() })).rejects.toThrow()
+    const inbox = await sandbox.fs.list('/workspace/inbox')
+    expect(inbox.some((entry) => entry.path.startsWith('/workspace/inbox/cut'))).toBe(false)
     await expect(
       sandbox.fs.read('/workspace/inbox/nested/binary', { maxBytes: 2 }),
     ).rejects.toThrow()
@@ -260,7 +271,7 @@ describe.skipIf(!image)('real Docker sandbox provider', () => {
     const entry = new URL('./docker.ts', import.meta.url).href
     const source = `
       import { createDockerSandboxProvider } from ${JSON.stringify(entry)};
-      const provider = createDockerSandboxProvider(${JSON.stringify({ runtime, socketPath, imagePrefix: 'raditi/agent' })});
+      const provider = createDockerSandboxProvider(${JSON.stringify({ runtime, socketPath })});
       const sandbox = await provider.get(${JSON.stringify(sandbox.id)});
       if (!sandbox) throw new Error('Missing owned fixture');
       try {

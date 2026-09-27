@@ -1,21 +1,36 @@
 import { Buffer } from 'node:buffer'
+import { performance } from 'node:perf_hooks'
 
+import { Logger } from '@nestjs/common'
 import {
+  DomainError,
+  leaseLost,
+  MAX_SANDBOX_TURN_MS,
   SANDBOX_SECRETS_DIR,
+  snapshotHasCredential,
+  TURN_FINALIZE_RESERVE_MS,
+  TURN_PUBLICATION_GRACE_MS,
   type AgentDriver,
   type AgentEvent,
   type ExecHandle,
+  type ObjectStorage,
   type PreparedRun,
   type Sandbox,
   type SandboxInfo,
+  type SecretStore,
+  type SiteLeaseAuthority,
   type SiteLeaseGrant,
   type SiteLeaseFence,
   type SnapshotManifest,
   type SnapshotMetadata,
+  type SnapshotReference,
   type TurnEvidence,
   type TurnResult,
 } from '@repo/domain'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
+
+import type { SnapshotArchives } from '../sessions/sandbox-snapshot.ts'
+import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { TurnPublicationRecovery, type PublicationRecoveryRequest } from './turn-recovery.ts'
 
 import {
@@ -63,7 +78,7 @@ function fixture() {
       env: {},
       secrets: [],
       network: { mode: 'none' },
-      hardTimeoutMs: 60_000,
+      hardTimeoutMs: MAX_SANDBOX_TURN_MS,
     },
     context: {
       taskId: labels.taskId,
@@ -83,6 +98,7 @@ function fixture() {
       repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
       branch: `agent/${labels.taskId}`,
       expectedBaseSha: baseSha,
+      protectedPaths: [],
     },
     committedAt: '2026-09-26T00:00:00.000Z',
   }
@@ -200,10 +216,12 @@ function fixture() {
     parts: [],
   })
   const snapshots = {
-    save: vi.fn(async (metadata: SnapshotMetadata) => {
-      order.push('save')
-      return manifest(metadata)
-    }),
+    save: vi.fn(
+      async (metadata: SnapshotMetadata, _archives: SnapshotArchives, _signal: AbortSignal) => {
+        order.push('save')
+        return manifest(metadata)
+      },
+    ),
     load: vi.fn(async () => {
       order.push('load')
       return {
@@ -285,7 +303,38 @@ function fixture() {
   }
 }
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
+
+function useFakeClock(): void {
+  vi.useFakeTimers()
+  // The monotonic clock follows the fake clock, as it would on a real host.
+  vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
+}
+
+/** The mocked step takes `ms` of the fake clock before it answers. */
+function takes<A extends unknown[], R>(mock: Mock<(...args: A) => Promise<R>>, ms: number): void {
+  const step = mock.getMockImplementation()!
+  mock.mockImplementation(async (...args: A) => {
+    await vi.advanceTimersByTimeAsync(ms)
+    return step(...args)
+  })
+}
+
+/** The DB fixes expires_at when the statement starts; the grant reaches core `delayMs` later. */
+function delayGrant<A extends unknown[]>(
+  mock: Mock<(...args: A) => Promise<SiteLeaseGrant>>,
+  delayMs: number,
+): void {
+  const grant = mock.getMockImplementation()!
+  mock.mockImplementation(async (...args: A) => {
+    const granted = await grant(...args)
+    await vi.advanceTimersByTimeAsync(delayMs)
+    return granted
+  })
+}
 
 async function expectLeaseCoversLatePush(
   f: ReturnType<typeof fixture>,
@@ -293,14 +342,14 @@ async function expectLeaseCoversLatePush(
   hardTimeoutMs: number,
   requestedTtl: () => number,
 ): Promise<void> {
-  vi.useFakeTimers()
+  useFakeClock()
   const startedAt = Date.now()
   const pushStarted = Promise.withResolvers<void>()
-  // Model a dead core heartbeat while the already-fenced native push remains in flight.
-  f.leases.renew.mockImplementation(() => new Promise(() => {}))
   f.journal.record.mockImplementation(async (entry) => {
     f.evidence.push(structuredClone(entry))
-    if (entry.phase === 'publishing') await vi.advanceTimersByTimeAsync(hardTimeoutMs - 1)
+    // Push at the last moment of the limit, which counts from the lease request.
+    if (entry.phase === 'publishing')
+      await vi.advanceTimersByTimeAsync(startedAt + hardTimeoutMs - 1 - Date.now())
   })
   f.publication.publish.mockImplementation(async (assertFence) => {
     await assertFence()
@@ -309,12 +358,20 @@ async function expectLeaseCoversLatePush(
       setTimeout(() => reject(new Error('push reply lost')), 60_000)
     })
   })
-  const rejected = expect(run()).rejects.toThrow()
+  let settledAt = 0
+  const rejected = expect(
+    run().finally(() => {
+      settledAt = Date.now()
+    }),
+  ).rejects.toThrow()
   await pushStarted.promise
   expect(requestedTtl() - hardTimeoutMs).toBeGreaterThanOrEqual(90_000)
   await vi.advanceTimersByTimeAsync(60_000)
   await rejected
+  expect(settledAt - startedAt).toBeLessThanOrEqual(hardTimeoutMs)
   expect(startedAt + requestedTtl() - Date.now()).toBeGreaterThanOrEqual(30_000)
+  // The first grant alone covers the in-flight push: nothing renews it.
+  expect(f.leases.renew).not.toHaveBeenCalled()
   expect(f.leases.holdForRecovery).toHaveBeenCalledOnce()
   expect(f.leases.release).not.toHaveBeenCalled()
   expect(f.evidence.at(-1)?.phase).toBe('recovery')
@@ -345,8 +402,15 @@ describe('PoC TurnSupervisor', () => {
       expect.objectContaining({ secrets: [], labels: expect.objectContaining({ leaseEpoch: 1 }) }),
       expect.any(AbortSignal),
     )
-    expect(f.leases.acquire).toHaveBeenCalledWith(expect.objectContaining({ ttlMs: 150_000 }))
-    expect(f.transport.capture).toHaveBeenCalledWith(f.sandbox, home, baseSha)
+    expect(f.leases.acquire).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS }),
+    )
+    // The capture refuses the turn's own credentials: the LLM key, the MCP token, secret files.
+    expect(f.transport.capture).toHaveBeenCalledWith(f.sandbox, home, baseSha, [
+      'synthetic-llm-secret',
+      'synthetic-mcp-secret',
+      'synthetic-llm-secret',
+    ])
     expect(f.snapshots.save).toHaveBeenCalledWith(
       expect.objectContaining({
         git: expect.objectContaining({
@@ -356,6 +420,7 @@ describe('PoC TurnSupervisor', () => {
         }),
       }),
       { home: Buffer.from('home'), patch: f.publication.patch, untracked: f.publication.untracked },
+      expect.any(AbortSignal),
     )
     expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
     expect(f.evidence.at(-1)?.phase).toBe('completed')
@@ -369,6 +434,163 @@ describe('PoC TurnSupervisor', () => {
       f.request.sandbox.hardTimeoutMs,
       () => f.leases.acquire.mock.calls[0]![0].ttlMs,
     )
+  })
+
+  it('keeps the same late-push margin when the lease grant arrives 40 seconds late', async () => {
+    const f = fixture()
+    delayGrant(f.leases.acquire, 40_000)
+    await expectLeaseCoversLatePush(
+      f,
+      () => f.run(),
+      f.request.sandbox.hardTimeoutMs,
+      () => f.leases.acquire.mock.calls[0]![0].ttlMs,
+    )
+  })
+
+  it('keeps the finalize reserve: an agent that ends just before its deadline is still saved and pushed', async () => {
+    const f = fixture()
+    useFakeClock()
+    const startedAt = Date.now()
+    // The agent works until 10 s before the deadline it gets. With the whole limit as its
+    // deadline that was 19:50, and the steps after it could not fit into the 20 minutes.
+    vi.mocked(f.handle.wait).mockImplementation(async () => {
+      const { timeoutMs } = vi.mocked(f.sandbox.exec).mock.calls[0]![0]
+      await vi.advanceTimersByTimeAsync(timeoutMs! - 10_000)
+      return { code: 0, reason: 'exited' }
+    })
+    takes(f.transport.capture, 30_000)
+    takes(f.workspace.preparePublication, 30_000)
+    takes(f.snapshots.save, 30_000)
+    takes(f.publication.publish, 30_000)
+    await expect(f.run()).resolves.toMatchObject({ result })
+    expect(vi.mocked(f.sandbox.exec).mock.calls[0]![0].timeoutMs).toBe(
+      MAX_SANDBOX_TURN_MS - TURN_FINALIZE_RESERVE_MS,
+    )
+    // The container keeps the whole limit and outlives the agent for capture, save and push.
+    expect(f.sandboxes.create).toHaveBeenCalledWith(
+      expect.objectContaining({ hardTimeoutMs: MAX_SANDBOX_TURN_MS }),
+      expect.any(AbortSignal),
+    )
+    expect(f.order).toEqual(expect.arrayContaining(['capture', 'candidate', 'save', 'publish']))
+    expect(f.evidence.at(-1)?.phase).toBe('completed')
+    expect(Date.now() - startedAt).toBeLessThan(MAX_SANDBOX_TURN_MS)
+  })
+
+  it('does not start the agent when less than the finalize reserve is left', async () => {
+    const f = fixture()
+    useFakeClock()
+    takes(f.workspace.prepareWorkspace, MAX_SANDBOX_TURN_MS - TURN_FINALIZE_RESERVE_MS)
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_INTERRUPTED', message: 'timeout' })
+    expect(f.sandbox.exec).not.toHaveBeenCalled()
+    expect(f.sandbox.destroy).toHaveBeenCalledWith('timeout')
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'timeout' })
+  })
+
+  it('rejects a turn limit that leaves no time for the agent, before the lease', async () => {
+    const f = fixture()
+    f.request.sandbox.hardTimeoutMs = TURN_FINALIZE_RESERVE_MS
+    await expect(f.run()).rejects.toThrow('no time for the agent')
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+  })
+
+  it('holds the site when a snapshot save never answers', async () => {
+    const f = fixture()
+    useFakeClock()
+    f.snapshots.save.mockImplementation(() => new Promise(() => {}))
+    let settled = false
+    const rejected = expect(
+      f.run().finally(() => {
+        settled = true
+      }),
+    ).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
+    await vi.advanceTimersByTimeAsync(f.request.sandbox.hardTimeoutMs)
+    // It may still be before its reservation: the supervisor waits for its answer a while.
+    expect(settled).toBe(false)
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(TURN_PUBLICATION_GRACE_MS)
+    await rejected
+    // The abandoned save sees the abort and must not write anything later.
+    expect(f.snapshots.save.mock.calls[0]![2].aborted).toBe(true)
+    expect(f.leases.holdForRecovery).toHaveBeenCalledOnce()
+    expect(f.leases.release).not.toHaveBeenCalled()
+    expect(f.sandbox.destroy).toHaveBeenCalledOnce()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'recovery', reason: 'timeout' })
+    expect(f.publication.publish).not.toHaveBeenCalled()
+    expect(f.publication.dispose).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['timeout', undefined],
+    ['cancelled', new AbortController()],
+  ] as const)(
+    'releases the site when a %s stops a save before its reservation',
+    async (reason, cancellation) => {
+      const f = fixture()
+      useFakeClock()
+      f.snapshots.save.mockImplementation((_metadata, _archives, signal) => {
+        const refused = new Promise<never>((_resolve, reject) => {
+          // Vault answers 10 s after the abort; the save then reserves nothing and says so.
+          signal.addEventListener('abort', () => {
+            setTimeout(() => {
+              reject(new DomainError('SNAPSHOT_NOT_WRITTEN', 'Snapshot save was interrupted', 409))
+            }, 10_000)
+          })
+        })
+        cancellation?.abort()
+        return refused
+      })
+      const rejected = expect(f.run(cancellation?.signal)).rejects.toMatchObject({
+        code: 'TURN_INTERRUPTED',
+        message: reason,
+      })
+      if (!cancellation) await vi.advanceTimersByTimeAsync(f.request.sandbox.hardTimeoutMs)
+      await vi.advanceTimersByTimeAsync(10_000)
+      await rejected
+      expect(f.snapshots.save).toHaveBeenCalledOnce()
+      expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+      expect(f.leases.release).toHaveBeenCalledOnce()
+      expect(f.publication.publish).not.toHaveBeenCalled()
+      // Why the site was released without a checkpoint: the interruption, and no prefix.
+      expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason })
+      expect(f.evidence.at(-1)).not.toHaveProperty('snapshotPrefix')
+    },
+  )
+
+  it('keeps the hold when an interrupted save still commits its snapshot', async () => {
+    const f = fixture()
+    const cancellation = new AbortController()
+    const saved = Promise.withResolvers<SnapshotManifest>()
+    f.snapshots.save.mockImplementation(async () => {
+      cancellation.abort()
+      return saved.promise
+    })
+    const rejected = expect(f.run(cancellation.signal)).rejects.toMatchObject({
+      code: 'TURN_INTERRUPTED',
+    })
+    await vi.waitFor(() => expect(f.snapshots.save).toHaveBeenCalledOnce())
+    saved.resolve({} as SnapshotManifest)
+    await rejected
+    expect(f.leases.holdForRecovery).toHaveBeenCalledOnce()
+    expect(f.leases.release).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'recovery', reason: 'cancelled' })
+  })
+
+  it('disposes a candidate that only arrives after cancellation', async () => {
+    const f = fixture()
+    const cancellation = new AbortController()
+    const late = Promise.withResolvers<typeof f.publication>()
+    f.workspace.preparePublication.mockImplementation(() => {
+      cancellation.abort()
+      return late.promise
+    })
+    await expect(f.run(cancellation.signal)).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    late.resolve(f.publication)
+    await vi.waitFor(() => expect(f.publication.dispose).toHaveBeenCalledOnce())
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.publication.publish).not.toHaveBeenCalled()
   })
 
   it('restores the prior candidate before installing the new turn secrets', async () => {
@@ -406,8 +628,38 @@ describe('PoC TurnSupervisor', () => {
   it('does not create a container without a lease', async () => {
     const f = fixture()
     f.leases.acquire.mockResolvedValueOnce(null as never)
-    await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(f.run()).rejects.toMatchObject({ code: 'SITE_BUSY' })
     expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['another operation owns it', false, 'SITE_BUSY'],
+    ['it waits for an operator', true, 'SITE_HELD'],
+    ['the lease lookup fails', undefined, 'SITE_BUSY'],
+  ] as const)('tells the client why a site is refused: %s', async (_, held, code) => {
+    const f = fixture()
+    f.leases.acquire.mockResolvedValueOnce(null as never)
+    if (held === undefined) f.leases.inspect.mockRejectedValueOnce(new Error('connection reset'))
+    else
+      f.leases.inspect.mockResolvedValueOnce({
+        siteId: labels.siteId,
+        taskId: '00000000-0000-4000-8000-000000000009',
+        operation: 'turn',
+        epoch: 7,
+        expiresAt: new Date(),
+        serverNow: new Date(),
+        heldForOperator: held,
+      } satisfies SiteLeaseAuthority as never)
+    await expect(f.run()).rejects.toMatchObject({ code, httpStatus: 409 })
+    expect(f.leases.inspect).toHaveBeenCalledWith(labels.siteId)
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects a turn credential in the container env before the lease: docker inspect shows it', async () => {
+    const f = fixture()
+    f.request.sandbox.env = { AGENT_FLAGS: `--auth=${f.request.context.mcp.token}` }
+    await expect(f.run()).rejects.toThrow('env contains a turn credential')
+    expect(f.leases.acquire).not.toHaveBeenCalled()
   })
 
   it('requires the previous checkpoint for every resumed turn', async () => {
@@ -417,6 +669,66 @@ describe('PoC TurnSupervisor', () => {
     await expect(f.run()).rejects.toThrow('previous checkpoint')
     expect(f.leases.acquire).not.toHaveBeenCalled()
   })
+
+  it.each<[string, Partial<SnapshotReference>]>([
+    ['workspace', { workspaceId: '00000000-0000-4000-8000-000000000009' }],
+    ['session', { sessionId: 'other-session' }],
+    ['turn', { turn: 2 }],
+    ['image', { image: `registry.invalid/raditi/codex@sha256:${'e'.repeat(64)}` }],
+    ['driver', { driver: { id: 'kimi', version: '1.0.0' } }],
+    ['driver version', { driver: { id: 'codex', version: '2.0.0' } }],
+  ])('rejects a foreign previous checkpoint (%s) before acquiring a lease', async (_, change) => {
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: 'codex', version: '1.0.0' },
+      home,
+      ...change,
+    }
+    await expect(f.run()).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(f.snapshots.load).not.toHaveBeenCalled()
+  })
+
+  it.each(['branch', 'turn', 'sha', 'protected paths'] as const)(
+    'rejects invalid publication metadata (%s) before acquiring a lease',
+    async (kind) => {
+      const f = fixture()
+      if (kind === 'branch') f.request.workspace.branch = 'agent/other'
+      if (kind === 'sha') f.request.workspace.expectedBaseSha = 'b'.repeat(64)
+      if (kind === 'protected paths')
+        delete (f.request.workspace as { protectedPaths?: string[] }).protectedPaths
+      if (kind === 'turn') {
+        f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 1_000_000 } }
+        f.request.context = { ...f.request.context, turn: 1_000_000 }
+        f.request.previous = {
+          workspaceId: labels.workspaceId,
+          sessionId: labels.sessionId,
+          turn: 999_999,
+          image,
+          driver: { id: 'codex', version: '1.0.0' },
+          home,
+        }
+      }
+      await expect(f.run()).rejects.toThrow('publication metadata')
+      expect(f.leases.acquire).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['', 'bad version', '-1.0', 'v'.repeat(65)])(
+    'rejects driver version %j that the snapshot manifest would refuse, before the lease',
+    async (driverVersion) => {
+      const f = fixture()
+      f.request.driverVersion = driverVersion
+      await expect(f.run()).rejects.toThrow('snapshot metadata')
+      expect(f.leases.acquire).not.toHaveBeenCalled()
+    },
+  )
 
   it('does not accept completed output when the process exits unsuccessfully', async () => {
     const f = fixture()
@@ -444,6 +756,66 @@ describe('PoC TurnSupervisor', () => {
         reason: point === 'snapshot' ? 'snapshot_ambiguous' : 'publication_ambiguous',
       })
       expect(JSON.stringify(f.evidence)).not.toContain('credential-must-not-be-recorded')
+    },
+  )
+
+  it.each([
+    ['SNAPSHOT_NOT_WRITTEN', 502],
+    ['SNAPSHOT_TOO_LARGE', 413],
+    ['PUBLICATION_TOO_LARGE', 413],
+  ])('releases the site when the snapshot provably wrote nothing (%s)', async (code, status) => {
+    const f = fixture()
+    f.snapshots.save.mockRejectedValueOnce(new DomainError(code, 'nothing was written', status))
+    await expect(f.run()).rejects.toMatchObject({ code })
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.publication.publish).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'run_failed' })
+    expect(f.evidence.at(-1)).not.toHaveProperty('snapshotPrefix')
+  })
+
+  it.each(['archive', 'home'] as const)(
+    'releases the site when the snapshot service refuses invalid %s before writing',
+    async (kind) => {
+      const f = fixture()
+      const storage = {
+        putIfAbsent: vi.fn(),
+        put: vi.fn(),
+        get: vi.fn(),
+        exists: vi.fn(),
+        delete: vi.fn(),
+        checkBuckets: vi.fn(),
+      }
+      const secrets = { transitDataKey: vi.fn(), transitDecryptDataKey: vi.fn() }
+      const service = new SnapshotService(
+        storage as unknown as ObjectStorage,
+        secrets as unknown as SecretStore,
+      )
+      // The fixture archives are not valid tar.zst; `home` fails its own schema first.
+      if (kind === 'home')
+        vi.mocked(f.driver.sessionState).mockReturnValue({ ...home, root: '/workspace/repo' })
+      f.snapshots.save.mockImplementation((metadata, archives, signal) =>
+        service.save(metadata, archives, signal),
+      )
+      await expect(f.run()).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+      expect(storage.putIfAbsent).not.toHaveBeenCalled()
+      expect(storage.put).not.toHaveBeenCalled()
+      expect(secrets.transitDataKey).not.toHaveBeenCalled()
+      expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+      expect(f.leases.release).toHaveBeenCalledOnce()
+      expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'run_failed' })
+    },
+  )
+
+  it.each(['SNAPSHOT_SAVE_FAILED', 'CONFLICT', 'NOT_FOUND'])(
+    'keeps every other snapshot error (%s) ambiguous',
+    async (code) => {
+      const f = fixture()
+      f.snapshots.save.mockRejectedValueOnce(new DomainError(code, 'synthetic', 502))
+      await expect(f.run()).rejects.toMatchObject({ code })
+      expect(f.leases.holdForRecovery).toHaveBeenCalledOnce()
+      expect(f.leases.release).not.toHaveBeenCalled()
+      expect(f.evidence.at(-1)).toMatchObject({ phase: 'recovery', reason: 'snapshot_ambiguous' })
     },
   )
 
@@ -495,6 +867,146 @@ describe('PoC TurnSupervisor', () => {
     },
   )
 
+  it('keeps the agent running through a lease read error while it prints', async () => {
+    const f = fixture()
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    vi.mocked(f.handle.output).mockImplementation(async function* () {
+      f.leases.assert.mockRejectedValueOnce(new Error('connection reset'))
+      yield {
+        stream: 'stdout' as const,
+        offset: 0,
+        data: Buffer.from(nativeEvents.map((event) => JSON.stringify(event)).join('\n') + '\n'),
+      }
+    })
+    await expect(f.run()).resolves.toMatchObject({ result })
+    expect(warn).toHaveBeenCalledWith('site lease check failed, retrying: connection reset')
+    expect(f.handle.kill).not.toHaveBeenCalled()
+    expect(f.evidence.map((entry) => entry.phase)).toContain('output')
+    expect(f.evidence.at(-1)?.phase).toBe('completed')
+  })
+
+  it('stops the agent as lease_lost when the fence is explicitly lost while it prints', async () => {
+    const f = fixture()
+    vi.mocked(f.handle.output).mockImplementation(async function* () {
+      f.leases.assert.mockResolvedValue(false)
+      yield {
+        stream: 'stdout' as const,
+        offset: 0,
+        data: Buffer.from(JSON.stringify(nativeEvents[0]) + '\n'),
+      }
+    })
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_INTERRUPTED', message: 'lease_lost' })
+    expect(f.handle.kill).toHaveBeenCalled()
+    expect(f.evidence.some((entry) => entry.phase === 'output')).toBe(false)
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'lease_lost' })
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+  })
+
+  it('records a journal outage while the agent prints as run_failed, not a lost lease', async () => {
+    const f = fixture()
+    f.journal.record.mockImplementation(async (entry) => {
+      if (entry.phase === 'output') throw new Error('connect ECONNREFUSED 127.0.0.1:5432')
+      f.evidence.push(structuredClone(entry))
+    })
+    await expect(f.run()).rejects.toThrow('ECONNREFUSED')
+    expect(f.handle.kill).toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'run_failed' })
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+  })
+
+  it('records a fenced journal insert that lost the lease as lease_lost', async () => {
+    const f = fixture()
+    f.journal.record.mockImplementation(async (entry) => {
+      if (entry.phase === 'output') throw leaseLost('Turn evidence no longer owns its site lease')
+      f.evidence.push(structuredClone(entry))
+    })
+    await expect(f.run()).rejects.toMatchObject({ code: 'LEASE_LOST' })
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'lease_lost' })
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'a driver file',
+      {
+        files: [{ path: '/agent-home/codex/config.toml', content: 'key = "synthetic-llm-secret"' }],
+      },
+    ],
+    [
+      'a driver file with the MCP token',
+      {
+        files: [
+          { path: '/agent-home/codex/mcp.json', content: '{"token":"synthetic-mcp-secret"}' },
+        ],
+      },
+    ],
+    [
+      'a driver file with a secret file value',
+      {
+        secrets: [{ path: `${SANDBOX_SECRETS_DIR}/extra`, content: 'synthetic-extra-secret' }],
+        files: [{ path: '/agent-home/codex/extra', content: 'synthetic-extra-secret' }],
+      },
+    ],
+    ['an env value', { env: { CODEX_API_KEY: 'synthetic-llm-secret' } }],
+  ] satisfies Array<[string, Partial<PreparedRun>]>)(
+    'refuses a turn credential in %s before writing anything',
+    async (_, overrides) => {
+      const f = fixture()
+      Object.assign(f.prepared, overrides)
+      await expect(f.run()).rejects.toMatchObject({
+        code: 'DRIVER_PREPARE_INVALID',
+        httpStatus: 502,
+        message: expect.stringContaining('credential'),
+      })
+      expect(f.sandbox.fs.write).not.toHaveBeenCalled()
+      expect(f.sandbox.exec).not.toHaveBeenCalled()
+      expect(f.driver.sessionState).not.toHaveBeenCalled()
+      expect(f.leases.release).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('refuses a turn credential in the agent command before writing or running anything', async () => {
+    const f = fixture()
+    vi.mocked(f.driver.command).mockReturnValue([
+      'synthetic-agent',
+      `--header=Authorization: Bearer ${f.request.context.llm.apiKey}`,
+    ])
+    await expect(f.run()).rejects.toMatchObject({ code: 'DRIVER_PREPARE_INVALID' })
+    expect(f.sandbox.fs.write).not.toHaveBeenCalled()
+    expect(f.sandbox.exec).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
+  it('releases the site without saving when the captured work holds a turn credential', async () => {
+    const f = fixture()
+    f.transport.capture.mockRejectedValueOnce(snapshotHasCredential())
+    await expect(f.run()).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+    expect(f.workspace.preparePublication).not.toHaveBeenCalled()
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'snapshot_credential' })
+    expect(f.evidence.at(-1)).not.toHaveProperty('snapshotPrefix')
+    expect(JSON.stringify(f.evidence)).not.toContain(f.request.context.llm.apiKey)
+  })
+
+  it('logs a failed recovery hold with only its epoch and phase', async () => {
+    const f = fixture()
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {})
+    f.snapshots.save.mockRejectedValueOnce(new Error('snapshot reply lost'))
+    f.leases.holdForRecovery.mockRejectedValue(new Error(`site ${labels.siteId} is unreachable`))
+    await expect(f.run()).rejects.toThrow('snapshot reply lost')
+    expect(error).toHaveBeenCalledWith(
+      'Site lease hold for recovery failed (epoch 1, phase checkpointing)',
+    )
+    const logged = JSON.stringify(error.mock.calls)
+    for (const id of [labels.siteId, labels.taskId, labels.sessionId])
+      expect(logged).not.toContain(id)
+    expect(f.leases.release).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'recovery', reason: 'snapshot_ambiguous' })
+  })
+
   it('rejects an oversized final line instead of accepting an earlier successful result', async () => {
     const f = fixture()
     f.stdout(
@@ -509,9 +1021,27 @@ describe('PoC TurnSupervisor', () => {
   it('does not write prepared files outside allowed roots', async () => {
     const f = fixture()
     f.prepared.secrets = [{ path: '/workspace/repo/secret', content: 'secret' }]
-    await expect(f.run()).rejects.toThrow('file path')
+    await expect(f.run()).rejects.toMatchObject({
+      code: 'DRIVER_PREPARE_INVALID',
+      message: expect.stringContaining('file path'),
+    })
     expect(f.sandbox.exec).not.toHaveBeenCalled()
     expect(f.sandbox.destroy).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    '/workspace/repo/AGENTS.md',
+    '/workspace/repo',
+    '/workspace/out/schema.json',
+    '/agent-home/../workspace/repo/AGENTS.md',
+    '/agent-home/./codex/config.toml',
+    `${SANDBOX_SECRETS_DIR}/config.toml`,
+  ])('never writes a prepared platform file to %s, where it could be published', async (path) => {
+    const f = fixture()
+    f.prepared.files = [{ path, content: 'platform instructions' }]
+    await expect(f.run()).rejects.toThrow('file path')
+    expect(f.sandbox.fs.write).not.toHaveBeenCalled()
+    expect(f.sandbox.exec).not.toHaveBeenCalled()
   })
 })
 
@@ -579,12 +1109,31 @@ describe('committed checkpoint publication recovery', () => {
     )
   })
 
+  it('keeps the same recovery push margin when the reclaim arrives 40 seconds late', async () => {
+    const f = await recoveryFixture()
+    delayGrant(f.leases.reclaimForRecovery, 40_000)
+    await expectLeaseCoversLatePush(
+      f,
+      () => f.recover(),
+      120_000,
+      () => f.leases.reclaimForRecovery.mock.calls[0]![1],
+    )
+  })
+
   it('does not reclaim an incomplete reservation without a committed manifest', async () => {
     const f = await recoveryFixture()
     f.snapshots.load.mockRejectedValue(new Error('manifest missing'))
     await expect(f.recover()).rejects.toThrow('manifest missing')
     expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
     expect(f.publication.publish).not.toHaveBeenCalled()
+  })
+
+  it('requires explicit protected paths before reading the snapshot or reclaiming', async () => {
+    const f = await recoveryFixture()
+    delete (f.input.workspace as { protectedPaths?: string[] }).protectedPaths
+    await expect(f.recover()).rejects.toThrow('recovery source')
+    expect(f.snapshots.load).toHaveBeenCalledTimes(1)
+    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
   })
 
   it('requires the exact deliberately held fence', async () => {
@@ -601,6 +1150,18 @@ describe('committed checkpoint publication recovery', () => {
     expect(f.publication.publish).not.toHaveBeenCalled()
     expect(f.leases.holdForRecovery).toHaveBeenCalledWith(expect.objectContaining({ epoch: 2 }))
     expect(f.leases.release).not.toHaveBeenCalled()
+  })
+
+  it('logs a failed hold of the new epoch with only its epoch and phase', async () => {
+    const f = await recoveryFixture()
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {})
+    f.publication.publish.mockRejectedValue(new Error('push reply lost'))
+    f.leases.holdForRecovery.mockResolvedValue(false)
+    await expect(f.recover()).rejects.toThrow('push reply lost')
+    expect(error).toHaveBeenCalledWith(
+      'Site lease hold for recovery was refused (epoch 2, phase publishing)',
+    )
+    expect(JSON.stringify(error.mock.calls)).not.toContain(labels.siteId)
   })
 
   it('keeps the new epoch held when publication is still ambiguous', async () => {

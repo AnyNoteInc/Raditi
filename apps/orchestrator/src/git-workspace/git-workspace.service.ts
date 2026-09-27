@@ -15,39 +15,30 @@ import {
   publicationMetadataSchema,
   publicationShaSchema,
   publicationSourceSchema,
+  publicationTooLarge,
+  repositoryTooLarge,
   snapshotLimits,
+  turnOutputRejected,
   type GitCredentials,
   type GitProvider,
   type PublicationMetadata,
   type PublicationSource,
   type RepoRef,
   type Sandbox,
+  type TurnPublication,
+  type TurnWorkspace,
+  withTimeout,
 } from '@repo/domain'
 
+import { execBounded } from '../sandbox/exec.ts'
 import { emptyUntrackedArchive, untrackedFiles } from './archive.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
-import { runProcess, type ProcessResult } from './process.ts'
+import { PROCESS_OUTPUT_LIMIT, runProcess, type ProcessResult } from './process.ts'
 
 export interface GitWorkspaceOptions {
   transport:
     { kind: 'https'; allowedOrigins: readonly string[] } | { kind: 'local-test'; root: string }
-  gitBinary?: string
   gitleaksBinary?: string
-}
-
-export interface PreparePublicationInput extends PublicationMetadata {
-  patch: Uint8Array
-  untracked: Uint8Array
-}
-
-export interface PreparedPublication {
-  readonly baseSha: string
-  readonly headSha: string
-  /** Canonical, complete patch, including new files; persists in the snapshot for retry. */
-  readonly patch: Uint8Array
-  readonly untracked: Uint8Array
-  publish(assertFence: () => Promise<void>): Promise<void>
-  dispose(): Promise<void>
 }
 
 interface Workspace {
@@ -67,6 +58,11 @@ const BOT_EMAIL = 'bot@raditi.ru'
 const GITLEAKS_CONFIG = '[extend]\nuseDefault = true\n'
 const failed = () =>
   new DomainError('GIT_OPERATION_FAILED', 'Trusted repository operation failed', 502)
+type TooLarge = (message: string) => Error
+/** At most one `ls-tree -z` or `ls-files --stage -z` row per file: mode, type, OID, path, NUL. */
+const listBytes = (files: number) => files * (64 + publicationLimits.pathBytes)
+/** The client's base tree plus at most the agent's changed files. */
+const CANDIDATE_FILES = publicationLimits.repositoryFiles + publicationLimits.files
 const text = (bytes: Uint8Array) => {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
@@ -76,7 +72,7 @@ const text = (bytes: Uint8Array) => {
 }
 
 /** Git data is used only in a fresh host-owned clone, never in the agent's .git directory. */
-export class GitWorkspaceService {
+export class GitWorkspaceService implements TurnWorkspace {
   constructor(
     private readonly provider: GitProvider,
     private readonly options: GitWorkspaceOptions,
@@ -109,7 +105,7 @@ export class GitWorkspaceService {
       await this.git(workspace, ['bundle', 'create', bundlePath, 'refs/heads/raditi-base'])
       // Bundle can include ancestry, so cap it separately from the current checked tree.
       if ((await stat(bundlePath)).size > publicationLimits.bundleBytes)
-        throw badRequest('Repository bundle is too large')
+        throw repositoryTooLarge('Repository bundle is too large')
       const bundle = await readFile(bundlePath)
       const destination = '/tmp/raditi-base.bundle'
       await this.sandboxExec(sandbox, ['test', '!', '-L', '/workspace'])
@@ -167,23 +163,26 @@ export class GitWorkspaceService {
     }
   }
 
-  async preparePublication(input: PreparePublicationInput): Promise<PreparedPublication> {
+  async preparePublication(
+    input: PublicationMetadata & { patch: Uint8Array; untracked: Uint8Array },
+  ): Promise<TurnPublication> {
     const { patch: rawPatch, untracked: rawUntracked, ...rawMetadata } = input
     const parsed = publicationMetadataSchema.safeParse(rawMetadata)
     if (!parsed.success) throw badRequest('Invalid publication metadata')
     const metadata = parsed.data
+    if (!(rawPatch instanceof Uint8Array) || !(rawUntracked instanceof Uint8Array))
+      throw badRequest('Invalid publication input')
     if (
-      !(rawPatch instanceof Uint8Array) ||
       rawPatch.byteLength > publicationLimits.patchBytes ||
-      !(rawUntracked instanceof Uint8Array) ||
       rawUntracked.byteLength > snapshotLimits.archiveBytes
-    ) {
-      throw badRequest('Publication input exceeds its size limit')
-    }
+    )
+      throw publicationTooLarge()
     const patch = Buffer.from(rawPatch)
     const untracked = Buffer.from(rawUntracked)
     assertBinaryPatchLimits(patch)
     const files = await untrackedFiles(untracked)
+    if (files.length > publicationLimits.files)
+      throw publicationTooLarge('Publication changes too many files')
     for (const file of files)
       assertPublicationChange(
         {
@@ -205,23 +204,22 @@ export class GitWorkspaceService {
       await this.git(workspace, ['read-tree', metadata.expectedBaseSha])
       if (patch.byteLength) {
         const stats = await this.git(workspace, ['apply', '--numstat', '-z', '-'], patch)
-        this.checkNumstat(stats.stdout, metadata.protectedPaths)
+        // The agent's changes, not the site's size: patched and new files count together.
+        const patched = this.checkNumstat(stats.stdout, metadata.protectedPaths)
+        if (patched + files.length > publicationLimits.files)
+          throw publicationTooLarge('Publication changes too many files')
         const summary = await this.git(workspace, ['apply', '--summary', '-'], patch)
         // Fail closed on extended mode headers; final index checks do not depend on this text.
         if (/\b(?:120000|160000)\b|mode change |^ (?:copy|rename) /m.test(text(summary.stdout)))
           throw forbidden('Publication contains a link, submodule or permission change')
         await this.checkPostimages(workspace, patch)
-        await this.git(
-          workspace,
-          ['apply', '--cached', '--check', '--whitespace=nowarn', '-'],
-          patch,
-        )
+        // Atomic without --reject: on failure the index is unchanged and the clone is discarded.
         await this.git(workspace, ['apply', '--cached', '--whitespace=nowarn', '-'], patch)
       }
       const afterPatch = await this.index(workspace)
       for (const file of files) {
         if (original.has(file.path) || afterPatch.has(file.path))
-          throw badRequest('Untracked publication file collides with the repository')
+          throw turnOutputRejected('Untracked publication file collides with the repository')
         const oid = this.sha(
           (await this.git(workspace, ['hash-object', '-w', '--stdin', '--no-filters'], file.bytes))
             .stdout,
@@ -233,25 +231,9 @@ export class GitWorkspaceService {
         )
       }
       const candidate = await this.index(workspace)
+      // Bounded before any scan: the complete patch is longer than any per-path summary.
+      const fullPatch = await this.candidatePatch(workspace, metadata.expectedBaseSha)
       await this.validateIndex(workspace, original, candidate, metadata)
-      const fullPatch = (
-        await this.git(
-          workspace,
-          [
-            'diff',
-            '--cached',
-            '--binary',
-            '--full-index',
-            '--no-renames',
-            '--no-ext-diff',
-            '--no-textconv',
-            metadata.expectedBaseSha,
-            '--',
-          ],
-          undefined,
-          publicationLimits.patchBytes,
-        )
-      ).stdout
       const tree = this.sha((await this.git(workspace, ['write-tree'])).stdout)
       const message = `Raditi task ${metadata.taskId}, turn ${metadata.turn}\n\nRaditi-Task: ${metadata.taskId}\nRaditi-Turn: ${metadata.turn}\n`
       const date = `${Math.floor(Date.parse(metadata.createdAt) / 1000)} +0000`
@@ -302,6 +284,32 @@ export class GitWorkspaceService {
     }
   }
 
+  /** The snapshot stores this patch, so it shares the snapshot's patch limit. */
+  private async candidatePatch(workspace: Workspace, baseSha: string): Promise<Buffer> {
+    try {
+      const diff = await this.git(
+        workspace,
+        [
+          'diff',
+          '--cached',
+          '--binary',
+          '--full-index',
+          '--no-renames',
+          '--no-ext-diff',
+          '--no-textconv',
+          baseSha,
+          '--',
+        ],
+        undefined,
+        publicationLimits.patchBytes,
+      )
+      return diff.stdout
+    } catch (error) {
+      if (isDomainError(error) && error.code === PROCESS_OUTPUT_LIMIT) throw publicationTooLarge()
+      throw error
+    }
+  }
+
   private source(input: PublicationSource) {
     const result = publicationSourceSchema.safeParse(input)
     if (!result.success || result.data.repo.provider !== this.provider.kind)
@@ -313,7 +321,12 @@ export class GitWorkspaceService {
     const source = this.source(input)
     let info
     try {
-      info = await this.provider.getRepository(source.repo)
+      // A late answer is discarded: nothing from it is used or cached.
+      info = await withTimeout(
+        this.provider.getRepository(source.repo),
+        publicationLimits.commandMs,
+        'Repository lookup timed out',
+      )
     } catch {
       throw failed()
     }
@@ -400,7 +413,11 @@ export class GitWorkspaceService {
     if (this.options.transport.kind === 'local-test') return {}
     let credentials: GitCredentials
     try {
-      credentials = await this.provider.issueCredentials(ref, access, CREDENTIAL_TTL_SECONDS)
+      credentials = await withTimeout(
+        this.provider.issueCredentials(ref, access, CREDENTIAL_TTL_SECONDS),
+        publicationLimits.commandMs,
+        'Repository credentials timed out',
+      )
     } catch {
       throw failed()
     }
@@ -488,7 +505,7 @@ export class GitWorkspaceService {
         throw forbidden('Repository credential expired before use')
       options.push('--config-env=http.extraHeader=RADITI_GIT_AUTH')
     }
-    return runProcess(this.options.gitBinary ?? 'git', [...options, ...args], {
+    return runProcess('git', [...options, ...args], {
       cwd,
       input,
       maxBytes,
@@ -514,21 +531,64 @@ export class GitWorkspaceService {
     return value
   }
 
+  /** The client's own base tree: its limits are the repository's, not the agent's. */
   private async tree(workspace: Workspace, sha: string): Promise<Map<string, Entry>> {
-    const output = await this.git(workspace, ['ls-tree', '-rz', '--full-tree', sha])
-    const entries = this.entries(output.stdout, /^(100644|100755) blob ([a-f0-9]{40})\t([^\0]+)$/)
-    await this.sizes(workspace, entries)
+    const output = await this.list(
+      workspace,
+      ['ls-tree', '-rz', '--full-tree', sha],
+      publicationLimits.repositoryFiles,
+      repositoryTooLarge,
+    )
+    const entries = this.entries(
+      output,
+      /^(100644|100755) blob ([a-f0-9]{40})\t([^\0]+)$/,
+      publicationLimits.repositoryFiles,
+      repositoryTooLarge,
+    )
+    await this.blobSizes(
+      workspace,
+      [...entries.values()].map((entry) => entry.oid),
+      repositoryTooLarge,
+    )
     return entries
   }
 
   private async index(workspace: Workspace): Promise<Map<string, Entry>> {
     return this.entries(
-      (await this.git(workspace, ['ls-files', '--stage', '-z'])).stdout,
+      await this.list(
+        workspace,
+        ['ls-files', '--stage', '-z'],
+        CANDIDATE_FILES,
+        publicationTooLarge,
+      ),
       /^(100644|100755) ([a-f0-9]{40}) 0\t([^\0]+)$/,
+      CANDIDATE_FILES,
+      publicationTooLarge,
     )
   }
 
-  private entries(bytes: Uint8Array, format: RegExp): Map<string, Entry> {
+  /** A file list bounded by its file limit: a larger listing is a 413, not a failed command. */
+  private async list(
+    workspace: Workspace,
+    args: string[],
+    files: number,
+    tooLarge: TooLarge,
+  ): Promise<Uint8Array> {
+    try {
+      return (await this.git(workspace, args, undefined, listBytes(files))).stdout
+    } catch (error) {
+      if (isDomainError(error) && error.code === PROCESS_OUTPUT_LIMIT)
+        throw tooLarge('File list exceeds its limit')
+      throw error
+    }
+  }
+
+  private entries(
+    bytes: Uint8Array,
+    format: RegExp,
+    limit: number,
+    tooLarge: TooLarge,
+  ): Map<string, Entry> {
     const raw = text(bytes)
     if (raw && !raw.endsWith('\0')) throw failed()
     const entries = new Map<string, Entry>()
@@ -540,61 +600,61 @@ export class GitWorkspaceService {
       const oid = match[2]!
       const path = match[3]!
       assertPublicationPath(path)
-      if (entries.has(path) || entries.size >= publicationLimits.files)
-        throw badRequest('Repository file count exceeds its limit')
+      if (entries.has(path)) throw badRequest('Repository lists a path twice')
+      if (entries.size >= limit) throw tooLarge('File count exceeds its limit')
       entries.set(path, { path, mode, oid })
     }
     return entries
   }
 
-  private async sizes(
+  /** Sizes by OID, within the per-blob and total limits. Only postimages may be missing. */
+  private async blobSizes(
     workspace: Workspace,
-    entries: Map<string, Entry>,
-  ): Promise<Map<string, number>> {
-    if (!entries.size) return new Map()
-    const request = [...entries.values()].map((entry) => entry.oid).join('\n') + '\n'
+    oids: string[],
+    tooLarge: TooLarge,
+    allowMissing = false,
+  ): Promise<(number | undefined)[]> {
+    if (!oids.length) return []
     const output = await this.git(
       workspace,
       ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
-      Buffer.from(request),
+      Buffer.from(oids.join('\n') + '\n'),
     )
     const rows = text(output.stdout).trimEnd().split('\n')
-    if (rows.length !== entries.size) throw failed()
-    const sizes = new Map<string, number>()
+    if (rows.length !== oids.length) throw failed()
+    const subject = allowMissing ? 'Publication historical blob' : 'Repository blob'
     let total = 0
-    for (const [index, entry] of [...entries.values()].entries()) {
+    return oids.map((oid, index) => {
+      if (allowMissing && rows[index] === `${oid} missing`) return undefined
       const match = /^([a-f0-9]{40}) blob ([0-9]+)$/.exec(rows[index]!)
       const size = Number(match?.[2])
-      if (
-        !match ||
-        match[1] !== entry.oid ||
-        !Number.isSafeInteger(size) ||
-        size > publicationLimits.fileBytes
-      )
-        throw badRequest('Repository blob exceeds its limit')
+      if (!match || match[1] !== oid || !Number.isSafeInteger(size))
+        throw badRequest(`${subject} is not a regular blob`)
+      if (size > publicationLimits.fileBytes) throw tooLarge(`${subject} exceeds its limit`)
       total += size
-      if (total > publicationLimits.treeBytes)
-        throw badRequest('Repository tree exceeds its size limit')
-      sizes.set(entry.path, size)
-    }
-    return sizes
+      if (total > publicationLimits.treeBytes) throw tooLarge(`${subject}s exceed the tree limit`)
+      return size
+    })
   }
 
-  private checkNumstat(output: Uint8Array, protectedPaths: readonly string[]): void {
+  /** Returns the number of paths the patch changes. */
+  private checkNumstat(output: Uint8Array, protectedPaths: readonly string[]): number {
     const raw = text(output)
     if (raw && !raw.endsWith('\0')) throw badRequest('Invalid patch statistics')
     const paths = new Set<string>()
     for (const row of raw ? raw.slice(0, -1).split('\0') : []) {
       const match = /^(?:[0-9]+|-)\t(?:[0-9]+|-)\t(.+)$/.exec(row)
       if (!match) throw badRequest('Unsupported or ambiguous patch paths')
-      if (paths.has(match[1]!) || paths.size >= publicationLimits.files)
-        throw badRequest('Publication has repeated paths or too many changes')
+      if (paths.has(match[1]!)) throw badRequest('Publication has repeated paths')
+      if (paths.size >= publicationLimits.files)
+        throw publicationTooLarge('Publication changes too many files')
       paths.add(match[1]!)
       assertPublicationChange(
         { path: match[1]!, oldMode: '100644', newMode: '100644', sizeBytes: 0 },
         protectedPaths,
       )
     }
+    return paths.size
   }
 
   private async checkPostimages(workspace: Workspace, patch: Uint8Array): Promise<void> {
@@ -610,30 +670,8 @@ export class GitWorkspaceService {
     }
     if (!oids.length) return
     if (oids.length > publicationLimits.files)
-      throw badRequest('Publication changes too many files')
-    const result = await this.git(
-      workspace,
-      ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
-      Buffer.from(oids.join('\n') + '\n'),
-    )
-    const rows = text(result.stdout).trimEnd().split('\n')
-    if (rows.length !== oids.length) throw failed()
-    let total = 0
-    for (let i = 0; i < rows.length; i++) {
-      if (rows[i] === `${oids[i]} missing`) continue
-      const match = /^([a-f0-9]{40}) blob ([0-9]+)$/.exec(rows[i]!)
-      const size = Number(match?.[2])
-      if (
-        !match ||
-        match[1] !== oids[i] ||
-        !Number.isSafeInteger(size) ||
-        size > publicationLimits.fileBytes
-      )
-        throw badRequest('Publication historical blob exceeds its limit')
-      total += size
-      if (total > publicationLimits.treeBytes)
-        throw badRequest('Publication historical blobs exceed the tree limit')
-    }
+      throw publicationTooLarge('Publication changes too many files')
+    await this.blobSizes(workspace, oids, publicationTooLarge, true)
   }
 
   private async validateIndex(
@@ -642,20 +680,13 @@ export class GitWorkspaceService {
     candidate: Map<string, Entry>,
     metadata: PublicationMetadata,
   ): Promise<void> {
-    // Ask Git for the resulting raw delta as well, never trust patch header declarations alone.
-    const raw = await this.git(workspace, [
-      'diff',
-      '--cached',
-      '--raw',
-      '-z',
-      '--no-renames',
-      '--no-ext-diff',
-      metadata.expectedBaseSha,
-      '--',
-    ])
-    if (raw.stdout.byteLength > publicationLimits.patchBytes)
-      throw badRequest('Publication changes too many files')
-    const sizes = await this.sizes(workspace, candidate)
+    const entries = [...candidate.values()]
+    const blobs = await this.blobSizes(
+      workspace,
+      entries.map((entry) => entry.oid),
+      publicationTooLarge,
+    )
+    const sizes = new Map(entries.map((entry, index) => [entry.path, blobs[index]]))
     const paths = new Set([...base.keys(), ...candidate.keys()])
     for (const path of paths) {
       const before = base.get(path)
@@ -749,56 +780,21 @@ export class GitWorkspaceService {
   }
 
   private async sandboxExec(sandbox: Sandbox, argv: string[], input?: Uint8Array): Promise<void> {
-    const controller = new AbortController()
-    let handle: Awaited<ReturnType<Sandbox['exec']>> | undefined
-    const run = async () => {
-      handle = await sandbox.exec({
-        argv,
-        env: {
-          GIT_CONFIG_NOSYSTEM: '1',
-          GIT_CONFIG_GLOBAL: '/dev/null',
-          GIT_CONFIG_SYSTEM: '/dev/null',
-          GIT_TERMINAL_PROMPT: '0',
-        },
-        stdin: input
-          ? (async function* () {
-              yield input
-            })()
-          : undefined,
-        timeoutMs: publicationLimits.commandMs,
-        signal: controller.signal,
-      })
-      if (controller.signal.aborted) {
-        void handle.kill('SIGKILL').catch(() => {})
-        throw failed()
-      }
-      const consume = (async () => {
-        let size = 0
-        for await (const chunk of handle!.output()) {
-          size += chunk.data.byteLength
-          if (size > 64 * 1024) throw failed()
-        }
-      })()
-      const [exit] = await Promise.all([handle.wait(), consume])
-      if (exit.reason !== 'exited' || exit.code !== 0) throw failed()
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined
-    try {
-      await Promise.race([
-        run(),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            controller.abort()
-            reject(failed())
-          }, publicationLimits.commandMs)
-        }),
-      ])
-    } catch {
-      controller.abort()
-      if (handle) void handle.kill('SIGKILL').catch(() => {})
-      throw failed()
-    } finally {
-      if (timer) clearTimeout(timer)
-    }
+    await execBounded(sandbox, argv, {
+      env: {
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_SYSTEM: '/dev/null',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+      stdin: input
+        ? (async function* () {
+            yield input
+          })()
+        : undefined,
+      maxStdout: 64 * 1024,
+      timeoutMs: publicationLimits.commandMs,
+      failure: failed,
+    })
   }
 }

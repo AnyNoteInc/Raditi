@@ -360,6 +360,24 @@ describe('adversarial known events', () => {
     )
   })
 
+  it('fails closed on terminal errors without a usable reason', () => {
+    const fallback = [{ type: 'failed', reason: 'Агент не смог завершить действие.' }]
+    const samples: [AgentDriver, unknown][] = [
+      [codex, { type: 'turn.failed', error: {} }],
+      [codex, { type: 'turn.failed', error: { message: '' } }],
+      [codex, { type: 'error' }],
+      [codex, { type: 'error', message: { text: 'nested' } }],
+      [qwen, { type: 'result', subtype: 'error', is_error: true, error: { message: 42 } }],
+      [qwen, { type: 'result', subtype: 'error', is_error: true, error: 'text' }],
+      [opencode, { type: 'error' }],
+      [opencode, { type: 'error', error: { data: { message: {} } } }],
+    ]
+    for (const [driver, sample] of samples) expect(parse(driver, sample)).toEqual(fallback)
+    expect(parse(codex, { type: 'item.completed', item: { type: 'error', message: 42 } })).toEqual(
+      [],
+    )
+  })
+
   it('never lets unknown native ids become snapshot path traversal', () => {
     for (const id of ['../secret', '/root', 'a/b', 'a\\b', '.', '..', 'x'.repeat(201)]) {
       expect(parse(codex, { type: 'thread.started', thread_id: id })).toEqual([])

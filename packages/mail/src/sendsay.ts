@@ -4,7 +4,7 @@ import Sendsay from 'sendsay-api'
 
 import { MailDeliveryError, type MailTransport } from './transport.ts'
 
-export const SENDSAY_API_URL = 'https://api.sendsay.ru'
+const SENDSAY_API_URL = 'https://api.sendsay.ru'
 
 export interface SendsayClient {
   request(payload: Record<string, unknown>): Promise<unknown>
@@ -12,7 +12,6 @@ export interface SendsayClient {
 
 export interface SendsayTransportOptions {
   apiKey: string
-  apiUrl?: string
   /** sendsay-api has no request timeout; a hung call would hold the queue worker forever. */
   timeoutMs?: number
 }
@@ -25,7 +24,7 @@ export function createSendsayTransport(
   options: SendsayTransportOptions,
   client: SendsayClient = new Sendsay({
     apiKey: options.apiKey,
-    apiUrl: options.apiUrl ?? SENDSAY_API_URL,
+    apiUrl: SENDSAY_API_URL,
   }),
 ): MailTransport {
   const timeoutMs = options.timeoutMs ?? 20_000

@@ -17,7 +17,7 @@ export interface YookassaWebhookOptions {
 }
 
 // A notification body is a few kilobytes; anything far larger is not from ЮKassa.
-const MAX_BODY_BYTES = 64 * 1024
+export const MAX_BODY_BYTES = 64 * 1024
 
 /**
  * The sender address. The reverse proxy in front of web overwrites X-Forwarded-For with the one
@@ -45,8 +45,12 @@ export async function handleYookassaWebhook(
     return json({ error: 'forbidden' }, 403)
   }
 
+  // A declared oversize body is refused unread; a missing or non-numeric length is checked after.
+  if (Number(request.headers.get('content-length')) > MAX_BODY_BYTES) {
+    return json({ error: 'invalid notification' }, 400)
+  }
   const text = await request.text()
-  if (text.length > MAX_BODY_BYTES) return json({ error: 'invalid notification' }, 400)
+  if (Buffer.byteLength(text) > MAX_BODY_BYTES) return json({ error: 'invalid notification' }, 400)
 
   let event: WebhookEvent
   try {

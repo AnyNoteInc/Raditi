@@ -70,7 +70,6 @@ catalog:
   '@prisma/adapter-pg': 7.10.0
   pg: ^8.23.0
   '@types/pg': ^8.23.1
-  dotenv: ^18.0.4
 
   # Auth and API
   better-auth: 1.7.6

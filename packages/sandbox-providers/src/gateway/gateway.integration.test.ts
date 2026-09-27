@@ -8,7 +8,6 @@ import Docker from 'dockerode'
 import { describe, expect, it } from 'vitest'
 
 import { createDockerSandboxProvider } from '../docker.ts'
-import { createDockerGatewayManager } from './manager.ts'
 
 const image = process.env.RADITI_DOCKER_TEST_IMAGE
 const gatewayImage = process.env.SANDBOX_GATEWAY_IMAGE
@@ -28,19 +27,16 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
     await new Promise<void>((resolve) => upstream.listen(0, '0.0.0.0', resolve))
     const port = (upstream.address() as AddressInfo).port
     const client = new Docker({ socketPath })
-    const manager = createDockerGatewayManager(
-      {
+    const provider = createDockerSandboxProvider({
+      runtime,
+      socketPath,
+      gateway: {
         image: gatewayImage!,
         guardImage: guardImage!,
         llmUpstream: `http://host.docker.internal:${port}`,
         mcpUpstream: `http://host.docker.internal:${port}`,
       },
-      { client },
-    )
-    const provider = createDockerSandboxProvider(
-      { runtime, imagePrefix: 'raditi/agent', socketPath },
-      { client, gateway: manager },
-    )
+    })
     let sandbox: Sandbox | undefined
     let resourceId: string | undefined
     const execute = async (argv: string[]) => {

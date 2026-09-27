@@ -12,6 +12,8 @@ import { badRequest } from '../errors.ts'
 export const sandboxRuntimes = ['runsc', 'runc'] as const
 export type SandboxRuntime = (typeof sandboxRuntimes)[number]
 export const SANDBOX_SECRETS_DIR = '/run/raditi/secrets'
+/** Size of the secrets tmpfs every provider mounts; prepared secrets must fit into it. */
+export const SANDBOX_SECRETS_TMPFS_BYTES = 2 * 1024 * 1024
 
 export interface SandboxLabels {
   workspaceId: string
@@ -149,9 +151,11 @@ export const MAX_SANDBOX_RESOURCES: Readonly<SandboxResources> = Object.freeze({
 })
 export const MAX_SANDBOX_TURN_MS = 20 * 60 * 1000
 
-/** `repository@sha256:<64 hex>`, optionally with a registry host and port; no tag. */
-const digestPinnedImage =
-  /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+(?=\/))?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$/
+const imageRepository = String.raw`[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+(?=\/))?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*`
+/** A repository without tag or digest, optionally with a registry host and port. */
+export const IMAGE_REPOSITORY = new RegExp(`^${imageRepository}$`)
+/** `repository@sha256:<64 hex>`; no tag. */
+export const DIGEST_PINNED_IMAGE = new RegExp(`^${imageRepository}@sha256:[0-9a-f]{64}$`)
 
 /** Label values end up in container names and docker labels. */
 const labelId = z
@@ -233,26 +237,66 @@ const sandboxEnvSchema = z.record(z.string(), z.string().max(4096)).superRefine(
   }
 })
 
-export const execCursorSchema = z.object({
-  stdout: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  stderr: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-}).strict()
+export const execCursorSchema = z
+  .object({
+    stdout: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    stderr: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict()
 
-export const execSpecSchema = z.object({
-  argv: z.array(z.string().max(128 * 1024).refine((s) => !s.includes('\0'))).min(1).max(256)
-    .refine((argv) => argv[0] !== '' && argv.reduce((n, s) => n + s.length, 0) <= 256 * 1024,
-      'command must be nonempty and fit the argument budget'),
-  cwd: z.string().max(1024).refine((path) => path.startsWith('/') && !path.includes('\0') &&
-    (path === '/' || path.slice(1).split('/').every((s) => s !== '' && s !== '.' && s !== '..'))).optional(),
-  env: sandboxEnvSchema.optional(),
-  stdin: z.custom<AsyncIterable<Uint8Array>>((value) => value !== null &&
-    typeof value === 'object' && Symbol.asyncIterator in value &&
-    typeof value[Symbol.asyncIterator] === 'function').optional(),
-  timeoutMs: z.number().int().positive().max(MAX_SANDBOX_TURN_MS),
-  signal: z.custom<AbortSignal>((value) => value !== null && typeof value === 'object' &&
-    'aborted' in value && typeof value.aborted === 'boolean' &&
-    'addEventListener' in value && typeof value.addEventListener === 'function').optional(),
-}).strict() satisfies z.ZodType<ExecSpec>
+export const execSpecSchema = z
+  .object({
+    argv: z
+      .array(
+        z
+          .string()
+          .max(128 * 1024)
+          .refine((s) => !s.includes('\0')),
+      )
+      .min(1)
+      .max(256)
+      .refine(
+        (argv) => argv[0] !== '' && argv.reduce((n, s) => n + s.length, 0) <= 256 * 1024,
+        'command must be nonempty and fit the argument budget',
+      ),
+    cwd: z
+      .string()
+      .max(1024)
+      .refine(
+        (path) =>
+          path.startsWith('/') &&
+          !path.includes('\0') &&
+          (path === '/' ||
+            path
+              .slice(1)
+              .split('/')
+              .every((s) => s !== '' && s !== '.' && s !== '..')),
+      )
+      .optional(),
+    env: sandboxEnvSchema.optional(),
+    stdin: z
+      .custom<AsyncIterable<Uint8Array>>(
+        (value) =>
+          value !== null &&
+          typeof value === 'object' &&
+          Symbol.asyncIterator in value &&
+          typeof value[Symbol.asyncIterator] === 'function',
+      )
+      .optional(),
+    timeoutMs: z.number().int().positive().max(MAX_SANDBOX_TURN_MS),
+    signal: z
+      .custom<AbortSignal>(
+        (value) =>
+          value !== null &&
+          typeof value === 'object' &&
+          'aborted' in value &&
+          typeof value.aborted === 'boolean' &&
+          'addEventListener' in value &&
+          typeof value.addEventListener === 'function',
+      )
+      .optional(),
+  })
+  .strict() satisfies z.ZodType<ExecSpec>
 
 export function assertExecSpec(spec: ExecSpec): ExecSpec {
   const parsed = execSpecSchema.safeParse(spec)
@@ -260,7 +304,7 @@ export function assertExecSpec(spec: ExecSpec): ExecSpec {
   return parsed.data
 }
 
-const networkPolicySchema = z.discriminatedUnion('mode', [
+export const networkPolicySchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('none') }).strict(),
   z
     .object({
@@ -272,7 +316,18 @@ const networkPolicySchema = z.discriminatedUnion('mode', [
         .refine((routes) => new Set(routes).size === routes.length, 'duplicate route'),
     })
     .strict(),
-])
+]) satisfies z.ZodType<NetworkPolicy>
+
+export const sandboxLabelsSchema = z
+  .object({
+    workspaceId: labelId,
+    siteId: labelId,
+    taskId: labelId,
+    sessionId: labelId,
+    turn: z.number().int().positive(),
+    leaseEpoch: z.number().int().positive().optional(),
+  })
+  .strict() satisfies z.ZodType<SandboxLabels>
 
 /**
  * The invariants of CLAUDE.md rule 5 as a schema: image pinned by digest, uid/gid 10001,
@@ -285,17 +340,8 @@ export const sandboxSpecSchema = z
     image: z
       .string()
       .max(512)
-      .regex(digestPinnedImage, 'expected an image pinned by digest: repository@sha256:<64 hex>'),
-    labels: z
-      .object({
-        workspaceId: labelId,
-        siteId: labelId,
-        taskId: labelId,
-        sessionId: labelId,
-        turn: z.number().int().positive(),
-        leaseEpoch: z.number().int().positive().optional(),
-      })
-      .strict(),
+      .regex(DIGEST_PINNED_IMAGE, 'expected an image pinned by digest: repository@sha256:<64 hex>'),
+    labels: sandboxLabelsSchema,
     runtime: z.enum(sandboxRuntimes),
     resources: z
       .object({

@@ -34,7 +34,7 @@ export function parseQwenEvent(line: string): AgentEvent[] {
     })
   }
   if (row.type !== 'result' || typeof row.is_error !== 'boolean') return []
-  if (row.is_error) return failed(object(row.error)?.message ?? 'Агент не смог завершить действие.')
+  if (row.is_error) return failed(object(row.error)?.message)
   if (row.subtype !== 'success') return []
   const usage = object(row.usage)
   const input = count(usage?.input_tokens)

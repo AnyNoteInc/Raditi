@@ -1,6 +1,7 @@
 import {
   agentEventSchema,
   agentOutputLimits,
+  nativeSessionIdSchema,
   turnResultSchema,
   type AgentEvent,
 } from '@repo/domain'
@@ -57,11 +58,8 @@ export const optionalCount = (value: unknown): number | undefined =>
 
 /** Session identifiers are also used in literal snapshot paths; never truncate them. */
 export function nativeSessionId(value: unknown): string | undefined {
-  return typeof value === 'string' &&
-    value.length <= agentOutputLimits.nativeSessionId &&
-    /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value)
-    ? value
-    : undefined
+  const parsed = nativeSessionIdSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
 }
 
 /** All normalized output crosses the shared zod boundary, including derived token counts. */
@@ -87,9 +85,14 @@ export function message(value: unknown): AgentEvent[] {
   return events({ type: 'message', text: valueText })
 }
 
-export function failed(value: unknown): AgentEvent[] {
-  const reason = text(value, agentOutputLimits.failureReason)
-  return reason === undefined ? [] : events({ type: 'failed', reason })
+const FAILURE_FALLBACK = 'Агент не смог завершить действие.'
+
+/** A recognized terminal error always fails the turn, even without a usable reason. */
+export function failed(value?: unknown): AgentEvent[] {
+  return events({
+    type: 'failed',
+    reason: text(value, agentOutputLimits.failureReason) || FAILURE_FALLBACK,
+  })
 }
 
 /** Only the current final message is eligible; never recover an older successful result. */

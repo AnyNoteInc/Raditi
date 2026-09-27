@@ -30,9 +30,9 @@ describe('bounded turn output', () => {
       () => {},
     )
     expect(read.events).toEqual([{ type: 'message', text: 'Привет' }])
-    expect(record).toHaveBeenNthCalledWith(1, { stdout: 0, stderr: 0 }, [])
-    expect(record).toHaveBeenNthCalledWith(2, { stdout: 0, stderr: 17 }, [])
-    expect(record).toHaveBeenLastCalledWith({ stdout: bytes.length, stderr: 17 }, read.events)
+    // A partial line and stderr carry no events: nothing is journaled until the line completes.
+    expect(record).toHaveBeenCalledOnce()
+    expect(record).toHaveBeenCalledWith({ stdout: bytes.length, stderr: 17 }, read.events)
     expect(JSON.stringify(record.mock.calls)).not.toContain('private raw error')
   })
 
@@ -49,6 +49,22 @@ describe('bounded turn output', () => {
     expect(record).toHaveBeenLastCalledWith({ stdout: bytes.length, stderr: 0 }, read.events)
   })
 
+  it('journals only output with events, and the final tail as before', async () => {
+    const record = vi.fn(async () => {})
+    await readTurnOutput(
+      handle([{ stream: 'stdout', offset: 0, data: Buffer.from('progress\nmore') }]),
+      { parseEvent: () => [] },
+      record,
+      () => {},
+    )
+    expect(record).toHaveBeenCalledOnce()
+    expect(record).toHaveBeenCalledWith({ stdout: 13, stderr: 0 }, [])
+  })
+
+  // The agent's output, not the client's input: never a 400 «check the data you entered».
+  const rejected = { code: 'TURN_OUTPUT_REJECTED', httpStatus: 502 }
+  const tooLarge = { code: 'TURN_OUTPUT_TOO_LARGE', httpStatus: 413 }
+
   it('refuses gaps in either stream instead of concatenating missing output', async () => {
     await expect(
       readTurnOutput(
@@ -57,7 +73,7 @@ describe('bounded turn output', () => {
         vi.fn(),
         () => {},
       ),
-    ).rejects.toThrow('Invalid agent output')
+    ).rejects.toMatchObject({ ...rejected, message: 'Invalid agent output stream' })
   })
 
   it('refuses invalid UTF-8 instead of silently changing the output', async () => {
@@ -68,6 +84,51 @@ describe('bounded turn output', () => {
         vi.fn(),
         () => {},
       ),
-    ).rejects.toThrow()
+    ).rejects.toMatchObject(rejected)
+  })
+
+  it('refuses an event that fails the shared schema as rejected output', async () => {
+    await expect(
+      readTurnOutput(
+        handle([{ stream: 'stdout', offset: 0, data: Buffer.from('{"type":"unknown"}\n') }]),
+        driver,
+        vi.fn(),
+        () => {},
+      ),
+    ).rejects.toMatchObject(rejected)
+  })
+
+  it('refuses a known credential as rejected output', async () => {
+    const line = JSON.stringify({ type: 'message', text: 'key synthetic-turn-key' }) + '\n'
+    await expect(
+      readTurnOutput(
+        handle([{ stream: 'stdout', offset: 0, data: Buffer.from(line) }]),
+        driver,
+        vi.fn(),
+        () => {},
+        ['synthetic-turn-key'],
+      ),
+    ).rejects.toMatchObject({ ...rejected, message: 'Agent output contains a turn credential' })
+  })
+
+  it('reports output over its limits as too large (413)', async () => {
+    const long = Buffer.alloc(256 * 1024 + 1, 'x')
+    await expect(
+      readTurnOutput(
+        handle([{ stream: 'stdout', offset: 0, data: long }]),
+        driver,
+        vi.fn(),
+        () => {},
+      ),
+    ).rejects.toMatchObject(tooLarge)
+    const many = Buffer.from(`${JSON.stringify({ type: 'completed' })}\n`.repeat(10_001))
+    await expect(
+      readTurnOutput(
+        handle([{ stream: 'stdout', offset: 0, data: many }]),
+        driver,
+        vi.fn(async () => {}),
+        () => {},
+      ),
+    ).rejects.toMatchObject({ ...tooLarge, message: 'Agent event limit exceeded' })
   })
 })

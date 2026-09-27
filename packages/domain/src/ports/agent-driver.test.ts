@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { agentEventSchema, agentOutputLimits, turnResultSchema } from './agent-driver.ts'
+import {
+  agentEventSchema,
+  agentOutputLimits,
+  preparedRunExposesSecret,
+  preparedRunLimits,
+  preparedRunSchema,
+  turnCredentials,
+  turnResultSchema,
+  type PreparedRun,
+} from './agent-driver.ts'
+import { SANDBOX_SECRETS_DIR, SANDBOX_SECRETS_TMPFS_BYTES } from './sandbox-provider.ts'
 
 describe('turnResultSchema', () => {
   it('accepts the example from spec §8', () => {
@@ -132,8 +142,93 @@ describe('limits on untrusted agent output', () => {
     expect(agentEventSchema.safeParse(event).success).toBe(true)
   })
 
+  it.each(['thread.1', 'ses:1', '../escape', '-flag', ''])(
+    'rejects a started event with native session id %j that is unsafe in snapshot paths',
+    (nativeSessionId) => {
+      expect(agentEventSchema.safeParse({ type: 'started', nativeSessionId }).success).toBe(false)
+    },
+  )
+
   it('exposes the limits for drivers that truncate before validation', () => {
     expect(agentOutputLimits).toMatchObject({ clientMessage: 2000, messageText: 20_000 })
     expect(Object.isFrozen(agentOutputLimits)).toBe(true)
+  })
+})
+
+describe('prepared run credentials', () => {
+  const context = {
+    taskId: 't',
+    sessionId: 's',
+    turn: 1,
+    llm: { baseUrl: 'http://gw.sandbox/llm', apiKey: 'llm-virtual-key', model: 'm' },
+    mcp: { url: 'http://gw.sandbox/mcp', token: 'mcp-turn-token' },
+    instructions: '',
+  }
+  const run = (overrides: Partial<PreparedRun> = {}): PreparedRun => ({
+    context,
+    files: [{ path: '/agent-home/codex/config.toml', content: 'model = "m"' }],
+    env: { CODEX_HOME: '/agent-home/codex' },
+    secrets: [{ path: `${SANDBOX_SECRETS_DIR}/extra`, content: 'extra-secret-value' }],
+    ...overrides,
+  })
+  const credentials = (prepared: PreparedRun) => turnCredentials(context, prepared.secrets)
+
+  it('lists the LLM key, the MCP token and every secret file, skipping empty values', () => {
+    expect(credentials(run())).toEqual(['llm-virtual-key', 'mcp-turn-token', 'extra-secret-value'])
+    expect(turnCredentials({ ...context, mcp: { url: 'u', token: '' } }, [])).toEqual([
+      'llm-virtual-key',
+    ])
+  })
+
+  it('accepts files and env that only point at the secrets tmpfs', () => {
+    const prepared = run({ env: { LLM_KEY_FILE: `${SANDBOX_SECRETS_DIR}/llm` } })
+    expect(preparedRunExposesSecret(prepared, credentials(prepared))).toBe(false)
+  })
+
+  it.each([
+    [
+      'a config file with the LLM key',
+      { files: [{ path: '/agent-home/c', content: 'key = "llm-virtual-key"' }] },
+    ],
+    [
+      'a config file with the MCP token',
+      { files: [{ path: '/agent-home/c', content: 'Bearer mcp-turn-token' }] },
+    ],
+    [
+      'a config file with a secret file value',
+      { files: [{ path: '/agent-home/c', content: 'x=extra-secret-value' }] },
+    ],
+    ['an env value with the LLM key', { env: { OPENAI_BASE: 'llm-virtual-key' } }],
+    ['an env value with the MCP token', { env: { MCP_HEADERS: 'Authorization: mcp-turn-token' } }],
+  ] satisfies Array<[string, Partial<PreparedRun>]>)('refuses %s', (_, overrides) => {
+    const prepared = run(overrides)
+    expect(preparedRunExposesSecret(prepared, credentials(prepared))).toBe(true)
+  })
+
+  it('refuses a command argument with a turn credential: argv is visible to process listings', () => {
+    const prepared = run()
+    const argv = (value: string) => ['codex', 'exec', `--header=Authorization: ${value}`]
+    expect(preparedRunExposesSecret(prepared, credentials(prepared), argv('file'))).toBe(false)
+    for (const value of credentials(prepared))
+      expect(preparedRunExposesSecret(prepared, credentials(prepared), argv(value))).toBe(true)
+  })
+
+  it('keeps prepared secrets within the secrets tmpfs, counted in whole pages', () => {
+    expect(preparedRunLimits.secretBytes).toBeLessThanOrEqual(SANDBOX_SECRETS_TMPFS_BYTES)
+    const fits = (count: number, bytes: number) =>
+      preparedRunSchema.safeParse(
+        run({
+          files: [],
+          secrets: Array.from({ length: count }, (_, i) => ({
+            path: `${SANDBOX_SECRETS_DIR}/s${i}`,
+            content: 'x'.repeat(bytes),
+          })),
+        }),
+      ).success
+    expect(fits(1, SANDBOX_SECRETS_TMPFS_BYTES)).toBe(true)
+    expect(fits(1, SANDBOX_SECRETS_TMPFS_BYTES + 1)).toBe(false)
+    // 170 and 200 files of three pages each: 1.6 MB of content alone would still pass.
+    expect(fits(170, 2 * 4096 + 1)).toBe(true)
+    expect(fits(200, 2 * 4096 + 1)).toBe(false)
   })
 })

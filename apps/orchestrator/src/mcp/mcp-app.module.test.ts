@@ -53,6 +53,10 @@ describe('McpAppModule', () => {
     expect(res.headers['cache-control']).toBe('no-store')
     expect(infra.prisma.$queryRaw).toHaveBeenCalledOnce()
     expect(infra.secrets.health).toHaveBeenCalledOnce()
+
+    // The next probes within a few seconds reuse the report.
+    expect((await request(server).get('/health')).body).toEqual({ status: 'ok' })
+    expect(infra.prisma.$queryRaw).toHaveBeenCalledOnce()
   })
 
   it('answers /health 503 when Vault is down', async () => {

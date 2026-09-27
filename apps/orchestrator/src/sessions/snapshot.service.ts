@@ -5,6 +5,7 @@ import {
   conflict,
   DomainError,
   isDomainError,
+  isTooLarge,
   notFound,
   SNAPSHOT_SCHEMA_VERSION,
   snapshotLimits,
@@ -13,9 +14,9 @@ import {
   snapshotPartFiles,
   snapshotPartNames,
   snapshotReferenceSchema,
+  snapshotTooLarge,
   turnSnapshotPrefix,
   type ObjectStorage,
-  type Sandbox,
   type SecretStore,
   type SnapshotManifest,
   type SnapshotMetadata,
@@ -24,7 +25,7 @@ import {
 } from '@repo/domain'
 
 import { decryptPart, encryptPart, sha256, snapshotAad } from './snapshot-crypto.ts'
-import { SandboxSnapshotTransport, type SnapshotArchives } from './sandbox-snapshot.ts'
+import type { SnapshotArchives } from './sandbox-snapshot.ts'
 import { validateSnapshotArchives } from './archive-validation.ts'
 
 export interface LoadedSnapshot {
@@ -34,55 +35,89 @@ export interface LoadedSnapshot {
 
 /**
  * Host-only snapshot lifecycle. The caller owns the site/turn lease and has stopped the agent.
- * An atomic reservation prevents concurrent or repeated writes to immutable turn keys. A crash
- * may leave an incomplete reservation: P2 reconciliation must inspect it under the site lease,
- * never blindly expire it while its writer could still be alive.
+ * Checks, the Vault data key, encryption and the manifest come first and write nothing: their
+ * failure is SNAPSHOT_NOT_WRITTEN, or a 413 for a size or count limit (SNAPSHOT_TOO_LARGE,
+ * PUBLICATION_TOO_LARGE), and the turn may be retried. Only then an atomic reservation
+ * prevents concurrent or repeated writes to immutable turn keys. A crash after it may leave an
+ * incomplete reservation: P2 reconciliation must inspect it under the site lease, never blindly
+ * expire it while its writer could still be alive. A caller that stops waiting aborts `signal`:
+ * a save still pending on Vault then writes nothing, and one past its reservation stops before
+ * the next object and never commits a manifest.
  */
 export class SnapshotService {
   constructor(
     private readonly storage: ObjectStorage,
     private readonly secrets: SecretStore,
-    private readonly transport = new SandboxSnapshotTransport(),
   ) {}
 
-  async capture(sandbox: Sandbox, input: SnapshotMetadata): Promise<SnapshotManifest> {
-    const metadata = parseMetadata(input)
-    assertSandboxScope(sandbox, metadata)
-    if (sandbox.labels.turn !== metadata.turn)
-      throw badRequest('Snapshot turn differs from sandbox')
-    const parts = await this.transport.capture(sandbox, metadata.home, metadata.git.baseSha)
-    return this.save(metadata, parts)
-  }
-
-  async save(input: SnapshotMetadata, inputArchives: SnapshotArchives): Promise<SnapshotManifest> {
-    const metadata = parseMetadata(input)
-    // Retain the exact checked bytes across asynchronous storage and Vault operations.
-    for (const name of snapshotPartNames) {
-      const limit = name === 'patch' ? snapshotLimits.patchBytes : snapshotLimits.archiveBytes
-      if (!(inputArchives[name] instanceof Uint8Array) || inputArchives[name].byteLength > limit)
-        throw badRequest('Invalid or oversized snapshot archive')
+  async save(
+    input: SnapshotMetadata,
+    inputArchives: SnapshotArchives,
+    signal?: AbortSignal,
+  ): Promise<SnapshotManifest> {
+    let metadata: SnapshotMetadata
+    let archives: SnapshotArchives
+    try {
+      metadata = parseMetadata(input)
+      // Only the owned, checked copies are encrypted; the caller may still mutate its buffers.
+      archives = await validateSnapshotArchives(metadata.home, inputArchives)
+    } catch (error) {
+      // A size or count limit stays a 413 for the client; it writes nothing either.
+      if (isTooLarge(error)) throw error
+      throw new DomainError(
+        'SNAPSHOT_NOT_WRITTEN',
+        'Invalid snapshot input; nothing was written',
+        400,
+      )
     }
-    const archives = {
-      home: Buffer.from(inputArchives.home),
-      untracked: Buffer.from(inputArchives.untracked),
-      patch: Buffer.from(inputArchives.patch),
-    }
-    await validateSnapshotArchives(metadata.home, archives)
     const prefix = turnSnapshotPrefix(metadata.sessionId, metadata.turn)
     const manifestKey = `${prefix}manifest.json`
-    const reservationKey = `${prefix}reservation.json`
-    let dataKey: Uint8Array | undefined
+    const { manifest, encoded, bodies } = await this.seal(metadata, archives)
+    if (signal?.aborted)
+      throw new DomainError('SNAPSHOT_NOT_WRITTEN', 'Snapshot save was interrupted', 409)
+    // Past the reservation an interruption is ambiguous: the reservation and parts stay.
+    const assertActive = () => {
+      if (signal?.aborted)
+        throw new DomainError('SNAPSHOT_SAVE_FAILED', 'Snapshot save was interrupted', 409)
+    }
     try {
       const claimed = await this.storage.putIfAbsent(
         'sessions',
-        reservationKey,
+        `${prefix}reservation.json`,
         Buffer.from(JSON.stringify({ writer: randomUUID() })),
         { contentType: 'application/json' },
       )
       if (!claimed) throw conflict('Snapshot already exists or is being written')
       if (await this.storage.exists('sessions', manifestKey))
         throw conflict('Snapshot already exists')
+      // Only wrapped keys and authenticated ciphertext reach S3.
+      for (const part of manifest.parts) {
+        assertActive()
+        await this.storage.put('sessions', part.key, bodies[part.name], {
+          contentType: 'application/octet-stream',
+          sizeBytes: part.sizeBytes,
+        })
+      }
+      assertActive()
+      // The sole commit point. Readers never treat a reservation or individual parts as a snapshot.
+      await this.storage.put('sessions', manifestKey, encoded, { contentType: 'application/json' })
+      return manifest
+    } catch (error) {
+      // A failed response does not prove the remote PUT stopped. Keep the reservation and
+      // partial objects so a late write cannot corrupt another writer using the same keys.
+      if (isDomainError(error)) throw error
+      throw new DomainError('SNAPSHOT_SAVE_FAILED', 'Could not save the turn snapshot', 502)
+    }
+  }
 
+  /** No side effects: one data key per snapshot, zeroed as soon as all parts are sealed. */
+  private async seal(
+    metadata: SnapshotMetadata,
+    archives: SnapshotArchives,
+  ): Promise<{ manifest: SnapshotManifest; encoded: Buffer; bodies: SnapshotArchives }> {
+    const prefix = turnSnapshotPrefix(metadata.sessionId, metadata.turn)
+    let dataKey: Uint8Array | undefined
+    try {
       const keyId = `ws-${metadata.workspaceId}`
       const issued = await this.secrets.transitDataKey(keyId)
       dataKey = issued.plaintext
@@ -91,10 +126,12 @@ export class SnapshotService {
         schemaVersion: SNAPSHOT_SCHEMA_VERSION as typeof SNAPSHOT_SCHEMA_VERSION,
         createdAt: new Date().toISOString(),
       }
+      const bodies = {} as SnapshotArchives
       const parts: SnapshotPart[] = []
       for (const name of snapshotPartNames) {
         const sealed = encryptPart(archives[name], dataKey, snapshotAad(base, name))
-        const part: SnapshotPart = {
+        bodies[name] = sealed.body
+        parts.push({
           name,
           key: `${prefix}${snapshotPartFiles[name]}`,
           sha256: sha256(sealed.body),
@@ -106,26 +143,18 @@ export class SnapshotService {
             iv: sealed.iv,
             tag: sealed.tag,
           },
-        }
-        // Only wrapped keys and authenticated ciphertext reach S3.
-        parts.push(part)
-        await this.storage.put('sessions', part.key, sealed.body, {
-          contentType: 'application/octet-stream',
-          sizeBytes: part.sizeBytes,
         })
       }
+      dataKey.fill(0)
       const manifest = snapshotManifestSchema.parse({ ...base, parts })
       const encoded = Buffer.from(JSON.stringify(manifest))
       if (encoded.byteLength > snapshotLimits.manifestBytes)
-        throw badRequest('Snapshot manifest is too large')
-      // The sole commit point. Readers never treat a reservation or individual parts as a snapshot.
-      await this.storage.put('sessions', manifestKey, encoded, { contentType: 'application/json' })
-      return manifest
+        throw snapshotTooLarge('Snapshot manifest is too large')
+      return { manifest, encoded, bodies }
     } catch (error) {
-      // A failed response does not prove the remote PUT stopped. Keep the reservation and
-      // partial objects so a late write cannot corrupt another writer using the same keys.
-      if (isDomainError(error)) throw error
-      throw new DomainError('SNAPSHOT_SAVE_FAILED', 'Could not save the turn snapshot', 502)
+      // Nothing was sent to storage, so no reservation blocks a retry of this turn.
+      if (isTooLarge(error)) throw error
+      throw new DomainError('SNAPSHOT_NOT_WRITTEN', 'Could not prepare the turn snapshot', 502)
     } finally {
       dataKey?.fill(0)
     }
@@ -149,18 +178,24 @@ export class SnapshotService {
       const manifest = parsed.data
       assertCompatible(manifest, expected)
 
-      const archives = {} as SnapshotArchives
+      // Every part is read and hash-checked before the single data key is unwrapped.
+      const bodies: Array<{ part: SnapshotPart; body: Uint8Array }> = []
       for (const part of manifest.parts) {
         // Keys are checked by the schema, derived again here to keep the trust boundary explicit.
         const body = await this.read(`${prefix}${snapshotPartFiles[part.name]}`, part.sizeBytes)
         if (body.byteLength !== part.sizeBytes || sha256(body) !== part.sha256) {
           throw badRequest('Snapshot part failed its size or hash check')
         }
-        const key = await this.secrets.transitDecryptDataKey(
-          `ws-${expected.workspaceId}`,
-          part.encryption.wrappedKey,
-        )
-        try {
+        bodies.push({ part, body })
+      }
+      // The schema requires one wrapped key shared by all parts.
+      const key = await this.secrets.transitDecryptDataKey(
+        `ws-${expected.workspaceId}`,
+        manifest.parts[0]!.encryption.wrappedKey,
+      )
+      const archives = {} as SnapshotArchives
+      try {
+        for (const { part, body } of bodies)
           archives[part.name] = decryptPart(
             body,
             key,
@@ -168,28 +203,15 @@ export class SnapshotService {
             part.encryption.iv,
             part.encryption.tag,
           )
-        } finally {
-          key.fill(0)
-        }
+      } finally {
+        key.fill(0)
       }
-      await validateSnapshotArchives(expected.home, archives)
-      return { manifest, archives }
+      return { manifest, archives: await validateSnapshotArchives(expected.home, archives) }
     } catch (error) {
-      if (isDomainError(error)) throw error
+      // A stored part over today's limits is an unusable snapshot, not the client's input.
+      if (isDomainError(error) && !isTooLarge(error)) throw error
       throw new DomainError('SNAPSHOT_LOAD_FAILED', 'Could not load the turn snapshot', 502)
     }
-  }
-
-  /** Restore into a fresh, quiescent sandbox whose repo is already at manifest.git.headSha. */
-  async restore(
-    sandbox: Sandbox,
-    expected: SnapshotReference,
-  ): Promise<{ manifest: SnapshotManifest; patch: Uint8Array }> {
-    assertSandboxScope(sandbox, expected)
-    const loaded = await this.load(expected)
-    await this.transport.restore(sandbox, loaded.manifest.home, loaded.archives)
-    // patch is data for trusted publication/replay, not shell input or an automatically applied diff.
-    return { manifest: loaded.manifest, patch: loaded.archives.patch }
   }
 
   private async read(key: string, maxBytes: number): Promise<Uint8Array> {
@@ -210,18 +232,6 @@ function parseMetadata(input: SnapshotMetadata): SnapshotMetadata {
   const parsed = snapshotMetadataSchema.safeParse(input)
   if (!parsed.success) throw badRequest('Invalid snapshot metadata')
   return parsed.data
-}
-
-function assertSandboxScope(
-  sandbox: Sandbox,
-  expected: Pick<SnapshotReference, 'workspaceId' | 'sessionId'>,
-): void {
-  if (
-    sandbox.labels.workspaceId !== expected.workspaceId ||
-    sandbox.labels.sessionId !== expected.sessionId
-  ) {
-    throw badRequest('Snapshot and sandbox belong to different sessions')
-  }
 }
 
 function assertCompatible(manifest: SnapshotManifest, expected: SnapshotReference): void {

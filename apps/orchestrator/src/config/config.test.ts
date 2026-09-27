@@ -1,6 +1,8 @@
+import type { Env } from '@repo/domain'
+import { DEV_METRICS_TOKEN } from '@repo/observability'
 import { describe, expect, it } from 'vitest'
 
-import { ConfigError, DEV_METRICS_TOKEN, loadConfig, type Env } from './config.ts'
+import { ConfigError, loadConfig } from './config.ts'
 
 /** The local setup of .env.example. */
 const devEnv: Env = {
@@ -25,6 +27,8 @@ const devEnv: Env = {
   METRICS_TOKEN: DEV_METRICS_TOKEN,
 }
 
+const PROD_METRICS_TOKEN = 'test-metrics-token-'.padEnd(32, 'x')
+
 const prodEnv = (overrides: Env = {}): Env => ({
   APP_ENV: 'production',
   ORCHESTRATOR_ROLES: 'core',
@@ -39,7 +43,7 @@ const prodEnv = (overrides: Env = {}): Env => ({
   SANDBOX_RUNTIME: 'runsc',
   SANDBOX_IMAGE_PREFIX: 'gitea.internal:3300/raditi/agent',
   SENDSAY_API_KEY: 'sendsay-key',
-  METRICS_TOKEN: 'a-long-random-metrics-token',
+  METRICS_TOKEN: PROD_METRICS_TOKEN,
   ...overrides,
 })
 
@@ -65,7 +69,7 @@ describe('loadConfig — development', () => {
       metricsToken: DEV_METRICS_TOKEN,
       db: { databaseUrl: 'postgresql://raditi:raditi@localhost:5432/raditi' },
       vault: { addr: 'http://localhost:8200', token: 'raditi-dev-root' },
-      sandbox: { runtime: 'runc', imagePrefix: 'raditi/agent' },
+      sandbox: { runtime: 'runc' },
       agentDrivers: { imagePrefix: 'raditi/agent' },
       mailer: { sendsayApiKey: undefined },
     })
@@ -94,7 +98,7 @@ describe('loadConfig — development', () => {
   })
 
   it('requires APP_ENV: a missing or misspelt one never falls back to development', () => {
-    const refused = 'APP_ENV: APP_ENV must be one of development, test, production'
+    const refused = 'APP_ENV: must be one of development, test, production'
     expect(problemsOf({ ...devEnv, APP_ENV: undefined })).toEqual([refused])
     expect(problemsOf({ ...devEnv, APP_ENV: ' ' })).toEqual([refused])
     expect(problemsOf({ ...devEnv, APP_ENV: 'prod' })).toEqual([refused])
@@ -151,7 +155,9 @@ describe('loadConfig — development', () => {
     expect(problemsOf({ ...devEnv, REDIS_URL: '' })).toEqual([
       'REDIS_URL: required for the core role',
     ])
-    expect(problemsOf({ ...devEnv, REDIS_URL: 'http://localhost:6379' })[0]).toMatch(/^REDIS_URL/)
+    expect(problemsOf({ ...devEnv, REDIS_URL: 'http://localhost:6379' })).toEqual([
+      'REDIS_URL: must be a redis:// URL',
+    ])
   })
 
   it('lists every broken section at once without leaking values', () => {
@@ -163,9 +169,11 @@ describe('loadConfig — development', () => {
     })
 
     expect(problems).toHaveLength(3)
-    expect(problems.join('\n')).toMatch(/DATABASE_URL/)
-    expect(problems.join('\n')).toMatch(/S3_ENDPOINT/)
-    expect(problems.join('\n')).toMatch(/SANDBOX_IMAGE_PREFIX/)
+    expect(problems[0]).toBe(
+      '[db] invalid configuration: DATABASE_URL: must be a postgresql:// connection string',
+    )
+    expect(problems[1]).toMatch(/^\[storage\] invalid configuration: S3_ENDPOINT: /)
+    expect(problems[2]).toMatch(/^\[agent drivers\] invalid configuration: SANDBOX_IMAGE_PREFIX: /)
     expect(problems.join('\n')).not.toMatch(/hunter2|raditi-dev-secret/)
   })
 })
@@ -178,7 +186,7 @@ describe('loadConfig — production', () => {
     expect(config.mcp).toBeNull()
     expect(config.core).toMatchObject({
       appEnv: 'production',
-      metricsToken: 'a-long-random-metrics-token',
+      metricsToken: PROD_METRICS_TOKEN,
       vault: { appRole: { roleId: 'core-role', secretId: 'core-secret' } },
       sandbox: { runtime: 'runsc' },
     })
@@ -202,6 +210,17 @@ describe('loadConfig — production', () => {
     expect(problemsOf(prodEnv({ METRICS_TOKEN: '' }))).toEqual([refused])
     expect(problemsOf(prodEnv({ METRICS_TOKEN: undefined }))).toEqual([refused])
     expect(problemsOf(prodEnv({ METRICS_TOKEN: DEV_METRICS_TOKEN }))).toEqual([refused])
+  })
+
+  it('requires a metrics token of at least 32 characters, without leaking it', () => {
+    const short = 'k'.repeat(31)
+    expect(PROD_METRICS_TOKEN).toHaveLength(32)
+
+    const problems = problemsOf(prodEnv({ METRICS_TOKEN: short }))
+    expect(problems).toEqual(['METRICS_TOKEN: must be at least 32 characters in production'])
+    expect(problems.join('\n')).not.toContain(short)
+    // Short tokens stay fine outside production.
+    expect(loadConfig({ ...devEnv, METRICS_TOKEN: 'short' }).core?.metricsToken).toBe('short')
   })
 
   it('does not ask the MCP gateway for a metrics token: it serves no /metrics', () => {

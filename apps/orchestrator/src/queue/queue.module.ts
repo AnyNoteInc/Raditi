@@ -2,9 +2,9 @@ import { BullModule, getQueueToken } from '@nestjs/bullmq'
 import { Logger, Module, type DynamicModule } from '@nestjs/common'
 import { DiscoveryModule } from '@nestjs/core'
 import { queueNames, type QueueName } from '@repo/domain'
+import { throttledLogger } from '@repo/observability'
 import type { Queue } from 'bullmq'
 
-import { throttledErrorLog } from '../common/error-log.ts'
 import { BULL_QUEUES, JOB_QUEUE } from '../infra/tokens.ts'
 import { BullMqJobQueue } from './bullmq-job-queue.ts'
 import { BullMqShutdownService } from './bullmq-shutdown.service.ts'
@@ -19,12 +19,13 @@ export interface QueueModuleOptions {
 /** Queues are injected in `queueNames` order; errors are logged, never thrown. */
 function collectQueues(...queues: Queue[]): ReadonlyMap<QueueName, Queue> {
   const logger = new Logger('BullMQ')
+  const warn = throttledLogger((line) => logger.warn(line))
   const byName = new Map<QueueName, Queue>()
   queueNames.forEach((name, index) => {
     const queue = queues[index]
     if (!queue) throw new Error(`Queue "${name}" is not registered`)
     // Without a listener BullMQ prints every reconnect failure to the console.
-    queue.on('error', throttledErrorLog(logger, `queue ${name}`))
+    queue.on('error', (error) => warn(`queue ${name}`, error))
     byName.set(name, queue)
   })
   return byName

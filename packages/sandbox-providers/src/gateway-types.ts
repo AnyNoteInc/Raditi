@@ -1,20 +1,20 @@
 import type { NetworkPolicy, SandboxLabels } from '@repo/domain'
-import type Docker from 'dockerode'
+
+type GatewayPolicy = Extract<NetworkPolicy, { mode: 'gateway' }>
 
 /** Trusted host infrastructure only; never exposed through the sandbox/domain port. */
 export interface DockerGatewayManager {
   prepare(
-    input: {
-      name: string
-      labels: SandboxLabels
-      policy: Extract<NetworkPolicy, { mode: 'gateway' }>
-      deadline: number
-    },
+    input: { labels: SandboxLabels; policy: GatewayPolicy; deadline: number },
     signal?: AbortSignal,
-  ): Promise<{ networkMode: string; resourceId: string; release(): Promise<void> }>
-  validate(
-    inspect: Docker.ContainerInspectInfo,
-    policy: Extract<NetworkPolicy, { mode: 'gateway' }>,
-  ): Promise<boolean>
-  release(inspect: Docker.ContainerInspectInfo): Promise<void>
+  ): Promise<{ networkMode: string; resourceId: string }>
+  /** Inputs come from the main container's already verified labels and host config. */
+  validate(input: {
+    resourceId: string
+    labels: SandboxLabels
+    deadline: number
+    policy: GatewayPolicy
+    networkMode: string | undefined
+  }): Promise<boolean>
+  release(resourceId: string): Promise<void>
 }

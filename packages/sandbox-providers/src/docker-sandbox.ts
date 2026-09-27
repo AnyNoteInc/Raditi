@@ -26,6 +26,7 @@ import {
   HELPER,
   HELPER_ENV,
   helperCommand,
+  SANDBOX_USER,
   startDetachedExec,
   isMissing,
   NODE,
@@ -74,6 +75,8 @@ const fileListSchema = z
   )
   .max(10_000)
 const ROOTS = ['/workspace', '/agent-home', '/tmp', '/run/raditi/secrets']
+const IDLE_POLL_MS = 50
+const MAX_IDLE_POLL_MS = 1000
 const checkedPath = (path: string, root = false) => {
   if (
     typeof path !== 'string' ||
@@ -100,9 +103,9 @@ const checkedNumber = (value: number | undefined, fallback: number, max: number)
 }
 
 export interface SandboxLifecycle {
-  originalInspect: Docker.ContainerInspectInfo
-  assertOwned(): Promise<Docker.ContainerInspectInfo>
-  release(inspect: Docker.ContainerInspectInfo): Promise<void>
+  assertOwned(): Promise<void>
+  /** Releases the network resources verified when this sandbox was adopted. */
+  release(): Promise<void>
 }
 
 export class DockerSandbox implements Sandbox {
@@ -157,9 +160,16 @@ export class DockerSandbox implements Sandbox {
         if (!(data instanceof Uint8Array) || data.length > COMMAND_BYTES)
           throw badRequest('Sandbox file is too large')
         const owned = Buffer.from(data)
+        // The helper renames only after exactly this many bytes: a cut stream leaves no file.
         await helperCommand(
           container,
-          ['fs', 'write', checkedPath(path), String(checkedNumber(opts?.mode, 0o600, 0o777))],
+          [
+            'fs',
+            'write',
+            checkedPath(path),
+            String(checkedNumber(opts?.mode, 0o600, 0o777)),
+            String(owned.length),
+          ],
           { stdin: input(owned) },
         )
       },
@@ -227,7 +237,7 @@ export class DockerSandbox implements Sandbox {
       this.container.exec({
         Cmd: [NODE, HELPER, 'run', id, String(execDeadline)],
         Env: HELPER_ENV,
-        User: '10001:10001',
+        User: SANDBOX_USER,
         Privileged: false,
         Tty: false,
         AttachStdin: false,
@@ -309,9 +319,8 @@ export class DockerSandbox implements Sandbox {
     this.#destroying = (async () => {
       clearTimeout(this.#timer)
       for (const handle of this.#handles.values()) handle.release()
-      let inspect = this.lifecycle.originalInspect
       try {
-        inspect = await this.lifecycle.assertOwned()
+        await this.lifecycle.assertOwned()
       } catch (error) {
         // Main removal can succeed before gateway cleanup fails, or happen externally.
         // The original, verified immutable labels still identify only our gateway attempt.
@@ -322,7 +331,7 @@ export class DockerSandbox implements Sandbox {
       } catch (error) {
         if (!isMissing(error)) throw commandError()
       }
-      await this.lifecycle.release(inspect)
+      await this.lifecycle.release()
       this.#destroyed = true
     })()
     try {
@@ -388,6 +397,8 @@ class DockerExecHandle implements ExecHandle {
   async *output(): AsyncIterable<ExecChunk> {
     const cursor = { ...this.initial }
     let stopped = false
+    // Every poll is a docker exec plus a node start inside the sandbox: back off while idle.
+    let idle = IDLE_POLL_MS
     while (true) {
       const page = await this.#page(cursor)
       for (const chunk of page.chunks) {
@@ -399,7 +410,8 @@ class DockerExecHandle implements ExecHandle {
         if (cursor[chunk.stream] > COMMAND_BYTES) throw commandError()
         yield { stream: chunk.stream, offset: chunk.offset, data }
       }
-      if (!page.chunks.length) {
+      if (page.chunks.length) idle = IDLE_POLL_MS
+      else {
         if (page.exit) {
           await this.wait()
           return
@@ -413,7 +425,8 @@ class DockerExecHandle implements ExecHandle {
           stopped = true
           continue
         }
-        await delay(100)
+        await delay(idle)
+        idle = Math.min(idle * 2, MAX_IDLE_POLL_MS)
       }
     }
   }

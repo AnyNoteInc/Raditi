@@ -1,21 +1,40 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import Docker from 'dockerode'
+import { MAX_SANDBOX_TURN_MS, type NetworkPolicy, type SandboxLabels } from '@repo/domain'
+import type Docker from 'dockerode'
 
-import { bounded, commandError, isMissing, startDetachedExec } from '../docker-api.ts'
+import { bounded, commandError, createOwned, isMissing, startDetachedExec } from '../docker-api.ts'
 import type { DockerGatewayManager } from '../gateway-types.ts'
 import { gatewayConfigSchema, type GatewayConfig } from './config.ts'
 
 const PREFIX = 'io.raditi.gateway.'
-const MAIN = 'io.raditi.sandbox.'
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 const scopes = ['workspaceId', 'siteId', 'taskId', 'sessionId', 'turn', 'leaseEpoch'] as const
-const ownLabels = (resourceId: string) => [
-  `${PREFIX}owner=raditi`,
-  `${PREFIX}protocol=1`,
-  `${PREFIX}resourceId=${resourceId}`,
-]
+const ownLabels = (resourceId: string): Record<string, string> => ({
+  [`${PREFIX}owner`]: 'raditi',
+  [`${PREFIX}protocol`]: '1',
+  [`${PREFIX}resourceId`]: resourceId,
+})
+const ownFilter = (resourceId: string) => ({
+  label: Object.entries(ownLabels(resourceId)).map(([key, value]) => `${key}=${value}`),
+})
+/** Every gateway object of one attempt carries these; containers and the network add a role. */
+const gatewayLabels = (
+  resourceId: string,
+  deadline: number,
+  policy: NetworkPolicy,
+  labels: SandboxLabels,
+) => ({
+  ...ownLabels(resourceId),
+  [`${PREFIX}deadline`]: String(deadline),
+  [`${PREFIX}policy`]: JSON.stringify(policy),
+  ...Object.fromEntries(
+    scopes
+      .filter((key) => labels[key] !== undefined)
+      .map((key) => [`${PREFIX}${key}`, String(labels[key])]),
+  ),
+})
 const labelsMatch = (
   actual: Record<string, string> | undefined,
   expected: Record<string, string>,
@@ -40,31 +59,6 @@ function addresses(cidr: string): { gateway: string; client: string } {
   const ip = (offset: number) =>
     [24, 16, 8, 0].map((shift) => ((number + offset) >>> shift) & 255).join('.')
   return { gateway: ip(2), client: ip(3) }
-}
-
-/** A late daemon response must clean up only the resource created by this attempt. */
-async function createOwned<T>(
-  operation: Promise<T>,
-  remove: (value: T) => Promise<unknown>,
-  signal?: AbortSignal,
-): Promise<T> {
-  let abandoned = false
-  try {
-    return await bounded(
-      operation.then(async (value) => {
-        if (abandoned || signal?.aborted) {
-          await remove(value)
-          throw commandError()
-        }
-        return value
-      }),
-      30_000,
-      signal,
-    )
-  } catch (error) {
-    abandoned = true
-    throw error
-  }
 }
 
 async function ready(
@@ -102,53 +96,35 @@ async function ready(
 
 export function createDockerGatewayManager(
   configValue: GatewayConfig,
-  options: { socketPath?: string; client?: Docker } = {},
+  docker: Docker,
 ): DockerGatewayManager {
   const config = gatewayConfigSchema.parse(configValue)
-  const socketPath = options.socketPath ?? '/var/run/docker.sock'
-  if (!socketPath.startsWith('/') || /[\0\r\n]/.test(socketPath)) throw commandError()
-  const docker = options.client ?? new Docker({ socketPath })
 
   const releaseId = async (resourceId: string) => {
     if (!uuid.test(resourceId)) throw commandError()
-    const containers = await bounded(
-      docker.listContainers({ all: true, filters: { label: ownLabels(resourceId) } }),
-    )
-    const results = await Promise.allSettled(
-      containers.map(async (item) => {
-        if (
-          !labelsMatch(item.Labels, {
-            [`${PREFIX}resourceId`]: resourceId,
-            [`${PREFIX}owner`]: 'raditi',
-            [`${PREFIX}protocol`]: '1',
-          })
-        )
-          throw commandError()
-        try {
-          await bounded(docker.getContainer(item.Id).remove({ force: true, v: true }))
-        } catch (error) {
-          if (!isMissing(error)) throw error
-        }
-      }),
-    )
-    if (results.some((result) => result.status === 'rejected')) throw commandError()
-    const networks = await bounded(
-      docker.listNetworks({ filters: { label: ownLabels(resourceId) } }),
-    )
-    for (const network of networks) {
-      if (
-        !labelsMatch(network.Labels, {
-          [`${PREFIX}resourceId`]: resourceId,
-          [`${PREFIX}owner`]: 'raditi',
-          [`${PREFIX}protocol`]: '1',
-        })
+    const own = ownLabels(resourceId)
+    const filters = ownFilter(resourceId)
+    type Owned = { Id: string; Labels?: Record<string, string> }
+    // Containers first: the network can be removed only after nothing is attached to it.
+    for (const [list, remove] of [
+      [
+        () => docker.listContainers({ all: true, filters }),
+        (id: string) => docker.getContainer(id).remove({ force: true, v: true }),
+      ],
+      [() => docker.listNetworks({ filters }), (id: string) => docker.getNetwork(id).remove()],
+    ] as [() => Promise<Owned[]>, (id: string) => Promise<unknown>][]) {
+      const items = await bounded(list())
+      const results = await Promise.allSettled(
+        items.map(async (item) => {
+          if (!labelsMatch(item.Labels, own)) throw commandError()
+          try {
+            await bounded(remove(item.Id))
+          } catch (error) {
+            if (!isMissing(error)) throw error
+          }
+        }),
       )
-        throw commandError()
-      try {
-        await bounded(docker.getNetwork(network.Id).remove())
-      } catch (error) {
-        if (!isMissing(error)) throw error
-      }
+      if (results.some((result) => result.status === 'rejected')) throw commandError()
     }
   }
 
@@ -181,23 +157,14 @@ export function createDockerGatewayManager(
     async prepare(input, signal) {
       const resourceId = randomUUID()
       const label = (role: string) => ({
-        [`${PREFIX}owner`]: 'raditi',
-        [`${PREFIX}protocol`]: '1',
-        [`${PREFIX}resourceId`]: resourceId,
+        ...gatewayLabels(resourceId, input.deadline, input.policy, input.labels),
         [`${PREFIX}role`]: role,
-        [`${PREFIX}deadline`]: String(input.deadline),
-        [`${PREFIX}policy`]: JSON.stringify(input.policy),
-        ...Object.fromEntries(
-          scopes
-            .filter((key) => input.labels[key] !== undefined)
-            .map((key) => [`${PREFIX}${key}`, String(input.labels[key])]),
-        ),
       })
       try {
         if (
           signal?.aborted ||
           input.deadline <= Date.now() ||
-          input.deadline > Date.now() + 20 * 60_000
+          input.deadline > Date.now() + MAX_SANDBOX_TURN_MS
         )
           throw commandError()
         for (const image of [config.image, config.guardImage]) {
@@ -276,47 +243,27 @@ export function createDockerGatewayManager(
         )
         await bounded(guard.start(), 10_000, signal)
         await ready(guard, '/run/raditi-guard/ready', input.deadline, signal)
-        return {
-          networkMode: `container:${guard.id}`,
-          resourceId,
-          release: () => releaseId(resourceId),
-        }
+        return { networkMode: `container:${guard.id}`, resourceId }
       } catch {
         await releaseId(resourceId)
         throw commandError()
       }
     },
-    async validate(main, policy) {
-      const resourceId = main.Config.Labels?.[`${MAIN}gatewayId`] ?? ''
+    async validate({ resourceId, labels, deadline, policy, networkMode }) {
       if (!uuid.test(resourceId)) return false
       try {
-        const expected = {
-          [`${PREFIX}resourceId`]: resourceId,
-          [`${PREFIX}owner`]: 'raditi',
-          [`${PREFIX}protocol`]: '1',
-          [`${PREFIX}deadline`]: main.Config.Labels[`${MAIN}deadline`]!,
-          [`${PREFIX}policy`]: JSON.stringify(policy),
-          ...Object.fromEntries(
-            scopes
-              .filter((key) => main.Config.Labels[`${MAIN}${key}`] !== undefined)
-              .map((key) => [`${PREFIX}${key}`, main.Config.Labels[`${MAIN}${key}`]!]),
-          ),
-        }
-        const resources = await bounded(
-          docker.listContainers({ all: true, filters: { label: ownLabels(resourceId) } }),
-        )
+        const expected = gatewayLabels(resourceId, deadline, policy, labels)
+        const filters = ownFilter(resourceId)
+        const resources = await bounded(docker.listContainers({ all: true, filters }))
         if (resources.length !== 2) return false
         const guardId = resources.find((item) => item.Labels[`${PREFIX}role`] === 'guard')?.Id
         const proxyId = resources.find((item) => item.Labels[`${PREFIX}role`] === 'proxy')?.Id
-        if (!guardId || !proxyId || main.HostConfig.NetworkMode !== `container:${guardId}`)
-          return false
+        if (!guardId || !proxyId || networkMode !== `container:${guardId}`) return false
         const [guard, proxy] = await Promise.all([
           bounded(docker.getContainer(guardId).inspect()),
           bounded(docker.getContainer(proxyId).inspect()),
         ])
-        const networks = await bounded(
-          docker.listNetworks({ filters: { label: ownLabels(resourceId) } }),
-        )
+        const networks = await bounded(docker.listNetworks({ filters }))
         if (networks.length !== 1) return false
         const network = await bounded(docker.getNetwork(networks[0]!.Id).inspect())
         if (
@@ -408,8 +355,6 @@ export function createDockerGatewayManager(
         return false
       }
     },
-    async release(main) {
-      await releaseId(main.Config.Labels?.[`${MAIN}gatewayId`] ?? '')
-    },
+    release: releaseId,
   }
 }

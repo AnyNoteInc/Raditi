@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  consentDocumentTypes,
   findLegalDocument,
+  legalDocumentFor,
   legalDocuments,
   missingRequiredConsents,
   type ConsentRecord,
@@ -21,6 +23,13 @@ describe('legal documents', () => {
   it('finds a document by slug', () => {
     expect(findLegalDocument('public-offer')?.consentType).toBe('public_offer')
     expect(findLegalDocument('nope')).toBeUndefined()
+  })
+
+  it('has a document for every consent type', () => {
+    for (const type of consentDocumentTypes) {
+      expect(legalDocumentFor(type).consentType).toBe(type)
+    }
+    expect(legalDocumentFor('public_offer').slug).toBe('public-offer')
   })
 
   it('requires every required document for a new user', () => {

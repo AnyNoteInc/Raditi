@@ -1,6 +1,8 @@
 // Core of the platform (ports and adapters). Adapters implement the ports below and depend
 // only on this package; apps compose them. Business logic moves here task by task.
 export * from './app-env.ts'
+export * from './async.ts'
+export * from './env.ts'
 export * from './errors.ts'
 export * from './legal/documents.ts'
 export * from './ports/agent-driver.ts'

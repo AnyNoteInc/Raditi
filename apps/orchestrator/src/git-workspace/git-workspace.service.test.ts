@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,9 +6,11 @@ import { promisify } from 'node:util'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 
 import {
+  DomainError,
   type GitProvider,
   type PublicationMetadata,
   type Sandbox,
+  type TurnPublication,
   publicationLimits,
 } from '@repo/domain'
 import { pack } from 'tar-stream'
@@ -16,11 +18,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyUntrackedArchive } from './archive.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
-import { GitWorkspaceService, type PreparedPublication } from './git-workspace.service.ts'
+import { GitWorkspaceService } from './git-workspace.service.ts'
+import { PROCESS_OUTPUT_LIMIT, runProcess } from './process.ts'
+
+// Real processes everywhere; a test may still answer one command itself.
+vi.mock('./process.ts', async (importOriginal) => {
+  const actual = await importOriginal<{ runProcess: typeof runProcess }>()
+  return { ...actual, runProcess: vi.fn(actual.runProcess) }
+})
+const realRunProcess = vi.mocked(runProcess).getMockImplementation()!
 
 const execute = promisify(execFile)
 const roots: string[] = []
-const candidates: PreparedPublication[] = []
+const candidates: TurnPublication[] = []
 const git = async (cwd: string, ...args: string[]) =>
   (
     await execute('git', args, {
@@ -40,6 +50,7 @@ const git = async (cwd: string, ...args: string[]) =>
   ).stdout
 
 afterEach(async () => {
+  vi.mocked(runProcess).mockImplementation(realRunProcess)
   await Promise.all(candidates.splice(0).map((candidate) => candidate.dispose()))
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
@@ -238,9 +249,139 @@ describe('trusted Git publication', () => {
     const patch = Buffer.from(
       `diff --git a/binary.dat b/binary.dat\nindex ${old}..${huge} 100644\nBinary files a/binary.dat and b/binary.dat differ\n`,
     )
-    await expect(f.prepare(patch, undefined, { expectedBaseSha: base })).rejects.toThrow(
-      'historical blob exceeds',
+    await expect(f.prepare(patch, undefined, { expectedBaseSha: base })).rejects.toMatchObject({
+      code: 'PUBLICATION_TOO_LARGE',
+      httpStatus: 413,
+      message: expect.stringContaining('historical blob exceeds'),
+    })
+  })
+
+  /** A base commit of `count` copies of one blob, named by `name`. */
+  async function manyFiles(
+    f: Awaited<ReturnType<typeof fixture>>,
+    count: number,
+    name: (i: number) => string,
+  ) {
+    const blob = (await git(f.work, 'hash-object', '-w', 'index.php')).toString().trim()
+    const rows = Array.from({ length: count }, (_, i) => `100644 blob ${blob}\t${name(i)}\n`).join(
+      '',
     )
+    const tree = execFileSync('git', ['mktree'], {
+      cwd: f.work,
+      input: rows,
+      maxBuffer: 1024 * 1024,
+    })
+      .toString()
+      .trim()
+    const base = (await git(f.work, 'commit-tree', tree, '-m', 'many files')).toString().trim()
+    await git(f.work, 'push', f.remote, `${base}:refs/heads/main`, '--force')
+    return base
+  }
+
+  it('reports a repository over the file count limit as the repository being too large', async () => {
+    const f = await fixture()
+    const base = await manyFiles(f, publicationLimits.repositoryFiles + 1, (i) => `file-${i}.txt`)
+    await expect(
+      f.prepare(Buffer.alloc(0), undefined, { expectedBaseSha: base }),
+    ).rejects.toMatchObject({ code: 'REPOSITORY_TOO_LARGE', httpStatus: 413 })
+    await expect(readFile(f.scannerLog, 'utf8')).rejects.toThrow()
+  }, 30_000)
+
+  it('publishes into a site with more files than one turn may change and a file list over 16 MiB', async () => {
+    const f = await fixture()
+    // Long names: the listings exceed the default 16 MiB command output.
+    const count = publicationLimits.files + 7_000
+    const name = (i: number) => `${'long-name-'.repeat(95)}${String(i).padStart(6, '0')}.txt`
+    // `100644 blob <oid>\t<name>\0` per file.
+    expect(count * (54 + name(0).length)).toBeGreaterThan(16 * 1024 * 1024)
+    const base = await manyFiles(f, count, name)
+    const candidate = await f.prepare(
+      Buffer.alloc(0),
+      await archive([{ name: 'new.txt', content: 'new' }]),
+      { expectedBaseSha: base },
+    )
+    expect(candidate.baseSha).toBe(base)
+  }, 30_000)
+
+  it.each([
+    ['ls-tree', 'REPOSITORY_TOO_LARGE', publicationLimits.repositoryFiles],
+    [
+      'ls-files',
+      'PUBLICATION_TOO_LARGE',
+      publicationLimits.repositoryFiles + publicationLimits.files,
+    ],
+  ] as const)(
+    'bounds the %s listing by its file limit and reports a longer one as too large',
+    async (command, code, files) => {
+      const f = await fixture()
+      const limits: (number | undefined)[] = []
+      vi.mocked(runProcess).mockImplementation(async (binary, argv, options) => {
+        if (!argv.includes(command)) return realRunProcess(binary, argv, options)
+        limits.push(options.maxBytes)
+        throw new DomainError(
+          PROCESS_OUTPUT_LIMIT,
+          'Trusted command output exceeded its limit',
+          502,
+        )
+      })
+      await expect(f.prepare()).rejects.toMatchObject({ code, httpStatus: 413 })
+      expect(limits).toEqual([files * (64 + publicationLimits.pathBytes)])
+    },
+  )
+
+  it('counts patched and new files together against the limit of one turn', async () => {
+    const f = await fixture()
+    await writeFile(join(f.work, 'index.php'), 'updated\n')
+    const files = Array.from({ length: publicationLimits.files }, (_, i) => ({
+      name: `new/${i}.txt`,
+      content: 'x',
+    }))
+    await expect(f.prepare(await f.patch(), await archive(files))).rejects.toMatchObject({
+      code: 'PUBLICATION_TOO_LARGE',
+      message: 'Publication changes too many files',
+    })
+    await expect(readFile(f.scannerLog, 'utf8')).rejects.toThrow()
+  })
+
+  it('rejects a complete patch over its limit as too large, before scanning or committing', async () => {
+    const f = await fixture()
+    const large = 'x'.repeat(3 * 1024 * 1024) + '\n'
+    const files = [1, 2, 3].map((n) => ({ name: `large-${n}.txt`, content: large }))
+    await expect(f.prepare(Buffer.alloc(0), await archive(files))).rejects.toMatchObject({
+      code: 'PUBLICATION_TOO_LARGE',
+      httpStatus: 413,
+    })
+    await expect(readFile(f.scannerLog, 'utf8')).rejects.toThrow()
+    expect((await git(f.remote, 'show-ref', '--heads')).toString()).not.toContain('agent/task1')
+  })
+
+  it('rejects an oversized captured patch as too large before cloning', async () => {
+    const f = await fixture()
+    await expect(f.prepare(Buffer.alloc(publicationLimits.patchBytes + 1))).rejects.toMatchObject({
+      code: 'PUBLICATION_TOO_LARGE',
+      httpStatus: 413,
+    })
+    expect(f.provider.getRepository).not.toHaveBeenCalled()
+  })
+
+  it('requires protected paths explicitly for checkout and publication', async () => {
+    const f = await fixture()
+    const { taskId: _task, turn: _turn, createdAt: _date, ...source } = f.metadata
+    const { protectedPaths: _paths, ...withoutPaths } = source
+    await expect(
+      f.service.prepareWorkspace({} as Sandbox, withoutPaths as typeof source),
+    ).rejects.toThrow('Invalid repository source')
+    await expect(
+      f.service.preparePublication({
+        ...(withoutPaths as typeof source),
+        taskId: 'task1',
+        turn: 1,
+        createdAt: f.metadata.createdAt,
+        patch: Buffer.alloc(0),
+        untracked: emptyUntrackedArchive(),
+      }),
+    ).rejects.toThrow('Invalid publication metadata')
+    expect(f.provider.getRepository).not.toHaveBeenCalled()
   })
 
   it('rejects repeated patch paths before allocating repeated postimages', async () => {
@@ -387,9 +528,14 @@ describe('trusted Git publication', () => {
         await archive([{ name: 'link', type: 'symlink', linkname: '/etc/passwd' }]),
       ),
     ).rejects.toThrow()
+    // The agent's output, not the client's input.
     await expect(
       f.prepare(Buffer.alloc(0), await archive([{ name: 'index.php', content: 'replace' }])),
-    ).rejects.toThrow('collides')
+    ).rejects.toMatchObject({
+      code: 'TURN_OUTPUT_REJECTED',
+      httpStatus: 502,
+      message: expect.stringContaining('collides'),
+    })
   })
 
   it.each(['synthetic-secret-marker', 'scanner-error-marker'])(
@@ -461,11 +607,35 @@ describe('trusted Git publication', () => {
     expect(calls.some((call) => call.argv.includes(f.remote))).toBe(false)
     expect(calls.at(-1)?.argv).toEqual(['rm', '-f', '--', '/tmp/raditi-base.bundle'])
   })
+
+  it('refuses a gap in sandbox command output and stops the command', async () => {
+    const f = await fixture()
+    const kill = vi.fn(async () => {})
+    const sandbox = {
+      exec: vi.fn(async () => ({
+        output: async function* () {
+          yield { stream: 'stdout', offset: 5, data: Buffer.from('x') }
+        },
+        wait: async () => ({ reason: 'exited', code: 0 }),
+        kill,
+      })),
+    } as unknown as Sandbox
+    const { taskId: _task, turn: _turn, createdAt: _date, ...source } = f.metadata
+    await expect(f.service.prepareWorkspace(sandbox, source)).rejects.toMatchObject({
+      code: 'GIT_OPERATION_FAILED',
+    })
+    expect(kill).toHaveBeenCalledWith('SIGKILL')
+  })
 })
 
 describe('production boundaries', () => {
   const ref = { provider: 'gitea' as const, owner: 'owner', name: 'repo' }
-  const source = { repo: ref, branch: 'agent/task1', expectedBaseSha: 'a'.repeat(40) }
+  const source = {
+    repo: ref,
+    branch: 'agent/task1',
+    expectedBaseSha: 'a'.repeat(40),
+    protectedPaths: [],
+  }
   const provider = (cloneUrl: string, expiresAt: Date) =>
     ({
       kind: 'gitea',
@@ -505,6 +675,32 @@ describe('production boundaries', () => {
     },
   )
 
+  it.each(['getRepository', 'issueCredentials'] as const)(
+    'gives up on a provider %s call that never answers',
+    async (call) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const p = provider('https://git.example.test/repo', new Date(Date.now() + 60_000))
+        const called = Promise.withResolvers<void>()
+        p[call] = vi.fn(() => {
+          called.resolve()
+          return new Promise<never>(() => {})
+        })
+        const service = new GitWorkspaceService(p, {
+          transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
+        })
+        const rejected = expect(
+          service.prepareWorkspace({} as Sandbox, source),
+        ).rejects.toMatchObject({ code: 'GIT_OPERATION_FAILED' })
+        await called.promise
+        await vi.advanceTimersByTimeAsync(publicationLimits.commandMs)
+        await rejected
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it('refuses local transport outside test mode', () => {
     const previous = process.env.NODE_ENV
     process.env.NODE_ENV = 'production'
@@ -522,17 +718,19 @@ describe('production boundaries', () => {
 })
 
 describe('binary patch allocation limits', () => {
-  it('rejects an inflated-size allocation before invoking native Git', () => {
+  it('rejects an inflated-size allocation before invoking native Git as too large', () => {
     expect(() =>
       assertBinaryPatchLimits(
         Buffer.from(`GIT binary patch\nliteral ${publicationLimits.fileBytes + 1}\nA00000\n\n`),
       ),
-    ).toThrow('oversized')
+    ).toThrow(expect.objectContaining({ code: 'PUBLICATION_TOO_LARGE', httpStatus: 413 }))
   })
-  it('rejects malformed base85 and empty binary blocks', () => {
+  it('rejects malformed base85 and empty binary blocks as invalid input', () => {
     expect(() =>
       assertBinaryPatchLimits(Buffer.from('GIT binary patch\nliteral 1\nA:::::\n\n')),
-    ).toThrow()
-    expect(() => assertBinaryPatchLimits(Buffer.from('GIT binary patch\n'))).toThrow()
+    ).toThrow(expect.objectContaining({ code: 'BAD_REQUEST' }))
+    expect(() => assertBinaryPatchLimits(Buffer.from('GIT binary patch\n'))).toThrow(
+      expect.objectContaining({ code: 'BAD_REQUEST' }),
+    )
   })
 })

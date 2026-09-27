@@ -1,5 +1,6 @@
 import {
   badRequest,
+  siteLeaseOperations,
   type SiteLeaseAuthority,
   type SiteLeaseFence,
   type SiteLeaseGrant,
@@ -14,7 +15,7 @@ const id = z.uuid()
 const fenceSchema = z.object({
   siteId: id,
   taskId: id,
-  operation: z.enum(['turn', 'deploy', 'revert']),
+  operation: z.enum(siteLeaseOperations),
   epoch: z.number().int().positive().max(2_147_483_647),
 })
 const ttlSchema = z
@@ -26,7 +27,7 @@ const rowsSchema = z.array(
   z.object({
     site_id: id,
     holder_task_id: id.nullable(),
-    operation: z.enum(['turn', 'deploy', 'revert']).nullable(),
+    operation: z.enum(siteLeaseOperations).nullable(),
     epoch: z.number().int().nonnegative(),
     expires_at: z.coerce.date().nullable(),
     server_now: z.coerce.date(),
@@ -99,6 +100,10 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
     )
   }
 
+  /**
+   * Not called by turns: their single grant covers the whole operation. Long deploy/revert
+   * operations (P12, up to 45 minutes) will renew here instead of taking a longer first TTL.
+   */
   async renew(input: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null> {
     const f = fenceSchema.parse(input)
     const ttl = ttlSchema.parse(ttlMs)

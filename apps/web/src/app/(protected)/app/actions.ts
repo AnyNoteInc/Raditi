@@ -1,10 +1,10 @@
 'use server'
 
 import { auth } from '@repo/auth'
+import { errorMessage } from '@repo/observability'
 import { unstable_rethrow } from 'next/navigation'
 
 import { getRequestHeaders } from '@/lib/session'
-import { describeError } from '@/server/errors'
 
 /** Ends the session; the caller then loads /sign-in afresh (SignOutButton). */
 export async function signOut(): Promise<void> {
@@ -13,6 +13,6 @@ export async function signOut(): Promise<void> {
     await auth.api.signOut({ headers: await getRequestHeaders() })
   } catch (error) {
     unstable_rethrow(error)
-    console.error(`[auth] sign-out failed: ${describeError(error)}`)
+    console.error(`[auth] sign-out failed: ${errorMessage(error)}`)
   }
 }

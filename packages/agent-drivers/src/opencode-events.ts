@@ -60,7 +60,7 @@ export function parseOpencodeEvent(line: string): AgentEvent[] {
   )
   if (part.reason === 'stop') result.push(...events({ type: 'completed' }))
   if (part.reason === 'error' || part.reason === 'length' || part.reason === 'content-filter') {
-    result.push(...failed('Агент не смог завершить действие.'))
+    result.push(...failed())
   }
   return result
 }

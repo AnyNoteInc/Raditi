@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { createMetricsRegistry, metricsResponse } from './metrics'
+import { getMetricsRegistry, metricsResponse } from './metrics'
 
 const TOKEN = 's3cret-token'
-const registry = createMetricsRegistry()
+const registry = getMetricsRegistry()
 
 const request = (authorization?: string) =>
   new Request('http://localhost:3000/api/metrics', {
@@ -27,5 +27,9 @@ describe('metricsResponse', () => {
     const text = await res.text()
     expect(text).toMatch(/^process_cpu_user_seconds_total\{app="web"\} /m)
     expect(text).not.toMatch(/task_id|user_id/)
+  })
+
+  it('keeps one registry per process', () => {
+    expect(getMetricsRegistry()).toBe(registry)
   })
 })

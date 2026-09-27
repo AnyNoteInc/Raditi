@@ -9,11 +9,10 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common'
 import { Prisma, type PrismaClient } from '@repo/db'
-import type { JobQueue } from '@repo/domain'
+import { withTimeout, type JobQueue } from '@repo/domain'
+import { errorMessage, throttledLogger } from '@repo/observability'
 import { z } from 'zod'
 
-import { errorMessage, withTimeout } from '../common/async.ts'
-import { throttledErrorLog } from '../common/error-log.ts'
 import { BACKGROUND_JOBS, JOB_QUEUE, PRISMA } from '../infra/tokens.ts'
 import { isQueueName } from '../queue/queues.ts'
 
@@ -91,7 +90,8 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
   #stopping = false
   #failedPasses = 0
   #pausedUntil = 0
-  readonly #logPassFailure = throttledErrorLog(this.#logger, 'Outbox relay pass failed')
+  readonly #warn = throttledLogger((line) => this.#logger.warn(line))
+  readonly #logPassFailure = (err: unknown) => this.#warn('Outbox relay pass failed', err)
 
   constructor(
     @Inject(PRISMA) prisma: PrismaClient,

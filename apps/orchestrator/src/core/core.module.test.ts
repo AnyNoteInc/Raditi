@@ -6,7 +6,6 @@ import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { OutboxRelayService } from '../outbox/outbox-relay.service.ts'
-import { TaskLifecycleService } from '../tasks/task-lifecycle.service.ts'
 import { AGENT_DRIVERS, JOB_QUEUE, SANDBOX_PROVIDER } from '../infra/tokens.ts'
 import {
   fakeInfra,
@@ -118,6 +117,27 @@ describe('CoreModule', () => {
     expect(res.body.checks).toEqual({ database: 'fail', redis: 'fail', s3: 'fail', vault: 'fail' })
   })
 
+  it('reuses one /health report for a few seconds instead of probing on every request', async () => {
+    const infra = fakeInfra()
+    const server = (await startCore(infra)).getHttpServer()
+
+    for (let i = 0; i < 3; i++) expect((await request(server).get('/health')).status).toBe(200)
+
+    expect(infra.prisma.$queryRaw).toHaveBeenCalledOnce()
+    expect(infra.redis.ping).toHaveBeenCalledOnce()
+  })
+
+  it('logs an unavailable dependency by name, without the details reaching the response', async () => {
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    const server = (await startCore(fakeInfra({ vault: 'down' }), logger)).getHttpServer()
+
+    const res = await request(server).get('/health')
+
+    expect(res.body).toEqual({ status: 'degraded' })
+    const lines = logger.warn.mock.calls.filter(([line]) => String(line).includes('unavailable'))
+    expect(lines).toEqual([['vault is unavailable: connect ECONNREFUSED', 'HealthController']])
+  })
+
   it('protects /metrics with the bearer METRICS_TOKEN', async () => {
     const server = (await startCore(fakeInfra())).getHttpServer()
 
@@ -140,7 +160,7 @@ describe('CoreModule', () => {
     expect((await request(server).post('/mcp').send({})).status).toBe(404)
   })
 
-  it('wires the ports: job queue, agent drivers, sandbox provider, task lifecycle, relay', async () => {
+  it('wires the ports: job queue, agent drivers, sandbox provider, relay', async () => {
     const infra = fakeInfra()
     const core = await startCore(infra)
 
@@ -148,7 +168,6 @@ describe('CoreModule', () => {
     expect(drivers.list().map((driver) => driver.id)).toEqual(['codex', 'kimi'])
     expect(drivers.has('qwen')).toBe(false)
     expect(core.get<SandboxProvider>(SANDBOX_PROVIDER).kind).toBe('docker')
-    expect(core.get(TaskLifecycleService).canTransition('queued', 'preparing')).toBe(true)
     expect(core.get(OutboxRelayService)).toBeInstanceOf(OutboxRelayService)
 
     await core.get<JobQueue>(JOB_QUEUE).enqueue('notifications', 'auth.welcome', { a: 1 })

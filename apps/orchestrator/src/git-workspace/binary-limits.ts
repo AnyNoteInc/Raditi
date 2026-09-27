@@ -1,12 +1,13 @@
 import { inflateSync } from 'node:zlib'
 
-import { badRequest, publicationLimits } from '@repo/domain'
+import { badRequest, publicationLimits, publicationTooLarge } from '@repo/domain'
 
 // Git binary patch encoding: https://github.com/git/git/blob/master/base85.c
 // Delta headers: https://github.com/git/git/blob/master/patch-delta.c
 const alphabet =
   '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~'
-const invalid = () => badRequest('Invalid or oversized binary publication patch')
+const invalid = () => badRequest('Invalid binary publication patch')
+const tooLarge = () => publicationTooLarge('Binary publication patch exceeds its limits')
 
 function decodeLine(line: string): Buffer {
   const code = line.charCodeAt(0)
@@ -43,7 +44,8 @@ export function assertBinaryPatchLimits(patch: Uint8Array): void {
       }
       if (++blocks > 2) throw invalid()
       const declared = Number(match[2])
-      if (!Number.isSafeInteger(declared) || declared > publicationLimits.fileBytes) throw invalid()
+      if (!Number.isSafeInteger(declared)) throw invalid()
+      if (declared > publicationLimits.fileBytes) throw tooLarge()
       const chunks: Buffer[] = []
       for (i += 1; i < lines.length && lines[i] !== ''; i += 1) chunks.push(decodeLine(lines[i]!))
       let decoded: Buffer
@@ -70,10 +72,10 @@ export function assertBinaryPatchLimits(patch: Uint8Array): void {
         const source = number()
         output = number()
         if (source > publicationLimits.fileBytes || output > publicationLimits.fileBytes)
-          throw invalid()
+          throw tooLarge()
       }
       total += output
-      if (total > publicationLimits.treeBytes) throw invalid()
+      if (total > publicationLimits.treeBytes) throw tooLarge()
       i += 1
     }
   }

@@ -1,5 +1,5 @@
 import {
-  legalDocuments,
+  legalDocumentFor,
   type ConsentDocumentType,
   type LegalDocument,
   type LegalDocumentSlug,
@@ -9,11 +9,8 @@ import type { ConsentDocumentLinks } from '@repo/ui/widgets/auth'
 export const legalDocumentHref = (slug: LegalDocumentSlug | LegalDocument['slug']): string =>
   `/terms/${slug}`
 
-function hrefFor(type: ConsentDocumentType): string {
-  const document = legalDocuments.find((d) => d.consentType === type)
-  if (!document) throw new Error(`No legal document for consent type ${type}`)
-  return legalDocumentHref(document.slug)
-}
+const hrefFor = (type: ConsentDocumentType): string =>
+  legalDocumentHref(legalDocumentFor(type).slug)
 
 /** Links for the consent checkboxes (sign-up and onboarding). */
 export function consentDocumentLinks(): ConsentDocumentLinks {

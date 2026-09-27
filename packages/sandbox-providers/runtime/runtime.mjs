@@ -100,7 +100,7 @@ async function parent(path, create = false, allowRoot = false) {
   }
 }
 
-async function fileOperation(operation, path, option) {
+async function fileOperation(operation, path, option, length) {
   const p = await parent(path, operation === 'write', operation === 'list')
   try {
     if (operation === 'read') {
@@ -124,6 +124,8 @@ async function fileOperation(operation, path, option) {
       }
     } else if (operation === 'write') {
       const mode = option === undefined ? 0o600 : number(option, 0o777)
+      // Required: a host timeout closes stdin like a normal EOF, so the size proves completion.
+      const expected = number(length, MAX_BYTES)
       const old = await fs.lstat(p.path).catch((e) => {
         if (e.code === 'ENOENT') return null
         throw e
@@ -142,6 +144,7 @@ async function fileOperation(operation, path, option) {
           if (bytes > MAX_BYTES) fail()
           await h.writeFile(chunk)
         }
+        if (bytes !== expected) fail()
         await h.chmod(mode)
         await h.close()
         await fs.rename(temp, p.path)

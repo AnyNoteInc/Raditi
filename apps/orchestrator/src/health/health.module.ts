@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import type { PrismaClient } from '@repo/db'
 import type { ObjectStorage, SecretStore } from '@repo/domain'
+import { databaseCheck, s3Check, vaultCheck, type HealthChecks } from '@repo/observability'
 import type { Redis } from 'ioredis'
 
 import type { CoreConfig } from '../config/config.ts'
@@ -12,14 +13,7 @@ import {
   REDIS,
   SECRET_STORE,
 } from '../infra/tokens.ts'
-import {
-  CORE_BUCKETS,
-  databaseCheck,
-  redisCheck,
-  s3Check,
-  vaultCheck,
-  type HealthChecks,
-} from './health-checks.ts'
+import { CORE_BUCKETS, redisCheck } from './health-checks.ts'
 import { HEALTH_DETAILS_TOKEN, HealthController } from './health.controller.ts'
 
 /** GET /health of the core role: database, Redis, its own S3 buckets and Vault. */
@@ -39,10 +33,10 @@ import { HEALTH_DETAILS_TOKEN, HealthController } from './health.controller.ts'
         storage: ObjectStorage,
         secrets: SecretStore,
       ): HealthChecks => ({
-        database: databaseCheck(prisma),
+        database: databaseCheck(() => prisma),
         redis: redisCheck(redis),
-        s3: s3Check(storage, CORE_BUCKETS),
-        vault: vaultCheck(secrets),
+        s3: s3Check(() => storage, CORE_BUCKETS),
+        vault: vaultCheck(() => secrets),
       }),
       inject: [PRISMA, REDIS, OBJECT_STORAGE, SECRET_STORE],
     },

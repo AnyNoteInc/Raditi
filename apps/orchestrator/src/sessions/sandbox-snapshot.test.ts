@@ -139,6 +139,24 @@ describe('SandboxSnapshotTransport', () => {
     )
   })
 
+  it('refuses a capture whose home or new files hold a turn credential, before returning it', async () => {
+    const key = 'synthetic-mcp-token-0123456789'
+    const clean = await fixture()
+    for (const parts of [
+      { ...clean, home: await archive('sessions/run.jsonl', `{"token":"${key}"}\n`) },
+      { ...clean, untracked: await archive('new.txt', `token=${key}`) },
+    ]) {
+      const fake = sandboxFixture(parts)
+      await expect(
+        new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha, [key]),
+      ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+    }
+    const fake = sandboxFixture(clean)
+    await expect(
+      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha, [key]),
+    ).resolves.toEqual(clean)
+  })
+
   it('collapses overlapping home include subtrees instead of producing duplicate tar entries', async () => {
     const fake = sandboxFixture(await fixture())
     await new SandboxSnapshotTransport().capture(
@@ -220,18 +238,60 @@ describe('SandboxSnapshotTransport', () => {
   })
 
   it('bounds stdout and stderr without including either in errors', async () => {
-    for (const reply of [
-      { stdout: Buffer.alloc(snapshotLimits.patchBytes + 1) },
-      { stderr: Buffer.alloc(64 * 1024 + 1) },
-    ]) {
+    for (const [reply, error] of [
+      [{ stdout: Buffer.alloc(snapshotLimits.patchBytes + 1) }, { code: 'PUBLICATION_TOO_LARGE' }],
+      [
+        { stderr: Buffer.alloc(64 * 1024 + 1) },
+        { code: 'SANDBOX_COMMAND_FAILED', httpStatus: 502 },
+      ],
+    ] as const) {
       const fake = sandboxFixture(await fixture(), (spec) =>
         spec.argv.includes('diff') ? reply : undefined,
       )
-      await expect(
-        new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
-      ).rejects.toThrow(/command/)
+      const capture = new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha)
+      await expect(capture).rejects.toMatchObject(error)
       expect(fake.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
     }
+  })
+
+  it.each([
+    [
+      'session archive',
+      (spec: ExecSpec) =>
+        spec.argv.includes('--create') && !spec.argv.includes('--directory=/workspace/repo'),
+      snapshotLimits.archiveBytes,
+      'SNAPSHOT_TOO_LARGE',
+    ],
+    [
+      'untracked archive',
+      (spec: ExecSpec) =>
+        spec.argv.includes('--directory=/workspace/repo') && spec.argv.includes('--create'),
+      snapshotLimits.archiveBytes,
+      'PUBLICATION_TOO_LARGE',
+    ],
+    [
+      'untracked list',
+      (spec: ExecSpec) => spec.argv.includes('ls-files'),
+      snapshotLimits.entries * (snapshotLimits.path + 1),
+      'PUBLICATION_TOO_LARGE',
+    ],
+  ] as const)('reports an oversized %s as a size limit (413)', async (_, match, limit, code) => {
+    const fake = sandboxFixture(await fixture(), (spec) =>
+      match(spec) ? { stdout: Buffer.alloc(limit + 1) } : undefined,
+    )
+    await expect(
+      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
+    ).rejects.toMatchObject({ code, httpStatus: 413 })
+  })
+
+  it('reports more untracked files than a snapshot holds as a size limit (413)', async () => {
+    const names = Array.from({ length: snapshotLimits.entries + 1 }, (_, i) => `f${i}\0`).join('')
+    const fake = sandboxFixture(await fixture(), (spec) =>
+      spec.argv.includes('ls-files') ? { stdout: Buffer.from(names) } : undefined,
+    )
+    await expect(
+      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
+    ).rejects.toMatchObject({ code: 'PUBLICATION_TOO_LARGE', httpStatus: 413 })
   })
 
   it('times out even when output ends but wait() never settles', async () => {

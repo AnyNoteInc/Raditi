@@ -12,7 +12,8 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "verify:snapshots": "pnpm build && node --env-file=../../.env scripts/verify-snapshots.mjs",
-    "verify:transport": "pnpm build && node scripts/verify-snapshot-transport.mjs"
+    "verify:transport": "pnpm build && node scripts/verify-snapshot-transport.mjs",
+    "verify:publication": "pnpm build && NODE_ENV=test node scripts/verify-publication.mjs"
   },
   "dependencies": {
     "@repo/agent-drivers": "workspace:*",
@@ -20,9 +21,8 @@
     "@repo/domain": "workspace:*",
     "@repo/mail": "workspace:*",
     "@repo/notifications": "workspace:*",
+    "@repo/observability": "workspace:*",
     "@repo/sandbox-providers": "workspace:*",
-    "@repo/site-adapters": "workspace:*",
-    "@repo/git-providers": "workspace:*",
     "@repo/storage": "workspace:*",
     "@repo/vault": "workspace:*",
     "@modelcontextprotocol/core": "catalog:",

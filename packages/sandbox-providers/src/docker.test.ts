@@ -1,24 +1,40 @@
 import { Buffer } from 'node:buffer'
 import { Duplex } from 'node:stream'
+import type * as Timers from 'node:timers/promises'
 
-import type { ExecChunk, SandboxSpec } from '@repo/domain'
+import {
+  MAX_SANDBOX_RESOURCES,
+  MAX_SANDBOX_TURN_MS,
+  preparedRunLimits,
+  SANDBOX_GID,
+  SANDBOX_SECRETS_DIR,
+  SANDBOX_SECRETS_TMPFS_BYTES,
+  SANDBOX_UID,
+  type ExecChunk,
+  type SandboxSpec,
+} from '@repo/domain'
 import type Docker from 'dockerode'
 import { describe, expect, it, vi } from 'vitest'
 
-import { DockerFrames, HELPER, NODE, startDetachedExec } from './docker-api.ts'
+import { DockerFrames, HELPER, HELPER_ENV, NODE, startDetachedExec } from './docker-api.ts'
 import { createDockerSandboxProvider } from './docker.ts'
-import { defaultSandboxLimits } from './limits.ts'
+
+// Route the provider's sleeps through the global timer, so fake timers drive them too.
+vi.mock('node:timers/promises', async (original) => ({
+  ...(await original<typeof Timers>()),
+  setTimeout: (ms: number) => new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms)),
+}))
 
 const spec = (patch: Partial<SandboxSpec> = {}): SandboxSpec => ({
   image: `registry.local:3300/raditi/sbx-wordpress@sha256:${'0'.repeat(64)}`,
   labels: { workspaceId: 'w', siteId: 's', taskId: 't', sessionId: 'x', turn: 1, leaseEpoch: 4 },
   runtime: 'runc',
-  resources: { ...defaultSandboxLimits.resources },
-  user: { ...defaultSandboxLimits.user },
+  resources: { ...MAX_SANDBOX_RESOURCES },
+  user: { uid: SANDBOX_UID, gid: SANDBOX_GID },
   env: { LANG: 'C.UTF-8' },
   secrets: [],
   network: { mode: 'none' },
-  hardTimeoutMs: defaultSandboxLimits.hardTimeoutMs,
+  hardTimeoutMs: MAX_SANDBOX_TURN_MS,
   ...patch,
 })
 const frame = (value: Uint8Array, stream = 1) => {
@@ -94,8 +110,13 @@ function daemon() {
                 })
                 output = Buffer.from(JSON.stringify({ chunks: items, exit: record.exit }))
               }
-              if (args[0] === 'fs' && args[1] === 'write')
-                files.set(args[2]!, Buffer.concat(chunks))
+              if (args[0] === 'fs' && args[1] === 'write') {
+                const data = Buffer.concat(chunks)
+                // Like the helper: no rename unless exactly the announced bytes arrived.
+                if (args[4] === String(data.length)) files.set(args[2]!, data)
+                else status.ExitCode = 125
+              }
+              if (args[0] === 'stage') files.set(`stage:${args[1]}`, Buffer.concat(chunks))
               if (args[0] === 'fs' && args[1] === 'read')
                 output = files.get(args[2]!) ?? Buffer.alloc(0)
               this.push(frame(output))
@@ -141,7 +162,7 @@ function daemon() {
     info: () => info,
   }
 }
-const config = { runtime: 'runc' as const, imagePrefix: 'raditi/agent' }
+const config = { runtime: 'runc' as const }
 const collect = async (source: AsyncIterable<ExecChunk>) => {
   const chunks = []
   for await (const chunk of source) chunks.push(chunk)
@@ -168,6 +189,11 @@ describe('Docker sandbox provider', () => {
     })
     expect(options.User).toBe('10001:10001')
     expect(options.Env).not.toContainEqual(expect.stringContaining('secret'))
+    // Prepared secrets are limited by the same constant the tmpfs is mounted with.
+    expect(options.HostConfig!.Tmpfs![SANDBOX_SECRETS_DIR]).toContain(
+      `size=${SANDBOX_SECRETS_TMPFS_BYTES / 1024}k,`,
+    )
+    expect(preparedRunLimits.secretBytes).toBeLessThanOrEqual(SANDBOX_SECRETS_TMPFS_BYTES)
     expect((await provider.get(sandbox.id))!.labels).toEqual(spec().labels)
     expect(await provider.list({ leaseEpoch: 4 })).toMatchObject([
       { id: sandbox.id, labels: spec().labels },
@@ -203,24 +229,57 @@ describe('Docker sandbox provider', () => {
     expect(fake.raw.createContainer).not.toHaveBeenCalled()
   })
 
+  it('refuses container env that every exec resets, but passes it through exec env', async () => {
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(config, { client: fake.client })
+    const value = '--max-old-space-size=2048'
+    for (const name of HELPER_ENV.map((entry) => entry.slice(0, -1)))
+      await expect(provider.create(spec({ env: { [name]: value } }))).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: expect.stringContaining('ExecSpec.env'),
+      })
+    expect(fake.raw.info).not.toHaveBeenCalled()
+    const sandbox = await provider.create(spec())
+    const run = await sandbox.exec({
+      argv: ['agent'],
+      env: { NODE_OPTIONS: value },
+      timeoutMs: 5000,
+    })
+    const staged = fake.files.get(`stage:${run.id.split('.')[0]}`)!
+    expect(JSON.parse(staged.subarray(4, 4 + staged.readUInt32BE(0)).toString())).toMatchObject({
+      env: { NODE_OPTIONS: value },
+    })
+    await sandbox.destroy('completed')
+  })
+
   it.each(['cleanup retry', 'external removal'])(
     'releases the exact gateway after main %s',
     async (cause) => {
       const fake = daemon()
       const resourceId = '01234567-1234-1234-1234-0123456789ab'
+      const networkMode = `container:${'a'.repeat(64)}`
+      const policy = { mode: 'gateway' as const, routes: ['llm' as const] }
       const gateway = {
-        prepare: vi.fn(async () => ({
-          networkMode: `container:${'a'.repeat(64)}`,
-          resourceId,
-          release: vi.fn(async () => {}),
-        })),
+        prepare: vi.fn(async () => ({ networkMode, resourceId })),
         validate: vi.fn(async () => true),
         release: vi.fn(async () => {}),
       }
       const sandbox = await createDockerSandboxProvider(config, {
         client: fake.client,
         gateway,
-      }).create(spec({ network: { mode: 'gateway', routes: ['llm'] } }))
+      }).create(spec({ network: policy }))
+      const deadline = Number(fake.info().Config.Labels['io.raditi.sandbox.deadline'])
+      expect(gateway.prepare).toHaveBeenCalledWith(
+        { labels: spec().labels, policy, deadline },
+        undefined,
+      )
+      expect(gateway.validate).toHaveBeenCalledWith({
+        resourceId,
+        labels: spec().labels,
+        deadline,
+        policy,
+        networkMode,
+      })
       if (cause === 'cleanup retry') {
         gateway.release.mockRejectedValueOnce(new Error('transient gateway cleanup failure'))
         await expect(sandbox.destroy('completed')).rejects.toThrow(/cleanup failure/)
@@ -230,8 +289,8 @@ describe('Docker sandbox provider', () => {
       await sandbox.destroy('completed')
       const expectedCalls = cause === 'cleanup retry' ? 2 : 1
       expect(gateway.release).toHaveBeenCalledTimes(expectedCalls)
-      for (const [info] of gateway.release.mock.calls as unknown as [Docker.ContainerInspectInfo][])
-        expect(info.Config.Labels['io.raditi.sandbox.gatewayId']).toBe(resourceId)
+      expect(gateway.release).toHaveBeenCalledWith(resourceId)
+      expect(gateway.release.mock.calls).toEqual(Array(expectedCalls).fill([resourceId]))
       await sandbox.destroy('completed')
       expect(gateway.release).toHaveBeenCalledTimes(expectedCalls)
     },
@@ -253,6 +312,28 @@ describe('Docker sandbox provider', () => {
     expect(gateway.prepare).not.toHaveBeenCalled()
     expect(fake.raw.createContainer).not.toHaveBeenCalled()
     expect(fake.raw.info).not.toHaveBeenCalled()
+  })
+
+  it('builds the gateway manager from its config on the same Docker client', async () => {
+    const fake = daemon()
+    const image = `registry.local:3300/raditi/sandbox-gateway@sha256:${'1'.repeat(64)}`
+    const provider = createDockerSandboxProvider(
+      {
+        ...config,
+        gateway: {
+          image,
+          guardImage: image,
+          llmUpstream: 'http://llm.internal:4000',
+          mcpUpstream: 'http://mcp.internal:8082',
+        },
+      },
+      { client: fake.client },
+    )
+    await expect(
+      provider.create(spec({ network: { mode: 'gateway', routes: ['llm'] } })),
+    ).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    expect(fake.raw.getImage).toHaveBeenCalledWith(image)
+    expect(fake.raw.createContainer).not.toHaveBeenCalled()
   })
 
   it.each(['owner', 'protocol', 'readonly', 'runtime', 'mount', 'epoch', 'privileged'])(
@@ -350,6 +431,14 @@ describe('Docker sandbox provider', () => {
     await sandbox.fs.write('/workspace/inbox/file', bytes)
     expect(await sandbox.fs.read('/workspace/inbox/file')).toEqual(bytes)
     expect(fake.files.get('/run/raditi/secrets/key')!.toString()).toBe('credential-value')
+    // Only the byte count travels in argv, so the helper can refuse a cut stdin.
+    expect(fake.commands.map((options) => options.Cmd!.slice(2))).toContainEqual([
+      'fs',
+      'write',
+      '/workspace/inbox/file',
+      '384',
+      '3',
+    ])
     expect(JSON.stringify(fake.commands)).not.toContain('credential-value')
     expect(JSON.stringify(fake.raw.createContainer.mock.calls)).not.toContain('credential-value')
     for (const path of [
@@ -418,6 +507,47 @@ describe('Docker sandbox provider', () => {
       { stream: 'stdout', offset: 0, data: Buffer.from([0, 255, 65, 66]) },
       { stream: 'stderr', offset: 0, data: Buffer.from('warn') },
     ])
+    await sandbox.destroy('completed')
+  })
+
+  it('backs off idle output polling and resets it when output arrives', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const run = await sandbox.exec({ argv: ['command'], timeoutMs: 60_000 })
+    const [logical, execId] = run.id.split('.') as [string, string]
+    const record = {
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      exit: null as { code: number; reason: string } | null,
+    }
+    fake.records.set(logical, record)
+    const exec = fake.raw.getExec(execId)!
+    const status = (await (exec.inspect as () => Promise<object>)()) as { Running: boolean }
+    exec.inspect.mockImplementation(async () => ({ ...status, Running: true }))
+    const reads = () => fake.commands.filter((options) => options.Cmd![2] === 'read-exec').length
+    vi.useFakeTimers()
+    try {
+      const output = run.output()[Symbol.asyncIterator]()
+      const first = output.next()
+      await vi.advanceTimersByTimeAsync(3000)
+      // Each read starts a helper process: 50 → 1000 ms backoff instead of ~30 reads at 100 ms.
+      expect(reads()).toBe(7)
+      record.stdout = Buffer.from('x')
+      await vi.advanceTimersByTimeAsync(1000)
+      expect((await first).value).toMatchObject({ stream: 'stdout', offset: 0 })
+      const before = reads()
+      const rest = output.next()
+      await vi.advanceTimersByTimeAsync(60)
+      expect(reads() - before).toBe(2)
+      record.exit = { code: 0, reason: 'exited' }
+      exec.inspect.mockImplementation(async () => status)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(await rest).toEqual({ done: true, value: undefined })
+    } finally {
+      vi.useRealTimers()
+    }
     await sandbox.destroy('completed')
   })
 })

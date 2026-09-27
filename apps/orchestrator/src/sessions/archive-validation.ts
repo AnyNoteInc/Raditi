@@ -5,10 +5,17 @@ import { constants, createZstdDecompress } from 'node:zlib'
 
 import {
   badRequest,
+  isSnapshotCredential,
+  isTooLarge,
+  publicationTooLarge,
   sessionRelativePathSchema,
+  snapshotHasCredential,
+  snapshotTooLarge,
   sessionStateSchema,
   snapshotLimits,
+  snapshotPartNames,
   type SessionState,
+  type SnapshotPartName,
 } from '@repo/domain'
 import { extract, type Header } from 'tar-stream'
 
@@ -22,7 +29,31 @@ const BLOCK_BYTES = 512
 const VALIDATION_TIMEOUT_MS = 60_000
 const USTAR_MAGIC_VERSION = Buffer.from('ustar\0' + '00', 'latin1')
 
-const invalidArchive = () => badRequest('Invalid or oversized snapshot archive')
+const invalidArchive = () => badRequest('Invalid snapshot archive')
+type TooLarge = () => Error
+/** The agent's session state is its own; untracked files and the patch are its changes. */
+const tooLargeFor = (name: SnapshotPartName): TooLarge =>
+  name === 'home'
+    ? () => snapshotTooLarge('Snapshot session archive exceeds its limits')
+    : () => publicationTooLarge(`Snapshot ${name} part exceeds its limits`)
+/** A size limit keeps its 413 and a found credential its own error; the rest is one format error. */
+const keepLimit = (error: unknown): Error =>
+  isTooLarge(error) || isSnapshotCredential(error) ? error : invalidArchive()
+
+/**
+ * Finds any of the turn's exact credentials in a stream of chunks, including one split between
+ * two chunks of the same file. The error never carries the value.
+ */
+function credentialScan(credentials: readonly Buffer[]): (chunk: Uint8Array) => boolean {
+  const keep = Math.max(0, ...credentials.map((value) => value.byteLength - 1))
+  let tail: Buffer = Buffer.alloc(0)
+  return (chunk) => {
+    const bytes = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+    const joined = tail.byteLength > 0 ? Buffer.concat([tail, bytes]) : bytes
+    tail = joined.subarray(Math.max(0, joined.byteLength - keep))
+    return credentials.some((value) => joined.includes(value))
+  }
+}
 
 /** No parseInt prefixes, base-256, high-bit aliases, embedded NULs or hidden suffixes. */
 function octalField(header: Buffer, offset: number, length: number, empty = false): number {
@@ -78,6 +109,10 @@ function assertHomePath(path: string, directory: boolean, state: SessionState): 
  * the capture command requests that format explicitly. No archive bytes are extracted here.
  */
 class UstarFraming extends Transform {
+  constructor(private readonly tooLarge: TooLarge) {
+    super()
+  }
+
   readonly #header = Buffer.alloc(BLOCK_BYTES)
   #headerBytes = 0
   #remaining = 0
@@ -88,7 +123,7 @@ class UstarFraming extends Transform {
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
     try {
       this.#total += chunk.byteLength
-      if (this.#total > snapshotLimits.expandedBytes) throw invalidArchive()
+      if (this.#total > snapshotLimits.expandedBytes) throw this.tooLarge()
       let offset = 0
       while (offset < chunk.byteLength) {
         if (this.#remaining > 0) {
@@ -107,8 +142,8 @@ class UstarFraming extends Transform {
         }
       }
       callback(null, chunk)
-    } catch {
-      callback(invalidArchive())
+    } catch (error) {
+      callback(keepLimit(error))
     }
   }
 
@@ -117,7 +152,8 @@ class UstarFraming extends Transform {
       this.#zeroBlocks += 1
       return
     }
-    if (this.#zeroBlocks > 0 || ++this.#entries > snapshotLimits.entries) throw invalidArchive()
+    if (this.#zeroBlocks > 0) throw invalidArchive()
+    if (++this.#entries > snapshotLimits.entries) throw this.tooLarge()
     if (!this.#header.subarray(257, 265).equals(USTAR_MAGIC_VERSION)) throw invalidArchive()
     assertStringField(this.#header, 0, 100)
     assertStringField(this.#header, 345, 155)
@@ -133,9 +169,8 @@ class UstarFraming extends Transform {
     octalField(this.#header, 148, 8) // checksum; tar-stream also verifies its value
     octalField(this.#header, 329, 8, true) // unused device numbers may be blank in USTAR
     octalField(this.#header, 337, 8, true)
-    if (mode > 0o777 || size > snapshotLimits.fileBytes || (type === 53 && size !== 0)) {
-      throw invalidArchive()
-    }
+    if (mode > 0o777 || (type === 53 && size !== 0)) throw invalidArchive()
+    if (size > snapshotLimits.fileBytes) throw this.tooLarge()
     this.#remaining = Math.ceil(size / BLOCK_BYTES) * BLOCK_BYTES
   }
 
@@ -181,7 +216,12 @@ function assertHeader(
   paths.set(path, directory)
 }
 
-async function validateArchive(bytes: Uint8Array, state?: SessionState): Promise<void> {
+async function validateArchive(
+  bytes: Uint8Array,
+  tooLarge: TooLarge,
+  credentials: readonly Buffer[],
+  state?: SessionState,
+): Promise<void> {
   const parser = extract()
   const paths = new Map<string, boolean>()
   const parentPaths = new Set<string>()
@@ -191,8 +231,17 @@ async function validateArchive(bytes: Uint8Array, state?: SessionState): Promise
     stream.on('error', () => {})
     try {
       assertHeader(header, paths, parentPaths, state)
+      let exposed = false
+      if (credentials.length > 0) {
+        exposed = credentialScan(credentials)(Buffer.from(header.name))
+        const scan = credentialScan(credentials)
+        stream.on('data', (chunk: unknown) => {
+          if (!(chunk instanceof Uint8Array)) parser.destroy(invalidArchive())
+          else if (!exposed) exposed = scan(chunk)
+        })
+      }
       // tar-stream also checks checksums and the exact body length; drain without retaining it.
-      stream.on('end', () => next())
+      stream.on('end', () => next(exposed ? snapshotHasCredential() : undefined))
       stream.resume()
     } catch {
       next(invalidArchive())
@@ -206,28 +255,52 @@ async function validateArchive(bytes: Uint8Array, state?: SessionState): Promise
           [constants.ZSTD_d_windowLogMax]: Math.ceil(Math.log2(snapshotLimits.expandedBytes)),
         },
       }),
-      new UstarFraming(),
+      new UstarFraming(tooLarge),
       parser,
       { signal: AbortSignal.timeout(VALIDATION_TIMEOUT_MS) },
     )
-  } catch {
-    throw invalidArchive()
+  } catch (error) {
+    throw keepLimit(error)
   }
 }
 
-/** Check both archives completely before the caller starts any restore or commits a manifest. */
+/** A private copy: a caller cannot swap bytes during an await after they were checked. */
+function ownedPart(name: SnapshotPartName, bytes: unknown): Buffer {
+  const limit = name === 'patch' ? snapshotLimits.patchBytes : snapshotLimits.archiveBytes
+  if (!(bytes instanceof Uint8Array)) throw invalidArchive()
+  if (bytes.byteLength > limit) throw tooLargeFor(name)()
+  return Buffer.from(bytes)
+}
+
+/**
+ * Check both archives completely before the caller starts any restore or commits a manifest.
+ * Callers must use only the returned copies, never their own input buffers. With the turn's
+ * `credentials` (capture), a part that contains one verbatim — a file name or content in an
+ * archive, or the patch text — is refused as snapshotHasCredential(). Binary changes to tracked
+ * files are compressed inside the patch and not covered by this exact match.
+ */
 export async function validateSnapshotArchives(
   state: SessionState,
   parts: SnapshotArchives,
-): Promise<void> {
+  credentials: readonly string[] = [],
+): Promise<SnapshotArchives> {
   const parsed = sessionStateSchema.safeParse(state)
   if (!parsed.success) throw badRequest('Invalid snapshot session state')
-  for (const name of ['home', 'untracked', 'patch'] as const) {
-    const bytes = parts[name]
-    const limit = name === 'patch' ? snapshotLimits.patchBytes : snapshotLimits.archiveBytes
-    if (!(bytes instanceof Uint8Array) || bytes.byteLength > limit) throw invalidArchive()
-  }
+  const owned = {} as SnapshotArchives
+  for (const name of snapshotPartNames) owned[name] = ownedPart(name, parts[name])
+  const known = credentials
+    .filter((value) => value.length > 0)
+    .map((value) => Buffer.from(value, 'utf8'))
   // Sequential decoding bounds memory: compressed parts are staged, expanded tar data is not.
-  await validateArchive(parts.home, parsed.data)
-  await validateArchive(parts.untracked)
+  await validateArchive(owned.home, tooLargeFor('home'), known, parsed.data)
+  await validateArchive(owned.untracked, tooLargeFor('untracked'), known)
+  if (credentialScan(known)(owned.patch)) throw snapshotHasCredential()
+  return owned
+}
+
+/** The untracked part alone (trusted publication), with the same framing and limits. */
+export async function validateUntrackedArchive(bytes: Uint8Array): Promise<Uint8Array> {
+  const owned = ownedPart('untracked', bytes)
+  await validateArchive(owned, tooLargeFor('untracked'), [])
+  return owned
 }

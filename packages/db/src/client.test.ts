@@ -12,12 +12,14 @@ describe('dbConfigFromEnv', () => {
   })
 
   it('fails with a clear message when DATABASE_URL is missing', () => {
-    expect(() => dbConfigFromEnv({})).toThrow('DATABASE_URL is not set')
+    expect(() => dbConfigFromEnv({})).toThrow(
+      '[db] invalid configuration: DATABASE_URL: is not set',
+    )
   })
 
   it('rejects a non-postgres URL', () => {
     expect(() => dbConfigFromEnv({ DATABASE_URL: 'mysql://localhost/raditi' })).toThrow(
-      'postgresql://',
+      'DATABASE_URL: must be a postgresql:// connection string',
     )
   })
 })
@@ -29,7 +31,7 @@ describe('importing @repo/db', () => {
     try {
       const db = await import('./index.ts')
       expect(db.TaskStatus.queued).toBe('queued')
-      expect(() => db.prisma.$connect).toThrow('DATABASE_URL is not set')
+      expect(() => db.prisma.$connect).toThrow('DATABASE_URL: is not set')
     } finally {
       if (saved !== undefined) process.env.DATABASE_URL = saved
     }

@@ -88,12 +88,11 @@ try {
     },
     { transport: { kind: 'local-test', root }, gitleaksBinary: scanner },
   )
-  const source = { repo, branch: 'agent/task1', expectedBaseSha: baseSha }
+  const source = { repo, branch: 'agent/task1', expectedBaseSha: baseSha, protectedPaths: [] }
   const metadata = { ...source, taskId: 'task1', turn: 1, createdAt: '2026-09-26T19:00:00.000Z' }
 
   const provider = createDockerSandboxProvider({
     runtime: 'runc',
-    imagePrefix: 'raditi/agent',
     socketPath: process.env.SANDBOX_DOCKER_SOCKET ?? '/var/run/docker.sock',
   })
   const unique = randomBytes(8).toString('hex')

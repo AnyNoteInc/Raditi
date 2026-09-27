@@ -3,10 +3,9 @@ import { Inject, Logger } from '@nestjs/common'
 import { isDomainError } from '@repo/domain'
 import type { Mailer } from '@repo/mail'
 import { deliverNotification, NOTIFICATIONS_QUEUE } from '@repo/notifications'
+import { errorMessage, throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
 
-import { errorMessage } from '../common/async.ts'
-import { throttledErrorLog } from '../common/error-log.ts'
 import { MAILER } from '../infra/tokens.ts'
 
 /**
@@ -18,7 +17,7 @@ import { MAILER } from '../infra/tokens.ts'
 export class NotificationsProcessor extends WorkerHost {
   readonly #logger = new Logger(NotificationsProcessor.name)
   readonly #mailer: Mailer
-  readonly #logWorkerError = throttledErrorLog(this.#logger, `worker ${NOTIFICATIONS_QUEUE}`)
+  readonly #warn = throttledLogger((line) => this.#logger.warn(line))
 
   constructor(@Inject(MAILER) mailer: Mailer) {
     super()
@@ -46,6 +45,6 @@ export class NotificationsProcessor extends WorkerHost {
 
   @OnWorkerEvent('error')
   onError(err: Error): void {
-    this.#logWorkerError(err)
+    this.#warn(`worker ${NOTIFICATIONS_QUEUE}`, err)
   }
 }

@@ -1,20 +1,18 @@
 import { createPrismaClient, dbConfigFromEnv, type PrismaClient } from '@repo/db'
 import type { ObjectStorage } from '@repo/domain'
+import {
+  cachedHealthProbe,
+  databaseCheck,
+  s3Check,
+  throttledLogger,
+  vaultCheck,
+} from '@repo/observability'
 import { createS3ObjectStorage } from '@repo/storage'
 import { createVaultSecretStore } from '@repo/vault'
 import { Redis } from 'ioredis'
 
 import { env } from '@/env'
-import {
-  cachedHealthProbe,
-  databaseCheck,
-  healthResponse,
-  redisCheck,
-  s3Check,
-  throttledHealthLogger,
-  vaultCheck,
-  WEB_BUCKETS,
-} from '@/server/health'
+import { healthResponse, redisCheck, WEB_BUCKETS } from '@/server/health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -51,6 +49,8 @@ const connectRedis = (url: string) => {
   return client
 }
 
+const warn = throttledLogger((line) => console.warn(`[health] ${line}`))
+
 // One probe per process: reports are reused for a few seconds and concurrent calls share a run.
 const probe = cachedHealthProbe(
   {
@@ -61,7 +61,7 @@ const probe = cachedHealthProbe(
       createVaultSecretStore({ ...env.vault(), timeoutMs: DEPENDENCY_TIMEOUT_MS }),
     ),
   },
-  { onFailure: throttledHealthLogger() },
+  { onFailure: (name, error) => warn(`${name} is unavailable`, error) },
 )
 
 /** Broken web settings: nobody gets the details, and the Redis check reports the problem. */

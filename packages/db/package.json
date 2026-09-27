@@ -21,7 +21,6 @@
     "@prisma/adapter-pg": "catalog:",
     "@prisma/client": "catalog:",
     "@repo/domain": "workspace:*",
-    "dotenv": "catalog:",
     "pg": "catalog:",
     "zod": "catalog:"
   },

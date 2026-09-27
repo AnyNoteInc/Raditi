@@ -33,9 +33,9 @@ const objectNames = [
 ]
 let keyCreated = false
 
-async function vault(path, body) {
+async function vault(path, body, method = body === undefined ? 'GET' : 'POST') {
   const response = await fetch(`${vaultConfig.addr.replace(/\/$/, '')}/v1/${path}`, {
-    method: body === undefined ? 'GET' : 'POST',
+    method,
     headers: { 'X-Vault-Token': vaultConfig.token, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     redirect: 'error',
@@ -113,16 +113,7 @@ try {
   )
   if (keyCreated) {
     await vault(`transit/keys/${keyId}/config`, { deletion_allowed: true })
-    const response = await fetch(
-      `${vaultConfig.addr.replace(/\/$/, '')}/v1/transit/keys/${keyId}`,
-      {
-        method: 'DELETE',
-        headers: { 'X-Vault-Token': vaultConfig.token },
-        redirect: 'error',
-        signal: AbortSignal.timeout(10_000),
-      },
-    )
-    assert(response.ok, 'Could not remove the temporary local Transit key')
+    await vault(`transit/keys/${keyId}`, undefined, 'DELETE')
   }
   assert(
     cleanup.every((result) => result.status === 'fulfilled'),

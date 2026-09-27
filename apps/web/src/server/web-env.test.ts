@@ -1,6 +1,7 @@
+import { DEV_METRICS_TOKEN } from '@repo/observability'
 import { describe, expect, it } from 'vitest'
 
-import { DEV_METRICS_TOKEN, MIN_METRICS_TOKEN_LENGTH, webEnvFromEnv } from './web-env'
+import { webEnvFromEnv } from './web-env'
 
 const devEnv = {
   APP_ENV: 'development',
@@ -9,10 +10,12 @@ const devEnv = {
   REDIS_URL: 'redis://localhost:6379',
 }
 
+const PROD_METRICS_TOKEN = 'test-metrics-token-'.padEnd(32, 'x')
+
 const prodEnv = {
   APP_ENV: 'production',
   APP_URL: 'https://raditi.ru',
-  METRICS_TOKEN: '3f9c1e7a5b2d4c6e8f0a1b3c5d7e9f1a',
+  METRICS_TOKEN: PROD_METRICS_TOKEN,
   REDIS_URL: 'rediss://redis.internal:6380',
 }
 
@@ -24,12 +27,16 @@ describe('webEnvFromEnv', () => {
       metricsToken: DEV_METRICS_TOKEN,
       redisUrl: 'redis://localhost:6379',
     })
+    expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
+      metricsToken: DEV_METRICS_TOKEN,
+      redisUrl: undefined,
+    })
   })
 
   it('requires APP_ENV: a missing or misspelt one never falls back to development', () => {
     for (const APP_ENV of [undefined, '', 'prod']) {
       expect(() => webEnvFromEnv({ ...devEnv, APP_ENV })).toThrow(
-        '[web] invalid configuration: APP_ENV: APP_ENV must be one of development, test, production',
+        '[web] invalid configuration: APP_ENV: must be one of development, test, production',
       )
     }
   })
@@ -37,20 +44,15 @@ describe('webEnvFromEnv', () => {
   it('accepts production settings', () => {
     expect(webEnvFromEnv(prodEnv)).toMatchObject({
       appEnv: 'production',
-      metricsToken: '3f9c1e7a5b2d4c6e8f0a1b3c5d7e9f1a',
+      metricsToken: PROD_METRICS_TOKEN,
     })
   })
 
   it('requires a production metrics token of at least 32 characters, without leaking it', () => {
-    const short = 'k'.repeat(MIN_METRICS_TOKEN_LENGTH - 1)
-    expect(MIN_METRICS_TOKEN_LENGTH).toBe(32)
+    const short = 'k'.repeat(31)
     expect(() => webEnvFromEnv({ ...prodEnv, METRICS_TOKEN: short })).toThrow(
       /^\[web\] invalid configuration: METRICS_TOKEN: must be at least 32 characters in production$/,
     )
-    expect(
-      webEnvFromEnv({ ...prodEnv, METRICS_TOKEN: 'x'.repeat(MIN_METRICS_TOKEN_LENGTH) })
-        .metricsToken,
-    ).toHaveLength(MIN_METRICS_TOKEN_LENGTH)
     // Short tokens stay fine outside production.
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: 'short' }).metricsToken).toBe('short')
   })
@@ -65,8 +67,18 @@ describe('webEnvFromEnv', () => {
       throw new Error('expected an error')
     })()
 
-    expect(error.message).toMatch(/METRICS_TOKEN: set a unique token in production/)
-    expect(error.message).toMatch(/APP_URL: must use https in production/)
-    expect(error.message).not.toContain(DEV_METRICS_TOKEN)
+    expect(error.message).toBe(
+      '[web] invalid configuration: ' +
+        'METRICS_TOKEN: set a unique token in production (the dev placeholder is refused); ' +
+        'APP_URL: must use https in production',
+    )
+  })
+
+  it('names bad URLs without echoing them', () => {
+    expect(() =>
+      webEnvFromEnv({ ...devEnv, APP_URL: 'ftp://files', REDIS_URL: 'http://cache:6379' }),
+    ).toThrow(
+      '[web] invalid configuration: APP_URL: must be an http(s) URL; REDIS_URL: must be a redis:// URL',
+    )
   })
 })

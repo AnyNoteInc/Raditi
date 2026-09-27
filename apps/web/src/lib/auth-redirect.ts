@@ -1,8 +1,7 @@
 import 'server-only'
 
+import { errorMessage } from '@repo/observability'
 import { redirect, unstable_rethrow } from 'next/navigation'
-
-import { describeError } from '@/server/errors'
 
 import { DEFAULT_AFTER_SIGN_IN } from './safe-redirect'
 import { getSession } from './session'
@@ -13,7 +12,7 @@ async function isSignedIn(): Promise<boolean> {
   } catch (error) {
     unstable_rethrow(error)
     // The form still renders; signing in reports its own error if the database is down.
-    console.error(`[auth] session lookup failed: ${describeError(error)}`)
+    console.error(`[auth] session lookup failed: ${errorMessage(error)}`)
     return false
   }
 }

@@ -21,7 +21,7 @@ const verifyEmail = {
 } as const
 
 describe('createMailer', () => {
-  it('renders the letter and sends it from noreply@raditi.ru by default', async () => {
+  it('renders the letter and sends it from noreply@raditi.ru', async () => {
     const { transport, sent } = fakeTransport()
 
     await createMailer({ transport }).sendMail(verifyEmail)
@@ -33,14 +33,6 @@ describe('createMailer', () => {
       subject: 'Подтвердите адрес почты',
     })
     expect(sent[0]?.html).toContain('href="https://raditi.ru/api/auth/verify-email?token=abc"')
-  })
-
-  it('takes the sender from config', async () => {
-    const { transport, sent } = fakeTransport()
-
-    await createMailer({ transport, from: { name: 'Радити, поддержка' } }).sendMail(verifyEmail)
-
-    expect(sent[0]?.from).toEqual({ email: 'noreply@raditi.ru', name: 'Радити, поддержка' })
   })
 
   it('rejects an invalid recipient before sending', async () => {
@@ -82,7 +74,9 @@ describe('mailerConfigFromEnv', () => {
     ['blank', ''],
     ['misspelt', 'prod'],
   ])('refuses a %s APP_ENV instead of assuming development', (_case, APP_ENV) => {
-    expect(() => mailerConfigFromEnv({ APP_ENV, SENDSAY_API_KEY: 'key' })).toThrow(/APP_ENV/)
+    expect(() => mailerConfigFromEnv({ APP_ENV, SENDSAY_API_KEY: 'key' })).toThrow(
+      '[mail] invalid configuration: APP_ENV: must be one of',
+    )
   })
 
   it('treats an empty key as absent in development', () => {
@@ -92,8 +86,10 @@ describe('mailerConfigFromEnv', () => {
   })
 
   it('requires the key in production', () => {
-    expect(() => mailerConfigFromEnv({ APP_ENV: 'production', SENDSAY_API_KEY: '' })).toThrow(
-      'SENDSAY_API_KEY',
-    )
+    for (const key of ['', ' ']) {
+      expect(() => mailerConfigFromEnv({ APP_ENV: 'production', SENDSAY_API_KEY: key })).toThrow(
+        'SENDSAY_API_KEY: is required when APP_ENV=production',
+      )
+    }
   })
 })

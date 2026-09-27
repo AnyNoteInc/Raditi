@@ -47,7 +47,7 @@ describe('vaultConfigFromEnv', () => {
         VAULT_ADDR: 'http://localhost:8200',
         VAULT_DEV_ROOT_TOKEN: 'raditi-dev-root',
       }),
-    ).toThrow(/APP_ENV: APP_ENV must be one of/)
+    ).toThrow('[vault] invalid configuration: APP_ENV: must be one of')
   })
 
   it('requires role id and secret id together', () => {
@@ -57,7 +57,7 @@ describe('vaultConfigFromEnv', () => {
         VAULT_ADDR: 'http://localhost:8200',
         VAULT_ROLE_ID: 'role-1',
       }),
-    ).toThrow(/must be set together/)
+    ).toThrow('VAULT_SECRET_ID: must be set together with VAULT_ROLE_ID')
   })
 
   it('requires https in production', () => {

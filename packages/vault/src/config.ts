@@ -1,4 +1,4 @@
-import { appEnvSchema, isProduction } from '@repo/domain'
+import { appEnvSchema, envVar, isProduction, parseEnv, type Env } from '@repo/domain'
 import { z } from 'zod'
 
 export interface VaultAppRole {
@@ -17,15 +17,12 @@ export interface VaultConfig {
   appRole?: VaultAppRole
 }
 
-const blankToUndefined = (value: unknown): unknown =>
-  typeof value === 'string' && value.trim() === '' ? undefined : value
-
-const optionalSecret = z.preprocess(blankToUndefined, z.string().optional())
+const optionalSecret = envVar(z.string().optional())
 
 const envSchema = z
   .object({
-    APP_ENV: appEnvSchema,
-    VAULT_ADDR: z.preprocess(blankToUndefined, z.url({ protocol: /^https?$/ })),
+    APP_ENV: envVar(appEnvSchema),
+    VAULT_ADDR: envVar(z.url({ protocol: /^https?$/ })),
     VAULT_ROLE_ID: optionalSecret,
     VAULT_SECRET_ID: optionalSecret,
     VAULT_DEV_ROOT_TOKEN: optionalSecret,
@@ -35,7 +32,7 @@ const envSchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['VAULT_SECRET_ID'],
-        message: 'VAULT_ROLE_ID and VAULT_SECRET_ID must be set together',
+        message: 'must be set together with VAULT_ROLE_ID',
       })
     }
     if (isProduction(env.APP_ENV)) {
@@ -65,13 +62,8 @@ const envSchema = z
   })
 
 /** Reads the Vault settings from an env-like object; the error never contains values. */
-export function vaultConfigFromEnv(env: Record<string, string | undefined>): VaultConfig {
-  const parsed = envSchema.safeParse(env)
-  if (!parsed.success) {
-    const problems = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
-    throw new Error(`[@repo/vault] invalid Vault configuration: ${problems.join('; ')}`)
-  }
-  const e = parsed.data
+export function vaultConfigFromEnv(env: Env): VaultConfig {
+  const e = parseEnv('vault', envSchema, env)
   const config: VaultConfig = { addr: e.VAULT_ADDR }
   if (e.VAULT_ROLE_ID !== undefined && e.VAULT_SECRET_ID !== undefined) {
     config.appRole = { roleId: e.VAULT_ROLE_ID, secretId: e.VAULT_SECRET_ID }

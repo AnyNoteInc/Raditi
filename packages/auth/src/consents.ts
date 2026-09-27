@@ -1,6 +1,6 @@
 import type { ConsentSource } from '@repo/db'
 import {
-  legalDocuments,
+  legalDocumentFor,
   missingRequiredConsents,
   type ConsentDocumentType,
   type ConsentRecord,
@@ -57,12 +57,6 @@ export interface ConsentContext extends RequestMeta {
 
 export const MARKETING_CONSENT: ConsentDocumentType = 'marketing'
 
-export function consentDocument(type: ConsentDocumentType): LegalDocument {
-  const document = legalDocuments.find((d) => d.consentType === type)
-  if (!document) throw new Error(`No legal document for consent type ${type}`)
-  return document
-}
-
 /** Latest record per document type from rows sorted newest first. */
 export function latestConsents(rowsNewestFirst: readonly StoredConsent[]): ConsentRecord[] {
   const latest = new Map<ConsentDocumentType, ConsentRecord>()
@@ -107,7 +101,7 @@ export function marketingConsentRow(
   granted: boolean,
   context: ConsentContext,
 ): ConsentRow | null {
-  const document = consentDocument(MARKETING_CONSENT)
+  const document = legalDocumentFor(MARKETING_CONSENT)
   const current = latest.find((r) => r.type === MARKETING_CONSENT)
   const unchanged =
     current !== undefined &&
@@ -128,7 +122,7 @@ export function signUpConsentRows(
   const granted = [
     ...requiredConsentCheckboxes.acceptTerms,
     ...requiredConsentCheckboxes.acceptPersonalData,
-  ].map((type) => row(consentDocument(type), true, full))
+  ].map((type) => row(legalDocumentFor(type), true, full))
   const marketing = marketingConsentRow([], consent.marketing ?? false, full)
   return [...granted, ...(marketing ? [marketing] : [])]
 }

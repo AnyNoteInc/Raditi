@@ -15,9 +15,11 @@ describe('yookassaConfigFromEnv', () => {
   })
 
   it('requires both values together', () => {
-    expect(() => yookassaConfigFromEnv({ YOOKASSA_SHOP_ID: '123456' })).toThrow(/together/)
+    expect(() => yookassaConfigFromEnv({ YOOKASSA_SHOP_ID: '123456' })).toThrow(
+      '[yookassa] invalid configuration: YOOKASSA_SECRET_KEY: YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be set together',
+    )
     expect(() => yookassaConfigFromEnv({ YOOKASSA_SECRET_KEY: 'test_abcdefgh' })).toThrow(
-      /together/,
+      'YOOKASSA_SHOP_ID: YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be set together',
     )
   })
 

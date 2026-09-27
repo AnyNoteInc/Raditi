@@ -27,6 +27,7 @@
     "@repo/auth": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",
+    "@repo/observability": "workspace:*",
     "@repo/storage": "workspace:*",
     "@repo/trpc": "workspace:*",
     "@repo/ui": "workspace:*",

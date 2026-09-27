@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { SANDBOX_SECRETS_DIR, SANDBOX_SECRETS_TMPFS_BYTES } from './sandbox-provider.ts'
+
 /**
  * Agent driver port — spec §8. The core knows only this interface and the common events;
  * every CLI-specific detail (flags, config files, event format) lives in the adapter
@@ -56,15 +58,120 @@ export interface SandboxFile {
 
 export interface PreparedRun {
   context: RunContext
-  /** Driver config, AGENTS.md, output schema — written before the turn starts. */
+  /**
+   * Driver config, AGENTS.md, output schema — written before the turn starts, only under
+   * SANDBOX_AGENT_HOME. Never the working copy (SANDBOX_WORKDIR): capture would publish them
+   * to the client's repository. preparedRunSchema enforces it.
+   */
   files: SandboxFile[]
   /**
-   * Non-secret variables only: they may end up in SandboxSpec.env, which sandboxSpecSchema
-   * checks. The LLM key and the MCP token go through `secrets` or the agent exec's own env.
+   * Non-secret variables of the agent exec only. The LLM key, the MCP token and every other
+   * credential reach the agent only as `secrets` files; files and env carrying one are refused
+   * (preparedRunExposesSecret): /agent-home is packed into the S3 snapshot.
    */
   env: Record<string, string>
-  /** Per-turn secrets: tmpfs only, never part of a snapshot. */
+  /** Per-turn secrets: only under SANDBOX_SECRETS_DIR (tmpfs), never part of a snapshot. */
   secrets: SandboxFile[]
+}
+
+/** tmpfs charges whole pages, so each secret file takes at least one. */
+const TMPFS_PAGE_BYTES = 4096
+
+export const preparedRunLimits = Object.freeze({
+  files: 256,
+  bytes: 4 * 1024 * 1024,
+  path: 1024,
+  /** Secret files in whole tmpfs pages: they must fit into the secrets tmpfs. */
+  secretBytes: SANDBOX_SECRETS_TMPFS_BYTES,
+})
+
+/** Normalized absolute path strictly below `root`: no '.', '..', empty or `.git` segments. */
+function isPreparedPath(path: string, root: string): boolean {
+  return (
+    path.startsWith(`${root}/`) &&
+    !path.includes('\\') &&
+    ![...path].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) &&
+    path
+      .slice(1)
+      .split('/')
+      .every(
+        (part) => part !== '' && part !== '.' && part !== '..' && part.toLowerCase() !== '.git',
+      )
+  )
+}
+
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
+const tmpfsBytes = (content: string) =>
+  Math.max(1, Math.ceil(utf8Bytes(content) / TMPFS_PAGE_BYTES)) * TMPFS_PAGE_BYTES
+
+const preparedFileSchema = (root: string) =>
+  z
+    .object({
+      path: z
+        .string()
+        .max(preparedRunLimits.path)
+        .refine((path) => isPreparedPath(path, root), `expected a normalized path under ${root}`),
+      content: z.string(),
+      mode: z.number().int().min(0).max(0o777).optional(),
+    })
+    .strict()
+
+/** What the orchestrator accepts from AgentDriver.prepare before writing anything. */
+export const preparedRunSchema = z
+  .object({
+    context: z.custom<RunContext>((value) => typeof value === 'object' && value !== null),
+    files: z.array(preparedFileSchema(SANDBOX_AGENT_HOME)).max(preparedRunLimits.files),
+    env: z.record(z.string(), z.string()),
+    secrets: z.array(preparedFileSchema(SANDBOX_SECRETS_DIR)).max(preparedRunLimits.files),
+  })
+  .strict()
+  .superRefine((run, ctx) => {
+    const all = [...run.files, ...run.secrets]
+    if (all.length > preparedRunLimits.files)
+      ctx.addIssue({ code: 'custom', message: 'too many prepared files' })
+    if (all.reduce((sum, file) => sum + utf8Bytes(file.content), 0) > preparedRunLimits.bytes)
+      ctx.addIssue({ code: 'custom', message: 'prepared files are too large' })
+    if (
+      run.secrets.reduce((sum, file) => sum + tmpfsBytes(file.content), 0) >
+      preparedRunLimits.secretBytes
+    )
+      ctx.addIssue({ code: 'custom', message: 'prepared secrets do not fit their tmpfs' })
+    if (new Set(all.map((file) => file.path)).size !== all.length)
+      ctx.addIssue({ code: 'custom', message: 'duplicate prepared file path' })
+  })
+
+/** Every credential of one turn: the LLM key, the MCP token and each secret file's content. */
+export function turnCredentials(
+  context: Pick<RunContext, 'llm' | 'mcp'>,
+  secrets: readonly SandboxFile[],
+): string[] {
+  return [context.llm.apiKey, context.mcp.token, ...secrets.map((file) => file.content)].filter(
+    (value) => value.length > 0,
+  )
+}
+
+/** True when any value contains one of the credentials verbatim. */
+export function containsCredential(
+  values: readonly string[],
+  credentials: readonly string[],
+): boolean {
+  const known = credentials.filter((value) => value.length > 0)
+  return values.some((value) => known.some((credential) => value.includes(credential)))
+}
+
+/**
+ * True when a driver file, env value or command argument carries a turn credential: files under
+ * /agent-home end up in the S3 snapshot (home.tar.zst), env and argv in exec inspection output.
+ */
+export function preparedRunExposesSecret(
+  run: Pick<PreparedRun, 'files' | 'env'>,
+  credentials: readonly string[],
+  argv: readonly string[] = [],
+): boolean {
+  return containsCredential(
+    [...run.files.map((file) => file.content), ...Object.values(run.env), ...argv],
+    credentials,
+  )
 }
 
 export interface TurnInput {
@@ -122,11 +229,14 @@ export const agentOutputLimits = Object.freeze({
 })
 const limits = agentOutputLimits
 
+/** Native session ids end up in literal snapshot paths: validated whole, never truncated. */
+export const nativeSessionIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/)
+
 /** Common events — the only agent vocabulary the orchestrator, chat and billing see (CLAUDE.md, rule 8). */
 export const agentEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('started'),
-    nativeSessionId: z.string().max(limits.nativeSessionId).optional(),
+    nativeSessionId: nativeSessionIdSchema.optional(),
   }),
   z.object({ type: z.literal('message'), text: z.string().max(limits.messageText) }),
   z.object({
@@ -147,6 +257,10 @@ export const agentEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('usage'), usage: tokenUsageSchema }),
   z.object({ type: z.literal('completed') }),
+  /**
+   * `reason` is raw CLI or provider text, often English: logs and operators only. The client
+   * never sees it verbatim; the chat shows a Russian text chosen by the event type (spec §8).
+   */
   z.object({ type: z.literal('failed'), reason: z.string().max(limits.failureReason) }),
 ])
 export type AgentEvent = z.infer<typeof agentEventSchema>

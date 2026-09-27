@@ -1,11 +1,6 @@
-import { appEnvSchema, isProduction, type AppEnv } from '@repo/domain'
+import { appEnvSchema, envVar, isProduction, parseEnv, type AppEnv, type Env } from '@repo/domain'
+import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
 import { z } from 'zod'
-
-/** METRICS_TOKEN from .env.example: fine locally, refused in production. */
-export const DEV_METRICS_TOKEN = 'raditi-dev-metrics'
-
-/** Production METRICS_TOKEN: long enough that guessing it is hopeless (openssl rand -hex 32). */
-export const MIN_METRICS_TOKEN_LENGTH = 32
 
 export interface WebEnv {
   appEnv: AppEnv
@@ -16,55 +11,30 @@ export interface WebEnv {
   redisUrl: string | undefined
 }
 
-type Env = Record<string, string | undefined>
-
-const blankToUndefined = (value: unknown): unknown =>
-  typeof value === 'string' && value.trim() === '' ? undefined : value
-
 const webEnvSchema = z
   .object({
     // Required, never defaulted: a missing APP_ENV must not switch the production checks off.
-    APP_ENV: z.preprocess(blankToUndefined, appEnvSchema),
-    APP_URL: z.preprocess(
-      blankToUndefined,
+    APP_ENV: envVar(appEnvSchema),
+    APP_URL: envVar(
       z
-        .url({ protocol: /^https?$/, error: 'APP_URL must be an http(s) URL' })
+        .url({ protocol: /^https?$/, error: 'must be an http(s) URL' })
         .transform((url) => url.replace(/\/+$/, '')),
     ),
-    METRICS_TOKEN: z.preprocess(blankToUndefined, z.string().optional()),
-    REDIS_URL: z.preprocess(
-      blankToUndefined,
-      z.url({ protocol: /^rediss?$/, error: 'REDIS_URL must be a redis:// URL' }).optional(),
-    ),
+    METRICS_TOKEN: envVar(z.string().optional()),
+    REDIS_URL: envVar(z.url({ protocol: /^rediss?$/, error: 'must be a redis:// URL' }).optional()),
   })
   .superRefine((env, ctx) => {
-    if (!isProduction(env.APP_ENV)) return
-    if (env.METRICS_TOKEN === undefined || env.METRICS_TOKEN === DEV_METRICS_TOKEN) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['METRICS_TOKEN'],
-        message: 'set a unique token in production (the dev placeholder is refused)',
-      })
-    } else if (env.METRICS_TOKEN.length < MIN_METRICS_TOKEN_LENGTH) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['METRICS_TOKEN'],
-        message: `must be at least ${MIN_METRICS_TOKEN_LENGTH} characters in production`,
-      })
-    }
-    if (!env.APP_URL.startsWith('https://')) {
+    const tokenProblem = metricsTokenProblem(env.METRICS_TOKEN, env.APP_ENV)
+    if (tokenProblem)
+      ctx.addIssue({ code: 'custom', path: ['METRICS_TOKEN'], message: tokenProblem })
+    if (isProduction(env.APP_ENV) && !env.APP_URL.startsWith('https://')) {
       ctx.addIssue({ code: 'custom', path: ['APP_URL'], message: 'must use https in production' })
     }
   })
 
 /** The app's own variables; the error names variables, never their values. */
 export function webEnvFromEnv(env: Env): WebEnv {
-  const parsed = webEnvSchema.safeParse(env)
-  if (!parsed.success) {
-    const problems = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
-    throw new Error(`[web] invalid configuration: ${problems.join('; ')}`)
-  }
-  const e = parsed.data
+  const e = parseEnv('web', webEnvSchema, env)
   return {
     appEnv: e.APP_ENV,
     appUrl: e.APP_URL,

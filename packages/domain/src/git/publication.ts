@@ -1,16 +1,25 @@
 import { z } from 'zod'
 
-import { badRequest, forbidden } from '../errors.ts'
+import { badRequest, forbidden, publicationTooLarge } from '../errors.ts'
 import { isForbiddenPath } from '../policies/diff-paths.ts'
 import { gitProviderKinds } from '../ports/git-provider.ts'
+import { snapshotLimits } from '../sessions/session-state.ts'
 import { snapshotIdSchema } from '../sessions/snapshot-manifest.ts'
 
 export const publicationLimits = Object.freeze({
-  patchBytes: 8 * 1024 * 1024,
+  /** The candidate patch is saved as the snapshot's patch part: one limit for both. */
+  patchBytes: snapshotLimits.patchBytes,
   fileBytes: 32 * 1024 * 1024,
   treeBytes: 128 * 1024 * 1024,
   bundleBytes: 64 * 1024 * 1024,
+  /** Files the agent's changes may add, change or delete in one turn. */
   files: 10_000,
+  /**
+   * Files in the site's own base tree. A guess for WordPress with plugins and uploads in Git;
+   * to be checked on real sites (P5).
+   */
+  repositoryFiles: 100_000,
+  pathBytes: 1024,
   commandMs: 60_000,
 })
 
@@ -31,7 +40,8 @@ export const publicationSourceSchema = z
       .max(200)
       .regex(/^agent\/[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
     expectedBaseSha: publicationShaSchema,
-    protectedPaths: z.array(z.string().min(1).max(1024)).max(100).default([]),
+    /** SiteAdapter.protectedPaths() of the site; required so a caller cannot silently omit it. */
+    protectedPaths: z.array(z.string().min(1).max(1024)).max(100),
   })
   .strict()
 export type PublicationSource = z.input<typeof publicationSourceSchema>
@@ -51,7 +61,7 @@ export type PublicationMetadata = z.input<typeof publicationMetadataSchema>
 export function assertPublicationPath(path: string): void {
   if (
     path.length === 0 ||
-    new TextEncoder().encode(path).byteLength > 1024 ||
+    new TextEncoder().encode(path).byteLength > publicationLimits.pathBytes ||
     path.startsWith('/') ||
     path.startsWith('-') ||
     /^[A-Za-z]:/.test(path) ||
@@ -77,7 +87,7 @@ export interface PublicationChange {
 
 export function assertPublicationChange(
   change: PublicationChange,
-  protectedPaths: readonly string[] = [],
+  protectedPaths: readonly string[],
 ): void {
   assertPublicationPath(change.path)
   if (isForbiddenPath(change.path, protectedPaths))
@@ -92,11 +102,8 @@ export function assertPublicationChange(
   ) {
     throw forbidden('Publication contains a link, submodule or permission change')
   }
-  if (
-    !Number.isSafeInteger(change.sizeBytes) ||
-    change.sizeBytes < 0 ||
-    change.sizeBytes > publicationLimits.fileBytes
-  ) {
-    throw badRequest('Publication file exceeds the size limit')
-  }
+  if (!Number.isSafeInteger(change.sizeBytes) || change.sizeBytes < 0)
+    throw badRequest('Invalid publication file size')
+  if (change.sizeBytes > publicationLimits.fileBytes)
+    throw publicationTooLarge('Publication file exceeds the size limit')
 }

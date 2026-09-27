@@ -1,23 +1,12 @@
-import { collectDefaultMetrics, Registry } from '@prometheus-io/client'
-
-import { bearerTokenMatches } from './bearer-token'
-
-/**
- * One registry per process, default label app=web. Labels never carry task or user ids
- * (spec §19): billing comes from token_usage, not from Prometheus.
- */
-export function createMetricsRegistry(): Registry {
-  const registry = new Registry()
-  registry.setDefaultLabels({ app: 'web' })
-  collectDefaultMetrics({ register: registry })
-  return registry
-}
+import { Registry } from '@prometheus-io/client'
+import { bearerTokenMatches, createMetricsRegistry } from '@repo/observability'
 
 // Survives module reloads in dev (HMR): default collectors must be registered only once.
 const globalForMetrics = globalThis as typeof globalThis & { __raditiWebMetrics?: Registry }
 
+/** The process registry, default label app=web. */
 export function getMetricsRegistry(): Registry {
-  globalForMetrics.__raditiWebMetrics ??= createMetricsRegistry()
+  globalForMetrics.__raditiWebMetrics ??= createMetricsRegistry('web')
   return globalForMetrics.__raditiWebMetrics
 }
 

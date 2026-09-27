@@ -1,8 +1,7 @@
-import { legalDocuments, type ConsentRecord } from '@repo/domain'
+import { legalDocumentFor, legalDocuments, type ConsentRecord } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
 import {
-  consentDocument,
   latestConsents,
   marketingConsentRow,
   requiredConsentCheckboxes,
@@ -15,7 +14,7 @@ import {
 const meta = { userId: 'user-1', ipAddress: '203.0.113.7', userAgent: 'Firefox' }
 const onboarding: ConsentContext = { ...meta, source: 'onboarding' }
 const required = legalDocuments.filter((d) => d.required && d.consentType !== null)
-const marketing = consentDocument('marketing')
+const marketing = legalDocumentFor('marketing')
 
 const acceptedAll = (): ConsentRecord[] =>
   required.map((d) => ({ type: d.consentType!, version: d.version, granted: true }))

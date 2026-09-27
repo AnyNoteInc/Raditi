@@ -1,11 +1,67 @@
-import type { AgentEvent, TurnResult } from './agent-driver.ts'
-import type { RepoRef } from './git-provider.ts'
-import type { ExecCursor, Sandbox } from './sandbox-provider.ts'
+import { z } from 'zod'
 
-export type SiteLeaseOperation = 'turn' | 'deploy' | 'revert'
+import { DomainError, isDomainError, isTooLarge } from '../errors.ts'
+import {
+  publicationShaSchema,
+  type PublicationMetadata,
+  type PublicationSource,
+} from '../git/publication.ts'
+import { agentEventSchema, turnResultSchema } from './agent-driver.ts'
+import { execCursorSchema, type Sandbox } from './sandbox-provider.ts'
+
+export const siteLeaseOperations = ['turn', 'deploy', 'revert'] as const
+export type SiteLeaseOperation = (typeof siteLeaseOperations)[number]
 
 /** A fenced publication may spend 60s in a native command after core dies; retain 30s cleanup margin. */
 export const TURN_PUBLICATION_GRACE_MS = 90_000
+
+/**
+ * The turn limit covers publication too: the agent's exec ends this much earlier, leaving time
+ * for quiesce, capture, the candidate commit and its secret scan, the snapshot save and push.
+ */
+export const TURN_FINALIZE_RESERVE_MS = 3 * 60_000
+
+/** Another operation owns the site. */
+export const siteBusy = (): DomainError =>
+  new DomainError('SITE_BUSY', 'The site is already running an operation', 409)
+
+/** The site waits for an operator after an ambiguous write: retrying does not help. */
+export const siteHeld = (): DomainError =>
+  new DomainError('SITE_HELD', 'The site is held for operator recovery', 409)
+
+const SNAPSHOT_CREDENTIAL = 'snapshot_credential'
+
+/**
+ * A captured snapshot part contains a turn credential (the LLM key, the MCP token or a secret
+ * file's value). Nothing is written and the site is released; the value is never reported.
+ */
+export const snapshotHasCredential = (): DomainError =>
+  new DomainError(
+    'SNAPSHOT_NOT_WRITTEN',
+    'Snapshot contains a turn credential; nothing was written',
+    502,
+    { reason: SNAPSHOT_CREDENTIAL },
+  )
+
+export function isSnapshotCredential(error: unknown): error is DomainError {
+  return (
+    isDomainError(error) &&
+    error.code === 'SNAPSHOT_NOT_WRITTEN' &&
+    (error.details as { reason?: unknown } | undefined)?.reason === SNAPSHOT_CREDENTIAL
+  )
+}
+
+/** A fenced write found that this owner no longer holds its site lease. */
+export const leaseLost = (message = 'Site lease is no longer owned'): DomainError =>
+  new DomainError('LEASE_LOST', message, 409)
+
+/**
+ * A snapshot save that failed this way wrote nothing: its checks, Vault or sealing failed, or
+ * it stopped before its reservation. The site is released and the turn may be retried.
+ */
+export function snapshotSaveWroteNothing(error: unknown): boolean {
+  return isDomainError(error) && (error.code === 'SNAPSHOT_NOT_WRITTEN' || isTooLarge(error))
+}
 
 export interface SiteLeaseFence {
   siteId: string
@@ -33,6 +89,10 @@ export interface SiteLeaseAuthority {
 /** Every mutation is conditional on the entire fence, never merely the task id. */
 export interface SiteLeaseStore {
   acquire(input: Omit<SiteLeaseFence, 'epoch'> & { ttlMs: number }): Promise<SiteLeaseGrant | null>
+  /**
+   * Turns never renew: one grant covers the hard limit plus TURN_PUBLICATION_GRACE_MS. Kept for
+   * long deploy/revert operations (P12, up to 45 minutes), which will renew under their fence.
+   */
   renew(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null>
   assert(fence: SiteLeaseFence): Promise<boolean>
   release(fence: SiteLeaseFence): Promise<boolean>
@@ -43,12 +103,7 @@ export interface SiteLeaseStore {
   reclaimForRecovery(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null>
 }
 
-export interface TurnWorkspaceSource {
-  repo: RepoRef
-  branch: string
-  expectedBaseSha: string
-  protectedPaths?: string[]
-}
+export type TurnWorkspaceSource = PublicationSource
 
 /** A host-owned candidate; its patch includes newly created files. */
 export interface TurnPublication {
@@ -65,13 +120,7 @@ export interface TurnPublication {
 export interface TurnWorkspace {
   prepareWorkspace(sandbox: Sandbox, source: TurnWorkspaceSource): Promise<void>
   preparePublication(
-    input: TurnWorkspaceSource & {
-      taskId: string
-      turn: number
-      createdAt: string
-      patch: Uint8Array
-      untracked: Uint8Array
-    },
+    input: PublicationMetadata & { patch: Uint8Array; untracked: Uint8Array },
   ): Promise<TurnPublication>
 }
 
@@ -93,33 +142,55 @@ export const turnPhases = [
 ] as const
 export type TurnPhase = (typeof turnPhases)[number]
 
+const evidenceId = z.uuid()
+const evidenceTextId = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
+
 /** Bounded operational evidence, with no prepared configs, credentials or raw error strings. */
-export interface TurnEvidence {
-  fence: SiteLeaseFence
-  sessionId: string
-  turn: number
-  sequence: number
-  phase: TurnPhase
-  containerId?: string
-  execId?: string
-  cursor?: ExecCursor
-  events?: AgentEvent[]
-  snapshotPrefix?: string
-  candidateHeadSha?: string
-  baseSha?: string
-  committedAt?: string
-  recoveredFromEpoch?: number
-  result?: TurnResult
-  reason?:
-    | 'cancelled'
-    | 'timeout'
-    | 'lease_lost'
-    | 'run_failed'
-    | 'snapshot_ambiguous'
-    | 'publication_ambiguous'
-    | 'destroy_failed'
-    | 'journal_failed'
-}
+export const turnEvidenceSchema = z
+  .object({
+    fence: z.object({
+      siteId: evidenceId,
+      taskId: evidenceId,
+      operation: z.enum(siteLeaseOperations),
+      epoch: z.number().int().positive(),
+    }),
+    sessionId: evidenceTextId,
+    turn: z.number().int().positive().max(999_999),
+    sequence: z.number().int().positive().max(1_000_000),
+    phase: z.enum(turnPhases),
+    containerId: evidenceTextId.optional(),
+    execId: evidenceTextId.optional(),
+    cursor: execCursorSchema.optional(),
+    events: z.array(agentEventSchema).max(10_000).optional(),
+    snapshotPrefix: z
+      .string()
+      .max(256)
+      .regex(/^sessions\/[A-Za-z0-9_-]+\/turns\/[0-9]+\/$/)
+      .optional(),
+    candidateHeadSha: publicationShaSchema.optional(),
+    baseSha: publicationShaSchema.optional(),
+    committedAt: z.iso.datetime().optional(),
+    recoveredFromEpoch: z.number().int().positive().optional(),
+    result: turnResultSchema.optional(),
+    reason: z
+      .enum([
+        'cancelled',
+        'timeout',
+        'lease_lost',
+        'run_failed',
+        'snapshot_ambiguous',
+        'snapshot_credential',
+        'publication_ambiguous',
+        'destroy_failed',
+      ])
+      .optional(),
+  })
+  .strict()
+export type TurnEvidence = z.input<typeof turnEvidenceSchema>
 
 /** The caller must supply durable storage; there is no in-memory production fallback. */
 export interface TurnJournal {

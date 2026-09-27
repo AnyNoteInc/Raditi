@@ -1,4 +1,4 @@
-import { appEnvSchema, isProduction, type AppEnv } from '@repo/domain'
+import { appEnvSchema, envVar, isProduction, parseEnv, type AppEnv, type Env } from '@repo/domain'
 import { z } from 'zod'
 
 export interface SmartCaptchaKeys {
@@ -24,70 +24,71 @@ const CLIENT_KEY_PREFIX = 'ysc1_'
 /** Keys of one captcha share the 20 characters after the prefix. */
 const pairId = (key: string): string => key.slice(5, 25)
 
-const httpUrl = (name: string) =>
+const httpUrl = envVar(
   z
-    .url({ protocol: /^https?$/, error: `${name} must be an http(s) URL` })
-    .transform((url) => url.replace(/\/+$/, ''))
+    .url({ protocol: /^https?$/, error: 'must be an http(s) URL' })
+    .transform((url) => url.replace(/\/+$/, '')),
+)
 
-const optionalKey = z
-  .string()
-  .optional()
-  .transform((value) => value?.trim() || undefined)
+const optionalKey = envVar(z.string().trim().optional())
 
 const authEnvSchema = z
   .object({
-    APP_ENV: appEnvSchema,
-    APP_URL: httpUrl('APP_URL'),
-    BETTER_AUTH_URL: httpUrl('BETTER_AUTH_URL'),
-    BETTER_AUTH_SECRET: z
-      .string({ error: 'BETTER_AUTH_SECRET is not set' })
-      .min(32, 'BETTER_AUTH_SECRET must be at least 32 characters (openssl rand -base64 32)'),
+    APP_ENV: envVar(appEnvSchema),
+    APP_URL: httpUrl,
+    BETTER_AUTH_URL: httpUrl,
+    BETTER_AUTH_SECRET: envVar(
+      z
+        .string({ error: 'is not set' })
+        .min(32, 'must be at least 32 characters (openssl rand -base64 32)'),
+    ),
     SMARTCAPTCHA_SERVER_KEY: optionalKey,
     SMARTCAPTCHA_CLIENT_KEY: optionalKey,
   })
   .superRefine((env, ctx) => {
     const server = env.SMARTCAPTCHA_SERVER_KEY
     const client = env.SMARTCAPTCHA_CLIENT_KEY
-    const issue = (message: string) => ctx.addIssue({ code: 'custom', message })
+    const issue = (name: keyof typeof env, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [name], message })
 
     if (isProduction(env.APP_ENV)) {
       if (!server || !client) {
         issue(
-          'SMARTCAPTCHA_SERVER_KEY and SMARTCAPTCHA_CLIENT_KEY are required when APP_ENV=production',
+          server ? 'SMARTCAPTCHA_CLIENT_KEY' : 'SMARTCAPTCHA_SERVER_KEY',
+          'both captcha keys are required when APP_ENV=production',
         )
       }
-      for (const [name, url] of [
-        ['APP_URL', env.APP_URL],
-        ['BETTER_AUTH_URL', env.BETTER_AUTH_URL],
-      ] as const) {
-        if (!url.startsWith('https://')) issue(`${name} must use https when APP_ENV=production`)
+      for (const name of ['APP_URL', 'BETTER_AUTH_URL'] as const) {
+        if (!env[name].startsWith('https://')) issue(name, 'must use https when APP_ENV=production')
       }
     }
     // Only one key would reject every sign-in with "captcha required", or show a widget
     // whose token nobody checks.
     if (Boolean(server) !== Boolean(client)) {
-      issue('Set both SMARTCAPTCHA_SERVER_KEY and SMARTCAPTCHA_CLIENT_KEY or neither')
+      issue(
+        server ? 'SMARTCAPTCHA_CLIENT_KEY' : 'SMARTCAPTCHA_SERVER_KEY',
+        'set both SMARTCAPTCHA_SERVER_KEY and SMARTCAPTCHA_CLIENT_KEY or neither',
+      )
       return
     }
     if (!server || !client) return
     if (!server.startsWith(SERVER_KEY_PREFIX)) {
-      issue(`SMARTCAPTCHA_SERVER_KEY must start with ${SERVER_KEY_PREFIX}`)
+      issue('SMARTCAPTCHA_SERVER_KEY', `must start with ${SERVER_KEY_PREFIX}`)
     }
     if (!client.startsWith(CLIENT_KEY_PREFIX)) {
-      issue(`SMARTCAPTCHA_CLIENT_KEY must start with ${CLIENT_KEY_PREFIX}`)
+      issue('SMARTCAPTCHA_CLIENT_KEY', `must start with ${CLIENT_KEY_PREFIX}`)
     }
     if (pairId(server) !== pairId(client)) {
-      issue('SMARTCAPTCHA_SERVER_KEY and SMARTCAPTCHA_CLIENT_KEY belong to different captchas')
+      issue(
+        'SMARTCAPTCHA_CLIENT_KEY',
+        'belongs to a different captcha than SMARTCAPTCHA_SERVER_KEY',
+      )
     }
   })
 
 /** Auth settings from the environment; throws with every problem listed. */
-export function authConfigFromEnv(env: Record<string, string | undefined>): AuthConfig {
-  const parsed = authEnvSchema.safeParse(env)
-  if (!parsed.success) {
-    throw new Error(`[@repo/auth] ${parsed.error.issues.map((i) => i.message).join('; ')}`)
-  }
-  const e = parsed.data
+export function authConfigFromEnv(env: Env): AuthConfig {
+  const e = parseEnv('auth', authEnvSchema, env)
   return {
     appEnv: e.APP_ENV,
     appUrl: e.APP_URL,

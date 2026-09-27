@@ -2,10 +2,10 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createZstdDecompress, zstdCompressSync } from 'node:zlib'
 
-import { badRequest, publicationLimits } from '@repo/domain'
+import { badRequest, isTooLarge, publicationLimits, publicationTooLarge } from '@repo/domain'
 import { extract } from 'tar-stream'
 
-import { validateSnapshotArchives } from '../sessions/archive-validation.ts'
+import { validateUntrackedArchive } from '../sessions/archive-validation.ts'
 
 export const emptyUntrackedArchive = (): Uint8Array => zstdCompressSync(Buffer.alloc(1024))
 export interface UntrackedFile {
@@ -15,12 +15,9 @@ export interface UntrackedFile {
 }
 
 /** Reads already validated regular blobs in memory; never extracts an agent path to host FS. */
-export async function untrackedFiles(archive: Uint8Array): Promise<UntrackedFile[]> {
-  const empty = emptyUntrackedArchive()
-  await validateSnapshotArchives(
-    { root: '/agent-home/validation', include: ['unused'], exclude: [] },
-    { home: empty, untracked: archive, patch: new Uint8Array() },
-  )
+export async function untrackedFiles(input: Uint8Array): Promise<UntrackedFile[]> {
+  // Parse the same owned copy that passed validation.
+  const archive = await validateUntrackedArchive(input)
   const parser = extract()
   const files: UntrackedFile[] = []
   let total = 0
@@ -34,7 +31,7 @@ export async function untrackedFiles(archive: Uint8Array): Promise<UntrackedFile
       }
       total += chunk.byteLength
       if (total > publicationLimits.treeBytes)
-        parser.destroy(badRequest('Publication tree is too large'))
+        parser.destroy(publicationTooLarge('Publication tree is too large'))
       else chunks.push(Buffer.from(chunk))
     })
     stream.on('end', () => {
@@ -50,8 +47,8 @@ export async function untrackedFiles(archive: Uint8Array): Promise<UntrackedFile
   })
   try {
     await pipeline(Readable.from([archive]), createZstdDecompress(), parser)
-  } catch {
-    throw badRequest('Invalid publication archive')
+  } catch (error) {
+    throw isTooLarge(error) ? error : badRequest('Invalid publication archive')
   }
   return files
 }

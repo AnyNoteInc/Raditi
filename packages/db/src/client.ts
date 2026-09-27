@@ -1,4 +1,5 @@
 import { PrismaPg } from '@prisma/adapter-pg'
+import { parseEnv, type Env } from '@repo/domain'
 import { z } from 'zod'
 
 import { PrismaClient, type Prisma } from './generated/prisma/client.ts'
@@ -25,16 +26,12 @@ const DEFAULT_CONNECTION_TIMEOUT_MS = 5_000
 
 const dbEnvSchema = z.object({
   DATABASE_URL: z
-    .string({ error: 'DATABASE_URL is not set' })
-    .regex(/^postgres(ql)?:\/\//, 'DATABASE_URL must be a postgresql:// connection string'),
+    .string({ error: 'is not set' })
+    .regex(/^postgres(ql)?:\/\//, 'must be a postgresql:// connection string'),
 })
 
-export function dbConfigFromEnv(env: Record<string, string | undefined>): DbConfig {
-  const parsed = dbEnvSchema.safeParse(env)
-  if (!parsed.success) {
-    throw new Error(`[@repo/db] ${parsed.error.issues.map((i) => i.message).join('; ')}`)
-  }
-  return { databaseUrl: parsed.data.DATABASE_URL }
+export function dbConfigFromEnv(env: Env): DbConfig {
+  return { databaseUrl: parseEnv('db', dbEnvSchema, env).DATABASE_URL }
 }
 
 export function createPrismaClient({

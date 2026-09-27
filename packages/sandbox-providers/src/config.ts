@@ -1,37 +1,27 @@
-import type { SandboxRuntime } from '@repo/domain'
-import { appEnvSchema, isProduction, sandboxRuntimes } from '@repo/domain'
+import {
+  appEnvSchema,
+  envVar,
+  isProduction,
+  parseEnv,
+  sandboxRuntimes,
+  type Env,
+  type SandboxRuntime,
+} from '@repo/domain'
 import { z } from 'zod'
 
+import { isLocalSocket } from './docker-api.ts'
 import { gatewayConfigFromEnv, type GatewayConfig } from './gateway/config.ts'
-
-const emptyAsMissing = (value: unknown) => (value === '' ? undefined : value)
-
-/**
- * A docker repository without tag or digest: `raditi/agent`, `registry.local:3300/raditi/agent`.
- * TODO(P2): sandboxSpecSchema accepts only digest-pinned images, so `<prefix>-<driver>` must be
- * resolved to `…@sha256:` (Gitea registry) before a SandboxSpec is built.
- */
-const imagePrefixPattern =
-  /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+(?=\/))?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/
 
 const sandboxEnvSchema = z
   .object({
     // Required, never defaulted: a missing APP_ENV must not switch the gVisor check off.
-    APP_ENV: z.preprocess(emptyAsMissing, appEnvSchema),
+    APP_ENV: envVar(appEnvSchema),
     // On macOS gVisor is unavailable, hence the runc default (CLAUDE.md, local development).
-    SANDBOX_RUNTIME: z.preprocess(emptyAsMissing, z.enum(sandboxRuntimes).default('runc')),
-    SANDBOX_IMAGE_PREFIX: z.preprocess(
-      emptyAsMissing,
-      z.string().regex(imagePrefixPattern, 'expected a repository without tag, e.g. raditi/agent'),
-    ),
-    SANDBOX_DOCKER_SOCKET: z.preprocess(
-      emptyAsMissing,
+    SANDBOX_RUNTIME: envVar(z.enum(sandboxRuntimes).default('runc')),
+    SANDBOX_DOCKER_SOCKET: envVar(
       z
         .string()
-        .refine(
-          (value) => value.startsWith('/') && !/[\0\r\n]/.test(value),
-          'expected an absolute Unix socket path',
-        )
+        .refine(isLocalSocket, 'expected an absolute Unix socket path')
         .default('/var/run/docker.sock'),
     ),
   })
@@ -42,23 +32,17 @@ const sandboxEnvSchema = z
 
 export interface SandboxConfig {
   runtime: SandboxRuntime
-  /** Agent images are `<prefix>-<driver>`. */
-  imagePrefix: string
   /** Local Unix socket only. Never inferred from DOCKER_HOST. */
   socketPath?: string
   gateway?: GatewayConfig
 }
 
-export function sandboxConfigFromEnv(env: Record<string, string | undefined>): SandboxConfig {
-  const parsed = sandboxEnvSchema.safeParse(env)
-  if (!parsed.success) {
-    throw new Error(`Invalid sandbox configuration:\n${z.prettifyError(parsed.error)}`)
-  }
+export function sandboxConfigFromEnv(env: Env): SandboxConfig {
+  const e = parseEnv('sandbox', sandboxEnvSchema, env)
   const gateway = gatewayConfigFromEnv(env)
   return {
-    runtime: parsed.data.SANDBOX_RUNTIME,
-    imagePrefix: parsed.data.SANDBOX_IMAGE_PREFIX,
-    socketPath: parsed.data.SANDBOX_DOCKER_SOCKET,
+    runtime: e.SANDBOX_RUNTIME,
+    socketPath: e.SANDBOX_DOCKER_SOCKET,
     ...(gateway ? { gateway } : {}),
   }
 }

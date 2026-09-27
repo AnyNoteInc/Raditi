@@ -8,15 +8,24 @@ describe('sandbox exec boundary', () => {
       expect(execCursorSchema.safeParse(value).success).toBe(false)
   })
   it('accepts literal arguments, including spaces and shell metacharacters', () => {
-    expect(assertExecSpec({ argv: ['printf', '%s', 'a;$(exit 1)'], timeoutMs: 1000 }).argv)
-      .toEqual(['printf', '%s', 'a;$(exit 1)'])
+    expect(assertExecSpec({ argv: ['printf', '%s', 'a;$(exit 1)'], timeoutMs: 1000 }).argv).toEqual(
+      ['printf', '%s', 'a;$(exit 1)'],
+    )
   })
   it.each([
-    { argv: [] }, { argv: [''] }, { argv: ['x\0y'] }, { argv: Array(257).fill('a') },
-    { argv: ['x', 'a'.repeat(128 * 1024 + 1)] }, { timeoutMs: 0 },
-    { timeoutMs: 20 * 60 * 1000 + 1 }, { cwd: '/workspace/../etc' }, { cwd: 'relative' },
-    { env: { TOKEN: 'secret' } }, { env: { URL: 'https://user:password@example.invalid' } },
-    { privileged: true }, { stdin: 'not a stream' },
+    { argv: [] },
+    { argv: [''] },
+    { argv: ['x\0y'] },
+    { argv: Array(257).fill('a') },
+    { argv: ['x', 'a'.repeat(128 * 1024 + 1)] },
+    { timeoutMs: 0 },
+    { timeoutMs: 20 * 60 * 1000 + 1 },
+    { cwd: '/workspace/../etc' },
+    { cwd: 'relative' },
+    { env: { TOKEN: 'secret' } },
+    { env: { URL: 'https://user:password@example.invalid' } },
+    { privileged: true },
+    { stdin: 'not a stream' },
   ])('rejects invalid specifications without disclosing their values: %o', (change) => {
     const spec = { argv: ['test'], timeoutMs: 1000, ...change }
     expect(execSpecSchema.safeParse(spec).success).toBe(false)

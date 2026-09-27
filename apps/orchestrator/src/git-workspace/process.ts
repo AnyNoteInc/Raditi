@@ -5,6 +5,9 @@ import { DomainError } from '@repo/domain'
 
 import { nativeSupervisor } from './native-supervisor.ts'
 
+/** stdout exceeded `maxBytes`: the caller's input is too large, not an infrastructure failure. */
+export const PROCESS_OUTPUT_LIMIT = 'PROCESS_OUTPUT_LIMIT'
+
 export interface ProcessResult {
   code: number
   stdout: Buffer
@@ -39,16 +42,18 @@ export async function runProcess(
     let errors = 0
     let failed = false
     let exitCode: number | undefined
-    const fail = () => {
+    const fail = (overflow = false) => {
       if (failed) return
       failed = true
       child.kill('SIGTERM')
       reject(
-        new DomainError(
-          'GIT_OPERATION_FAILED',
-          'Trusted repository command failed or exceeded its limits',
-          502,
-        ),
+        overflow
+          ? new DomainError(PROCESS_OUTPUT_LIMIT, 'Trusted command output exceeded its limit', 502)
+          : new DomainError(
+              'GIT_OPERATION_FAILED',
+              'Trusted repository command failed or exceeded its limits',
+              502,
+            ),
       )
     }
     const { stdout, stderr, stdin } = child
@@ -56,18 +61,18 @@ export async function runProcess(
       fail()
       return
     }
-    const timer = setTimeout(fail, timeoutMs)
-    child.once('error', fail)
+    const timer = setTimeout(() => fail(), timeoutMs)
+    child.once('error', () => fail())
     stdout.on('data', (chunk: Buffer) => {
       bytes += chunk.byteLength
-      if (bytes > (options.maxBytes ?? 16 * 1024 * 1024)) fail()
+      if (bytes > (options.maxBytes ?? 16 * 1024 * 1024)) fail(true)
       else chunks.push(Buffer.from(chunk))
     })
     stderr.on('data', (chunk: Buffer) => {
       errors += chunk.byteLength
       if (errors > 64 * 1024) fail()
     })
-    stdin.on('error', fail)
+    stdin.on('error', () => fail())
     child.on('message', (message: unknown) => {
       if (typeof message !== 'object' || message === null || !('type' in message)) return fail()
       if (

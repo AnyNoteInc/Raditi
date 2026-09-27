@@ -2,8 +2,8 @@ import { Buffer } from 'node:buffer'
 import type { Duplex } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import { DomainError } from '@repo/domain'
-import type Docker from 'dockerode'
+import { badRequest, SANDBOX_GID, SANDBOX_UID, sandboxCommandFailed } from '@repo/domain'
+import Docker from 'dockerode'
 
 export const HELPER = '/usr/local/lib/raditi/runtime.mjs'
 export const NODE = '/usr/local/bin/node'
@@ -17,11 +17,21 @@ export const HELPER_ENV = [
   'LD_LIBRARY_PATH=',
   'LD_AUDIT=',
 ]
+export const SANDBOX_USER = `${SANDBOX_UID}:${SANDBOX_GID}`
 export const COMMAND_BYTES = 64 * 1024 * 1024
-export const commandError = () =>
-  new DomainError('SANDBOX_COMMAND_FAILED', 'Sandbox command failed or exceeded its limits', 502)
-export const isMissing = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && 'statusCode' in error && error.statusCode === 404
+export const commandError = () => sandboxCommandFailed()
+export const hasStatus = (error: unknown, code: number): boolean =>
+  typeof error === 'object' && error !== null && 'statusCode' in error && error.statusCode === code
+export const isMissing = (error: unknown): boolean => hasStatus(error, 404)
+export const isLocalSocket = (path: string): boolean =>
+  path.startsWith('/') && !/[\0\r\n]/.test(path)
+
+/** Only a local Unix socket: never DOCKER_HOST or TCP. */
+export function localDocker(socketPath = '/var/run/docker.sock'): Docker {
+  if (!isLocalSocket(socketPath))
+    throw badRequest('Docker requires an absolute local Unix socket path')
+  return new Docker({ socketPath })
+}
 
 /** Bound daemon requests too: a disconnected Docker socket must not leave callers hanging. */
 export async function bounded<T>(
@@ -44,6 +54,31 @@ export async function bounded<T>(
   } finally {
     clearTimeout(timer)
     if (abort) signal?.removeEventListener('abort', abort)
+  }
+}
+
+/** A late daemon response must clean up only the resource created by this attempt. */
+export async function createOwned<T>(
+  operation: Promise<T>,
+  remove: (value: T) => Promise<unknown>,
+  signal?: AbortSignal,
+): Promise<T> {
+  let abandoned = false
+  try {
+    return await bounded(
+      operation.then(async (value) => {
+        if (abandoned || signal?.aborted) {
+          await remove(value).catch(() => {})
+          throw commandError()
+        }
+        return value
+      }),
+      30_000,
+      signal,
+    )
+  } catch (error) {
+    abandoned = true
+    throw error
   }
 }
 
@@ -147,7 +182,7 @@ export async function helperCommand(
     const exec = await container.exec({
       Cmd: [NODE, HELPER, ...argv],
       Env: HELPER_ENV,
-      User: options.bootstrap ? '0:0' : '10001:10001',
+      User: options.bootstrap ? '0:0' : SANDBOX_USER,
       Privileged: false,
       Tty: false,
       AttachStdin: true,

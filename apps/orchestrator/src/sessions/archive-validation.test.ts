@@ -1,11 +1,15 @@
 import { Buffer } from 'node:buffer'
 import { zstdCompressSync } from 'node:zlib'
 
-import { snapshotLimits, type SessionState } from '@repo/domain'
+import { isSnapshotCredential, snapshotLimits, type SessionState } from '@repo/domain'
 import { pack, type Header } from 'tar-stream'
 import { describe, expect, it } from 'vitest'
 
-import { validateSnapshotArchives, type SnapshotArchives } from './archive-validation.ts'
+import {
+  validateSnapshotArchives,
+  validateUntrackedArchive,
+  type SnapshotArchives,
+} from './archive-validation.ts'
 
 const state: SessionState = {
   root: '/agent-home/codex',
@@ -80,12 +84,30 @@ describe('validateSnapshotArchives', () => {
     const untracked = await archive([
       { name: 'media/picture.bin', body: Buffer.from([0, 255, 1, 2]) },
     ])
-    await expect(
-      validateSnapshotArchives(state, await parts(home, untracked)),
-    ).resolves.toBeUndefined()
+    const input = await parts(home, untracked)
+    const owned = await validateSnapshotArchives(state, input)
+    for (const name of ['home', 'untracked', 'patch'] as const) {
+      const expected = Buffer.from(input[name])
+      input[name].fill(0)
+      expect(Buffer.from(owned[name])).toEqual(expected)
+    }
     await expect(
       validateSnapshotArchives(state, await parts(await archive([]))),
-    ).resolves.toBeUndefined()
+    ).resolves.toBeDefined()
+  })
+
+  it('validates a lone untracked archive and returns the copy it checked', async () => {
+    const input = await archive([{ name: 'new dir/file.txt', body: 'new' }])
+    const expected = Buffer.from(input)
+    const owned = await validateUntrackedArchive(input)
+    input.fill(0)
+    expect(Buffer.from(owned)).toEqual(expected)
+    await expect(validateUntrackedArchive(await archive([{ name: '../escape' }]))).rejects.toThrow(
+      /archive/,
+    )
+    await expect(
+      validateUntrackedArchive(Buffer.alloc(snapshotLimits.archiveBytes + 1)),
+    ).rejects.toMatchObject({ code: 'PUBLICATION_TOO_LARGE', httpStatus: 413 })
   })
 
   it.each([
@@ -137,7 +159,7 @@ describe('validateSnapshotArchives', () => {
         state,
         await parts(await archive([{ name: 'sessions/private-ok' }])),
       ),
-    ).resolves.toBeUndefined()
+    ).resolves.toBeDefined()
   })
 
   it('allows an ancestor directory of an explicitly included file, but not its siblings', async () => {
@@ -149,7 +171,7 @@ describe('validateSnapshotArchives', () => {
           await archive([{ name: 'sessions/', type: 'directory' }, { name: 'sessions/run.jsonl' }]),
         ),
       ),
-    ).resolves.toBeUndefined()
+    ).resolves.toBeDefined()
     await expect(
       validateSnapshotArchives(narrow, await parts(await archive([{ name: 'sessions/other' }]))),
     ).rejects.toThrow(/archive/)
@@ -241,7 +263,7 @@ describe('validateSnapshotArchives', () => {
       checksum(raw)
       await expect(
         validateSnapshotArchives(state, await parts(zstdCompressSync(raw))),
-      ).resolves.toBeUndefined()
+      ).resolves.toBeDefined()
     }
   })
 
@@ -276,20 +298,22 @@ describe('validateSnapshotArchives', () => {
 
   it('bounds compressed data, patch bytes, file sizes, depth and entry count', async () => {
     const empty = await archive([])
+    const session = { code: 'SNAPSHOT_TOO_LARGE', httpStatus: 413 }
+    const changes = { code: 'PUBLICATION_TOO_LARGE', httpStatus: 413 }
     await expect(
       validateSnapshotArchives(state, {
         home: Buffer.alloc(snapshotLimits.archiveBytes + 1),
         untracked: empty,
         patch: Buffer.alloc(0),
       }),
-    ).rejects.toThrow(/archive/)
+    ).rejects.toMatchObject(session)
     await expect(
       validateSnapshotArchives(state, {
         home: empty,
         untracked: empty,
         patch: Buffer.alloc(snapshotLimits.patchBytes + 1),
       }),
-    ).rejects.toThrow(/archive/)
+    ).rejects.toMatchObject(changes)
     const hugeHeader = await rawTar([{ name: 'sessions/run' }])
     hugeHeader.write(
       `${(snapshotLimits.fileBytes + 1).toString(8).padStart(11, '0')}\0`,
@@ -299,23 +323,92 @@ describe('validateSnapshotArchives', () => {
     checksum(hugeHeader)
     await expect(
       validateSnapshotArchives(state, await parts(zstdCompressSync(hugeHeader))),
-    ).rejects.toThrow(/archive/)
+    ).rejects.toMatchObject(session)
+    // Depth is a path rule, not a size: an invalid archive, not a 413.
     await expect(
       validateSnapshotArchives(
         state,
         await parts(empty, await archive([{ name: Array(33).fill('a').join('/') }])),
       ),
-    ).rejects.toThrow(/archive/)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     const many = await archive(
       Array.from({ length: snapshotLimits.entries + 1 }, (_, i) => ({ name: `file-${i}` })),
     )
-    await expect(validateSnapshotArchives(state, await parts(empty, many))).rejects.toThrow(
-      /archive/,
+    await expect(validateSnapshotArchives(state, await parts(empty, many))).rejects.toMatchObject(
+      changes,
     )
   })
 
   it('bounds expanded bytes even for an archive consisting only of compressible zero padding', async () => {
     const bomb = zstdCompressSync(Buffer.alloc(snapshotLimits.expandedBytes + 512))
-    await expect(validateSnapshotArchives(state, await parts(bomb))).rejects.toThrow(/archive/)
+    await expect(validateSnapshotArchives(state, await parts(bomb))).rejects.toMatchObject({
+      code: 'SNAPSHOT_TOO_LARGE',
+    })
+  })
+})
+
+describe('turn credentials in a captured snapshot', () => {
+  const key = 'synthetic-llm-key-0123456789'
+  const refuses = async (input: SnapshotArchives) => {
+    const error: unknown = await validateSnapshotArchives(state, input, ['', key]).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    )
+    expect(error).toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN', httpStatus: 502 })
+    expect(isSnapshotCredential(error)).toBe(true)
+    // Neither the message nor the details carry the value.
+    expect(JSON.stringify(error) + String(error)).not.toContain(key)
+  }
+
+  it.each<[string, () => Promise<SnapshotArchives>]>([
+    [
+      'a session file of the agent home',
+      async () =>
+        parts(await archive([{ name: 'sessions/run.jsonl', body: `{"auth":"${key}"}\n` }])),
+    ],
+    [
+      'a new site file',
+      async () =>
+        parts(
+          await archive([]),
+          await archive([{ name: 'wp-content/leak.php', body: `<?php // ${key}\n` }]),
+        ),
+    ],
+    [
+      'a binary new file',
+      async () =>
+        parts(
+          await archive([]),
+          await archive([
+            {
+              name: 'media/blob.bin',
+              body: Buffer.concat([Buffer.from([0, 255]), Buffer.from(key)]),
+            },
+          ]),
+        ),
+    ],
+    ['a file name', async () => parts(await archive([{ name: `sessions/${key}.jsonl` }]))],
+    [
+      'the patch of tracked files',
+      async () => ({
+        ...(await parts(await archive([]))),
+        patch: Buffer.from(`+define('AUTH', '${key}');\n`),
+      }),
+    ],
+  ])('refuses %s that contains one, without the value in the error', async (_, input) => {
+    await refuses(await input())
+  })
+
+  it('finds a value split between two chunks of one large file', async () => {
+    // Decompressed 16 KiB at a time, the first body chunk ends 512 bytes early (the header).
+    const boundary = 16 * 1024 - 512
+    const body = Buffer.alloc(64 * 1024, 'x')
+    body.write(key, boundary - 5)
+    await refuses(await parts(await archive([{ name: 'sessions/large.jsonl', body }])))
+  })
+
+  it('accepts the same kind of archives when they hold no credential', async () => {
+    const home = await archive([{ name: 'sessions/run.jsonl', body: '{"auth":"file"}\n' }])
+    await expect(validateSnapshotArchives(state, await parts(home), [key])).resolves.toBeDefined()
   })
 })

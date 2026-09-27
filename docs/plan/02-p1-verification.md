@@ -22,7 +22,8 @@
 подмену шифротекста и метаданных, чужое workspace, несовместимый образ/драйвер,
 изменение входных буферов во время await, утечки ключа, архивные бомбы,
 traversal, ссылки, дубликаты и повреждённые заголовки. Ни один отказ в проверке архивов
-не запускает запись в песочницу. Проверяются лимиты exec, оффсеты вывода, таймауты и kill.
+не запускает запись в песочницу, а при сохранении — запись в S3: отказ проверки метаданных
+или архивов возвращает `SNAPSHOT_NOT_WRITTEN`, и ход можно повторить (уточнено после ревью P2). Проверяются лимиты exec, оффсеты вывода, таймауты и kill.
 
 ## Воспроизводимая проверка S3 + Transit
 
@@ -83,6 +84,24 @@ Tracked-файлы при restore остаются на базе; отдельн
 Сценарий поймал несовместимость `--keep-old-files` с `--no-overwrite-dir` у GNU tar;
 несовместимый флаг удалён. Runtime-контейнеры удаляются в `finally`.
 Это проверочный адаптер exec; изоляцию gVisor и полный `SandboxProvider` проверит P2.
+
+### Повтор на пути P2 (27.09.2026)
+
+Сценарий переписан на `createDockerSandboxProvider` (runc, `network: none`) и runtime-образ P2
+из `infra/sandbox/Dockerfile` (Debian bookworm: GNU tar 1.34, git 2.39.5, zstd 1.5.4).
+Самописный адаптер `docker exec` и `snapshot-fixture.Dockerfile` удалены, поэтому команды
+выше больше не работают. Контейнеры создаёт и удаляет provider. В начале сценария
+проверяются uid 10001 и rootfs только для чтения. Байты идут через exec помощника, без
+`docker cp`. Перед capture процессы останавливаются через `quiesce`, как в ходе.
+Проверены те же 11 свойств; `tar --extract` считает обёртка над `sandbox.exec`.
+Результат — PASS: 119 команд, 3 извлечения tar, оба контейнера удалены. Изоляция под gVisor
+остаётся незакрытым гейтом (`03-p2-verification.md`).
+
+```sh
+docker build --target runtime -f infra/sandbox/Dockerfile -t raditi-sandbox-runtime:p2 .
+P2_SANDBOX_IMAGE="$(docker image inspect raditi-sandbox-runtime:p2 --format '{{index .RepoDigests 0}}')" \
+  pnpm --filter orchestrator verify:transport
+```
 
 ## Ограничения и следующий шаг
 

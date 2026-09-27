@@ -1,9 +1,9 @@
 import { Global, Module } from '@nestjs/common'
+import { HEALTH_CHECK_TIMEOUT_MS } from '@repo/observability'
 import { createS3ObjectStorage } from '@repo/storage'
 import { createVaultSecretStore } from '@repo/vault'
 
 import type { CoreConfig } from '../config/config.ts'
-import { HEALTH_CHECK_TIMEOUT_MS } from '../health/health-checks.ts'
 import { PrismaLifecycle, RedisLifecycle } from './lifecycle.ts'
 import { createOrchestratorPrisma } from './prisma.ts'
 import { createRedisClient } from './redis.ts'

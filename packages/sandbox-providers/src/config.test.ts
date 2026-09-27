@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { sandboxConfigFromEnv } from './config.ts'
 
-const base = { APP_ENV: 'development', SANDBOX_IMAGE_PREFIX: 'raditi/agent' }
+const base = { APP_ENV: 'development' }
 
 describe('sandboxConfigFromEnv', () => {
   it('defaults to runc for local development', () => {
     expect(sandboxConfigFromEnv(base)).toEqual({
       runtime: 'runc',
-      imagePrefix: 'raditi/agent',
       socketPath: '/var/run/docker.sock',
     })
     expect(sandboxConfigFromEnv({ ...base, SANDBOX_RUNTIME: '' }).runtime).toBe('runc')
+    expect(sandboxConfigFromEnv({ ...base, SANDBOX_RUNTIME: ' ' }).runtime).toBe('runc')
   })
 
   it('accepts runsc', () => {
@@ -31,7 +31,7 @@ describe('sandboxConfigFromEnv', () => {
   it('rejects any other runtime', () => {
     for (const runtime of ['kata', 'RUNSC', 'runsc ']) {
       expect(() => sandboxConfigFromEnv({ ...base, SANDBOX_RUNTIME: runtime })).toThrow(
-        /Invalid sandbox configuration[\s\S]*SANDBOX_RUNTIME/,
+        /^\[sandbox\] invalid configuration: SANDBOX_RUNTIME: /,
       )
     }
   })
@@ -55,30 +55,5 @@ describe('sandboxConfigFromEnv', () => {
     for (const appEnv of ['prod', 'Production', 'staging']) {
       expect(() => sandboxConfigFromEnv({ ...base, APP_ENV: appEnv })).toThrow(/APP_ENV/)
     }
-  })
-
-  it('requires an image prefix', () => {
-    expect(() => sandboxConfigFromEnv({ APP_ENV: 'development' })).toThrow(/SANDBOX_IMAGE_PREFIX/)
-    expect(() => sandboxConfigFromEnv({ ...base, SANDBOX_IMAGE_PREFIX: '' })).toThrow(
-      /SANDBOX_IMAGE_PREFIX/,
-    )
-  })
-
-  it('accepts a registry host with a port', () => {
-    const prefix = 'registry.raditi.local:3300/raditi/agent'
-    expect(sandboxConfigFromEnv({ ...base, SANDBOX_IMAGE_PREFIX: prefix }).imagePrefix).toBe(prefix)
-  })
-
-  it.each([
-    'raditi/agent:latest',
-    'raditi/agent@sha256:abc',
-    'Raditi/Agent',
-    'raditi//agent',
-    'host:3300',
-    '/agent',
-  ])('rejects the image prefix %s', (prefix) => {
-    expect(() => sandboxConfigFromEnv({ ...base, SANDBOX_IMAGE_PREFIX: prefix })).toThrow(
-      /SANDBOX_IMAGE_PREFIX/,
-    )
   })
 })

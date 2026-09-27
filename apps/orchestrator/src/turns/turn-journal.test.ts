@@ -15,6 +15,25 @@ describe('turn journal boundary', () => {
     ).rejects.toThrow()
     expect($queryRaw).not.toHaveBeenCalled()
   })
+
+  it('reports a fenced insert that matched no lease as a lost lease', async () => {
+    const $queryRaw = vi.fn().mockResolvedValue([])
+    const evidence: TurnEvidence = {
+      fence: {
+        siteId: '00000000-0000-4000-8000-000000000002',
+        taskId: '00000000-0000-4000-8000-000000000003',
+        operation: 'turn',
+        epoch: 1,
+      },
+      sessionId: 'synthetic',
+      turn: 1,
+      sequence: 1,
+      phase: 'output',
+    }
+    await expect(new TaskEventTurnJournal({ $queryRaw }).record(evidence)).rejects.toMatchObject({
+      code: 'LEASE_LOST',
+    })
+  })
 })
 
 const databaseUrl = process.env.DATABASE_URL
@@ -81,7 +100,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     await f.leases.holdForRecovery(f.fence)
     await f.journal.record({ ...f.evidence, phase: 'recovery', reason: 'snapshot_ambiguous' })
     await expect(f.journal.record({ ...f.evidence, phase: 'running' })).rejects.toMatchObject({
-      code: 'CONFLICT',
+      code: 'LEASE_LOST',
     })
     expect(await db.taskEvent.count({ where: { taskId: f.task.id } })).toBe(1)
   })
@@ -96,7 +115,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       ttlMs: 60_000,
     })
     await expect(f.journal.record({ ...f.evidence, phase: 'recovery' })).rejects.toMatchObject({
-      code: 'CONFLICT',
+      code: 'LEASE_LOST',
     })
     expect(await db.taskEvent.count({ where: { taskId: f.task.id } })).toBe(0)
   })

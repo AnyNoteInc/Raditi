@@ -1,10 +1,7 @@
+import { DIGEST_PINNED_IMAGE, envVar, parseEnv, type Env } from '@repo/domain'
 import { z } from 'zod'
 
-const image = z
-  .string()
-  .regex(
-    /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+(?=\/))?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$/,
-  )
+const image = z.string().regex(DIGEST_PINNED_IMAGE)
 const origin = z.url().refine((value) => {
   try {
     const url = new URL(value)
@@ -32,23 +29,23 @@ export const gatewayConfigSchema = z
 
 export type GatewayConfig = z.infer<typeof gatewayConfigSchema>
 
-/** Optional only as a complete group: gateway-mode creation fails closed without it. */
-export function gatewayConfigFromEnv(
-  env: Record<string, string | undefined>,
-): GatewayConfig | undefined {
-  const values = [
-    env.SANDBOX_GATEWAY_IMAGE,
-    env.SANDBOX_NETWORK_GUARD_IMAGE,
-    env.SANDBOX_LLM_UPSTREAM,
-    env.SANDBOX_MCP_UPSTREAM,
-  ]
-  if (values.every((value) => !value)) return undefined
-  const parsed = gatewayConfigSchema.safeParse({
+const gatewayEnvSchema = z
+  .object({
+    SANDBOX_GATEWAY_IMAGE: envVar(image),
+    SANDBOX_NETWORK_GUARD_IMAGE: envVar(image),
+    SANDBOX_LLM_UPSTREAM: envVar(origin),
+    SANDBOX_MCP_UPSTREAM: envVar(origin),
+  })
+  .transform((env): GatewayConfig => ({
     image: env.SANDBOX_GATEWAY_IMAGE,
     guardImage: env.SANDBOX_NETWORK_GUARD_IMAGE,
     llmUpstream: env.SANDBOX_LLM_UPSTREAM,
     mcpUpstream: env.SANDBOX_MCP_UPSTREAM,
-  })
-  if (!parsed.success) throw new Error('Invalid sandbox gateway configuration')
-  return parsed.data
+  }))
+
+/** Optional only as a complete group: gateway-mode creation fails closed without it. */
+export function gatewayConfigFromEnv(env: Env): GatewayConfig | undefined {
+  const names = Object.keys(gatewayEnvSchema.in.shape)
+  if (names.every((name) => !env[name]?.trim())) return undefined
+  return parseEnv('sandbox gateway', gatewayEnvSchema, env)
 }

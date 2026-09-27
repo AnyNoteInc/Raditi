@@ -72,6 +72,13 @@ export function findLegalDocument(slug: string): LegalDocument | undefined {
   return legalDocuments.find((d) => d.slug === slug)
 }
 
+/** The document a consent of this type is given to. */
+export function legalDocumentFor(type: ConsentDocumentType): LegalDocument {
+  const document = legalDocuments.find((d) => d.consentType === type)
+  if (!document) throw new Error(`No legal document for consent type ${type}`)
+  return document
+}
+
 export interface ConsentRecord {
   type: ConsentDocumentType
   version: string

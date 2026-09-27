@@ -2,28 +2,32 @@ import { Buffer } from 'node:buffer'
 
 import {
   badRequest,
+  publicationTooLarge,
   SANDBOX_WORKDIR,
+  sandboxCommandFailed,
   sessionStateSchema,
   snapshotLimits,
-  type ExecHandle,
+  snapshotTooLarge,
   type ExecSpec,
   type Sandbox,
   type SessionState,
 } from '@repo/domain'
 
+import { execBounded, SANDBOX_EXEC_TIMEOUT_MS } from '../sandbox/exec.ts'
 import {
   snapshotEntryPath,
   validateSnapshotArchives,
   type SnapshotArchives,
 } from './archive-validation.ts'
 
-export { validateSnapshotArchives, type SnapshotArchives } from './archive-validation.ts'
+export type { SnapshotArchives } from './archive-validation.ts'
 
-const EXEC_TIMEOUT_MS = 60_000
-const STDERR_BYTES = 64 * 1024
-const MAX_EXEC_CHUNKS = 100_000
 const LIST_BYTES = snapshotLimits.entries * (snapshotLimits.path + 1)
-const commandFailed = () => badRequest('Snapshot sandbox command failed or exceeded its limits')
+const commandFailed = () =>
+  sandboxCommandFailed('Snapshot sandbox command failed or exceeded its limits')
+// The agent's session state versus its changes to the site: both 413s, told apart for the client.
+const homeTooLarge = () => snapshotTooLarge('Agent session state exceeds the snapshot limits')
+const changesTooLarge = () => publicationTooLarge('Agent changes exceed the snapshot limits')
 
 async function* input(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   if (bytes.byteLength > 0) yield bytes
@@ -41,14 +45,23 @@ export class SandboxSnapshotTransport {
   readonly #timeoutMs: number
 
   constructor(options: { timeoutMs?: number } = {}) {
-    const timeoutMs = options.timeoutMs ?? EXEC_TIMEOUT_MS
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > EXEC_TIMEOUT_MS) {
+    const timeoutMs = options.timeoutMs ?? SANDBOX_EXEC_TIMEOUT_MS
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > SANDBOX_EXEC_TIMEOUT_MS) {
       throw badRequest('Invalid snapshot command timeout')
     }
     this.#timeoutMs = timeoutMs
   }
 
-  async capture(sandbox: Sandbox, state: SessionState, baseSha: string): Promise<SnapshotArchives> {
+  /**
+   * `credentials` are the turn's own (turnCredentials): an archive or patch that contains one
+   * is refused before anything is saved or published (snapshotHasCredential).
+   */
+  async capture(
+    sandbox: Sandbox,
+    state: SessionState,
+    baseSha: string,
+    credentials: readonly string[] = [],
+  ): Promise<SnapshotArchives> {
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha))
       throw badRequest('Snapshot capture requires the trusted base commit')
     const homeState = this.#state(state)
@@ -68,27 +81,31 @@ export class SandboxSnapshotTransport {
         paths.push(path)
       }
     }
-    const home = await this.#archive(sandbox, homeState.root, paths, homeState.exclude)
+    const home = await this.#archive(sandbox, homeState.root, paths, homeState.exclude, {
+      tooLarge: homeTooLarge,
+    })
     await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
     const untrackedList = await this.#exec(
       sandbox,
       ['git', '-c', 'core.fsmonitor=false', 'ls-files', '--others', '--exclude-standard', '-z'],
       LIST_BYTES,
-      { cwd: SANDBOX_WORKDIR },
+      { cwd: SANDBOX_WORKDIR, tooLarge: changesTooLarge },
     )
     let names: string[]
     try {
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(untrackedList.bytes)
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(untrackedList.stdout)
       if (text !== '' && !text.endsWith('\0')) throw commandFailed()
       names = text === '' ? [] : text.slice(0, -1).split('\0')
-      if (names.length > snapshotLimits.entries || new Set(names).size !== names.length) {
-        throw commandFailed()
-      }
+      if (new Set(names).size !== names.length) throw commandFailed()
       names.forEach((name) => snapshotEntryPath(name))
     } catch {
       throw commandFailed()
     }
-    const untracked = await this.#archive(sandbox, SANDBOX_WORKDIR, names, [], true)
+    if (names.length > snapshotLimits.entries) throw changesTooLarge()
+    const untracked = await this.#archive(sandbox, SANDBOX_WORKDIR, names, [], {
+      noRecursion: true,
+      tooLarge: changesTooLarge,
+    })
     const patch = await this.#exec(
       sandbox,
       [
@@ -105,27 +122,19 @@ export class SandboxSnapshotTransport {
         '--',
       ],
       snapshotLimits.patchBytes,
-      { cwd: SANDBOX_WORKDIR },
+      { cwd: SANDBOX_WORKDIR, tooLarge: changesTooLarge },
     )
-    const parts = { home, untracked, patch: patch.bytes }
-    await validateSnapshotArchives(homeState, parts)
-    return parts
+    return validateSnapshotArchives(
+      homeState,
+      { home, untracked, patch: patch.stdout },
+      credentials,
+    )
   }
 
   async restore(sandbox: Sandbox, state: SessionState, parts: SnapshotArchives): Promise<void> {
     const homeState = this.#state(state)
-    // Own the checked bytes across awaits; a caller cannot swap data after validation.
-    for (const name of ['home', 'untracked', 'patch'] as const) {
-      const limit = name === 'patch' ? snapshotLimits.patchBytes : snapshotLimits.archiveBytes
-      if (!(parts[name] instanceof Uint8Array) || parts[name].byteLength > limit)
-        throw commandFailed()
-    }
-    const checked = {
-      home: Buffer.from(parts.home),
-      untracked: Buffer.from(parts.untracked),
-      patch: Buffer.from(parts.patch),
-    }
-    await validateSnapshotArchives(homeState, checked)
+    // Only the owned, checked copies reach the sandbox.
+    const checked = await validateSnapshotArchives(homeState, parts)
     // Existing symlink ancestors are dangerous even when every archive entry is a regular file.
     await this.#checkDestination(sandbox, homeState.root)
     await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
@@ -163,7 +172,7 @@ export class SandboxSnapshotTransport {
     root: string,
     paths: string[],
     excludes: string[],
-    noRecursion = false,
+    { noRecursion = false, tooLarge }: { noRecursion?: boolean; tooLarge: () => Error },
   ): Promise<Uint8Array> {
     const argv = [
       'tar',
@@ -181,8 +190,11 @@ export class SandboxSnapshotTransport {
       '--files-from=-',
     ]
     return (
-      await this.#exec(sandbox, argv, snapshotLimits.archiveBytes, { stdin: input(nulList(paths)) })
-    ).bytes
+      await this.#exec(sandbox, argv, snapshotLimits.archiveBytes, {
+        stdin: input(nulList(paths)),
+        tooLarge,
+      })
+    ).stdout
   }
 
   async #checkDestination(sandbox: Sandbox, root: string): Promise<void> {
@@ -194,7 +206,7 @@ export class SandboxSnapshotTransport {
         ['find', '-P', root, '-type', 'l', '-print', '-quit'],
         snapshotLimits.path + 1,
       )
-      if (links.bytes.byteLength > 0) throw commandFailed()
+      if (links.stdout.byteLength > 0) throw commandFailed()
     }
   }
 
@@ -213,73 +225,20 @@ export class SandboxSnapshotTransport {
     }
   }
 
-  async #exec(
+  #exec(
     sandbox: Sandbox,
     argv: string[],
-    maxBytes: number,
-    options: Pick<ExecSpec, 'cwd' | 'stdin'> & { allowedCodes?: number[] } = {},
-  ): Promise<{ bytes: Uint8Array; code: number }> {
-    const controller = new AbortController()
-    let handle: ExecHandle | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        controller.abort()
-        reject(commandFailed())
-      }, this.#timeoutMs)
+    maxStdout: number,
+    options: Pick<ExecSpec, 'cwd' | 'stdin'> & {
+      allowedCodes?: number[]
+      tooLarge?: () => Error
+    } = {},
+  ) {
+    return execBounded(sandbox, argv, {
+      ...options,
+      maxStdout,
+      timeoutMs: this.#timeoutMs,
+      failure: commandFailed,
     })
-    const run = async () => {
-      handle = await sandbox.exec({
-        argv,
-        cwd: options.cwd,
-        stdin: options.stdin,
-        timeoutMs: this.#timeoutMs,
-        signal: controller.signal,
-      })
-      if (controller.signal.aborted) {
-        void handle.kill('SIGKILL').catch(() => {})
-        throw commandFailed()
-      }
-      const current = handle
-      const consume = async () => {
-        const chunks: Buffer[] = []
-        const offsets = { stdout: 0, stderr: 0 }
-        let count = 0
-        for await (const chunk of current.output()) {
-          if (
-            ++count > MAX_EXEC_CHUNKS ||
-            (chunk.stream !== 'stdout' && chunk.stream !== 'stderr') ||
-            !(chunk.data instanceof Uint8Array) ||
-            chunk.data.byteLength === 0 ||
-            chunk.offset !== offsets[chunk.stream]
-          )
-            throw commandFailed()
-          offsets[chunk.stream] += chunk.data.byteLength
-          if (offsets[chunk.stream] > (chunk.stream === 'stdout' ? maxBytes : STDERR_BYTES)) {
-            throw commandFailed()
-          }
-          if (chunk.stream === 'stdout') chunks.push(Buffer.from(chunk.data))
-        }
-        return Buffer.concat(chunks, offsets.stdout)
-      }
-      const [bytes, exit] = await Promise.all([consume(), current.wait()])
-      if (
-        exit.reason !== 'exited' ||
-        exit.code === null ||
-        !(options.allowedCodes ?? [0]).includes(exit.code)
-      ) {
-        throw commandFailed()
-      }
-      return { bytes, code: exit.code }
-    }
-    try {
-      return await Promise.race([run(), timeout])
-    } catch {
-      controller.abort()
-      if (handle) void handle.kill('SIGKILL').catch(() => {})
-      throw commandFailed()
-    } finally {
-      if (timer) clearTimeout(timer)
-    }
   }
 }

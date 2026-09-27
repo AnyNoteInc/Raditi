@@ -16,12 +16,12 @@ import {
   formatError,
   INTERNAL_ERROR_MESSAGE,
   INVALID_INPUT_MESSAGE,
-  mapDomain,
+  toTRPCError,
   trpcCodeForStatus,
 } from './errors.ts'
 import { createCallerFactory, publicProcedure, router, type Context } from './trpc.ts'
 
-describe('mapDomain', () => {
+describe('toTRPCError', () => {
   it.each([
     [notFound('Site not found'), 'NOT_FOUND', 'Не нашли то, что вы ищете'],
     [forbidden('Not the owner'), 'FORBIDDEN', 'Недостаточно прав'],
@@ -35,24 +35,40 @@ describe('mapDomain', () => {
     ],
     [new DomainError('TEAPOT', 'Teapot', 418), 'BAD_REQUEST', INVALID_INPUT_MESSAGE],
     [new DomainError('BROKEN', 'Broken', 599), 'INTERNAL_SERVER_ERROR', INTERNAL_ERROR_MESSAGE],
-  ])('maps %s to %s with a Russian message', async (domainError, code, message) => {
-    const error = await mapDomain(async () => {
-      throw domainError
-    }).catch((e: unknown) => e)
+  ])('maps %s to %s with a Russian message', (domainError, code, message) => {
+    const error = toTRPCError(domainError)
 
     expect(error).toBeInstanceOf(TRPCError)
     expect(error).toMatchObject({ code, message, cause: domainError })
   })
 
-  it('passes results and other errors through', async () => {
-    await expect(mapDomain(async () => 42)).resolves.toBe(42)
-    const other = new Error('boom')
-    await expect(
-      mapDomain(async () => {
-        throw other
-      }),
-    ).rejects.toBe(other)
-  })
+  it.each([
+    ['PUBLICATION_TOO_LARGE', 413, 'PAYLOAD_TOO_LARGE', 'Изменения получились слишком большими'],
+    ['SNAPSHOT_TOO_LARGE', 413, 'PAYLOAD_TOO_LARGE', 'Работа агента заняла слишком много места'],
+    ['REPOSITORY_TOO_LARGE', 413, 'PAYLOAD_TOO_LARGE', 'Файлы сайта занимают слишком много места'],
+    ['SNAPSHOT_NOT_WRITTEN', 502, 'BAD_GATEWAY', 'Не удалось сохранить работу агента'],
+    ['SNAPSHOT_SAVE_FAILED', 502, 'BAD_GATEWAY', 'Не удалось сохранить работу агента'],
+    ['SNAPSHOT_LOAD_FAILED', 502, 'BAD_GATEWAY', 'Не удалось восстановить прошлую работу'],
+    ['TURN_INTERRUPTED', 409, 'CONFLICT', 'Работа агента остановлена'],
+    ['TURN_EXEC_FAILED', 502, 'BAD_GATEWAY', 'Агент не смог закончить работу'],
+    ['TURN_OUTPUT_REJECTED', 502, 'BAD_GATEWAY', 'Не удалось принять результат работы агента'],
+    ['TURN_OUTPUT_TOO_LARGE', 413, 'PAYLOAD_TOO_LARGE', 'Агент написал слишком много'],
+    ['DRIVER_PREPARE_INVALID', 502, 'BAD_GATEWAY', 'Не удалось подготовить агента'],
+    ['LEASE_LOST', 409, 'CONFLICT', 'Работа агента прервана'],
+    ['SITE_BUSY', 409, 'CONFLICT', 'С сайтом сейчас идёт другая работа'],
+    ['SITE_HELD', 409, 'CONFLICT', 'Нужно проверить, что случилось с прошлой работой на сайте'],
+    ['SANDBOX_COMMAND_FAILED', 502, 'BAD_GATEWAY', 'технического сбоя'],
+    ['GIT_OPERATION_FAILED', 502, 'BAD_GATEWAY', 'файлы сайта'],
+  ] as const)(
+    'gives the turn failure %s its own Russian text, without English or jargon',
+    (domainCode, status, code, text) => {
+      const error = toTRPCError(new DomainError(domainCode, 'English text for the logs', status))
+      expect(error.code).toBe(code)
+      expect(error.message).toContain(text)
+      expect(error.message).not.toMatch(/[A-Za-z]/)
+      expect(clientMessage(error)).toBe(error.message)
+    },
+  )
 
   it('falls back by status class', () => {
     expect(trpcCodeForStatus(451)).toBe('BAD_REQUEST')
@@ -65,11 +81,10 @@ describe('domain errors in procedures', () => {
     missing: publicProcedure.query(() => {
       throw notFound('Site not found')
     }),
-    wrapped: publicProcedure.query(() =>
-      mapDomain(async () => {
-        throw conflict('Task is running')
-      }),
-    ),
+    busy: publicProcedure.query(async () => {
+      await Promise.resolve()
+      throw conflict('Task is running')
+    }),
     crash: publicProcedure.query(() => {
       throw new Error('connect ECONNREFUSED 10.0.0.5:5432')
     }),
@@ -77,15 +92,15 @@ describe('domain errors in procedures', () => {
   const ctx = { headers: new Headers(), session: null, user: null } as unknown as Context
   const caller = createCallerFactory(testRouter)(ctx)
 
-  it('get the matching code without mapDomain', async () => {
+  it('get the matching code and the Russian text', async () => {
     await expect(caller.missing()).rejects.toMatchObject({
       code: 'NOT_FOUND',
       message: 'Не нашли то, что вы ищете',
     })
-  })
-
-  it('keep the code set by mapDomain', async () => {
-    await expect(caller.wrapped()).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(caller.busy()).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Действие сейчас недоступно',
+    })
   })
 
   it('leave other failures internal', async () => {

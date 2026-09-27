@@ -12,10 +12,10 @@ import {
   type ExecutionContext,
 } from '@nestjs/common'
 import { Registry } from '@prometheus-io/client'
+import { bearerTokenMatches } from '@repo/observability'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CORE_CONFIG, METRICS_REGISTRY } from '../infra/tokens.ts'
-import { bearerTokenMatches } from './metrics.ts'
 
 @Injectable()
 export class MetricsTokenGuard implements CanActivate {

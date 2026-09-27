@@ -65,7 +65,7 @@ describe('authConfigFromEnv', () => {
         SMARTCAPTCHA_SERVER_KEY: serverKey,
         SMARTCAPTCHA_CLIENT_KEY: `ysc1_${'z'.repeat(20)}CLIENTPUBLICPART`,
       }),
-    ).toThrow(/different captchas/)
+    ).toThrow(/SMARTCAPTCHA_CLIENT_KEY: belongs to a different captcha/)
   })
 
   it('requires the captcha and https in production', () => {
@@ -79,7 +79,7 @@ describe('authConfigFromEnv', () => {
         SMARTCAPTCHA_SERVER_KEY: serverKey,
         SMARTCAPTCHA_CLIENT_KEY: clientKey,
       }),
-    ).toThrow(/APP_URL must use https/)
+    ).toThrow(/APP_URL: must use https when APP_ENV=production/)
     const config = authConfigFromEnv({
       APP_ENV: 'production',
       APP_URL: 'https://raditi.ru',
@@ -96,14 +96,22 @@ describe('authConfigFromEnv', () => {
     ['blank', ''],
     ['misspelt', 'prod'],
   ])('refuses a %s APP_ENV instead of assuming development', (_case, APP_ENV) => {
-    expect(() => authConfigFromEnv({ ...base, APP_ENV })).toThrow(/APP_ENV must be one of/)
+    expect(() => authConfigFromEnv({ ...base, APP_ENV })).toThrow(
+      /^\[auth\] invalid configuration: APP_ENV: must be one of development, test, production$/,
+    )
   })
 
   it('refuses a short or missing secret and a non-http URL', () => {
-    expect(() => authConfigFromEnv({ ...base, BETTER_AUTH_SECRET: 'short' })).toThrow(/at least 32/)
-    expect(() => authConfigFromEnv({ ...base, BETTER_AUTH_SECRET: undefined })).toThrow(/not set/)
+    expect(() => authConfigFromEnv({ ...base, BETTER_AUTH_SECRET: 'short' })).toThrow(
+      /BETTER_AUTH_SECRET: must be at least 32/,
+    )
+    for (const secret of [undefined, ' ']) {
+      expect(() => authConfigFromEnv({ ...base, BETTER_AUTH_SECRET: secret })).toThrow(
+        'BETTER_AUTH_SECRET: is not set',
+      )
+    }
     expect(() => authConfigFromEnv({ ...base, APP_URL: 'javascript:alert(1)' })).toThrow(
-      /APP_URL must be an http\(s\) URL/,
+      'APP_URL: must be an http(s) URL',
     )
   })
 })
