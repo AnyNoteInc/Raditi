@@ -756,6 +756,48 @@ describe('Docker sandbox provider', () => {
     await sandbox.destroy('completed')
   })
 
+  it('stops a handle a re-attach replaced: its output fails and its timer never fires', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    vi.useFakeTimers()
+    try {
+      const run = await sandbox.exec({ argv: ['command'], timeoutMs: 10_000 })
+      const [logical, execId] = run.id.split('.') as [string, string]
+      const record = {
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        exit: null as { code: number; reason: string } | null,
+      }
+      fake.records.set(logical, record)
+      const exec = fake.raw.getExec(execId)!
+      const status = (await (exec.inspect as () => Promise<object>)()) as { Running: boolean }
+      exec.inspect.mockImplementation(async () => ({ ...status, Running: true }))
+      const cursor = { stdout: 0, stderr: 0 }
+      const older = await sandbox.attach(run.id, cursor)
+      const reading = collect(older.output())
+      reading.catch(() => {})
+      await vi.advanceTimersByTimeAsync(500)
+
+      // A resume in the same process: the older reader must not poll the exec any more.
+      const newer = await sandbox.attach(run.id, cursor)
+      await vi.advanceTimersByTimeAsync(1_500)
+      await expect(reading).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+      record.exit = { code: 0, reason: 'exited' }
+      exec.inspect.mockImplementation(async () => status)
+      expect(await newer.wait()).toEqual({ code: 0, reason: 'exited' })
+
+      // Past the exec's deadline no replaced handle wakes up to signal or read it.
+      const issued = fake.commands.length
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(fake.commands).toHaveLength(issued)
+    } finally {
+      vi.useRealTimers()
+      await sandbox.destroy('completed')
+    }
+  })
+
   it('drains bytes written between an empty spool read and the completed exec inspection', async () => {
     const fake = daemon()
     const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(

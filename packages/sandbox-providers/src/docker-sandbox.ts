@@ -301,6 +301,8 @@ export class DockerSandbox implements Sandbox {
       cursor.data,
       Math.max(1, execDeadline - Date.now()),
     )
+    // The handle this one replaces stops reading the exec, and its timer no longer fires.
+    this.#handles.get(execId)?.close()
     this.#handles.set(execId, handle)
     return handle
   }
@@ -354,6 +356,7 @@ class DockerExecHandle implements ExecHandle {
   #done: ExecExit | undefined
   #reason: ExecExit['reason'] | undefined
   #killPromise: Promise<void> | undefined
+  #closed = false
   private readonly sandbox: DockerSandbox
   private readonly exec: Docker.Exec
   private readonly logicalId: string
@@ -387,6 +390,11 @@ class DockerExecHandle implements ExecHandle {
     clearTimeout(this.#timer)
     if (this.#abort) this.signal?.removeEventListener('abort', this.#abort)
   }
+  /** Replaced by a newer handle of the same exec: its output fails at its next read. */
+  close(): void {
+    this.#closed = true
+    this.release()
+  }
   async #page(cursor: ExecCursor) {
     const bytes = await helperCommand(
       this.sandbox.container,
@@ -405,7 +413,9 @@ class DockerExecHandle implements ExecHandle {
     // Every poll is a docker exec plus a node start inside the sandbox: back off while idle.
     let idle = IDLE_POLL_MS
     while (true) {
+      if (this.#closed) throw commandError()
       const page = await this.#page(cursor)
+      if (this.#closed) throw commandError()
       for (const chunk of page.chunks) {
         if (chunk.offset !== cursor[chunk.stream]) throw commandError()
         const data = Buffer.from(chunk.data, 'base64')
