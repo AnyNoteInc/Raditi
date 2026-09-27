@@ -260,7 +260,8 @@ class Reattach extends Error {
  * platform credentials: snapshot parts move through presigned requests, data keys and the base
  * bundle come from core per command. Commands run concurrently — a destroy may arrive while a
  * prepare still waits for core to take its container over — and every report is retried until
- * the turn's deadline. Nothing it logs names a URL, a key, a token or a turn.
+ * the turn's deadline plus the publication grace, as long as its lease lives. Nothing it logs
+ * names a URL, a key, a token or a turn.
  */
 export class SandboxRunner {
   /** A fresh session per process start: a restarted runner is a new session for core. */
@@ -274,8 +275,8 @@ export class SandboxRunner {
   #inventory: RunnerInventory = []
   #loop: Promise<void> | undefined
   #retired = false
-  /** Ends the waiting poll: on stop, or when a turn freed a slot its capacity did not count. */
-  #polling: AbortController | undefined
+  /** A turn freed a slot the waiting poll did not count: the next poll goes now. */
+  #freed: (() => void) | undefined
 
   constructor(private readonly deps: SandboxRunnerDependencies) {
     this.#logger = deps.logger ?? new Logger('Runner')
@@ -289,7 +290,6 @@ export class SandboxRunner {
   /** Stops polling. Containers stay: core recovers the turns of a restarted runner. */
   async stop(): Promise<void> {
     this.#stop.abort()
-    this.#polling?.abort()
     await this.#loop
   }
 
@@ -301,39 +301,62 @@ export class SandboxRunner {
 
   // --- Poll loop --------------------------------------------------------------------------------
 
+  /**
+   * A freed slot never aborts the waiting poll: core may have written its answer already, and
+   * an answer lost on the wire is one core counts as delivered. The next poll goes at once
+   * instead; core then answers the older one — empty, or with what it already took — and that
+   * answer is still carried out.
+   */
   async #run(): Promise<void> {
     for (let failures = 0; !this.#stop.signal.aborted;) {
       this.#expire()
-      const polling = new AbortController()
-      this.#polling = polling
+      const freed = Promise.withResolvers<'freed'>()
+      let slotFreed = false
+      this.#freed = () => {
+        slotFreed = true
+        freed.resolve('freed')
+      }
       const request = await this.#pollRequest()
-      // Stopped, or a slot was freed after its capacity was counted.
-      if (polling.signal.aborted) continue
-      let answer: unknown
+      // A slot was freed after its capacity was counted.
+      if (slotFreed) continue
       // A prepare's remaining time counts from here: core took it off its queue only later.
       const sentAt = performance.now()
-      try {
-        answer = await this.deps.transport.poll(request, polling.signal)
-      } catch (error) {
+      const polled = this.deps.transport.poll(request, this.#stop.signal).then(
+        (answer) => ({ ok: true as const, answer }),
+        (error: unknown) => ({ ok: false as const, error }),
+      )
+      const outcome = await Promise.race([polled, freed.promise])
+      if (outcome === 'freed') {
+        // Its failure, a retired session included, reaches the next poll as well.
+        void polled.then((late) => {
+          if (late.ok) this.#take(late.answer, sentAt)
+        })
+        continue
+      }
+      if (!outcome.ok) {
         if (this.#stop.signal.aborted) return
-        // Core requeues whatever an ended poll did not deliver.
-        if (polling.signal.aborted) continue
         // A poll is about no single turn: a lost lease there, too, means the session is over.
-        if (['retired', 'lost'].includes(classify(error).reason)) return this.#retire()
-        this.#warn('poll', logged(error))
+        if (['retired', 'lost'].includes(classify(outcome.error).reason)) return this.#retire()
+        this.#warn('poll', logged(outcome.error))
         const wait = Math.min(POLL_BACKOFF_MS.max, POLL_BACKOFF_MS.first * 2 ** failures++)
         await sleep(wait, this.#stop.signal)
         continue
       }
       failures = 0
-      const receivedAt = performance.now()
-      const parsed = pollAnswer.safeParse(answer)
-      if (!parsed.success) {
-        this.#warn('poll', new Error('invalid answer'))
-        continue
-      }
-      for (const command of parsed.data.commands) this.#dispatch(command, receivedAt, sentAt)
+      this.#take(outcome.answer, sentAt)
     }
+  }
+
+  /** The commands of a poll's answer, each on its own. */
+  #take(answer: unknown, sentAt: number): void {
+    if (this.#retired) return
+    const receivedAt = performance.now()
+    const parsed = pollAnswer.safeParse(answer)
+    if (!parsed.success) {
+      this.#warn('poll', new Error('invalid answer'))
+      return
+    }
+    for (const command of parsed.data.commands) this.#dispatch(command, receivedAt, sentAt)
   }
 
   async #pollRequest(): Promise<RunnerPollRequest> {
@@ -926,7 +949,7 @@ export class SandboxRunner {
     if (this.#held.get(held.id) === held) {
       this.#held.delete(held.id)
       // The freed slot takes the next turn now, not when core ends the poll it holds.
-      this.#polling?.abort()
+      this.#freed?.()
     }
     if (held.containerId) {
       this.#gone.set(held.id, held.containerId)

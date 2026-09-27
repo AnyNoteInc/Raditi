@@ -106,17 +106,39 @@ const open = async (assignments: MemoryTurnAssignments) =>
     remainingMs: MAX_SANDBOX_TURN_MS,
   }))!
 
-/** A core that answers only what a test sends it: polls wait for `send`, reports are kept. */
+interface WaitingPoll {
+  answer(commands: unknown[]): void
+  /** Core wrote its answer: from now on a dropped connection loses it. */
+  sent: boolean
+}
+
+/**
+ * A core that answers only what a test sends it: polls wait for `send`, reports are kept. Like
+ * the hub, a newer poll of the session answers the older ones empty, and like HTTP, a poll the
+ * runner aborts after core wrote its answer loses that answer.
+ */
 function scriptedCore() {
   const polls: RunnerPollRequest[] = []
   const reports: RunnerReport[] = []
-  const waiting: Array<(answer: unknown) => void> = []
+  const waiting: WaitingPoll[] = []
   const transport = {
     poll: vi.fn((request: RunnerPollRequest, abort: AbortSignal) => {
       polls.push(structuredClone(request))
-      return new Promise<unknown>((resolve) => {
-        waiting.push(resolve)
-        abort.addEventListener('abort', () => resolve({ commands: [] }), { once: true })
+      for (const older of waiting.splice(0)) older.answer([])
+      return new Promise<unknown>((resolve, reject) => {
+        const poll: WaitingPoll = { answer: (commands) => resolve({ commands }), sent: false }
+        waiting.push(poll)
+        abort.addEventListener(
+          'abort',
+          () => {
+            const index = waiting.indexOf(poll)
+            if (index >= 0) waiting.splice(index, 1)
+            // Written already: the answer goes down with the connection. Otherwise core requeues.
+            if (poll.sent) reject(new RunnerCallError('poll', null))
+            else resolve({ commands: [] })
+          },
+          { once: true },
+        )
       })
     }),
     report: vi.fn(async (report: RunnerReport) => {
@@ -137,7 +159,14 @@ function scriptedCore() {
     /** Answers the runner's waiting poll. */
     async send(...commands: unknown[]) {
       await vi.waitFor(() => expect(waiting.length).toBeGreaterThan(0))
-      waiting.shift()!({ commands })
+      waiting.shift()!.answer(commands)
+    },
+    /** Answers the waiting poll with `commands` that reach the runner only on `arrive()`. */
+    async sendSlowly(...commands: unknown[]) {
+      await vi.waitFor(() => expect(waiting.length).toBeGreaterThan(0))
+      const poll = waiting.shift()!
+      poll.sent = true
+      return { arrive: () => poll.answer(commands) }
     },
   }
 }
@@ -488,6 +517,37 @@ describe('SandboxRunner commands', () => {
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'destroyed']))
     await vi.waitFor(() => expect(core.polls).toHaveLength(polled + 1))
     expect(core.polls.at(-1)).toMatchObject({ capacity: 1, active: [] })
+  })
+
+  it('carries out what a poll brought even when a freed slot started the next poll', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    startRunner(core.transport, side.executor)
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    const removal = Promise.withResolvers<void>()
+    vi.mocked(side.sandbox.destroy).mockImplementation(() => removal.promise)
+    await core.send(command('destroy', { reason: 'completed' }))
+    await vi.waitFor(() => expect(core.polls.at(-1)).toMatchObject({ capacity: 0 }))
+
+    // Core took a command off its queue for the poll it holds; the answer is on its way when
+    // the slot frees. Core counts it delivered: nothing would send the command again.
+    const other = '00000000-0000-4000-8000-0000000000a2'
+    const late = { ...command('destroy', { reason: 'failed' }), assignmentId: other }
+    const answer = await core.sendSlowly(late)
+    removal.resolve()
+    await vi.waitFor(() => expect(core.polls.at(-1)).toMatchObject({ capacity: 1, active: [] }))
+    answer.arrive()
+
+    await vi.waitFor(() =>
+      expect(
+        core.reports.find((report) => 'commandId' in report && report.commandId === late.commandId),
+      ).toMatchObject({
+        type: 'failed',
+        assignmentId: other,
+        code: 'EXEC_LOST',
+      }),
+    )
   })
 
   it('removes a container core did not take over, before anything is imported into it', async () => {
