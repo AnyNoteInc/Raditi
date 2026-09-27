@@ -17,7 +17,7 @@ import type Docker from 'dockerode'
 import { describe, expect, it, vi } from 'vitest'
 
 import { DockerFrames, HELPER, HELPER_ENV, NODE, startDetachedExec } from './docker-api.ts'
-import { createDockerSandboxProvider, safeRunscArgs } from './docker.ts'
+import { createDockerSandboxProvider, safeRunscArgs, safeRunscRuntime } from './docker.ts'
 
 // Route the provider's sleeps through the global timer, so fake timers drive them too.
 vi.mock('node:timers/promises', async (original) => ({
@@ -299,7 +299,7 @@ describe('Docker sandbox provider', () => {
   it('runsc: joins the attempt network directly at the address the gateway manager gives', async () => {
     const fake = daemon()
     fake.raw.info.mockResolvedValue({
-      Runtimes: { runsc: { runtimeArgs: ['--platform=systrap'] } },
+      Runtimes: { runsc: { path: '/usr/bin/runsc', runtimeArgs: ['--platform=systrap'] } },
     })
     const resourceId = '01234567-1234-1234-1234-0123456789ab'
     const network = 'b'.repeat(64)
@@ -352,16 +352,35 @@ describe('Docker sandbox provider', () => {
       [1],
     ])
       expect(safeRunscArgs(args)).toBe(false)
-    const fake = daemon()
-    fake.raw.info.mockResolvedValue({ Runtimes: { runsc: { runtimeArgs: ['--net-raw'] } } })
-    const provider = createDockerSandboxProvider(
-      { ...config, runtime: 'runsc' },
-      { client: fake.client },
-    )
-    await expect(provider.create(spec({ runtime: 'runsc' }))).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    })
-    expect(fake.raw.createContainer).not.toHaveBeenCalled()
+    expect(safeRunscRuntime({ path: '/usr/bin/runsc', status: {} })).toBe(true)
+    for (const runtime of [
+      // A containerd shim takes flags from a toml file the daemon does not report.
+      { path: '/usr/bin/runsc', runtimeType: 'io.containerd.runsc.v1' },
+      { path: '/usr/bin/runsc', options: { ConfigPath: '/etc/containerd/runsc.toml' } },
+      // Any binary may be registered under the runtime name runsc.
+      { path: 'runc' },
+      { path: '/usr/bin/runsc', runtimeArgs: ['--net-raw'] },
+      {},
+      null,
+    ])
+      expect(safeRunscRuntime(runtime)).toBe(false)
+    for (const runsc of [
+      { path: '/usr/bin/runsc', runtimeArgs: ['--net-raw'] },
+      { path: '/usr/bin/runsc', runtimeType: 'io.containerd.runsc.v1' },
+    ]) {
+      const fake = daemon()
+      fake.raw.info.mockResolvedValue({ Runtimes: { runsc } })
+      const provider = createDockerSandboxProvider(
+        { ...config, runtime: 'runsc' },
+        { client: fake.client },
+      )
+      // A misconfigured daemon is an infrastructure fault, never «check your input».
+      await expect(provider.create(spec({ runtime: 'runsc' }))).rejects.toMatchObject({
+        code: 'SANDBOX_COMMAND_FAILED',
+        httpStatus: 502,
+      })
+      expect(fake.raw.createContainer).not.toHaveBeenCalled()
+    }
   })
 
   it('refuses a none-network container that gained extra hosts', async () => {

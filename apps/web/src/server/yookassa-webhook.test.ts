@@ -91,6 +91,59 @@ describe('handleYookassaWebhook', () => {
     expect(onEvent).not.toHaveBeenCalled()
   })
 
+  /** A body sent in chunks, without Content-Length. */
+  const chunked = (source: UnderlyingDefaultSource<Uint8Array>) =>
+    new Request('http://localhost:3000/api/webhooks/yookassa', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': YOOKASSA_IP },
+      body: new ReadableStream(source),
+      duplex: 'half',
+    } as RequestInit)
+
+  it('stops reading a body without Content-Length as soon as it passes the limit', async () => {
+    const onEvent = vi.fn()
+    const chunk = 16 * 1024
+    let pulled = 0
+    let cancelled = false
+    // Endless: reading it whole would never finish.
+    const request = chunked({
+      pull(controller) {
+        pulled += 1
+        controller.enqueue(new Uint8Array(chunk).fill(0x20))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    expect(request.headers.get('content-length')).toBeNull()
+
+    const res = await handleYookassaWebhook(request, { requireAllowlist: true, onEvent })
+
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'invalid notification' })
+    expect(cancelled).toBe(true)
+    expect(pulled * chunk).toBeLessThanOrEqual(MAX_BODY_BYTES + 2 * chunk)
+    expect(onEvent).not.toHaveBeenCalled()
+  })
+
+  it('accepts a notification sent in chunks without Content-Length', async () => {
+    const onEvent = vi.fn()
+    const bytes = new TextEncoder().encode(JSON.stringify(notification))
+    const middle = Math.floor(bytes.byteLength / 2)
+    const res = await handleYookassaWebhook(
+      chunked({
+        start(controller) {
+          controller.enqueue(bytes.subarray(0, middle))
+          controller.enqueue(bytes.subarray(middle))
+          controller.close()
+        },
+      }),
+      { requireAllowlist: true, onEvent },
+    )
+    expect(res.status).toBe(200)
+    expect(onEvent).toHaveBeenCalledTimes(1)
+  })
+
   it('checks the body itself when Content-Length is exact or not a number', async () => {
     const body = JSON.stringify(notification)
     for (const length of [String(Buffer.byteLength(body)), 'unknown']) {

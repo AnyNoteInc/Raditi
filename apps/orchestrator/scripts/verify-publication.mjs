@@ -48,9 +48,9 @@ const git = (cwd, ...argv) =>
       GIT_COMMITTER_EMAIL: 'fixture@example.test',
     },
   })
-const archive = async (content) => {
+const archive = async (files) => {
   const stream = pack()
-  stream.entry({ name: 'new.txt', mode: 0o644 }, content)
+  for (const [name, content] of Object.entries(files)) stream.entry({ name, mode: 0o644 }, content)
   stream.finalize()
   const chunks = []
   for await (const chunk of stream) chunks.push(chunk)
@@ -73,21 +73,22 @@ try {
   await git(work, 'push', remote, 'HEAD:main')
   const baseSha = (await git(work, 'rev-parse', 'HEAD')).toString().trim()
   const repo = { provider: 'gitea', owner: 'fixture', name: 'site' }
-  const service = new GitWorkspaceService(
-    {
-      kind: 'gitea',
-      getRepository: async () => ({
-        ref: repo,
-        cloneUrl: remote,
-        defaultBranch: 'main',
-        private: true,
-      }),
-      issueCredentials: async () => {
-        throw new Error('Local fixtures must not request credentials')
-      },
+  const gitProvider = {
+    kind: 'gitea',
+    getRepository: async () => ({
+      ref: repo,
+      cloneUrl: remote,
+      defaultBranch: 'main',
+      private: true,
+    }),
+    issueCredentials: async () => {
+      throw new Error('Local fixtures must not request credentials')
     },
-    { transport: { kind: 'local-test', root }, gitleaksBinary: scanner },
-  )
+  }
+  const service = new GitWorkspaceService(gitProvider, {
+    transport: { kind: 'local-test', root },
+    gitleaksBinary: scanner,
+  })
   const source = { repo, branch: 'agent/task1', expectedBaseSha: baseSha, protectedPaths: [] }
   const metadata = { ...source, taskId: 'task1', turn: 1, createdAt: '2026-09-26T19:00:00.000Z' }
 
@@ -161,6 +162,7 @@ try {
     ...metadata,
     patch: captured.patch,
     untracked: captured.untracked,
+    credentials: [],
   })
   candidates.push(candidate)
   assert(!(await git(remote, 'show-ref', '--heads')).toString().includes('agent/task1'))
@@ -178,28 +180,81 @@ try {
     ...metadata,
     patch: candidate.patch,
     untracked: candidate.untracked,
+    credentials: [],
   })
   candidates.push(retry)
   assert.equal(retry.headSha, candidate.headSha)
   await retry.publish(async () => {})
 
   // A synthetic, random token-shaped value exists only in memory and must never be printed.
+  // One scanner run covers many files; the agent's own ignore file is only content to it.
   const synthetic = 'gh' + 'p_' + randomBytes(18).toString('hex')
-  let blocked = false
-  try {
-    const unexpected = await service.preparePublication({
-      ...metadata,
-      patch: Buffer.alloc(0),
-      untracked: await archive(`TOKEN=${synthetic} # gitleaks:allow\n`),
-    })
-    candidates.push(unexpected)
-  } catch (error) {
-    assert.equal(error.code, 'FORBIDDEN')
-    assert.equal(error.message, 'Publication contains a possible secret')
-    assert(!JSON.stringify(error).includes(synthetic))
-    blocked = true
+  const files = Object.fromEntries(
+    Array.from({ length: 50 }, (_, i) => [`pages/${i}.txt`, `page ${i}\n`]),
+  )
+  files['pages/7.txt'] = `TOKEN=${synthetic} # gitleaks:allow\n`
+  files['.gitleaksignore'] = Array.from({ length: 60 }, (_, i) => `${i}:github-pat:1\n`).join('')
+  const refusal = async (untracked, using = service) => {
+    try {
+      candidates.push(
+        await using.preparePublication({
+          ...metadata,
+          patch: Buffer.alloc(0),
+          untracked,
+          credentials: [],
+        }),
+      )
+    } catch (error) {
+      assert(!JSON.stringify(error).includes(synthetic))
+      assert(!String(error).includes(synthetic))
+      return error
+    }
+    assert.fail('Real Gitleaks accepted a publication it must refuse')
   }
-  assert(blocked, 'Real Gitleaks must reject the synthetic token despite an allow comment')
+  const secret = await refusal(await archive(files))
+  assert.equal(secret.code, 'PUBLICATION_SECRET', 'Despite an allow comment and ignore file')
+  assert.equal(secret.message, 'Publication contains a possible secret')
+  // Gitleaks skips a file that starts like a PDF, or has `ustar` at offset 257 like a tar
+  // archive: the text is found only behind the host's image header, wherever the agent puts
+  // the signature (at 257 in the file, in the copy, or after a one-byte prefix).
+  for (const text of [
+    `%PDF-1.7\nTOKEN=${synthetic}\n`,
+    // One invalid UTF-8 byte: the copy still gets the header.
+    Buffer.concat([Buffer.from(`%PDF-1.7\nTOKEN=${synthetic}\n`), Buffer.from([0xff])]),
+    ...[257, 257 - 'GIF89a\n'.length, 256].map(
+      (offset) => `TOKEN=${synthetic}\n`.padEnd(offset, 'x') + 'ustar\n',
+    ),
+  ])
+    assert.equal(
+      (await refusal(await archive({ 'disguised.txt': text }))).code,
+      'PUBLICATION_SECRET',
+      'Text disguised as an application file must still be scanned',
+    )
+  // Gitleaks exits 1 on its own errors too, whatever --exit-code says: that is not a finding.
+  const brokenConfig = join(root, 'broken-gitleaks.toml')
+  await writeFile(brokenConfig, '[extend\n')
+  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`
+  const brokenScanner = join(root, 'gitleaks-broken-config')
+  // The last --config wins: every other flag is the service's own.
+  await writeFile(
+    brokenScanner,
+    `#!/bin/sh\nexec ${quote(scanner)} "$@" --config ${quote(brokenConfig)}\n`,
+    { mode: 0o700 },
+  )
+  const broken = await runProcess(
+    scanner,
+    ['dir', '.', '--config', brokenConfig, '--exit-code=99', '--no-banner', '--log-level=error'],
+    { cwd: work, env: { PATH: process.env.PATH, HOME: root } },
+  )
+  assert.equal(broken.code, 1, 'Gitleaks reports a broken config with exit code 1')
+  const failedScan = await refusal(
+    await archive({ 'clean.txt': 'nothing secret here\n' }),
+    new GitWorkspaceService(gitProvider, {
+      transport: { kind: 'local-test', root },
+      gitleaksBinary: brokenScanner,
+    }),
+  )
+  assert.equal(failedScan.code, 'GIT_OPERATION_FAILED', 'A failed scan is not a found secret')
 } catch (error) {
   failures.push(error)
 } finally {
@@ -213,5 +268,5 @@ try {
 }
 if (failures.length) throw new AggregateError(failures, 'Publication verification failed')
 console.log(
-  'PASS: trusted Docker checkout; agent self-commit captured; fenced local publication; deterministic retry; real Gitleaks 8.30.1 secret rejection; resources cleaned',
+  'PASS: trusted Docker checkout; agent self-commit captured; fenced local publication; deterministic retry; real Gitleaks 8.30.1 secret rejection in one run over 51 new files and in text disguised as PDF or tar; broken scanner config is a failed scan, not a finding; resources cleaned',
 )

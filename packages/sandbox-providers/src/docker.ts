@@ -10,6 +10,7 @@ import {
   notImplemented,
   SANDBOX_SECRETS_DIR,
   SANDBOX_SECRETS_TMPFS_BYTES,
+  sandboxCommandFailed,
   sandboxLabelsSchema,
   type NetworkPolicy,
   type SandboxLabels,
@@ -79,6 +80,22 @@ export function safeRunscArgs(args: unknown = []): boolean {
     if (name === 'network') return (value ?? args[index + 1]) === 'sandbox'
     return true
   })
+}
+
+/**
+ * The daemon must run the runsc binary directly: a containerd shim (`runtimeType`, `options`)
+ * reads its flags from a config file that `docker info` does not report.
+ */
+export function safeRunscRuntime(runtime: unknown): boolean {
+  if (typeof runtime !== 'object' || runtime === null) return false
+  const { path, runtimeArgs, runtimeType, options } = runtime as Record<string, unknown>
+  return (
+    runtimeType === undefined &&
+    options === undefined &&
+    typeof path === 'string' &&
+    path.split('/').pop() === 'runsc' &&
+    safeRunscArgs(runtimeArgs)
+  )
 }
 
 function identity(info: Docker.ContainerInspectInfo): {
@@ -266,10 +283,13 @@ export function createDockerSandboxProvider(
       if (spec.network.mode === 'gateway' && !gateway)
         throw notImplemented('Sandbox gateway requires a trusted network manager')
       const daemon = await bounded(docker.info(), 10_000, signal)
-      const runtime = daemon.Runtimes?.[spec.runtime] as { runtimeArgs?: unknown } | undefined
-      if (!runtime) throw badRequest('Configured sandbox runtime is not available')
-      if (spec.runtime === 'runsc' && !safeRunscArgs(runtime.runtimeArgs))
-        throw badRequest('runsc must keep its own network stack without raw sockets')
+      const runtime: unknown = daemon.Runtimes?.[spec.runtime]
+      // Daemon configuration is infrastructure, not client input: fail as a sandbox fault.
+      if (!runtime) throw sandboxCommandFailed('Configured sandbox runtime is not available')
+      if (spec.runtime === 'runsc' && !safeRunscRuntime(runtime))
+        throw sandboxCommandFailed(
+          'runsc must be the plain binary with its own network stack and no raw sockets',
+        )
       const image = await bounded(docker.getImage(spec.image).inspect(), 10_000, signal)
       if (Object.keys(image.Config?.Volumes ?? {}).length)
         throw badRequest('Sandbox images must not declare volumes')

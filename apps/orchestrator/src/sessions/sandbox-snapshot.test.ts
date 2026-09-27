@@ -157,6 +157,38 @@ describe('SandboxSnapshotTransport', () => {
     ).resolves.toEqual(clean)
   })
 
+  it.each([
+    [
+      'a symlink in agent home',
+      'home',
+      { name: 'sessions/link', type: 'symlink', linkname: '/etc' },
+    ],
+    ['a FIFO in agent home', 'home', { name: 'sessions/pipe', type: 'fifo' }],
+    [
+      'a symlink in the working copy',
+      'untracked',
+      { name: 'new.txt', type: 'symlink', linkname: '/' },
+    ],
+    ['a FIFO in the working copy', 'untracked', { name: 'pipe', type: 'fifo' }],
+    ['a setuid file in the working copy', 'untracked', { name: 'run.sh', mode: 0o4755 }],
+  ] as const)(
+    'refuses %s as rejected agent output, not the client input',
+    async (_, part, header) => {
+      const writer = pack()
+      const packed = (async () => {
+        const chunks: Buffer[] = []
+        for await (const chunk of writer) chunks.push(Buffer.from(chunk as Uint8Array))
+        return zstdCompressSync(Buffer.concat(chunks))
+      })()
+      writer.entry({ mode: 0o644, ...header }, '')
+      writer.finalize()
+      const fake = sandboxFixture({ ...(await fixture()), [part]: await packed })
+      await expect(
+        new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
+      ).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED', httpStatus: 502 })
+    },
+  )
+
   it('collapses overlapping home include subtrees instead of producing duplicate tar entries', async () => {
     const fake = sandboxFixture(await fixture())
     await new SandboxSnapshotTransport().capture(

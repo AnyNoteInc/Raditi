@@ -34,6 +34,29 @@ export function webhookSenderIp(headers: Headers): string | null {
 const json = (body: unknown, status: number) =>
   Response.json(body, { status, headers: { 'cache-control': 'no-store' } })
 
+/** The body as text, or null once it passes `limit` bytes: the rest is never read. */
+async function readBody(request: Request, limit: number): Promise<string | null> {
+  if (!request.body) return ''
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bytes += value.byteLength
+      if (bytes > limit) {
+        await reader.cancel().catch(() => {})
+        return null
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks))
+}
+
 /** Checks the sender and the body; 403 for a foreign address, 400 for a broken notification. */
 export async function handleYookassaWebhook(
   request: Request,
@@ -45,12 +68,13 @@ export async function handleYookassaWebhook(
     return json({ error: 'forbidden' }, 403)
   }
 
-  // A declared oversize body is refused unread; a missing or non-numeric length is checked after.
+  // A declared oversize body is refused unread; without a usable length (a chunked body) it is
+  // read only up to the limit.
   if (Number(request.headers.get('content-length')) > MAX_BODY_BYTES) {
     return json({ error: 'invalid notification' }, 400)
   }
-  const text = await request.text()
-  if (Buffer.byteLength(text) > MAX_BODY_BYTES) return json({ error: 'invalid notification' }, 400)
+  const text = await readBody(request, MAX_BODY_BYTES)
+  if (text === null) return json({ error: 'invalid notification' }, 400)
 
   let event: WebhookEvent
   try {

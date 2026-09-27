@@ -53,6 +53,18 @@ export function isTooLarge(e: unknown): e is DomainError {
  */
 export const turnOutputRejected = (message = 'Agent output was rejected'): DomainError =>
   new DomainError('TURN_OUTPUT_REJECTED', message, 502)
+/** The agent changed CI or protected paths, or added a link, submodule or permission change. */
+export const publicationForbidden = (
+  message = 'Publication changes files the agent must not change',
+): DomainError => new DomainError('PUBLICATION_FORBIDDEN', message, 502)
+/** The secret scanner found something like a password or key in the agent's changes. */
+export const publicationSecret = (
+  message = 'Publication contains a possible secret',
+): DomainError => new DomainError('PUBLICATION_SECRET', message, 502)
+/** The site's own repository holds entries the agent cannot work with (links, submodules). */
+export const repositoryUnsupported = (
+  message = 'Repository contains unsupported entries',
+): DomainError => new DomainError('REPOSITORY_UNSUPPORTED', message, 422)
 export const driverPrepareInvalid = (message = 'Prepared agent run is invalid'): DomainError =>
   new DomainError('DRIVER_PREPARE_INVALID', message, 502)
 export const sandboxCommandFailed = (

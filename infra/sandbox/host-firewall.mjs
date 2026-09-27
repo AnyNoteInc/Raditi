@@ -19,9 +19,10 @@ export function hostFirewall({ run, bridgeExists, ipv6 }) {
     return result
   }
   const remove = (binary, bridge) => {
-    // A rule may have been inserted twice by an interrupted install; remove every copy.
+    // A rule may have been inserted twice by an interrupted install; remove every copy. A
+    // concurrent sweep may delete it first, so a failed -D counts only if the rule is still there.
     for (let attempt = 0; attempt < 8 && has(binary, bridge); attempt++)
-      must(call(binary, '-D', ...rule(bridge)))
+      call(binary, '-D', ...rule(bridge))
     if (has(binary, bridge)) throw new Error('Host firewall rule is still present')
   }
   /** Drops rules whose bridge is gone; a live attempt's rule is never touched. */
@@ -32,17 +33,29 @@ export function hostFirewall({ run, bridgeExists, ipv6 }) {
         if (bridge && !bridgeExists(bridge)) remove(binary, bridge)
       }
   }
+  const known = (bridge) => {
+    // The rule is keyed by interface name: it protects only if that bridge already exists.
+    if (!BRIDGE.test(bridge ?? '') || !bridgeExists(bridge))
+      throw new Error('Unknown sandbox bridge')
+  }
+  const check = (bridge) => {
+    known(bridge)
+    for (const binary of binaries)
+      if (!has(binary, bridge)) throw new Error('Host firewall rule is missing')
+  }
   return {
     sweep,
+    check,
     install(bridge) {
-      // The rule is keyed by interface name: it protects only if that bridge already exists.
-      if (!BRIDGE.test(bridge ?? '') || !bridgeExists(bridge))
-        throw new Error('Unknown sandbox bridge')
-      sweep()
-      for (const binary of binaries) {
-        if (!has(binary, bridge)) must(call(binary, '-I', ...rule(bridge)))
-        if (!has(binary, bridge)) throw new Error('Host firewall rule was not installed')
+      known(bridge)
+      try {
+        sweep()
+      } catch {
+        // Leftovers of other attempts only drop traffic of bridges that no longer exist.
       }
+      for (const binary of binaries)
+        if (!has(binary, bridge)) must(call(binary, '-I', ...rule(bridge)))
+      check(bridge)
     },
   }
 }

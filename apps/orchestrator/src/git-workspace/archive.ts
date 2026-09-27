@@ -2,7 +2,12 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createZstdDecompress, zstdCompressSync } from 'node:zlib'
 
-import { badRequest, isTooLarge, publicationLimits, publicationTooLarge } from '@repo/domain'
+import {
+  isTooLarge,
+  publicationLimits,
+  publicationTooLarge,
+  turnOutputRejected,
+} from '@repo/domain'
 import { extract } from 'tar-stream'
 
 import { validateUntrackedArchive } from '../sessions/archive-validation.ts'
@@ -13,11 +18,18 @@ export interface UntrackedFile {
   mode: string
   bytes: Uint8Array
 }
+/** The agent's new files: a malformed archive is its output, not the client's input. */
+const invalid = () => turnOutputRejected('Invalid publication archive')
 
 /** Reads already validated regular blobs in memory; never extracts an agent path to host FS. */
 export async function untrackedFiles(input: Uint8Array): Promise<UntrackedFile[]> {
-  // Parse the same owned copy that passed validation.
-  const archive = await validateUntrackedArchive(input)
+  let archive: Uint8Array
+  try {
+    // Parse the same owned copy that passed validation.
+    archive = await validateUntrackedArchive(input)
+  } catch (error) {
+    throw isTooLarge(error) ? error : invalid()
+  }
   const parser = extract()
   const files: UntrackedFile[] = []
   let total = 0
@@ -26,7 +38,7 @@ export async function untrackedFiles(input: Uint8Array): Promise<UntrackedFile[]
     stream.on('error', () => {})
     stream.on('data', (chunk: unknown) => {
       if (!(chunk instanceof Uint8Array)) {
-        parser.destroy(badRequest('Invalid publication archive'))
+        parser.destroy(invalid())
         return
       }
       total += chunk.byteLength
@@ -48,7 +60,7 @@ export async function untrackedFiles(input: Uint8Array): Promise<UntrackedFile[]
   try {
     await pipeline(Readable.from([archive]), createZstdDecompress(), parser)
   } catch (error) {
-    throw isTooLarge(error) ? error : badRequest('Invalid publication archive')
+    throw isTooLarge(error) ? error : invalid()
   }
   return files
 }

@@ -277,7 +277,8 @@ function ownedPart(name: SnapshotPartName, bytes: unknown): Buffer {
  * Callers must use only the returned copies, never their own input buffers. With the turn's
  * `credentials` (capture), a part that contains one verbatim — a file name or content in an
  * archive, or the patch text — is refused as snapshotHasCredential(). Binary changes to tracked
- * files are compressed inside the patch and not covered by this exact match.
+ * files are compressed inside the patch: the trusted candidate repeats this exact match over
+ * every changed file in full (GitWorkspaceService.preparePublication).
  */
 export async function validateSnapshotArchives(
   state: SessionState,

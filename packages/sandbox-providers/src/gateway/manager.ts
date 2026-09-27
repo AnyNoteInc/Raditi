@@ -151,7 +151,8 @@ export function createDockerGatewayManager(
   const hostFirewall = async (resourceId: string, args: string[], signal?: AbortSignal) => {
     const helper = await createOwned(
       docker.createContainer({
-        name: `raditi-gateway-firewall-${resourceId}-${args[0]}`,
+        // Unique: validations of one attempt may check its rule concurrently.
+        name: `raditi-gateway-firewall-${resourceId}-${args[0]}-${randomUUID().slice(0, 8)}`,
         Image: config.guardImage,
         User: '0:0',
         Entrypoint: entrypoint('host-firewall.mjs'),
@@ -221,8 +222,15 @@ export function createDockerGatewayManager(
       )
       if (results.some((result) => result.status === 'rejected')) throw commandError()
     }
-    // The bridge is gone now; the sweep drops only rules whose bridge no longer exists.
-    if (runsc) await hostFirewall(resourceId, ['sweep'])
+    // The bridge is gone now; the sweep drops only rules whose bridge no longer exists. A failed
+    // sweep is not a failed release: such a rule matches no interface, and the next install or
+    // release sweeps it again.
+    if (runsc)
+      await hostFirewall(resourceId, ['sweep']).catch(() =>
+        process.emitWarning('Sandbox host firewall sweep failed', {
+          code: 'RADITI_SANDBOX_FIREWALL_SWEEP',
+        }),
+      )
   }
 
   const serviceHost = (networkMode: string, guard: boolean): Docker.HostConfig => ({
@@ -355,7 +363,10 @@ export function createDockerGatewayManager(
       try {
         const expected = gatewayLabels(resourceId, deadline, policy, labels)
         const filters = ownFilter(resourceId)
-        const resources = await bounded(docker.listContainers({ all: true, filters }))
+        // Short-lived firewall helpers of this attempt may be running; they never join its network.
+        const resources = (await bounded(docker.listContainers({ all: true, filters }))).filter(
+          (item) => item.Labels[`${PREFIX}role`] !== 'firewall',
+        )
         const idOf = (role: string) =>
           resources.find((item) => item.Labels[`${PREFIX}role`] === role)?.Id
         const proxyId = idOf('proxy')
@@ -460,10 +471,14 @@ export function createDockerGatewayManager(
             Date.now() + 3_000,
           )
         }
-        return true
       } catch {
         return false
       }
+      // Idempotent: puts back a rule that a firewalld reload or iptables-restore dropped since
+      // prepare. Outside the try: a failed helper is an infrastructure fault, not a foreign
+      // container, so callers see an error instead of a sandbox that silently vanished.
+      if (runsc) await hostFirewall(resourceId, ['install', bridgeName(resourceId)])
+      return true
     },
     release: releaseId,
   }

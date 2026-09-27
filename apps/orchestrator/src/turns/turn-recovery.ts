@@ -145,6 +145,8 @@ export class TurnPublicationRecovery {
           createdAt: metadata.committedAt,
           patch: archives.patch,
           untracked: archives.untracked,
+          // A replay of a completed snapshot: the credential check ran before its checkpoint.
+          credentials: [],
         }),
         (late) => late.dispose(),
       )

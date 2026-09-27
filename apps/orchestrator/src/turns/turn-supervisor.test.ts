@@ -926,6 +926,43 @@ describe('PoC TurnSupervisor', () => {
     expect(f.snapshots.save).not.toHaveBeenCalled()
   })
 
+  it('releases the site when the final failed entry cannot be journaled and nothing was written', async () => {
+    const f = fixture()
+    vi.mocked(f.handle.wait).mockResolvedValue({ code: 1, reason: 'exited' })
+    f.journal.record.mockImplementation(async (entry) => {
+      if (entry.phase === 'failed') throw new Error('connect ECONNREFUSED 127.0.0.1:5432')
+      f.evidence.push(structuredClone(entry))
+    })
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_EXEC_FAILED' })
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
+  it('leaves the lease to its TTL when neither the journal nor the release answers', async () => {
+    const f = fixture()
+    vi.mocked(f.handle.wait).mockResolvedValue({ code: 1, reason: 'exited' })
+    f.journal.record.mockImplementation(async (entry) => {
+      if (entry.phase === 'failed') throw new Error('connect ECONNREFUSED 127.0.0.1:5432')
+    })
+    f.leases.release.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:5432'))
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_EXEC_FAILED' })
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the hold when the recovery entry cannot be journaled after a snapshot started', async () => {
+    const f = fixture()
+    f.snapshots.save.mockRejectedValueOnce(new Error('snapshot reply lost'))
+    f.journal.record.mockImplementation(async (entry) => {
+      if (entry.phase === 'recovery') throw new Error('connect ECONNREFUSED 127.0.0.1:5432')
+      f.evidence.push(structuredClone(entry))
+    })
+    await expect(f.run()).rejects.toThrow('snapshot reply lost')
+    expect(f.leases.holdForRecovery).toHaveBeenCalledOnce()
+    expect(f.leases.release).not.toHaveBeenCalled()
+  })
+
   it.each([
     [
       'a driver file',
@@ -988,6 +1025,25 @@ describe('PoC TurnSupervisor', () => {
     expect(f.leases.release).toHaveBeenCalledOnce()
     expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'snapshot_credential' })
     expect(f.evidence.at(-1)).not.toHaveProperty('snapshotPrefix')
+    expect(JSON.stringify(f.evidence)).not.toContain(f.request.context.llm.apiKey)
+  })
+
+  it('hands the turn credentials to the candidate and releases the site when a changed file holds one', async () => {
+    const f = fixture()
+    f.workspace.preparePublication.mockRejectedValueOnce(snapshotHasCredential())
+    await expect(f.run()).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+    expect(f.workspace.preparePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credentials: expect.arrayContaining([
+          f.request.context.llm.apiKey,
+          f.request.context.mcp.token,
+        ]),
+      }),
+    )
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'snapshot_credential' })
     expect(JSON.stringify(f.evidence)).not.toContain(f.request.context.llm.apiKey)
   })
 
@@ -1088,6 +1144,8 @@ describe('committed checkpoint publication recovery', () => {
         createdAt: f.request.committedAt,
         patch: f.publication.patch,
         untracked: f.publication.untracked,
+        // The completed snapshot passed the credential check before its checkpoint.
+        credentials: [],
       }),
     )
     expect(f.leases.release).toHaveBeenCalledWith(expect.objectContaining({ epoch: 2 }))

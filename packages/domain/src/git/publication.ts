@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { badRequest, forbidden, publicationTooLarge } from '../errors.ts'
+import { publicationForbidden, publicationTooLarge, turnOutputRejected } from '../errors.ts'
 import { isForbiddenPath } from '../policies/diff-paths.ts'
 import { gitProviderKinds } from '../ports/git-provider.ts'
 import { snapshotLimits } from '../sessions/session-state.ts'
@@ -57,9 +57,15 @@ export const publicationMetadataSchema = publicationSourceSchema
   .refine((value) => value.branch === `agent/${value.taskId}`, 'task branch mismatch')
 export type PublicationMetadata = z.input<typeof publicationMetadataSchema>
 
+/**
+ * `.git` or its NTFS short name `git~1`, with the trailing dots, spaces or stream suffix NTFS
+ * ignores. Git refuses such a component under core.protectNTFS, on by default everywhere.
+ */
+const ntfsDotGit = /^(?:\.git|git~1)[. ]*(?::|$)/i
+
 /** Validate, never normalize, paths crossing the trusted publication boundary. */
-export function assertPublicationPath(path: string): void {
-  if (
+export function isPublicationPath(path: string): boolean {
+  return !(
     path.length === 0 ||
     new TextEncoder().encode(path).byteLength > publicationLimits.pathBytes ||
     path.startsWith('/') ||
@@ -71,11 +77,13 @@ export function assertPublicationPath(path: string): void {
     ) ||
     path.includes('\ufffd') ||
     path.split('/').length > 32 ||
-    path
-      .split('/')
-      .some((part) => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')
+    path.split('/').some((part) => !part || part === '.' || part === '..' || ntfsDotGit.test(part))
   )
-    throw badRequest('Invalid publication path')
+}
+
+/** A path the agent produced: its output, not the client's input. */
+export function assertPublicationPath(path: string): void {
+  if (!isPublicationPath(path)) throw turnOutputRejected('Invalid publication path')
 }
 
 export interface PublicationChange {
@@ -91,7 +99,7 @@ export function assertPublicationChange(
 ): void {
   assertPublicationPath(change.path)
   if (isForbiddenPath(change.path, protectedPaths))
-    throw forbidden('Publication changes a protected path')
+    throw publicationForbidden('Publication changes a protected path')
   const modes = new Set(['000000', '100644', '100755'])
   if (
     !modes.has(change.oldMode) ||
@@ -100,10 +108,10 @@ export function assertPublicationChange(
       change.newMode !== '000000' &&
       change.oldMode !== change.newMode)
   ) {
-    throw forbidden('Publication contains a link, submodule or permission change')
+    throw publicationForbidden('Publication contains a link, submodule or permission change')
   }
   if (!Number.isSafeInteger(change.sizeBytes) || change.sizeBytes < 0)
-    throw badRequest('Invalid publication file size')
+    throw turnOutputRejected('Invalid publication file size')
   if (change.sizeBytes > publicationLimits.fileBytes)
     throw publicationTooLarge('Publication file exceeds the size limit')
 }

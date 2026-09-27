@@ -4,19 +4,23 @@ import { isAbsolute, join, relative } from 'node:path'
 
 import {
   assertPublicationChange,
-  assertPublicationPath,
   badRequest,
   conflict,
   DomainError,
   forbidden,
   isDomainError,
+  isPublicationPath,
   notFound,
+  publicationForbidden,
   publicationLimits,
   publicationMetadataSchema,
   publicationShaSchema,
   publicationSourceSchema,
+  publicationSecret,
   publicationTooLarge,
   repositoryTooLarge,
+  repositoryUnsupported,
+  snapshotHasCredential,
   snapshotLimits,
   turnOutputRejected,
   type GitCredentials,
@@ -56,19 +60,68 @@ const CREDENTIAL_TTL_SECONDS = 120
 const BOT_NAME = 'Raditi Bot'
 const BOT_EMAIL = 'bot@raditi.ru'
 const GITLEAKS_CONFIG = '[extend]\nuseDefault = true\n'
+/** Gitleaks exits 1 on its own errors too: `--exit-code` changes only the code of a finding. */
+const GITLEAKS_FINDING_EXIT = 99
+/**
+ * Gitleaks skips a file whose first bytes match an application type (archive, PDF, program),
+ * some at offsets 128, 257 or 32769, so a newline alone would only shift them. Its detector
+ * tries image types first: behind this header it reads the content whatever it starts with.
+ * Every copy gets it: one invalid UTF-8 byte must not turn a text file into a skipped one.
+ */
+const SCAN_PREFIX = Buffer.from('GIF89a\n')
+export const scanCopy = (blob: Buffer): Buffer => Buffer.concat([SCAN_PREFIX, blob])
 const failed = () =>
   new DomainError('GIT_OPERATION_FAILED', 'Trusted repository operation failed', 502)
-type TooLarge = (message: string) => Error
+type Refusal = (message: string) => Error
+/** Who answers for a listed entry or blob that cannot be published. */
+interface Scope {
+  tooLarge: Refusal
+  /** A link, submodule or other entry that is not a regular file. */
+  entry: Refusal
+  /** A path that is not valid UTF-8 or fails isPublicationPath. */
+  path: Refusal
+  /** An object listed as a blob that is not one. */
+  blob: Refusal
+}
+/** The site's own repository: what the agent cannot work with is the site's, not the agent's. */
+const REPOSITORY: Scope = {
+  tooLarge: repositoryTooLarge,
+  entry: repositoryUnsupported,
+  path: repositoryUnsupported,
+  blob: () => failed(),
+}
+/** The candidate adds only the agent's changes to that checked tree. */
+const CANDIDATE: Scope = {
+  tooLarge: publicationTooLarge,
+  entry: publicationForbidden,
+  path: turnOutputRejected,
+  blob: turnOutputRejected,
+}
 /** At most one `ls-tree -z` or `ls-files --stage -z` row per file: mode, type, OID, path, NUL. */
 const listBytes = (files: number) => files * (64 + publicationLimits.pathBytes)
 /** The client's base tree plus at most the agent's changed files. */
 const CANDIDATE_FILES = publicationLimits.repositoryFiles + publicationLimits.files
-const text = (bytes: Uint8Array) => {
+const text = (bytes: Uint8Array, invalid: () => Error = failed) => {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
-    throw badRequest('Invalid repository output')
+    throw invalid()
   }
+}
+
+/** Consecutive groups of blobs, each within `limit` bytes unless a single blob is larger. */
+function batches(blobs: [string, number][], limit: number): [string, number][][] {
+  const groups: [string, number][][] = []
+  let bytes = 0
+  for (const blob of blobs) {
+    if (!groups.length || bytes + blob[1] > limit) {
+      groups.push([])
+      bytes = 0
+    }
+    groups.at(-1)!.push(blob)
+    bytes += blob[1]
+  }
+  return groups
 }
 
 /** Git data is used only in a fresh host-owned clone, never in the agent's .git directory. */
@@ -164,14 +217,31 @@ export class GitWorkspaceService implements TurnWorkspace {
   }
 
   async preparePublication(
-    input: PublicationMetadata & { patch: Uint8Array; untracked: Uint8Array },
+    input: PublicationMetadata & {
+      patch: Uint8Array
+      untracked: Uint8Array
+      credentials: readonly string[]
+    },
   ): Promise<TurnPublication> {
-    const { patch: rawPatch, untracked: rawUntracked, ...rawMetadata } = input
+    const {
+      patch: rawPatch,
+      untracked: rawUntracked,
+      credentials: rawCredentials,
+      ...rawMetadata
+    } = input
     const parsed = publicationMetadataSchema.safeParse(rawMetadata)
     if (!parsed.success) throw badRequest('Invalid publication metadata')
     const metadata = parsed.data
-    if (!(rawPatch instanceof Uint8Array) || !(rawUntracked instanceof Uint8Array))
+    if (
+      !(rawPatch instanceof Uint8Array) ||
+      !(rawUntracked instanceof Uint8Array) ||
+      !Array.isArray(rawCredentials) ||
+      rawCredentials.some((value) => typeof value !== 'string')
+    )
       throw badRequest('Invalid publication input')
+    const credentials = rawCredentials
+      .filter((value) => value.length > 0)
+      .map((value) => Buffer.from(value, 'utf8'))
     if (
       rawPatch.byteLength > publicationLimits.patchBytes ||
       rawUntracked.byteLength > snapshotLimits.archiveBytes
@@ -203,37 +273,47 @@ export class GitWorkspaceService implements TurnWorkspace {
       const original = await this.tree(workspace, metadata.expectedBaseSha)
       await this.git(workspace, ['read-tree', metadata.expectedBaseSha])
       if (patch.byteLength) {
-        const stats = await this.git(workspace, ['apply', '--numstat', '-z', '-'], patch)
+        const summary = await this.apply(workspace, ['--summary'], patch)
+        // Fail closed on extended mode headers; final index checks do not depend on this text.
+        // Before numstat: a file replaced by a link lists its path twice there.
+        const headers = text(summary.stdout, () => turnOutputRejected('Invalid patch summary'))
+        if (/\b(?:120000|160000)\b|mode change |^ (?:copy|rename) /m.test(headers))
+          throw publicationForbidden('Publication contains a link, submodule or permission change')
+        const stats = await this.apply(workspace, ['--numstat', '-z'], patch)
         // The agent's changes, not the site's size: patched and new files count together.
         const patched = this.checkNumstat(stats.stdout, metadata.protectedPaths)
         if (patched + files.length > publicationLimits.files)
           throw publicationTooLarge('Publication changes too many files')
-        const summary = await this.git(workspace, ['apply', '--summary', '-'], patch)
-        // Fail closed on extended mode headers; final index checks do not depend on this text.
-        if (/\b(?:120000|160000)\b|mode change |^ (?:copy|rename) /m.test(text(summary.stdout)))
-          throw forbidden('Publication contains a link, submodule or permission change')
         await this.checkPostimages(workspace, patch)
         // Atomic without --reject: on failure the index is unchanged and the clone is discarded.
-        await this.git(workspace, ['apply', '--cached', '--whitespace=nowarn', '-'], patch)
+        await this.apply(workspace, ['--cached', '--whitespace=nowarn'], patch)
       }
       const afterPatch = await this.index(workspace)
-      for (const file of files) {
+      for (const file of files)
         if (original.has(file.path) || afterPatch.has(file.path))
           throw turnOutputRejected('Untracked publication file collides with the repository')
-        const oid = this.sha(
-          (await this.git(workspace, ['hash-object', '-w', '--stdin', '--no-filters'], file.bytes))
-            .stdout,
-        )
+      const oids = files.length
+        ? await this.hashBlobs(
+            workspace,
+            files.map((file) => file.bytes),
+          )
+        : []
+      if (files.length)
         await this.git(
           workspace,
           ['update-index', '-z', '--index-info'],
-          Buffer.from(`${file.mode} ${oid}\t${file.path}\0`),
+          Buffer.from(files.map((file, i) => `${file.mode} ${oids[i]}\t${file.path}\0`).join('')),
         )
-      }
       const candidate = await this.index(workspace)
+      // update-index skips a path Git refuses (core.protectNTFS: `git~1`, `.git.`) and exits 0.
+      for (const [i, file] of files.entries()) {
+        const entry = candidate.get(file.path)
+        if (!entry || entry.oid !== oids[i] || entry.mode !== file.mode)
+          throw turnOutputRejected('Untracked publication file is missing from the candidate')
+      }
       // Bounded before any scan: the complete patch is longer than any per-path summary.
       const fullPatch = await this.candidatePatch(workspace, metadata.expectedBaseSha)
-      await this.validateIndex(workspace, original, candidate, metadata)
+      await this.validateIndex(workspace, original, candidate, metadata, credentials)
       const tree = this.sha((await this.git(workspace, ['write-tree'])).stdout)
       const message = `Raditi task ${metadata.taskId}, turn ${metadata.turn}\n\nRaditi-Task: ${metadata.taskId}\nRaditi-Turn: ${metadata.turn}\n`
       const date = `${Math.floor(Date.parse(metadata.createdAt) / 1000)} +0000`
@@ -525,6 +605,13 @@ export class GitWorkspaceService implements TurnWorkspace {
     return result
   }
 
+  /** Git refusing the agent's patch is its output's fault; a failed or timed-out run is ours. */
+  private async apply(workspace: Workspace, args: string[], patch: Buffer): Promise<ProcessResult> {
+    const result = await this.command(workspace, ['apply', ...args, '-'], patch)
+    if (result.code !== 0) throw turnOutputRejected('Invalid publication patch')
+    return result
+  }
+
   private sha(output: Uint8Array): string {
     const value = text(output).trim()
     if (!publicationShaSchema.safeParse(value).success) throw failed()
@@ -537,33 +624,28 @@ export class GitWorkspaceService implements TurnWorkspace {
       workspace,
       ['ls-tree', '-rz', '--full-tree', sha],
       publicationLimits.repositoryFiles,
-      repositoryTooLarge,
+      REPOSITORY,
     )
     const entries = this.entries(
       output,
       /^(100644|100755) blob ([a-f0-9]{40})\t([^\0]+)$/,
       publicationLimits.repositoryFiles,
-      repositoryTooLarge,
+      REPOSITORY,
     )
     await this.blobSizes(
       workspace,
       [...entries.values()].map((entry) => entry.oid),
-      repositoryTooLarge,
+      REPOSITORY,
     )
     return entries
   }
 
   private async index(workspace: Workspace): Promise<Map<string, Entry>> {
     return this.entries(
-      await this.list(
-        workspace,
-        ['ls-files', '--stage', '-z'],
-        CANDIDATE_FILES,
-        publicationTooLarge,
-      ),
+      await this.list(workspace, ['ls-files', '--stage', '-z'], CANDIDATE_FILES, CANDIDATE),
       /^(100644|100755) ([a-f0-9]{40}) 0\t([^\0]+)$/,
       CANDIDATE_FILES,
-      publicationTooLarge,
+      CANDIDATE,
     )
   }
 
@@ -572,13 +654,13 @@ export class GitWorkspaceService implements TurnWorkspace {
     workspace: Workspace,
     args: string[],
     files: number,
-    tooLarge: TooLarge,
+    scope: Scope,
   ): Promise<Uint8Array> {
     try {
       return (await this.git(workspace, args, undefined, listBytes(files))).stdout
     } catch (error) {
       if (isDomainError(error) && error.code === PROCESS_OUTPUT_LIMIT)
-        throw tooLarge('File list exceeds its limit')
+        throw scope.tooLarge('File list exceeds its limit')
       throw error
     }
   }
@@ -587,21 +669,20 @@ export class GitWorkspaceService implements TurnWorkspace {
     bytes: Uint8Array,
     format: RegExp,
     limit: number,
-    tooLarge: TooLarge,
+    scope: Scope,
   ): Map<string, Entry> {
-    const raw = text(bytes)
+    const raw = text(bytes, () => scope.path('File list has a path that is not UTF-8'))
     if (raw && !raw.endsWith('\0')) throw failed()
     const entries = new Map<string, Entry>()
     for (const row of raw ? raw.slice(0, -1).split('\0') : []) {
       const match = format.exec(row)
-      if (!match)
-        throw forbidden('Repository contains a link, submodule or unsupported index entry')
+      if (!match) throw scope.entry('Tree contains a link, submodule or unsupported index entry')
       const mode = match[1]!
       const oid = match[2]!
       const path = match[3]!
-      assertPublicationPath(path)
-      if (entries.has(path)) throw badRequest('Repository lists a path twice')
-      if (entries.size >= limit) throw tooLarge('File count exceeds its limit')
+      if (!isPublicationPath(path)) throw scope.path('Tree contains an unsupported path')
+      if (entries.has(path)) throw failed()
+      if (entries.size >= limit) throw scope.tooLarge('File count exceeds its limit')
       entries.set(path, { path, mode, oid })
     }
     return entries
@@ -611,7 +692,7 @@ export class GitWorkspaceService implements TurnWorkspace {
   private async blobSizes(
     workspace: Workspace,
     oids: string[],
-    tooLarge: TooLarge,
+    scope: Scope,
     allowMissing = false,
   ): Promise<(number | undefined)[]> {
     if (!oids.length) return []
@@ -629,23 +710,24 @@ export class GitWorkspaceService implements TurnWorkspace {
       const match = /^([a-f0-9]{40}) blob ([0-9]+)$/.exec(rows[index]!)
       const size = Number(match?.[2])
       if (!match || match[1] !== oid || !Number.isSafeInteger(size))
-        throw badRequest(`${subject} is not a regular blob`)
-      if (size > publicationLimits.fileBytes) throw tooLarge(`${subject} exceeds its limit`)
+        throw scope.blob(`${subject} is not a regular blob`)
+      if (size > publicationLimits.fileBytes) throw scope.tooLarge(`${subject} exceeds its limit`)
       total += size
-      if (total > publicationLimits.treeBytes) throw tooLarge(`${subject}s exceed the tree limit`)
+      if (total > publicationLimits.treeBytes)
+        throw scope.tooLarge(`${subject}s exceed the tree limit`)
       return size
     })
   }
 
   /** Returns the number of paths the patch changes. */
   private checkNumstat(output: Uint8Array, protectedPaths: readonly string[]): number {
-    const raw = text(output)
-    if (raw && !raw.endsWith('\0')) throw badRequest('Invalid patch statistics')
+    const raw = text(output, () => turnOutputRejected('Invalid patch statistics'))
+    if (raw && !raw.endsWith('\0')) throw turnOutputRejected('Invalid patch statistics')
     const paths = new Set<string>()
     for (const row of raw ? raw.slice(0, -1).split('\0') : []) {
       const match = /^(?:[0-9]+|-)\t(?:[0-9]+|-)\t(.+)$/.exec(row)
-      if (!match) throw badRequest('Unsupported or ambiguous patch paths')
-      if (paths.has(match[1]!)) throw badRequest('Publication has repeated paths')
+      if (!match) throw turnOutputRejected('Unsupported or ambiguous patch paths')
+      if (paths.has(match[1]!)) throw turnOutputRejected('Publication has repeated paths')
       if (paths.size >= publicationLimits.files)
         throw publicationTooLarge('Publication changes too many files')
       paths.add(match[1]!)
@@ -665,13 +747,13 @@ export class GitWorkspaceService implements TurnWorkspace {
     for (const line of Buffer.from(patch).toString('latin1').split('\n')) {
       if (!line.startsWith('index ')) continue
       const match = /^index [a-f0-9]{4,40}\.\.([a-f0-9]{4,40})(?: [0-7]{6})?$/.exec(line)
-      if (!match) throw badRequest('Invalid publication object header')
+      if (!match) throw turnOutputRejected('Invalid publication object header')
       if (match[1]!.length === 40 && !/^0+$/.test(match[1]!)) oids.push(match[1]!)
     }
     if (!oids.length) return
     if (oids.length > publicationLimits.files)
       throw publicationTooLarge('Publication changes too many files')
-    await this.blobSizes(workspace, oids, publicationTooLarge, true)
+    await this.blobSizes(workspace, oids, CANDIDATE, true)
   }
 
   private async validateIndex(
@@ -679,16 +761,18 @@ export class GitWorkspaceService implements TurnWorkspace {
     base: Map<string, Entry>,
     candidate: Map<string, Entry>,
     metadata: PublicationMetadata,
+    credentials: readonly Buffer[],
   ): Promise<void> {
     const entries = [...candidate.values()]
     const blobs = await this.blobSizes(
       workspace,
       entries.map((entry) => entry.oid),
-      publicationTooLarge,
+      CANDIDATE,
     )
-    const sizes = new Map(entries.map((entry, index) => [entry.path, blobs[index]]))
-    const paths = new Set([...base.keys(), ...candidate.keys()])
-    for (const path of paths) {
+    const sizes = new Map(entries.map((entry, index) => [entry.path, blobs[index] ?? 0]))
+    // Each distinct content once, however many changed paths share it.
+    const changed = new Map<string, number>()
+    for (const path of new Set([...base.keys(), ...candidate.keys()])) {
       const before = base.get(path)
       const after = candidate.get(path)
       if (before?.oid === after?.oid && before?.mode === after?.mode) continue
@@ -701,39 +785,110 @@ export class GitWorkspaceService implements TurnWorkspace {
         },
         metadata.protectedPaths,
       )
-      if (after) {
-        const blob = (
+      if (after) changed.set(after.oid, sizes.get(path) ?? 0)
+    }
+    await this.scanBlobs(workspace, changed, credentials)
+  }
+
+  /**
+   * Writes the new files as blobs with one hash-object. The copies are numbered by the host:
+   * an agent's path never names a file on the host.
+   */
+  private async hashBlobs(workspace: Workspace, blobs: readonly Uint8Array[]): Promise<string[]> {
+    const directory = join(workspace.root, 'new')
+    await mkdir(directory, { mode: 0o700 })
+    try {
+      const paths = blobs.map((_, index) => join(directory, String(index)))
+      for (const [index, blob] of blobs.entries())
+        await writeFile(paths[index]!, blob, { mode: 0o600, flag: 'wx' })
+      const output = await this.git(
+        workspace,
+        ['hash-object', '-w', '--no-filters', '--stdin-paths'],
+        Buffer.from(paths.map((path) => `${path}\n`).join('')),
+        blobs.length * 41,
+      )
+      const oids = text(output.stdout).split('\n')
+      if (oids.pop() !== '' || oids.length !== blobs.length) throw failed()
+      for (const oid of oids) if (!publicationShaSchema.safeParse(oid).success) throw failed()
+      return oids
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  }
+
+  /**
+   * Every changed blob in full: a few `cat-file --batch` reads of at most one blob limit each,
+   * the turn's exact credentials in memory, then one Gitleaks run over host-numbered private
+   * copies. Numbered names keep agent paths out of the scan (a `.gitleaksignore` of the scanned
+   * directory, path allowlists), as with stdin; the config is the host's, `gitleaks:allow` is off.
+   */
+  private async scanBlobs(
+    workspace: Workspace,
+    blobs: Map<string, number>,
+    credentials: readonly Buffer[],
+  ): Promise<void> {
+    if (!blobs.size) return
+    const directory = join(workspace.root, 'scan')
+    await mkdir(directory, { mode: 0o700 })
+    try {
+      let written = 0
+      for (const batch of batches([...blobs], publicationLimits.fileBytes)) {
+        const headers = batch.map(([oid, size]) => `${oid} blob ${size}\n`)
+        const expected = batch.reduce(
+          (total, [, size], index) => total + headers[index]!.length + size + 1,
+          0,
+        )
+        const output = (
           await this.git(
             workspace,
-            ['cat-file', 'blob', after.oid],
-            undefined,
-            publicationLimits.fileBytes,
+            ['cat-file', '--batch'],
+            Buffer.from(batch.map(([oid]) => `${oid}\n`).join('')),
+            expected,
           )
         ).stdout
-        const scan = await runProcess(
-          this.options.gitleaksBinary ?? 'gitleaks',
-          [
-            'stdin',
-            '--config',
-            join(workspace.root, 'gitleaks.toml'),
-            '--gitleaks-ignore-path',
-            join(workspace.root, 'empty'),
-            '--ignore-gitleaks-allow',
-            '--redact=100',
-            '--no-banner',
-            '--no-color',
-            '--log-level=error',
-          ],
-          {
-            cwd: workspace.root,
-            env: this.environment(workspace),
-            input: blob,
-            maxBytes: 64 * 1024,
-          },
-        )
-        if (scan.code === 1) throw forbidden('Publication contains a possible secret')
-        if (scan.code !== 0) throw failed()
+        if (output.byteLength !== expected) throw failed()
+        let at = 0
+        for (const [index, [, size]] of batch.entries()) {
+          const header = headers[index]!
+          if (output.toString('latin1', at, at + header.length) !== header) throw failed()
+          at += header.length
+          const blob = output.subarray(at, at + size)
+          at += size
+          if (output[at++] !== 0x0a) throw failed()
+          // Binary changes are compressed in the captured patch: only here is their content whole.
+          if (credentials.some((value) => blob.includes(value))) throw snapshotHasCredential()
+          await writeFile(join(directory, String(written++)), scanCopy(blob), {
+            mode: 0o600,
+            flag: 'wx',
+          })
+        }
       }
+      const scan = await runProcess(
+        this.options.gitleaksBinary ?? 'gitleaks',
+        [
+          'dir',
+          '.',
+          '--config',
+          join(workspace.root, 'gitleaks.toml'),
+          '--gitleaks-ignore-path',
+          join(workspace.root, 'empty'),
+          '--ignore-gitleaks-allow',
+          '--redact=100',
+          '--no-banner',
+          '--no-color',
+          '--log-level=error',
+          `--exit-code=${GITLEAKS_FINDING_EXIT}`,
+        ],
+        {
+          cwd: directory,
+          env: this.environment(workspace),
+          maxBytes: 64 * 1024,
+        },
+      )
+      if (scan.code === GITLEAKS_FINDING_EXIT) throw publicationSecret()
+      if (scan.code !== 0) throw failed()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
     }
   }
 

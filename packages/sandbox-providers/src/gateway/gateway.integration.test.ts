@@ -22,13 +22,13 @@ const upstreamHost = process.env.RADITI_DOCKER_TEST_UPSTREAM_HOST || 'host.docke
 // two attempts of 6 s and the gateway itself is a positive control (P2 gate 1 audit).
 const PROBE = `const net=require('net');const probe=(host,port)=>new Promise(done=>{const s=net.connect({host,port,timeout:6000});s.on('connect',()=>{s.destroy();done('connect')});s.on('timeout',()=>{s.destroy();done('timeout')});s.on('error',e=>done(e.code||'error'))});(async()=>{const out={};await Promise.all(JSON.parse(process.argv[1]).map(async([host,port])=>{let r;for(let i=0;i<2&&r!=='connect';i++)r=await probe(host,port);out[host+':'+port]=r}));process.stdout.write(JSON.stringify(out))})()`
 
-/** Runs iptables in the host netns (runc, NET_ADMIN only) and returns its exit code. */
-async function hostRule(client: Docker, bridge: string): Promise<number> {
+/** Runs iptables on the attempt's INPUT rule in the host netns (runc, NET_ADMIN only). */
+async function hostRule(client: Docker, bridge: string, op = '-C'): Promise<number> {
   const container = await client.createContainer({
     Image: guardImage!,
     User: '0:0',
     Entrypoint: ['/usr/sbin/iptables'],
-    Cmd: ['--wait', '5', '-C', 'INPUT', '-i', bridge, '-j', 'DROP'],
+    Cmd: ['--wait', '5', op, 'INPUT', '-i', bridge, '-j', 'DROP'],
     HostConfig: {
       Runtime: 'runc',
       NetworkMode: 'host',
@@ -109,7 +109,15 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
       expect(network.IPAM?.Config?.[0]?.Gateway).toBeFalsy()
       const subnet = network.IPAM!.Config![0]!.Subnet!.split('/')[0]!.split('.').slice(0, 3)
       const at = (last: number) => [...subnet, String(last)].join('.')
-      if (runtime === 'runsc') expect(await hostRule(client, bridgeName(resourceId))).toBe(0)
+      if (runtime === 'runsc') {
+        const bridge = bridgeName(resourceId)
+        expect(await hostRule(client, bridge)).toBe(0)
+        // A firewalld reload drops the rule; adopting the sandbox again puts it back.
+        expect(await hostRule(client, bridge, '-D')).toBe(0)
+        expect(await hostRule(client, bridge)).not.toBe(0)
+        expect((await provider.get(sandbox.id))?.id).toBe(sandbox.id)
+        expect(await hostRule(client, bridge)).toBe(0)
+      }
       expect((await provider.get(sandbox.id))?.id).toBe(sandbox.id)
 
       for (const path of ['/v1/responses', '/v1/chat/completions', '/mcp']) {

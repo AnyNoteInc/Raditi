@@ -7,6 +7,7 @@ import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 
 import {
   DomainError,
+  isSnapshotCredential,
   type GitProvider,
   type PublicationMetadata,
   type Sandbox,
@@ -18,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyUntrackedArchive } from './archive.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
-import { GitWorkspaceService } from './git-workspace.service.ts'
+import { GitWorkspaceService, scanCopy } from './git-workspace.service.ts'
 import { PROCESS_OUTPUT_LIMIT, runProcess } from './process.ts'
 
 // Real processes everywhere; a test may still answer one command itself.
@@ -97,11 +98,22 @@ async function fixture() {
   const baseSha = (await git(work, 'rev-parse', 'HEAD')).toString().trim()
   await git(work, 'push', remote, 'HEAD:refs/heads/main')
   // The test executable models success, leak detection, and scanner failure; no real secret.
+  // It scans a directory like `gitleaks dir` and logs its argv and every file it was given.
+  // Like Gitleaks, it reports a finding with `--exit-code` and its own errors with 1.
   const scanner = join(root, 'scanner.mjs')
   const scannerLog = join(root, 'scanner.log')
   await writeFile(
     scanner,
-    `#!${process.execPath}\nimport { appendFileSync } from 'node:fs';\nlet data='';for await(const chunk of process.stdin)data+=chunk;\nappendFileSync(${JSON.stringify(scannerLog)},JSON.stringify(process.argv.slice(2))+'\\n');\nprocess.exit(data.includes('synthetic-secret-marker')?1:data.includes('scanner-error-marker')?2:0);\n`,
+    `#!${process.execPath}
+import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+const args = process.argv.slice(2)
+const files = Object.fromEntries(readdirSync(args[1]).map((name) => [name, readFileSync(join(args[1], name), 'latin1')]))
+appendFileSync(${JSON.stringify(scannerLog)}, JSON.stringify({ args, cwd: process.cwd(), files }) + '\\n')
+const data = Object.values(files).join('\\n')
+const finding = Number(args.find((arg) => arg.startsWith('--exit-code='))?.slice(12) ?? 1)
+process.exit(data.includes('synthetic-secret-marker') ? finding : data.includes('gitleaks-error-marker') ? 1 : data.includes('scanner-error-marker') ? 2 : 0)
+`,
     { mode: 0o700 },
   )
   const repo = { provider: 'gitea' as const, owner: 'fixture', name: 'site' }
@@ -131,13 +143,22 @@ async function fixture() {
     protectedPaths: ['wp-config.php'],
   }
   const patch = () => git(work, 'diff', '--binary', '--full-index', 'HEAD', '--')
+  const scans = async () =>
+    (await readFile(scannerLog, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(
+        (line) =>
+          JSON.parse(line) as { args: string[]; cwd: string; files: Record<string, string> },
+      )
   const prepare = async (
     diff = Buffer.alloc(0),
     untracked: Uint8Array = emptyUntrackedArchive(),
-    overrides: Partial<PublicationMetadata> = {},
+    overrides: Partial<PublicationMetadata> & { credentials?: string[] } = {},
   ) => {
     const candidate = await service.preparePublication({
       ...metadata,
+      credentials: [],
       ...overrides,
       patch: diff,
       untracked,
@@ -158,6 +179,7 @@ async function fixture() {
     baseSha,
     patch,
     prepare,
+    scans,
   }
 }
 
@@ -203,18 +225,90 @@ describe('trusted Git publication', () => {
     await retry.publish(fence)
     expect(fence).toHaveBeenCalledTimes(2)
     expect(f.provider.issueCredentials).not.toHaveBeenCalled()
-    const scanArgs = (await readFile(f.scannerLog, 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line) as string[])
-    expect(
-      scanArgs.every(
-        (args) =>
-          args.includes('--ignore-gitleaks-allow') &&
-          args.includes('--redact=100') &&
-          args[args.indexOf('--config') + 1]?.startsWith('/'),
-      ),
-    ).toBe(true)
+    // One scanner run per candidate, never one per file.
+    const scans = await f.scans()
+    expect(scans).toHaveLength(2)
+    for (const { args } of scans) {
+      expect(args.slice(0, 2)).toEqual(['dir', '.'])
+      expect(args).toContain('--ignore-gitleaks-allow')
+      expect(args).toContain('--redact=100')
+      expect(args).toContain('--exit-code=99')
+      expect(args[args.indexOf('--config') + 1]).toMatch(/^\//)
+    }
+  })
+
+  it('scans every changed blob in full once, under host-numbered names, in one run', async () => {
+    const f = await fixture()
+    await writeFile(join(f.work, 'index.php'), 'updated\n')
+    const binary = Buffer.from([0, 8, 9, 255, 0, 7, 0])
+    await writeFile(join(f.work, 'binary.dat'), binary)
+    const candidate = await f.prepare(
+      await f.patch(),
+      await archive([
+        { name: '.gitleaksignore', content: 'ignore everything' },
+        { name: 'same-a.txt', content: 'shared' },
+        { name: 'same-b.txt', content: 'shared' },
+      ]),
+    )
+    const [scan, ...more] = await f.scans()
+    expect(more).toEqual([])
+    expect(scan!.args.slice(0, 2)).toEqual(['dir', '.'])
+    // Agent paths never name a scanned file: a `.gitleaksignore` of its own is only content.
+    expect(Object.keys(scan!.files).sort()).toEqual(['0', '1', '2', '3'])
+    // Every copy behind an image header, so Gitleaks cannot take it for an archive.
+    expect(Object.values(scan!.files).sort()).toEqual(
+      [
+        'GIF89a\nignore everything',
+        'GIF89a\nshared',
+        'GIF89a\nupdated\n',
+        `GIF89a\n${binary.toString('latin1')}`,
+      ].sort(),
+    )
+    // The private copies are gone before the candidate is handed out.
+    await expect(readFile(join(scan!.cwd, '0'))).rejects.toThrow()
+    await candidate.publish(async () => {})
+    expect((await git(f.remote, 'show', `${candidate.headSha}:same-b.txt`)).toString()).toBe(
+      'shared',
+    )
+  })
+
+  it('runs as many processes for 300 changed files as for 2: none per file', async () => {
+    const processes = async (count: number) => {
+      const f = await fixture()
+      await writeFile(join(f.work, 'index.php'), 'updated\n')
+      const patch = await f.patch()
+      const files = Array.from({ length: count - 1 }, (_, i) => ({
+        name: `new/${i}.txt`,
+        content: `file ${i}\n`,
+      }))
+      vi.mocked(runProcess).mockClear()
+      await f.prepare(patch, await archive(files))
+      return vi.mocked(runProcess).mock.calls.length
+    }
+    expect(await processes(300)).toBe(await processes(2))
+  })
+
+  it('refuses a turn credential in a binary change of a tracked file before scanning', async () => {
+    const f = await fixture()
+    const credential = 'synthetic-turn-credential-0123456789'
+    // Compressed in the binary patch: the captured patch text never shows the value itself.
+    await writeFile(
+      join(f.work, 'binary.dat'),
+      Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(credential.repeat(64))]),
+    )
+    const patch = await f.patch()
+    expect(patch.toString()).toContain('GIT binary patch')
+    expect(patch.includes(credential)).toBe(false)
+    const error: unknown = await f.prepare(patch, undefined, { credentials: [credential] }).then(
+      () => null,
+      (rejection: unknown) => rejection,
+    )
+    expect(isSnapshotCredential(error)).toBe(true)
+    expect(JSON.stringify(error)).not.toContain(credential)
+    expect(String(error)).not.toContain(credential)
+    await expect(readFile(f.scannerLog, 'utf8')).rejects.toThrow()
+    // Recovery replays a checked checkpoint without the turn's credentials.
+    await expect(f.prepare(patch)).resolves.toBeDefined()
   })
 
   it('accepts a real compact Git binary delta and reproduces it on retry', async () => {
@@ -379,6 +473,7 @@ describe('trusted Git publication', () => {
         createdAt: f.metadata.createdAt,
         patch: Buffer.alloc(0),
         untracked: emptyUntrackedArchive(),
+        credentials: [],
       }),
     ).rejects.toThrow('Invalid publication metadata')
     expect(f.provider.getRepository).not.toHaveBeenCalled()
@@ -388,7 +483,10 @@ describe('trusted Git publication', () => {
     const f = await fixture()
     await writeFile(join(f.work, 'index.php'), 'updated\n')
     const patch = await f.patch()
-    await expect(f.prepare(Buffer.concat([patch, patch]))).rejects.toThrow('repeated paths')
+    await expect(f.prepare(Buffer.concat([patch, patch]))).rejects.toMatchObject({
+      code: 'TURN_OUTPUT_REJECTED',
+      message: expect.stringContaining('repeated paths'),
+    })
   })
 
   it('checks fencing immediately before push and never changes a branch after lost ownership', async () => {
@@ -488,36 +586,94 @@ describe('trusted Git publication', () => {
   })
 
   it.each([
-    '.github/workflows/pwn.yml',
-    'wp-config.php',
-    '.GIT/config',
-    'nested/../escape',
-    '/absolute',
-    '-option',
-  ])('rejects untracked dangerous path %s', async (name) => {
+    ['.github/workflows/pwn.yml', 'PUBLICATION_FORBIDDEN'],
+    ['wp-config.php', 'PUBLICATION_FORBIDDEN'],
+    ['.GIT/config', 'TURN_OUTPUT_REJECTED'],
+    ['git~1/config', 'TURN_OUTPUT_REJECTED'],
+    ['nested/.git. /config', 'TURN_OUTPUT_REJECTED'],
+    ['nested/../escape', 'TURN_OUTPUT_REJECTED'],
+    ['/absolute', 'TURN_OUTPUT_REJECTED'],
+    ['-option', 'TURN_OUTPUT_REJECTED'],
+  ])('rejects untracked dangerous path %s as the agent output (%s)', async (name, code) => {
     const f = await fixture()
     await expect(
       f.prepare(Buffer.alloc(0), await archive([{ name, content: 'bad' }])),
-    ).rejects.toThrow()
+    ).rejects.toMatchObject({ code, httpStatus: 502 })
+  })
+
+  it('rejects a patched path starting with a dash as the agent output', async () => {
+    const f = await fixture()
+    await writeFile(join(f.work, '-option'), 'bad\n')
+    await git(f.work, 'add', '--', '-option')
+    await expect(f.prepare(await f.patch())).rejects.toMatchObject({
+      code: 'TURN_OUTPUT_REJECTED',
+      httpStatus: 502,
+    })
   })
 
   it('rejects edits and renames of protected existing paths', async () => {
     const f = await fixture()
     await writeFile(join(f.work, 'wp-config.php'), 'changed\n')
-    await expect(f.prepare(await f.patch())).rejects.toThrow('protected path')
+    await expect(f.prepare(await f.patch())).rejects.toMatchObject({
+      code: 'PUBLICATION_FORBIDDEN',
+      message: expect.stringContaining('protected path'),
+    })
     await git(f.work, 'reset', '--hard', 'HEAD')
     await git(f.work, 'mv', 'wp-config.php', 'renamed.php')
-    await expect(f.prepare(await f.patch())).rejects.toThrow()
+    await expect(f.prepare(await f.patch())).rejects.toMatchObject({
+      code: 'PUBLICATION_FORBIDDEN',
+    })
   })
 
   it('rejects symlink and permission change patch headers', async () => {
     const f = await fixture()
     await rm(join(f.work, 'index.php'))
     await symlink('wp-config.php', join(f.work, 'index.php'))
-    await expect(f.prepare(await f.patch())).rejects.toThrow()
+    await expect(f.prepare(await f.patch())).rejects.toMatchObject({
+      code: 'PUBLICATION_FORBIDDEN',
+    })
     await git(f.work, 'reset', '--hard', 'HEAD')
     await chmod(join(f.work, 'index.php'), 0o755)
-    await expect(f.prepare(await f.patch())).rejects.toThrow('permission change')
+    await expect(f.prepare(await f.patch())).rejects.toMatchObject({
+      code: 'PUBLICATION_FORBIDDEN',
+      message: expect.stringContaining('permission change'),
+    })
+  })
+
+  it.each([
+    ['an object header', (old: string) => `index ${old}..zz 100644`],
+    [
+      'a postimage that is not a blob',
+      (old: string, tree: string) => `index ${old}..${tree} 100644`,
+    ],
+  ])('rejects %s it cannot use as the agent output', async (_, header) => {
+    const f = await fixture()
+    const old = (await git(f.work, 'rev-parse', 'HEAD:binary.dat')).toString().trim()
+    const tree = (await git(f.work, 'rev-parse', 'HEAD^{tree}')).toString().trim()
+    const patch = Buffer.from(
+      `diff --git a/binary.dat b/binary.dat\n${header(old, tree)}\nBinary files a/binary.dat and b/binary.dat differ\n`,
+    )
+    await expect(f.prepare(patch)).rejects.toMatchObject({
+      code: 'TURN_OUTPUT_REJECTED',
+      httpStatus: 502,
+    })
+  })
+
+  it('reports a link in the site repository itself as unsupported, not as the agent fault', async () => {
+    const f = await fixture()
+    await symlink('index.php', join(f.work, 'link.php'))
+    await git(f.work, 'add', 'link.php')
+    await git(f.work, 'commit', '-m', 'site link')
+    await git(f.work, 'push', f.remote, 'HEAD:main')
+    const base = (await git(f.work, 'rev-parse', 'HEAD')).toString().trim()
+    const { taskId: _task, turn: _turn, createdAt: _date, ...source } = f.metadata
+    const unsupported = { code: 'REPOSITORY_UNSUPPORTED', httpStatus: 422 }
+    await expect(
+      f.service.prepareWorkspace({} as Sandbox, { ...source, expectedBaseSha: base }),
+    ).rejects.toMatchObject(unsupported)
+    await expect(
+      f.prepare(Buffer.alloc(0), undefined, { expectedBaseSha: base }),
+    ).rejects.toMatchObject(unsupported)
   })
 
   it('rejects symlink archives and collisions rather than replacing a tracked file', async () => {
@@ -527,7 +683,7 @@ describe('trusted Git publication', () => {
         Buffer.alloc(0),
         await archive([{ name: 'link', type: 'symlink', linkname: '/etc/passwd' }]),
       ),
-    ).rejects.toThrow()
+    ).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED', httpStatus: 502 })
     // The agent's output, not the client's input.
     await expect(
       f.prepare(Buffer.alloc(0), await archive([{ name: 'index.php', content: 'replace' }])),
@@ -538,16 +694,18 @@ describe('trusted Git publication', () => {
     })
   })
 
-  it.each(['synthetic-secret-marker', 'scanner-error-marker'])(
-    'fails closed when fixed scanner rejects a full blob: %s',
-    async (content) => {
-      const f = await fixture()
-      await expect(
-        f.prepare(Buffer.alloc(0), await archive([{ name: 'payload.bin', content }])),
-      ).rejects.toThrow()
-      expect((await git(f.remote, 'show-ref', '--heads')).toString()).not.toContain('agent/task1')
-    },
-  )
+  it.each([
+    ['synthetic-secret-marker', 'PUBLICATION_SECRET'],
+    // Gitleaks exits 1 on a partial scan or a broken config, not only on a finding.
+    ['gitleaks-error-marker', 'GIT_OPERATION_FAILED'],
+    ['scanner-error-marker', 'GIT_OPERATION_FAILED'],
+  ])('fails closed when fixed scanner rejects a full blob: %s', async (content, code) => {
+    const f = await fixture()
+    await expect(
+      f.prepare(Buffer.alloc(0), await archive([{ name: 'payload.bin', content }])),
+    ).rejects.toMatchObject({ code, httpStatus: 502 })
+    expect((await git(f.remote, 'show-ref', '--heads')).toString()).not.toContain('agent/task1')
+  })
 
   it('fails closed when scanner is missing and does not expose process diagnostics', async () => {
     const f = await fixture()
@@ -565,7 +723,76 @@ describe('trusted Git publication', () => {
     await expect(
       f.prepare(Buffer.alloc(0), undefined, { createdAt: 'not a date' }),
     ).rejects.toThrow('metadata')
-    await expect(f.prepare(Buffer.from('this is not a patch'))).rejects.toThrow()
+    await expect(f.prepare(Buffer.from('this is not a patch'))).rejects.toMatchObject({
+      code: 'TURN_OUTPUT_REJECTED',
+      httpStatus: 502,
+    })
+  })
+
+  it.each([
+    [
+      'a corrupt patch',
+      'diff --git a/index.php b/index.php\n--- a/index.php\n+++ b/index.php\n@@ -1 +1 @@\nnot a hunk line\n',
+    ],
+    [
+      'a patch that does not apply',
+      'diff --git a/index.php b/index.php\n--- a/index.php\n+++ b/index.php\n@@ -1 +1 @@\n-other\n+updated\n',
+    ],
+  ])('reports %s refused by Git as the agent output', async (_, patch) => {
+    const f = await fixture()
+    await expect(f.prepare(Buffer.from(patch))).rejects.toMatchObject({
+      code: 'TURN_OUTPUT_REJECTED',
+      httpStatus: 502,
+      message: 'Invalid publication patch',
+    })
+  })
+
+  it.each(['--summary', '--numstat', '--cached'])(
+    'maps git apply %s exiting non-zero to the agent output, a failed run to ours',
+    async (flag) => {
+      const f = await fixture()
+      await writeFile(join(f.work, 'index.php'), 'updated\n')
+      const patch = await f.patch()
+      let failure: 'exit' | 'process' = 'exit'
+      vi.mocked(runProcess).mockImplementation(async (binary, argv, options) => {
+        if (!(argv.includes('apply') && argv.includes(flag)))
+          return realRunProcess(binary, argv, options)
+        if (failure === 'exit') return { code: 128, stdout: Buffer.alloc(0) }
+        throw new DomainError('GIT_OPERATION_FAILED', 'Trusted repository command failed', 502)
+      })
+      await expect(f.prepare(patch)).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
+      failure = 'process'
+      await expect(f.prepare(patch)).rejects.toMatchObject({ code: 'GIT_OPERATION_FAILED' })
+    },
+  )
+
+  it('rejects a new file Git leaves out of the index while reporting success', async () => {
+    const f = await fixture()
+    // As with `git~1/x` under core.protectNTFS: «Ignoring path» for one entry, exit code 0.
+    vi.mocked(runProcess).mockImplementation(async (binary, argv, options) => {
+      if (!argv.includes('update-index')) return realRunProcess(binary, argv, options)
+      const rows = Buffer.from(options.input!).toString().split('\0')
+      const kept = rows.filter((row) => !row.endsWith('\tdropped.txt')).join('\0')
+      return realRunProcess(binary, argv, { ...options, input: Buffer.from(kept) })
+    })
+    const files = [
+      { name: 'kept.txt', content: 'kept' },
+      { name: 'dropped.txt', content: 'dropped' },
+    ]
+    await expect(f.prepare(Buffer.alloc(0), await archive(files))).rejects.toMatchObject({
+      code: 'TURN_OUTPUT_REJECTED',
+      message: expect.stringContaining('missing from the candidate'),
+    })
+    await expect(readFile(f.scannerLog, 'utf8')).rejects.toThrow()
+  })
+
+  it('requires the turn credentials explicitly, even when there are none', async () => {
+    const f = await fixture()
+    const input = { ...f.metadata, patch: Buffer.alloc(0), untracked: emptyUntrackedArchive() }
+    // @ts-expect-error: like protectedPaths, the turn credentials cannot be left out.
+    const missing = f.service.preparePublication(input)
+    await expect(missing).rejects.toThrow('Invalid publication input')
+    expect(f.provider.getRepository).not.toHaveBeenCalled()
   })
 
   it('copies input bytes before asynchronous work', async () => {
@@ -717,6 +944,26 @@ describe('production boundaries', () => {
   })
 })
 
+describe('scan copies', () => {
+  it('puts content that starts with an application signature behind an image header', () => {
+    // Gitleaks skips a file that looks like a PDF, archive or program; verify-publication.mjs
+    // proves the header with the real binary.
+    for (const text of [
+      Buffer.from('%PDF-1.7\nTOKEN=synthetic-secret-marker\n'),
+      Buffer.from('TOKEN=synthetic-secret-marker\n'.padEnd(256, 'x') + 'ustar\n'),
+    ]) {
+      const copy = scanCopy(text)
+      expect(copy.subarray(0, 7).toString('latin1')).toBe('GIF89a\n')
+      expect(copy.subarray(7)).toEqual(text)
+    }
+  })
+
+  it('puts binary content behind the same header: one invalid byte must not hide text', () => {
+    const binary = Buffer.from('%PDF-1.7\nTOKEN=synthetic-secret-marker\n\xff', 'latin1')
+    expect(scanCopy(binary)).toEqual(Buffer.concat([Buffer.from('GIF89a\n'), binary]))
+  })
+})
+
 describe('binary patch allocation limits', () => {
   it('rejects an inflated-size allocation before invoking native Git as too large', () => {
     expect(() =>
@@ -725,12 +972,12 @@ describe('binary patch allocation limits', () => {
       ),
     ).toThrow(expect.objectContaining({ code: 'PUBLICATION_TOO_LARGE', httpStatus: 413 }))
   })
-  it('rejects malformed base85 and empty binary blocks as invalid input', () => {
+  it('rejects malformed base85 and empty binary blocks as rejected agent output', () => {
     expect(() =>
       assertBinaryPatchLimits(Buffer.from('GIT binary patch\nliteral 1\nA:::::\n\n')),
-    ).toThrow(expect.objectContaining({ code: 'BAD_REQUEST' }))
+    ).toThrow(expect.objectContaining({ code: 'TURN_OUTPUT_REJECTED', httpStatus: 502 }))
     expect(() => assertBinaryPatchLimits(Buffer.from('GIT binary patch\n'))).toThrow(
-      expect.objectContaining({ code: 'BAD_REQUEST' }),
+      expect.objectContaining({ code: 'TURN_OUTPUT_REJECTED', httpStatus: 502 }),
     )
   })
 })

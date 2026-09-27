@@ -2,12 +2,15 @@ import { Buffer } from 'node:buffer'
 
 import {
   badRequest,
+  isSnapshotCredential,
+  isTooLarge,
   publicationTooLarge,
   SANDBOX_WORKDIR,
   sandboxCommandFailed,
   sessionStateSchema,
   snapshotLimits,
   snapshotTooLarge,
+  turnOutputRejected,
   type ExecSpec,
   type Sandbox,
   type SessionState,
@@ -124,11 +127,17 @@ export class SandboxSnapshotTransport {
       snapshotLimits.patchBytes,
       { cwd: SANDBOX_WORKDIR, tooLarge: changesTooLarge },
     )
-    return validateSnapshotArchives(
-      homeState,
-      { home, untracked, patch: patch.stdout },
-      credentials,
-    )
+    try {
+      return await validateSnapshotArchives(
+        homeState,
+        { home, untracked, patch: patch.stdout },
+        credentials,
+      )
+    } catch (error) {
+      if (isTooLarge(error) || isSnapshotCredential(error)) throw error
+      // A link, special file or setuid bit in the agent's files: its output, not client input.
+      throw turnOutputRejected('Captured snapshot archive is invalid')
+    }
   }
 
   async restore(sandbox: Sandbox, state: SessionState, parts: SnapshotArchives): Promise<void> {

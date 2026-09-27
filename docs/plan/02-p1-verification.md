@@ -94,8 +94,8 @@ Tracked-файлы при restore остаются на базе; отдельн
 проверяются uid 10001 и rootfs только для чтения. Байты идут через exec помощника, без
 `docker cp`. Перед capture процессы останавливаются через `quiesce`, как в ходе.
 Проверены те же 11 свойств; `tar --extract` считает обёртка над `sandbox.exec`.
-Результат — PASS: 119 команд, 3 извлечения tar, оба контейнера удалены. Изоляция под gVisor
-остаётся незакрытым гейтом (`03-p2-verification.md`).
+Результат — PASS: 119 команд, 3 извлечения tar, оба контейнера удалены. Песочница под
+gVisor (`runsc`) проверена отдельно — раздел «Гейт 1» в `03-p2-verification.md`, закрыт 27.09.2026.
 
 ```sh
 docker build --target runtime -f infra/sandbox/Dockerfile -t raditi-sandbox-runtime:p2 .

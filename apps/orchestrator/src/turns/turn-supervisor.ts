@@ -276,6 +276,8 @@ export class TurnSupervisor {
           createdAt: request.committedAt,
           patch: archives.patch,
           untracked: archives.untracked,
+          // Binary edits of tracked files are compressed in the patch: checked there in full.
+          credentials,
         }),
         (late) => late.dispose(),
       )
@@ -362,14 +364,10 @@ export class TurnSupervisor {
         reason = 'destroy_failed'
       }
       if (!completed) {
-        const phase = lastPhase
-        if (recovery) await holdForRecovery(this.deps.leases, lease, phase)
-        try {
-          await record(recovery ? 'recovery' : 'failed', { reason })
-        } catch {
-          recovery = true
-          await holdForRecovery(this.deps.leases, lease, phase)
-        }
+        if (recovery) await holdForRecovery(this.deps.leases, lease, lastPhase)
+        // Without its last journal entry the site stays held only if S3 or Git may have been
+        // written (above); otherwise it is released, and a failed release expires by its TTL.
+        await record(recovery ? 'recovery' : 'failed', { reason }).catch(() => {})
         if (!recovery) await this.deps.leases.release(lease).catch(() => false)
       }
       guard.close()

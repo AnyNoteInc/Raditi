@@ -119,8 +119,17 @@ export interface TurnPublication {
 
 export interface TurnWorkspace {
   prepareWorkspace(sandbox: Sandbox, source: TurnWorkspaceSource): Promise<void>
+  /**
+   * `credentials` are the turn's own (turnCredentials): a changed file of the candidate that
+   * contains one verbatim, binary ones included, is refused as snapshotHasCredential().
+   * Required like protectedPaths, so a caller cannot silently skip the check.
+   */
   preparePublication(
-    input: PublicationMetadata & { patch: Uint8Array; untracked: Uint8Array },
+    input: PublicationMetadata & {
+      patch: Uint8Array
+      untracked: Uint8Array
+      credentials: readonly string[]
+    },
   ): Promise<TurnPublication>
 }
 

@@ -26,7 +26,7 @@ const ROLE = 'io.raditi.gateway.role'
 function daemon({
   hostAddress,
   firewallExit = 0,
-}: { hostAddress?: string; firewallExit?: number } = {}) {
+}: { hostAddress?: string; firewallExit?: number | ((action: string) => number) } = {}) {
   type Stored = {
     options: Docker.ContainerCreateOptions
     networks: Record<string, { NetworkID: string; IPAddress: string }>
@@ -89,7 +89,10 @@ function daemon({
       stored.running = !stored.options.Labels?.[ROLE]?.startsWith('firewall')
       events.push(`start ${role(stored.options)}`)
     }),
-    wait: vi.fn(async () => ({ StatusCode: firewallExit })),
+    wait: vi.fn(async () => {
+      const action = String(containers.get(id)?.options.Cmd?.[0])
+      return { StatusCode: typeof firewallExit === 'number' ? firewallExit : firewallExit(action) }
+    }),
     remove: vi.fn(async () => {
       const stored = containers.get(id)
       if (!stored) throw { statusCode: 404 }
@@ -172,7 +175,8 @@ const input = () => ({ labels, policy, deadline: Date.now() + 60_000 })
 
 describe('Docker gateway manager', () => {
   it('runsc: installs the host rule before any code joins a hostless bridge; the sandbox joins directly', async () => {
-    const fake = daemon()
+    let helperDown = false
+    const fake = daemon({ firewallExit: () => (helperDown ? 1 : 0) })
     const manager = createDockerGatewayManager(config, fake.client, 'runsc')
     const attachment = await manager.prepare(input())
     const [networkId] = fake.networks.keys()
@@ -230,6 +234,15 @@ describe('Docker gateway manager', () => {
     expect(await check()).toBe(false)
     await intruder.remove()
     expect(await check()).toBe(true)
+    // Every adoption puts the host rule back (e.g. after a firewalld reload); a helper that
+    // cannot do it is an infrastructure error, not a vanished sandbox.
+    const installs = () => fake.events.filter((event) => event === 'create firewall install').length
+    const before = installs()
+    expect(await check()).toBe(true)
+    expect(installs()).toBe(before + 1)
+    helperDown = true
+    await expect(check()).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    helperDown = false
     fake.networks.get(networkId!)!.options.Options!['com.docker.network.bridge.name'] = 'docker0'
     expect(await check()).toBe(false)
   })
@@ -247,6 +260,15 @@ describe('Docker gateway manager', () => {
       'start firewall sweep',
       'remove firewall sweep',
     ])
+    expect(fake.containers.size).toBe(0)
+    expect(fake.networks.size).toBe(0)
+  })
+
+  it('runsc: a failed sweep does not fail the release', async () => {
+    const fake = daemon({ firewallExit: (action) => (action === 'sweep' ? 1 : 0) })
+    const manager = createDockerGatewayManager(config, fake.client, 'runsc')
+    const { resourceId } = await manager.prepare(input())
+    await manager.release(resourceId)
     expect(fake.containers.size).toBe(0)
     expect(fake.networks.size).toBe(0)
   })

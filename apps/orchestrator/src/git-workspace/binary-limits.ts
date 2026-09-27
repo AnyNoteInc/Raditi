@@ -1,12 +1,13 @@
 import { inflateSync } from 'node:zlib'
 
-import { badRequest, publicationLimits, publicationTooLarge } from '@repo/domain'
+import { publicationLimits, publicationTooLarge, turnOutputRejected } from '@repo/domain'
 
 // Git binary patch encoding: https://github.com/git/git/blob/master/base85.c
 // Delta headers: https://github.com/git/git/blob/master/patch-delta.c
 const alphabet =
   '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~'
-const invalid = () => badRequest('Invalid binary publication patch')
+// A broken patch is the agent's output, never the client's input.
+const invalid = () => turnOutputRejected('Invalid binary publication patch')
 const tooLarge = () => publicationTooLarge('Binary publication patch exceeds its limits')
 
 function decodeLine(line: string): Buffer {

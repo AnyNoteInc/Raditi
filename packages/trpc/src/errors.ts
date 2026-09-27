@@ -56,6 +56,12 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   SNAPSHOT_TOO_LARGE: `Работа агента заняла слишком много места, и мы не можем её сохранить. ${SPLIT_TASK}`,
   REPOSITORY_TOO_LARGE:
     'Файлы сайта занимают слишком много места, и агент пока не может с ними работать',
+  REPOSITORY_UNSUPPORTED:
+    'Часть файлов сайта агент пока не умеет обрабатывать: ярлыки, вложенные проекты или файлы с необычными именами. Напишите нам — поможем разобраться',
+  // The agent's changes broke a publication rule (spec §8, §10): nothing was saved.
+  PUBLICATION_FORBIDDEN:
+    'Агент попытался изменить файлы, которые менять нельзя. Изменения не сохранены',
+  PUBLICATION_SECRET: 'В изменениях нашлось что-то похожее на пароль или ключ — мы их не сохранили',
   // Turn and snapshot failures (P1, P2).
   SNAPSHOT_NOT_WRITTEN: `${SAVE_FAILED}. Попробуйте ещё раз`,
   SNAPSHOT_SAVE_FAILED: `${SAVE_FAILED}. Мы проверим, что случилось, а до тех пор новые задачи для этого сайта недоступны`,
