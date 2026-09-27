@@ -23,7 +23,8 @@
     "infra:down": "docker compose --env-file .env -f infra/dev/docker-compose.yml down",
     "infra:logs": "docker compose --env-file .env -f infra/dev/docker-compose.yml logs -f --tail=100",
     "prepare": "husky || true",
-    "test:infra": "node --test infra/*/*.test.mjs"
+    "test:infra": "node --test infra/*/*.test.mjs",
+    "verify:edge": "node infra/app/verify-edge.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",

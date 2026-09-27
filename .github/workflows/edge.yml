@@ -1,0 +1,96 @@
+name: Edge
+
+# The app VM edge end to end on Linux (infra/app/verify-edge.mjs): the real web and orchestrator
+# images, Traefik with certificates from Pebble, and — with userland-proxy off, as on the VM —
+# the real client address at Traefik and at the runner API. Not required for merge.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - infra/app/**
+      - apps/*/Dockerfile
+      - .dockerignore
+      - apps/web/next.config.ts
+      - apps/web/src/instrumentation.ts
+      - pnpm-lock.yaml
+      - packages/db/prisma/**
+      - apps/orchestrator/src/config/**
+      - apps/orchestrator/src/runner-api/runner-auth.ts
+  workflow_dispatch:
+    inputs:
+      renewal:
+        description: Also wait for Traefik to renew a 30-minute certificate (~15 minutes)
+        type: boolean
+        default: false
+
+concurrency:
+  group: edge-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-edge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+
+      # As on the app VM: DNAT keeps the client's address, so core and Traefik see the real one.
+      - name: Docker without userland-proxy
+        run: |
+          daemon=/etc/docker/daemon.json
+          current=$(sudo cat "$daemon" 2>/dev/null || echo '{}')
+          printf '%s' "$current" | jq '. + {"userland-proxy": false}' | sudo tee "$daemon" >/dev/null
+          sudo systemctl restart docker
+          docker info >/dev/null
+          if pgrep -x docker-proxy; then echo 'docker-proxy is still running' >&2; exit 1; fi
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build web
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          target: runtime
+          tags: raditi-verify/web:local
+          load: true
+          push: false
+          cache-from: type=gha,scope=edge-web
+          cache-to: type=gha,scope=edge-web,mode=max
+
+      - name: Build orchestrator
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/orchestrator/Dockerfile
+          target: runtime
+          tags: raditi-verify/orchestrator:local
+          load: true
+          push: false
+          cache-from: type=gha,scope=edge-orchestrator
+          cache-to: type=gha,scope=edge-orchestrator,mode=max
+
+      - name: Build migrate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/orchestrator/Dockerfile
+          target: migrate
+          tags: raditi-verify/migrate:local
+          load: true
+          push: false
+          cache-from: type=gha,scope=edge-orchestrator
+
+      - name: Verify the edge
+        env:
+          RENEWAL: ${{ inputs.renewal && '--renewal' || '' }}
+        run: pnpm verify:edge -- --no-build --real-address $RENEWAL

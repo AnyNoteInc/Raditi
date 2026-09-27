@@ -1,5 +1,6 @@
 // The platform images (apps/*/Dockerfile): pinned bases, pnpm from its version and turbo from the
-// lockfile, a non-root runtime, and the git that publication needs.
+// lockfile, a non-root runtime, and the git that publication needs. The third-party images of the
+// app VM: verify:edge runs exactly the digests that env.example deploys.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -75,4 +76,16 @@ test('orchestrator: migrate runs the Prisma CLI of @repo/db as its own uid', () 
   const migrate = stage(dockerfiles.orchestrator, 'migrate')
   assert.ok(migrate.includes('WORKDIR /repo/packages/db'))
   assert.ok(migrate.includes('USER 10004:10004'))
+})
+
+test('verify:edge runs the Traefik, PostgreSQL and Redis digests that the app VM deploys', () => {
+  const digest = (image) => /@(sha256:[0-9a-f]{64})$/.exec(image)?.[1]
+  const example = readFileSync(new URL('infra/app/env.example', root), 'utf8')
+  const verify = readFileSync(new URL('infra/app/verify-edge.mjs', root), 'utf8')
+  for (const name of ['TRAEFIK_IMAGE', 'POSTGRES_IMAGE', 'REDIS_IMAGE']) {
+    const deployed = digest(new RegExp(`^${name}=(\\S+)$`, 'm').exec(example)?.[1] ?? '')
+    const verified = digest(new RegExp(`const ${name} =\\s+'([^']+)'`).exec(verify)?.[1] ?? '')
+    assert.ok(deployed, `${name} in env.example is not pinned`)
+    assert.equal(verified, deployed, name)
+  }
 })

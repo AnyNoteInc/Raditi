@@ -1,0 +1,31 @@
+name: Edge certificate
+
+# Until the M9 alerts: Let's Encrypt sends no expiry mail, and a renewal can break silently (a
+# security group, an AAAA record, DDoS protection against foreign validation points). A failed
+# run notifies through GitHub. Enabled by the repository variable EDGE_CERT_HOST (the apex).
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  expiry:
+    if: vars.EDGE_CERT_HOST != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        prefix: ['', 'www.']
+
+    steps:
+      - name: The certificate is valid and holds for 21 more days
+        shell: bash
+        env:
+          HOST: ${{ matrix.prefix }}${{ vars.EDGE_CERT_HOST }}
+        run: |
+          openssl s_client -connect "$HOST:443" -servername "$HOST" \
+            -verify_return_error -verify_hostname "$HOST" </dev/null 2>/dev/null |
+            openssl x509 -noout -subject -enddate -checkend $((21 * 86400))

@@ -1,0 +1,34 @@
+# Only for verify-edge.mjs: Pebble instead of Let's Encrypt, an echo service for the forwarded
+# headers. Everything else — ports, networks, Traefik flags, routes — is the production file.
+services:
+  traefik:
+    environment:
+      # Go's system pool: Traefik trusts Pebble's directory certificate (minica, public key)
+      SSL_CERT_FILE: /pebble/minica.pem
+    volumes:
+      - ${VERIFY_DIR:?}/minica.pem:/pebble/minica.pem:ro
+      # The production routes, copied verbatim, plus echo.yml
+      - ${VERIFY_DIR:?}/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      acme: { ipv4_address: 10.30.50.10 }
+    depends_on:
+      pebble: { condition: service_started }
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+    command: ['-config', '/test/raditi.json', '-strict', '-dnsserver', '10.30.50.3:8053']
+    environment: { PEBBLE_VA_NOSLEEP: '1', PEBBLE_WFE_NONCEREJECT: '0' }
+    # Written by verify-edge.mjs: the validity depends on --renewal
+    volumes: ['${VERIFY_DIR:?}/pebble.json:/test/raditi.json:ro']
+    ports: ['127.0.0.1:15000:15000']
+    networks: { acme: { ipv4_address: 10.30.50.2 } }
+  challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:2.10.1@sha256:12ce21884def456bcf9786542113949e1f19dc7738d2c70e156c2d0c38a1405b
+    command: ['-defaultIPv6', '', '-defaultIPv4', '10.30.50.10']
+    networks: { acme: { ipv4_address: 10.30.50.3 } }
+  echo: # echo.<domain>: shows the forwarded headers web would get
+    image: ghcr.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+    command: ['--port', '3000', '--name', 'echo']
+    networks: [edge]
+networks:
+  acme:
+    ipam: { config: [{ subnet: 10.30.50.0/24 }] }
