@@ -819,6 +819,24 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     await w.recover(recovery)
     expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
     expect(w.journal.phases()).toEqual(['leased', 'failed'])
+    expect(w.journal.entries.at(-1)).toMatchObject({ reason: 'run_failed', outcome: 'failed' })
+  })
+
+  it('keeps a turn recovery gave up lost when its assignment update was lost', async () => {
+    const w = world(kind)
+    const { after } = await w.crashAt('output')
+    vi.spyOn(w.assignments, 'finish').mockRejectedValueOnce(new Error('database unavailable'))
+    await w.recover(after.recovery)
+    expect(w.assignment().outcome).toBeNull()
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'exec_lost',
+      outcome: 'lost',
+      fence: { epoch: 2 },
+    })
+    await w.recover(after.recovery)
+    expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 2 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false })
   })
 
   it.each([
@@ -1253,16 +1271,21 @@ describe('turn exec recovery on a runner VM', () => {
     expect(w.journal.phases(1).at(-1)).toBe('output')
 
     pastGrace(w)
-    await w.recover(after.recovery)
+    // The assignment update is lost once: the next pass closes it from the journal, still lost.
+    vi.spyOn(w.assignments, 'finish').mockRejectedValueOnce(new Error('database unavailable'))
+    await expect(w.recover(after.recovery)).resolves.toBeUndefined()
+    expect(w.assignment().outcome).toBeNull()
     expect(w.journal.entries.at(-1)).toMatchObject({
       phase: 'failed',
       reason: 'timeout',
+      outcome: 'lost',
       fence: { epoch: 1 },
     })
+    await w.recover(after.recovery)
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
     // The watchdog removed it by now: the site is freed, not left to its TTL.
     expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
-    expect(w.credentials.revoked).toEqual([reference])
+    expect(w.credentials.revoked).toEqual([reference, reference])
   })
 
   it('removes once a container the runner reports under the older epoch after recovery took the turn', async () => {

@@ -124,6 +124,17 @@ describe('turn journal replay', () => {
     expect(replayedTurn(journal.slice(0, 3))).toMatchObject({ nativeSessionId: 'prior' })
   })
 
+  it('names the outcome the last failed entry closes the assignment with', () => {
+    const journal = [
+      entry('leased'),
+      entry('failed', { sequence: 2, reason: 'exec_lost', outcome: 'lost' }),
+    ]
+    expect(replayedTurn(journal)).toMatchObject({ lastPhase: 'failed', outcome: 'lost' })
+    // An entry written before outcomes were journaled leaves it to the caller.
+    expect(replayedTurn([entry('failed', { reason: 'run_failed' })]).outcome).toBeUndefined()
+    expect(replayedTurn([...journal, entry('created', { sequence: 3 })]).outcome).toBeUndefined()
+  })
+
   it('remembers a turn given up while its prepare was out, whatever came after', () => {
     const vacated = [
       entry('leased'),

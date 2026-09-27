@@ -215,6 +215,11 @@ export const turnEvidenceSchema = z
     /** The driver session the turn resumed (turn n−1): recovery derives the session state from it. */
     nativeSessionId: nativeSessionIdSchema.optional(),
     recoveredFromEpoch: z.number().int().positive().optional(),
+    /**
+     * What a `failed` entry closes the assignment with: `lost` when recovery gave the turn up,
+     * never billed (P12). A pass that finds the update lost closes it the same way.
+     */
+    outcome: z.enum(['failed', 'lost']).optional(),
     result: turnResultSchema.optional(),
     reason: z
       .enum([

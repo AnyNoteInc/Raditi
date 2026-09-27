@@ -120,6 +120,8 @@ export interface ReplayedTurn {
   reason: JournaledEvidence['reason']
   /** An owner gave the turn up while its prepare was out (vacating): it ends `failed`. */
   vacating: boolean
+  /** The outcome the last `failed` entry closes the assignment with. */
+  outcome: JournaledEvidence['outcome']
   /** The highest sequence journaled: a recovered owner continues after it. */
   sequence: number
   containerId: string | undefined
@@ -144,6 +146,7 @@ export function replayedTurn(entries: readonly JournaledEvidence[]): ReplayedTur
     step: undefined,
     reason: undefined,
     vacating: false,
+    outcome: undefined,
     sequence: 0,
     containerId: undefined,
     execId: undefined,
@@ -161,10 +164,13 @@ export function replayedTurn(entries: readonly JournaledEvidence[]): ReplayedTur
       throw mismatch()
     state.lastPhase = entry.phase
     if (entry.phase === 'vacating') state.vacating = true
-    if (endings.includes(entry.phase)) state.reason = entry.reason
-    else {
+    if (endings.includes(entry.phase)) {
+      state.reason = entry.reason
+      state.outcome = entry.outcome
+    } else {
       state.step = entry.phase
       state.reason = undefined
+      state.outcome = undefined
     }
     state.sequence = Math.max(state.sequence, entry.sequence)
     state.containerId = entry.containerId ?? state.containerId

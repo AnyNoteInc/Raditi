@@ -102,6 +102,14 @@ describe('turn evidence', () => {
     expect(execLost()).toMatchObject({ code: 'EXEC_LOST', httpStatus: 502 })
   })
 
+  it('records the outcome a failed turn closes its assignment with', () => {
+    const failed = { ...evidence, phase: 'failed', reason: 'exec_lost' } as const
+    for (const outcome of ['lost', 'failed'])
+      expect(turnEvidenceSchema.safeParse({ ...failed, outcome }).success).toBe(true)
+    // Completed is journaled as `completed`, never as a failed entry.
+    expect(turnEvidenceSchema.safeParse({ ...failed, outcome: 'completed' }).success).toBe(false)
+  })
+
   it('records a turn given up without proof that its container is gone', () => {
     const vacating = { ...evidence, phase: 'vacating', reason: 'cancelled' } as const
     expect(turnEvidenceSchema.safeParse(vacating).success).toBe(true)

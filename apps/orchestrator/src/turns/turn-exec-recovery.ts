@@ -197,10 +197,11 @@ export class TurnExecRecovery {
       return this.#park(assignment, step, 'journal mismatch')
     if (doneSteps.includes(step)) return this.#done(assignment)
     // Written only with proof that the container is gone or after the deadline and its grace:
-    // only the release of the site or the assignment update was lost.
+    // only the release of the site or the assignment update was lost. The entry names the
+    // outcome, so a turn recovery gave up stays `lost`.
     if (turn.lastPhase === 'failed') {
       await this.#free(assignment)
-      return this.#close(assignment, 'failed')
+      return this.#close(assignment, turn.outcome ?? 'failed')
     }
     // No container reported yet: nothing to resume, only to remove, and no attempt to count.
     if (step === 'leased') return this.#vacate(assignment, turn, remainingMs())
@@ -408,7 +409,8 @@ export class TurnExecRecovery {
     // Unclaimed after core died: no core waits for it any more, so no runner can take it (P1).
     if (assignment.executor === 'runner' && assignment.runner === null) {
       if (!(await this.deps.assignments.abandon(assignment.id))) return
-      await this.#journal(assignment, turn, 'failed', reason).catch(() => {})
+      // abandon() closed it `failed`.
+      await this.#journal(assignment, turn, 'failed', reason, 'failed').catch(() => {})
       await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
       return this.#free(assignment)
     }
@@ -448,12 +450,13 @@ export class TurnExecRecovery {
   async #expire(assignment: TurnAssignment, turn: ReplayedTurn): Promise<void> {
     await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
     const reason = turn.vacating ? (turn.reason ?? 'timeout') : 'timeout'
-    await this.#journal(assignment, turn, 'failed', reason).catch(() => {})
+    const outcome = turn.vacating ? 'failed' : 'lost'
+    await this.#journal(assignment, turn, 'failed', reason, outcome).catch(() => {})
     await this.#free(assignment)
     await this.deps.assignments.finish({
       id: assignment.id,
       epoch: assignment.fence.epoch,
-      outcome: turn.vacating ? 'failed' : 'lost',
+      outcome,
     })
   }
 
@@ -600,6 +603,7 @@ export class TurnExecRecovery {
     turn: ReplayedTurn,
     phase: TurnPhase,
     reason: NonNullable<TurnEvidence['reason']>,
+    outcome?: TurnEvidence['outcome'],
   ): Promise<void> {
     return this.deps.journal.record({
       fence: assignment.fence,
@@ -608,6 +612,7 @@ export class TurnExecRecovery {
       sequence: turn.sequence + 1,
       phase,
       reason,
+      ...(outcome ? { outcome } : {}),
     })
   }
 

@@ -213,7 +213,7 @@ export class TurnAttempt {
     this.#ended = true
     const { lease } = this.init
     await this.#vacatingRecorded
-    await this.record('failed', { reason: this.#reason }).catch(() => {})
+    await this.record('failed', { reason: this.#reason, outcome: 'failed' }).catch(() => {})
     const released = await this.deps.leases.release(lease).catch(() => false)
     if (!released) {
       const now = await this.deps.leases.inspect(lease.siteId).catch(() => null)
@@ -450,7 +450,12 @@ export class TurnAttempt {
     }
     if (!this.#completed) {
       if (recovery) await holdForRecovery(this.deps.leases, lease, this.#lastPhase)
-      await this.record(recovery ? 'recovery' : 'failed', { reason: this.#reason }).catch(() => {})
+      await this.record(
+        recovery ? 'recovery' : 'failed',
+        recovery
+          ? { reason: this.#reason }
+          : { reason: this.#reason, outcome: this.#outcome === 'lost' ? 'lost' : 'failed' },
+      ).catch(() => {})
       if (!recovery) await this.deps.leases.release(lease).catch(() => false)
     }
     // A held turn stays assigned for recovery; a failed update is left to it as well.
