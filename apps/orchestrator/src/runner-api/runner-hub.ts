@@ -650,7 +650,11 @@ export class RunnerHub implements OnApplicationShutdown {
   #session(runnerId: string, sessionId: string): RunnerSession {
     this.#rejectRetired(runnerId, sessionId)
     let session = this.#sessions.get(runnerId)
-    if (session?.id === sessionId) return session
+    if (session?.id === sessionId) {
+      // Silent past the heartbeat: its turns were given up; it restarts under a new session.
+      if (session.gone) throw RunnerApiError.leaseLost()
+      return session
+    }
     if (session) {
       this.#retire(session, runnerUnavailable('The sandbox runner restarted'))
       const retired = this.#retired.get(runnerId) ?? []

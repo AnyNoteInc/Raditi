@@ -523,11 +523,13 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     // The monotonic clock follows the fake clock, as it would on a real host.
     vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
     const f = fixture()
-    const { execution } = await f.prepared()
+    const { execution, vm } = await f.prepared()
     const quiescing = execution.quiesce()
     const rejected = expect(quiescing).rejects.toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
     await vi.advanceTimersByTimeAsync(runnerTimings.silentAfterMs + 10_000)
     await rejected
+    // Coming back, it is told to restart under a new session instead of polling in vain.
+    expect(await refusal(vm.poll())).toEqual({ error: 'LEASE_LOST' })
   })
 
   it('treats a container the runner removed on its own as gone', async () => {
