@@ -19,6 +19,7 @@ import {
   snapshotPlanSchema,
   snapshotReferenceSchema,
   snapshotSaveWroteNothing,
+  toTurnPlan,
   TURN_FINALIZE_RESERVE_MS,
   TURN_PUBLICATION_GRACE_MS,
   turnCredentials,
@@ -35,12 +36,15 @@ import {
   type SnapshotManifest,
   type SnapshotMetadata,
   type SnapshotReference,
+  type TurnAssignment,
+  type TurnAssignmentStore,
   type TurnBundleSource,
   type TurnEvidence,
   type TurnExecution,
   type TurnExecutor,
   type TurnJournal,
   type TurnPhase,
+  type TurnPlan,
   type TurnPublication,
   type TurnRequest,
   type TurnRestoreSource,
@@ -73,6 +77,8 @@ export interface TurnSupervisorDependencies {
   leases: SiteLeaseStore
   /** Owns the turn's container: in core's process (PoC) or on a runner VM. */
   executor: TurnExecutor
+  /** Where the turn is held for recovery: its plan without credentials, epochs and deadline. */
+  assignments: TurnAssignmentStore
   driver: AgentDriver
   workspace: TurnWorkspace
   snapshots: TurnSnapshotStore
@@ -92,7 +98,7 @@ export class TurnSupervisor {
   constructor(private readonly deps: TurnSupervisorDependencies) {}
 
   async run(request: TurnRequest, signal?: AbortSignal): Promise<CompletedTurn> {
-    this.validate(request)
+    const plan = this.validate(request)
     const labels = request.sandbox.labels
     const acquiredAt = performance.now()
     const lease = await this.deps.leases.acquire({
@@ -113,6 +119,7 @@ export class TurnSupervisor {
       signal,
       performance.now() - acquiredAt,
     )
+    let assignment: TurnAssignment | undefined
     let execution: TurnExecution | undefined
     let publication: TurnPublication | undefined
     let abandoned = false
@@ -160,6 +167,19 @@ export class TurnSupervisor {
     try {
       await guard.assertFence()
       await record('leased')
+      const opened = await this.deps.assignments.open({
+        fence: lease,
+        sessionId: labels.sessionId,
+        turn: labels.turn,
+        executor: this.deps.executor.kind,
+        plan,
+        remainingMs: guard.remainingMs,
+      })
+      if (!opened) {
+        await guard.assertFence()
+        throw conflict('The turn already has an unfinished assignment')
+      }
+      assignment = opened
       // Cloned on the host with a short read-only credential; the executor gets objects only.
       let bundle: TurnBundleSource | undefined = await guard.interruptible(
         this.deps.workspace.buildBaseBundle(request.workspace),
@@ -194,6 +214,7 @@ export class TurnSupervisor {
       const ready = await guard.interruptible(
         this.deps.executor.prepare(
           {
+            assignmentId: assignment.id,
             fence: lease,
             sandbox: {
               ...request.sandbox,
@@ -408,12 +429,22 @@ export class TurnSupervisor {
         await record(recovery ? 'recovery' : 'failed', { reason }).catch(() => {})
         if (!recovery) await this.deps.leases.release(lease).catch(() => false)
       }
+      // A held turn stays assigned for recovery; a failed update is left to it as well.
+      if (assignment && (completed || !recovery))
+        await this.deps.assignments
+          .finish({
+            id: assignment.id,
+            epoch: lease.epoch,
+            outcome: completed ? 'completed' : 'failed',
+          })
+          .catch(() => false)
       guard.close()
       await publication?.dispose().catch(() => {})
     }
   }
 
-  private validate(request: TurnRequest): void {
+  /** Everything checked before the lease; the plan is what the assignment keeps. */
+  private validate(request: TurnRequest): TurnPlan {
     assertSandboxSpec(request.sandbox)
     const labels = request.sandbox.labels
     if (labels.turn > 1 && !request.previous)
@@ -468,6 +499,7 @@ export class TurnSupervisor {
       )
         throw badRequest('Incompatible previous turn snapshot')
     }
+    return toTurnPlan(request)
   }
 
   /**

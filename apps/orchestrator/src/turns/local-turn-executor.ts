@@ -60,6 +60,8 @@ const loadFailed = () =>
  * move through presigned requests, the data key and the base bundle come from core's functions.
  */
 export class LocalTurnExecutor implements TurnExecutor {
+  readonly kind = 'local'
+
   constructor(private readonly deps: LocalTurnExecutorDependencies) {}
 
   async prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution> {

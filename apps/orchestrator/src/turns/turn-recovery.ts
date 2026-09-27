@@ -21,6 +21,8 @@ import { holdForRecovery, LeaseGuard } from './lease-guard.ts'
 import type { TurnSupervisorDependencies } from './turn-supervisor.ts'
 
 export interface PublicationRecoveryRequest {
+  /** The unfinished assignment of the turn: where its containers are found. */
+  assignmentId: string
   /** Exact held epoch from durable evidence. This API never guesses or clears a different hold. */
   heldFence: SiteLeaseFence
   snapshot: SnapshotReference
@@ -127,6 +129,7 @@ export class TurnPublicationRecovery {
         const stale = await guard.interruptible(
           this.deps.executor.adopt(
             {
+              assignmentId: input.assignmentId,
               fence: lease,
               containerId: candidate.id,
               labels: candidate.labels,

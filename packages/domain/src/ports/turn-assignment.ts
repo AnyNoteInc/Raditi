@@ -1,9 +1,5 @@
-import type { TurnPlan } from './turn-executor.ts'
+import type { TurnExecutorKind, TurnPlan } from './turn-executor.ts'
 import type { SiteLeaseFence } from './turn-runner.ts'
-
-/** Where a turn's container runs: core's own Docker (PoC, tests) or a runner VM. */
-export const turnExecutorKinds = ['local', 'runner'] as const
-export type TurnExecutorKind = (typeof turnExecutorKinds)[number]
 
 /** How an assignment ended. `lost`: recovery gave the turn up, never billed (P12). */
 export const turnAssignmentOutcomes = ['completed', 'failed', 'lost'] as const

@@ -30,6 +30,10 @@ import {
 } from './sandbox-provider.ts'
 import type { SiteLeaseFence, TurnBundleSource } from './turn-runner.ts'
 
+/** Where a turn's container runs: core's own Docker (PoC, tests) or a runner VM. */
+export const turnExecutorKinds = ['local', 'runner'] as const
+export type TurnExecutorKind = (typeof turnExecutorKinds)[number]
+
 /**
  * Turn executor port — spec §8. The supervisor in core keeps the lease, the journal, the driver
  * and publication; an executor owns the turn's container. `LocalTurnExecutor` drives a local
@@ -38,6 +42,7 @@ import type { SiteLeaseFence, TurnBundleSource } from './turn-runner.ts'
  * arrive as presigned requests, data keys and the base bundle through functions of core.
  */
 export interface TurnExecutor {
+  readonly kind: TurnExecutorKind
   /** Create the container, import the base bundle, restore turn n−1, write the driver files. */
   prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution>
   /**
@@ -51,6 +56,8 @@ export interface TurnExecutor {
 }
 
 export interface TurnPrepareInput {
+  /** The turn's open assignment (TurnAssignmentStore.open): what a runner claims. */
+  assignmentId: string
   fence: SiteLeaseFence
   /** Without secrets: turn secrets are written only after restore (`prepared.secrets`). */
   sandbox: SandboxSpec
@@ -81,6 +88,7 @@ export interface TurnRestoreSource {
 }
 
 export type TurnAdoptInput = {
+  assignmentId: string
   fence: SiteLeaseFence
   containerId: string
   labels: SandboxLabels

@@ -132,6 +132,7 @@ async function fixture() {
     60_000,
   )
   const input = (): TurnPrepareInput => ({
+    assignmentId: '00000000-0000-4000-8000-0000000000aa',
     fence,
     sandbox: {
       image,
@@ -470,6 +471,7 @@ describe('LocalTurnExecutor', () => {
 
   describe('adoption after a restart', () => {
     const adopt = (purpose: 'work' | 'removal', extra: object = {}) => ({
+      assignmentId: '00000000-0000-4000-8000-0000000000aa',
       fence: { ...fence, epoch: 2 },
       containerId: 'container2',
       labels,

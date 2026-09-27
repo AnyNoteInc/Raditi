@@ -10,6 +10,7 @@ import {
   SANDBOX_SECRETS_DIR,
   snapshotHasCredential,
   TURN_FINALIZE_RESERVE_MS,
+  toTurnPlan,
   TURN_PUBLICATION_GRACE_MS,
   type AgentDriver,
   type AgentEvent,
@@ -42,6 +43,7 @@ import {
   type SnapshotParts,
 } from '../sessions/snapshot.service.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
+import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from './local-turn-executor.ts'
 import { TurnPublicationRecovery, type PublicationRecoveryRequest } from './turn-recovery.ts'
 
@@ -326,9 +328,11 @@ function turnFixture(kind: string) {
     transfer,
     importBundle,
   })
+  const assignments = new MemoryTurnAssignments()
   const deps: TurnSupervisorDependencies = {
     leases,
     executor,
+    assignments,
     driver,
     workspace,
     snapshots,
@@ -350,6 +354,7 @@ function turnFixture(kind: string) {
     workspace,
     transport,
     journal,
+    assignments,
     sandboxes,
     importBundle,
     transfer,
@@ -1054,6 +1059,63 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     },
   )
 
+  it('assigns the turn with its plan and without its credentials, then finishes it', async () => {
+    const f = fixture()
+    const open = vi.spyOn(f.assignments, 'open')
+    const prepare = vi.spyOn(f.deps.executor, 'prepare')
+    await f.run()
+    const [assignment] = [...f.assignments.rows.values()]
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fence: expect.objectContaining({ epoch: 1 }),
+        sessionId: labels.sessionId,
+        turn: 1,
+        executor: kind,
+      }),
+    )
+    expect(assignment).toMatchObject({
+      outcome: 'completed',
+      plan: { committedAt: f.request.committedAt },
+    })
+    expect(JSON.stringify(assignment!.plan)).not.toContain('synthetic-llm-secret')
+    expect(JSON.stringify(assignment!.plan)).not.toContain('synthetic-mcp-secret')
+    expect(prepare.mock.calls[0]![0].assignmentId).toBe(assignment!.id)
+  })
+
+  it('finishes a failed turn once its container is gone and keeps a held one assigned', async () => {
+    const failed = fixture()
+    failed.stdout('not json\n')
+    await expect(failed.run()).rejects.toThrow()
+    expect([...failed.assignments.rows.values()]).toEqual([
+      expect.objectContaining({ outcome: 'failed' }),
+    ])
+
+    const held = fixture()
+    vi.mocked(held.sandbox.destroy).mockRejectedValue(new Error('unreachable daemon'))
+    await expect(held.run()).rejects.toThrow()
+    expect(held.leases.holdForRecovery).toHaveBeenCalled()
+    expect([...held.assignments.rows.values()]).toEqual([
+      expect.objectContaining({ outcome: null }),
+    ])
+  })
+
+  it('refuses a second unfinished assignment of the turn before anything is built', async () => {
+    const f = fixture()
+    await f.assignments.open({
+      fence: f.lease,
+      sessionId: labels.sessionId,
+      turn: 1,
+      executor: kind === 'local' ? 'local' : 'runner',
+      plan: toTurnPlan(f.request),
+      remainingMs: 60_000,
+    })
+    await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(f.workspace.buildBaseBundle).not.toHaveBeenCalled()
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'run_failed' })
+  })
+
   it('holds a site when container deletion remains uncertain', async () => {
     const f = fixture()
     vi.mocked(f.sandbox.destroy).mockRejectedValue(new Error('unreachable daemon'))
@@ -1348,6 +1410,7 @@ describe.each(executorKinds)('committed checkpoint publication recovery (%s exec
     loaded.archives.untracked = f.publication.untracked
     f.snapshots.load.mockResolvedValue(loaded)
     const input: PublicationRecoveryRequest = {
+      assignmentId: '00000000-0000-4000-8000-0000000000aa',
       heldFence: f.lease,
       workspace: f.request.workspace,
       snapshot: {
