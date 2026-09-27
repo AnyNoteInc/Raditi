@@ -183,7 +183,8 @@ process.exit(data.includes('synthetic-secret-marker') ? finding : data.includes(
   }
 }
 
-describe('trusted Git publication', () => {
+// Real git and dozens of child processes per test: a shared CI runner needs more than 5 s.
+describe('trusted Git publication', { timeout: 30_000 }, () => {
   it('stages text, binary, deletion and new blobs; snapshots a deterministic candidate before fenced CAS push', async () => {
     const f = await fixture()
     await writeFile(join(f.work, 'index.php'), 'updated\n')
@@ -855,7 +856,7 @@ describe('trusted Git publication', () => {
   })
 })
 
-describe('production boundaries', () => {
+describe('production boundaries', { timeout: 30_000 }, () => {
   const ref = { provider: 'gitea' as const, owner: 'owner', name: 'repo' }
   const source = {
     repo: ref,

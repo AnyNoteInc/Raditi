@@ -268,7 +268,12 @@ describe('Docker gateway manager', () => {
     const fake = daemon({ firewallExit: (action) => (action === 'sweep' ? 1 : 0) })
     const manager = createDockerGatewayManager(config, fake.client, 'runsc')
     const { resourceId } = await manager.prepare(input())
+    const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => {})
     await manager.release(resourceId)
+    expect(warning).toHaveBeenCalledWith('Sandbox host firewall sweep failed', {
+      code: 'RADITI_SANDBOX_FIREWALL_SWEEP',
+    })
+    warning.mockRestore()
     expect(fake.containers.size).toBe(0)
     expect(fake.networks.size).toBe(0)
   })
@@ -279,7 +284,9 @@ describe('Docker gateway manager', () => {
   ])('runsc fails closed on %s and removes the attempt', async (_case, options) => {
     const fake = daemon(options)
     const manager = createDockerGatewayManager(config, fake.client, 'runsc')
+    const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => {})
     await expect(manager.prepare(input())).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    warning.mockRestore()
     expect(fake.events).not.toContain('create proxy')
     expect(fake.networks.size).toBe(0)
     expect(fake.containers.size).toBe(0)
