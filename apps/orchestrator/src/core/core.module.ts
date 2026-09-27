@@ -7,7 +7,6 @@ import { MetricsModule } from '../metrics/metrics.module.ts'
 import { NotificationsModule } from '../notifications/notifications.module.ts'
 import { OutboxModule } from '../outbox/outbox.module.ts'
 import { QueueModule } from '../queue/queue.module.ts'
-import { SandboxModule } from '../sandbox/sandbox.module.ts'
 import { SessionsModule } from '../sessions/sessions.module.ts'
 import { TurnsModule } from '../turns/turns.module.ts'
 import { CoreConfigModule, type CoreModuleOptions } from './core-config.module.ts'
@@ -31,7 +30,6 @@ export class CoreModule {
         OutboxModule,
         NotificationsModule,
         DriversModule,
-        SandboxModule,
         SessionsModule,
         TurnsModule.forRoot(options.config.turnExecutor),
       ],

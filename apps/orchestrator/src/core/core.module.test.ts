@@ -192,6 +192,8 @@ describe('CoreModule', () => {
       },
     })
     expect(core.get<TurnExecutor>(TURN_EXECUTOR).kind).toBe('runner')
+    // Core drives no Docker of its own then: the runners do.
+    expect(() => core.get(SANDBOX_PROVIDER)).toThrow()
     const { port } = await core.get(RunnerApiServer).listen(0, '127.0.0.1')
     const poll = (authorization: string) =>
       fetch(`http://127.0.0.1:${port}/runner/v1/reconcile`, {

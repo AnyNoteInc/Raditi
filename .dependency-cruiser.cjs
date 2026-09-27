@@ -152,6 +152,24 @@ module.exports = {
       to: { path: '^packages/(trpc|ui)/' },
     },
     {
+      name: 'runner-no-platform-access',
+      comment:
+        'The runner role and the local executor it drives never reach PostgreSQL, Redis, Vault, S3 or core’s runner API, not even transitively: a sandbox VM holds no platform credentials (spec §8, §19).',
+      severity: 'error',
+      from: {
+        path: '^apps/orchestrator/src/(runner/|turns/local-turn-executor\\.ts$)',
+        pathNot: '\\.test\\.ts$',
+      },
+      to: {
+        path: [
+          '^packages/(db|vault|storage)/',
+          '^apps/orchestrator/src/runner-api/',
+          ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+'),
+        ],
+        reachable: true,
+      },
+    },
+    {
       name: 'web-no-sandbox',
       comment: 'Only the orchestrator runs agents and sandboxes — not even transitively from web.',
       severity: 'error',

@@ -8,6 +8,7 @@ import {
   presignedGetSchema,
   presignedPutSchema,
   sandboxSpecSchema,
+  sessionStateSchema,
   snapshotSealBaseSchema,
   type CapturedTurn,
   type DestroyReason,
@@ -230,10 +231,13 @@ class RemoteTurnExecution implements TurnExecution {
 
   async capture(input: { home: SessionState; baseSha: string }): Promise<CapturedTurn> {
     this.#allow('turn', 'work')
+    // Refused here as the local capture refuses it, before the runner is asked.
+    const home = sessionStateSchema.safeParse(input.home)
+    if (!home.success) throw badRequest('Invalid snapshot session state')
     const candidates: CandidateParts = {}
     const captured = await this.hub.send(
       this.live,
-      { type: 'capture', home: input.home, baseSha: input.baseSha },
+      { type: 'capture', home: home.data, baseSha: input.baseSha },
       { answers: ['captured'], replyMs: runnerReplyMs.capture, candidates },
     )
     // The hub checked both uploads against the report.

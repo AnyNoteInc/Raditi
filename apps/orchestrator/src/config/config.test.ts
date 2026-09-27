@@ -127,13 +127,72 @@ describe('loadConfig — development', () => {
     ).not.toThrow()
   })
 
-  it('accepts the runner role (refused later, at startup)', () => {
-    expect(loadConfig({ APP_ENV: 'development', ORCHESTRATOR_ROLES: 'runner' })).toEqual({
-      appEnv: 'development',
-      roles: ['runner'],
-      core: null,
-      mcp: null,
+  it('builds the runner role from its own settings only: core, token file, Docker', () => {
+    const config = loadConfig({
+      APP_ENV: 'development',
+      ORCHESTRATOR_ROLES: 'runner',
+      RUNNER_CORE_URL: 'http://127.0.0.1:8083',
+      RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
     })
+    expect(config).toMatchObject({ roles: ['runner'], core: null, mcp: null })
+    expect(config.runner).toEqual({
+      appEnv: 'development',
+      coreUrl: new URL('http://127.0.0.1:8083'),
+      tokenFile: '/etc/raditi/runner-token',
+      caFile: null,
+      maxTurns: 1,
+      sandbox: { runtime: 'runc', socketPath: '/var/run/docker.sock' },
+    })
+    expect(loadConfig(devEnv).runner).toBeNull()
+  })
+
+  it('refuses a runner without core, its token file or with more than one turn', () => {
+    expect(problemsOf({ APP_ENV: 'development', ORCHESTRATOR_ROLES: 'runner' })).toEqual([
+      'RUNNER_CORE_URL: required for the runner role',
+      'RUNNER_TOKEN_FILE: required for the runner role (the token is never an env value)',
+    ])
+    expect(
+      problemsOf({
+        APP_ENV: 'development',
+        ORCHESTRATOR_ROLES: 'runner',
+        RUNNER_CORE_URL: 'http://runner:secret@127.0.0.1:8083/runner/v1',
+        RUNNER_TOKEN_FILE: 'runner-token',
+        RUNNER_CORE_CA_FILE: 'ca.pem',
+      }),
+    ).toEqual([
+      'RUNNER_CORE_URL: expected an origin (no path, credentials or query)',
+      'RUNNER_TOKEN_FILE: must be an absolute path',
+      'RUNNER_CORE_CA_FILE: must be an absolute path',
+    ])
+    expect(
+      problemsOf({
+        APP_ENV: 'development',
+        ORCHESTRATOR_ROLES: 'runner',
+        RUNNER_CORE_URL: 'http://127.0.0.1:8083/?token=secret',
+        RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
+      }).join('\n'),
+    ).not.toContain('secret')
+    expect(
+      problemsOf({
+        APP_ENV: 'development',
+        ORCHESTRATOR_ROLES: 'runner',
+        RUNNER_MAX_TURNS: '2',
+      })[0],
+    ).toBe('RUNNER_MAX_TURNS: one turn per runner until several runners are supported (stage 2)')
+  })
+
+  it('drives Docker from core only with the local executor', () => {
+    expect(loadConfig(devEnv).core?.sandbox).toEqual({
+      runtime: 'runc',
+      socketPath: '/var/run/docker.sock',
+    })
+    const runner = loadConfig({
+      ...devEnv,
+      TURN_EXECUTOR: 'runner',
+      RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}`,
+      SANDBOX_RUNTIME: 'kata',
+    })
+    expect(runner.core?.sandbox).toBeNull()
   })
 
   it('runs turns in core by default and on runners with their token hashes', () => {
@@ -234,7 +293,7 @@ describe('loadConfig — production', () => {
       appEnv: 'production',
       metricsToken: PROD_METRICS_TOKEN,
       vault: { appRole: { roleId: 'core-role', secretId: 'core-secret' } },
-      sandbox: { runtime: 'runsc' },
+      sandbox: null,
     })
   })
 
@@ -287,20 +346,65 @@ describe('loadConfig — production', () => {
     expect(config.mcp?.port).toBe(8082)
   })
 
-  it('keeps the package rules: https Vault, AppRole, gVisor and SendSay are mandatory', () => {
+  it('keeps the package rules: https Vault, AppRole and SendSay are mandatory', () => {
     const problems = problemsOf(
       prodEnv({
         VAULT_ADDR: 'http://vault.internal:8200',
         VAULT_ROLE_ID: '',
         VAULT_SECRET_ID: '',
-        SANDBOX_RUNTIME: 'runc',
         SENDSAY_API_KEY: '',
       }),
     ).join('\n')
 
     expect(problems).toMatch(/VAULT_ADDR: must use https in production/)
     expect(problems).toMatch(/VAULT_ROLE_ID/)
-    expect(problems).toMatch(/SANDBOX_RUNTIME/)
     expect(problems).toMatch(/SENDSAY_API_KEY/)
+  })
+
+  const runnerEnv = (overrides: Env = {}): Env => ({
+    APP_ENV: 'production',
+    ORCHESTRATOR_ROLES: 'runner',
+    RUNNER_CORE_URL: 'https://core.internal:8083',
+    RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
+    RUNNER_CORE_CA_FILE: '/etc/raditi/core-ca.pem',
+    SANDBOX_RUNTIME: 'runsc',
+    ...overrides,
+  })
+
+  it('runs a runner over https under gVisor, with nothing of the platform', () => {
+    expect(loadConfig(runnerEnv()).runner).toMatchObject({
+      coreUrl: new URL('https://core.internal:8083'),
+      caFile: '/etc/raditi/core-ca.pem',
+      sandbox: { runtime: 'runsc' },
+    })
+    expect(
+      problemsOf(
+        runnerEnv({ RUNNER_CORE_URL: 'http://core.internal:8083', SANDBOX_RUNTIME: 'runc' }),
+      ),
+    ).toEqual([
+      'RUNNER_CORE_URL: must use https in production',
+      expect.stringMatching(/^\[sandbox\] invalid configuration: SANDBOX_RUNTIME: /),
+    ])
+  })
+
+  it('refuses to start a runner that holds platform credentials, naming only the variables', () => {
+    const problems = problemsOf(
+      runnerEnv({
+        DATABASE_URL: 'postgresql://core:secret@db.internal:5432/raditi',
+        REDIS_URL: 'rediss://redis.internal:6380',
+        VAULT_ADDR: 'https://vault.internal:8200',
+        VAULT_SECRET_ID: 'core-secret',
+        S3_SECRET_ACCESS_KEY: 'very-secret-s3-key',
+        S3_REGION: ' ',
+      }),
+    )
+    expect(problems).toEqual([
+      'DATABASE_URL: must not be set for the runner role in production',
+      'REDIS_URL: must not be set for the runner role in production',
+      'S3_SECRET_ACCESS_KEY: must not be set for the runner role in production',
+      'VAULT_ADDR: must not be set for the runner role in production',
+      'VAULT_SECRET_ID: must not be set for the runner role in production',
+    ])
+    expect(problems.join('\n')).not.toMatch(/secret@|core-secret|very-secret/)
   })
 })

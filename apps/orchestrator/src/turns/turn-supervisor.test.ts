@@ -35,6 +35,9 @@ import {
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
+import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
+import { RunnerHub } from '../runner-api/runner-hub.ts'
+import { SandboxRunner } from '../runner/sandbox-runner.ts'
 import type { PresignedTransfer } from '../sessions/presigned-transfer.ts'
 import type { SnapshotArchives } from '../sessions/sandbox-snapshot.ts'
 import {
@@ -42,6 +45,7 @@ import {
   type SealedElsewhere,
   type SnapshotParts,
 } from '../sessions/snapshot.service.ts'
+import { loopbackTransport } from '../testing/runner-loopback.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from './local-turn-executor.ts'
@@ -79,12 +83,49 @@ const nativeEvents: AgentEvent[] = [
   { type: 'completed' },
 ]
 
+interface CoreSide {
+  leases: TurnSupervisorDependencies['leases']
+  assignments: MemoryTurnAssignments
+}
+
+const cleanups: Array<() => Promise<void>> = []
+/** Everything a runner logged during the test. */
+const runnerLines: string[] = []
+const runnerLogger = {
+  log: (line: string) => runnerLines.push(line),
+  warn: (line: string) => runnerLines.push(line),
+  error: (line: string) => runnerLines.push(line),
+}
+
 /**
  * The whole suite runs against every executor over the same sandbox-side fakes: the supervisor
- * has one code path whether the container is in core's process or on a runner.
+ * has one code path whether the container is in core's process or on a runner. The runner kind
+ * is a real SandboxRunner in this process behind core's RunnerHub (loopback transport): every
+ * step crosses the pull protocol, its keys and presigned requests included.
  */
-const executors: Record<string, (sandboxSide: LocalTurnExecutorDependencies) => TurnExecutor> = {
+const executors: Record<
+  string,
+  (sandboxSide: LocalTurnExecutorDependencies, core: CoreSide) => TurnExecutor
+> = {
   local: (sandboxSide) => new LocalTurnExecutor(sandboxSide),
+  runner: (sandboxSide, core) => {
+    const hub = new RunnerHub({ ...core, logger: { warn: vi.fn() } })
+    const transport = loopbackTransport(hub)
+    const runner = new SandboxRunner({
+      transport,
+      executor: new LocalTurnExecutor(sandboxSide),
+      maxTurns: 1,
+      logger: runnerLogger,
+    })
+    runner.start()
+    cleanups.push(async () => {
+      await runner.stop()
+      hub.close()
+      // The runner zeroed every data key right after using it.
+      expect(transport.keys.every((key) => key.every((byte) => byte === 0))).toBe(true)
+    })
+    return new RemoteTurnExecutor(hub, core.leases, core.assignments)
+  },
 }
 const executorKinds = Object.keys(executors)
 
@@ -321,14 +362,11 @@ function turnFixture(kind: string) {
       throw new Error('No presigned object in this test')
     }),
   }
-  const executor = executors[kind]!({
-    sandboxes,
-    parser: () => driver,
-    transport,
-    transfer,
-    importBundle,
-  })
   const assignments = new MemoryTurnAssignments()
+  const executor = executors[kind]!(
+    { sandboxes, parser: () => driver, transport, transfer, importBundle },
+    { leases, assignments },
+  )
   const deps: TurnSupervisorDependencies = {
     leases,
     executor,
@@ -365,7 +403,10 @@ function turnFixture(kind: string) {
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup()
+  // Nothing a runner logs names a presigned URL or a turn credential.
+  expect(runnerLines.splice(0).join('\n')).not.toMatch(/s3\.invalid|X-Amz|synthetic-[a-z]+-secret/)
   vi.restoreAllMocks()
   vi.useRealTimers()
 })
@@ -1016,7 +1057,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
 
   it.each(['archive', 'home'] as const)(
     'releases the site when the snapshot service refuses invalid %s before writing',
-    async (kind) => {
+    async (part) => {
       const f = fixture()
       const storage = {
         putIfAbsent: vi.fn(),
@@ -1032,12 +1073,15 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
         secrets as unknown as SecretStore,
       )
       // The fixture archives are not valid tar.zst; `home` fails its own schema first.
-      if (kind === 'home')
+      if (part === 'home')
         vi.mocked(f.driver.sessionState).mockReturnValue({ ...home, root: '/workspace/repo' })
       f.snapshots.save.mockImplementation((metadata, archives, signal) =>
         service.save(metadata, archives, signal),
       )
-      await expect(f.run()).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+      // A runner is not even asked to capture an invalid home, as the local capture refuses it.
+      await expect(f.run()).rejects.toMatchObject({
+        code: kind === 'runner' && part === 'home' ? 'BAD_REQUEST' : 'SNAPSHOT_NOT_WRITTEN',
+      })
       expect(storage.putIfAbsent).not.toHaveBeenCalled()
       expect(storage.put).not.toHaveBeenCalled()
       expect(secrets.transitDataKey).not.toHaveBeenCalled()
@@ -1157,7 +1201,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       let line = JSON.stringify({ type: 'message', text: f.request.context.llm.apiKey })
       if (escaped) line = line.replace('synthetic-', '\\u0073ynthetic-')
       f.stdout(line + '\n')
-      await expect(f.run()).rejects.toThrow('credential')
+      await expect(f.run()).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
       expect(f.evidence.every((entry) => !entry.events?.length)).toBe(true)
       expect(JSON.stringify(f.evidence)).not.toContain(f.request.context.llm.apiKey)
       expect(f.snapshots.save).not.toHaveBeenCalled()
@@ -1367,7 +1411,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
         '\n' +
         'x'.repeat(256 * 1024 + 1),
     )
-    await expect(f.run()).rejects.toThrow('line exceeds')
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_OUTPUT_TOO_LARGE' })
     expect(f.snapshots.save).not.toHaveBeenCalled()
   })
 
@@ -1400,7 +1444,10 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
   })
 })
 
-describe.each(executorKinds)('committed checkpoint publication recovery (%s executor)', (kind) => {
+// On runner VMs the containers of a held turn are listed and adopted through its assignment,
+// which recovery takes over first (TurnExecRecovery); the runner side of that adoption is
+// tested in runner/sandbox-runner.test.ts.
+describe.each(['local'])('committed checkpoint publication recovery (%s executor)', (kind) => {
   async function recoveryFixture() {
     const f = turnFixture(kind)
     const loaded = await f.snapshots.load()

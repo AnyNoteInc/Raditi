@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { OrchestratorConfig } from './config/config.ts'
 import { LOCAL_HOST, listenHost, startMcp, startRoles, type RoleStarters } from './roles.ts'
-import { testCoreConfig, testMcpConfig } from './testing/fakes.ts'
+import { testCoreConfig, testMcpConfig, testRunnerConfig } from './testing/fakes.ts'
 
 const fakeApp = () =>
   ({ close: vi.fn().mockResolvedValue(undefined) }) as unknown as INestApplication
@@ -15,6 +15,7 @@ function starters(overrides: Partial<RoleStarters> = {}) {
   return {
     core: vi.fn<RoleStarters['core']>().mockResolvedValue(fakeApp()),
     mcp: vi.fn<RoleStarters['mcp']>().mockResolvedValue(fakeApp()),
+    runner: vi.fn<RoleStarters['runner']>().mockResolvedValue(fakeApp()),
     ...overrides,
   }
 }
@@ -24,6 +25,7 @@ const devConfig = (overrides: Partial<OrchestratorConfig> = {}): OrchestratorCon
   roles: ['core', 'mcp'],
   core: testCoreConfig(),
   mcp: testMcpConfig(),
+  runner: null,
   ...overrides,
 })
 
@@ -33,14 +35,13 @@ const rejectsNotImplemented = (promise: Promise<unknown>, pattern: RegExp) =>
   )
 
 describe('startRoles', () => {
-  it('fails on the runner role before any port opens', async () => {
+  it('starts the runner role on its own, without the HTTP roles', async () => {
     const start = starters()
+    const runner = testRunnerConfig()
 
-    await rejectsNotImplemented(
-      startRoles(devConfig({ roles: ['core', 'runner'] }), start),
-      /runner/,
-    )
+    await startRoles(devConfig({ roles: ['runner'], core: null, mcp: null, runner }), start)
 
+    expect(start.runner).toHaveBeenCalledWith(runner)
     expect(start.core).not.toHaveBeenCalled()
     expect(start.mcp).not.toHaveBeenCalled()
   })

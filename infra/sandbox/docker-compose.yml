@@ -19,3 +19,46 @@ services:
         max-size: 1m
         max-file: '1'
         compress: 'false'
+
+  # The runner role (spec §8, §19): polls core's runner API and drives this VM's Docker. It opens
+  # no port and holds no platform credentials: no PostgreSQL, Redis, Vault or S3 settings reach it,
+  # and it refuses to start with them. The VM token (root, 0400) and core's private CA come
+  # read-only from /etc/raditi on the VM. Started next to the watchdog: --profile runner.
+  runner:
+    image: ${RUNNER_IMAGE:-}
+    profiles: [runner]
+    restart: unless-stopped
+    # Root only for the Docker socket; every capability is dropped.
+    user: '0:0'
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 256
+    tmpfs:
+      - /tmp:size=64m
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      ORCHESTRATOR_ROLES: runner
+      RUNNER_CORE_URL: ${RUNNER_CORE_URL:-}
+      RUNNER_TOKEN_FILE: /etc/raditi/runner-token
+      RUNNER_CORE_CA_FILE: ${RUNNER_CORE_CA_FILE:-}
+      RUNNER_MAX_TURNS: '1'
+      SANDBOX_RUNTIME: runsc
+      SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
+      SANDBOX_GATEWAY_IMAGE: ${SANDBOX_GATEWAY_IMAGE:-}
+      SANDBOX_NETWORK_GUARD_IMAGE: ${SANDBOX_NETWORK_GUARD_IMAGE:-}
+      SANDBOX_LLM_UPSTREAM: ${SANDBOX_LLM_UPSTREAM:-}
+      SANDBOX_MCP_UPSTREAM: ${SANDBOX_MCP_UPSTREAM:-}
+    volumes:
+      - ${SANDBOX_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - /etc/raditi:/etc/raditi:ro
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+        compress: 'false'
