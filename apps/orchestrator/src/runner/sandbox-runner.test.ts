@@ -346,6 +346,27 @@ describe('SandboxRunner commands', () => {
     expect(lines).toEqual(['command: invalid command'])
   })
 
+  it('polls again as soon as a turn is gone: its slot takes the next turn at once', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    startRunner(core.transport, side.executor)
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    const removal = Promise.withResolvers<void>()
+    vi.mocked(side.sandbox.destroy).mockImplementation(() => removal.promise)
+
+    const before = core.polls.length
+    await core.send(command('destroy', { reason: 'completed' }))
+    // The poll core holds now was sent while the turn still took the only slot.
+    await vi.waitFor(() => expect(core.polls).toHaveLength(before + 1))
+    expect(core.polls.at(-1)).toMatchObject({ capacity: 0 })
+    const polled = core.polls.length
+    removal.resolve()
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'destroyed']))
+    await vi.waitFor(() => expect(core.polls).toHaveLength(polled + 1))
+    expect(core.polls.at(-1)).toMatchObject({ capacity: 1, active: [] })
+  })
+
   it('removes a container core did not take over, before anything is imported into it', async () => {
     const side = sandboxSide()
     const core = scriptedCore()

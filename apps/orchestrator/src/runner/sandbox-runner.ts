@@ -266,6 +266,8 @@ export class SandboxRunner {
   #inventory: RunnerInventory = []
   #loop: Promise<void> | undefined
   #retired = false
+  /** Ends the waiting poll: on stop, or when a turn freed a slot its capacity did not count. */
+  #polling: AbortController | undefined
 
   constructor(private readonly deps: SandboxRunnerDependencies) {
     this.#logger = deps.logger ?? new Logger('Runner')
@@ -279,6 +281,7 @@ export class SandboxRunner {
   /** Stops polling. Containers stay: core recovers the turns of a restarted runner. */
   async stop(): Promise<void> {
     this.#stop.abort()
+    this.#polling?.abort()
     await this.#loop
   }
 
@@ -293,11 +296,18 @@ export class SandboxRunner {
   async #run(): Promise<void> {
     for (let failures = 0; !this.#stop.signal.aborted;) {
       this.#expire()
+      const polling = new AbortController()
+      this.#polling = polling
+      const request = await this.#pollRequest()
+      // Stopped, or a slot was freed after its capacity was counted.
+      if (polling.signal.aborted) continue
       let answer: unknown
       try {
-        answer = await this.deps.transport.poll(await this.#pollRequest(), this.#stop.signal)
+        answer = await this.deps.transport.poll(request, polling.signal)
       } catch (error) {
         if (this.#stop.signal.aborted) return
+        // Core requeues whatever an ended poll did not deliver.
+        if (polling.signal.aborted) continue
         if (classify(error).reason === 'lost') return this.#retire()
         this.#warn('poll', logged(error))
         const wait = Math.min(POLL_BACKOFF_MS.max, POLL_BACKOFF_MS.first * 2 ** failures++)
@@ -862,7 +872,11 @@ export class SandboxRunner {
   }
 
   #forget(held: Held): void {
-    if (this.#held.get(held.id) === held) this.#held.delete(held.id)
+    if (this.#held.get(held.id) === held) {
+      this.#held.delete(held.id)
+      // The freed slot takes the next turn now, not when core ends the poll it holds.
+      this.#polling?.abort()
+    }
     if (held.containerId) {
       this.#gone.set(held.id, held.containerId)
       if (this.#gone.size > GONE_ASSIGNMENTS) this.#gone.delete(this.#gone.keys().next().value!)

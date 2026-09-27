@@ -402,6 +402,8 @@ export class RunnerHub implements OnApplicationShutdown {
           const timer = setTimeout(wake, remaining)
           signal.addEventListener('abort', wake, { once: true })
           session.wake = wake
+          // Aborted while the claim ran: that abort event does not fire again.
+          if (signal.aborted) wake()
         })
       }
     } finally {
