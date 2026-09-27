@@ -40,6 +40,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # Three images (migrate alone is ~2 GB) plus the buildx cache do not fit the runner's free
+      # disk: drop preinstalled toolchains this job never uses.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker image prune --all --force >/dev/null
+          df -h /
+
       - name: Setup toolchain
         uses: ./.github/actions/setup
 

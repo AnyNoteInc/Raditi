@@ -185,7 +185,8 @@ test('secrets: each service mounts only its own directory, read-only, never crea
     const [bind] = binds
     assert.equal(bind.type, 'bind')
     assert.equal(bind.read_only, true)
-    assert.equal(bind.bind?.create_host_path, false)
+    // Long syntax defaults to false; older Compose (GitHub runners) omits the default when rendering.
+    assert.equal(bind.bind?.create_host_path ?? false, false)
     assert.equal(bind.source, `${example.SECRETS_DIR}/${secretDirs[name]}`)
     for (const volume of services[name].volumes ?? [])
       if (volume !== bind)
