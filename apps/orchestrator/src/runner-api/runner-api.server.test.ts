@@ -180,7 +180,20 @@ async function start() {
     return { assignment, preparing, command: command!, bundle }
   }
 
-  return { hub, executor, assignments, leases, warn, call, json, poll, report, binary, prepare }
+  return {
+    hub,
+    executor,
+    assignments,
+    leases,
+    warn,
+    runnerSession,
+    call,
+    json,
+    poll,
+    report,
+    binary,
+    prepare,
+  }
 }
 
 describe('RunnerApiServer', () => {
@@ -319,6 +332,29 @@ describe('RunnerApiServer', () => {
     })
     expect(foreign.status).toBe(409)
     expect(await foreign.json()).toEqual({ error: 'LEASE_LOST' })
+  })
+
+  it('asks runners to retry while core shuts down, never tells them their turns are lost', async () => {
+    const f = await start()
+    const waiting = f.poll()
+    await vi.waitFor(() => expect(f.hub.session('sandbox-1')).toBe(f.runnerSession))
+    // The hub closes first; the listener still takes requests until the server closes.
+    f.hub.close()
+    expect(await waiting).toEqual([])
+    for (const response of [
+      await f.json(runnerApiPaths.poll, {
+        runnerSession: f.runnerSession,
+        capacity: 1,
+        inventory: [],
+        active: [],
+      }),
+      await f.report(randomUUID(), { type: 'quiesced', commandId: randomUUID() }),
+      await f.json(runnerApiPaths.reconcile, { runnerSession: f.runnerSession, inventory: [] }),
+    ]) {
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({ error: 'UNAVAILABLE' })
+    }
+    expect(f.warn).not.toHaveBeenCalled()
   })
 
   it('takes a capture upload only up to its limit', async () => {

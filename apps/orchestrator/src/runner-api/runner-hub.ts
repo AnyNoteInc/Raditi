@@ -370,7 +370,7 @@ export class RunnerHub implements OnApplicationShutdown {
     request: RunnerPollRequest,
     signal: AbortSignal,
   ): Promise<{ commands: RunnerCommand[] }> {
-    this.#assertOpen()
+    this.#assertServing()
     const session = this.#session(runnerId, request.runnerSession)
     session.inventory = request.inventory
     session.inventoryAt = performance.now()
@@ -424,7 +424,6 @@ export class RunnerHub implements OnApplicationShutdown {
   }
 
   async report(runnerId: string, report: RunnerReport): Promise<void> {
-    this.#assertOpen()
     const live = await this.#authorize(
       runnerId,
       report.runnerSession,
@@ -534,7 +533,7 @@ export class RunnerHub implements OnApplicationShutdown {
     runnerId: string,
     request: RunnerReconcileRequest,
   ): Promise<{ remove: string[] }> {
-    this.#assertOpen()
+    this.#assertServing()
     this.#rejectRetired(runnerId, request.runnerSession)
     let owners
     try {
@@ -647,6 +646,14 @@ export class RunnerHub implements OnApplicationShutdown {
     if (this.#closed) throw runnerUnavailable('Core is shutting down')
   }
 
+  /**
+   * A runner request after close: its sessions were retired only in this core's memory, so the
+   * runner retries against the next core instead of hearing that its turns are lost.
+   */
+  #assertServing(): void {
+    if (this.#closed) throw RunnerApiError.of('UNAVAILABLE')
+  }
+
   #connected(live: LiveAssignment): RunnerSession | undefined {
     const session = this.#sessions.get(live.runner.id)
     return session && session.id === live.runner.session && !session.gone ? session : undefined
@@ -741,6 +748,7 @@ export class RunnerHub implements OnApplicationShutdown {
     assignmentId: string,
     epoch: number,
   ): Promise<LiveAssignment> {
+    this.#assertServing()
     this.#rejectRetired(runnerId, sessionId)
     const live = this.#live.get(assignmentId)
     if (live) {
