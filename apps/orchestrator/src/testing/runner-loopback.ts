@@ -20,9 +20,26 @@ import {
 
 const wire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
-async function answer<T>(route: string, call: () => Promise<T>): Promise<T> {
+/**
+ * A request of a connection that drops fails as if core were unreachable; a long poll ends
+ * empty instead, so that the runner polls the next core without its backoff.
+ */
+function dropped<T>(connection: AbortSignal, route: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const drop = () =>
+      route === 'poll' ? resolve({ commands: [] } as T) : reject(new RunnerCallError(route, null))
+    if (connection.aborted) drop()
+    else connection.addEventListener('abort', drop, { once: true })
+  })
+}
+
+async function answerOn<T>(
+  route: string,
+  call: () => Promise<T>,
+  connection: AbortSignal,
+): Promise<T> {
   try {
-    return await call()
+    return await Promise.race([call(), dropped<T>(connection, route)])
   } catch (error) {
     if (error instanceof RunnerCallError) throw error
     if (error instanceof RunnerApiError) throw new RunnerCallError(route, error.status, error.body)
@@ -40,6 +57,8 @@ const headers = (fence: RunnerCommandFence): RunnerBinaryHeaders => ({
 export interface LoopbackTransport extends RunnerTransport {
   /** The core the runner talks to; a test swaps it to restart core. */
   hub: RunnerHub
+  /** Core died: requests in flight fail as unreachable, the next ones reach `hub`. */
+  reconnect(hub: RunnerHub): void
   /** Every data key the runner got, to check that it zeroed each one. */
   readonly keys: Uint8Array[]
   /** Called before each request reaches core: a test may throw a RunnerCallError here. */
@@ -47,8 +66,16 @@ export interface LoopbackTransport extends RunnerTransport {
 }
 
 export function loopbackTransport(hub: RunnerHub, runnerId = 'sandbox-1'): LoopbackTransport {
+  let connection = new AbortController()
+  const answer = <T>(route: string, call: () => Promise<T>) =>
+    answerOn(route, call, connection.signal)
   const transport: LoopbackTransport = {
     hub,
+    reconnect(next) {
+      connection.abort()
+      connection = new AbortController()
+      transport.hub = next
+    },
     keys: [],
     poll: (request, signal) =>
       answer('poll', async () => {

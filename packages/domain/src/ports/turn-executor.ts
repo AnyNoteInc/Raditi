@@ -48,12 +48,35 @@ export interface TurnExecutor {
   prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution>
   /**
    * Take over the container of an unfinished turn after a restart, under the recovered fence.
-   * null when the container is missing; CONFLICT when the container found under `containerId`
-   * has other labels. `removal` only allows destroy().
+   * null when the container is gone; CONFLICT when the container found under `containerId` has
+   * other labels. `work` refuses a container that can no longer run the agent (its gateway
+   * died) and a turn whose credentials the executor lacks with EXEC_LOST; `removal` reaches
+   * such a container too and only allows destroy().
    */
   adopt(input: TurnAdoptInput, signal: AbortSignal): Promise<TurnExecution | null>
   /** Turn containers the executor holds, found by labels: what recovery must adopt or remove. */
   list(filter: Partial<SandboxLabels>): Promise<SandboxInfo[]>
+  /**
+   * Whether recovery can take an unfinished assignment over now. null while the runner that
+   * holds it is away: it may come back before the turn's deadline.
+   */
+  takeover(assignment: { runner: TurnAssignmentRunner | null }): TurnTakeover | null
+}
+
+/** The runner session an assignment is bound to (TurnAssignment.runner). */
+export interface TurnAssignmentRunner {
+  id: string
+  session: string
+}
+
+export interface TurnTakeover {
+  /** The runner session the assignment moves to; none for the local executor. */
+  runnerSession?: string
+  /**
+   * The session that launched the agent is still there and filters its output itself: recovery
+   * sends no credentials. Otherwise they come from TurnCredentialSource or the turn is given up.
+   */
+  holdsCredentials: boolean
 }
 
 export interface TurnPrepareInput {

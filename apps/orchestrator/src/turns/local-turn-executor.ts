@@ -32,6 +32,7 @@ import {
   type TurnPrepareInput,
   type TurnRestoreSource,
   type TurnSealInput,
+  type TurnTakeover,
 } from '@repo/domain'
 
 import { importBaseBundle } from '../git-workspace/base-bundle.ts'
@@ -147,6 +148,11 @@ export class LocalTurnExecutor implements TurnExecutor {
 
   list(filter: Partial<SandboxLabels>): Promise<SandboxInfo[]> {
     return this.deps.sandboxes.list(filter)
+  }
+
+  /** Always reachable; the turn credentials lived in the memory of the core that died. */
+  takeover(): TurnTakeover {
+    return { holdsCredentials: false }
   }
 
   /** Every part is fetched and checked, and the data key zeroed, before anything is written. */

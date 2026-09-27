@@ -340,9 +340,10 @@ export class TurnAttempt {
   }
 
   /**
-   * Removes the container (and whatever `alsoRemove` removes), then releases the site, or holds
-   * it when a removal failed or S3 or Git may have been written. Without its last journal entry
-   * the site stays held only in the latter cases; a failed release expires by its TTL.
+   * Removes the container (and, unless the turn completed, whatever `alsoRemove` removes), then
+   * releases the site, or holds it when a removal failed or S3 or Git may have been written.
+   * Without its last journal entry the site stays held only in the latter cases; a failed
+   * release expires by its TTL.
    */
   async settle(alsoRemove?: () => Promise<void>): Promise<'completed' | 'released' | 'held'> {
     const { lease, guard } = this.init
@@ -351,7 +352,7 @@ export class TurnAttempt {
     let recovery = this.#checkpointStarted && !this.#completed
     try {
       await this.#destroy()
-      await alsoRemove?.()
+      if (!this.#completed) await alsoRemove?.()
     } catch {
       recovery = true
       this.#reason = 'destroy_failed'

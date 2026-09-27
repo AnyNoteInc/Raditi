@@ -1,4 +1,4 @@
-import type { TurnExecutorKind, TurnPlan } from './turn-executor.ts'
+import type { TurnAssignmentRunner, TurnExecutorKind, TurnPlan } from './turn-executor.ts'
 import type { SiteLeaseFence } from './turn-runner.ts'
 
 /** How an assignment ended. `lost`: recovery gave the turn up, never billed (P12). */
@@ -24,7 +24,7 @@ export interface TurnAssignment {
   /** The database clock of the same statement. */
   serverNow: Date
   /** The runner session holding the turn; null until claimed and for the local executor. */
-  runner: { id: string; session: string } | null
+  runner: TurnAssignmentRunner | null
   containerId: string | null
   recoveryAttempts: number
   outcome: TurnAssignmentOutcome | null

@@ -1,0 +1,894 @@
+import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
+
+import {
+  DomainError,
+  MAX_SANDBOX_TURN_MS,
+  runnerReportSchema,
+  SANDBOX_SECRETS_DIR,
+  type AgentDriver,
+  type AgentEvent,
+  type ExecCursor,
+  type ExecHandle,
+  type RemovableSandbox,
+  type Sandbox,
+  type SandboxInfo,
+  type SnapshotManifest,
+  type SnapshotMetadata,
+  type SnapshotReference,
+  type TurnBundleSource,
+  type TurnExecutor,
+  type TurnResult,
+} from '@repo/domain'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
+import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
+import { RunnerHub } from '../runner-api/runner-hub.ts'
+import { SandboxRunner } from '../runner/sandbox-runner.ts'
+import type { SealedElsewhere, SnapshotParts } from '../sessions/snapshot.service.ts'
+import { crashable } from '../testing/crash.ts'
+import { loopbackTransport, type LoopbackTransport } from '../testing/runner-loopback.ts'
+import { MemorySiteLeases } from '../testing/site-leases.ts'
+import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+import { MemoryTurnCredentials } from '../testing/turn-credentials.ts'
+import { MemoryTurnJournal } from '../testing/turn-journal.ts'
+import { LiveTurns } from './live-turns.ts'
+import { LocalTurnExecutor } from './local-turn-executor.ts'
+import { TurnExecRecovery } from './turn-exec-recovery.ts'
+import { TurnSupervisor, type TurnRequest } from './turn-supervisor.ts'
+
+const labels = {
+  workspaceId: '00000000-0000-4000-8000-000000000001',
+  siteId: '00000000-0000-4000-8000-000000000002',
+  taskId: '00000000-0000-4000-8000-000000000003',
+  sessionId: 'session1',
+  turn: 1,
+}
+const baseSha = 'b'.repeat(40)
+const headSha = 'c'.repeat(40)
+const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+const values = { llmApiKey: 'synthetic-llm-secret', mcpToken: 'synthetic-mcp-secret' }
+const result: TurnResult = {
+  summary: 'Готово',
+  change_type: 'code',
+  client_message: 'Изменение готово к проверке.',
+  files_changed: ['page.txt'],
+  questions: [],
+  needs_approval: false,
+  risk: 'low',
+}
+const events: AgentEvent[] = [
+  { type: 'started', nativeSessionId: 'native1' },
+  { type: 'message', text: JSON.stringify(result) },
+  { type: 'completed' },
+]
+const line = (event: AgentEvent) => JSON.stringify(event) + '\n'
+/** What the agent prints before a test lets it finish, and after. */
+const first = Buffer.from(line(events[0]!) + line(events[1]!))
+const rest = Buffer.from(line(events[2]!))
+/** The first epoch's credentials, as P3 would keep them. */
+const reference = { taskId: labels.taskId, sessionId: labels.sessionId, turn: 1, epoch: 1 }
+
+const request = (): TurnRequest => ({
+  sandbox: {
+    image,
+    labels,
+    runtime: 'runc',
+    resources: { cpu: 1, memoryMiB: 256, pids: 64 },
+    user: { uid: 10001, gid: 10001 },
+    env: {},
+    secrets: [],
+    network: { mode: 'none' },
+    hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+  },
+  context: {
+    taskId: labels.taskId,
+    sessionId: labels.sessionId,
+    turn: 1,
+    llm: { baseUrl: 'http://synthetic.invalid', apiKey: values.llmApiKey, model: 'synthetic' },
+    mcp: { url: 'http://synthetic.invalid/mcp', token: values.mcpToken },
+    instructions: 'Synthetic verification',
+  },
+  input: { prompt: 'Synthetic turn', attachments: [] },
+  driverVersion: '1.0.0',
+  workspace: {
+    repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
+    branch: `agent/${labels.taskId}`,
+    expectedBaseSha: baseSha,
+    protectedPaths: [],
+  },
+  committedAt: '2026-09-27T00:00:00.000Z',
+})
+
+/** The VM's Docker: survives every restart of core and of the runner. */
+function docker() {
+  const gate = Promise.withResolvers<void>()
+  let killed = false
+  let exists = false
+  const kill = vi.fn(async () => {
+    killed = true
+    gate.resolve()
+  })
+  const handle = (from: number): ExecHandle => ({
+    id: 'exec1',
+    output: async function* () {
+      if (from < first.byteLength) {
+        yield { stream: 'stdout' as const, offset: from, data: first.subarray(from) }
+        await gate.promise
+        if (killed) return
+      }
+      const at = Math.max(from, first.byteLength)
+      if (at < first.byteLength + rest.byteLength)
+        yield { stream: 'stdout' as const, offset: at, data: rest.subarray(at - first.byteLength) }
+    },
+    wait: async () => {
+      await gate.promise
+      return killed
+        ? { code: null, reason: 'cancelled' as const }
+        : { code: 0, reason: 'exited' as const }
+    },
+    kill,
+  })
+  const sandbox: Sandbox = {
+    id: 'container1',
+    labels: { ...labels, leaseEpoch: 1 },
+    exec: vi.fn(async () => handle(0)),
+    attach: vi.fn(async (_execId: string, cursor?: ExecCursor) => handle(cursor?.stdout ?? 0)),
+    fs: { write: vi.fn(async () => {}), read: vi.fn(), list: vi.fn(), remove: vi.fn() },
+    quiesce: vi.fn(async () => {}),
+    destroy: vi.fn(async () => {
+      exists = false
+    }),
+  }
+  const found = (id: string) => (exists && id === sandbox.id ? sandbox : null)
+  const sandboxes = {
+    kind: 'docker' as const,
+    create: vi.fn(async () => {
+      exists = true
+      return sandbox
+    }),
+    get: vi.fn(async (id: string): Promise<Sandbox | null> => found(id)),
+    getForRemoval: vi.fn(async (id: string): Promise<RemovableSandbox | null> => found(id)),
+    list: vi.fn(async (): Promise<SandboxInfo[]> =>
+      exists ? [{ id: sandbox.id, labels: sandbox.labels, createdAt: new Date() }] : [],
+    ),
+  }
+  const archives = {
+    home: Buffer.from('home archive'),
+    patch: Buffer.from('tracked-patch'),
+    untracked: emptyUntrackedArchive(),
+  }
+  return {
+    sandbox,
+    sandboxes,
+    kill,
+    exists: () => exists,
+    /** The agent prints the rest and exits. */
+    finish: () => gate.resolve(),
+    side: {
+      sandboxes,
+      parser: () => ({ parseEvent: (text: string) => [JSON.parse(text) as AgentEvent] }),
+      transport: { capture: vi.fn(async () => archives), restore: vi.fn(async () => {}) },
+      transfer: {
+        get: vi.fn(async (): Promise<Uint8Array> => {
+          throw new Error('No previous turn in this test')
+        }),
+        put: vi.fn(async () => {}),
+      },
+      importBundle: vi.fn(async () => {}),
+    },
+  }
+}
+
+/** What survives a restart of core: the database, S3, Git and the sandbox side. */
+function world(kind: string) {
+  const leases = new MemorySiteLeases()
+  const journal = new MemoryTurnJournal(leases)
+  const assignments = new MemoryTurnAssignments()
+  const credentials = new MemoryTurnCredentials()
+  const vm = docker()
+  const driver: AgentDriver = {
+    id: 'codex',
+    image,
+    capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
+    prepare: vi.fn(async (context) => ({
+      context: { ...context },
+      files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true' }],
+      env: {},
+      secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: context.llm.apiKey }],
+    })),
+    command: vi.fn(() => ['synthetic-agent']),
+    parseEvent: (text) => [JSON.parse(text) as AgentEvent],
+    // The saved home depends on the driver session: recovery must derive the same one.
+    sessionState: vi.fn((run) => ({
+      root: '/agent-home/codex',
+      include: [`sessions/${run.context.nativeSessionId ?? 'new'}`],
+      exclude: [],
+    })),
+    extractResult: (list) =>
+      JSON.parse(list.findLast((event) => event.type === 'message')?.text ?? 'null') as unknown,
+  }
+  const committed = new Map<string, { manifest: SnapshotManifest; patch: Uint8Array }>()
+  const snapshots = {
+    save: vi.fn(
+      async (
+        metadata: SnapshotMetadata,
+        parts: SnapshotParts<SealedElsewhere>,
+        _signal: AbortSignal,
+      ) => {
+        const manifest: SnapshotManifest = {
+          ...metadata,
+          schemaVersion: 1,
+          createdAt: request().committedAt,
+          parts: [],
+        }
+        committed.set(`${metadata.sessionId}/${metadata.turn}`, {
+          manifest,
+          patch: Buffer.from(parts.patch as Uint8Array),
+        })
+        return manifest
+      },
+    ),
+    load: vi.fn(async (ref: SnapshotReference) => {
+      const found = committed.get(`${ref.sessionId}/${ref.turn}`)
+      if (!found) throw new DomainError('SNAPSHOT_LOAD_FAILED', 'No committed manifest', 502)
+      if (JSON.stringify(found.manifest.home) !== JSON.stringify(ref.home))
+        throw new DomainError('CONFLICT', 'Snapshot is incompatible', 409)
+      return {
+        manifest: structuredClone(found.manifest),
+        archives: { home: Buffer.alloc(0), patch: found.patch, untracked: emptyUntrackedArchive() },
+      }
+    }),
+    restoreSource: vi.fn(async () => {
+      throw new Error('No previous turn in this test')
+    }),
+  }
+  const publish = vi.fn(async (assertFence: () => Promise<void>) => {
+    await assertFence()
+  })
+  const bundle: TurnBundleSource = {
+    baseSha,
+    branch: `agent/${labels.taskId}`,
+    sha256: '0'.repeat(64),
+    sizeBytes: 1,
+    read: async function* () {
+      yield Buffer.from('b')
+    },
+  }
+  const workspace = {
+    buildBaseBundle: vi.fn(async () => bundle),
+    preparePublication: vi.fn(async (_input: { credentials: readonly string[] }) => ({
+      baseSha,
+      headSha,
+      patch: Buffer.from('full-patch') as Uint8Array,
+      untracked: emptyUntrackedArchive(),
+      publish,
+      dispose: vi.fn(async () => {}),
+    })),
+  }
+  const logger = { warn: vi.fn(), error: vi.fn() }
+  let transport: LoopbackTransport | undefined
+  let runner: SandboxRunner | undefined
+
+  /** A core process: its own memory, the shared stores; `crash` can kill or pause it. */
+  const core = (crash?: ReturnType<typeof crashable>) => {
+    const wrap = crash?.wrap ?? (<T>(value: T) => value)
+    const deps = {
+      leases: wrap(leases),
+      assignments: wrap(assignments),
+      journal: wrap(journal),
+      workspace: wrap(workspace),
+      snapshots: wrap(snapshots),
+    }
+    let hub: RunnerHub | undefined
+    let executor: TurnExecutor
+    if (kind === 'local') executor = new LocalTurnExecutor(vm.side)
+    else {
+      hub = new RunnerHub({ ...deps, logger: { warn: vi.fn() } })
+      cleanups.push(async () => hub!.close())
+      executor = new RemoteTurnExecutor(hub, deps.leases, deps.assignments)
+    }
+    executor = wrap(executor)
+    const live = new LiveTurns()
+    return {
+      hub,
+      executor,
+      live,
+      supervisor: new TurnSupervisor({ ...deps, executor, driver, live }),
+      recovery: new TurnExecRecovery({
+        ...deps,
+        executor,
+        driver: () => driver,
+        credentials,
+        live,
+        logger,
+      }),
+    }
+  }
+
+  /** The runner VM's process, polling `hub`; a new one is a restarted runner. */
+  const startRunner = (hub: RunnerHub) => {
+    transport = loopbackTransport(hub)
+    runner = new SandboxRunner({
+      transport,
+      executor: new LocalTurnExecutor(vm.side),
+      maxTurns: 1,
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    })
+    runner.start()
+    const started = runner
+    cleanups.push(() => started.stop())
+    return runner
+  }
+
+  let current: ReturnType<typeof core> | undefined
+  let runnerStopped = false
+  /** A new core process; on a runner VM the runner's next poll reaches it. */
+  const restart = async (crash?: ReturnType<typeof crashable>) => {
+    const previous = current
+    const next = core(crash)
+    current = next
+    if (next.hub && transport) {
+      transport.reconnect(next.hub)
+      previous?.hub?.close()
+      if (!runnerStopped)
+        await vi.waitFor(() => expect(next.hub!.session('sandbox-1')).toBeDefined())
+    }
+    return next
+  }
+
+  /**
+   * Runs a turn on a core that is killed -9 right after it journaled `phase`, or when `arm`
+   * kills it; returns a new core that shares only what survives a restart. On a runner VM the
+   * runner lives on and polls the new core, unless `stopRunner` stops it first.
+   */
+  const crashAt = async (
+    phase: string | undefined,
+    options: { arm?: (kill: () => void) => void; stopRunner?: boolean } = {},
+  ) => {
+    const crash = crashable()
+    const before = core(crash)
+    current = before
+    if (before.hub) startRunner(before.hub)
+    let crashed = false
+    const kill = () => {
+      if (crashed) return
+      crashed = true
+      crash.freeze()
+    }
+    journal.onRecord = (entry) => {
+      if (entry.phase === phase) kill()
+    }
+    options.arm?.(kill)
+    const zombie = before.supervisor.run(request()).then(
+      () => 'completed',
+      (error: unknown) => error,
+    )
+    await vi.waitFor(() => expect(crashed).toBe(true))
+    journal.onRecord = undefined
+    if (options.stopRunner && runner) {
+      await runner.stop()
+      runnerStopped = true
+    }
+    const after = await restart()
+    return { before, after, crash, zombie }
+  }
+
+  /** kill -9 of the runner: its memory is gone, its container stays; a new session polls. */
+  const restartRunner = async () => {
+    await runner!.stop()
+    const next = startRunner(current!.hub!)
+    await vi.waitFor(() => expect(current!.hub!.session('sandbox-1')).toBe(next.session))
+    return next
+  }
+
+  const assignment = () => [...assignments.rows.values()][0]!
+  const lease = () => leases.rows.get(labels.siteId)!
+  return {
+    leases,
+    journal,
+    assignments,
+    credentials,
+    vm,
+    driver,
+    snapshots,
+    workspace,
+    publish,
+    logger,
+    core,
+    crashAt,
+    startRunner,
+    restart,
+    restartRunner,
+    runner: () => runner!,
+    transport: () => transport!,
+    assignment,
+    lease,
+    /** One recovery pass and every recovery it started. */
+    recover: async (recovery: TurnExecRecovery) => {
+      await recovery.tick()
+      await recovery.settled()
+    },
+  }
+}
+
+const cleanups: Array<() => Promise<void>> = []
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
+  vi.restoreAllMocks()
+})
+
+describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) => {
+  /** The executor of the new core holds the turn credentials only when a runner outlived it. */
+  const runnerHolds = kind === 'runner'
+
+  /** Recovery finished the turn itself under `epoch`: saved, removed, published, released. */
+  const expectCompleted = (w: ReturnType<typeof world>, epoch = 2) => {
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch })
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.vm.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('completed')
+    expect(w.vm.sandboxes.create).toHaveBeenCalledOnce()
+    expect(w.vm.sandbox.exec).toHaveBeenCalledOnce()
+    expect(w.journal.phases(epoch).slice(-5)).toEqual([
+      'checkpointing',
+      'checkpointed',
+      'destroyed',
+      'publishing',
+      'completed',
+    ])
+    expect(
+      w.journal.entries
+        .filter((entry) => entry.fence.epoch === epoch)
+        .every((entry) => entry.recoveredFromEpoch === epoch - 1),
+    ).toBe(true)
+    expect(w.credentials.revoked).toEqual([reference])
+  }
+
+  /** Recovery removed the turn's container and released the site: the turn is lost. */
+  const expectGivenUp = (w: ReturnType<typeof world>, reason: string) => {
+    expect(w.vm.exists()).toBe(false)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason,
+      fence: { epoch: 2 },
+      recoveredFromEpoch: 1,
+    })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 2 } })
+    expect(w.publish).not.toHaveBeenCalled()
+    expect(w.credentials.revoked).toEqual([reference])
+  }
+
+  it.each(['running', 'output'])(
+    'resumes an agent left %s from the journal cursor and finishes the turn',
+    async (phase) => {
+      const w = world(kind)
+      w.credentials.keep(reference, values)
+      const { after } = await w.crashAt(phase)
+      const recovering = after.recovery.tick().then(() => after.recovery.settled())
+      await vi.waitFor(() => expect(w.journal.phases(2)).toContain('resumed'))
+      w.vm.finish()
+      await recovering
+
+      expectCompleted(w)
+      const cursor =
+        phase === 'output' ? { stdout: first.byteLength, stderr: 0 } : { stdout: 0, stderr: 0 }
+      expect(w.journal.entries.find((entry) => entry.phase === 'resumed')).toMatchObject({
+        cursor,
+        execId: 'exec1',
+        containerId: 'container1',
+        recoveredFromEpoch: 1,
+      })
+      expect(w.vm.sandbox.attach).toHaveBeenCalledWith('exec1', cursor)
+      // Every event once across the epochs, and the result read from all of them.
+      expect(
+        w.journal.entries.flatMap((entry) =>
+          entry.phase === 'output' ? (entry.events ?? []) : [],
+        ),
+      ).toEqual(events)
+      expect(w.snapshots.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driver: { id: 'codex', version: '1.0.0', nativeSessionId: 'native1' },
+          home: { root: '/agent-home/codex', include: ['sessions/native1'], exclude: [] },
+        }),
+        expect.anything(),
+        expect.anything(),
+      )
+      // Keys come from the source only when no runner outlived core to filter the output.
+      expect(w.credentials.recovered).toBe(runnerHolds ? 0 : 1)
+      expect(w.workspace.preparePublication.mock.calls.at(-1)![0].credentials).toEqual(
+        runnerHolds ? [] : [values.llmApiKey, values.mcpToken, values.llmApiKey],
+      )
+    },
+  )
+
+  it('captures a quiesced turn again and publishes it', async () => {
+    const w = world(kind)
+    w.credentials.keep(reference, values)
+    w.vm.finish()
+    const { after } = await w.crashAt('quiesced')
+    await w.recover(after.recovery)
+    expectCompleted(w)
+    expect(w.vm.sandbox.quiesce).toHaveBeenCalledTimes(2)
+    expect(w.vm.sandbox.attach).not.toHaveBeenCalled()
+  })
+  it('resumes again when the core that resumed the turn died too', async () => {
+    const w = world(kind)
+    w.credentials.keep(reference, values)
+    await w.crashAt('output')
+    const crash = crashable()
+    const second = await w.restart(crash)
+    w.journal.onRecord = (entry) => {
+      if (entry.phase === 'resumed') crash.freeze()
+    }
+    void second.recovery.tick()
+    await vi.waitFor(() => expect(w.journal.phases(2)).toEqual(['resumed']))
+    w.journal.onRecord = undefined
+    const third = await w.restart()
+    const recovering = w.recover(third.recovery)
+    await vi.waitFor(() => expect(w.journal.phases(3)).toContain('resumed'))
+    w.vm.finish()
+    await recovering
+
+    expectCompleted(w, 3)
+    expect(w.assignment()).toMatchObject({ firstEpoch: 1, recoveryAttempts: 2 })
+    expect(w.journal.entries.filter((entry) => entry.phase === 'resumed')).toMatchObject([
+      { fence: { epoch: 2 }, recoveredFromEpoch: 1 },
+      { fence: { epoch: 3 }, recoveredFromEpoch: 2 },
+    ])
+  })
+
+  it.each([
+    ['leased', 'a container its journal does not know yet'],
+    ['created', 'a created container'],
+    ['restored', 'a prepared container'],
+  ])('removes %s turn with %s: its agent may have started', async (phase) => {
+    const w = world(kind)
+    const create = w.vm.sandboxes.create.getMockImplementation()!
+    await w.crashAt(phase === 'leased' ? undefined : phase, {
+      // Killed between the container's creation and its journal entry.
+      arm: (kill) =>
+        phase === 'leased' &&
+        w.vm.sandboxes.create.mockImplementationOnce(async (...args) => {
+          const created = await create(...args)
+          kill()
+          return created
+        }),
+    })
+    const { recovery } = await w.restart()
+    expect(w.journal.phases(1).at(-1)).toBe(phase)
+    await w.recover(recovery)
+
+    expectGivenUp(w, 'run_failed')
+    expect(w.vm.sandbox.destroy).toHaveBeenCalledWith('failed')
+    expect(w.vm.sandbox.exec).not.toHaveBeenCalled()
+    expect(w.driver.prepare).toHaveBeenCalledOnce()
+  })
+
+  it('fails a turn whose core died before any runner or container took it', async () => {
+    const w = world(kind)
+    await w.crashAt(undefined, {
+      arm: (kill) =>
+        w.workspace.buildBaseBundle.mockImplementationOnce(async () => {
+          kill()
+          return new Promise<never>(() => {})
+        }),
+    })
+    const { recovery } = await w.restart()
+    await w.recover(recovery)
+    expect(w.vm.sandboxes.create).not.toHaveBeenCalled()
+    expectGivenUp(w, 'run_failed')
+  })
+
+  it('publishes a checkpoint whose manifest was committed before core died', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const save = w.snapshots.save.getMockImplementation()!
+    const { after } = await w.crashAt(undefined, {
+      arm: (kill) =>
+        w.snapshots.save.mockImplementationOnce(async (...args) => {
+          const manifest = await save(...args)
+          kill()
+          return manifest
+        }),
+    })
+    expect(w.journal.phases(1).at(-1)).toBe('checkpointing')
+    await w.recover(after.recovery)
+
+    expect(w.journal.phases(2)).toEqual([
+      'checkpointed',
+      'destroyed',
+      'publishing',
+      'publication_recovered',
+    ])
+    expect(w.vm.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('failed')
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+    expect(w.credentials.revoked).toEqual([reference])
+  })
+
+  it('leaves a checkpoint without a committed manifest to an operator', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const { after } = await w.crashAt(undefined, {
+      arm: (kill) =>
+        w.snapshots.save.mockImplementationOnce(async () => {
+          kill()
+          return new Promise<never>(() => {})
+        }),
+    })
+    const hold = vi.spyOn(w.leases, 'holdForRecovery')
+    await w.recover(after.recovery)
+    const holds = hold.mock.calls.length
+    // Not tried again by this process.
+    await w.recover(after.recovery)
+
+    expect(hold).toHaveBeenCalledTimes(holds)
+    expect(w.snapshots.load).toHaveBeenCalledOnce()
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 1 } })
+    expect(w.publish).not.toHaveBeenCalled()
+    expect(w.logger.error).toHaveBeenCalledWith(
+      'Turn recovery left a turn to an operator: no committed checkpoint (epoch 1, phase checkpointing, attempts 0)',
+    )
+  })
+
+  it.each(['checkpointed', 'destroyed', 'publishing'])(
+    'publishes a turn left %s under a newer epoch',
+    async (phase) => {
+      const w = world(kind)
+      w.vm.finish()
+      const { after } = await w.crashAt(phase)
+      await w.recover(after.recovery)
+
+      expect(w.journal.phases(2).slice(-2)).toEqual(['publishing', 'publication_recovered'])
+      expect(w.publish).toHaveBeenCalledOnce()
+      expect(w.vm.exists()).toBe(false)
+      expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+      expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+    },
+  )
+
+  it('frees the site of a turn journaled completed before its release', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const { after } = await w.crashAt('completed')
+    await w.recover(after.recovery)
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.lease()).toMatchObject({ taskId: null, held: false })
+    expect(w.assignment()).toMatchObject({ outcome: 'completed' })
+  })
+
+  it('closes a failed turn whose assignment update was lost', async () => {
+    const w = world(kind)
+    const { supervisor, recovery } = await w.restart()
+    w.workspace.buildBaseBundle.mockRejectedValueOnce(new Error('clone failed'))
+    vi.spyOn(w.assignments, 'finish').mockRejectedValueOnce(new Error('database unavailable'))
+    await expect(supervisor.run(request())).rejects.toThrow('clone failed')
+    expect(w.assignment().outcome).toBeNull()
+    await w.recover(recovery)
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+    expect(w.journal.phases()).toEqual(['leased', 'failed'])
+  })
+
+  it.each([
+    ['its exec is gone', 'exec'],
+    ['its container is gone', 'container'],
+    ['its container can no longer run the agent', 'gateway'],
+  ])('gives the turn up when %s', async (_case, lost) => {
+    const w = world(kind)
+    w.credentials.keep(reference, values)
+    const { after } = await w.crashAt('output')
+    // A runner that holds the container answers from memory: only a restarted one asks Docker.
+    if (kind === 'runner' && lost !== 'exec') await w.restartRunner()
+    if (lost === 'exec')
+      vi.mocked(w.vm.sandbox.attach).mockRejectedValue(
+        new DomainError('NOT_FOUND', 'No such exec', 404),
+      )
+    else {
+      w.vm.sandboxes.get.mockResolvedValue(null)
+      // Gone for good, or found by its labels and reached only for removal (its gateway died).
+      if (lost === 'container') await w.vm.sandbox.destroy('failed')
+    }
+    await w.recover(after.recovery)
+
+    expectGivenUp(w, 'exec_lost')
+    expect(w.vm.sandbox.destroy).toHaveBeenLastCalledWith('failed')
+  })
+
+  it('gives the turn up when nobody holds its credentials any more', async () => {
+    const w = world(kind)
+    const { after } = await w.crashAt('output')
+    if (kind === 'runner') await w.restartRunner()
+    await w.recover(after.recovery)
+    expect(w.credentials.recovered).toBe(1)
+    expectGivenUp(w, 'exec_lost')
+  })
+
+  it('gives the turn up as a timeout once its deadline passed', async () => {
+    const w = world(kind)
+    w.credentials.keep(reference, values)
+    const { after } = await w.crashAt('output')
+    w.assignments.rows.get(w.assignment().id)!.deadlineAt = new Date(Date.now() - 1_000)
+    await w.recover(after.recovery)
+    expectGivenUp(w, 'timeout')
+    expect(w.vm.sandbox.attach).not.toHaveBeenCalled()
+  })
+
+  it('holds the site while a container of the turn cannot be removed', async () => {
+    const w = world(kind)
+    const { after } = await w.crashAt('restored')
+    w.vm.sandbox.destroy = vi.fn(async () => {
+      throw new DomainError('SANDBOX_COMMAND_FAILED', 'Docker did not answer', 502)
+    })
+    await w.recover(after.recovery)
+
+    expect(w.vm.exists()).toBe(true)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'recovery',
+      reason: 'destroy_failed',
+      fence: { epoch: 2 },
+    })
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 2 })
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 2 } })
+    expect(w.credentials.revoked).toEqual([])
+  })
+
+  it('tries again later when the executor does not answer before the agent is back', async () => {
+    const w = world(kind)
+    w.credentials.keep(reference, values)
+    const { after } = await w.crashAt('output')
+    vi.mocked(w.vm.sandbox.attach).mockRejectedValueOnce(
+      new DomainError('SANDBOX_COMMAND_FAILED', 'Docker did not answer', 502),
+    )
+    await w.recover(after.recovery)
+    // The container and its agent stay; the site waits under the new epoch.
+    expect(w.vm.exists()).toBe(true)
+    expect(w.vm.kill).not.toHaveBeenCalled()
+    expect(w.lease()).toMatchObject({ held: true, epoch: 2 })
+    expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 1 })
+
+    const recovering = w.recover(after.recovery)
+    await vi.waitFor(() => expect(w.journal.phases(3)).toContain('resumed'))
+    w.vm.finish()
+    await recovering
+    expectCompleted(w, 3)
+  })
+
+  it('leaves a turn to an operator after two recovery attempts', async () => {
+    const w = world(kind)
+    const { after } = await w.crashAt('output')
+    w.assignments.rows.get(w.assignment().id)!.recoveryAttempts = 2
+    const hold = vi.spyOn(w.leases, 'holdForRecovery')
+    await w.recover(after.recovery)
+    await w.recover(after.recovery)
+
+    expect(hold).toHaveBeenCalledOnce()
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+    expect(w.vm.exists()).toBe(true)
+    expect(w.assignment().outcome).toBeNull()
+    expect(w.logger.error).toHaveBeenCalledWith(
+      'Turn recovery left a turn to an operator: too many recovery attempts (epoch 1, phase output, attempts 2)',
+    )
+  })
+
+  it('leaves a turn to an operator when its journal and assignment disagree', async () => {
+    const w = world(kind)
+    const { after } = await w.crashAt('output')
+    w.assignments.rows.get(w.assignment().id)!.containerId = 'other-container'
+    await w.recover(after.recovery)
+    expect(w.lease()).toMatchObject({ held: true, epoch: 1 })
+    expect(w.vm.exists()).toBe(true)
+    expect(w.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('left a turn to an operator: journal mismatch'),
+    )
+  })
+
+  it('fences the core it took the turn from by the epoch', async () => {
+    const w = world(kind)
+    w.credentials.keep(reference, values)
+    const { after, crash, zombie } = await w.crashAt('output')
+    const recovering = w.recover(after.recovery)
+    await vi.waitFor(() => expect(w.journal.phases(2)).toContain('resumed'))
+    w.vm.finish()
+    await recovering
+    const journaled = w.journal.entries.length
+    const lease = { ...w.lease() }
+
+    // The old core was only paused: it goes on with its stale fence.
+    crash.thaw()
+    expect(await zombie).toBeInstanceOf(DomainError)
+    expect(w.journal.entries).toHaveLength(journaled)
+    expect(w.lease()).toEqual(lease)
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+    expect(w.publish).toHaveBeenCalledOnce()
+  })
+
+  it('never takes over a turn its own process drives', async () => {
+    const w = world(kind)
+    const crash = crashable()
+    const core = w.core(crash)
+    if (core.hub) w.startRunner(core.hub)
+    w.journal.onRecord = (entry) => {
+      if (entry.phase === 'output') crash.freeze()
+    }
+    void core.supervisor.run(request()).catch(() => {})
+    await vi.waitFor(() => expect(w.journal.phases()).toContain('output'))
+    // A recovery of the same process: it shares the supervisor's live turns.
+    const recovery = new TurnExecRecovery({
+      leases: w.leases,
+      assignments: w.assignments,
+      journal: w.journal,
+      workspace: w.workspace,
+      snapshots: w.snapshots,
+      executor: core.executor,
+      driver: () => w.driver,
+      credentials: w.credentials,
+      live: core.live,
+    })
+    const hold = vi.spyOn(w.leases, 'holdForRecovery')
+    await w.recover(recovery)
+    expect(hold).not.toHaveBeenCalled()
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 1 } })
+  })
+})
+
+describe('turn exec recovery on a runner VM', () => {
+  it('waits for a runner that is away and gives the turn up at its deadline', async () => {
+    const w = world('runner')
+    const { after } = await w.crashAt('output', { stopRunner: true })
+    await w.recover(after.recovery)
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+    expect(w.journal.phases(1).at(-1)).toBe('output')
+
+    w.assignments.rows.get(w.assignment().id)!.deadlineAt = new Date(Date.now() - 1_000)
+    await w.recover(after.recovery)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'timeout',
+      fence: { epoch: 1 },
+    })
+    expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
+    // Nobody confirmed the removal: the lease expires with its grace, not released early.
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+    expect(w.credentials.revoked).toEqual([reference])
+  })
+
+  it('resumes on a restarted runner with recovered credentials and fences the old session', async () => {
+    const w = world('runner')
+    w.credentials.keep(reference, values)
+    const { after } = await w.crashAt('output')
+    const old = w.runner().session
+    const adopt = vi.spyOn(after.executor, 'adopt')
+    const restarted = await w.restartRunner()
+    const recovering = w.recover(after.recovery)
+    await vi.waitFor(() => expect(w.journal.phases(2)).toContain('resumed'))
+    expect(w.assignment().runner).toEqual({ id: 'sandbox-1', session: restarted.session })
+    expect(adopt.mock.calls[0]![0]).toMatchObject({
+      purpose: 'work',
+      credentials: [values.llmApiKey, values.mcpToken, values.llmApiKey],
+    })
+    // A zombie of the old session is refused.
+    await expect(
+      after.hub!.report(
+        'sandbox-1',
+        runnerReportSchema.parse({
+          type: 'quiesced',
+          commandId: randomUUID(),
+          runnerSession: old,
+          assignmentId: w.assignment().id,
+          epoch: 2,
+        }),
+      ),
+    ).rejects.toMatchObject({ body: { error: 'LEASE_LOST' } })
+    w.vm.finish()
+    await recovering
+
+    expect(w.credentials.recovered).toBe(1)
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+    expect(w.publish).toHaveBeenCalledOnce()
+  })
+})

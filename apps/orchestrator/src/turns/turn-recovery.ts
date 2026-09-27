@@ -21,8 +21,10 @@ import { holdForRecovery, LeaseGuard } from './lease-guard.ts'
 import type { TurnSupervisorDependencies } from './turn-supervisor.ts'
 
 export interface PublicationRecoveryRequest {
-  /** The unfinished assignment of the turn: where its containers are found. */
+  /** The unfinished assignment of the turn: it moves to the new epoch and ends completed. */
   assignmentId: string
+  /** The runner session the assignment moves to, when its runner restarted (TurnTakeover). */
+  runnerSession?: string
   /** Exact held epoch from durable evidence. This API never guesses or clears a different hold. */
   heldFence: SiteLeaseFence
   snapshot: SnapshotReference
@@ -33,7 +35,7 @@ const RECOVERY_TIMEOUT_MS = 120_000
 
 type RecoveryDependencies = Pick<
   TurnSupervisorDependencies,
-  'leases' | 'executor' | 'workspace' | 'snapshots' | 'journal'
+  'leases' | 'executor' | 'assignments' | 'workspace' | 'snapshots' | 'journal'
 >
 
 /**
@@ -104,6 +106,14 @@ export class TurnPublicationRecovery {
       })
     }
     try {
+      // Its containers are adopted through the assignment, so it moves to this epoch first.
+      const advanced = await this.deps.assignments.advance({
+        id: input.assignmentId,
+        fromEpoch: input.heldFence.epoch,
+        epoch: lease.epoch,
+        ...(input.runnerSession ? { runnerSession: input.runnerSession } : {}),
+      })
+      if (!advanced) throw conflict('The turn assignment moved on without this recovery')
       await guard.assertFence()
       await record('checkpointed')
       const containers = await this.deps.executor.list({
@@ -171,6 +181,10 @@ export class TurnPublicationRecovery {
       if (!(await this.deps.leases.release(lease)))
         throw leaseLost('Recovery lease was lost before completion')
       completed = true
+      // A failed update is finished by the next recovery pass from the journal.
+      await this.deps.assignments
+        .finish({ id: input.assignmentId, epoch: lease.epoch, outcome: 'completed' })
+        .catch(() => false)
       return { manifest, headSha: publication.headSha }
     } finally {
       if (!completed) {

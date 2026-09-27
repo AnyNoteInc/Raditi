@@ -332,6 +332,12 @@ export class RunnerHub implements OnApplicationShutdown {
     live.exec?.fail(released)
   }
 
+  /** The runner's connected session, if it has one. */
+  session(runnerId: string): string | undefined {
+    const session = this.#sessions.get(runnerId)
+    return session && !session.gone ? session.id : undefined
+  }
+
   /** Turn containers the connected runners reported in their last poll. */
   inventory(filter: Partial<SandboxLabels>): SandboxInfo[] {
     const now = performance.now()

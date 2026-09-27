@@ -105,7 +105,14 @@ export class TaskEventTurnJournal implements TurnJournal {
 
 /** What recovery needs from a replayed journal: the last step and where the agent's output ended. */
 export interface ReplayedTurn {
+  /** The last entry: `failed` or `recovery` when an owner ended the turn or held its site. */
   lastPhase: TurnPhase | undefined
+  /** The last step the turn reached, not counting those two. */
+  step: TurnPhase | undefined
+  /** Why the last `failed` or `recovery` entry ended the turn. */
+  reason: JournaledEvidence['reason']
+  /** The highest sequence journaled: a recovered owner continues after it. */
+  sequence: number
   containerId: string | undefined
   execId: string | undefined
   /** The durable output cursor: only whole lines, acknowledged with their events. */
@@ -113,25 +120,57 @@ export interface ReplayedTurn {
   /** Every journaled agent event, across the epochs; its length is the attach eventCount. */
   events: AgentEvent[]
   candidateHeadSha: string | undefined
+  /** The driver session: the last `started` event's, else the one the turn resumed. */
+  nativeSessionId: string | undefined
 }
 
+const endings: readonly TurnPhase[] = ['failed', 'recovery']
+
+/**
+ * Sums a turn's journal up. Entries that contradict each other — another container or exec, an
+ * output cursor that moved back — are a journal mismatch: CONFLICT, and the turn waits for an
+ * operator.
+ */
 export function replayedTurn(entries: readonly JournaledEvidence[]): ReplayedTurn {
   const state: ReplayedTurn = {
     lastPhase: undefined,
+    step: undefined,
+    reason: undefined,
+    sequence: 0,
     containerId: undefined,
     execId: undefined,
     cursor: { stdout: 0, stderr: 0 },
     events: [],
     candidateHeadSha: undefined,
+    nativeSessionId: undefined,
   }
+  const mismatch = () => conflict('Turn journal entries contradict each other')
   for (const entry of entries) {
+    if (
+      (entry.containerId && state.containerId && entry.containerId !== state.containerId) ||
+      (entry.execId && state.execId && entry.execId !== state.execId)
+    )
+      throw mismatch()
     state.lastPhase = entry.phase
+    if (endings.includes(entry.phase)) state.reason = entry.reason
+    else {
+      state.step = entry.phase
+      state.reason = undefined
+    }
+    state.sequence = Math.max(state.sequence, entry.sequence)
     state.containerId = entry.containerId ?? state.containerId
     state.execId = entry.execId ?? state.execId
     state.candidateHeadSha = entry.candidateHeadSha ?? state.candidateHeadSha
+    state.nativeSessionId = entry.nativeSessionId ?? state.nativeSessionId
     if (entry.phase === 'output' && entry.cursor) {
+      if (entry.cursor.stdout < state.cursor.stdout || entry.cursor.stderr < state.cursor.stderr)
+        throw mismatch()
       state.cursor = { ...entry.cursor }
-      state.events.push(...(entry.events ?? []))
+      for (const event of entry.events ?? []) {
+        state.events.push(event)
+        if (event.type === 'started' && event.nativeSessionId)
+          state.nativeSessionId = event.nativeSessionId
+      }
     }
   }
   return state

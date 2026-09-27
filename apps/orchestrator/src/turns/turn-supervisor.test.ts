@@ -1464,9 +1464,8 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
   })
 })
 
-// On runner VMs the containers of a held turn are listed and adopted through its assignment,
-// which recovery takes over first (TurnExecRecovery); the runner side of that adoption is
-// tested in runner/sandbox-runner.test.ts.
+// On runner VMs the containers of a held turn are adopted through its assignment, which this
+// recovery moves to the new epoch first; turn-exec-recovery.test.ts runs it on both executors.
 describe.each(['local'])('committed checkpoint publication recovery (%s executor)', (kind) => {
   async function recoveryFixture() {
     const f = turnFixture(kind)
@@ -1476,8 +1475,16 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     loaded.archives.patch = f.publication.patch
     loaded.archives.untracked = f.publication.untracked
     f.snapshots.load.mockResolvedValue(loaded)
+    const assignment = (await f.assignments.open({
+      fence: f.lease,
+      sessionId: labels.sessionId,
+      turn: 1,
+      executor: 'local',
+      plan: toTurnPlan(f.request, 'codex'),
+      remainingMs: 60_000,
+    }))!
     const input: PublicationRecoveryRequest = {
-      assignmentId: '00000000-0000-4000-8000-0000000000aa',
+      assignmentId: assignment.id,
       heldFence: f.lease,
       workspace: f.request.workspace,
       snapshot: {
@@ -1493,6 +1500,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
       ...f,
       input,
       loaded,
+      assignment,
       recover: () => new TurnPublicationRecovery(f.deps).recover(input),
     }
   }
@@ -1522,6 +1530,12 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     expect(f.evidence.at(-1)).toMatchObject({
       phase: 'publication_recovered',
       recoveredFromEpoch: 1,
+    })
+    // The assignment moved to the new epoch before any container was adopted, and ended there.
+    expect(await f.assignments.get(f.assignment.id)).toMatchObject({
+      fence: { epoch: 2 },
+      recoveryAttempts: 1,
+      outcome: 'completed',
     })
     expect(f.driver.prepare).not.toHaveBeenCalled()
     expect(f.sandboxes.create).not.toHaveBeenCalled()
@@ -1590,6 +1604,14 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     await expect(f.recover()).rejects.toThrow('recovery source')
     expect(f.snapshots.load).toHaveBeenCalledTimes(1)
     expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
+  })
+
+  it('holds the new epoch without publishing when the assignment moved on', async () => {
+    const f = await recoveryFixture()
+    await f.assignments.finish({ id: f.assignment.id, epoch: 1, outcome: 'failed' })
+    await expect(f.recover()).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(f.publication.publish).not.toHaveBeenCalled()
+    expect(f.leases.holdForRecovery).toHaveBeenCalledWith(expect.objectContaining({ epoch: 2 }))
   })
 
   it('requires the exact deliberately held fence', async () => {

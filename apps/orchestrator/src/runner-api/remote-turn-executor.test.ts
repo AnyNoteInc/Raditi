@@ -585,6 +585,26 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     await expect(adopting).resolves.toBeNull()
   })
 
+  it('tells recovery whether the runner of a turn is there and still holds its credentials', async () => {
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    const row = (await f.assignments.get(assignment.id))!
+    expect(f.executor.takeover(row)).toEqual({
+      runnerSession: vm.runnerSession,
+      holdsCredentials: true,
+    })
+    // Restarted: a new session that never saw the turn credentials.
+    const restarted = f.runner('sandbox-1')
+    await restarted.poll({ capacity: 0 })
+    expect(f.executor.takeover(row)).toEqual({
+      runnerSession: restarted.runnerSession,
+      holdsCredentials: false,
+    })
+    expect(f.executor.takeover({ runner: { id: 'sandbox-2', session: randomUUID() } })).toBeNull()
+    // Nobody claimed it: no runner holds anything of the turn.
+    expect(f.executor.takeover({ runner: null })).toEqual({ holdsCredentials: false })
+  })
+
   it('lists and reconciles the runner inventory against unfinished assignments', async () => {
     const f = fixture()
     const { assignment, vm } = await f.prepared()

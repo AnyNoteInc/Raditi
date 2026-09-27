@@ -1,4 +1,11 @@
-import type { SandboxInfo, SandboxProvider, SiteLeaseAuthority, SiteLeaseStore } from '@repo/domain'
+import type {
+  SandboxInfo,
+  SandboxProvider,
+  SiteLeaseAuthority,
+  SiteLeaseStore,
+  TurnAssignment,
+  TurnAssignmentStore,
+} from '@repo/domain'
 
 export interface ReconcileResult {
   removed: string[]
@@ -11,15 +18,24 @@ export class TurnReconciler {
   constructor(
     private readonly sandboxes: SandboxProvider,
     private readonly leases: SiteLeaseStore,
+    /** Recovery moves a turn to a newer epoch; its container keeps the epoch it was created with. */
+    private readonly assignments: Pick<TurnAssignmentStore, 'unfinished'>,
   ) {}
 
   async reconcile(): Promise<ReconcileResult> {
     const result: ReconcileResult = { removed: [], preserved: [], uncertain: [] }
     const candidates = await this.sandboxes.list()
+    if (candidates.length === 0) return result
+    // Without the owners an adopted container cannot be told from an orphan: nothing is removed.
+    const owners = await this.assignments.unfinished().catch(() => null)
+    if (!owners) {
+      result.uncertain.push(...candidates.map((candidate) => candidate.id))
+      return result
+    }
     for (const candidate of candidates) {
       try {
         const authority = await this.leases.inspect(candidate.labels.siteId)
-        if (!this.stale(candidate, authority)) {
+        if (!this.stale(candidate, authority, owners)) {
           result.preserved.push(candidate.id)
           continue
         }
@@ -36,7 +52,7 @@ export class TurnReconciler {
           result.uncertain.push(candidate.id)
           continue
         }
-        if (!this.stale(candidate, await this.leases.inspect(candidate.labels.siteId))) {
+        if (!this.stale(candidate, await this.leases.inspect(candidate.labels.siteId), owners)) {
           result.preserved.push(candidate.id)
           continue
         }
@@ -49,16 +65,33 @@ export class TurnReconciler {
     return result
   }
 
-  private stale(candidate: SandboxInfo, authority: SiteLeaseAuthority | null): boolean {
+  private stale(
+    candidate: SandboxInfo,
+    authority: SiteLeaseAuthority | null,
+    owners: readonly TurnAssignment[],
+  ): boolean {
     if (!authority || authority.taskId === null) return true
     if (authority.taskId !== candidate.labels.taskId || authority.operation !== 'turn') return true
     // Old fixtures without an epoch can be kept; assigning them the current epoch would be unsafe.
-    if (candidate.labels.leaseEpoch === undefined) return false
-    if (authority.epoch !== candidate.labels.leaseEpoch) return true
-    return (
-      authority.heldForOperator ||
-      authority.expiresAt === null ||
-      authority.expiresAt.getTime() <= authority.serverNow.getTime()
+    const epoch = candidate.labels.leaseEpoch
+    if (epoch === undefined) return false
+    const live =
+      !authority.heldForOperator &&
+      authority.expiresAt !== null &&
+      authority.expiresAt.getTime() > authority.serverNow.getTime()
+    if (authority.epoch === epoch) return !live
+    // Taken over by recovery: the turn's assignment holds the current epoch and this container.
+    const adopted = owners.some(
+      (owner) =>
+        owner.fence.siteId === candidate.labels.siteId &&
+        owner.fence.taskId === candidate.labels.taskId &&
+        owner.sessionId === candidate.labels.sessionId &&
+        owner.turn === candidate.labels.turn &&
+        owner.fence.epoch === authority.epoch &&
+        epoch >= owner.firstEpoch &&
+        epoch < owner.fence.epoch &&
+        (owner.containerId === null || owner.containerId === candidate.id),
     )
+    return !(adopted && live)
   }
 }

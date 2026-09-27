@@ -20,6 +20,7 @@ import {
   type SiteLeaseStore,
   type TurnAdoptInput,
   type TurnAgentExec,
+  type TurnAssignmentRunner,
   type TurnAssignmentStore,
   type TurnAttachState,
   type TurnExecution,
@@ -27,6 +28,7 @@ import {
   type TurnOutputBatch,
   type TurnPrepareInput,
   type TurnSealInput,
+  type TurnTakeover,
 } from '@repo/domain'
 
 import type { ExecStream } from './exec-stream.ts'
@@ -172,6 +174,18 @@ export class RemoteTurnExecutor implements TurnExecutor {
 
   async list(filter: Partial<SandboxLabels>): Promise<SandboxInfo[]> {
     return this.hub.inventory(filter)
+  }
+
+  /**
+   * The assignment's runner under its current session: the one that launched the agent still
+   * holds its credentials, a restarted one does not. An assignment nobody claimed has no runner
+   * and no container.
+   */
+  takeover(assignment: { runner: TurnAssignmentRunner | null }): TurnTakeover | null {
+    if (!assignment.runner) return { holdsCredentials: false }
+    const session = this.hub.session(assignment.runner.id)
+    if (!session) return null
+    return { runnerSession: session, holdsCredentials: session === assignment.runner.session }
   }
 }
 

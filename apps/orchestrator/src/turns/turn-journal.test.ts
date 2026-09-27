@@ -4,6 +4,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { replayedTurn, TaskEventTurnJournal, type JournaledEvidence } from './turn-journal.ts'
 
+const fence = {
+  siteId: '00000000-0000-4000-8000-000000000002',
+  taskId: '00000000-0000-4000-8000-000000000003',
+  operation: 'turn' as const,
+  epoch: 1,
+}
+const entry = (phase: JournaledEvidence['phase'], extra: Partial<JournaledEvidence> = {}) =>
+  ({ fence, sessionId: 'synthetic', turn: 1, sequence: 1, phase, ...extra }) as JournaledEvidence
+
 describe('turn journal boundary', () => {
   it('refuses arbitrary raw errors and prepared credentials in evidence', async () => {
     const $queryRaw = vi.fn()
@@ -54,56 +63,78 @@ describe('turn journal replay', () => {
   })
 
   it('sums up where the agent stopped: the last phase, its exec and the journaled output', () => {
-    const fence = {
-      siteId: '00000000-0000-4000-8000-000000000002',
-      taskId: '00000000-0000-4000-8000-000000000003',
-      operation: 'turn' as const,
-      epoch: 1,
-    }
-    const entry = (phase: JournaledEvidence['phase'], extra: Partial<JournaledEvidence> = {}) =>
-      ({
-        fence,
-        sessionId: 'synthetic',
-        turn: 1,
-        sequence: 1,
-        phase,
-        ...extra,
-      }) as JournaledEvidence
     expect(replayedTurn([])).toEqual({
       lastPhase: undefined,
+      step: undefined,
+      reason: undefined,
+      sequence: 0,
       containerId: undefined,
       execId: undefined,
       cursor: { stdout: 0, stderr: 0 },
       events: [],
       candidateHeadSha: undefined,
+      nativeSessionId: undefined,
     })
-    expect(
-      replayedTurn([
-        entry('leased'),
-        entry('created', { containerId: 'container1' }),
-        entry('running', { containerId: 'container1', execId: 'exec1' }),
-        entry('output', {
-          execId: 'exec1',
-          cursor: { stdout: 10, stderr: 2 },
-          events: [{ type: 'message', text: 'first' }],
-        }),
-        entry('output', { execId: 'exec1', cursor: { stdout: 12, stderr: 5 } }),
-        entry('resumed', { fence: { ...fence, epoch: 2 }, recoveredFromEpoch: 1 }),
-        entry('output', {
-          fence: { ...fence, epoch: 2 },
-          execId: 'exec1',
-          cursor: { stdout: 20, stderr: 5 },
-          events: [{ type: 'completed' }],
-        }),
-      ]),
-    ).toEqual({
+    const journal = [
+      entry('leased'),
+      entry('created', { sequence: 2, containerId: 'container1' }),
+      entry('restored', { sequence: 3, containerId: 'container1', nativeSessionId: 'prior' }),
+      entry('running', { sequence: 4, containerId: 'container1', execId: 'exec1' }),
+      entry('output', {
+        sequence: 5,
+        execId: 'exec1',
+        cursor: { stdout: 10, stderr: 2 },
+        events: [
+          { type: 'started', nativeSessionId: 'native1' },
+          { type: 'message', text: 'first' },
+        ],
+      }),
+      entry('output', { sequence: 6, execId: 'exec1', cursor: { stdout: 12, stderr: 5 } }),
+      entry('resumed', { sequence: 7, fence: { ...fence, epoch: 2 }, recoveredFromEpoch: 1 }),
+      entry('output', {
+        sequence: 8,
+        fence: { ...fence, epoch: 2 },
+        execId: 'exec1',
+        cursor: { stdout: 20, stderr: 5 },
+        events: [{ type: 'completed' }],
+      }),
+    ]
+    expect(replayedTurn(journal)).toEqual({
       lastPhase: 'output',
+      step: 'output',
+      reason: undefined,
+      sequence: 8,
       containerId: 'container1',
       execId: 'exec1',
       cursor: { stdout: 20, stderr: 5 },
-      events: [{ type: 'message', text: 'first' }, { type: 'completed' }],
+      events: [
+        { type: 'started', nativeSessionId: 'native1' },
+        { type: 'message', text: 'first' },
+        { type: 'completed' },
+      ],
       candidateHeadSha: undefined,
+      nativeSessionId: 'native1',
     })
+    // A held turn keeps the step it reached and says why it was held.
+    expect(
+      replayedTurn([...journal, entry('recovery', { sequence: 9, reason: 'destroy_failed' })]),
+    ).toMatchObject({ lastPhase: 'recovery', step: 'output', reason: 'destroy_failed' })
+    expect(replayedTurn(journal.slice(0, 3))).toMatchObject({ nativeSessionId: 'prior' })
+  })
+
+  it.each([
+    ['another container', entry('created', { containerId: 'container2' })],
+    ['another exec', entry('running', { containerId: 'container1', execId: 'exec2' })],
+    ['a cursor moved back', entry('output', { execId: 'exec1', cursor: { stdout: 1, stderr: 0 } })],
+  ])('finds a journal mismatch in %s', (_case, contradicting) => {
+    const journal = [
+      entry('created', { containerId: 'container1' }),
+      entry('running', { containerId: 'container1', execId: 'exec1' }),
+      entry('output', { execId: 'exec1', cursor: { stdout: 5, stderr: 0 } }),
+    ]
+    expect(() => replayedTurn([...journal, contradicting])).toThrow(
+      expect.objectContaining({ code: 'CONFLICT' }),
+    )
   })
 })
 
