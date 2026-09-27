@@ -490,7 +490,7 @@ describe('loadConfig — production', () => {
     ).toBe('http://192.168.5.2:8333')
   })
 
-  it('refuses to start a runner that holds platform credentials, naming only the variables', () => {
+  it('refuses to start a runner given anything but its own settings, naming only the variables', () => {
     const problems = problemsOf(
       runnerEnv({
         DATABASE_URL: 'postgresql://core:secret@db.internal:5432/raditi',
@@ -498,16 +498,57 @@ describe('loadConfig — production', () => {
         VAULT_ADDR: 'https://vault.internal:8200',
         VAULT_SECRET_ID: 'core-secret',
         S3_SECRET_ACCESS_KEY: 'very-secret-s3-key',
+        GITEA_TOKEN: 'gitea-secret',
+        LITELLM_MASTER_KEY: 'sk-master-secret',
+        YANDEX_API_KEY: 'yandex-secret',
+        BETTER_AUTH_SECRET: 'auth-secret',
+        METRICS_TOKEN: 'metrics-secret',
+        NODE_OPTIONS: '--require /tmp/hook.js',
         S3_REGION: ' ',
       }),
     )
     expect(problems).toEqual([
+      'BETTER_AUTH_SECRET: must not be set for the runner role in production',
       'DATABASE_URL: must not be set for the runner role in production',
+      'GITEA_TOKEN: must not be set for the runner role in production',
+      'LITELLM_MASTER_KEY: must not be set for the runner role in production',
+      'METRICS_TOKEN: must not be set for the runner role in production',
+      'NODE_OPTIONS: must not be set for the runner role in production',
       'REDIS_URL: must not be set for the runner role in production',
       'S3_SECRET_ACCESS_KEY: must not be set for the runner role in production',
       'VAULT_ADDR: must not be set for the runner role in production',
       'VAULT_SECRET_ID: must not be set for the runner role in production',
+      'YANDEX_API_KEY: must not be set for the runner role in production',
     ])
-    expect(problems.join('\n')).not.toMatch(/secret@|core-secret|very-secret/)
+    expect(problems.join('\n')).not.toMatch(/secret|hook/)
+  })
+
+  it('lets a production runner keep what the system, Docker and the Node image set', () => {
+    expect(
+      loadConfig(
+        runnerEnv({
+          NODE_ENV: 'production',
+          PATH: '/usr/local/bin:/usr/bin:/bin',
+          HOME: '/root',
+          HOSTNAME: 'a1b2c3d4e5f6',
+          TZ: 'UTC',
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+          NODE_VERSION: '26.10.0',
+          RUNNER_MAX_TURNS: '1',
+          SANDBOX_DOCKER_SOCKET: '/var/run/docker.sock',
+        }),
+      ).runner,
+    ).not.toBeNull()
+    // Outside production a runner shares the developer's .env.
+    expect(
+      loadConfig({
+        APP_ENV: 'development',
+        ORCHESTRATOR_ROLES: 'runner',
+        RUNNER_CORE_URL: 'http://127.0.0.1:8083',
+        RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
+        DATABASE_URL: 'postgresql://raditi:raditi@localhost:5432/raditi',
+      }).runner,
+    ).not.toBeNull()
   })
 })

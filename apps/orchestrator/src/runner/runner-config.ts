@@ -2,8 +2,9 @@ import type { AppEnv } from '@repo/domain'
 import type { SandboxConfig } from '@repo/sandbox-providers'
 
 /**
- * The runner role on a sandbox VM (spec §8): Docker and core's runner API only. It holds no
- * PostgreSQL, Redis, Vault or S3 settings; the VM token is read from its file at start.
+ * The runner role on a sandbox VM (spec §8): Docker and core's runner API only. In production
+ * it starts only with its own, the sandbox and the system variables; the VM token is read from
+ * its file at start.
  */
 export interface RunnerConfig {
   appEnv: AppEnv

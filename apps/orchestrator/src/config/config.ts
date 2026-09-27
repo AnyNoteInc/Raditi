@@ -121,13 +121,38 @@ const ownEnvSchema = z.object({
   METRICS_TOKEN: envVar(z.string().optional()),
 })
 
-/** Platform credentials a sandbox VM must never hold (spec §8, §19). */
-function isPlatformVariable(name: string): boolean {
+/** Set by the OS, Docker or the Node image: never a platform setting. */
+const systemVariables = new Set([
+  'PATH',
+  'HOME',
+  'HOSTNAME',
+  'TZ',
+  'TERM',
+  'LANG',
+  'LANGUAGE',
+  'PWD',
+  'OLDPWD',
+  'SHLVL',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TMPDIR',
+  'NODE_VERSION',
+  'YARN_VERSION',
+  '_',
+])
+
+/**
+ * All a production runner may be given (spec §8, §19): its own and the sandbox settings plus the
+ * system's. Anything else may be a platform credential a sandbox VM must never hold.
+ */
+function isRunnerVariable(name: string): boolean {
   return (
-    name === 'DATABASE_URL' ||
-    name === 'REDIS_URL' ||
-    name.startsWith('VAULT_') ||
-    name.startsWith('S3_')
+    ['APP_ENV', 'NODE_ENV', 'ORCHESTRATOR_ROLES'].includes(name) ||
+    name.startsWith('RUNNER_') ||
+    name.startsWith('SANDBOX_') ||
+    name.startsWith('LC_') ||
+    systemVariables.has(name)
   )
 }
 
@@ -229,10 +254,10 @@ export function loadConfig(env: Env): OrchestratorConfig {
       problems.push('RUNNER_TOKEN_FILE: must be an absolute path')
     if (own.RUNNER_CORE_CA_FILE !== undefined && !isAbsolute(own.RUNNER_CORE_CA_FILE))
       problems.push('RUNNER_CORE_CA_FILE: must be an absolute path')
-    // Names only: the values are exactly what must not be on a sandbox VM.
+    // Names only: the values may be exactly what must not be on a sandbox VM.
     if (production)
-      for (const name of Object.keys(env).filter(isPlatformVariable).sort())
-        if (env[name]?.trim())
+      for (const name of Object.keys(env).sort())
+        if (!isRunnerVariable(name) && env[name]?.trim())
           problems.push(`${name}: must not be set for the runner role in production`)
   }
 
