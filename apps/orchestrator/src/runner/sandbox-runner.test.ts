@@ -8,6 +8,7 @@ import {
   TURN_PUBLICATION_GRACE_MS,
   type RunnerPollRequest,
   type RunnerReport,
+  type SandboxSpec,
   type TurnOutputBatch,
   type TurnPlan,
 } from '@repo/domain'
@@ -348,6 +349,29 @@ describe('SandboxRunner commands', () => {
       inventory: [{ containerId: 'container1', labels: { ...labels, leaseEpoch: 1 } }],
     })
     expect(lines).toEqual(['command: invalid command'])
+  })
+
+  it('counts a turn from the poll that brought it, and a command’s validity from receipt', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    const now = performance.now.bind(performance)
+    let later = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now() + later)
+    startRunner(core.transport, side.executor)
+    await vi.waitFor(() => expect(core.polls).toHaveLength(1))
+    // Core answers 5 s after the runner sent its poll: that much of the turn is gone already.
+    later = 5_000
+    await core.send(prepareCommand({ remainingMs: 60_000 }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    const [spec] = side.sandboxes.create.mock.calls[0] as unknown as [SandboxSpec]
+    expect(spec.hardTimeoutMs).toBeLessThanOrEqual(55_000)
+    expect(spec.hardTimeoutMs).toBeGreaterThan(54_000)
+
+    // A quiesce valid for 3 s is still carried out 5 s after its poll was sent.
+    await vi.waitFor(() => expect(core.polls).toHaveLength(2))
+    later = 10_000
+    await core.send(command('quiesce', { ttlMs: 3_000 }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'quiesced']))
   })
 
   it('polls again as soon as a turn is gone: its slot takes the next turn at once', async () => {

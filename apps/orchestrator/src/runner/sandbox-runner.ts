@@ -306,6 +306,8 @@ export class SandboxRunner {
       // Stopped, or a slot was freed after its capacity was counted.
       if (polling.signal.aborted) continue
       let answer: unknown
+      // A prepare's remaining time counts from here: core took it off its queue only later.
+      const sentAt = performance.now()
       try {
         answer = await this.deps.transport.poll(request, polling.signal)
       } catch (error) {
@@ -325,7 +327,7 @@ export class SandboxRunner {
         this.#warn('poll', new Error('invalid answer'))
         continue
       }
-      for (const command of parsed.data.commands) this.#dispatch(command, receivedAt)
+      for (const command of parsed.data.commands) this.#dispatch(command, receivedAt, sentAt)
     }
   }
 
@@ -372,7 +374,11 @@ export class SandboxRunner {
     }
   }
 
-  #dispatch(raw: unknown, receivedAt: number): void {
+  /**
+   * A command's TTL counts from receipt: a poll is held for up to 25 seconds. What is left of
+   * a turn counts from the poll's sending, which is never later than core's delivery.
+   */
+  #dispatch(raw: unknown, receivedAt: number, sentAt: number): void {
     const parsed = runnerCommandSchema.safeParse(raw)
     if (!parsed.success) {
       this.#warn('command', new Error('invalid command'))
@@ -381,16 +387,16 @@ export class SandboxRunner {
     const command = parsed.data
     if (this.#seen.has(command.commandId)) return
     remember(this.#seen, command.commandId, SEEN_COMMANDS)
-    void this.#execute(command, receivedAt + command.ttlMs).catch((error: unknown) =>
+    void this.#execute(command, receivedAt + command.ttlMs, sentAt).catch((error: unknown) =>
       this.#warn(`${command.type} command`, logged(error)),
     )
   }
 
-  async #execute(command: RunnerCommand, expiresAt: number): Promise<void> {
+  async #execute(command: RunnerCommand, expiresAt: number, sentAt: number): Promise<void> {
     // An expired command is dropped unanswered: core stopped waiting for it.
     if (performance.now() > expiresAt || this.#retired) return
-    if (command.type === 'prepare') return this.#prepare(command)
-    if (command.type === 'adopt') return this.#adopt(command)
+    if (command.type === 'prepare') return this.#prepare(command, sentAt)
+    if (command.type === 'adopt') return this.#adopt(command, sentAt)
     const held = this.#held.get(command.assignmentId)
     if (!held) return this.#unknown(command)
     // A stale owner's command, or another turn's fence: dropped.
@@ -421,13 +427,13 @@ export class SandboxRunner {
 
   // --- Commands ---------------------------------------------------------------------------------
 
-  async #prepare(command: Command<'prepare'>): Promise<void> {
+  async #prepare(command: Command<'prepare'>, sentAt: number): Promise<void> {
     if (this.#held.has(command.assignmentId)) return
     const held = new Held(
       command.assignmentId,
       command.fence,
       command.sandbox.labels,
-      performance.now() + command.remainingMs,
+      sentAt + command.remainingMs,
     )
     const answer = this.#answer(held, command)
     if (this.#held.size >= this.deps.maxTurns) {
@@ -524,8 +530,10 @@ export class SandboxRunner {
     }
   }
 
-  async #adopt(command: Command<'adopt'>): Promise<void> {
-    const deadline = performance.now() + (command.work?.remainingMs ?? REMOVAL_MS)
+  async #adopt(command: Command<'adopt'>, sentAt: number): Promise<void> {
+    const deadline = command.work
+      ? sentAt + command.work.remainingMs
+      : performance.now() + REMOVAL_MS
     const known = this.#held.get(command.assignmentId)
     if (known) {
       const answer = this.#answer(known, command)

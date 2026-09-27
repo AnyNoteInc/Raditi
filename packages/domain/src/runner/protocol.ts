@@ -193,7 +193,10 @@ const command = <K extends string, T extends z.ZodRawShape>(type: K, shape: T) =
 
 const prepareCommand = command('prepare', {
   sandbox: sandboxSpecSchema,
-  /** Left of the whole turn at issue: the runner derives its local deadline from receipt. */
+  /**
+   * Left of the whole turn when a poll takes the command; the runner counts it from sending that
+   * poll, so the container's deadline never outlives the turn's (spec §8).
+   */
   remainingMs: turnMs,
   /** Fetched from runnerBundlePath() and checked before the import. */
   bundle: z

@@ -447,8 +447,11 @@ describe('RemoteTurnExecutor over the runner hub', () => {
       type: 'adopt',
       fence: { epoch: 2 },
       purpose: 'work',
-      work: { remainingMs: 60_000, driverId: 'codex' },
+      work: { driverId: 'codex' },
     })
+    // What is left when the poll took it, not when it was queued.
+    expect(adopt!.type === 'adopt' && adopt!.work!.remainingMs).toBeGreaterThan(59_000)
+    expect(adopt!.type === 'adopt' && adopt!.work!.remainingMs).toBeLessThanOrEqual(60_000)
     expect(adopt).not.toHaveProperty('work.credentials')
     const quiesced = { type: 'quiesced', commandId: randomUUID() }
     expect(await refusal(vm.report(assignment.id, quiesced, 1))).toEqual({
@@ -491,6 +494,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
         credentials: [],
         remainingMs: 1,
       }),
+      fence.epoch,
     )
     await expect(quiescing).rejects.toMatchObject({ code: 'CONFLICT' })
     const answer = { type: 'quiesced', commandId: quiesce!.commandId }
@@ -644,5 +648,160 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(
       await refusal(f.hub.reconcile('sandbox-1', { runnerSession: vm.runnerSession, inventory })),
     ).toEqual({ error: 'UNAVAILABLE' })
+  })
+})
+
+describe('RemoteTurnExecutor: the turn deadline at delivery', () => {
+  const fakeClock = () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    })
+    // The monotonic clock follows the fake clock, as it would on a real host.
+    vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
+  }
+  const remaining = (command: RunnerCommand | undefined) =>
+    command?.type === 'prepare'
+      ? command.remainingMs
+      : command?.type === 'adopt'
+        ? command.work?.remainingMs
+        : undefined
+
+  it('hands out what is left of the turn when a poll takes the prepare, not when it was queued', async () => {
+    fakeClock()
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const sandbox = { ...f.input(assignment.id).sandbox, hardTimeoutMs: 40_000 }
+    const preparing = f.executor.prepare(
+      f.input(assignment.id, { remainingMs: 40_000, sandbox }),
+      new AbortController().signal,
+    )
+    const [first] = await vm.poll()
+    expect(first).toMatchObject({ type: 'prepare', remainingMs: 40_000, ttlMs: 40_000 })
+    // The answer of that poll never reached the runner: the prepare waits 10 s for the next one.
+    f.hub.requeue('sandbox-1', vm.runnerSession, [first!])
+    await vi.advanceTimersByTimeAsync(10_000)
+    const [second] = await vm.poll()
+    expect(second).toMatchObject({
+      type: 'prepare',
+      commandId: first!.commandId,
+      remainingMs: 30_000,
+      ttlMs: 30_000,
+      sandbox: { hardTimeoutMs: 30_000 },
+    })
+    await vm.report(assignment.id, {
+      type: 'failed',
+      commandId: first!.commandId,
+      code: 'SANDBOX_COMMAND_FAILED',
+    })
+    await expect(preparing).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+  })
+
+  it('counts an adoption for work from its delivery too', async () => {
+    fakeClock()
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    const adopting = f.executor.adopt(
+      {
+        assignmentId: assignment.id,
+        fence: { ...fence, epoch: 2 },
+        containerId: 'container1',
+        labels: { ...labels, leaseEpoch: 1 },
+        purpose: 'work',
+        remainingMs: 50_000,
+        driverId: 'codex',
+      },
+      new AbortController().signal,
+    )
+    await vi.advanceTimersByTimeAsync(10_000)
+    const [adopt] = await vm.poll()
+    expect(remaining(adopt)).toBe(40_000)
+    await vm.report(
+      assignment.id,
+      { type: 'adopted', commandId: adopt!.commandId, containerId: 'container1' },
+      2,
+    )
+    await expect(adopting).resolves.toMatchObject({ containerId: 'container1' })
+  })
+
+  it('never delivers a prepare whose turn ran out while it waited, and refuses it', async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const preparing = f.executor.prepare(
+      f.input(assignment.id, { remainingMs: 60_000 }),
+      new AbortController().signal,
+    )
+    const [first] = await vm.poll()
+    f.hub.requeue('sandbox-1', vm.runnerSession, [first!])
+    // The event loop was late: the next poll comes after the turn's deadline, before its timer.
+    const now = performance.now.bind(performance)
+    vi.spyOn(performance, 'now').mockImplementation(() => now() + 61_000)
+    const refused = expect(preparing).rejects.toMatchObject({
+      code: 'RUNNER_UNAVAILABLE',
+      message: 'The turn ran out of time before a runner took it',
+    })
+    expect(await vm.poll()).toEqual([])
+    await refused
+  })
+
+  it('takes a rejected command off the queue by its id, also the copy a poll put back', async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const cancel = new AbortController()
+    const preparing = f.executor.prepare(f.input(assignment.id), cancel.signal)
+    const [first] = await vm.poll()
+    f.hub.requeue('sandbox-1', vm.runnerSession, [first!])
+    cancel.abort(new Error('cancelled'))
+    await expect(preparing).rejects.toThrow('cancelled')
+    expect(await vm.poll()).toEqual([])
+  })
+
+  it('lets an older owner neither command nor forget a turn recovery took over', async () => {
+    const f = fixture()
+    const { assignment, execution, vm } = await f.prepared()
+    const adopting = f.executor.adopt(
+      {
+        assignmentId: assignment.id,
+        fence: { ...fence, epoch: 2 },
+        containerId: 'container1',
+        labels: { ...labels, leaseEpoch: 1 },
+        purpose: 'removal',
+      },
+      new AbortController().signal,
+    )
+    const [adopt] = await vm.poll()
+    // The owner of epoch 1 is refused before anything reaches the runner, under any fence.
+    await expect(execution.destroy('failed')).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'The turn was taken over under a newer fence',
+    })
+    await expect(execution.quiesce()).rejects.toMatchObject({ code: 'CONFLICT' })
+    const live = (f.hub as unknown as { attach: RunnerHub['attach'] }).attach({
+      id: assignment.id,
+      fence: { ...fence, epoch: 2 },
+      runner: { id: 'sandbox-1', session: vm.runnerSession },
+      credentials: [],
+      remainingMs: 60_000,
+    })
+    f.hub.release(live, 1)
+    expect(await vm.poll()).toEqual([])
+    // Recovery's adoption under epoch 2 is still answered.
+    await vm.report(
+      assignment.id,
+      { type: 'adopted', commandId: adopt!.commandId, containerId: 'container1' },
+      2,
+    )
+    const adopted = (await adopting)!
+    const destroying = adopted.destroy('failed')
+    const [destroy] = await vm.poll()
+    expect(destroy).toMatchObject({ type: 'destroy', fence: { epoch: 2 } })
+    await vm.report(
+      assignment.id,
+      { type: 'destroyed', commandId: destroy!.commandId, containerId: 'container1' },
+      2,
+    )
+    await destroying
   })
 })

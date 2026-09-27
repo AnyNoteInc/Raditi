@@ -122,6 +122,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
         answers: ['prepared'],
         replyMs: remainingMs,
         signal,
+        // The runner gets what is left when its poll takes the prepare, not what was left here.
+        deadline: started + input.remainingMs,
         bundle: input.bundle,
         ...(input.restore ? { dataKey: input.restore.dataKey } : {}),
         // Runs even after the supervisor gave up, so that it removes the container.
@@ -135,6 +137,7 @@ export class RemoteTurnExecutor implements TurnExecutor {
     signal.throwIfAborted()
     if (input.labels.siteId !== input.fence.siteId || input.labels.taskId !== input.fence.taskId)
       throw badRequest('Adopted container labels differ from the fence')
+    const started = performance.now()
     const assignment = await this.assignments.get(input.assignmentId)
     if (!assignment?.runner || assignment.outcome !== null)
       throw conflict('The turn is not held by a runner')
@@ -163,10 +166,15 @@ export class RemoteTurnExecutor implements TurnExecutor {
             }
           : {}),
       },
-      { answers: ['adopted', 'destroyed'], replyMs: runnerReplyMs.adopt, signal },
+      {
+        answers: ['adopted', 'destroyed'],
+        replyMs: runnerReplyMs.adopt,
+        signal,
+        ...(input.purpose === 'work' ? { deadline: started + input.remainingMs } : {}),
+      },
     )
     if (answer.type === 'destroyed') {
-      this.hub.release(live)
+      this.hub.release(live, input.fence.epoch)
       return null
     }
     return new RemoteTurnExecution(this.hub, this.leases, live, input.purpose)
@@ -189,15 +197,22 @@ export class RemoteTurnExecutor implements TurnExecutor {
   }
 }
 
+/**
+ * One owner's hold on the turn's container, under the epoch it was created or adopted with: once
+ * recovery took the turn over under a newer one, this owner's commands are refused as CONFLICT.
+ */
 class RemoteTurnExecution implements TurnExecution {
   #homeBytes: number | undefined
+  readonly #epoch: number
 
   constructor(
     private readonly hub: RunnerHub,
     private readonly leases: Pick<SiteLeaseStore, 'assert'>,
     private readonly live: LiveAssignment,
     private readonly purpose: Purpose,
-  ) {}
+  ) {
+    this.#epoch = live.fence.epoch
+  }
 
   get containerId(): string {
     const id = this.live.containerId
@@ -213,7 +228,7 @@ class RemoteTurnExecution implements TurnExecution {
     await this.hub.send(
       this.live,
       { type: 'launch', timeoutMs },
-      { answers: ['running'], replyMs: runnerReplyMs.launch },
+      { answers: ['running'], replyMs: runnerReplyMs.launch, epoch: this.#epoch },
     )
     return this.#agent()
   }
@@ -224,7 +239,7 @@ class RemoteTurnExecution implements TurnExecution {
       await this.hub.send(
         this.live,
         { type: 'resume', execId: from.execId, cursor: from.cursor, eventCount: from.eventCount },
-        { answers: ['running'], replyMs: runnerReplyMs.resume },
+        { answers: ['running'], replyMs: runnerReplyMs.resume, epoch: this.#epoch },
       )
     } catch (error) {
       // A missing or foreign exec is lost; anything else may be retried.
@@ -239,7 +254,7 @@ class RemoteTurnExecution implements TurnExecution {
     await this.hub.send(
       this.live,
       { type: 'quiesce' },
-      { answers: ['quiesced'], replyMs: runnerReplyMs.quiesce },
+      { answers: ['quiesced'], replyMs: runnerReplyMs.quiesce, epoch: this.#epoch },
     )
   }
 
@@ -252,7 +267,7 @@ class RemoteTurnExecution implements TurnExecution {
     const captured = await this.hub.send(
       this.live,
       { type: 'capture', home: home.data, baseSha: input.baseSha },
-      { answers: ['captured'], replyMs: runnerReplyMs.capture, candidates },
+      { answers: ['captured'], replyMs: runnerReplyMs.capture, candidates, epoch: this.#epoch },
     )
     // The hub checked both uploads against the report.
     this.#homeBytes = captured.homeBytes
@@ -274,7 +289,7 @@ class RemoteTurnExecution implements TurnExecution {
         sizeBytes: this.#homeBytes,
         put: presignedPutSchema.parse(wire(put)),
       },
-      { answers: ['sealed'], replyMs: runnerReplyMs.seal, dataKey },
+      { answers: ['sealed'], replyMs: runnerReplyMs.seal, dataKey, epoch: this.#epoch },
     )
     return { sha256: sealed.sha256, sizeBytes: sealed.sizeBytes, iv: sealed.iv, tag: sealed.tag }
   }
@@ -284,15 +299,15 @@ class RemoteTurnExecution implements TurnExecution {
       await this.hub.send(
         this.live,
         { type: 'destroy', reason },
-        { answers: ['destroyed'], replyMs: runnerReplyMs.destroy },
+        { answers: ['destroyed'], replyMs: runnerReplyMs.destroy, epoch: this.#epoch },
       )
-    this.hub.release(this.live)
+    this.hub.release(this.live, this.#epoch)
   }
 
   #agent(): TurnAgentExec {
     const stream = this.live.exec
     if (!stream) throw conflict('The runner did not start the agent')
-    return new RemoteAgentExec(this.hub, this.live, stream)
+    return new RemoteAgentExec(this.hub, this.live, stream, this.#epoch)
   }
 
   #allow(...purposes: Purpose[]): void {
@@ -310,6 +325,7 @@ class RemoteAgentExec implements TurnAgentExec {
     private readonly hub: RunnerHub,
     private readonly live: LiveAssignment,
     private readonly stream: ExecStream,
+    private readonly epoch: number,
   ) {}
 
   get execId(): string {
@@ -326,6 +342,6 @@ class RemoteAgentExec implements TurnAgentExec {
 
   /** The runner kills the exec; its output then ends with the exit report. */
   async kill(): Promise<void> {
-    this.hub.post(this.live, { type: 'abort' })
+    this.hub.post(this.live, { type: 'abort' }, this.epoch)
   }
 }

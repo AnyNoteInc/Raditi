@@ -525,6 +525,36 @@ describe('Docker sandbox provider', () => {
     }
   })
 
+  it('counts the container deadline from the call and never creates one past it', async () => {
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(config, { client: fake.client })
+    const slow = <T>(value: T, ms: number) =>
+      new Promise<T>((resolve) => globalThis.setTimeout(() => resolve(value), ms))
+    fake.raw.info.mockImplementation(() => slow({ Runtimes: { runc: {} } }, 8_000))
+    fake.raw.getImage.mockImplementation(() => ({
+      inspect: () => slow({ Config: {} }, 7_000),
+    }))
+    vi.useFakeTimers()
+    try {
+      const startedAt = Date.now()
+      const creating = provider.create(spec({ hardTimeoutMs: 60_000 }))
+      await vi.advanceTimersByTimeAsync(15_000)
+      await creating
+      // The daemon's 15 s count against the turn: the label is not 15 s later.
+      expect(Number(fake.info().Config.Labels['io.raditi.sandbox.deadline'])).toBe(
+        startedAt + 60_000,
+      )
+
+      fake.raw.createContainer.mockClear()
+      const late = provider.create(spec({ hardTimeoutMs: 10_000 })).catch((error: unknown) => error)
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await late).toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+      expect(fake.raw.createContainer).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not let an unconsumed completed handle cancel a later command', async () => {
     const fake = daemon()
     const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(

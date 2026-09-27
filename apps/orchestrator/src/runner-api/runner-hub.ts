@@ -74,9 +74,14 @@ interface RunnerSession {
 }
 
 interface OpenCommand {
-  readonly command: RunnerCommand
+  /** Queued as sent; a prepare or an adoption for work is rewritten when a poll takes it. */
+  command: RunnerCommand
   readonly answers: readonly RunnerReportType[]
   settled: boolean
+  /** A poll took it: the runner may carry it out from now on. */
+  delivered: boolean
+  /** performance.now() by which the turn ends: its remaining time is counted at delivery. */
+  readonly deadline?: number
   resolve(report: RunnerReport): void
   reject(error: unknown): void
   cleanup(): void
@@ -99,6 +104,13 @@ export interface SendOptions<T extends RunnerReportType> {
   /** How long core waits for the answer; the command's TTL is at most this. */
   replyMs: number
   signal?: AbortSignal
+  /** The epoch the caller drives: refused once recovery took the turn over under a newer one. */
+  epoch?: number
+  /**
+   * performance.now() by which the turn ends. The remaining time of a prepare or an adoption for
+   * work is counted when a poll takes it; one that ran out by then is never delivered.
+   */
+  deadline?: number
   /** Served at runnerBundlePath() while a prepare is open. */
   bundle?: TurnBundleSource
   /** Served at runnerKeyPath() while a prepare with restore or a seal is open. */
@@ -129,6 +141,25 @@ export class LiveAssignment {
 
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const clampMs = (ms: number) => Math.max(1, Math.min(MAX_SANDBOX_TURN_MS, Math.floor(ms)))
+const superseded = () => conflict('The turn was taken over under a newer fence')
+
+/** The command with what is left of its turn when a poll takes it. */
+function withRemaining(command: RunnerCommand, remainingMs: number): RunnerCommand {
+  if (command.type === 'prepare')
+    return {
+      ...command,
+      remainingMs,
+      ttlMs: Math.min(COMMAND_TTL_MS, remainingMs),
+      sandbox: {
+        ...command.sandbox,
+        hardTimeoutMs: Math.min(command.sandbox.hardTimeoutMs, remainingMs),
+      },
+    }
+  if (command.type === 'adopt' && command.work)
+    return { ...command, work: { ...command.work, remainingMs } }
+  return command
+}
+
 /** Only a code: messages of storage and database errors stay out of the log. */
 const logged = (error: unknown) =>
   new Error(isDomainError(error) ? error.code : error instanceof Error ? error.name : 'unknown')
@@ -242,9 +273,9 @@ export class RunnerHub implements OnApplicationShutdown {
       this.#live.set(input.id, live)
     } else {
       if (live.fence.epoch !== fence.epoch) {
-        const superseded = conflict('The turn was taken over under a newer fence')
-        for (const open of live.commands.values()) this.#reject(open, superseded)
-        live.exec?.fail(superseded)
+        const error = superseded()
+        for (const open of live.commands.values()) this.#reject(open, error)
+        live.exec?.fail(error)
         live.exec = undefined
       }
       live.fence = fence
@@ -264,6 +295,8 @@ export class RunnerHub implements OnApplicationShutdown {
     options: SendOptions<T>,
   ): Promise<ReportOf<T>> {
     this.#assertOpen()
+    if (options.epoch !== undefined && options.epoch !== live.fence.epoch)
+      return Promise.reject(superseded())
     if (live.gone) return Promise.reject(execLost('The runner removed the turn container'))
     const session = this.#connected(live)
     if (!session)
@@ -287,12 +320,15 @@ export class RunnerHub implements OnApplicationShutdown {
       command,
       answers: options.answers,
       settled: false,
+      delivered: false,
+      ...(options.deadline !== undefined ? { deadline: options.deadline } : {}),
       resolve: (report) => deferred.resolve(report as ReportOf<T>),
       reject: (error) => deferred.reject(error),
       cleanup: () => {
         clearTimeout(timer)
         options.signal?.removeEventListener('abort', onAbort)
-        const index = session.queue.indexOf(command)
+        // By id: a poll that failed to deliver it put back the copy it rewrote.
+        const index = session.queue.findIndex((queued) => queued.commandId === command.commandId)
         if (index >= 0) session.queue.splice(index, 1)
       },
       ...(options.bundle ? { bundle: options.bundle } : {}),
@@ -308,9 +344,9 @@ export class RunnerHub implements OnApplicationShutdown {
   }
 
   /** A command without an answer (abort): delivered if the runner session is still there. */
-  post(live: LiveAssignment, body: RunnerCommandBody): void {
+  post(live: LiveAssignment, body: RunnerCommandBody, epoch = live.fence.epoch): void {
     const session = this.#connected(live)
-    if (!session || live.gone) return
+    if (!session || live.gone || epoch !== live.fence.epoch) return
     const command = runnerCommandSchema.parse({
       ...body,
       commandId: randomUUID(),
@@ -323,8 +359,15 @@ export class RunnerHub implements OnApplicationShutdown {
     session.wake?.()
   }
 
-  /** Forgets the assignment once its container is gone or core gave it up. */
-  release(live: LiveAssignment): void {
+  /**
+   * Forgets the assignment once its container is gone or core gave it up, only while `epoch`
+   * still drives it: an older owner never drops what recovery took over under a newer one.
+   */
+  release(live: LiveAssignment, epoch: number): void {
+    if (live.fence.epoch === epoch) this.#forget(live)
+  }
+
+  #forget(live: LiveAssignment): void {
     if (this.#live.get(live.id) !== live) return
     this.#live.delete(live.id)
     const released = conflict('The turn is no longer driven by this core')
@@ -388,8 +431,8 @@ export class RunnerHub implements OnApplicationShutdown {
         if (session.gone || this.#closed || signal.aborted || session.generation !== generation)
           return { commands: [] }
         await this.#claim(session, request.capacity, active)
-        if (session.queue.length > 0)
-          return { commands: session.queue.splice(0, runnerLimits.commands) }
+        const commands = this.#deliver(session)
+        if (commands.length > 0) return { commands }
         const remaining = deadline - performance.now()
         if (remaining <= 0) return { commands: [] }
         await new Promise<void>((resolve) => {
@@ -639,7 +682,7 @@ export class RunnerHub implements OnApplicationShutdown {
     const closing = runnerUnavailable('Core is shutting down')
     for (const pending of this.#pending.values()) pending.reject(closing)
     for (const session of this.#sessions.values()) this.#retire(session, closing)
-    for (const live of [...this.#live.values()]) this.release(live)
+    for (const live of [...this.#live.values()]) this.#forget(live)
   }
 
   // --- Internals --------------------------------------------------------------------------------
@@ -654,6 +697,32 @@ export class RunnerHub implements OnApplicationShutdown {
    */
   #assertServing(): void {
     if (this.#closed) throw RunnerApiError.of('UNAVAILABLE')
+  }
+
+  /**
+   * Takes queued commands one by one for a poll's answer. A prepare or an adoption for work
+   * carries what is left of its turn now, never what was left when it was queued; one that ran
+   * out is refused here and never reaches the runner.
+   */
+  #deliver(session: RunnerSession): RunnerCommand[] {
+    const now = performance.now()
+    const out: RunnerCommand[] = []
+    while (session.queue.length > 0 && out.length < runnerLimits.commands) {
+      let queued = session.queue.shift()!
+      const open = this.#live.get(queued.assignmentId)?.commands.get(queued.commandId)
+      if (open?.deadline !== undefined) {
+        const remainingMs = Math.floor(open.deadline - now)
+        if (remainingMs <= 0) {
+          this.#reject(open, runnerUnavailable('The turn ran out of time before a runner took it'))
+          continue
+        }
+        queued = runnerCommandSchema.parse(withRemaining(queued, remainingMs))
+        open.command = queued
+      }
+      if (open) open.delivered = true
+      out.push(queued)
+    }
+    return out
   }
 
   #connected(live: LiveAssignment): RunnerSession | undefined {
@@ -879,6 +948,6 @@ export class RunnerHub implements OnApplicationShutdown {
         now - session.lastSeen > runnerTimings.silentAfterMs
       )
         this.#retire(session, runnerUnavailable('The sandbox runner stopped answering'))
-    for (const live of [...this.#live.values()]) if (now > live.expiresAt) this.release(live)
+    for (const live of [...this.#live.values()]) if (now > live.expiresAt) this.#forget(live)
   }
 }

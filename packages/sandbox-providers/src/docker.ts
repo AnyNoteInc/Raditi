@@ -290,6 +290,9 @@ export function createDockerSandboxProvider(
   return {
     kind: 'docker',
     async create(value, signal) {
+      // The container's deadline counts from the call, never from after the daemon answered:
+      // the caller's time left was measured before it (spec §8 «Срок контейнера и аренда»).
+      const startedAt = Date.now()
       const spec: SandboxSpec = assertSandboxSpec(value)
       const reset = Object.keys(spec.env).filter((name) => helperEnvNames.has(name))
       if (reset.length)
@@ -314,7 +317,7 @@ export function createDockerSandboxProvider(
       const image = await bounded(docker.getImage(spec.image).inspect(), 10_000, signal)
       if (Object.keys(image.Config?.Volumes ?? {}).length)
         throw badRequest('Sandbox images must not declare volumes')
-      const deadline = Date.now() + spec.hardTimeoutMs
+      const deadline = startedAt + spec.hardTimeoutMs
       const name = `raditi-turn-${spec.labels.taskId}-${spec.labels.turn}`
       const network =
         spec.network.mode === 'gateway'
@@ -323,6 +326,8 @@ export function createDockerSandboxProvider(
       let container: Docker.Container | undefined
       try {
         if (signal?.aborted) throw commandError()
+        // The turn ran out while the daemon answered: a container now would outlive it.
+        if (Date.now() >= deadline) throw commandError()
         // A late daemon response cleans up its exact returned id, never the shared turn name.
         container = await createOwned(
           docker.createContainer({
