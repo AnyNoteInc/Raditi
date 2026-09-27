@@ -93,7 +93,7 @@ export async function reapExpired(client, now = Date.now()) {
       !expired(item.Labels, gatewayPrefix, now) ||
       !idPattern.test(item.Id) ||
       !resourcePattern.test(item.Labels[`${gatewayPrefix}resourceId`] ?? '') ||
-      !['guard', 'proxy'].includes(item.Labels[`${gatewayPrefix}role`]) ||
+      !['guard', 'proxy', 'firewall'].includes(item.Labels[`${gatewayPrefix}role`]) ||
       blocked.has(item.Labels[`${gatewayPrefix}resourceId`])
     )
       continue

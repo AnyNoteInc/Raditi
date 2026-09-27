@@ -67,6 +67,20 @@ const labelsOf = (
   ...(gatewayId ? { [`${PREFIX}gatewayId`]: gatewayId } : {}),
 })
 
+/**
+ * Daemon flags for runsc (spec §8): gVisor keeps its own netstack (`network=sandbox`), refuses
+ * raw sockets and ignores per-container flag overrides. Defaults are safe; overrides are not.
+ */
+export function safeRunscArgs(args: unknown = []): boolean {
+  if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) return false
+  return args.every((arg: string, index) => {
+    const [, name, value] = /^--?([A-Za-z0-9-]+)(?:=(.*))?$/.exec(arg) ?? []
+    if (name === 'net-raw' || name === 'allow-flag-override') return value === 'false'
+    if (name === 'network') return (value ?? args[index + 1]) === 'sandbox'
+    return true
+  })
+}
+
 function identity(info: Docker.ContainerInspectInfo): {
   labels: SandboxLabels
   deadline: number
@@ -121,14 +135,12 @@ export function createDockerSandboxProvider(
 ): SandboxProvider {
   const docker = options.client ?? localDocker(config.socketPath)
   const gateway =
-    options.gateway ?? (config.gateway && createDockerGatewayManager(config.gateway, docker))
+    options.gateway ??
+    (config.gateway && createDockerGatewayManager(config.gateway, docker, config.runtime))
 
   const inspectSafe = async (info: Docker.ContainerInspectInfo) => {
     const meta = identity(info)
     if (!meta) return null
-    // gVisor netstack emits L2 packets; the current shared-netns OUTPUT filter is a runc
-    // mechanism. Require separately verified host-side enforcement before enabling gateway.
-    if (config.runtime === 'runsc' && meta.policy.mode === 'gateway') return null
     const host = info.HostConfig
     const createdAt = new Date(info.Created)
     if (
@@ -198,7 +210,7 @@ export function createDockerSandboxProvider(
     )
       return null
     if (meta.policy.mode === 'none') {
-      if (host.NetworkMode !== 'none') return null
+      if (host.NetworkMode !== 'none' || (host.ExtraHosts?.length ?? 0) !== 0) return null
     } else if (
       !gateway ||
       !(await gateway.validate({
@@ -206,7 +218,7 @@ export function createDockerSandboxProvider(
         labels: meta.labels,
         deadline: meta.deadline,
         policy: meta.policy,
-        networkMode: host.NetworkMode,
+        sandbox: info,
       }))
     )
       return null
@@ -251,15 +263,13 @@ export function createDockerSandboxProvider(
         throw badRequest(
           `Sandbox runtime ${spec.runtime} differs from SANDBOX_RUNTIME=${config.runtime}`,
         )
-      if (spec.runtime === 'runsc' && spec.network.mode === 'gateway')
-        throw notImplemented(
-          'runsc gateway requires verified host-side network enforcement; the current network guard supports runc only',
-        )
       if (spec.network.mode === 'gateway' && !gateway)
         throw notImplemented('Sandbox gateway requires a trusted network manager')
       const daemon = await bounded(docker.info(), 10_000, signal)
-      if (!daemon.Runtimes?.[spec.runtime])
-        throw badRequest('Configured sandbox runtime is not available')
+      const runtime = daemon.Runtimes?.[spec.runtime] as { runtimeArgs?: unknown } | undefined
+      if (!runtime) throw badRequest('Configured sandbox runtime is not available')
+      if (spec.runtime === 'runsc' && !safeRunscArgs(runtime.runtimeArgs))
+        throw badRequest('runsc must keep its own network stack without raw sockets')
       const image = await bounded(docker.getImage(spec.image).inspect(), 10_000, signal)
       if (Object.keys(image.Config?.Volumes ?? {}).length)
         throw badRequest('Sandbox images must not declare volumes')
@@ -298,6 +308,7 @@ export function createDockerSandboxProvider(
               MemorySwap: spec.resources.memoryMiB * 1024 * 1024,
               PidsLimit: spec.resources.pids,
               NetworkMode: network?.networkMode ?? 'none',
+              ...(network?.extraHosts.length ? { ExtraHosts: network.extraHosts } : {}),
               RestartPolicy: { Name: 'no' },
               AutoRemove: false,
               Tmpfs: { ...tmpfs },
@@ -306,6 +317,9 @@ export function createDockerSandboxProvider(
                 Config: { 'max-size': '1m', 'max-file': '1', compress: 'false' },
               },
             },
+            ...(network?.endpoints
+              ? { NetworkingConfig: { EndpointsConfig: network.endpoints } }
+              : {}),
           }),
           (created) => created.remove({ force: true, v: true }),
           signal,

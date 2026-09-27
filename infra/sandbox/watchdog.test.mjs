@@ -87,6 +87,26 @@ test('failed discovery does not guess whether resources exist', async () => {
   assert.equal(calls, 1)
 })
 
+test('expired host firewall helpers are reaped; unknown gateway roles are not', async () => {
+  const calls = []
+  const resource = '01234567-1234-1234-1234-0123456789ab'
+  const removed = await reapExpired(async (method, path) => {
+    if (method === 'DELETE') {
+      calls.push(path)
+      return null
+    }
+    if (path.includes('sandbox.') || path.startsWith('/networks')) return []
+    return ['firewall', 'other'].map((role, index) =>
+      item(gateway, 99, 'ab'[index], {
+        [`${gateway}resourceId`]: resource,
+        [`${gateway}role`]: role,
+      }),
+    )
+  }, 100)
+  assert.equal(removed, 1)
+  assert.deepEqual(calls, [`/containers/${'a'.repeat(64)}?force=1&v=1`])
+})
+
 test('only absolute Unix socket paths are accepted', () => {
   for (const path of ['tcp://daemon:2375', './socket', '/tmp/a\nb'])
     assert.throws(() => dockerClient(path))

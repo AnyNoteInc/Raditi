@@ -30,6 +30,19 @@ const writeJson = async (path, value) => {
   await fs.writeFile(tmp, JSON.stringify(value), { flag: 'wx', mode: 0o600 })
   await fs.rename(tmp, path)
 }
+// gVisor opens a symlink to a directory even with O_DIRECTORY | O_NOFOLLOW (Linux refuses it),
+// so a handle counts only if the name itself is that directory: same inode, not a link.
+const openDirectory = async (path) => {
+  const handle = await fs.open(path, directoryFlags)
+  try {
+    const [opened, named] = await Promise.all([handle.stat(), fs.lstat(path)])
+    if (!named.isDirectory() || opened.ino !== named.ino || opened.dev !== named.dev) fail()
+    return handle
+  } catch (e) {
+    await handle.close()
+    throw e
+  }
+}
 const readJson = async (path, max = CHUNK) => {
   const h = await fs.open(path, constants.O_RDONLY | noFollow)
   try {
@@ -77,7 +90,7 @@ function segments(path, allowRoot = false) {
 // a later path operation. /proc/self/fd references our own already-open directory descriptors.
 async function parent(path, create = false, allowRoot = false) {
   const { root, names } = segments(path, allowRoot)
-  const handles = [await fs.open(root, directoryFlags)]
+  const handles = [await openDirectory(root)]
   try {
     for (const part of names.slice(0, -1)) {
       const next = `/proc/self/fd/${handles.at(-1).fd}/${part}`
@@ -85,7 +98,7 @@ async function parent(path, create = false, allowRoot = false) {
         await fs.mkdir(next, { mode: 0o700 }).catch((e) => {
           if (e.code !== 'EEXIST') throw e
         })
-      handles.push(await fs.open(next, directoryFlags))
+      handles.push(await openDirectory(next))
     }
     const base = `/proc/self/fd/${handles.at(-1).fd}`
     return {
@@ -160,7 +173,7 @@ async function fileOperation(operation, path, option, length) {
       const entries = []
       const visit = async (physical, logical, depth) => {
         if (depth > 32) fail()
-        const dir = await fs.open(physical, directoryFlags)
+        const dir = await openDirectory(physical)
         try {
           for (const name of await fs.readdir(`/proc/self/fd/${dir.fd}`)) {
             const child = `/proc/self/fd/${dir.fd}/${name}`
@@ -198,7 +211,7 @@ async function fileOperation(operation, path, option, length) {
           return
         }
         if (!stat.isDirectory()) fail()
-        const dir = await fs.open(physical, directoryFlags)
+        const dir = await openDirectory(physical)
         try {
           if (recursive)
             for (const name of await fs.readdir(`/proc/self/fd/${dir.fd}`))

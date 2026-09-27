@@ -114,6 +114,9 @@ describe.skipIf(!image)('real Docker sandbox provider', () => {
     ])
       await expect(sandbox.fs.read(path)).rejects.toThrow()
     await expect(sandbox.fs.write('/workspace/link/synthetic', bytes)).rejects.toThrow()
+    // gVisor opens a directory symlink even with O_NOFOLLOW; the helper must still refuse it.
+    await expect(sandbox.fs.list('/workspace/link')).rejects.toThrow()
+    await expect(sandbox.fs.remove('/workspace/link/synthetic')).rejects.toThrow()
     // A cut stdin (host timeout or abort) reaches the helper as a normal EOF: no rename then.
     const container = client.getContainer(sandbox.id)
     const cut = async function* () {

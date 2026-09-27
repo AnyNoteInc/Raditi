@@ -17,7 +17,7 @@ import type Docker from 'dockerode'
 import { describe, expect, it, vi } from 'vitest'
 
 import { DockerFrames, HELPER, HELPER_ENV, NODE, startDetachedExec } from './docker-api.ts'
-import { createDockerSandboxProvider } from './docker.ts'
+import { createDockerSandboxProvider, safeRunscArgs } from './docker.ts'
 
 // Route the provider's sleeps through the global timer, so fake timers drive them too.
 vi.mock('node:timers/promises', async (original) => ({
@@ -260,7 +260,7 @@ describe('Docker sandbox provider', () => {
       const networkMode = `container:${'a'.repeat(64)}`
       const policy = { mode: 'gateway' as const, routes: ['llm' as const] }
       const gateway = {
-        prepare: vi.fn(async () => ({ networkMode, resourceId })),
+        prepare: vi.fn(async () => ({ networkMode, resourceId, extraHosts: [] })),
         validate: vi.fn(async () => true),
         release: vi.fn(async () => {}),
       }
@@ -278,7 +278,7 @@ describe('Docker sandbox provider', () => {
         labels: spec().labels,
         deadline,
         policy,
-        networkMode,
+        sandbox: expect.objectContaining({ Id: fake.info().Id }),
       })
       if (cause === 'cleanup retry') {
         gateway.release.mockRejectedValueOnce(new Error('transient gateway cleanup failure'))
@@ -296,22 +296,80 @@ describe('Docker sandbox provider', () => {
     },
   )
 
-  it('refuses runsc gateway even when a trusted manager is configured', async () => {
+  it('runsc: joins the attempt network directly at the address the gateway manager gives', async () => {
     const fake = daemon()
-    const gateway = { prepare: vi.fn(), validate: vi.fn(), release: vi.fn() }
+    fake.raw.info.mockResolvedValue({
+      Runtimes: { runsc: { runtimeArgs: ['--platform=systrap'] } },
+    })
+    const resourceId = '01234567-1234-1234-1234-0123456789ab'
+    const network = 'b'.repeat(64)
+    const endpoints = { [network]: { IPAMConfig: { IPv4Address: '172.30.0.3' } } }
+    const gateway = {
+      prepare: vi.fn(async () => ({
+        resourceId,
+        networkMode: network,
+        extraHosts: ['sandbox-gw:172.30.0.2'],
+        endpoints,
+      })),
+      validate: vi.fn(async () => true),
+      release: vi.fn(async () => {}),
+    }
     const provider = createDockerSandboxProvider(
       { ...config, runtime: 'runsc' },
       { client: fake.client, gateway },
     )
-    await expect(
-      provider.create(spec({ runtime: 'runsc', network: { mode: 'gateway', routes: ['llm'] } })),
-    ).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
-      message: expect.stringContaining('host-side network enforcement'),
+    const sandbox = await provider.create(
+      spec({ runtime: 'runsc', network: { mode: 'gateway', routes: ['llm'] } }),
+    )
+    const options = fake.raw.createContainer.mock.calls[0]![0]
+    expect(options.HostConfig).toMatchObject({
+      Runtime: 'runsc',
+      NetworkMode: network,
+      ExtraHosts: ['sandbox-gw:172.30.0.2'],
+      CapDrop: ['ALL'],
     })
-    expect(gateway.prepare).not.toHaveBeenCalled()
+    expect(options.NetworkingConfig).toEqual({ EndpointsConfig: endpoints })
+    await sandbox.destroy('completed')
+    expect(gateway.release).toHaveBeenCalledWith(resourceId)
+  })
+
+  it('runsc: refuses daemon flags that give the sandbox the host network or raw sockets', async () => {
+    for (const args of [
+      undefined,
+      [],
+      ['--platform=systrap'],
+      ['-network=sandbox', '--net-raw=false'],
+    ])
+      expect(safeRunscArgs(args)).toBe(true)
+    for (const args of [
+      ['--net-raw'],
+      ['-net-raw=true'],
+      ['--network=host'],
+      ['--network', 'host'],
+      ['--network'],
+      ['--allow-flag-override'],
+      'not-a-list',
+      [1],
+    ])
+      expect(safeRunscArgs(args)).toBe(false)
+    const fake = daemon()
+    fake.raw.info.mockResolvedValue({ Runtimes: { runsc: { runtimeArgs: ['--net-raw'] } } })
+    const provider = createDockerSandboxProvider(
+      { ...config, runtime: 'runsc' },
+      { client: fake.client },
+    )
+    await expect(provider.create(spec({ runtime: 'runsc' }))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
     expect(fake.raw.createContainer).not.toHaveBeenCalled()
-    expect(fake.raw.info).not.toHaveBeenCalled()
+  })
+
+  it('refuses a none-network container that gained extra hosts', async () => {
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(config, { client: fake.client })
+    const sandbox = await provider.create(spec())
+    fake.info().HostConfig.ExtraHosts = ['sandbox-gw:192.0.2.1']
+    expect(await provider.get(sandbox.id)).toBeNull()
   })
 
   it('builds the gateway manager from its config on the same Docker client', async () => {

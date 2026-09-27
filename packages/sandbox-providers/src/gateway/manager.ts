@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import { MAX_SANDBOX_TURN_MS, type NetworkPolicy, type SandboxLabels } from '@repo/domain'
+import {
+  MAX_SANDBOX_TURN_MS,
+  type NetworkPolicy,
+  type SandboxLabels,
+  type SandboxRuntime,
+} from '@repo/domain'
 import type Docker from 'dockerode'
 
 import { bounded, commandError, createOwned, isMissing, startDetachedExec } from '../docker-api.ts'
@@ -11,6 +16,11 @@ import { gatewayConfigSchema, type GatewayConfig } from './config.ts'
 const PREFIX = 'io.raditi.gateway.'
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 const scopes = ['workspaceId', 'siteId', 'taskId', 'sessionId', 'turn', 'leaseEpoch'] as const
+const SCRIPTS = '/usr/local/lib/raditi'
+const logConfig = {
+  Type: 'local',
+  Config: { 'max-size': '1m', 'max-file': '1', compress: 'false' },
+}
 const ownLabels = (resourceId: string): Record<string, string> => ({
   [`${PREFIX}owner`]: 'raditi',
   [`${PREFIX}protocol`]: '1',
@@ -39,6 +49,36 @@ const labelsMatch = (
   actual: Record<string, string> | undefined,
   expected: Record<string, string>,
 ) => actual !== undefined && Object.entries(expected).every(([key, value]) => actual[key] === value)
+const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
+const entrypoint = (program: string) => [
+  'tini',
+  '--',
+  '/usr/local/bin/node',
+  `${SCRIPTS}/${program}`,
+]
+
+/** Linux bridge of the attempt (≤ 15 bytes): the host firewall rule is keyed by this name. */
+export const bridgeName = (resourceId: string): string =>
+  `rdx${resourceId.replaceAll('-', '').slice(0, 12)}`
+
+/**
+ * Fail closed on what Docker built, not on the options it was asked for: an attempt bridge
+ * must have no host address at all (spec §8), so the sandbox cannot reach host services.
+ */
+function hostless(network: Docker.NetworkInspectInfo, resourceId: string): boolean {
+  const configs = network.IPAM?.Config ?? []
+  const options = network.Options ?? {}
+  return (
+    network.Driver === 'bridge' &&
+    network.Internal &&
+    !network.EnableIPv6 &&
+    options['com.docker.network.bridge.name'] === bridgeName(resourceId) &&
+    options['com.docker.network.bridge.gateway_mode_ipv4'] === 'isolated' &&
+    options['com.docker.network.bridge.gateway_mode_ipv6'] === 'isolated' &&
+    configs.length === 1 &&
+    !configs[0]!.Gateway
+  )
+}
 
 function addresses(cidr: string): { gateway: string; client: string } {
   const [host, prefix] = cidr.split('/')
@@ -94,11 +134,66 @@ async function ready(
   throw commandError()
 }
 
+/**
+ * runc: the sandbox shares the netns of a guard container that drops everything but the gateway.
+ * runsc: gVisor's netstack bypasses that netns filter, so the sandbox joins the hostless attempt
+ * network directly and a host INPUT rule drops whatever its bridge sends to the host (spec §8).
+ */
 export function createDockerGatewayManager(
   configValue: GatewayConfig,
   docker: Docker,
+  runtime: SandboxRuntime,
 ): DockerGatewayManager {
   const config = gatewayConfigSchema.parse(configValue)
+  const runsc = runtime === 'runsc'
+
+  /** host-firewall.mjs in the host netns: runc, NET_ADMIN only, no Docker socket, no network. */
+  const hostFirewall = async (resourceId: string, args: string[], signal?: AbortSignal) => {
+    const helper = await createOwned(
+      docker.createContainer({
+        name: `raditi-gateway-firewall-${resourceId}-${args[0]}`,
+        Image: config.guardImage,
+        User: '0:0',
+        Entrypoint: entrypoint('host-firewall.mjs'),
+        Cmd: args,
+        Labels: {
+          ...ownLabels(resourceId),
+          [`${PREFIX}role`]: 'firewall',
+          [`${PREFIX}deadline`]: String(Date.now() + 60_000),
+        },
+        HostConfig: {
+          Runtime: 'runc',
+          NetworkMode: 'host',
+          ReadonlyRootfs: true,
+          Privileged: false,
+          CapDrop: ['ALL'],
+          CapAdd: ['NET_ADMIN'],
+          SecurityOpt: ['no-new-privileges'],
+          NanoCpus: 250_000_000,
+          Memory: 64 * 1024 * 1024,
+          MemorySwap: 64 * 1024 * 1024,
+          PidsLimit: 16,
+          RestartPolicy: { Name: 'no' },
+          AutoRemove: false,
+          LogConfig: logConfig,
+          Tmpfs: { '/run': 'rw,noexec,nosuid,nodev,size=1m,mode=0755' },
+        },
+      }),
+      (created) => created.remove({ force: true, v: true }),
+      signal,
+    )
+    let status: unknown
+    try {
+      await bounded(helper.start(), 10_000, signal)
+      status = ((await bounded(helper.wait(), 20_000, signal)) as { StatusCode?: unknown })
+        .StatusCode
+    } finally {
+      await bounded(helper.remove({ force: true, v: true })).catch((error: unknown) => {
+        if (!isMissing(error)) throw commandError()
+      })
+    }
+    if (status !== 0) throw commandError()
+  }
 
   const releaseId = async (resourceId: string) => {
     if (!uuid.test(resourceId)) throw commandError()
@@ -126,6 +221,8 @@ export function createDockerGatewayManager(
       )
       if (results.some((result) => result.status === 'rejected')) throw commandError()
     }
+    // The bridge is gone now; the sweep drops only rules whose bridge no longer exists.
+    if (runsc) await hostFirewall(resourceId, ['sweep'])
   }
 
   const serviceHost = (networkMode: string, guard: boolean): Docker.HostConfig => ({
@@ -141,7 +238,7 @@ export function createDockerGatewayManager(
     PidsLimit: 32,
     RestartPolicy: { Name: 'no' },
     AutoRemove: false,
-    LogConfig: { Type: 'local', Config: { 'max-size': '1m', 'max-file': '1', compress: 'false' } },
+    LogConfig: logConfig,
     Tmpfs: {
       [guard ? '/run/raditi-guard' : '/run/raditi-gateway']:
         `rw,noexec,nosuid,nodev,size=1m,uid=${guard ? 0 : 10001},gid=${guard ? 0 : 10001},mode=0700`,
@@ -179,6 +276,7 @@ export function createDockerGatewayManager(
             EnableIPv6: false,
             Labels: label('network'),
             Options: {
+              'com.docker.network.bridge.name': bridgeName(resourceId),
               'com.docker.network.bridge.gateway_mode_ipv4': 'isolated',
               'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
             },
@@ -187,16 +285,19 @@ export function createDockerGatewayManager(
           signal,
         )
         const networkInfo = await bounded(network.inspect(), 10_000, signal)
-        const ips = addresses(networkInfo.IPAM?.Config?.[0]?.Subnet ?? '')
-        const endpoint = (ip: string) => ({
-          EndpointsConfig: { [network.id]: { IPAMConfig: { IPv4Address: ip } } },
+        if (!hostless(networkInfo, resourceId)) throw commandError()
+        const ips = addresses(networkInfo.IPAM!.Config![0]!.Subnet ?? '')
+        // Before anything that runs code joins the bridge.
+        if (runsc) await hostFirewall(resourceId, ['install', bridgeName(resourceId)], signal)
+        const endpoints = (ip: string): Docker.EndpointsConfig => ({
+          [network.id]: { IPAMConfig: { IPv4Address: ip } },
         })
         const proxy = await createOwned(
           docker.createContainer({
             name: `raditi-gateway-proxy-${resourceId}`,
             Image: config.image,
             User: '10001:10001',
-            Entrypoint: ['tini', '--', '/usr/local/bin/node', '/usr/local/lib/raditi/gateway.mjs'],
+            Entrypoint: entrypoint('gateway.mjs'),
             Cmd: [],
             Labels: label('proxy'),
             Env: [
@@ -210,7 +311,7 @@ export function createDockerGatewayManager(
               ...serviceHost(network.id, false),
               ExtraHosts: ['host.docker.internal:host-gateway'],
             },
-            NetworkingConfig: endpoint(ips.gateway),
+            NetworkingConfig: { EndpointsConfig: endpoints(ips.gateway) },
           }),
           (created) => created.remove({ force: true, v: true }),
           signal,
@@ -218,68 +319,81 @@ export function createDockerGatewayManager(
         await bounded(docker.getNetwork('bridge').connect({ Container: proxy.id }), 10_000, signal)
         await bounded(proxy.start(), 10_000, signal)
         await ready(proxy, '/run/raditi-gateway/ready', input.deadline, signal)
+        const extraHosts = [`sandbox-gw:${ips.gateway}`]
+        if (runsc)
+          return {
+            resourceId,
+            networkMode: network.id,
+            extraHosts,
+            endpoints: endpoints(ips.client),
+          }
         const guard = await createOwned(
           docker.createContainer({
             name: `raditi-gateway-guard-${resourceId}`,
             Image: config.guardImage,
             User: '0:0',
-            Entrypoint: [
-              'tini',
-              '--',
-              '/usr/local/bin/node',
-              '/usr/local/lib/raditi/network-guard.mjs',
-            ],
+            Entrypoint: entrypoint('network-guard.mjs'),
             Cmd: [],
             Labels: label('guard'),
             Env: [`GATEWAY_IPV4=${ips.gateway}`, 'GATEWAY_PORT=8080'],
-            HostConfig: {
-              ...serviceHost(network.id, true),
-              ExtraHosts: [`sandbox-gw:${ips.gateway}`],
-            },
-            NetworkingConfig: endpoint(ips.client),
+            HostConfig: { ...serviceHost(network.id, true), ExtraHosts: extraHosts },
+            NetworkingConfig: { EndpointsConfig: endpoints(ips.client) },
           }),
           (created) => created.remove({ force: true, v: true }),
           signal,
         )
         await bounded(guard.start(), 10_000, signal)
         await ready(guard, '/run/raditi-guard/ready', input.deadline, signal)
-        return { networkMode: `container:${guard.id}`, resourceId }
+        return { resourceId, networkMode: `container:${guard.id}`, extraHosts: [] }
       } catch {
         await releaseId(resourceId)
         throw commandError()
       }
     },
-    async validate({ resourceId, labels, deadline, policy, networkMode }) {
+    async validate({ resourceId, labels, deadline, policy, sandbox }) {
       if (!uuid.test(resourceId)) return false
       try {
         const expected = gatewayLabels(resourceId, deadline, policy, labels)
         const filters = ownFilter(resourceId)
         const resources = await bounded(docker.listContainers({ all: true, filters }))
-        if (resources.length !== 2) return false
-        const guardId = resources.find((item) => item.Labels[`${PREFIX}role`] === 'guard')?.Id
-        const proxyId = resources.find((item) => item.Labels[`${PREFIX}role`] === 'proxy')?.Id
-        if (!guardId || !proxyId || networkMode !== `container:${guardId}`) return false
-        const [guard, proxy] = await Promise.all([
-          bounded(docker.getContainer(guardId).inspect()),
-          bounded(docker.getContainer(proxyId).inspect()),
-        ])
+        const idOf = (role: string) =>
+          resources.find((item) => item.Labels[`${PREFIX}role`] === role)?.Id
+        const proxyId = idOf('proxy')
+        const guardId = runsc ? undefined : idOf('guard')
+        if (resources.length !== (runsc ? 1 : 2) || !proxyId || (!runsc && !guardId)) return false
         const networks = await bounded(docker.listNetworks({ filters }))
         if (networks.length !== 1) return false
         const network = await bounded(docker.getNetwork(networks[0]!.Id).inspect())
+        if (!labelsMatch(network.Labels, expected) || !hostless(network, resourceId)) return false
+        const ips = addresses(network.IPAM!.Config![0]!.Subnet ?? '')
+        // Traffic inside the bridge is not filtered: only the sandbox side and its gateway attach.
         if (
-          !labelsMatch(network.Labels, expected) ||
-          !network.Internal ||
-          network.EnableIPv6 ||
-          network.Driver !== 'bridge' ||
-          network.Options?.['com.docker.network.bridge.gateway_mode_ipv4'] !== 'isolated'
+          !same(
+            Object.keys(network.Containers ?? {}).sort(),
+            [runsc ? sandbox.Id : guardId, proxyId].sort(),
+          )
         )
           return false
-        const ips = addresses(network.IPAM?.Config?.[0]?.Subnet ?? '')
-        for (const [info, isGuard] of [
-          [guard, true],
-          [proxy, false],
+        const attached = Object.values(sandbox.NetworkSettings?.Networks ?? {})
+        const host = sandbox.HostConfig
+        if (
+          runsc
+            ? host.NetworkMode !== network.Id ||
+              attached.length !== 1 ||
+              attached[0]!.NetworkID !== network.Id ||
+              attached[0]!.IPAddress !== ips.client ||
+              !same(host.ExtraHosts, [`sandbox-gw:${ips.gateway}`])
+            : host.NetworkMode !== `container:${guardId}` ||
+              attached.length !== 0 ||
+              (host.ExtraHosts?.length ?? 0) !== 0
+        )
+          return false
+        for (const [id, isGuard] of [
+          [proxyId, false],
+          ...(guardId ? [[guardId, true] as const] : []),
         ] as const) {
-          const host = info.HostConfig
+          const info = await bounded(docker.getContainer(id).inspect())
+          const service = info.HostConfig
           if (
             !info.State.Running ||
             !labelsMatch(info.Config.Labels, {
@@ -288,37 +402,33 @@ export function createDockerGatewayManager(
             }) ||
             info.Config.Image !== (isGuard ? config.guardImage : config.image) ||
             info.Config.User !== (isGuard ? '0:0' : '10001:10001') ||
-            !host.ReadonlyRootfs ||
-            host.Privileged ||
-            host.PidMode ||
-            host.IpcMode === 'host' ||
-            (host.Binds?.length ?? 0) ||
-            host.CapDrop?.join() !== 'ALL' ||
-            (host.CapAdd?.join() ?? '') !== (isGuard ? 'NET_ADMIN' : '') ||
-            host.SecurityOpt?.join() !== 'no-new-privileges' ||
-            Object.keys(host.PortBindings ?? {}).length ||
-            host.PublishAllPorts ||
-            host.Sysctls?.['net.ipv4.ip_forward'] !== '0' ||
-            host.Sysctls?.['net.ipv6.conf.all.disable_ipv6'] !== '1'
+            !service.ReadonlyRootfs ||
+            service.Privileged ||
+            service.PidMode ||
+            service.IpcMode === 'host' ||
+            (service.Binds?.length ?? 0) ||
+            service.CapDrop?.join() !== 'ALL' ||
+            (service.CapAdd?.join() ?? '') !== (isGuard ? 'NET_ADMIN' : '') ||
+            service.SecurityOpt?.join() !== 'no-new-privileges' ||
+            Object.keys(service.PortBindings ?? {}).length ||
+            service.PublishAllPorts ||
+            service.Sysctls?.['net.ipv4.ip_forward'] !== '0' ||
+            service.Sysctls?.['net.ipv6.conf.all.disable_ipv6'] !== '1'
           )
             return false
-          const attached = Object.values(info.NetworkSettings.Networks)
+          const joined = Object.values(info.NetworkSettings.Networks)
           if (
-            attached.length !== (isGuard ? 1 : 2) ||
-            attached.find((entry) => entry.NetworkID === network.Id)?.IPAddress !==
+            joined.length !== (isGuard ? 1 : 2) ||
+            joined.find((entry) => entry.NetworkID === network.Id)?.IPAddress !==
               (isGuard ? ips.client : ips.gateway)
           )
             return false
           if (!isGuard && !info.NetworkSettings.Networks.bridge) return false
-          const program = isGuard ? 'network-guard' : 'gateway'
           if (
-            JSON.stringify(info.Config.Entrypoint) !==
-              JSON.stringify([
-                'tini',
-                '--',
-                '/usr/local/bin/node',
-                `/usr/local/lib/raditi/${program}.mjs`,
-              ]) ||
+            !same(
+              info.Config.Entrypoint,
+              entrypoint(isGuard ? 'network-guard.mjs' : 'gateway.mjs'),
+            ) ||
             (info.Config.Cmd?.length ?? 0)
           )
             return false

@@ -25,11 +25,13 @@ COPY infra/sandbox/gateway.mjs /usr/local/lib/raditi/gateway.mjs
 USER 10001:10001
 
 # This is trusted network infrastructure. Agent containers never get NET_ADMIN or root.
+# network-guard.mjs filters the shared netns under runc; host-firewall.mjs guards the host
+# from runsc attempt bridges (spec §8).
 FROM base AS network-guard
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iptables \
     && rm -rf /var/lib/apt/lists/*
-COPY infra/sandbox/network-guard.mjs /usr/local/lib/raditi/network-guard.mjs
+COPY infra/sandbox/network-guard.mjs infra/sandbox/host-firewall.mjs /usr/local/lib/raditi/
 
 # Separate trusted service; agent containers never receive its Docker socket.
 FROM base AS watchdog
