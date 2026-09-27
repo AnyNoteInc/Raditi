@@ -3,7 +3,9 @@ import { Buffer } from 'node:buffer'
 import {
   conflict,
   DomainError,
+  leftNothing,
   SANDBOX_SECRETS_DIR,
+  sandboxCommandFailed,
   type AgentEvent,
   type ExecChunk,
   type ExecHandle,
@@ -171,6 +173,8 @@ async function fixture() {
     created: vi.fn(async () => {
       order.push('created')
     }),
+    dispatched: vi.fn(),
+    vacated: vi.fn(),
   })
   const signal = new AbortController().signal
   return {
@@ -264,6 +268,28 @@ describe('LocalTurnExecutor', () => {
     change(input)
     await expect(f.executor.prepare(input, f.signal)).rejects.toMatchObject({ code })
     expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(input.dispatched).not.toHaveBeenCalled()
+  })
+
+  it('tells the caller when a container may exist, and when a failed create proved none does', async () => {
+    const f = await fixture()
+    const input = f.input()
+    f.sandboxes.create.mockImplementationOnce(async () => {
+      // From the call on, not from its answer: the daemon may create it and never answer.
+      expect(input.dispatched).toHaveBeenCalledOnce()
+      throw new Error('daemon did not answer')
+    })
+    await expect(f.executor.prepare(input, f.signal)).rejects.toThrow('daemon did not answer')
+    expect(input.vacated).not.toHaveBeenCalled()
+
+    const proven = f.input()
+    f.sandboxes.create.mockRejectedValueOnce(leftNothing(sandboxCommandFailed()))
+    await expect(f.executor.prepare(proven, f.signal)).rejects.toMatchObject({
+      code: 'SANDBOX_COMMAND_FAILED',
+    })
+    expect(proven.dispatched).toHaveBeenCalledOnce()
+    expect(proven.vacated).toHaveBeenCalledOnce()
+    expect(proven.created).not.toHaveBeenCalled()
   })
 
   it('refuses a part changed in storage before asking for the key or writing anything', async () => {

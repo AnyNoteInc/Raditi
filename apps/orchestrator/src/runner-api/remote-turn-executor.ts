@@ -7,6 +7,7 @@ import {
   leaseLost,
   presignedGetSchema,
   presignedPutSchema,
+  runnerTimings,
   sandboxSpecSchema,
   sessionStateSchema,
   snapshotSealBaseSchema,
@@ -126,8 +127,11 @@ export class RemoteTurnExecutor implements TurnExecutor {
         deadline: started + input.remainingMs,
         bundle: input.bundle,
         ...(input.restore ? { dataKey: input.restore.dataKey } : {}),
-        // Runs even after the supervisor gave up, so that it removes the container.
+        // These run even after the supervisor gave up: a late container is removed, and a
+        // prepare that left none frees the site.
         onCreated: () => input.created(execution),
+        onDispatched: () => input.dispatched(),
+        onVacated: () => input.vacated(),
       },
     )
     return execution
@@ -149,6 +153,11 @@ export class RemoteTurnExecutor implements TurnExecutor {
       remainingMs: input.purpose === 'work' ? input.remainingMs : runnerReplyMs.destroy,
       containerId: input.containerId,
     })
+    // The runner already reported this very container removed (P2): nothing to ask it.
+    if (input.purpose === 'removal' && live.goneContainer === input.containerId) {
+      this.hub.release(live, input.fence.epoch)
+      return null
+    }
     const answer = await this.hub.send(
       live,
       {
@@ -191,7 +200,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
    */
   takeover(assignment: { runner: TurnAssignmentRunner | null }): TurnTakeover | null {
     if (!assignment.runner) return { holdsCredentials: false }
-    const session = this.hub.session(assignment.runner.id)
+    // A session silent past its poll hold may be gone: taken over now, a removal would time out.
+    const session = this.hub.session(assignment.runner.id, runnerTimings.pollHoldMs + 15_000)
     if (!session) return null
     return { runnerSession: session, holdsCredentials: session === assignment.runner.session }
   }
@@ -295,7 +305,8 @@ class RemoteTurnExecution implements TurnExecution {
   }
 
   async destroy(reason: DestroyReason): Promise<void> {
-    if (!this.live.gone)
+    // Skipped only for the removal the runner reported for this very container.
+    if (this.live.goneContainer === undefined || this.live.goneContainer !== this.live.containerId)
       await this.hub.send(
         this.live,
         { type: 'destroy', reason },

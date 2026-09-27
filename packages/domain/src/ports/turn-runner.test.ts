@@ -102,6 +102,12 @@ describe('turn evidence', () => {
     expect(execLost()).toMatchObject({ code: 'EXEC_LOST', httpStatus: 502 })
   })
 
+  it('records a turn given up without proof that its container is gone', () => {
+    const vacating = { ...evidence, phase: 'vacating', reason: 'cancelled' } as const
+    expect(turnEvidenceSchema.safeParse(vacating).success).toBe(true)
+    expect(turnEvidenceSchema.safeParse({ ...vacating, containerId: 'c1' }).success).toBe(true)
+  })
+
   it('keeps only the fence of a lease grant', () => {
     const grant = { ...evidence.fence, expiresAt: new Date(), serverNow: new Date() }
     expect(turnEvidenceSchema.parse({ ...evidence, fence: grant }).fence).toEqual(evidence.fence)

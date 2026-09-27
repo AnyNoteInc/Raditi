@@ -71,7 +71,8 @@ export interface TurnAttemptInit {
   lease: SiteLeaseGrant
   guard: LeaseGuard
   plan: TurnPlan
-  driver: AgentDriver
+  /** None for recovery that only removes a given-up turn's container. */
+  driver?: AgentDriver
   /** The last sequence the turn's journal holds: a recovered owner continues after it. */
   sequence?: number
   /** Every entry of a recovered owner names the epoch it took the turn over from. */
@@ -87,7 +88,9 @@ const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.l
  * One owner's run of a turn under one fence: the supervisor's from the lease on, recovery's from
  * the epoch it took the turn over with. It journals every step, runs the agent's output, capture,
  * checkpoint and publication, and when the turn ends removes its container, then releases the
- * site or holds it for recovery when S3 or Git may have been written.
+ * site or holds it for recovery when S3 or Git may have been written. A turn given up while its
+ * prepare was out and without proof that no container is left is vacating: the lease is neither
+ * released nor held until that proof comes, and otherwise expires by itself (spec §8).
  */
 export class TurnAttempt {
   execution: TurnExecution | undefined
@@ -107,6 +110,17 @@ export class TurnAttempt {
   #reason: TurnEvidence['reason'] = 'run_failed'
   #outcome: TurnAssignmentOutcome = 'failed'
   #candidateHeadSha: string | undefined
+  /** A container of the prepare may exist from now on. */
+  #dispatched = false
+  /** Proof that the prepare left no container and never will. */
+  #vacated = false
+  /** Given up while the prepare was out and without that proof. */
+  #vacating = false
+  /** A late container could not be removed: the site is held for recovery. */
+  #heldByAttempt = false
+  #ended = false
+  /** Settles, never rejects, once the vacating entry was journaled or refused. */
+  #vacatingRecorded: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly deps: TurnAttemptDependencies,
@@ -139,16 +153,76 @@ export class TurnAttempt {
     })
   }
 
+  /** The executor handed the prepare out: from now on a container of it may exist. */
+  dispatched(): void {
+    this.#dispatched = true
+  }
+
+  /** The executor proved the prepare left no container: a vacating turn ends now. */
+  vacated(): void {
+    this.#vacated = true
+    if (this.#vacating && !this.#heldByAttempt) void this.#endVacating()
+  }
+
   /** The executor reports the container: from now on this attempt removes it. */
   async created(execution: TurnExecution): Promise<void> {
     if (this.#abandoned) {
-      // The turn was given up while its container was being created: remove it now.
-      await execution.destroy(this.#destroyReason())
+      await this.#removeLate(execution)
       throw new DomainError('TURN_INTERRUPTED', this.init.guard.reason, 409)
     }
     this.execution = execution
     await this.init.guard.assertFence()
     await this.record('created')
+  }
+
+  /** The turn was given up while its container was being created: remove it now. */
+  async #removeLate(execution: TurnExecution): Promise<void> {
+    const { containerId } = execution
+    if (this.#vacating) {
+      // After the first vacating entry, or replay would end on one without the container.
+      await this.#vacatingRecorded
+      await this.record('vacating', { reason: this.#reason, containerId }).catch(() => {})
+    }
+    try {
+      await execution.destroy(this.#destroyReason())
+    } catch {
+      // Recovery took the turn over under a newer epoch: the container is its to remove.
+      if (await this.#superseded()) return
+      this.#heldByAttempt = true
+      await holdForRecovery(this.deps.leases, this.init.lease, this.#lastPhase)
+      await this.record('recovery', { reason: 'destroy_failed', containerId }).catch(() => {})
+      return
+    }
+    this.#vacated = true
+    if (this.#vacating) await this.#endVacating()
+  }
+
+  async #superseded(): Promise<boolean> {
+    const { lease } = this.init
+    const now = await this.deps.leases.inspect(lease.siteId).catch(() => null)
+    return now !== null && now.taskId === lease.taskId && now.epoch > lease.epoch
+  }
+
+  /**
+   * The proof came: `failed`, then the site is released and the assignment finished. Never while
+   * the site is held at this epoch: recovery took the turn and finishes it, so its takeover never
+   * loses to this attempt's finish.
+   */
+  async #endVacating(): Promise<void> {
+    if (this.#ended || this.#heldByAttempt) return
+    this.#ended = true
+    const { lease } = this.init
+    await this.#vacatingRecorded
+    await this.record('failed', { reason: this.#reason }).catch(() => {})
+    const released = await this.deps.leases.release(lease).catch(() => false)
+    if (!released) {
+      const now = await this.deps.leases.inspect(lease.siteId).catch(() => null)
+      if (!now || (now.heldForOperator && now.epoch === lease.epoch)) return
+    }
+    if (this.assignment)
+      await this.deps.assignments
+        .finish({ id: this.assignment.id, epoch: lease.epoch, outcome: 'failed' })
+        .catch(() => false)
   }
 
   /**
@@ -210,6 +284,7 @@ export class TurnAttempt {
     const labels = plan.sandbox.labels
     const ready = this.execution
     if (!ready) throw conflict('The turn has no container')
+    if (!driver) throw conflict('The turn has no driver')
     await guard.assertFence()
     await ready.quiesce()
     await this.record('quiesced')
@@ -333,23 +408,39 @@ export class TurnAttempt {
               : 'run_failed'
   }
 
-  /** Recovery gives the turn up: it ends as `lost`, never billed (P12). */
-  giveUp(reason: NonNullable<TurnEvidence['reason']>): void {
+  /**
+   * Recovery gives the turn up: it ends as `lost`, never billed (P12), or as `failed` when its
+   * owner gave it up first (vacating).
+   */
+  giveUp(
+    reason: NonNullable<TurnEvidence['reason']>,
+    outcome: TurnAssignmentOutcome = 'lost',
+  ): void {
     this.#reason = reason
-    this.#outcome = 'lost'
+    this.#outcome = outcome
   }
 
   /**
    * Removes the container (and, unless the turn completed, whatever `alsoRemove` removes), then
    * releases the site, or holds it when a removal failed or S3 or Git may have been written.
    * Without its last journal entry the site stays held only in the latter cases; a failed
-   * release expires by its TTL.
+   * release expires by its TTL. A turn whose prepare is out without a container reported is
+   * vacating: nothing is released or finished until vacated() or a late container's removal.
    */
-  async settle(alsoRemove?: () => Promise<void>): Promise<'completed' | 'released' | 'held'> {
+  async settle(
+    alsoRemove?: () => Promise<void>,
+  ): Promise<'completed' | 'released' | 'held' | 'vacating'> {
     const { lease, guard } = this.init
     // A container the executor reports from now on is removed by the `created` hook.
     this.#abandoned = true
     let recovery = this.#checkpointStarted && !this.#completed
+    // Decided before any await, so that a late `created` or vacated() sees the same answer.
+    if (!this.#completed && !recovery && !this.execution && this.#dispatched && !this.#vacated) {
+      this.#vacating = true
+      this.#vacatingRecorded = this.record('vacating', { reason: this.#reason }).catch(() => {})
+      guard.close()
+      return 'vacating'
+    }
     try {
       await this.#destroy()
       if (!this.#completed) await alsoRemove?.()

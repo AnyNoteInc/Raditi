@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { badRequest } from '../errors.ts'
+import { badRequest, DomainError, isDomainError } from '../errors.ts'
 
 /**
  * Sandbox port — spec §8. One task is a logical session; a container lives for one turn.
@@ -136,6 +136,7 @@ export type RemovableSandbox = Pick<Sandbox, 'id' | 'labels' | 'destroy'>
 
 export interface SandboxProvider {
   readonly kind: 'docker'
+  /** A rejection marked with leftNothing() proves that no container of this call exists or will. */
   create(spec: SandboxSpec, signal?: AbortSignal): Promise<Sandbox>
   /**
    * A container to work in: this provider's own, unchanged and with its network intact. null
@@ -149,6 +150,33 @@ export interface SandboxProvider {
   getForRemoval(id: string): Promise<RemovableSandbox | null>
   /** Turn containers of this provider by labels and age, whether or not get() takes them. */
   list(filter?: Partial<SandboxLabels>): Promise<SandboxInfo[]>
+}
+
+/**
+ * Marks a failed create() that provably left no container: it never asked the daemon, the daemon
+ * refused and has no container of the turn's name, or the provider removed what it created.
+ * Without the mark nothing is proven, and the turn's lease waits for its own expiry (spec §8).
+ */
+export function leftNothing(error: DomainError): DomainError {
+  const details: unknown = error.details
+  return new DomainError(error.code, error.message, error.httpStatus, {
+    ...(typeof details === 'object' && details !== null && !Array.isArray(details)
+      ? details
+      : details === undefined
+        ? {}
+        : { issues: details }),
+    leftNothing: true,
+  })
+}
+
+export function createLeftNothing(error: unknown): boolean {
+  if (!isDomainError(error)) return false
+  const details: unknown = error.details
+  return (
+    typeof details === 'object' &&
+    details !== null &&
+    (details as { leftNothing?: unknown }).leftNothing === true
+  )
 }
 
 // --- Sandbox policy: CLAUDE.md rule 5, spec §8 ------------------------------------------------

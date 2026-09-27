@@ -160,4 +160,6 @@ export const prepareInput = (assignmentId: string): TurnPrepareInput => ({
   argv: ['synthetic-agent'],
   credentials,
   created: vi.fn(async () => {}),
+  dispatched: vi.fn(),
+  vacated: vi.fn(),
 })

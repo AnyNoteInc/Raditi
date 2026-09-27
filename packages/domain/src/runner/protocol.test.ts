@@ -334,6 +334,15 @@ describe('runner reports', () => {
     )
   })
 
+  it('takes `absent` only as the answer to a command', () => {
+    const failed = { ...base, type: 'failed', code: 'SANDBOX_COMMAND_FAILED', absent: true }
+    expect(runnerReportSchema.safeParse({ ...failed, commandId: ids.command }).success).toBe(true)
+    expect(runnerReportSchema.safeParse(failed).success).toBe(false)
+    expect(
+      runnerReportSchema.safeParse({ ...failed, commandId: ids.command, absent: false }).success,
+    ).toBe(false)
+  })
+
   it('refuses free text in a failure and parts above their limits', () => {
     expect(
       runnerReportSchema.safeParse({ ...base, type: 'failed', code: 'EXEC_LOST', message: 'x' })

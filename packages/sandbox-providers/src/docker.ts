@@ -4,6 +4,8 @@ import {
   badRequest,
   conflict,
   DIGEST_PINNED_IMAGE,
+  isDomainError,
+  leftNothing,
   MAX_SANDBOX_RESOURCES,
   MAX_SANDBOX_TURN_MS,
   networkPolicySchema,
@@ -32,7 +34,7 @@ import {
   SANDBOX_USER,
 } from './docker-api.ts'
 import { DockerSandbox } from './docker-sandbox.ts'
-import type { DockerGatewayManager } from './gateway-types.ts'
+import type { DockerGatewayManager, GatewayAttachment } from './gateway-types.ts'
 import { createDockerGatewayManager } from './gateway/manager.ts'
 
 const PREFIX = 'io.raditi.sandbox.'
@@ -50,6 +52,12 @@ const tmpfs = {
   '/run/raditi/control': 'rw,noexec,nosuid,nodev,size=1m,uid=0,gid=0,mode=0755',
 }
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
+/** An HTTP answer of the daemon; a timeout or an abort of `bounded` has none. */
+const daemonRefused = (error: unknown): boolean =>
+  typeof error === 'object' &&
+  error !== null &&
+  'statusCode' in error &&
+  typeof error.statusCode === 'number'
 const labelsOf = (
   labels: SandboxLabels,
   deadline: number,
@@ -293,41 +301,54 @@ export function createDockerSandboxProvider(
       // The container's deadline counts from the call, never from after the daemon answered:
       // the caller's time left was measured before it (spec §8 «Срок контейнера и аренда»).
       const startedAt = Date.now()
-      const spec: SandboxSpec = assertSandboxSpec(value)
-      const reset = Object.keys(spec.env).filter((name) => helperEnvNames.has(name))
-      if (reset.length)
-        throw badRequest(
-          `Sandbox env ${reset.join(', ')} is reset for every exec: pass it through ExecSpec.env`,
-        )
-      if (signal?.aborted) throw commandError()
-      if (spec.runtime !== config.runtime)
-        throw badRequest(
-          `Sandbox runtime ${spec.runtime} differs from SANDBOX_RUNTIME=${config.runtime}`,
-        )
-      if (spec.network.mode === 'gateway' && !gateway)
-        throw notImplemented('Sandbox gateway requires a trusted network manager')
-      const daemon = await bounded(docker.info(), 10_000, signal)
-      const runtime: unknown = daemon.Runtimes?.[spec.runtime]
-      // Daemon configuration is infrastructure, not client input: fail as a sandbox fault.
-      if (!runtime) throw sandboxCommandFailed('Configured sandbox runtime is not available')
-      if (spec.runtime === 'runsc' && !safeRunscRuntime(runtime))
-        throw sandboxCommandFailed(
-          'runsc must be the plain binary with its own network stack and no raw sockets',
-        )
-      const image = await bounded(docker.getImage(spec.image).inspect(), 10_000, signal)
-      if (Object.keys(image.Config?.Volumes ?? {}).length)
-        throw badRequest('Sandbox images must not declare volumes')
-      const deadline = startedAt + spec.hardTimeoutMs
+      let spec: SandboxSpec
+      let deadline: number
+      let network: GatewayAttachment | undefined
+      try {
+        spec = assertSandboxSpec(value)
+        const reset = Object.keys(spec.env).filter((name) => helperEnvNames.has(name))
+        if (reset.length)
+          throw badRequest(
+            `Sandbox env ${reset.join(', ')} is reset for every exec: pass it through ExecSpec.env`,
+          )
+        if (signal?.aborted) throw commandError()
+        if (spec.runtime !== config.runtime)
+          throw badRequest(
+            `Sandbox runtime ${spec.runtime} differs from SANDBOX_RUNTIME=${config.runtime}`,
+          )
+        if (spec.network.mode === 'gateway' && !gateway)
+          throw notImplemented('Sandbox gateway requires a trusted network manager')
+        const daemon = await bounded(docker.info(), 10_000, signal)
+        const runtime: unknown = daemon.Runtimes?.[spec.runtime]
+        // Daemon configuration is infrastructure, not client input: fail as a sandbox fault.
+        if (!runtime) throw sandboxCommandFailed('Configured sandbox runtime is not available')
+        if (spec.runtime === 'runsc' && !safeRunscRuntime(runtime))
+          throw sandboxCommandFailed(
+            'runsc must be the plain binary with its own network stack and no raw sockets',
+          )
+        const image = await bounded(docker.getImage(spec.image).inspect(), 10_000, signal)
+        if (Object.keys(image.Config?.Volumes ?? {}).length)
+          throw badRequest('Sandbox images must not declare volumes')
+        deadline = startedAt + spec.hardTimeoutMs
+        network =
+          spec.network.mode === 'gateway'
+            ? await gateway!.prepare(
+                { labels: spec.labels, policy: spec.network, deadline },
+                signal,
+              )
+            : undefined
+      } catch (error) {
+        // Nothing of the turn was asked of the daemon yet.
+        throw leftNothing(isDomainError(error) ? error : commandError())
+      }
       const name = `raditi-turn-${spec.labels.taskId}-${spec.labels.turn}`
-      const network =
-        spec.network.mode === 'gateway'
-          ? await gateway!.prepare({ labels: spec.labels, policy: spec.network, deadline }, signal)
-          : undefined
+      let requested = false
       let container: Docker.Container | undefined
       try {
         if (signal?.aborted) throw commandError()
         // The turn ran out while the daemon answered: a container now would outlive it.
         if (Date.now() >= deadline) throw commandError()
+        requested = true
         // A late daemon response cleans up its exact returned id, never the shared turn name.
         container = await createOwned(
           docker.createContainer({
@@ -391,13 +412,37 @@ export function createDockerSandboxProvider(
         }
         return sandbox
       } catch (error) {
-        if (container)
-          await bounded(container.remove({ force: true, v: true })).catch((e) => {
-            if (!isMissing(e)) throw commandError()
-          })
-        if (network) await gateway!.release(network.resourceId)
-        if (hasStatus(error, 409)) throw conflict('A container already exists for this turn')
-        throw commandError()
+        // Proof that nothing is left comes from the create and the removal, never from a later
+        // failure: without it the turn's lease waits for its own expiry (spec §8).
+        let absent = !requested
+        if (container) {
+          const removed = await bounded(container.remove({ force: true, v: true })).then(
+            () => true,
+            (e: unknown) => isMissing(e),
+          )
+          // Still there: its network stays with it.
+          if (!removed) throw commandError()
+          absent = true
+        } else if (requested && daemonRefused(error) && !hasStatus(error, 409)) {
+          // The daemon answered with an error of its own: it created nothing if the name is free.
+          absent = await bounded(
+            docker.listContainers({ all: true, filters: { name: [`^/${name}$`] } }),
+          ).then(
+            (rows) => rows.length === 0,
+            () => false,
+          )
+        }
+        const failure = hasStatus(error, 409)
+          ? conflict('A container already exists for this turn')
+          : commandError()
+        const outcome = absent ? leftNothing(failure) : failure
+        if (network)
+          await gateway!.release(network.resourceId).catch(() =>
+            process.emitWarning('Sandbox gateway release failed', {
+              code: 'RADITI_SANDBOX_GATEWAY_RELEASE',
+            }),
+          )
+        throw outcome
       }
     },
     async get(id) {

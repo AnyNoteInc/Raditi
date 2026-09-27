@@ -97,6 +97,7 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
     fromEpoch: number
     epoch: number
     runnerSession?: string
+    countAttempt?: boolean
   }): Promise<TurnAssignment | null> {
     const row = this.rows.get(input.id)
     if (
@@ -108,10 +109,17 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
       return null
     if (input.runnerSession && !row.runner) return null
     row.fence = { ...row.fence, epoch: input.epoch }
-    row.recoveryAttempts += 1
+    if (input.countAttempt ?? true) row.recoveryAttempts += 1
     if (input.runnerSession && row.runner)
       row.runner = { ...row.runner, session: input.runnerSession }
     return this.#copy(row)
+  }
+
+  async countAttempt(input: { id: string; epoch: number }): Promise<boolean> {
+    const row = this.rows.get(input.id)
+    if (!row || row.outcome || row.fence.epoch !== input.epoch) return false
+    row.recoveryAttempts += 1
+    return true
   }
 
   async finish(input: {

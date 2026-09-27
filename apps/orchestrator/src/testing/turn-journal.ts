@@ -1,10 +1,12 @@
 // In-memory turn journal for *.test.ts files with the fence rule of TaskEventTurnJournal: an
-// entry is kept only while its fence owns the site (failed and recovery entries also after
-// expiry or a hold), and replay reads a turn over an epoch range in the order written.
+// entry is kept only while its fence owns the site (failed, recovery and vacating entries also
+// after expiry or a hold), and replay reads a turn over an epoch range in the order written.
 import { leaseLost, turnEvidenceSchema, type TurnEvidence, type TurnJournal } from '@repo/domain'
 
 import type { JournaledEvidence, TurnJournalRange } from '../turns/turn-journal.ts'
 import type { MemorySiteLeases } from './site-leases.ts'
+
+const endings = new Set(['failed', 'recovery', 'vacating'])
 
 export class MemoryTurnJournal implements TurnJournal {
   readonly entries: JournaledEvidence[] = []
@@ -17,7 +19,7 @@ export class MemoryTurnJournal implements TurnJournal {
     const entry = turnEvidenceSchema.parse(input)
     const { fence } = entry
     const row = this.leases.rows.get(fence.siteId)
-    const ending = entry.phase === 'failed' || entry.phase === 'recovery'
+    const ending = endings.has(entry.phase)
     if (
       !row ||
       row.taskId !== fence.taskId ||

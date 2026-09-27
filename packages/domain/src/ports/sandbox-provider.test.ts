@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { badRequest, DomainError, sandboxCommandFailed } from '../errors.ts'
 import type { SandboxSpec } from './sandbox-provider.ts'
 import {
   assertSandboxSpec,
+  createLeftNothing,
+  leftNothing,
   MAX_SANDBOX_RESOURCES,
   MAX_SANDBOX_TURN_MS,
   sandboxSpecSchema,
@@ -172,5 +175,34 @@ describe('assertSandboxSpec', () => {
     expect(text).toMatch(/OPENAI_API_KEY/)
     expect(text).toMatch(/env URL/)
     expect(text).not.toContain('top-secret')
+  })
+})
+
+describe('leftNothing', () => {
+  it('marks a failed create that provably left no container, keeping the error', () => {
+    const marked = leftNothing(sandboxCommandFailed())
+    expect(marked).toMatchObject({
+      code: 'SANDBOX_COMMAND_FAILED',
+      httpStatus: 502,
+      message: sandboxCommandFailed().message,
+      details: { leftNothing: true },
+    })
+    expect(createLeftNothing(marked)).toBe(true)
+    const issues = [{ path: 'image', message: 'bad' }]
+    expect(leftNothing(badRequest('Invalid', issues)).details).toEqual({
+      issues,
+      leftNothing: true,
+    })
+    const detailed = new DomainError('CONFLICT', 'x', 409, { reason: 'r' })
+    expect(leftNothing(detailed).details).toEqual({ reason: 'r', leftNothing: true })
+  })
+
+  it('proves nothing without the mark', () => {
+    expect(createLeftNothing(sandboxCommandFailed())).toBe(false)
+    expect(createLeftNothing(new DomainError('X', 'x', 500, { leftNothing: 'true' }))).toBe(false)
+    expect(
+      createLeftNothing(Object.assign(new Error('x'), { details: { leftNothing: true } })),
+    ).toBe(false)
+    expect(createLeftNothing(undefined)).toBe(false)
   })
 })

@@ -174,6 +174,8 @@ async function start(binding = '') {
         argv: ['codex'],
         credentials: ['synthetic-llm-secret', 'synthetic-mcp-secret'],
         created: async () => {},
+        dispatched: () => {},
+        vacated: () => {},
       },
       new AbortController().signal,
     )

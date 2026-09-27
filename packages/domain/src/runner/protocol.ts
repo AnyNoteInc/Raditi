@@ -426,9 +426,19 @@ export const runnerReportSchema = z
     }),
     /** Without a command when the runner removed the container on its own (LEASE_LOST). */
     report('destroyed', { commandId: uuid.optional(), containerId: sandboxRef }),
-    report('failed', { commandId: uuid.optional(), code: z.enum(runnerFailureCodes) }),
+    report('failed', {
+      commandId: uuid.optional(),
+      code: z.enum(runnerFailureCodes),
+      /**
+       * Answers a prepare: it created no container, or its provider removed the one it created.
+       * Core may then free the site at once (spec §8).
+       */
+      absent: z.literal(true).optional(),
+    }),
   ])
   .superRefine((value, ctx) => {
+    if (value.type === 'failed' && value.absent && value.commandId === undefined)
+      ctx.addIssue({ code: 'custom', message: 'only the answer to a prepare can be absent' })
     if (value.type !== 'output') return
     if (value.to.stdout < value.from.stdout || value.to.stderr < value.from.stderr)
       ctx.addIssue({ code: 'custom', message: 'the output cursor moved backwards' })

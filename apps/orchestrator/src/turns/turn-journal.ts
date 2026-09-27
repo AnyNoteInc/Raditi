@@ -14,6 +14,9 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
+/** Entries an owner may append for its own epoch after its lease expired or was held. */
+const endings: readonly TurnPhase[] = ['failed', 'recovery', 'vacating']
+
 /** Evidence as the journal holds it: parsed, with the fence reduced to its four fields. */
 export type JournaledEvidence = z.output<typeof turnEvidenceSchema>
 
@@ -48,8 +51,9 @@ export class TaskEventTurnJournal implements TurnJournal {
     if (Buffer.byteLength(payload) > 1024 * 1024)
       throw badRequest('Turn evidence exceeds its limit')
     const { fence } = evidence
-    const recovery = evidence.phase === 'recovery' || evidence.phase === 'failed'
-    // A failed/held owner may append evidence for its own epoch, never for a newer owner.
+    const recovery = endings.includes(evidence.phase)
+    // A failed, held or vacating owner may append evidence for its own epoch, never for a newer
+    // owner.
     // The fence check and append are one statement, not a check-then-write race.
     const rows = await this.db.$queryRaw<Array<{ id: bigint }>>`
       WITH owned_lease AS MATERIALIZED (
@@ -105,12 +109,17 @@ export class TaskEventTurnJournal implements TurnJournal {
 
 /** What recovery needs from a replayed journal: the last step and where the agent's output ended. */
 export interface ReplayedTurn {
-  /** The last entry: `failed` or `recovery` when an owner ended the turn or held its site. */
+  /**
+   * The last entry: `failed`, `recovery` or `vacating` when an owner ended the turn, held its
+   * site or gave it up without proof that its container is gone.
+   */
   lastPhase: TurnPhase | undefined
-  /** The last step the turn reached, not counting those two. */
+  /** The last step the turn reached, not counting those three. */
   step: TurnPhase | undefined
-  /** Why the last `failed` or `recovery` entry ended the turn. */
+  /** Why the last `failed`, `recovery` or `vacating` entry ended the turn. */
   reason: JournaledEvidence['reason']
+  /** An owner gave the turn up while its prepare was out (vacating): it ends `failed`. */
+  vacating: boolean
   /** The highest sequence journaled: a recovered owner continues after it. */
   sequence: number
   containerId: string | undefined
@@ -124,8 +133,6 @@ export interface ReplayedTurn {
   nativeSessionId: string | undefined
 }
 
-const endings: readonly TurnPhase[] = ['failed', 'recovery']
-
 /**
  * Sums a turn's journal up. Entries that contradict each other — another container or exec, an
  * output cursor that moved back — are a journal mismatch: CONFLICT, and the turn waits for an
@@ -136,6 +143,7 @@ export function replayedTurn(entries: readonly JournaledEvidence[]): ReplayedTur
     lastPhase: undefined,
     step: undefined,
     reason: undefined,
+    vacating: false,
     sequence: 0,
     containerId: undefined,
     execId: undefined,
@@ -152,6 +160,7 @@ export function replayedTurn(entries: readonly JournaledEvidence[]): ReplayedTur
     )
       throw mismatch()
     state.lastPhase = entry.phase
+    if (entry.phase === 'vacating') state.vacating = true
     if (endings.includes(entry.phase)) state.reason = entry.reason
     else {
       state.step = entry.phase

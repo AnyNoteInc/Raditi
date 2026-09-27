@@ -5,9 +5,11 @@ import { Logger } from '@nestjs/common'
 import {
   DomainError,
   leaseLost,
+  leftNothing,
   MAX_PRESIGN_TTL_MS,
   MAX_SANDBOX_TURN_MS,
   SANDBOX_SECRETS_DIR,
+  sandboxCommandFailed,
   snapshotHasCredential,
   TURN_FINALIZE_RESERVE_MS,
   toTurnPlan,
@@ -883,8 +885,8 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.evidence.at(-1)).toMatchObject({ phase: 'recovery', reason: 'lease_lost' })
   })
 
-  it('removes a container the executor reports only after the turn was given up', async () => {
-    const f = fixture()
+  /** A create that answers only when `created` resolves, after the turn was cancelled. */
+  function lateCreate(f: Fixture) {
     const cancellation = new AbortController()
     const created = Promise.withResolvers<void>()
     const create = f.sandboxes.create.getMockImplementation()!
@@ -893,15 +895,117 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       await created.promise
       return create(...args)
     })
+    return { cancellation, created }
+  }
+  const outcome = (f: Fixture) => [...f.assignments.rows.values()][0]?.outcome
+
+  it('keeps the lease while a container the executor may still create is unaccounted for', async () => {
+    const f = fixture()
+    const { cancellation, created } = lateCreate(f)
     await expect(f.run(cancellation.signal)).rejects.toMatchObject({
       code: 'TURN_INTERRUPTED',
       message: 'cancelled',
     })
-    expect(f.leases.release).toHaveBeenCalledOnce()
+    // No proof that no container is left: neither released nor held, it expires by itself.
+    expect(f.leases.release).not.toHaveBeenCalled()
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'vacating', reason: 'cancelled' })
+    expect(outcome(f)).toBeNull()
+
+    // The late container is removed at once, and only then is the site freed.
     created.resolve()
-    await vi.waitFor(() => expect(f.sandbox.destroy).toHaveBeenCalledWith('cancelled'))
+    await vi.waitFor(() => expect(outcome(f)).toBe('failed'))
+    expect(f.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('cancelled')
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.order.indexOf('destroy')).toBeLessThan(f.order.indexOf('release'))
+    expect(f.evidence.map((entry) => entry.phase).slice(-3)).toEqual([
+      'vacating',
+      'vacating',
+      'failed',
+    ])
+    expect(f.evidence.at(-2)).toMatchObject({ reason: 'cancelled', containerId: f.sandbox.id })
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
     expect(f.importBundle).not.toHaveBeenCalled()
     expect(f.sandbox.exec).not.toHaveBeenCalled()
+  })
+
+  it('frees the site at once when the turn is given up before its prepare went out', async () => {
+    const f = fixture()
+    const cancellation = new AbortController()
+    const prepare = vi.mocked(f.driver.prepare).getMockImplementation()!
+    vi.mocked(f.driver.prepare).mockImplementation(async (context) => {
+      cancellation.abort()
+      return prepare(context)
+    })
+    await expect(f.run(cancellation.signal)).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'cancelled' })
+    expect(outcome(f)).toBe('failed')
+  })
+
+  it('waits for the lease to expire when a failed create proves nothing', async () => {
+    const f = fixture()
+    f.sandboxes.create.mockRejectedValue(new Error('daemon did not answer'))
+    await expect(f.run()).rejects.toThrow()
+    expect(f.leases.release).not.toHaveBeenCalled()
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'vacating', reason: 'run_failed' })
+    expect(outcome(f)).toBeNull()
+  })
+
+  it('frees the site at once when the provider proves a failed create left nothing', async () => {
+    const f = fixture()
+    f.sandboxes.create.mockRejectedValue(leftNothing(sandboxCommandFailed()))
+    await expect(f.run()).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'run_failed' })
+    expect(outcome(f)).toBe('failed')
+  })
+
+  it('holds the site for recovery when a late container cannot be removed, whatever comes later', async () => {
+    const f = fixture()
+    const prepare = vi.spyOn(f.deps.executor, 'prepare')
+    const { cancellation, created } = lateCreate(f)
+    vi.mocked(f.sandbox.destroy).mockRejectedValue(new Error('unreachable daemon'))
+    await expect(f.run(cancellation.signal)).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
+    created.resolve()
+    await vi.waitFor(() => expect(f.evidence.at(-1)?.phase).toBe('recovery'))
+    expect(f.evidence.at(-1)).toMatchObject({
+      reason: 'destroy_failed',
+      containerId: f.sandbox.id,
+    })
+    expect(f.leases.holdForRecovery).toHaveBeenCalledOnce()
+    // A proof that arrives now changes nothing: recovery removes the container and ends the turn.
+    prepare.mock.calls[0]![0].vacated()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(f.leases.release).not.toHaveBeenCalled()
+    expect(outcome(f)).toBeNull()
+    expect(f.evidence.at(-1)?.phase).toBe('recovery')
+  })
+
+  it('leaves a late container to recovery once it took the turn over under a newer epoch', async () => {
+    const f = fixture()
+    const { cancellation, created } = lateCreate(f)
+    vi.mocked(f.sandbox.destroy).mockRejectedValue(new Error('removed by recovery meanwhile'))
+    await expect(f.run(cancellation.signal)).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
+    f.leases.inspect.mockResolvedValue({
+      siteId: labels.siteId,
+      taskId: labels.taskId,
+      operation: 'turn',
+      epoch: 2,
+      expiresAt: new Date(Date.now() + 60_000),
+      serverNow: new Date(),
+      heldForOperator: false,
+    } satisfies SiteLeaseAuthority as never)
+    created.resolve()
+    await vi.waitFor(() => expect(f.sandbox.destroy).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+    expect(f.leases.release).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'vacating', containerId: f.sandbox.id })
+    expect(outcome(f)).toBeNull()
   })
 
   it('rejects eager secrets and cross-task identities before acquiring a lease', async () => {

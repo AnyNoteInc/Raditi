@@ -1,4 +1,4 @@
-/* global process, setImmediate */
+/* global AbortController, process, setImmediate */
 // The core process of verify-runner.mjs: the turn supervisor, the runner API and exec recovery
 // over the local PostgreSQL, S3 and Vault, as P12 will wire them. The harness sends it turns over
 // IPC and kills it with SIGKILL: only the database, S3, the Git remote and the runner VM outlive
@@ -172,6 +172,8 @@ const recovery = new TurnExecRecovery({
   live,
 })
 
+// The client's «Отменить» of a running turn, by task.
+const cancels = new Map()
 const failure = (error) => ({
   code: typeof error?.code === 'string' ? error.code : (error?.name ?? 'Error'),
   message: error instanceof Error ? error.message : String(error),
@@ -182,7 +184,17 @@ const handlers = {
       llmApiKey: request.context.llm.apiKey,
       mcpToken: request.context.mcp.token,
     })
-    return supervisor.run(request)
+    const cancel = new AbortController()
+    cancels.set(request.context.taskId, cancel)
+    try {
+      return await supervisor.run(request, cancel.signal)
+    } finally {
+      cancels.delete(request.context.taskId)
+    }
+  },
+  async cancel({ taskId }) {
+    cancels.get(taskId)?.abort()
+    return null
   },
   async session() {
     return hub.session(config.runnerId) ?? null

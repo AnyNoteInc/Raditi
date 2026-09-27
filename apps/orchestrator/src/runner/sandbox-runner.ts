@@ -233,6 +233,8 @@ class Held implements Target {
   lost = false
   /** Stops a prepare that is still running when the turn is removed. */
   readonly abort = new AbortController()
+  /** Settles once the prepare's own work ended, before it answers core. */
+  preparing: Promise<void> | undefined
 
   constructor(
     readonly id: string,
@@ -393,9 +395,10 @@ export class SandboxRunner {
   }
 
   async #execute(command: RunnerCommand, expiresAt: number, sentAt: number): Promise<void> {
+    if (this.#retired) return
+    if (command.type === 'prepare') return this.#prepare(command, sentAt, expiresAt)
     // An expired command is dropped unanswered: core stopped waiting for it.
-    if (performance.now() > expiresAt || this.#retired) return
-    if (command.type === 'prepare') return this.#prepare(command, sentAt)
+    if (performance.now() > expiresAt) return
     if (command.type === 'adopt') return this.#adopt(command, sentAt)
     const held = this.#held.get(command.assignmentId)
     if (!held) return this.#unknown(command)
@@ -427,7 +430,12 @@ export class SandboxRunner {
 
   // --- Commands ---------------------------------------------------------------------------------
 
-  async #prepare(command: Command<'prepare'>, sentAt: number): Promise<void> {
+  /**
+   * A prepare that creates no container — expired, without a free slot, or failed before its
+   * provider was asked or with the provider's proof that nothing is left — answers
+   * `failed{absent}`: core may then free the site at once (spec §8).
+   */
+  async #prepare(command: Command<'prepare'>, sentAt: number, expiresAt: number): Promise<void> {
     if (this.#held.has(command.assignmentId)) return
     const held = new Held(
       command.assignmentId,
@@ -436,13 +444,17 @@ export class SandboxRunner {
       sentAt + command.remainingMs,
     )
     const answer = this.#answer(held, command)
-    if (this.#held.size >= this.deps.maxTurns) {
-      await answer({ type: 'failed', code: 'SANDBOX_COMMAND_FAILED' })
+    if (performance.now() > expiresAt || this.#held.size >= this.deps.maxTurns) {
+      await answer({ type: 'failed', code: 'SANDBOX_COMMAND_FAILED', absent: true })
       return
     }
     this.#held.set(held.id, held)
+    const ended = Promise.withResolvers<void>()
+    held.preparing = ended.promise
     const fence = this.#fence(command)
     let created: Outcome<void> | undefined
+    let dispatched = false
+    let vacated = false
     try {
       const restore = command.restore ? this.#restoreSource(held, command, fence) : undefined
       const execution = await this.deps.executor.prepare(
@@ -467,9 +479,16 @@ export class SandboxRunner {
             created = await answer({ type: 'created', containerId: execution.containerId })
             if (!created.ok) throw new Error('Core did not take the container over')
           },
+          dispatched: () => {
+            dispatched = true
+          },
+          vacated: () => {
+            vacated = true
+          },
         },
         held.abort.signal,
       )
+      ended.resolve()
       held.phase = 'prepared'
       await answer({ type: 'prepared', containerId: execution.containerId })
     } catch (error) {
@@ -477,9 +496,12 @@ export class SandboxRunner {
       const code = runnerFailureCode(error, 'SANDBOX_COMMAND_FAILED', passes.prepare)
       if (!held.execution) {
         this.#forget(held)
-        await answer({ type: 'failed', code })
+        ended.resolve()
+        const absent = !dispatched || vacated
+        await answer({ type: 'failed', code, ...(absent ? { absent: true as const } : {}) })
         return
       }
+      ended.resolve()
       const handover = created as Outcome<void> | undefined
       if (handover && !handover.ok) {
         // Nobody in core owns the container: remove it here. A lost lease already does, and a
@@ -534,6 +556,13 @@ export class SandboxRunner {
     const deadline = command.work
       ? sentAt + command.work.remainingMs
       : performance.now() + REMOVAL_MS
+    const preparing = this.#held.get(command.assignmentId)
+    if (!command.work && preparing?.preparing && preparing.containerId === undefined) {
+      // Removal of a turn still being prepared: stop the prepare, whose failure removes what it
+      // created, and answer from what is left once it ended.
+      preparing.abort.abort()
+      await preparing.preparing
+    }
     const known = this.#held.get(command.assignmentId)
     if (known) {
       const answer = this.#answer(known, command)

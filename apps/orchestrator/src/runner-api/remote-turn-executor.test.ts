@@ -52,6 +52,8 @@ function fixture() {
   const executor = new RemoteTurnExecutor(hub, leases, assignments)
   const bundleBytes = Buffer.from('synthetic bundle')
   const created = vi.fn(async (_execution: TurnExecution) => {})
+  const dispatched = vi.fn()
+  const vacated = vi.fn()
 
   const runner = (runnerId = 'sandbox-1', runnerSession = randomUUID()) => ({
     runnerId,
@@ -131,6 +133,8 @@ function fixture() {
     argv: ['codex', 'exec', '--json'],
     credentials,
     created,
+    dispatched,
+    vacated,
     ...extra,
   })
 
@@ -163,6 +167,8 @@ function fixture() {
     input,
     prepared,
     created,
+    dispatched,
+    vacated,
     bundleBytes,
   }
 }
@@ -239,6 +245,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(f.assignments.rows.get(assignment.id)!.outcome).toBe('failed')
     vi.useRealTimers()
     expect(await f.runner().poll()).toEqual([])
+    expect(f.dispatched).not.toHaveBeenCalled()
   })
 
   it('stops waiting for a runner when the turn is given up', async () => {
@@ -249,6 +256,8 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     cancel.abort(new Error('cancelled'))
     await expect(preparing).rejects.toThrow('cancelled')
     expect(f.assignments.rows.get(assignment.id)!.outcome).toBe('failed')
+    // Never handed out: no container of it can exist.
+    expect(f.dispatched).not.toHaveBeenCalled()
   })
 
   it('reports a container created after the prepare was given up, so that it is removed', async () => {
@@ -258,6 +267,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     const cancel = new AbortController()
     const preparing = f.executor.prepare(f.input(assignment.id), cancel.signal)
     const [command] = await vm.poll()
+    expect(f.dispatched).toHaveBeenCalledOnce()
     cancel.abort(new Error('cancelled'))
     await expect(preparing).rejects.toThrow('cancelled')
     await vm.report(assignment.id, {
@@ -266,6 +276,81 @@ describe('RemoteTurnExecutor over the runner hub', () => {
       containerId: 'container1',
     })
     expect(f.created).toHaveBeenCalledOnce()
+    expect(f.vacated).not.toHaveBeenCalled()
+  })
+
+  it('takes `absent` as proof only while no container of the prepare was reported', async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const cancel = new AbortController()
+    const preparing = f.executor.prepare(f.input(assignment.id), cancel.signal)
+    const [command] = await vm.poll()
+    cancel.abort(new Error('cancelled'))
+    await expect(preparing).rejects.toThrow('cancelled')
+    // Answered after the owner gave up: the proof still reaches it.
+    const absent = {
+      type: 'failed',
+      commandId: command!.commandId,
+      code: 'SANDBOX_COMMAND_FAILED',
+      absent: true,
+    }
+    await vm.report(assignment.id, absent)
+    expect(f.vacated).toHaveBeenCalledOnce()
+    await vm.report(assignment.id, absent)
+    expect(f.vacated).toHaveBeenCalledOnce()
+
+    const g = fixture()
+    const other = g.runner()
+    const second = await g.open()
+    const running = g.executor.prepare(g.input(second.id), new AbortController().signal)
+    const [prepare] = await other.poll()
+    await other.report(second.id, {
+      type: 'created',
+      commandId: prepare!.commandId,
+      containerId: 'container1',
+    })
+    await other.report(second.id, { ...absent, commandId: prepare!.commandId })
+    await expect(running).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    expect(g.vacated).not.toHaveBeenCalled()
+  })
+
+  it('proves nothing by a removal report for a container core did not know', async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const preparing = f.executor.prepare(f.input(assignment.id), new AbortController().signal)
+    const [command] = await vm.poll()
+    await vm.report(assignment.id, { type: 'destroyed', containerId: 'container9' })
+    await expect(preparing).rejects.toMatchObject({ code: 'EXEC_LOST' })
+    expect(f.vacated).not.toHaveBeenCalled()
+    expect(f.created).not.toHaveBeenCalled()
+    await vm.report(assignment.id, {
+      type: 'failed',
+      commandId: command!.commandId,
+      code: 'SANDBOX_COMMAND_FAILED',
+      absent: true,
+    })
+    expect(f.vacated).not.toHaveBeenCalled()
+    // A newer owner asks the runner about it again instead of trusting that report.
+    const adopting = f.executor.adopt(
+      {
+        assignmentId: assignment.id,
+        fence: { ...fence, epoch: 2 },
+        containerId: 'container9',
+        labels: { ...labels, leaseEpoch: 1 },
+        purpose: 'removal',
+      },
+      new AbortController().signal,
+    )
+    const [adopt] = await vm.poll()
+    expect(adopt).toMatchObject({ type: 'adopt', containerId: 'container9', purpose: 'removal' })
+    await vm.report(
+      assignment.id,
+      { type: 'destroyed', commandId: adopt!.commandId, containerId: 'container9' },
+      2,
+    )
+    await expect(adopting).resolves.toBeNull()
   })
 
   it('maps a failure report to the error core writes itself', async () => {
@@ -550,6 +635,25 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(await vm.poll()).toEqual([])
   })
 
+  it('answers a removal of the very container the runner reported removed without asking it', async () => {
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    await vm.report(assignment.id, { type: 'destroyed', containerId: 'container1' })
+    const adopt = (containerId: string) =>
+      f.executor.adopt(
+        {
+          assignmentId: assignment.id,
+          fence: { ...fence, epoch: 2 },
+          containerId,
+          labels: { ...labels, leaseEpoch: 1 },
+          purpose: 'removal',
+        },
+        new AbortController().signal,
+      )
+    await expect(adopt('container1')).resolves.toBeNull()
+    expect(await vm.poll()).toEqual([])
+  })
+
   it('destroys through the runner and forgets the turn once it confirmed', async () => {
     const f = fixture()
     const { assignment, execution, vm } = await f.prepared()
@@ -607,6 +711,23 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(f.executor.takeover({ runner: { id: 'sandbox-2', session: randomUUID() } })).toBeNull()
     // Nobody claimed it: no runner holds anything of the turn.
     expect(f.executor.takeover({ runner: null })).toEqual({ holdsCredentials: false })
+  })
+
+  it('does not take a turn over through a runner silent past its poll hold', async () => {
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    const row = (await f.assignments.get(assignment.id))!
+    const now = performance.now.bind(performance)
+    let later = runnerTimings.pollHoldMs + 14_000
+    vi.spyOn(performance, 'now').mockImplementation(() => now() + later)
+    expect(f.executor.takeover(row)).toMatchObject({ runnerSession: vm.runnerSession })
+    // Removing through it now would only time out: recovery waits for it instead.
+    later = runnerTimings.pollHoldMs + 16_000
+    expect(f.executor.takeover(row)).toBeNull()
+    // A poll in progress is fresh however long ago the last one ended.
+    const polling = vm.poll()
+    await vi.waitFor(() => expect(f.executor.takeover(row)).not.toBeNull())
+    await polling
   })
 
   it('lists and reconciles the runner inventory against unfinished assignments', async () => {
@@ -743,6 +864,8 @@ describe('RemoteTurnExecutor: the turn deadline at delivery', () => {
     })
     expect(await vm.poll()).toEqual([])
     await refused
+    // Only the first delivery counts: it is the one that may have reached the runner.
+    expect(f.dispatched).toHaveBeenCalledOnce()
   })
 
   it('takes a rejected command off the queue by its id, also the copy a poll put back', async () => {
@@ -756,6 +879,7 @@ describe('RemoteTurnExecutor: the turn deadline at delivery', () => {
     cancel.abort(new Error('cancelled'))
     await expect(preparing).rejects.toThrow('cancelled')
     expect(await vm.poll()).toEqual([])
+    expect(f.dispatched).toHaveBeenCalledOnce()
   })
 
   it('lets an older owner neither command nor forget a turn recovery took over', async () => {

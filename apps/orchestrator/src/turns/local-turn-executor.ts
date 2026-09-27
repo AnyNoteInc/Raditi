@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer'
 import {
   badRequest,
   conflict,
+  createLeftNothing,
   DomainError,
   driverPrepareInvalid,
   execLost,
@@ -77,14 +78,22 @@ export class LocalTurnExecutor implements TurnExecutor {
       throw badRequest('Turn secrets are installed only after restore')
     const { files, env, secrets } = parsed.data
     const parser = this.deps.parser(input.driverId)
-    const sandbox = await this.deps.sandboxes.create(
-      {
-        ...input.sandbox,
-        hardTimeoutMs: Math.min(input.sandbox.hardTimeoutMs, input.remainingMs),
-        secrets: [],
-      },
-      signal,
-    )
+    let sandbox: Sandbox
+    input.dispatched()
+    try {
+      sandbox = await this.deps.sandboxes.create(
+        {
+          ...input.sandbox,
+          hardTimeoutMs: Math.min(input.sandbox.hardTimeoutMs, input.remainingMs),
+          secrets: [],
+        },
+        signal,
+      )
+    } catch (error) {
+      // The provider proved nothing is left: the site need not wait for its lease to expire.
+      if (createLeftNothing(error)) input.vacated()
+      throw error
+    }
     const execution = new LocalTurnExecution(
       sandbox,
       this.deps,

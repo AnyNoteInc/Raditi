@@ -4,10 +4,13 @@ import { performance } from 'node:perf_hooks'
 
 import {
   leaseLost,
+  leftNothing,
   MAX_SANDBOX_TURN_MS,
+  sandboxCommandFailed,
   TURN_PUBLICATION_GRACE_MS,
   type RunnerPollRequest,
   type RunnerReport,
+  type Sandbox,
   type SandboxSpec,
   type TurnOutputBatch,
   type TurnPlan,
@@ -45,6 +48,19 @@ import {
 } from './sandbox-runner.ts'
 
 const signal = new AbortController().signal
+
+/**
+ * A create that ends only when it is stopped: with the provider's proof that it left nothing,
+ * or without one.
+ */
+const stoppedCreate = (proven: boolean, started?: () => void) =>
+  ((_spec: unknown, abort?: AbortSignal) =>
+    new Promise<Sandbox>((_resolve, reject) => {
+      started?.()
+      const failure = () =>
+        reject(proven ? leftNothing(sandboxCommandFailed()) : sandboxCommandFailed())
+      abort?.addEventListener('abort', failure, { once: true })
+    })) as unknown as () => Promise<Sandbox>
 
 const runners: SandboxRunner[] = []
 const hubs: RunnerHub[] = []
@@ -329,19 +345,28 @@ describe('SandboxRunner commands', () => {
     vi.spyOn(performance, 'now').mockImplementation(() => (clock += 5))
     const { runner, lines } = startRunner(core.transport, side.executor)
 
+    // An expired prepare created nothing: core may free the site at once.
     await core.send({ type: 'prepare', commandId: randomUUID() }, prepareCommand({ ttlMs: 1 }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed']))
+    expect(core.reports[0]).toMatchObject({
+      code: 'SANDBOX_COMMAND_FAILED',
+      absent: true,
+      epoch: 1,
+    })
     await core.send(prepareCommand({}, 2))
-    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'created', 'prepared']))
     // A stale owner's command is dropped; the current one is carried out.
     await core.send(command('quiesce', {}, 1))
     await core.send(command('quiesce', {}, 2))
-    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'quiesced']))
+    await vi.waitFor(() =>
+      expect(core.types()).toEqual(['failed', 'created', 'prepared', 'quiesced']),
+    )
     await core.send()
     await vi.waitFor(() => expect(core.polls).toHaveLength(6))
 
     expect(side.sandboxes.create).toHaveBeenCalledOnce()
     expect(side.sandbox.quiesce).toHaveBeenCalledOnce()
-    expect(core.reports.every((report) => report.epoch === 2)).toBe(true)
+    expect(core.reports.slice(1).every((report) => report.epoch === 2)).toBe(true)
     expect(core.polls[0]).toMatchObject({ runnerSession: runner.session, capacity: 1, active: [] })
     expect(core.polls.at(-1)).toMatchObject({
       capacity: 0,
@@ -349,6 +374,73 @@ describe('SandboxRunner commands', () => {
       inventory: [{ containerId: 'container1', labels: { ...labels, leaseEpoch: 1 } }],
     })
     expect(lines).toEqual(['command: invalid command'])
+  })
+
+  it('answers a prepare that created nothing as absent, and only then', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    startRunner(core.transport, side.executor)
+    const other = '00000000-0000-4000-8000-0000000000a2'
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    // Its only slot is taken: the second turn never reaches Docker.
+    await core.send({ ...prepareCommand(), assignmentId: other })
+    await vi.waitFor(() => expect(core.types()).toHaveLength(3))
+    expect(core.reports[2]).toMatchObject({ type: 'failed', assignmentId: other, absent: true })
+    await core.send(command('destroy', { reason: 'failed' }))
+    await vi.waitFor(() => expect(core.types()).toHaveLength(4))
+
+    // The provider proved it left nothing: absent.
+    side.sandboxes.create.mockRejectedValueOnce(leftNothing(sandboxCommandFailed()))
+    await core.send({ ...prepareCommand(), assignmentId: other })
+    await vi.waitFor(() => expect(core.types()).toHaveLength(5))
+    expect(core.reports[4]).toMatchObject({ type: 'failed', assignmentId: other, absent: true })
+    // Docker did not answer: the container may exist, so no proof.
+    side.sandboxes.create.mockRejectedValueOnce(new Error('daemon did not answer'))
+    const third = '00000000-0000-4000-8000-0000000000a3'
+    await core.send({ ...prepareCommand(), assignmentId: third })
+    await vi.waitFor(() => expect(core.types()).toHaveLength(6))
+    expect(core.reports[5]).toMatchObject({ type: 'failed', assignmentId: third })
+    expect(core.reports[5]).not.toHaveProperty('absent')
+  })
+
+  it('stops a prepare still creating its container when core adopts the turn for removal', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    startRunner(core.transport, side.executor)
+    const creating = Promise.withResolvers<void>()
+    // The provider removes what it began to create when it is stopped, and says so.
+    side.sandboxes.create.mockImplementation(stoppedCreate(true, () => creating.resolve()))
+    side.sandboxes.getForRemoval.mockResolvedValue(null)
+    const prepare = prepareCommand()
+    await core.send(prepare)
+    await creating.promise
+    // Core saw the container in the inventory and adopts it for removal under a newer epoch.
+    const adopt = command(
+      'adopt',
+      { containerId: 'container1', labels: { ...labels, leaseEpoch: 1 }, purpose: 'removal' },
+      2,
+    )
+    await core.send(adopt)
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'destroyed']))
+    expect(core.reports).toMatchObject([
+      { commandId: prepare.commandId, code: 'SANDBOX_COMMAND_FAILED', absent: true },
+      { commandId: adopt.commandId, containerId: 'container1', epoch: 2 },
+    ])
+
+    // Stopped too late to prove anything: the container is adopted and removed like any other.
+    const again = scriptedCore()
+    const next = sandboxSide()
+    startRunner(again.transport, next.executor)
+    next.sandboxes.create.mockImplementation(stoppedCreate(false))
+    await again.send(prepareCommand())
+    await vi.waitFor(() => expect(next.sandboxes.create).toHaveBeenCalled())
+    await again.send(adopt)
+    await vi.waitFor(() => expect(again.types()).toEqual(['failed', 'adopted']))
+    expect(again.reports[0]).not.toHaveProperty('absent')
+    await again.send(command('destroy', { reason: 'failed' }, 2))
+    await vi.waitFor(() => expect(again.types()).toEqual(['failed', 'adopted', 'destroyed']))
+    expect(next.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('failed')
   })
 
   it('counts a turn from the poll that brought it, and a command’s validity from receipt', async () => {

@@ -283,6 +283,60 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     expect((await store.unfinished({ runnerId: 'vm1' })).map((a) => a.id)).not.toContain(opened.id)
   })
 
+  it('lets exactly one of a claim and an abandon win an unclaimed assignment', async () => {
+    const claimFirst = await fixture()
+    const claimed = (await store.open(claimFirst.input))!
+    let abandoning: Promise<boolean> | undefined
+    let answered = false
+    // A runner's claim holds the row while the core that waited for it gives the turn up.
+    await db.$transaction(async (tx) => {
+      const rows = await new PostgresTurnAssignmentStore(tx).claim({
+        ids: [claimed.id],
+        runnerId: 'vm1',
+        runnerSession: randomUUID(),
+        limit: 1,
+      })
+      expect(rows).toHaveLength(1)
+      abandoning = store.abandon(claimed.id)
+      void abandoning.finally(() => {
+        answered = true
+      })
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      // The abandon waits for the claim instead of failing a turn a runner may be preparing.
+      expect(answered).toBe(false)
+    })
+    expect(await abandoning).toBe(false)
+    expect(await store.get(claimed.id)).toMatchObject({ outcome: null, runner: { id: 'vm1' } })
+
+    const abandonFirst = await fixture()
+    const abandoned = (await store.open(abandonFirst.input))!
+    const claim = () =>
+      store.claim({ ids: [abandoned.id], runnerId: 'vm1', runnerSession: randomUUID(), limit: 1 })
+    await db.$transaction(async (tx) => {
+      expect(await new PostgresTurnAssignmentStore(tx).abandon(abandoned.id)).toBe(true)
+      // Skipped while the abandon holds it, and never claimed once it committed.
+      expect(await claim()).toEqual([])
+    })
+    expect(await claim()).toEqual([])
+    expect(await store.get(abandoned.id)).toMatchObject({ outcome: 'failed', runner: null })
+  })
+
+  it('counts a recovery attempt only when asked, under the current epoch', async () => {
+    const { lease, input } = await fixture()
+    const opened = (await store.open(input))!
+    await leases.holdForRecovery(lease)
+    expect((await leases.reclaimForRecovery(lease, 60_000))!.epoch).toBe(2)
+    expect(
+      await store.advance({ id: opened.id, fromEpoch: 1, epoch: 2, countAttempt: false }),
+    ).toMatchObject({ fence: { epoch: 2 }, recoveryAttempts: 0 })
+    expect(await store.countAttempt({ id: opened.id, epoch: 1 })).toBe(false)
+    expect(await store.countAttempt({ id: opened.id, epoch: 2 })).toBe(true)
+    expect(await store.get(opened.id)).toMatchObject({ recoveryAttempts: 1 })
+    expect(await store.finish({ id: opened.id, epoch: 2, outcome: 'completed' })).toBe(true)
+    expect(await store.countAttempt({ id: opened.id, epoch: 2 })).toBe(false)
+    expect(await store.get(opened.id)).toMatchObject({ recoveryAttempts: 1 })
+  })
+
   it('refuses runner fields on a local assignment in the database itself', async () => {
     const { input } = await fixture('local')
     const opened = (await store.open(input))!

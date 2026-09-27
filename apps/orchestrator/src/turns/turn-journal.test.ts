@@ -67,6 +67,7 @@ describe('turn journal replay', () => {
       lastPhase: undefined,
       step: undefined,
       reason: undefined,
+      vacating: false,
       sequence: 0,
       containerId: undefined,
       execId: undefined,
@@ -103,6 +104,7 @@ describe('turn journal replay', () => {
       lastPhase: 'output',
       step: 'output',
       reason: undefined,
+      vacating: false,
       sequence: 8,
       containerId: 'container1',
       execId: 'exec1',
@@ -120,6 +122,29 @@ describe('turn journal replay', () => {
       replayedTurn([...journal, entry('recovery', { sequence: 9, reason: 'destroy_failed' })]),
     ).toMatchObject({ lastPhase: 'recovery', step: 'output', reason: 'destroy_failed' })
     expect(replayedTurn(journal.slice(0, 3))).toMatchObject({ nativeSessionId: 'prior' })
+  })
+
+  it('remembers a turn given up while its prepare was out, whatever came after', () => {
+    const vacated = [
+      entry('leased'),
+      entry('vacating', { sequence: 2, reason: 'cancelled' }),
+      entry('vacating', { sequence: 3, reason: 'cancelled', containerId: 'container1' }),
+      entry('recovery', { sequence: 4, reason: 'destroy_failed', containerId: 'container1' }),
+    ]
+    expect(replayedTurn(vacated.slice(0, 2))).toMatchObject({
+      lastPhase: 'vacating',
+      step: 'leased',
+      reason: 'cancelled',
+      vacating: true,
+      containerId: undefined,
+    })
+    expect(replayedTurn(vacated)).toMatchObject({
+      lastPhase: 'recovery',
+      step: 'leased',
+      reason: 'destroy_failed',
+      vacating: true,
+      containerId: 'container1',
+    })
   })
 
   it.each([
@@ -261,6 +286,24 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       },
     })
     await expect(f.journal.replay(range)).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
+  it('keeps a vacating entry under its own held or expired epoch, never under a newer owner', async () => {
+    const f = await fixture()
+    await f.journal.record({ ...f.evidence, phase: 'vacating', reason: 'cancelled' })
+    await db.$executeRaw`UPDATE site_leases SET expires_at = clock_timestamp() - interval '1 second'
+      WHERE site_id = ${f.fence.siteId}::uuid`
+    await f.journal.record({ ...f.evidence, sequence: 2, phase: 'vacating', reason: 'cancelled' })
+    await expect(f.journal.record({ ...f.evidence, phase: 'running' })).rejects.toMatchObject({
+      code: 'LEASE_LOST',
+    })
+    await f.leases.holdForRecovery(f.fence)
+    await f.journal.record({ ...f.evidence, sequence: 3, phase: 'vacating', reason: 'cancelled' })
+    await f.leases.reclaimForRecovery(f.fence, 60_000)
+    await expect(
+      f.journal.record({ ...f.evidence, sequence: 4, phase: 'vacating', reason: 'cancelled' }),
+    ).rejects.toMatchObject({ code: 'LEASE_LOST' })
+    expect(await db.taskEvent.count({ where: { taskId: f.task.id } })).toBe(3)
   })
 
   it('refuses old-epoch evidence after a newer owner acquires the site', async () => {

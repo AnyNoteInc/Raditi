@@ -66,14 +66,18 @@ export interface TurnAssignmentStore {
   seen(input: { runnerId: string; runnerSession: string; ids: readonly string[] }): Promise<void>
   /**
    * Recovery takes the turn over under a newer epoch of the same lease, optionally for a
-   * restarted session of the same runner, and counts the attempt.
+   * restarted session of the same runner, and counts the attempt unless `countAttempt` is false:
+   * removing a given-up turn's container, or publishing its checkpoint before the removal.
    */
   advance(input: {
     id: string
     fromEpoch: number
     epoch: number
     runnerSession?: string
+    countAttempt?: boolean
   }): Promise<TurnAssignment | null>
+  /** Counts a recovery attempt under the assignment's current epoch; false once it moved on. */
+  countAttempt(input: { id: string; epoch: number }): Promise<boolean>
   finish(input: { id: string; epoch: number; outcome: TurnAssignmentOutcome }): Promise<boolean>
   /** Oldest first; for recovery and a runner's reconcile. */
   unfinished(filter?: { runnerId?: string }): Promise<TurnAssignment[]>

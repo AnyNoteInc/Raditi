@@ -101,6 +101,10 @@ export interface TurnPrepareInput {
    * its removal through this execution, even when prepare fails later; a rejection stops prepare.
    */
   created(execution: TurnExecution): Promise<void>
+  /** From now on a container of this prepare may exist: the caller frees the site only with proof. */
+  dispatched(): void
+  /** Proof that this prepare left no container and never will. May come after the caller gave up. */
+  vacated(): void
 }
 
 /** Turn n−1: the manifest is already checked by core; parts are verified before any write. */

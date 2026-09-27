@@ -89,6 +89,8 @@ interface OpenCommand {
   readonly dataKey?: () => Promise<Uint8Array>
   readonly candidates?: CandidateParts
   readonly onCreated?: (containerId: string) => Promise<void>
+  readonly onDispatched?: () => void
+  readonly onVacated?: () => void
   created?: Promise<void>
 }
 
@@ -119,6 +121,13 @@ export interface SendOptions<T extends RunnerReportType> {
   candidates?: CandidateParts
   /** Runs once, on the `created` report of a prepare. */
   onCreated?: (containerId: string) => Promise<void>
+  /** Runs once, when a poll takes the command: from then on the runner may carry it out. */
+  onDispatched?: () => void
+  /**
+   * Runs when the runner answers a prepare with `failed{absent}` before any container of the
+   * turn was reported: proof that it left none (spec §8). Never on `destroyed`.
+   */
+  onVacated?: () => void
 }
 
 /** The core side of one turn on a runner: its fence, runner session and open commands. */
@@ -126,6 +135,11 @@ export class LiveAssignment {
   containerId: string | undefined
   /** A `destroyed` report arrived: the container is gone. */
   gone = false
+  /**
+   * The container core knew that the runner reported removed: proof that it is gone. A report
+   * for a container core did not know only sets `gone`, which a newer epoch asks again.
+   */
+  goneContainer: string | undefined
   exec: ExecStream | undefined
   readonly commands = new Map<string, OpenCommand>()
   readonly answered = new Set<string>()
@@ -277,6 +291,8 @@ export class RunnerHub implements OnApplicationShutdown {
         for (const open of live.commands.values()) this.#reject(open, error)
         live.exec?.fail(error)
         live.exec = undefined
+        // Only a proven removal carries over; the new owner asks the runner about the rest.
+        if (live.goneContainer === undefined) live.gone = false
       }
       live.fence = fence
       live.runner = input.runner
@@ -335,6 +351,8 @@ export class RunnerHub implements OnApplicationShutdown {
       ...(options.dataKey ? { dataKey: options.dataKey } : {}),
       ...(options.candidates ? { candidates: options.candidates } : {}),
       ...(options.onCreated ? { onCreated: options.onCreated } : {}),
+      ...(options.onDispatched ? { onDispatched: options.onDispatched } : {}),
+      ...(options.onVacated ? { onVacated: options.onVacated } : {}),
     }
     live.commands.set(command.commandId, open)
     options.signal?.addEventListener('abort', onAbort, { once: true })
@@ -375,10 +393,15 @@ export class RunnerHub implements OnApplicationShutdown {
     live.exec?.fail(released)
   }
 
-  /** The runner's connected session, if it has one. */
-  session(runnerId: string): string | undefined {
+  /**
+   * The runner's connected session, if it has one; with `freshWithinMs`, only while it polls or
+   * polled that recently.
+   */
+  session(runnerId: string, freshWithinMs = Number.POSITIVE_INFINITY): string | undefined {
     const session = this.#sessions.get(runnerId)
-    return session && !session.gone ? session.id : undefined
+    if (!session || session.gone) return undefined
+    const fresh = session.polling > 0 || performance.now() - session.lastSeen <= freshWithinMs
+    return fresh ? session.id : undefined
   }
 
   /** Turn containers the connected runners reported in their last poll. */
@@ -545,6 +568,9 @@ export class RunnerHub implements OnApplicationShutdown {
       case 'destroyed': {
         if (live.containerId !== undefined && live.containerId !== report.containerId)
           throw RunnerApiError.of('BAD_REQUEST')
+        // Proof only for the container core knew; a prepare's never ends here (its `created`).
+        if (live.containerId !== undefined) live.goneContainer = report.containerId
+        live.containerId = report.containerId
         live.gone = true
         const removed = execLost('The runner removed the turn container')
         live.exec?.fail(removed)
@@ -561,6 +587,9 @@ export class RunnerHub implements OnApplicationShutdown {
         if (report.commandId) {
           const open = this.#answering(live, report.commandId, [])
           if (!open) return
+          // The prepare left no container (P3): believed only before any container was reported.
+          if (report.absent && open.command.type === 'prepare' && live.containerId === undefined)
+            open.onVacated?.()
           this.#reject(open, error)
           live.commands.delete(report.commandId)
           live.answered.add(report.commandId)
@@ -719,7 +748,10 @@ export class RunnerHub implements OnApplicationShutdown {
         queued = runnerCommandSchema.parse(withRemaining(queued, remainingMs))
         open.command = queued
       }
-      if (open) open.delivered = true
+      if (open && !open.delivered) {
+        open.delivered = true
+        open.onDispatched?.()
+      }
       out.push(queued)
     }
     return out

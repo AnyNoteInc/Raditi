@@ -168,6 +168,11 @@ export const turnPhases = [
   'publication_recovered',
   'failed',
   'recovery',
+  /**
+   * The owner gave the turn up without proof that the container of its prepare is gone: the
+   * lease is neither released nor held, it expires by itself (spec §8).
+   */
+  'vacating',
 ] as const
 export type TurnPhase = (typeof turnPhases)[number]
 

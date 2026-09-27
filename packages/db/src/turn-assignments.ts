@@ -256,16 +256,28 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
     fromEpoch: number
     epoch: number
     runnerSession?: string
+    countAttempt?: boolean
   }): Promise<TurnAssignment | null> {
     const checked = z
-      .object({ id, fromEpoch: epoch, epoch, runnerSession: id.nullable() })
-      .parse({ ...input, runnerSession: input.runnerSession ?? null })
+      .object({
+        id,
+        fromEpoch: epoch,
+        epoch,
+        runnerSession: id.nullable(),
+        countAttempt: z.boolean(),
+      })
+      .parse({
+        ...input,
+        runnerSession: input.runnerSession ?? null,
+        countAttempt: input.countAttempt ?? true,
+      })
     if (checked.epoch <= checked.fromEpoch) throw badRequest('Recovery must move to a newer epoch')
+    const attempts = checked.countAttempt ? 1 : 0
     // Only the current owner of the newer epoch takes the turn over.
     const rows = assignments(
       await this.db.$queryRaw`
       UPDATE turn_assignments a SET lease_epoch = ${checked.epoch},
-        recovery_attempts = a.recovery_attempts + 1,
+        recovery_attempts = a.recovery_attempts + ${attempts}::int,
         runner_session = COALESCE(${checked.runnerSession}::uuid, a.runner_session),
         updated_at = clock_timestamp()
       WHERE a.id = ${checked.id}::uuid AND a.lease_epoch = ${checked.fromEpoch}
@@ -278,6 +290,16 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
       RETURNING ${columns('a')}`,
     )
     return rows[0] ?? null
+  }
+
+  async countAttempt(input: { id: string; epoch: number }): Promise<boolean> {
+    const checked = z.object({ id, epoch }).parse({ id: input.id, epoch: input.epoch })
+    const rows = await this.db.$queryRaw<Array<{ id: string }>>`
+      UPDATE turn_assignments SET recovery_attempts = recovery_attempts + 1,
+        updated_at = clock_timestamp()
+      WHERE id = ${checked.id}::uuid AND lease_epoch = ${checked.epoch} AND finished_at IS NULL
+      RETURNING id`
+    return rows.length === 1
   }
 
   async finish(input: {

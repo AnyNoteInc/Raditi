@@ -147,6 +147,9 @@ export class TurnSupervisor {
             argv,
             credentials,
             created: (created) => attempt.created(created),
+            // Until a container is reported, only these tell whether the site may be freed.
+            dispatched: () => attempt.dispatched(),
+            vacated: () => attempt.vacated(),
           },
           guard.signal,
         ),

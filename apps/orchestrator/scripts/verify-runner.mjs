@@ -8,6 +8,8 @@
 //   2. core killed -9 while the agent's output is journaled: a new core's recovery resumes it;
 //   3. the runner killed -9 there: the turn is given up, its container removed, the site freed;
 //   4. both killed: recovery resumes on the restarted runner with the turn's credentials;
+//   5. the turn cancelled while the runner creates its container: the site stays with the turn
+//      until the container is removed;
 // and a stale epoch or a runner session that is gone is refused. Synthetic data only; every
 // row, object, key, container, network and firewall rule it creates is removed.
 //
@@ -772,6 +774,53 @@ try {
     expectEvents(await journal(task.taskId))
     verified.push(
       `kill -9 of core and the runner during output: resumed on the new runner session with recovered credentials, the old session → 409 LEASE_LOST, published (${Math.round((Date.now() - started) / 1000)} s)`,
+    )
+  }
+
+  // 5. Cancelled while the runner creates the container: no proof that none is left, so the
+  //    site stays with the turn (vacating) until the late container is removed.
+  {
+    const started = Date.now()
+    const task = await createTask()
+    sessions.push(task.sessionId)
+    const run = core.request('run', {
+      request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+    })
+    run.catch(() => {})
+    // Claimed and delivered in one poll; creating a gateway and a sandbox takes seconds.
+    await waitFor(
+      async () => (await assignmentOf(task.taskId))?.runnerSession,
+      'the runner to take the prepare',
+    )
+    assert(!(await journal(task.taskId)).some((entry) => entry.phase === 'created'))
+    await core.request('cancel', { taskId: task.taskId })
+    await assert.rejects(run, { code: 'TURN_INTERRUPTED', message: 'cancelled' })
+    let seen = false
+    await waitFor(async () => {
+      // The lease first: a container that exists after the site was freed breaks the rule.
+      const lease = await leaseOf()
+      const containers = await turnContainers('io.raditi.sandbox.taskId', task.taskId)
+      if (containers.length > 0) {
+        seen = true
+        assert.equal(lease.holderTaskId, task.taskId, 'The site stays with the turn meanwhile')
+      }
+      return containers.length === 0 && (await assignmentOf(task.taskId)).outcome
+    }, 'the cancelled turn to end')
+    const entries = await journal(task.taskId)
+    assert.deepEqual(
+      entries.map((entry) => [entry.phase, entry.reason, Boolean(entry.containerId)]),
+      [
+        ['leased', undefined, false],
+        ['vacating', 'cancelled', false],
+        ['vacating', 'cancelled', true],
+        ['failed', 'cancelled', false],
+      ],
+    )
+    assert.equal((await assignmentOf(task.taskId)).outcome, 'failed')
+    assert.equal((await leaseOf()).holderTaskId, null)
+    assert.equal(await branchHead(task.taskId), '', 'Nothing of the cancelled turn is published')
+    verified.push(
+      `cancel while the runner creates the container: vacating without a release, the late container removed through the runner, then the site freed${seen ? ' (held while the container was seen)' : ''} (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 

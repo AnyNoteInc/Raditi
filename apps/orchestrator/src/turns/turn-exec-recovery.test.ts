@@ -6,6 +6,7 @@ import {
   MAX_SANDBOX_TURN_MS,
   runnerReportSchema,
   SANDBOX_SECRETS_DIR,
+  TURN_PUBLICATION_GRACE_MS,
   type AgentDriver,
   type AgentEvent,
   type ExecCursor,
@@ -565,9 +566,11 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     expect(w.vm.sandbox.destroy).toHaveBeenCalledWith('failed')
     expect(w.vm.sandbox.exec).not.toHaveBeenCalled()
     expect(w.driver.prepare).toHaveBeenCalledOnce()
+    // Only removed, no agent to resume: no attempt counts against the turn.
+    expect(w.assignment().recoveryAttempts).toBe(phase === 'leased' ? 0 : 1)
   })
 
-  it('fails a turn whose core died before any runner or container took it', async () => {
+  it('frees the site of a turn whose core died before any runner or container took it', async () => {
     const w = world(kind)
     await w.crashAt(undefined, {
       arm: (kill) =>
@@ -579,7 +582,92 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     const { recovery } = await w.restart()
     await w.recover(recovery)
     expect(w.vm.sandboxes.create).not.toHaveBeenCalled()
-    expectGivenUp(w, 'run_failed')
+    if (kind === 'runner') {
+      // Nobody claimed it: abandoned now, no runner ever will (P1), and the site is free at once.
+      expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+      expect(w.journal.entries.at(-1)).toMatchObject({
+        phase: 'failed',
+        reason: 'run_failed',
+        fence: { epoch: 1 },
+      })
+      expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+      expect(w.credentials.revoked).toEqual([reference])
+      return
+    }
+    // Nothing tells whether the dead core started a create in its Docker: the site waits.
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+    expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 0 })
+    w.assignments.rows.get(w.assignment().id)!.deadlineAt = new Date(
+      Date.now() - TURN_PUBLICATION_GRACE_MS - 1_000,
+    )
+    await w.recover(recovery)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'timeout',
+      fence: { epoch: 1 },
+    })
+    expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('ends a turn its owner gave up while the prepare was out as failed, once its container is removed', async () => {
+    const w = world(kind)
+    const create = w.vm.sandboxes.create.getMockImplementation()!
+    // The daemon did not answer, yet created the container: nothing proves it absent.
+    w.vm.sandboxes.create.mockImplementationOnce(async (...args) => {
+      await create(...args)
+      throw new DomainError('SANDBOX_COMMAND_FAILED', 'Docker did not answer', 502)
+    })
+    await w.crashAt('vacating')
+    expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
+    const { recovery } = await w.restart()
+    await w.recover(recovery)
+
+    expect(w.vm.exists()).toBe(false)
+    expect(w.assignment()).toMatchObject({
+      outcome: 'failed',
+      fence: { epoch: 2 },
+      recoveryAttempts: 0,
+    })
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'run_failed',
+      fence: { epoch: 2 },
+    })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('removes a leased turn’s container even when its driver is gone', async () => {
+    const w = world(kind)
+    const create = w.vm.sandboxes.create.getMockImplementation()!
+    await w.crashAt(undefined, {
+      arm: (kill) =>
+        w.vm.sandboxes.create.mockImplementationOnce(async (...args) => {
+          const created = await create(...args)
+          kill()
+          return created
+        }),
+    })
+    const after = await w.restart()
+    const recovery = new TurnExecRecovery({
+      leases: w.leases,
+      assignments: w.assignments,
+      journal: w.journal,
+      workspace: w.workspace,
+      snapshots: w.snapshots,
+      executor: after.executor,
+      driver: () => {
+        throw new Error('This core has no such driver')
+      },
+      credentials: w.credentials,
+      live: after.live,
+      logger: w.logger,
+    })
+    await w.recover(recovery)
+    expect(w.vm.exists()).toBe(false)
+    expect(w.logger.error).not.toHaveBeenCalled()
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.assignment()).toMatchObject({ outcome: 'lost', recoveryAttempts: 0 })
   })
 
   it('publishes a checkpoint whose manifest was committed before core died', async () => {
@@ -836,15 +924,220 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
   })
 })
 
+/** The turn's deadline passed long enough ago that the VM's watchdog removed its container. */
+const pastGrace = (w: ReturnType<typeof world>) => {
+  w.assignments.rows.get(w.assignment().id)!.deadlineAt = new Date(
+    Date.now() - TURN_PUBLICATION_GRACE_MS - 1_000,
+  )
+}
+
+describe('turn exec recovery of a turn given up before its container was reported', () => {
+  /** A local turn cancelled while its create hangs; `created` lets the create answer. */
+  async function vacatingTurn(w: ReturnType<typeof world>) {
+    const core = await w.restart()
+    const cancellation = new AbortController()
+    const created = Promise.withResolvers<void>()
+    const create = w.vm.sandboxes.create.getMockImplementation()!
+    w.vm.sandboxes.create.mockImplementationOnce(async (...args) => {
+      cancellation.abort()
+      await created.promise
+      return create(...args)
+    })
+    await expect(core.supervisor.run(request(), cancellation.signal)).rejects.toMatchObject({
+      code: 'TURN_INTERRUPTED',
+    })
+    expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
+    return { core, created }
+  }
+
+  it('ends as failed after a late container whose removal failed is removed by recovery', async () => {
+    const w = world('local')
+    const { core, created } = await vacatingTurn(w)
+    const destroy = w.vm.sandbox.destroy
+    w.vm.sandbox.destroy = vi.fn(async () => {
+      throw new DomainError('SANDBOX_COMMAND_FAILED', 'Docker did not answer', 502)
+    })
+    created.resolve()
+    await vi.waitFor(() =>
+      expect(w.journal.entries.at(-1)).toMatchObject({
+        phase: 'recovery',
+        reason: 'destroy_failed',
+        containerId: 'container1',
+      }),
+    )
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+    expect(w.assignment().outcome).toBeNull()
+
+    w.vm.sandbox.destroy = destroy
+    await w.recover(core.recovery)
+    expect(w.vm.exists()).toBe(false)
+    // Its owner gave it up first: failed, not lost, whatever the last entry was.
+    expect(w.assignment()).toMatchObject({
+      outcome: 'failed',
+      fence: { epoch: 2 },
+      recoveryAttempts: 0,
+    })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('frees a held site and closes the turn on the next pass when core died after `failed`', async () => {
+    const w = world('local')
+    const { created } = await vacatingTurn(w)
+    w.vm.sandbox.destroy = vi.fn(async () => {
+      throw new DomainError('SANDBOX_COMMAND_FAILED', 'Docker did not answer', 502)
+    })
+    created.resolve()
+    await vi.waitFor(() => expect(w.lease()).toMatchObject({ held: true, epoch: 1 }))
+    pastGrace(w)
+    const crash = crashable()
+    const dying = await w.restart(crash)
+    w.journal.onRecord = (entry) => {
+      if (entry.phase === 'failed') crash.freeze()
+    }
+    void dying.recovery.tick()
+    await vi.waitFor(() => expect(w.journal.entries.at(-1)?.phase).toBe('failed'))
+    w.journal.onRecord = undefined
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+
+    const { recovery } = await w.restart()
+    await w.recover(recovery)
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+  })
+
+  /** A local turn cancelled while its create hangs with the container already in Docker. */
+  async function vacatingWithContainer(w: ReturnType<typeof world>) {
+    const core = await w.restart()
+    const cancellation = new AbortController()
+    const created = Promise.withResolvers<void>()
+    const create = w.vm.sandboxes.create.getMockImplementation()!
+    w.vm.sandboxes.create.mockImplementationOnce(async (...args) => {
+      const sandbox = await create(...args)
+      cancellation.abort()
+      await created.promise
+      return sandbox
+    })
+    await expect(core.supervisor.run(request(), cancellation.signal)).rejects.toMatchObject({
+      code: 'TURN_INTERRUPTED',
+    })
+    expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
+    expect(w.vm.exists()).toBe(true)
+    return { core, created }
+  }
+
+  it('lets recovery take a vacating turn over when the proof comes after it held the site', async () => {
+    const w = world('local')
+    const { core, created } = await vacatingWithContainer(w)
+    const finish = vi.spyOn(w.assignments, 'finish')
+    const reclaim = w.leases.reclaimForRecovery.bind(w.leases)
+    vi.spyOn(w.leases, 'reclaimForRecovery').mockImplementationOnce(async (fence, ttlMs) => {
+      // Held at epoch 1: the late container is removed now, and its attempt ends meanwhile.
+      created.resolve()
+      await vi.waitFor(() => expect(w.journal.phases(1).at(-1)).toBe('failed'))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return reclaim(fence, ttlMs)
+    })
+    await w.recover(core.recovery)
+
+    expect(w.vm.sandbox.destroy).toHaveBeenCalledOnce()
+    // The attempt saw the hold at its epoch and left the assignment to recovery.
+    expect(finish.mock.calls.map(([input]) => input.epoch)).toEqual([2])
+    expect(w.assignment()).toMatchObject({
+      outcome: 'failed',
+      fence: { epoch: 2 },
+      recoveryAttempts: 0,
+    })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('frees the epoch it reclaimed when the attempt finished the turn before its takeover', async () => {
+    const w = world('local')
+    const { core, created } = await vacatingWithContainer(w)
+    // Expired: the attempt's release fails, and it finds the site not held yet.
+    w.lease().expiresAt = Date.now() - 1_000
+    const inspected = Promise.withResolvers<void>()
+    const inspect = w.leases.inspect.bind(w.leases)
+    vi.spyOn(w.leases, 'inspect').mockImplementation(async (siteId) => {
+      const found = await inspect(siteId)
+      inspected.resolve()
+      return found
+    })
+    const finishing = Promise.withResolvers<void>()
+    const finish = w.assignments.finish.bind(w.assignments)
+    const finished = Promise.withResolvers<void>()
+    vi.spyOn(w.assignments, 'finish').mockImplementation(async (input) => {
+      await finishing.promise
+      const done = await finish(input)
+      finished.resolve()
+      return done
+    })
+    const hold = w.leases.holdForRecovery.bind(w.leases)
+    vi.spyOn(w.leases, 'holdForRecovery').mockImplementationOnce(async (fence) => {
+      created.resolve()
+      await inspected.promise
+      return hold(fence)
+    })
+    const reclaim = w.leases.reclaimForRecovery.bind(w.leases)
+    vi.spyOn(w.leases, 'reclaimForRecovery').mockImplementationOnce(async (fence, ttlMs) => {
+      const grant = await reclaim(fence, ttlMs)
+      finishing.resolve()
+      await finished.promise
+      return grant
+    })
+    await w.recover(core.recovery)
+
+    expect(w.vm.sandbox.destroy).toHaveBeenCalledOnce()
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('waits for a claimed prepare no container of which shows, without a hold or an attempt', async () => {
+    const w = world('runner')
+    await w.crashAt(undefined, {
+      // The runner took the prepare; core died while the daemon had not created anything yet.
+      arm: (kill) =>
+        w.vm.sandboxes.create.mockImplementationOnce(async () => {
+          kill()
+          return new Promise<never>(() => {})
+        }),
+    })
+    const { recovery } = await w.restart()
+    await w.recover(recovery)
+    await w.recover(recovery)
+    expect(w.assignment()).toMatchObject({
+      outcome: null,
+      fence: { epoch: 1 },
+      recoveryAttempts: 0,
+      runner: { id: 'sandbox-1' },
+    })
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+
+    pastGrace(w)
+    await w.recover(recovery)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'timeout',
+      fence: { epoch: 1 },
+    })
+    expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+})
+
 describe('turn exec recovery on a runner VM', () => {
-  it('waits for a runner that is away and gives the turn up at its deadline', async () => {
+  it('waits for a runner that is away and gives the turn up at its deadline and grace', async () => {
     const w = world('runner')
     const { after } = await w.crashAt('output', { stopRunner: true })
     await w.recover(after.recovery)
     expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
     expect(w.journal.phases(1).at(-1)).toBe('output')
 
+    // Past its deadline the watchdog may still be removing the container: the grace is waited out.
     w.assignments.rows.get(w.assignment().id)!.deadlineAt = new Date(Date.now() - 1_000)
+    await w.recover(after.recovery)
+    expect(w.journal.phases(1).at(-1)).toBe('output')
+
+    pastGrace(w)
     await w.recover(after.recovery)
     expect(w.journal.entries.at(-1)).toMatchObject({
       phase: 'failed',
@@ -852,10 +1145,173 @@ describe('turn exec recovery on a runner VM', () => {
       fence: { epoch: 1 },
     })
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
-    // Nobody confirmed the removal: the lease expires with its grace, not released early.
-    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+    // The watchdog removed it by now: the site is freed, not left to its TTL.
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
     expect(w.credentials.revoked).toEqual([reference])
   })
+
+  it('removes once a container the runner reports under the older epoch after recovery took the turn', async () => {
+    const w = world('runner')
+    const core = await w.restart()
+    w.startRunner(core.hub!)
+    const cancellation = new AbortController()
+    const created = Promise.withResolvers<void>()
+    const create = w.vm.sandboxes.create.getMockImplementation()!
+    w.vm.sandboxes.create.mockImplementationOnce(async (...args) => {
+      const sandbox = await create(...args)
+      cancellation.abort()
+      await created.promise
+      return sandbox
+    })
+    const onCreated = vi.fn()
+    await expect(core.supervisor.run(request(), cancellation.signal)).rejects.toMatchObject({
+      code: 'TURN_INTERRUPTED',
+    })
+    expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
+    // The runner's inventory shows the container its prepare is still creating.
+    await vi.waitFor(() => expect(core.hub!.inventory({})).toHaveLength(1))
+    w.transport().intercept = (route, body) => {
+      const report = body as { type?: string; epoch?: number } | undefined
+      if (route === 'report' && report?.type === 'created') onCreated(report.epoch)
+    }
+
+    // Recovery of the same process takes it over under epoch 2 while `created` is on its way.
+    const recovering = w.recover(core.recovery)
+    await vi.waitFor(() => expect(w.assignment().fence.epoch).toBe(2))
+    created.resolve()
+    await recovering
+
+    expect(onCreated).toHaveBeenCalledWith(1)
+    expect(w.vm.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('failed')
+    expect(w.vm.exists()).toBe(false)
+    expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
+    expect(w.journal.phases(2)).toEqual(['failed'])
+    expect(w.assignment()).toMatchObject({
+      outcome: 'failed',
+      fence: { epoch: 2 },
+      recoveryAttempts: 0,
+    })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('removes a container a restarted runner shows after the old session died creating it', async () => {
+    const w = world('runner')
+    const core = await w.restart()
+    w.startRunner(core.hub!)
+    const create = w.vm.sandboxes.create.getMockImplementation()!
+    // kill -9 of the runner mid-create: the container exists, `created` is never sent.
+    w.vm.sandboxes.create.mockImplementationOnce(async (...args) => {
+      await create(...args)
+      return new Promise<never>(() => {})
+    })
+    const running = core.supervisor.run(request()).catch((error: unknown) => error)
+    await vi.waitFor(() => expect(w.vm.exists()).toBe(true))
+    await w.restartRunner()
+    expect(await running).toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
+    expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+
+    await vi.waitFor(() => expect(core.hub!.inventory({})).toHaveLength(1))
+    await w.recover(core.recovery)
+    expect(w.vm.exists()).toBe(false)
+    expect(w.vm.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('failed')
+    expect(w.assignment()).toMatchObject({
+      outcome: 'failed',
+      fence: { epoch: 2 },
+      recoveryAttempts: 0,
+    })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('keeps the site until the deadline and grace when the dead runner session left no container', async () => {
+    const w = world('runner')
+    const core = await w.restart()
+    w.startRunner(core.hub!)
+    w.vm.sandboxes.create.mockImplementationOnce(() => new Promise<never>(() => {}))
+    const release = vi.spyOn(w.leases, 'release')
+    const running = core.supervisor.run(request()).catch((error: unknown) => error)
+    await vi.waitFor(() => expect(w.vm.sandboxes.create).toHaveBeenCalled())
+    await w.restartRunner()
+    expect(await running).toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
+
+    await w.recover(core.recovery)
+    await w.recover(core.recovery)
+    expect(release).not.toHaveBeenCalled()
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+    expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 0 })
+
+    pastGrace(w)
+    await w.recover(core.recovery)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'run_failed',
+      fence: { epoch: 1 },
+    })
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('takes a hold off after the deadline and grace when the runner of a failed removal is away', async () => {
+    const w = world('runner')
+    const { after } = await w.crashAt('restored')
+    const destroy = w.vm.sandbox.destroy
+    w.vm.sandbox.destroy = vi.fn(async () => {
+      throw new DomainError('SANDBOX_COMMAND_FAILED', 'Docker did not answer', 502)
+    })
+    await w.recover(after.recovery)
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 2 })
+    w.vm.sandbox.destroy = destroy
+
+    // The runner is silent past its poll hold: it may be gone, and it is not waited for here.
+    await w.runner().stop()
+    const now = performance.now.bind(performance)
+    vi.spyOn(performance, 'now').mockImplementation(() => now() + 50_000)
+    await w.recover(after.recovery)
+    expect(w.lease()).toMatchObject({ held: true, epoch: 2 })
+    pastGrace(w)
+    await w.recover(after.recovery)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'timeout',
+      fence: { epoch: 2 },
+    })
+    expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 2 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 3 })
+  })
+
+  it.each(['another task', 'the same task'])(
+    'closes a turn whose expired lease %s took, without writing under that owner',
+    async (holder) => {
+      const w = world('runner')
+      const { after } = await w.crashAt('output', { stopRunner: true })
+      const journaled = w.journal.entries.length
+      w.lease().expiresAt = Date.now() - 1_000
+      const taskId = holder === 'the same task' ? labels.taskId : randomUUID()
+      const next = (await w.leases.acquire({
+        siteId: labels.siteId,
+        taskId,
+        operation: 'turn',
+        ttlMs: 60_000,
+      }))!
+      pastGrace(w)
+      await w.recover(after.recovery)
+
+      expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
+      expect(w.journal.entries).toHaveLength(journaled)
+      expect(w.lease()).toMatchObject({ taskId, held: false, epoch: 2 })
+      // The turn of the task is no longer locked by an unfinished assignment.
+      expect(
+        await w.assignments.open({
+          fence: next,
+          sessionId: labels.sessionId,
+          turn: 1,
+          executor: 'runner',
+          plan: w.assignment().plan,
+          remainingMs: 60_000,
+        }),
+      ).not.toBeNull()
+    },
+  )
 
   it('resumes on a restarted runner with recovered credentials and fences the old session', async () => {
     const w = world('runner')

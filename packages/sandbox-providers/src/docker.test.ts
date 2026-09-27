@@ -3,6 +3,7 @@ import { Duplex } from 'node:stream'
 import type * as Timers from 'node:timers/promises'
 
 import {
+  createLeftNothing,
   MAX_SANDBOX_RESOURCES,
   MAX_SANDBOX_TURN_MS,
   preparedRunLimits,
@@ -548,11 +549,117 @@ describe('Docker sandbox provider', () => {
       fake.raw.createContainer.mockClear()
       const late = provider.create(spec({ hardTimeoutMs: 10_000 })).catch((error: unknown) => error)
       await vi.advanceTimersByTimeAsync(15_000)
-      expect(await late).toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+      const refused = await late
+      expect(refused).toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
       expect(fake.raw.createContainer).not.toHaveBeenCalled()
+      // Never asked for: the caller may free the turn's site at once.
+      expect(createLeftNothing(refused)).toBe(true)
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  describe('a failed create proves it left no container only when it knows', () => {
+    const failed = async (fake: ReturnType<typeof daemon>, gateway?: object) => {
+      const provider = createDockerSandboxProvider(config, {
+        client: fake.client,
+        ...(gateway ? { gateway: gateway as never } : {}),
+      })
+      const error = await provider
+        .create(gateway ? spec({ network: { mode: 'gateway', routes: ['llm'] } }) : spec())
+        .then(
+          () => null,
+          (reason: unknown) => reason,
+        )
+      expect(error).toMatchObject({ code: expect.any(String) })
+      return createLeftNothing(error)
+    }
+
+    it('before the daemon was asked', async () => {
+      const fake = daemon()
+      fake.raw.info.mockRejectedValue(Object.assign(new Error('daemon down'), { statusCode: 500 }))
+      expect(await failed(fake)).toBe(true)
+      expect(fake.raw.createContainer).not.toHaveBeenCalled()
+    })
+
+    it('when the daemon refused and holds no container of the turn', async () => {
+      const fake = daemon()
+      fake.raw.createContainer.mockRejectedValue({ statusCode: 500 })
+      fake.raw.listContainers.mockResolvedValue([])
+      expect(await failed(fake)).toBe(true)
+      expect(fake.raw.listContainers).toHaveBeenCalledWith({
+        all: true,
+        filters: { name: ['^/raditi-turn-t-1$'] },
+      })
+    })
+
+    it('not when the daemon refused but a container of the turn exists, or cannot say', async () => {
+      const fake = daemon()
+      fake.raw.createContainer.mockRejectedValue({ statusCode: 500 })
+      expect(await failed(fake)).toBe(false)
+      fake.raw.listContainers.mockRejectedValue(new Error('daemon down'))
+      expect(await failed(fake)).toBe(false)
+    })
+
+    it('not for a name conflict: that container is this turn’s', async () => {
+      const fake = daemon()
+      fake.raw.createContainer.mockRejectedValue({ statusCode: 409 })
+      fake.raw.listContainers.mockResolvedValue([])
+      expect(await failed(fake)).toBe(false)
+      expect(fake.raw.listContainers).not.toHaveBeenCalled()
+    })
+
+    it('not when the create timed out: the daemon may still create it', async () => {
+      const fake = daemon()
+      fake.raw.createContainer.mockImplementation(() => new Promise(() => {}))
+      fake.raw.listContainers.mockResolvedValue([])
+      vi.useFakeTimers()
+      try {
+        const pending = failed(fake)
+        await vi.advanceTimersByTimeAsync(30_001)
+        expect(await pending).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('when it removed the container it created, and not when the removal failed', async () => {
+      const fake = daemon()
+      fake.container.start.mockRejectedValue(new Error('engine error'))
+      expect(await failed(fake)).toBe(true)
+      fake.container.remove.mockRejectedValueOnce({ statusCode: 404 })
+      expect(await failed(fake)).toBe(true)
+      fake.container.remove.mockRejectedValueOnce({ statusCode: 500 })
+      expect(await failed(fake)).toBe(false)
+    })
+
+    it('by the create, not by a gateway release that failed after it', async () => {
+      const fake = daemon()
+      fake.raw.createContainer.mockRejectedValue({ statusCode: 500 })
+      fake.raw.listContainers.mockResolvedValue([])
+      const gateway = {
+        prepare: vi.fn(async () => ({
+          networkMode: `container:${'a'.repeat(64)}`,
+          resourceId: '01234567-1234-1234-1234-0123456789ab',
+          extraHosts: [],
+        })),
+        validate: vi.fn(async () => true),
+        release: vi.fn(async () => {
+          throw new Error('gateway cleanup failed')
+        }),
+      }
+      const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => {})
+      try {
+        expect(await failed(fake, gateway)).toBe(true)
+        expect(gateway.release).toHaveBeenCalledOnce()
+        // The leak is not silent, and names no resource.
+        expect(warning).toHaveBeenCalledExactlyOnceWith('Sandbox gateway release failed', {
+          code: 'RADITI_SANDBOX_GATEWAY_RELEASE',
+        })
+      } finally {
+        warning.mockRestore()
+      }
+    })
   })
 
   it('does not let an unconsumed completed handle cancel a later command', async () => {

@@ -10,6 +10,7 @@ import {
   type AgentDriver,
   type AgentDriverId,
   type PreparedRun,
+  type SandboxInfo,
   type SandboxLabels,
   type SiteLeaseGrant,
   type SiteLeaseStore,
@@ -94,7 +95,9 @@ interface Owner {
  * whose agent may have started is removed, a running one resumed, a quiesced one captured
  * again, a checkpointed one published. The site is held and reclaimed under a newer epoch for
  * what is left of the turn: its deadline is never extended. Zombie owners are fenced by that
- * epoch, zombie runners by their session.
+ * epoch, zombie runners by their session. The site is freed early only with proof that the
+ * turn's container is gone; otherwise it waits for the turn's deadline plus the grace, by which
+ * the VM's watchdog removed the container.
  */
 export class TurnExecRecovery {
   readonly #running = new Map<string, Promise<void>>()
@@ -189,8 +192,14 @@ export class TurnExecRecovery {
     if (!step || !consistent(assignment, turn))
       return this.#park(assignment, step, 'journal mismatch')
     if (doneSteps.includes(step)) return this.#done(assignment)
-    // Its owner removed the container and released the site; only the assignment update was lost.
-    if (turn.lastPhase === 'failed') return this.#close(assignment, 'failed')
+    // Written only with proof that the container is gone or after the deadline and its grace:
+    // only the release of the site or the assignment update was lost.
+    if (turn.lastPhase === 'failed') {
+      await this.#free(assignment)
+      return this.#close(assignment, 'failed')
+    }
+    // No container reported yet: nothing to resume, only to remove, and no attempt to count.
+    if (step === 'leased') return this.#vacate(assignment, turn, remainingMs())
     if (assignment.recoveryAttempts >= MAX_TURN_RECOVERY_ATTEMPTS)
       return this.#park(assignment, step, 'too many recovery attempts')
     let driver: AgentDriver
@@ -201,7 +210,7 @@ export class TurnExecRecovery {
     }
     const takeover = this.deps.executor.takeover(assignment)
     if (publicationSteps.includes(step)) return this.#publish(assignment, turn, driver, takeover)
-    if (!takeover) return this.#awaitRunner(assignment, turn, remainingMs())
+    if (!takeover) return this.#expireAfterGrace(assignment, turn, remainingMs())
     const owner = await this.#takeOver(assignment, turn, driver, takeover, remainingMs())
     if (!owner) return
     if (owner.remainingMs <= 0) return this.#giveUp(assignment, turn, owner, 'timeout')
@@ -220,9 +229,16 @@ export class TurnExecRecovery {
   async #takeOver(
     assignment: TurnAssignment,
     turn: ReplayedTurn,
-    driver: AgentDriver,
+    driver: AgentDriver | undefined,
     takeover: TurnTakeover,
     remainingMs: number,
+    {
+      countAttempt = true,
+      outcome = 'lost',
+    }: {
+      countAttempt?: boolean
+      outcome?: TurnAssignmentOutcome
+    } = {},
   ): Promise<Owner | null> {
     const phase = turn.step!
     if (!(await this.deps.leases.holdForRecovery(assignment.fence))) {
@@ -231,7 +247,7 @@ export class TurnExecRecovery {
       this.#logger.warn(
         `Turn recovery found the site lease moved on (epoch ${assignment.fence.epoch}, phase ${phase})`,
       )
-      await this.#close(assignment, 'lost')
+      await this.#close(assignment, outcome)
       return null
     }
     const started = performance.now()
@@ -247,9 +263,16 @@ export class TurnExecRecovery {
         fromEpoch: assignment.fence.epoch,
         epoch: grant.epoch,
         ...(takeover.runnerSession ? { runnerSession: takeover.runnerSession } : {}),
+        countAttempt,
       })
       .catch(() => null)
     if (!advanced) {
+      const now = await this.deps.assignments.get(assignment.id).catch(() => null)
+      // Finished meanwhile by its owner, which had proof: free the epoch this pass reclaimed.
+      if (now && now.outcome !== null) {
+        await this.deps.leases.release(grant).catch(() => false)
+        return null
+      }
       await holdForRecovery(this.deps.leases, grant, phase)
       return null
     }
@@ -264,7 +287,7 @@ export class TurnExecRecovery {
       lease: grant,
       guard,
       plan: assignment.plan,
-      driver,
+      ...(driver ? { driver } : {}),
       sequence: turn.sequence,
       recoveredFromEpoch: assignment.fence.epoch,
       phase,
@@ -359,11 +382,85 @@ export class TurnExecRecovery {
     turn: ReplayedTurn,
     { grant, attempt }: Owner,
     reason: NonNullable<TurnEvidence['reason']>,
+    outcome: TurnAssignmentOutcome = 'lost',
   ): Promise<void> {
-    attempt.giveUp(reason)
+    attempt.giveUp(reason, outcome)
     const settled = await attempt.settle(() => this.#removeContainers(assignment, grant, turn))
     if (settled !== 'held')
       await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
+  }
+
+  /**
+   * A turn whose journal ends before any container: its owner died or gave it up while the
+   * prepare might still create one. Recovery frees the site only with proof that none is left —
+   * a runner prepare nobody claimed is abandoned, a known or listed container is removed by its
+   * id — and otherwise waits, without holding the site, for the deadline and its grace. No
+   * attempt is counted and no driver is needed.
+   */
+  async #vacate(assignment: TurnAssignment, turn: ReplayedTurn, remainingMs: number) {
+    if (remainingMs + TURN_PUBLICATION_GRACE_MS <= 0) return this.#expire(assignment, turn)
+    const outcome: TurnAssignmentOutcome = turn.vacating ? 'failed' : 'lost'
+    const reason = turn.reason ?? 'run_failed'
+    // Unclaimed after core died: no core waits for it any more, so no runner can take it (P1).
+    if (assignment.executor === 'runner' && assignment.runner === null) {
+      if (!(await this.deps.assignments.abandon(assignment.id))) return
+      await this.#journal(assignment, turn, 'failed', reason).catch(() => {})
+      await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
+      return this.#free(assignment)
+    }
+    const takeover = this.deps.executor.takeover(assignment)
+    // Away or silent: its container may still be created. The site is not held meanwhile.
+    if (!takeover) return
+    const known = turn.containerId ?? assignment.containerId
+    if (!known && (await this.#listed(assignment)).length === 0) return
+    const owner = await this.#takeOver(assignment, turn, undefined, takeover, remainingMs, {
+      countAttempt: false,
+      outcome,
+    })
+    if (owner) await this.#giveUp(assignment, turn, owner, reason, outcome)
+  }
+
+  /** The containers of this assignment its executor finds by labels, at its epochs. */
+  async #listed(assignment: TurnAssignment): Promise<SandboxInfo[]> {
+    const labels = containerLabels(assignment)
+    const listed = await this.deps.executor.list({
+      siteId: labels.siteId,
+      taskId: labels.taskId,
+      sessionId: labels.sessionId,
+      turn: labels.turn,
+    })
+    return listed.filter(
+      (info) =>
+        info.labels.leaseEpoch !== undefined && info.labels.leaseEpoch >= assignment.firstEpoch,
+    )
+  }
+
+  /**
+   * Past the deadline and its grace the VM's watchdog removed the container. The credentials
+   * are revoked, `failed` is written under the assignment's epoch — refused if another owner
+   * has the site — any hold is taken off and the assignment is closed, also when the lease
+   * moved on: an open one would lock this turn of the task for good.
+   */
+  async #expire(assignment: TurnAssignment, turn: ReplayedTurn): Promise<void> {
+    await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
+    const reason = turn.vacating ? (turn.reason ?? 'timeout') : 'timeout'
+    await this.#journal(assignment, turn, 'failed', reason).catch(() => {})
+    await this.#free(assignment)
+    await this.deps.assignments.finish({
+      id: assignment.id,
+      epoch: assignment.fence.epoch,
+      outcome: turn.vacating ? 'failed' : 'lost',
+    })
+  }
+
+  /** A runner away with a turn past its step: it may come back until the deadline and grace. */
+  async #expireAfterGrace(
+    assignment: TurnAssignment,
+    turn: ReplayedTurn,
+    remainingMs: number,
+  ): Promise<void> {
+    if (remainingMs + TURN_PUBLICATION_GRACE_MS > 0) return
+    return this.#expire(assignment, turn)
   }
 
   /**
@@ -455,28 +552,21 @@ export class TurnExecRecovery {
     await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
   }
 
-  /**
-   * The runner holding the turn is away: it may come back before the turn's deadline. After
-   * it the container is past its own deadline and the VM's watchdog removes it; the lease is
-   * left to expire with its grace instead of being released without a confirmed removal.
-   */
-  async #awaitRunner(
+  /** An entry under the assignment's own epoch, after the last one its journal holds. */
+  #journal(
     assignment: TurnAssignment,
     turn: ReplayedTurn,
-    remainingMs: number,
+    phase: TurnPhase,
+    reason: NonNullable<TurnEvidence['reason']>,
   ): Promise<void> {
-    if (remainingMs > 0) return
-    await this.deps.journal
-      .record({
-        fence: assignment.fence,
-        sessionId: assignment.sessionId,
-        turn: assignment.turn,
-        sequence: turn.sequence + 1,
-        phase: 'failed',
-        reason: 'timeout',
-      })
-      .catch(() => {})
-    await this.#close(assignment, 'lost')
+    return this.deps.journal.record({
+      fence: assignment.fence,
+      sessionId: assignment.sessionId,
+      turn: assignment.turn,
+      sequence: turn.sequence + 1,
+      phase,
+      reason,
+    })
   }
 
   /**
@@ -484,14 +574,22 @@ export class TurnExecRecovery {
    * or the release failed and its owner held the site. The site is freed either way.
    */
   async #done(assignment: TurnAssignment): Promise<void> {
-    if (await this.deps.leases.holdForRecovery(assignment.fence)) {
-      const grant = await this.deps.leases.reclaimForRecovery(
-        assignment.fence,
-        TURN_PUBLICATION_GRACE_MS,
-      )
-      if (grant) await this.deps.leases.release(grant)
-    }
+    await this.#free(assignment)
     await this.#close(assignment, 'completed')
+  }
+
+  /**
+   * Takes this epoch off the site, held or expired alike, unless another owner has it. A
+   * database error propagates: the next pass tries again.
+   */
+  async #free(assignment: TurnAssignment): Promise<void> {
+    // Moved on or already released: nothing of this epoch is left to free.
+    if (!(await this.deps.leases.holdForRecovery(assignment.fence))) return
+    const grant = await this.deps.leases.reclaimForRecovery(
+      assignment.fence,
+      TURN_PUBLICATION_GRACE_MS,
+    )
+    if (grant) await this.deps.leases.release(grant)
   }
 
   async #close(assignment: TurnAssignment, outcome: TurnAssignmentOutcome): Promise<void> {
