@@ -348,6 +348,31 @@ describe('loadConfig — production', () => {
     expect(problems.join('\n')).not.toMatch(/8\.8\.8\.8|aaaa/)
   })
 
+  it('signs presigned URLs for runners only over https', () => {
+    expect(
+      loadConfig(prodEnv({ S3_RUNNER_ENDPOINT: 'https://storage.yandexcloud.net' })).core?.storage
+        .presignEndpoint,
+    ).toBe('https://storage.yandexcloud.net')
+    expect(problemsOf(prodEnv({ S3_RUNNER_ENDPOINT: 'http://10.20.0.5:8333' }))).toEqual([
+      'S3_RUNNER_ENDPOINT: must use https in production (runners follow presigned URLs)',
+    ])
+    // Without a runner address, presigned URLs are signed for S3_ENDPOINT itself.
+    expect(problemsOf(prodEnv({ S3_ENDPOINT: 'http://storage.yandexcloud.net' }))).toEqual([
+      'S3_ENDPOINT: must use https in production (runners follow presigned URLs)',
+    ])
+    // Core may reach S3 over a private address when runners get their own https one.
+    expect(
+      loadConfig(
+        prodEnv({
+          S3_ENDPOINT: 'http://10.20.0.5:8333',
+          S3_RUNNER_ENDPOINT: 'https://storage.yandexcloud.net',
+        }),
+      ).core?.storage.endpoint,
+    ).toBe('http://10.20.0.5:8333')
+    // Local S3 stays plain outside production.
+    expect(loadConfig(devEnv).core?.storage.endpoint).toMatch(/^http:/)
+  })
+
   it('refuses more than one role per process', () => {
     expect(problemsOf(prodEnv({ ORCHESTRATOR_ROLES: 'core,mcp' }))).toContain(
       'ORCHESTRATOR_ROLES: production runs exactly one role per process',

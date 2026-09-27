@@ -272,6 +272,14 @@ export function loadConfig(env: Env): OrchestratorConfig {
   const db = hasCore || hasMcp ? section(() => dbConfigFromEnv(env)) : undefined
   const vault = hasCore || hasMcp ? section(() => vaultConfigFromEnv(env)) : undefined
   const storage = hasCore ? section(() => storageConfigFromEnv(env)) : undefined
+  // A presigned URL is a bearer capability a runner VM follows over the cloud's network.
+  if (production && storage) {
+    const [name, origin] = storage.presignEndpoint
+      ? ['S3_RUNNER_ENDPOINT', storage.presignEndpoint]
+      : ['S3_ENDPOINT', storage.endpoint]
+    if (new URL(origin).protocol !== 'https:')
+      problems.push(`${name}: must use https in production (runners follow presigned URLs)`)
+  }
   // Docker is driven by the runner, or by core itself only with the local executor.
   const coreSandbox = hasCore && turnExecutor === 'local'
   const sandbox = coreSandbox || hasRunner ? section(() => sandboxConfigFromEnv(env)) : undefined
