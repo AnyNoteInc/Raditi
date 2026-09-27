@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
@@ -29,13 +30,14 @@ import {
   type PublicationSource,
   type RepoRef,
   type Sandbox,
+  type TurnBundleSource,
   type TurnPublication,
   type TurnWorkspace,
   withTimeout,
 } from '@repo/domain'
 
-import { execBounded } from '../sandbox/exec.ts'
 import { emptyUntrackedArchive, untrackedFiles } from './archive.ts'
+import { BASE_BUNDLE_REF, importBaseBundle } from './base-bundle.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
 import { PROCESS_OUTPUT_LIMIT, runProcess, type ProcessResult } from './process.ts'
 
@@ -148,72 +150,39 @@ export class GitWorkspaceService implements TurnWorkspace {
   }
 
   /** A trusted bundle carries objects and one ref, with no remote credentials, config or hooks. */
-  async prepareWorkspace(sandbox: Sandbox, input: PublicationSource): Promise<void> {
+  async buildBaseBundle(input: PublicationSource): Promise<TurnBundleSource> {
     const source = this.source(input)
     const workspace = await this.clone(source)
     try {
       await this.tree(workspace, source.expectedBaseSha)
-      await this.git(workspace, ['update-ref', 'refs/heads/raditi-base', source.expectedBaseSha])
+      await this.git(workspace, [
+        'update-ref',
+        `refs/heads/${BASE_BUNDLE_REF}`,
+        source.expectedBaseSha,
+      ])
       const bundlePath = join(workspace.root, 'base.bundle')
-      await this.git(workspace, ['bundle', 'create', bundlePath, 'refs/heads/raditi-base'])
+      await this.git(workspace, ['bundle', 'create', bundlePath, `refs/heads/${BASE_BUNDLE_REF}`])
       // Bundle can include ancestry, so cap it separately from the current checked tree.
       if ((await stat(bundlePath)).size > publicationLimits.bundleBytes)
         throw repositoryTooLarge('Repository bundle is too large')
       const bundle = await readFile(bundlePath)
-      const destination = '/tmp/raditi-base.bundle'
-      await this.sandboxExec(sandbox, ['test', '!', '-L', '/workspace'])
-      // The runtime may already have made an empty work directory. Git clone itself rejects
-      // existing nonempty directories; explicitly reject links before it touches the path.
-      await this.sandboxExec(sandbox, ['test', '!', '-L', '/workspace/repo'])
-      await this.sandboxExec(sandbox, ['test', '!', '-e', destination])
-      await this.sandboxExec(
-        sandbox,
-        ['dd', `of=${destination}`, 'status=none', 'conv=excl'],
-        bundle,
-      )
-      try {
-        await this.sandboxExec(sandbox, [
-          'git',
-          '-c',
-          'core.hooksPath=/dev/null',
-          '-c',
-          'core.fsmonitor=false',
-          '-c',
-          'submodule.recurse=false',
-          '-c',
-          'protocol.file.allow=always',
-          'clone',
-          '--no-hardlinks',
-          '--no-recurse-submodules',
-          '--template=',
-          '--branch',
-          'raditi-base',
-          destination,
-          '/workspace/repo',
-        ])
-        await this.sandboxExec(sandbox, [
-          'git',
-          '-C',
-          '/workspace/repo',
-          'remote',
-          'remove',
-          'origin',
-        ])
-        await this.sandboxExec(sandbox, [
-          'git',
-          '-C',
-          '/workspace/repo',
-          'checkout',
-          '-b',
-          source.branch,
-          source.expectedBaseSha,
-        ])
-      } finally {
-        await this.sandboxExec(sandbox, ['rm', '-f', '--', destination])
+      return {
+        baseSha: source.expectedBaseSha,
+        branch: source.branch,
+        sha256: createHash('sha256').update(bundle).digest('hex'),
+        sizeBytes: bundle.byteLength,
+        // Each reader gets its own copy; the importer checks the hash of what it read.
+        read: async function* () {
+          yield Buffer.from(bundle)
+        },
       }
     } finally {
       await this.dispose(workspace)
     }
+  }
+
+  async prepareWorkspace(sandbox: Sandbox, input: PublicationSource): Promise<void> {
+    await importBaseBundle(sandbox, await this.buildBaseBundle(input))
   }
 
   async preparePublication(
@@ -932,24 +901,5 @@ export class GitWorkspaceService implements TurnWorkspace {
 
   private async dispose(workspace: Workspace): Promise<void> {
     await rm(workspace.root, { recursive: true, force: true })
-  }
-
-  private async sandboxExec(sandbox: Sandbox, argv: string[], input?: Uint8Array): Promise<void> {
-    await execBounded(sandbox, argv, {
-      env: {
-        GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_GLOBAL: '/dev/null',
-        GIT_CONFIG_SYSTEM: '/dev/null',
-        GIT_TERMINAL_PROMPT: '0',
-      },
-      stdin: input
-        ? (async function* () {
-            yield input
-          })()
-        : undefined,
-      maxStdout: 64 * 1024,
-      timeoutMs: publicationLimits.commandMs,
-      failure: failed,
-    })
   }
 }

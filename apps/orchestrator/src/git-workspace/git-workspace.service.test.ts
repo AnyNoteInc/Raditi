@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,6 +19,7 @@ import { pack } from 'tar-stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyUntrackedArchive } from './archive.ts'
+import { importBaseBundle } from './base-bundle.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
 import { GitWorkspaceService, scanCopy } from './git-workspace.service.ts'
 import { PROCESS_OUTPUT_LIMIT, runProcess } from './process.ts'
@@ -463,9 +465,9 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
     const f = await fixture()
     const { taskId: _task, turn: _turn, createdAt: _date, ...source } = f.metadata
     const { protectedPaths: _paths, ...withoutPaths } = source
-    await expect(
-      f.service.prepareWorkspace({} as Sandbox, withoutPaths as typeof source),
-    ).rejects.toThrow('Invalid repository source')
+    await expect(f.service.buildBaseBundle(withoutPaths as typeof source)).rejects.toThrow(
+      'Invalid repository source',
+    )
     await expect(
       f.service.preparePublication({
         ...(withoutPaths as typeof source),
@@ -670,7 +672,7 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
     const { taskId: _task, turn: _turn, createdAt: _date, ...source } = f.metadata
     const unsupported = { code: 'REPOSITORY_UNSUPPORTED', httpStatus: 422 }
     await expect(
-      f.service.prepareWorkspace({} as Sandbox, { ...source, expectedBaseSha: base }),
+      f.service.buildBaseBundle({ ...source, expectedBaseSha: base }),
     ).rejects.toMatchObject(unsupported)
     await expect(
       f.prepare(Buffer.alloc(0), undefined, { expectedBaseSha: base }),
@@ -824,8 +826,12 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
       }),
     } as unknown as Sandbox
     const { taskId: _task, turn: _turn, createdAt: _date, ...source } = f.metadata
-    await f.service.prepareWorkspace(sandbox, source)
+    const bundle = await f.service.buildBaseBundle(source)
+    expect(bundle).toMatchObject({ baseSha: f.baseSha, branch: source.branch })
+    await importBaseBundle(sandbox, bundle)
     const transfer = calls.find((call) => call.argv[0] === 'dd')!
+    expect(transfer.stdin.byteLength).toBe(bundle.sizeBytes)
+    expect(createHash('sha256').update(transfer.stdin).digest('hex')).toBe(bundle.sha256)
     const bundlePath = join(f.root, 'delivered.bundle')
     await writeFile(bundlePath, transfer.stdin)
     expect((await git(f.work, 'bundle', 'list-heads', bundlePath)).toString()).toBe(
@@ -849,10 +855,31 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
       })),
     } as unknown as Sandbox
     const { taskId: _task, turn: _turn, createdAt: _date, ...source } = f.metadata
-    await expect(f.service.prepareWorkspace(sandbox, source)).rejects.toMatchObject({
-      code: 'GIT_OPERATION_FAILED',
-    })
+    await expect(
+      importBaseBundle(sandbox, await f.service.buildBaseBundle(source)),
+    ).rejects.toMatchObject({ code: 'GIT_OPERATION_FAILED' })
     expect(kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  it.each([
+    ['changed bytes', { sha256: 'f'.repeat(64) }, 'GIT_OPERATION_FAILED'],
+    ['a different size', { sizeBytes: 1 }, 'GIT_OPERATION_FAILED'],
+    [
+      'a size over the limit',
+      { sizeBytes: publicationLimits.bundleBytes + 1 },
+      'REPOSITORY_TOO_LARGE',
+    ],
+    ['a branch git reads as an option', { branch: '--upload-pack=touch' }, 'BAD_REQUEST'],
+    ['an abbreviated base', { baseSha: 'abc1234' }, 'BAD_REQUEST'],
+  ])('refuses a bundle with %s before running anything in the sandbox', async (_, change, code) => {
+    const f = await fixture()
+    const exec = vi.fn()
+    const { taskId: _task, turn: _turn, createdAt: _date, ...source } = f.metadata
+    const bundle = { ...(await f.service.buildBaseBundle(source)), ...change }
+    await expect(importBaseBundle({ exec } as unknown as Sandbox, bundle)).rejects.toMatchObject({
+      code,
+    })
+    expect(exec).not.toHaveBeenCalled()
   })
 })
 
@@ -886,7 +913,7 @@ describe('production boundaries', { timeout: 30_000 }, () => {
     const service = new GitWorkspaceService(p, {
       transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
     })
-    await expect(service.prepareWorkspace({} as Sandbox, source)).rejects.toThrow('HTTPS origins')
+    await expect(service.buildBaseBundle(source)).rejects.toThrow('HTTPS origins')
     expect(p.issueCredentials).not.toHaveBeenCalled()
   })
 
@@ -897,9 +924,7 @@ describe('production boundaries', { timeout: 30_000 }, () => {
         provider('https://git.example.test/repo', expiresAt),
         { transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] } },
       )
-      await expect(service.prepareWorkspace({} as Sandbox, source)).rejects.toThrow(
-        'short-lived grant',
-      )
+      await expect(service.buildBaseBundle(source)).rejects.toThrow('short-lived grant')
     },
   )
 
@@ -917,9 +942,9 @@ describe('production boundaries', { timeout: 30_000 }, () => {
         const service = new GitWorkspaceService(p, {
           transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
         })
-        const rejected = expect(
-          service.prepareWorkspace({} as Sandbox, source),
-        ).rejects.toMatchObject({ code: 'GIT_OPERATION_FAILED' })
+        const rejected = expect(service.buildBaseBundle(source)).rejects.toMatchObject({
+          code: 'GIT_OPERATION_FAILED',
+        })
         await called.promise
         await vi.advanceTimersByTimeAsync(publicationLimits.commandMs)
         await rejected

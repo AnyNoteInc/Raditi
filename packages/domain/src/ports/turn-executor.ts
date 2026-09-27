@@ -27,7 +27,7 @@ import {
   type SandboxLabels,
   type SandboxSpec,
 } from './sandbox-provider.ts'
-import type { SiteLeaseFence } from './turn-runner.ts'
+import type { SiteLeaseFence, TurnBundleSource } from './turn-runner.ts'
 
 /**
  * Turn executor port — spec §8. The supervisor in core keeps the lease, the journal, the driver
@@ -61,13 +61,6 @@ export interface TurnPrepareInput {
   argv: string[]
   /** turnCredentials(): agent output and captured parts containing one are refused. */
   credentials: readonly string[]
-}
-
-/** The base checkout as a git bundle without credentials, imported through exec stdin. */
-export interface TurnBundleSource {
-  sha256: string
-  sizeBytes: number
-  read(): AsyncIterable<Uint8Array>
 }
 
 /** Turn n−1: the manifest is already checked by core; parts are verified before any write. */

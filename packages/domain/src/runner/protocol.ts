@@ -12,7 +12,11 @@ import {
   turnOutputRejected,
   turnOutputTooLarge,
 } from '../errors.ts'
-import { publicationLimits, publicationShaSchema } from '../git/publication.ts'
+import {
+  publicationLimits,
+  publicationShaSchema,
+  publicationSourceSchema,
+} from '../git/publication.ts'
 import { sessionStateSchema, snapshotLimits } from '../sessions/session-state.ts'
 import {
   SNAPSHOT_SCHEMA_VERSION,
@@ -194,6 +198,9 @@ const prepareCommand = command('prepare', {
   /** Fetched from runnerBundlePath() and checked before the import. */
   bundle: z
     .object({
+      /** Its single ref points here; the agent's branch starts from it. */
+      baseSha: publicationShaSchema,
+      branch: publicationSourceSchema.shape.branch,
       sha256: sha256Hex,
       sizeBytes: z.number().int().positive().max(publicationLimits.bundleBytes),
     })

@@ -121,7 +121,23 @@ export interface TurnPublication {
   dispose(): Promise<void>
 }
 
+/**
+ * The base checkout as a git bundle without credentials: objects and the single ref
+ * `refs/heads/raditi-base` at `baseSha`. Imported through exec stdin into /workspace/repo on
+ * `branch`, after its size and SHA-256 are checked.
+ */
+export interface TurnBundleSource {
+  baseSha: string
+  branch: string
+  sha256: string
+  sizeBytes: number
+  read(): AsyncIterable<Uint8Array>
+}
+
 export interface TurnWorkspace {
+  /** Clones the site on the host and bundles `expectedBaseSha` for the turn's sandbox. */
+  buildBaseBundle(source: TurnWorkspaceSource): Promise<TurnBundleSource>
+  /** buildBaseBundle, imported into the sandbox here; the supervisor leaves it to an executor. */
   prepareWorkspace(sandbox: Sandbox, source: TurnWorkspaceSource): Promise<void>
   /**
    * `credentials` are the turn's own (turnCredentials): a changed file of the candidate that

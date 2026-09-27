@@ -9,6 +9,7 @@ import { zstdCompressSync } from 'node:zlib'
 import { createDockerSandboxProvider } from '@repo/sandbox-providers'
 import { pack } from 'tar-stream'
 
+import { importBaseBundle } from '../dist/git-workspace/base-bundle.js'
 import { GitWorkspaceService } from '../dist/git-workspace/git-workspace.service.js'
 import { runProcess } from '../dist/git-workspace/process.js'
 import { SandboxSnapshotTransport } from '../dist/sessions/sandbox-snapshot.js'
@@ -123,7 +124,7 @@ try {
     assert.deepEqual(await handle.wait(), { code: 0, reason: 'exited' })
     return Buffer.concat(chunks)
   }
-  await service.prepareWorkspace(sandbox, source)
+  await importBaseBundle(sandbox, await service.buildBaseBundle(source))
   assert.equal(
     (await exec(['git', '-C', '/workspace/repo', 'rev-parse', 'HEAD'])).toString().trim(),
     baseSha,

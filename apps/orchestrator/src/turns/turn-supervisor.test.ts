@@ -239,6 +239,7 @@ function fixture() {
     }),
   }
   const workspace = {
+    buildBaseBundle: vi.fn(),
     prepareWorkspace: vi.fn(async () => {
       order.push('checkout')
     }),

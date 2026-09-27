@@ -80,7 +80,7 @@ const prepare = () => ({
     hardTimeoutMs: 600_000,
   },
   remainingMs: 600_000,
-  bundle: { sha256: digest, sizeBytes: 1024 },
+  bundle: { baseSha: 'b'.repeat(40), branch: `agent/${ids.task}`, sha256: digest, sizeBytes: 1024 },
   restore: {
     manifest,
     parts: {
@@ -232,7 +232,11 @@ describe('runner commands', () => {
     ],
     [
       'a bundle above its limit',
-      { ...prepare(), bundle: { sha256: digest, sizeBytes: 64 * 1024 * 1024 + 1 } },
+      { ...prepare(), bundle: { ...prepare().bundle, sizeBytes: 64 * 1024 * 1024 + 1 } },
+    ],
+    [
+      'a bundle branch that git would read as an option',
+      { ...prepare(), bundle: { ...prepare().bundle, branch: '--upload-pack=touch' } },
     ],
     ['no credentials', { ...prepare(), credentials: [] }],
     [
