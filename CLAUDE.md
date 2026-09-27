@@ -17,7 +17,7 @@
 
 ## Состояние
 
-Каркас готов (`/bootstrap`, B0–B5, 26.09.2026): монорепозиторий, пакеты-порты и адаптеры, `apps/web`, `apps/orchestrator` (роли `core`, `mcp` и `runner`), `apps/e2e`, схема данных v1 с миграциями и сидами, локальная инфраструктура с мониторингом. Работают вход по почте и паролю с согласиями, юридические страницы, health и метрики, outbox → BullMQ → письма. P1 добавляет парсеры четырёх CLI и выбор файлов сессии, зашифрованные снимки ходов в S3 и проверяемое восстановление через порт Sandbox; отчёт — `docs/plan/02-p1-verification.md`. P2 готов (27.09.2026): Docker provider под `runsc` и `runc` со шлюзом (под `runsc` — мост попытки без адреса хоста и правило `INPUT DROP` на хосте, spec §8 «Сеть»), супервизор хода на порту `TurnExecutor`, SQL-аренда, доверенная Git-публикация, роль `runner` (pull без входящих портов, API раннеров в `core` на отдельном порту, presigned-ссылки и ключ данных на ход) и восстановление незавершённого exec. Всё проверено в Linux-ВМ под gVisor, в том числе `kill -9` `core` и раннера. Отчёт, открытые вопросы и остаток для M10 и P3–P12 — `docs/plan/03-p2-verification.md`. Супервизор и recovery подключаются к очереди в P12; четыре решения по умолчанию в spec §20 ждут владельца. Запуск CLI с моделями — P4/P5; бизнес-логика задач, git-провайдеры и оплата ещё впереди (`docs/plan/roadmap.md`). Реквизиты оператора в юридических текстах — заглушки (`apps/web/content/legal/README.md`).
+Каркас готов (`/bootstrap`, B0–B5, 26.09.2026): монорепозиторий, пакеты-порты и адаптеры, `apps/web`, `apps/orchestrator` (роли `core`, `mcp` и `runner`), `apps/e2e`, схема данных v1 с миграциями и сидами, локальная инфраструктура с мониторингом. Работают вход по почте и паролю с согласиями, юридические страницы, health и метрики, outbox → BullMQ → письма. P1 добавляет парсеры четырёх CLI и выбор файлов сессии, зашифрованные снимки ходов в S3 и проверяемое восстановление через порт Sandbox; отчёт — `docs/plan/02-p1-verification.md`. P2 готов (27.09.2026): Docker provider под `runsc` и `runc` со шлюзом (под `runsc` — мост попытки без адреса хоста и правило `INPUT DROP` на хосте, spec §8 «Сеть»), супервизор хода на порту `TurnExecutor`, SQL-аренда, доверенная Git-публикация, роль `runner` (pull без входящих портов, API раннеров в `core` на отдельном порту, presigned-ссылки и ключ данных на ход) и восстановление незавершённого exec. Всё проверено в Linux-ВМ под gVisor, в том числе `kill -9` `core` и раннера. Отчёт, открытые вопросы и остаток для M10 и P3–P12 — `docs/plan/03-p2-verification.md`. Выкладка app-ВМ (часть M10): `infra/app` — Compose с Traefik и Let's Encrypt, Dockerfile `web` и `orchestrator`, runbook и preflight, сквозная проверка `pnpm verify:edge` на Pebble; секреты из Vault через vault-agent и Ansible — M10. Супервизор и recovery подключаются к очереди в P12; четыре решения по умолчанию в spec §20 ждут владельца. Запуск CLI с моделями — P4/P5; бизнес-логика задач, git-провайдеры и оплата ещё впереди (`docs/plan/roadmap.md`). Реквизиты оператора в юридических текстах — заглушки (`apps/web/content/legal/README.md`).
 
 Локальные проверки и границы результата — `docs/plan/01-bootstrap-verification.md`; GitHub Actions нужно подтвердить после отправки ветки.
 
@@ -36,7 +36,7 @@
   - `awaiting_user` и `awaiting_approval` — статус плюс отложенная задача-таймер BullMQ, а не висящий job;
   - строго один ход, выкладка или откат на сайт — аренда сайта в PostgreSQL;
   - cron — job schedulers BullMQ; живой поток задачи — история в `task_events` плюс Redis pub/sub между репликами web.
-- Инфраструктура: PostgreSQL 17, Redis 8 (appendonly, `maxmemory-policy noeviction`), S3 (в проде — российское облако, локально SeaweedFS), OpenBao, Gitea 1.27 + gitea/runner — для репозиториев сайтов и реестра образов песочниц, LiteLLM не ниже 1.83.7 (один экземпляр, в изолированном сегменте), Docker 29 + gVisor (`runsc`, systrap), свой реестр образов (Docker Hub отвечает 403 для российских IP).
+- Инфраструктура: PostgreSQL 17, Redis 8 (appendonly, `maxmemory-policy noeviction`), S3 (в проде — российское облако, локально SeaweedFS), OpenBao, Gitea 1.27 + gitea/runner — для репозиториев сайтов и реестра образов песочниц, LiteLLM не ниже 1.83.7 (один экземпляр, в изолированном сегменте), Docker 29 + gVisor (`runsc`, systrap), свой реестр образов (Docker Hub отвечает 403 для российских IP). Traefik 3.7 — единственный публичный вход app-ВМ (80/443, сертификаты Let's Encrypt выпускает сам, маршруты — file provider без сокета Docker); между ВМ — HTTP на частные IP-адреса, кроме Vault и Gitea (TLS); токен раннера привязан к адресу ВМ.
 - Наблюдаемость: Prometheus + Grafana (локально — профиль `monitoring`), метрики — `@prometheus-io/client`. Sentry — позже, только свой сервер в России.
 - Код платформы — на GitHub: CI и релизы — GitHub Actions (typecheck, lint, test, check-architecture, build; semantic-release с `@semantic-release/github`). Выкладка платформы на ВМ через GitHub Actions — задача M10.
 
@@ -49,12 +49,13 @@ Node 26.10 (`nvm use`) и pnpm 12.6. `npm` и `npx` внутри репозит�
 - `pnpm db:migrate` (новая миграция в dev), `pnpm db:deploy` (применить), `pnpm db:seed` (справочники, повторный запуск безопасен), `pnpm db:generate`.
 - `pnpm dev` — web :3000, orchestrator :8081 (core) и :8082 (mcp); при `TURN_EXECUTOR=runner` — ещё API раннеров :8083. Останавливать Ctrl-C (SIGINT): SIGTERM оставляет дочерние процессы.
 - Роль `runner` — `ORCHESTRATOR_ROLES=runner` с `RUNNER_CORE_URL`, `RUNNER_TOKEN_FILE` и `SANDBOX_*`. Токен ВМ и хеш для `RUNNER_TOKENS` в `core` — `pnpm --filter orchestrator runner-token issue <id> <файл>`.
-- `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm check-architecture`, `pnpm check-env`; всё сразу — `pnpm gates`.
+- `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:infra`, `pnpm build`, `pnpm check-architecture`, `pnpm check-env`; всё сразу — `pnpm gates`. `test:infra` — тесты `infra/*/*.test.mjs` (песочная ВМ, compose app-ВМ, маршруты Traefik, Dockerfile); нужен Docker CLI, демон — нет.
 - Тесты `@repo/db` с базой: `DATABASE_URL=postgresql://raditi:raditi@localhost:5432/raditi pnpm --filter @repo/db test` (без переменной они пропускаются).
 - `pnpm --filter @repo/storage test:s3` — presigned-ссылки на локальном SeaweedFS с `S3_*` из `.env`; в обычном `pnpm test` без `S3_ENDPOINT` на loopback эти тесты пропускаются.
 - `pnpm e2e` — smoke на поднятой инфраструктуре (web на :3100, core на :8181, mcp на :8182); `pnpm dev` перед этим остановить.
 - `pnpm --filter orchestrator verify:snapshots` — локальная интеграционная проверка P1 на SeaweedFS + OpenBao из `.env`: временные синтетические данные, без моделей; свой Transit-ключ и S3-объекты удаляются после проверки.
 - `pnpm --filter orchestrator verify:runner` — гейты 2 и 3 P2: `core` на этой машине, раннер в Linux-ВМ под gVisor (Colima), полный ход с restore, `kill -9` `core` и раннера. Образы собираются в демоне ВМ; переменные `P2_RUNNER_*` и повтор — `docs/plan/03-p2-verification.md`. Всё созданное удаляется.
+- `pnpm verify:edge` — сквозная проверка края app-ВМ: сборка образов web и orchestrator, Traefik выпускает сертификаты у локального Pebble, web отвечает по HTTPS, core снаружи и из сети web не виден, API раннеров — HTTP только на частном адресе; `-- --renewal` — плюс продление, `-- --real-address` — только в CI с `userland-proxy: false`. Порты 18080, 18443, 18083 и 15000 на `127.0.0.1` должны быть свободны; результаты — `docs/plan/04-edge-verification.md`.
 - Health: web `/api/health`, orchestrator `/health` — публично только status; подробности web и core — с `Authorization: Bearer $METRICS_TOKEN`, MCP всегда только status. Метрики — `/api/metrics` и `/metrics` с тем же токеном.
 
 ## Структура
@@ -73,7 +74,9 @@ packages/
   auth notifications — сервисы; trpc — транспорт; ui — MUI-тема, формы входа, SmartCaptcha
   observability — общие для приложений health, метрики, проверка bearer-токена, лог ошибок (только сервер)
   eslint-config typescript-config — общие конфиги
-infra/dev/        docker compose, конфиги LiteLLM, раннера, Prometheus и Grafana
+infra/dev/        локальная инфраструктура: docker compose, конфиги LiteLLM, раннера, Prometheus и Grafana
+infra/sandbox/    песочная ВМ: watchdog, sandbox-gw, раннер
+infra/app/        app-ВМ: compose с Traefik и Let's Encrypt, runbook, preflight, проверки, verify-edge
 docs/             spec, business, план, исследования, лендинг
 .github/          CI и релизы (GitHub Actions)
 ```
@@ -100,7 +103,7 @@ docs/             spec, business, план, исследования, ленди
 - Пакеты называются `@repo/<имя>`.
 - zod на всех границах: вебхуки, tRPC, итог хода агента, события драйверов.
 - Деньги в коде — Decimal (decimal.js), не `number`. В DTO и API — строки с фиксированным числом знаков (`toFixed`), их проверяют zod-схемы.
-- Новая переменная окружения — сразу в `.env.example` и в `globalEnv` в `turbo.json`.
+- Новая переменная окружения — сразу в `.env.example` и в `globalEnv` в `turbo.json`. Переменные, которые подставляет только compose app-ВМ (`APP_DOMAIN`, `ACME_*`, образы и т. п.), — в `infra/app/env.example`: приложения их не читают.
 - Ошибки домена — `DomainError`, как в AnyNote.
 - Статусы задачи — только из §7: `queued`, `preparing`, `running`, `awaiting_user`, `awaiting_approval`, `deploying`, `verifying`, `done`, `failed`, `rolled_back`, `cancelled`.
 - Бакеты — `raditi-inbox`, `raditi-sessions`, `raditi-logs`, `raditi-artifacts`, `raditi-backups`, `raditi-platform` (§14).
