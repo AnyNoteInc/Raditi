@@ -39,6 +39,7 @@ import { emptyUntrackedArchive, untrackedFiles } from './archive.ts'
 import { BASE_BUNDLE_REF } from './base-bundle.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
 import { PROCESS_OUTPUT_LIMIT, runProcess, type ProcessResult } from './process.ts'
+import { CLONE_PREFIX } from './stale-clones.ts'
 
 export interface GitWorkspaceOptions {
   transport:
@@ -382,7 +383,7 @@ export class GitWorkspaceService implements TurnWorkspace {
     )
       throw forbidden('Repository scope mismatch')
     const url = await this.cloneUrl(info.cloneUrl)
-    const root = await mkdtemp(join(tmpdir(), 'raditi-git-'))
+    const root = await mkdtemp(join(tmpdir(), CLONE_PREFIX))
     const workspace = { root, repo: join(root, 'repo'), url, ref: source.repo }
     try {
       await mkdir(join(root, 'empty'))

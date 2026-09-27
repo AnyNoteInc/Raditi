@@ -1,8 +1,11 @@
 import { Module, type DynamicModule } from '@nestjs/common'
 
+import type { CoreConfig } from '../config/config.ts'
 import { DriversModule } from '../drivers/drivers.module.ts'
+import { StaleClonesSweep } from '../git-workspace/stale-clones.ts'
 import { HealthModule } from '../health/health.module.ts'
 import { InfraModule } from '../infra/infra.module.ts'
+import { CORE_CONFIG } from '../infra/tokens.ts'
 import { MetricsModule } from '../metrics/metrics.module.ts'
 import { NotificationsModule } from '../notifications/notifications.module.ts'
 import { OutboxModule } from '../outbox/outbox.module.ts'
@@ -32,6 +35,13 @@ export class CoreModule {
         DriversModule,
         SessionsModule,
         TurnsModule.forRoot(options.config.turnExecutor),
+      ],
+      providers: [
+        {
+          provide: StaleClonesSweep,
+          useFactory: (config: CoreConfig) => new StaleClonesSweep(config.appEnv),
+          inject: [CORE_CONFIG],
+        },
       ],
     }
   }

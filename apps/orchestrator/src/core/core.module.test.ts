@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { OutboxRelayService } from '../outbox/outbox-relay.service.ts'
 import type { CoreConfig } from '../config/config.ts'
+import { StaleClonesSweep } from '../git-workspace/stale-clones.ts'
 import { hashRunnerToken, parseRunnerTokens } from '../config/runner-tokens.ts'
 import { AGENT_DRIVERS, JOB_QUEUE, SANDBOX_PROVIDER, TURN_EXECUTOR } from '../infra/tokens.ts'
 import { RunnerApiServer } from '../runner-api/runner-api.server.ts'
@@ -38,6 +39,7 @@ async function startCore(
 afterEach(async () => {
   await app?.close()
   app = undefined
+  vi.restoreAllMocks()
 })
 
 describe('CoreModule', () => {
@@ -207,6 +209,13 @@ describe('CoreModule', () => {
     await core.close()
     app = undefined
     await expect(poll(`Bearer ${token}`)).rejects.toThrow()
+  })
+
+  it('sweeps stale publication clones once, while the modules start', async () => {
+    const sweep = vi.spyOn(StaleClonesSweep.prototype, 'onModuleInit')
+    const core = await startCore(fakeInfra())
+    expect(core.get(StaleClonesSweep)).toBeInstanceOf(StaleClonesSweep)
+    expect(sweep).toHaveBeenCalledOnce()
   })
 
   it('closes its connections on shutdown without errors', async () => {
