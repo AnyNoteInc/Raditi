@@ -50,6 +50,7 @@ Node 26.10 (`nvm use`) и pnpm 12.6. `npm` и `npx` внутри репозит�
 - `pnpm dev` — web :3000, orchestrator :8081 (core) и :8082 (mcp). Останавливать Ctrl-C (SIGINT): SIGTERM оставляет дочерние процессы.
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm check-architecture`, `pnpm check-env`; всё сразу — `pnpm gates`.
 - Тесты `@repo/db` с базой: `DATABASE_URL=postgresql://raditi:raditi@localhost:5432/raditi pnpm --filter @repo/db test` (без переменной они пропускаются).
+- `pnpm --filter @repo/storage test:s3` — presigned-ссылки на локальном SeaweedFS с `S3_*` из `.env`; в обычном `pnpm test` без `S3_ENDPOINT` на loopback эти тесты пропускаются.
 - `pnpm e2e` — smoke на поднятой инфраструктуре (web на :3100, core на :8181, mcp на :8182); `pnpm dev` перед этим остановить.
 - `pnpm --filter orchestrator verify:snapshots` — локальная интеграционная проверка P1 на SeaweedFS + OpenBao из `.env`: временные синтетические данные, без моделей; свой Transit-ключ и S3-объекты удаляются после проверки.
 - Health: web `/api/health`, orchestrator `/health` — публично только status; подробности web и core — с `Authorization: Bearer $METRICS_TOKEN`, MCP всегда только status. Метрики — `/api/metrics` и `/metrics` с тем же токеном.

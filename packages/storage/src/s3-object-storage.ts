@@ -10,11 +10,15 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import {
   badRequest,
   bucketKinds,
+  MAX_PRESIGN_TTL_MS,
+  presignableBuckets,
   type BucketKind,
   type ObjectStorage,
+  type PresignRequest,
   type PutOptions,
 } from '@repo/domain'
 
@@ -23,11 +27,15 @@ import type { StorageConfig } from './config.ts'
 export interface S3ObjectStorageOptions {
   /** Upper bound for one checkBuckets() call, retries included. */
   healthTimeoutMs?: number
+  /** Signing time of presigned URLs; tests only. */
+  now?: () => Date
 }
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 3_000
 const MAX_KEY_BYTES = 1024
 const MAX_CONDITIONAL_PUT_BYTES = 64 * 1024
+/** One S3 PutObject stores at most 5 GiB. */
+const MAX_SINGLE_PUT_BYTES = 5 * 1024 ** 3
 
 export function createS3Client(config: StorageConfig): S3Client {
   return new S3Client({
@@ -47,8 +55,8 @@ export function createS3Client(config: StorageConfig): S3Client {
 
 /**
  * ObjectStorage port (spec §14) over any S3-compatible store.
- * TODO(P1, M2): presigned GET/PUT URLs for the browser (15 minutes) and browser multipart
- * upload; streams already go through lib-storage multipart on the server side.
+ * TODO(M2): presigned URLs and multipart upload for the browser; streams already go through
+ * lib-storage multipart on the server side.
  */
 export function createS3ObjectStorage(
   config: StorageConfig,
@@ -57,6 +65,12 @@ export function createS3ObjectStorage(
 ): ObjectStorage {
   const healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS
   const bucketOf = (kind: BucketKind): string => config.buckets[kind]
+  // SigV4 signs the host: a runner VM may reach S3 at another address than core does.
+  let presigner: S3Client | undefined
+  const presignClient = () =>
+    config.presignEndpoint === undefined || config.presignEndpoint === config.endpoint
+      ? client
+      : (presigner ??= createS3Client({ ...config, endpoint: config.presignEndpoint }))
 
   return {
     async putIfAbsent(bucket, key, body, opts?: PutOptions) {
@@ -137,6 +151,46 @@ export function createS3ObjectStorage(
       assertKey(key)
       // S3 DeleteObject is idempotent: a missing key is not an error.
       await client.send(new DeleteObjectCommand({ Bucket: bucketOf(bucket), Key: key }))
+    },
+
+    async presign(request: PresignRequest) {
+      assertKey(request.key)
+      if (!(presignableBuckets as readonly string[]).includes(request.bucket))
+        throw badRequest('This bucket is not reachable by presigned URLs')
+      if (
+        !Number.isInteger(request.ttlMs) ||
+        request.ttlMs < 1000 ||
+        request.ttlMs > MAX_PRESIGN_TTL_MS
+      )
+        throw badRequest('Invalid presigned URL lifetime')
+      const target = { Bucket: bucketOf(request.bucket), Key: request.key }
+      let command: GetObjectCommand | PutObjectCommand
+      let headers: Record<string, string> = {}
+      if (request.method === 'GET') {
+        command = new GetObjectCommand(target)
+      } else if (request.method === 'PUT') {
+        const size = request.sizeBytes
+        if (!Number.isSafeInteger(size) || size < 0 || size > MAX_SINGLE_PUT_BYTES)
+          throw badRequest('Invalid presigned upload size')
+        // Both headers are signed: the URL can neither replace an object nor store other sizes.
+        command = new PutObjectCommand({ ...target, ContentLength: size, IfNoneMatch: '*' })
+        headers = { 'if-none-match': '*' }
+      } else {
+        throw badRequest('Invalid presigned method')
+      }
+      // X-Amz-Date has whole seconds; the URL expires relative to it.
+      const signedAt = Math.floor((options.now?.() ?? new Date()).getTime() / 1000) * 1000
+      const expiresIn = Math.floor(request.ttlMs / 1000)
+      const url = await getSignedUrl(presignClient(), command, {
+        expiresIn,
+        signingDate: new Date(signedAt),
+      })
+      return {
+        method: request.method,
+        url,
+        headers,
+        expiresAt: new Date(signedAt + expiresIn * 1000),
+      }
     },
 
     async checkBuckets(kinds = bucketKinds) {

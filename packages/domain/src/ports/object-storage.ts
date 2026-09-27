@@ -73,5 +73,9 @@ export interface ObjectStorage {
    * checks only the buckets its own S3 key may access (spec §14).
    */
   checkBuckets(kinds?: readonly BucketKind[]): Promise<Partial<Record<BucketKind, boolean>>>
-  // TODO(P2, M2): scoped presigned GET/PUT for runners and browsers, never sandboxes.
+  /**
+   * A scoped URL for one object, for a runner host and never a sandbox. Signing sends nothing
+   * to S3. Browser uploads (M2) will widen presignableBuckets.
+   */
+  presign(request: PresignRequest): Promise<PresignedRequest>
 }

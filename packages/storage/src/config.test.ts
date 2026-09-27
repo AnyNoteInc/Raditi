@@ -51,6 +51,20 @@ describe('storageConfigFromEnv', () => {
     expect(config.buckets.backups).toBe('prod-raditi-backups')
   })
 
+  it('reads the S3 address a runner VM sees for presigned URLs', () => {
+    expect(storageConfigFromEnv(base)).not.toHaveProperty('presignEndpoint')
+    expect(storageConfigFromEnv({ ...base, S3_RUNNER_ENDPOINT: '' })).not.toHaveProperty(
+      'presignEndpoint',
+    )
+    expect(
+      storageConfigFromEnv({ ...base, S3_RUNNER_ENDPOINT: 'http://192.168.5.2:8333' })
+        .presignEndpoint,
+    ).toBe('http://192.168.5.2:8333')
+    expect(() => storageConfigFromEnv({ ...base, S3_RUNNER_ENDPOINT: 'ftp://s3' })).toThrow(
+      'S3_RUNNER_ENDPOINT',
+    )
+  })
+
   it('accepts 1/0 for S3_FORCE_PATH_STYLE', () => {
     expect(storageConfigFromEnv({ ...base, S3_FORCE_PATH_STYLE: '1' }).forcePathStyle).toBe(true)
     expect(storageConfigFromEnv({ ...base, S3_FORCE_PATH_STYLE: '0' }).forcePathStyle).toBe(false)

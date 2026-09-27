@@ -77,6 +77,9 @@ function fixture() {
       objects.delete(key)
     }),
     checkBuckets: vi.fn(async () => ({ sessions: true })),
+    presign: vi.fn(async () => {
+      throw new Error('SnapshotService never presigns')
+    }),
   }
   const issued: Uint8Array[] = []
   const newKey = () => {

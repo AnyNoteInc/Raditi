@@ -469,4 +469,88 @@ describe('createS3ObjectStorage', () => {
     expect(result.sessions).toBe(false)
     expect(result.inbox).toBe(true)
   })
+
+  describe('presign', () => {
+    const now = () => new Date('2026-09-27T10:00:00.750Z')
+    const key = 'sessions/s1/turns/0002/home.tar.zst'
+
+    it('signs a GET for the sessions bucket without sending anything', async () => {
+      const { client, requests } = fakeS3(() => ({ status: 200 }))
+      const storage = createS3ObjectStorage(config, client, { now })
+
+      const signed = await storage.presign({
+        method: 'GET',
+        bucket: 'sessions',
+        key,
+        ttlMs: 300_000,
+      })
+
+      const url = new URL(signed.url)
+      expect(`${url.origin}${url.pathname}`).toBe(`http://s3.test/raditi-sessions/${key}`)
+      expect(url.searchParams.get('X-Amz-Expires')).toBe('300')
+      expect(url.searchParams.get('X-Amz-Date')).toBe('20260927T100000Z')
+      expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('host')
+      expect(signed).toMatchObject({ method: 'GET', headers: {} })
+      expect(signed.expiresAt.toISOString()).toBe('2026-09-27T10:05:00.000Z')
+      expect(requests).toHaveLength(0)
+    })
+
+    it('signs a create-only PUT of an exact size', async () => {
+      const { client, requests } = fakeS3(() => ({ status: 200 }))
+      const storage = createS3ObjectStorage(config, client, { now })
+
+      const signed = await storage.presign({
+        method: 'PUT',
+        bucket: 'sessions',
+        key,
+        ttlMs: 1_999,
+        sizeBytes: 1234,
+      })
+
+      const url = new URL(signed.url)
+      expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;host;if-none-match')
+      expect(url.searchParams.get('X-Amz-Expires')).toBe('1')
+      expect(url.searchParams.has('x-id')).toBe(true)
+      expect(signed).toMatchObject({ method: 'PUT', headers: { 'if-none-match': '*' } })
+      expect(signed.expiresAt.toISOString()).toBe('2026-09-27T10:00:01.000Z')
+      expect(signed.url).not.toContain(config.secretAccessKey)
+      expect(requests).toHaveLength(0)
+    })
+
+    it('signs for the S3 address a runner sees', async () => {
+      const { client } = fakeS3(() => ({ status: 200 }))
+      const storage = createS3ObjectStorage(
+        { ...config, presignEndpoint: 'https://s3.runner.test:9443' },
+        client,
+      )
+
+      const signed = await storage.presign({
+        method: 'GET',
+        bucket: 'sessions',
+        key,
+        ttlMs: 60_000,
+      })
+
+      expect(new URL(signed.url).host).toBe('s3.runner.test:9443')
+    })
+
+    it.each([
+      ['another bucket', { method: 'GET', bucket: 'platform', key, ttlMs: 60_000 }],
+      ['an unsafe key', { method: 'GET', bucket: 'sessions', key: 'a/../b', ttlMs: 60_000 }],
+      ['less than a second', { method: 'GET', bucket: 'sessions', key, ttlMs: 999 }],
+      ['more than five minutes', { method: 'GET', bucket: 'sessions', key, ttlMs: 300_001 }],
+      ['a fractional lifetime', { method: 'GET', bucket: 'sessions', key, ttlMs: 1000.5 }],
+      ['a negative size', { method: 'PUT', bucket: 'sessions', key, ttlMs: 60_000, sizeBytes: -1 }],
+      ['no size', { method: 'PUT', bucket: 'sessions', key, ttlMs: 60_000 }],
+      ['another method', { method: 'DELETE', bucket: 'sessions', key, ttlMs: 60_000 }],
+    ])('refuses %s', async (_label, request) => {
+      const { client, requests } = fakeS3(() => ({ status: 200 }))
+      const storage = createS3ObjectStorage(config, client)
+
+      await expect(
+        storage.presign(request as Parameters<typeof storage.presign>[0]),
+      ).rejects.toSatisfy(isDomainError)
+      expect(requests).toHaveLength(0)
+    })
+  })
 })
