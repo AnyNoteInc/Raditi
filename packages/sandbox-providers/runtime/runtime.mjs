@@ -250,8 +250,8 @@ async function stage(id) {
   await fs.writeFile(`${path}/stderr`, '', { flag: 'wx', mode: 0o600 })
 }
 
-async function processIdentity(pid) {
-  const raw = await fs.readFile(`/proc/${pid}/stat`, 'utf8')
+/** State, parent, process group and start time (field 22) of one /proc/<pid>/stat line. */
+export function statIdentity(raw) {
   const values = raw.slice(raw.lastIndexOf(')') + 2).split(' ')
   return {
     state: values[0],
@@ -259,6 +259,24 @@ async function processIdentity(pid) {
     group: Number(values[2]),
     started: values[19],
   }
+}
+/**
+ * The start time is only compared, as the pid's generation. Linux counts it in ticks since boot;
+ * gVisor subtracts its boot time from the task's start on the realtime clock, so a process started
+ * right after the sandbox booted gets a negative value when the host clock steps back in between
+ * (a VM's time sync does). That value is as stable as a positive one; after such a step it may
+ * repeat for another process, which is harmless for the keepalive: its death ends the container.
+ */
+export const isProcessStart = (value) => typeof value === 'string' && /^-?\d+$/.test(value)
+/** The keepalive identity bootstrap records and quiesce trusts: one check for both sides. */
+export const isKeepaliveRecord = (record) =>
+  typeof record === 'object' &&
+  record !== null &&
+  Number.isSafeInteger(record.pid) &&
+  record.pid > 1 &&
+  isProcessStart(record.started)
+async function processIdentity(pid) {
+  return statIdentity(await fs.readFile(`/proc/${pid}/stat`, 'utf8'))
 }
 async function signalGroup(path, signal, reason) {
   const meta = await maybeJson(`${path}/process.json`)
@@ -410,8 +428,10 @@ async function bootstrap() {
   const keepalive = number(children[0])
   if (keepalive <= 1) fail()
   const original = await processIdentity(keepalive)
-  if (original.ppid !== 1 || original.state === 'Z') fail()
-  await fs.writeFile(CONTROL, JSON.stringify({ pid: keepalive, started: original.started }), {
+  const record = { pid: keepalive, started: original.started }
+  // Never record an identity quiesce refuses: a container that cannot be quiesced fails here.
+  if (original.ppid !== 1 || original.state === 'Z' || !isKeepaliveRecord(record)) fail()
+  await fs.writeFile(CONTROL, JSON.stringify(record), {
     flag: 'wx',
     mode: 0o444,
   })
@@ -421,9 +441,8 @@ async function quiesce() {
   const stat = await fs.lstat(CONTROL)
   if (!stat.isFile() || stat.uid !== 0 || stat.gid !== 0 || (stat.mode & 0o777) !== 0o444) fail()
   const original = await readJson(CONTROL, 1024)
-  const keepalive = number(original.pid)
-  if (keepalive <= 1 || typeof original.started !== 'string' || !/^\d+$/.test(original.started))
-    fail()
+  if (!isKeepaliveRecord(original)) fail()
+  const keepalive = original.pid
   const validKeepalive = async () => {
     const current = await processIdentity(keepalive)
     if (
@@ -481,7 +500,9 @@ async function main() {
   else fail()
 }
 
-main().catch(() => {
-  process.stderr.write('Sandbox helper failed\n')
-  process.exitCode = 125
-})
+// A unit test imports the helper for its pure checks only; everywhere else it runs its command.
+if (!globalThis.raditiRuntimeUnderTest)
+  main().catch(() => {
+    process.stderr.write('Sandbox helper failed\n')
+    process.exitCode = 125
+  })
