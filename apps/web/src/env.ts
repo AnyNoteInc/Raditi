@@ -19,7 +19,8 @@ function lazy<T>(read: () => T): () => T {
 
 /**
  * Server configuration, section by section. Nothing is read at import time, so `next build`
- * needs no secrets, and a broken section (say, S3) fails only the code that uses it.
+ * needs no secrets, and in development a broken section (say, S3) fails only the code that uses
+ * it. In production every section is checked at start (instrumentation.ts).
  */
 export const env = {
   web: lazy(() => webEnvFromEnv(process.env)),
