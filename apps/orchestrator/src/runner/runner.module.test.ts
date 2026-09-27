@@ -14,7 +14,7 @@ import { RunnerHub } from '../runner-api/runner-hub.ts'
 import { testRunnerConfig } from '../testing/fakes.ts'
 import { labels } from '../testing/runner-sandbox.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
-import { RunnerModule } from './runner.module.ts'
+import { RunnerModule, runnerSandboxConfig } from './runner.module.ts'
 import { SandboxRunner } from './sandbox-runner.ts'
 
 const closers: Array<() => Promise<unknown>> = []
@@ -73,5 +73,12 @@ describe('RunnerModule', () => {
     expect(moduleRef.get(SandboxRunner).session).toMatch(/^[0-9a-f-]{36}$/)
     await moduleRef.close()
     closers.pop()
+  })
+
+  it('labels its turn containers with the runner id of its VM token', () => {
+    const config = testRunnerConfig({ RUNNER_TOKEN_FILE: '/etc/raditi/runner-token' })
+    const token = `rnr_sandbox-7.${randomBytes(32).toString('base64url')}`
+    expect(runnerSandboxConfig(config, token)).toEqual({ ...config.sandbox, runnerId: 'sandbox-7' })
+    expect(() => runnerSandboxConfig(config, 'not-a-token')).toThrow(/RUNNER_TOKEN_FILE/)
   })
 })

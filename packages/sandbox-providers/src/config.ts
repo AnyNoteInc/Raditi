@@ -35,6 +35,11 @@ export interface SandboxConfig {
   /** Local Unix socket only. Never inferred from DOCKER_HOST. */
   socketPath?: string
   gateway?: GatewayConfig
+  /**
+   * The runner whose turn containers these are, from its VM token: they carry its id and list
+   * finds only them, so runners that share one Docker daemon never collect each other's.
+   */
+  runnerId?: string
 }
 
 export function sandboxConfigFromEnv(env: Env): SandboxConfig {

@@ -7,8 +7,8 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common'
 import { agentEventParser } from '@repo/agent-drivers'
-import type { SandboxProvider } from '@repo/domain'
-import { createDockerSandboxProvider } from '@repo/sandbox-providers'
+import { parseRunnerToken, type SandboxProvider } from '@repo/domain'
+import { createDockerSandboxProvider, type SandboxConfig } from '@repo/sandbox-providers'
 
 import { SANDBOX_PROVIDER } from '../infra/tokens.ts'
 import { fetchPresignedTransfer } from '../sessions/presigned-transfer.ts'
@@ -23,6 +23,19 @@ import { SandboxRunner } from './sandbox-runner.ts'
 export interface RunnerModuleOptions {
   /** Core retired this session: the process should end so that it restarts under a new one. */
   onRetired?: () => void
+}
+
+/** The VM token, read once at start: the transport sends it, its runner id labels containers. */
+const RUNNER_TOKEN = Symbol('RUNNER_TOKEN')
+
+/**
+ * The runner's Docker settings: its turn containers carry its id, and it lists only those, so
+ * two runners sharing one daemon (a verification next to another) never collect each other's.
+ */
+export function runnerSandboxConfig(config: RunnerConfig, token: string): SandboxConfig {
+  const parsed = parseRunnerToken(token)
+  if (!parsed) throw new Error('RUNNER_TOKEN_FILE: does not hold a runner token')
+  return { ...config.sandbox, runnerId: parsed.runnerId }
 }
 
 /** Starts polling once the context is up; stops it on shutdown and leaves containers alone. */
@@ -57,17 +70,24 @@ export class RunnerModule {
       module: RunnerModule,
       providers: [
         {
+          provide: RUNNER_TOKEN,
+          useFactory: () => readRunnerToken(config.tokenFile, config.appEnv),
+        },
+        {
           provide: HttpRunnerTransport,
-          useFactory: async () =>
+          useFactory: async (token: string) =>
             new HttpRunnerTransport({
               coreUrl: config.coreUrl,
-              token: await readRunnerToken(config.tokenFile, config.appEnv),
+              token,
               ca: config.caFile ? await readFile(config.caFile) : null,
             }),
+          inject: [RUNNER_TOKEN],
         },
         {
           provide: SANDBOX_PROVIDER,
-          useFactory: () => createDockerSandboxProvider(config.sandbox),
+          useFactory: (token: string) =>
+            createDockerSandboxProvider(runnerSandboxConfig(config, token)),
+          inject: [RUNNER_TOKEN],
         },
         {
           provide: SandboxRunner,

@@ -10,6 +10,7 @@ import {
   MAX_SANDBOX_TURN_MS,
   networkPolicySchema,
   notImplemented,
+  runnerIdSchema,
   SANDBOX_SECRETS_DIR,
   SANDBOX_SECRETS_TMPFS_BYTES,
   sandboxCommandFailed,
@@ -39,6 +40,8 @@ import { createDockerGatewayManager } from './gateway/manager.ts'
 
 const PREFIX = 'io.raditi.sandbox.'
 const OWNER = 'raditi'
+/** Outside the sandbox identity: a container adopted by its id need not be this runner's. */
+const RUNNER = 'io.raditi.runner'
 const PROTOCOL = '1'
 // Every exec resets these for the trusted helper, so container-wide values never reach the agent.
 const helperEnvNames = new Set(HELPER_ENV.map((entry) => entry.slice(0, entry.indexOf('='))))
@@ -158,6 +161,10 @@ export function createDockerSandboxProvider(
   /** Injection is trusted infrastructure, used by tests. */
   options: { client?: Docker; gateway?: DockerGatewayManager } = {},
 ): SandboxProvider {
+  if (config.runnerId !== undefined && !runnerIdSchema.safeParse(config.runnerId).success)
+    throw badRequest('Invalid sandbox runner id')
+  const runnerLabel: Record<string, string> =
+    config.runnerId === undefined ? {} : { [RUNNER]: config.runnerId }
   const docker = options.client ?? localDocker(config.socketPath)
   const gateway =
     options.gateway ??
@@ -363,7 +370,10 @@ export function createDockerSandboxProvider(
             Env: Object.entries({ LANG: 'C.UTF-8', HOME: '/agent-home', ...spec.env }).map(
               ([key, value]) => `${key}=${value}`,
             ),
-            Labels: labelsOf(spec.labels, deadline, spec.network, network?.resourceId),
+            Labels: {
+              ...labelsOf(spec.labels, deadline, spec.network, network?.resourceId),
+              ...runnerLabel,
+            },
             HostConfig: {
               Runtime: spec.runtime,
               ReadonlyRootfs: true,
@@ -471,6 +481,7 @@ export function createDockerSandboxProvider(
       const labels = [
         `${PREFIX}owner=${OWNER}`,
         `${PREFIX}protocol=${PROTOCOL}`,
+        ...Object.entries(runnerLabel).map(([key, value]) => `${key}=${value}`),
         ...Object.entries(parsed.data).map(([key, value]) => `${PREFIX}${key}=${value}`),
       ]
       const containers = await bounded(
@@ -488,6 +499,7 @@ export function createDockerSandboxProvider(
         const meta = inspectOwned(info)
         if (
           meta &&
+          (config.runnerId === undefined || info.Config.Labels?.[RUNNER] === config.runnerId) &&
           Object.entries(parsed.data).every(
             ([key, value]) => meta.labels[key as keyof SandboxLabels] === value,
           )

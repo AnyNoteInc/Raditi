@@ -208,6 +208,39 @@ describe('Docker sandbox provider', () => {
     ).toThrow(/socket/)
   })
 
+  it('labels turn containers with their runner and lists only that runner’s', async () => {
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(
+      { ...config, runnerId: 'sandbox-1' },
+      { client: fake.client },
+    )
+    const sandbox = await provider.create(spec())
+    const created = fake.raw.createContainer.mock.calls[0]![0]
+    expect(created.Labels).toMatchObject({
+      'io.raditi.runner': 'sandbox-1',
+      'io.raditi.sandbox.taskId': 't',
+    })
+    expect(await provider.list()).toEqual([expect.objectContaining({ id: sandbox.id })])
+    expect(fake.raw.listContainers).toHaveBeenLastCalledWith({
+      all: true,
+      filters: { label: expect.arrayContaining(['io.raditi.runner=sandbox-1']) },
+    })
+    // Another runner on the same daemon never sees it, even when the daemon lists it.
+    const other = createDockerSandboxProvider(
+      { ...config, runnerId: 'sandbox-2' },
+      { client: fake.client },
+    )
+    expect(await other.list()).toEqual([])
+    // Core's own local executor labels no runner and sees every turn container.
+    expect(await createDockerSandboxProvider(config, { client: fake.client }).list()).toHaveLength(
+      1,
+    )
+    expect(() => createDockerSandboxProvider({ ...config, runnerId: 'x=y' })).toThrow(
+      expect.objectContaining({ code: 'BAD_REQUEST' }),
+    )
+    await sandbox.destroy('completed')
+  })
+
   it('refuses invalid policy, missing runtimes and an unconfigured gateway before create', async () => {
     const fake = daemon()
     const provider = createDockerSandboxProvider(config, { client: fake.client })
