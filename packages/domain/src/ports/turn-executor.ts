@@ -74,7 +74,8 @@ export interface TurnTakeover {
   runnerSession?: string
   /**
    * The session that launched the agent is still there and filters its output itself: recovery
-   * sends no credentials. Otherwise they come from TurnCredentialSource or the turn is given up.
+   * does not send it the credentials again. Core checks the output against them all the same, so
+   * recovery takes them from TurnCredentialSource either way, or gives the turn up.
    */
   holdsCredentials: boolean
 }
@@ -127,10 +128,15 @@ export type TurnAdoptInput = {
       remainingMs: number
       driverId: AgentDriverId
       /**
-       * Omitted only when the executor may still hold them (a runner that outlived core);
-       * an executor without them cannot filter output and gives the turn up (exec_lost).
+       * turnCredentials() of the run, recovered by core: output that contains one is refused.
+       * An executor without them cannot filter output and gives the turn up (exec_lost).
        */
-      credentials?: readonly string[]
+      credentials: readonly string[]
+      /**
+       * The executor still holds them (TurnTakeover.holdsCredentials): core checks the output
+       * against them itself and does not send them again.
+       */
+      holdsCredentials?: boolean
     }
 )
 

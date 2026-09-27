@@ -524,6 +524,8 @@ describe('RemoteTurnExecutor over the runner hub', () => {
         purpose: 'work',
         remainingMs: 60_000,
         driverId: 'codex',
+        credentials,
+        holdsCredentials: true,
       },
       new AbortController().signal,
     )
@@ -587,6 +589,55 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(await refusal(vm.report(assignment.id, answer))).toEqual({ error: 'UNAVAILABLE' })
     await f.assignments.finish({ id: assignment.id, epoch: 1, outcome: 'failed' })
     expect(await refusal(vm.report(assignment.id, answer))).toEqual({ error: 'LEASE_LOST' })
+  })
+
+  it('checks an adopted agent’s output against the credentials it did not send again', async () => {
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    const adopting = f.executor.adopt(
+      {
+        assignmentId: assignment.id,
+        fence: { ...fence, epoch: 2 },
+        containerId: 'container1',
+        labels: { ...labels, leaseEpoch: 1 },
+        purpose: 'work',
+        remainingMs: 60_000,
+        driverId: 'codex',
+        credentials,
+        holdsCredentials: true,
+      },
+      new AbortController().signal,
+    )
+    const [adopt] = await vm.poll()
+    expect(JSON.stringify(adopt)).not.toContain(credentials[0])
+    await vm.report(
+      assignment.id,
+      { type: 'adopted', commandId: adopt!.commandId, containerId: 'container1' },
+      2,
+    )
+    const adopted = (await adopting)!
+    const cursor = { stdout: 0, stderr: 0 }
+    const attaching = adopted.attach({ execId: 'exec1', cursor, eventCount: 0 })
+    const [resume] = await vm.poll()
+    await vm.report(
+      assignment.id,
+      { type: 'running', commandId: resume!.commandId, execId: 'exec1' },
+      2,
+    )
+    const agent = (await attaching)!
+    const record = vi.fn(async () => {})
+    const reading = agent.output(record)
+    // A runner that let a key through, compromised or not: core refuses it before the journal.
+    const leaked = {
+      type: 'output',
+      execId: 'exec1',
+      from: cursor,
+      to: { stdout: 64, stderr: 0 },
+      events: [{ type: 'message', text: `ключ ${credentials[0]}` }],
+    }
+    expect(await refusal(vm.report(assignment.id, leaked, 2))).toEqual({ error: 'COMMAND_CLOSED' })
+    await expect(reading).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
+    expect(record).not.toHaveBeenCalled()
   })
 
   it('retires another session of the runner that reports on a turn no core drives yet', async () => {
@@ -862,6 +913,7 @@ describe('RemoteTurnExecutor: the turn deadline at delivery', () => {
         purpose: 'work',
         remainingMs: 50_000,
         driverId: 'codex',
+        credentials,
       },
       new AbortController().signal,
     )

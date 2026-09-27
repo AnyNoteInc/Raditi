@@ -468,6 +468,7 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
       const w = world(kind)
       w.credentials.keep(reference, values)
       const { after } = await w.crashAt(phase)
+      const adopt = vi.spyOn(after.executor, 'adopt')
       const recovering = after.recovery.tick().then(() => after.recovery.settled())
       await vi.waitFor(() => expect(w.journal.phases(2)).toContain('resumed'))
       w.vm.finish()
@@ -497,11 +498,19 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
         expect.anything(),
         expect.anything(),
       )
-      // Keys come from the source only when no runner outlived core to filter the output.
-      expect(w.credentials.recovered).toBe(runnerHolds ? 0 : 1)
-      expect(w.workspace.preparePublication.mock.calls.at(-1)![0].credentials).toEqual(
-        runnerHolds ? [] : [values.llmApiKey, values.mcpToken, values.llmApiKey],
-      )
+      // Core checks the output and the candidate with keys from the source; a runner that
+      // outlived core still holds them and is not sent them again.
+      expect(w.credentials.recovered).toBe(1)
+      expect(w.workspace.preparePublication.mock.calls.at(-1)![0].credentials).toEqual([
+        values.llmApiKey,
+        values.mcpToken,
+        values.llmApiKey,
+      ])
+      expect(adopt.mock.calls[0]![0]).toMatchObject({
+        purpose: 'work',
+        credentials: [values.llmApiKey, values.mcpToken, values.llmApiKey],
+        ...(runnerHolds ? { holdsCredentials: true } : {}),
+      })
     },
   )
 
@@ -835,6 +844,14 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
 
     expectGivenUp(w, 'exec_lost')
     expect(w.vm.sandbox.destroy).toHaveBeenLastCalledWith('failed')
+  })
+
+  it('gives the turn up when core cannot recover its credentials to check the output', async () => {
+    const w = world(kind)
+    const { after } = await w.crashAt('output')
+    await w.recover(after.recovery)
+    expect(w.credentials.recovered).toBe(1)
+    expectGivenUp(w, 'exec_lost')
   })
 
   it('gives the turn up when nobody holds its credentials any more', async () => {

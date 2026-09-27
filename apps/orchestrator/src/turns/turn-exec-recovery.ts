@@ -317,12 +317,10 @@ export class TurnExecRecovery {
     let resumed = false
     let deferred = false
     try {
-      let values: TurnCredentialValues | null = null
-      // The executor that launched the agent filters its output with the keys it still holds.
-      if (!takeover.holdsCredentials) {
-        values = await this.deps.credentials.recover(reference)
-        if (!values) throw execLost('The turn credentials cannot be recovered')
-      }
+      // Core checks the output and the candidate itself, whatever the executor filters; a runner
+      // that outlived core still holds the keys and does not get them again.
+      const values = await this.deps.credentials.recover(reference)
+      if (!values) throw execLost('The turn credentials cannot be recovered')
       const run = await recoveredRun(driver, assignment.plan, turn, values)
       attempt.credentials = run.credentials
       const execution = await guard.interruptible(
@@ -335,7 +333,8 @@ export class TurnExecRecovery {
             purpose: 'work',
             remainingMs: guard.remainingMs,
             driverId: driver.id,
-            ...(values ? { credentials: run.credentials } : {}),
+            credentials: run.credentials,
+            ...(takeover.holdsCredentials ? { holdsCredentials: true } : {}),
           },
           guard.signal,
         ),
@@ -681,9 +680,8 @@ function consistent(assignment: TurnAssignment, turn: ReplayedTurn): boolean {
 
 /**
  * The driver's run of the turn as recovery rebuilds it from the plan. With the credentials it is
- * the supervisor's run and names them for the candidate check. Without them — the runner that
- * holds them filters output and capture itself — only what sessionState and extractResult read
- * is known: the driver session.
+ * the supervisor's run and names them for the output and candidate checks. Without them — a
+ * checkpoint to publish — only what sessionState reads is known: the driver session.
  */
 async function recoveredRun(
   driver: AgentDriver,

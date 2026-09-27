@@ -577,7 +577,7 @@ describe('LocalTurnExecutor', () => {
     it('gives the turn up when it cannot filter the output without the credentials', async () => {
       const f = await fixture()
       await expect(
-        f.executor.adopt(adopt('work', { credentials: undefined }), f.signal),
+        f.executor.adopt(adopt('work', { credentials: [] }), f.signal),
       ).rejects.toMatchObject({ code: 'EXEC_LOST' })
     })
 

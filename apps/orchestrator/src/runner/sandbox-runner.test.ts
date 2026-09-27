@@ -197,6 +197,8 @@ describe('SandboxRunner with core', () => {
         purpose: 'work',
         remainingMs: 60_000,
         driverId: 'codex',
+        credentials,
+        holdsCredentials: true,
       },
       signal,
     )
@@ -241,7 +243,7 @@ describe('SandboxRunner with core', () => {
       epoch: 2,
       runnerSession: runner.session,
     })
-    const adopt = (withCredentials: boolean) =>
+    const adopt = (sent: boolean) =>
       core.executor.adopt(
         {
           assignmentId: assignment.id,
@@ -251,7 +253,8 @@ describe('SandboxRunner with core', () => {
           purpose: 'work',
           remainingMs: 60_000,
           driverId: 'codex',
-          ...(withCredentials ? { credentials } : {}),
+          credentials,
+          ...(sent ? {} : { holdsCredentials: true }),
         },
         signal,
       )

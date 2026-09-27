@@ -677,7 +677,8 @@ try {
         .filter((entry) => entry.fence.epoch === resumed.fence.epoch)
         .every((entry) => entry.recoveredFromEpoch === epoch),
     )
-    assert.equal(core.recovered, 0, 'The runner that outlived core still held the credentials')
+    // Core checks the resumed output with keys from the source; the runner kept its own.
+    assert.equal(core.recovered, 1, 'Core recovered the credentials to check the output')
     const finished = await report({
       runnerSession: current.runnerSession,
       assignmentId: current.id,

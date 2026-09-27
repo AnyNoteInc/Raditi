@@ -136,7 +136,7 @@ export class LocalTurnExecutor implements TurnExecutor {
       return new RemovalExecution(removable)
     }
     // Without the turn's credentials its output cannot be filtered: the turn is given up.
-    if (!input.credentials?.length)
+    if (!input.credentials.length)
       throw execLost('The turn credentials are not available to this executor')
     const sandbox = await this.deps.sandboxes.get(input.containerId)
     if (!sandbox) {

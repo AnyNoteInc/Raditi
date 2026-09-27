@@ -603,7 +603,7 @@ export class SandboxRunner {
               purpose: 'work',
               remainingMs: command.work.remainingMs,
               driverId: command.work.driverId,
-              ...(command.work.credentials ? { credentials: command.work.credentials } : {}),
+              credentials: command.work.credentials ?? [],
             }
           : { ...base, purpose: 'removal' },
         this.#stop.signal,

@@ -149,7 +149,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
       id: input.assignmentId,
       fence: input.fence,
       runner: assignment.runner,
-      credentials: input.purpose === 'work' ? (input.credentials ?? []) : [],
+      // Core checks the output against them, whatever the runner filters.
+      credentials: input.purpose === 'work' ? input.credentials : [],
       remainingMs: input.purpose === 'work' ? input.remainingMs : runnerReplyMs.destroy,
       containerId: input.containerId,
     })
@@ -170,7 +171,10 @@ export class RemoteTurnExecutor implements TurnExecutor {
               work: {
                 remainingMs: input.remainingMs,
                 driverId: input.driverId,
-                ...(input.credentials?.length ? { credentials: [...input.credentials] } : {}),
+                // The session that launched the agent still has them: they do not travel again.
+                ...(!input.holdsCredentials && input.credentials.length
+                  ? { credentials: [...input.credentials] }
+                  : {}),
               },
             }
           : {}),
