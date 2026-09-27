@@ -4,10 +4,12 @@ import { isDomainError, isTooLarge } from '../errors.ts'
 import { isSnapshotCredential } from '../ports/turn-runner.ts'
 import {
   parseRunnerToken,
+  runnerApiErrors,
   runnerBundlePath,
   runnerCandidatePath,
   runnerCommandSchema,
   runnerConflictSchema,
+  runnerErrorSchema,
   runnerFailure,
   runnerFailureCodes,
   runnerIdSchema,
@@ -291,6 +293,7 @@ describe('runner reports', () => {
 
   it('accepts every report kind', () => {
     for (const value of [
+      { ...base, type: 'created', commandId: ids.command, containerId: 'c1' },
       { ...base, type: 'prepared', commandId: ids.command, containerId: 'c1' },
       { ...base, type: 'running', commandId: ids.command, execId: 'exec-1' },
       output([{ type: 'message', text: 'Готово' }]),
@@ -379,6 +382,17 @@ describe('runner poll and answers', () => {
       }).success,
     ).toBe(true)
     expect(runnerConflictSchema.safeParse({ error: 'LEASE_LOST', fence }).success).toBe(false)
+  })
+
+  it('answers every other refusal with a bare code', () => {
+    expect(runnerErrorSchema.parse({ error: 'COMMAND_CLOSED' })).toEqual({
+      error: 'COMMAND_CLOSED',
+    })
+    expect(runnerApiErrors.COMMAND_CLOSED).toBe(410)
+    expect(runnerErrorSchema.safeParse({ error: 'COMMAND_CLOSED', detail: 'x' }).success).toBe(
+      false,
+    )
+    expect(runnerErrorSchema.safeParse({ error: 'LEASE_LOST' }).success).toBe(false)
   })
 
   it('builds endpoint paths only from an assignment uuid', () => {

@@ -9,11 +9,13 @@ import { OutboxModule } from '../outbox/outbox.module.ts'
 import { QueueModule } from '../queue/queue.module.ts'
 import { SandboxModule } from '../sandbox/sandbox.module.ts'
 import { SessionsModule } from '../sessions/sessions.module.ts'
+import { TurnsModule } from '../turns/turns.module.ts'
 import { CoreConfigModule, type CoreModuleOptions } from './core-config.module.ts'
 
 /**
  * The core role (spec §5): task lifecycle, BullMQ workers, cron, sandboxes, git publishing.
- * Serves /health and /metrics on ORCHESTRATOR_PORT, never on the MCP port.
+ * Serves /health and /metrics on ORCHESTRATOR_PORT, never on the MCP port; with runner VMs also
+ * the runner API on RUNNER_API_PORT.
  */
 @Module({})
 export class CoreModule {
@@ -31,6 +33,7 @@ export class CoreModule {
         DriversModule,
         SandboxModule,
         SessionsModule,
+        TurnsModule.forRoot(options.config.turnExecutor),
       ],
     }
   }

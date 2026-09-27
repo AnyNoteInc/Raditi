@@ -1,0 +1,626 @@
+import { Buffer } from 'node:buffer'
+import { createHash, randomUUID } from 'node:crypto'
+
+import {
+  MAX_SANDBOX_TURN_MS,
+  runnerReportSchema,
+  runnerTimings,
+  SANDBOX_SECRETS_DIR,
+  type RunnerCommand,
+  type TurnExecution,
+  type TurnPlan,
+  type TurnPrepareInput,
+} from '@repo/domain'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+import { RemoteTurnExecutor } from './remote-turn-executor.ts'
+import { RunnerApiError } from './runner-api-error.ts'
+import { RunnerHub } from './runner-hub.ts'
+
+const siteId = '00000000-0000-4000-8000-000000000002'
+const taskId = '00000000-0000-4000-8000-000000000003'
+const fence = { siteId, taskId, operation: 'turn' as const, epoch: 1 }
+const labels = { workspaceId: 'ws1', siteId, taskId, sessionId: 'session1', turn: 1 }
+const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+const baseSha = 'b'.repeat(40)
+const credentials = ['synthetic-llm-secret', 'synthetic-mcp-secret']
+const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
+
+const hubs: RunnerHub[] = []
+afterEach(() => {
+  for (const hub of hubs.splice(0)) hub.close()
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
+
+async function refusal(promise: Promise<unknown>): Promise<unknown> {
+  const error = await promise.then(
+    () => undefined,
+    (reason: unknown) => reason,
+  )
+  expect(error).toBeInstanceOf(RunnerApiError)
+  return (error as RunnerApiError).body
+}
+
+function fixture() {
+  const assignments = new MemoryTurnAssignments()
+  const leases = { assert: vi.fn(async () => true) }
+  const warn = vi.fn()
+  const hub = new RunnerHub({ assignments, leases, logger: { warn } })
+  hubs.push(hub)
+  const executor = new RemoteTurnExecutor(hub, leases, assignments)
+  const bundleBytes = Buffer.from('synthetic bundle')
+  const created = vi.fn(async (_execution: TurnExecution) => {})
+
+  const runner = (runnerId = 'sandbox-1', runnerSession = randomUUID()) => ({
+    runnerId,
+    runnerSession,
+    /** One poll; it gives up after 200 ms instead of the 25-second hold. */
+    async poll(overrides: { capacity?: number; active?: string[] } = {}) {
+      const { commands } = await hub.poll(
+        runnerId,
+        {
+          runnerSession,
+          capacity: overrides.capacity ?? 1,
+          inventory: [],
+          active: (overrides.active ?? []).map((assignmentId) => ({
+            assignmentId,
+            epoch: 1,
+            phase: 'running' as const,
+          })),
+        },
+        AbortSignal.timeout(200),
+      )
+      return commands
+    },
+    report(assignmentId: string, body: Record<string, unknown>, epoch = 1) {
+      return hub.report(
+        runnerId,
+        runnerReportSchema.parse({ runnerSession, assignmentId, epoch, ...body }),
+      )
+    },
+    headers(command: RunnerCommand, epoch = command.fence.epoch) {
+      return { session: runnerSession, epoch: String(epoch), command: command.commandId }
+    },
+  })
+
+  const open = async () =>
+    (await assignments.open({
+      fence,
+      sessionId: labels.sessionId,
+      turn: 1,
+      executor: 'runner',
+      plan: {} as TurnPlan,
+      remainingMs: MAX_SANDBOX_TURN_MS,
+    }))!
+
+  const input = (
+    assignmentId: string,
+    extra: Partial<TurnPrepareInput> = {},
+  ): TurnPrepareInput => ({
+    assignmentId,
+    fence,
+    sandbox: {
+      image,
+      labels: { ...labels, leaseEpoch: 1 },
+      runtime: 'runc',
+      resources: { cpu: 1, memoryMiB: 256, pids: 64 },
+      user: { uid: 10001, gid: 10001 },
+      env: {},
+      secrets: [],
+      network: { mode: 'none' },
+      hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+    },
+    remainingMs: MAX_SANDBOX_TURN_MS,
+    bundle: {
+      baseSha,
+      branch: `agent/${taskId}`,
+      sha256: sha256(bundleBytes),
+      sizeBytes: bundleBytes.byteLength,
+      read: async function* () {
+        yield Buffer.from(bundleBytes)
+      },
+    },
+    driverId: 'codex',
+    prepared: {
+      files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true' }],
+      env: {},
+      secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: credentials[0]! }],
+    },
+    argv: ['codex', 'exec', '--json'],
+    credentials,
+    created,
+    ...extra,
+  })
+
+  /** A prepared turn on `vm`: the prepare command answered with created and prepared. */
+  const prepared = async (vm = runner()) => {
+    const assignment = await open()
+    const preparing = executor.prepare(input(assignment.id), new AbortController().signal)
+    const [command] = await vm.poll()
+    await vm.report(assignment.id, {
+      type: 'created',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    await vm.report(assignment.id, {
+      type: 'prepared',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    return { assignment, execution: await preparing, vm, command: command! }
+  }
+
+  return {
+    assignments,
+    leases,
+    warn,
+    hub,
+    executor,
+    runner,
+    open,
+    input,
+    prepared,
+    created,
+    bundleBytes,
+  }
+}
+
+describe('RemoteTurnExecutor over the runner hub', () => {
+  it('hands the prepare to a runner with a free slot and owns the container from `created`', async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const preparing = f.executor.prepare(f.input(assignment.id), new AbortController().signal)
+    // A runner without a free slot takes nothing.
+    expect(await vm.poll({ capacity: 0 })).toEqual([])
+    expect(f.assignments.rows.get(assignment.id)!.runner).toBeNull()
+
+    const [command] = await vm.poll()
+    expect(command).toMatchObject({
+      type: 'prepare',
+      assignmentId: assignment.id,
+      fence,
+      driverId: 'codex',
+      credentials,
+      bundle: { baseSha, sizeBytes: f.bundleBytes.byteLength },
+      sandbox: { secrets: [], labels: { leaseEpoch: 1 } },
+    })
+    expect(command).not.toHaveProperty('restore')
+    expect(f.assignments.rows.get(assignment.id)!.runner).toEqual({
+      id: 'sandbox-1',
+      session: vm.runnerSession,
+    })
+
+    const bundle = await f.hub.bundle('sandbox-1', assignment.id, vm.headers(command!))
+    const chunks: Uint8Array[] = []
+    for await (const chunk of bundle.read()) chunks.push(chunk)
+    expect(Buffer.concat(chunks)).toEqual(f.bundleBytes)
+    expect(f.leases.assert).toHaveBeenCalledWith(fence)
+
+    await vm.report(assignment.id, {
+      type: 'created',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    expect(f.created).toHaveBeenCalledOnce()
+    expect(f.created.mock.calls[0]![0].containerId).toBe('container1')
+    expect(f.assignments.rows.get(assignment.id)!.containerId).toBe('container1')
+    // A repeated report changes nothing.
+    await vm.report(assignment.id, {
+      type: 'created',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    expect(f.created).toHaveBeenCalledOnce()
+
+    const done = { type: 'prepared', commandId: command!.commandId, containerId: 'container1' }
+    await vm.report(assignment.id, done)
+    await expect(preparing).resolves.toMatchObject({ containerId: 'container1' })
+    await vm.report(assignment.id, done)
+    // Nothing can be fetched for an answered command.
+    expect(await refusal(f.hub.bundle('sandbox-1', assignment.id, vm.headers(command!)))).toEqual({
+      error: 'COMMAND_CLOSED',
+    })
+  })
+
+  it('fails the turn as RUNNER_UNAVAILABLE when no runner claims it in time', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    const assignment = await f.open()
+    const preparing = f.executor.prepare(f.input(assignment.id), new AbortController().signal)
+    const rejected = expect(preparing).rejects.toMatchObject({
+      code: 'RUNNER_UNAVAILABLE',
+      httpStatus: 503,
+    })
+    await vi.advanceTimersByTimeAsync(runnerTimings.claimTimeoutMs)
+    await rejected
+    expect(f.assignments.rows.get(assignment.id)!.outcome).toBe('failed')
+    vi.useRealTimers()
+    expect(await f.runner().poll()).toEqual([])
+  })
+
+  it('stops waiting for a runner when the turn is given up', async () => {
+    const f = fixture()
+    const assignment = await f.open()
+    const cancel = new AbortController()
+    const preparing = f.executor.prepare(f.input(assignment.id), cancel.signal)
+    cancel.abort(new Error('cancelled'))
+    await expect(preparing).rejects.toThrow('cancelled')
+    expect(f.assignments.rows.get(assignment.id)!.outcome).toBe('failed')
+  })
+
+  it('reports a container created after the prepare was given up, so that it is removed', async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const cancel = new AbortController()
+    const preparing = f.executor.prepare(f.input(assignment.id), cancel.signal)
+    const [command] = await vm.poll()
+    cancel.abort(new Error('cancelled'))
+    await expect(preparing).rejects.toThrow('cancelled')
+    await vm.report(assignment.id, {
+      type: 'created',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    expect(f.created).toHaveBeenCalledOnce()
+  })
+
+  it('maps a failure report to the error core writes itself', async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const preparing = f.executor.prepare(f.input(assignment.id), new AbortController().signal)
+    const [command] = await vm.poll()
+    await vm.report(assignment.id, {
+      type: 'failed',
+      commandId: command!.commandId,
+      code: 'SNAPSHOT_LOAD_FAILED',
+    })
+    await expect(preparing).rejects.toMatchObject({
+      code: 'SNAPSHOT_LOAD_FAILED',
+      message: 'The runner could not restore the turn',
+    })
+  })
+
+  it('launches only under a confirmed fence and journals output from its cursor', async () => {
+    const f = fixture()
+    const { assignment, execution, vm } = await f.prepared()
+    f.leases.assert.mockResolvedValueOnce(false)
+    await expect(execution.launch(60_000)).rejects.toMatchObject({ code: 'LEASE_LOST' })
+    f.leases.assert.mockRejectedValueOnce(new Error('database unavailable'))
+    await expect(execution.launch(60_000)).rejects.toMatchObject({ code: 'LEASE_LOST' })
+    expect(await vm.poll()).toEqual([])
+
+    const launching = execution.launch(60_000)
+    const [launch] = await vm.poll()
+    expect(launch).toMatchObject({ type: 'launch', timeoutMs: 60_000 })
+    await vm.report(assignment.id, {
+      type: 'running',
+      commandId: launch!.commandId,
+      execId: 'exec1',
+    })
+    const agent = await launching
+    const journal: unknown[] = []
+    const output = agent.output(async (batch) => {
+      journal.push(batch)
+    })
+    const batch = (from: number, to: number) => ({
+      type: 'output',
+      execId: 'exec1',
+      from: { stdout: from, stderr: 0 },
+      to: { stdout: to, stderr: 0 },
+      events: [{ type: 'message', text: `up to ${to}` }],
+    })
+    await vm.report(assignment.id, batch(0, 10))
+    expect(await refusal(vm.report(assignment.id, batch(20, 30)))).toEqual({
+      error: 'CURSOR_MISMATCH',
+      expected: { stdout: 10, stderr: 0 },
+    })
+    await vm.report(assignment.id, batch(0, 10))
+    await vm.report(assignment.id, batch(10, 20))
+    await vm.report(assignment.id, {
+      type: 'exited',
+      execId: 'exec1',
+      exit: { code: 0, reason: 'exited' },
+    })
+    await output
+    expect(journal).toHaveLength(2)
+    expect(await agent.wait()).toEqual({ code: 0, reason: 'exited' })
+    expect(await refusal(vm.report(assignment.id, { ...batch(20, 30), execId: 'exec2' }))).toEqual({
+      error: 'COMMAND_CLOSED',
+    })
+
+    await agent.kill()
+    expect(await vm.poll()).toEqual([expect.objectContaining({ type: 'abort', fence })])
+  })
+
+  it('takes the captured parts only as uploaded for the open capture, and seals with its key', async () => {
+    const f = fixture()
+    const { assignment, execution, vm } = await f.prepared()
+    const patch = Buffer.from('untrusted patch')
+    const untracked = Buffer.from('untrusted archive')
+    const capturing = execution.capture({
+      home: { root: '/agent-home/codex', include: ['sessions'], exclude: [] },
+      baseSha,
+    })
+    const [capture] = await vm.poll()
+    expect(capture).toMatchObject({ type: 'capture', baseSha })
+    const upload = async (part: 'patch' | 'untracked', bytes: Uint8Array) =>
+      (await f.hub.candidate('sandbox-1', assignment.id, part, vm.headers(capture!)))(bytes)
+    await upload('patch', patch)
+    const captured = {
+      type: 'captured',
+      commandId: capture!.commandId,
+      homeBytes: 321,
+      patch: { sha256: sha256(patch), sizeBytes: patch.byteLength },
+      untracked: { sha256: sha256(untracked), sizeBytes: untracked.byteLength },
+    }
+    expect(await refusal(vm.report(assignment.id, captured))).toEqual({ error: 'BAD_REQUEST' })
+    await upload('untracked', Buffer.from('another archive'))
+    expect(await refusal(vm.report(assignment.id, captured))).toEqual({ error: 'BAD_REQUEST' })
+    await upload('untracked', untracked)
+    await vm.report(assignment.id, captured)
+    const result = await capturing
+    expect(Buffer.from(result.patch)).toEqual(patch)
+    expect(Buffer.from(result.untracked)).toEqual(untracked)
+    expect(result.homeBytes).toBe(321)
+
+    const key = new Uint8Array(32).fill(7)
+    const dataKey = vi.fn(async () => key)
+    const base = {
+      workspaceId: 'ws1',
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: 'codex' as const, version: '1.0.0' },
+      home: { root: '/agent-home/codex', include: ['sessions'], exclude: [] },
+      git: {
+        provider: 'gitea' as const,
+        branch: `agent/${taskId}`,
+        baseSha,
+        headSha: 'c'.repeat(40),
+      },
+      schemaVersion: 1 as const,
+      createdAt: '2026-09-27T00:00:00.000Z',
+    }
+    const sealing = execution.seal({
+      base,
+      dataKey,
+      put: {
+        method: 'PUT',
+        url: 'https://s3.invalid/raditi-sessions/sessions/session1/turns/0001/home.tar.zst?X-Amz-Signature=synthetic',
+        headers: { 'if-none-match': '*' },
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    })
+    const [seal] = await vm.poll()
+    expect(seal).toMatchObject({ type: 'seal', sizeBytes: 321, put: { method: 'PUT' } })
+    expect(seal).not.toHaveProperty('put.expiresAt')
+    // A key for another command, or once the site is lost, never leaves core.
+    expect(
+      await refusal(f.hub.key('sandbox-1', assignment.id, 'restore', vm.headers(seal!))),
+    ).toEqual({ error: 'COMMAND_CLOSED' })
+    f.leases.assert.mockResolvedValueOnce(false)
+    expect(await refusal(f.hub.key('sandbox-1', assignment.id, 'seal', vm.headers(seal!)))).toEqual(
+      {
+        error: 'LEASE_LOST',
+      },
+    )
+    f.leases.assert.mockRejectedValueOnce(new Error('database unavailable'))
+    expect(await refusal(f.hub.key('sandbox-1', assignment.id, 'seal', vm.headers(seal!)))).toEqual(
+      {
+        error: 'UNAVAILABLE',
+      },
+    )
+    expect(dataKey).not.toHaveBeenCalled()
+    expect(await f.hub.key('sandbox-1', assignment.id, 'seal', vm.headers(seal!))).toBe(key)
+    const sealed = {
+      sha256: 'd'.repeat(64),
+      sizeBytes: 321,
+      iv: 'e'.repeat(24),
+      tag: 'f'.repeat(32),
+    }
+    await vm.report(assignment.id, { type: 'sealed', commandId: seal!.commandId, ...sealed })
+    await expect(sealing).resolves.toEqual(sealed)
+  })
+
+  it('points a runner behind a recovery at the newer fence and refuses everyone else', async () => {
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    const adopting = f.executor.adopt(
+      {
+        assignmentId: assignment.id,
+        fence: { ...fence, epoch: 2 },
+        containerId: 'container1',
+        labels: { ...labels, leaseEpoch: 1 },
+        purpose: 'work',
+        remainingMs: 60_000,
+        driverId: 'codex',
+      },
+      new AbortController().signal,
+    )
+    const [adopt] = await vm.poll()
+    expect(adopt).toMatchObject({
+      type: 'adopt',
+      fence: { epoch: 2 },
+      purpose: 'work',
+      work: { remainingMs: 60_000, driverId: 'codex' },
+    })
+    expect(adopt).not.toHaveProperty('work.credentials')
+    const quiesced = { type: 'quiesced', commandId: randomUUID() }
+    expect(await refusal(vm.report(assignment.id, quiesced, 1))).toEqual({
+      error: 'FENCE_SUPERSEDED',
+      fence: { ...fence, epoch: 2 },
+    })
+    expect(await refusal(vm.report(assignment.id, quiesced, 3))).toEqual({ error: 'LEASE_LOST' })
+    const other = f.runner('sandbox-2', vm.runnerSession)
+    expect(await refusal(other.report(assignment.id, quiesced, 2))).toEqual({ error: 'LEASE_LOST' })
+    const zombie = f.runner('sandbox-1')
+    expect(await refusal(zombie.report(assignment.id, quiesced, 2))).toEqual({
+      error: 'LEASE_LOST',
+    })
+    expect(await refusal(vm.report(randomUUID(), quiesced, 2))).toEqual({ error: 'LEASE_LOST' })
+    expect(await refusal(vm.report(assignment.id, quiesced, 2))).toEqual({
+      error: 'COMMAND_CLOSED',
+    })
+
+    await vm.report(
+      assignment.id,
+      { type: 'adopted', commandId: adopt!.commandId, containerId: 'container1' },
+      2,
+    )
+    const adopted = (await adopting)!
+    expect(adopted.containerId).toBe('container1')
+    await expect(adopted.launch(1_000)).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
+  it('leaves a turn no core drives to recovery and refuses a finished one', async () => {
+    const f = fixture()
+    const { assignment, execution, vm } = await f.prepared()
+    const quiescing = execution.quiesce()
+    const [quiesce] = await vm.poll()
+    // Core restarted: the assignment is unfinished, but no live state answers for it.
+    f.hub.release(
+      (f.hub as unknown as { attach: RunnerHub['attach'] }).attach({
+        id: assignment.id,
+        fence,
+        runner: { id: 'sandbox-1', session: vm.runnerSession },
+        credentials: [],
+        remainingMs: 1,
+      }),
+    )
+    await expect(quiescing).rejects.toMatchObject({ code: 'CONFLICT' })
+    const answer = { type: 'quiesced', commandId: quiesce!.commandId }
+    expect(await refusal(vm.report(assignment.id, answer))).toEqual({ error: 'UNAVAILABLE' })
+    await f.assignments.finish({ id: assignment.id, epoch: 1, outcome: 'failed' })
+    expect(await refusal(vm.report(assignment.id, answer))).toEqual({ error: 'LEASE_LOST' })
+  })
+
+  it('fails the open commands of a runner that restarted and refuses its old session', async () => {
+    const f = fixture()
+    const { assignment, execution, vm } = await f.prepared()
+    const quiescing = execution.quiesce()
+    const rejected = expect(quiescing).rejects.toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
+    await vm.poll()
+    const restarted = f.runner('sandbox-1')
+    expect(await restarted.poll({ capacity: 0 })).toEqual([])
+    await rejected
+    expect(
+      await refusal(vm.report(assignment.id, { type: 'quiesced', commandId: randomUUID() })),
+    ).toEqual({ error: 'LEASE_LOST' })
+    await expect(vm.poll()).rejects.toBeInstanceOf(RunnerApiError)
+    // The container is not reachable through the new session until recovery adopts it.
+    await expect(execution.destroy('failed')).rejects.toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
+  })
+
+  it('gives up the commands of a runner silent for longer than the heartbeat allows', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    })
+    // The monotonic clock follows the fake clock, as it would on a real host.
+    vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
+    const f = fixture()
+    const { execution } = await f.prepared()
+    const quiescing = execution.quiesce()
+    const rejected = expect(quiescing).rejects.toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
+    await vi.advanceTimersByTimeAsync(runnerTimings.silentAfterMs + 10_000)
+    await rejected
+  })
+
+  it('treats a container the runner removed on its own as gone', async () => {
+    const f = fixture()
+    const { assignment, execution, vm } = await f.prepared()
+    const quiescing = execution.quiesce()
+    await vm.poll()
+    expect(
+      await refusal(vm.report(assignment.id, { type: 'destroyed', containerId: 'container2' })),
+    ).toEqual({ error: 'BAD_REQUEST' })
+    await vm.report(assignment.id, { type: 'destroyed', containerId: 'container1' })
+    await expect(quiescing).rejects.toMatchObject({ code: 'EXEC_LOST' })
+    await execution.destroy('failed')
+    expect(await vm.poll()).toEqual([])
+  })
+
+  it('destroys through the runner and forgets the turn once it confirmed', async () => {
+    const f = fixture()
+    const { assignment, execution, vm } = await f.prepared()
+    const destroying = execution.destroy('completed')
+    const [destroy] = await vm.poll()
+    expect(destroy).toMatchObject({ type: 'destroy', reason: 'completed' })
+    const confirmed = {
+      type: 'destroyed',
+      commandId: destroy!.commandId,
+      containerId: 'container1',
+    }
+    await vm.report(assignment.id, confirmed)
+    await destroying
+    // A late repeat finds the turn left to recovery, not a live command.
+    expect(await refusal(vm.report(assignment.id, confirmed))).toEqual({ error: 'UNAVAILABLE' })
+  })
+
+  it('adopts nothing when the runner answers that the container is gone', async () => {
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    const adopting = f.executor.adopt(
+      {
+        assignmentId: assignment.id,
+        fence: { ...fence, epoch: 2 },
+        containerId: 'container1',
+        labels: { ...labels, leaseEpoch: 1 },
+        purpose: 'removal',
+      },
+      new AbortController().signal,
+    )
+    const [adopt] = await vm.poll()
+    await vm.report(
+      assignment.id,
+      { type: 'destroyed', commandId: adopt!.commandId, containerId: 'container1' },
+      2,
+    )
+    await expect(adopting).resolves.toBeNull()
+  })
+
+  it('lists and reconciles the runner inventory against unfinished assignments', async () => {
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    const container = (containerId: string, extra: Record<string, unknown> = {}) => ({
+      containerId,
+      labels: { ...labels, leaseEpoch: 1, ...extra },
+      ageMs: 1_000,
+    })
+    const inventory = [
+      container('container1'),
+      container('container2'),
+      container('container3', { turn: 2 }),
+      container('container4', { leaseEpoch: 2 }),
+    ]
+    await f.hub.poll(
+      'sandbox-1',
+      { runnerSession: vm.runnerSession, capacity: 0, inventory, active: [] },
+      AbortSignal.timeout(100),
+    )
+    expect((await f.executor.list({ turn: 1 })).map((info) => info.id)).toEqual([
+      'container1',
+      'container2',
+      'container4',
+    ])
+    expect(
+      await f.hub.reconcile('sandbox-1', { runnerSession: vm.runnerSession, inventory }),
+    ).toEqual({ remove: ['container2', 'container3', 'container4'] })
+    // Another runner owns none of them.
+    expect(await f.hub.reconcile('sandbox-2', { runnerSession: randomUUID(), inventory })).toEqual({
+      remove: inventory.map((entry) => entry.containerId),
+    })
+    await f.assignments.finish({ id: assignment.id, epoch: 1, outcome: 'completed' })
+    expect(
+      (await f.hub.reconcile('sandbox-1', { runnerSession: vm.runnerSession, inventory })).remove,
+    ).toContain('container1')
+    vi.spyOn(f.assignments, 'unfinished').mockRejectedValueOnce(new Error('database unavailable'))
+    expect(
+      await refusal(f.hub.reconcile('sandbox-1', { runnerSession: vm.runnerSession, inventory })),
+    ).toEqual({ error: 'UNAVAILABLE' })
+  })
+})

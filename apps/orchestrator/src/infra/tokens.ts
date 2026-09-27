@@ -12,6 +12,12 @@ export const PRISMA = Symbol('PRISMA')
 export const OBJECT_STORAGE = Symbol('OBJECT_STORAGE')
 /** SecretStore port (Vault/OpenBao). */
 export const SECRET_STORE = Symbol('SECRET_STORE')
+/** SiteLeaseStore port (PostgreSQL). */
+export const SITE_LEASES = Symbol('SITE_LEASES')
+/** TurnAssignmentStore port (PostgreSQL). */
+export const TURN_ASSIGNMENTS = Symbol('TURN_ASSIGNMENTS')
+/** TurnExecutor port: LocalTurnExecutor or the runner API, by TURN_EXECUTOR. */
+export const TURN_EXECUTOR = Symbol('TURN_EXECUTOR')
 /** SandboxProvider port (Docker in the PoC). */
 export const SANDBOX_PROVIDER = Symbol('SANDBOX_PROVIDER')
 /** AgentDriverRegistry of the enabled CLI agents. */

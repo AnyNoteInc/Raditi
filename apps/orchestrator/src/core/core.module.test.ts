@@ -1,12 +1,15 @@
 import type { INestApplication, LoggerService } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
-import type { JobQueue, SandboxProvider } from '@repo/domain'
+import type { JobQueue, SandboxProvider, TurnExecutor } from '@repo/domain'
 import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { OutboxRelayService } from '../outbox/outbox-relay.service.ts'
-import { AGENT_DRIVERS, JOB_QUEUE, SANDBOX_PROVIDER } from '../infra/tokens.ts'
+import type { CoreConfig } from '../config/config.ts'
+import { hashRunnerToken, parseRunnerTokens } from '../config/runner-tokens.ts'
+import { AGENT_DRIVERS, JOB_QUEUE, SANDBOX_PROVIDER, TURN_EXECUTOR } from '../infra/tokens.ts'
+import { RunnerApiServer } from '../runner-api/runner-api.server.ts'
 import {
   fakeInfra,
   overrideCoreInfra,
@@ -21,9 +24,10 @@ let app: INestApplication | undefined
 async function startCore(
   infra: FakeInfra,
   logger: LoggerService | false = false,
+  config: CoreConfig = testCoreConfig(),
 ): Promise<INestApplication> {
   const builder = Test.createTestingModule({
-    imports: [CoreModule.forRoot({ config: testCoreConfig(), background: false })],
+    imports: [CoreModule.forRoot({ config, background: false })],
   })
   const moduleRef = await overrideCoreInfra(builder, infra).compile()
   app = moduleRef.createNestApplication({ logger })
@@ -172,6 +176,35 @@ describe('CoreModule', () => {
 
     await core.get<JobQueue>(JOB_QUEUE).enqueue('notifications', 'auth.welcome', { a: 1 })
     expect(infra.queue.add).toHaveBeenCalledWith('auth.welcome', { a: 1 }, {})
+  })
+
+  it('runs turns in core by default and on runner VMs behind their own port', async () => {
+    expect((await startCore(fakeInfra())).get<TurnExecutor>(TURN_EXECUTOR).kind).toBe('local')
+    await app?.close()
+
+    const token = `rnr_sandbox-1.${'a'.repeat(43)}`
+    const core = await startCore(fakeInfra(), false, {
+      ...testCoreConfig(),
+      turnExecutor: 'runner',
+      runnerApi: {
+        port: 0,
+        tokens: parseRunnerTokens(`sandbox-1:${hashRunnerToken(token)}`).hashes,
+      },
+    })
+    expect(core.get<TurnExecutor>(TURN_EXECUTOR).kind).toBe('runner')
+    const { port } = await core.get(RunnerApiServer).listen(0, '127.0.0.1')
+    const poll = (authorization: string) =>
+      fetch(`http://127.0.0.1:${port}/runner/v1/reconcile`, {
+        method: 'POST',
+        headers: { authorization, 'content-type': 'application/json' },
+        body: JSON.stringify({ runnerSession: crypto.randomUUID(), inventory: [] }),
+      })
+    expect((await poll('Bearer wrong')).status).toBe(401)
+    // The runner API is not on the main port.
+    expect((await request(core.getHttpServer()).post('/runner/v1/reconcile')).status).toBe(404)
+    await core.close()
+    app = undefined
+    await expect(poll(`Bearer ${token}`)).rejects.toThrow()
   })
 
   it('closes its connections on shutdown without errors', async () => {

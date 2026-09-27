@@ -5,8 +5,10 @@ import {
   envProblems,
   envVar,
   isProduction,
+  turnExecutorKinds,
   type AppEnv,
   type Env,
+  type TurnExecutorKind,
 } from '@repo/domain'
 import { mailerConfigFromEnv, type MailerConfig } from '@repo/mail'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
@@ -15,12 +17,16 @@ import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
 import { z } from 'zod'
 
+import { parseRunnerTokens, type RunnerTokenHashes } from './runner-tokens.ts'
+
 /** Process roles (spec §5, §6): one image, the role is picked by ORCHESTRATOR_ROLES. */
 export const orchestratorRoles = ['core', 'mcp', 'runner'] as const
 export type OrchestratorRole = (typeof orchestratorRoles)[number]
 
 export const DEFAULT_CORE_PORT = 8081
 export const DEFAULT_MCP_PORT = 8082
+/** Runner VMs reach only this port of core, on the private network (spec §19). */
+export const DEFAULT_RUNNER_API_PORT = 8083
 /** Locally both HTTP roles share one process (spec §6). */
 const DEFAULT_DEV_ROLES: OrchestratorRole[] = ['core', 'mcp']
 
@@ -36,6 +42,16 @@ export interface CoreConfig {
   sandbox: SandboxConfig
   agentDrivers: AgentDriverConfig
   mailer: MailerConfig
+  /** Where turns run: core's own Docker (local, not in production) or runner VMs. */
+  turnExecutor: TurnExecutorKind
+  /** The runner API listener; null with the local executor. */
+  runnerApi: RunnerApiConfig | null
+}
+
+export interface RunnerApiConfig {
+  port: number
+  /** SHA-256 of runner tokens by runner id; the tokens themselves stay on the VMs. */
+  tokens: RunnerTokenHashes
 }
 
 /** The MCP gateway: its own port; database and Vault only (its own AppRole in production). */
@@ -74,6 +90,9 @@ const ownEnvSchema = z.object({
   ORCHESTRATOR_ROLES: envVar(z.string().optional()),
   ORCHESTRATOR_PORT: port(DEFAULT_CORE_PORT),
   MCP_PORT: port(DEFAULT_MCP_PORT),
+  RUNNER_API_PORT: port(DEFAULT_RUNNER_API_PORT),
+  TURN_EXECUTOR: envVar(z.enum(turnExecutorKinds).optional()),
+  RUNNER_TOKENS: envVar(z.string().optional()),
   REDIS_URL: envVar(z.url({ protocol: /^rediss?$/, error: 'must be a redis:// URL' }).optional()),
   METRICS_TOKEN: envVar(z.string().optional()),
 })
@@ -121,8 +140,21 @@ export function loadConfig(env: Env): OrchestratorConfig {
     )
   }
 
+  const turnExecutor = own.TURN_EXECUTOR ?? (production ? 'runner' : 'local')
+  let runnerApi: RunnerApiConfig | null = null
   if (hasCore) {
     if (own.REDIS_URL === undefined) problems.push('REDIS_URL: required for the core role')
+    if (production && turnExecutor !== 'runner')
+      problems.push('TURN_EXECUTOR: production runs turns only on runner VMs (runner)')
+    if (turnExecutor === 'runner') {
+      if ([own.ORCHESTRATOR_PORT, ...(hasMcp ? [own.MCP_PORT] : [])].includes(own.RUNNER_API_PORT))
+        problems.push('RUNNER_API_PORT: must differ from ORCHESTRATOR_PORT and MCP_PORT')
+      const tokens = parseRunnerTokens(own.RUNNER_TOKENS ?? '')
+      problems.push(...tokens.problems.map((problem) => `RUNNER_TOKENS: ${problem}`))
+      if (tokens.problems.length === 0 && tokens.hashes.size === 0)
+        problems.push('RUNNER_TOKENS: at least one runner token hash is required (id:sha256)')
+      runnerApi = { port: own.RUNNER_API_PORT, tokens: tokens.hashes }
+    }
     // /metrics lives on the core port only.
     const tokenProblem = metricsTokenProblem(own.METRICS_TOKEN, appEnv)
     if (tokenProblem) problems.push(`METRICS_TOKEN: ${tokenProblem}`)
@@ -160,6 +192,8 @@ export function loadConfig(env: Env): OrchestratorConfig {
           sandbox: present(sandbox),
           agentDrivers: present(agentDrivers),
           mailer: present(mailer),
+          turnExecutor,
+          runnerApi,
         }
       : null,
     mcp: hasMcp ? { appEnv, port: own.MCP_PORT, db: present(db), vault: present(vault) } : null,

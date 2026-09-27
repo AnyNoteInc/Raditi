@@ -28,6 +28,7 @@ const devEnv: Env = {
 }
 
 const PROD_METRICS_TOKEN = 'test-metrics-token-'.padEnd(32, 'x')
+const RUNNER_HASH = 'a'.repeat(64)
 
 const prodEnv = (overrides: Env = {}): Env => ({
   APP_ENV: 'production',
@@ -44,6 +45,7 @@ const prodEnv = (overrides: Env = {}): Env => ({
   SANDBOX_IMAGE_PREFIX: 'gitea.internal:3300/raditi/agent',
   SENDSAY_API_KEY: 'sendsay-key',
   METRICS_TOKEN: PROD_METRICS_TOKEN,
+  RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}`,
   ...overrides,
 })
 
@@ -134,6 +136,50 @@ describe('loadConfig — development', () => {
     })
   })
 
+  it('runs turns in core by default and on runners with their token hashes', () => {
+    expect(loadConfig(devEnv).core).toMatchObject({ turnExecutor: 'local', runnerApi: null })
+    const runner = loadConfig({
+      ...devEnv,
+      TURN_EXECUTOR: 'runner',
+      RUNNER_TOKENS: ` sandbox-1:${RUNNER_HASH}, sandbox-1:${'B'.repeat(64)},sandbox-2:${'c'.repeat(64)} `,
+    }).core
+    expect(runner?.turnExecutor).toBe('runner')
+    expect(runner?.runnerApi?.port).toBe(8083)
+    expect([...runner!.runnerApi!.tokens.keys()]).toEqual(['sandbox-1', 'sandbox-2'])
+    expect(runner!.runnerApi!.tokens.get('sandbox-1')!.map((hash) => hash.toString('hex'))).toEqual(
+      [RUNNER_HASH, 'b'.repeat(64)],
+    )
+  })
+
+  it('refuses runner settings it cannot serve, naming entries and never their values', () => {
+    const runner = { ...devEnv, TURN_EXECUTOR: 'runner' }
+    expect(problemsOf(runner)).toEqual([
+      'RUNNER_TOKENS: at least one runner token hash is required (id:sha256)',
+    ])
+    const leaked = 'rnr_sandbox-1.' + 'x'.repeat(43)
+    const problems = problemsOf({
+      ...runner,
+      RUNNER_API_PORT: '8082',
+      RUNNER_TOKENS: [
+        leaked,
+        `sandbox-1:${RUNNER_HASH}`,
+        `sandbox-1:${RUNNER_HASH}`,
+        `sandbox-1:${'b'.repeat(64)}`,
+        `sandbox-1:${'c'.repeat(64)}`,
+        `Sandbox:${RUNNER_HASH}`,
+      ].join(','),
+    })
+    expect(problems).toEqual([
+      'RUNNER_API_PORT: must differ from ORCHESTRATOR_PORT and MCP_PORT',
+      'RUNNER_TOKENS: entry 1 must be <runner id>:<sha256 hex>',
+      'RUNNER_TOKENS: entry 3 repeats a hash of runner sandbox-1',
+      'RUNNER_TOKENS: runner sandbox-1 has more than 2 token hashes',
+      'RUNNER_TOKENS: entry 6 must be <runner id>:<sha256 hex>',
+    ])
+    expect(problems.join('\n')).not.toContain(leaked)
+    expect(problemsOf({ ...runner, TURN_EXECUTOR: 'docker' })[0]).toMatch(/^TURN_EXECUTOR/)
+  })
+
   it('rejects unknown roles and an empty list', () => {
     expect(problemsOf({ ...devEnv, ORCHESTRATOR_ROLES: 'core,worker' })).toEqual([
       'ORCHESTRATOR_ROLES: unknown role "worker"; expected core, mcp, runner',
@@ -190,6 +236,19 @@ describe('loadConfig — production', () => {
       vault: { appRole: { roleId: 'core-role', secretId: 'core-secret' } },
       sandbox: { runtime: 'runsc' },
     })
+  })
+
+  it('runs turns only on runner VMs', () => {
+    expect(loadConfig(prodEnv()).core).toMatchObject({
+      turnExecutor: 'runner',
+      runnerApi: { port: 8083 },
+    })
+    expect(problemsOf(prodEnv({ TURN_EXECUTOR: 'local' }))).toEqual([
+      'TURN_EXECUTOR: production runs turns only on runner VMs (runner)',
+    ])
+    expect(problemsOf(prodEnv({ RUNNER_TOKENS: '' }))).toEqual([
+      'RUNNER_TOKENS: at least one runner token hash is required (id:sha256)',
+    ])
   })
 
   it('refuses more than one role per process', () => {

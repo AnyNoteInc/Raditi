@@ -13,7 +13,8 @@
     "test": "vitest run",
     "verify:snapshots": "pnpm build && node --env-file=../../.env scripts/verify-snapshots.mjs",
     "verify:transport": "pnpm build && node scripts/verify-snapshot-transport.mjs",
-    "verify:publication": "pnpm build && NODE_ENV=test node scripts/verify-publication.mjs"
+    "verify:publication": "pnpm build && NODE_ENV=test node scripts/verify-publication.mjs",
+    "runner-token": "node scripts/runner-token.mjs"
   },
   "dependencies": {
     "@repo/agent-drivers": "workspace:*",

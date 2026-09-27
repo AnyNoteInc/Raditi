@@ -387,7 +387,14 @@ const candidatePart = (maxBytes: number) =>
 
 export const runnerReportSchema = z
   .discriminatedUnion('type', [
+    /**
+     * The container of a prepare exists; sent before the bundle import. From its answer on core
+     * owns the container's removal, and the runner waits for that answer before importing. The
+     * answer may wait for a destroy of the same assignment: commands keep arriving meanwhile.
+     */
+    report('created', { commandId: uuid, containerId: sandboxRef }),
     report('prepared', { commandId: uuid, containerId: sandboxRef }),
+    /** Answers adopt; a missing container answers it with `destroyed`, another one with CONFLICT. */
     report('adopted', { commandId: uuid, containerId: sandboxRef }),
     /** Answers launch or resume. */
     report('running', { commandId: uuid, execId: sandboxRef }),
@@ -432,7 +439,11 @@ export type RunnerReport = z.infer<typeof runnerReportSchema>
 
 export const runnerReportReplySchema = z.object({ ok: z.literal(true) }).strict()
 
-/** 409 answers. FENCE_SUPERSEDED: switch to the newer fence; LEASE_LOST: kill and remove. */
+/**
+ * 409 answers. FENCE_SUPERSEDED: recovery took the turn over under a newer fence; the runner
+ * switches to it, drops the reports of commands issued under the older epoch and sends output
+ * again only after the next resume. LEASE_LOST: kill the exec and remove the container.
+ */
 export const runnerConflictSchema = z.discriminatedUnion('error', [
   z.object({ error: z.literal('FENCE_SUPERSEDED'), fence }).strict(),
   z.object({ error: z.literal('LEASE_LOST') }).strict(),
@@ -440,6 +451,27 @@ export const runnerConflictSchema = z.discriminatedUnion('error', [
   z.object({ error: z.literal('CURSOR_MISMATCH'), expected: execCursorSchema }).strict(),
 ])
 export type RunnerConflict = z.infer<typeof runnerConflictSchema>
+
+/**
+ * Every other refusal is `{ error }` with one of these codes and nothing about the cause.
+ * COMMAND_CLOSED: core no longer waits for this command or exec; the runner drops that work and
+ * waits for the next command. UNAVAILABLE: retry with backoff until the turn deadline.
+ */
+export const runnerApiErrors = Object.freeze({
+  BAD_REQUEST: 400,
+  UNAUTHORIZED: 401,
+  NOT_FOUND: 404,
+  COMMAND_CLOSED: 410,
+  TOO_LARGE: 413,
+  INTERNAL: 500,
+  UNAVAILABLE: 503,
+})
+export type RunnerApiErrorCode = keyof typeof runnerApiErrors
+export const runnerErrorSchema = z
+  .object({
+    error: z.enum(Object.keys(runnerApiErrors) as [RunnerApiErrorCode, ...RunnerApiErrorCode[]]),
+  })
+  .strict()
 
 // --- Errors ------------------------------------------------------------------------------------
 

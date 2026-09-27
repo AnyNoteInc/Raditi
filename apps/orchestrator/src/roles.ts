@@ -6,6 +6,7 @@ import { isProduction, notImplemented, type AppEnv } from '@repo/domain'
 import type { CoreConfig, McpConfig, OrchestratorConfig } from './config/config.ts'
 import { CoreModule } from './core/core.module.ts'
 import { McpAppModule } from './mcp/mcp-app.module.ts'
+import { RunnerApiServer } from './runner-api/runner-api.server.ts'
 import { createMcpStrategy, mountMcp } from './mcp/mcp-server.ts'
 
 /** Hard stop when graceful shutdown hangs (e.g. a worker waiting for a stuck job). */
@@ -45,6 +46,16 @@ export async function startCore(config: CoreConfig): Promise<INestApplication> {
   app.enableShutdownHooks([...SHUTDOWN_SIGNALS])
   const address = await listen(app, config.port, config.appEnv)
   logger.log(`core role listening on ${address} (/health, /metrics)`)
+  if (config.runnerApi) {
+    try {
+      const host = listenHost(config.appEnv)
+      const runnerApi = await app.get(RunnerApiServer).listen(config.runnerApi.port, host)
+      logger.log(`runner API listening on ${host ?? '*'}:${runnerApi.port}`)
+    } catch (err) {
+      await app.close()
+      throw err
+    }
+  }
   return app
 }
 

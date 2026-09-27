@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common'
+import { PostgresSiteLeaseStore, PostgresTurnAssignmentStore, type PrismaClient } from '@repo/db'
 import { HEALTH_CHECK_TIMEOUT_MS } from '@repo/observability'
 import { createS3ObjectStorage } from '@repo/storage'
 import { createVaultSecretStore } from '@repo/vault'
@@ -7,7 +8,15 @@ import type { CoreConfig } from '../config/config.ts'
 import { PrismaLifecycle, RedisLifecycle } from './lifecycle.ts'
 import { createOrchestratorPrisma } from './prisma.ts'
 import { createRedisClient } from './redis.ts'
-import { CORE_CONFIG, OBJECT_STORAGE, PRISMA, REDIS, SECRET_STORE } from './tokens.ts'
+import {
+  CORE_CONFIG,
+  OBJECT_STORAGE,
+  PRISMA,
+  REDIS,
+  SECRET_STORE,
+  SITE_LEASES,
+  TURN_ASSIGNMENTS,
+} from './tokens.ts'
 
 /** Adapters of the core role. Nothing connects here: Prisma and S3 connect on first use. */
 @Global()
@@ -36,9 +45,19 @@ import { CORE_CONFIG, OBJECT_STORAGE, PRISMA, REDIS, SECRET_STORE } from './toke
       useFactory: (config: CoreConfig) => createRedisClient(config.redisUrl),
       inject: [CORE_CONFIG],
     },
+    {
+      provide: SITE_LEASES,
+      useFactory: (prisma: PrismaClient) => new PostgresSiteLeaseStore(prisma),
+      inject: [PRISMA],
+    },
+    {
+      provide: TURN_ASSIGNMENTS,
+      useFactory: (prisma: PrismaClient) => new PostgresTurnAssignmentStore(prisma),
+      inject: [PRISMA],
+    },
     PrismaLifecycle,
     RedisLifecycle,
   ],
-  exports: [PRISMA, OBJECT_STORAGE, SECRET_STORE, REDIS],
+  exports: [PRISMA, OBJECT_STORAGE, SECRET_STORE, REDIS, SITE_LEASES, TURN_ASSIGNMENTS],
 })
 export class InfraModule {}
