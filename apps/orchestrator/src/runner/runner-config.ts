@@ -7,11 +7,14 @@ import type { SandboxConfig } from '@repo/sandbox-providers'
  */
 export interface RunnerConfig {
   appEnv: AppEnv
-  /** RUNNER_CORE_URL: the origin of core's runner API, https:// in production. */
+  /**
+   * RUNNER_CORE_URL: the origin of core's runner API; http:// only to a private IP address in
+   * production, otherwise https://.
+   */
   coreUrl: URL
   /** RUNNER_TOKEN_FILE: the file with the VM token, never an env value (docker inspect shows env). */
   tokenFile: string
-  /** RUNNER_CORE_CA_FILE: a private CA for core's certificate. */
+  /** RUNNER_CORE_CA_FILE: a private CA, only for an https:// core. */
   caFile: string | null
   /** RUNNER_MAX_TURNS: turns at once; one until several runners are supported (stage 2). */
   maxTurns: number

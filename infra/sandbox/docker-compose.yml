@@ -22,8 +22,9 @@ services:
 
   # The runner role (spec §8, §19): polls core's runner API and drives this VM's Docker. It opens
   # no port and holds no platform credentials: no PostgreSQL, Redis, Vault or S3 settings reach it,
-  # and it refuses to start with them. The VM token (root, 0400) and core's private CA come
-  # read-only from /etc/raditi on the VM. Started next to the watchdog: --profile runner.
+  # and it refuses to start with them. The VM token (root, 0400) — and core's CA, only for an
+  # https core — come read-only from /etc/raditi on the VM. Started next to the watchdog:
+  # --profile runner.
   runner:
     image: ${RUNNER_IMAGE:-}
     profiles: [runner]

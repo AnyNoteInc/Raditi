@@ -20,6 +20,7 @@ import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
 import { z } from 'zod'
 
 import type { RunnerConfig } from '../runner/runner-config.ts'
+import { isPrivateAddress } from './private-address.ts'
 import { parseRunnerTokens, type RunnerTokenHashes } from './runner-tokens.ts'
 
 export type { RunnerConfig }
@@ -205,8 +206,11 @@ export function loadConfig(env: Env): OrchestratorConfig {
         coreUrl.hash
       )
         problems.push('RUNNER_CORE_URL: expected an origin (no path, credentials or query)')
-      if (production && coreUrl.protocol !== 'https:')
-        problems.push('RUNNER_CORE_URL: must use https in production')
+      // Inside the perimeter plain http goes to the app VM's private address only (spec §19).
+      if (production && coreUrl.protocol === 'http:' && !isPrivateAddress(coreUrl.hostname))
+        problems.push(
+          'RUNNER_CORE_URL: plain http only to a private IP address in production (spec §19)',
+        )
     }
     if (own.RUNNER_TOKEN_FILE === undefined)
       problems.push(

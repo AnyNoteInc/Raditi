@@ -49,6 +49,14 @@ const prodEnv = (overrides: Env = {}): Env => ({
   ...overrides,
 })
 
+const testRunnerUrl = (url: string) =>
+  loadConfig({
+    APP_ENV: 'development',
+    ORCHESTRATOR_ROLES: 'runner',
+    RUNNER_CORE_URL: url,
+    RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
+  }).runner?.coreUrl
+
 function problemsOf(env: Env): readonly string[] {
   try {
     loadConfig(env)
@@ -377,14 +385,36 @@ describe('loadConfig — production', () => {
       caFile: '/etc/raditi/core-ca.pem',
       sandbox: { runtime: 'runsc' },
     })
-    expect(
-      problemsOf(
-        runnerEnv({ RUNNER_CORE_URL: 'http://core.internal:8083', SANDBOX_RUNTIME: 'runc' }),
-      ),
-    ).toEqual([
-      'RUNNER_CORE_URL: must use https in production',
+    expect(problemsOf(runnerEnv({ SANDBOX_RUNTIME: 'runc' }))).toEqual([
       expect.stringMatching(/^\[sandbox\] invalid configuration: SANDBOX_RUNTIME: /),
     ])
+  })
+
+  it('reaches core over plain http only at a private IP address', () => {
+    const plain = { RUNNER_CORE_CA_FILE: undefined }
+    for (const url of ['http://10.10.0.10:8083', 'http://[fd00::10]:8083'])
+      expect(loadConfig(runnerEnv({ ...plain, RUNNER_CORE_URL: url })).runner?.coreUrl).toEqual(
+        new URL(url),
+      )
+    expect(
+      loadConfig(runnerEnv({ ...plain, RUNNER_CORE_URL: 'https://core.raditi.ru:8083' })).runner
+        ?.coreUrl,
+    ).toEqual(new URL('https://core.raditi.ru:8083'))
+    for (const url of [
+      // A name: what it resolves to is never checked.
+      'http://core.raditi.internal:8083',
+      'http://core.raditi.ru:8083',
+      'http://8.8.8.8:8083',
+      'http://172.32.0.1:8083',
+      'http://127.0.0.1:8083',
+      'http://169.254.169.254:8083',
+      'http://[fe80::1]:8083',
+    ])
+      expect(problemsOf(runnerEnv({ ...plain, RUNNER_CORE_URL: url }))).toEqual([
+        'RUNNER_CORE_URL: plain http only to a private IP address in production (spec §19)',
+      ])
+    // Outside production a local core is fine.
+    expect(testRunnerUrl('http://127.0.0.1:8083')).toEqual(new URL('http://127.0.0.1:8083'))
   })
 
   it('refuses to start a runner that holds platform credentials, naming only the variables', () => {
