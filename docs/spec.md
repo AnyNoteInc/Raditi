@@ -479,7 +479,8 @@ interface TurnExecution {
 | `adopt`, `resume` | После рестарта принимает контейнер — для работы или только для удаления — и переподключается к exec с курсора журнала. Контейнера нет — ответ `destroyed`, чужой контейнер — `failed{CONFLICT}` | `adopted`, `running` |
 | `quiesce`, `capture` | Останавливает агента; снимает patch и untracked и загружает их в `core` (`PUT …/candidate/{patch,untracked}`, до 8 и 16 МиБ, недоверенные данные); home остаётся у раннера | `quiesced`, `captured` |
 | `seal` | Шифрует `home.tar.zst` ключом данных хода с AAD снимка, куда входят headSha кандидата и `createdAt`, и кладёт его presigned PUT | `sealed{sha256,sizeBytes,iv,tag}` |
-| `abort`, `destroy` | Убивает exec агента; удаляет контейнер | `destroyed` |
+| `abort` | Убивает exec агента; контейнер остаётся для capture или удаления | Отдельного ответа нет: вывод завершается отчётом `exited` |
+| `destroy` | Удаляет контейнер | `destroyed` |
 
 Сбой команды — `failed{code}` с кодом из закрытого списка. Ошибку с текстом строит `core`, а текст раннера не попадает ни в журнал, ни к клиенту. Прочие отказы API — `{error}` с кодом и без подробностей (`runnerApiErrors`): `COMMAND_CLOSED` (410) — `core` больше не ждёт эту команду или этот exec, раннер бросает эту работу и ждёт следующую команду; `UNAVAILABLE` (503) — повторить с backoff до срока хода; а также 400, 401, 404, 413 и 500.
 
