@@ -1,17 +1,21 @@
 import { zstdCompressSync } from 'node:zlib'
 
 import {
+  DomainError,
   snapshotLimits,
   type ObjectStorage,
+  type PresignedRequest,
   type SecretStore,
   type SnapshotMetadata,
   type SnapshotReference,
+  type TurnSealInput,
   turnSnapshotPrefix,
 } from '@repo/domain'
 import { pack } from 'tar-stream'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, type Mock } from 'vitest'
 
-import { SnapshotService } from './snapshot.service.ts'
+import { sealSnapshotPart } from './snapshot-parts.ts'
+import { SnapshotService, type SealedElsewhere } from './snapshot.service.ts'
 
 const metadata: SnapshotMetadata = {
   workspaceId: 'ws1',
@@ -77,9 +81,12 @@ function fixture() {
       objects.delete(key)
     }),
     checkBuckets: vi.fn(async () => ({ sessions: true })),
-    presign: vi.fn(async () => {
-      throw new Error('SnapshotService never presigns')
-    }),
+    presign: vi.fn(async (request) => ({
+      method: request.method,
+      url: `https://s3.invalid/raditi-sessions/${request.key}?X-Amz-Signature=synthetic`,
+      headers: (request.method === 'PUT' ? { 'if-none-match': '*' } : {}) as Record<string, string>,
+      expiresAt: new Date(Date.now() + request.ttlMs),
+    })),
   }
   const issued: Uint8Array[] = []
   const newKey = () => {
@@ -92,7 +99,39 @@ function fixture() {
     transitDecryptDataKey: vi.fn(async () => newKey()),
   } as unknown as SecretStore
   const service = new SnapshotService(storage, secrets)
-  return { objects, writes, storage, secrets, issued, service }
+  /** A create-only presigned PUT, as S3 answers it: 412 when the key exists. */
+  const putPresigned = (request: PresignedRequest, body: Uint8Array) => {
+    const key = new URL(request.url).pathname.replace(/^\/raditi-sessions\//, '')
+    if (request.method !== 'PUT' || request.headers['if-none-match'] !== '*')
+      throw new Error('expected a create-only PUT')
+    if (objects.has(key)) throw new Error('412 Precondition Failed')
+    objects.set(key, Buffer.from(body))
+    writes.push(key)
+  }
+  return { objects, writes, storage, secrets, issued, service, putPresigned }
+}
+
+/** The home part sealed like a TurnExecution does: with the data key, stored by the PUT. */
+function sealedHome(
+  f: ReturnType<typeof fixture>,
+  home: Uint8Array,
+): SealedElsewhere & {
+  seal: Mock<SealedElsewhere['seal']>
+} {
+  return {
+    sizeBytes: home.byteLength,
+    ttlMs: () => 60_000,
+    seal: vi.fn(async ({ base, dataKey, put }: TurnSealInput) => {
+      const key = await dataKey()
+      try {
+        const { body, sealed } = sealSnapshotPart(base, 'home', home, key)
+        f.putPresigned(put, body)
+        return sealed
+      } finally {
+        key.fill(0)
+      }
+    }),
+  }
 }
 
 function changeManifest(
@@ -394,5 +433,145 @@ describe('host snapshot lifecycle', () => {
     })
     expect(f.objects.has(`${prefix}reservation.json`)).toBe(true)
     expect(f.objects.has(manifestKey)).toBe(false)
+  })
+})
+
+describe('home part sealed by a turn executor', () => {
+  it('reserves first, admits the PUT home only after reading it back and commits last', async () => {
+    const f = fixture()
+    const original = await parts()
+    const home = sealedHome(f, original.home)
+    const manifest = await f.service.save(metadata, { ...original, home })
+    expect(f.writes).toEqual([
+      `${prefix}home.tar.zst`,
+      `${prefix}untracked.tar.zst`,
+      `${prefix}patch.diff`,
+      manifestKey,
+    ])
+    expect(f.storage.putIfAbsent).toHaveBeenCalledBefore(home.seal)
+    // A create-only PUT of exactly the archive size: AES-GCM adds no padding.
+    expect(f.storage.presign).toHaveBeenCalledWith({
+      bucket: 'sessions',
+      key: `${prefix}home.tar.zst`,
+      method: 'PUT',
+      sizeBytes: original.home.byteLength,
+      ttlMs: 60_000,
+    })
+    const input = home.seal.mock.calls[0]![0]
+    expect(input.base).toMatchObject({ git: { headSha: metadata.git.headSha }, schemaVersion: 1 })
+    expect(input.base.createdAt).toBe(manifest.createdAt)
+    // One data key: the executor's copy and core's parts share the wrapped key.
+    expect(new Set(manifest.parts.map((p) => p.encryption.wrappedKey)).size).toBe(1)
+    const loaded = await f.service.load(reference)
+    for (const name of ['home', 'untracked', 'patch'] as const)
+      expect(Buffer.from(loaded.archives[name])).toEqual(Buffer.from(original[name]))
+    expect(f.issued.every((key) => key.every((byte) => byte === 0))).toBe(true)
+  })
+
+  it.each([
+    ['a different hash', { sha256: 'f'.repeat(64) }],
+    ['a different size', { sizeBytes: 1 }],
+    ['a different tag', { tag: 'f'.repeat(32) }],
+  ])('keeps a reported part with %s ambiguous and commits nothing', async (_, change) => {
+    const f = fixture()
+    const original = await parts()
+    const home = sealedHome(f, original.home)
+    const seal = home.seal.getMockImplementation()!
+    home.seal.mockImplementation(async (input) => ({ ...(await seal(input)), ...change }))
+    await expect(f.service.save(metadata, { ...original, home })).rejects.toMatchObject({
+      code: 'SNAPSHOT_SAVE_FAILED',
+    })
+    expect(f.objects.has(`${prefix}reservation.json`)).toBe(true)
+    expect(f.objects.has(manifestKey)).toBe(false)
+    expect(f.writes).toEqual([`${prefix}home.tar.zst`])
+  })
+
+  it('refuses a home part whose archive is not a valid session archive', async () => {
+    const f = fixture()
+    const original = await parts()
+    const home = sealedHome(f, await archive('../escape', 'bad'))
+    await expect(f.service.save(metadata, { ...original, home })).rejects.toMatchObject({
+      code: 'SNAPSHOT_SAVE_FAILED',
+    })
+    expect(f.objects.has(manifestKey)).toBe(false)
+  })
+
+  it.each([
+    ['says nothing was written', new DomainError('SNAPSHOT_NOT_WRITTEN', 'synthetic', 502)],
+    ['is too large', new DomainError('SNAPSHOT_TOO_LARGE', 'synthetic', 413)],
+    ['fails', new Error('put reply lost')],
+  ])('keeps a sealer that %s ambiguous: the reservation is already written', async (_, error) => {
+    const f = fixture()
+    const original = await parts()
+    const home = sealedHome(f, original.home)
+    home.seal.mockRejectedValueOnce(error)
+    await expect(f.service.save(metadata, { ...original, home })).rejects.toMatchObject({
+      code: 'SNAPSHOT_SAVE_FAILED',
+    })
+    expect(f.objects.has(`${prefix}reservation.json`)).toBe(true)
+  })
+
+  it('refuses an oversized home before asking Vault or writing', async () => {
+    const f = fixture()
+    const original = await parts()
+    const home = { ...sealedHome(f, original.home), sizeBytes: snapshotLimits.archiveBytes + 1 }
+    await expect(f.service.save(metadata, { ...original, home })).rejects.toMatchObject({
+      code: 'SNAPSHOT_TOO_LARGE',
+      httpStatus: 413,
+    })
+    expect(f.secrets.transitDataKey).not.toHaveBeenCalled()
+    expect(f.objects.size).toBe(0)
+  })
+
+  it('never hands out the PUT once aborted after the reservation', async () => {
+    const f = fixture()
+    const original = await parts()
+    const home = sealedHome(f, original.home)
+    const controller = new AbortController()
+    const claim = vi.mocked(f.storage.putIfAbsent).getMockImplementation()!
+    vi.mocked(f.storage.putIfAbsent).mockImplementationOnce(async (...args) => {
+      const claimed = await claim(...args)
+      controller.abort()
+      return claimed
+    })
+    await expect(
+      f.service.save(metadata, { ...original, home }, controller.signal),
+    ).rejects.toMatchObject({ code: 'SNAPSHOT_SAVE_FAILED' })
+    expect(f.storage.presign).not.toHaveBeenCalled()
+    expect(home.seal).not.toHaveBeenCalled()
+  })
+})
+
+describe('restore source for a turn executor', () => {
+  it('checks the manifest and presigns only the three parts of that turn', async () => {
+    const f = fixture()
+    const original = await parts()
+    await f.service.save(metadata, original)
+    const source = await f.service.restoreSource(reference, 30_000)
+    expect(source.manifest.turn).toBe(1)
+    for (const name of ['home', 'untracked', 'patch'] as const)
+      expect(source.parts[name]).toMatchObject({ method: 'GET' })
+    expect(vi.mocked(f.storage.presign).mock.calls.map(([request]) => request)).toEqual([
+      { bucket: 'sessions', key: `${prefix}home.tar.zst`, method: 'GET', ttlMs: 30_000 },
+      { bucket: 'sessions', key: `${prefix}untracked.tar.zst`, method: 'GET', ttlMs: 30_000 },
+      { bucket: 'sessions', key: `${prefix}patch.diff`, method: 'GET', ttlMs: 30_000 },
+    ])
+    // No part is read and no key unwrapped until the executor asks for it.
+    expect(f.secrets.transitDecryptDataKey).not.toHaveBeenCalled()
+    const key = await source.dataKey()
+    expect(key).toHaveLength(32)
+    expect(f.secrets.transitDecryptDataKey).toHaveBeenCalledWith('ws-ws1', 'vault:v1:wrapped')
+  })
+
+  it('refuses an incompatible reference before presigning anything', async () => {
+    const f = fixture()
+    await f.service.save(metadata, await parts())
+    await expect(
+      f.service.restoreSource({ ...reference, workspaceId: 'other' }, 30_000),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(f.service.restoreSource({ ...reference, turn: 2 }, 30_000)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    expect(f.storage.presign).not.toHaveBeenCalled()
   })
 })

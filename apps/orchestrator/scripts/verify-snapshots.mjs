@@ -8,6 +8,7 @@ import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 import { pack } from 'tar-stream'
 
+import { openSnapshotParts, sealSnapshotPart } from '../dist/sessions/snapshot-parts.js'
 import { SnapshotService } from '../dist/sessions/snapshot.service.js'
 
 // Explicit local integration check: no models, client data or production endpoints.
@@ -23,14 +24,21 @@ const secrets = createVaultSecretStore(vaultConfig)
 const id = `p1verify-${randomUUID()}`
 const keyId = `ws-${id}`
 const prefix = turnSnapshotPrefix(id, 1)
-const objectNames = [
-  'reservation.json',
-  'home.tar.zst',
-  'untracked.tar.zst',
-  'patch.diff',
-  'manifest.json',
-  'conditional-probe',
+// Turn 2 is saved the way a turn executor seals home: through a presigned create-only PUT.
+const prefix2 = turnSnapshotPrefix(id, 2)
+const partNames = ['reservation.json', 'home.tar.zst', 'untracked.tar.zst', 'patch.diff']
+const objectKeys = [
+  ...[...partNames, 'manifest.json', 'conditional-probe'].map((name) => `${prefix}${name}`),
+  ...[...partNames, 'manifest.json'].map((name) => `${prefix2}${name}`),
 ]
+const presigned = (request, body) =>
+  fetch(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body,
+    redirect: 'error',
+    signal: AbortSignal.timeout(10_000),
+  })
 let keyCreated = false
 
 async function vault(path, body, method = body === undefined ? 'GET' : 'POST') {
@@ -104,13 +112,40 @@ try {
   await assert.rejects(service.load({ ...reference, workspaceId: `${id}-other` }), {
     code: 'CONFLICT',
   })
+
+  let replayed
+  const sealedHome = {
+    sizeBytes: parts.home.byteLength,
+    ttlMs: () => 60_000,
+    async seal({ base, dataKey, put }) {
+      const key = await dataKey()
+      try {
+        const { body, sealed } = sealSnapshotPart(base, 'home', parts.home, key)
+        assert.equal((await presigned(put, body)).status, 200)
+        replayed = (await presigned(put, body)).status
+        return sealed
+      } finally {
+        key.fill(0)
+      }
+    },
+  }
+  await service.save({ ...metadata, turn: 2 }, { ...parts, home: sealedHome })
+  assert.equal(replayed, 412, 'A presigned PUT must be create-only')
+  const source = await service.restoreSource({ ...reference, turn: 2 }, 60_000)
+  const stored = []
+  for (const part of source.manifest.parts) {
+    const response = await presigned(source.parts[part.name])
+    assert.equal(response.status, 200)
+    stored.push({ part, body: Buffer.from(await response.arrayBuffer()) })
+  }
+  const restored = await openSnapshotParts(source.manifest, stored, home, source.dataKey)
+  for (const name of ['home', 'untracked', 'patch'])
+    assert.deepEqual(Buffer.from(restored[name]), parts[name])
   console.log(
-    'Snapshot integration passed: S3 conditional PUT (12 contenders), Vault Transit, encrypted round trip, immutable turn, workspace isolation.',
+    'Snapshot integration passed: S3 conditional PUT (12 contenders), Vault Transit, encrypted round trip, immutable turn, workspace isolation, home sealed through a create-only presigned PUT and restored through presigned GETs.',
   )
 } finally {
-  const cleanup = await Promise.allSettled(
-    objectNames.map((name) => storage.delete('sessions', `${prefix}${name}`)),
-  )
+  const cleanup = await Promise.allSettled(objectKeys.map((key) => storage.delete('sessions', key)))
   if (keyCreated) {
     await vault(`transit/keys/${keyId}/config`, { deletion_allowed: true })
     await vault(`transit/keys/${keyId}`, undefined, 'DELETE')

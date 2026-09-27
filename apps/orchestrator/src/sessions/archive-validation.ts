@@ -264,11 +264,16 @@ async function validateArchive(
   }
 }
 
+/** The stored size limit of a part: its 413 when `sizeBytes` exceeds it. */
+export function assertSnapshotPartSize(name: SnapshotPartName, sizeBytes: number): void {
+  const limit = name === 'patch' ? snapshotLimits.patchBytes : snapshotLimits.archiveBytes
+  if (sizeBytes > limit) throw tooLargeFor(name)()
+}
+
 /** A private copy: a caller cannot swap bytes during an await after they were checked. */
 function ownedPart(name: SnapshotPartName, bytes: unknown): Buffer {
-  const limit = name === 'patch' ? snapshotLimits.patchBytes : snapshotLimits.archiveBytes
   if (!(bytes instanceof Uint8Array)) throw invalidArchive()
-  if (bytes.byteLength > limit) throw tooLargeFor(name)()
+  assertSnapshotPartSize(name, bytes.byteLength)
   return Buffer.from(bytes)
 }
 
@@ -285,17 +290,36 @@ export async function validateSnapshotArchives(
   parts: SnapshotArchives,
   credentials: readonly string[] = [],
 ): Promise<SnapshotArchives> {
+  return validateParts(state, parts, snapshotPartNames, credentials) as Promise<SnapshotArchives>
+}
+
+/** The same checks for only the given parts, such as the home part a sandbox sealed. */
+export async function validateSnapshotParts<P extends Partial<SnapshotArchives>>(
+  state: SessionState,
+  parts: P,
+  credentials: readonly string[] = [],
+): Promise<P> {
+  const names = snapshotPartNames.filter((name) => Object.hasOwn(parts, name))
+  return validateParts(state, parts, names, credentials) as Promise<P>
+}
+
+async function validateParts(
+  state: SessionState,
+  parts: Partial<SnapshotArchives>,
+  names: readonly SnapshotPartName[],
+  credentials: readonly string[],
+): Promise<Partial<SnapshotArchives>> {
   const parsed = sessionStateSchema.safeParse(state)
   if (!parsed.success) throw badRequest('Invalid snapshot session state')
-  const owned = {} as SnapshotArchives
-  for (const name of snapshotPartNames) owned[name] = ownedPart(name, parts[name])
+  const owned: Partial<SnapshotArchives> = {}
+  for (const name of names) owned[name] = ownedPart(name, parts?.[name])
   const known = credentials
     .filter((value) => value.length > 0)
     .map((value) => Buffer.from(value, 'utf8'))
   // Sequential decoding bounds memory: compressed parts are staged, expanded tar data is not.
-  await validateArchive(owned.home, tooLargeFor('home'), known, parsed.data)
-  await validateArchive(owned.untracked, tooLargeFor('untracked'), known)
-  if (credentialScan(known)(owned.patch)) throw snapshotHasCredential()
+  if (owned.home) await validateArchive(owned.home, tooLargeFor('home'), known, parsed.data)
+  if (owned.untracked) await validateArchive(owned.untracked, tooLargeFor('untracked'), known)
+  if (owned.patch && credentialScan(known)(owned.patch)) throw snapshotHasCredential()
   return owned
 }
 

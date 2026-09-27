@@ -17,29 +17,83 @@ import {
   snapshotTooLarge,
   turnSnapshotPrefix,
   type ObjectStorage,
+  type PresignedRequest,
+  type SealedTurnPart,
   type SecretStore,
   type SnapshotManifest,
   type SnapshotMetadata,
   type SnapshotPart,
+  type SnapshotPartName,
   type SnapshotReference,
+  type TurnRestoreSource,
+  type TurnSealInput,
 } from '@repo/domain'
 
-import { decryptPart, encryptPart, sha256, snapshotAad } from './snapshot-crypto.ts'
-import type { SnapshotArchives } from './sandbox-snapshot.ts'
-import { validateSnapshotArchives } from './archive-validation.ts'
+import {
+  assertSnapshotPartSize,
+  validateSnapshotParts,
+  type SnapshotArchives,
+} from './archive-validation.ts'
+import { openSnapshotParts, sealSnapshotPart, type SnapshotSealBase } from './snapshot-parts.ts'
 
 export interface LoadedSnapshot {
   manifest: SnapshotManifest
   archives: SnapshotArchives
 }
 
+/** A part a TurnExecution seals with the snapshot's data key: its size, known before sealing. */
+export interface PendingSnapshotPart {
+  sizeBytes: number
+}
+
+/** The home part sealed where the archive stays: encrypted there, stored by a presigned PUT. */
+export interface SealedElsewhere extends PendingSnapshotPart {
+  /** Lifetime of the presigned PUT, asked for right before signing it. */
+  ttlMs(): number
+  seal(input: TurnSealInput): Promise<SealedTurnPart>
+}
+
+/** Each part as bytes core seals, or as a part sealed elsewhere with the same data key. */
+export type SnapshotParts<P = PendingSnapshotPart> = {
+  [N in SnapshotPartName]: Uint8Array | P
+}
+
+/** Sealed in memory: nothing is written before reserve(). */
+export interface SealedSnapshot {
+  readonly base: SnapshotSealBase
+  readonly prefix: string
+  readonly keyId: string
+  /** The one data key of every part, wrapped by Transit. */
+  readonly wrappedKey: string
+  /** Parts core sealed; commit() stores them. */
+  readonly bodies: Readonly<Partial<Record<SnapshotPartName, Uint8Array>>>
+  readonly parts: Readonly<Partial<Record<SnapshotPartName, SnapshotPart>>>
+  /** Sizes of the parts still sealed elsewhere; acceptSealedPart() admits each one. */
+  readonly pending: Readonly<Partial<Record<SnapshotPartName, number>>>
+}
+
+const saveFailed = () =>
+  new DomainError('SNAPSHOT_SAVE_FAILED', 'Could not save the turn snapshot', 502)
+const interrupted = () =>
+  new DomainError('SNAPSHOT_SAVE_FAILED', 'Snapshot save was interrupted', 409)
+/**
+ * From the reservation request on, a failure is ambiguous: a failed response does not prove the
+ * remote PUT stopped. Only a conflict keeps its code; nothing else may claim "nothing written".
+ */
+const ambiguous = (error: unknown): DomainError =>
+  isDomainError(error) && (error.code === 'CONFLICT' || error.code === 'SNAPSHOT_SAVE_FAILED')
+    ? error
+    : saveFailed()
+
 /**
  * Host-only snapshot lifecycle. The caller owns the site/turn lease and has stopped the agent.
- * Checks, the Vault data key, encryption and the manifest come first and write nothing: their
- * failure is SNAPSHOT_NOT_WRITTEN, or a 413 for a size or count limit (SNAPSHOT_TOO_LARGE,
- * PUBLICATION_TOO_LARGE), and the turn may be retried. Only then an atomic reservation
- * prevents concurrent or repeated writes to immutable turn keys. A crash after it may leave an
- * incomplete reservation: P2 reconciliation must inspect it under the site lease, never blindly
+ * seal() checks metadata and parts, gets the Vault data key, encrypts and checks the manifest
+ * first, writing nothing: its failure is SNAPSHOT_NOT_WRITTEN, or a 413 for a size or count
+ * limit (SNAPSHOT_TOO_LARGE, PUBLICATION_TOO_LARGE), and the turn may be retried. Only then
+ * reserve() atomically prevents concurrent or repeated writes to immutable turn keys; a part
+ * sealed elsewhere is stored through a presigned PUT and verified (acceptSealedPart), and
+ * commit() stores core's parts and the manifest last. A crash after the reservation may leave
+ * an incomplete one: P2 reconciliation must inspect it under the site lease, never blindly
  * expire it while its writer could still be alive. A caller that stops waiting aborts `signal`:
  * a save still pending on Vault then writes nothing, and one past its reservation stops before
  * the next object and never commits a manifest.
@@ -51,16 +105,51 @@ export class SnapshotService {
   ) {}
 
   async save(
-    input: SnapshotMetadata,
-    inputArchives: SnapshotArchives,
+    metadata: SnapshotMetadata,
+    parts: SnapshotParts<SealedElsewhere>,
     signal?: AbortSignal,
   ): Promise<SnapshotManifest> {
+    let sealed = await this.seal(metadata, parts)
+    await this.reserve(sealed, signal)
+    for (const name of snapshotPartNames) {
+      const part = parts[name]
+      if (part instanceof Uint8Array) continue
+      try {
+        if (signal?.aborted) throw interrupted()
+        const put = await this.presignPart(sealed, name, part.ttlMs())
+        const stored = await part.seal({
+          base: sealed.base,
+          dataKey: () => this.dataKey(sealed),
+          put,
+        })
+        sealed = await this.acceptSealedPart(sealed, name, stored, signal)
+      } catch (error) {
+        throw ambiguous(error)
+      }
+    }
+    return this.commit(sealed, signal)
+  }
+
+  /**
+   * No side effects: one data key per snapshot, zeroed as soon as core's parts are sealed. A
+   * part given by size is sealed elsewhere with the same key (dataKey()).
+   */
+  async seal(input: SnapshotMetadata, parts: SnapshotParts): Promise<SealedSnapshot> {
     let metadata: SnapshotMetadata
-    let archives: SnapshotArchives
+    const archives: Partial<SnapshotArchives> = {}
+    const pending: Partial<Record<SnapshotPartName, number>> = {}
     try {
       metadata = parseMetadata(input)
+      for (const name of snapshotPartNames) {
+        const part = parts?.[name]
+        if (part instanceof Uint8Array) archives[name] = part
+        else if (Number.isSafeInteger(part?.sizeBytes) && part.sizeBytes >= 0) {
+          assertSnapshotPartSize(name, part.sizeBytes)
+          pending[name] = part.sizeBytes
+        } else throw badRequest('Invalid snapshot part')
+      }
       // Only the owned, checked copies are encrypted; the caller may still mutate its buffers.
-      archives = await validateSnapshotArchives(metadata.home, inputArchives)
+      Object.assign(archives, await validateSnapshotParts(metadata.home, archives))
     } catch (error) {
       // A size or count limit stays a 413 for the client; it writes nothing either.
       if (isTooLarge(error)) throw error
@@ -71,86 +160,38 @@ export class SnapshotService {
       )
     }
     const prefix = turnSnapshotPrefix(metadata.sessionId, metadata.turn)
-    const manifestKey = `${prefix}manifest.json`
-    const { manifest, encoded, bodies } = await this.seal(metadata, archives)
-    if (signal?.aborted)
-      throw new DomainError('SNAPSHOT_NOT_WRITTEN', 'Snapshot save was interrupted', 409)
-    // Past the reservation an interruption is ambiguous: the reservation and parts stay.
-    const assertActive = () => {
-      if (signal?.aborted)
-        throw new DomainError('SNAPSHOT_SAVE_FAILED', 'Snapshot save was interrupted', 409)
-    }
-    try {
-      const claimed = await this.storage.putIfAbsent(
-        'sessions',
-        `${prefix}reservation.json`,
-        Buffer.from(JSON.stringify({ writer: randomUUID() })),
-        { contentType: 'application/json' },
-      )
-      if (!claimed) throw conflict('Snapshot already exists or is being written')
-      if (await this.storage.exists('sessions', manifestKey))
-        throw conflict('Snapshot already exists')
-      // Only wrapped keys and authenticated ciphertext reach S3.
-      for (const part of manifest.parts) {
-        assertActive()
-        await this.storage.put('sessions', part.key, bodies[part.name], {
-          contentType: 'application/octet-stream',
-          sizeBytes: part.sizeBytes,
-        })
-      }
-      assertActive()
-      // The sole commit point. Readers never treat a reservation or individual parts as a snapshot.
-      await this.storage.put('sessions', manifestKey, encoded, { contentType: 'application/json' })
-      return manifest
-    } catch (error) {
-      // A failed response does not prove the remote PUT stopped. Keep the reservation and
-      // partial objects so a late write cannot corrupt another writer using the same keys.
-      if (isDomainError(error)) throw error
-      throw new DomainError('SNAPSHOT_SAVE_FAILED', 'Could not save the turn snapshot', 502)
-    }
-  }
-
-  /** No side effects: one data key per snapshot, zeroed as soon as all parts are sealed. */
-  private async seal(
-    metadata: SnapshotMetadata,
-    archives: SnapshotArchives,
-  ): Promise<{ manifest: SnapshotManifest; encoded: Buffer; bodies: SnapshotArchives }> {
-    const prefix = turnSnapshotPrefix(metadata.sessionId, metadata.turn)
     let dataKey: Uint8Array | undefined
     try {
       const keyId = `ws-${metadata.workspaceId}`
       const issued = await this.secrets.transitDataKey(keyId)
       dataKey = issued.plaintext
-      const base = {
+      const base: SnapshotSealBase = {
         ...metadata,
-        schemaVersion: SNAPSHOT_SCHEMA_VERSION as typeof SNAPSHOT_SCHEMA_VERSION,
+        schemaVersion: SNAPSHOT_SCHEMA_VERSION,
         createdAt: new Date().toISOString(),
       }
-      const bodies = {} as SnapshotArchives
-      const parts: SnapshotPart[] = []
+      const bodies: Partial<Record<SnapshotPartName, Uint8Array>> = {}
+      const sealedParts: Partial<Record<SnapshotPartName, SnapshotPart>> = {}
       for (const name of snapshotPartNames) {
-        const sealed = encryptPart(archives[name], dataKey, snapshotAad(base, name))
-        bodies[name] = sealed.body
-        parts.push({
-          name,
-          key: `${prefix}${snapshotPartFiles[name]}`,
-          sha256: sha256(sealed.body),
-          sizeBytes: sealed.body.byteLength,
-          encryption: {
-            algorithm: 'aes-256-gcm',
-            keyId,
-            wrappedKey: issued.ciphertext,
-            iv: sealed.iv,
-            tag: sealed.tag,
-          },
-        })
+        const plaintext = archives[name]
+        if (!plaintext) continue
+        const { body, sealed } = sealSnapshotPart(base, name, plaintext, dataKey)
+        bodies[name] = body
+        sealedParts[name] = snapshotPart(prefix, name, keyId, issued.ciphertext, sealed)
       }
       dataKey.fill(0)
-      const manifest = snapshotManifestSchema.parse({ ...base, parts })
-      const encoded = Buffer.from(JSON.stringify(manifest))
-      if (encoded.byteLength > snapshotLimits.manifestBytes)
-        throw snapshotTooLarge('Snapshot manifest is too large')
-      return { manifest, encoded, bodies }
+      const snapshot: SealedSnapshot = {
+        base,
+        prefix,
+        keyId,
+        wrappedKey: issued.ciphertext,
+        bodies,
+        parts: sealedParts,
+        pending,
+      }
+      // The manifest is written last, but its schema and limit are checked while nothing is.
+      encodeManifest(snapshot)
+      return snapshot
     } catch (error) {
       // Nothing was sent to storage, so no reservation blocks a retry of this turn.
       if (isTooLarge(error)) throw error
@@ -160,58 +201,169 @@ export class SnapshotService {
     }
   }
 
+  /** The atomic claim of the turn's keys; from its request on every failure is ambiguous. */
+  async reserve(sealed: SealedSnapshot, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted)
+      throw new DomainError('SNAPSHOT_NOT_WRITTEN', 'Snapshot save was interrupted', 409)
+    try {
+      const claimed = await this.storage.putIfAbsent(
+        'sessions',
+        `${sealed.prefix}reservation.json`,
+        Buffer.from(JSON.stringify({ writer: randomUUID() })),
+        { contentType: 'application/json' },
+      )
+      if (!claimed) throw conflict('Snapshot already exists or is being written')
+      if (await this.storage.exists('sessions', `${sealed.prefix}manifest.json`))
+        throw conflict('Snapshot already exists')
+    } catch (error) {
+      // Keep the reservation and partial objects so a late write cannot corrupt another writer.
+      throw ambiguous(error)
+    }
+  }
+
+  /** A create-only PUT of one pending part: it can store exactly its size, and only once. */
+  async presignPart(
+    sealed: SealedSnapshot,
+    name: SnapshotPartName,
+    ttlMs: number,
+  ): Promise<PresignedRequest> {
+    const sizeBytes = sealed.pending[name]
+    if (sizeBytes === undefined) throw conflict('Snapshot part is not sealed elsewhere')
+    return this.storage.presign({
+      bucket: 'sessions',
+      key: `${sealed.prefix}${snapshotPartFiles[name]}`,
+      method: 'PUT',
+      sizeBytes,
+      ttlMs,
+    })
+  }
+
+  /** The snapshot's data key, unwrapped again for whoever seals a pending part; zero it. */
+  dataKey(sealed: SealedSnapshot): Promise<Uint8Array> {
+    return this.secrets.transitDecryptDataKey(sealed.keyId, sealed.wrappedKey)
+  }
+
+  /**
+   * Admits a part sealed elsewhere only after reading it back: its size and hash, then GCM with
+   * the snapshot's AAD, then the archive itself. Past the reservation, so every failure is
+   * ambiguous.
+   */
+  async acceptSealedPart(
+    sealed: SealedSnapshot,
+    name: SnapshotPartName,
+    stored: SealedTurnPart,
+    signal?: AbortSignal,
+  ): Promise<SealedSnapshot> {
+    try {
+      if (signal?.aborted) throw interrupted()
+      const { [name]: sizeBytes, ...pending } = sealed.pending
+      if (sizeBytes === undefined || stored.sizeBytes !== sizeBytes)
+        throw badRequest('Sealed part differs from its reservation')
+      const part = snapshotPart(sealed.prefix, name, sealed.keyId, sealed.wrappedKey, stored)
+      const body = await this.read(part.key, sizeBytes)
+      await openSnapshotParts(sealed.base, [{ part, body }], sealed.base.home, () =>
+        this.dataKey(sealed),
+      )
+      return { ...sealed, parts: { ...sealed.parts, [name]: part }, pending }
+    } catch (error) {
+      throw ambiguous(error)
+    }
+  }
+
+  /** Stores core's parts, then the manifest: the sole commit point. */
+  async commit(sealed: SealedSnapshot, signal?: AbortSignal): Promise<SnapshotManifest> {
+    // Past the reservation an interruption is ambiguous: the reservation and parts stay.
+    const assertActive = () => {
+      if (signal?.aborted) throw interrupted()
+    }
+    try {
+      const { manifest, encoded } = encodeManifest(sealed)
+      // Only wrapped keys and authenticated ciphertext reach S3.
+      for (const part of manifest.parts) {
+        const body = sealed.bodies[part.name]
+        if (!body) continue
+        assertActive()
+        await this.storage.put('sessions', part.key, body, {
+          contentType: 'application/octet-stream',
+          sizeBytes: part.sizeBytes,
+        })
+      }
+      assertActive()
+      // Readers never treat a reservation or individual parts as a snapshot.
+      await this.storage.put('sessions', `${sealed.prefix}manifest.json`, encoded, {
+        contentType: 'application/json',
+      })
+      return manifest
+    } catch (error) {
+      throw ambiguous(error)
+    }
+  }
+
   async load(input: SnapshotReference): Promise<LoadedSnapshot> {
-    const result = snapshotReferenceSchema.safeParse(input)
-    if (!result.success) throw badRequest('Invalid snapshot reference')
-    const expected = result.data
+    const expected = parseReference(input)
     const prefix = turnSnapshotPrefix(expected.sessionId, expected.turn)
     try {
-      const bytes = await this.read(`${prefix}manifest.json`, snapshotLimits.manifestBytes)
-      let json: unknown
-      try {
-        json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-      } catch {
-        throw badRequest('Invalid snapshot manifest')
-      }
-      const parsed = snapshotManifestSchema.safeParse(json)
-      if (!parsed.success) throw badRequest('Invalid snapshot manifest')
-      const manifest = parsed.data
-      assertCompatible(manifest, expected)
-
+      const manifest = await this.readManifest(expected)
       // Every part is read and hash-checked before the single data key is unwrapped.
-      const bodies: Array<{ part: SnapshotPart; body: Uint8Array }> = []
+      const stored = []
       for (const part of manifest.parts) {
         // Keys are checked by the schema, derived again here to keep the trust boundary explicit.
         const body = await this.read(`${prefix}${snapshotPartFiles[part.name]}`, part.sizeBytes)
-        if (body.byteLength !== part.sizeBytes || sha256(body) !== part.sha256) {
-          throw badRequest('Snapshot part failed its size or hash check')
-        }
-        bodies.push({ part, body })
+        stored.push({ part, body })
       }
-      // The schema requires one wrapped key shared by all parts.
-      const key = await this.secrets.transitDecryptDataKey(
-        `ws-${expected.workspaceId}`,
-        manifest.parts[0]!.encryption.wrappedKey,
+      const archives = await openSnapshotParts(manifest, stored, expected.home, () =>
+        this.unwrap(manifest),
       )
-      const archives = {} as SnapshotArchives
-      try {
-        for (const { part, body } of bodies)
-          archives[part.name] = decryptPart(
-            body,
-            key,
-            snapshotAad(manifest, part.name),
-            part.encryption.iv,
-            part.encryption.tag,
-          )
-      } finally {
-        key.fill(0)
-      }
-      return { manifest, archives: await validateSnapshotArchives(expected.home, archives) }
+      return { manifest, archives }
     } catch (error) {
-      // A stored part over today's limits is an unusable snapshot, not the client's input.
-      if (isDomainError(error) && !isTooLarge(error)) throw error
-      throw new DomainError('SNAPSHOT_LOAD_FAILED', 'Could not load the turn snapshot', 502)
+      throw loadFailed(error)
     }
+  }
+
+  /**
+   * Turn n−1 for a TurnExecution: the checked manifest, presigned GETs of its three parts and
+   * its data key on demand. No part is read here; the executor checks each before any write.
+   */
+  async restoreSource(input: SnapshotReference, ttlMs: number): Promise<TurnRestoreSource> {
+    const expected = parseReference(input)
+    const prefix = turnSnapshotPrefix(expected.sessionId, expected.turn)
+    try {
+      const manifest = await this.readManifest(expected)
+      const parts = {} as Record<SnapshotPartName, PresignedRequest>
+      for (const name of snapshotPartNames)
+        parts[name] = await this.storage.presign({
+          bucket: 'sessions',
+          key: `${prefix}${snapshotPartFiles[name]}`,
+          method: 'GET',
+          ttlMs,
+        })
+      return { manifest, parts, dataKey: () => this.unwrap(manifest) }
+    } catch (error) {
+      throw loadFailed(error)
+    }
+  }
+
+  private async readManifest(expected: SnapshotReference): Promise<SnapshotManifest> {
+    const prefix = turnSnapshotPrefix(expected.sessionId, expected.turn)
+    const bytes = await this.read(`${prefix}manifest.json`, snapshotLimits.manifestBytes)
+    let json: unknown
+    try {
+      json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+    } catch {
+      throw badRequest('Invalid snapshot manifest')
+    }
+    const parsed = snapshotManifestSchema.safeParse(json)
+    if (!parsed.success) throw badRequest('Invalid snapshot manifest')
+    assertCompatible(parsed.data, expected)
+    return parsed.data
+  }
+
+  /** The schema requires one wrapped key shared by all parts. */
+  private unwrap(manifest: SnapshotManifest): Promise<Uint8Array> {
+    return this.secrets.transitDecryptDataKey(
+      `ws-${manifest.workspaceId}`,
+      manifest.parts[0]!.encryption.wrappedKey,
+    )
   }
 
   private async read(key: string, maxBytes: number): Promise<Uint8Array> {
@@ -226,6 +378,58 @@ export class SnapshotService {
     }
     return Buffer.concat(chunks, total)
   }
+}
+
+function snapshotPart(
+  prefix: string,
+  name: SnapshotPartName,
+  keyId: string,
+  wrappedKey: string,
+  sealed: SealedTurnPart,
+): SnapshotPart {
+  return {
+    name,
+    key: `${prefix}${snapshotPartFiles[name]}`,
+    sha256: sealed.sha256,
+    sizeBytes: sealed.sizeBytes,
+    encryption: { algorithm: 'aes-256-gcm', keyId, wrappedKey, iv: sealed.iv, tag: sealed.tag },
+  }
+}
+
+/**
+ * The manifest with its parts in their fixed order. A pending part counts with its reserved
+ * size and the longest hash, IV and tag, so seal() checks the final schema and size limit.
+ */
+function encodeManifest(sealed: SealedSnapshot): { manifest: SnapshotManifest; encoded: Buffer } {
+  const parts = snapshotPartNames.map((name) => {
+    const part = sealed.parts[name]
+    if (part) return part
+    const sizeBytes = sealed.pending[name]
+    if (sizeBytes === undefined) throw badRequest('Snapshot part is missing')
+    return snapshotPart(sealed.prefix, name, sealed.keyId, sealed.wrappedKey, {
+      sha256: '0'.repeat(64),
+      sizeBytes,
+      iv: '0'.repeat(24),
+      tag: '0'.repeat(32),
+    })
+  })
+  const manifest = snapshotManifestSchema.parse({ ...sealed.base, parts })
+  const encoded = Buffer.from(JSON.stringify(manifest))
+  if (encoded.byteLength > snapshotLimits.manifestBytes)
+    throw snapshotTooLarge('Snapshot manifest is too large')
+  return { manifest, encoded }
+}
+
+/** A stored part over today's limits is an unusable snapshot, not the client's input. */
+function loadFailed(error: unknown): DomainError {
+  if (isDomainError(error) && !isTooLarge(error)) return error
+  return new DomainError('SNAPSHOT_LOAD_FAILED', 'Could not load the turn snapshot', 502)
+}
+
+function parseReference(input: SnapshotReference): SnapshotReference {
+  const result = snapshotReferenceSchema.safeParse(input)
+  if (!result.success) throw badRequest('Invalid snapshot reference')
+  return result.data
 }
 
 function parseMetadata(input: SnapshotMetadata): SnapshotMetadata {
