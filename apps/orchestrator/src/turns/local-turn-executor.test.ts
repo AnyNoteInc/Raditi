@@ -1,11 +1,13 @@
 import { Buffer } from 'node:buffer'
 
 import {
+  conflict,
   DomainError,
   SANDBOX_SECRETS_DIR,
   type AgentEvent,
   type ExecChunk,
   type ExecHandle,
+  type RemovableSandbox,
   type Sandbox,
   type SandboxInfo,
   type SnapshotMetadata,
@@ -98,6 +100,7 @@ async function fixture() {
       return sandbox
     }),
     get: vi.fn(async (): Promise<Sandbox | null> => sandbox),
+    getForRemoval: vi.fn(async (): Promise<RemovableSandbox | null> => sandbox),
     list: vi.fn(async () => [] as SandboxInfo[]),
   }
   const transport = {
@@ -483,15 +486,44 @@ describe('LocalTurnExecutor', () => {
     it('finds nothing to adopt when the container is gone', async () => {
       const f = await fixture()
       f.sandboxes.get.mockResolvedValue(null)
+      f.sandboxes.getForRemoval.mockResolvedValue(null)
       await expect(f.executor.adopt(adopt('removal'), f.signal)).resolves.toBeNull()
+      await expect(f.executor.adopt(adopt('work'), f.signal)).resolves.toBeNull()
+    })
+
+    it('reaches a container that can no longer run the agent only for removal', async () => {
+      const f = await fixture()
+      // Its gateway died: the provider no longer hands it out to work in.
+      f.sandboxes.get.mockResolvedValue(null)
+      const destroy = vi.fn(async () => {})
+      f.sandboxes.getForRemoval.mockResolvedValue({ id: 'container2', labels, destroy })
+      await expect(f.executor.adopt(adopt('work'), f.signal)).rejects.toMatchObject({
+        code: 'EXEC_LOST',
+      })
+      const execution = (await f.executor.adopt(adopt('removal'), f.signal))!
+      expect(execution.containerId).toBe('container2')
+      await expect(
+        execution.attach({ execId: 'exec1', cursor: { stdout: 0, stderr: 0 }, eventCount: 0 }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' })
+      await execution.destroy('failed')
+      expect(destroy).toHaveBeenCalledWith('failed')
+      expect(f.sandbox.destroy).not.toHaveBeenCalled()
     })
 
     it('refuses a container whose identity changed', async () => {
       const f = await fixture()
-      f.sandboxes.get.mockResolvedValue({ ...f.sandbox, labels: { ...labels, turn: 3 } })
+      const changed = { ...f.sandbox, labels: { ...labels, turn: 3 } }
+      f.sandboxes.get.mockResolvedValue(changed)
+      f.sandboxes.getForRemoval.mockResolvedValue(changed)
+      for (const purpose of ['work', 'removal'] as const)
+        await expect(f.executor.adopt(adopt(purpose), f.signal)).rejects.toMatchObject({
+          code: 'CONFLICT',
+        })
+      f.sandboxes.getForRemoval.mockRejectedValue(conflict('Not a sandbox of this provider'))
       await expect(f.executor.adopt(adopt('removal'), f.signal)).rejects.toMatchObject({
         code: 'CONFLICT',
       })
+      expect(f.sandbox.destroy).not.toHaveBeenCalled()
     })
 
     it('refuses labels of another site or task than the fence', async () => {
@@ -503,6 +535,7 @@ describe('LocalTurnExecutor', () => {
         ),
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
       expect(f.sandboxes.get).not.toHaveBeenCalled()
+      expect(f.sandboxes.getForRemoval).not.toHaveBeenCalled()
     })
 
     it('allows only removal of a container adopted for removal', async () => {

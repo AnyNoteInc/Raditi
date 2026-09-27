@@ -9,6 +9,7 @@ import {
   type AgentEvent,
   type ExecCursor,
   type ExecHandle,
+  type RemovableSandbox,
   type Sandbox,
   type SandboxInfo,
   type TurnBundleSource,
@@ -81,6 +82,9 @@ export function sandboxSide() {
     kind: 'docker' as const,
     create: vi.fn(async () => sandbox),
     get: vi.fn(async (id: string): Promise<Sandbox | null> => (id === sandbox.id ? sandbox : null)),
+    getForRemoval: vi.fn(async (id: string): Promise<RemovableSandbox | null> =>
+      id === sandbox.id ? sandbox : null,
+    ),
     list: vi.fn(async (): Promise<SandboxInfo[]> => [
       { id: sandbox.id, labels: sandbox.labels, createdAt: new Date() },
     ]),

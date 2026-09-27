@@ -35,7 +35,7 @@ function fixture() {
   const sandbox = { id: item.id, labels: item.labels, destroy } as unknown as Sandbox
   const sandboxes = {
     list: vi.fn(async () => [item]),
-    get: vi.fn(async () => sandbox),
+    getForRemoval: vi.fn(async () => sandbox),
   } as unknown as SandboxProvider
   const inspect = vi.fn(async (): Promise<SiteLeaseAuthority | null> => authority)
   const leases = { inspect } as unknown as SiteLeaseStore
@@ -66,7 +66,7 @@ describe('turn reconciler', () => {
       if (kind === 'old-epoch') f.authority.epoch = 2
       if (kind === 'held') f.authority.heldForOperator = true
       expect((await f.reconcile()).removed).toEqual([f.item.id])
-      expect(f.sandboxes.get).toHaveBeenCalledWith(f.item.id)
+      expect(f.sandboxes.getForRemoval).toHaveBeenCalledWith(f.item.id)
       expect(f.destroy).toHaveBeenCalledWith('gc')
     },
   )
@@ -88,7 +88,7 @@ describe('turn reconciler', () => {
   it('refuses a reused container name resolving to another immutable id', async () => {
     const f = fixture()
     f.inspect.mockResolvedValue(null)
-    vi.mocked(f.sandboxes.get).mockResolvedValue({ ...f.sandbox, id: 'different-id' })
+    vi.mocked(f.sandboxes.getForRemoval).mockResolvedValue({ ...f.sandbox, id: 'different-id' })
     expect((await f.reconcile()).uncertain).toEqual([f.item.id])
     expect(f.destroy).not.toHaveBeenCalled()
   })

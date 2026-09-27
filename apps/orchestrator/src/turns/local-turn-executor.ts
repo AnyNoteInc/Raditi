@@ -16,6 +16,7 @@ import {
   type CapturedTurn,
   type DestroyReason,
   type ExecHandle,
+  type RemovableSandbox,
   type Sandbox,
   type SandboxInfo,
   type SandboxLabels,
@@ -49,7 +50,8 @@ export interface LocalTurnExecutorDependencies {
   importBundle?: typeof importBaseBundle
 }
 
-type Purpose = 'turn' | 'work' | 'removal'
+/** A prepared turn launches its agent; an adopted one only re-attaches to it. */
+type Purpose = 'turn' | 'work'
 
 const loadFailed = () =>
   new DomainError('SNAPSHOT_LOAD_FAILED', 'Could not load the turn snapshot', 502)
@@ -116,21 +118,24 @@ export class LocalTurnExecutor implements TurnExecutor {
     signal.throwIfAborted()
     if (input.labels.siteId !== input.fence.siteId || input.labels.taskId !== input.fence.taskId)
       throw badRequest('Adopted container labels differ from the fence')
-    const sandbox = await this.deps.sandboxes.get(input.containerId)
-    if (!sandbox) return null
-    // The provider must return the exact immutable container id, never a reused name.
-    if (
-      sandbox.id !== input.containerId ||
-      (Object.entries(input.labels) as [keyof SandboxLabels, unknown][]).some(
-        ([key, value]) => sandbox.labels[key] !== value,
-      )
-    )
-      throw conflict('Recovery container identity changed')
-    if (input.purpose === 'removal')
-      return new LocalTurnExecution(sandbox, this.deps, 'removal', { parseEvent: () => [] }, [])
+    if (input.purpose === 'removal') {
+      // Also a container that can no longer run anything, such as one whose gateway died.
+      const removable = await this.deps.sandboxes.getForRemoval(input.containerId)
+      if (!removable) return null
+      assertIdentity(removable, input)
+      return new RemovalExecution(removable)
+    }
     // Without the turn's credentials its output cannot be filtered: the turn is given up.
     if (!input.credentials?.length)
       throw execLost('The turn credentials are not available to this executor')
+    const sandbox = await this.deps.sandboxes.get(input.containerId)
+    if (!sandbox) {
+      // Gone, or unable to run the agent any more: only an adoption for removal reaches it.
+      if (await this.deps.sandboxes.getForRemoval(input.containerId))
+        throw execLost('The turn container can no longer run the agent')
+      return null
+    }
+    assertIdentity(sandbox, input)
     return new LocalTurnExecution(
       sandbox,
       this.deps,
@@ -164,6 +169,52 @@ export class LocalTurnExecutor implements TurnExecutor {
       // Whatever went wrong in storage, the key or the parts: the prior turn is unusable here.
       throw loadFailed()
     }
+  }
+}
+
+/** The provider must return the exact immutable container id, never a reused name. */
+function assertIdentity(found: RemovableSandbox, input: TurnAdoptInput): void {
+  if (
+    found.id !== input.containerId ||
+    (Object.entries(input.labels) as [keyof SandboxLabels, unknown][]).some(
+      ([key, value]) => found.labels[key] !== value,
+    )
+  )
+    throw conflict('Recovery container identity changed')
+}
+
+const removalOnly = () => conflict('The container was adopted only for removal')
+
+/** A container recovery only removes: nothing runs in it any more. */
+class RemovalExecution implements TurnExecution {
+  constructor(private readonly sandbox: RemovableSandbox) {}
+
+  get containerId(): string {
+    return this.sandbox.id
+  }
+
+  launch(): Promise<TurnAgentExec> {
+    return Promise.reject(removalOnly())
+  }
+
+  attach(): Promise<TurnAgentExec | null> {
+    return Promise.reject(removalOnly())
+  }
+
+  quiesce(): Promise<void> {
+    return Promise.reject(removalOnly())
+  }
+
+  capture(): Promise<CapturedTurn> {
+    return Promise.reject(removalOnly())
+  }
+
+  seal(): Promise<SealedTurnPart> {
+    return Promise.reject(removalOnly())
+  }
+
+  destroy(reason: DestroyReason): Promise<void> {
+    return this.sandbox.destroy(reason)
   }
 }
 
@@ -255,12 +306,7 @@ class LocalTurnExecution implements TurnExecution {
   }
 
   #allow(...purposes: Purpose[]): void {
-    if (!purposes.includes(this.purpose))
-      throw conflict(
-        this.purpose === 'removal'
-          ? 'The container was adopted only for removal'
-          : 'An adopted turn re-attaches to its agent',
-      )
+    if (!purposes.includes(this.purpose)) throw conflict('An adopted turn re-attaches to its agent')
   }
 }
 

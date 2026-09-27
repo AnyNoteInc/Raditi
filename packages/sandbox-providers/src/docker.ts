@@ -155,7 +155,8 @@ export function createDockerSandboxProvider(
     options.gateway ??
     (config.gateway && createDockerGatewayManager(config.gateway, docker, config.runtime))
 
-  const inspectSafe = async (info: Docker.ContainerInspectInfo) => {
+  /** This provider's own turn container, unchanged since creation; its gateway is not checked. */
+  const inspectOwned = (info: Docker.ContainerInspectInfo) => {
     const meta = identity(info)
     if (!meta) return null
     const host = info.HostConfig
@@ -226,26 +227,46 @@ export function createDockerSandboxProvider(
       host.LogConfig.Config?.compress !== 'false'
     )
       return null
-    if (meta.policy.mode === 'none') {
-      if (host.NetworkMode !== 'none' || (host.ExtraHosts?.length ?? 0) !== 0) return null
-    } else if (
-      !gateway ||
-      !(await gateway.validate({
+    // A gateway container's network is the gateway manager's to verify (inspectSafe).
+    if (
+      meta.policy.mode === 'none' &&
+      (host.NetworkMode !== 'none' || (host.ExtraHosts?.length ?? 0) !== 0)
+    )
+      return null
+    return { ...meta, createdAt }
+  }
+
+  /** Owned and with its gateway intact: a container to work in. */
+  const inspectSafe = async (info: Docker.ContainerInspectInfo) => {
+    const meta = inspectOwned(info)
+    if (!meta || meta.policy.mode === 'none') return meta
+    const intact =
+      gateway !== undefined &&
+      (await gateway.validate({
         resourceId: meta.gatewayId!,
         labels: meta.labels,
         deadline: meta.deadline,
         policy: meta.policy,
         sandbox: info,
       }))
-    )
-      return null
-    return { ...meta, createdAt }
+    return intact ? meta : null
+  }
+
+  const inspectById = async (id: string) => {
+    if (!/^[a-f0-9]{64}$/.test(id)) throw badRequest('Invalid sandbox identifier')
+    const container = docker.getContainer(id)
+    try {
+      return { container, info: await bounded(container.inspect()) }
+    } catch (error) {
+      if (isMissing(error)) return null
+      throw commandError()
+    }
   }
 
   const wrap = (
     container: Docker.Container,
     info: Docker.ContainerInspectInfo,
-    meta: NonNullable<Awaited<ReturnType<typeof inspectSafe>>>,
+    meta: NonNullable<ReturnType<typeof inspectOwned>>,
   ) => {
     const originalLabels = info.Config.Labels
     // Verified above: present exactly for gateway policies, and immutable with the labels.
@@ -375,17 +396,24 @@ export function createDockerSandboxProvider(
       }
     },
     async get(id) {
-      if (!/^[a-f0-9]{64}$/.test(id)) throw badRequest('Invalid sandbox identifier')
-      const container = docker.getContainer(id)
-      let info: Docker.ContainerInspectInfo
-      try {
-        info = await bounded(container.inspect())
-      } catch (error) {
-        if (isMissing(error)) return null
-        throw commandError()
+      const found = await inspectById(id)
+      if (!found) return null
+      const meta = await inspectSafe(found.info)
+      return meta ? wrap(found.container, found.info, meta) : null
+    },
+    async getForRemoval(id) {
+      const found = await inspectById(id)
+      if (!found) return null
+      const meta = inspectOwned(found.info)
+      if (!meta) throw conflict('The container is not a sandbox of this provider')
+      // Its gateway is released with it; without a manager it cannot be.
+      if (meta.gatewayId !== undefined && !gateway) throw commandError()
+      const sandbox = wrap(found.container, found.info, meta)
+      return {
+        id: sandbox.id,
+        labels: sandbox.labels,
+        destroy: (reason) => sandbox.destroy(reason),
       }
-      const meta = await inspectSafe(info)
-      return meta ? wrap(container, info, meta) : null
     },
     async list(filter = {}) {
       const parsed = sandboxLabelsSchema.partial().safeParse(filter)
@@ -407,7 +435,7 @@ export function createDockerSandboxProvider(
           },
         )
         if (!info) continue
-        const meta = await inspectSafe(info)
+        const meta = inspectOwned(info)
         if (
           meta &&
           Object.entries(parsed.data).every(

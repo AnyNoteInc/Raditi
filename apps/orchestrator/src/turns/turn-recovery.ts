@@ -125,7 +125,8 @@ export class TurnPublicationRecovery {
         )
           throw conflict('Recovery container identity is ambiguous')
         await guard.assertFence()
-        // Only for removal: a changed identity is a CONFLICT and keeps the site held.
+        // Only for removal, which reaches even a container that can no longer run anything:
+        // null means it is gone, and a changed identity is a CONFLICT that keeps the site held.
         const stale = await guard.interruptible(
           this.deps.executor.adopt(
             {

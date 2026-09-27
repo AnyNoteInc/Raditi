@@ -213,6 +213,11 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
       await intruder.start()
       await client.getNetwork(network.Id).connect({ Container: intruder.id })
       expect(await provider.get(sandbox.id)).toBeNull()
+      // Still found by its labels, and reached for removal only.
+      expect(
+        (await provider.list({ taskId: sandbox.labels.taskId })).map((found) => found.id),
+      ).toEqual([sandbox.id])
+      expect((await provider.getForRemoval(sandbox.id))?.id).toBe(sandbox.id)
       await intruder.remove({ force: true })
       intruder = undefined
       expect((await provider.get(sandbox.id))?.id).toBe(sandbox.id)

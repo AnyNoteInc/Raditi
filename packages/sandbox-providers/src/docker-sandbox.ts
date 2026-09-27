@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import {
   assertExecSpec,
   badRequest,
+  notFound,
   type DestroyReason,
   type ExecChunk,
   type ExecCursor,
@@ -273,7 +274,11 @@ export class DockerSandbox implements Sandbox {
     if (!cursor.success) throw badRequest('Invalid sandbox exec cursor')
     const [logical, dockerId] = execId.split('.') as [string, string]
     const exec = this.docker.getExec(dockerId)
-    const info = await bounded(exec.inspect())
+    const info = await bounded(exec.inspect()).catch((error: unknown) => {
+      // Gone with a restarted daemon or container: recovery gives the turn up (exec_lost).
+      if (isMissing(error)) throw notFound('Sandbox exec not found')
+      throw commandError()
+    })
     const args = info.ProcessConfig?.arguments
     const execDeadline = Number(args?.[3])
     if (

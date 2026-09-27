@@ -89,7 +89,8 @@ export class RunnerReconciler {
         continue
       }
       try {
-        const sandbox = await this.deps.sandboxes.get(id)
+        // Also a container that can no longer run anything, such as one whose gateway died.
+        const sandbox = await this.deps.sandboxes.getForRemoval(id)
         if (!sandbox) continue
         // The provider must return the exact immutable container id, never a reused name.
         if (

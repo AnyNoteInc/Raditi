@@ -296,6 +296,51 @@ describe('Docker sandbox provider', () => {
     },
   )
 
+  it('lists a container whose gateway died and reaches it only for removal', async () => {
+    const fake = daemon()
+    const resourceId = '01234567-1234-1234-1234-0123456789ab'
+    const gateway = {
+      prepare: vi.fn(async () => ({
+        networkMode: `container:${'a'.repeat(64)}`,
+        resourceId,
+        extraHosts: [],
+      })),
+      validate: vi.fn(async () => true),
+      release: vi.fn(async () => {}),
+    }
+    const provider = createDockerSandboxProvider(config, { client: fake.client, gateway })
+    const sandbox = await provider.create(spec({ network: { mode: 'gateway', routes: ['llm'] } }))
+    gateway.validate.mockResolvedValue(false)
+
+    // Nothing runs in it any more, but recovery finds it and must remove it before it goes on.
+    expect(await provider.get(sandbox.id)).toBeNull()
+    expect(await provider.list({ taskId: 't' })).toMatchObject([
+      { id: sandbox.id, labels: spec().labels },
+    ])
+    const removable = (await provider.getForRemoval(sandbox.id))!
+    expect(removable).toEqual({
+      id: sandbox.id,
+      labels: spec().labels,
+      destroy: expect.any(Function),
+    })
+    expect(removable).not.toHaveProperty('exec')
+    await removable.destroy('failed')
+    expect(fake.container.remove).toHaveBeenCalledWith({ force: true, v: true })
+    expect(gateway.release).toHaveBeenCalledWith(resourceId)
+
+    fake.container.inspect.mockRejectedValue({ statusCode: 404 })
+    expect(await provider.getForRemoval(sandbox.id)).toBeNull()
+    fake.container.inspect.mockRejectedValue(new Error('daemon unavailable'))
+    await expect(provider.getForRemoval(sandbox.id)).rejects.toMatchObject({
+      code: 'SANDBOX_COMMAND_FAILED',
+    })
+    // Without a gateway manager its gateway could not be released with it.
+    fake.container.inspect.mockImplementation(async () => structuredClone(fake.info()))
+    await expect(
+      createDockerSandboxProvider(config, { client: fake.client }).getForRemoval(sandbox.id),
+    ).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+  })
+
   it('runsc: joins the attempt network directly at the address the gateway manager gives', async () => {
     const fake = daemon()
     fake.raw.info.mockResolvedValue({
@@ -429,6 +474,7 @@ describe('Docker sandbox provider', () => {
       if (change === 'privileged') info.HostConfig.Privileged = true
       expect(await provider.get(sandbox.id)).toBeNull()
       expect(await provider.list()).toEqual([])
+      await expect(provider.getForRemoval(sandbox.id)).rejects.toMatchObject({ code: 'CONFLICT' })
       if (['owner', 'protocol', 'epoch'].includes(change))
         await expect(sandbox.destroy('gc')).rejects.toThrow(/ownership/)
       expect(fake.container.remove).not.toHaveBeenCalled()
@@ -553,6 +599,14 @@ describe('Docker sandbox provider', () => {
       code: 'BAD_REQUEST',
     })
     await expect(reconstructed.attach('../other')).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    // An exec the daemon no longer knows is lost, not a host failure to retry.
+    const [, dockerExecId] = run.id.split('.') as [string, string]
+    fake.raw.getExec(dockerExecId)!.inspect.mockRejectedValueOnce({ statusCode: 404 })
+    await expect(reconstructed.attach(run.id)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    fake.raw.getExec(dockerExecId)!.inspect.mockRejectedValueOnce(new Error('daemon unavailable'))
+    await expect(reconstructed.attach(run.id)).rejects.toMatchObject({
+      code: 'SANDBOX_COMMAND_FAILED',
+    })
     expect(
       fake.commands.every(
         (cmd) =>

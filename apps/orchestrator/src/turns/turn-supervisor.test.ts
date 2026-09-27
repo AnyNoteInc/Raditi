@@ -349,6 +349,7 @@ function turnFixture(kind: string) {
       return sandbox
     }),
     get: vi.fn(),
+    getForRemoval: vi.fn(),
     list: vi.fn(async () => [] as SandboxInfo[]),
   }
   const importBundle = vi.fn(async () => {
@@ -1482,10 +1483,13 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     f.sandboxes.list.mockResolvedValue([
       { id: f.sandbox.id, labels: f.sandbox.labels, createdAt: new Date() },
     ])
-    f.sandboxes.get.mockResolvedValue(f.sandbox)
+    f.sandboxes.getForRemoval.mockResolvedValue(f.sandbox)
     await expect(f.recover()).resolves.toMatchObject({ headSha })
     expect(f.leases.reclaimForRecovery).toHaveBeenCalledWith(f.lease, 210_000)
+    expect(f.order.indexOf('destroy')).toBeGreaterThan(-1)
     expect(f.order.indexOf('destroy')).toBeLessThan(f.order.indexOf('publish'))
+    // Removal only: nothing is taken over to work in.
+    expect(f.sandboxes.get).not.toHaveBeenCalled()
     expect(f.workspace.preparePublication).toHaveBeenCalledWith(
       expect.objectContaining({
         createdAt: f.request.committedAt,
@@ -1503,6 +1507,34 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     expect(f.driver.prepare).not.toHaveBeenCalled()
     expect(f.sandboxes.create).not.toHaveBeenCalled()
   })
+
+  it('removes a listed container that can no longer run anything before it publishes', async () => {
+    const f = await recoveryFixture()
+    f.sandboxes.list.mockResolvedValue([
+      { id: f.sandbox.id, labels: f.sandbox.labels, createdAt: new Date() },
+    ])
+    // Its gateway died: get() refuses it, removal still reaches it.
+    f.sandboxes.get.mockResolvedValue(null)
+    f.sandboxes.getForRemoval.mockResolvedValue(f.sandbox)
+    await expect(f.recover()).resolves.toMatchObject({ headSha })
+    expect(f.order.indexOf('destroy')).toBeGreaterThan(-1)
+    expect(f.order.indexOf('destroy')).toBeLessThan(f.order.indexOf('publish'))
+  })
+
+  it.each(['CONFLICT', 'SANDBOX_COMMAND_FAILED'])(
+    'holds the site without publishing while a listed container cannot be removed (%s)',
+    async (code) => {
+      const f = await recoveryFixture()
+      f.sandboxes.list.mockResolvedValue([
+        { id: f.sandbox.id, labels: f.sandbox.labels, createdAt: new Date() },
+      ])
+      f.sandboxes.getForRemoval.mockRejectedValue(new DomainError(code, 'Not removable', 409))
+      await expect(f.recover()).rejects.toMatchObject({ code })
+      expect(f.publication.publish).not.toHaveBeenCalled()
+      expect(f.leases.holdForRecovery).toHaveBeenCalledWith(expect.objectContaining({ epoch: 2 }))
+      expect(f.leases.release).not.toHaveBeenCalled()
+    },
+  )
 
   it('retains the new epoch beyond a late 60-second recovery push without a heartbeat', async () => {
     const f = await recoveryFixture()

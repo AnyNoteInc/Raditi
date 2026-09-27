@@ -239,7 +239,12 @@ describe('SandboxRunner with core', () => {
     await expect(adopt(false)).rejects.toMatchObject({ code: 'EXEC_LOST' })
     // A container gone meanwhile answers the adoption with `destroyed`.
     side.sandboxes.get.mockResolvedValueOnce(null)
+    side.sandboxes.getForRemoval.mockResolvedValueOnce(null)
     await expect(adopt(true)).resolves.toBeNull()
+    // One that can no longer run the agent (its gateway died) is lost for work, not gone.
+    side.sandboxes.get.mockResolvedValueOnce(null)
+    await expect(adopt(true)).rejects.toMatchObject({ code: 'EXEC_LOST' })
+    expect(runner.holds('container1')).toBe(false)
     const adopted = await adopt(true)
 
     expect(adopted?.containerId).toBe('container1')
@@ -419,6 +424,48 @@ describe('SandboxRunner commands', () => {
 
     expect(side.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('failed')
     expect(side.sandbox.exec).not.toHaveBeenCalled()
+  })
+
+  it('removes a container that can no longer run anything and answers only a gone one as destroyed', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    startRunner(core.transport, side.executor)
+    // Its gateway died: the provider no longer hands it out to work in.
+    side.sandboxes.get.mockResolvedValue(null)
+    const adopt = (purpose: 'work' | 'removal', containerId = 'container1') =>
+      command('adopt', {
+        containerId,
+        labels: { ...labels, leaseEpoch: 1 },
+        purpose,
+        ...(purpose === 'work'
+          ? { work: { remainingMs: 60_000, driverId: 'codex', credentials } }
+          : {}),
+      })
+
+    await core.send(adopt('work'))
+    await vi.waitFor(() =>
+      expect(core.reports).toMatchObject([{ type: 'failed', code: 'EXEC_LOST' }]),
+    )
+    await core.send(adopt('removal'))
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'adopted']))
+    await core.send(command('destroy', { reason: 'failed' }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'adopted', 'destroyed']))
+    expect(side.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('failed')
+    await core.send({
+      ...adopt('removal', 'container2'),
+      assignmentId: '00000000-0000-4000-8000-0000000000a2',
+    })
+    await vi.waitFor(() => expect(core.types()).toHaveLength(4))
+    expect(core.reports.at(-1)).toMatchObject({ type: 'destroyed', containerId: 'container2' })
+    // Without the turn credentials nothing is looked up: its output could not be filtered.
+    await core.send({
+      ...adopt('work'),
+      assignmentId: '00000000-0000-4000-8000-0000000000a3',
+      work: { remainingMs: 60_000, driverId: 'codex' },
+    })
+    await vi.waitFor(() => expect(core.types()).toHaveLength(5))
+    expect(core.reports.at(-1)).toMatchObject({ type: 'failed', code: 'CREDENTIALS_LOST' })
+    expect(side.sandboxes.getForRemoval).toHaveBeenCalledTimes(3)
   })
 })
 

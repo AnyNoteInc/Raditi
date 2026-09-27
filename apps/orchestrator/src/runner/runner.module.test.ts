@@ -45,6 +45,7 @@ describe('RunnerModule', () => {
       kind: 'docker' as const,
       create: vi.fn(),
       get: vi.fn(async () => null),
+      getForRemoval: vi.fn(async () => null),
       list: vi.fn(async () => [
         { id: 'container1', labels: { ...labels, leaseEpoch: 1 }, createdAt: new Date() },
       ]),
@@ -68,7 +69,7 @@ describe('RunnerModule', () => {
 
     // The poll brought the inventory; the reconcile at start found no owner for the container.
     await vi.waitFor(() => expect(hub.inventory({})).toHaveLength(1))
-    await vi.waitFor(() => expect(docker.get).toHaveBeenCalledWith('container1'))
+    await vi.waitFor(() => expect(docker.getForRemoval).toHaveBeenCalledWith('container1'))
     expect(moduleRef.get(SandboxRunner).session).toMatch(/^[0-9a-f-]{36}$/)
     await moduleRef.close()
     closers.pop()

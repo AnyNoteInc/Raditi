@@ -131,11 +131,23 @@ export interface SandboxInfo {
   createdAt: Date
 }
 
+/** A container that is only removed: recovery and garbage collection never run anything in it. */
+export type RemovableSandbox = Pick<Sandbox, 'id' | 'labels' | 'destroy'>
+
 export interface SandboxProvider {
   readonly kind: 'docker'
   create(spec: SandboxSpec, signal?: AbortSignal): Promise<Sandbox>
+  /**
+   * A container to work in: this provider's own, unchanged and with its network intact. null
+   * when it is gone or can no longer be used (its gateway died); getForRemoval() still reaches it.
+   */
   get(id: string): Promise<Sandbox | null>
-  /** For the reconciler: find orphans by labels and age. */
+  /**
+   * Removal only: a container list() reports, even one get() refuses. null when it is gone;
+   * CONFLICT when it exists but is not, or no longer, this provider's own container.
+   */
+  getForRemoval(id: string): Promise<RemovableSandbox | null>
+  /** Turn containers of this provider by labels and age, whether or not get() takes them. */
   list(filter?: Partial<SandboxLabels>): Promise<SandboxInfo[]>
 }
 

@@ -522,6 +522,12 @@ export class SandboxRunner {
     // A restarted runner takes the container over from Docker, checked by id and labels.
     const held = new Held(command.assignmentId, command.fence, command.labels, deadline)
     const answer = this.#answer(held, command)
+    // Only the session that launched the agent held its credentials: without them its output
+    // cannot be filtered, and the turn is given up.
+    if (command.work && !command.work.credentials) {
+      await answer({ type: 'failed', code: 'CREDENTIALS_LOST' })
+      return
+    }
     try {
       const base = {
         assignmentId: held.id,
@@ -551,13 +557,10 @@ export class SandboxRunner {
       this.#held.set(held.id, held)
       await answer({ type: 'adopted', containerId: execution.containerId })
     } catch (error) {
+      // EXEC_LOST: the container can no longer run the agent; only removal reaches it.
       await answer({
         type: 'failed',
-        // Without the turn's credentials its output cannot be filtered: the turn is given up.
-        code:
-          isDomainError(error) && error.code === 'EXEC_LOST'
-            ? 'CREDENTIALS_LOST'
-            : runnerFailureCode(error, 'SANDBOX_COMMAND_FAILED', ['CONFLICT']),
+        code: runnerFailureCode(error, 'SANDBOX_COMMAND_FAILED', ['CONFLICT', 'EXEC_LOST']),
       })
     }
   }

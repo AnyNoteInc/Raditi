@@ -340,8 +340,9 @@ interface AgentDriver {
 interface SandboxProvider {
   kind: 'docker'                                       // локальный сокет Docker: в core (PoC) или в роли runner (пилот)
   create(spec: SandboxSpec, signal?: AbortSignal): Promise<Sandbox>
-  get(id: SandboxId): Promise<Sandbox | null>          // подхватить после рестарта процесса
-  list(filter?: Partial<SandboxLabels>): Promise<SandboxInfo[]> // сироты для сборщика мусора
+  get(id: SandboxId): Promise<Sandbox | null>          // подхватить для работы: свой, неизменный, шлюз цел
+  getForRemoval(id: SandboxId): Promise<RemovableSandbox | null> // только удалить: и тот, что get не отдаёт
+  list(filter?: Partial<SandboxLabels>): Promise<SandboxInfo[]> // свои контейнеры ходов по меткам — и для работы, и для удаления
 }
 
 interface SandboxSpec {
@@ -365,6 +366,8 @@ interface Sandbox {
   destroy(reason: 'completed' | 'failed' | 'cancelled' | 'timeout' | 'gc'): Promise<void>
 }
 ```
+
+Принять контейнер после рестарта для работы и для удаления — разные операции. `get` отдаёт только контейнер, в котором можно продолжать ход: свой по меткам, с прежними настройками изоляции и целым шлюзом. `getForRemoval` находит и тот, что для работы уже не годится (например, упал его шлюз), и умеет только удалить его вместе с ресурсами шлюза; `null` значит, что контейнера нет, а чужой контейнер — `CONFLICT`. `list` сообщает все свои контейнеры ходов, поэтому recovery и сборщик мусора видят и такие. Пропавший exec при `attach` — `NOT_FOUND`: recovery отказывается от хода (`exec_lost`), а не повторяет попытку.
 
 Правило 5 из CLAUDE.md проверяется кодом, а не только ревью: каждая спецификация проходит `sandboxSpecSchema` (`assertSandboxSpec` в `packages/domain`) до запуска — образ по дайджесту, uid 10001, потолки ресурсов и времени, сеть только `sandbox-gw`, нет похожих на секреты переменных окружения. Вывод агента недоверенный: у общих событий и итога хода есть лимиты длины (`agentOutputLimits`). Пути, которые дифф трогать не может, проверяет `isForbiddenPath` там же, в ядре.
 

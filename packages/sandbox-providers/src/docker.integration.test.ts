@@ -174,6 +174,11 @@ describe.skipIf(!image)('real Docker sandbox provider', () => {
     expect(total.stdout).toEqual(Buffer.from([1, 2, 0, 255, 42, 0, 255, 43]))
     expect(total.stderr).toEqual(Buffer.from([3, 255, 0, 4]))
     expect(await attached.wait()).toEqual({ code: 0, reason: 'exited' })
+    // An exec the daemon does not know is lost for recovery, not a host failure.
+    const [logical] = exec.id.split('.') as [string, string]
+    await expect(recovered.attach(`${logical}.${'0'.repeat(64)}`)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
   }, 30_000)
 
   it('handles missing executables and command timeout without hanging', async () => {

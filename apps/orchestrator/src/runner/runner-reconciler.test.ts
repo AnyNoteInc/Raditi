@@ -42,7 +42,9 @@ function fakeDocker() {
     provider: {
       kind: 'docker' as const,
       create: vi.fn(),
-      get: vi.fn(async (id: string) => sandboxes.get(id) ?? null),
+      // Nothing here is taken to work in: the reconciler only removes.
+      get: vi.fn(async () => null),
+      getForRemoval: vi.fn(async (id: string) => sandboxes.get(id) ?? null),
       list: vi.fn(async () =>
         Object.entries(containers).map(([id, containerLabels]) => ({
           id,
@@ -109,6 +111,6 @@ describe('RunnerReconciler', () => {
     })
 
     await expect(reconciler.reconcile()).rejects.toBeInstanceOf(RunnerCallError)
-    expect(docker.provider.get).not.toHaveBeenCalled()
+    expect(docker.provider.getForRemoval).not.toHaveBeenCalled()
   })
 })
