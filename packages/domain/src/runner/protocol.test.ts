@@ -378,7 +378,7 @@ describe('runner poll and answers', () => {
     expect(runnerLimits.capacity).toBe(64)
   })
 
-  it('knows the three conflicts', () => {
+  it('knows the four conflicts', () => {
     expect(runnerConflictSchema.parse({ error: 'FENCE_SUPERSEDED', fence })).toEqual({
       error: 'FENCE_SUPERSEDED',
       fence,
@@ -391,6 +391,10 @@ describe('runner poll and answers', () => {
       }).success,
     ).toBe(true)
     expect(runnerConflictSchema.safeParse({ error: 'LEASE_LOST', fence }).success).toBe(false)
+    expect(runnerConflictSchema.parse({ error: 'SESSION_RETIRED' })).toEqual({
+      error: 'SESSION_RETIRED',
+    })
+    expect(runnerConflictSchema.safeParse({ error: 'SESSION_RETIRED', fence }).success).toBe(false)
   })
 
   it('answers every other refusal with a bare code', () => {

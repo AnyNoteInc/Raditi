@@ -766,11 +766,7 @@ export class RunnerHub implements OnApplicationShutdown {
   #session(runnerId: string, sessionId: string): RunnerSession {
     this.#rejectRetired(runnerId, sessionId)
     let session = this.#sessions.get(runnerId)
-    if (session?.id === sessionId) {
-      // Silent past the heartbeat: its turns were given up; it restarts under a new session.
-      if (session.gone) throw RunnerApiError.leaseLost()
-      return session
-    }
+    if (session?.id === sessionId) return session
     if (session) {
       this.#retire(session, runnerUnavailable('The sandbox runner restarted'))
       const retired = this.#retired.get(runnerId) ?? []
@@ -793,9 +789,24 @@ export class RunnerHub implements OnApplicationShutdown {
     return session
   }
 
-  /** A zombie of a restarted runner is told to remove what it still holds. */
+  /**
+   * A zombie of a restarted runner, or a session core gave up as silent, stops without touching
+   * any container — the newer session or recovery may hold them — and restarts under a new one.
+   */
   #rejectRetired(runnerId: string, sessionId: string): void {
-    if (this.#retired.get(runnerId)?.includes(sessionId)) throw RunnerApiError.leaseLost()
+    const current = this.#sessions.get(runnerId)
+    if (
+      this.#retired.get(runnerId)?.includes(sessionId) ||
+      (current?.id === sessionId && current.gone)
+    )
+      throw RunnerApiError.sessionRetired()
+  }
+
+  /** Reports and transfers come only from the runner's current session, once it polled. */
+  #assertCurrent(runnerId: string, sessionId: string): void {
+    this.#rejectRetired(runnerId, sessionId)
+    const current = this.#sessions.get(runnerId)
+    if (current && current.id !== sessionId) throw RunnerApiError.sessionRetired()
   }
 
   #retire(session: RunnerSession, error: unknown): void {
@@ -852,11 +863,12 @@ export class RunnerHub implements OnApplicationShutdown {
     epoch: number,
   ): Promise<LiveAssignment> {
     this.#assertServing()
-    this.#rejectRetired(runnerId, sessionId)
+    this.#assertCurrent(runnerId, sessionId)
     const live = this.#live.get(assignmentId)
     if (live) {
-      if (live.runner.id !== runnerId || live.runner.session !== sessionId)
-        throw RunnerApiError.leaseLost()
+      if (live.runner.id !== runnerId) throw RunnerApiError.leaseLost()
+      // Another session of this runner holds the turn: this one must not touch its container.
+      if (live.runner.session !== sessionId) throw RunnerApiError.sessionRetired()
       if (epoch === live.fence.epoch) return live
       if (epoch < live.fence.epoch) throw RunnerApiError.superseded(live.fence)
       throw RunnerApiError.leaseLost()
@@ -869,12 +881,13 @@ export class RunnerHub implements OnApplicationShutdown {
       throw RunnerApiError.of('UNAVAILABLE')
     }
     if (
-      !row ||
-      row.outcome !== null ||
-      row.runner?.id !== runnerId ||
-      row.runner.session !== sessionId ||
-      epoch > row.fence.epoch
+      row &&
+      row.outcome === null &&
+      row.runner?.id === runnerId &&
+      row.runner.session !== sessionId
     )
+      throw RunnerApiError.sessionRetired()
+    if (!row || row.outcome !== null || row.runner?.id !== runnerId || epoch > row.fence.epoch)
       throw RunnerApiError.leaseLost()
     // Unfinished and still this runner's, but no core drives it now: recovery takes it over.
     throw RunnerApiError.of('UNAVAILABLE')

@@ -183,7 +183,7 @@ export function runnerInventory(listed: readonly SandboxInfo[]): RunnerInventory
 }
 
 type Failure =
-  | { reason: 'lost' | 'closed' | 'refused' | 'gave_up' }
+  | { reason: 'lost' | 'retired' | 'closed' | 'refused' | 'gave_up' }
   | { reason: 'superseded'; fence: SiteLeaseFence }
   | { reason: 'mismatch'; expected: ExecCursor }
 type Outcome<T> = { ok: true; value: T } | ({ ok: false } & Failure)
@@ -197,6 +197,8 @@ function classify(error: unknown): Failure | { reason: 'retry' } {
     switch (refusal.error) {
       case 'LEASE_LOST':
         return { reason: 'lost' }
+      case 'SESSION_RETIRED':
+        return { reason: 'retired' }
       case 'FENCE_SUPERSEDED':
         return { reason: 'superseded', fence: refusal.fence }
       case 'CURSOR_MISMATCH':
@@ -316,7 +318,8 @@ export class SandboxRunner {
         if (this.#stop.signal.aborted) return
         // Core requeues whatever an ended poll did not deliver.
         if (polling.signal.aborted) continue
-        if (classify(error).reason === 'lost') return this.#retire()
+        // A poll is about no single turn: a lost lease there, too, means the session is over.
+        if (['retired', 'lost'].includes(classify(error).reason)) return this.#retire()
         this.#warn('poll', logged(error))
         const wait = Math.min(POLL_BACKOFF_MS.max, POLL_BACKOFF_MS.first * 2 ** failures++)
         await sleep(wait, this.#stop.signal)
@@ -351,8 +354,9 @@ export class SandboxRunner {
   }
 
   /**
-   * A newer session of this runner polls core: this one is a zombie. It drops its turns without
-   * touching their containers — the newer session may hold them — and stops.
+   * Core retired this session (SESSION_RETIRED): a newer one of this runner polls, or core gave
+   * it up as silent. It drops its turns without touching their containers — the newer session or
+   * recovery may hold them — and stops.
    */
   #retire(): void {
     if (this.#retired) return
@@ -1009,6 +1013,10 @@ export class SandboxRunner {
           }
           await sleep(wait, stop)
           continue
+        }
+        if (failure.reason === 'retired') {
+          this.#retire()
+          return { ok: false, ...failure }
         }
         if (target instanceof Held) {
           if (failure.reason === 'lost') void this.#leaseLost(target)

@@ -1544,7 +1544,7 @@ describe('turn exec recovery on a runner VM', () => {
           epoch: 2,
         }),
       ),
-    ).rejects.toMatchObject({ body: { error: 'LEASE_LOST' } })
+    ).rejects.toMatchObject({ body: { error: 'SESSION_RETIRED' } })
     w.vm.finish()
     await recovering
 

@@ -546,9 +546,10 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(await refusal(vm.report(assignment.id, quiesced, 3))).toEqual({ error: 'LEASE_LOST' })
     const other = f.runner('sandbox-2', vm.runnerSession)
     expect(await refusal(other.report(assignment.id, quiesced, 2))).toEqual({ error: 'LEASE_LOST' })
+    // Another session of this runner: it stops and leaves the container to this one.
     const zombie = f.runner('sandbox-1')
     expect(await refusal(zombie.report(assignment.id, quiesced, 2))).toEqual({
-      error: 'LEASE_LOST',
+      error: 'SESSION_RETIRED',
     })
     expect(await refusal(vm.report(randomUUID(), quiesced, 2))).toEqual({ error: 'LEASE_LOST' })
     expect(await refusal(vm.report(assignment.id, quiesced, 2))).toEqual({
@@ -588,6 +589,32 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(await refusal(vm.report(assignment.id, answer))).toEqual({ error: 'LEASE_LOST' })
   })
 
+  it('retires another session of the runner that reports on a turn no core drives yet', async () => {
+    const f = fixture()
+    const { assignment, vm } = await f.prepared()
+    // Core restarted: its hub knows no runner session yet; the assignment names vm's.
+    const restarted = new RunnerHub({
+      assignments: f.assignments,
+      leases: f.leases,
+      logger: { warn: vi.fn() },
+    })
+    hubs.push(restarted)
+    const report = (runnerId: string, runnerSession: string) =>
+      restarted.report(
+        runnerId,
+        runnerReportSchema.parse({
+          type: 'quiesced',
+          commandId: randomUUID(),
+          runnerSession,
+          assignmentId: assignment.id,
+          epoch: 1,
+        }),
+      )
+    expect(await refusal(report('sandbox-1', randomUUID()))).toEqual({ error: 'SESSION_RETIRED' })
+    expect(await refusal(report('sandbox-1', vm.runnerSession))).toEqual({ error: 'UNAVAILABLE' })
+    expect(await refusal(report('sandbox-2', vm.runnerSession))).toEqual({ error: 'LEASE_LOST' })
+  })
+
   it('fails the open commands of a runner that restarted and refuses its old session', async () => {
     const f = fixture()
     const { assignment, execution, vm } = await f.prepared()
@@ -597,10 +624,11 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     const restarted = f.runner('sandbox-1')
     expect(await restarted.poll({ capacity: 0 })).toEqual([])
     await rejected
+    // Retired, not lost: the new session may have taken the container over.
     expect(
       await refusal(vm.report(assignment.id, { type: 'quiesced', commandId: randomUUID() })),
-    ).toEqual({ error: 'LEASE_LOST' })
-    await expect(vm.poll()).rejects.toBeInstanceOf(RunnerApiError)
+    ).toEqual({ error: 'SESSION_RETIRED' })
+    expect(await refusal(vm.poll())).toEqual({ error: 'SESSION_RETIRED' })
     // The container is not reachable through the new session until recovery adopts it.
     await expect(execution.destroy('failed')).rejects.toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
   })
@@ -612,13 +640,16 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     // The monotonic clock follows the fake clock, as it would on a real host.
     vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
     const f = fixture()
-    const { execution, vm } = await f.prepared()
+    const { assignment, execution, vm } = await f.prepared()
     const quiescing = execution.quiesce()
     const rejected = expect(quiescing).rejects.toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
     await vi.advanceTimersByTimeAsync(runnerTimings.silentAfterMs + 10_000)
     await rejected
     // Coming back, it is told to restart under a new session instead of polling in vain.
-    expect(await refusal(vm.poll())).toEqual({ error: 'LEASE_LOST' })
+    expect(await refusal(vm.poll())).toEqual({ error: 'SESSION_RETIRED' })
+    expect(
+      await refusal(vm.report(assignment.id, { type: 'quiesced', commandId: randomUUID() })),
+    ).toEqual({ error: 'SESSION_RETIRED' })
   })
 
   it('treats a container the runner removed on its own as gone', async () => {

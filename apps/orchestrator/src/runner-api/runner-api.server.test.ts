@@ -348,7 +348,7 @@ describe('RunnerApiServer', () => {
       ...output(10, 20),
     })
     expect(foreign.status).toBe(409)
-    expect(await foreign.json()).toEqual({ error: 'LEASE_LOST' })
+    expect(await foreign.json()).toEqual({ error: 'SESSION_RETIRED' })
   })
 
   it('asks runners to retry while core shuts down, never tells them their turns are lost', async () => {

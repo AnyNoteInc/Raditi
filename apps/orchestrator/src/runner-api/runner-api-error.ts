@@ -27,6 +27,10 @@ export class RunnerApiError extends Error {
     return RunnerApiError.conflict({ error: 'LEASE_LOST' })
   }
 
+  static sessionRetired(): RunnerApiError {
+    return RunnerApiError.conflict({ error: 'SESSION_RETIRED' })
+  }
+
   static superseded(fence: SiteLeaseFence): RunnerApiError {
     const { siteId, taskId, operation, epoch } = fence
     return RunnerApiError.conflict({

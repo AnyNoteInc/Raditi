@@ -644,7 +644,7 @@ try {
     assert.deepEqual([resumed.execId, resumed.cursor], [left.execId, left.cursor])
     const current = await assignmentOf(task.taskId)
     assert.equal(current.runnerSession, assignment.runnerSession, 'The same runner session')
-    // A stale epoch is refused with the fence to move to; a foreign session loses the lease.
+    // A stale epoch is refused with the fence to move to; another session of the runner is retired.
     const stale = await report({
       runnerSession: current.runnerSession,
       assignmentId: current.id,
@@ -658,7 +658,7 @@ try {
       assignmentId: current.id,
       epoch: resumed.fence.epoch,
     })
-    assert.deepEqual([foreign.status, foreign.body], [409, { error: 'LEASE_LOST' }])
+    assert.deepEqual([foreign.status, foreign.body], [409, { error: 'SESSION_RETIRED' }])
     await openGate(assignment.containerId)
     await waitFor(async () => (await assignmentOf(task.taskId)).outcome, 'the resumed turn to end')
     await expectCompleted(task.taskId, 1)
@@ -685,7 +685,7 @@ try {
     })
     assert.deepEqual([finished.status, finished.body], [409, { error: 'LEASE_LOST' }])
     verified.push(
-      `kill -9 of core during output: resumed from the journal cursor under epoch ${resumed.fence.epoch}, every event once, published; stale epoch → 409 FENCE_SUPERSEDED, foreign or finished session → 409 LEASE_LOST (${Math.round((Date.now() - started) / 1000)} s)`,
+      `kill -9 of core during output: resumed from the journal cursor under epoch ${resumed.fence.epoch}, every event once, published; stale epoch → 409 FENCE_SUPERSEDED, another session → 409 SESSION_RETIRED, a finished turn → 409 LEASE_LOST (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 
@@ -723,9 +723,9 @@ try {
       assignmentId: current.id,
       epoch: current.leaseEpoch,
     })
-    assert.deepEqual([zombie.status, zombie.body], [409, { error: 'LEASE_LOST' }])
+    assert.deepEqual([zombie.status, zombie.body], [409, { error: 'SESSION_RETIRED' }])
     verified.push(
-      `kill -9 of the runner during output: the turn lost without publication, its container removed through the restarted runner, the site freed only after that; the old session → 409 LEASE_LOST (${Math.round((Date.now() - started) / 1000)} s)`,
+      `kill -9 of the runner during output: the turn lost without publication, its container removed through the restarted runner, the site freed only after that; the old session → 409 SESSION_RETIRED (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 
@@ -761,7 +761,7 @@ try {
       assignmentId: current.id,
       epoch,
     })
-    assert.deepEqual([zombie.status, zombie.body], [409, { error: 'LEASE_LOST' }])
+    assert.deepEqual([zombie.status, zombie.body], [409, { error: 'SESSION_RETIRED' }])
     const stale = await report({
       runnerSession: current.runnerSession,
       assignmentId: current.id,
@@ -773,7 +773,7 @@ try {
     await expectCompleted(task.taskId, 1)
     expectEvents(await journal(task.taskId))
     verified.push(
-      `kill -9 of core and the runner during output: resumed on the new runner session with recovered credentials, the old session → 409 LEASE_LOST, published (${Math.round((Date.now() - started) / 1000)} s)`,
+      `kill -9 of core and the runner during output: resumed on the new runner session with recovered credentials, the old session → 409 SESSION_RETIRED, published (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 

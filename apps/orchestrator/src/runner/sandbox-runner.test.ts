@@ -532,7 +532,9 @@ describe('SandboxRunner commands', () => {
     await core.send(prepareCommand())
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
 
-    core.transport.poll.mockRejectedValue(new RunnerCallError('poll', 409, { error: 'LEASE_LOST' }))
+    core.transport.poll.mockRejectedValue(
+      new RunnerCallError('poll', 409, { error: 'SESSION_RETIRED' }),
+    )
     await core.send()
     await vi.waitFor(() => expect(onRetired).toHaveBeenCalledOnce())
 
@@ -542,6 +544,30 @@ describe('SandboxRunner commands', () => {
     expect(lines).toContain(
       'Core retired this runner session: it stops and restarts under a new one',
     )
+  })
+
+  it('stops without touching the container when core answers a report that its session is retired', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    const onRetired = vi.fn()
+    const { runner } = startRunner(core.transport, side.executor, { onRetired })
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    // Unlike LEASE_LOST, which removes the container of this very turn.
+    core.transport.report.mockImplementation(async (report) => {
+      core.reports.push(report)
+      if (report.type === 'quiesced')
+        throw new RunnerCallError('report', 409, { error: 'SESSION_RETIRED' })
+    })
+
+    await core.send(command('quiesce'))
+    await vi.waitFor(() => expect(onRetired).toHaveBeenCalledOnce())
+
+    expect(side.sandbox.destroy).not.toHaveBeenCalled()
+    expect(runner.holds('container1')).toBe(false)
+    const polls = core.polls.length
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(core.polls).toHaveLength(polls)
   })
 
   it('adopts a container only for removal and removes it', async () => {

@@ -456,10 +456,14 @@ export const runnerReportReplySchema = z.object({ ok: z.literal(true) }).strict(
  * 409 answers. FENCE_SUPERSEDED: recovery took the turn over under a newer fence; the runner
  * switches to it, drops the reports of commands issued under the older epoch and sends output
  * again only after the next resume. LEASE_LOST: kill the exec and remove the container.
+ * SESSION_RETIRED: this runner session is no longer the runner's (a newer one polls, or core
+ * gave it up as silent): it stops without touching any container — the newer session or
+ * recovery may hold them — and the runner restarts under a new session.
  */
 export const runnerConflictSchema = z.discriminatedUnion('error', [
   z.object({ error: z.literal('FENCE_SUPERSEDED'), fence }).strict(),
   z.object({ error: z.literal('LEASE_LOST') }).strict(),
+  z.object({ error: z.literal('SESSION_RETIRED') }).strict(),
   /** A gap in the output: the runner re-attaches from `expected`. */
   z.object({ error: z.literal('CURSOR_MISMATCH'), expected: execCursorSchema }).strict(),
 ])
