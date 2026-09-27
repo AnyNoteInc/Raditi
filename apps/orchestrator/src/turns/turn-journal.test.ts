@@ -2,7 +2,7 @@ import { createPrismaClient, PostgresSiteLeaseStore, type PrismaClient } from '@
 import type { SiteLeaseGrant, TurnEvidence } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { TaskEventTurnJournal } from './turn-journal.ts'
+import { replayedTurn, TaskEventTurnJournal, type JournaledEvidence } from './turn-journal.ts'
 
 describe('turn journal boundary', () => {
   it('refuses arbitrary raw errors and prepared credentials in evidence', async () => {
@@ -32,6 +32,77 @@ describe('turn journal boundary', () => {
     }
     await expect(new TaskEventTurnJournal({ $queryRaw }).record(evidence)).rejects.toMatchObject({
       code: 'LEASE_LOST',
+    })
+  })
+})
+
+describe('turn journal replay', () => {
+  it('refuses an invalid range before querying', async () => {
+    const $queryRaw = vi.fn()
+    const journal = new TaskEventTurnJournal({ $queryRaw })
+    const range = {
+      siteId: '00000000-0000-4000-8000-000000000002',
+      taskId: '00000000-0000-4000-8000-000000000003',
+      sessionId: 'synthetic',
+      turn: 1,
+      fromEpoch: 2,
+      toEpoch: 1,
+    }
+    await expect(journal.replay(range)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(journal.replay({ ...range, siteId: 'bad', toEpoch: 2 })).rejects.toThrow()
+    expect($queryRaw).not.toHaveBeenCalled()
+  })
+
+  it('sums up where the agent stopped: the last phase, its exec and the journaled output', () => {
+    const fence = {
+      siteId: '00000000-0000-4000-8000-000000000002',
+      taskId: '00000000-0000-4000-8000-000000000003',
+      operation: 'turn' as const,
+      epoch: 1,
+    }
+    const entry = (phase: JournaledEvidence['phase'], extra: Partial<JournaledEvidence> = {}) =>
+      ({
+        fence,
+        sessionId: 'synthetic',
+        turn: 1,
+        sequence: 1,
+        phase,
+        ...extra,
+      }) as JournaledEvidence
+    expect(replayedTurn([])).toEqual({
+      lastPhase: undefined,
+      containerId: undefined,
+      execId: undefined,
+      cursor: { stdout: 0, stderr: 0 },
+      events: [],
+      candidateHeadSha: undefined,
+    })
+    expect(
+      replayedTurn([
+        entry('leased'),
+        entry('created', { containerId: 'container1' }),
+        entry('running', { containerId: 'container1', execId: 'exec1' }),
+        entry('output', {
+          execId: 'exec1',
+          cursor: { stdout: 10, stderr: 2 },
+          events: [{ type: 'message', text: 'first' }],
+        }),
+        entry('output', { execId: 'exec1', cursor: { stdout: 12, stderr: 5 } }),
+        entry('resumed', { fence: { ...fence, epoch: 2 }, recoveredFromEpoch: 1 }),
+        entry('output', {
+          fence: { ...fence, epoch: 2 },
+          execId: 'exec1',
+          cursor: { stdout: 20, stderr: 5 },
+          events: [{ type: 'completed' }],
+        }),
+      ]),
+    ).toEqual({
+      lastPhase: 'output',
+      containerId: 'container1',
+      execId: 'exec1',
+      cursor: { stdout: 20, stderr: 5 },
+      events: [{ type: 'message', text: 'first' }, { type: 'completed' }],
+      candidateHeadSha: undefined,
     })
   })
 })
@@ -103,6 +174,62 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       code: 'LEASE_LOST',
     })
     expect(await db.taskEvent.count({ where: { taskId: f.task.id } })).toBe(1)
+  })
+
+  it('replays one turn across its epochs in the order it was written', async () => {
+    const f = await fixture()
+    const record = (fence: SiteLeaseGrant, extra: Partial<TurnEvidence>) =>
+      f.journal.record({ ...f.evidence, fence, ...extra })
+    await record(f.fence, { phase: 'leased' })
+    await record(f.fence, { phase: 'running', execId: 'exec1', containerId: 'container1' })
+    await record(f.fence, { phase: 'output', cursor: { stdout: 5, stderr: 0 } })
+    // Another session and another turn of the same task stay out.
+    await record(f.fence, { phase: 'leased', sessionId: 'other' })
+    await record(f.fence, { phase: 'leased', turn: 2 })
+    await f.leases.holdForRecovery(f.fence)
+    const next = (await f.leases.reclaimForRecovery(f.fence, 60_000)) as SiteLeaseGrant
+    await record(next, { phase: 'resumed', recoveredFromEpoch: 1 })
+    // Many output batches: more than one page of the replay.
+    await db.$executeRaw`
+      INSERT INTO task_events (task_id, type, payload, client_visible)
+      SELECT ${f.task.id}::uuid, 'turn.output', jsonb_build_object(
+        'fence', jsonb_build_object('siteId', ${f.fence.siteId}::text,
+          'taskId', ${f.task.id}::text, 'operation', 'turn', 'epoch', 2),
+        'sessionId', 'synthetic', 'turn', 1, 'sequence', n, 'phase', 'output',
+        'cursor', jsonb_build_object('stdout', 5 + n, 'stderr', 0)), false
+      FROM generate_series(1, 600) AS n`
+    const range = {
+      siteId: f.fence.siteId,
+      taskId: f.task.id,
+      sessionId: 'synthetic',
+      turn: 1,
+      fromEpoch: 1,
+      toEpoch: 2,
+    }
+    const entries = await f.journal.replay(range)
+    expect(entries).toHaveLength(604)
+    expect(entries.slice(0, 4).map((entry) => [entry.fence.epoch, entry.phase])).toEqual([
+      [1, 'leased'],
+      [1, 'running'],
+      [1, 'output'],
+      [2, 'resumed'],
+    ])
+    expect(replayedTurn(entries)).toMatchObject({
+      lastPhase: 'output',
+      execId: 'exec1',
+      cursor: { stdout: 605, stderr: 0 },
+    })
+    expect(await f.journal.replay({ ...range, toEpoch: 1 })).toHaveLength(3)
+
+    // A stored entry the schema refuses is a mismatch for an operator, never skipped.
+    await db.taskEvent.create({
+      data: {
+        taskId: f.task.id,
+        type: 'turn.lifecycle',
+        payload: { ...entries[0], fence: { ...entries[0]!.fence, epoch: 2 }, phase: 'rewritten' },
+      },
+    })
+    await expect(f.journal.replay(range)).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 
   it('refuses old-epoch evidence after a newer owner acquires the site', async () => {
