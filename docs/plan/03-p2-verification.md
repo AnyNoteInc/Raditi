@@ -54,7 +54,7 @@ export RADITI_DOCKER_TEST_IMAGE="$(docker image inspect raditi-sandbox-runtime:p
 export SANDBOX_GATEWAY_IMAGE="$(docker image inspect raditi-sandbox-gateway:p2 --format '{{index .RepoDigests 0}}')"
 export SANDBOX_NETWORK_GUARD_IMAGE="$(docker image inspect raditi-sandbox-guard:p2 --format '{{index .RepoDigests 0}}')"
 pnpm --filter @repo/sandbox-providers exec vitest run src/docker.integration.test.ts src/gateway/gateway.integration.test.ts
-pnpm test:sandbox-infra
+pnpm test:infra
 ```
 
 На Docker с классическим image store локальная сборка может не иметь `RepoDigests`: сначала загрузить образ в локальный реестр и получить digest оттуда. Не заменять его изменяемым тегом в `SandboxSpec`.

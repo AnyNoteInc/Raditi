@@ -1,0 +1,19 @@
+# /etc/systemd/system/raditi-app.service: starts the app VM stack once the secrets are rendered.
+# raditi-secrets.service (vault-agent, M10) renders /run/raditi/<service>/ before docker.service;
+# until it has, the containers cannot start (their secret directories are missing).
+[Unit]
+Description=Raditi app VM stack (infra/app)
+After=docker.service raditi-secrets.service network-online.target
+Requires=docker.service
+Wants=raditi-secrets.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/raditi/app
+ExecStartPre=/opt/raditi/app/preflight.sh
+ExecStart=/usr/bin/docker compose --project-directory /opt/raditi/app up -d --wait --no-build
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
