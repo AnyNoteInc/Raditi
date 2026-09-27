@@ -77,6 +77,33 @@ describe('turn plan', () => {
     expect(turnPlanSchema.safeParse({ ...plan, driverId: 'other' }).success).toBe(false)
   })
 
+  it('refuses a credential hidden in the LLM or MCP address', () => {
+    for (const url of [
+      'http://turn:sk-turn-llm-key@sandbox-gw:8080/llm',
+      'http://sk-turn-llm-key@sandbox-gw:8080/llm',
+      'http://sandbox-gw:8080/llm?api_key=sk-turn-llm-key',
+      'http://sandbox-gw:8080/llm#sk-turn-llm-key',
+    ]) {
+      const llm = request()
+      llm.context.llm.baseUrl = url
+      const mcp = request()
+      mcp.context.mcp.url = url.replace('/llm', '/mcp')
+      for (const unsafe of [llm, mcp]) {
+        let error: unknown
+        try {
+          toTurnPlan(unsafe, 'kimi')
+        } catch (e) {
+          error = e
+        }
+        expect(isDomainError(error) && error.code).toBe('BAD_REQUEST')
+        expect(String((error as Error).message)).not.toContain('sk-turn-llm-key')
+      }
+    }
+    const plan = toTurnPlan(request(), 'kimi')
+    const stored = { ...plan.context, mcp: { url: 'http://sandbox-gw:8080/mcp?token=mcp-turn' } }
+    expect(turnPlanSchema.safeParse({ ...plan, context: stored }).success).toBe(false)
+  })
+
   it('refuses turn secrets in the sandbox spec and an invalid request without echoing it', () => {
     const withSecret = request()
     withSecret.sandbox.secrets = [{ path: '/run/raditi/secrets/llm', value: 'sk-turn-llm-key' }]

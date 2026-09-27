@@ -242,7 +242,14 @@ export const turnPlanLimits = Object.freeze({
   url: 2048,
 })
 
-const httpUrl = z.url({ protocol: /^https?$/ }).max(turnPlanLimits.url)
+/** A credential inside the URL would be kept in turn_assignments.plan: only the address. */
+const httpUrl = z
+  .url({ protocol: /^https?$/ })
+  .max(turnPlanLimits.url)
+  .refine((url) => {
+    const parsed = URL.parse(url)
+    return parsed !== null && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
+  }, 'expected a URL without credentials, query or fragment')
 
 const inboxPath = z
   .string()
