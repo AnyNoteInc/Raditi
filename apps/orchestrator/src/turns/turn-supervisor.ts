@@ -22,61 +22,30 @@ import {
   type PreparedFiles,
   type PreparedRun,
   type RunContext,
-  type SiteLeaseStore,
-  type SnapshotManifest,
-  type SnapshotMetadata,
-  type SnapshotReference,
-  type TurnAssignmentStore,
   type TurnBundleSource,
   type TurnExecutor,
-  type TurnJournal,
   type TurnPlan,
   type TurnRequest,
   type TurnRestoreSource,
-  type TurnResult,
-  type TurnWorkspace,
 } from '@repo/domain'
 
-import type {
-  LoadedSnapshot,
-  SealedElsewhere,
-  SnapshotParts,
-} from '../sessions/snapshot.service.ts'
 import { LeaseGuard } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
-import { TurnAttempt } from './turn-attempt.ts'
+import {
+  TurnAttempt,
+  type CompletedTurn,
+  type TurnAttemptDependencies,
+  type TurnSnapshotStore,
+} from './turn-attempt.ts'
 
-export type { TurnRequest }
+export type { CompletedTurn, TurnRequest, TurnSnapshotStore }
 
-export interface TurnSnapshotStore {
-  load(reference: SnapshotReference): Promise<LoadedSnapshot>
-  /** Turn n−1 for the executor: presigned GETs of its parts that live `ttlMs`. */
-  restoreSource(reference: SnapshotReference, ttlMs: number): Promise<TurnRestoreSource>
-  /** An aborted `signal` must stop any S3 write that has not started yet (see SnapshotService). */
-  save(
-    metadata: SnapshotMetadata,
-    parts: SnapshotParts<SealedElsewhere>,
-    signal: AbortSignal,
-  ): Promise<SnapshotManifest>
-}
-
-export interface TurnSupervisorDependencies {
-  leases: SiteLeaseStore
+export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   /** Owns the turn's container: in core's process (PoC) or on a runner VM. */
   executor: TurnExecutor
-  /** Where the turn is held for recovery: its plan without credentials, epochs and deadline. */
-  assignments: TurnAssignmentStore
   driver: AgentDriver
-  workspace: TurnWorkspace
-  snapshots: TurnSnapshotStore
-  journal: TurnJournal
   /** Shared with TurnExecRecovery: it never takes over a turn this process drives. */
   live: LiveTurns
-}
-
-export interface CompletedTurn {
-  result: TurnResult
-  manifest: SnapshotManifest
 }
 
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
