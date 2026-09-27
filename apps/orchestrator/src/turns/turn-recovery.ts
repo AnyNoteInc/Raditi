@@ -31,7 +31,7 @@ const RECOVERY_TIMEOUT_MS = 120_000
 
 type RecoveryDependencies = Pick<
   TurnSupervisorDependencies,
-  'leases' | 'sandboxes' | 'workspace' | 'snapshots' | 'journal'
+  'leases' | 'executor' | 'workspace' | 'snapshots' | 'journal'
 >
 
 /**
@@ -104,7 +104,7 @@ export class TurnPublicationRecovery {
     try {
       await guard.assertFence()
       await record('checkpointed')
-      const containers = await this.deps.sandboxes.list({
+      const containers = await this.deps.executor.list({
         siteId: lease.siteId,
         taskId: lease.taskId,
         sessionId: reference.sessionId,
@@ -123,18 +123,22 @@ export class TurnPublicationRecovery {
         )
           throw conflict('Recovery container identity is ambiguous')
         await guard.assertFence()
-        const sandbox = await this.deps.sandboxes.get(candidate.id)
-        if (!sandbox) continue
-        if (
-          sandbox.id !== candidate.id ||
-          Object.entries(candidate.labels).some(
-            ([key, value]) => sandbox.labels[key as keyof typeof sandbox.labels] !== value,
-          )
+        // Only for removal: a changed identity is a CONFLICT and keeps the site held.
+        const stale = await guard.interruptible(
+          this.deps.executor.adopt(
+            {
+              fence: lease,
+              containerId: candidate.id,
+              labels: candidate.labels,
+              purpose: 'removal',
+            },
+            guard.signal,
+          ),
         )
-          throw conflict('Recovery container identity changed')
+        if (!stale) continue
         await guard.assertFence()
-        await sandbox.destroy('failed')
-        await record('destroyed', { containerId: sandbox.id })
+        await stale.destroy('failed')
+        await record('destroyed', { containerId: stale.containerId })
       }
       await guard.assertFence()
       publication = await guard.interruptibleResource(

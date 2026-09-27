@@ -15,15 +15,26 @@ const MAX_LINE_BYTES = 256 * 1024
 const MAX_EVENTS = 10_000
 const MAX_CHUNKS = 100_000
 
-/** Strict byte accounting precedes decoding; oversized final lines cannot revive an older result. */
+/** Where reading starts: a re-attached exec continues from the journal's cursor and count. */
+export interface TurnOutputStart {
+  cursor: ExecCursor
+  /** Events journaled before: the per-turn limits span the reconnect. */
+  eventCount: number
+}
+
+/**
+ * Strict byte accounting precedes decoding; oversized final lines cannot revive an older result.
+ * Returns only the events read here.
+ */
 export async function readTurnOutput(
   handle: Pick<ExecHandle, 'output'>,
   driver: Pick<AgentDriver, 'parseEvent'>,
   record: (cursor: ExecCursor, events: AgentEvent[]) => Promise<void>,
   assertActive: () => void,
   knownSecrets: readonly string[] = [],
+  start: TurnOutputStart = { cursor: { stdout: 0, stderr: 0 }, eventCount: 0 },
 ): Promise<{ events: AgentEvent[]; cursor: ExecCursor }> {
-  const cursor = { stdout: 0, stderr: 0 }
+  const cursor = { stdout: start.cursor.stdout, stderr: start.cursor.stderr }
   const events: AgentEvent[] = []
   let pending = Buffer.alloc(0)
   let chunks = 0
@@ -51,7 +62,7 @@ export async function readTurnOutput(
       return checked.data
     })
     if (containsSecret(parsed)) throw turnOutputRejected('Agent output contains a turn credential')
-    if (events.length + parsed.length > MAX_EVENTS)
+    if (start.eventCount + events.length + parsed.length > MAX_EVENTS)
       throw turnOutputTooLarge('Agent event limit exceeded')
     events.push(...parsed)
     return parsed

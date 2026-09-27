@@ -24,6 +24,7 @@ import {
   type DestroyReason,
   type ExecCursor,
   type ExecExit,
+  type SandboxInfo,
   type SandboxLabels,
   type SandboxSpec,
 } from './sandbox-provider.ts'
@@ -41,9 +42,12 @@ export interface TurnExecutor {
   prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution>
   /**
    * Take over the container of an unfinished turn after a restart, under the recovered fence.
-   * null when the container is missing or not this turn's. `removal` only allows destroy().
+   * null when the container is missing; CONFLICT when the container found under `containerId`
+   * has other labels. `removal` only allows destroy().
    */
   adopt(input: TurnAdoptInput, signal: AbortSignal): Promise<TurnExecution | null>
+  /** Turn containers the executor holds, found by labels: what recovery must adopt or remove. */
+  list(filter: Partial<SandboxLabels>): Promise<SandboxInfo[]>
 }
 
 export interface TurnPrepareInput {
@@ -61,6 +65,11 @@ export interface TurnPrepareInput {
   argv: string[]
   /** turnCredentials(): agent output and captured parts containing one are refused. */
   credentials: readonly string[]
+  /**
+   * Called once the container exists, before the bundle import. From then on the caller owns
+   * its removal through this execution, even when prepare fails later; a rejection stops prepare.
+   */
+  created(execution: TurnExecution): Promise<void>
 }
 
 /** Turn n−1: the manifest is already checked by core; parts are verified before any write. */

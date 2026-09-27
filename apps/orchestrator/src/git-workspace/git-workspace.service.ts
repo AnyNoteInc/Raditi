@@ -29,7 +29,6 @@ import {
   type PublicationMetadata,
   type PublicationSource,
   type RepoRef,
-  type Sandbox,
   type TurnBundleSource,
   type TurnPublication,
   type TurnWorkspace,
@@ -37,7 +36,7 @@ import {
 } from '@repo/domain'
 
 import { emptyUntrackedArchive, untrackedFiles } from './archive.ts'
-import { BASE_BUNDLE_REF, importBaseBundle } from './base-bundle.ts'
+import { BASE_BUNDLE_REF } from './base-bundle.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
 import { PROCESS_OUTPUT_LIMIT, runProcess, type ProcessResult } from './process.ts'
 
@@ -179,10 +178,6 @@ export class GitWorkspaceService implements TurnWorkspace {
     } finally {
       await this.dispose(workspace)
     }
-  }
-
-  async prepareWorkspace(sandbox: Sandbox, input: PublicationSource): Promise<void> {
-    await importBaseBundle(sandbox, await this.buildBaseBundle(input))
   }
 
   async preparePublication(

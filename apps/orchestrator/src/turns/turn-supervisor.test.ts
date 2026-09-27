@@ -5,6 +5,7 @@ import { Logger } from '@nestjs/common'
 import {
   DomainError,
   leaseLost,
+  MAX_PRESIGN_TTL_MS,
   MAX_SANDBOX_TURN_MS,
   SANDBOX_SECRETS_DIR,
   snapshotHasCredential,
@@ -24,13 +25,24 @@ import {
   type SnapshotManifest,
   type SnapshotMetadata,
   type SnapshotReference,
+  type TurnBundleSource,
   type TurnEvidence,
+  type TurnExecutor,
+  type TurnRestoreSource,
   type TurnResult,
 } from '@repo/domain'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 
+import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
+import type { PresignedTransfer } from '../sessions/presigned-transfer.ts'
 import type { SnapshotArchives } from '../sessions/sandbox-snapshot.ts'
-import { SnapshotService } from '../sessions/snapshot.service.ts'
+import {
+  SnapshotService,
+  type SealedElsewhere,
+  type SnapshotParts,
+} from '../sessions/snapshot.service.ts'
+import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
+import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from './local-turn-executor.ts'
 import { TurnPublicationRecovery, type PublicationRecoveryRequest } from './turn-recovery.ts'
 
 import {
@@ -65,7 +77,16 @@ const nativeEvents: AgentEvent[] = [
   { type: 'completed' },
 ]
 
-function fixture() {
+/**
+ * The whole suite runs against every executor over the same sandbox-side fakes: the supervisor
+ * has one code path whether the container is in core's process or on a runner.
+ */
+const executors: Record<string, (sandboxSide: LocalTurnExecutorDependencies) => TurnExecutor> = {
+  local: (sandboxSide) => new LocalTurnExecutor(sandboxSide),
+}
+const executorKinds = Object.keys(executors)
+
+function turnFixture(kind: string) {
   const order: string[] = []
   const evidence: TurnEvidence[] = []
   const request: TurnRequest = {
@@ -194,8 +215,8 @@ function fixture() {
   const publication = {
     baseSha,
     headSha,
-    patch: Buffer.from('full-patch-with-new-files'),
-    untracked: Buffer.from('empty-valid-archive'),
+    patch: Buffer.from('full-patch-with-new-files') as Uint8Array,
+    untracked: Buffer.from('empty-valid-archive') as Uint8Array,
     publish: vi.fn(async (assertFence: () => Promise<void>) => {
       await assertFence()
       order.push('publish')
@@ -204,7 +225,7 @@ function fixture() {
       order.push('dispose')
     }),
   }
-  const archives = {
+  const archives: SnapshotArchives = {
     home: Buffer.from('home'),
     patch: Buffer.from('tracked-patch'),
     untracked: Buffer.from('untracked-files'),
@@ -217,9 +238,18 @@ function fixture() {
   })
   const snapshots = {
     save: vi.fn(
-      async (metadata: SnapshotMetadata, _archives: SnapshotArchives, _signal: AbortSignal) => {
+      async (
+        metadata: SnapshotMetadata,
+        _parts: SnapshotParts<SealedElsewhere>,
+        _signal: AbortSignal,
+      ) => {
         order.push('save')
         return manifest(metadata)
+      },
+    ),
+    restoreSource: vi.fn(
+      async (_reference: SnapshotReference, _ttlMs: number): Promise<TurnRestoreSource> => {
+        throw new Error('This turn has no previous checkpoint')
       },
     ),
     load: vi.fn(async () => {
@@ -238,10 +268,17 @@ function fixture() {
       }
     }),
   }
+  const bundle: TurnBundleSource = {
+    baseSha,
+    branch: request.workspace.branch,
+    sha256: '0'.repeat(64),
+    sizeBytes: 1,
+    read: async function* () {},
+  }
   const workspace = {
-    buildBaseBundle: vi.fn(),
-    prepareWorkspace: vi.fn(async () => {
-      order.push('checkout')
+    buildBaseBundle: vi.fn(async () => {
+      order.push('bundle')
+      return bundle
     }),
     preparePublication: vi.fn(async () => {
       order.push('candidate')
@@ -271,13 +308,30 @@ function fixture() {
     get: vi.fn(),
     list: vi.fn(async () => [] as SandboxInfo[]),
   }
+  const importBundle = vi.fn(async () => {
+    order.push('checkout')
+  })
+  const transfer = {
+    get: vi.fn<PresignedTransfer['get']>(async () => {
+      throw new Error('No presigned object in this test')
+    }),
+    put: vi.fn<PresignedTransfer['put']>(async () => {
+      throw new Error('No presigned object in this test')
+    }),
+  }
+  const executor = executors[kind]!({
+    sandboxes,
+    parser: () => driver,
+    transport,
+    transfer,
+    importBundle,
+  })
   const deps: TurnSupervisorDependencies = {
     leases,
+    executor,
     driver,
-    sandboxes,
     workspace,
     snapshots,
-    transport,
     journal,
   }
   return {
@@ -297,6 +351,8 @@ function fixture() {
     transport,
     journal,
     sandboxes,
+    importBundle,
+    transfer,
     stdout: (value: string) => {
       stdout = value
     },
@@ -337,8 +393,10 @@ function delayGrant<A extends unknown[]>(
   })
 }
 
+type Fixture = ReturnType<typeof turnFixture>
+
 async function expectLeaseCoversLatePush(
-  f: ReturnType<typeof fixture>,
+  f: Fixture,
   run: () => Promise<unknown>,
   hardTimeoutMs: number,
   requestedTtl: () => number,
@@ -378,15 +436,18 @@ async function expectLeaseCoversLatePush(
   expect(f.evidence.at(-1)?.phase).toBe('recovery')
 }
 
-describe('PoC TurnSupervisor', () => {
+describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
+  const fixture = () => turnFixture(kind)
+
   it('snapshots the candidate before destroying the container and publishing', async () => {
     const f = fixture()
     const finished = await f.run()
     expect(finished.result).toEqual(result)
     expect(f.order).toEqual([
+      'bundle',
+      'prepare',
       'create',
       'checkout',
-      'prepare',
       'write:/agent-home/codex/config.toml',
       `write:${SANDBOX_SECRETS_DIR}/llm`,
       'exec',
@@ -420,11 +481,29 @@ describe('PoC TurnSupervisor', () => {
           publication: { taskId: labels.taskId, committedAt: f.request.committedAt },
         }),
       }),
-      { home: Buffer.from('home'), patch: f.publication.patch, untracked: f.publication.untracked },
+      {
+        // Sealed in the sandbox, which keeps the captured archive: core knows only its size.
+        home: expect.objectContaining({ sizeBytes: Buffer.from('home').byteLength }),
+        patch: f.publication.patch,
+        untracked: f.publication.untracked,
+      },
       expect.any(AbortSignal),
     )
     expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
-    expect(f.evidence.at(-1)?.phase).toBe('completed')
+    expect(f.evidence.map((entry) => entry.phase)).toEqual([
+      'leased',
+      'created',
+      'restored',
+      'running',
+      'output',
+      'quiesced',
+      'checkpointing',
+      'checkpointed',
+      'destroyed',
+      'publishing',
+      'completed',
+    ])
+    expect(f.evidence[1]).toMatchObject({ containerId: f.sandbox.id })
   })
 
   it('keeps lease authority beyond a late 60-second push without a heartbeat', async () => {
@@ -480,7 +559,7 @@ describe('PoC TurnSupervisor', () => {
   it('does not start the agent when less than the finalize reserve is left', async () => {
     const f = fixture()
     useFakeClock()
-    takes(f.workspace.prepareWorkspace, MAX_SANDBOX_TURN_MS - TURN_FINALIZE_RESERVE_MS)
+    takes(f.importBundle, MAX_SANDBOX_TURN_MS - TURN_FINALIZE_RESERVE_MS)
     await expect(f.run()).rejects.toMatchObject({ code: 'TURN_INTERRUPTED', message: 'timeout' })
     expect(f.sandbox.exec).not.toHaveBeenCalled()
     expect(f.sandbox.destroy).toHaveBeenCalledWith('timeout')
@@ -594,8 +673,37 @@ describe('PoC TurnSupervisor', () => {
     expect(f.publication.publish).not.toHaveBeenCalled()
   })
 
-  it('restores the prior candidate before installing the new turn secrets', async () => {
+  it('restores turn n−1 through presigned GETs before installing the new turn secrets', async () => {
     const f = fixture()
+    const memory = memoryStorage()
+    const transit = memoryTransit()
+    const service = new SnapshotService(memory.storage, transit.secrets)
+    const prior = {
+      home: await tarZst({ 'sessions/prior.jsonl': 'prior conversation' }),
+      untracked: emptyUntrackedArchive(),
+      patch: Buffer.from('prior patch'),
+    }
+    await service.save(
+      {
+        workspaceId: labels.workspaceId,
+        sessionId: labels.sessionId,
+        turn: 1,
+        image,
+        driver: { id: 'codex', version: '1.0.0', nativeSessionId: 'prior-native' },
+        home,
+        git: {
+          provider: 'gitea',
+          branch: f.request.workspace.branch,
+          baseSha: 'a'.repeat(40),
+          headSha: baseSha,
+        },
+      },
+      prior,
+    )
+    f.snapshots.restoreSource.mockImplementation((reference, ttlMs) =>
+      service.restoreSource(reference, ttlMs),
+    )
+    f.transfer.get.mockImplementation(memory.transfer.get)
     f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
     f.request.context = { ...f.request.context, turn: 2 }
     f.request.previous = {
@@ -607,13 +715,139 @@ describe('PoC TurnSupervisor', () => {
       home,
     }
     await f.run()
-    expect(f.order.indexOf('restore')).toBeLessThan(f.order.indexOf('prepare'))
+    expect(f.transport.restore).toHaveBeenCalledWith(f.sandbox, home, {
+      home: Buffer.from(prior.home),
+      untracked: Buffer.from(prior.untracked),
+      patch: Buffer.from(prior.patch),
+    })
+    const ttlMs = f.snapshots.restoreSource.mock.calls[0]![1]
+    expect(ttlMs).toBeGreaterThan(0)
+    expect(ttlMs).toBeLessThanOrEqual(MAX_PRESIGN_TTL_MS)
     expect(f.driver.prepare).toHaveBeenCalledWith(
       expect.objectContaining({ nativeSessionId: 'prior-native' }),
     )
     expect(f.order.indexOf(`write:${SANDBOX_SECRETS_DIR}/llm`)).toBeGreaterThan(
       f.order.indexOf('restore'),
     )
+    // The data key reached the sandbox side only to open the parts, and was zeroed there.
+    expect(transit.secrets.transitDecryptDataKey).toHaveBeenCalledOnce()
+    expect(transit.allZeroed()).toBe(true)
+  })
+
+  it('refuses a previous checkpoint of another checkout before creating a container', async () => {
+    const f = fixture()
+    f.snapshots.restoreSource.mockResolvedValue({
+      manifest: {
+        ...(await f.snapshots.load()).manifest,
+        git: { provider: 'gitea', branch: f.request.workspace.branch, baseSha, headSha },
+      },
+      parts: {} as TurnRestoreSource['parts'],
+      dataKey: vi.fn(),
+    })
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: 'codex', version: '1.0.0' },
+      home,
+    }
+    await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
+  it('seals the home part in the sandbox and commits a snapshot core can load back', async () => {
+    const f = fixture()
+    const memory = memoryStorage()
+    const transit = memoryTransit()
+    const service = new SnapshotService(memory.storage, transit.secrets)
+    const captured = {
+      home: await tarZst({ 'sessions/turn.jsonl': 'native session' }),
+      untracked: emptyUntrackedArchive(),
+      patch: Buffer.from('tracked-patch'),
+    }
+    f.transport.capture.mockResolvedValue(captured)
+    f.publication.untracked = emptyUntrackedArchive()
+    f.transfer.put.mockImplementation(memory.transfer.put)
+    f.snapshots.save.mockImplementation((metadata, parts, signal) =>
+      service.save(metadata, parts, signal),
+    )
+    const finished = await f.run()
+    const loaded = await service.load({
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: 'codex', version: '1.0.0' },
+      home,
+    })
+    expect(finished.manifest).toEqual(loaded.manifest)
+    expect(loaded.manifest.git).toMatchObject({ baseSha, headSha })
+    expect(Buffer.from(loaded.archives.home)).toEqual(Buffer.from(captured.home))
+    expect(Buffer.from(loaded.archives.patch)).toEqual(Buffer.from(f.publication.patch))
+    // The home part went only through the create-only PUT, never through core's own writes.
+    expect(f.transfer.put).toHaveBeenCalledOnce()
+    expect(memory.storage.put.mock.calls.map(([, key]) => key)).not.toContain(
+      `sessions/${labels.sessionId}/turns/0001/home.tar.zst`,
+    )
+    expect(memory.storage.presign).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'PUT', sizeBytes: captured.home.byteLength }),
+    )
+    expect(transit.allZeroed()).toBe(true)
+  })
+
+  it('hands the sandbox neither the PUT nor the data key once the site is lost', async () => {
+    const f = fixture()
+    const memory = memoryStorage()
+    const transit = memoryTransit()
+    const service = new SnapshotService(memory.storage, transit.secrets)
+    f.transport.capture.mockResolvedValue({
+      home: await tarZst({ 'sessions/turn.jsonl': 'native session' }),
+      untracked: emptyUntrackedArchive(),
+      patch: Buffer.from('tracked-patch'),
+    })
+    f.publication.untracked = emptyUntrackedArchive()
+    f.transfer.put.mockImplementation(memory.transfer.put)
+    f.snapshots.save.mockImplementation((metadata, parts, signal) =>
+      service.save(metadata, parts, signal),
+    )
+    const issue = transit.secrets.transitDataKey.getMockImplementation()!
+    transit.secrets.transitDataKey.mockImplementationOnce(async (...args) => {
+      // Another owner takes the site while the snapshot is sealed and reserved.
+      f.leases.assert.mockResolvedValue(false)
+      return issue(...args)
+    })
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_INTERRUPTED', message: 'lease_lost' })
+    expect(f.transfer.put).not.toHaveBeenCalled()
+    expect(transit.secrets.transitDecryptDataKey).not.toHaveBeenCalled()
+    // The reservation is written: the site waits for an operator.
+    expect(f.leases.holdForRecovery).toHaveBeenCalledOnce()
+    expect(f.leases.release).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'recovery', reason: 'lease_lost' })
+  })
+
+  it('removes a container the executor reports only after the turn was given up', async () => {
+    const f = fixture()
+    const cancellation = new AbortController()
+    const created = Promise.withResolvers<void>()
+    const create = f.sandboxes.create.getMockImplementation()!
+    f.sandboxes.create.mockImplementation(async (...args) => {
+      cancellation.abort()
+      await created.promise
+      return create(...args)
+    })
+    await expect(f.run(cancellation.signal)).rejects.toMatchObject({
+      code: 'TURN_INTERRUPTED',
+      message: 'cancelled',
+    })
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    created.resolve()
+    await vi.waitFor(() => expect(f.sandbox.destroy).toHaveBeenCalledWith('cancelled'))
+    expect(f.importBundle).not.toHaveBeenCalled()
+    expect(f.sandbox.exec).not.toHaveBeenCalled()
   })
 
   it('rejects eager secrets and cross-task identities before acquiring a lease', async () => {
@@ -693,7 +927,7 @@ describe('PoC TurnSupervisor', () => {
     }
     await expect(f.run()).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(f.leases.acquire).not.toHaveBeenCalled()
-    expect(f.snapshots.load).not.toHaveBeenCalled()
+    expect(f.snapshots.restoreSource).not.toHaveBeenCalled()
   })
 
   it.each(['branch', 'turn', 'sha', 'protected paths'] as const)(
@@ -832,11 +1066,11 @@ describe('PoC TurnSupervisor', () => {
 
   it('fences a stale owner before the next operation and still destroys its container', async () => {
     const f = fixture()
-    f.workspace.prepareWorkspace.mockImplementation(async () => {
+    f.importBundle.mockImplementation(async () => {
       f.leases.assert.mockResolvedValue(false)
     })
     await expect(f.run()).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
-    expect(f.driver.prepare).not.toHaveBeenCalled()
+    expect(f.sandbox.exec).not.toHaveBeenCalled()
     expect(f.publication.publish).not.toHaveBeenCalled()
     expect(f.sandbox.destroy).toHaveBeenCalledOnce()
   })
@@ -1082,8 +1316,10 @@ describe('PoC TurnSupervisor', () => {
       code: 'DRIVER_PREPARE_INVALID',
       message: expect.stringContaining('file path'),
     })
+    // Refused in core before any container exists.
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
     expect(f.sandbox.exec).not.toHaveBeenCalled()
-    expect(f.sandbox.destroy).toHaveBeenCalledOnce()
+    expect(f.leases.release).toHaveBeenCalledOnce()
   })
 
   it.each([
@@ -1102,9 +1338,9 @@ describe('PoC TurnSupervisor', () => {
   })
 })
 
-describe('committed checkpoint publication recovery', () => {
+describe.each(executorKinds)('committed checkpoint publication recovery (%s executor)', (kind) => {
   async function recoveryFixture() {
-    const f = fixture()
+    const f = turnFixture(kind)
     const loaded = await f.snapshots.load()
     loaded.manifest.git.headSha = headSha
     loaded.manifest.git.publication = { taskId: labels.taskId, committedAt: f.request.committedAt }

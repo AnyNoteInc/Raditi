@@ -374,6 +374,7 @@ interface Sandbox {
 interface TurnExecutor {
   prepare(input, signal): Promise<TurnExecution>        // контейнер, git bundle, restore хода n−1, файлы и секреты драйвера
   adopt(input, signal): Promise<TurnExecution | null>   // после рестарта: принять контейнер для работы или только для удаления
+  list(filter): Promise<SandboxInfo[]>                  // контейнеры ходов по меткам — что recovery должен принять или удалить
 }
 
 interface TurnExecution {
@@ -386,7 +387,7 @@ interface TurnExecution {
 }
 ```
 
-Вывод агента исполнитель отдаёт партиями `{from, to, events}`: курсор сдвигают только целые строки stdout, а следующая партия читается после того, как журнал записал предыдущую. Секретов платформы у исполнителя нет: объекты S3 он получает presigned-запросами, ключ данных и git bundle — через функции `core`. Файлы и секреты драйвера приходят к нему уже проверенными (`preparedRunSchema`, `preparedRunExposesSecret`), и он проверяет их снова (`preparedFilesSchema`).
+Сразу после создания контейнера `prepare` передаёт супервизору его `TurnExecution` (`input.created`): с этого момента удаление контейнера — забота супервизора, даже если импорт bundle, restore или запись файлов потом не удались, а контейнер, о котором исполнитель сообщил уже после отказа от хода, удаляется сразу. Вывод агента исполнитель отдаёт партиями `{from, to, events}`: курсор сдвигают только целые строки stdout, а следующая партия читается после того, как журнал записал предыдущую. Секретов платформы у исполнителя нет: объекты S3 он получает presigned-запросами, ключ данных и git bundle — через функции `core`. Файлы и секреты драйвера приходят к нему уже проверенными (`preparedRunSchema`, `preparedRunExposesSecret`), и он проверяет их снова (`preparedFilesSchema`).
 
 ### Изоляция
 
@@ -473,7 +474,7 @@ interface TurnExecution {
 
 | Команда | Что делает раннер | Отчёт |
 | --- | --- | --- |
-| `prepare` | Создаёт контейнер по `SandboxSpec` без секретов; скачивает у `core` git bundle (SHA-256, до 64 МиБ) и импортирует его через stdin exec; восстанавливает ход n−1 по presigned GET трёх частей (SHA-256, GCM, проверка архивов); пишет файлы и секреты драйвера | `prepared{containerId}` |
+| `prepare` | Создаёт контейнер по `SandboxSpec` без секретов; скачивает у `core` git bundle (SHA-256, до 64 МиБ, с базовым SHA и веткой задачи) и импортирует его через stdin exec; восстанавливает ход n−1 по presigned GET трёх частей (SHA-256, GCM, проверка архивов); пишет файлы и секреты драйвера | `prepared{containerId}` |
 | `launch` | Запускает агента — `core` перед этим строго сверил аренду; разбирает вывод `parseEvent` и фильтрует учётные данные хода | `running{execId}`; `output{from,to,events}` — до 1 МиБ, только целые строки; `exited{exit}` |
 | `adopt`, `resume` | После рестарта принимает контейнер — для работы или только для удаления — и переподключается к exec с курсора журнала | `adopted`, `running` |
 | `quiesce`, `capture` | Останавливает агента; снимает patch и untracked и загружает их в `core` (`PUT …/candidate/{patch,untracked}`, до 8 и 16 МиБ, недоверенные данные); home остаётся у раннера | `quiesced`, `captured` |

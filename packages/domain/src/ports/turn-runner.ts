@@ -7,7 +7,7 @@ import {
   type PublicationSource,
 } from '../git/publication.ts'
 import { agentEventSchema, turnResultSchema } from './agent-driver.ts'
-import { execCursorSchema, type Sandbox } from './sandbox-provider.ts'
+import { execCursorSchema } from './sandbox-provider.ts'
 
 export const siteLeaseOperations = ['turn', 'deploy', 'revert'] as const
 export type SiteLeaseOperation = (typeof siteLeaseOperations)[number]
@@ -135,10 +135,8 @@ export interface TurnBundleSource {
 }
 
 export interface TurnWorkspace {
-  /** Clones the site on the host and bundles `expectedBaseSha` for the turn's sandbox. */
+  /** Clones the site on the host and bundles `expectedBaseSha` for the turn's executor. */
   buildBaseBundle(source: TurnWorkspaceSource): Promise<TurnBundleSource>
-  /** buildBaseBundle, imported into the sandbox here; the supervisor leaves it to an executor. */
-  prepareWorkspace(sandbox: Sandbox, source: TurnWorkspaceSource): Promise<void>
   /**
    * `credentials` are the turn's own (turnCredentials): a changed file of the candidate that
    * contains one verbatim, binary ones included, is refused as snapshotHasCredential().

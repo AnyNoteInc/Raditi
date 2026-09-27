@@ -131,4 +131,48 @@ describe('bounded turn output', () => {
       ),
     ).rejects.toMatchObject({ ...tooLarge, message: 'Agent event limit exceeded' })
   })
+
+  it('continues from the journal cursor after a reconnect', async () => {
+    const line = Buffer.from(JSON.stringify({ type: 'completed' }) + '\n')
+    const record = vi.fn(async () => {})
+    const start = { cursor: { stdout: 100, stderr: 7 }, eventCount: 3 }
+    const read = await readTurnOutput(
+      handle([{ stream: 'stdout', offset: 100, data: line }]),
+      driver,
+      record,
+      () => {},
+      [],
+      start,
+    )
+    expect(read).toEqual({
+      events: [{ type: 'completed' }],
+      cursor: { stdout: 100 + line.length, stderr: 7 },
+    })
+    expect(record).toHaveBeenCalledWith({ stdout: 100 + line.length, stderr: 7 }, read.events)
+    // The replayed stream must start exactly at the cursor.
+    await expect(
+      readTurnOutput(
+        handle([{ stream: 'stdout', offset: 0, data: line }]),
+        driver,
+        vi.fn(),
+        () => {},
+        [],
+        start,
+      ),
+    ).rejects.toMatchObject(rejected)
+  })
+
+  it('counts events journaled before a reconnect against the limit of the turn', async () => {
+    const two = Buffer.from(`${JSON.stringify({ type: 'completed' })}\n`.repeat(2))
+    await expect(
+      readTurnOutput(
+        handle([{ stream: 'stdout', offset: 0, data: two }]),
+        driver,
+        vi.fn(async () => {}),
+        () => {},
+        [],
+        { cursor: { stdout: 0, stderr: 0 }, eventCount: 9_999 },
+      ),
+    ).rejects.toMatchObject({ ...tooLarge, message: 'Agent event limit exceeded' })
+  })
 })

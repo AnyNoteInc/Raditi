@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer'
 import { performance } from 'node:perf_hooks'
 
 import {
@@ -11,10 +10,10 @@ import {
   isDomainError,
   isSnapshotCredential,
   leaseLost,
+  MAX_PRESIGN_TTL_MS,
   preparedRunExposesSecret,
   preparedRunSchema,
   publicationMetadataSchema,
-  SANDBOX_WORKDIR,
   siteBusy,
   siteHeld,
   snapshotPlanSchema,
@@ -27,47 +26,56 @@ import {
   turnSnapshotPrefix,
   withTimeout,
   type AgentDriver,
+  type AgentEvent,
+  type DestroyReason,
+  type PreparedFiles,
   type PreparedRun,
   type RunContext,
-  type Sandbox,
-  type SandboxProvider,
   type SiteLeaseStore,
   type SnapshotManifest,
   type SnapshotMetadata,
   type SnapshotReference,
+  type TurnBundleSource,
   type TurnEvidence,
+  type TurnExecution,
+  type TurnExecutor,
   type TurnJournal,
   type TurnPhase,
   type TurnPublication,
   type TurnRequest,
+  type TurnRestoreSource,
   type TurnResult,
   type TurnWorkspace,
 } from '@repo/domain'
 
-import type { SandboxSnapshotTransport, SnapshotArchives } from '../sessions/sandbox-snapshot.ts'
-import type { LoadedSnapshot } from '../sessions/snapshot.service.ts'
+import type {
+  LoadedSnapshot,
+  SealedElsewhere,
+  SnapshotParts,
+} from '../sessions/snapshot.service.ts'
 import { holdForRecovery, LeaseGuard } from './lease-guard.ts'
-import { readTurnOutput } from './turn-output.ts'
 
 export type { TurnRequest }
 
 export interface TurnSnapshotStore {
   load(reference: SnapshotReference): Promise<LoadedSnapshot>
+  /** Turn n−1 for the executor: presigned GETs of its parts that live `ttlMs`. */
+  restoreSource(reference: SnapshotReference, ttlMs: number): Promise<TurnRestoreSource>
   /** An aborted `signal` must stop any S3 write that has not started yet (see SnapshotService). */
   save(
     metadata: SnapshotMetadata,
-    archives: SnapshotArchives,
+    parts: SnapshotParts<SealedElsewhere>,
     signal: AbortSignal,
   ): Promise<SnapshotManifest>
 }
 
 export interface TurnSupervisorDependencies {
   leases: SiteLeaseStore
-  sandboxes: SandboxProvider
+  /** Owns the turn's container: in core's process (PoC) or on a runner VM. */
+  executor: TurnExecutor
   driver: AgentDriver
   workspace: TurnWorkspace
   snapshots: TurnSnapshotStore
-  transport: Pick<SandboxSnapshotTransport, 'capture' | 'restore'>
   journal: TurnJournal
 }
 
@@ -75,6 +83,9 @@ export interface CompletedTurn {
   result: TurnResult
   manifest: SnapshotManifest
 }
+
+/** A presigned URL never outlives the lease that allowed it (spec §14). */
+const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.leaseRemainingMs)
 
 /** PoC execution only: task billing, queue dispatch and product task transitions belong to P12. */
 export class TurnSupervisor {
@@ -102,8 +113,9 @@ export class TurnSupervisor {
       signal,
       performance.now() - acquiredAt,
     )
-    let sandbox: Sandbox | undefined
+    let execution: TurnExecution | undefined
     let publication: TurnPublication | undefined
+    let abandoned = false
     let destroyed = false
     let checkpointStarted = false
     let publishStarted = false
@@ -121,7 +133,7 @@ export class TurnSupervisor {
         turn: labels.turn,
         sequence: ++sequence,
         phase,
-        ...(sandbox ? { containerId: sandbox.id } : {}),
+        ...(execution ? { containerId: execution.containerId } : {}),
         ...(execId ? { execId } : {}),
         ...(candidateHeadSha ? { candidateHeadSha } : {}),
         baseSha: request.workspace.expectedBaseSha,
@@ -132,98 +144,120 @@ export class TurnSupervisor {
         ...extra,
       })
     }
+    const destroyReason = (checkpointComplete = false): DestroyReason =>
+      guard.signal.aborted
+        ? guard.reason === 'timeout'
+          ? 'timeout'
+          : 'cancelled'
+        : checkpointComplete
+          ? 'completed'
+          : 'failed'
     const destroy = async (checkpointComplete = false) => {
-      if (!sandbox || destroyed) return
-      await sandbox.destroy(
-        guard.signal.aborted
-          ? guard.reason === 'timeout'
-            ? 'timeout'
-            : 'cancelled'
-          : checkpointComplete
-            ? 'completed'
-            : 'failed',
-      )
+      if (!execution || destroyed) return
+      await execution.destroy(destroyReason(checkpointComplete))
       destroyed = true
     }
     try {
       await guard.assertFence()
       await record('leased')
-      sandbox = await this.deps.sandboxes.create(
-        {
-          ...request.sandbox,
-          hardTimeoutMs: guard.remainingMs,
-          labels: { ...labels, leaseEpoch: lease.epoch },
-          secrets: [],
-        },
-        guard.signal,
+      // Cloned on the host with a short read-only credential; the executor gets objects only.
+      let bundle: TurnBundleSource | undefined = await guard.interruptible(
+        this.deps.workspace.buildBaseBundle(request.workspace),
       )
-      await guard.assertFence()
-      await record('created')
-
-      let previous: LoadedSnapshot | undefined
+      let restore: TurnRestoreSource | undefined
       if (request.previous) {
-        previous = await guard.interruptible(this.deps.snapshots.load(request.previous))
-        if (previous.manifest.git.headSha !== request.workspace.expectedBaseSha)
-          throw conflict('Previous checkpoint differs from the expected checkout')
-      }
-      await guard.assertFence()
-      await guard.interruptible(this.deps.workspace.prepareWorkspace(sandbox, request.workspace))
-      if (previous) {
         await guard.assertFence()
-        await this.deps.transport.restore(sandbox, previous.manifest.home, previous.archives)
+        const source = await guard.interruptible(
+          this.deps.snapshots.restoreSource(request.previous, presignTtlMs(guard)),
+        )
+        if (source.manifest.git.headSha !== request.workspace.expectedBaseSha)
+          throw conflict('Previous checkpoint differs from the expected checkout')
+        // The data key leaves core only while this owner still holds the site.
+        restore = {
+          ...source,
+          dataKey: async () => {
+            await guard.assertFence()
+            return source.dataKey()
+          },
+        }
       }
-      await record('restored')
-      await guard.assertFence()
       const context = {
         ...request.context,
-        ...(previous?.manifest.driver.nativeSessionId
-          ? { nativeSessionId: previous.manifest.driver.nativeSessionId }
+        ...(restore?.manifest.driver.nativeSessionId
+          ? { nativeSessionId: restore.manifest.driver.nativeSessionId }
           : {}),
       }
       const prepared = await this.deps.driver.prepare(context)
       const argv = this.deps.driver.command(prepared, request.input)
-      const credentials = await this.writePrepared(sandbox, context, prepared, argv, guard)
+      const { files, credentials } = this.checkPrepared(context, prepared, argv)
       await guard.assertFence()
-      const handle = await sandbox.exec({
-        argv,
-        cwd: SANDBOX_WORKDIR,
-        env: prepared.env,
-        // The turn limit includes publication: the agent's exec ends the reserve early, while the
-        // container keeps the whole limit and outlives the agent for capture, save and push.
-        timeoutMs: guard.remainingBeforeReserveMs(TURN_FINALIZE_RESERVE_MS),
-        signal: guard.signal,
-      })
-      execId = handle.id
+      const ready = await guard.interruptible(
+        this.deps.executor.prepare(
+          {
+            fence: lease,
+            sandbox: {
+              ...request.sandbox,
+              hardTimeoutMs: guard.remainingMs,
+              labels: { ...labels, leaseEpoch: lease.epoch },
+              secrets: [],
+            },
+            remainingMs: guard.remainingMs,
+            bundle,
+            ...(restore ? { restore } : {}),
+            driverId: this.deps.driver.id,
+            prepared: files,
+            argv,
+            credentials,
+            created: async (created) => {
+              if (abandoned) {
+                // The turn was given up while its container was being created: remove it now.
+                await created.destroy(destroyReason())
+                throw new DomainError('TURN_INTERRUPTED', guard.reason, 409)
+              }
+              execution = created
+              await guard.assertFence()
+              await record('created')
+            },
+          },
+          guard.signal,
+        ),
+      )
+      execution = ready
+      bundle = undefined
+      await record('restored')
+      await guard.assertFence()
+      // The turn limit includes publication: the agent's exec ends the reserve early, while the
+      // container keeps the whole limit and outlives the agent for capture, save and push.
+      const agent = await ready.launch(guard.remainingBeforeReserveMs(TURN_FINALIZE_RESERVE_MS))
+      execId = agent.execId
       await record('running')
       const kill = () => {
-        void handle.kill('SIGKILL').catch(() => {})
+        void agent.kill().catch(() => {})
       }
       guard.signal.addEventListener('abort', kill, { once: true })
-      let output: Awaited<ReturnType<typeof readTurnOutput>>
+      const events: AgentEvent[] = []
       try {
-        const [exit, collected] = await guard.interruptible(
+        const [exit] = await guard.interruptible(
           Promise.all([
-            handle.wait(),
-            readTurnOutput(
-              handle,
-              this.deps.driver,
-              async (cursor, events) => {
-                // Like the periodic probe: only an explicit loss stops the agent here, a read
-                // error just warns. The journal INSERT below is fenced by itself.
-                await guard.checkFence()
-                // Operational evidence, never shown verbatim: a `failed` event's reason is raw
-                // CLI/provider text; the chat shows a Russian text chosen by the event type.
-                await record('output', { cursor, ...(events.length ? { events } : {}) })
-              },
-              () => guard.assertActive(),
-              credentials,
-            ),
+            agent.wait(),
+            agent.output(async (batch) => {
+              // Like the periodic probe: only an explicit loss stops the agent here, a read
+              // error just warns. The journal INSERT below is fenced by itself.
+              await guard.checkFence()
+              // Operational evidence, never shown verbatim: a `failed` event's reason is raw
+              // CLI/provider text; the chat shows a Russian text chosen by the event type.
+              await record('output', {
+                cursor: batch.to,
+                ...(batch.events.length ? { events: batch.events } : {}),
+              })
+              events.push(...batch.events)
+            }),
           ]),
         )
         if (
           exit.reason !== 'exited' ||
           exit.code !== 0 ||
-          collected.events.some((event) => event.type === 'failed')
+          events.some((event) => event.type === 'failed')
         ) {
           throw new DomainError(
             'TURN_EXEC_FAILED',
@@ -231,31 +265,25 @@ export class TurnSupervisor {
             502,
           )
         }
-        output = collected
       } catch (error) {
-        await handle.kill('SIGKILL').catch(() => {})
+        await agent.kill().catch(() => {})
         throw error
       } finally {
         guard.signal.removeEventListener('abort', kill)
       }
 
       await guard.assertFence()
-      await sandbox.quiesce()
+      await ready.quiesce()
       await record('quiesced')
-      const result = turnResultSchema.parse(this.deps.driver.extractResult(output.events, null))
-      for (const event of output.events) {
+      const result = turnResultSchema.parse(this.deps.driver.extractResult(events, null))
+      for (const event of events) {
         if (event.type === 'started' && event.nativeSessionId)
           prepared.context.nativeSessionId = event.nativeSessionId
       }
       const home = this.deps.driver.sessionState(prepared)
       await guard.assertFence()
-      // The agent may have copied a turn credential into its home or the site: never save it.
-      const archives = await this.deps.transport.capture(
-        sandbox,
-        home,
-        request.workspace.expectedBaseSha,
-        credentials,
-      )
+      // Refused when the agent copied a turn credential into its home or the site.
+      const captured = await ready.capture({ home, baseSha: request.workspace.expectedBaseSha })
       await guard.assertFence()
       publication = await guard.interruptibleResource(
         this.deps.workspace.preparePublication({
@@ -263,8 +291,8 @@ export class TurnSupervisor {
           taskId: labels.taskId,
           turn: labels.turn,
           createdAt: request.committedAt,
-          patch: archives.patch,
-          untracked: archives.untracked,
+          patch: captured.patch,
+          untracked: captured.untracked,
           // Binary edits of tracked files are compressed in the patch: checked there in full.
           credentials,
         }),
@@ -296,7 +324,26 @@ export class TurnSupervisor {
             publication: { taskId: labels.taskId, committedAt: request.committedAt },
           },
         },
-        { home: archives.home, patch: publication.patch, untracked: publication.untracked },
+        {
+          // Sealed where the archive stayed; its AAD binds the candidate's headSha.
+          home: {
+            sizeBytes: captured.homeBytes,
+            ttlMs: () => presignTtlMs(guard),
+            // The PUT and the data key leave core only while this owner still holds the site.
+            seal: async (input) => {
+              await guard.assertFence()
+              return ready.seal({
+                ...input,
+                dataKey: async () => {
+                  await guard.assertFence()
+                  return input.dataKey()
+                },
+              })
+            },
+          },
+          patch: publication.patch,
+          untracked: publication.untracked,
+        },
         // Stops a save still pending on Vault from writing after the supervisor gave up on it.
         guard.signal,
       )
@@ -345,6 +392,8 @@ export class TurnSupervisor {
                 : 'run_failed'
       throw error
     } finally {
+      // A container the executor reports from now on is removed by its `created` hook.
+      abandoned = true
       let recovery = checkpointStarted && !completed
       try {
         await destroy()
@@ -422,16 +471,15 @@ export class TurnSupervisor {
   }
 
   /**
-   * Returns the turn's credentials, which the output journal and the snapshot must never contain
-   * either. Nothing is written when the driver's run or command is unsafe.
+   * The driver's files for the executor and the turn's credentials, which the output journal and
+   * the snapshot must never contain either. Nothing reaches a sandbox when the driver's run or
+   * command is unsafe.
    */
-  private async writePrepared(
-    sandbox: Sandbox,
+  private checkPrepared(
     context: RunContext,
     prepared: PreparedRun,
     argv: readonly string[],
-    guard: LeaseGuard,
-  ): Promise<string[]> {
+  ): { files: PreparedFiles; credentials: string[] } {
     // Files only under /agent-home and secrets only in their tmpfs, never the working copy:
     // capture would publish platform files to the client's repository.
     const parsed = preparedRunSchema.safeParse(prepared)
@@ -441,14 +489,7 @@ export class TurnSupervisor {
     const credentials = turnCredentials(context, parsed.data.secrets)
     if (preparedRunExposesSecret(parsed.data, credentials, argv))
       throw driverPrepareInvalid('Prepared turn files, env or command contain a turn credential')
-    const { files, secrets } = parsed.data
-    for (const [file, mode] of [
-      ...files.map((file) => [file, file.mode ?? 0o600] as const),
-      ...secrets.map((file) => [file, 0o600] as const),
-    ]) {
-      await guard.assertFence()
-      await sandbox.fs.write(file.path, Buffer.from(file.content), { mode })
-    }
-    return credentials
+    const { files, env, secrets } = parsed.data
+    return { files: { files, env, secrets }, credentials }
   }
 }
