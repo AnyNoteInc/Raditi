@@ -228,6 +228,9 @@ export const turnEvidenceSchema = z
         'destroy_failed',
         // Recovery found the agent's exec or container missing or foreign: the turn is given up.
         'exec_lost',
+        // A checkpoint waits to be published until its runner is back or the deadline and grace
+        // passed: its container's removal is not confirmed yet.
+        'awaiting_runner',
       ])
       .optional(),
   })

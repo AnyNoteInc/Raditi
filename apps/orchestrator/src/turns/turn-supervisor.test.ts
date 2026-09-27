@@ -52,7 +52,11 @@ import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { LiveTurns } from './live-turns.ts'
 import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from './local-turn-executor.ts'
-import { TurnPublicationRecovery, type PublicationRecoveryRequest } from './turn-recovery.ts'
+import {
+  RECOVERY_TIMEOUT_MS,
+  TurnPublicationRecovery,
+  type PublicationRecoveryRequest,
+} from './turn-recovery.ts'
 
 import {
   TurnSupervisor,
@@ -1599,6 +1603,9 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
         driver: { id: 'codex', version: '1.0.0' },
         home,
       },
+      // Its owner journaled the removal: only what the labels still find is removed.
+      removal: 'confirmed',
+      labels: { ...labels, leaseEpoch: 1 },
     }
     return {
       ...f,
@@ -1616,7 +1623,10 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     ])
     f.sandboxes.getForRemoval.mockResolvedValue(f.sandbox)
     await expect(f.recover()).resolves.toMatchObject({ headSha })
-    expect(f.leases.reclaimForRecovery).toHaveBeenCalledWith(f.lease, 210_000)
+    expect(f.leases.reclaimForRecovery).toHaveBeenCalledWith(
+      f.lease,
+      RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS,
+    )
     expect(f.order.indexOf('destroy')).toBeGreaterThan(-1)
     expect(f.order.indexOf('destroy')).toBeLessThan(f.order.indexOf('publish'))
     // Removal only: nothing is taken over to work in.
@@ -1678,7 +1688,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     await expectLeaseCoversLatePush(
       f,
       () => f.recover(),
-      120_000,
+      RECOVERY_TIMEOUT_MS,
       () => f.leases.reclaimForRecovery.mock.calls[0]![1],
     )
   })
@@ -1689,7 +1699,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     await expectLeaseCoversLatePush(
       f,
       () => f.recover(),
-      120_000,
+      RECOVERY_TIMEOUT_MS,
       () => f.leases.reclaimForRecovery.mock.calls[0]![1],
     )
   })

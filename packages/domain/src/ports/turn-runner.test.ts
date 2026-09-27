@@ -108,6 +108,12 @@ describe('turn evidence', () => {
     expect(turnEvidenceSchema.safeParse({ ...vacating, containerId: 'c1' }).success).toBe(true)
   })
 
+  it('records a checkpoint that waits for its runner before publication', () => {
+    const waiting = { ...evidence, phase: 'recovery', reason: 'awaiting_runner' } as const
+    expect(turnEvidenceSchema.safeParse(waiting).success).toBe(true)
+    expect(turnEvidenceSchema.safeParse({ ...waiting, reason: 'runner_away' }).success).toBe(false)
+  })
+
   it('keeps only the fence of a lease grant', () => {
     const grant = { ...evidence.fence, expiresAt: new Date(), serverNow: new Date() }
     expect(turnEvidenceSchema.parse({ ...evidence, fence: grant }).fence).toEqual(evidence.fence)

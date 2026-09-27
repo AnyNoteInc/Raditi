@@ -740,6 +740,56 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     },
   )
 
+  it('removes the container its journal names before publishing, whatever the inventory shows', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed')
+    // The inventory lags behind the container the journal names.
+    const list = vi.spyOn(after.executor, 'list').mockResolvedValue([])
+    const order: string[] = []
+    const destroy = w.vm.sandbox.destroy
+    w.vm.sandbox.destroy = vi.fn(async (reason) => {
+      order.push('destroy')
+      await destroy(reason)
+    })
+    w.publish.mockImplementation(async (assertFence) => {
+      order.push('publish')
+      await assertFence()
+    })
+    await w.recover(after.recovery)
+
+    expect(list).toHaveBeenCalled()
+    expect(order).toEqual(['destroy', 'publish'])
+    expect(w.journal.entries.find((entry) => entry.phase === 'destroyed')).toMatchObject({
+      containerId: 'container1',
+      fence: { epoch: 2 },
+    })
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', recoveryAttempts: 1 })
+  })
+
+  it('leaves a checkpoint to an operator when its container is of another identity', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed')
+    // A restarted runner asks Docker; one that held the container would answer from memory.
+    if (kind === 'runner') await w.restartRunner()
+    const foreign = {
+      ...w.vm.sandbox,
+      labels: { ...w.vm.sandbox.labels, workspaceId: randomUUID() },
+    }
+    w.vm.sandboxes.getForRemoval.mockResolvedValue(foreign)
+    await w.recover(after.recovery)
+    await w.recover(after.recovery)
+
+    expect(w.publish).not.toHaveBeenCalled()
+    expect(w.vm.exists()).toBe(true)
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 2 })
+    expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 0 })
+    expect(w.logger.error).toHaveBeenCalledExactlyOnceWith(
+      'Turn recovery left a turn to an operator: ambiguous container (epoch 2, phase checkpointed, attempts 0)',
+    )
+  })
+
   it('frees the site of a turn journaled completed before its release', async () => {
     const w = world(kind)
     w.vm.finish()
@@ -1124,6 +1174,54 @@ describe('turn exec recovery of a turn given up before its container was reporte
   })
 })
 
+describe('turn exec recovery of a checkpoint: attempts', () => {
+  it('counts no attempt for a removal that failed, and one once the container is gone', async () => {
+    const w = world('local')
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed')
+    const destroy = w.vm.sandbox.destroy
+    w.vm.sandbox.destroy = vi.fn(async () => {
+      throw new DomainError('SANDBOX_COMMAND_FAILED', 'Docker did not answer', 502)
+    })
+    await w.recover(after.recovery)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'recovery',
+      reason: 'destroy_failed',
+      fence: { epoch: 2 },
+    })
+    expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 0 })
+    expect(w.lease()).toMatchObject({ held: true, epoch: 2 })
+
+    w.vm.sandbox.destroy = destroy
+    await w.recover(after.recovery)
+    expect(w.vm.exists()).toBe(false)
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.assignment()).toMatchObject({
+      outcome: 'completed',
+      fence: { epoch: 3 },
+      recoveryAttempts: 1,
+    })
+  })
+
+  it('leaves to an operator a checkpoint whose candidate never matches it', async () => {
+    const w = world('local')
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed')
+    const prepare = w.workspace.preparePublication.getMockImplementation()!
+    w.workspace.preparePublication.mockImplementation(async (input) => ({
+      ...(await prepare(input)),
+      headSha: 'd'.repeat(40),
+    }))
+    for (let pass = 0; pass < 4; pass++) await w.recover(after.recovery)
+
+    expect(w.publish).not.toHaveBeenCalled()
+    expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 2 })
+    expect(w.logger.error).toHaveBeenCalledWith(
+      'Turn recovery left a turn to an operator: too many recovery attempts (epoch 3, phase checkpointed, attempts 2)',
+    )
+  })
+})
+
 describe('turn exec recovery on a runner VM', () => {
   it('waits for a runner that is away and gives the turn up at its deadline and grace', async () => {
     const w = world('runner')
@@ -1249,6 +1347,113 @@ describe('turn exec recovery on a runner VM', () => {
     })
     expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
     expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('holds a checkpoint of an away runner unpublished, then publishes once it is back', async () => {
+    const w = world('runner')
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed', { stopRunner: true })
+    await w.recover(after.recovery)
+    await w.recover(after.recovery)
+
+    expect(w.publish).not.toHaveBeenCalled()
+    expect(w.vm.exists()).toBe(true)
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+    expect(w.journal.entries.filter((entry) => entry.reason === 'awaiting_runner')).toMatchObject([
+      { phase: 'recovery', fence: { epoch: 1 } },
+    ])
+    expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 0 })
+
+    await w.restartRunner()
+    await w.recover(after.recovery)
+    expect(w.journal.phases(2)).toEqual([
+      'checkpointed',
+      'destroyed',
+      'publishing',
+      'publication_recovered',
+    ])
+    expect(w.journal.entries.find((entry) => entry.phase === 'destroyed')).toMatchObject({
+      containerId: 'container1',
+    })
+    expect(w.vm.exists()).toBe(false)
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.assignment()).toMatchObject({
+      outcome: 'completed',
+      fence: { epoch: 2 },
+      recoveryAttempts: 1,
+    })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('waits for a runner silent past its poll hold instead of timing out on it', async () => {
+    const w = world('runner')
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed')
+    await w.runner().stop()
+    // Silent for 50 s: not yet lost to the hub, but a removal through it would only time out.
+    const now = performance.now.bind(performance)
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now() + 50_000)
+    await w.recover(after.recovery)
+    await w.recover(after.recovery)
+    expect(w.publish).not.toHaveBeenCalled()
+    expect(w.logger.error).not.toHaveBeenCalled()
+    expect(w.lease()).toMatchObject({ held: true, epoch: 1 })
+    expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 0 })
+
+    clock.mockRestore()
+    await w.restartRunner()
+    await w.recover(after.recovery)
+    expect(w.vm.exists()).toBe(false)
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', recoveryAttempts: 1 })
+  })
+
+  it('publishes without the runner once the deadline and grace passed: the watchdog removed it', async () => {
+    const w = world('runner')
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed', { stopRunner: true })
+    const adopt = vi.spyOn(after.executor, 'adopt')
+    // The VM's watchdog removes the container past its own deadline.
+    await w.vm.sandbox.destroy('timeout')
+    pastGrace(w)
+    await w.recover(after.recovery)
+
+    expect(adopt).not.toHaveBeenCalled()
+    expect(w.journal.phases(2)).toEqual([
+      'checkpointed',
+      'destroyed',
+      'publishing',
+      'publication_recovered',
+    ])
+    expect(w.journal.entries.find((entry) => entry.phase === 'destroyed')).toMatchObject({
+      containerId: 'container1',
+      reason: 'timeout',
+    })
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', recoveryAttempts: 1 })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
+  it('publishes a turn journaled publishing at once, its runner away or not', async () => {
+    const w = world('runner')
+    w.vm.finish()
+    const { after } = await w.crashAt('publishing', { stopRunner: true })
+    await w.recover(after.recovery)
+    expect(w.journal.entries.some((entry) => entry.reason === 'awaiting_runner')).toBe(false)
+    expect(w.journal.phases(2).slice(-2)).toEqual(['publishing', 'publication_recovered'])
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+  })
+
+  it('does not let the wait for an away runner hide the attempt limit', async () => {
+    const w = world('runner')
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed', { stopRunner: true })
+    w.assignments.rows.get(w.assignment().id)!.recoveryAttempts = 2
+    await w.recover(after.recovery)
+    expect(w.journal.entries.some((entry) => entry.reason === 'awaiting_runner')).toBe(false)
+    expect(w.lease()).toMatchObject({ held: true, epoch: 1 })
+    expect(w.logger.error).toHaveBeenCalledWith(
+      'Turn recovery left a turn to an operator: too many recovery attempts (epoch 1, phase checkpointed, attempts 2)',
+    )
   })
 
   it('takes a hold off after the deadline and grace when the runner of a failed removal is away', async () => {

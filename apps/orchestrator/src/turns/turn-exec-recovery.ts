@@ -40,7 +40,11 @@ import {
   type ReplayedTurn,
   type TurnJournalRange,
 } from './turn-journal.ts'
-import { TurnPublicationRecovery } from './turn-recovery.ts'
+import {
+  isAmbiguousContainer,
+  TurnPublicationRecovery,
+  type PublicationRemoval,
+} from './turn-recovery.ts'
 import { checkPreparedRun, type TurnSnapshotStore } from './turn-supervisor.ts'
 
 /** Recovery passes over the unfinished assignments at start and this often. */
@@ -209,7 +213,8 @@ export class TurnExecRecovery {
       return this.#park(assignment, step, 'driver unavailable')
     }
     const takeover = this.deps.executor.takeover(assignment)
-    if (publicationSteps.includes(step)) return this.#publish(assignment, turn, driver, takeover)
+    if (publicationSteps.includes(step))
+      return this.#publish(assignment, turn, driver, takeover, remainingMs())
     if (!takeover) return this.#expireAfterGrace(assignment, turn, remainingMs())
     const owner = await this.#takeOver(assignment, turn, driver, takeover, remainingMs())
     if (!owner) return
@@ -509,15 +514,29 @@ export class TurnExecRecovery {
   }
 
   /**
-   * A committed checkpoint is published under a newer epoch (TurnPublicationRecovery). Without
-   * a committed manifest a turn stopped while checkpointing waits for an operator.
+   * A committed checkpoint is published under a newer epoch (TurnPublicationRecovery), only once
+   * the turn's container is known to be gone: its owner journaled the removal, recovery removes
+   * it now through the executor, or the deadline and grace passed and the VM's watchdog removed
+   * it. A runner that is away is waited for with the site held. Without a committed manifest a
+   * turn stopped while checkpointing waits for an operator, as does a container of another
+   * identity.
    */
   async #publish(
     assignment: TurnAssignment,
     turn: ReplayedTurn,
     driver: AgentDriver,
     takeover: TurnTakeover | null,
+    remainingMs: number,
   ): Promise<void> {
+    const removal: PublicationRemoval | null =
+      turn.step === 'destroyed' || turn.step === 'publishing'
+        ? 'confirmed'
+        : takeover
+          ? 'adopt'
+          : remainingMs + TURN_PUBLICATION_GRACE_MS <= 0
+            ? 'expired'
+            : null
+    if (removal === null) return this.#awaitRunnerToPublish(assignment, turn)
     const { plan } = assignment
     const labels = plan.sandbox.labels
     const snapshot: SnapshotReference = {
@@ -534,6 +553,7 @@ export class TurnExecRecovery {
       )
       return this.#close(assignment, 'lost')
     }
+    const containerId = turn.containerId ?? assignment.containerId ?? undefined
     try {
       await this.#publication.recover({
         assignmentId: assignment.id,
@@ -541,15 +561,38 @@ export class TurnExecRecovery {
         ...(takeover?.runnerSession ? { runnerSession: takeover.runnerSession } : {}),
         snapshot,
         workspace: plan.workspace,
+        removal,
+        ...(containerId ? { containerId } : {}),
+        labels: containerLabels(assignment),
       })
     } catch (error) {
       const now = await this.deps.assignments.get(assignment.id).catch(() => null)
       // Refused before any takeover: the snapshot has no committed manifest.
       if (turn.step === 'checkpointing' && now?.fence.epoch === assignment.fence.epoch)
         return this.#park(assignment, turn.step, 'no committed checkpoint')
+      // Another identity where the turn's container should be. Any other failed removal left
+      // the new epoch held, and the next pass tries again without counting an attempt.
+      if (isAmbiguousContainer(error))
+        return this.#park(now ?? assignment, turn.step, 'ambiguous container')
       throw error
     }
     await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
+  }
+
+  /**
+   * The runner of a checkpointed turn is away: its container may still exist. The site is held
+   * at the assignment's epoch and the wait journaled once; no attempt is counted. The runner's
+   * return or the deadline and grace end the wait (#publish).
+   */
+  async #awaitRunnerToPublish(assignment: TurnAssignment, turn: ReplayedTurn): Promise<void> {
+    if (!(await this.deps.leases.holdForRecovery(assignment.fence))) {
+      this.#logger.error(
+        `Turn recovery cannot publish a checkpoint whose site lease moved on (epoch ${assignment.fence.epoch}, phase ${turn.step})`,
+      )
+      return this.#close(assignment, 'lost')
+    }
+    if (turn.lastPhase === 'recovery' && turn.reason === 'awaiting_runner') return
+    await this.#journal(assignment, turn, 'recovery', 'awaiting_runner')
   }
 
   /** An entry under the assignment's own epoch, after the last one its journal holds. */
