@@ -21,7 +21,9 @@ async function startMcp(infra: FakeInfra): Promise<INestApplication> {
     .compile()
   app = moduleRef.createNestApplication({ logger: false })
   await mountMcp(app, createMcpStrategy())
-  await app.init()
+  // On 127.0.0.1, where supertest connects. Left unbound, supertest listens on every address,
+  // and a server another test file binds to 127.0.0.1 on the same port answers instead.
+  await app.listen(0, '127.0.0.1')
   return app
 }
 
