@@ -10,7 +10,7 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 | `secrets.example/` | Раскладка секретов `/run/raditi/<сервис>/` — какие файлы и что в них |
 | `postgres/init-roles.sh` | Роли PostgreSQL: владелец схемы `raditi`, `raditi_web` и `raditi_core` только с DML |
 | `preflight.sh` | Проверки хоста перед стартом, `ExecStartPre` юнита |
-| `systemd/raditi-app.service` | Запуск стека после рендера секретов |
+| `systemd/raditi-app.service` | Запуск стека, как только проходит `preflight.sh`; повтор каждые 30 секунд |
 | `*.test.mjs`, `verify-edge.mjs`, `verify/` | Проверки: `pnpm test:infra` и `pnpm verify:edge` |
 
 ## Что открыто
@@ -43,7 +43,7 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 ## Первая выкладка
 
 1. **DNS и сеть.** A-записи apex и `www`, без AAAA, пока мосты Docker без IPv6. Группы безопасности — как выше.
-2. **Хост** (Ansible, M10): Docker 28 и новее, в `/etc/docker/daemon.json` — `"userland-proxy": false` и `"live-restore": true`; `vm.overcommit_memory=1`; chrony. Каталог `/opt/raditi/app` — этот каталог репозитория и `.env` по образцу `env.example` (root:docker, 0640).
+2. **Хост** (Ansible, M10): Docker 28 и новее, в `/etc/docker/daemon.json` — `"userland-proxy": false` и `"live-restore": true`; `vm.overcommit_memory=1`; chrony и `systemctl enable chrony-wait.service`, чтобы `time-sync.target` при загрузке ждал синхронизации часов. Каталог `/opt/raditi/app` — этот каталог репозитория и `.env` по образцу `env.example` (root:docker, 0640).
 3. **Тома:** `docker volume create raditi-app-acme`, то же для `raditi-app-pgdata` и `raditi-app-redis`. `docker compose down -v` их не удаляет.
 4. **Staging Let's Encrypt.** В `.env`: `ACME_CA_SERVER=https://acme-staging-v02.api.letsencrypt.org/directory`, `ACME_STORAGE_FILE=acme-staging.json`. Затем `./preflight.sh` и `docker compose up -d --wait traefik`.
 5. **Проверка снаружи**, не с ВМ:
@@ -67,7 +67,7 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 
 **Откат.** Прежние digest в `.env`, затем `docker compose up -d --wait --no-deps web core`. Схему не откатываем: старый код совместим с новой схемой.
 
-**Перезагрузка ВМ.** `/run` — tmpfs. `raditi-secrets.service` рендерит секреты до `docker.service`, стек поднимает `raditi-app.service`. Пока секретов нет, контейнеры не стартуют.
+**Перезагрузка ВМ.** `/run` — tmpfs. `raditi-secrets.service` рендерит секреты до `docker.service`, и контейнеры поднимает сам dockerd (`restart: unless-stopped`). Пока секретов нет, контейнеры не стартуют. Если секреты отрендерились позже или часы ещё не синхронизированы, `preflight.sh` не проходит, и `raditi-app.service` повторяет запуск каждые 30 секунд, пока стек не поднимется: `systemctl status raditi-app.service` покажет, какая проверка мешает.
 
 ## Токены раннеров
 

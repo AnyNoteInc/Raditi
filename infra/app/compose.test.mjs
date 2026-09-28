@@ -145,6 +145,23 @@ test("preflight.sh requires a digest for every image of the server's .env", () =
   assert.ok(preflight.includes("grep -Eq '@sha256:[0-9a-f]{64}$'"))
 })
 
+test('the stack unit waits for the clock and tries again until preflight passes', () => {
+  const unit = readFileSync(new URL('./systemd/raditi-app.service', import.meta.url), 'utf8')
+  const values = (name) =>
+    [...unit.matchAll(new RegExp(`^${name}=(.*)$`, 'gm'))].flatMap(([, value]) =>
+      value.split(/\s+/),
+    )
+  for (const name of ['After', 'Wants']) {
+    assert.ok(values(name).includes('time-sync.target'), name)
+    assert.ok(values(name).includes('raditi-secrets.service'), name)
+  }
+  // A failed dependency would end the job without a restart: the render is only wanted.
+  assert.deepEqual(values('Requires'), ['docker.service'])
+  assert.deepEqual(values('ExecStartPre'), ['/opt/raditi/app/preflight.sh'])
+  assert.deepEqual(values('Restart'), ['on-failure'])
+  assert.deepEqual(values('RestartSec'), ['30s'])
+})
+
 test('every service is read-only, drops all capabilities, cannot gain privileges, has limits', () => {
   for (const name of names) {
     const service = services[name]
