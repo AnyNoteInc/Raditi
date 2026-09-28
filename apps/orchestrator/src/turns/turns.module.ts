@@ -13,7 +13,8 @@ import { LocalTurnExecutor } from './local-turn-executor.ts'
 
 /**
  * TURN_EXECUTOR by configuration: runner VMs over the runner API, or core's own Docker (PoC,
- * never in production). The supervisor that uses it is wired with the task queue in P12.
+ * never in production). The supervisor that uses it, its recovery and, for the local executor,
+ * TurnReconciler are wired with the task queue in P12.
  */
 @Module({})
 export class TurnsModule {
