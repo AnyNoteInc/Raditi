@@ -447,6 +447,32 @@ describe('SandboxRunner commands', () => {
     expect(core.reports[5]).not.toHaveProperty('absent')
   })
 
+  it('fetches the base bundle again while core is unavailable, as any other call', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    let calls = 0
+    core.transport.bundle = async function* () {
+      calls += 1
+      if (calls === 1) throw new RunnerCallError('bundle', 503, { error: 'UNAVAILABLE' })
+      yield Buffer.from(bundleBytes.subarray(0, 4))
+      if (calls === 2) throw new RunnerCallError('bundle', null)
+      yield Buffer.from(bundleBytes.subarray(4))
+    }
+    let imported: Buffer | undefined
+    side.importBundle.mockImplementation(async (_sandbox, bundle) => {
+      const chunks: Uint8Array[] = []
+      for await (const chunk of bundle.read()) chunks.push(chunk)
+      imported = Buffer.concat(chunks)
+    })
+    startRunner(core.transport, side.executor)
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']), {
+      timeout: 5_000,
+    })
+    expect(calls).toBe(3)
+    expect(imported).toEqual(bundleBytes)
+  })
+
   it('stops a prepare still creating its container when core adopts the turn for removal', async () => {
     const side = sandboxSide()
     const core = scriptedCore()

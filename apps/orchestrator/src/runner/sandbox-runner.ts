@@ -506,7 +506,7 @@ export class SandboxRunner {
           remainingMs: Math.max(1, Math.floor(held.deadline - performance.now())),
           bundle: {
             ...command.bundle,
-            read: () => this.deps.transport.bundle(held.id, fence, command.bundle.sizeBytes),
+            read: () => this.#bundle(held, fence, command.bundle.sizeBytes),
           },
           ...(restore ? { restore } : {}),
           driverId: command.driverId,
@@ -1003,6 +1003,30 @@ export class SandboxRunner {
     const key = await this.#call(held, () => this.deps.transport.key(held.id, purpose, fence))
     if (!key.ok) throw new Error('No data key')
     return key.value
+  }
+
+  /**
+   * The base bundle, fetched whole and retried like any other call to core: the importer checks
+   * its size and SHA-256 anyway. Each chunk is let go once the importer took it.
+   */
+  async *#bundle(
+    held: Held,
+    fence: RunnerCommandFence,
+    sizeBytes: number,
+  ): AsyncIterable<Uint8Array> {
+    const read = await this.#call(
+      held,
+      async () => {
+        const chunks: Uint8Array[] = []
+        for await (const chunk of this.deps.transport.bundle(held.id, fence, sizeBytes))
+          chunks.push(chunk)
+        return chunks.reverse()
+      },
+      held.abort.signal,
+    )
+    if (!read.ok) throw new Error('No base bundle')
+    const chunks = read.value
+    while (chunks.length > 0) yield chunks.pop()!
   }
 
   #report(
