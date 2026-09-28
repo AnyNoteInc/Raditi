@@ -58,17 +58,6 @@ export const runnerKeyPath = (assignmentId: string, purpose: 'restore' | 'seal')
 export const runnerCandidatePath = (assignmentId: string, part: 'patch' | 'untracked') =>
   `${assignmentPath(assignmentId)}/candidate/${part}`
 
-/**
- * What core presigns for a runner. P2 issues only snapshot parts of the current turn; log chunks
- * (P12) and /workspace/out artifacts (M7) are reserved and not issued yet.
- */
-export const runnerGrantKinds = [
-  'snapshot_restore',
-  'snapshot_seal',
-  'log_chunk',
-  'artifact',
-] as const
-
 /** The fence of the binary endpoints above, which have no JSON body. */
 export const runnerHeaders = Object.freeze({
   session: 'x-raditi-runner-session',
@@ -333,8 +322,12 @@ export const runnerPollRequestSchema = z
   .strict()
 export type RunnerPollRequest = z.infer<typeof runnerPollRequestSchema>
 
+/**
+ * The envelope of a poll's answer. The runner checks each command on its own with
+ * runnerCommandSchema, so one it cannot read does not drop the others.
+ */
 export const runnerPollResponseSchema = z
-  .object({ commands: z.array(runnerCommandSchema).max(runnerLimits.commands) })
+  .object({ commands: z.array(z.unknown()).max(runnerLimits.commands) })
   .strict()
 
 export const runnerReconcileRequestSchema = z
@@ -449,8 +442,6 @@ export const runnerReportSchema = z
       ctx.addIssue({ code: 'custom', message: 'output batch exceeds its limit' })
   })
 export type RunnerReport = z.infer<typeof runnerReportSchema>
-
-export const runnerReportReplySchema = z.object({ ok: z.literal(true) }).strict()
 
 /**
  * 409 answers. FENCE_SUPERSEDED: recovery took the turn over under a newer fence; the runner

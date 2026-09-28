@@ -11,6 +11,7 @@ import {
   runnerCommandSchema,
   runnerLimits,
   runnerPollRequestSchema,
+  runnerPollResponseSchema,
   runnerReportSchema,
   snapshotPartFiles,
   TURN_PUBLICATION_GRACE_MS,
@@ -34,7 +35,6 @@ import {
   type TurnRestoreSource,
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
-import { z } from 'zod'
 
 import { RunnerCallError, type RunnerCommandFence, type RunnerTransport } from './core-client.ts'
 
@@ -83,7 +83,6 @@ const SEEN_COMMANDS = 1024
 const GONE_ASSIGNMENTS = 64
 
 const inventoryEntry = runnerPollRequestSchema.shape.inventory.element
-const pollAnswer = z.object({ commands: z.array(z.unknown()).max(runnerLimits.commands) }).strict()
 
 /** Only a code or a status: messages may carry storage or Docker details, never a secret. */
 const logged = (error: unknown): Error =>
@@ -366,7 +365,7 @@ export class SandboxRunner {
   #take(answer: unknown, sentAt: number): void {
     if (this.#retired) return
     const receivedAt = performance.now()
-    const parsed = pollAnswer.safeParse(answer)
+    const parsed = runnerPollResponseSchema.safeParse(answer)
     if (!parsed.success) {
       this.#warn('poll', new Error('invalid answer'))
       return

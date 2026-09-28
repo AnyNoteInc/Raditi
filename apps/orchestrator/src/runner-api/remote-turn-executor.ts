@@ -48,7 +48,10 @@ export const runnerReplyMs = Object.freeze({
 
 type Purpose = 'turn' | 'work' | 'removal'
 
-/** Only what the runner needs: the expiry is signed into the URL. */
+/**
+ * Only what the runner needs: the expiry is signed into the URL. P2 presigns only the snapshot
+ * parts of the current turn; log chunks (P12) and /workspace/out artifacts (M7) come later.
+ */
 const wire = ({ method, url, headers }: PresignedRequest) => ({
   method,
   url,

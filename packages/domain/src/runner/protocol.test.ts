@@ -16,6 +16,7 @@ import {
   runnerKeyPath,
   runnerLimits,
   runnerPollRequestSchema,
+  runnerPollResponseSchema,
   runnerReportSchema,
   runnerUnavailable,
 } from './protocol.ts'
@@ -376,6 +377,18 @@ describe('runner poll and answers', () => {
     expect(runnerPollRequestSchema.safeParse({ ...poll, runnerSession: 'r1' }).success).toBe(false)
     expect(runnerPollRequestSchema.safeParse({ ...poll, capacity: 65 }).success).toBe(false)
     expect(runnerLimits.capacity).toBe(64)
+  })
+
+  it('bounds an answer and leaves each command to its own check', () => {
+    // One command the runner cannot read does not drop the others with it.
+    expect(runnerPollResponseSchema.safeParse({ commands: [{ type: 'unknown' }] }).success).toBe(
+      true,
+    )
+    expect(
+      runnerPollResponseSchema.safeParse({ commands: Array(runnerLimits.commands + 1).fill({}) })
+        .success,
+    ).toBe(false)
+    expect(runnerPollResponseSchema.safeParse({ commands: [], extra: true }).success).toBe(false)
   })
 
   it('knows the four conflicts', () => {
