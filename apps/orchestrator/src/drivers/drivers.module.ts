@@ -1,0 +1,25 @@
+import { Module } from '@nestjs/common'
+import { createAgentDriverRegistry, createAgentDrivers } from '@repo/agent-drivers'
+import type { AgentDriverId } from '@repo/domain'
+
+import type { CoreConfig } from '../config/config.ts'
+import { AGENT_DRIVERS, CORE_CONFIG } from '../infra/tokens.ts'
+
+/** Drivers the router may pick in the MVP (spec §8); qwen and opencode are registered spares. */
+export const ENABLED_AGENT_DRIVERS: readonly AgentDriverId[] = ['codex', 'kimi']
+
+@Module({
+  providers: [
+    {
+      provide: AGENT_DRIVERS,
+      useFactory: (config: CoreConfig) =>
+        createAgentDriverRegistry(
+          createAgentDrivers(config.agentDrivers),
+          new Set(ENABLED_AGENT_DRIVERS),
+        ),
+      inject: [CORE_CONFIG],
+    },
+  ],
+  exports: [AGENT_DRIVERS],
+})
+export class DriversModule {}

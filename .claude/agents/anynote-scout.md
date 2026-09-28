@@ -14,9 +14,11 @@ tools: Read, Grep, Glob, Bash
 
 Помни об отличиях Радити от AnyNote:
 
-- `apps/agents` в Радити — NestJS на TypeScript, а не Python и LangGraph: агент теперь внешний CLI.
-- S3 для разработки — SeaweedFS, а не MinIO.
-- Новые пакеты: vault, gitea, agent-runtime, site-adapters; `storage` расширяем (несколько бакетов, presigned, multipart), `yookassa` — чеками 54-ФЗ.
+- Вместо `apps/agents` (Python) и `apps/engines` в Радити одно NestJS-приложение `apps/orchestrator` с ролями core, mcp и runner: агент теперь внешний CLI в песочнице.
+- `packages/domain` — ядро портов и адаптеров: порты там, адаптеры зависят только от него.
+- Очереди — BullMQ на Redis (`@nestjs/bullmq`); в AnyNote их нет.
+- S3 для разработки — SeaweedFS, а не MinIO. Деньги — Decimal, а не целые копейки.
+- Новые пакеты: vault, git-providers, sandbox-providers, agent-drivers, site-adapters; `storage` расширяем (несколько бакетов, presigned, multipart), `yookassa` — чеками 54-ФЗ.
 - Всё, что относится к продукту AnyNote (заметки, его домен, его тексты), в Радити не переносится.
 
 Если в AnyNote чего-то нет — так и скажи, не выдумывай. Отвечай компактно: список путей и выводов, без пересказа файлов целиком.

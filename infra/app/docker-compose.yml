@@ -1,0 +1,353 @@
+# App VM (spec §19). The only public entry is Traefik on 80/443 with Let's Encrypt. The runner API
+# (8083) is published only on APP_PRIVATE_IP, which the cloud security group opens to the sandbox
+# VMs' subnet only; it is plain HTTP (owner's decision of 27.09.2026). No secret lives in this file
+# or in `environment:`: each service reads its own files from ${SECRETS_DIR}/<service> (host tmpfs,
+# rendered before docker.service starts). LiteLLM (P3) and mcp (P6) join with their own networks.
+# Runbook: README.md.
+name: raditi-app
+
+# journald on the host: the logs outlive a recreated container (every release recreates web and
+# core). The access log is the incident trail (152-ФЗ: report within 24 hours); its retention and
+# size are the host's journald.conf (README.md, «Хост»).
+x-logging: &logging
+  driver: journald
+  options: { tag: '{{.Name}}' }
+
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging: *logging
+
+x-node: &node
+  <<: *hardened
+  init: true
+
+x-platform-env: &platform-env
+  NODE_ENV: production
+  APP_ENV: production
+  APP_URL: https://${APP_DOMAIN:?Set APP_DOMAIN}
+  S3_ENDPOINT: ${S3_ENDPOINT:?Set S3_ENDPOINT}
+  S3_REGION: ${S3_REGION:?Set S3_REGION}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+  S3_BUCKET_INBOX: raditi-inbox
+  S3_BUCKET_SESSIONS: raditi-sessions
+  S3_BUCKET_LOGS: raditi-logs
+  S3_BUCKET_ARTIFACTS: raditi-artifacts
+  S3_BUCKET_BACKUPS: raditi-backups
+  S3_BUCKET_PLATFORM: raditi-platform
+  VAULT_ADDR: ${VAULT_ADDR:?Set VAULT_ADDR}
+
+x-node-health: &node-health
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 30s
+
+# A service's own secret files. A missing directory fails the start instead of mounting an empty one.
+x-secrets: &secrets
+  type: bind
+  target: /run/raditi
+  read_only: true
+  bind: { create_host_path: false }
+
+services:
+  # Named volumes start root-owned; every service below runs under its own uid.
+  volume-init:
+    image: ${REDIS_IMAGE:?Set the digest-pinned Redis image}
+    restart: 'no'
+    user: '0:0'
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    logging: *logging
+    entrypoint: ['/bin/sh', '-euc']
+    command:
+      - |
+        chown 65532:65532 /v/acme && chmod 0700 /v/acme
+        chown 70:70 /v/pgdata && chmod 0700 /v/pgdata
+        chown 10003:10003 /v/redis-data && chmod 0700 /v/redis-data
+        mkdir -p /v/core-work/tmp /v/core-work/home
+        chown -R 10002:10002 /v/core-work && chmod 0700 /v/core-work
+    volumes:
+      - acme:/v/acme
+      - pgdata:/v/pgdata
+      - redis-data:/v/redis-data
+      - core-work:/v/core-work
+
+  # Static configuration only as flags (no /etc/traefik/traefik.*, no TRAEFIK_*): a changed flag
+  # recreates the container on `up -d`. Routes come from the file provider; no Docker socket, no
+  # dashboard. ping and metrics answer on :9000, which is never published.
+  traefik:
+    <<: *hardened
+    image: ${TRAEFIK_IMAGE:?Set the digest-pinned Traefik image}
+    user: '65532:65532'
+    depends_on:
+      volume-init: { condition: service_completed_successfully }
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --log.level=INFO
+      - --log.format=json
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.fields.defaultmode=keep
+      - --accesslog.fields.names.ClientUsername=drop
+      - --accesslog.fields.headers.defaultmode=drop
+      - --accesslog.fields.queryparameters.defaultmode=drop
+      - --entrypoints.web.address=:8000
+      # ':443', not 'websecure': the entry point's own port (8443) would land in Location
+      - --entrypoints.web.http.redirections.entrypoint.to=:443
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      - --entrypoints.web.observability.accesslogs=false
+      - --entrypoints.web.http.aliasheadersstrategy=delete
+      - --entrypoints.websecure.address=:8443
+      - --entrypoints.websecure.asdefault=true
+      - --entrypoints.websecure.http.aliasheadersstrategy=delete
+      # Each request writes its path to the access log in journald; the default 1 MiB of headers
+      # would let a flood evict the whole incident trail fast. web (Node) takes 16 KiB anyway.
+      - --entrypoints.websecure.http.maxheaderbytes=32768
+      - --entrypoints.websecure.http.encodedcharacters.allowencodedslash=false
+      - --entrypoints.websecure.http.encodedcharacters.allowencodedbackslash=false
+      - --entrypoints.websecure.http.encodedcharacters.allowencodednullcharacter=false
+      - --entrypoints.websecure.http.encodedcharacters.allowencodedsemicolon=false
+      - --entrypoints.websecure.http.encodedcharacters.allowencodedpercent=false
+      - --entrypoints.websecure.http.encodedcharacters.allowencodedquestionmark=false
+      - --entrypoints.websecure.http.encodedcharacters.allowencodedhash=false
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=60s
+      # 0: the task's SSE stream stays open for as long as the task runs
+      - --entrypoints.websecure.transport.respondingtimeouts.writetimeout=0s
+      - --entrypoints.websecure.transport.respondingtimeouts.idletimeout=180s
+      # forwardedHeaders is not set: client X-Forwarded-* is dropped, XFF = the peer address
+      - --entrypoints.internal.address=:9000
+      - --entrypoints.internal.http.aliasheadersstrategy=delete
+      - --ping=true
+      - --ping.entrypoint=internal
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=internal
+      - --metrics.prometheus.addrouterslabels=true
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      # Not empty: without an email Traefik registers a new ACME account on every start
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?Set ACME_EMAIL}
+      - --certificatesresolvers.le.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.le.acme.storage=/acme/${ACME_STORAGE_FILE:-acme.json}
+      - --certificatesresolvers.le.acme.keytype=EC256
+      - --certificatesresolvers.le.acme.certificatesduration=${ACME_CERT_HOURS:-2160}
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN}
+    ports:
+      - '${EDGE_HTTP:-80}:8000'
+      - '${EDGE_HTTPS:-443}:8443'
+    volumes:
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - acme:/acme
+    healthcheck:
+      test:
+        - CMD
+        - traefik
+        - healthcheck
+        - --ping=true
+        - --ping.entrypoint=internal
+        - --entrypoints.internal.address=:9000
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 256
+    networks: [public, edge, metrics-edge]
+
+  web:
+    <<: *node
+    image: ${WEB_IMAGE:?Set the digest-pinned web image}
+    user: '10001:10001'
+    command: ['--env-file=/run/raditi/app.env', 'apps/web/server.js']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      <<: *platform-env
+      BETTER_AUTH_URL: https://${APP_DOMAIN}
+      HOSTNAME: 0.0.0.0
+      PORT: '3000'
+    # No `ports:` and no network shared with core: only Traefik reaches web, so X-Forwarded-For
+    # is always the single address Traefik set.
+    volumes:
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/web' }
+    tmpfs:
+      - /app/apps/web/.next/cache:size=256m,uid=10001,gid=10001,mode=0700
+    healthcheck:
+      # Liveness: any answer (200 or 503) means the process serves; broken settings never start
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/api/health').then(() => process.exit(0), () => process.exit(1))
+      <<: *node-health
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 512
+    networks: [edge, web-data, web-egress]
+
+  core:
+    <<: *node
+    image: ${ORCHESTRATOR_IMAGE:?Set the digest-pinned orchestrator image}
+    user: '10002:10002'
+    command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      volume-init: { condition: service_completed_successfully }
+    environment:
+      <<: *platform-env
+      S3_RUNNER_ENDPOINT: ${S3_RUNNER_ENDPOINT:-}
+      ORCHESTRATOR_ROLES: core
+      ORCHESTRATOR_PORT: '8081'
+      TURN_EXECUTOR: runner
+      RUNNER_API_PORT: '8083'
+      # SHA-256 of the VM tokens bound to the VMs' private addresses: not a secret (spec §15)
+      RUNNER_TOKENS: ${RUNNER_TOKENS:?Set the runner token hashes}
+      # Agent images live in the platform registry: <prefix>-<driver>
+      SANDBOX_IMAGE_PREFIX: ${SANDBOX_IMAGE_PREFIX:?Set the agent image repository prefix}
+      # Publication clones (git-workspace.service.ts) go to core's own volume, not to RAM
+      TMPDIR: /work/tmp
+      HOME: /work/home
+    ports:
+      # The runner API only, only on the private address: plain HTTP to the sandbox VMs
+      - '${APP_PRIVATE_IP:?Set the private address of this VM}:${RUNNER_API_PUBLISH:-8083}:8083'
+    volumes:
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/core' }
+      - core-work:/work
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8081/health').then(() => process.exit(0), () => process.exit(1))
+      <<: *node-health
+    # SHUTDOWN_TIMEOUT_MS is 30 s (roles.ts); compose's default 10 s would cut it short
+    stop_grace_period: 40s
+    cpus: 2
+    mem_limit: 3g
+    pids_limit: 1024
+    networks: [core-data, core-egress]
+
+  # Explicit deploy steps, never started by `up`: `docker compose run --rm migrate`, then `seed`.
+  migrate: &migrate
+    <<: *node
+    image: ${MIGRATE_IMAGE:?Set the digest-pinned migrate image}
+    profiles: [ops]
+    restart: 'no'
+    user: '10004:10004'
+    command:
+      ['--env-file=/run/raditi/app.env', 'node_modules/prisma/build/index.js', 'migrate', 'deploy']
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      HOME: /tmp
+      CHECKPOINT_DISABLE: '1'
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/migrate' }
+    tmpfs:
+      - /tmp:size=64m,uid=10004,gid=10004,mode=0700
+    cpus: 1
+    mem_limit: 1g
+    pids_limit: 256
+    networks: [core-data]
+
+  seed:
+    <<: *migrate
+    command: ['--env-file=/run/raditi/app.env', 'node_modules/prisma/build/index.js', 'db', 'seed']
+
+  postgres:
+    <<: *hardened
+    image: ${POSTGRES_IMAGE:?Set the digest-pinned PostgreSQL image}
+    # The image runs as its postgres user (uid 70) without root: pgdata is chowned by volume-init
+    user: '70:70'
+    depends_on:
+      volume-init: { condition: service_completed_successfully }
+    environment:
+      POSTGRES_DB: raditi
+      POSTGRES_PASSWORD_FILE: /run/raditi/superuser-password
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/postgres' }
+      - ./postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    tmpfs:
+      - /var/run/postgresql:uid=70,gid=70,mode=0775
+      - /tmp:uid=70,gid=70,mode=1777
+    shm_size: 256m
+    healthcheck:
+      # TCP, not the socket: during initdb the temporary server listens on the socket only
+      test: ['CMD', 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'raditi']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 60s
+    cpus: 2
+    mem_limit: 3g
+    pids_limit: 512
+    networks: [web-data, core-data]
+
+  redis:
+    <<: *hardened
+    image: ${REDIS_IMAGE:?Set the digest-pinned Redis image}
+    user: '10003:10003'
+    depends_on:
+      volume-init: { condition: service_completed_successfully }
+    # noeviction works only with maxmemory; the memory limit leaves room for the AOF rewrite fork
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - noeviction
+      - --aclfile
+      - /run/raditi/users.acl
+    volumes:
+      - redis-data:/data
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/redis' }
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH="$$(cat /run/raditi/health-password)" redis-cli --user health ping | grep -q PONG
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    cpus: 0.5
+    mem_limit: 1536m
+    pids_limit: 256
+    networks: [web-data, core-data]
+
+networks:
+  # Traefik only: the published 80/443 and ACME egress
+  public:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-public' }
+  edge: { internal: true } # Traefik ↔ web
+  web-data: { internal: true } # web ↔ PostgreSQL, Redis
+  core-data: { internal: true } # core, migrate, seed ↔ PostgreSQL, Redis
+  # Egress per service: web and core never share a network (web trusts X-Forwarded-For)
+  web-egress:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-web' }
+  core-egress:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-core' }
+  metrics-edge: { internal: true } # Prometheus (M9) → traefik:9000 only
+
+volumes:
+  # Stateful volumes are created once by the runbook and survive `down -v`
+  acme: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-acme' } # certificate and account keys
+  pgdata: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-pgdata' }
+  redis-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-redis' }
+  core-work: {}

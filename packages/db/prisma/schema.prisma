@@ -1,0 +1,1252 @@
+// Радити — data model v1 (spec §16).
+// Conventions: uuid v7 ids, snake_case tables and columns via @@map/@map, timestamptz(6),
+// enum values in lowercase snake_case, money as Decimal with an explicit precision (spec §16:
+// never float, never integer kopecks). CHECK constraints Prisma cannot express are appended to
+// the migration that creates their table; Prisma ignores them when diffing, so later migrations
+// keep them.
+// onDelete: Restrict for money, usage and history rows; Cascade only for rows that live and die
+// with their parent (membership, channel identities, a task's turns, events and files);
+// SetNull for "who did it" and "latest" pointers.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  runtime             = "nodejs"
+  moduleFormat        = "esm"
+  // One unfinished turn assignment per turn: a partial unique index.
+  previewFeatures     = ["partialIndexes"]
+  // .ts imports inside the generated client: plain Node loads it with type stripping
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Auth (better-auth 1.7.6 core tables) ─────────────────────────────────────
+// Field names are what better-auth writes; its schema check compares them with this model.
+
+model User {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  name          String   @db.VarChar(255)
+  email         String   @unique @db.VarChar(255)
+  emailVerified Boolean  @default(false) @map("email_verified")
+  image         String?  @db.VarChar(1024)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sessions          Session[]
+  accounts          Account[]
+  consents          UserConsent[]
+  memberships       Member[]
+  channelIdentities ChannelIdentity[]
+  workspacesCreated Workspace[]
+  tasksCreated      Task[]
+  attachments       Attachment[]
+  orders            Order[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique @db.VarChar(255)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  ipAddress String?  @map("ip_address") @db.VarChar(45)
+  userAgent String?  @map("user_agent") @db.VarChar(1024)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id @default(uuid(7)) @db.Uuid
+  userId                String    @map("user_id") @db.Uuid
+  /// "credential" for email and password, otherwise the OAuth provider id.
+  providerId            String    @map("provider_id") @db.VarChar(255)
+  accountId             String    @map("account_id") @db.VarChar(255)
+  accessToken           String?   @map("access_token") @db.Text
+  refreshToken          String?   @map("refresh_token") @db.Text
+  idToken               String?   @map("id_token") @db.Text
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at") @db.Timestamptz(6)
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at") @db.Timestamptz(6)
+  scope                 String?   @db.Text
+  /// Password hash; set only for providerId = "credential".
+  password              String?   @db.Text
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  identifier String   @db.Text
+  value      String   @db.Text
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+/// better-auth rate limiter with rateLimit.storage = "database" (no Redis for auth).
+model RateLimit {
+  id          String @id @default(uuid(7)) @db.Uuid
+  key         String @unique @db.VarChar(255)
+  count       Int
+  /// Unix time in milliseconds.
+  lastRequest BigInt @map("last_request")
+
+  @@map("rate_limits")
+}
+
+// ─── Consents (152-FZ) ────────────────────────────────────────────────────────
+
+/// Immutable append-only log: every consent action inserts a row, nothing is updated.
+/// Current state per (userId, documentType) is the row with the latest createdAt.
+model UserConsent {
+  id              String              @id @default(uuid(7)) @db.Uuid
+  userId          String              @map("user_id") @db.Uuid
+  documentType    ConsentDocumentType @map("document_type")
+  granted         Boolean
+  documentVersion String              @map("document_version") @db.VarChar(80)
+  source          ConsentSource
+  ipAddress       String?             @map("ip_address") @db.VarChar(45)
+  userAgent       String?             @map("user_agent") @db.VarChar(1024)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, documentType, createdAt(sort: Desc)])
+  @@map("user_consents")
+}
+
+/// Must equal consentDocumentTypes in @repo/domain (checked by a test).
+enum ConsentDocumentType {
+  user_agreement
+  privacy_policy
+  pii_processing
+  public_offer
+  marketing
+}
+
+enum ConsentSource {
+  sign_up
+  onboarding
+  settings
+}
+
+// ─── Workspaces and people ────────────────────────────────────────────────────
+
+/// The client is a company, not a single person: sites, tasks and money belong to a workspace.
+model Workspace {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  name        String   @db.VarChar(255)
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  createdBy       User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  members         Member[]
+  sites           Site[]
+  credentialRefs  CredentialRef[]
+  chatSessions    ChatSession[]
+  tasks           Task[]
+  subscriptions   Subscription[]
+  billingAccounts BillingAccount[]
+  orders          Order[]
+
+  @@index([createdById])
+  @@map("workspaces")
+}
+
+/// Workspace membership. One owner per workspace is kept by the service layer.
+model Member {
+  id          String     @id @default(uuid(7)) @db.Uuid
+  workspaceId String     @map("workspace_id") @db.Uuid
+  userId      String     @map("user_id") @db.Uuid
+  role        MemberRole @default(member)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("members")
+}
+
+enum MemberRole {
+  owner
+  admin
+  member
+}
+
+/// A user's account in a chat channel; Telegram is linked by signing in to the cabinet (spec §18).
+model ChannelIdentity {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  channel    Channel
+  /// User id in the channel (Telegram or MAX user id as a string).
+  externalId String   @map("external_id") @db.VarChar(64)
+  /// Display handle, e.g. the Telegram @username; informational only.
+  username   String?  @db.VarChar(255)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channel, externalId])
+  @@index([userId])
+  @@map("channel_identities")
+}
+
+enum Channel {
+  web
+  telegram
+  max
+}
+
+// ─── Sites (spec §10, §12, §13) ───────────────────────────────────────────────
+
+model Site {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  workspaceId    String      @map("workspace_id") @db.Uuid
+  name           String      @db.VarChar(255)
+  /// Public origin of the production site, e.g. https://example.ru.
+  url            String      @db.VarChar(512)
+  stack          SiteStack
+  status         SiteStatus  @default(onboarding)
+  /// sync: server-side changes are committed to main before a deploy; freeze: DISALLOW_FILE_MODS.
+  driftPolicy    DriftPolicy @default(sync) @map("drift_policy")
+  /// First tasks go through an operator before the client sees them (spec §12, step 8).
+  operatorReview Boolean     @default(true) @map("operator_review")
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  lease           SiteLease?
+  gitRepositories GitRepository[]
+  environments    Environment[]
+  credentialRefs  CredentialRef[]
+  chatSessions    ChatSession[]
+  tasks           Task[]
+  snapshots       Snapshot[]
+  deployments     Deployment[]
+  turnAssignments TurnAssignment[]
+
+  @@unique([workspaceId, url])
+  @@map("sites")
+}
+
+/// Must equal siteStacks in @repo/domain (checked by a test).
+enum SiteStack {
+  wordpress
+  bitrix
+  laravel
+  static
+  node
+  python
+}
+
+enum SiteStatus {
+  onboarding
+  active
+  paused
+  disconnected
+  archived
+}
+
+enum DriftPolicy {
+  sync
+  freeze
+}
+
+/// Site lease (spec §7): at most one operation — a turn, a deploy or a revert — per site.
+/// One row per site for its whole life. Acquire is a conditional UPDATE that sets the holder and
+/// bumps epoch when the lease is free or expired; every write by a holder checks its epoch, which
+/// fences a stale owner. held_for_operator: the deploy outcome is unknown, so an expired lease
+/// is not taken over until an operator decides.
+model SiteLease {
+  siteId          String          @id @map("site_id") @db.Uuid
+  operation       LeaseOperation?
+  holderTaskId    String?         @map("holder_task_id") @db.Uuid
+  epoch           Int             @default(0)
+  acquiredAt      DateTime?       @map("acquired_at") @db.Timestamptz(6)
+  expiresAt       DateTime?       @map("expires_at") @db.Timestamptz(6)
+  heldForOperator Boolean         @default(false) @map("held_for_operator")
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site       Site  @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  holderTask Task? @relation(fields: [holderTaskId], references: [id], onDelete: Restrict)
+
+  @@index([holderTaskId])
+  @@map("site_leases")
+}
+
+enum LeaseOperation {
+  turn
+  deploy
+  revert
+}
+
+/// Where a site's code lives (spec §10): our Gitea in MVP; later the client's GitHub or GitLab,
+/// with our Gitea as the internal mirror for intermediate turns.
+model GitRepository {
+  id              String          @id @default(uuid(7)) @db.Uuid
+  siteId          String          @map("site_id") @db.Uuid
+  provider        GitProviderKind
+  /// Organization or user, e.g. "sites" in our Gitea.
+  owner           String          @db.VarChar(255)
+  name            String          @db.VarChar(255)
+  defaultBranch   String          @default("main") @map("default_branch") @db.VarChar(255)
+  /// Web URL of the repository.
+  url             String          @db.VarChar(1024)
+  /// Platform access to the client's GitHub or GitLab; NULL for our Gitea (platform bot).
+  credentialRefId String?         @map("credential_ref_id") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site          Site           @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  credentialRef CredentialRef? @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+
+  // Webhooks find the repository by provider and full name.
+  @@unique([provider, owner, name])
+  @@index([siteId])
+  @@index([credentialRefId])
+  @@map("git_repositories")
+}
+
+/// Must equal gitProviderKinds in @repo/domain (checked by a test).
+enum GitProviderKind {
+  gitea
+  github
+  gitlab
+}
+
+/// Deployment target of a site. Only prod exists (CLAUDE.md, rule 3); kind is a hook for staging.
+model Environment {
+  id           String          @id @default(uuid(7)) @db.Uuid
+  siteId       String          @map("site_id") @db.Uuid
+  kind         EnvironmentKind @default(prod)
+  /// Server host name or IP for SSH or FTP.
+  host         String          @db.VarChar(255)
+  port         Int?
+  deployMethod DeployMethod    @map("deploy_method")
+  /// Document root or deploy directory on the server.
+  path         String          @db.VarChar(1024)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site        Site         @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  deployments Deployment[]
+
+  @@unique([siteId, kind])
+  @@map("environments")
+}
+
+enum EnvironmentKind {
+  prod
+}
+
+enum DeployMethod {
+  rsync
+  git_ftp
+  docker
+}
+
+/// A pointer to a secret in Vault, never the secret itself (CLAUDE.md, rule 2; spec §15).
+/// Site access: kv/sites/<siteId>/{ssh,ftp,wp,browser}; provider keys: kv/llm/<provider>;
+/// subscriptions: kv/subscriptions/<accountId>. Platform-wide refs (llm_provider, subscription)
+/// have no workspace; site access always has a site (CHECK in the init migration).
+model CredentialRef {
+  id          String         @id @default(uuid(7)) @db.Uuid
+  workspaceId String?        @map("workspace_id") @db.Uuid
+  siteId      String?        @map("site_id") @db.Uuid
+  kind        CredentialKind
+  vaultPath   String         @unique @map("vault_path") @db.VarChar(512)
+  /// KV v2 version the platform last wrote; bumps on rotation.
+  keyVersion  Int            @default(1) @map("key_version")
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace           Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  site                Site?                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  gitRepositories     GitRepository[]
+  llmProviders        LlmProvider[]
+  subscriptionAccount SubscriptionAccount?
+
+  @@index([workspaceId])
+  @@index([siteId, kind])
+  @@map("credential_refs")
+}
+
+enum CredentialKind {
+  ssh
+  ftp
+  wp
+  browser
+  git
+  llm_provider
+  subscription
+}
+
+// ─── Chat and tasks (spec §7, §8, §11) ────────────────────────────────────────
+
+/// A conversation thread in one channel: the web chat of a site, a Telegram chat or topic, a MAX
+/// chat. Holds the agent driver choice and a pointer to the latest turn for resuming.
+model ChatSession {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  workspaceId     String   @map("workspace_id") @db.Uuid
+  siteId          String?  @map("site_id") @db.Uuid
+  channel         Channel
+  /// Chat id in the channel (Telegram or MAX chat id as a string); NULL for the web chat.
+  externalChatId  String?  @map("external_chat_id") @db.VarChar(64)
+  /// Telegram forum topic (message_thread_id).
+  telegramTopicId Int?     @map("telegram_topic_id")
+  agentDriverId   String?  @map("agent_driver_id") @db.VarChar(32)
+  lastTurnId      String?  @map("last_turn_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  site        Site?        @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  agentDriver AgentDriver? @relation(fields: [agentDriverId], references: [id], onDelete: Restrict)
+  lastTurn    TaskTurn?    @relation(fields: [lastTurnId], references: [id], onDelete: SetNull)
+  tasks       Task[]
+
+  @@index([workspaceId, siteId])
+  @@index([channel, externalChatId, telegramTopicId])
+  @@index([agentDriverId])
+  @@index([lastTurnId])
+  @@map("chat_sessions")
+}
+
+/// One client request: one logical agent session and one task branch (spec §7). The status
+/// changes only by a conditional UPDATE in the same transaction as its credit_ledger entry.
+model Task {
+  id            String      @id @default(uuid(7)) @db.Uuid
+  workspaceId   String      @map("workspace_id") @db.Uuid
+  siteId        String      @map("site_id") @db.Uuid
+  chatSessionId String?     @map("chat_session_id") @db.Uuid
+  createdById   String?     @map("created_by_id") @db.Uuid
+  /// «Отменить» of a done task: this task reverts that one and is never billed.
+  revertsTaskId String?     @map("reverts_task_id") @db.Uuid
+  status        TaskStatus  @default(queued)
+  /// From the turn result (turnResultSchema.change_type); NULL until the first turn ends.
+  changeType    ChangeType? @map("change_type")
+  /// Picked by the router before queueing; selects the pricing rule.
+  modelClass    ModelClass? @map("model_class")
+  /// Summary of the latest turn result.
+  summary       String?     @db.VarChar(500)
+  /// Number of the latest turn; 0 before the first one.
+  turnNo        Int         @default(0) @map("turn_no")
+  /// «Попробовать ещё» (failed → queued) starts a new attempt with a new hold.
+  attempt       Int         @default(1)
+  prNumber      Int?        @map("pr_number")
+  prUrl         String?     @map("pr_url") @db.VarChar(1024)
+  /// The deployment that shipped (or last tried to ship) this task.
+  deploymentId  String?     @unique @map("deployment_id") @db.Uuid
+  /// Pinned when queued on the pay-per-action plan (spec §17).
+  pricingRuleId String?     @map("pricing_rule_id") @db.Uuid
+  /// Σ token_usage.cost_rub plus sandbox cost, full precision, never rounded.
+  costRub       Decimal     @default(0) @map("cost_rub") @db.Decimal(18, 10)
+  /// Charged to the wallet on done, rounded HALF_UP once; NULL on quota plans or until charged.
+  billedRub     Decimal?    @map("billed_rub") @db.Decimal(12, 2)
+  /// false for «Отменить» and operator retries: no hold, no charge.
+  billable      Boolean     @default(true)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  finishedAt    DateTime?   @map("finished_at") @db.Timestamptz(6)
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  site            Site             @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  chatSession     ChatSession?     @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
+  createdBy       User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  revertsTask     Task?            @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
+  revertedBy      Task[]           @relation("TaskReverts")
+  deployment      Deployment?      @relation("TaskCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
+  pricingRule     PricingRule?     @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  deployments     Deployment[]     @relation("TaskDeployments")
+  turns           TaskTurn[]
+  events          TaskEvent[]
+  attachments     Attachment[]
+  snapshots       Snapshot[]
+  tokenUsage      TokenUsage[]
+  creditHolds     CreditHold[]
+  ledgerEntries   CreditLedger[]
+  leases          SiteLease[]
+  turnAssignments TurnAssignment[]
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([siteId, status])
+  @@index([status, updatedAt])
+  @@index([chatSessionId])
+  @@index([createdById])
+  @@index([revertsTaskId])
+  @@index([pricingRuleId])
+  @@map("tasks")
+}
+
+/// Must equal taskStatuses in @repo/domain (checked by a test).
+enum TaskStatus {
+  queued
+  preparing
+  running
+  awaiting_user
+  awaiting_approval
+  deploying
+  verifying
+  done
+  failed
+  rolled_back
+  cancelled
+}
+
+/// Must equal turnResultSchema.change_type in @repo/domain (checked by a test).
+enum ChangeType {
+  code
+  content
+  mixed
+  none
+}
+
+/// Router model classes (spec §9); service is for platform calls (classification, client texts).
+/// No domain vocabulary yet: mirror it here when the router lands.
+enum ModelClass {
+  light
+  standard
+  heavy
+  service
+}
+
+/// One container run of a task (spec §8). The snapshot under snapshot_prefix restores the next turn.
+model TaskTurn {
+  id              String     @id @default(uuid(7)) @db.Uuid
+  taskId          String     @map("task_id") @db.Uuid
+  turnNo          Int        @map("turn_no")
+  status          TurnStatus @default(pending)
+  driverId        String     @map("driver_id") @db.VarChar(32)
+  driverVersion   String?    @map("driver_version") @db.VarChar(64)
+  /// Sandbox image, pinned by digest.
+  image           String     @db.VarChar(512)
+  /// Model the router picked for the turn.
+  modelId         String?    @map("model_id") @db.Uuid
+  /// Native CLI session id (Codex thread id, Kimi session id).
+  nativeSessionId String?    @map("native_session_id") @db.VarChar(200)
+  /// raditi-sessions prefix: sessions/<sessionId>/turns/<NNNN>/.
+  snapshotPrefix  String?    @map("snapshot_prefix") @db.VarChar(512)
+  /// SHA-256 (hex) of the per-turn LiteLLM virtual key: maps gateway calls to the turn.
+  /// The key itself is never stored.
+  litellmKeyHash  String?    @unique @map("litellm_key_hash") @db.VarChar(64)
+  baseSha         String?    @map("base_sha") @db.VarChar(64)
+  headSha         String?    @map("head_sha") @db.VarChar(64)
+  failureReason   String?    @map("failure_reason") @db.VarChar(2000)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt       DateTime?  @map("started_at") @db.Timestamptz(6)
+  finishedAt      DateTime?  @map("finished_at") @db.Timestamptz(6)
+
+  task         Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  driver       AgentDriver   @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  model        LlmModel?     @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  events       TaskEvent[]
+  mcpCalls     McpCall[]
+  tokenUsage   TokenUsage[]
+  chatSessions ChatSession[]
+
+  @@unique([taskId, turnNo])
+  @@index([driverId])
+  @@index([modelId])
+  @@map("task_turns")
+}
+
+enum TurnStatus {
+  pending
+  running
+  completed
+  failed
+  cancelled
+  timed_out
+  /// The runner or container vanished; never billed to the client (spec §17).
+  lost
+}
+
+/// One turn's hold on an executor (spec §8 «Раннер на песочной ВМ»): core's own Docker or a runner
+/// session, the lease epochs of its journal and the absolute deadline of its container. Recovery
+/// reads the unfinished ones; a turn has at most one.
+model TurnAssignment {
+  id               String                 @id @default(uuid(7)) @db.Uuid
+  taskId           String                 @map("task_id") @db.Uuid
+  siteId           String                 @map("site_id") @db.Uuid
+  /// Sandbox label of the session: sessions/<sessionId>/turns/<NNNN>/ in raditi-sessions.
+  sessionId        String                 @map("session_id") @db.VarChar(64)
+  turnNo           Int                    @map("turn_no")
+  executor         TurnExecutorKind
+  /// The turn request without its LLM key and MCP token (turnPlanSchema in @repo/domain).
+  plan             Json
+  /// The turn lease epoch it started under; recovery moves lease_epoch forward.
+  firstEpoch       Int                    @map("first_epoch")
+  leaseEpoch       Int                    @map("lease_epoch")
+  /// Database time by which the container is gone; recovery never extends it.
+  deadlineAt       DateTime               @map("deadline_at") @db.Timestamptz(6)
+  runnerId         String?                @map("runner_id") @db.VarChar(63)
+  /// A uuid per runner process start: a restarted runner is a new session.
+  runnerSession    String?                @map("runner_session") @db.Uuid
+  claimedAt        DateTime?              @map("claimed_at") @db.Timestamptz(6)
+  containerId      String?                @map("container_id") @db.VarChar(200)
+  recoveryAttempts Int                    @default(0) @map("recovery_attempts")
+  outcome          TurnAssignmentOutcome?
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  finishedAt       DateTime?              @map("finished_at") @db.Timestamptz(6)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, turnNo], map: "turn_assignments_active_turn_key", where: raw("finished_at IS NULL"))
+  @@index([siteId])
+  @@index([runnerId, runnerSession])
+  @@map("turn_assignments")
+}
+
+/// Must equal turnExecutorKinds in @repo/domain (checked by a test).
+enum TurnExecutorKind {
+  local
+  runner
+}
+
+/// Must equal turnAssignmentOutcomes in @repo/domain (checked by a test).
+enum TurnAssignmentOutcome {
+  completed
+  failed
+  lost
+}
+
+/// Task history for the chat and SSE (spec §7). The bigint id orders events and is the
+/// Last-Event-ID a browser resumes from. Large bodies live in S3 under s3_key.
+model TaskEvent {
+  id            BigInt   @id @default(autoincrement())
+  taskId        String   @map("task_id") @db.Uuid
+  turnId        String?  @map("turn_id") @db.Uuid
+  /// A common agent event (started, message, command, …, failed) or a platform event.
+  type          String   @db.VarChar(64)
+  payload       Json
+  /// Shown to the client in the chat; the rest is for operators.
+  clientVisible Boolean  @default(false) @map("client_visible")
+  /// Key in raditi-logs or raditi-artifacts when the body is too large for payload.
+  s3Key         String?  @map("s3_key") @db.VarChar(1024)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  task Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  turn TaskTurn? @relation(fields: [turnId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, id])
+  @@index([turnId])
+  @@map("task_events")
+}
+
+/// Journal of site-changing MCP calls (spec §11): a retry with the same idempotency key is not
+/// applied twice; «Изменить» restores the turn's content edits from the linked snapshots.
+model McpCall {
+  id             String         @id @default(uuid(7)) @db.Uuid
+  turnId         String         @map("turn_id") @db.Uuid
+  tool           String         @db.VarChar(200)
+  idempotencyKey String         @unique @map("idempotency_key") @db.VarChar(255)
+  /// Changed object in the site adapter's notation, e.g. "post:42" or "option:blogname".
+  objectRef      String?        @map("object_ref") @db.VarChar(1024)
+  snapshotId     String?        @map("snapshot_id") @db.Uuid
+  /// NULL while the call is in flight.
+  result         McpCallResult?
+  /// Response replayed to a retry with the same key.
+  response       Json?
+  error          String?        @db.VarChar(2000)
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  finishedAt     DateTime?      @map("finished_at") @db.Timestamptz(6)
+  /// Set when «Изменить» or a turn retry rolled the edit back.
+  revertedAt     DateTime?      @map("reverted_at") @db.Timestamptz(6)
+
+  turn     TaskTurn  @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  snapshot Snapshot? @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+
+  @@index([turnId])
+  @@index([snapshotId])
+  @@map("mcp_calls")
+}
+
+enum McpCallResult {
+  ok
+  error
+  denied
+}
+
+/// A client file from the chat in raditi-inbox (inbox/<wsId>/<taskId>/<fileId>).
+model Attachment {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  taskId       String   @map("task_id") @db.Uuid
+  uploadedById String?  @map("uploaded_by_id") @db.Uuid
+  source       Channel
+  s3Key        String   @unique @map("s3_key") @db.VarChar(1024)
+  fileName     String   @map("file_name") @db.VarChar(255)
+  contentType  String   @map("content_type") @db.VarChar(255)
+  sizeBytes    Int      @map("size_bytes")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  task       Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy User? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([uploadedById])
+  @@map("attachments")
+}
+
+/// Content snapshot taken before an edit (spec §11) in raditi-artifacts (snapshots/<siteId>/…);
+/// «Отменить» restores it until expires_at (7 days).
+model Snapshot {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  siteId     String    @map("site_id") @db.Uuid
+  taskId     String?   @map("task_id") @db.Uuid
+  /// Object in the site adapter's notation, e.g. "post:42".
+  objectRef  String    @map("object_ref") @db.VarChar(1024)
+  s3Key      String    @unique @map("s3_key") @db.VarChar(1024)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  restoredAt DateTime? @map("restored_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  task     Task?     @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  mcpCalls McpCall[]
+
+  @@index([siteId, objectRef])
+  @@index([taskId])
+  @@index([expiresAt])
+  @@map("snapshots")
+}
+
+/// A run of the mandatory deploy workflow (spec §10): backup → deploy → verify → auto-rollback.
+/// kind = revert is «Отменить»: a revert commit shipped by the same workflow.
+model Deployment {
+  id            String           @id @default(uuid(7)) @db.Uuid
+  siteId        String           @map("site_id") @db.Uuid
+  environmentId String           @map("environment_id") @db.Uuid
+  taskId        String           @map("task_id") @db.Uuid
+  kind          DeploymentKind   @default(deploy)
+  status        DeploymentStatus @default(pending)
+  /// Merge or revert commit on main that the workflow deploys.
+  commitSha     String?          @map("commit_sha") @db.VarChar(64)
+  /// Workflow run id at the git provider (workflow_run webhook).
+  workflowRunId String?          @map("workflow_run_id") @db.VarChar(64)
+  /// raditi-backups prefix: sites/<siteId>/<deployId>/.
+  backupPrefix  String?          @map("backup_prefix") @db.VarChar(512)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  startedAt     DateTime?        @map("started_at") @db.Timestamptz(6)
+  finishedAt    DateTime?        @map("finished_at") @db.Timestamptz(6)
+
+  site        Site        @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  environment Environment @relation(fields: [environmentId], references: [id], onDelete: Restrict)
+  task        Task        @relation("TaskDeployments", fields: [taskId], references: [id], onDelete: Restrict)
+  currentOf   Task?       @relation("TaskCurrentDeployment")
+
+  @@index([siteId, createdAt(sort: Desc)])
+  @@index([environmentId])
+  @@index([taskId])
+  @@index([commitSha])
+  @@map("deployments")
+}
+
+enum DeploymentKind {
+  deploy
+  revert
+}
+
+enum DeploymentStatus {
+  pending
+  running
+  succeeded
+  failed
+  rolled_back
+  cancelled
+  /// Outcome unknown: the site lease stays until an operator decides (spec §7).
+  unknown
+}
+
+// ─── Agents and models (spec §8, §9) ──────────────────────────────────────────
+
+/// Registry of agent drivers; id is AgentDriver.id (agentDriverIds in @repo/domain, the seed test
+/// checks it). A string, not an enum: adding a driver needs no migration.
+model AgentDriver {
+  id           String   @id @db.VarChar(32)
+  /// Sandbox image with the CLI; pinned by digest from P4, the seed writes a placeholder.
+  image        String   @db.VarChar(512)
+  /// AgentCapabilities: resume, jsonEvents, outputSchema, mcp, images.
+  capabilities Json
+  enabled      Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  turns                TaskTurn[]
+  chatSessions         ChatSession[]
+  tokenUsage           TokenUsage[]
+  subscriptionAccounts SubscriptionAccount[]
+
+  @@map("agent_drivers")
+}
+
+model LlmProvider {
+  id              String          @id @default(uuid(7)) @db.Uuid
+  /// Stable key, e.g. "yandex-ai-studio"; the provider key lives at kv/llm/<slug>.
+  slug            String          @unique @db.VarChar(64)
+  name            String          @db.VarChar(255)
+  /// subscription: only where the contract allows serving clients (spec §9).
+  kind            LlmProviderKind @default(api)
+  credentialRefId String?         @map("credential_ref_id") @db.Uuid
+  enabled         Boolean         @default(true)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  credentialRef        CredentialRef?        @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+  models               LlmModel[]
+  subscriptionAccounts SubscriptionAccount[]
+
+  @@index([credentialRefId])
+  @@map("llm_providers")
+}
+
+enum LlmProviderKind {
+  api
+  subscription
+}
+
+model LlmModel {
+  id              String     @id @default(uuid(7)) @db.Uuid
+  providerId      String     @map("provider_id") @db.Uuid
+  /// model_name in the LiteLLM config.
+  slug            String     @db.VarChar(128)
+  /// Display name, e.g. "Qwen3.6 35B".
+  name            String     @db.VarChar(255)
+  /// Model id in the provider API; NULL until confirmed in the PoC.
+  providerModelId String?    @map("provider_model_id") @db.VarChar(255)
+  modelClass      ModelClass @map("model_class")
+  enabled         Boolean    @default(true)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  provider   LlmProvider     @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  prices     LlmModelPrice[]
+  turns      TaskTurn[]
+  tokenUsage TokenUsage[]
+
+  @@unique([providerId, slug])
+  @@map("llm_models")
+}
+
+/// Provider price history in RUB per 1M tokens including VAT (spec §16, §17). Append-only: a new
+/// price is a new row with a later effective_from; token_usage keeps the price_id it was costed
+/// with. NULL cache prices are charged as input.
+model LlmModelPrice {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  modelId         String   @map("model_id") @db.Uuid
+  effectiveFrom   DateTime @map("effective_from") @db.Timestamptz(6)
+  inputPer1m      Decimal  @map("input_per_1m") @db.Decimal(14, 6)
+  cacheReadPer1m  Decimal? @map("cache_read_per_1m") @db.Decimal(14, 6)
+  cacheWritePer1m Decimal? @map("cache_write_per_1m") @db.Decimal(14, 6)
+  /// Reasoning tokens are part of the output.
+  outputPer1m     Decimal  @map("output_per_1m") @db.Decimal(14, 6)
+  /// 0.2200 for 22%.
+  vatRate         Decimal  @map("vat_rate") @db.Decimal(5, 4)
+  sourceUrl       String   @map("source_url") @db.VarChar(1024)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  model      LlmModel     @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  tokenUsage TokenUsage[]
+
+  @@unique([modelId, effectiveFrom])
+  @@map("llm_model_prices")
+}
+
+/// One LLM call from the LiteLLM spend log, ingested idempotently by gateway_call_id (spec §9,
+/// §17). The only source for billing: agent usage events are for the UI. Token categories match
+/// tokenUsageSchema in @repo/domain; cost uses the price row in price_id.
+model TokenUsage {
+  id                  String   @id @default(uuid(7)) @db.Uuid
+  gatewayCallId       String   @unique @map("gateway_call_id") @db.VarChar(128)
+  taskId              String   @map("task_id") @db.Uuid
+  turnId              String   @map("turn_id") @db.Uuid
+  driverId            String   @map("driver_id") @db.VarChar(32)
+  modelId             String   @map("model_id") @db.Uuid
+  priceId             String   @map("price_id") @db.Uuid
+  /// Input without cache reads and cache writes.
+  inputUncachedTokens Int      @map("input_uncached_tokens")
+  cacheReadTokens     Int      @default(0) @map("cache_read_tokens")
+  cacheWriteTokens    Int      @default(0) @map("cache_write_tokens")
+  /// Includes reasoning.
+  outputTokens        Int      @map("output_tokens")
+  /// Informational: already inside output_tokens, never added again.
+  reasoningTokens     Int      @default(0) @map("reasoning_tokens")
+  costRub             Decimal  @map("cost_rub") @db.Decimal(18, 10)
+  occurredAt          DateTime @map("occurred_at") @db.Timestamptz(6)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  task   Task          @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  turn   TaskTurn      @relation(fields: [turnId], references: [id], onDelete: Restrict)
+  driver AgentDriver   @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  model  LlmModel      @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  price  LlmModelPrice @relation(fields: [priceId], references: [id], onDelete: Restrict)
+
+  @@index([taskId, turnId])
+  @@index([turnId])
+  @@index([modelId, occurredAt])
+  @@index([occurredAt])
+  @@map("token_usage")
+}
+
+/// Agent or model subscriptions, only where the contract allows serving clients (spec §9).
+/// sandbox-gw injects the key, never the container.
+model SubscriptionAccount {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  providerId      String   @map("provider_id") @db.Uuid
+  /// Driver the subscription serves, e.g. a corporate GigaCode seat.
+  driverId        String?  @map("driver_id") @db.VarChar(32)
+  label           String   @db.VarChar(255)
+  credentialRefId String   @unique @map("credential_ref_id") @db.Uuid
+  /// Provider limits: requests per minute, tokens per period, seats.
+  limits          Json     @default("{}")
+  enabled         Boolean  @default(false)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  provider      LlmProvider   @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  driver        AgentDriver?  @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  credentialRef CredentialRef @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+
+  @@index([providerId])
+  @@index([driverId])
+  @@map("subscription_accounts")
+}
+
+// ─── Plans and billing (spec §17) ─────────────────────────────────────────────
+
+/// Tariffs (docs/business.md §6). Prices in RUB including VAT.
+model Plan {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  slug          String   @unique @db.VarChar(50)
+  name          String   @db.VarChar(100)
+  kind          PlanKind
+  /// Monthly price (quota), one-off price (pack), 0 for pay-per-action.
+  price         Decimal  @db.Decimal(12, 2)
+  editsPerMonth Int?     @map("edits_per_month")
+  editsPerDay   Int?     @map("edits_per_day")
+  /// Edits a pack adds to the quota.
+  packEdits     Int?     @map("pack_edits")
+  /// NULL for packs: they add edits, not sites.
+  maxSites      Int?     @map("max_sites")
+  isActive      Boolean  @default(true) @map("is_active")
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  pricingRules  PricingRule[]
+  subscriptions Subscription[]
+  orders        Order[]
+
+  @@map("plans")
+}
+
+enum PlanKind {
+  quota
+  payg
+  pack
+}
+
+/// Pay-per-action price (spec §17): clamp(fee_per_action + Σ cost × markup, min_charge,
+/// hold_amount), rounded HALF_UP to kopecks once per task. Versioned by effective_from and never
+/// edited: a task pins its rule when queued.
+model PricingRule {
+  id            String     @id @default(uuid(7)) @db.Uuid
+  planId        String     @map("plan_id") @db.Uuid
+  modelClass    ModelClass @map("model_class")
+  effectiveFrom DateTime   @map("effective_from") @db.Timestamptz(6)
+  markup        Decimal    @db.Decimal(8, 4)
+  feePerAction  Decimal    @map("fee_per_action") @db.Decimal(12, 2)
+  minCharge     Decimal    @map("min_charge") @db.Decimal(12, 2)
+  /// Reserved from the wallet when the task is queued; also the price ceiling.
+  holdAmount    Decimal    @map("hold_amount") @db.Decimal(12, 2)
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  plan  Plan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+  tasks Task[]
+
+  @@unique([planId, modelClass, effectiveFrom])
+  @@map("pricing_rules")
+}
+
+/// A workspace's subscription to a quota plan; renewed by cron with the saved payment method.
+model Subscription {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  workspaceId        String             @map("workspace_id") @db.Uuid
+  planId             String             @map("plan_id") @db.Uuid
+  status             SubscriptionStatus @default(active)
+  currentPeriodStart DateTime           @map("current_period_start") @db.Timestamptz(6)
+  currentPeriodEnd   DateTime           @map("current_period_end") @db.Timestamptz(6)
+  cancelAtPeriodEnd  Boolean            @default(false) @map("cancel_at_period_end")
+  cancelledAt        DateTime?          @map("cancelled_at") @db.Timestamptz(6)
+  /// ЮKassa saved payment method id for renewals.
+  paymentMethodId    String?            @map("payment_method_id") @db.VarChar(64)
+  /// ЮKassa payment_method.title, e.g. "Bank card *4444".
+  paymentMethodTitle String?            @map("payment_method_title") @db.VarChar(128)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  plan      Plan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+  orders    Order[]
+
+  @@index([workspaceId])
+  @@index([planId])
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+enum SubscriptionStatus {
+  trial
+  active
+  past_due
+  cancelled
+  expired
+}
+
+/// Quota in edits (unit = edit) or the RUB wallet (unit = rub) of a workspace (spec §17).
+/// balance and held change only in SQL, in the transaction that writes credit_ledger or
+/// credit_holds. held = Σ active holds; available = balance − held.
+model BillingAccount {
+  id          String      @id @default(uuid(7)) @db.Uuid
+  workspaceId String      @map("workspace_id") @db.Uuid
+  unit        BillingUnit
+  balance     Decimal     @default(0) @db.Decimal(14, 2)
+  held        Decimal     @default(0) @db.Decimal(14, 2)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  holds     CreditHold[]
+  entries   CreditLedger[]
+
+  @@unique([workspaceId, unit])
+  // Target of the (account_id, unit) foreign keys: a ledger entry's or hold's unit always matches
+  // its account.
+  @@unique([id, unit])
+  @@map("billing_accounts")
+}
+
+enum BillingUnit {
+  edit
+  rub
+}
+
+/// A task's reserve (spec §17): one edit, or the class hold amount in RUB. «Попробовать ещё» is a
+/// new attempt with a new hold; topping up after the LiteLLM budget ran out raises amount.
+/// unit copies the account's unit (composite foreign key, as in credit_ledger) so a CHECK keeps
+/// edit holds whole.
+model CreditHold {
+  id        String      @id @default(uuid(7)) @db.Uuid
+  accountId String      @map("account_id") @db.Uuid
+  unit      BillingUnit
+  taskId    String      @map("task_id") @db.Uuid
+  attempt   Int         @default(1)
+  amount    Decimal     @db.Decimal(14, 2)
+  status    HoldStatus  @default(active)
+  /// Cron expires holds of tasks stuck past this moment (e.g. in awaiting_user).
+  expiresAt DateTime    @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  settledAt DateTime?   @map("settled_at") @db.Timestamptz(6)
+
+  account BillingAccount @relation(fields: [accountId, unit], references: [id, unit], onDelete: Restrict, onUpdate: Restrict)
+  task    Task           @relation(fields: [taskId], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, attempt])
+  @@index([accountId, status])
+  @@index([status, expiresAt])
+  @@map("credit_holds")
+}
+
+enum HoldStatus {
+  active
+  captured
+  released
+  expired
+}
+
+/// The single journal of edits and roubles (spec §17). Every balance change is one row, written
+/// in the transaction that updates the balance; idempotency_key turns retries into no-ops
+/// (e.g. "task:<id>:<attempt>:charge"). amount is signed: grants and top-ups are positive,
+/// charges and expiries negative. unit copies the account's unit (composite foreign key) so a
+/// CHECK keeps edit amounts whole.
+model CreditLedger {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  accountId      String      @map("account_id") @db.Uuid
+  unit           BillingUnit
+  kind           LedgerKind
+  amount         Decimal     @db.Decimal(14, 2)
+  balanceAfter   Decimal     @map("balance_after") @db.Decimal(14, 2)
+  taskId         String?     @map("task_id") @db.Uuid
+  orderId        String?     @map("order_id") @db.Uuid
+  idempotencyKey String      @unique @map("idempotency_key") @db.VarChar(255)
+  /// Reason of an adjust entry by an operator.
+  note           String?     @db.VarChar(500)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  account BillingAccount @relation(fields: [accountId, unit], references: [id, unit], onDelete: Restrict, onUpdate: Restrict)
+  task    Task?          @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  order   Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([accountId, createdAt])
+  @@index([taskId])
+  @@index([orderId])
+  @@map("credit_ledger")
+}
+
+enum LedgerKind {
+  grant
+  topup
+  charge
+  refund
+  expire
+  adjust
+}
+
+/// A ЮKassa payment: a subscription period, an edit pack or a wallet top-up (spec §17). The
+/// 54-FZ receipt goes with the payment; receipt_status tracks it.
+model Order {
+  id                String        @id @default(uuid(7)) @db.Uuid
+  workspaceId       String        @map("workspace_id") @db.Uuid
+  /// Who paid; kept as NULL if the user is deleted.
+  userId            String?       @map("user_id") @db.Uuid
+  kind              OrderKind
+  /// Plan for subscription and pack orders; NULL for top-ups (CHECK in the init migration).
+  planId            String?       @map("plan_id") @db.Uuid
+  subscriptionId    String?       @map("subscription_id") @db.Uuid
+  amount            Decimal       @db.Decimal(12, 2)
+  status            OrderStatus   @default(pending)
+  yookassaPaymentId String?       @unique @map("yookassa_payment_id") @db.VarChar(64)
+  /// Idempotence-Key of the create-payment request.
+  idempotenceKey    String        @unique @map("idempotence_key") @db.VarChar(64)
+  receiptStatus     ReceiptStatus @default(pending) @map("receipt_status")
+  /// The first payment of a subscription saves the method for renewals.
+  savePaymentMethod Boolean       @default(false) @map("save_payment_method")
+  paidAt            DateTime?     @map("paid_at") @db.Timestamptz(6)
+  refundedAt        DateTime?     @map("refunded_at") @db.Timestamptz(6)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  user          User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  plan          Plan?          @relation(fields: [planId], references: [id], onDelete: Restrict)
+  subscription  Subscription?  @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  ledgerEntries CreditLedger[]
+
+  @@index([workspaceId, createdAt])
+  @@index([userId])
+  @@index([planId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@map("orders")
+}
+
+enum OrderKind {
+  subscription
+  pack
+  topup
+}
+
+enum OrderStatus {
+  pending
+  paid
+  failed
+  refunded
+  cancelled
+}
+
+enum ReceiptStatus {
+  pending
+  succeeded
+  cancelled
+}
+
+// ─── Outbox (reliable publishing to BullMQ) ───────────────────────────────────
+
+/// Written in the same transaction as the business change; the relay in the orchestrator
+/// moves pending rows to BullMQ (queue = topic, job name = type), marks them published and
+/// clears their payload.
+model OutboxEvent {
+  id          String            @id @default(uuid(7)) @db.Uuid
+  /// BullMQ queue name, one of queueNames in @repo/domain (checked by enqueueOutbox).
+  topic       String            @db.VarChar(64)
+  /// Job name inside the queue, e.g. "auth.verify_email".
+  type        String            @db.VarChar(128)
+  /// Job data; holds addresses and one-time links, so the relay sets it to NULL once the
+  /// row is published. Always set on insert (enqueueOutbox); NULL only after publishing.
+  payload     Json?
+  /// Idempotency key: a second row with the same key is silently skipped.
+  dedupeKey   String?           @unique @map("dedupe_key") @db.VarChar(255)
+  status      OutboxEventStatus @default(pending)
+  attempts    Int               @default(0)
+  availableAt DateTime          @default(now()) @map("available_at") @db.Timestamptz(6)
+  lockedAt    DateTime?         @map("locked_at") @db.Timestamptz(6)
+  lockedBy    String?           @map("locked_by") @db.VarChar(64)
+  publishedAt DateTime?         @map("published_at") @db.Timestamptz(6)
+  lastError   String?           @map("last_error") @db.Text
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([status, availableAt])
+  @@map("outbox_events")
+}
+
+enum OutboxEventStatus {
+  pending
+  published
+  failed
+}
+
+// ─── Audit ────────────────────────────────────────────────────────────────────
+
+/// Who did what, when (spec §16, §18): people, the agent, the platform and operators.
+/// Append-only and without foreign keys, so the log outlives what it describes.
+model AuditLog {
+  id          String         @id @default(uuid(7)) @db.Uuid
+  actorType   AuditActorType @map("actor_type")
+  /// User id, agent driver id or service name, depending on actor_type.
+  actorId     String?        @map("actor_id") @db.VarChar(128)
+  workspaceId String?        @map("workspace_id") @db.Uuid
+  /// Dotted verb, e.g. "site.credentials.write" or "task.approve".
+  action      String         @db.VarChar(128)
+  /// Target object: type ("site", "task", …) and id.
+  targetType  String?        @map("target_type") @db.VarChar(64)
+  targetId    String?        @map("target_id") @db.VarChar(128)
+  meta        Json?
+  ip          String?        @db.VarChar(45)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([actorType, actorId, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+  @@map("audit_log")
+}
+
+enum AuditActorType {
+  user
+  agent
+  system
+  operator
+}

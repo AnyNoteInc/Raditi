@@ -1,0 +1,25 @@
+# /etc/systemd/system/raditi-app.service: starts the app VM stack once preflight passes.
+# raditi-secrets.service (vault-agent, M10) renders /run/raditi/<service>/ before docker.service,
+# and dockerd then starts the containers itself (restart: unless-stopped) once the clock is
+# synced: its time-sync.target drop-in holds them back at boot (README, «Хост»). If the secrets
+# come later, preflight fails and this unit tries again every 30 s until the stack is up.
+[Unit]
+Description=Raditi app VM stack (infra/app)
+After=docker.service raditi-secrets.service network-online.target time-sync.target
+Requires=docker.service
+# Wants, not Requires: a failed render must not stop the retries below.
+Wants=raditi-secrets.service network-online.target time-sync.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/raditi/app
+ExecStartPre=/opt/raditi/app/preflight.sh
+ExecStart=/usr/bin/docker compose --project-directory /opt/raditi/app up -d --wait --no-build
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

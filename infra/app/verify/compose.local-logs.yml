@@ -1,0 +1,11 @@
+# Only for verify-edge.mjs on a host without journald (Docker Desktop): the production file logs
+# to journald, which such a daemon cannot start a container with.
+services:
+  volume-init: { logging: { driver: local } }
+  traefik: { logging: { driver: local } }
+  web: { logging: { driver: local } }
+  core: { logging: { driver: local } }
+  migrate: { logging: { driver: local } }
+  seed: { logging: { driver: local } }
+  postgres: { logging: { driver: local } }
+  redis: { logging: { driver: local } }

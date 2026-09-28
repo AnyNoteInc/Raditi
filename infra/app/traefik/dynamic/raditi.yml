@@ -1,0 +1,64 @@
+# Routes of the app VM. Only web is behind the edge: core and the runner API never are (spec §19).
+# APP_DOMAIN comes from Traefik's environment (Go template). Apex and www are separate ACME orders:
+# a www that fails validation never blocks the apex certificate.
+http:
+  routers:
+    web:
+      entryPoints: [websecure]
+      rule: 'Host(`{{ env "APP_DOMAIN" }}`)'
+      service: web
+      tls:
+        certResolver: le
+        domains: [{ main: '{{ env "APP_DOMAIN" }}' }]
+    www:
+      entryPoints: [websecure]
+      rule: 'Host(`www.{{ env "APP_DOMAIN" }}`)'
+      middlewares: [www-to-apex]
+      service: web # never reached: the middleware always redirects
+      tls:
+        certResolver: le
+        domains: [{ main: 'www.{{ env "APP_DOMAIN" }}' }]
+    # better-auth puts the password reset token in the path: it never reaches the access log,
+    # on either host (www redirects here too).
+    web-reset-password:
+      entryPoints: [websecure]
+      rule: '(Host(`{{ env "APP_DOMAIN" }}`) || Host(`www.{{ env "APP_DOMAIN" }}`)) && PathPrefix(`/api/auth/reset-password/`)'
+      priority: 1000
+      middlewares: [www-to-apex]
+      service: web
+      tls: {}
+      observability: { accessLogs: false }
+    # Prometheus (M9) scrapes web inside Docker; through the edge the answer is 403.
+    web-metrics:
+      entryPoints: [websecure]
+      rule: '(Host(`{{ env "APP_DOMAIN" }}`) || Host(`www.{{ env "APP_DOMAIN" }}`)) && PathPrefix(`/api/metrics`)'
+      priority: 1000
+      middlewares: [edge-deny]
+      service: web
+      tls: {}
+  middlewares:
+    www-to-apex:
+      redirectRegex:
+        regex: '^https://www\.([^/]+)/(.*)$'
+        replacement: 'https://${1}/${2}'
+        permanent: true
+    # RemoteAddr strategy: no client is ever 127.0.0.1 at the edge.
+    edge-deny:
+      ipAllowList: { sourceRange: ['127.0.0.1/32'] }
+  services:
+    web:
+      loadBalancer:
+        servers: [{ url: 'http://web:3000' }]
+
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true
+      cipherSuites: # TLS 1.2 only; Go does not configure TLS 1.3 suites
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256

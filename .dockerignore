@@ -1,0 +1,31 @@
+# build artifacts and caches
+**/.next
+**/.turbo
+**/.vitest
+**/dist
+**/coverage
+
+# dependencies (images install their own)
+**/node_modules
+
+# tooling; docs and deployment files never go into an image
+.claude
+.husky
+.github
+docs
+infra
+# except the scripts the sandbox images copy (infra/sandbox/Dockerfile)
+!infra/sandbox/*.mjs
+
+# local environment and secrets
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+CLAUDE.local.md
+
+# vcs, OS
+.git
+.DS_Store
+*.log

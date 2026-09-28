@@ -1,0 +1,253 @@
+import { Buffer } from 'node:buffer'
+
+import {
+  badRequest,
+  isSnapshotCredential,
+  isTooLarge,
+  publicationTooLarge,
+  SANDBOX_WORKDIR,
+  sandboxCommandFailed,
+  sessionStateSchema,
+  snapshotLimits,
+  snapshotTooLarge,
+  turnOutputRejected,
+  type ExecSpec,
+  type Sandbox,
+  type SessionState,
+} from '@repo/domain'
+
+import { execBounded, SANDBOX_EXEC_TIMEOUT_MS } from '../sandbox/exec.ts'
+import {
+  snapshotEntryPath,
+  validateSnapshotArchives,
+  type SnapshotArchives,
+} from './archive-validation.ts'
+
+export type { SnapshotArchives } from './archive-validation.ts'
+
+const LIST_BYTES = snapshotLimits.entries * (snapshotLimits.path + 1)
+const commandFailed = () =>
+  sandboxCommandFailed('Snapshot sandbox command failed or exceeded its limits')
+// The agent's session state versus its changes to the site: both 413s, told apart for the client.
+const homeTooLarge = () => snapshotTooLarge('Agent session state exceeds the snapshot limits')
+const changesTooLarge = () => publicationTooLarge('Agent changes exceed the snapshot limits')
+
+async function* input(bytes: Uint8Array): AsyncIterable<Uint8Array> {
+  if (bytes.byteLength > 0) yield bytes
+}
+
+const nulList = (paths: string[]): Uint8Array =>
+  Buffer.from(paths.length === 0 ? '' : `${paths.join('\0')}\0`, 'utf8')
+
+/**
+ * P1 byte transport only. P2 must stop all agent processes before capture, and restore into a
+ * fresh, quiescent sandbox before writing turn credentials or starting the next agent.
+ * Docker lifecycle, cloning headSha and applying/publishing patch.diff belong to P2.
+ */
+export class SandboxSnapshotTransport {
+  readonly #timeoutMs: number
+
+  constructor(options: { timeoutMs?: number } = {}) {
+    const timeoutMs = options.timeoutMs ?? SANDBOX_EXEC_TIMEOUT_MS
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > SANDBOX_EXEC_TIMEOUT_MS) {
+      throw badRequest('Invalid snapshot command timeout')
+    }
+    this.#timeoutMs = timeoutMs
+  }
+
+  /**
+   * `credentials` are the turn's own (turnCredentials): an archive or patch that contains one
+   * is refused before anything is saved or published (snapshotHasCredential).
+   */
+  async capture(
+    sandbox: Sandbox,
+    state: SessionState,
+    baseSha: string,
+    credentials: readonly string[] = [],
+  ): Promise<SnapshotArchives> {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha))
+      throw badRequest('Snapshot capture requires the trusted base commit')
+    const homeState = this.#state(state)
+    const paths: string[] = []
+    const checkedAncestors = new Set<string>()
+    await this.#checkNoSymlinkAncestors(sandbox, homeState.root, checkedAncestors)
+    for (const path of homeState.include) {
+      if (homeState.include.some((parent) => parent !== path && path.startsWith(`${parent}/`)))
+        continue
+      const exists = await this.#exec(sandbox, ['test', '-e', `${homeState.root}/${path}`], 0, {
+        allowedCodes: [0, 1],
+      })
+      if (exists.code === 0) {
+        // tar does not follow a final symlink, but it would traverse a symlink parent of a
+        // literal file in --files-from. Reject those before the archive command sees it.
+        await this.#checkNoSymlinkAncestors(sandbox, `${homeState.root}/${path}`, checkedAncestors)
+        paths.push(path)
+      }
+    }
+    const home = await this.#archive(sandbox, homeState.root, paths, homeState.exclude, {
+      tooLarge: homeTooLarge,
+    })
+    await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
+    const untrackedList = await this.#exec(
+      sandbox,
+      ['git', '-c', 'core.fsmonitor=false', 'ls-files', '--others', '--exclude-standard', '-z'],
+      LIST_BYTES,
+      { cwd: SANDBOX_WORKDIR, tooLarge: changesTooLarge },
+    )
+    let names: string[]
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(untrackedList.stdout)
+      if (text !== '' && !text.endsWith('\0')) throw commandFailed()
+      names = text === '' ? [] : text.slice(0, -1).split('\0')
+      if (new Set(names).size !== names.length) throw commandFailed()
+      names.forEach((name) => snapshotEntryPath(name))
+    } catch {
+      throw commandFailed()
+    }
+    if (names.length > snapshotLimits.entries) throw changesTooLarge()
+    const untracked = await this.#archive(sandbox, SANDBOX_WORKDIR, names, [], {
+      noRecursion: true,
+      tooLarge: changesTooLarge,
+    })
+    const patch = await this.#exec(
+      sandbox,
+      [
+        'git',
+        '--no-replace-objects',
+        '-c',
+        'core.fsmonitor=false',
+        'diff',
+        '--binary',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--no-renames',
+        baseSha,
+        '--',
+      ],
+      snapshotLimits.patchBytes,
+      { cwd: SANDBOX_WORKDIR, tooLarge: changesTooLarge },
+    )
+    try {
+      return await validateSnapshotArchives(
+        homeState,
+        { home, untracked, patch: patch.stdout },
+        credentials,
+      )
+    } catch (error) {
+      if (isTooLarge(error) || isSnapshotCredential(error)) throw error
+      // A link, special file or setuid bit in the agent's files: its output, not client input.
+      throw turnOutputRejected('Captured snapshot archive is invalid')
+    }
+  }
+
+  async restore(sandbox: Sandbox, state: SessionState, parts: SnapshotArchives): Promise<void> {
+    const homeState = this.#state(state)
+    // Only the owned, checked copies reach the sandbox.
+    const checked = await validateSnapshotArchives(homeState, parts)
+    // Existing symlink ancestors are dangerous even when every archive entry is a regular file.
+    await this.#checkDestination(sandbox, homeState.root)
+    await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
+    for (const [root, archive] of [
+      [homeState.root, checked.home],
+      [SANDBOX_WORKDIR, checked.untracked],
+    ] as const) {
+      await this.#exec(sandbox, ['mkdir', '--parents', '--', root], 0)
+      await this.#exec(
+        sandbox,
+        [
+          'tar',
+          '--extract',
+          '--zstd',
+          '--file=-',
+          `--directory=${root}`,
+          '--no-same-owner',
+          '--no-same-permissions',
+          '--keep-old-files',
+        ],
+        0,
+        { stdin: input(archive) },
+      )
+    }
+  }
+
+  #state(state: SessionState): SessionState {
+    const parsed = sessionStateSchema.safeParse(state)
+    if (!parsed.success) throw badRequest('Invalid snapshot session state')
+    return parsed.data
+  }
+
+  async #archive(
+    sandbox: Sandbox,
+    root: string,
+    paths: string[],
+    excludes: string[],
+    { noRecursion = false, tooLarge }: { noRecursion?: boolean; tooLarge: () => Error },
+  ): Promise<Uint8Array> {
+    const argv = [
+      'tar',
+      '--create',
+      '--zstd',
+      '--format=ustar',
+      '--file=-',
+      `--directory=${root}`,
+      '--null',
+      '--verbatim-files-from',
+      '--no-wildcards',
+      '--anchored',
+      ...excludes.map((path) => `--exclude=${path}`),
+      ...(noRecursion ? ['--no-recursion'] : []),
+      '--files-from=-',
+    ]
+    return (
+      await this.#exec(sandbox, argv, snapshotLimits.archiveBytes, {
+        stdin: input(nulList(paths)),
+        tooLarge,
+      })
+    ).stdout
+  }
+
+  async #checkDestination(sandbox: Sandbox, root: string): Promise<void> {
+    await this.#checkNoSymlinkAncestors(sandbox, root)
+    const exists = await this.#exec(sandbox, ['test', '-e', root], 0, { allowedCodes: [0, 1] })
+    if (exists.code === 0) {
+      const links = await this.#exec(
+        sandbox,
+        ['find', '-P', root, '-type', 'l', '-print', '-quit'],
+        snapshotLimits.path + 1,
+      )
+      if (links.stdout.byteLength > 0) throw commandFailed()
+    }
+  }
+
+  async #checkNoSymlinkAncestors(
+    sandbox: Sandbox,
+    root: string,
+    checked = new Set<string>(),
+  ): Promise<void> {
+    const segments = root.slice(1).split('/')
+    for (let i = 1; i <= segments.length; i += 1) {
+      const path = `/${segments.slice(0, i).join('/')}`
+      if (checked.has(path)) continue
+      const link = await this.#exec(sandbox, ['test', '-L', path], 0, { allowedCodes: [0, 1] })
+      if (link.code === 0) throw commandFailed()
+      checked.add(path)
+    }
+  }
+
+  #exec(
+    sandbox: Sandbox,
+    argv: string[],
+    maxStdout: number,
+    options: Pick<ExecSpec, 'cwd' | 'stdin'> & {
+      allowedCodes?: number[]
+      tooLarge?: () => Error
+    } = {},
+  ) {
+    return execBounded(sandbox, argv, {
+      ...options,
+      maxStdout,
+      timeoutMs: this.#timeoutMs,
+      failure: commandFailed,
+    })
+  }
+}

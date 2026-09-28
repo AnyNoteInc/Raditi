@@ -1,0 +1,87 @@
+# Prometheus для разработки. Перечитать после правки: curl -X POST localhost:9090/-/reload
+# Токен метрик приложений совпадает с METRICS_TOKEN из .env.example: Prometheus не подставляет
+# переменные окружения в этот файл. В проде — credentials_file из Vault.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels: { env: dev }
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [{ targets: ['localhost:9090'] }]
+
+  # Приложения на хосте (pnpm dev)
+  - job_name: web
+    metrics_path: /api/metrics
+    authorization: { credentials: raditi-dev-metrics }
+    static_configs: [{ targets: ['host.docker.internal:3000'], labels: { app: web } }]
+
+  - job_name: orchestrator
+    metrics_path: /metrics
+    authorization: { credentials: raditi-dev-metrics }
+    static_configs: [{ targets: ['host.docker.internal:8081'], labels: { app: orchestrator } }]
+
+  # Инфраструктура в compose
+  - job_name: postgres
+    static_configs: [{ targets: ['postgres-exporter:9187'] }]
+
+  - job_name: redis
+    static_configs: [{ targets: ['redis-exporter:9121'] }]
+
+  - job_name: seaweedfs
+    static_configs: [{ targets: ['s3:9324'] }]
+
+  - job_name: openbao
+    metrics_path: /v1/sys/metrics
+    params: { format: ['prometheus'] }
+    static_configs: [{ targets: ['vault:8200'] }]
+
+  - job_name: gitea
+    static_configs: [{ targets: ['gitea:3000'] }]
+
+  # Дополнительные профили: без них цели будут down — это нормально. Метка отделяет их
+  # от обязательных целей в Grafana и алертах. Проверка включённых профилей — в README.md.
+  - job_name: gitea-runner
+    static_configs: [{ targets: ['runner:9101'], labels: { compose_profile: ci } }]
+
+  # Ни хэшей ключей хода, ни пользователей в метках: вторая линия после prometheus_exclude_labels
+  # в litellm.config.yaml.
+  - job_name: litellm
+    static_configs: [{ targets: ['litellm:4001'], labels: { compose_profile: llm } }]
+    metric_relabel_configs:
+      - action: labeldrop
+        regex: 'hashed_api_key|api_key_alias|user|user_email|user_alias|end_user|team|team_alias|tag|client_ip|user_agent'
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels: { compose_profile: monitoring-host }
+
+  # Проверки доступности через blackbox. LiteLLM здесь нет: blackbox не входит в сеть llm
+  # (иначе LiteLLM мог бы ходить через него куда угодно); его доступность — up{job="litellm"}.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params: { module: [http_2xx] }
+    static_configs:
+      - targets:
+          - http://host.docker.internal:3000/api/health
+          - http://host.docker.internal:8081/health
+          - http://host.docker.internal:8082/health
+          - http://gitea:3000/api/healthz
+          - http://vault:8200/v1/sys/health
+          - http://s3:8333/healthz
+      - targets: ['http://site:80/']
+        labels: { compose_profile: site }
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  - job_name: blackbox-exporter
+    static_configs: [{ targets: ['blackbox:9115'] }]

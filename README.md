@@ -2,54 +2,90 @@
 
 AI-поддержка сайтов малого бизнеса: владелец пишет в чат — агент меняет сайт. Домен — raditi.ru.
 
-В этом архиве — всё, чтобы начать разработку с Claude Code: инструкции для агента (`CLAUDE.md`, `.claude/`), спецификация и бизнес-модель (`docs/`), план работ и локальная инфраструктура (`infra/dev`). Кода приложения пока нет — его собирает команда `/bootstrap`.
+Каркас B0–B5 собран: монорепозиторий, веб-приложение с входом и юридическими страницами,
+оркестратор, схема данных, очередь писем, локальная инфраструктура и мониторинг.
+Чат, выполнение правок на сайтах и биллинг ещё предстоит реализовать в этапах PoC и MVP.
+P1 добавляет разбор событий четырёх CLI и зашифрованные снимки сессий с проверкой восстановления.
+Локальная часть P2 добавляет Docker-провайдер, шлюз для runc, супервизор, аренду с эпохами
+и доверенную Git-публикацию. P2 остаётся открытой: нужны Linux/runsc-сеть, восстановление
+незавершённого хода и пилотный pull-runner; [проверки и границы](docs/plan/03-p2-verification.md).
+Границы и проверка P1 — в [отчёте](docs/plan/02-p1-verification.md).
 
-## Что внутри
+## Локальный запуск
 
+Нужны Node из `.nvmrc`, pnpm из `package.json` и работающий Docker Desktop (macOS) или Docker (Linux).
+В репозитории используйте `pnpm`, а не `npm`/`npx`.
+
+```sh
+nvm use
+pnpm install --frozen-lockfile
+cp .env.example .env
 ```
-CLAUDE.md                    главные правила проекта для Claude Code
-.claude/settings.json        разрешения: pnpm, docker compose, чтение ../AnyNote
-.claude/commands/            /bootstrap, /task, /spec-check
-.claude/agents/              spec-reviewer, anynote-scout
-docs/spec.md                 спецификация v0.2
-docs/business.md             рынок, тарифы, юнит-экономика
-docs/plan/roadmap.md         этапы, гейты, задачи с ID
-docs/plan/00-bootstrap.md    первый шаг: каркас монорепозитория
-docs/landing/                прототип лендинга
-docs/model/                  модель юнит-экономики (xlsx)
-infra/dev/                   docker compose для локальной разработки
-.env.example                 переменные окружения
+
+Копируйте `.env.example` только при первом запуске. В `.env` задайте `BETTER_AUTH_SECRET`:
+подойдёт значение, созданное `openssl rand -base64 48`. Остальные значения подходят для локальной инфраструктуры.
+
+```sh
+pnpm infra:up
+pnpm db:generate
+pnpm db:deploy
+pnpm db:seed
+pnpm dev
 ```
 
-## Как начать
+Web: http://localhost:3000, core: http://localhost:8081/health, MCP: http://localhost:8082/health.
+Останавливайте `pnpm dev` через Ctrl-C (SIGINT). Юридические страницы содержат заглушки реквизитов;
+перед публикацией нужна проверка юристом.
 
-1. Распакуйте архив рядом с AnyNote — например, в `~/Projects/raditi`. Команды и агенты ждут образец в `../AnyNote`; если он в другом месте, поправьте путь в `.claude/settings.json` и `CLAUDE.md`.
-2. Инициализируйте репозиторий:
-   ```bash
-   cd ~/Projects/raditi
-   git init && git add . && git commit -m "chore: project brief for Claude Code"
-   cp .env.example .env
-   ```
-3. Поднимите инфраструктуру (нужен Docker: Docker Desktop, OrbStack или Colima):
-   ```bash
-   docker compose --env-file .env -f infra/dev/docker-compose.yml up -d
-   ```
-   Gitea — http://localhost:3300 (администратора создайте командой ниже), OpenBao — http://localhost:8200, S3 — http://localhost:8333.
-   ```bash
-   docker compose -f infra/dev/docker-compose.yml exec gitea \
-     gitea admin user create --admin --username raditi --password 'change-me-please' --email admin@raditi.local
-   ```
-4. Запустите Claude Code в папке проекта и выполните первую команду:
-   ```bash
-   claude
-   > /bootstrap
-   ```
-5. Дальше — по задачам: `/task P1`, `/task P2`… или просто `/task`, чтобы взять следующую из `docs/plan/roadmap.md`.
+`pnpm db:deploy` применяет новые миграции без сброса данных; `pnpm db:seed` безопасно повторять.
+Применённые SQL-миграции не редактируйте — создавайте следующую через `pnpm db:migrate`.
+На томе PostgreSQL от старого bootstrap обновите роли идемпотентным скриптом:
 
-Личные заметки для Claude Code (пути, токены тестовых сервисов) кладите в `CLAUDE.local.md` — он в `.gitignore`.
+```sh
+docker compose -f infra/dev/docker-compose.yml exec -T postgres \
+  psql -U raditi -d postgres -v ON_ERROR_STOP=1 < infra/dev/postgres-init.sql
+```
 
-## Полезно знать
+## Проверки
 
-- gVisor на macOS не запускается: локально песочница работает с `SANDBOX_RUNTIME=runc`, изоляцию проверяйте в Linux-ВМ.
-- Для S3 локально — SeaweedFS, а не MinIO: MinIO Community больше не развивается как открытый проект (spec §14).
-- Ключи Yandex AI Studio и Cloud.ru нужны для LiteLLM (`--profile llm`) и задач P3–P5; ID моделей в `infra/dev/litellm.config.yaml` сверьте с каталогами провайдеров.
+```sh
+DATABASE_URL=postgresql://raditi:raditi@localhost:5432/raditi pnpm gates
+pnpm format:check
+pnpm e2e
+```
+
+`gates` проверяет окружение, типы, линтер, архитектурные слои, тесты и сборку.
+Для тестов базы задавайте `DATABASE_URL` явно: без него интеграционные тесты БД пропускаются.
+Перед `pnpm e2e` остановите `pnpm dev`. Smoke-набор сам запускает web на 3100 и core/MCP на 8181/8182,
+проверяет главную, юридическую страницу и health всех трёх приложений, затем останавливает процессы.
+Инфраструктура должна оставаться запущенной.
+
+## Инфраструктура и мониторинг
+
+`pnpm infra:up`, `infra:down`, `infra:logs` управляют PostgreSQL, Redis, SeaweedFS, OpenBao и Gitea.
+Дополнительные профили: `site` — WordPress на 8080, `monitoring` — Prometheus на 9090 и Grafana на 3030,
+`llm` — LiteLLM, `ci` — раннер Gitea, `monitoring-host` — cAdvisor на Linux.
+
+```sh
+docker compose --env-file .env -f infra/dev/docker-compose.yml --profile monitoring --profile site up -d
+```
+
+Проверяются обязательные цели и цели включённых профилей. Выключенные дополнительные цели
+ожидаемо отображаются как DOWN; подробности — в [инструкции мониторинга](infra/dev/monitoring/README.md).
+Ключи моделей и регистрация раннера нужны только для соответствующих профилей.
+
+## Где что находится
+
+| Путь | Содержимое |
+| --- | --- |
+| `apps/web` | Next.js: вход, кабинет-заглушка, юридические страницы, API |
+| `apps/orchestrator` | NestJS: роли core и MCP, очередь, outbox, уведомления; runner — заглушка |
+| `apps/e2e` | Smoke-тесты Playwright |
+| `packages` | Domain, порты и адаптеры, Prisma, auth, tRPC, UI |
+| `infra/dev` | Docker Compose и мониторинг |
+| `docs/spec.md` | Спецификация и архитектура |
+| `docs/plan/roadmap.md` | Готовность этапов и следующие задачи |
+| `CLAUDE.md`, `.claude/` | Правила и команды для работы с проектом |
+
+Локальные секреты храните в `.env`, личные заметки — в `CLAUDE.local.md`: оба файла исключены из Git.
+На macOS песочница использует `runc`; `runsc + gateway` явно отклоняется до проверки изоляции на Linux (P2).

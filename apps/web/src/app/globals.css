@@ -1,0 +1,6 @@
+/* Fonts come from @fontsource-variable (self-hosted, no Google); @repo/ui's theme reads these. */
+:root {
+  --font-golos: 'Golos Text Variable';
+  --font-unbounded: 'Unbounded Variable';
+  --font-jetbrains: 'JetBrains Mono Variable';
+}

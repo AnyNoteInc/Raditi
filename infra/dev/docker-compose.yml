@@ -1,135 +1,175 @@
 # Радити — локальная инфраструктура для разработки. Не для прода.
-# Запуск из корня репозитория:
-#   docker compose --env-file .env -f infra/dev/docker-compose.yml up -d
-# Профили: site — тестовый WordPress, llm — LiteLLM, ci — act_runner.
+# Запуск из корня репозитория: pnpm infra:up
+#   (= docker compose --env-file .env -f infra/dev/docker-compose.yml up -d)
+# Профили (--profile <имя> или COMPOSE_PROFILES в .env):
+#   site — тестовый WordPress, llm — LiteLLM, ci — раннер Gitea Actions,
+#   monitoring — Prometheus и Grafana, monitoring-host — cAdvisor (только Linux).
+# Теги закреплены; порты публикуются только на 127.0.0.1.
+# Сети: default — всё, кроме LiteLLM; llm — LiteLLM, PostgreSQL (своя база litellm) и Prometheus.
+# Из llm не видно Vault, Redis, S3 и Gitea (spec §9).
 
 name: raditi-dev
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.11-alpine3.24
     environment:
       POSTGRES_USER: raditi
       POSTGRES_PASSWORD: raditi
       POSTGRES_DB: raditi
     ports:
-      - "5432:5432"
+      - '127.0.0.1:5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    networks: [default, llm]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U raditi -d raditi"]
+      test: ['CMD-SHELL', 'pg_isready -U raditi -d raditi']
       interval: 5s
       timeout: 3s
       retries: 20
 
+  # Redis для BullMQ: задачи хранятся на диске (AOF), вытеснение ключей запрещено.
   redis:
-    image: redis:7-alpine
+    image: redis:8.10.2-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
     ports:
-      - "6379:6379"
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       timeout: 3s
       retries: 20
 
   # S3 для разработки — SeaweedFS вместо MinIO (spec §14). В проде — S3 российского облака.
   s3:
-    image: chrislusf/seaweedfs:latest
-    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+    image: chrislusf/seaweedfs:4.47
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -metricsPort=9324
     ports:
-      - "8333:8333"
+      - '127.0.0.1:8333:8333'
     volumes:
       - s3data:/data
       - ./seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
 
-  # Создаёт бакеты raditi-* и завершается.
+  # Создаёт бакеты raditi-* и завершается; отсутствие любого бакета — ошибка запуска.
   s3-init:
-    image: amazon/aws-cli:latest
+    image: amazon/aws-cli:2.37.4
     depends_on:
       - s3
     environment:
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-raditi}
       AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-raditi-dev-secret}
       AWS_DEFAULT_REGION: ${S3_REGION:-ru-central1}
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: ['/bin/sh', '-c']
     command:
       - |
-        for i in $$(seq 1 30); do
-          aws --endpoint-url http://s3:8333 s3 ls >/dev/null 2>&1 && break
-          sleep 2
-        done
+        set -eu
+        s3api() {
+          aws --endpoint-url http://s3:8333 --cli-connect-timeout 2 --cli-read-timeout 5 s3api "$$@"
+        }
         for b in raditi-inbox raditi-sessions raditi-logs raditi-artifacts raditi-backups raditi-platform; do
-          aws --endpoint-url http://s3:8333 s3 mb "s3://$$b" || true
+          ready=false
+          for i in $$(seq 1 30); do
+            if s3api head-bucket --bucket "$$b" >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            if s3api create-bucket --bucket "$$b" >/dev/null 2>&1 &&
+               s3api head-bucket --bucket "$$b" >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$$ready" != true ]; then
+            echo "S3 initialization failed: bucket $$b is unavailable after 30 attempts" >&2
+            exit 1
+          fi
         done
-    restart: "no"
+    restart: 'no'
 
-  # OpenBao в dev-режиме: данные в памяти, root-токен из .env.
+  # OpenBao в dev-режиме: данные в памяти, root-токен из .env; метрики без токена (только dev).
   vault:
-    image: ghcr.io/openbao/openbao:latest
+    image: ghcr.io/openbao/openbao:2.7.0
     environment:
       BAO_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-raditi-dev-root}
       BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
     cap_add:
       - IPC_LOCK
     ports:
-      - "8200:8200"
+      - '127.0.0.1:8200:8200'
 
+  # Gitea — только репозитории сайтов клиентов (код платформы живёт на GitHub).
   gitea:
-    image: gitea/gitea:1.27-rootless
+    image: gitea/gitea:1.27.3-rootless
     environment:
       GITEA__database__DB_TYPE: sqlite3
       GITEA__server__ROOT_URL: http://localhost:3300/
-      GITEA__server__HTTP_PORT: "3000"
-      GITEA__security__INSTALL_LOCK: "true"
-      GITEA__actions__ENABLED: "true"
+      GITEA__server__HTTP_PORT: '3000'
+      GITEA__security__INSTALL_LOCK: 'true'
+      GITEA__actions__ENABLED: 'true'
       GITEA__actions__DEFAULT_ACTIONS_URL: self
-      GITEA__webhook__ALLOWED_HOST_LIST: "*"
+      # Вебхуки — только на локальные и частные адреса (apps/web в dev).
+      GITEA__webhook__ALLOWED_HOST_LIST: 'loopback,private'
+      GITEA__metrics__ENABLED: 'true'
     ports:
-      - "3300:3000"
-      - "2222:2222"
+      - '127.0.0.1:3300:3000'
+      - '127.0.0.1:2222:2222'
     volumes:
       - giteadata:/var/lib/gitea
       - giteaconf:/etc/gitea
 
-  # act_runner: токен регистрации — в Gitea, «Администрирование → Actions → Раннеры».
+  # Раннер Gitea Actions (бывший act_runner, теперь gitea/runner).
+  # Токен регистрации — в Gitea: «Администрирование → Actions → Раннеры».
+  # Node в заданиях — LTS для сборки сайтов клиентов, не версия платформы; тег точный.
+  # Сокет Docker нужен самому раннеру; в задания он не попадает (runner.yaml: docker_host '-').
   runner:
-    image: gitea/act_runner:latest
-    profiles: ["ci"]
+    image: gitea/runner:4.0.0
+    profiles: ['ci']
     depends_on:
       - gitea
     environment:
       GITEA_INSTANCE_URL: http://gitea:3000
       GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_TOKEN:-}
       GITEA_RUNNER_NAME: raditi-dev-runner
-      GITEA_RUNNER_LABELS: check:docker://node:22-bookworm,deploy:docker://node:22-bookworm
+      GITEA_RUNNER_LABELS: check:docker://node:24.21.0-bookworm,deploy:docker://node:24.21.0-bookworm
+      CONFIG_FILE: /config/runner.yaml
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - runnerdata:/data
+      - ./runner.yaml:/config/runner.yaml:ro
 
   # LiteLLM — единая точка к моделям. ID моделей — в litellm.config.yaml.
+  # Закреплён по digest: в марте 2026 пакеты LiteLLM на PyPI были скомпрометированы.
+  # Порт метрик 4001 без авторизации — наружу не публикуется.
+  # Своя сеть llm: видит только PostgreSQL (базу litellm) и Prometheus, но не Vault, Redis и S3.
   litellm:
-    image: ghcr.io/berriai/litellm:main-stable
-    profiles: ["llm"]
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    image: ghcr.io/berriai/litellm:v1.102.1@sha256:87f34979b9f8cb274fac90ca8a4fdda07d8480de22755562a26adeb95ce20d02
+    profiles: ['llm']
+    command: ['--config', '/app/config.yaml', '--port', '4000', '--prometheus_metrics_port', '4001']
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-raditi-dev}
-      DATABASE_URL: postgresql://raditi:raditi@postgres:5432/litellm
+      DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm
       YANDEX_API_KEY: ${YANDEX_API_KEY:-}
       YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
       CLOUDRU_API_KEY: ${CLOUDRU_API_KEY:-}
+      # Карта цен моделей — из образа, без запроса на GitHub при старте.
+      LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+    networks: [llm]
     ports:
-      - "4000:4000"
+      - '127.0.0.1:4000:4000'
     volumes:
       - ./litellm.config.yaml:/app/config.yaml:ro
 
   # Тестовый сайт клиента: WordPress + MariaDB + WP-CLI.
   site-db:
-    image: mariadb:11.4
-    profiles: ["site"]
+    image: mariadb:11.4.13
+    profiles: ['site']
     environment:
       MARIADB_DATABASE: wp
       MARIADB_USER: wp
@@ -139,8 +179,8 @@ services:
       - sitedb:/var/lib/mysql
 
   site:
-    image: wordpress:php8.3-apache
-    profiles: ["site"]
+    image: wordpress:7.1.2-php8.3-apache
+    profiles: ['site']
     depends_on:
       - site-db
     environment:
@@ -149,15 +189,15 @@ services:
       WORDPRESS_DB_PASSWORD: wp
       WORDPRESS_DB_NAME: wp
     ports:
-      - "8080:80"
+      - '127.0.0.1:${SITE_PORT:-8080}:80'
     volumes:
       - sitefiles:/var/www/html
 
   # Разовый запуск: docker compose -f infra/dev/docker-compose.yml --profile site run --rm wpcli core version
   wpcli:
-    image: wordpress:cli-php8.3
-    profiles: ["site"]
-    user: "33:33"
+    image: wordpress:cli-2.12.0-php8.3
+    profiles: ['site']
+    user: '33:33'
     depends_on:
       - site
     environment:
@@ -165,16 +205,112 @@ services:
       WORDPRESS_DB_USER: wp
       WORDPRESS_DB_PASSWORD: wp
       WORDPRESS_DB_NAME: wp
-    entrypoint: ["wp"]
-    command: ["--info"]
+    entrypoint: ['wp']
+    command: ['--info']
     volumes:
       - sitefiles:/var/www/html
 
+  # --- Мониторинг (профиль monitoring) ---
+  # Grafana — http://localhost:3030 (admin / GRAFANA_ADMIN_PASSWORD), Prometheus — http://localhost:9090.
+  # Приложения (pnpm dev) опрашиваются на хосте через host.docker.internal.
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    profiles: ['monitoring']
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '127.0.0.1:9090:9090'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - promdata:/prometheus
+    # llm — чтобы снимать метрики LiteLLM.
+    networks: [default, llm]
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    profiles: ['monitoring']
+    depends_on:
+      - prometheus
+    environment:
+      GF_SERVER_ROOT_URL: http://localhost:3030/
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-raditi-dev}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      # Никаких обращений к grafana.com и stats.grafana.org
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: 'false'
+      GF_NEWS_NEWS_FEED_ENABLED: 'false'
+      GF_PLUGINS_PREINSTALL_DISABLED: 'true'
+      GF_SECURITY_DISABLE_GRAVATAR: 'true'
+      GF_SNAPSHOTS_EXTERNAL_ENABLED: 'false'
+    ports:
+      - '127.0.0.1:3030:3000'
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    profiles: ['monitoring']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Роль только с pg_monitor (postgres-init.sql), не владелец базы.
+      DATA_SOURCE_URI: postgres:5432/raditi?sslmode=disable
+      DATA_SOURCE_USER: postgres_exporter
+      DATA_SOURCE_PASS: postgres_exporter
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.92.0-alpine
+    profiles: ['monitoring']
+    depends_on:
+      - redis
+    environment:
+      REDIS_ADDR: redis://redis:6379
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.28.0
+    profiles: ['monitoring']
+    command: ['--config.file=/etc/blackbox/blackbox.yml']
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - ./monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+
+  # Метрики контейнеров. На macOS показывает Linux-ВМ Docker Desktop, поэтому отдельный профиль.
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    profiles: ['monitoring-host']
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+networks:
+  default:
+  llm:
+
 volumes:
   pgdata:
+  redisdata:
   s3data:
   giteadata:
   giteaconf:
   runnerdata:
   sitedb:
   sitefiles:
+  promdata:
+  grafanadata:

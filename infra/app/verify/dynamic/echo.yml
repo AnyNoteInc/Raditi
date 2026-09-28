@@ -1,0 +1,14 @@
+# Only for verify-edge.mjs: echo.<domain> shows the headers Traefik forwards to web.
+http:
+  routers:
+    echo:
+      entryPoints: [websecure]
+      rule: 'Host(`echo.{{ env "APP_DOMAIN" }}`)'
+      service: echo
+      tls:
+        certResolver: le
+        domains: [{ main: 'echo.{{ env "APP_DOMAIN" }}' }]
+  services:
+    echo:
+      loadBalancer:
+        servers: [{ url: 'http://echo:3000' }]

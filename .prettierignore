@@ -1,0 +1,16 @@
+node_modules
+pnpm-lock.yaml
+.next
+.turbo
+.vitest
+dist
+coverage
+playwright-report
+test-results
+**/src/generated
+infra/dev/monitoring/grafana/dashboards
+# Prose (docs, legal texts): formatting is manual
+**/*.md
+**/*.mdx
+.claude
+docs
