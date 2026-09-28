@@ -41,6 +41,12 @@ export interface PublicationRecoveryRequest {
   snapshot: SnapshotReference
   workspace: TurnWorkspaceSource
   removal: PublicationRemoval
+  /**
+   * What was left of the turn when recovery read its assignment, 0 or less once its deadline
+   * passed. The new epoch lives at least that long plus the grace: a container still to be removed
+   * may live until then, and the lease must not expire before it (spec §8).
+   */
+  remainingMs: number
   /** The container the journal or the assignment names. */
   containerId?: string
   /** The labels the turn's container was created with. */
@@ -104,7 +110,7 @@ export class TurnPublicationRecovery {
     const taken = await this.deps.assignments.takeOver({
       id: input.assignmentId,
       fence: input.heldFence,
-      ttlMs: RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS,
+      ttlMs: Math.max(RECOVERY_TIMEOUT_MS, input.remainingMs) + TURN_PUBLICATION_GRACE_MS,
       ...(input.runnerSession ? { runnerSession: input.runnerSession } : {}),
       countAttempt: false,
     })

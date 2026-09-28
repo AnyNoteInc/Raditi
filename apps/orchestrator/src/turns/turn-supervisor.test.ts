@@ -1605,6 +1605,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
       },
       // Its owner journaled the removal: only what the labels still find is removed.
       removal: 'confirmed',
+      remainingMs: 60_000,
       labels: { ...labels, leaseEpoch: 1 },
     }
     return {
@@ -1654,6 +1655,24 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     expect(f.driver.prepare).not.toHaveBeenCalled()
     expect(f.sandboxes.create).not.toHaveBeenCalled()
   })
+
+  it.each([
+    [15 * 60_000, 15 * 60_000],
+    [0, RECOVERY_TIMEOUT_MS],
+    [-60_000, RECOVERY_TIMEOUT_MS],
+  ])(
+    'keeps the new epoch past a container that is still to be removed (%i ms of the turn left)',
+    async (remainingMs, covered) => {
+      const f = await recoveryFixture()
+      f.input.removal = 'adopt'
+      f.input.remainingMs = remainingMs
+      await expect(f.recover()).resolves.toMatchObject({ headSha })
+      expect(f.leases.reclaimForRecovery).toHaveBeenCalledWith(
+        f.lease,
+        covered + TURN_PUBLICATION_GRACE_MS,
+      )
+    },
+  )
 
   it('removes a listed container that can no longer run anything before it publishes', async () => {
     const f = await recoveryFixture()

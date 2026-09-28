@@ -519,7 +519,7 @@ AAD снимка включает headSha и `createdAt`, поэтому home ш
 
 ### Восстановление незавершённого хода
 
-`TurnExecRecovery` в `core` запускается при старте и каждые 30 секунд. Он берёт незавершённые `turn_assignments` и читает журнал по диапазону эпох назначения `first_epoch…lease_epoch` в порядке `task_events.id`. Затем удерживает эпоху E (`holdForRecovery`) и забирает её вместе с назначением (`takeOver`) на `deadline_at − now + TURN_PUBLICATION_GRACE_MS`: срок хода не продлевается. Остаток охраняет новый `LeaseGuard`.
+`TurnExecRecovery` в `core` запускается при старте и каждые 30 секунд. Он берёт незавершённые `turn_assignments` и читает журнал по диапазону эпох назначения `first_epoch…lease_epoch` в порядке `task_events.id`. Затем удерживает эпоху E (`holdForRecovery`) и забирает её вместе с назначением (`takeOver`) на `deadline_at − now + TURN_PUBLICATION_GRACE_MS`: срок хода не продлевается. Остаток охраняет новый `LeaseGuard`. Восстановление публикации забирает эпоху на `max(RECOVERY_TIMEOUT_MS, deadline_at − now) + TURN_PUBLICATION_GRACE_MS`: работа по-прежнему ограничена шестью минутами, но контейнер, который ещё предстоит удалить, может жить до срока хода, и аренда не истекает раньше него.
 
 | Последняя фаза | Что делаем |
 | --- | --- |

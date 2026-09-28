@@ -749,6 +749,21 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     },
   )
 
+  it('reclaims a checkpoint whose container is still to be removed for what is left of the turn', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed')
+    const takeOver = vi.spyOn(w.assignments, 'takeOver')
+    await w.recover(after.recovery)
+
+    // Nearly the whole limit is left, more than the recovery's own six minutes: the container
+    // may live that long, so the new epoch does too.
+    expect(takeOver.mock.calls[0]![0].ttlMs).toBeGreaterThan(
+      MAX_SANDBOX_TURN_MS - 60_000 + TURN_PUBLICATION_GRACE_MS,
+    )
+    expect(w.publish).toHaveBeenCalledOnce()
+  })
+
   it('removes the container its journal names before publishing, whatever the inventory shows', async () => {
     const w = world(kind)
     w.vm.finish()

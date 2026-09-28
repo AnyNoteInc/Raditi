@@ -577,6 +577,7 @@ export class TurnExecRecovery {
         snapshot,
         workspace: plan.workspace,
         removal,
+        remainingMs,
         ...(containerId ? { containerId } : {}),
         labels: containerLabels(assignment),
       })
