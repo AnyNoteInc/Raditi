@@ -1316,8 +1316,10 @@ describe('turn exec recovery of a checkpoint: attempts', () => {
 
     expect(w.publish).not.toHaveBeenCalled()
     expect(w.assignment()).toMatchObject({ outcome: null, recoveryAttempts: 2 })
+    // The first pass removed the container: the second one starts from that removal.
+    expect(w.journal.phases(3)[0]).toBe('destroyed')
     expect(w.logger.error).toHaveBeenCalledWith(
-      'Turn recovery left a turn to an operator: too many recovery attempts (epoch 3, phase checkpointed, attempts 2)',
+      'Turn recovery left a turn to an operator: too many recovery attempts (epoch 3, phase destroyed, attempts 2)',
     )
   })
 })
@@ -1547,6 +1549,31 @@ describe('turn exec recovery on a runner VM', () => {
     expect(w.journal.phases(2).slice(-2)).toEqual(['publishing', 'publication_recovered'])
     expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
   })
+
+  it.each(['destroyed', 'publishing'])(
+    'still publishes a turn journaled %s at once after a pass failed before publishing, its runner away',
+    async (phase) => {
+      const w = world('runner')
+      w.vm.finish()
+      const { after } = await w.crashAt(phase, { stopRunner: true })
+      w.workspace.preparePublication.mockRejectedValueOnce(
+        new DomainError('GIT_UNAVAILABLE', 'The clone did not answer', 502),
+      )
+      await w.recover(after.recovery)
+      expect(w.publish).not.toHaveBeenCalled()
+      expect(w.journal.phases(2)).toEqual(['destroyed', 'recovery'])
+      expect(w.lease()).toMatchObject({ held: true, epoch: 2 })
+
+      await w.recover(after.recovery)
+      expect(w.journal.entries.some((entry) => entry.reason === 'awaiting_runner')).toBe(false)
+      expect(w.publish).toHaveBeenCalledOnce()
+      expect(w.assignment()).toMatchObject({
+        outcome: 'completed',
+        fence: { epoch: 3 },
+        recoveryAttempts: 2,
+      })
+    },
+  )
 
   it('does not let the wait for an away runner hide the attempt limit', async () => {
     const w = world('runner')

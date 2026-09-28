@@ -149,7 +149,9 @@ export class TurnPublicationRecovery {
     }
     try {
       await guard.assertFence()
-      await record('checkpointed')
+      // A pass that fails before `publishing` leaves the journal's confirmed removal as its last
+      // step, so the next one publishes without waiting for a runner that is away.
+      await record(input.removal === 'confirmed' ? 'destroyed' : 'checkpointed')
       await this.#removeContainers(input, reference, lease, guard, record).catch(
         (error: unknown) => {
           // Another identity where the turn's container should be: no retry resolves that.
