@@ -131,7 +131,7 @@ CAA привязывает выпуск к ACME-аккаунту из `acme.json
 **Переход на DNS-01** (HTTP-01 сломан: группа безопасности, AAAA, защита от DDoS):
 1. Сначала CAA: `validationmethods=http-01,dns-01` (`accounturi` оставить, если `acme.json` цел) и дождаться TTL.
 2. Затем правка `docker-compose.yml` обычным релизом:
-   - флаг `--certificatesresolvers.le.acme.dnschallenge.provider=yandexcloud`;
+   - флаг `--certificatesresolvers.le.acme.httpchallenge.entrypoint=web` заменить на `--certificatesresolvers.le.acme.dnschallenge.provider=yandexcloud`, а не добавить второй рядом: из двух проверок одного резолвера lego выбирает HTTP-01, и продление снова падает. Резолвер с двумя проверками не пропустит `pnpm test:infra`;
    - каталог секретов `${SECRETS_DIR}/traefik`, который vault-agent рендерит из `kv/platform/app/traefik`, смонтированный только в Traefik;
    - учётные данные `YANDEX_CLOUD_IAM_TOKEN` и `YANDEX_CLOUD_FOLDER_ID` — через переменные lego `*_FILE`, не значениями в `environment:`;
    - `traefik` — в `secretDirs` в `compose.test.mjs`.

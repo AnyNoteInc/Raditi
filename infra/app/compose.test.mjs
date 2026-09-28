@@ -315,3 +315,22 @@ test('Traefik: static config only as flags, no dashboard or Docker provider, log
   for (const volume of volumes) assert.doesNotMatch(volume.target, /^\/etc\/traefik\/traefik\./)
   for (const variable of Object.keys(environment ?? {})) assert.doesNotMatch(variable, /^TRAEFIK_/)
 })
+
+// Traefik registers every configured challenge and lego tries tls-alpn-01, then http-01, then
+// dns-01: DNS-01 added next to HTTP-01 is never used.
+test('every ACME resolver has exactly one challenge type', () => {
+  const challenges = new Map()
+  for (const flag of services.traefik.command) {
+    const [, resolver, type] =
+      /^--certificatesresolvers\.([^.=]+)\.acme\.(?:(http|dns|tls)challenge(?:[.=]|$))?/i.exec(
+        flag,
+      ) ?? []
+    if (!resolver) continue
+    const types = challenges.get(resolver.toLowerCase()) ?? new Set()
+    if (type) types.add(type.toLowerCase())
+    challenges.set(resolver.toLowerCase(), types)
+  }
+  assert.ok(challenges.has('le'))
+  for (const [resolver, types] of challenges)
+    assert.equal(types.size, 1, `${resolver}: ${[...types].join(', ') || 'no challenge'}`)
+})
