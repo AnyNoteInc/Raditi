@@ -327,8 +327,11 @@ function world(kind: string) {
 
   let current: ReturnType<typeof core> | undefined
   let runnerStopped = false
-  /** A new core process; on a runner VM the runner's next poll reaches it. */
-  const restart = async (crash?: ReturnType<typeof crashable>) => {
+  /**
+   * A new core process; on a runner VM the runner's next poll reaches it, within `timeout` when
+   * the runner backs off from a core that answered it UNAVAILABLE.
+   */
+  const restart = async (crash?: ReturnType<typeof crashable>, { timeout = 1_000 } = {}) => {
     const previous = current
     const next = core(crash)
     current = next
@@ -336,7 +339,7 @@ function world(kind: string) {
       transport.reconnect(next.hub)
       previous?.hub?.close()
       if (!runnerStopped)
-        await vi.waitFor(() => expect(next.hub!.session('sandbox-1')).toBeDefined())
+        await vi.waitFor(() => expect(next.hub!.session('sandbox-1')).toBeDefined(), { timeout })
     }
     return next
   }
@@ -378,6 +381,29 @@ function world(kind: string) {
     return { before, after, crash, zombie }
   }
 
+  /**
+   * Runs a turn on a runner through a core that stops gracefully (its hub closes as on SIGTERM)
+   * right after it journaled `phase`; returns what the old supervisor ended with and the next
+   * core, which the living runner polls.
+   */
+  const stopAt = async (phase: string) => {
+    const before = core()
+    current = before
+    startRunner(before.hub!)
+    let stopped = false
+    journal.onRecord = (entry) => {
+      if (entry.phase !== phase || stopped) return
+      stopped = true
+      before.hub!.close()
+    }
+    const ended = await before.supervisor.run(request()).then(
+      () => 'completed',
+      (error: unknown) => error,
+    )
+    journal.onRecord = undefined
+    return { before, ended }
+  }
+
   /** kill -9 of the runner: its memory is gone, its container stays; a new session polls. */
   const restartRunner = async () => {
     await runner!.stop()
@@ -401,6 +427,7 @@ function world(kind: string) {
     logger,
     core,
     crashAt,
+    stopAt,
     startRunner,
     restart,
     restartRunner,
@@ -1113,6 +1140,40 @@ const pastGrace = (w: ReturnType<typeof world>) => {
     Date.now() - TURN_PUBLICATION_GRACE_MS - 1_000,
   )
 }
+
+describe('turn exec recovery after core stopped gracefully (runner executor)', () => {
+  it('resumes the agent a stopping core left instead of closing the turn lost', async () => {
+    const w = world('runner')
+    w.credentials.keep(reference, values)
+    const { ended } = await w.stopAt('output')
+
+    // The old core neither removed the container nor held the site nor wrote an entry.
+    expect(ended).toMatchObject({ code: 'CORE_STOPPING' })
+    expect(w.journal.phases()).toEqual(['leased', 'created', 'restored', 'running', 'output'])
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 1 } })
+    expect(w.vm.exists()).toBe(true)
+    expect(w.vm.kill).not.toHaveBeenCalled()
+    expect(w.credentials.revoked).toEqual([])
+
+    // The runner was answered UNAVAILABLE while core stopped: it backs off before the next poll.
+    const after = await w.restart(undefined, { timeout: 5_000 })
+    const recovering = after.recovery.tick().then(() => after.recovery.settled())
+    await vi.waitFor(() => expect(w.journal.phases(2)).toContain('resumed'))
+    w.vm.finish()
+    await recovering
+
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.vm.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('completed')
+    expect(w.vm.sandbox.exec).toHaveBeenCalledOnce()
+    expect(w.journal.phases(2).at(-1)).toBe('completed')
+    expect(
+      w.journal.entries.flatMap((entry) => (entry.phase === 'output' ? (entry.events ?? []) : [])),
+    ).toEqual(events)
+  })
+})
 
 describe('turn exec recovery of a turn given up before its container was reported', () => {
   /** A local turn cancelled while its create hangs; `created` lets the create answer. */

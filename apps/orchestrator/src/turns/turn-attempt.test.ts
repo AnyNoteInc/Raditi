@@ -3,8 +3,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 
 import {
+  coreStopping,
   MAX_SANDBOX_TURN_MS,
   runnerReportSchema,
+  runnerUnavailable,
   SANDBOX_SECRETS_DIR,
   toTurnPlan,
   TURN_PUBLICATION_GRACE_MS,
@@ -278,6 +280,32 @@ describe('TurnAttempt given up while its prepare was out (spec §8)', () => {
     expect(t.release).not.toHaveBeenCalled()
     expect(t.finish).not.toHaveBeenCalled()
     expect(t.journal.phases().at(-1)).toBe('vacating')
+  })
+})
+
+describe('TurnAttempt when core stops (spec §8 «Устройство раннера»)', () => {
+  it('leaves a running turn to the next core: no removal, hold or journal entry', async () => {
+    const t = await given()
+    await t.attempt.created(t.execution)
+    t.destroy.mockRejectedValue(coreStopping())
+    t.attempt.failed(coreStopping())
+    expect(await t.attempt.settle()).toBe('held')
+    expect(t.journal.phases()).toEqual(['leased', 'created'])
+    expect(t.row()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+    expect(t.release).not.toHaveBeenCalled()
+    expect(t.finish).not.toHaveBeenCalled()
+    expect(t.outcome()).toBeNull()
+  })
+
+  it('still holds the site when a runner does not answer the removal', async () => {
+    const t = await given()
+    await t.attempt.created(t.execution)
+    t.destroy.mockRejectedValue(runnerUnavailable('The sandbox runner did not answer in time'))
+    t.attempt.failed(new Error('agent failed'))
+    expect(await t.attempt.settle()).toBe('held')
+    expect(t.journal.entries.at(-1)).toMatchObject({ phase: 'recovery', reason: 'destroy_failed' })
+    expect(t.row()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+    expect(t.finish).not.toHaveBeenCalled()
   })
 })
 

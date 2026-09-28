@@ -4,6 +4,7 @@ import {
   conflict,
   DomainError,
   driverPrepareInvalid,
+  isDomainError,
   publicationTooLarge,
   repositoryTooLarge,
   repositoryUnsupported,
@@ -497,6 +498,16 @@ export const runnerErrorSchema = z
 /** No runner took the turn in time; nothing ran, and the turn may be retried. */
 export const runnerUnavailable = (message = 'No sandbox runner took the turn'): DomainError =>
   new DomainError('RUNNER_UNAVAILABLE', message, 503)
+
+/**
+ * This core stops: the runners keep their turns, and the next core's recovery takes them over.
+ * Unlike RUNNER_UNAVAILABLE, nothing is known to be wrong with the runner or the turn.
+ */
+export const coreStopping = (): DomainError =>
+  new DomainError('CORE_STOPPING', 'Core is shutting down', 503)
+
+export const isCoreStopping = (error: unknown): boolean =>
+  isDomainError(error) && error.code === 'CORE_STOPPING'
 
 /** The error core raises for a runner's failure report, with a message of its own. */
 export function runnerFailure(code: RunnerFailureCode): DomainError {

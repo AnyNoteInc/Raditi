@@ -5,6 +5,8 @@ import { agentOutputLimits, preparedRunLimits } from '../ports/agent-driver.ts'
 import { SANDBOX_SECRETS_DIR } from '../ports/sandbox-provider.ts'
 import { isSnapshotCredential } from '../ports/turn-runner.ts'
 import {
+  coreStopping,
+  isCoreStopping,
   parseRunnerToken,
   runnerApiErrors,
   runnerBundlePath,
@@ -514,5 +516,12 @@ describe('runner errors', () => {
     expect(isTooLarge(runnerFailure('SNAPSHOT_TOO_LARGE'))).toBe(true)
     expect(runnerFailure('CREDENTIALS_LOST')).toMatchObject({ code: 'EXEC_LOST', httpStatus: 502 })
     expect(runnerUnavailable()).toMatchObject({ code: 'RUNNER_UNAVAILABLE', httpStatus: 503 })
+  })
+
+  it('tells a stopping core from a runner that cannot be reached', () => {
+    expect(coreStopping()).toMatchObject({ code: 'CORE_STOPPING', httpStatus: 503 })
+    expect(isCoreStopping(coreStopping())).toBe(true)
+    expect(isCoreStopping(runnerUnavailable('Core is shutting down'))).toBe(false)
+    expect(isCoreStopping(new Error('CORE_STOPPING'))).toBe(false)
   })
 })

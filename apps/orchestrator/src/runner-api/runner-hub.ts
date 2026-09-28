@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { Logger, type OnApplicationShutdown } from '@nestjs/common'
 import {
   conflict,
+  coreStopping,
   execLost,
   isDomainError,
   leaseLost,
@@ -385,10 +386,12 @@ export class RunnerHub implements OnApplicationShutdown {
     if (live.fence.epoch === epoch) this.#forget(live)
   }
 
-  #forget(live: LiveAssignment): void {
+  #forget(
+    live: LiveAssignment,
+    released: unknown = conflict('The turn is no longer driven by this core'),
+  ): void {
     if (this.#live.get(live.id) !== live) return
     this.#live.delete(live.id)
-    const released = conflict('The turn is no longer driven by this core')
     for (const open of live.commands.values()) this.#reject(open, released)
     live.exec?.fail(released)
   }
@@ -707,20 +710,24 @@ export class RunnerHub implements OnApplicationShutdown {
     this.close()
   }
 
+  /**
+   * Stops driving turns without giving them up: every wait fails with CORE_STOPPING, and the
+   * runners keep their turns for the next core's recovery (spec §8 «Устройство раннера»).
+   */
   close(): void {
     if (this.#closed) return
     this.#closed = true
     clearInterval(this.#sweep)
-    const closing = runnerUnavailable('Core is shutting down')
+    const closing = coreStopping()
     for (const pending of this.#pending.values()) pending.reject(closing)
     for (const session of this.#sessions.values()) this.#retire(session, closing)
-    for (const live of [...this.#live.values()]) this.#forget(live)
+    for (const live of [...this.#live.values()]) this.#forget(live, closing)
   }
 
   // --- Internals --------------------------------------------------------------------------------
 
   #assertOpen(): void {
-    if (this.#closed) throw runnerUnavailable('Core is shutting down')
+    if (this.#closed) throw coreStopping()
   }
 
   /**

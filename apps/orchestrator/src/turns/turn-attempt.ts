@@ -1,6 +1,7 @@
 import {
   conflict,
   DomainError,
+  isCoreStopping,
   isDomainError,
   isSnapshotCredential,
   leaseLost,
@@ -426,6 +427,8 @@ export class TurnAttempt {
    * Without its last journal entry the site stays held only in the latter cases; a failed
    * release expires by its TTL. A turn whose prepare is out without a container reported is
    * vacating: nothing is released or finished until vacated() or a late container's removal.
+   * When core stops before any checkpoint, the turn is left as it is to the next core: `held`
+   * without a hold or a journal entry.
    */
   async settle(
     alsoRemove?: () => Promise<void>,
@@ -447,7 +450,14 @@ export class TurnAttempt {
     try {
       await this.#destroy()
       if (!this.#completed) await alsoRemove?.()
-    } catch {
+    } catch (error) {
+      if (isCoreStopping(error) && !recovery && !this.#completed) {
+        // The runner keeps the turn: the journal stays on its last step and the lease on its
+        // epoch, so the next core's recovery resumes the agent or removes the container.
+        guard.close()
+        await this.#publication?.dispose().catch(() => {})
+        return 'held'
+      }
       recovery = true
       this.#reason = 'destroy_failed'
     }
