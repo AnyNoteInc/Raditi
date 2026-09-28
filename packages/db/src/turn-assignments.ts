@@ -49,6 +49,8 @@ const openSchema = z.object({
 const idsSchema = z.array(id).max(runnerLimits.claimIds)
 const runnerSchema = z.object({ runnerId: runnerIdSchema, runnerSession: id })
 const takenSchema = z.array(z.object({ lease_expires_at: z.coerce.date() })).length(1)
+/** Rows per query of unfinished(), which reads them all. */
+export const UNFINISHED_PAGE = 1000
 
 const rowsSchema = z.array(
   z.object({
@@ -205,8 +207,7 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
         FOR UPDATE SKIP LOCKED
       )
       UPDATE turn_assignments a SET runner_id = ${runnerId}, runner_session = ${runnerSession}::uuid,
-        claimed_at = clock_timestamp(), runner_seen_at = clock_timestamp(),
-        updated_at = clock_timestamp()
+        claimed_at = clock_timestamp(), updated_at = clock_timestamp()
       FROM picked WHERE a.id = picked.id
       RETURNING ${columns('a')}`,
     )
@@ -240,21 +241,6 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
         AND (container_id IS NULL OR container_id = ${checked.containerId})
       RETURNING id`
     return rows.length === 1
-  }
-
-  async seen(input: {
-    runnerId: string
-    runnerSession: string
-    ids: readonly string[]
-  }): Promise<void> {
-    const ids = idsSchema.parse(input.ids)
-    const { runnerId, runnerSession } = runnerSchema.parse(input)
-    if (ids.length === 0) return
-    await this.db.$queryRaw`
-      UPDATE turn_assignments SET runner_seen_at = clock_timestamp()
-      WHERE id = ANY(${ids}::uuid[]) AND runner_id = ${runnerId}
-        AND runner_session = ${runnerSession}::uuid AND finished_at IS NULL
-      RETURNING id`
   }
 
   async takeOver(input: {
@@ -367,12 +353,21 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
 
   async unfinished(filter: { runnerId?: string } = {}): Promise<TurnAssignment[]> {
     const runnerId = runnerIdSchema.nullable().parse(filter.runnerId ?? null)
-    return assignments(
-      await this.db.$queryRaw`
-      SELECT ${columns('a')} FROM turn_assignments a
-      WHERE a.finished_at IS NULL AND (${runnerId}::text IS NULL OR a.runner_id = ${runnerId})
-      ORDER BY a.created_at, a.id
-      LIMIT 1000`,
-    )
+    const all: TurnAssignment[] = []
+    // Page by page: turns parked for an operator stay unfinished and must not crowd newer ones out.
+    for (let after: string | null = null; ;) {
+      const page = assignments(
+        await this.db.$queryRaw`
+        SELECT ${columns('a')} FROM turn_assignments a
+        WHERE a.finished_at IS NULL AND (${runnerId}::text IS NULL OR a.runner_id = ${runnerId})
+          AND (${after}::uuid IS NULL OR (a.created_at, a.id) >
+            (SELECT b.created_at, b.id FROM turn_assignments b WHERE b.id = ${after}::uuid))
+        ORDER BY a.created_at, a.id
+        LIMIT ${UNFINISHED_PAGE}`,
+      )
+      all.push(...page)
+      if (page.length < UNFINISHED_PAGE) return all
+      after = page.at(-1)!.id
+    }
   }
 }

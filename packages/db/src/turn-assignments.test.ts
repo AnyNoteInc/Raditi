@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { createPrismaClient } from './client.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import { PostgresSiteLeaseStore } from './site-leases.ts'
-import { PostgresTurnAssignmentStore } from './turn-assignments.ts'
+import { PostgresTurnAssignmentStore, UNFINISHED_PAGE } from './turn-assignments.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 
@@ -289,7 +289,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     expect(await store.recordContainer({ id: opened.id, epoch: 1, containerId: 'c1' })).toBe(true)
     expect(await store.recordContainer({ id: opened.id, epoch: 1, containerId: 'c1' })).toBe(true)
     expect(await store.recordContainer({ id: opened.id, epoch: 1, containerId: 'c2' })).toBe(false)
-    await store.seen({ runnerId: 'vm1', runnerSession: session, ids: [opened.id] })
 
     // The lease must be held for recovery at the assignment's epoch first.
     expect(await store.takeOver({ id: opened.id, fence: lease, ttlMs: 60_000 })).toBeNull()
@@ -466,6 +465,32 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
       epoch: again.epoch,
     })
     expect(await leases.holdForRecovery(orphan.lease)).toBe(false)
+  })
+
+  it('returns every unfinished assignment, however many older ones are left open', async () => {
+    const { input } = await fixture()
+    const newest = (await store.open(input))!
+    const runnerId = `vm-${randomUUID().slice(0, 8)}`
+    await store.claim({ ids: [newest.id], runnerId, runnerSession: randomUUID(), limit: 1 })
+    // Older turns of the task nobody closes, as turns parked for an operator; ties on created_at
+    // are ordered by id.
+    await db.$executeRaw`
+      INSERT INTO turn_assignments (id, task_id, site_id, session_id, turn_no, executor, plan,
+        first_epoch, lease_epoch, deadline_at, runner_id, runner_session, claimed_at, created_at,
+        updated_at)
+      SELECT gen_random_uuid(), a.task_id, a.site_id, a.session_id, a.turn_no + n, a.executor,
+        a.plan, a.first_epoch, a.lease_epoch, a.deadline_at, a.runner_id, a.runner_session,
+        a.claimed_at, a.created_at - make_interval(secs => 1 + n % 7), clock_timestamp()
+      FROM turn_assignments a, generate_series(1, ${UNFINISHED_PAGE}) n
+      WHERE a.id = ${newest.id}::uuid`
+    for (const filter of [{}, { runnerId }]) {
+      const ids = (await store.unfinished(filter))
+        .filter((a) => a.fence.taskId === input.fence.taskId)
+        .map((a) => a.id)
+      expect(ids).toHaveLength(UNFINISHED_PAGE + 1)
+      expect(new Set(ids).size).toBe(ids.length)
+      expect(ids.at(-1)).toBe(newest.id)
+    }
   })
 
   it('refuses runner fields on a local assignment in the database itself', async () => {

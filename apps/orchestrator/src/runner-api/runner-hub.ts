@@ -50,7 +50,7 @@ export interface ClaimedRunner {
 const COMMAND_TTL_MS = 60_000
 const SWEEP_MS = 5_000
 /** A claim that lost its race to a runner waits this long for that runner's poll. */
-const CLAIM_RACE_MS = 5_000
+export const CLAIM_RACE_MS = 5_000
 const RETIRED_SESSIONS = 16
 /**
  * Polls in a row that miss a delivered prepare before it goes out again: the first may have
@@ -76,6 +76,8 @@ interface RunnerSession {
   inventoryAt: number
   queue: RunnerCommand[]
   wake: (() => void) | undefined
+  /** Counts wakes, so that one arriving while a poll's claim runs is not lost. */
+  woken: number
   gone: boolean
 }
 
@@ -164,6 +166,12 @@ export class LiveAssignment {
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const clampMs = (ms: number) => Math.max(1, Math.min(MAX_SANDBOX_TURN_MS, Math.floor(ms)))
 const superseded = () => conflict('The turn was taken over under a newer fence')
+
+/** Ends the session's waiting poll, or makes the running one look again before it waits. */
+function wakeSession(session: RunnerSession): void {
+  session.woken += 1
+  session.wake?.()
+}
 
 /** The command with what is left of its turn when a poll takes it. */
 function withRemaining(command: RunnerCommand, remainingMs: number): RunnerCommand {
@@ -271,7 +279,7 @@ export class RunnerHub implements OnApplicationShutdown {
     const timer = setTimeout(() => expire(runnerUnavailable()), runnerTimings.claimTimeoutMs)
     signal.addEventListener('abort', onAbort, { once: true })
     this.#pending.set(assignmentId, pending)
-    for (const session of this.#sessions.values()) session.wake?.()
+    for (const session of this.#sessions.values()) wakeSession(session)
     return deferred.promise
   }
 
@@ -365,7 +373,7 @@ export class RunnerHub implements OnApplicationShutdown {
     live.commands.set(command.commandId, open)
     options.signal?.addEventListener('abort', onAbort, { once: true })
     session.queue.push(command)
-    session.wake?.()
+    wakeSession(session)
     return deferred.promise
   }
 
@@ -382,7 +390,7 @@ export class RunnerHub implements OnApplicationShutdown {
     })
     live.answered.add(command.commandId)
     session.queue.push(command)
-    session.wake?.()
+    wakeSession(session)
   }
 
   /**
@@ -453,18 +461,16 @@ export class RunnerHub implements OnApplicationShutdown {
     session.lastSeen = performance.now()
     session.polling += 1
     const generation = ++session.generation
-    session.wake?.()
+    wakeSession(session)
     const active = new Set(request.active.map((entry) => entry.assignmentId))
     this.#missed(session, active)
-    await this.deps.assignments
-      .seen({ runnerId, runnerSession: session.id, ids: [...active] })
-      .catch((error: unknown) => this.#warn('runner heartbeat', logged(error)))
     const deadline = performance.now() + runnerTimings.pollHoldMs
     const over = () =>
       session.gone || this.#closed || signal.aborted || session.generation !== generation
     try {
       for (;;) {
         if (over()) return { commands: [] }
+        const woken = session.woken
         await this.#claim(session, request.capacity, active)
         // Closed while the claim ran: a prepare it queued waits for the next poll, undispatched.
         if (over()) return { commands: [] }
@@ -472,6 +478,8 @@ export class RunnerHub implements OnApplicationShutdown {
         if (commands.length > 0) return { commands }
         const remaining = deadline - performance.now()
         if (remaining <= 0) return { commands: [] }
+        // A turn began to wait while the claim ran: claim again instead of sleeping.
+        if (session.woken !== woken) continue
         await new Promise<void>((resolve) => {
           const wake = () => {
             clearTimeout(timer)
@@ -835,6 +843,7 @@ export class RunnerHub implements OnApplicationShutdown {
       inventoryAt: performance.now(),
       queue: [],
       wake: undefined,
+      woken: 0,
       gone: false,
     }
     this.#sessions.set(runnerId, session)
@@ -866,7 +875,7 @@ export class RunnerHub implements OnApplicationShutdown {
     if (session.gone) return
     session.gone = true
     session.queue.length = 0
-    session.wake?.()
+    wakeSession(session)
     for (const live of this.#live.values()) {
       if (live.runner.id !== session.runnerId || live.runner.session !== session.id) continue
       for (const open of live.commands.values()) this.#reject(open, error)

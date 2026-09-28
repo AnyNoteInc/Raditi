@@ -605,8 +605,6 @@ model TurnAssignment {
   /// A uuid per runner process start: a restarted runner is a new session.
   runnerSession    String?                @map("runner_session") @db.Uuid
   claimedAt        DateTime?              @map("claimed_at") @db.Timestamptz(6)
-  /// Last poll of the runner session that listed the assignment as active.
-  runnerSeenAt     DateTime?              @map("runner_seen_at") @db.Timestamptz(6)
   containerId      String?                @map("container_id") @db.VarChar(200)
   recoveryAttempts Int                    @default(0) @map("recovery_attempts")
   outcome          TurnAssignmentOutcome?

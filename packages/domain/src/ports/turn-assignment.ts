@@ -66,8 +66,6 @@ export interface TurnAssignmentStore {
   abandon(id: string, outcome?: TurnAssignmentOutcome): Promise<boolean>
   /** The turn's container, once; false for another container or a stale epoch. */
   recordContainer(input: { id: string; epoch: number; containerId: string }): Promise<boolean>
-  /** A poll of the runner session listed these assignments as active. */
-  seen(input: { runnerId: string; runnerSession: string; ids: readonly string[] }): Promise<void>
   /**
    * Recovery takes the turn over: the site lease held for recovery at the assignment's epoch
    * (`fence`) is reclaimed under the next one for `ttlMs`, and the assignment moves there — both
@@ -93,6 +91,9 @@ export interface TurnAssignmentStore {
    * with the turn's owner. Returns how many were freed.
    */
   freeOrphanedHolds(): Promise<number>
-  /** Oldest first; for recovery and a runner's reconcile. */
+  /**
+   * Every unfinished assignment, oldest first: for recovery and a runner's reconcile, which would
+   * take an owner left out for none.
+   */
   unfinished(filter?: { runnerId?: string }): Promise<TurnAssignment[]>
 }

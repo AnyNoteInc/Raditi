@@ -41,6 +41,44 @@ describe('RunnerHub long poll', () => {
     await waiting
   })
 
+  it('claims a turn that began to wait while its claim ran, instead of sleeping out its hold', async () => {
+    const assignments = new MemoryTurnAssignments()
+    const claiming = Promise.withResolvers<void>()
+    const released = Promise.withResolvers<void>()
+    let calls = 0
+    vi.spyOn(assignments, 'claim').mockImplementation(async (input) => {
+      calls += 1
+      if (calls > 1) return input.ids.map((id) => ({ id }) as TurnAssignment)
+      // The first claim takes nothing: another runner won the turn it offered.
+      claiming.resolve()
+      await released.promise
+      return []
+    })
+    const hub = new RunnerHub({
+      assignments,
+      leases: { assert: vi.fn(async () => true) },
+      logger: { warn: vi.fn() },
+    })
+    const first = hub.awaitClaim(randomUUID(), new AbortController().signal).catch(() => {})
+    const runnerSession = randomUUID()
+    const connection = new AbortController()
+    const polled = hub.poll(
+      'sandbox-1',
+      { runnerSession, capacity: 2, inventory: [], active: [] },
+      connection.signal,
+    )
+    await claiming.promise
+    const late = hub.awaitClaim(randomUUID(), new AbortController().signal)
+    released.resolve()
+
+    const timeout = new Promise((resolve) => setTimeout(() => resolve('slept'), 1_000))
+    expect(await Promise.race([late, timeout])).toEqual({ id: 'sandbox-1', session: runnerSession })
+    connection.abort()
+    await polled
+    hub.close()
+    await first
+  })
+
   it('offers the store only as many waiting turns as it takes, oldest first', async () => {
     const assignments = new MemoryTurnAssignments()
     const offered: string[][] = []

@@ -21,7 +21,6 @@ export type TakeOverLeases = {
 
 export class MemoryTurnAssignments implements TurnAssignmentStore {
   readonly rows = new Map<string, TurnAssignment>()
-  readonly seenAt = new Map<string, number>()
 
   constructor(private readonly leases?: TakeOverLeases) {}
 
@@ -89,18 +88,6 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
     if (row.containerId !== null && row.containerId !== input.containerId) return false
     row.containerId = input.containerId
     return true
-  }
-
-  async seen(input: {
-    runnerId: string
-    runnerSession: string
-    ids: readonly string[]
-  }): Promise<void> {
-    for (const id of input.ids) {
-      const row = this.rows.get(id)
-      if (row?.runner?.id === input.runnerId && row.runner.session === input.runnerSession)
-        this.seenAt.set(id, Date.now())
-    }
   }
 
   async takeOver(input: {
