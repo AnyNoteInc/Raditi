@@ -40,6 +40,8 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 
 После ротации паролей PostgreSQL — `docker compose exec postgres sh /docker-entrypoint-initdb.d/10-roles.sh`, затем перезапуск web и `core`.
 
+После ротации паролей Redis, когда vault-agent отрендерил новые `users.acl`, `health-password` и `REDIS_URL` web и `core`, — `docker compose restart redis`, затем сразу `docker compose restart web core`. Redis читает `--aclfile` только при старте, а `ACL LOAD` выполнить некому: `default` выключен, у `web`, `core` и `health` нет `@admin`. Данные сохраняет AOF. До перезапуска web и `core` входят со старым паролем и получают `WRONGPASS`, а очереди стоят, поэтому паузу между шагами держать короткой. Без отказов входа: на время ротации в `users.acl` у пользователя два хеша (`#<старый> #<новый>`) — перезапустить Redis, затем web и `core` с новым `REDIS_URL`, затем убрать старый хеш и снова перезапустить Redis.
+
 ## Первая выкладка
 
 1. **DNS и сеть.** A-записи apex и `www`, без AAAA, пока мосты Docker без IPv6. Группы безопасности — как выше.
