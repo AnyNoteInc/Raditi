@@ -7,15 +7,26 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - .github/workflows/edge.yml
       - infra/app/**
       - apps/*/Dockerfile
       - .dockerignore
+      - .nvmrc
       - apps/web/next.config.ts
       - apps/web/src/instrumentation.ts
+      - apps/web/src/env.ts
+      - apps/web/src/server/config-check.ts
+      - apps/web/src/server/web-env.ts
+      - apps/web/src/server/health.ts
+      - apps/web/src/app/api/health/**
       - pnpm-lock.yaml
       - packages/db/prisma/**
+      - packages/observability/src/**
       - apps/orchestrator/src/config/**
+      - apps/orchestrator/src/health/**
+      - apps/orchestrator/src/roles.ts
       - apps/orchestrator/src/runner-api/runner-auth.ts
+      - apps/orchestrator/src/runner-api/runner-api.server.ts
   workflow_dispatch:
     inputs:
       renewal:
@@ -49,8 +60,11 @@ jobs:
           docker image prune --all --force >/dev/null
           df -h /
 
-      - name: Setup toolchain
-        uses: ./.github/actions/setup
+      # verify-edge.mjs needs Node alone: buildx builds the images, the workspace is not installed.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
 
       # As on the app VM: DNAT keeps the client's address, so core and Traefik see the real one.
       - name: Docker without userland-proxy
@@ -102,4 +116,4 @@ jobs:
       - name: Verify the edge
         env:
           RENEWAL: ${{ inputs.renewal && '--renewal' || '' }}
-        run: pnpm verify:edge -- --no-build --real-address $RENEWAL
+        run: node infra/app/verify-edge.mjs --no-build --real-address $RENEWAL
