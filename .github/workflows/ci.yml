@@ -96,7 +96,8 @@ jobs:
         run: pnpm test -- --testTimeout=30000
 
       # Sandbox gateway allowlist, watchdog and network guard (the Docker test skips itself);
-      # the app VM compose, edge routes and Dockerfiles (the Docker CLI, no daemon).
+      # the app VM compose, edge routes and Dockerfiles (the Docker CLI, no daemon); the egress
+      # proxy and the spike's recording pass-through on a synthetic CA (openssl).
       - name: Infrastructure tests
         run: pnpm test:infra
 
