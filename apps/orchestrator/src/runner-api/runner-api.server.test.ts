@@ -351,6 +351,41 @@ describe('RunnerApiServer', () => {
     expect(await foreign.json()).toEqual({ error: 'SESSION_RETIRED' })
   })
 
+  it('puts back the commands of a poll whose connection closed before its answer', async () => {
+    const f = await start()
+    const commands = [{ commandId: randomUUID() }] as unknown as RunnerCommand[]
+    const polling = Promise.withResolvers<void>()
+    vi.spyOn(f.hub, 'poll').mockImplementationOnce(async (_runnerId, _request, signal) => {
+      polling.resolve()
+      await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
+      return { commands }
+    })
+    const requeue = vi.spyOn(f.hub, 'requeue').mockImplementation(() => {})
+    const client = new AbortController()
+    const answered = f
+      .call(runnerApiPaths.poll, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          runnerSession: f.runnerSession,
+          capacity: 1,
+          inventory: [],
+          active: [],
+        }),
+        signal: client.signal,
+      })
+      .then(
+        () => 'answered',
+        () => 'aborted',
+      )
+    await polling.promise
+    client.abort()
+    expect(await answered).toBe('aborted')
+    await vi.waitFor(() =>
+      expect(requeue).toHaveBeenCalledExactlyOnceWith('sandbox-1', f.runnerSession, commands),
+    )
+  })
+
   it('asks runners to retry while core shuts down, never tells them their turns are lost', async () => {
     const f = await start()
     const waiting = f.poll()

@@ -170,6 +170,12 @@ export class RunnerApiServer implements OnApplicationShutdown {
       const aborted = new AbortController()
       response.once('close', () => aborted.abort())
       const answer = await this.hub.poll(runnerId, poll, aborted.signal)
+      // Closed already: its `close` fired before the listener below, and nothing reaches the runner.
+      if (aborted.signal.aborted) {
+        if (answer.commands.length > 0)
+          this.hub.requeue(runnerId, poll.runnerSession, answer.commands)
+        return
+      }
       let delivered = false
       response.once('finish', () => {
         delivered = true

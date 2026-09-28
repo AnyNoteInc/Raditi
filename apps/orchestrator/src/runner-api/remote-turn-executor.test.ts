@@ -248,6 +248,44 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(f.dispatched).not.toHaveBeenCalled()
   })
 
+  it('keeps a prepare undispatched when the poll that claimed it closed meanwhile', async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const preparing = f.executor.prepare(f.input(assignment.id), new AbortController().signal)
+    const claim = f.assignments.claim.bind(f.assignments)
+    const claiming = Promise.withResolvers<void>()
+    const answer = Promise.withResolvers<void>()
+    vi.spyOn(f.assignments, 'claim').mockImplementationOnce(async (input) => {
+      claiming.resolve()
+      await answer.promise
+      return claim(input)
+    })
+    const connection = new AbortController()
+    const polled = f.hub.poll(
+      'sandbox-1',
+      { runnerSession: vm.runnerSession, capacity: 1, inventory: [], active: [] },
+      connection.signal,
+    )
+    await claiming.promise
+    // The runner's connection breaks while the claim query is out; then the claim commits.
+    connection.abort()
+    answer.resolve()
+
+    expect(await polled).toEqual({ commands: [] })
+    expect(f.dispatched).not.toHaveBeenCalled()
+    // Still queued: the next poll of the session takes it, and only then has it left core.
+    const [command] = await vm.poll()
+    expect(command).toMatchObject({ type: 'prepare', assignmentId: assignment.id })
+    expect(f.dispatched).toHaveBeenCalledOnce()
+    await vm.report(assignment.id, {
+      type: 'prepared',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    await preparing
+  })
+
   it('stops waiting for a runner when the turn is given up', async () => {
     const f = fixture()
     const assignment = await f.open()

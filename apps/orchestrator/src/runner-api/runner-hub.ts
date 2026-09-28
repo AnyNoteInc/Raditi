@@ -449,11 +449,14 @@ export class RunnerHub implements OnApplicationShutdown {
       .seen({ runnerId, runnerSession: session.id, ids: [...active] })
       .catch((error: unknown) => this.#warn('runner heartbeat', logged(error)))
     const deadline = performance.now() + runnerTimings.pollHoldMs
+    const over = () =>
+      session.gone || this.#closed || signal.aborted || session.generation !== generation
     try {
       for (;;) {
-        if (session.gone || this.#closed || signal.aborted || session.generation !== generation)
-          return { commands: [] }
+        if (over()) return { commands: [] }
         await this.#claim(session, request.capacity, active)
+        // Closed while the claim ran: a prepare it queued waits for the next poll, undispatched.
+        if (over()) return { commands: [] }
         const commands = this.#deliver(session)
         if (commands.length > 0) return { commands }
         const remaining = deadline - performance.now()
