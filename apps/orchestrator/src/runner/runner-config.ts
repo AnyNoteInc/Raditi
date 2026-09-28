@@ -18,8 +18,8 @@ export interface RunnerConfig {
   /** RUNNER_CORE_CA_FILE: a private CA, only for an https:// core. */
   caFile: string | null
   /**
-   * RUNNER_S3_ORIGIN: the only origin of presigned URLs the runner follows, https:// in
-   * production; null (no pin) only outside production.
+   * RUNNER_S3_ORIGIN: the only origin of presigned URLs the runner follows, with the sessions
+   * bucket as its path for path-style S3; https:// in production, null (no pin) only outside it.
    */
   s3Origin: string | null
   /** RUNNER_MAX_TURNS: turns at once; one until several runners are supported (stage 2). */

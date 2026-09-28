@@ -218,7 +218,10 @@ async function startRunner() {
     ORCHESTRATOR_ROLES: 'runner',
     RUNNER_CORE_URL: `http://${hostAddress}:${port}`,
     RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
-    RUNNER_S3_ORIGIN: new URL(s3RunnerEndpoint).origin,
+    // Path-style S3 (SeaweedFS) shares its host between buckets: the pin names the sessions one.
+    RUNNER_S3_ORIGIN:
+      new URL(s3RunnerEndpoint).origin +
+      (storageConfig.forcePathStyle ? `/${storageConfig.buckets.sessions}` : ''),
     RUNNER_MAX_TURNS: '1',
     SANDBOX_RUNTIME: 'runsc',
     SANDBOX_DOCKER_SOCKET: '/var/run/docker.sock',

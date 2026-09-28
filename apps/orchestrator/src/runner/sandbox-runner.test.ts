@@ -778,21 +778,27 @@ describe('SandboxRunner snapshot parts', () => {
       keys.push(key)
       return key
     })
-    startRunner(core.transport, side.executor, { s3Origin: 'https://s3.invalid' })
+    // Path-style: the pin names the sessions bucket of the shared host.
+    startRunner(core.transport, side.executor, { s3Origin: 'https://s3.invalid/raditi-sessions' })
 
     const foreign = structuredClone(prior.restore)
     foreign.parts.home.url = foreign.parts.home.url.replace('/turns/0001/', '/turns/0002/')
-    // The same object at another origin: a forged core's own store.
+    // The same object at another origin, or in another bucket of the same host: a forged core's.
     const elsewhere = structuredClone(prior.restore)
     elsewhere.parts.untracked.url = elsewhere.parts.untracked.url.replace(
       'https://s3.invalid/',
       'https://s3.invalid.example/',
     )
+    const otherBucket = structuredClone(prior.restore)
+    otherBucket.parts.patch.url = otherBucket.parts.patch.url.replace('/raditi-sessions/', '/evil/')
     await core.send(secondTurn(foreign))
     await vi.waitFor(() => expect(core.types()).toEqual(['failed']))
     await core.send(secondTurn(elsewhere))
     await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'failed']))
+    await core.send(secondTurn(otherBucket))
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'failed', 'failed']))
     expect(core.reports).toMatchObject([
+      { code: 'SNAPSHOT_LOAD_FAILED' },
       { code: 'SNAPSHOT_LOAD_FAILED' },
       { code: 'SNAPSHOT_LOAD_FAILED' },
     ])
@@ -802,7 +808,7 @@ describe('SandboxRunner snapshot parts', () => {
 
     await core.send(secondTurn(prior.restore))
     await vi.waitFor(() =>
-      expect(core.types()).toEqual(['failed', 'failed', 'created', 'prepared']),
+      expect(core.types()).toEqual(['failed', 'failed', 'failed', 'created', 'prepared']),
     )
     expect(side.snapshot.restore).toHaveBeenCalledWith(side.sandbox, home, expect.anything())
     expect(side.transfer.get).toHaveBeenCalledTimes(3)
@@ -828,7 +834,7 @@ describe('SandboxRunner snapshot parts', () => {
       return key
     })
     const { lines } = startRunner(core.transport, side.executor, {
-      s3Origin: 'https://s3.invalid',
+      s3Origin: 'https://s3.invalid/raditi-sessions',
     })
     await core.send(prepareCommand())
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
@@ -856,7 +862,11 @@ describe('SandboxRunner snapshot parts', () => {
     await vi.waitFor(() => expect(core.types()).toHaveLength(4))
     await core.send(seal('0001', url('0001').replace('//s3.invalid/', '//s3.invalid:8443/')))
     await vi.waitFor(() => expect(core.types()).toHaveLength(5))
+    // Another bucket of the same path-style host.
+    await core.send(seal('0001', url('0001').replace('/raditi-sessions/', '/evil/')))
+    await vi.waitFor(() => expect(core.types()).toHaveLength(6))
     expect(core.reports.slice(3)).toMatchObject([
+      { type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' },
       { type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' },
       { type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' },
     ])
@@ -864,11 +874,11 @@ describe('SandboxRunner snapshot parts', () => {
     expect(side.transfer.put).not.toHaveBeenCalled()
 
     await core.send(seal('0001'))
-    await vi.waitFor(() => expect(core.types()).toHaveLength(6))
-    expect(core.reports[5]).toMatchObject({ type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' })
-    await core.send(seal('0001'))
     await vi.waitFor(() => expect(core.types()).toHaveLength(7))
-    expect(core.reports[6]).toMatchObject({
+    expect(core.reports[6]).toMatchObject({ type: 'failed', code: 'SNAPSHOT_SAVE_FAILED' })
+    await core.send(seal('0001'))
+    await vi.waitFor(() => expect(core.types()).toHaveLength(8))
+    expect(core.reports[7]).toMatchObject({
       type: 'sealed',
       sizeBytes: side.archives.home.byteLength,
     })
@@ -903,5 +913,25 @@ describe('isTurnSnapshotUrl', () => {
       expect(isTurnSnapshotUrl(url, 'session1', 1, 'home', pinned)).toBe(false)
     expect(isTurnSnapshotUrl(`${pinned}/${key}`, 'session1', 1, 'patch', pinned)).toBe(false)
     expect(isTurnSnapshotUrl(`${pinned}/${key}`, 'session1', 2, 'home', pinned)).toBe(false)
+    // Only the exact object: nothing before the key.
+    expect(isTurnSnapshotUrl(`${pinned}/x/${key}`, 'session1', 1, 'home', pinned)).toBe(false)
+  })
+
+  it('pins the sessions bucket of a path-style host that other buckets share', () => {
+    const pinned = 'https://storage.yandexcloud.net/raditi-sessions'
+    const host = 'https://storage.yandexcloud.net'
+    expect(
+      isTurnSnapshotUrl(`${pinned}/${key}?X-Amz-Signature=s`, 'session1', 1, 'home', pinned),
+    ).toBe(true)
+    for (const url of [
+      `${host}/evil/${key}`,
+      `${host}/raditi-sessions/x/${key}`,
+      `${host}/raditi-sessions-evil/${key}`,
+      `${host}/evil/raditi-sessions/${key}`,
+      `${host}/raditi-sessions%2F${key}`,
+      `${host}/${key}`,
+      `https://raditi-sessions.storage.yandexcloud.net/${key}`,
+    ])
+      expect(isTurnSnapshotUrl(url, 'session1', 1, 'home', pinned)).toBe(false)
   })
 })

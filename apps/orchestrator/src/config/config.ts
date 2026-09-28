@@ -239,12 +239,15 @@ export function loadConfig(env: Env): OrchestratorConfig {
       if (production) problems.push('RUNNER_S3_ORIGIN: required for the runner role in production')
     } else {
       const s3 = new URL(own.RUNNER_S3_ORIGIN)
-      if (!isOrigin(s3))
-        problems.push('RUNNER_S3_ORIGIN: expected an origin (no path, credentials or query)')
+      // Path-style S3 shares one host between buckets: the pin names the sessions bucket too.
+      if (!isOrigin(s3, { bucket: true }))
+        problems.push(
+          'RUNNER_S3_ORIGIN: expected an origin, with the sessions bucket for path-style S3 (no credentials or query)',
+        )
       // The cloud's S3 is outside the private network: presigned URLs go there over TLS only.
       else if (production && s3.protocol !== 'https:')
         problems.push('RUNNER_S3_ORIGIN: must use https in production')
-      s3Origin = s3.origin
+      s3Origin = s3.origin + s3.pathname.replace(/\/$/, '')
     }
     if (own.RUNNER_TOKEN_FILE === undefined)
       problems.push(
@@ -322,8 +325,14 @@ export function loadConfig(env: Env): OrchestratorConfig {
   }
 }
 
-const isOrigin = (url: URL) =>
-  !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash
+/** An origin; with `bucket`, optionally followed by one S3 bucket name as its path. */
+const isOrigin = (url: URL, { bucket = false } = {}) =>
+  !url.username &&
+  !url.password &&
+  (url.pathname === '/' ||
+    (bucket && /^\/[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]\/?$/.test(url.pathname))) &&
+  !url.search &&
+  !url.hash
 
 /** Every missing section was reported above, so this only narrows the type. */
 function present<T>(value: T | undefined): T {

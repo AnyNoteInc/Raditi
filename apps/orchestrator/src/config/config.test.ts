@@ -488,14 +488,23 @@ describe('loadConfig — production', () => {
       expect(problemsOf(runnerEnv({ ...plainCore, RUNNER_S3_ORIGIN: origin }))).toEqual([
         'RUNNER_S3_ORIGIN: must use https in production',
       ])
-    for (const origin of [
+    // Path-style S3 shares its host between buckets: the pin names the sessions bucket.
+    for (const pin of [
       'https://storage.yandexcloud.net/raditi-sessions',
+      'https://storage.yandexcloud.net/raditi-sessions/',
+    ])
+      expect(loadConfig(runnerEnv({ RUNNER_S3_ORIGIN: pin })).runner?.s3Origin).toBe(
+        'https://storage.yandexcloud.net/raditi-sessions',
+      )
+    for (const origin of [
+      'https://storage.yandexcloud.net/raditi-sessions/sessions',
+      'https://storage.yandexcloud.net/Raditi_Sessions',
       'https://key:secret@storage.yandexcloud.net',
       'https://storage.yandexcloud.net/?X-Amz-Signature=secret',
     ]) {
       const problems = problemsOf(runnerEnv({ RUNNER_S3_ORIGIN: origin }))
       expect(problems).toEqual([
-        'RUNNER_S3_ORIGIN: expected an origin (no path, credentials or query)',
+        'RUNNER_S3_ORIGIN: expected an origin, with the sessions bucket for path-style S3 (no credentials or query)',
       ])
       expect(problems.join('\n')).not.toContain('secret')
     }

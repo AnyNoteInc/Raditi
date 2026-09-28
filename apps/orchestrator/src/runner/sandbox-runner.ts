@@ -65,7 +65,10 @@ export interface SandboxRunnerDependencies {
   executor: TurnExecutor
   /** RUNNER_MAX_TURNS. */
   maxTurns: number
-  /** RUNNER_S3_ORIGIN: presigned URLs of any other origin are refused; unset outside production. */
+  /**
+   * RUNNER_S3_ORIGIN: presigned URLs of any other origin, or of another bucket of a path-style
+   * host, are refused; unset outside production.
+   */
   s3Origin?: string
   /** Core retired this session (a newer one of this runner polls): restart under a new one. */
   onRetired?: () => void
@@ -144,26 +147,38 @@ const passes = {
 } satisfies Record<string, RunnerFailureCode[]>
 
 /**
- * The URL names exactly this object of this turn: `sessions/<sid>/turns/<NNNN>/<part>`, at the
- * platform's S3 when `origin` pins it. Core signs only such URLs; the runner refuses anything
- * else before a byte moves, so even a forged core cannot send a turn's home elsewhere.
+ * The URL names exactly this object of this turn: `sessions/<sid>/turns/<NNNN>/<part>`. With a
+ * `pin` (RUNNER_S3_ORIGIN: an origin, plus the sessions bucket for path-style S3) it is that
+ * object's exact path there, so another bucket of a shared host does not pass. Core signs only
+ * such URLs; the runner refuses anything else before a byte moves, so even a forged core cannot
+ * send a turn's home elsewhere.
  */
 export function isTurnSnapshotUrl(
   url: string,
   sessionId: string,
   turn: number,
   part: SnapshotPartName,
-  origin?: string,
+  pin?: string,
 ): boolean {
   const parsed = URL.parse(url)
-  if (!parsed || (origin !== undefined && parsed.origin !== origin)) return false
+  if (!parsed) return false
+  const key = `${turnSnapshotPrefix(sessionId, turn)}${snapshotPartFiles[part]}`
+  if (pin !== undefined) {
+    const base = URL.parse(pin)
+    // The key has no character a signer encodes: the path is compared as sent.
+    return (
+      base !== null &&
+      parsed.origin === base.origin &&
+      parsed.pathname === `${base.pathname.replace(/\/$/, '')}/${key}`
+    )
+  }
   let path: string
   try {
     path = decodeURIComponent(parsed.pathname)
   } catch {
     return false
   }
-  return path.endsWith(`/${turnSnapshotPrefix(sessionId, turn)}${snapshotPartFiles[part]}`)
+  return path.endsWith(`/${key}`)
 }
 
 /** The labelled turn containers of this VM as a poll or reconcile reports them. */
