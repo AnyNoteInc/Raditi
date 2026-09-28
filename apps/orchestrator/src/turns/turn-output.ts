@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 
 import {
   agentEventSchema,
+  agentOutputLimits,
   turnOutputRejected,
   turnOutputTooLarge,
   type AgentDriver,
@@ -12,7 +13,6 @@ import {
 
 const MAX_BYTES = 32 * 1024 * 1024
 const MAX_LINE_BYTES = 256 * 1024
-const MAX_EVENTS = 10_000
 const MAX_CHUNKS = 100_000
 
 /** Where reading starts: a re-attached exec continues from the journal's cursor and count. */
@@ -62,7 +62,7 @@ export async function readTurnOutput(
       return checked.data
     })
     if (containsSecret(parsed)) throw turnOutputRejected('Agent output contains a turn credential')
-    if (start.eventCount + events.length + parsed.length > MAX_EVENTS)
+    if (start.eventCount + events.length + parsed.length > agentOutputLimits.turnEvents)
       throw turnOutputTooLarge('Agent event limit exceeded')
     events.push(...parsed)
     return parsed

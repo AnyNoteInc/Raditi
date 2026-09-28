@@ -255,6 +255,8 @@ export const agentOutputLimits = Object.freeze({
   filesChanged: 500,
   questions: 5,
   question: 500,
+  /** Events of one turn across reconnects, on both executors. */
+  turnEvents: 10_000,
 })
 const limits = agentOutputLimits
 

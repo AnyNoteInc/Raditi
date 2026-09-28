@@ -1,4 +1,10 @@
-import { DomainError, leaseLost, type AgentEvent, type TurnOutputBatch } from '@repo/domain'
+import {
+  DomainError,
+  leaseLost,
+  runnerLimits,
+  type AgentEvent,
+  type TurnOutputBatch,
+} from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ExecStream } from './exec-stream.ts'
@@ -60,7 +66,7 @@ describe('ExecStream', () => {
 
   it('waits for the supervisor to read and resumes from a journal cursor', async () => {
     const stream = new ExecStream(
-      { execId: 'exec1', cursor: { stdout: 40, stderr: 3 }, eventCount: 9_999 },
+      { execId: 'exec1', cursor: { stdout: 40, stderr: 3 }, eventCount: runnerLimits.events - 1 },
       [],
     )
     const delivered = stream.deliver({

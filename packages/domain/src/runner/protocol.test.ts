@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { isDomainError, isTooLarge } from '../errors.ts'
-import { preparedRunLimits } from '../ports/agent-driver.ts'
+import { agentOutputLimits, preparedRunLimits } from '../ports/agent-driver.ts'
 import { SANDBOX_SECRETS_DIR } from '../ports/sandbox-provider.ts'
 import { isSnapshotCredential } from '../ports/turn-runner.ts'
 import {
@@ -313,6 +313,23 @@ describe('runner credentials', () => {
       expect(runnerCommandSchema.safeParse({ ...full, credentials: values }).success).toBe(false)
       expect(runnerCommandSchema.safeParse(adopt(values)).success).toBe(false)
     }
+  })
+})
+
+describe('runner events of a turn', () => {
+  it('are bounded by the per-turn limit both executors apply', () => {
+    expect(runnerLimits.events).toBe(agentOutputLimits.turnEvents)
+    const resume = (eventCount: number) => ({
+      ...envelope,
+      type: 'resume',
+      execId: 'exec-1',
+      cursor: { stdout: 0, stderr: 0 },
+      eventCount,
+    })
+    expect(runnerCommandSchema.safeParse(resume(agentOutputLimits.turnEvents)).success).toBe(true)
+    expect(runnerCommandSchema.safeParse(resume(agentOutputLimits.turnEvents + 1)).success).toBe(
+      false,
+    )
   })
 })
 

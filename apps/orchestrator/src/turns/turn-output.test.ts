@@ -1,6 +1,12 @@
 import { Buffer } from 'node:buffer'
 
-import type { AgentDriver, AgentEvent, ExecChunk, ExecHandle } from '@repo/domain'
+import {
+  agentOutputLimits,
+  type AgentDriver,
+  type AgentEvent,
+  type ExecChunk,
+  type ExecHandle,
+} from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
 import { readTurnOutput } from './turn-output.ts'
@@ -121,7 +127,9 @@ describe('bounded turn output', () => {
         () => {},
       ),
     ).rejects.toMatchObject(tooLarge)
-    const many = Buffer.from(`${JSON.stringify({ type: 'completed' })}\n`.repeat(10_001))
+    const many = Buffer.from(
+      `${JSON.stringify({ type: 'completed' })}\n`.repeat(agentOutputLimits.turnEvents + 1),
+    )
     await expect(
       readTurnOutput(
         handle([{ stream: 'stdout', offset: 0, data: many }]),
@@ -171,7 +179,7 @@ describe('bounded turn output', () => {
         vi.fn(async () => {}),
         () => {},
         [],
-        { cursor: { stdout: 0, stderr: 0 }, eventCount: 9_999 },
+        { cursor: { stdout: 0, stderr: 0 }, eventCount: agentOutputLimits.turnEvents - 1 },
       ),
     ).rejects.toMatchObject({ ...tooLarge, message: 'Agent event limit exceeded' })
   })

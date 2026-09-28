@@ -26,6 +26,7 @@ import {
 import {
   agentDriverIds,
   agentEventSchema,
+  agentOutputLimits,
   preparedFilesSchema,
   preparedRunLimits,
 } from '../ports/agent-driver.ts'
@@ -90,7 +91,7 @@ export const runnerLimits = Object.freeze({
   inventory: 256,
   /** turnCredentials(): the LLM key, the MCP token and every secret file. */
   credentials: preparedRunLimits.secretFiles + 2,
-  events: 10_000,
+  events: agentOutputLimits.turnEvents,
 })
 
 // --- Runner identity ---------------------------------------------------------------------------

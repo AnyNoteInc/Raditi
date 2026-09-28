@@ -6,7 +6,12 @@ import {
   type PublicationMetadata,
   type PublicationSource,
 } from '../git/publication.ts'
-import { agentEventSchema, nativeSessionIdSchema, turnResultSchema } from './agent-driver.ts'
+import {
+  agentEventSchema,
+  agentOutputLimits,
+  nativeSessionIdSchema,
+  turnResultSchema,
+} from './agent-driver.ts'
 import { execCursorSchema } from './sandbox-provider.ts'
 
 export const siteLeaseOperations = ['turn', 'deploy', 'revert'] as const
@@ -208,7 +213,7 @@ export const turnEvidenceSchema = z
     containerId: evidenceTextId.optional(),
     execId: evidenceTextId.optional(),
     cursor: execCursorSchema.optional(),
-    events: z.array(agentEventSchema).max(10_000).optional(),
+    events: z.array(agentEventSchema).max(agentOutputLimits.turnEvents).optional(),
     snapshotPrefix: z
       .string()
       .max(256)
