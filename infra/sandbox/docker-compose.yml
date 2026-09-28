@@ -59,9 +59,10 @@ services:
     volumes:
       - ${SANDBOX_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       - /etc/raditi:/etc/raditi:ro
+    # The only trail on this VM of the turns it ran: journald on the host outlives a container
+    # recreated for a new RUNNER_IMAGE (retention as on the app VM). The watchdog keeps the local
+    # driver: it also runs on Docker Desktop in the dev check.
     logging:
-      driver: local
+      driver: journald
       options:
-        max-size: 10m
-        max-file: '3'
-        compress: 'false'
+        tag: '{{.Name}}'

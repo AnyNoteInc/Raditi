@@ -28,3 +28,11 @@ test('the runner opens no port and gets no platform credentials, only its read-o
   // Only on request, so that the watchdog alone still starts without a runner image.
   assert.match(runner, /profiles: \[runner\]/)
 })
+
+test("the runner's logs go to journald on the host: they outlive a recreated container", () => {
+  const runner = service('runner')
+  assert.match(
+    runner,
+    /^ {4}logging:\n {6}driver: journald\n {6}options:\n {8}tag: '\{\{\.Name\}\}'$/m,
+  )
+})
