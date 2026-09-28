@@ -106,10 +106,11 @@ export interface SiteLeaseStore {
   assert(fence: SiteLeaseFence): Promise<boolean>
   release(fence: SiteLeaseFence): Promise<boolean>
   inspect(siteId: string): Promise<SiteLeaseAuthority | null>
-  /** Preserve an ambiguous write for reconciliation; never clear it on a timeout alone. */
+  /**
+   * Preserve an ambiguous write for reconciliation; never clear it on a timeout alone. Recovery
+   * moves a held epoch on only with its assignment (TurnAssignmentStore.takeOver).
+   */
   holdForRecovery(fence: SiteLeaseFence): Promise<boolean>
-  /** Explicit recovery only: a held exact epoch becomes a new fenced owner. */
-  reclaimForRecovery(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null>
   /**
    * Recovery only, with proof that the turn's container is gone or its deadline passed: frees the
    * exact epoch, held or expired alike, in one statement. false when another owner has the site.

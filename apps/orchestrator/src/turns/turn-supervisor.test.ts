@@ -236,7 +236,8 @@ function turnFixture(kind: string) {
       return true
     }),
     inspect: vi.fn(async () => null),
-    reclaimForRecovery: vi.fn(async (_fence: SiteLeaseFence, ttlMs: number) => ({
+    // The lease half of MemoryTurnAssignments.takeOver, not part of the port.
+    takeOverHeld: vi.fn(async (_fence: SiteLeaseFence, ttlMs: number) => ({
       ...grant(ttlMs),
       epoch: 2,
     })),
@@ -1661,6 +1662,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
       input,
       loaded,
       assignment,
+      takeOver: vi.spyOn(f.assignments, 'takeOver'),
       recover: () => new TurnPublicationRecovery(f.deps).recover(input),
     }
   }
@@ -1672,9 +1674,11 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     ])
     f.sandboxes.getForRemoval.mockResolvedValue(f.sandbox)
     await expect(f.recover()).resolves.toMatchObject({ headSha })
-    expect(f.leases.reclaimForRecovery).toHaveBeenCalledWith(
-      f.lease,
-      RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS,
+    expect(f.takeOver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fence: f.lease,
+        ttlMs: RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS,
+      }),
     )
     expect(f.order.indexOf('destroy')).toBeGreaterThan(-1)
     expect(f.order.indexOf('destroy')).toBeLessThan(f.order.indexOf('publish'))
@@ -1715,9 +1719,8 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
       f.input.removal = 'adopt'
       f.input.remainingMs = remainingMs
       await expect(f.recover()).resolves.toMatchObject({ headSha })
-      expect(f.leases.reclaimForRecovery).toHaveBeenCalledWith(
-        f.lease,
-        covered + TURN_PUBLICATION_GRACE_MS,
+      expect(f.takeOver).toHaveBeenCalledWith(
+        expect.objectContaining({ fence: f.lease, ttlMs: covered + TURN_PUBLICATION_GRACE_MS }),
       )
     },
   )
@@ -1756,18 +1759,18 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
       f,
       () => f.recover(),
       RECOVERY_TIMEOUT_MS,
-      () => f.leases.reclaimForRecovery.mock.calls[0]![1],
+      () => f.takeOver.mock.calls[0]![0].ttlMs,
     )
   })
 
   it('keeps the same recovery push margin when the reclaim arrives 40 seconds late', async () => {
     const f = await recoveryFixture()
-    delayGrant(f.leases.reclaimForRecovery, 40_000)
+    delayGrant(f.leases.takeOverHeld, 40_000)
     await expectLeaseCoversLatePush(
       f,
       () => f.recover(),
       RECOVERY_TIMEOUT_MS,
-      () => f.leases.reclaimForRecovery.mock.calls[0]![1],
+      () => f.takeOver.mock.calls[0]![0].ttlMs,
     )
   })
 
@@ -1775,7 +1778,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     const f = await recoveryFixture()
     f.snapshots.load.mockRejectedValue(new Error('manifest missing'))
     await expect(f.recover()).rejects.toThrow('manifest missing')
-    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
+    expect(f.takeOver).not.toHaveBeenCalled()
     expect(f.publication.publish).not.toHaveBeenCalled()
   })
 
@@ -1789,7 +1792,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     f.snapshots.load.mockRejectedValue(error)
     const refused = await f.recover().catch((caught: unknown) => caught)
     expect(isMissingCheckpoint(refused)).toBe(missing)
-    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
+    expect(f.takeOver).not.toHaveBeenCalled()
   })
 
   it('refuses a checkpoint of another publication as missing', async () => {
@@ -1797,7 +1800,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     f.loaded.manifest.git.branch = 'agent/another'
     const refused = await f.recover().catch((caught: unknown) => caught)
     expect(isMissingCheckpoint(refused)).toBe(true)
-    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
+    expect(f.takeOver).not.toHaveBeenCalled()
   })
 
   it('requires explicit protected paths before reading the snapshot or reclaiming', async () => {
@@ -1805,7 +1808,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     delete (f.input.workspace as { protectedPaths?: string[] }).protectedPaths
     await expect(f.recover()).rejects.toThrow('recovery source')
     expect(f.snapshots.load).toHaveBeenCalledTimes(1)
-    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
+    expect(f.takeOver).not.toHaveBeenCalled()
   })
 
   it('takes nothing over and publishes nothing when the assignment moved on', async () => {
@@ -1814,13 +1817,13 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     await expect(f.recover()).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(f.publication.publish).not.toHaveBeenCalled()
     // The lease stays held where it was: no newer epoch exists that nothing points at.
-    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
+    await expect(f.takeOver.mock.results[0]!.value).resolves.toBeNull()
     expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
   })
 
   it('requires the exact deliberately held fence', async () => {
     const f = await recoveryFixture()
-    f.leases.reclaimForRecovery.mockResolvedValueOnce(null as never)
+    f.takeOver.mockResolvedValueOnce(null)
     await expect(f.recover()).rejects.toThrow('held lease')
     expect(f.workspace.preparePublication).not.toHaveBeenCalled()
   })

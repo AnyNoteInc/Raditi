@@ -1,7 +1,7 @@
 // In-memory TurnAssignmentStore for *.test.ts files: the rules of the PostgreSQL store (one
 // unfinished assignment per turn, claims of unclaimed runner turns, epoch-conditional writes)
 // without the site lease check of `open`, which packages/db tests against PostgreSQL. A takeover
-// reclaims and the sweep of orphaned holds frees through the site lease store it is given.
+// moves the held lease on and the sweep of orphaned holds frees through the lease store it is given.
 import { randomUUID } from 'node:crypto'
 
 import type {
@@ -14,14 +14,16 @@ import type {
   TurnAssignmentStore,
 } from '@repo/domain'
 
+/** The site lease store of a test, with the lease half of a takeover (MemorySiteLeases). */
+export type TakeOverLeases = {
+  takeOverHeld(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null>
+} & Partial<Pick<SiteLeaseStore, 'inspect' | 'free'>>
+
 export class MemoryTurnAssignments implements TurnAssignmentStore {
   readonly rows = new Map<string, TurnAssignment>()
   readonly seenAt = new Map<string, number>()
 
-  constructor(
-    private readonly leases?: Pick<SiteLeaseStore, 'reclaimForRecovery'> &
-      Partial<Pick<SiteLeaseStore, 'inspect' | 'free'>>,
-  ) {}
+  constructor(private readonly leases?: TakeOverLeases) {}
 
   async open(input: OpenTurnAssignment): Promise<TurnAssignment | null> {
     for (const row of this.rows.values())
@@ -118,7 +120,7 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
       row.fence.epoch === input.fence.epoch &&
       (!input.runnerSession || row.runner !== null)
     if (!current()) return null
-    const grant = await this.leases.reclaimForRecovery(input.fence, input.ttlMs)
+    const grant = await this.leases.takeOverHeld(input.fence, input.ttlMs)
     if (!grant) return null
     // One statement in PostgreSQL: a test that changes the row meanwhile has a race it cannot have.
     if (!current()) throw new Error('The assignment changed during its takeover')

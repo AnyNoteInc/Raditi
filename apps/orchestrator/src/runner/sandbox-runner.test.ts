@@ -97,9 +97,9 @@ function startRunner(
   return { runner, lines }
 }
 
-/** Recovery reclaims the held lease under the next epoch; the hub only asserts fences here. */
+/** A takeover moves the held lease to the next epoch; the hub only asserts fences here. */
 const recoveryLeases = () => ({
-  reclaimForRecovery: async (held: SiteLeaseFence, ttlMs: number) => ({
+  takeOverHeld: async (held: SiteLeaseFence, ttlMs: number) => ({
     ...held,
     epoch: held.epoch + 1,
     expiresAt: new Date(Date.now() + ttlMs),

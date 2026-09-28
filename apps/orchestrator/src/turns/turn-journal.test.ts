@@ -219,7 +219,17 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       sequence: 1,
       phase: 'leased',
     }
-    return { task, leases, fence, evidence, journal: new TaskEventTurnJournal(db) }
+    /** The same task at the next epoch: a newer owner, as a recovery takeover leaves the site. */
+    const nextEpoch = async () => {
+      await leases.free(fence)
+      return (await leases.acquire({
+        siteId: site.id,
+        taskId: task.id,
+        operation: 'turn',
+        ttlMs: 60_000,
+      })) as SiteLeaseGrant
+    }
+    return { task, leases, fence, evidence, nextEpoch, journal: new TaskEventTurnJournal(db) }
   }
 
   it('persists bounded operational evidence without changing task status', async () => {
@@ -253,8 +263,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     // Another session and another turn of the same task stay out.
     await record(f.fence, { phase: 'leased', sessionId: 'other' })
     await record(f.fence, { phase: 'leased', turn: 2 })
-    await f.leases.holdForRecovery(f.fence)
-    const next = (await f.leases.reclaimForRecovery(f.fence, 60_000)) as SiteLeaseGrant
+    const next = await f.nextEpoch()
     await record(next, { phase: 'resumed', recoveredFromEpoch: 1 })
     // Many output batches: more than one page of the replay.
     await db.$executeRaw`
@@ -310,7 +319,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     })
     await f.leases.holdForRecovery(f.fence)
     await f.journal.record({ ...f.evidence, sequence: 3, phase: 'vacating', reason: 'cancelled' })
-    await f.leases.reclaimForRecovery(f.fence, 60_000)
+    await f.nextEpoch()
     await expect(
       f.journal.record({ ...f.evidence, sequence: 4, phase: 'vacating', reason: 'cancelled' }),
     ).rejects.toMatchObject({ code: 'LEASE_LOST' })

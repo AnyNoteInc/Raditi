@@ -169,27 +169,6 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
     return rows.length === 1
   }
 
-  async reclaimForRecovery(input: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null> {
-    const f = fenceSchema.parse(input)
-    const ttl = ttlSchema.parse(ttlMs)
-    return grant(
-      await this.db.$queryRaw`
-      WITH held AS MATERIALIZED (
-        SELECT site_id FROM site_leases
-        WHERE site_id = ${f.siteId}::uuid AND holder_task_id = ${f.taskId}::uuid
-          AND epoch = ${f.epoch} AND operation = ${f.operation}::"LeaseOperation"
-          AND held_for_operator AND epoch < 2147483647
-        FOR UPDATE
-      )
-      UPDATE site_leases l SET epoch = l.epoch + 1, held_for_operator = false,
-        acquired_at = clock_timestamp(), updated_at = clock_timestamp(),
-        expires_at = clock_timestamp() + ${ttl}::int * interval '1 millisecond'
-      FROM held WHERE l.site_id = held.site_id
-      RETURNING l.site_id, l.holder_task_id, l.operation, l.epoch, l.expires_at, l.held_for_operator,
-        clock_timestamp() AS server_now`,
-    )
-  }
-
   async free(input: SiteLeaseFence): Promise<boolean> {
     const f = fenceSchema.parse(input)
     // The epoch stays: every fenced write also names the holder, and the next acquire moves on.

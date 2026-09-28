@@ -131,19 +131,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL site leases', () => {
     expect(await renewed).toBeNull()
   })
 
-  it('requires an explicit held fence for recovery and advances its epoch', async () => {
-    const input = await fixture()
-    const first = (await store.acquire(input))!
-    expect(await store.reclaimForRecovery(first, 60_000)).toBeNull()
-    await store.holdForRecovery(first)
-    expect(await store.reclaimForRecovery({ ...first, epoch: first.epoch + 1 }, 60_000)).toBeNull()
-    const recovered = await store.reclaimForRecovery(first, 60_000)
-    expect(recovered?.epoch).toBe(first.epoch + 1)
-    expect(await store.assert(first)).toBe(false)
-    expect(await store.assert(recovered!)).toBe(true)
-    expect(await store.reclaimForRecovery(first, 60_000)).toBeNull()
-  })
-
   it('frees its exact epoch in one statement, held or expired, never another owner’s', async () => {
     const input = await fixture()
     const lease = (await store.acquire(input))!

@@ -1251,13 +1251,13 @@ describe('turn exec recovery of a turn given up before its container was reporte
     const w = world('local')
     const { core, created } = await vacatingWithContainer(w)
     const finish = vi.spyOn(w.assignments, 'finish')
-    const reclaim = w.leases.reclaimForRecovery.bind(w.leases)
-    vi.spyOn(w.leases, 'reclaimForRecovery').mockImplementationOnce(async (fence, ttlMs) => {
+    const takeOver = w.assignments.takeOver.bind(w.assignments)
+    vi.spyOn(w.assignments, 'takeOver').mockImplementationOnce(async (input) => {
       // Held at epoch 1: the late container is removed now, and its attempt ends meanwhile.
       created.resolve()
       await vi.waitFor(() => expect(w.journal.phases(1).at(-1)).toBe('failed'))
       await new Promise((resolve) => setTimeout(resolve, 10))
-      return reclaim(fence, ttlMs)
+      return takeOver(input)
     })
     await w.recover(core.recovery)
 

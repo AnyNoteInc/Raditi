@@ -263,7 +263,12 @@ describe('TurnAttempt given up while its prepare was out (spec §8)', () => {
     t.attempt.dispatched()
     expect(await t.attempt.settle()).toBe('vacating')
     await t.leases.holdForRecovery(t.lease)
-    await t.leases.reclaimForRecovery(t.lease, 60_000)
+    await t.assignments.takeOver({
+      id: t.attempt.assignment!.id,
+      fence: t.lease,
+      ttlMs: 60_000,
+      countAttempt: false,
+    })
     // The executor refuses the older owner's removal: the turn is recovery's now.
     t.destroy.mockRejectedValue(new Error('The turn was taken over under a newer fence'))
     await expect(t.attempt.created(t.execution)).rejects.toMatchObject({

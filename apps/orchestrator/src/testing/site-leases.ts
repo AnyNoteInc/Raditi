@@ -1,6 +1,7 @@
 // In-memory SiteLeaseStore for *.test.ts files with the rules of the PostgreSQL store (every
-// write conditional on the whole fence, holds that survive expiry, reclaim under the next epoch),
-// so recovery tests see stale owners fenced as they would be. packages/db tests the real one.
+// write conditional on the whole fence, holds that survive expiry), so recovery tests see stale
+// owners fenced as they would be. packages/db tests the real one. takeOverHeld is not part of the
+// port: it is the lease half of MemoryTurnAssignments.takeOver, one statement in PostgreSQL.
 import type {
   SiteLeaseAuthority,
   SiteLeaseFence,
@@ -76,7 +77,8 @@ export class MemorySiteLeases implements SiteLeaseStore {
     return true
   }
 
-  async reclaimForRecovery(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null> {
+  /** The held exact epoch moves on, as TurnAssignmentStore.takeOver moves it with the assignment. */
+  async takeOverHeld(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null> {
     const row = this.#owned(fence)
     if (!row?.held) return null
     Object.assign(row, { epoch: row.epoch + 1, held: false, expiresAt: Date.now() + ttlMs })
