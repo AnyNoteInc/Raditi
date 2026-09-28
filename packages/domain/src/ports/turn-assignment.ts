@@ -85,6 +85,13 @@ export interface TurnAssignmentStore {
   /** Counts a recovery attempt under the assignment's current epoch; false once it moved on. */
   countAttempt(input: { id: string; epoch: number }): Promise<boolean>
   finish(input: { id: string; epoch: number; outcome: TurnAssignmentOutcome }): Promise<boolean>
+  /**
+   * Frees every turn lease held at the epoch of a finished assignment whose task has no
+   * unfinished one on the site. An assignment is finished only once its epoch is released or not
+   * held, so such a hold is what a recovery left when it stopped between the two or lost a race
+   * with the turn's owner. Returns how many were freed.
+   */
+  freeOrphanedHolds(): Promise<number>
   /** Oldest first; for recovery and a runner's reconcile. */
   unfinished(filter?: { runnerId?: string }): Promise<TurnAssignment[]>
 }

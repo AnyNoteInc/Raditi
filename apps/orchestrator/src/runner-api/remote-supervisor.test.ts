@@ -185,6 +185,7 @@ describe('TurnSupervisor on a runner', () => {
       inspect: vi.fn(async () => null),
       holdForRecovery: vi.fn(async () => true),
       reclaimForRecovery: vi.fn(async () => null),
+      free: vi.fn(async () => true),
     }
     const hub = new RunnerHub({ assignments, leases, logger: { warn: vi.fn() } })
     hubs.push(hub)

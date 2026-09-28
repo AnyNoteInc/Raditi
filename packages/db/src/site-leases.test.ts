@@ -144,6 +144,31 @@ describe.skipIf(!databaseUrl)('PostgreSQL site leases', () => {
     expect(await store.reclaimForRecovery(first, 60_000)).toBeNull()
   })
 
+  it('frees its exact epoch in one statement, held or expired, never another owner’s', async () => {
+    const input = await fixture()
+    const lease = (await store.acquire(input))!
+    expect(await store.holdForRecovery(lease)).toBe(true)
+    await db.$executeRaw`UPDATE site_leases SET expires_at = clock_timestamp() - interval '1 second' WHERE site_id = ${input.siteId}::uuid`
+    expect(await store.free({ ...lease, epoch: lease.epoch + 1 })).toBe(false)
+    expect(await store.free({ ...lease, taskId: input.otherTaskId })).toBe(false)
+    expect(await store.free({ ...lease, operation: 'deploy' })).toBe(false)
+    expect(await store.free(lease)).toBe(true)
+    expect(await store.inspect(input.siteId)).toMatchObject({
+      taskId: null,
+      operation: null,
+      expiresAt: null,
+      heldForOperator: false,
+      epoch: lease.epoch,
+    })
+    // Its fence is gone for good: the next owner starts a newer epoch.
+    expect(await store.free(lease)).toBe(false)
+    expect(await store.holdForRecovery(lease)).toBe(false)
+    const next = (await store.acquire({ ...input, taskId: input.otherTaskId }))!
+    expect(next.epoch).toBe(lease.epoch + 1)
+    expect(await store.free(lease)).toBe(false)
+    expect(await store.assert(next)).toBe(true)
+  })
+
   it('refuses a task belonging to another site', async () => {
     const input = await fixture()
     const other = await fixture()

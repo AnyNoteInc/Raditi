@@ -244,6 +244,7 @@ function turnFixture(kind: string) {
       order.push('hold')
       return true
     }),
+    free: vi.fn(async () => true),
   }
   const driver: AgentDriver = {
     id: 'codex',

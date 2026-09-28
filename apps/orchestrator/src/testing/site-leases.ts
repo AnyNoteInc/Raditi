@@ -83,6 +83,13 @@ export class MemorySiteLeases implements SiteLeaseStore {
     return this.#grant(fence.siteId, row)
   }
 
+  async free(fence: SiteLeaseFence): Promise<boolean> {
+    const row = this.#owned(fence)
+    if (!row) return false
+    Object.assign(row, { taskId: null, operation: null, expiresAt: null, held: false })
+    return true
+  }
+
   /** The fence's row, expired or held alike. */
   #owned(fence: SiteLeaseFence): Row | null {
     const row = this.rows.get(fence.siteId)

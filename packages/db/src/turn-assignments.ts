@@ -347,6 +347,23 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
     return rows.length === 1
   }
 
+  async freeOrphanedHolds(): Promise<number> {
+    // A finished assignment never becomes unfinished, and no turn opens on a held site: the
+    // subqueries cannot change their answer for a lease this statement locks.
+    const rows = await this.db.$queryRaw<Array<{ site_id: string }>>`
+      UPDATE site_leases lease SET holder_task_id = NULL, operation = NULL, acquired_at = NULL,
+        expires_at = NULL, held_for_operator = false, updated_at = clock_timestamp()
+      WHERE lease.held_for_operator AND lease.operation = 'turn'::"LeaseOperation"
+        AND EXISTS (SELECT 1 FROM turn_assignments a
+          WHERE a.site_id = lease.site_id AND a.task_id = lease.holder_task_id
+            AND a.lease_epoch = lease.epoch AND a.finished_at IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM turn_assignments a
+          WHERE a.site_id = lease.site_id AND a.task_id = lease.holder_task_id
+            AND a.finished_at IS NULL)
+      RETURNING lease.site_id`
+    return rows.length
+  }
+
   async unfinished(filter: { runnerId?: string } = {}): Promise<TurnAssignment[]> {
     const runnerId = runnerIdSchema.nullable().parse(filter.runnerId ?? null)
     return assignments(

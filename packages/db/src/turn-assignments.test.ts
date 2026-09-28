@@ -406,6 +406,48 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     expect(await store.get(opened.id)).toMatchObject({ recoveryAttempts: 1 })
   })
 
+  it('frees only holds left on the epoch of a finished assignment of the holding task', async () => {
+    const hold = async (finished: boolean) => {
+      const { lease, input, siteId } = await fixture()
+      const opened = (await store.open(input))!
+      await leases.holdForRecovery(lease)
+      if (finished) await store.finish({ id: opened.id, epoch: lease.epoch, outcome: 'failed' })
+      return { lease, siteId }
+    }
+    const orphan = await hold(true)
+    const open = await hold(false)
+    // Finished and released: nothing is held.
+    const released = await fixture()
+    const done = (await store.open(released.input))!
+    await store.finish({ id: done.id, epoch: released.lease.epoch, outcome: 'completed' })
+    await leases.release(released.lease)
+    // Held again under a newer epoch that no finished assignment names.
+    const again = (await leases.acquire({
+      siteId: released.siteId,
+      taskId: released.taskId,
+      operation: 'turn',
+      ttlMs: 60_000,
+    }))!
+    await leases.holdForRecovery(again)
+
+    expect(await store.freeOrphanedHolds()).toBeGreaterThanOrEqual(1)
+    expect(await leases.inspect(orphan.siteId)).toMatchObject({
+      taskId: null,
+      heldForOperator: false,
+      epoch: orphan.lease.epoch,
+    })
+    expect(await leases.inspect(open.siteId)).toMatchObject({
+      taskId: open.lease.taskId,
+      heldForOperator: true,
+    })
+    expect(await leases.inspect(released.siteId)).toMatchObject({
+      taskId: released.taskId,
+      heldForOperator: true,
+      epoch: again.epoch,
+    })
+    expect(await leases.holdForRecovery(orphan.lease)).toBe(false)
+  })
+
   it('refuses runner fields on a local assignment in the database itself', async () => {
     const { input } = await fixture('local')
     const opened = (await store.open(input))!

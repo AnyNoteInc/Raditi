@@ -603,7 +603,7 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
         outcome: 'lost',
         fence: { epoch: 1 },
       })
-      expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+      expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
       expect(w.credentials.revoked).toEqual([reference])
       return
     }
@@ -620,7 +620,7 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
       fence: { epoch: 1 },
     })
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
-    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
   })
 
   it('ends a turn its owner gave up while the prepare was out as failed, once its container is removed', async () => {
@@ -1184,7 +1184,7 @@ describe('turn exec recovery of a turn given up before its container was reporte
 
     const { recovery } = await w.restart()
     await w.recover(recovery)
-    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
     expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
   })
 
@@ -1272,16 +1272,21 @@ describe('turn exec recovery of a turn given up before its container was reporte
     expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
   })
 
-  it('frees the epoch it held when the attempt finished the turn before its takeover', async () => {
-    const w = world('local')
+  /**
+   * The attempt finishes a vacating turn while a recovery pass takes it over: the pass held the
+   * site before the attempt's failed release looked, and its takeover then finds the turn closed.
+   */
+  async function finishedDuringTakeOver(w: ReturnType<typeof world>) {
     const { core, created } = await vacatingWithContainer(w)
     // Expired: the attempt's release fails, and it finds the site not held yet.
     w.lease().expiresAt = Date.now() - 1_000
     const inspected = Promise.withResolvers<void>()
     const inspect = w.leases.inspect.bind(w.leases)
+    // The attempt's inspect after its failed release, not the sweep's at the start of the pass.
+    let armed = false
     vi.spyOn(w.leases, 'inspect').mockImplementation(async (siteId) => {
       const found = await inspect(siteId)
-      inspected.resolve()
+      if (armed) inspected.resolve()
       return found
     })
     const finishing = Promise.withResolvers<void>()
@@ -1295,6 +1300,7 @@ describe('turn exec recovery of a turn given up before its container was reporte
     })
     const hold = w.leases.holdForRecovery.bind(w.leases)
     vi.spyOn(w.leases, 'holdForRecovery').mockImplementationOnce(async (fence) => {
+      armed = true
       created.resolve()
       await inspected.promise
       return hold(fence)
@@ -1305,11 +1311,37 @@ describe('turn exec recovery of a turn given up before its container was reporte
       await finished.promise
       return takeOver(input)
     })
+    return core
+  }
+
+  it('frees the epoch it held when the attempt finished the turn before its takeover', async () => {
+    const w = world('local')
+    const core = await finishedDuringTakeOver(w)
     await w.recover(core.recovery)
 
     expect(w.vm.sandbox.destroy).toHaveBeenCalledOnce()
     expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
-    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
+  })
+
+  it('frees on the next pass a hold it left on a turn finished during its takeover', async () => {
+    const w = world('local')
+    const core = await finishedDuringTakeOver(w)
+    // The read after the refused takeover fails: this pass cannot tell the turn was closed.
+    const get = w.assignments.get.bind(w.assignments)
+    vi.spyOn(w.assignments, 'get')
+      .mockImplementationOnce(get)
+      .mockRejectedValueOnce(new Error('database unavailable'))
+    await w.recover(core.recovery)
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+
+    // No unfinished assignment leads a pass back to it: the sweep does.
+    await w.recover(core.recovery)
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
+    expect(w.logger.warn).toHaveBeenCalledWith(
+      'Turn recovery freed 1 site(s) held for finished turns',
+    )
   })
 
   it('waits for a claimed prepare no container of which shows, without a hold or an attempt', async () => {
@@ -1341,7 +1373,7 @@ describe('turn exec recovery of a turn given up before its container was reporte
       fence: { epoch: 1 },
     })
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
-    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
   })
 })
 
@@ -1396,6 +1428,40 @@ describe('turn exec recovery of a checkpoint: attempts', () => {
 })
 
 describe('turn exec recovery on a runner VM', () => {
+  it.each([
+    ['not held', false],
+    ['held by an earlier recovery', true],
+  ])(
+    'never leaves a site %s held for good when freeing it fails after the turn was abandoned',
+    async (_, heldBefore) => {
+      const w = world('runner')
+      await w.crashAt(undefined, {
+        arm: (kill) =>
+          w.workspace.buildBaseBundle.mockImplementationOnce(async () => {
+            kill()
+            return new Promise<never>(() => {})
+          }),
+      })
+      if (heldBefore) w.lease().held = true
+      const { recovery } = await w.restart()
+      const hold = vi.spyOn(w.leases, 'holdForRecovery')
+      vi.spyOn(w.leases, 'free').mockRejectedValueOnce(new Error('database unavailable'))
+      await w.recover(recovery)
+      expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
+      // One statement frees the epoch: no step of it holds the site.
+      expect(hold).not.toHaveBeenCalled()
+      expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: heldBefore, epoch: 1 })
+
+      await w.recover(recovery)
+      // Not held, it runs out by its TTL; held, the sweep takes it off.
+      expect(w.lease()).toMatchObject(
+        heldBefore
+          ? { taskId: null, held: false, epoch: 1 }
+          : { taskId: labels.taskId, held: false, epoch: 1 },
+      )
+    },
+  )
+
   it('waits for a runner that is away and gives the turn up at its deadline and grace', async () => {
     const w = world('runner')
     const { after } = await w.crashAt('output', { stopRunner: true })
@@ -1422,7 +1488,7 @@ describe('turn exec recovery on a runner VM', () => {
     await w.recover(after.recovery)
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
     // The watchdog removed it by now: the site is freed, not left to its TTL.
-    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
     expect(w.credentials.revoked).toEqual([reference, reference])
   })
 
@@ -1524,7 +1590,7 @@ describe('turn exec recovery on a runner VM', () => {
       fence: { epoch: 1 },
     })
     expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
-    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
   })
 
   it('holds a checkpoint of an away runner unpublished, then publishes once it is back', async () => {
@@ -1684,7 +1750,7 @@ describe('turn exec recovery on a runner VM', () => {
       fence: { epoch: 2 },
     })
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 2 } })
-    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 3 })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
   })
 
   it.each(['another task', 'the same task'])(

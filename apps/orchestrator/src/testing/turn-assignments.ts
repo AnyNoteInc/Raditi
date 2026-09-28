@@ -1,7 +1,7 @@
 // In-memory TurnAssignmentStore for *.test.ts files: the rules of the PostgreSQL store (one
 // unfinished assignment per turn, claims of unclaimed runner turns, epoch-conditional writes)
 // without the site lease check of `open`, which packages/db tests against PostgreSQL. A takeover
-// reclaims through the site lease store it is given.
+// reclaims and the sweep of orphaned holds frees through the site lease store it is given.
 import { randomUUID } from 'node:crypto'
 
 import type {
@@ -18,7 +18,10 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
   readonly rows = new Map<string, TurnAssignment>()
   readonly seenAt = new Map<string, number>()
 
-  constructor(private readonly leases?: Pick<SiteLeaseStore, 'reclaimForRecovery'>) {}
+  constructor(
+    private readonly leases?: Pick<SiteLeaseStore, 'reclaimForRecovery'> &
+      Partial<Pick<SiteLeaseStore, 'inspect' | 'free'>>,
+  ) {}
 
   async open(input: OpenTurnAssignment): Promise<TurnAssignment | null> {
     for (const row of this.rows.values())
@@ -142,6 +145,25 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
     if (!row || row.outcome || row.fence.epoch !== input.epoch) return false
     row.outcome = input.outcome
     return true
+  }
+
+  async freeOrphanedHolds(): Promise<number> {
+    const { inspect, free } = this.leases ?? {}
+    if (!inspect || !free) throw new Error('A sweep needs the site lease store')
+    let freed = 0
+    const rows = [...this.rows.values()]
+    for (const siteId of new Set(rows.map((row) => row.fence.siteId))) {
+      const lease = await inspect.call(this.leases, siteId)
+      if (!lease?.heldForOperator || lease.operation !== 'turn' || !lease.taskId) continue
+      const ofTask = rows.filter(
+        (row) => row.fence.siteId === siteId && row.fence.taskId === lease.taskId,
+      )
+      if (!ofTask.some((row) => row.outcome && row.fence.epoch === lease.epoch)) continue
+      if (ofTask.some((row) => !row.outcome)) continue
+      const fence = { siteId, taskId: lease.taskId, operation: lease.operation, epoch: lease.epoch }
+      if (await free.call(this.leases, fence)) freed += 1
+    }
+    return freed
   }
 
   async unfinished(filter: { runnerId?: string } = {}): Promise<TurnAssignment[]> {

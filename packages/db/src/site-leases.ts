@@ -189,4 +189,16 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
         clock_timestamp() AS server_now`,
     )
   }
+
+  async free(input: SiteLeaseFence): Promise<boolean> {
+    const f = fenceSchema.parse(input)
+    // The epoch stays: every fenced write also names the holder, and the next acquire moves on.
+    const rows = await this.db.$queryRaw<Array<{ site_id: string }>>`
+      UPDATE site_leases SET holder_task_id = NULL, operation = NULL, acquired_at = NULL,
+        expires_at = NULL, held_for_operator = false, updated_at = clock_timestamp()
+      WHERE site_id = ${f.siteId}::uuid AND holder_task_id = ${f.taskId}::uuid
+        AND epoch = ${f.epoch} AND operation = ${f.operation}::"LeaseOperation"
+      RETURNING site_id`
+    return rows.length === 1
+  }
 }

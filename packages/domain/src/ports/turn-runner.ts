@@ -105,6 +105,11 @@ export interface SiteLeaseStore {
   holdForRecovery(fence: SiteLeaseFence): Promise<boolean>
   /** Explicit recovery only: a held exact epoch becomes a new fenced owner. */
   reclaimForRecovery(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null>
+  /**
+   * Recovery only, with proof that the turn's container is gone or its deadline passed: frees the
+   * exact epoch, held or expired alike, in one statement. false when another owner has the site.
+   */
+  free(fence: SiteLeaseFence): Promise<boolean>
 }
 
 export type TurnWorkspaceSource = PublicationSource

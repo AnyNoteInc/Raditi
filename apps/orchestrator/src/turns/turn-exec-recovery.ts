@@ -147,6 +147,7 @@ export class TurnExecRecovery {
    * them — a resumed agent may run for the rest of its turn.
    */
   async tick(): Promise<void> {
+    await this.#sweep()
     for (const assignment of await this.deps.assignments.unfinished()) {
       if (this.#running.has(assignment.id) || this.#parked.has(assignment.id)) continue
       if (!this.deps.live.enter(assignment.fence)) continue
@@ -158,6 +159,18 @@ export class TurnExecRecovery {
         })
       this.#running.set(assignment.id, recovery)
     }
+  }
+
+  /**
+   * Holds left on finished turns — a recovery stopped between closing a turn and freeing its site,
+   * or lost the race with an owner that finished it — are taken off first: no pass returns to them.
+   */
+  async #sweep(): Promise<void> {
+    const freed = await this.deps.assignments.freeOrphanedHolds().catch((error: unknown) => {
+      this.#warn('turn recovery sweep', logged(error))
+      return 0
+    })
+    if (freed > 0) this.#logger.warn(`Turn recovery freed ${freed} site(s) held for finished turns`)
   }
 
   /** Settles once every recovery started so far has. */
@@ -304,7 +317,11 @@ export class TurnExecRecovery {
     assignment: TurnAssignment,
     phase: TurnPhase,
   ): Promise<TurnAssignment | null> {
-    const now = await this.deps.assignments.get(assignment.id).catch(() => null)
+    const now = await this.deps.assignments.get(assignment.id).catch((error: unknown) => {
+      // A hold this pass left on a turn its owner finished is freed by the next pass's sweep.
+      this.#warn('turn recovery read after a takeover', logged(error))
+      return null
+    })
     if (now && now.outcome !== null)
       await this.#free(now).catch(() =>
         this.#logger.error(
@@ -642,17 +659,12 @@ export class TurnExecRecovery {
   }
 
   /**
-   * Takes this epoch off the site, held or expired alike, unless another owner has it. A
-   * database error propagates: the next pass tries again.
+   * Takes this epoch off the site, held or expired alike, unless another owner has it; moved on
+   * or already released, nothing is left to free. One statement, so no step leaves the site held.
+   * A database error propagates: the next pass tries again, or its sweep once the turn is closed.
    */
   async #free(assignment: TurnAssignment): Promise<void> {
-    // Moved on or already released: nothing of this epoch is left to free.
-    if (!(await this.deps.leases.holdForRecovery(assignment.fence))) return
-    const grant = await this.deps.leases.reclaimForRecovery(
-      assignment.fence,
-      TURN_PUBLICATION_GRACE_MS,
-    )
-    if (grant) await this.deps.leases.release(grant)
+    await this.deps.leases.free(assignment.fence)
   }
 
   async #close(assignment: TurnAssignment, outcome: TurnAssignmentOutcome): Promise<void> {
