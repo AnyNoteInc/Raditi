@@ -561,6 +561,24 @@ describe('SandboxRunner commands', () => {
     )
   })
 
+  it('drops a copy of a prepare it already took, while it holds the turn and after it', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    startRunner(core.transport, side.executor)
+    // Core hands a prepare out again when its polls miss it: it cannot tell a lost answer.
+    const prepare = prepareCommand()
+    await core.send(prepare)
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    await core.send(prepare)
+    await core.send(command('destroy', { reason: 'completed' }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'destroyed']))
+    await core.send(prepare)
+    // The next poll left only after the copy was taken.
+    await core.send()
+    expect(side.sandboxes.create).toHaveBeenCalledOnce()
+    expect(core.types()).toEqual(['created', 'prepared', 'destroyed'])
+  })
+
   it('removes a container core did not take over, before anything is imported into it', async () => {
     const side = sandboxSide()
     const core = scriptedCore()

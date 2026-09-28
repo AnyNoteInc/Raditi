@@ -52,6 +52,11 @@ const SWEEP_MS = 5_000
 /** A claim that lost its race to a runner waits this long for that runner's poll. */
 const CLAIM_RACE_MS = 5_000
 const RETIRED_SESSIONS = 16
+/**
+ * Polls in a row that miss a delivered prepare before it goes out again: the first may have
+ * been sent before the answer that carried it arrived.
+ */
+const PREPARE_MISSED_POLLS = 2
 
 const binaryHeadersSchema = z.object({
   session: z.uuid(),
@@ -81,6 +86,8 @@ interface OpenCommand {
   settled: boolean
   /** A poll took it: the runner may carry it out from now on. */
   delivered: boolean
+  /** A delivered prepare the runner's polls miss: since when, and how many polls in a row. */
+  missing?: { since: number; polls: number }
   /** performance.now() by which the turn ends: its remaining time is counted at delivery. */
   readonly deadline?: number
   resolve(report: RunnerReport): void
@@ -448,6 +455,7 @@ export class RunnerHub implements OnApplicationShutdown {
     const generation = ++session.generation
     session.wake?.()
     const active = new Set(request.active.map((entry) => entry.assignmentId))
+    this.#missed(session, active)
     await this.deps.assignments
       .seen({ runnerId, runnerSession: session.id, ids: [...active] })
       .catch((error: unknown) => this.#warn('runner heartbeat', logged(error)))
@@ -765,6 +773,41 @@ export class RunnerHub implements OnApplicationShutdown {
       out.push(queued)
     }
     return out
+  }
+
+  /**
+   * A poll's answer counts as delivered once the socket took it, yet the wire can still lose
+   * it. A delivered prepare the session's polls miss — not held, not answered, no container —
+   * goes out again, under its commandId, after PREPARE_MISSED_POLLS polls in a row; the runner
+   * drops a copy it already took. Missing for runnerTimings.prepareMissingMs, it fails
+   * RUNNER_UNAVAILABLE: without proof the turn vacates, but the runner's slot takes the next
+   * turn (spec §8).
+   */
+  #missed(session: RunnerSession, active: ReadonlySet<string>): void {
+    const now = performance.now()
+    for (const live of this.#live.values()) {
+      if (live.runner.id !== session.runnerId || live.runner.session !== session.id) continue
+      for (const open of live.commands.values()) {
+        const { command } = open
+        if (command.type !== 'prepare' || !open.delivered || open.settled) continue
+        if (
+          active.has(live.id) ||
+          live.containerId !== undefined ||
+          session.queue.some((queued) => queued.commandId === command.commandId)
+        ) {
+          open.missing = undefined
+          continue
+        }
+        const missing = (open.missing ??= { since: now, polls: 0 })
+        missing.polls += 1
+        if (now - missing.since >= runnerTimings.prepareMissingMs)
+          this.#reject(open, runnerUnavailable('The sandbox runner did not take the prepare'))
+        else if (missing.polls >= PREPARE_MISSED_POLLS) {
+          missing.polls = 0
+          session.queue.unshift(command)
+        }
+      }
+    }
   }
 
   #connected(live: LiveAssignment): RunnerSession | undefined {

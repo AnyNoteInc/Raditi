@@ -80,6 +80,11 @@ export const runnerTimings = Object.freeze({
   silentAfterMs: 90_000,
   /** A prepare command no runner took in this time fails the turn (RUNNER_UNAVAILABLE). */
   claimTimeoutMs: 30_000,
+  /**
+   * A delivered prepare its runner's polls miss this long — not held, not answered — fails the
+   * turn (RUNNER_UNAVAILABLE) and frees the runner's slot.
+   */
+  prepareMissingMs: 2 * 60_000,
 })
 
 export const runnerLimits = Object.freeze({

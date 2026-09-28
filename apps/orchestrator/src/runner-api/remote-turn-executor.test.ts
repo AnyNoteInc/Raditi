@@ -892,14 +892,15 @@ describe('RemoteTurnExecutor over the runner hub', () => {
   })
 })
 
+const fakeClock = () => {
+  vi.useFakeTimers({
+    toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+  })
+  // The monotonic clock follows the fake clock, as it would on a real host.
+  vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
+}
+
 describe('RemoteTurnExecutor: the turn deadline at delivery', () => {
-  const fakeClock = () => {
-    vi.useFakeTimers({
-      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
-    })
-    // The monotonic clock follows the fake clock, as it would on a real host.
-    vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
-  }
   const remaining = (command: RunnerCommand | undefined) =>
     command?.type === 'prepare'
       ? command.remainingMs
@@ -1048,5 +1049,128 @@ describe('RemoteTurnExecutor: the turn deadline at delivery', () => {
       2,
     )
     await destroying
+  })
+})
+
+describe('RemoteTurnExecutor: a prepare the wire lost', () => {
+  it('hands a prepare out again under its id once two polls of its runner miss it', async () => {
+    fakeClock()
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const preparing = f.executor.prepare(f.input(assignment.id), new AbortController().signal)
+    // Core wrote the answer, so it counts the prepare delivered; the wire lost it after that.
+    const [lost] = await vm.poll()
+    expect(lost).toMatchObject({ type: 'prepare', remainingMs: MAX_SANDBOX_TURN_MS })
+    await vi.advanceTimersByTimeAsync(25_000)
+    // One poll may have left before the answer arrived: it proves nothing yet.
+    expect(await vm.poll()).toEqual([])
+    await vi.advanceTimersByTimeAsync(25_000)
+    const [again] = await vm.poll()
+    expect(again).toMatchObject({
+      type: 'prepare',
+      commandId: lost!.commandId,
+      remainingMs: MAX_SANDBOX_TURN_MS - 50_000,
+    })
+    // Handed out once as far as the turn knows: the runner drops a copy it already took.
+    expect(f.dispatched).toHaveBeenCalledOnce()
+
+    // A poll that reports the turn starts the count again.
+    for (const active of [[assignment.id], [], [assignment.id], []])
+      expect(await vm.poll({ capacity: 1 - active.length, active })).toEqual([])
+    await vm.report(assignment.id, {
+      type: 'created',
+      commandId: lost!.commandId,
+      containerId: 'container1',
+    })
+    // A prepare whose container core knows is never missing.
+    expect(await vm.poll()).toEqual([])
+    expect(await vm.poll()).toEqual([])
+    await vm.report(assignment.id, {
+      type: 'prepared',
+      commandId: lost!.commandId,
+      containerId: 'container1',
+    })
+    await expect(preparing).resolves.toMatchObject({ containerId: 'container1' })
+  })
+
+  it('gives up a prepare its runner never takes, and the runner’s slot takes the next turn', async () => {
+    fakeClock()
+    const f = fixture()
+    const vm = f.runner()
+    const first = await f.open()
+    const preparing = f.executor.prepare(f.input(first.id), new AbortController().signal)
+    const refused = expect(preparing).rejects.toMatchObject({
+      code: 'RUNNER_UNAVAILABLE',
+      message: 'The sandbox runner did not take the prepare',
+    })
+    const pollAt = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms - Date.now())
+      return vm.poll()
+    }
+    const start = Date.now()
+    const [lost] = await vm.poll()
+    // Every copy is lost as well: the runner never holds the turn and never answers.
+    for (const [at, copy] of [
+      [10_000, false],
+      [20_000, true],
+      [40_000, false],
+      [60_000, true],
+      [80_000, false],
+      [100_000, true],
+    ] as const) {
+      const commands = await pollAt(start + at)
+      expect(commands.map((command) => command.commandId)).toEqual(copy ? [lost!.commandId] : [])
+    }
+
+    // Another turn now waits for this VM, the only one, with one slot.
+    await vi.advanceTimersByTimeAsync(start + 110_000 - Date.now())
+    const other = '00000000-0000-4000-8000-000000000004'
+    const otherFence = { ...fence, siteId: other, taskId: other }
+    const second = (await f.assignments.open({
+      fence: otherFence,
+      sessionId: 'session2',
+      turn: 1,
+      executor: 'runner',
+      plan: {} as TurnPlan,
+      remainingMs: MAX_SANDBOX_TURN_MS,
+    }))!
+    const base = f.input(second.id)
+    const next = f.executor.prepare(
+      {
+        ...base,
+        fence: otherFence,
+        sandbox: {
+          ...base.sandbox,
+          labels: { ...base.sandbox.labels, siteId: other, taskId: other, sessionId: 'session2' },
+        },
+      },
+      new AbortController().signal,
+    )
+    // The missing prepare still takes the slot.
+    expect(await pollAt(start + 115_000)).toEqual([])
+    expect(f.assignments.rows.get(second.id)!.runner).toBeNull()
+
+    // Missing for two minutes since the first poll that missed it: long before its deadline.
+    expect(runnerTimings.prepareMissingMs).toBe(120_000)
+    const [handed] = await pollAt(start + 130_000)
+    await refused
+    expect(handed).toMatchObject({ type: 'prepare', assignmentId: second.id })
+    // No proof that nothing was created: the first turn vacates, and a late answer still frees it.
+    expect(f.vacated).not.toHaveBeenCalled()
+    await vm.report(first.id, {
+      type: 'failed',
+      commandId: lost!.commandId,
+      code: 'SANDBOX_COMMAND_FAILED',
+      absent: true,
+    })
+    expect(f.vacated).toHaveBeenCalledOnce()
+
+    await vm.report(second.id, {
+      type: 'prepared',
+      commandId: handed!.commandId,
+      containerId: 'container2',
+    })
+    await expect(next).resolves.toMatchObject({ containerId: 'container2' })
   })
 })
