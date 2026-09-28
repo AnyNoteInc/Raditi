@@ -429,8 +429,10 @@ export class TurnAttempt {
    * Without its last journal entry the site stays held only in the latter cases; a failed
    * release expires by its TTL. A turn whose prepare is out without a container reported is
    * vacating: nothing is released or finished until vacated() or a late container's removal.
-   * When core stops before any checkpoint, the turn is left as it is to the next core: `held`
-   * without a hold or a journal entry.
+   * When core stops before any checkpoint and after the turn's container was reported, the turn
+   * is left as it is to the next core: `held` without a hold or a journal entry. Without a
+   * container it settles like any other failure: released at once when the prepare was not
+   * dispatched, vacating when it was, and the next core then closes the turn as `failed`.
    */
   async settle(
     alsoRemove?: () => Promise<void>,

@@ -16,7 +16,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
-import { RunnerHub } from '../runner-api/runner-hub.ts'
+import { CLAIM_RACE_MS, RunnerHub } from '../runner-api/runner-hub.ts'
 import { MemorySiteLeases } from '../testing/site-leases.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { MemoryTurnJournal } from '../testing/turn-journal.ts'
@@ -363,46 +363,44 @@ async function onRunner() {
       }),
     )
   const dispatched = vi.spyOn(t.attempt, 'dispatched')
-  const settled = t.guard
-    .interruptible(
-      executor.prepare(
-        {
-          assignmentId: t.attempt.assignment!.id,
-          fence: t.lease,
-          sandbox: { ...request.sandbox, labels: { ...labels, leaseEpoch: 1 } },
-          remainingMs: t.guard.remainingMs,
-          bundle: {
-            baseSha: request.workspace.expectedBaseSha,
-            branch: request.workspace.branch,
-            sha256: createHash('sha256').update(bundleBytes).digest('hex'),
-            sizeBytes: bundleBytes.byteLength,
-            read: async function* () {
-              yield Buffer.from(bundleBytes)
-            },
-          },
-          driverId: 'codex',
-          prepared: {
-            files: [],
-            env: {},
-            secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'synthetic-llm-secret' }],
-          },
-          argv: ['synthetic-agent'],
-          credentials: ['synthetic-llm-secret'],
-          created: (execution) => t.attempt.created(execution),
-          dispatched: () => t.attempt.dispatched(),
-          vacated: () => t.attempt.vacated(),
+  const preparing = executor.prepare(
+    {
+      assignmentId: t.attempt.assignment!.id,
+      fence: t.lease,
+      sandbox: { ...request.sandbox, labels: { ...labels, leaseEpoch: 1 } },
+      remainingMs: t.guard.remainingMs,
+      bundle: {
+        baseSha: request.workspace.expectedBaseSha,
+        branch: request.workspace.branch,
+        sha256: createHash('sha256').update(bundleBytes).digest('hex'),
+        sizeBytes: bundleBytes.byteLength,
+        read: async function* () {
+          yield Buffer.from(bundleBytes)
         },
-        t.guard.signal,
-      ),
-    )
-    .then(
-      () => 'prepared' as const,
-      (error: unknown) => {
-        t.attempt.failed(error)
-        return t.attempt.settle()
       },
-    )
-  return { ...t, hub, runnerSession, poll, report, dispatched, settled }
+      driverId: 'codex',
+      prepared: {
+        files: [],
+        env: {},
+        secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'synthetic-llm-secret' }],
+      },
+      argv: ['synthetic-agent'],
+      credentials: ['synthetic-llm-secret'],
+      created: (execution) => t.attempt.created(execution),
+      dispatched: () => t.attempt.dispatched(),
+      vacated: () => t.attempt.vacated(),
+    },
+    t.guard.signal,
+  )
+  preparing.catch(() => {})
+  const settled = t.guard.interruptible(preparing).then(
+    () => 'prepared' as const,
+    (error: unknown) => {
+      t.attempt.failed(error)
+      return t.attempt.settle()
+    },
+  )
+  return { ...t, hub, runnerSession, poll, report, dispatched, preparing, settled }
 }
 
 describe('TurnAttempt over a runner: delivery against giving up (spec §8)', () => {
@@ -474,18 +472,87 @@ describe('TurnAttempt over a runner: delivery against giving up (spec §8)', () 
     expect(t.release).not.toHaveBeenCalled()
   })
 
-  it('frees the site when the claim a runner won never reaches core', async () => {
+  it('fails the turn and frees the site when core stops before a poll took the prepare', async () => {
+    const t = await onRunner()
+    t.hub.close()
+    expect(await t.settled).toBe('released')
+    expect(t.dispatched).not.toHaveBeenCalled()
+    expect(t.journal.entries.slice(1)).toMatchObject([
+      { phase: 'failed', reason: 'run_failed', outcome: 'failed' },
+    ])
+    expect(t.release).toHaveBeenCalledOnce()
+    expect(t.outcome()).toBe('failed')
+    expect(t.row()).toMatchObject({ taskId: null, held: false, epoch: 1 })
+  })
+
+  it('vacates when core stops after a poll took the prepare and before created', async () => {
+    const t = await onRunner()
+    const [prepare] = await t.poll()
+    expect(prepare).toMatchObject({ type: 'prepare' })
+    t.hub.close()
+    // No proof that the runner created nothing: the next core closes the turn as failed.
+    expect(await t.settled).toBe('vacating')
+    expect(t.dispatched).toHaveBeenCalledOnce()
+    expect(t.journal.entries.slice(1)).toMatchObject([{ phase: 'vacating', reason: 'run_failed' }])
+    expect(t.release).not.toHaveBeenCalled()
+    expect(t.finish).not.toHaveBeenCalled()
+    expect(t.outcome()).toBeNull()
+    expect(t.row()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
+  })
+
+  /** The runner's claim commits at once; its answer reaches core only once `answer` resolves. */
+  function claimAnsweredLate(t: Awaited<ReturnType<typeof onRunner>>) {
+    const claim = t.assignments.claim.bind(t.assignments)
+    const committed = Promise.withResolvers<void>()
+    const answer = Promise.withResolvers<void>()
+    vi.spyOn(t.assignments, 'claim').mockImplementationOnce(async (input) => {
+      const rows = await claim(input)
+      committed.resolve()
+      await answer.promise
+      return rows
+    })
+    return { committed: committed.promise, answer: () => answer.resolve() }
+  }
+
+  it('never dispatches a prepare whose claim a runner won after the owner gave up', async () => {
+    const t = await onRunner()
+    const late = claimAnsweredLate(t)
+    const polled = t.poll()
+    await late.committed
+    // The abandon loses to the committed claim: the site is freed without waiting for it.
+    t.cancel()
+    expect(await t.settled).toBe('released')
+    expect(t.row()).toMatchObject({ taskId: null, held: false, epoch: 1 })
+    late.answer()
+    expect(await polled).toEqual([])
+    await expect(t.preparing).rejects.toBeDefined()
+    expect(await t.poll()).toEqual([])
+    expect(t.dispatched).not.toHaveBeenCalled()
+    expect(t.release).toHaveBeenCalledOnce()
+  })
+
+  it('stops waiting for a claim a runner won when its answer never reaches core', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const t = await onRunner()
+    const late = claimAnsweredLate(t)
     try {
-      const t = await onRunner()
-      // The runner's claim holds the row, so the abandon loses, and its poll never comes.
-      vi.spyOn(t.assignments, 'abandon').mockResolvedValue(false)
+      void t.poll().catch(() => {})
+      await late.committed
       t.cancel()
-      await vi.advanceTimersByTimeAsync(5_000)
       expect(await t.settled).toBe('released')
+      let rejected = false
+      t.preparing.catch(() => {
+        rejected = true
+      })
+      await vi.advanceTimersByTimeAsync(CLAIM_RACE_MS - 1)
+      expect(rejected).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(rejected).toBe(true)
       expect(t.dispatched).not.toHaveBeenCalled()
+      expect(t.release).toHaveBeenCalledOnce()
       expect(t.row()).toMatchObject({ taskId: null, held: false, epoch: 1 })
     } finally {
+      late.answer()
       vi.useRealTimers()
     }
   })
