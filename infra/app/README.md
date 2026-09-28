@@ -36,9 +36,10 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 - Каталог — 0700, файлы — 0400, владелец — uid своего сервиса.
 - Пароль роли PostgreSQL и `DATABASE_URL` сервиса, пароль пользователя Redis и `REDIS_URL` — одно значение из одной записи Vault.
 - Хеш для `users.acl`: `printf %s "$пароль" | sha256sum`, в файле — `#<hex>`.
+- `superuser-password` нужен только первому `initdb`: `10-roles.sh` снимает пароль суперпользователя `postgres`, и тот входит только через сокет внутри контейнера. Ротация его не касается, но файл должен быть: образ читает его при каждом старте.
 - Исключение из правила 2: ключи сертификата и ACME-аккаунта лежат в `acme.json` на томе `acme` (0600, только Traefik). В Vault и бэкапы они не входят. При утрате сертификат перевыпускается — сначала правка CAA (раздел «Утрата `acme.json` и смена способа проверки»); лимит Let's Encrypt — 5 одинаковых сертификатов в неделю.
 
-После ротации паролей PostgreSQL — `docker compose exec postgres sh /docker-entrypoint-initdb.d/10-roles.sh`, затем перезапуск web и `core`.
+После ротации паролей ролей `raditi`, `raditi_web` и `raditi_core` — `docker compose exec postgres sh /docker-entrypoint-initdb.d/10-roles.sh`, затем перезапуск web и `core`.
 
 После ротации паролей Redis, когда vault-agent отрендерил новые `users.acl`, `health-password` и `REDIS_URL` web и `core`, — `docker compose restart redis`, затем сразу `docker compose restart web core`. Redis читает `--aclfile` только при старте, а `ACL LOAD` выполнить некому: `default` выключен, у `web`, `core` и `health` нет `@admin`. Данные сохраняет AOF. До перезапуска web и `core` входят со старым паролем и получают `WRONGPASS`, а очереди стоят, поэтому паузу между шагами держать короткой. Без отказов входа: на время ротации в `users.acl` у пользователя два хеша (`#<старый> #<новый>`) — перезапустить Redis, затем web и `core` с новым `REDIS_URL`, затем убрать старый хеш и снова перезапустить Redis.
 

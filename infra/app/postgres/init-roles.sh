@@ -1,7 +1,8 @@
 #!/bin/sh
 # Roles of the platform database (spec §15). The image's superuser runs only this script; the
 # schema belongs to raditi (migrate, seed); web and core get DML through raditi_app. Idempotent:
-# run it again after a password rotation (README.md).
+# run it again after a password rotation (README.md). superuser-password serves the first initdb
+# only: the script drops it, so the superuser has the socket and nothing over the network.
 set -eu
 psql -v ON_ERROR_STOP=1 --username postgres --dbname raditi <<'SQL'
 \set owner_pw `cat /run/raditi/owner-password`
@@ -18,6 +19,7 @@ SELECT 'CREATE ROLE raditi_core LOGIN IN ROLE raditi_app'
 ALTER ROLE raditi PASSWORD :'owner_pw';
 ALTER ROLE raditi_web PASSWORD :'web_pw';
 ALTER ROLE raditi_core PASSWORD :'core_pw';
+ALTER ROLE postgres PASSWORD NULL;
 ALTER DATABASE raditi OWNER TO raditi;
 ALTER SCHEMA public OWNER TO raditi;
 REVOKE ALL ON DATABASE raditi FROM PUBLIC;

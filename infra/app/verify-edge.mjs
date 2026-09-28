@@ -895,14 +895,15 @@ try {
     for (const value of secret.values)
       assert.ok(!output.includes(value), 'a secret value is in the output')
   })
-  await check('21. PostgreSQL: web has no DDL, no role is a superuser', async () => {
+  await check('21. PostgreSQL: web has no DDL, superuser only over the socket', async () => {
+    // By the service name, not 127.0.0.1: loopback is `trust` in the image's pg_hba
     const psql = (password, user, sql) =>
       inside('postgres', [
         'env',
         `PGPASSWORD=${password}`,
         'psql',
         '-h',
-        '127.0.0.1',
+        'postgres',
         '-U',
         user,
         '-d',
@@ -927,6 +928,11 @@ try {
       "SELECT string_agg(rolsuper::text, ',') FROM pg_roles WHERE rolname IN ('raditi', 'raditi_web', 'raditi_core')",
     )
     assert.equal(roles.stdout.trim(), 'false,false,false')
+    const wrong = await psql(secret.pg.owner.replace(/.$/, 'x'), 'raditi', 'SELECT 1')
+    assert.match(wrong.stderr, /password authentication failed/)
+    const superuser = await psql(secret.pg.superuser, 'postgres', 'SELECT 1')
+    assert.notEqual(superuser.code, 0)
+    assert.match(superuser.stderr, /password authentication failed/)
   })
   await check('22. Redis: no admin or mass commands for web, only PING for health', async () => {
     const cli = (user, password, ...args) =>
