@@ -68,8 +68,8 @@ check_secrets migrate 10004 app.env
 check_secrets postgres 70 superuser-password owner-password web-password core-password
 check_secrets redis 10003 users.acl health-password
 
-# 5. Compose's .env is not a secret store.
-if grep -Eq '^[A-Z0-9_]*(PASSWORD|SECRET|_KEY|DATABASE_URL|REDIS_URL)=' "$env_file"; then
+# 5. Compose's .env is not a secret store (RUNNER_TOKENS holds only hashes).
+if grep -Eq '^[A-Z0-9_]*(PASSWORD|SECRET|SECRET_ID|TOKEN|_KEY|DATABASE_URL|REDIS_URL)=' "$env_file"; then
   fail "$env_file holds secret-like names: secrets are files in $secrets"
 fi
 
@@ -91,6 +91,11 @@ domain=$(setting APP_DOMAIN)
 if [ -n "$domain" ] && getent ahostsv6 "$domain" 2>/dev/null | grep -qv '^::ffff:'; then
   fail "$domain has an AAAA record"
 fi
+
+# 9. Images by digest only (spec §19): a tag is not a rollback point.
+for name in WEB_IMAGE ORCHESTRATOR_IMAGE MIGRATE_IMAGE TRAEFIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE; do
+  setting "$name" | grep -Eq '@sha256:[0-9a-f]{64}$' || fail "$name must be pinned by digest"
+done
 
 [ "$failed" -eq 0 ] || exit 1
 echo "preflight: ok"

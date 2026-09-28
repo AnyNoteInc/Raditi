@@ -107,17 +107,42 @@ test('no secret in the environment of any service', () => {
       if (variable !== 'RUNNER_TOKENS' && !variable.endsWith('_FILE'))
         assert.doesNotMatch(
           variable,
-          /(PASSWORD|SECRET|TOKEN|_KEY|DATABASE_URL|REDIS_URL)$/,
+          /(PASSWORD|SECRET|SECRET_ID|TOKEN|_KEY|DATABASE_URL|REDIS_URL)$/,
           `${name}: ${variable}`,
         )
   for (const name of names) assert.equal(services[name].env_file, undefined, `${name}: env_file`)
 })
 
+const preflight = readFileSync(new URL('./preflight.sh', import.meta.url), 'utf8')
+
 test("the server's .env holds no secret-like names either (preflight.sh refuses them)", () => {
   for (const name of Object.keys(example))
-    assert.doesNotMatch(name, /(PASSWORD|SECRET|_KEY|DATABASE_URL|REDIS_URL)$/, name)
-  const preflight = readFileSync(new URL('./preflight.sh', import.meta.url), 'utf8')
-  assert.ok(preflight.includes('(PASSWORD|SECRET|_KEY|DATABASE_URL|REDIS_URL)='))
+    assert.doesNotMatch(
+      name,
+      /(PASSWORD|SECRET|SECRET_ID|TOKEN|_KEY|DATABASE_URL|REDIS_URL)$/,
+      name,
+    )
+  // preflight's own pattern, run by grep as on the VM.
+  const pattern = /grep -Eq '(\^\[A-Z0-9_\]\*\([^']+\)=)'/.exec(preflight)?.[1]
+  assert.ok(pattern)
+  const refused = (name) => {
+    try {
+      execFileSync('grep', ['-Eq', pattern], { input: `${name}=value\n` })
+      return true
+    } catch {
+      return false
+    }
+  }
+  for (const name of ['METRICS_TOKEN', 'VAULT_SECRET_ID', 'S3_SECRET_ACCESS_KEY', 'DATABASE_URL'])
+    assert.equal(refused(name), true, name)
+  for (const name of Object.keys(example)) assert.equal(refused(name), false, name)
+})
+
+test("preflight.sh requires a digest for every image of the server's .env", () => {
+  const images = [...source.matchAll(/\$\{([A-Z_]+_IMAGE):\?/g)].map(([, name]) => name)
+  const checked = /^for name in ([A-Z_ ]+); do$/m.exec(preflight)?.[1].split(' ')
+  assert.deepEqual([...new Set(images)].sort(), checked?.sort())
+  assert.ok(preflight.includes("grep -Eq '@sha256:[0-9a-f]{64}$'"))
 })
 
 test('every service is read-only, drops all capabilities, cannot gain privileges, has limits', () => {
