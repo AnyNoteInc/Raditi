@@ -790,7 +790,7 @@ enum DeploymentStatus {
 /// checks it). A string, not an enum: adding a driver needs no migration.
 model AgentDriver {
   id           String   @id @db.VarChar(32)
-  /// Sandbox image with the CLI; pinned by digest in P2, the seed writes a placeholder.
+  /// Sandbox image with the CLI; pinned by digest from P4, the seed writes a placeholder.
   image        String   @db.VarChar(512)
   /// AgentCapabilities: resume, jsonEvents, outputSchema, mcp, images.
   capabilities Json

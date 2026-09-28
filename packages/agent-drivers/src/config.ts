@@ -3,8 +3,9 @@ import { z } from 'zod'
 
 /**
  * SANDBOX_IMAGE_PREFIX: a repository without tag or digest; a driver image is `<prefix>-<driver>`.
- * TODO(P2): sandboxSpecSchema accepts only digest-pinned images, so `<prefix>-<driver>` must be
- * resolved to `…@sha256:` (Gitea registry) before a SandboxSpec is built.
+ * TODO(P4): sandboxSpecSchema accepts only digest-pinned images, so `<prefix>-<driver>` must be
+ * resolved to `…@sha256:` (Gitea registry) before a SandboxSpec is built. Check against spec §8
+ * first: it names one base image per stack, not one per driver.
  */
 const imagePrefix = z
   .string()

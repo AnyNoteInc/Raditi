@@ -127,7 +127,7 @@ export const pricingRuleSeeds: readonly PricingRuleSeed[] = [
 
 export interface AgentDriverSeed {
   id: AgentDriverId
-  /** Placeholder until P2 pins sandbox images by digest; set on create only. */
+  /** Placeholder until P4 pins the driver's sandbox image by digest; set on create only. */
   image: string
   /** Mirrors the adapter in packages/agent-drivers (db may not import an adapter). */
   capabilities: AgentCapabilities
