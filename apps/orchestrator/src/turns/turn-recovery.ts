@@ -100,11 +100,17 @@ export class TurnPublicationRecovery {
       throw conflict('Checkpoint does not match the requested publication recovery')
 
     const started = performance.now()
-    const lease = await this.deps.leases.reclaimForRecovery(
-      input.heldFence,
-      RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS,
-    )
-    if (!lease) throw conflict('The exact held lease is no longer available for recovery')
+    // Its containers are adopted through the assignment, so it moves with the lease first.
+    const taken = await this.deps.assignments.takeOver({
+      id: input.assignmentId,
+      fence: input.heldFence,
+      ttlMs: RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS,
+      ...(input.runnerSession ? { runnerSession: input.runnerSession } : {}),
+      countAttempt: false,
+    })
+    if (!taken)
+      throw conflict('The turn assignment or its exact held lease moved on without this recovery')
+    const lease = taken.grant
     const guard = new LeaseGuard(
       lease,
       this.deps.leases,
@@ -136,15 +142,6 @@ export class TurnPublicationRecovery {
       })
     }
     try {
-      // Its containers are adopted through the assignment, so it moves to this epoch first.
-      const advanced = await this.deps.assignments.advance({
-        id: input.assignmentId,
-        fromEpoch: input.heldFence.epoch,
-        epoch: lease.epoch,
-        ...(input.runnerSession ? { runnerSession: input.runnerSession } : {}),
-        countAttempt: false,
-      })
-      if (!advanced) throw conflict('The turn assignment moved on without this recovery')
       await guard.assertFence()
       await record('checkpointed')
       await this.#removeContainers(input, reference, lease, guard, record).catch(

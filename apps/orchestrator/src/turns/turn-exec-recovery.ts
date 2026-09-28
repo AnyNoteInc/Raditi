@@ -229,8 +229,9 @@ export class TurnExecRecovery {
   }
 
   /**
-   * Holds the site at the assignment's epoch, reclaims it under the next one for what is left of
-   * the turn and moves the assignment there. null when another owner has the turn now.
+   * Holds the site at the assignment's epoch, then reclaims it under the next one for what is left
+   * of the turn and moves the assignment there in the same statement. null when another owner has
+   * the turn now or the takeover did not go through.
    */
   async #takeOver(
     assignment: TurnAssignment,
@@ -257,31 +258,20 @@ export class TurnExecRecovery {
       return null
     }
     const started = performance.now()
-    const grant = await this.deps.leases.reclaimForRecovery(
-      assignment.fence,
-      Math.max(0, remainingMs) + TURN_PUBLICATION_GRACE_MS,
-    )
-    // Reclaimed by someone else meanwhile: the site stays theirs or held.
-    if (!grant) return null
-    const advanced = await this.deps.assignments
-      .advance({
+    const taken = await this.deps.assignments
+      .takeOver({
         id: assignment.id,
-        fromEpoch: assignment.fence.epoch,
-        epoch: grant.epoch,
+        fence: assignment.fence,
+        ttlMs: Math.max(0, remainingMs) + TURN_PUBLICATION_GRACE_MS,
         ...(takeover.runnerSession ? { runnerSession: takeover.runnerSession } : {}),
         countAttempt,
       })
       .catch(() => null)
-    if (!advanced) {
-      const now = await this.deps.assignments.get(assignment.id).catch(() => null)
-      // Finished meanwhile by its owner, which had proof: free the epoch this pass reclaimed.
-      if (now && now.outcome !== null) {
-        await this.deps.leases.release(grant).catch(() => false)
-        return null
-      }
-      await holdForRecovery(this.deps.leases, grant, phase)
+    if (!taken) {
+      await this.#afterTakeOver(assignment, phase)
       return null
     }
+    const { assignment: advanced, grant } = taken
     const guard = new LeaseGuard(
       grant,
       this.deps.leases,
@@ -300,6 +290,29 @@ export class TurnExecRecovery {
     })
     attempt.assignment = advanced
     return { grant, guard, attempt, remainingMs }
+  }
+
+  /**
+   * A takeover that was refused or did not answer: the site and the assignment moved together or
+   * not at all. Finished meanwhile by its owner, which had proof — the epoch this pass held is
+   * freed. Moved on because the takeover committed and only its answer was lost — that epoch is
+   * held for the next pass. Otherwise the site stays held at the assignment's epoch, or another
+   * recovery has it. Returns the assignment as read now.
+   */
+  async #afterTakeOver(
+    assignment: TurnAssignment,
+    phase: TurnPhase,
+  ): Promise<TurnAssignment | null> {
+    const now = await this.deps.assignments.get(assignment.id).catch(() => null)
+    if (now && now.outcome !== null)
+      await this.#free(now).catch(() =>
+        this.#logger.error(
+          `Turn recovery could not free the site of a finished turn (epoch ${now.fence.epoch}, phase ${phase})`,
+        ),
+      )
+    else if (now && now.fence.epoch > assignment.fence.epoch)
+      await holdForRecovery(this.deps.leases, now.fence, phase)
+    return now
   }
 
   /**
@@ -568,7 +581,8 @@ export class TurnExecRecovery {
         labels: containerLabels(assignment),
       })
     } catch (error) {
-      const now = await this.deps.assignments.get(assignment.id).catch(() => null)
+      // Refused or unanswered takeovers leave the site held where the assignment is.
+      const now = await this.#afterTakeOver(assignment, turn.step!)
       // Refused before any takeover: the snapshot has no committed manifest.
       if (turn.step === 'checkpointing' && now?.fence.epoch === assignment.fence.epoch)
         return this.#park(assignment, turn.step, 'no committed checkpoint')

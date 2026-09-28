@@ -12,6 +12,7 @@ import {
   type RunnerReport,
   type Sandbox,
   type SandboxSpec,
+  type SiteLeaseFence,
   type TurnOutputBatch,
   type TurnPlan,
 } from '@repo/domain'
@@ -95,6 +96,16 @@ function startRunner(
   runners.push(runner)
   return { runner, lines }
 }
+
+/** Recovery reclaims the held lease under the next epoch; the hub only asserts fences here. */
+const recoveryLeases = () => ({
+  reclaimForRecovery: async (held: SiteLeaseFence, ttlMs: number) => ({
+    ...held,
+    epoch: held.epoch + 1,
+    expiresAt: new Date(Date.now() + ttlMs),
+    serverNow: new Date(),
+  }),
+})
 
 const open = async (assignments: MemoryTurnAssignments) =>
   (await assignments.open({
@@ -198,7 +209,7 @@ const prepareCommand = (body: Record<string, unknown> = {}, epoch = 1) =>
 
 describe('SandboxRunner with core', () => {
   it('carries a turn through a restart of core and resumes the agent from the journal', async () => {
-    const assignments = new MemoryTurnAssignments()
+    const assignments = new MemoryTurnAssignments(recoveryLeases())
     const side = sandboxSide()
     const before = coreSide(assignments)
     const transport = loopbackTransport(before.hub)
@@ -215,7 +226,7 @@ describe('SandboxRunner with core', () => {
     const after = coreSide(assignments)
     transport.hub = after.hub
     await vi.waitFor(() => expect(after.hub.inventory({})).toHaveLength(1))
-    await assignments.advance({ id: assignment.id, fromEpoch: 1, epoch: 2 })
+    await assignments.takeOver({ id: assignment.id, fence, ttlMs: 60_000 })
     // The runner still holds the turn credentials: recovery does not send them again.
     const adopted = await after.executor.adopt(
       {
@@ -253,7 +264,7 @@ describe('SandboxRunner with core', () => {
   })
 
   it('lets a restarted runner take the container over by its labels, only with the turn credentials', async () => {
-    const assignments = new MemoryTurnAssignments()
+    const assignments = new MemoryTurnAssignments(recoveryLeases())
     const side = sandboxSide()
     const core = coreSide(assignments)
     const gone = startRunner(loopbackTransport(core.hub), side.executor)
@@ -266,10 +277,10 @@ describe('SandboxRunner with core', () => {
     transport.intercept = (route) => void (route === 'poll' && polls++)
     const { runner } = startRunner(transport, side.executor)
     await vi.waitFor(() => expect(polls).toBeGreaterThan(0))
-    await assignments.advance({
+    await assignments.takeOver({
       id: assignment.id,
-      fromEpoch: 1,
-      epoch: 2,
+      fence,
+      ttlMs: 60_000,
       runnerSession: runner.session,
     })
     const adopt = (sent: boolean) =>

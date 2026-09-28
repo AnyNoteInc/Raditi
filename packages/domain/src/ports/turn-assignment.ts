@@ -1,5 +1,5 @@
 import type { TurnAssignmentRunner, TurnExecutorKind, TurnPlan } from './turn-executor.ts'
-import type { SiteLeaseFence } from './turn-runner.ts'
+import type { SiteLeaseFence, SiteLeaseGrant } from './turn-runner.ts'
 
 /** How an assignment ended. `lost`: recovery gave the turn up, never billed (P12). */
 export const turnAssignmentOutcomes = ['completed', 'failed', 'lost'] as const
@@ -65,17 +65,20 @@ export interface TurnAssignmentStore {
   /** A poll of the runner session listed these assignments as active. */
   seen(input: { runnerId: string; runnerSession: string; ids: readonly string[] }): Promise<void>
   /**
-   * Recovery takes the turn over under a newer epoch of the same lease, optionally for a
-   * restarted session of the same runner, and counts the attempt unless `countAttempt` is false:
-   * removing a given-up turn's container, or publishing its checkpoint before the removal.
+   * Recovery takes the turn over: the site lease held for recovery at the assignment's epoch
+   * (`fence`) is reclaimed under the next one for `ttlMs`, and the assignment moves there — both
+   * or neither, so the lease and the assignment never end up on different epochs. Optionally for
+   * a restarted session of the same runner; counts the attempt unless `countAttempt` is false:
+   * removing a given-up turn's container, or publishing its checkpoint before the removal. null
+   * when the assignment finished or moved on, or the lease is not held at `fence`.
    */
-  advance(input: {
+  takeOver(input: {
     id: string
-    fromEpoch: number
-    epoch: number
+    fence: SiteLeaseFence
+    ttlMs: number
     runnerSession?: string
     countAttempt?: boolean
-  }): Promise<TurnAssignment | null>
+  }): Promise<{ assignment: TurnAssignment; grant: SiteLeaseGrant } | null>
   /** Counts a recovery attempt under the assignment's current epoch; false once it moved on. */
   countAttempt(input: { id: string; epoch: number }): Promise<boolean>
   finish(input: { id: string; epoch: number; outcome: TurnAssignmentOutcome }): Promise<boolean>

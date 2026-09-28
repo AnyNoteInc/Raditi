@@ -72,7 +72,14 @@ describe('turn assignment input validation', () => {
     await expect(
       store.claim({ ids: [], runnerId: 'VM 1', runnerSession: randomUUID(), limit: 1 }),
     ).rejects.toThrow()
-    await expect(store.advance({ id: randomUUID(), fromEpoch: 2, epoch: 2 })).rejects.toThrow()
+    await expect(
+      store.takeOver({
+        id: randomUUID(),
+        fence: { ...fence, operation: 'deploy' } as never,
+        ttlMs: 60_000,
+      }),
+    ).rejects.toThrow()
+    await expect(store.takeOver({ id: randomUUID(), fence, ttlMs: 999 })).rejects.toThrow()
     await expect(store.get('bad')).rejects.toThrow()
     expect($queryRaw).not.toHaveBeenCalled()
     expect(
@@ -246,7 +253,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     expect(await store.abandon(own.id)).toBe(false)
   })
 
-  it('records one container and advances only under the reclaimed newer epoch', async () => {
+  it('records one container and takes the turn over only from the lease held at its epoch', async () => {
     const { lease, input } = await fixture()
     const opened = (await store.open(input))!
     const session = randomUUID()
@@ -257,30 +264,85 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     expect(await store.recordContainer({ id: opened.id, epoch: 1, containerId: 'c2' })).toBe(false)
     await store.seen({ runnerId: 'vm1', runnerSession: session, ids: [opened.id] })
 
-    // The newer epoch must own the lease first.
-    expect(await store.advance({ id: opened.id, fromEpoch: 1, epoch: 2 })).toBeNull()
+    // The lease must be held for recovery at the assignment's epoch first.
+    expect(await store.takeOver({ id: opened.id, fence: lease, ttlMs: 60_000 })).toBeNull()
+    expect(await leases.inspect(lease.siteId)).toMatchObject({ epoch: 1, heldForOperator: false })
     await leases.holdForRecovery(lease)
-    const reclaimed = (await leases.reclaimForRecovery(lease, 60_000))!
-    expect(reclaimed.epoch).toBe(2)
     const restarted = randomUUID()
-    const advanced = await store.advance({
+    const taken = (await store.takeOver({
       id: opened.id,
-      fromEpoch: 1,
-      epoch: 2,
+      fence: lease,
+      ttlMs: 60_000,
       runnerSession: restarted,
-    })
-    expect(advanced).toMatchObject({
+    }))!
+    expect(taken.assignment).toMatchObject({
       fence: { epoch: 2 },
       firstEpoch: 1,
       recoveryAttempts: 1,
       containerId: 'c1',
       runner: { id: 'vm1', session: restarted },
     })
-    expect(await store.advance({ id: opened.id, fromEpoch: 1, epoch: 2 })).toBeNull()
+    expect(taken.grant).toMatchObject({
+      siteId: lease.siteId,
+      taskId: lease.taskId,
+      operation: 'turn',
+      epoch: 2,
+    })
+    const ttl = taken.grant.expiresAt.getTime() - taken.grant.serverNow.getTime()
+    expect(ttl).toBeGreaterThan(59_000)
+    expect(ttl).toBeLessThanOrEqual(60_000)
+    expect(await leases.assert(taken.grant)).toBe(true)
+    expect(await store.takeOver({ id: opened.id, fence: lease, ttlMs: 60_000 })).toBeNull()
     expect(await store.finish({ id: opened.id, epoch: 1, outcome: 'lost' })).toBe(false)
     expect((await store.unfinished({ runnerId: 'vm1' })).map((a) => a.id)).toContain(opened.id)
     expect(await store.finish({ id: opened.id, epoch: 2, outcome: 'lost' })).toBe(true)
     expect((await store.unfinished({ runnerId: 'vm1' })).map((a) => a.id)).not.toContain(opened.id)
+  })
+
+  it('moves neither the lease nor the assignment when either one refuses the takeover', async () => {
+    const { lease, input } = await fixture()
+    const opened = (await store.open(input))!
+    await leases.holdForRecovery(lease)
+    const held = { epoch: 1, heldForOperator: true, taskId: lease.taskId }
+    // A new runner session only for a claimed assignment.
+    expect(
+      await store.takeOver({
+        id: opened.id,
+        fence: lease,
+        ttlMs: 60_000,
+        runnerSession: randomUUID(),
+      }),
+    ).toBeNull()
+    // Another task's fence, or the lease of another epoch.
+    expect(
+      await store.takeOver({
+        id: opened.id,
+        fence: { ...lease, taskId: randomUUID() },
+        ttlMs: 60_000,
+      }),
+    ).toBeNull()
+    expect(
+      await store.takeOver({ id: opened.id, fence: { ...lease, epoch: 2 }, ttlMs: 60_000 }),
+    ).toBeNull()
+    expect(await leases.inspect(lease.siteId)).toMatchObject(held)
+    expect(await store.get(opened.id)).toMatchObject({ fence: { epoch: 1 }, recoveryAttempts: 0 })
+
+    // Finished by its owner: the held lease stays at its epoch for recovery to free.
+    expect(await store.finish({ id: opened.id, epoch: 1, outcome: 'failed' })).toBe(true)
+    expect(await store.takeOver({ id: opened.id, fence: lease, ttlMs: 60_000 })).toBeNull()
+    expect(await leases.inspect(lease.siteId)).toMatchObject(held)
+  })
+
+  it('lets exactly one of two takeovers of the same held epoch win', async () => {
+    const { lease, input } = await fixture()
+    const opened = (await store.open(input))!
+    await leases.holdForRecovery(lease)
+    const results = await Promise.all(
+      [1, 2].map(() => store.takeOver({ id: opened.id, fence: lease, ttlMs: 60_000 })),
+    )
+    expect(results.filter((taken) => taken !== null)).toHaveLength(1)
+    expect(await leases.inspect(lease.siteId)).toMatchObject({ epoch: 2, heldForOperator: false })
+    expect(await store.get(opened.id)).toMatchObject({ fence: { epoch: 2 }, recoveryAttempts: 1 })
   })
 
   it('lets exactly one of a claim and an abandon win an unclaimed assignment', async () => {
@@ -325,9 +387,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     const { lease, input } = await fixture()
     const opened = (await store.open(input))!
     await leases.holdForRecovery(lease)
-    expect((await leases.reclaimForRecovery(lease, 60_000))!.epoch).toBe(2)
     expect(
-      await store.advance({ id: opened.id, fromEpoch: 1, epoch: 2, countAttempt: false }),
+      (await store.takeOver({ id: opened.id, fence: lease, ttlMs: 60_000, countAttempt: false }))
+        ?.assignment,
     ).toMatchObject({ fence: { epoch: 2 }, recoveryAttempts: 0 })
     expect(await store.countAttempt({ id: opened.id, epoch: 1 })).toBe(false)
     expect(await store.countAttempt({ id: opened.id, epoch: 2 })).toBe(true)

@@ -1,10 +1,14 @@
 // In-memory TurnAssignmentStore for *.test.ts files: the rules of the PostgreSQL store (one
 // unfinished assignment per turn, claims of unclaimed runner turns, epoch-conditional writes)
-// without the site lease check, which packages/db tests against PostgreSQL.
+// without the site lease check of `open`, which packages/db tests against PostgreSQL. A takeover
+// reclaims through the site lease store it is given.
 import { randomUUID } from 'node:crypto'
 
 import type {
   OpenTurnAssignment,
+  SiteLeaseFence,
+  SiteLeaseGrant,
+  SiteLeaseStore,
   TurnAssignment,
   TurnAssignmentOutcome,
   TurnAssignmentStore,
@@ -13,6 +17,8 @@ import type {
 export class MemoryTurnAssignments implements TurnAssignmentStore {
   readonly rows = new Map<string, TurnAssignment>()
   readonly seenAt = new Map<string, number>()
+
+  constructor(private readonly leases?: Pick<SiteLeaseStore, 'reclaimForRecovery'>) {}
 
   async open(input: OpenTurnAssignment): Promise<TurnAssignment | null> {
     for (const row of this.rows.values())
@@ -92,27 +98,32 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
     }
   }
 
-  async advance(input: {
+  async takeOver(input: {
     id: string
-    fromEpoch: number
-    epoch: number
+    fence: SiteLeaseFence
+    ttlMs: number
     runnerSession?: string
     countAttempt?: boolean
-  }): Promise<TurnAssignment | null> {
+  }): Promise<{ assignment: TurnAssignment; grant: SiteLeaseGrant } | null> {
+    if (!this.leases) throw new Error('A takeover needs the site lease store')
     const row = this.rows.get(input.id)
-    if (
-      !row ||
-      row.outcome ||
-      row.fence.epoch !== input.fromEpoch ||
-      input.epoch <= input.fromEpoch
-    )
-      return null
-    if (input.runnerSession && !row.runner) return null
-    row.fence = { ...row.fence, epoch: input.epoch }
+    if (!row) return null
+    const current = () =>
+      !row.outcome &&
+      row.fence.siteId === input.fence.siteId &&
+      row.fence.taskId === input.fence.taskId &&
+      row.fence.epoch === input.fence.epoch &&
+      (!input.runnerSession || row.runner !== null)
+    if (!current()) return null
+    const grant = await this.leases.reclaimForRecovery(input.fence, input.ttlMs)
+    if (!grant) return null
+    // One statement in PostgreSQL: a test that changes the row meanwhile has a race it cannot have.
+    if (!current()) throw new Error('The assignment changed during its takeover')
+    row.fence = { ...row.fence, epoch: grant.epoch }
     if (input.countAttempt ?? true) row.recoveryAttempts += 1
     if (input.runnerSession && row.runner)
       row.runner = { ...row.runner, session: input.runnerSession }
-    return this.#copy(row)
+    return { assignment: this.#copy(row), grant }
   }
 
   async countAttempt(input: { id: string; epoch: number }): Promise<boolean> {

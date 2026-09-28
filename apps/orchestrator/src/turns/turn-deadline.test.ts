@@ -144,7 +144,7 @@ describe('turn deadline chain (spec §8 «Срок контейнера и ар�
     let checked = 0
     for (let run = 0; run < 100; run++) {
       const leases = new MemorySiteLeases()
-      const assignments = new MemoryTurnAssignments()
+      const assignments = new MemoryTurnAssignments(leases)
       const journal = new MemoryTurnJournal(leases)
       const grants: SiteLeaseGrant[] = []
       const acquire = leases.acquire.bind(leases)

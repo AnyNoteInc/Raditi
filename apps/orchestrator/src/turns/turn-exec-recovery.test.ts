@@ -186,7 +186,7 @@ function docker() {
 function world(kind: string) {
   const leases = new MemorySiteLeases()
   const journal = new MemoryTurnJournal(leases)
-  const assignments = new MemoryTurnAssignments()
+  const assignments = new MemoryTurnAssignments(leases)
   const credentials = new MemoryTurnCredentials()
   const vm = docker()
   const driver: AgentDriver = {
@@ -931,6 +931,57 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     expectCompleted(w, 3)
   })
 
+  it.each(['before', 'after'])(
+    'resumes on the next pass when a takeover fails %s its commit, lease and assignment on one epoch',
+    async (when) => {
+      const w = world(kind)
+      w.credentials.keep(reference, values)
+      const { after } = await w.crashAt('running')
+      const takeOver = w.assignments.takeOver.bind(w.assignments)
+      vi.spyOn(w.assignments, 'takeOver').mockImplementationOnce(async (input) => {
+        if (when === 'after') await takeOver(input)
+        throw new Error('connection reset')
+      })
+      await w.recover(after.recovery)
+      // Committed with its answer lost: the epoch it moved to is held for the next pass.
+      const epoch = when === 'after' ? 2 : 1
+      expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch } })
+      expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch })
+      expect(w.vm.exists()).toBe(true)
+
+      const recovering = w.recover(after.recovery)
+      await vi.waitFor(() => expect(w.journal.phases(epoch + 1)).toContain('resumed'))
+      w.vm.finish()
+      await recovering
+      expectCompleted(w, epoch + 1)
+    },
+  )
+
+  it.each(['before', 'after'])(
+    'publishes on the next pass when a takeover fails %s its commit, lease and assignment on one epoch',
+    async (when) => {
+      const w = world(kind)
+      w.vm.finish()
+      const { after } = await w.crashAt('checkpointed')
+      const takeOver = w.assignments.takeOver.bind(w.assignments)
+      vi.spyOn(w.assignments, 'takeOver').mockImplementationOnce(async (input) => {
+        if (when === 'after') await takeOver(input)
+        throw new Error('connection reset')
+      })
+      await w.recover(after.recovery)
+      const epoch = when === 'after' ? 2 : 1
+      expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch } })
+      expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch })
+      expect(w.publish).not.toHaveBeenCalled()
+
+      await w.recover(after.recovery)
+      expect(w.publish).toHaveBeenCalledOnce()
+      expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: epoch + 1 } })
+      expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: epoch + 1 })
+      expect(w.logger.error).not.toHaveBeenCalled()
+    },
+  )
+
   it('leaves a turn to an operator after two recovery attempts', async () => {
     const w = world(kind)
     const { after } = await w.crashAt('output')
@@ -1135,7 +1186,7 @@ describe('turn exec recovery of a turn given up before its container was reporte
     expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
   })
 
-  it('frees the epoch it reclaimed when the attempt finished the turn before its takeover', async () => {
+  it('frees the epoch it held when the attempt finished the turn before its takeover', async () => {
     const w = world('local')
     const { core, created } = await vacatingWithContainer(w)
     // Expired: the attempt's release fails, and it finds the site not held yet.
@@ -1162,12 +1213,11 @@ describe('turn exec recovery of a turn given up before its container was reporte
       await inspected.promise
       return hold(fence)
     })
-    const reclaim = w.leases.reclaimForRecovery.bind(w.leases)
-    vi.spyOn(w.leases, 'reclaimForRecovery').mockImplementationOnce(async (fence, ttlMs) => {
-      const grant = await reclaim(fence, ttlMs)
+    const takeOver = w.assignments.takeOver.bind(w.assignments)
+    vi.spyOn(w.assignments, 'takeOver').mockImplementationOnce(async (input) => {
       finishing.resolve()
       await finished.promise
-      return grant
+      return takeOver(input)
     })
     await w.recover(core.recovery)
 

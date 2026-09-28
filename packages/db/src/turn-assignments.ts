@@ -8,6 +8,8 @@ import {
   turnExecutorKinds,
   turnPlanSchema,
   type OpenTurnAssignment,
+  type SiteLeaseFence,
+  type SiteLeaseGrant,
   type TurnAssignment,
   type TurnAssignmentOutcome,
   type TurnAssignmentStore,
@@ -45,6 +47,7 @@ const openSchema = z.object({
 })
 const idsSchema = z.array(id).max(256)
 const runnerSchema = z.object({ runnerId: runnerIdSchema, runnerSession: id })
+const takenSchema = z.array(z.object({ lease_expires_at: z.coerce.date() })).length(1)
 
 const rowsSchema = z.array(
   z.object({
@@ -133,8 +136,9 @@ function uuidv7(): string {
 }
 
 /**
- * Turn assignments in PostgreSQL. Opening is fenced by the site lease in the same statement,
- * claims skip rows another claimant holds, and later writes are conditional on the epoch.
+ * Turn assignments in PostgreSQL. Opening and a takeover are fenced by the site lease in the same
+ * statement, claims skip rows another claimant holds, and later writes are conditional on the
+ * epoch.
  */
 export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
   private readonly db: AssignmentDatabase
@@ -251,45 +255,69 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
       RETURNING id`
   }
 
-  async advance(input: {
+  async takeOver(input: {
     id: string
-    fromEpoch: number
-    epoch: number
+    fence: SiteLeaseFence
+    ttlMs: number
     runnerSession?: string
     countAttempt?: boolean
-  }): Promise<TurnAssignment | null> {
+  }): Promise<{ assignment: TurnAssignment; grant: SiteLeaseGrant } | null> {
     const checked = z
       .object({
         id,
-        fromEpoch: epoch,
-        epoch,
+        fence: fenceSchema,
+        ttlMs: z
+          .number()
+          .int()
+          .min(1_000)
+          .max(30 * 60_000),
         runnerSession: id.nullable(),
         countAttempt: z.boolean(),
       })
       .parse({
-        ...input,
+        id: input.id,
+        fence: input.fence,
+        ttlMs: input.ttlMs,
         runnerSession: input.runnerSession ?? null,
         countAttempt: input.countAttempt ?? true,
       })
-    if (checked.epoch <= checked.fromEpoch) throw badRequest('Recovery must move to a newer epoch')
+    const { fence } = checked
     const attempts = checked.countAttempt ? 1 : 0
-    // Only the current owner of the newer epoch takes the turn over.
-    const rows = assignments(
-      await this.db.$queryRaw`
-      UPDATE turn_assignments a SET lease_epoch = ${checked.epoch},
-        recovery_attempts = a.recovery_attempts + ${attempts}::int,
-        runner_session = COALESCE(${checked.runnerSession}::uuid, a.runner_session),
+    // One statement: the lease moves to the next epoch only together with the assignment.
+    const raw = await this.db.$queryRaw`
+      WITH a AS MATERIALIZED (
+        SELECT id, site_id, task_id FROM turn_assignments
+        WHERE id = ${checked.id}::uuid AND site_id = ${fence.siteId}::uuid
+          AND task_id = ${fence.taskId}::uuid AND lease_epoch = ${fence.epoch}
+          AND finished_at IS NULL
+          AND (${checked.runnerSession}::uuid IS NULL OR runner_id IS NOT NULL)
+        FOR UPDATE
+      ), held AS MATERIALIZED (
+        SELECT lease.site_id FROM site_leases lease JOIN a ON a.site_id = lease.site_id
+        WHERE lease.holder_task_id = a.task_id AND lease.epoch = ${fence.epoch}
+          AND lease.operation = 'turn'::"LeaseOperation" AND lease.held_for_operator
+          AND lease.epoch < 2147483647
+        FOR UPDATE OF lease
+      ), lease AS (
+        UPDATE site_leases l SET epoch = l.epoch + 1, held_for_operator = false,
+          acquired_at = clock_timestamp(), updated_at = clock_timestamp(),
+          expires_at = clock_timestamp() + ${checked.ttlMs}::int * interval '1 millisecond'
+        FROM held WHERE l.site_id = held.site_id
+        RETURNING l.site_id, l.epoch, l.expires_at
+      )
+      UPDATE turn_assignments t SET lease_epoch = lease.epoch,
+        recovery_attempts = t.recovery_attempts + ${attempts}::int,
+        runner_session = COALESCE(${checked.runnerSession}::uuid, t.runner_session),
         updated_at = clock_timestamp()
-      WHERE a.id = ${checked.id}::uuid AND a.lease_epoch = ${checked.fromEpoch}
-        AND a.finished_at IS NULL
-        AND (${checked.runnerSession}::uuid IS NULL OR a.runner_id IS NOT NULL)
-        AND EXISTS (SELECT 1 FROM site_leases lease
-          WHERE lease.site_id = a.site_id AND lease.holder_task_id = a.task_id
-            AND lease.epoch = ${checked.epoch} AND lease.operation = 'turn'::"LeaseOperation"
-            AND NOT lease.held_for_operator AND lease.expires_at > clock_timestamp())
-      RETURNING ${columns('a')}`,
-    )
-    return rows[0] ?? null
+      FROM a, lease WHERE t.id = a.id AND lease.site_id = a.site_id
+      RETURNING ${columns('t')}, lease.expires_at AS lease_expires_at`
+    const assignment = assignments(raw)[0]
+    if (!assignment) return null
+    const { lease_expires_at: expiresAt } = takenSchema.parse(raw)[0]!
+    return {
+      assignment,
+      grant: { ...assignment.fence, expiresAt, serverNow: assignment.serverNow },
+    }
   }
 
   async countAttempt(input: { id: string; epoch: number }): Promise<boolean> {

@@ -370,7 +370,7 @@ function turnFixture(kind: string) {
       throw new Error('No presigned object in this test')
     }),
   }
-  const assignments = new MemoryTurnAssignments()
+  const assignments = new MemoryTurnAssignments(leases)
   const executor = executors[kind]!(
     { sandboxes, parser: () => driver, transport, transfer, importBundle },
     { leases, assignments },
@@ -1720,12 +1720,14 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
   })
 
-  it('holds the new epoch without publishing when the assignment moved on', async () => {
+  it('takes nothing over and publishes nothing when the assignment moved on', async () => {
     const f = await recoveryFixture()
     await f.assignments.finish({ id: f.assignment.id, epoch: 1, outcome: 'failed' })
     await expect(f.recover()).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(f.publication.publish).not.toHaveBeenCalled()
-    expect(f.leases.holdForRecovery).toHaveBeenCalledWith(expect.objectContaining({ epoch: 2 }))
+    // The lease stays held where it was: no newer epoch exists that nothing points at.
+    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
+    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
   })
 
   it('requires the exact deliberately held fence', async () => {

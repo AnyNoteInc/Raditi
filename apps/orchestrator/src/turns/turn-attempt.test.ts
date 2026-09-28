@@ -72,7 +72,7 @@ afterEach(() => {
 async function given() {
   const leases = new MemorySiteLeases()
   const journal = new MemoryTurnJournal(leases)
-  const assignments = new MemoryTurnAssignments()
+  const assignments = new MemoryTurnAssignments(leases)
   const lease = (await leases.acquire({
     siteId: labels.siteId,
     taskId: labels.taskId,
@@ -219,14 +219,15 @@ describe('TurnAttempt given up while its prepare was out (spec §8)', () => {
     expect(t.finish).not.toHaveBeenCalled()
     expect(t.row()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
     // So its takeover is never lost to this attempt's finish.
-    const grant = (await t.leases.reclaimForRecovery(t.lease, 60_000))!
     expect(
-      await t.assignments.advance({
-        id: t.attempt.assignment!.id,
-        fromEpoch: 1,
-        epoch: grant.epoch,
-        countAttempt: false,
-      }),
+      (
+        await t.assignments.takeOver({
+          id: t.attempt.assignment!.id,
+          fence: t.lease,
+          ttlMs: 60_000,
+          countAttempt: false,
+        })
+      )?.assignment,
     ).toMatchObject({ fence: { epoch: 2 }, recoveryAttempts: 0 })
   })
 
