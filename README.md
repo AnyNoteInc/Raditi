@@ -64,7 +64,8 @@ pnpm e2e
 
 `pnpm infra:up`, `infra:down`, `infra:logs` управляют PostgreSQL, Redis, SeaweedFS, OpenBao и Gitea.
 Дополнительные профили: `site` — WordPress на 8080, `monitoring` — Prometheus на 9090 и Grafana на 3030,
-`llm` — LiteLLM, `ci` — раннер Gitea, `monitoring-host` — cAdvisor на Linux.
+`llm` — LiteLLM (удаляется в P3: профиль станет фейками подписок Codex и Kimi и локальным прокси выхода),
+`ci` — раннер Gitea, `monitoring-host` — cAdvisor на Linux.
 
 ```sh
 docker compose --env-file .env -f infra/dev/docker-compose.yml --profile monitoring --profile site up -d
