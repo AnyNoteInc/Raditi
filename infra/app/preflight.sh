@@ -84,6 +84,9 @@ done
 [ "$(sysctl -n vm.overcommit_memory)" = 1 ] || fail "vm.overcommit_memory must be 1"
 [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] ||
   fail "the clock is not NTP-synchronized"
+# At boot dockerd starts the containers itself: only its own ordering holds them until the sync.
+systemctl show docker.service -p After --value 2>/dev/null | grep -qw time-sync.target ||
+  fail "docker.service must start after time-sync.target"
 
 # 8. No AAAA while the bridges have no IPv6: a client over IPv6 would reach web with the address
 # of the bridge gateway instead of its own.
@@ -95,6 +98,20 @@ fi
 # 9. Images by digest only (spec §19): a tag is not a rollback point.
 for name in WEB_IMAGE ORCHESTRATOR_IMAGE MIGRATE_IMAGE TRAEFIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE; do
   setting "$name" | grep -Eq '@sha256:[0-9a-f]{64}$' || fail "$name must be pinned by digest"
+done
+
+# 10. setting() reads a value as written, while compose strips quotes and a trailing comment.
+if grep -Eq "^[A-Z0-9_]+=([\"']|.*[[:space:]]#)" "$env_file"; then
+  fail "$env_file: write values without quotes or trailing comments"
+fi
+
+# 11. The record for rollback and the roles step need the revision of this directory.
+setting APP_REVISION | grep -Eqx '[0-9a-f]{40}' || fail "APP_REVISION must be a full commit sha"
+
+# 12. The access log holds client addresses: kept 90 days and 10 GB at most, no copy in syslog.
+journald=/etc/systemd/journald.conf.d/raditi.conf
+for line in '[Journal]' Storage=persistent SystemMaxUse=10G MaxRetentionSec=90day ForwardToSyslog=no; do
+  grep -qxF "$line" "$journald" 2>/dev/null || fail "$journald must contain $line"
 done
 
 [ "$failed" -eq 0 ] || exit 1

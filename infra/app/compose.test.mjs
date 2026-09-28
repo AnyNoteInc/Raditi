@@ -159,6 +159,52 @@ test("the server's .env holds no secret-like names either (preflight.sh refuses 
   for (const name of Object.keys(example)) assert.equal(refused(name), false, name)
 })
 
+test('env.example writes values the way preflight.sh reads them: no quotes or comments', () => {
+  // preflight's own pattern, run by grep as on the VM.
+  const pattern = /if grep -Eq "(\^\[A-Z0-9_\]\+=[^"]*\\"[^"]*)" "\$env_file"; then/
+    .exec(preflight)?.[1]
+    .replace('\\"', '"')
+  assert.ok(pattern)
+  const refused = (line) => {
+    try {
+      execFileSync('grep', ['-Eq', pattern], { input: `${line}\n` })
+      return true
+    } catch {
+      return false
+    }
+  }
+  for (const line of ['APP_DOMAIN="raditi.ru"', "APP_DOMAIN='raditi.ru'", 'VOLUME_PREFIX=a # b'])
+    assert.equal(refused(line), true, line)
+  for (const [name, value] of Object.entries(example))
+    assert.equal(refused(`${name}=${value}`), false, name)
+})
+
+test('preflight.sh requires a full revision and the journald limits of the runbook', () => {
+  const revision = /setting APP_REVISION \| grep -Eqx '([^']+)'/.exec(preflight)?.[1]
+  assert.ok(revision)
+  const accepted = (value) => {
+    try {
+      execFileSync('grep', ['-Eqx', revision], { input: `${value}\n` })
+      return true
+    } catch {
+      return false
+    }
+  }
+  assert.equal(accepted('0123456789abcdef0123456789abcdef01234567'), true)
+  for (const value of ['', 'verify', '0123456', `${'A'.repeat(40)}`])
+    assert.equal(accepted(value), false)
+  assert.equal(example.APP_REVISION, '')
+  const lines = /^for line in (.+); do$/m.exec(preflight)?.[1].split(' ')
+  assert.deepEqual(lines, [
+    "'[Journal]'",
+    'Storage=persistent',
+    'SystemMaxUse=10G',
+    'MaxRetentionSec=90day',
+    'ForwardToSyslog=no',
+  ])
+  assert.ok(preflight.includes('grep -qxF "$line" "$journald"'))
+})
+
 test("preflight.sh requires a digest for every image of the server's .env", () => {
   const images = [...source.matchAll(/\$\{([A-Z_]+_IMAGE):\?/g)].map(([, name]) => name)
   const checked = /^for name in ([A-Z_ ]+); do$/m.exec(preflight)?.[1].split(' ')
@@ -181,6 +227,9 @@ test('the stack unit waits for the clock and tries again until preflight passes'
   assert.deepEqual(values('ExecStartPre'), ['/opt/raditi/app/preflight.sh'])
   assert.deepEqual(values('Restart'), ['on-failure'])
   assert.deepEqual(values('RestartSec'), ['30s'])
+  // dockerd itself restarts the containers at boot: preflight checks that it waits for the clock.
+  assert.ok(preflight.includes('systemctl show docker.service -p After --value'))
+  assert.ok(preflight.includes('grep -qw time-sync.target'))
 })
 
 test('every service is read-only, drops all capabilities, cannot gain privileges, has limits', () => {

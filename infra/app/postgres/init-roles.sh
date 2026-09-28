@@ -1,7 +1,8 @@
 #!/bin/sh
 # Roles of the platform database (spec §15). The image's superuser runs only this script; the
-# schema belongs to raditi (migrate, seed); web and core get DML through raditi_app. Idempotent:
-# run it again after a password rotation (README.md). superuser-password serves the first initdb
+# schema belongs to raditi (migrate, seed); web and core get DML through raditi_app, except on
+# the migration history. Idempotent: run it again after the first migration and after a password
+# rotation (README.md). superuser-password serves the first initdb
 # only: the script drops it, so the superuser has the socket and nothing over the network.
 set -eu
 psql -v ON_ERROR_STOP=1 --username postgres --dbname raditi <<'SQL'
@@ -32,4 +33,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE raditi IN SCHEMA public
   GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO raditi_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO raditi_app;
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO raditi_app;
+-- After the grants, so that no run gives it back: the history decides which DDL migrate runs.
+SELECT 'REVOKE ALL ON TABLE public._prisma_migrations FROM raditi_app'
+  WHERE to_regclass('public._prisma_migrations') IS NOT NULL \gexec
 SQL

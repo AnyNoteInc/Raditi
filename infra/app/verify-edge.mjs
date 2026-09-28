@@ -611,6 +611,10 @@ try {
   if (realAddress) await createOutsideClient()
   try {
     await compose(['--profile', 'ops', 'run', '--rm', 'migrate'])
+    // As the runbook does after the first migration: the history is not the apps' to change.
+    await compose(['exec', '-T', 'postgres', 'sh', '-s'], {
+      input: await readFile(join(app, 'postgres/init-roles.sh')),
+    })
     await compose(['--profile', 'ops', 'run', '--rm', 'seed'])
     await compose(['up', '-d', '--wait', '--wait-timeout', String(UP_TIMEOUT_S)])
   } catch (error) {
@@ -969,12 +973,16 @@ try {
     const ddl = await psql(secret.pg.web, 'raditi_web', 'CREATE TABLE verify_edge_x ()')
     assert.notEqual(ddl.code, 0)
     assert.match(ddl.stderr, /permission denied/)
-    const dml = await psql(
-      secret.pg.core,
-      'raditi_core',
-      'SELECT count(*) > 0 FROM _prisma_migrations',
-    )
-    assert.equal(dml.stdout.trim(), 't')
+    const dml = await psql(secret.pg.core, 'raditi_core', 'SELECT count(*) >= 0 FROM users')
+    assert.equal(dml.stdout.trim(), 't', dml.stderr)
+    for (const [password, user] of [
+      [secret.pg.web, 'raditi_web'],
+      [secret.pg.core, 'raditi_core'],
+    ]) {
+      const history = await psql(password, user, 'DELETE FROM _prisma_migrations')
+      assert.notEqual(history.code, 0)
+      assert.match(history.stderr, /permission denied/)
+    }
     const roles = await psql(
       secret.pg.web,
       'raditi_web',
