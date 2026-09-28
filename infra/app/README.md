@@ -60,12 +60,13 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 
 ## Обычная выкладка
 
-1. Новые digest `WEB_IMAGE`, `ORCHESTRATOR_IMAGE`, `MIGRATE_IMAGE` в `.env`, затем `docker compose pull web core migrate`.
-2. `docker compose run --rm migrate`. Миграции только расширяют схему: сужение — в следующем релизе, потому что старые web и `core` работают на новой схеме, а отката схемы у Prisma нет.
-3. `docker compose up -d --wait --no-deps web core`. Пока web пересоздаётся, Traefik несколько секунд отвечает 502, потоки задач переподключаются. Это принято.
-4. `docker compose run --rm seed` — только если сиды менялись. Сбой сида не мешает работе web и `core`.
+1. **Файлы.** Привести `/opt/raditi/app` (всё, кроме `.env`) к коммиту, из которого собраны образы: `docker-compose.yml`, маршруты Traefik, `preflight.sh` и `postgres/init-roles.sh` должны быть той же ревизии. Новые переменные из `env.example` дописать в `.env`. Коммит записать в `.env` рядом с digest: `APP_REVISION=<sha>`.
+2. **Образы.** Новые digest `WEB_IMAGE`, `ORCHESTRATOR_IMAGE`, `MIGRATE_IMAGE` в `.env`, затем `./preflight.sh` (в том числе проверяет, что все образы — по digest) и `docker compose pull web core migrate`.
+3. `docker compose run --rm migrate`. Миграции только расширяют схему: сужение — в следующем релизе, потому что старые web и `core` работают на новой схеме, а отката схемы у Prisma нет.
+4. `docker compose up -d --wait --no-deps web core`. Пока web пересоздаётся, Traefik несколько секунд отвечает 502, потоки задач переподключаются. Это принято. Если релиз менял флаги Traefik (`command:`) или сервисы `traefik`, `postgres`, `redis` — `docker compose up -d --wait` без `--no-deps`. Файлы `traefik/dynamic` Traefik перечитывает сам.
+5. `docker compose run --rm seed` — только если сиды менялись. Сбой сида не мешает работе web и `core`.
 
-**Откат.** Прежние digest в `.env`, затем `docker compose up -d --wait --no-deps web core`. Схему не откатываем: старый код совместим с новой схемой.
+**Откат.** Вернуть `/opt/raditi/app` к прежнему `APP_REVISION` и прежние digest в `.env`, затем `./preflight.sh` и `docker compose up -d --wait --no-deps web core` (без `--no-deps`, если менялись Traefik или сервисы данных). Схему не откатываем: старый код совместим с новой схемой.
 
 **Перезагрузка ВМ.** `/run` — tmpfs. `raditi-secrets.service` рендерит секреты до `docker.service`, и контейнеры поднимает сам dockerd (`restart: unless-stopped`). Пока секретов нет, контейнеры не стартуют. Если секреты отрендерились позже или часы ещё не синхронизированы, `preflight.sh` не проходит, и `raditi-app.service` повторяет запуск каждые 30 секунд, пока стек не поднимется: `systemctl status raditi-app.service` покажет, какая проверка мешает.
 
