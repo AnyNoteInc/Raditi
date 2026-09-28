@@ -10,6 +10,7 @@ import {
   MAX_PRESIGN_TTL_MS,
   MAX_SANDBOX_TURN_MS,
   notFound,
+  preparedRunLimits,
   SANDBOX_SECRETS_DIR,
   sandboxCommandFailed,
   snapshotHasCredential,
@@ -1545,6 +1546,48 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     )
     await expect(f.run()).rejects.toMatchObject({ code: 'TURN_OUTPUT_TOO_LARGE' })
     expect(f.snapshots.save).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'more secret files than a runner prepare carries',
+      (f: ReturnType<typeof fixture>) => {
+        f.prepared.secrets = Array.from({ length: preparedRunLimits.secretFiles + 1 }, (_, i) => ({
+          path: `${SANDBOX_SECRETS_DIR}/s${i}`,
+          content: `synthetic-secret-${i}`,
+        }))
+      },
+      'file path, mode or size',
+    ],
+    [
+      'a secret file above its size',
+      (f: ReturnType<typeof fixture>) => {
+        f.prepared.secrets = [
+          {
+            path: `${SANDBOX_SECRETS_DIR}/big`,
+            content: 'x'.repeat(preparedRunLimits.secretChars + 1),
+          },
+        ]
+      },
+      'file path, mode or size',
+    ],
+    [
+      'an LLM key above the size of a secret',
+      (f: ReturnType<typeof fixture>) => {
+        f.request.context.llm.apiKey = 'k'.repeat(preparedRunLimits.secretChars + 1)
+      },
+      'credential is too long',
+    ],
+  ])('refuses %s on either executor before any container', async (_, change, message) => {
+    const f = fixture()
+    change(f)
+    await expect(f.run()).rejects.toMatchObject({
+      code: 'DRIVER_PREPARE_INVALID',
+      message: expect.stringContaining(message),
+    })
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(f.sandbox.fs.write).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
   })
 
   it('does not write prepared files outside allowed roots', async () => {

@@ -226,11 +226,13 @@ describe('prepared run credentials', () => {
           })),
         }),
       ).success
-    expect(fits(1, SANDBOX_SECRETS_TMPFS_BYTES)).toBe(true)
-    expect(fits(1, SANDBOX_SECRETS_TMPFS_BYTES + 1)).toBe(false)
-    // 170 and 200 files of three pages each: 1.6 MB of content alone would still pass.
-    expect(fits(170, 2 * 4096 + 1)).toBe(true)
-    expect(fits(200, 2 * 4096 + 1)).toBe(false)
+    // 32 files of 64 KiB fill the tmpfs exactly; a runner prepare carries no more (runnerLimits).
+    expect(preparedRunLimits.secretFiles * preparedRunLimits.secretChars).toBe(
+      SANDBOX_SECRETS_TMPFS_BYTES,
+    )
+    expect(fits(preparedRunLimits.secretFiles, preparedRunLimits.secretChars)).toBe(true)
+    expect(fits(preparedRunLimits.secretFiles + 1, 1)).toBe(false)
+    expect(fits(1, preparedRunLimits.secretChars + 1)).toBe(false)
   })
 })
 

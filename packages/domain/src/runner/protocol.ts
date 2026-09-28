@@ -23,7 +23,12 @@ import {
   snapshotManifestSchema,
   snapshotMetadataSchema,
 } from '../sessions/snapshot-manifest.ts'
-import { agentDriverIds, agentEventSchema, preparedFilesSchema } from '../ports/agent-driver.ts'
+import {
+  agentDriverIds,
+  agentEventSchema,
+  preparedFilesSchema,
+  preparedRunLimits,
+} from '../ports/agent-driver.ts'
 import {
   execCursorSchema,
   execSpecSchema,
@@ -83,8 +88,8 @@ export const runnerLimits = Object.freeze({
   commands: 64,
   capacity: 64,
   inventory: 256,
-  /** turnCredentials(): the LLM key, the MCP token and up to 32 secret files. */
-  credentials: 34,
+  /** turnCredentials(): the LLM key, the MCP token and every secret file. */
+  credentials: preparedRunLimits.secretFiles + 2,
   events: 10_000,
 })
 
@@ -215,7 +220,10 @@ const prepareCommand = command('prepare', {
   /** Checked by core (preparedRunSchema, preparedRunExposesSecret) and again by the runner. */
   prepared: preparedFilesSchema,
   argv: execSpecSchema.shape.argv,
-  credentials: z.array(z.string().min(1).max(65_536)).min(1).max(runnerLimits.credentials),
+  credentials: z
+    .array(z.string().min(1).max(preparedRunLimits.secretChars))
+    .min(1)
+    .max(runnerLimits.credentials),
 })
 
 const adoptCommand = command('adopt', {
@@ -229,7 +237,7 @@ const adoptCommand = command('adopt', {
       driverId: z.enum(agentDriverIds),
       /** Omitted when the runner session that prepared the turn still holds them. */
       credentials: z
-        .array(z.string().min(1).max(65_536))
+        .array(z.string().min(1).max(preparedRunLimits.secretChars))
         .min(1)
         .max(runnerLimits.credentials)
         .optional(),

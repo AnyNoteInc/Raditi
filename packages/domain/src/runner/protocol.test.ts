@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { isDomainError, isTooLarge } from '../errors.ts'
+import { preparedRunLimits } from '../ports/agent-driver.ts'
+import { SANDBOX_SECRETS_DIR } from '../ports/sandbox-provider.ts'
 import { isSnapshotCredential } from '../ports/turn-runner.ts'
 import {
   parseRunnerToken,
@@ -278,6 +280,39 @@ describe('runner commands', () => {
     ],
   ])('refuses %s', (_label, cmd) => {
     expect(runnerCommandSchema.safeParse(cmd).success).toBe(false)
+  })
+})
+
+describe('runner credentials', () => {
+  it('carry every credential a checked prepared run can have, and no more', () => {
+    const secrets = Array.from({ length: preparedRunLimits.secretFiles }, (_, i) => ({
+      path: `${SANDBOX_SECRETS_DIR}/s${i}`,
+      content: `${i}`.padEnd(preparedRunLimits.secretChars, 'x'),
+    }))
+    const credentials = [
+      'k'.repeat(preparedRunLimits.secretChars),
+      'mcp-turn-token',
+      ...secrets.map((file) => file.content),
+    ]
+    expect(credentials).toHaveLength(runnerLimits.credentials)
+    const full = { ...prepare(), prepared: { ...prepare().prepared, secrets }, credentials }
+    expect(runnerCommandSchema.safeParse(full).success).toBe(true)
+    const adopt = (values: string[]) => ({
+      ...envelope,
+      type: 'adopt',
+      containerId: 'c1',
+      labels,
+      purpose: 'work',
+      work: { remainingMs: 1_000, driverId: 'kimi', credentials: values },
+    })
+    expect(runnerCommandSchema.safeParse(adopt(credentials)).success).toBe(true)
+    for (const values of [
+      [...credentials, 'one more'],
+      ['k'.repeat(preparedRunLimits.secretChars + 1)],
+    ]) {
+      expect(runnerCommandSchema.safeParse({ ...full, credentials: values }).success).toBe(false)
+      expect(runnerCommandSchema.safeParse(adopt(values)).success).toBe(false)
+    }
   })
 })
 

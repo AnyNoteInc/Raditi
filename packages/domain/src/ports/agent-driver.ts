@@ -1,6 +1,11 @@
 import { z } from 'zod'
 
-import { SANDBOX_SECRETS_DIR, SANDBOX_SECRETS_TMPFS_BYTES } from './sandbox-provider.ts'
+import {
+  SANDBOX_SECRET_CHARS,
+  SANDBOX_SECRET_FILES,
+  SANDBOX_SECRETS_DIR,
+  SANDBOX_SECRETS_TMPFS_BYTES,
+} from './sandbox-provider.ts'
 
 /**
  * Agent driver port — spec §8. The core knows only this interface and the common events;
@@ -83,6 +88,12 @@ export const preparedRunLimits = Object.freeze({
   path: 1024,
   /** Secret files in whole tmpfs pages: they must fit into the secrets tmpfs. */
   secretBytes: SANDBOX_SECRETS_TMPFS_BYTES,
+  /**
+   * Secret files and the characters of each secret — also the LLM key and the MCP token: a
+   * runner takes a turn's credentials only within these (runnerLimits), so both executors do.
+   */
+  secretFiles: SANDBOX_SECRET_FILES,
+  secretChars: SANDBOX_SECRET_CHARS,
 })
 
 /** Normalized absolute path strictly below `root`: no '.', '..', empty or `.git` segments. */
@@ -104,14 +115,14 @@ const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
 const tmpfsBytes = (content: string) =>
   Math.max(1, Math.ceil(utf8Bytes(content) / TMPFS_PAGE_BYTES)) * TMPFS_PAGE_BYTES
 
-const preparedFileSchema = (root: string) =>
+const preparedFileSchema = (root: string, maxChars?: number) =>
   z
     .object({
       path: z
         .string()
         .max(preparedRunLimits.path)
         .refine((path) => isPreparedPath(path, root), `expected a normalized path under ${root}`),
-      content: z.string(),
+      content: maxChars === undefined ? z.string() : z.string().max(maxChars),
       mode: z.number().int().min(0).max(0o777).optional(),
     })
     .strict()
@@ -119,7 +130,9 @@ const preparedFileSchema = (root: string) =>
 const preparedFilesShape = {
   files: z.array(preparedFileSchema(SANDBOX_AGENT_HOME)).max(preparedRunLimits.files),
   env: z.record(z.string(), z.string()),
-  secrets: z.array(preparedFileSchema(SANDBOX_SECRETS_DIR)).max(preparedRunLimits.files),
+  secrets: z
+    .array(preparedFileSchema(SANDBOX_SECRETS_DIR, preparedRunLimits.secretChars))
+    .max(preparedRunLimits.secretFiles),
 }
 
 function checkPreparedFiles(

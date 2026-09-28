@@ -8,6 +8,7 @@ import {
   driverPrepareInvalid,
   MAX_PRESIGN_TTL_MS,
   preparedRunExposesSecret,
+  preparedRunLimits,
   preparedRunSchema,
   publicationMetadataSchema,
   siteBusy,
@@ -255,6 +256,9 @@ export function checkPreparedRun(
   // Credentials only as secret files: /agent-home is packed into the S3 snapshot (rule 2),
   // env and argv show up in docker inspect and process listings.
   const credentials = turnCredentials(context, parsed.data.secrets)
+  // The runner protocol carries each credential within this limit: so does the local executor.
+  if (credentials.some((value) => value.length > preparedRunLimits.secretChars))
+    throw driverPrepareInvalid('A turn credential is too long')
   if (preparedRunExposesSecret(parsed.data, credentials, argv))
     throw driverPrepareInvalid('Prepared turn files, env or command contain a turn credential')
   const { files, env, secrets } = parsed.data

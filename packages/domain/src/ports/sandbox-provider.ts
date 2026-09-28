@@ -15,6 +15,9 @@ export type SandboxRuntime = (typeof sandboxRuntimes)[number]
 export const SANDBOX_SECRETS_DIR = '/run/raditi/secrets'
 /** Size of the secrets tmpfs every provider mounts; prepared secrets must fit into it. */
 export const SANDBOX_SECRETS_TMPFS_BYTES = 2 * 1024 * 1024
+/** Secret files of one sandbox and the characters of each: 32 × 64 KiB fill the secrets tmpfs. */
+export const SANDBOX_SECRET_FILES = 32
+export const SANDBOX_SECRET_CHARS = 65_536
 
 export interface SandboxLabels {
   workspaceId: string
@@ -394,8 +397,10 @@ export const sandboxSpecSchema = z
     user: z.object({ uid: z.literal(SANDBOX_UID), gid: z.literal(SANDBOX_GID) }).strict(),
     env: sandboxEnvSchema,
     secrets: z
-      .array(z.object({ path: secretPath, value: z.string().min(1).max(65_536) }).strict())
-      .max(32)
+      .array(
+        z.object({ path: secretPath, value: z.string().min(1).max(SANDBOX_SECRET_CHARS) }).strict(),
+      )
+      .max(SANDBOX_SECRET_FILES)
       .refine(
         (files) => new Set(files.map((f) => f.path)).size === files.length,
         'duplicate secret path',
