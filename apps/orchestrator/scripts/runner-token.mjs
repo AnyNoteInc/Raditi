@@ -1,5 +1,6 @@
 /* global console, process */
-// Runner VM tokens (spec §15). The token opens only the turns assigned to its runner; core keeps
+// Runner VM tokens (spec §15). Runners pull: a token may claim any waiting turn, then opens only
+// the turns its runner claimed; core keeps
 // only its SHA-256 in RUNNER_TOKENS=<runner id>:<sha256>@<VM private IP>,… and the token itself
 // is never printed.
 //

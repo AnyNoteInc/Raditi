@@ -19,8 +19,9 @@ const NO_TOKEN: RunnerTokenHash = {
 }
 
 /**
- * The runner a request comes from. A token opens only the turns assigned to its runner: it is
- * a machine identity, not a platform secret (spec §15). A token bound to its VM's address opens
+ * The runner a request comes from. Runners pull: a token may claim any waiting turn of any
+ * client, then opens only the turns its runner claimed. It is a machine identity, not a
+ * platform secret (spec §15). A token bound to its VM's address opens
  * nothing from another one: inside the perimeter it travels over plain http. Encryption, if ever
  * needed, is WireGuard between the VMs, with no code change (spec §15, §19).
  */
