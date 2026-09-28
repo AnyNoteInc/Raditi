@@ -836,7 +836,7 @@ interface SiteAdapter {
 | Audit | Файл и syslog | Журнал всех обращений |
 | KV v2 | `kv/platform/app/<service>` | Настройки с секретами сервисов app-ВМ (`DATABASE_URL`, `REDIS_URL`, ключи S3, `METRICS_TOKEN`, ключи внешних API) и пароли ролей PostgreSQL и пользователей Redis: vault-agent ВМ (M10) рендерит их в `/run/raditi/<service>/` на tmpfs хоста до старта Docker; каталог монтируется только в свой контейнер, приложение читает его `node --env-file`. SecretID сервисов здесь не хранится: vault-agent выпускает его сам (`auth/approle/role/<service>/secret-id` с `secret_id_bound_cidrs` моста сервиса) |
 
-Исключение: ключи TLS-сертификата и ACME-аккаунта Traefik лежат в `acme.json` на томе `acme` app-ВМ (0600, только Traefik), не в Vault и не в бэкапах; при утрате сертификат перевыпускается. Токен реестра образов на ВМ — только на чтение, его рендерит vault-agent в tmpfs (`DOCKER_CONFIG`).
+Исключение: ключи TLS-сертификата и ACME-аккаунта Traefik лежат в `acme.json` на томе `acme` app-ВМ (0600, только Traefik), не в Vault и не в бэкапах; при утрате сертификат перевыпускается после правки CAA: запись привязывает выпуск к ACME-аккаунту из `acme.json` (runbook — `infra/app/README.md`). Токен реестра образов на ВМ — только на чтение, его рендерит vault-agent в tmpfs (`DOCKER_CONFIG`).
 
 Для P1 в `packages/vault` работают выдача и расшифровка ключа данных Transit и вход по AppRole с ограниченным TTL кэша токена. Runtime не создаёт mount, ключи рабочих пространств, роли и политики; их provisioning, KV v2, SSH CA и response wrapping остаются P7. Локальная проверка P1 при необходимости включает Transit mount и создаёт/удаляет собственный тестовый ключ; mount остаётся включённым.
 

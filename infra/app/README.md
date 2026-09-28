@@ -36,7 +36,7 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 - Каталог — 0700, файлы — 0400, владелец — uid своего сервиса.
 - Пароль роли PostgreSQL и `DATABASE_URL` сервиса, пароль пользователя Redis и `REDIS_URL` — одно значение из одной записи Vault.
 - Хеш для `users.acl`: `printf %s "$пароль" | sha256sum`, в файле — `#<hex>`.
-- Исключение из правила 2: ключи сертификата и ACME-аккаунта лежат в `acme.json` на томе `acme` (0600, только Traefik). В Vault и бэкапы они не входят. При утрате сертификат перевыпускается; лимит Let's Encrypt — 5 одинаковых сертификатов в неделю.
+- Исключение из правила 2: ключи сертификата и ACME-аккаунта лежат в `acme.json` на томе `acme` (0600, только Traefik). В Vault и бэкапы они не входят. При утрате сертификат перевыпускается — сначала правка CAA (раздел «Утрата `acme.json` и смена способа проверки»); лимит Let's Encrypt — 5 одинаковых сертификатов в неделю.
 
 После ротации паролей PostgreSQL — `docker compose exec postgres sh /docker-entrypoint-initdb.d/10-roles.sh`, затем перезапуск web и `core`.
 
@@ -54,7 +54,7 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 6. **Боевой Let's Encrypt.** Вернуть боевые `ACME_*` и выполнить `docker compose up -d --wait traefik`: флаги сменились, контейнер пересоздаётся.
 7. **Стек:** `docker compose run --rm migrate` → `docker compose run --rm seed` → `docker compose up -d --wait`.
 8. **После выкладки.**
-   - CAA: `0 issue "letsencrypt.org; accounturi=<из acme.json>; validationmethods=http-01"`.
+   - CAA: `0 issue "letsencrypt.org; accounturi=<из acme.json>; validationmethods=http-01"`. Запись разрешает выпуск только текущему ACME-аккаунту и только через HTTP-01: при утрате `acme.json` и при переходе на DNS-01 её сначала меняют (раздел «Утрата `acme.json` и смена способа проверки»).
    - Включить `.github/workflows/edge-cert.yml`: переменная репозитория `EDGE_CERT_HOST=raditi.ru`.
    - `systemctl enable raditi-app.service` (файл — `systemd/raditi-app.service`).
 
@@ -106,7 +106,24 @@ docker build -f apps/orchestrator/Dockerfile --target migrate -t <реестр>/
 
 ## Срок сертификата
 
-До алертов M9 срок проверяет ежедневный workflow `edge-cert.yml` (apex и `www`, запас 21 день). Let's Encrypt писем больше не шлёт, а продление может молча сломаться — из-за смены группы безопасности, AAAA-записи или защиты от DDoS, которая режет зарубежные точки проверки. Запасной путь — DNS-01 через Yandex Cloud DNS (провайдер lego `yandexcloud`), без правок кода.
+До алертов M9 срок проверяет ежедневный workflow `edge-cert.yml` (apex и `www`, запас 21 день). Let's Encrypt писем больше не шлёт, а продление может молча сломаться — из-за смены группы безопасности, AAAA-записи или защиты от DDoS, которая режет зарубежные точки проверки. Запасной путь — DNS-01 через Yandex Cloud DNS (провайдер lego `yandexcloud`): это правка CAA и compose, см. следующий раздел.
+
+## Утрата `acme.json` и смена способа проверки
+
+CAA привязывает выпуск к ACME-аккаунту из `acme.json` и к HTTP-01. Пока запись не поправлена, Let's Encrypt откажет новому аккаунту и любой другой проверке, а при `sniStrict` без сертификата сайт недоступен по HTTPS. Поэтому любой из сценариев начинается с CAA.
+
+**Утрачен `acme.json`** (вместе с ним — ключ аккаунта и текущий сертификат):
+1. Заменить CAA на `0 issue "letsencrypt.org; validationmethods=http-01"` — без `accounturi` — и дождаться TTL записи.
+2. `docker compose restart traefik`: Traefik заводит новый аккаунт и выпускает сертификаты.
+3. Когда сертификаты выпущены, вернуть в CAA `accounturi` нового аккаунта из `acme.json`. Заранее его не узнать: адрес аккаунта появляется только после регистрации.
+
+**Переход на DNS-01** (HTTP-01 сломан: группа безопасности, AAAA, защита от DDoS):
+1. Сначала CAA: `validationmethods=http-01,dns-01` (`accounturi` оставить, если `acme.json` цел) и дождаться TTL.
+2. Затем правка `docker-compose.yml` обычным релизом:
+   - флаг `--certificatesresolvers.le.acme.dnschallenge.provider=yandexcloud`;
+   - каталог секретов `${SECRETS_DIR}/traefik`, который vault-agent рендерит из `kv/platform/app/traefik`, смонтированный только в Traefik;
+   - учётные данные `YANDEX_CLOUD_IAM_TOKEN` и `YANDEX_CLOUD_FOLDER_ID` — через переменные lego `*_FILE`, не значениями в `environment:`;
+   - `traefik` — в `secretDirs` в `compose.test.mjs`.
 
 ## Проверки
 
