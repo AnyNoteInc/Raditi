@@ -328,12 +328,18 @@ const dotenv = (entries) =>
   `${Object.entries(entries)
     .map(([name, value]) => `${name}=${value}`)
     .join('\n')}\n`
+// app.env as the Vault template must write it (README.md «Секреты»): every value double-quoted.
+const appEnv = (entries) =>
+  `${Object.entries(entries)
+    .map(([name, value]) => `${name}="${value}"`)
+    .join('\n')}\n`
 
 function secrets() {
   const pg = { superuser: hex(), owner: hex(), web: hex(), core: hex() }
   const redis = { web: hex(), core: hex(), health: hex() }
   const pair = randomBytes(15).toString('base64url') // 20 characters shared by the captcha keys
-  const metricsToken = hex(32)
+  // With `#`: an unquoted value would be cut there by node --env-file, and check 3b would fail.
+  const metricsToken = `${hex(16)}#${hex(16)}`
   const s3 = { S3_ACCESS_KEY_ID: `verify-${hex(8)}`, S3_SECRET_ACCESS_KEY: hex() }
   const vault = { VAULT_ROLE_ID: randomUUID(), VAULT_SECRET_ID: randomUUID() }
   const web = {
@@ -357,9 +363,9 @@ function secrets() {
   const acl = (user) =>
     `user ${user} on #${sha256(redis[user])} ~* &* +@all -@admin -flushall -flushdb -keys -swapdb`
   const files = {
-    'web/app.env': dotenv(web),
-    'core/app.env': dotenv(core),
-    'migrate/app.env': dotenv({
+    'web/app.env': appEnv(web),
+    'core/app.env': appEnv(core),
+    'migrate/app.env': appEnv({
       DATABASE_URL: `postgresql://raditi:${pg.owner}@postgres:5432/raditi`,
     }),
     'postgres/superuser-password': pg.superuser,
@@ -479,6 +485,8 @@ try {
   const read = wrote.code === 0 && (await docker(['logs', probe], { allowFailure: true }))
   await docker(['rm', '-f', probe], { allowFailure: true })
   if (!read || !read.stdout.includes('journald-probe')) {
+    // The Linux run is the one that proves the production logging driver (edge.yml).
+    assert(!realAddress, '--real-address: the daemon cannot log to journald')
     console.log('warning: the daemon cannot log to journald; the stack logs with the local driver')
     composeFiles.push(localLogs)
   }
@@ -526,7 +534,7 @@ try {
   await writeFile(join(work, 'pebble.json'), JSON.stringify(pebbleConfig, null, 2), { mode: 0o644 })
   const secret = secrets()
   await writeTree(join(work, 'secrets'), secret.files)
-  await writeTree(join(work, 'secrets-broken'), { 'web/app.env': dotenv(secret.broken) })
+  await writeTree(join(work, 'secrets-broken'), { 'web/app.env': appEnv(secret.broken) })
   const tokenEntries = [`verify-1:${sha256(runnerTokens.foreign)}@10.0.0.1`]
   if (realAddress) tokenEntries.push(`verify-2:${sha256(runnerTokens.own)}@${CLIENT.address}`)
   envFile = join(work, 'compose.env')

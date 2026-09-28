@@ -35,6 +35,8 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 
 - Каталог — 0700, файлы — 0400, владелец — uid своего сервиса.
 - Пароль роли PostgreSQL и `DATABASE_URL` сервиса, пароль пользователя Redis и `REDIS_URL` — одно значение из одной записи Vault.
+- Пароли ролей PostgreSQL и пользователей Redis — только из алфавита `[A-Za-z0-9_-]` (`openssl rand -hex 24` или base64url). Шаблон подставляет их в `DATABASE_URL` и `REDIS_URL` без кодирования, а `@ / : ? # %` ломают адрес, хотя файл `*-password` получит пароль целиком.
+- `app.env` читает `node --env-file`: без кавычек всё после `#` отбрасывается. Поэтому шаблон пишет каждое значение в двойных кавычках (`KEY="…"`); `"`, `\` и перевод строки в значении недопустимы.
 - Хеш для `users.acl`: `printf %s "$пароль" | sha256sum`, в файле — `#<hex>`.
 - `superuser-password` нужен только первому `initdb`: `10-roles.sh` снимает пароль суперпользователя `postgres`, и тот входит только через сокет внутри контейнера. Ротация его не касается, но файл должен быть: образ читает его при каждом старте.
 - Исключение из правила 2: ключи сертификата и ACME-аккаунта лежат в `acme.json` на томе `acme` (0600, только Traefik). В Vault и бэкапы они не входят. При утрате сертификат перевыпускается — сначала правка CAA (раздел «Утрата `acme.json` и смена способа проверки»); лимит Let's Encrypt — 5 одинаковых сертификатов в неделю.
@@ -106,10 +108,12 @@ sudo docker run --rm --network none --user 0:0 -v /etc/raditi:/etc/raditi \
 Только по digest, значений по умолчанию нет. Docker Hub отвечает 403 для российских IP, поэтому образы берутся из своего реестра (M10). Зеркала сохраняют upstream-digest: `crane copy` или `skopeo copy --all --preserve-digests`, а не `docker pull/tag/push`. Свои образы:
 
 ```sh
-docker build -f apps/web/Dockerfile --target runtime -t <реестр>/raditi/web .
-docker build -f apps/orchestrator/Dockerfile --target runtime -t <реестр>/raditi/orchestrator .
-docker build -f apps/orchestrator/Dockerfile --target migrate -t <реестр>/raditi/migrate .
+docker build --platform linux/amd64 -f apps/web/Dockerfile --target runtime -t <реестр>/raditi/web .
+docker build --platform linux/amd64 -f apps/orchestrator/Dockerfile --target runtime -t <реестр>/raditi/orchestrator .
+docker build --platform linux/amd64 -f apps/orchestrator/Dockerfile --target migrate -t <реестр>/raditi/migrate .
 ```
+
+ВМ — x86_64: без `--platform linux/amd64` на Mac получится образ arm64, который на ВМ не запустится. Выпускные образы будет собирать GitHub Actions (M10). Если хост сборки не достаёт до Docker Hub или ghcr.io — передать зеркало с тем же digest: `--build-arg NODE_IMAGE=<реестр>/mirror/node:26.10.0-trixie-slim@<digest из ARG в Dockerfile>`, для orchestrator — ещё и `GITLEAKS_IMAGE`.
 
 ## Срок сертификата
 
