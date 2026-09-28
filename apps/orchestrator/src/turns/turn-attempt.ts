@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from 'node:timers/promises'
+
 import {
   conflict,
   DomainError,
@@ -120,7 +122,7 @@ export class TurnAttempt {
   /** A late container could not be removed: the site is held for recovery. */
   #heldByAttempt = false
   #ended = false
-  /** Settles, never rejects, once the vacating entry was journaled or refused. */
+  /** Settles, never rejects, once the vacating entry was journaled or finally refused. */
   #vacatingRecorded: Promise<void> = Promise.resolve()
 
   constructor(
@@ -440,7 +442,7 @@ export class TurnAttempt {
     // Decided before any await, so that a late `created` or vacated() sees the same answer.
     if (!this.#completed && !recovery && !this.execution && this.#dispatched && !this.#vacated) {
       this.#vacating = true
-      this.#vacatingRecorded = this.record('vacating', { reason: this.#reason }).catch(() => {})
+      this.#vacatingRecorded = this.#recordVacating()
       guard.close()
       // Journaled before the supervisor leaves LiveTurns: a recovery pass of this process must
       // replay it, or it would close the turn `lost` instead of `failed`.
@@ -483,6 +485,23 @@ export class TurnAttempt {
     guard.close()
     await this.#publication?.dispose().catch(() => {})
     return this.#completed ? 'completed' : recovery ? 'held' : 'released'
+  }
+
+  /**
+   * The vacating entry, tried again while the database refuses it and the lease lasts (spec §8):
+   * by then recovery would close the turn anyway. A domain refusal (another owner has the site)
+   * is final.
+   */
+  async #recordVacating(): Promise<void> {
+    const { guard } = this.init
+    for (let delayMs = 100; ; delayMs = Math.min(delayMs * 2, 5_000)) {
+      try {
+        return await this.record('vacating', { reason: this.#reason })
+      } catch (error) {
+        if (isDomainError(error) || guard.leaseRemainingMs <= delayMs) return
+        await sleep(delayMs)
+      }
+    }
   }
 
   #destroyReason(checkpointComplete = false): DestroyReason {

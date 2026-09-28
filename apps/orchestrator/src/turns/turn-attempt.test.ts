@@ -200,19 +200,39 @@ describe('TurnAttempt given up while its prepare was out (spec §8)', () => {
     expect(after.journal.phases()).toEqual(['leased', 'vacating', 'failed'])
   })
 
-  it('still frees the site when the vacating entry was refused', async () => {
+  it('writes the vacating entry again while the database refuses it, before it lets go', async () => {
     const t = await given()
     t.attempt.dispatched()
     const record = t.journal.record.bind(t.journal)
+    let refused = 0
     vi.spyOn(t.journal, 'record').mockImplementation(async (entry) => {
-      if (entry.phase === 'vacating') throw new Error('database unavailable')
+      if (entry.phase === 'vacating' && refused++ === 0) throw new Error('database unavailable')
       return record(entry)
     })
     expect(await t.attempt.settle()).toBe('vacating')
+    expect(t.journal.phases()).toEqual(['leased', 'vacating'])
     t.attempt.vacated()
     await vi.waitFor(() => expect(t.outcome()).toBe('failed'))
+    expect(t.journal.phases()).toEqual(['leased', 'vacating', 'failed'])
     expect(t.release).toHaveBeenCalledOnce()
     expect(t.row()).toMatchObject({ taskId: null, held: false, epoch: 1 })
+  })
+
+  it('stops writing the vacating entry once another owner has the site', async () => {
+    const t = await given()
+    t.attempt.dispatched()
+    const record = vi.spyOn(t.journal, 'record')
+    // Recovery took the turn over meanwhile: the journal refuses this epoch for good.
+    await t.leases.holdForRecovery(t.lease)
+    await t.assignments.takeOver({
+      id: t.attempt.assignment!.id,
+      fence: t.lease,
+      ttlMs: 60_000,
+      countAttempt: false,
+    })
+    expect(await t.attempt.settle()).toBe('vacating')
+    expect(record.mock.calls.filter(([entry]) => entry.phase === 'vacating')).toHaveLength(1)
+    expect(t.journal.phases()).toEqual(['leased'])
   })
 
   it('leaves the assignment to recovery once it holds the site at the turn’s epoch', async () => {
