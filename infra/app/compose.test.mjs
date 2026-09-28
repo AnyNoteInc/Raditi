@@ -93,6 +93,17 @@ test('no Docker socket, no privileges, no host network; only volume-init adds ca
   }
 })
 
+test('every variable compose substitutes is described in env.example', () => {
+  const used = new Set(
+    source
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .flatMap((line) => [...line.matchAll(/\$\{([A-Z][A-Z0-9_]*)/g)].map(([, name]) => name)),
+  )
+  assert.ok(used.size > 0)
+  for (const name of used) assert.ok(name in example, `${name} is missing from env.example`)
+})
+
 test('every image is pinned by digest and has no default', () => {
   for (const name of names)
     assert.match(services[name].image, /@sha256:[0-9a-f]{64}$/, `${name} image is not pinned`)
