@@ -439,6 +439,9 @@ export class TurnAttempt {
       this.#vacating = true
       this.#vacatingRecorded = this.record('vacating', { reason: this.#reason }).catch(() => {})
       guard.close()
+      // Journaled before the supervisor leaves LiveTurns: a recovery pass of this process must
+      // replay it, or it would close the turn `lost` instead of `failed`.
+      await this.#vacatingRecorded
       return 'vacating'
     }
     try {

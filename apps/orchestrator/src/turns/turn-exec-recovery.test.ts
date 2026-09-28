@@ -1156,6 +1156,45 @@ describe('turn exec recovery of a turn given up before its container was reporte
     expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
   })
 
+  it('leaves a vacating turn to its owner until the entry is journaled, then ends it failed', async () => {
+    const w = world('local')
+    const core = await w.restart()
+    const cancellation = new AbortController()
+    const create = w.vm.sandboxes.create.getMockImplementation()!
+    // The create hangs with the container already in Docker.
+    w.vm.sandboxes.create.mockImplementationOnce(async (...args) => {
+      await create(...args)
+      cancellation.abort()
+      return new Promise<never>(() => {})
+    })
+    const slow = Promise.withResolvers<void>()
+    const record = w.journal.record.bind(w.journal)
+    const journaling = vi.spyOn(w.journal, 'record').mockImplementation(async (entry) => {
+      if (entry.phase === 'vacating') await slow.promise
+      return record(entry)
+    })
+    let left = false
+    const running = core.supervisor.run(request(), cancellation.signal).catch(() => {
+      left = true
+    })
+    await vi.waitFor(() =>
+      expect(journaling).toHaveBeenCalledWith(expect.objectContaining({ phase: 'vacating' })),
+    )
+    // A pass while the entry commits: the turn is still this process's own.
+    await w.recover(core.recovery)
+    expect(left).toBe(false)
+    expect(w.vm.exists()).toBe(true)
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 1 } })
+
+    slow.resolve()
+    await running
+    await w.recover(core.recovery)
+    expect(w.vm.exists()).toBe(false)
+    // Its owner gave it up first: failed, not lost.
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 2 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+  })
+
   /** A local turn cancelled while its create hangs with the container already in Docker. */
   async function vacatingWithContainer(w: ReturnType<typeof world>) {
     const core = await w.restart()

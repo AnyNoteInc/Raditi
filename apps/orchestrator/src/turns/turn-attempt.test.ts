@@ -148,12 +148,18 @@ describe('TurnAttempt given up while its prepare was out (spec §8)', () => {
       if (entry.phase === 'vacating' && entry.containerId === undefined) await slow.promise
       return record(entry)
     })
-    expect(await t.attempt.settle()).toBe('vacating')
-    expect(t.release).not.toHaveBeenCalled()
+    let settled = false
+    const settling = t.attempt.settle().finally(() => {
+      settled = true
+    })
     const late = t.attempt.created(t.execution)
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(t.journal.phases()).toEqual(['leased'])
+    // The supervisor leaves LiveTurns only once the entry is journaled.
+    expect(settled).toBe(false)
+    expect(t.release).not.toHaveBeenCalled()
     slow.resolve()
+    expect(await settling).toBe('vacating')
     await expect(late).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
 
     expect(t.journal.entries.slice(1)).toMatchObject([
