@@ -75,8 +75,9 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
     'Не удалось подготовить агента к работе. Попробуйте ещё раз немного позже',
   LEASE_LOST: 'Работа агента прервана. Попробуйте ещё раз',
   SITE_BUSY: 'С сайтом сейчас идёт другая работа. Попробуйте ещё раз, когда она закончится',
+  // Every recovery hold, including ones that clear on their own; no notification exists yet (P12).
   SITE_HELD:
-    'Нужно проверить, что случилось с прошлой работой на сайте. Мы напишем, когда можно продолжить',
+    'С прошлой работой на сайте произошёл сбой, мы её заканчиваем. Попробуйте ещё раз немного позже',
   SANDBOX_COMMAND_FAILED:
     'Агент не смог выполнить работу из-за технического сбоя. Попробуйте ещё раз немного позже',
   // The runner VM did not take the turn or lost touch with it; recovery lost the agent (P2).

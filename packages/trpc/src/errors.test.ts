@@ -64,7 +64,7 @@ describe('toTRPCError', () => {
     ['DRIVER_PREPARE_INVALID', 502, 'BAD_GATEWAY', 'Не удалось подготовить агента'],
     ['LEASE_LOST', 409, 'CONFLICT', 'Работа агента прервана'],
     ['SITE_BUSY', 409, 'CONFLICT', 'С сайтом сейчас идёт другая работа'],
-    ['SITE_HELD', 409, 'CONFLICT', 'Нужно проверить, что случилось с прошлой работой на сайте'],
+    ['SITE_HELD', 409, 'CONFLICT', 'С прошлой работой на сайте произошёл сбой'],
     ['SANDBOX_COMMAND_FAILED', 502, 'BAD_GATEWAY', 'технического сбоя'],
     ['RUNNER_UNAVAILABLE', 503, 'SERVICE_UNAVAILABLE', 'Не получается связаться с агентом'],
     ['EXEC_LOST', 502, 'BAD_GATEWAY', 'Работа агента прервалась'],
