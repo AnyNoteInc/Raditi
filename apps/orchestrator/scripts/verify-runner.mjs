@@ -19,8 +19,8 @@
 //
 // Needs: the local infrastructure from .env; P2_GITLEAKS_BINARY (gitleaks 8.30.1);
 // P2_RUNNER_DOCKER_SOCKET, the VM's Docker socket on this host; images built in that daemon and
-// pinned by digest: P2_SANDBOX_IMAGE (runtime), P2_RUNNER_NODE_IMAGE (base: Node and tini — the
-// orchestrator image is M10), SANDBOX_GATEWAY_IMAGE, SANDBOX_NETWORK_GUARD_IMAGE. The VM reaches
+// pinned by digest: P2_SANDBOX_IMAGE (runtime), P2_RUNNER_NODE_IMAGE (base: Node and tini, which runs
+// this repository's build instead of the orchestrator image), SANDBOX_GATEWAY_IMAGE, SANDBOX_NETWORK_GUARD_IMAGE. The VM reaches
 // this host's loopback at P2_RUNNER_HOST (192.168.5.2 in Colima and Lima).
 import assert from 'node:assert/strict'
 import { fork, spawn } from 'node:child_process'
@@ -206,8 +206,8 @@ async function startCore() {
 /**
  * The runner role as compose runs it (infra/sandbox/docker-compose.yml, profile runner): no port,
  * root only for the Docker socket, no capabilities, read-only; the token read-only from
- * /etc/raditi. The orchestrator image is M10, so Node runs this repository's build, mounted
- * read-only, with the .env file masked. Its environment has no platform credentials at all.
+ * /etc/raditi. Node runs this repository's build in P2_RUNNER_NODE_IMAGE rather than the
+ * orchestrator's runtime image, mounted read-only, with the .env file masked. Its environment has no platform credentials at all.
  */
 async function startRunner() {
   const name = `raditi-verify-runner-${runId}-${runners.length + 1}`
