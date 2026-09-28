@@ -79,8 +79,9 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
     'Нужно проверить, что случилось с прошлой работой на сайте. Мы напишем, когда можно продолжить',
   SANDBOX_COMMAND_FAILED:
     'Агент не смог выполнить работу из-за технического сбоя. Попробуйте ещё раз немного позже',
-  // The runner VM did not take the turn, or recovery lost the agent (P2).
-  RUNNER_UNAVAILABLE: 'Сейчас не получается запустить агента. Попробуйте ещё раз немного позже',
+  // The runner VM did not take the turn or lost touch with it; recovery lost the agent (P2).
+  RUNNER_UNAVAILABLE:
+    'Не получается связаться с агентом из-за технического сбоя. Попробуйте ещё раз немного позже',
   EXEC_LOST: 'Работа агента прервалась из-за технического сбоя. Попробуйте ещё раз',
   GIT_OPERATION_FAILED:
     'Не удалось получить или сохранить файлы сайта. Попробуйте ещё раз немного позже',

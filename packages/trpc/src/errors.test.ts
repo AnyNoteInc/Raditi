@@ -66,7 +66,7 @@ describe('toTRPCError', () => {
     ['SITE_BUSY', 409, 'CONFLICT', 'С сайтом сейчас идёт другая работа'],
     ['SITE_HELD', 409, 'CONFLICT', 'Нужно проверить, что случилось с прошлой работой на сайте'],
     ['SANDBOX_COMMAND_FAILED', 502, 'BAD_GATEWAY', 'технического сбоя'],
-    ['RUNNER_UNAVAILABLE', 503, 'SERVICE_UNAVAILABLE', 'не получается запустить агента'],
+    ['RUNNER_UNAVAILABLE', 503, 'SERVICE_UNAVAILABLE', 'Не получается связаться с агентом'],
     ['EXEC_LOST', 502, 'BAD_GATEWAY', 'Работа агента прервалась'],
     ['GIT_OPERATION_FAILED', 502, 'BAD_GATEWAY', 'файлы сайта'],
   ] as const)(
