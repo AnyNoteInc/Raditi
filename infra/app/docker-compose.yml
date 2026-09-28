@@ -6,9 +6,12 @@
 # Runbook: README.md.
 name: raditi-app
 
+# journald on the host: the logs outlive a recreated container (every release recreates web and
+# core). The access log is the incident trail (152-ФЗ: report within 24 hours); its retention and
+# size are the host's journald.conf (README.md, «Хост»).
 x-logging: &logging
-  driver: local
-  options: { max-size: 10m, max-file: '3', compress: 'false' }
+  driver: journald
+  options: { tag: '{{.Name}}' }
 
 x-hardened: &hardened
   restart: unless-stopped
@@ -153,10 +156,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
-    # The access log is the incident trail (152-ФЗ: report within 24 hours)
-    logging:
-      driver: local
-      options: { max-size: 50m, max-file: '5', compress: 'false' }
     cpus: 0.5
     mem_limit: 256m
     pids_limit: 256

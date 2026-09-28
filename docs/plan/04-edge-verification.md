@@ -90,6 +90,7 @@ GitHub Actions, `edge.yml`, Ubuntu 24.04 с `userland-proxy: false`: `verify:edg
 - **Проверка 10** следует одному редиректу Next (`/dashboard/` → `/dashboard`), потом ждёт 404.
 - **Проверка 17** не ищет строку `Configuration loaded from flags`: в JSON-журнале Traefik 3.7 её нет. Флаги приняты, если запустился провайдер ACME: с неизвестным флагом Traefik не стартует.
 - **Проверка 20** передаёт web все несекретные настройки из compose, поэтому сломана ровно секция `auth`.
+- **Логи — journald хоста** (ревью 28.09.2026): у драйвера `local` логи удалялись вместе с контейнером при каждой выкладке. `verify:edge` сначала проверяет, что демон пишет в journald и читает оттуда (`docker logs`); если нет — как у Docker Desktop, — стек запускается с `verify/compose.local-logs.yml`, который меняет только драйвер. Прогон на Docker Desktop 28.09.2026 со сборкой образов: 25 проверок, драйвер `local`. На Linux (`edge.yml`) стек идёт с journald; драйвер записи и чтения проверен на ВМ Colima (Docker 29.5).
 
 ## Не закрыто
 

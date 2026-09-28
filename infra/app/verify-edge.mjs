@@ -66,6 +66,8 @@ const { values: options } = parseArgs({
 const app = fileURLToPath(new URL('./', import.meta.url))
 const repository = fileURLToPath(new URL('../../', import.meta.url))
 const composeFiles = [join(app, 'docker-compose.yml'), join(app, 'verify/compose.verify.yml')]
+// Docker Desktop has no journald: the production logging driver is kept wherever the host has it.
+const localLogs = join(app, 'verify/compose.local-logs.yml')
 const pebbleImage = /image: (ghcr\.io\/letsencrypt\/pebble:\S+)/.exec(
   await readFile(join(app, 'verify/compose.verify.yml'), 'utf8'),
 )[1]
@@ -455,6 +457,31 @@ try {
   await docker(['version', '--format', '{{.Server.Version}}'])
   for (const port of Object.values(PORTS))
     assert(await portIsFree(port), `port ${port} on 127.0.0.1 is busy`)
+  // The checks read the logs back (docker compose logs): journald must take and give them.
+  const probe = `${PROJECT}-journald`
+  await docker(['rm', '-f', probe], { allowFailure: true })
+  const wrote = await docker(
+    [
+      'run',
+      '--name',
+      probe,
+      '--network',
+      'none',
+      '--log-driver',
+      'journald',
+      '--entrypoint',
+      'echo',
+      REDIS_IMAGE,
+      'journald-probe',
+    ],
+    { allowFailure: true },
+  )
+  const read = wrote.code === 0 && (await docker(['logs', probe], { allowFailure: true }))
+  await docker(['rm', '-f', probe], { allowFailure: true })
+  if (!read || !read.stdout.includes('journald-probe')) {
+    console.log('warning: the daemon cannot log to journald; the stack logs with the local driver')
+    composeFiles.push(localLogs)
+  }
   const dirty = await command('git', ['-C', repository, 'status', '--porcelain'], {
     allowFailure: true,
   })

@@ -23,13 +23,23 @@ const cliEnv = Object.fromEntries(
     ([name]) => ['PATH', 'HOME'].includes(name) || name.startsWith('DOCKER_'),
   ),
 )
-const config = JSON.parse(
-  execFileSync(
-    'docker',
-    ['compose', '-f', file, '--env-file', envFile, 'config', '--format', 'json'],
-    { env: { ...cliEnv, COMPOSE_PROFILES: 'ops' }, encoding: 'utf8' },
-  ),
-)
+const resolve = (...files) =>
+  JSON.parse(
+    execFileSync(
+      'docker',
+      [
+        'compose',
+        ...files.flatMap((name) => ['-f', name]),
+        '--env-file',
+        envFile,
+        'config',
+        '--format',
+        'json',
+      ],
+      { env: { ...cliEnv, COMPOSE_PROFILES: 'ops' }, encoding: 'utf8' },
+    ),
+  )
+const config = resolve(file)
 const services = config.services
 const names = Object.keys(services).sort()
 
@@ -244,6 +254,27 @@ test('secrets: each service mounts only its own directory, read-only, never crea
     for (const volume of services[name].volumes ?? [])
       if (volume !== bind)
         assert.ok(!`${volume.source}`.startsWith(example.SECRETS_DIR), `${name}: ${volume.source}`)
+  }
+})
+
+test('logs go to journald on the host: they outlive a recreated container', () => {
+  for (const name of names) {
+    assert.equal(services[name].logging?.driver, 'journald', `${name}: logging`)
+    assert.equal(services[name].logging.options?.tag, '{{.Name}}', `${name}: tag`)
+  }
+})
+
+test("verify-edge's fallback for a host without journald changes the logging driver only", () => {
+  const local = resolve(
+    file,
+    fileURLToPath(new URL('./verify/compose.local-logs.yml', import.meta.url)),
+  )
+  assert.deepEqual(Object.keys(local.services).sort(), names)
+  for (const name of names) {
+    assert.deepEqual(local.services[name].logging, { driver: 'local' }, name)
+    const { logging: _, ...rest } = local.services[name]
+    const { logging: __, ...production } = services[name]
+    assert.deepEqual(rest, production, name)
   }
 })
 
