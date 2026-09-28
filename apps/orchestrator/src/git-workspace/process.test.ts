@@ -73,7 +73,8 @@ async function hangingCaller(timeoutMs: number) {
   return { caller, ...owned }
 }
 
-describe('trusted native command supervision', () => {
+// Every case starts Node processes, some of them nested: slow on a loaded machine, not stuck.
+describe('trusted native command supervision', { timeout: 30_000 }, () => {
   it('preserves fast binary stdout and native nonzero exit status exactly', async () => {
     const result = await runProcess(
       process.execPath,

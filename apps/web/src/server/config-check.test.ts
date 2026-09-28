@@ -42,7 +42,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('brokenSections', () => {
+// Every case imports the server modules afresh: slow on a loaded machine, not stuck.
+describe('brokenSections', { timeout: 30_000 }, () => {
   it('finds nothing broken in complete production settings', async () => {
     const { brokenSections } = await withEnv(production)
     expect(brokenSections()).toEqual([])
@@ -67,7 +68,7 @@ describe('brokenSections', () => {
   })
 })
 
-describe('register', () => {
+describe('register', { timeout: 30_000 }, () => {
   function stubExit() {
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never)
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})

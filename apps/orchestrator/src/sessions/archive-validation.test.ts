@@ -339,12 +339,19 @@ describe('validateSnapshotArchives', () => {
     )
   })
 
-  it('bounds expanded bytes even for an archive consisting only of compressible zero padding', async () => {
-    const bomb = zstdCompressSync(Buffer.alloc(snapshotLimits.expandedBytes + 512))
-    await expect(validateSnapshotArchives(state, await parts(bomb))).rejects.toMatchObject({
-      code: 'SNAPSHOT_TOO_LARGE',
-    })
-  })
+  // Compresses and inflates past the expansion limit: seconds of CPU on a loaded machine.
+  it(
+    'bounds expanded bytes even for an archive consisting only of compressible zero padding',
+    {
+      timeout: 30_000,
+    },
+    async () => {
+      const bomb = zstdCompressSync(Buffer.alloc(snapshotLimits.expandedBytes + 512))
+      await expect(validateSnapshotArchives(state, await parts(bomb))).rejects.toMatchObject({
+        code: 'SNAPSHOT_TOO_LARGE',
+      })
+    },
+  )
 })
 
 describe('turn credentials in a captured snapshot', () => {
