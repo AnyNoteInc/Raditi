@@ -20,8 +20,21 @@ on:
       - apps/web/src/server/health.ts
       - apps/web/src/app/api/health/**
       - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      # turbo prune and the build scripts the Dockerfiles run
+      - turbo.json
+      - apps/*/package.json
+      - packages/db/package.json
       - packages/db/prisma/**
+      # migrate deploy and db seed in the migrate image
+      - packages/db/prisma.config.ts
+      # Settings schemas web's config check and core's loadConfig apply at start
+      - packages/*/src/config.ts
+      - packages/domain/src/env.ts
+      - packages/db/src/client.ts
+      - packages/mail/src/mailer.ts
       - packages/observability/src/**
+      - apps/orchestrator/src/main.ts
       - apps/orchestrator/src/config/**
       - apps/orchestrator/src/health/**
       - apps/orchestrator/src/roles.ts
