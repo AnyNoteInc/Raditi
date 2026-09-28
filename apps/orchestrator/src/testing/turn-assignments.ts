@@ -67,10 +67,10 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
     return claimed
   }
 
-  async abandon(id: string): Promise<boolean> {
+  async abandon(id: string, outcome: TurnAssignmentOutcome = 'failed'): Promise<boolean> {
     const row = this.rows.get(id)
     if (!row || row.executor !== 'runner' || row.runner || row.outcome) return false
-    row.outcome = 'failed'
+    row.outcome = outcome
     return true
   }
 

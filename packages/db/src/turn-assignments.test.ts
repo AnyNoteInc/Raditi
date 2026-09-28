@@ -251,6 +251,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
       await store.claim({ ids: [own.id], runnerId: 'vm1', runnerSession: randomUUID(), limit: 1 }),
     ).toEqual([])
     expect(await store.abandon(own.id)).toBe(false)
+
+    // Recovery gives up a turn its dead core left unclaimed: lost, not failed.
+    const orphaned = (await store.open((await fixture()).input))!
+    expect(await store.abandon(orphaned.id, 'lost')).toBe(true)
+    expect(await store.get(orphaned.id)).toMatchObject({ outcome: 'lost' })
+    expect(await store.abandon(orphaned.id, 'failed')).toBe(false)
+    expect(await store.get(orphaned.id)).toMatchObject({ outcome: 'lost' })
   })
 
   it('records one container and takes the turn over only from the lease held at its epoch', async () => {

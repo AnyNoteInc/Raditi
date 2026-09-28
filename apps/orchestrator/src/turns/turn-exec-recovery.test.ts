@@ -595,10 +595,12 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     expect(w.vm.sandboxes.create).not.toHaveBeenCalled()
     if (kind === 'runner') {
       // Nobody claimed it: abandoned now, no runner ever will (P1), and the site is free at once.
-      expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+      // Recovery gave it up, not its owner: lost.
+      expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
       expect(w.journal.entries.at(-1)).toMatchObject({
         phase: 'failed',
         reason: 'run_failed',
+        outcome: 'lost',
         fence: { epoch: 1 },
       })
       expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })

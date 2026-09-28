@@ -211,12 +211,13 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
     )
   }
 
-  async abandon(assignmentId: string): Promise<boolean> {
+  async abandon(assignmentId: string, outcome?: TurnAssignmentOutcome): Promise<boolean> {
     const checked = id.parse(assignmentId)
+    const closed = z.enum(turnAssignmentOutcomes).default('failed').parse(outcome)
     // Waits for a claim that holds the row, then sees its runner and changes nothing.
     const rows = await this.db.$queryRaw<Array<{ id: string }>>`
       UPDATE turn_assignments SET finished_at = clock_timestamp(),
-        outcome = 'failed'::"TurnAssignmentOutcome", updated_at = clock_timestamp()
+        outcome = ${closed}::"TurnAssignmentOutcome", updated_at = clock_timestamp()
       WHERE id = ${checked}::uuid AND executor = 'runner'::"TurnExecutorKind"
         AND runner_id IS NULL AND finished_at IS NULL
       RETURNING id`

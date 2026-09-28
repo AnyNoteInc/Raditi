@@ -58,8 +58,11 @@ export interface TurnAssignmentStore {
     runnerSession: string
     limit: number
   }): Promise<TurnAssignment[]>
-  /** Fails a runner assignment nobody claimed; false when a runner took it meanwhile. */
-  abandon(id: string): Promise<boolean>
+  /**
+   * Closes a runner assignment nobody claimed, `failed` unless `outcome` says otherwise; false
+   * when a runner took it meanwhile.
+   */
+  abandon(id: string, outcome?: TurnAssignmentOutcome): Promise<boolean>
   /** The turn's container, once; false for another container or a stale epoch. */
   recordContainer(input: { id: string; epoch: number; containerId: string }): Promise<boolean>
   /** A poll of the runner session listed these assignments as active. */

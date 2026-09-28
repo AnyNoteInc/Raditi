@@ -422,9 +422,8 @@ export class TurnExecRecovery {
     const reason = turn.reason ?? 'run_failed'
     // Unclaimed after core died: no core waits for it any more, so no runner can take it (P1).
     if (assignment.executor === 'runner' && assignment.runner === null) {
-      if (!(await this.deps.assignments.abandon(assignment.id))) return
-      // abandon() closed it `failed`.
-      await this.#journal(assignment, turn, 'failed', reason, 'failed').catch(() => {})
+      if (!(await this.deps.assignments.abandon(assignment.id, outcome))) return
+      await this.#journal(assignment, turn, 'failed', reason, outcome).catch(() => {})
       await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
       return this.#free(assignment)
     }
