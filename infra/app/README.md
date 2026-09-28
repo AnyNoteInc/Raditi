@@ -10,6 +10,7 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 | `secrets.example/` | Раскладка секретов `/run/raditi/<сервис>/` — какие файлы и что в них |
 | `postgres/init-roles.sh` | Роли PostgreSQL: владелец схемы `raditi`, `raditi_web` и `raditi_core` только с DML |
 | `preflight.sh` | Проверки хоста перед стартом, `ExecStartPre` юнита |
+| `dump-db.sh` | Дамп базы перед миграцией, шаг обычной выкладки |
 | `systemd/raditi-app.service` | Запуск стека, как только проходит `preflight.sh`; повтор каждые 30 секунд |
 | `*.test.mjs`, `verify-edge.mjs`, `verify/` | Проверки: `pnpm test:infra` и `pnpm verify:edge` |
 
@@ -57,7 +58,7 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 
    Если первый заказ не удался, Traefik не повторит его до перезапуска: исправить причину и выполнить `docker compose restart traefik`. Лимит Let's Encrypt — 5 неудачных проверок в час на имя.
 6. **Боевой Let's Encrypt.** Вернуть боевые `ACME_*` и выполнить `docker compose up -d --wait traefik`: флаги сменились, контейнер пересоздаётся.
-7. **Стек:** `docker compose run --rm migrate` → `docker compose run --rm seed` → `docker compose up -d --wait`.
+7. **Стек:** `docker compose run --rm migrate` → `docker compose run --rm seed` → `docker compose up -d --wait`. Дамп перед первой миграцией не нужен: база ещё пуста.
 8. **После выкладки.**
    - CAA: `0 issue "letsencrypt.org; accounturi=<из acme.json>; validationmethods=http-01"`. Запись разрешает выпуск только текущему ACME-аккаунту и только через HTTP-01: при утрате `acme.json` и при переходе на DNS-01 её сначала меняют (раздел «Утрата `acme.json` и смена способа проверки»).
    - Включить `.github/workflows/edge-cert.yml`: переменная репозитория `EDGE_CERT_HOST=raditi.ru`.
@@ -69,13 +70,24 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 1. **Файлы.** Привести `/opt/raditi/app` (всё, кроме `.env`) к коммиту, из которого собраны образы: `docker-compose.yml`, маршруты Traefik, `preflight.sh` и `postgres/init-roles.sh` должны быть той же ревизии. Новые переменные из `env.example` дописать в `.env`. Коммит записать в `.env` рядом с digest: `APP_REVISION=<sha>`.
 2. **Роли PostgreSQL.** Если релиз менял `postgres/init-roles.sh` (`git diff --quiet <прежний APP_REVISION> <новый> -- infra/app/postgres/init-roles.sh` в клоне репозитория завершается не нулём) — `docker compose exec -T postgres sh -s < postgres/init-roles.sh`. К уже созданной базе скрипт сам не применяется: `initdb` запускает его только на пустом томе.
 3. **Образы.** Новые digest `WEB_IMAGE`, `ORCHESTRATOR_IMAGE`, `MIGRATE_IMAGE` в `.env`, затем `./preflight.sh` (в том числе проверяет, что все образы — по digest) и `docker compose pull web core migrate`.
-4. `docker compose run --rm migrate`. Миграции только расширяют схему: сужение — в следующем релизе, потому что старые web и `core` работают на новой схеме, а отката схемы у Prisma нет.
-5. `docker compose up -d --wait --no-deps web core`. Пока web пересоздаётся, Traefik несколько секунд отвечает 502, потоки задач переподключаются. Это принято. Если релиз менял флаги Traefik (`command:`) или сервисы `traefik`, `postgres`, `redis` — `docker compose up -d --wait` без `--no-deps`. Файлы `traefik/dynamic` Traefik перечитывает сам.
-6. `docker compose run --rm seed` — только если сиды менялись. Сбой сида не мешает работе web и `core`.
+4. **Дамп базы** — `./dump-db.sh`. Отката миграций у Prisma нет: данные, которые испортила миграция, вернёт только этот дамп. Скрипт снимает `pg_dump -Fc` суперпользователем через сокет, проверяет, что в архиве есть данные `_prisma_migrations`, и дописывает путь к дампу в запись шага 0 (`dump=…`). Дампы лежат в `/opt/raditi/backups` (каталог 0700, файлы 0600, владелец root: в них персональные данные и сессии), хранятся пять последних и не старше 30 дней, как бэкапы платформы (spec §14); лишние скрипт удаляет при каждом запуске. Завершился не нулём — не мигрировать. Ночные бэкапы вне ВМ (M10) он не заменяет: диск у дампа и базы один.
+5. `docker compose run --rm migrate`. Миграции только расширяют схему: сужение — в следующем релизе, потому что старые web и `core` работают на новой схеме.
+6. `docker compose up -d --wait --no-deps web core`. Пока web пересоздаётся, Traefik несколько секунд отвечает 502, потоки задач переподключаются. Это принято. Если релиз менял флаги Traefik (`command:`) или сервисы `traefik`, `postgres`, `redis` — `docker compose up -d --wait` без `--no-deps`. Файлы `traefik/dynamic` Traefik перечитывает сам.
+7. `docker compose run --rm seed` — только если сиды менялись. Сбой сида не мешает работе web и `core`.
 
 Выкладка через GitHub Actions (M10) делает те же шаги и пишет ту же запись в `releases.log`.
 
-**Откат.** Последняя запись в `/opt/raditi/releases.log` — релиз, который работал до текущей выкладки. Привести `/opt/raditi/app` к её `APP_REVISION` и заменить в `.env` только строки из записи — `APP_REVISION` и `*_IMAGE`. Остальное, например `RUNNER_TOKENS`, не трогать: откат не должен отменять ротацию или отзыв токенов. Затем `./preflight.sh` и `docker compose up -d --wait --no-deps web core` (без `--no-deps`, если менялись Traefik или сервисы данных). Схему и роли не откатываем: старый код совместим с новой схемой.
+**Откат.** Последняя запись в `/opt/raditi/releases.log` — релиз, который работал до текущей выкладки. Привести `/opt/raditi/app` к её `APP_REVISION` и заменить в `.env` строки `APP_REVISION` и `*_IMAGE` из записи, и только их. Остальное, например `RUNNER_TOKENS`, не трогать: откат не должен отменять ротацию или отзыв токенов. Затем `./preflight.sh` и `docker compose up -d --wait --no-deps web core` (без `--no-deps`, если менялись Traefik или сервисы данных). Схему и роли не откатываем: старый код совместим с новой схемой.
+
+**Миграция испортила данные.** Базу возвращает дамп из той же записи (строка `dump=`). Всё, что записано после дампа, — задачи, платежи, входы — пропадёт, поэтому сначала решить, нельзя ли исправить данные следующей миграцией. Если нельзя — до отката кода:
+
+```sh
+docker compose stop web core
+docker compose exec -T postgres pg_restore -U postgres -d postgres \
+  --clean --if-exists --create --exit-on-error < /opt/raditi/backups/<дамп>.dump
+```
+
+`--create` пересоздаёт базу целиком: владелец и права ролей приходят из дампа, а таблицы миграции, которых в дампе нет, исчезают. Без него `--clean` не удалит таблицу, на которую ссылается новая, и восстановление остановится на полпути. Затем откат кода, как выше.
 
 **Перезагрузка ВМ.** `/run` — tmpfs. `raditi-secrets.service` рендерит секреты до `docker.service`, и контейнеры поднимает сам dockerd (`restart: unless-stopped`). Пока секретов нет, контейнеры не стартуют. Если секреты отрендерились позже или часы ещё не синхронизированы, `preflight.sh` не проходит, и `raditi-app.service` повторяет запуск каждые 30 секунд, пока стек не поднимется: `systemctl status raditi-app.service` покажет, какая проверка мешает.
 
@@ -138,5 +150,5 @@ CAA привязывает выпуск к ACME-аккаунту из `acme.json
 
 ## Проверки
 
-- `pnpm test:infra` — compose, маршруты и Dockerfile без Docker-демона (в `pnpm gates`).
-- `pnpm verify:edge` — сквозная проверка на Pebble вместо Let's Encrypt; результаты — `docs/plan/04-edge-verification.md`.
+- `pnpm test:infra` — compose, маршруты, Dockerfile и `dump-db.sh` без Docker-демона (в `pnpm gates`).
+- `pnpm verify:edge` — сквозная проверка на Pebble вместо Let's Encrypt, в том числе дамп и восстановление базы; результаты — `docs/plan/04-edge-verification.md`.

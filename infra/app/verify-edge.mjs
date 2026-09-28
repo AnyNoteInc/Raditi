@@ -3,7 +3,8 @@
 // Let's Encrypt (verify/compose.verify.yml). Proves that Traefik gets real certificates and serves
 // web over HTTPS; that core, its port 8081 and the runner API never show through the edge or to
 // web; that the runner API is plain HTTP on the private address only, its token bound to the VM;
-// that broken settings stop web; that the database roles and the Redis ACL hold.
+// that broken settings stop web; that the database roles and the Redis ACL hold; that the dump
+// before a migration (dump-db.sh) brings the database back.
 //
 //   pnpm verify:edge [-- --no-build] [--keep] [--renewal] [--real-address]
 //
@@ -19,7 +20,17 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import http from 'node:http'
 import https from 'node:https'
 import { connect, createServer } from 'node:net'
@@ -81,10 +92,14 @@ const dockerEnv = Object.fromEntries(
 
 // --- Processes ---------------------------------------------------------------------------------
 /** Runs a command; a failure names the command, never its arguments (they may carry secrets). */
-function command(binary, args, { allowFailure = false, input, timeoutMs, stdio = 'pipe' } = {}) {
+function command(
+  binary,
+  args,
+  { allowFailure = false, input, timeoutMs, stdio = 'pipe', env = dockerEnv } = {},
+) {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
-      env: dockerEnv,
+      env,
       stdio: stdio === 'inherit' ? ['pipe', 'inherit', 'inherit'] : 'pipe',
     })
     const out = []
@@ -542,6 +557,7 @@ try {
     envFile,
     dotenv({
       APP_DOMAIN: DOMAIN,
+      APP_REVISION: 'verify',
       APP_PRIVATE_IP: runnerHost,
       RUNNER_API_PUBLISH: PORTS.runner,
       ACME_EMAIL: 'verify@raditi.test',
@@ -646,7 +662,8 @@ try {
     assert.ok([200, 503].includes(health.status), `status ${health.status}`)
     assert.deepEqual(Object.keys(JSON.parse(health.body)), ['status'])
   })
-  await check('3b. web and core work under their own database roles and Redis users', async () => {
+  /** web and core reach PostgreSQL and Redis under their own roles and users. */
+  const dataReachable = async () => {
     const web = await edge(DOMAIN, '/api/health', {
       headers: { authorization: `Bearer ${secret.metricsToken}` },
     })
@@ -664,7 +681,8 @@ try {
     const coreChecks = JSON.parse(core.stdout.trim().split('\n').at(-1))
     assert.equal(coreChecks.database, 'ok')
     assert.equal(coreChecks.redis, 'ok')
-  })
+  }
+  await check('3b. web and core work under their own database roles and Redis users', dataReachable)
   await check('4. http:// redirects to https:// on 443, without a port', async () => {
     const answer = await request(`http://${DOMAIN}:${PORTS.http}/x?y=1`, { host: '127.0.0.1' })
     assert.ok([301, 308].includes(answer.status), `status ${answer.status}`)
@@ -976,6 +994,137 @@ try {
       assert.match((await cli('web', secret.redis.web, ...args)).stdout, /NOPERM/, args[0])
     assert.match((await cli('health', secret.redis.health, 'GET', 'x')).stdout, /NOPERM/)
     assert.match((await cli('web', secret.redis.web, 'PING')).stdout, /PONG/)
+  })
+  // Last: it restarts web and core.
+  await check('23. the dump before a migration takes the database back (dump-db.sh)', async () => {
+    // The script from a copy of the app directory, as on the VM: its .env and the record for
+    // rollback; compose reaches this stack through its own variables.
+    const vm = join(work, 'vm')
+    await mkdir(join(vm, 'app'), { recursive: true })
+    await copyFile(join(app, 'dump-db.sh'), join(vm, 'app/dump-db.sh'))
+    await copyFile(envFile, join(vm, 'app/.env'))
+    const log = join(vm, 'releases.log')
+    await writeFile(log, `${new Date().toISOString()}\nAPP_REVISION=verify\n`)
+    const dumped = await command('sh', [join(vm, 'app/dump-db.sh')], {
+      env: {
+        ...dockerEnv,
+        COMPOSE_PROJECT_NAME: PROJECT,
+        COMPOSE_FILE: composeFiles.join(':'),
+        COMPOSE_ENV_FILES: envFile,
+        DUMP_DIR: join(vm, 'backups'),
+        RELEASES_LOG: log,
+      },
+    })
+    const file = /^dump-db: (\S+)$/m.exec(dumped.stdout)?.[1]
+    assert.ok(file?.startsWith(join(vm, 'backups/')), dumped.stdout)
+    assert.equal((await stat(file)).mode & 0o777, 0o600)
+    assert.equal((await readFile(log, 'utf8')).trim().split('\n').at(-1), `dump=${file}`)
+
+    // The superuser over the socket reads; the schema owner breaks data as a migration would.
+    const superuser = async (sql) => {
+      const answer = await inside('postgres', [
+        'psql',
+        '-U',
+        'postgres',
+        '-d',
+        'raditi',
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-tAc',
+        sql,
+      ])
+      assert.equal(answer.code, 0, answer.stderr)
+      return answer.stdout.trim()
+    }
+    const owner = (sql) =>
+      inside('postgres', [
+        'env',
+        `PGPASSWORD=${secret.pg.owner}`,
+        'psql',
+        '-h',
+        'postgres',
+        '-U',
+        'raditi',
+        '-d',
+        'raditi',
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-tAc',
+        sql,
+      ])
+    const plans = "SELECT string_agg(name, ',' ORDER BY slug) FROM plans"
+    const before = await superuser(plans)
+    assert.ok(before)
+    const broken = await owner(
+      "CREATE TABLE verify_edge_broken (plan_id uuid REFERENCES plans (id)); INSERT INTO verify_edge_broken SELECT id FROM plans; UPDATE plans SET name = 'broken'",
+    )
+    assert.equal(broken.code, 0, broken.stderr)
+
+    // The runbook's restore: web and core stopped, the database recreated from the dump.
+    await compose(['stop', 'web', 'core'])
+    const restored = await inside(
+      'postgres',
+      [
+        'pg_restore',
+        '-U',
+        'postgres',
+        '-d',
+        'postgres',
+        '--clean',
+        '--if-exists',
+        '--create',
+        '--exit-on-error',
+      ],
+      { input: await readFile(file) },
+    )
+    assert.equal(restored.code, 0, restored.stderr)
+    assert.equal(await superuser(plans), before)
+    // --create: a table the dump does not know goes too, even with a key into a restored one
+    assert.equal(await superuser("SELECT to_regclass('verify_edge_broken') IS NULL"), 't')
+    // The owner and the grants of the database and the schema came back with it
+    assert.equal(
+      await superuser(
+        "SELECT pg_get_userbyid(datdba) || ',' || has_database_privilege('public', 'raditi', 'CONNECT') FROM pg_database WHERE datname = 'raditi'",
+      ),
+      'raditi,false',
+    )
+    assert.equal(
+      await superuser(
+        "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'public'",
+      ),
+      'raditi',
+    )
+    await compose([
+      'up',
+      '-d',
+      '--wait',
+      '--wait-timeout',
+      String(UP_TIMEOUT_S),
+      '--no-deps',
+      'web',
+      'core',
+    ])
+    await dataReachable()
+    // So did the default privileges: the next migration's tables are open to web and core
+    const next = await owner('CREATE TABLE verify_edge_next (id int)')
+    assert.equal(next.code, 0, next.stderr)
+    const read = await inside('postgres', [
+      'env',
+      `PGPASSWORD=${secret.pg.core}`,
+      'psql',
+      '-h',
+      'postgres',
+      '-U',
+      'raditi_core',
+      '-d',
+      'raditi',
+      '-tAc',
+      'SELECT count(*) FROM verify_edge_next',
+    ])
+    assert.equal(read.stdout.trim(), '0', read.stderr)
+    // And the migrations table: the restored schema is the one the migrations recorded
+    const migrate = await compose(['--profile', 'ops', 'run', '--rm', 'migrate'])
+    assert.match(migrate.stdout + migrate.stderr, /No pending migrations to apply/)
   })
   console.log(`verify:edge: ${passed} checks passed`)
 } catch (error) {
