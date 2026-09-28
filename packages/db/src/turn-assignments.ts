@@ -4,6 +4,7 @@ import {
   badRequest,
   MAX_SANDBOX_TURN_MS,
   runnerIdSchema,
+  runnerLimits,
   turnAssignmentOutcomes,
   turnExecutorKinds,
   turnPlanSchema,
@@ -45,7 +46,7 @@ const openSchema = z.object({
   plan: turnPlanSchema,
   remainingMs: z.number().int().positive().max(MAX_SANDBOX_TURN_MS),
 })
-const idsSchema = z.array(id).max(256)
+const idsSchema = z.array(id).max(runnerLimits.claimIds)
 const runnerSchema = z.object({ runnerId: runnerIdSchema, runnerSession: id })
 const takenSchema = z.array(z.object({ lease_expires_at: z.coerce.date() })).length(1)
 

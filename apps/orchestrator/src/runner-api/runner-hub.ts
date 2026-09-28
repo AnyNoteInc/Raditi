@@ -829,7 +829,12 @@ export class RunnerHub implements OnApplicationShutdown {
     capacity: number,
     active: ReadonlySet<string>,
   ): Promise<void> {
-    const ids = [...this.#pending].filter(([, pending]) => !pending.done).map(([id]) => id)
+    // Oldest first, as many as the store takes: the map keeps the order turns began to wait in.
+    // One whose abandon is under way can no longer be claimed.
+    const ids = [...this.#pending]
+      .filter(([, pending]) => !pending.done && !pending.expiring)
+      .slice(0, runnerLimits.claimIds)
+      .map(([id]) => id)
     if (ids.length === 0) return
     // Prepares this session got but does not report as active yet still take a slot.
     let delivering = 0

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { SiteLeaseGrant, TurnPlan } from '@repo/domain'
+import { runnerLimits, type SiteLeaseGrant, type TurnPlan } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createPrismaClient } from './client.ts'
@@ -72,6 +72,16 @@ describe('turn assignment input validation', () => {
     await expect(
       store.claim({ ids: [], runnerId: 'VM 1', runnerSession: randomUUID(), limit: 1 }),
     ).rejects.toThrow()
+    // The hub offers at most this many waiting turns per claim (RunnerHub).
+    const waiting = (count: number) => Array.from({ length: count }, () => randomUUID())
+    await expect(
+      store.claim({
+        ids: waiting(runnerLimits.claimIds + 1),
+        runnerId: 'vm1',
+        runnerSession: randomUUID(),
+        limit: 1,
+      }),
+    ).rejects.toThrow()
     await expect(
       store.takeOver({
         id: randomUUID(),
@@ -85,6 +95,16 @@ describe('turn assignment input validation', () => {
     expect(
       await store.claim({ ids: [], runnerId: 'vm1', runnerSession: randomUUID(), limit: 1 }),
     ).toEqual([])
+    $queryRaw.mockResolvedValue([])
+    expect(
+      await store.claim({
+        ids: waiting(runnerLimits.claimIds),
+        runnerId: 'vm1',
+        runnerSession: randomUUID(),
+        limit: 1,
+      }),
+    ).toEqual([])
+    expect($queryRaw).toHaveBeenCalledOnce()
   })
 })
 

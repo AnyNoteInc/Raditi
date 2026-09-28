@@ -88,6 +88,8 @@ export const runnerLimits = Object.freeze({
   bodyBytes: 1024 * 1024 + 64 * 1024,
   commands: 64,
   capacity: 64,
+  /** Waiting assignments one claim offers the store, oldest first. */
+  claimIds: 256,
   inventory: 256,
   /** turnCredentials(): the LLM key, the MCP token and every secret file. */
   credentials: preparedRunLimits.secretFiles + 2,

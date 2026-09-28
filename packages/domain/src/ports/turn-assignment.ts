@@ -49,8 +49,9 @@ export interface TurnAssignmentStore {
   open(input: OpenTurnAssignment): Promise<TurnAssignment | null>
   get(id: string): Promise<TurnAssignment | null>
   /**
-   * Binds unclaimed runner assignments among `ids` to a runner session, oldest first and at
-   * most `limit`. Rows another claimant holds are skipped, never waited for.
+   * Binds unclaimed runner assignments among `ids` (at most runnerLimits.claimIds) to a runner
+   * session, oldest first and at most `limit`. Rows another claimant holds are skipped, never
+   * waited for.
    */
   claim(input: {
     ids: readonly string[]
