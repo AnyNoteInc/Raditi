@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import {
   DomainError,
   MAX_SANDBOX_TURN_MS,
+  notFound,
   runnerReportSchema,
   SANDBOX_SECRETS_DIR,
   TURN_PUBLICATION_GRACE_MS,
@@ -233,7 +234,8 @@ function world(kind: string) {
     ),
     load: vi.fn(async (ref: SnapshotReference) => {
       const found = committed.get(`${ref.sessionId}/${ref.turn}`)
-      if (!found) throw new DomainError('SNAPSHOT_LOAD_FAILED', 'No committed manifest', 502)
+      // The manifest is written last: without it SnapshotService answers NOT_FOUND.
+      if (!found) throw notFound('Snapshot or snapshot part is missing')
       if (JSON.stringify(found.manifest.home) !== JSON.stringify(ref.home))
         throw new DomainError('CONFLICT', 'Snapshot is incompatible', 409)
       return {
@@ -731,6 +733,34 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     expect(w.logger.error).toHaveBeenCalledWith(
       'Turn recovery left a turn to an operator: no committed checkpoint (epoch 1, phase checkpointing, attempts 0)',
     )
+  })
+
+  it('tries a checkpoint again when reading it failed, instead of leaving it to an operator', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const save = w.snapshots.save.getMockImplementation()!
+    const { after } = await w.crashAt(undefined, {
+      arm: (kill) =>
+        w.snapshots.save.mockImplementationOnce(async (...args) => {
+          const manifest = await save(...args)
+          kill()
+          return manifest
+        }),
+    })
+    expect(w.journal.phases(1).at(-1)).toBe('checkpointing')
+    // S3 or Vault did not answer: that proves nothing about the manifest.
+    w.snapshots.load.mockRejectedValueOnce(
+      new DomainError('SNAPSHOT_LOAD_FAILED', 'Could not load the turn snapshot', 502),
+    )
+    await w.recover(after.recovery)
+    expect(w.logger.error).not.toHaveBeenCalled()
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 1 } })
+
+    await w.recover(after.recovery)
+    expect(w.journal.phases(2).at(-1)).toBe('publication_recovered')
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
   })
 
   it.each(['checkpointed', 'destroyed', 'publishing'])(

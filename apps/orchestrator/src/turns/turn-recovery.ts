@@ -57,6 +57,22 @@ export interface PublicationRecoveryRequest {
 export const RECOVERY_TIMEOUT_MS = 6 * 60_000
 
 const AMBIGUOUS_CONTAINER = 'ambiguous_container'
+const NO_CHECKPOINT = 'no_checkpoint'
+
+/**
+ * The snapshot holds no committed checkpoint of this publication: its manifest is missing — it
+ * is written last, so none was committed — or belongs to another turn. No retry changes that; a
+ * storage, Vault or timeout error proves nothing and is tried again.
+ */
+export function isMissingCheckpoint(error: unknown): boolean {
+  return (
+    isDomainError(error) &&
+    (error.details as { reason?: unknown } | undefined)?.reason === NO_CHECKPOINT
+  )
+}
+
+const noCheckpoint = (error: DomainError) =>
+  new DomainError(error.code, error.message, error.httpStatus, { reason: NO_CHECKPOINT })
 
 /** A container of the turn could not be taken for removal as the turn's own: an operator decides. */
 export function isAmbiguousContainer(error: unknown): boolean {
@@ -93,7 +109,11 @@ export class TurnPublicationRecovery {
       this.deps.snapshots.load(reference),
       RECOVERY_TIMEOUT_MS,
       'Snapshot recovery read timed out',
-    )
+    ).catch((error: unknown) => {
+      if (isDomainError(error) && ['NOT_FOUND', 'CONFLICT'].includes(error.code))
+        throw noCheckpoint(error)
+      throw error
+    })
     const { manifest, archives } = loaded
     const metadata = manifest.git.publication
     if (
@@ -103,7 +123,7 @@ export class TurnPublicationRecovery {
       manifest.git.provider !== input.workspace.repo.provider ||
       manifest.git.branch !== input.workspace.branch
     )
-      throw conflict('Checkpoint does not match the requested publication recovery')
+      throw noCheckpoint(conflict('Checkpoint does not match the requested publication recovery'))
 
     const started = performance.now()
     // Its containers are adopted through the assignment, so it moves with the lease first.

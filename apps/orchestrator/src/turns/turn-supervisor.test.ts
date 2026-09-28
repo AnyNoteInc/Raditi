@@ -3,14 +3,17 @@ import { performance } from 'node:perf_hooks'
 
 import { Logger } from '@nestjs/common'
 import {
+  conflict,
   DomainError,
   leaseLost,
   leftNothing,
   MAX_PRESIGN_TTL_MS,
   MAX_SANDBOX_TURN_MS,
+  notFound,
   SANDBOX_SECRETS_DIR,
   sandboxCommandFailed,
   snapshotHasCredential,
+  TimeoutError,
   TURN_FINALIZE_RESERVE_MS,
   toTurnPlan,
   TURN_PUBLICATION_GRACE_MS,
@@ -53,6 +56,7 @@ import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { LiveTurns } from './live-turns.ts'
 import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from './local-turn-executor.ts'
 import {
+  isMissingCheckpoint,
   RECOVERY_TIMEOUT_MS,
   TurnPublicationRecovery,
   type PublicationRecoveryRequest,
@@ -1729,6 +1733,27 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     await expect(f.recover()).rejects.toThrow('manifest missing')
     expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
     expect(f.publication.publish).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a missing manifest', notFound('Snapshot or snapshot part is missing'), true],
+    ['a manifest of another turn', conflict('Snapshot is incompatible'), true],
+    ['a storage error', new DomainError('SNAPSHOT_LOAD_FAILED', 'Could not load', 502), false],
+    ['a timeout', new TimeoutError('Snapshot recovery read timed out'), false],
+  ])('tells %s from a failed read before any takeover', async (_case, error, missing) => {
+    const f = await recoveryFixture()
+    f.snapshots.load.mockRejectedValue(error)
+    const refused = await f.recover().catch((caught: unknown) => caught)
+    expect(isMissingCheckpoint(refused)).toBe(missing)
+    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
+  })
+
+  it('refuses a checkpoint of another publication as missing', async () => {
+    const f = await recoveryFixture()
+    f.loaded.manifest.git.branch = 'agent/another'
+    const refused = await f.recover().catch((caught: unknown) => caught)
+    expect(isMissingCheckpoint(refused)).toBe(true)
+    expect(f.leases.reclaimForRecovery).not.toHaveBeenCalled()
   })
 
   it('requires explicit protected paths before reading the snapshot or reclaiming', async () => {

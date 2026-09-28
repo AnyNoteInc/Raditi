@@ -42,6 +42,7 @@ import {
 } from './turn-journal.ts'
 import {
   isAmbiguousContainer,
+  isMissingCheckpoint,
   TurnPublicationRecovery,
   type PublicationRemoval,
 } from './turn-recovery.ts'
@@ -532,9 +533,9 @@ export class TurnExecRecovery {
    * A committed checkpoint is published under a newer epoch (TurnPublicationRecovery), only once
    * the turn's container is known to be gone: its owner journaled the removal, recovery removes
    * it now through the executor, or the deadline and grace passed and the VM's watchdog removed
-   * it. A runner that is away is waited for with the site held. Without a committed manifest a
-   * turn stopped while checkpointing waits for an operator, as does a container of another
-   * identity.
+   * it. A runner that is away is waited for with the site held. A turn without a committed
+   * manifest of its own waits for an operator, as does a container of another identity; a read
+   * of the snapshot that failed is tried again.
    */
   async #publish(
     assignment: TurnAssignment,
@@ -584,8 +585,9 @@ export class TurnExecRecovery {
     } catch (error) {
       // Refused or unanswered takeovers leave the site held where the assignment is.
       const now = await this.#afterTakeOver(assignment, turn.step!)
-      // Refused before any takeover: the snapshot has no committed manifest.
-      if (turn.step === 'checkpointing' && now?.fence.epoch === assignment.fence.epoch)
+      // Proven before any takeover: no committed manifest of this turn. Any other failure to read
+      // it — storage, Vault, a timeout — keeps the site held, and the next pass tries again.
+      if (isMissingCheckpoint(error))
         return this.#park(assignment, turn.step, 'no committed checkpoint')
       // Another identity where the turn's container should be. Any other failed removal left
       // the new epoch held, and the next pass tries again without counting an attempt.
