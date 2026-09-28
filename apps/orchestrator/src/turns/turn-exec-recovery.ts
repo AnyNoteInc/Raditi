@@ -42,6 +42,7 @@ import {
 } from './turn-journal.ts'
 import {
   isAmbiguousContainer,
+  isBrokenCheckpoint,
   isMissingCheckpoint,
   TurnPublicationRecovery,
   type PublicationRemoval,
@@ -601,10 +602,12 @@ export class TurnExecRecovery {
     } catch (error) {
       // Refused or unanswered takeovers leave the site held where the assignment is.
       const now = await this.#afterTakeOver(assignment, turn.step!)
-      // Proven before any takeover: no committed manifest of this turn. Any other failure to read
-      // it — storage, Vault, a timeout — keeps the site held, and the next pass tries again.
+      // Proven before any takeover: no committed manifest of this turn, or one that fails its own
+      // checks. Any other failure to read it — storage, Vault, a timeout — keeps the site held,
+      // and the next pass tries again.
       if (isMissingCheckpoint(error))
         return this.#park(assignment, turn.step, 'no committed checkpoint')
+      if (isBrokenCheckpoint(error)) return this.#park(assignment, turn.step, 'broken checkpoint')
       // Another identity where the turn's container should be. Any other failed removal left
       // the new epoch held, and the next pass tries again without counting an attempt.
       if (isAmbiguousContainer(error))

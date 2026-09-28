@@ -58,6 +58,7 @@ export const RECOVERY_TIMEOUT_MS = 6 * 60_000
 
 const AMBIGUOUS_CONTAINER = 'ambiguous_container'
 const NO_CHECKPOINT = 'no_checkpoint'
+const BROKEN_CHECKPOINT = 'broken_checkpoint'
 
 /**
  * The snapshot holds no committed checkpoint of this publication: its manifest is missing — it
@@ -73,6 +74,18 @@ export function isMissingCheckpoint(error: unknown): boolean {
 
 const noCheckpoint = (error: DomainError) =>
   new DomainError(error.code, error.message, error.httpStatus, { reason: NO_CHECKPOINT })
+
+/**
+ * The committed checkpoint fails its own checks — manifest schema, a part's size or hash, GCM or
+ * the archive: SnapshotService.load answers BAD_REQUEST only for these, and reading it again
+ * gives the same answer.
+ */
+export function isBrokenCheckpoint(error: unknown): boolean {
+  return (
+    isDomainError(error) &&
+    (error.details as { reason?: unknown } | undefined)?.reason === BROKEN_CHECKPOINT
+  )
+}
 
 /** A container of the turn could not be taken for removal as the turn's own: an operator decides. */
 export function isAmbiguousContainer(error: unknown): boolean {
@@ -112,6 +125,10 @@ export class TurnPublicationRecovery {
     ).catch((error: unknown) => {
       if (isDomainError(error) && ['NOT_FOUND', 'CONFLICT'].includes(error.code))
         throw noCheckpoint(error)
+      if (isDomainError(error) && error.code === 'BAD_REQUEST')
+        throw new DomainError(error.code, error.message, error.httpStatus, {
+          reason: BROKEN_CHECKPOINT,
+        })
       throw error
     })
     const { manifest, archives } = loaded

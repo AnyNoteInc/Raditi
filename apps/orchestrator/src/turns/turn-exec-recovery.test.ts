@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 
 import {
+  badRequest,
   DomainError,
   MAX_SANDBOX_TURN_MS,
   notFound,
@@ -790,6 +791,32 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     expect(w.journal.phases(2).at(-1)).toBe('publication_recovered')
     expect(w.publish).toHaveBeenCalledOnce()
     expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+  })
+
+  it('leaves a committed checkpoint that fails its own checks to an operator', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const save = w.snapshots.save.getMockImplementation()!
+    const { after } = await w.crashAt(undefined, {
+      arm: (kill) =>
+        w.snapshots.save.mockImplementationOnce(async (...args) => {
+          const manifest = await save(...args)
+          kill()
+          return manifest
+        }),
+    })
+    // Reading it again gives the same answer: no pass of this process tries it again.
+    w.snapshots.load.mockRejectedValue(badRequest('Snapshot part failed its size or hash check'))
+    await w.recover(after.recovery)
+    await w.recover(after.recovery)
+
+    expect(w.snapshots.load).toHaveBeenCalledOnce()
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 1 } })
+    expect(w.publish).not.toHaveBeenCalled()
+    expect(w.logger.error).toHaveBeenCalledExactlyOnceWith(
+      'Turn recovery left a turn to an operator: broken checkpoint (epoch 1, phase checkpointing, attempts 0)',
+    )
   })
 
   it.each(['checkpointed', 'destroyed', 'publishing'])(
