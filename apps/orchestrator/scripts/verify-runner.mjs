@@ -10,6 +10,8 @@
 //   4. both killed: recovery resumes on the restarted runner with the turn's credentials;
 //   5. the turn cancelled while the runner creates its container: the site stays with the turn
 //      until the container is removed;
+//   6. core killed after the checkpoint with the runner away: nothing is published until the
+//      runner is back and the container removed;
 // and a stale epoch or a runner session that is gone is refused. Synthetic data only; every
 // row, object, key, container, network and firewall rule it creates is removed.
 //
@@ -24,7 +26,7 @@ import assert from 'node:assert/strict'
 import { fork, spawn } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdtemp, open, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -143,6 +145,8 @@ async function startCore() {
       NODE_ENV: 'test',
       NO_COLOR: '1',
       S3_RUNNER_ENDPOINT: s3RunnerEndpoint,
+      // Publication clones a killed core leaves behind go with the work directory.
+      TMPDIR: join(work, 'tmp'),
     },
     stdio: ['ignore', log.fd, log.fd, 'ipc'],
   })
@@ -516,6 +520,7 @@ try {
   helpersBefore = await helpers()
 
   work = await mkdtemp(join(tmpdir(), 'raditi-runner-verify-'))
+  await mkdir(join(work, 'tmp'))
   port = await freePort()
   // The site's Git remote: one commit on main; each task publishes to agent/<task>.
   const remote = join(work, 'remote.git')
@@ -805,6 +810,9 @@ try {
         seen = true
         assert.equal(lease.holderTaskId, task.taskId, 'The site stays with the turn meanwhile')
       }
+      // Freed only after the proof: `failed` follows the removal and precedes the release.
+      if (lease.holderTaskId !== task.taskId)
+        assert.equal((await journal(task.taskId)).at(-1).phase, 'failed')
       return containers.length === 0 && (await assignmentOf(task.taskId)).outcome
     }, 'the cancelled turn to end')
     const entries = await journal(task.taskId)
@@ -822,6 +830,72 @@ try {
     assert.equal(await branchHead(task.taskId), '', 'Nothing of the cancelled turn is published')
     verified.push(
       `cancel while the runner creates the container: vacating without a release, the late container removed through the runner, then the site freed${seen ? ' (held while the container was seen)' : ''} (${Math.round((Date.now() - started) / 1000)} s)`,
+    )
+  }
+
+  // 6. core killed -9 right after the checkpoint is journaled, the runner killed too and kept
+  //    away: recovery holds the site and publishes nothing until the runner is back and the
+  //    turn's container is removed through it.
+  {
+    const started = Date.now()
+    const task = await createTask()
+    sessions.push(task.sessionId)
+    await core.request('crashAfter', { taskId: task.taskId, phase: 'checkpointed' })
+    const run = core.request('run', {
+      request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: false }),
+    })
+    run.catch(() => {})
+    await core.exited
+    await killRunner(runner)
+    const left = await journal(task.taskId)
+    assert.equal(left.at(-1).phase, 'checkpointed')
+    const { epoch } = left.at(-1).fence
+    const { containerId } = await assignmentOf(task.taskId)
+    const exists = async () =>
+      (await dockerCommand(['inspect', '--format', '{{.Id}}', containerId], { allowFailure: true }))
+        .code === 0
+    assert(await exists(), 'The container outlives core and the runner')
+    core = await startCore()
+    const awaiting = (entries) =>
+      entries.filter((entry) => entry.phase === 'recovery' && entry.reason === 'awaiting_runner')
+    await waitFor(
+      async () => awaiting(await journal(task.taskId)).length > 0,
+      'recovery to wait for the runner',
+    )
+    // Three more passes with the runner away change nothing.
+    await new Promise((done) => setTimeout(done, 16_000))
+    const waiting = await journal(task.taskId)
+    assert.equal(awaiting(waiting).length, 1, 'The wait is journaled once')
+    assert(waiting.every((entry) => entry.fence.epoch === epoch))
+    const held = await leaseOf()
+    assert.deepEqual(
+      [held.holderTaskId, held.epoch, held.heldForOperator],
+      [task.taskId, epoch, true],
+    )
+    const open = await assignmentOf(task.taskId)
+    assert.deepEqual([open.outcome, open.recoveryAttempts], [null, 0])
+    assert.equal(await branchHead(task.taskId), '', 'Nothing is published while the runner is away')
+    assert(await exists(), 'The container waits for the runner')
+    runner = await startRunner()
+    await waitFor(async () => (await assignmentOf(task.taskId)).outcome, 'the checkpoint published')
+    assert(!(await exists()), 'The container is removed')
+    const done = await expectCompleted(task.taskId, 1)
+    assert.equal(done.recoveryAttempts, 1)
+    const entries = await journal(task.taskId)
+    const recovered = entries.at(-1).fence.epoch
+    assert.deepEqual(
+      entries
+        .filter((entry) => entry.fence.epoch > epoch)
+        .map((entry) => [entry.phase, entry.containerId ?? null, entry.recoveredFromEpoch]),
+      [
+        ['checkpointed', null, epoch],
+        ['destroyed', containerId, epoch],
+        ['publishing', null, epoch],
+        ['publication_recovered', null, epoch],
+      ],
+    )
+    verified.push(
+      `kill -9 of core after the checkpoint with the runner away: the site held, one recovery{awaiting_runner}, no attempt and nothing published over four passes; the returned runner removed the container by its id, then the checkpoint was published under epoch ${recovered} (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 

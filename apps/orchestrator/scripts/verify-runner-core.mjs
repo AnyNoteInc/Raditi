@@ -101,6 +101,13 @@ const db = createPrismaClient({ databaseUrl: env.DATABASE_URL, log: [] })
 const leases = new PostgresSiteLeaseStore(db)
 const assignments = new PostgresTurnAssignmentStore(db)
 const journal = new TaskEventTurnJournal(db)
+// kill -9 of this core right after a phase of one task is journaled, before anything follows it.
+const crashAfter = new Map()
+const record = journal.record.bind(journal)
+journal.record = async (input) => {
+  await record(input)
+  if (crashAfter.get(input.fence.taskId) === input.phase) process.kill(process.pid, 'SIGKILL')
+}
 // Presigned URLs are signed for S3 as the VM sees it (S3_RUNNER_ENDPOINT).
 const snapshots = new SnapshotService(
   createS3ObjectStorage(storageConfigFromEnv(env)),
@@ -194,6 +201,10 @@ const handlers = {
   },
   async cancel({ taskId }) {
     cancels.get(taskId)?.abort()
+    return null
+  },
+  async crashAfter({ taskId, phase }) {
+    crashAfter.set(taskId, phase)
     return null
   },
   async session() {
