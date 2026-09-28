@@ -355,6 +355,7 @@ test('Traefik: static config only as flags, no dashboard or Docker provider, log
     '--accesslog.fields.headers.defaultmode=drop',
     '--accesslog.fields.queryparameters.defaultmode=drop',
     '--entrypoints.websecure.http.aliasheadersstrategy=delete',
+    '--entrypoints.websecure.http.maxheaderbytes=32768',
     '--entrypoints.web.http.redirections.entrypoint.to=:443',
     '--entrypoints.web.observability.accesslogs=false',
     '--providers.file.directory=/etc/traefik/dynamic',

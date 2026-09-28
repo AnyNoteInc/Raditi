@@ -109,6 +109,9 @@ services:
       - --entrypoints.websecure.address=:8443
       - --entrypoints.websecure.asdefault=true
       - --entrypoints.websecure.http.aliasheadersstrategy=delete
+      # Each request writes its path to the access log in journald; the default 1 MiB of headers
+      # would let a flood evict the whole incident trail fast. web (Node) takes 16 KiB anyway.
+      - --entrypoints.websecure.http.maxheaderbytes=32768
       - --entrypoints.websecure.http.encodedcharacters.allowencodedslash=false
       - --entrypoints.websecure.http.encodedcharacters.allowencodedbackslash=false
       - --entrypoints.websecure.http.encodedcharacters.allowencodednullcharacter=false
