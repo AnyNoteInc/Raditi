@@ -10,8 +10,9 @@
 //   --no-build      use raditi-verify/{web,orchestrator,migrate}:local as they are
 //   --keep          leave the stack, its volumes and the temporary directory for a look
 //   --renewal       plus the certificate renewal: a 30-minute certificate, ~15 more minutes
-//   --real-address  Linux with "userland-proxy": false only (CI): the edge and the runner API on
-//                   the host's own address; core must see that address, Traefik must forward it
+//   --real-address  Linux with "userland-proxy": false and sudo only (CI): the edge and the runner
+//                   API on the host's own address, called by a client in its own network namespace;
+//                   Traefik must forward and core must see that client's address
 //
 // Synthetic data only; the secrets are random, written to a temporary directory and removed.
 // The output names the checks, never a secret. The results go to docs/plan/04-edge-verification.md.
@@ -47,6 +48,10 @@ const PROJECT = 'raditi-edge-verify'
 const DOMAIN = 'raditi.test'
 const PORTS = { http: 18080, https: 18443, runner: 18083, pebble: 15000 }
 const UP_TIMEOUT_S = 180
+// --real-address: a client outside the host. Docker masquerades every connection the host itself
+// opens to a published port (the source becomes the bridge gateway), so only a client in its own
+// network namespace, reaching the host over a veth pair, shows the real address.
+const CLIENT = { netns: 'raditi-verify-client', host: '10.254.254.1', address: '10.254.254.2' }
 
 const { values: options } = parseArgs({
   args: process.argv.slice(2).filter((arg) => arg !== '--'),
@@ -124,6 +129,67 @@ const compose = (args, opts) =>
 const inside = (service, args, opts) =>
   compose(['exec', '-T', service, ...args], { allowFailure: true, ...opts })
 
+const sudo = (args, opts) => command('sudo', ['-n', ...args], opts)
+
+/** The namespace and veth pair of the outside client; the veth goes away with the namespace. */
+async function createOutsideClient() {
+  await sudo(['ip', 'netns', 'del', CLIENT.netns], { allowFailure: true })
+  const inNetns = (args) => sudo(['ip', 'netns', 'exec', CLIENT.netns, ...args])
+  await sudo(['ip', 'netns', 'add', CLIENT.netns])
+  await sudo(['ip', 'link', 'add', 'rvc-host', 'type', 'veth', 'peer', 'name', 'rvc-client'])
+  await sudo(['ip', 'link', 'set', 'rvc-client', 'netns', CLIENT.netns])
+  await sudo(['ip', 'address', 'add', `${CLIENT.host}/30`, 'dev', 'rvc-host'])
+  await sudo(['ip', 'link', 'set', 'rvc-host', 'up'])
+  await inNetns(['ip', 'address', 'add', `${CLIENT.address}/30`, 'dev', 'rvc-client'])
+  await inNetns(['ip', 'link', 'set', 'rvc-client', 'up'])
+  await inNetns(['ip', 'link', 'set', 'lo', 'up'])
+  await inNetns(['ip', 'route', 'add', 'default', 'via', CLIENT.host])
+}
+
+/**
+ * curl from the outside client. Headers go through a 0600 file (a token never reaches argv);
+ * returns the status and the body.
+ */
+async function fromOutside(url, { method = 'GET', headers = {}, body, resolve, cacert } = {}) {
+  const headerFile = join(work, `outside-headers-${randomUUID()}`)
+  await writeFile(
+    headerFile,
+    Object.entries(headers)
+      .map(([name, value]) => `${name}: ${value}\n`)
+      .join(''),
+    { mode: 0o600 },
+  )
+  try {
+    const result = await sudo(
+      [
+        'ip',
+        'netns',
+        'exec',
+        CLIENT.netns,
+        'curl',
+        '-sS',
+        '--max-time',
+        '15',
+        '-X',
+        method,
+        '-H',
+        `@${headerFile}`,
+        ...(resolve ? ['--resolve', resolve] : []),
+        ...(cacert ? ['--cacert', cacert] : []),
+        ...(body === undefined ? [] : ['--data-binary', '@-']),
+        '-w',
+        '\n%{http_code}',
+        url,
+      ],
+      { input: body },
+    )
+    const split = result.stdout.lastIndexOf('\n')
+    return { status: Number(result.stdout.slice(split + 1)), body: result.stdout.slice(0, split) }
+  } finally {
+    await rm(headerFile, { force: true })
+  }
+}
+
 // --- Network helpers ---------------------------------------------------------------------------
 /**
  * The host's own IPv4 address: not loopback and not a Docker bridge, whose traffic to a published
@@ -132,7 +198,11 @@ const inside = (service, args, opts) =>
 function hostAddress() {
   for (const [name, addresses] of Object.entries(networkInterfaces()))
     for (const address of addresses ?? [])
-      if (address.family === 'IPv4' && !address.internal && !/^(docker|br-|veth|rdv-)/.test(name))
+      if (
+        address.family === 'IPv4' &&
+        !address.internal &&
+        !/^(docker|br-|veth|rdv-|rvc-)/.test(name)
+      )
         return address.address
   return undefined
 }
@@ -370,6 +440,7 @@ async function cleanup() {
       allowFailure: true,
     })
   }
+  if (realAddress) await sudo(['ip', 'netns', 'del', CLIENT.netns], { allowFailure: true })
   if (work) await rm(work, { recursive: true, force: true })
 }
 
@@ -430,7 +501,7 @@ try {
   await writeTree(join(work, 'secrets'), secret.files)
   await writeTree(join(work, 'secrets-broken'), { 'web/app.env': dotenv(secret.broken) })
   const tokenEntries = [`verify-1:${sha256(runnerTokens.foreign)}@10.0.0.1`]
-  if (realAddress) tokenEntries.push(`verify-2:${sha256(runnerTokens.own)}@${lanAddress}`)
+  if (realAddress) tokenEntries.push(`verify-2:${sha256(runnerTokens.own)}@${CLIENT.address}`)
   envFile = join(work, 'compose.env')
   await writeFile(
     envFile,
@@ -484,6 +555,9 @@ try {
     60_000,
   )
   const ca = [pebbleRoot]
+  const caFile = join(work, 'pebble-root.pem')
+  await writeFile(caFile, pebbleRoot)
+  if (realAddress) await createOutsideClient()
   try {
     await compose(['--profile', 'ops', 'run', '--rm', 'migrate'])
     await compose(['--profile', 'ops', 'run', '--rm', 'seed'])
@@ -593,10 +667,14 @@ try {
   })
   if (realAddress)
     await check('8b. Traefik forwards the real client address (userland-proxy off)', async () => {
-      const answer = await edge(`echo.${DOMAIN}`)
+      const answer = await fromOutside(`https://echo.${DOMAIN}:${PORTS.https}/`, {
+        resolve: `echo.${DOMAIN}:${PORTS.https}:${lanAddress}`,
+        cacert: caFile,
+      })
+      assert.equal(answer.status, 200)
       assert.match(
         answer.body,
-        new RegExp(`^X-Forwarded-For: ${lanAddress.replaceAll('.', '\\.')}\\r?$`, 'im'),
+        new RegExp(`^X-Forwarded-For: ${CLIENT.address.replaceAll('.', '\\.')}\\r?$`, 'im'),
       )
     })
   await check('9. core never shows through the edge', async () => {
@@ -715,10 +793,17 @@ try {
     await check(
       '13c. a valid token from its own address is accepted: core sees the real address',
       async () => {
-        const answer = await runnerApi('reconcile', runnerTokens.own, {
-          runnerSession: randomUUID(),
-          inventory: [],
-        })
+        const answer = await fromOutside(
+          `http://${runnerHost}:${PORTS.runner}/runner/v1/reconcile`,
+          {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${runnerTokens.own}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ runnerSession: randomUUID(), inventory: [] }),
+          },
+        )
         assert.equal(answer.status, 200)
         assert.deepEqual(JSON.parse(answer.body), { remove: [] })
       },
