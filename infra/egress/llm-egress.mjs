@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { createServer } from 'node:https'
 import { BlockList, connect, isIPv4 } from 'node:net'
 import { join } from 'node:path'
+import { clearTimeout, setTimeout } from 'node:timers'
 
 // The egress proxy on egress-1 (README.md, spec §19): the llm role's only way to the model
 // providers. An HTTPS proxy with mutual TLS: CONNECT to an exact host:port allowlist, and
@@ -198,9 +199,12 @@ export function createEgressProxy({
     let upstream
     let open = false
     let finished = false
+    let closing = false
+    let connectDeadline
     const finish = (result) => {
       if (finished) return
       finished = true
+      clearTimeout(connectDeadline)
       tunnels -= 1
       socket.destroy()
       upstream?.destroy()
@@ -211,18 +215,27 @@ export function createEgressProxy({
     socket.on('close', () => finish(open ? 'ok' : 'client_closed'))
     socket.on('error', () => finish('client_error'))
     const fail = (status, reason, result) => {
-      refuse(socket, status, reason)
+      if (finished || closing) return
+      closing = true
+      clearTimeout(connectDeadline)
       socket.once('finish', () => finish(result))
+      refuse(socket, status, reason)
       upstream?.destroy()
     }
 
+    // One deadline covers DNS and TCP together. Socket timeouts start too late to bound DNS.
+    connectDeadline = setTimeout(
+      () => fail(504, 'Gateway Timeout', 'connect_timeout'),
+      connectTimeoutMs,
+    )
+    connectDeadline.unref()
     let addresses = null
     try {
       addresses = await lookup(host)
     } catch {
       // Reported below as a failed resolution.
     }
-    if (finished) return
+    if (finished || closing) return
     if (!addresses?.length) return fail(502, 'Bad Gateway', 'resolve')
     if (!addresses.every(isPublicIPv4)) return fail(403, 'Forbidden', 'forbidden_address')
 
@@ -231,15 +244,12 @@ export function createEgressProxy({
     } catch {
       return fail(502, 'Bad Gateway', 'connect_error')
     }
-    const onTimeout = () => fail(504, 'Gateway Timeout', 'connect_timeout')
     const onError = () => fail(502, 'Bad Gateway', 'connect_error')
-    upstream.setTimeout(connectTimeoutMs)
-    upstream.once('timeout', onTimeout)
     upstream.once('error', onError)
     upstream.once('connect', () => {
-      upstream.removeListener('timeout', onTimeout)
       upstream.removeListener('error', onError)
-      if (finished) return
+      if (finished || closing) return
+      clearTimeout(connectDeadline)
       open = true
       upstream.on('error', () => finish('upstream_error'))
       const idle = () => finish('idle')

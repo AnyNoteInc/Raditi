@@ -4,12 +4,13 @@ import { Buffer } from 'node:buffer'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, request } from 'node:http'
 import { createServer as createTlsServer } from 'node:https'
-import { connect } from 'node:net'
+import { connect, createServer as createTcpServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { gzipSync, zstdCompressSync } from 'node:zlib'
 
 import { createEgressProxy } from '../../egress/llm-egress.mjs'
 import {
@@ -222,6 +223,7 @@ test('Codex: the subscription token goes in, stripped headers and fields stay ou
     assert.deepEqual(record.request.stripped, ['client_metadata', 'service_tier'])
     assert.equal(record.request.headers['x-codex-turn-metadata'], '{"cwd":"/work"}')
     assert.equal(record.request.headers.authorization, '[local key]')
+    assert.equal(record.request.headers.cookie, '[redacted]')
     assert.equal(record.request.sent.authorization, '[subscription]')
     assert.equal(record.response.headers['x-codex-primary-used-percent'], '12')
     assert.deepEqual(
@@ -247,6 +249,117 @@ test('Codex: the subscription token goes in, stripped headers and fields stay ou
     ])
       assert.ok(!raw.includes(secret), secret.slice(0, 12))
     assert.equal(statSync(proxy.recordFile).mode & 0o077, 0)
+  } finally {
+    await proxy.close()
+  }
+})
+
+test('compressed Codex requests strip metadata before forwarding and bound decoded size', async () => {
+  const proxy = await start()
+  try {
+    for (const [encoding, compress] of [
+      ['gzip', gzipSync],
+      ['zstd', zstdCompressSync],
+    ]) {
+      const answer = await call(proxy.port, 'POST', '/codex/responses', {
+        headers: { ...codexHeaders, 'content-encoding': encoding },
+        body: compress(Buffer.from(codexBody)),
+      })
+      assert.equal(answer.status, 200)
+      const sent = proxy.fake.received.at(-1)
+      assert.equal(sent.headers['content-encoding'], undefined)
+      const body = JSON.parse(sent.body)
+      assert.equal(body.client_metadata, undefined)
+      assert.equal(body.service_tier, undefined)
+      assert.equal(body.model, 'gpt-6-sol')
+      assert.deepEqual(proxy.records().at(-1).request.stripped, ['client_metadata', 'service_tier'])
+    }
+    for (const [encoding, body, status] of [
+      ['gzip', Buffer.from('not gzip'), 400],
+      ['unknown', Buffer.from('{}'), 415],
+      ['gzip', gzipSync(Buffer.alloc(16 * 1024 * 1024 + 1, 32)), 413],
+    ]) {
+      assert.equal(
+        (
+          await call(proxy.port, 'POST', '/codex/responses', {
+            headers: { ...codexHeaders, 'content-encoding': encoding },
+            body,
+          })
+        ).status,
+        status,
+      )
+    }
+    assert.equal(proxy.fake.received.length, 2)
+  } finally {
+    await proxy.close()
+  }
+})
+
+test('refused exchanges scrub both configured credentials and structural secret fields', async () => {
+  const proxy = await start()
+  try {
+    const body = JSON.stringify({
+      echo: [auth.tokens.refresh_token, ACCOUNT, 'sk-kimi-synthetic-console-key-0001'],
+      nested: {
+        refresh_token: 'unknown-synthetic-refresh',
+        account_id: 'unknown-synthetic-account',
+      },
+    })
+    const refused = await call(proxy.port, 'POST', '/codex/unknown', {
+      headers: { 'content-encoding': 'gzip', 'chatgpt-account-id': ACCOUNT },
+      body: gzipSync(Buffer.from(body)),
+    })
+    assert.equal(refused.status, 403)
+    assert.equal(
+      (
+        await call(proxy.port, 'GET', '/wham/usage', {
+          headers: {
+            authorization: 'Bearer incorrect-local-key',
+            'chatgpt-account-id': 'unconfigured-synthetic-account',
+            cookie: 'unconfigured-synthetic-cookie',
+          },
+        })
+      ).status,
+      401,
+    )
+    for (const secret of [
+      auth.tokens.refresh_token,
+      ACCOUNT,
+      'sk-kimi-synthetic-console-key-0001',
+      'unknown-synthetic-refresh',
+      'unknown-synthetic-account',
+      'unconfigured-synthetic-account',
+      'unconfigured-synthetic-cookie',
+    ]) {
+      assert.ok(!(proxy.raw() + proxy.printed.join('\n')).includes(secret))
+    }
+    assert.deepEqual(proxy.fake.received, [])
+    assert.equal(proxy.records()[0].request.body.nested.refresh_token, '[secret]')
+    assert.equal(proxy.records()[1].request.headers['chatgpt-account-id'], '[redacted]')
+  } finally {
+    await proxy.close()
+  }
+})
+
+test('malformed and oversized compressed replies are recorded safely and the proxy keeps serving', async () => {
+  const replies = [
+    Buffer.from('not gzip'),
+    gzipSync(Buffer.alloc(32 * 1024 * 1024 + 1, 32)),
+    gzipSync(Buffer.from('{"healthy":true}')),
+  ]
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' })
+    res.end(replies.shift())
+  })
+  await listen(server)
+  const proxy = await start({}, { server, origin: `http://127.0.0.1:${server.address().port}` })
+  try {
+    for (let i = 0; i < 3; i++)
+      assert.equal((await call(proxy.port, 'GET', '/wham/usage')).status, 200)
+    const records = proxy.records()
+    assert.equal(records[0].response.decode_error, 'Z_DATA_ERROR')
+    assert.equal(records[1].response.decode_error, 'ERR_BUFFER_TOO_LARGE')
+    assert.deepEqual(records[2].response.body, { healthy: true })
   } finally {
     await proxy.close()
   }
@@ -397,6 +510,38 @@ test('scrub removes known secrets, JWTs and emails', () => {
     'a [secret] b [jwt] c [email]',
   )
 })
+
+test(
+  'egress client bounds connection setup and reports an early peer close',
+  { timeout: 3000 },
+  async () => {
+    for (const earlyClose of [false, true]) {
+      const sockets = new Set()
+      const server = createTcpServer((socket) => {
+        sockets.add(socket)
+        socket.resume()
+        if (earlyClose) socket.end()
+      })
+      await listen(server)
+      const agent = egressAgent({
+        address: '127.0.0.1',
+        port: server.address().port,
+        connectTimeoutMs: 50,
+      })
+      try {
+        const error = await new Promise((resolve) =>
+          agent.createConnection({ host: 'chatgpt.com', port: 443 }, (error) => resolve(error)),
+        )
+        assert.ok(error)
+        if (!earlyClose) assert.equal(error.code, 'EGRESS_TIMEOUT')
+      } finally {
+        agent.destroy()
+        for (const socket of sockets) socket.destroy()
+        await close(server)
+      }
+    }
+  },
+)
 
 test(
   'through egress-1: CONNECT inside mutual TLS, the provider TLS inside the tunnel',

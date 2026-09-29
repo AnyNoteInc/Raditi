@@ -111,7 +111,10 @@ export function inspectCodexAuth(file) {
 export function scrub(text, secrets) {
   let out = text
   for (const secret of secrets)
-    if (typeof secret === 'string' && secret.length >= 8) out = out.replaceAll(secret, '[secret]')
+    if (typeof secret === 'string' && secret.length >= 8) {
+      out = out.replaceAll(JSON.stringify(secret).slice(1, -1), '[secret]')
+      out = out.replaceAll(secret, '[secret]')
+    }
   return out
     .replace(/eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+/g, '[jwt]')
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '[email]')
@@ -119,6 +122,12 @@ export function scrub(text, secrets) {
 
 /** JSON for the record: encrypted reasoning and data URLs become their lengths. */
 function shorten(value, key) {
+  if (
+    /^(access_token|refresh_token|id_token|api_key|openai_api_key|account_id|chatgpt_account_id)$/i.test(
+      key ?? '',
+    )
+  )
+    return '[secret]'
   if (typeof value === 'string') {
     if (key === 'encrypted_content') return `[encrypted_content: ${value.length} chars]`
     if (value.startsWith('data:') && value.length > 64) return `[data URL: ${value.length} chars]`
@@ -175,13 +184,17 @@ function usageOf(record) {
  * the node's address and port, and the root, client certificate and key of make-ca.sh.
  * `providerCa` replaces Node's CA set for the provider only in tests.
  */
-export function egressAgent({ address, port = 443, ca, cert, key }, providerCa) {
+export function egressAgent(
+  { address, port = 443, ca, cert, key, connectTimeoutMs = 10_000 },
+  providerCa,
+) {
   const agent = new Agent({ keepAlive: true, maxSockets: 4 })
   agent.createConnection = (options, callback) => {
     let called = false
     const done = (error, socket) => {
       if (called) return
       called = true
+      clearTimeout(timer)
       callback(error, socket)
     }
     const proxy = tlsConnect({
@@ -201,10 +214,17 @@ export function egressAgent({ address, port = 443, ca, cert, key }, providerCa) 
     }
     const refused = (answer) =>
       Object.assign(new Error('egress refused'), { code: `EGRESS_${answer}` })
+    // HTTPS Agent does not yet own this socket, so the request's abort/timeout alone cannot
+    // close a stalled outer TLS handshake, CONNECT response or provider TLS handshake.
+    const timer = setTimeout(() => fail(refused('TIMEOUT')), connectTimeoutMs)
+    proxy.once('close', () => {
+      if (!called) fail(refused('CLOSED'))
+    })
     const onData = (chunk) => {
       head = Buffer.concat([head, chunk])
+      if (head.length > 8192) return fail(refused('GARBAGE'))
       const end = head.indexOf('\r\n\r\n')
-      if (end === -1) return head.length > 8192 ? fail(refused('GARBAGE')) : undefined
+      if (end === -1) return
       proxy.removeListener('data', onData)
       proxy.pause()
       const status = /^HTTP\/1\.1 (\d{3}) /.exec(head.toString('latin1'))?.[1]
@@ -219,7 +239,7 @@ export function egressAgent({ address, port = 443, ca, cert, key }, providerCa) 
       proxy.removeListener('error', fail)
       proxy.on('error', (error) => socket.destroy(error))
       socket.once('secureConnect', () => done(null, socket))
-      socket.once('error', (error) => done(error))
+      socket.once('error', fail)
     }
     proxy.on('error', fail)
     proxy.on('data', onData)
@@ -235,6 +255,13 @@ const DECODERS = {
   br: brotliDecompressSync,
   deflate: inflateSync,
   zstd: zstdDecompressSync,
+}
+
+function decodeBody(buffer, encoding, limit) {
+  if (!encoding || encoding === 'identity') return buffer
+  if (!Object.hasOwn(DECODERS, encoding))
+    throw Object.assign(new Error('unsupported content encoding'), { code: 'UNSUPPORTED_ENCODING' })
+  return DECODERS[encoding](buffer, { maxOutputLength: limit })
 }
 
 export function createRecordProxy({
@@ -266,7 +293,20 @@ export function createRecordProxy({
     const record = { n, at: new Date(started).toISOString(), method: req.method, path: req.url }
     const chunks = []
     let size = 0
-    let secrets = [localKey]
+    const secrets = [localKey]
+    const available = new Map()
+    const unreadable = new Set()
+    // Refused routes and unauthorized requests are recorded too. Load the redaction set
+    // independently of routing, and never include a credential file's parse error in a reply.
+    for (const backend of ['codex', 'kimi']) {
+      try {
+        const credential = credentials(backend)
+        available.set(backend, credential)
+        if (credential) secrets.push(...credential.secrets)
+      } catch {
+        unreadable.add(backend)
+      }
+    }
     const write = () => {
       appendFileSync(recordFile, `${scrub(JSON.stringify(record), secrets)}\n`, { mode: 0o600 })
       const outcome =
@@ -289,6 +329,8 @@ export function createRecordProxy({
     req.on('end', async () => {
       const body = Buffer.concat(chunks)
       const received = { ...req.headers }
+      for (const name of ['cookie', 'proxy-authorization', 'x-api-key', 'chatgpt-account-id'])
+        if (received[name]) received[name] = '[redacted]'
       if (received.authorization)
         received.authorization =
           received.authorization === expected.toString() ? '[local key]' : '[other]'
@@ -297,10 +339,18 @@ export function createRecordProxy({
       const presented = Buffer.from(req.headers.authorization ?? '')
       if (presented.length !== expected.length || !timingSafeEqual(presented, expected))
         return answer(401, 'local key required')
+      let decoded
+      try {
+        decoded = decodeBody(body, req.headers['content-encoding'], REQUEST_LIMIT)
+      } catch (error) {
+        if (error.code === 'UNSUPPORTED_ENCODING')
+          return answer(415, 'unsupported content encoding')
+        if (error.code === 'ERR_BUFFER_TOO_LARGE') return answer(413, 'decoded request too large')
+        return answer(400, 'invalid compressed request')
+      }
+      // Decode before stripping fields: compressed CLI requests follow the same policy.
       // What the CLI sent, refused paths included: finding those is half of the spike.
-      if (req.headers['content-encoding'])
-        record.request.body = `[${req.headers['content-encoding']}: ${size} bytes]`
-      else if (body.length > 0) record.request.body = json(body.toString('utf8'))
+      if (decoded.length > 0) record.request.body = json(decoded.toString('utf8'))
       const [path, query = ''] = req.url.split(/\?(.*)/s)
       const route = ROUTES.get(`${req.method} ${path}`)
       const local = req.socket.localPort
@@ -309,14 +359,10 @@ export function createRecordProxy({
       if (!route) return answer(403, 'path not allowed')
       if (query && (req.method !== 'GET' || !/^[\w.=&%+-]{1,256}$/.test(query)))
         return answer(403, 'query not allowed')
-      let credential
-      try {
-        credential = credentials(route.backend)
-      } catch (error) {
-        return answer(503, error.message)
-      }
+      if (unreadable.has(route.backend))
+        return answer(503, `${route.backend} credentials unavailable`)
+      const credential = available.get(route.backend)
       if (!credential) return answer(503, `${route.backend} credentials are not configured`)
-      secrets = [localKey, ...credential.secrets]
 
       const headers = {}
       for (const name of FORWARD[route.backend])
@@ -333,13 +379,11 @@ export function createRecordProxy({
       if (route.path.endsWith('/codex/responses')) headers.accept = 'text/event-stream'
       headers['accept-encoding'] = 'identity'
 
-      let payload = body
-      if (req.headers['content-encoding'])
-        headers['content-encoding'] = req.headers['content-encoding']
-      else if (route.backend === 'codex' && body.length > 0) {
+      let payload = decoded
+      if (route.backend === 'codex' && decoded.length > 0) {
         let parsed = null
         try {
-          parsed = JSON.parse(body.toString('utf8'))
+          parsed = JSON.parse(decoded.toString('utf8'))
         } catch {
           // Not JSON: forwarded as it came; the record shows it.
         }
@@ -393,21 +437,32 @@ export function createRecordProxy({
               response.on('data', (chunk) => {
                 savedBytes += chunk.length
                 if (savedBytes <= RECORD_LIMIT) saved.push(chunk)
-                res.write(chunk)
               })
               response.on('error', reject)
               response.on('end', () => {
-                res.end()
-                let raw = Buffer.concat(saved)
-                const encoding = response.headers['content-encoding']
-                if (encoding && DECODERS[encoding]) raw = DECODERS[encoding](raw)
-                Object.assign(record.response, readBody(raw, response.headers['content-type']), {
+                Object.assign(record.response, {
                   bytes: savedBytes,
                   ms: Date.now() - started,
-                  ...(savedBytes > RECORD_LIMIT ? { truncated: true } : {}),
                 })
+                if (savedBytes > RECORD_LIMIT) record.response.truncated = true
+                else {
+                  try {
+                    const raw = decodeBody(
+                      Buffer.concat(saved),
+                      response.headers['content-encoding'],
+                      RECORD_LIMIT,
+                    )
+                    Object.assign(record.response, readBody(raw, response.headers['content-type']))
+                  } catch (error) {
+                    // Recording must not crash the proxy on malformed or oversized replies.
+                    // Keep only the code; a decompressor's message can contain provider data.
+                    record.response.decode_error = error.code ?? 'decode_failed'
+                  }
+                }
                 resolve()
               })
+              // pipe applies backpressure when a CLI stops reading the provider's stream.
+              response.pipe(res)
             },
           )
           upstream.on('error', reject)

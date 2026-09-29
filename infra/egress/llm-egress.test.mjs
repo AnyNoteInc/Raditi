@@ -395,6 +395,56 @@ test('a failed dial answers 502 and a dial that hangs answers 504', { skip }, as
 })
 
 test(
+  'the CONNECT deadline bounds DNS, frees capacity and ignores late resolution',
+  { skip },
+  async () => {
+    let resolveFirst
+    let lookups = 0
+    const proxy = await start({
+      maxTunnels: 1,
+      connectTimeoutMs: 100,
+      lookup: () => {
+        lookups += 1
+        return lookups === 1
+          ? new Promise((resolve) => (resolveFirst = resolve))
+          : Promise.resolve(ADDRESSES['chatgpt.com'])
+      },
+    })
+    try {
+      const pending = tunnel(proxy.port, 'chatgpt.com:443')
+      await until(() => resolveFirst)
+      const busy = await tunnel(proxy.port, 'chatgpt.com:443')
+      assert.equal(busy.status, 503)
+      busy.socket.destroy()
+
+      const expired = await Promise.race([
+        pending,
+        delay(2000, undefined, { ref: false }).then(() =>
+          assert.fail('DNS setup deadline did not expire'),
+        ),
+      ])
+      assert.equal(expired.status, 504)
+      await until(() => proxy.logs.some((log) => log.result === 'connect_timeout'))
+      assert.deepEqual(proxy.dialled, [])
+
+      const next = await tunnel(proxy.port, 'chatgpt.com:443')
+      assert.equal(next.status, 200)
+      resolveFirst(ADDRESSES['chatgpt.com'])
+      // A late DNS answer must not dial, and an established tunnel outlives its setup deadline.
+      await delay(150)
+      next.socket.write('still open')
+      await receive(next.socket, 'still open', next.rest)
+      assert.deepEqual(proxy.dialled, ['104.18.32.47:443'])
+      assert.equal(proxy.logs.filter((log) => log.result === 'connect_timeout').length, 1)
+      next.socket.destroy()
+    } finally {
+      resolveFirst?.(ADDRESSES['chatgpt.com'])
+      await proxy.close()
+    }
+  },
+)
+
+test(
   'the service reads its files from EGRESS_TLS_DIR and refuses a bad configuration',
   {
     skip,
