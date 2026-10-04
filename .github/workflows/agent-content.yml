@@ -1,0 +1,87 @@
+name: Agent content
+
+# The glue below the queue: a turn key from the real issuer, the real pinned Codex and Kimi CLIs in
+# the sandbox image, sandbox-gw, the role llm on synthetic HTTPS providers, the real role mcp with
+# the local content profile and the WordPress plugin, on disposable PostgreSQL, OpenBao, S3,
+# WordPress and MariaDB. Synthetic content only: no repository secrets, client sites or provider
+# accounts.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/agent-content.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - .dockerignore
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      # The stand's scripts, the roles llm and mcp and the turn-key issuer of the build.
+      - apps/orchestrator/**
+      - packages/domain/**
+      - packages/db/**
+      - packages/llm-backends/**
+      # The drivers' real prepare and command in the production agent runtime.
+      - packages/agent-drivers/**
+      - packages/sandbox-providers/runtime/**
+      # The WordPress content gateway and the snapshot storage of the role mcp.
+      - packages/site-adapters/**
+      - packages/storage/**
+      - packages/vault/**
+      - packages/observability/**
+      - packages/typescript-config/**
+      - infra/dev/llm-verify/**
+      - infra/dev/site-verify/**
+      - infra/wordpress/**
+      - infra/egress/**
+      - infra/sandbox/**
+      - infra/vault/**
+      - infra/app/postgres/**
+  workflow_dispatch:
+
+concurrency:
+  group: agent-content-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-agent-content:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Leave room for the workspace dependencies, two CLI distributions and disposable images.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      # The WordPress fixture never pulls: its images are pinned by digest in verify-site.mjs
+      # (WordPress, MariaDB, WP-CLI, forwarder); infra/dev/llm-verify/agent-content.test.mjs keeps
+      # this list equal to them. The rest of the stand is a Compose project that pulls its own.
+      - name: Pull the pinned images
+        run: |
+          for image in \
+            wordpress:7.1.2-php8.3-apache@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 \
+            mariadb:11.4.13@sha256:70cc072b29b4a89ae07abb2d4da2c64678a7f2dfe092751bb51c87d67dc1338b \
+            wordpress@sha256:2b5e9d4d3e51909dca1aaa4732e9f5e5bf0377c2114dbd8ff39f060bff202586 \
+            alpine/socat@sha256:68b28fed1e6f5dc5cc7574315284573d89a655b0bc528720be4164f36b998680
+          do
+            docker pull --quiet "$image"
+          done
+
+      - name: Verify the agent content path on a real WordPress
+        run: pnpm verify:agent-content

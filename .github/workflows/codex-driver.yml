@@ -1,0 +1,103 @@
+name: Codex driver
+
+# The real Codex CLI in the production agent runtime, and the sandbox provider's Docker isolation
+# suites on a real daemon. Local fixtures only: no repository secrets or provider accounts.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/codex-driver.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - .dockerignore
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - packages/domain/**
+      - packages/agent-drivers/**
+      # The provider, its gateway and guard, the watchdog and the images they run in.
+      - packages/sandbox-providers/**
+      - infra/sandbox/**
+  workflow_dispatch:
+
+concurrency:
+  group: codex-driver-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-codex:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      - name: Check driver and domain
+        run: |
+          pnpm --filter @repo/domain --filter @repo/agent-drivers typecheck
+          pnpm --filter @repo/domain --filter @repo/agent-drivers lint
+          pnpm --filter @repo/domain --filter @repo/agent-drivers test
+      - name: Build sandbox runtime
+        run: docker build -f infra/sandbox/Dockerfile --target runtime -t raditi-p4verify-sandbox:local .
+      - name: Verify real Codex with isolated local fixtures
+        run: pnpm verify:codex
+
+  # The opt-in suites of @repo/sandbox-providers and the watchdog against a real daemon (rule 5):
+  # internal network without DNS, host, bridge and internet unreachable, the route allowlist,
+  # read-only rootfs, uid 10001, exec replay. Under runc; gVisor is verified on the sandbox VM
+  # (docs/plan/03-p2-verification.md). The unit tests of the package use a fake dockerode.
+  sandbox-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      # The provider takes images pinned by digest only, and a local build has a repository
+      # digest only in the containerd image store.
+      - name: Docker with the containerd image store
+        run: |
+          daemon=/etc/docker/daemon.json
+          current=$(sudo cat "$daemon" 2>/dev/null || echo '{}')
+          printf '%s' "$current" \
+            | jq '.features = ((.features // {}) + {"containerd-snapshotter": true})' \
+            | sudo tee "$daemon" >/dev/null
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}' | grep -q io.containerd.snapshotter
+      - name: Build and pin the sandbox images
+        run: |
+          for target in runtime gateway network-guard; do
+            docker build -f infra/sandbox/Dockerfile --target "$target" \
+              -t "raditi-civerify-sandbox-$target:local" .
+          done
+          pinned() {
+            reference=$(docker image inspect "raditi-civerify-sandbox-$1:local" \
+              --format '{{index .RepoDigests 0}}')
+            case "$reference" in
+              *@sha256:*) printf '%s' "$reference" ;;
+              *) echo "No repository digest for the $1 image" >&2; return 1 ;;
+            esac
+          }
+          runtime=$(pinned runtime)
+          gateway=$(pinned gateway)
+          guard=$(pinned network-guard)
+          # Gateway containers reach the upstream of the test, on this runner, through docker0.
+          upstream=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+          test -n "$upstream"
+          {
+            echo "RADITI_DOCKER_TEST_IMAGE=$runtime"
+            echo "SANDBOX_GATEWAY_IMAGE=$gateway"
+            echo "SANDBOX_NETWORK_GUARD_IMAGE=$guard"
+            echo "RADITI_DOCKER_TEST_UPSTREAM_HOST=$upstream"
+          } >> "$GITHUB_ENV"
+      - name: Sandbox provider against the real daemon
+        run: pnpm --filter @repo/sandbox-providers test
+      - name: Watchdog against the real daemon
+        run: node --test infra/sandbox/watchdog.integration.test.mjs

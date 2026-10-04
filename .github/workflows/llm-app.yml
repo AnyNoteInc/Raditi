@@ -1,0 +1,57 @@
+name: App LLM profile
+
+# Production image wiring and real packet filtering, using only disposable local fixtures.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/llm-app.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - .dockerignore
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - apps/orchestrator/**
+      - packages/**
+      - infra/app/**
+      - infra/dev/llm-verify/**
+      - infra/egress/**
+      - infra/vault/**
+  workflow_dispatch:
+
+concurrency:
+  group: llm-app-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-llm-app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      - name: Generate Prisma client
+        run: pnpm db:generate
+      - name: Docker without userland-proxy
+        run: |
+          daemon=/etc/docker/daemon.json
+          current=$(sudo cat "$daemon" 2>/dev/null || echo '{}')
+          printf '%s' "$current" | jq '. + {"userland-proxy": false}' | sudo tee "$daemon" >/dev/null
+          sudo systemctl restart docker
+          docker info >/dev/null
+          if pgrep -x docker-proxy; then echo 'docker-proxy is still running' >&2; exit 1; fi
+      - name: Verify configuration and preflight
+        run: node --test infra/app/compose.test.mjs infra/app/llm-preflight.test.mjs infra/app/llm-firewall.test.mjs infra/app/verify-llm-firewall.test.mjs
+      - name: Verify packet filtering inside an isolated container
+        run: pnpm verify:llm-firewall
+      - name: Build production orchestrator
+        run: docker build -f apps/orchestrator/Dockerfile --target runtime -t raditi-p3verify-orchestrator:b14 .
+      - name: Verify production LLM service
+        run: pnpm verify:llm-app
