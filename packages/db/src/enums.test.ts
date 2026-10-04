@@ -2,18 +2,26 @@ import { describe, expect, it } from 'vitest'
 
 import {
   consentDocumentTypes,
+  editAccountUnits,
   gitProviderKinds,
+  orderKinds,
+  orderStatuses,
   siteStacks,
+  subscriptionStatuses,
   taskStatuses,
   turnAssignmentOutcomes,
   turnExecutorKinds,
   turnResultSchema,
 } from '@repo/domain'
 import {
+  BillingUnit,
   ChangeType,
   ConsentDocumentType,
   GitProviderKind,
+  OrderKind,
+  OrderStatus,
   SiteStack,
+  SubscriptionStatus,
   TaskStatus,
   TurnAssignmentOutcome,
   TurnExecutorKind,
@@ -43,5 +51,20 @@ describe('database enums match the domain', () => {
   it('TurnExecutorKind and TurnAssignmentOutcome match the turn assignment port', () => {
     expect(Object.values(TurnExecutorKind)).toEqual([...turnExecutorKinds])
     expect(Object.values(TurnAssignmentOutcome)).toEqual([...turnAssignmentOutcomes])
+  })
+
+  it('SubscriptionStatus, OrderKind and OrderStatus match the billing statuses', () => {
+    expect(Object.values(SubscriptionStatus)).toEqual([...subscriptionStatuses])
+    expect(Object.values(OrderKind)).toEqual([...orderKinds])
+    expect(Object.values(OrderStatus)).toEqual([...orderStatuses])
+  })
+
+  it('BillingUnit has the two edit accounts of the domain and the rouble wallet', () => {
+    // In the order of the database type: edit_pack was added after rub.
+    expect(Object.values(BillingUnit)).toEqual([
+      editAccountUnits.tariff,
+      'rub',
+      editAccountUnits.pack,
+    ])
   })
 })
