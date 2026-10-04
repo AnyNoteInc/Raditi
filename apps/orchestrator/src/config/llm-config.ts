@@ -1,0 +1,246 @@
+import { isIP } from 'node:net'
+import { isAbsolute } from 'node:path'
+
+import {
+  envVar,
+  isProduction,
+  llmEgressOriginSchema,
+  parseEnv,
+  type AppEnv,
+  type Env,
+  type LlmBackend,
+} from '@repo/domain'
+import { llmBackends } from '@repo/llm-backends'
+import { z } from 'zod'
+
+import { ipLiteral } from './private-address.ts'
+
+export const DEFAULT_LLM_GATEWAY_PORT = 8084
+
+/** What the adapters declare, checked: a malformed declaration stops the configuration. */
+const declaredOrigins = (backends: readonly LlmBackend[]) =>
+  backends.flatMap((backend) => backend.egress.map((entry) => llmEgressOriginSchema.parse(entry)))
+
+/** The fixed provider origins of the platform's adapters; nothing else is behind the egress. */
+export const providerOrigins: readonly string[] = [
+  ...new Set(declaredOrigins(llmBackends).map((entry) => entry.origin)),
+]
+
+/** The proxy's CA is separate from the CA set used inside its CONNECT tunnel. */
+export interface EgressConfig {
+  proxyUrl: URL
+  caFile: string
+  clientCertFile: string
+  clientKeyFile: string
+  upstreamCaFile: string | null
+  /** Only nonproduction may replace the adapters' fixed origins with loopback HTTPS fakes. */
+  backendOrigins: ReadonlyMap<string, string>
+}
+
+/** One allowed client range, already validated: an address, its prefix length and family. */
+export interface LlmClientRange {
+  address: string
+  prefix: number
+  family: 'ipv4' | 'ipv6'
+}
+
+export interface LlmConfig {
+  appEnv: AppEnv
+  port: number
+  listenHost: string
+  clients: readonly LlmClientRange[]
+  hosts: readonly string[]
+  maxRequestsPerKey: number
+  /** No proxy configured means outgoing requests are disabled, never sent directly. */
+  egress: EgressConfig | null
+}
+
+const optional = envVar(z.string().optional())
+const egressSchema = z.object({
+  LLM_EGRESS_PROXY_URL: optional,
+  LLM_EGRESS_CA_FILE: optional,
+  LLM_EGRESS_CLIENT_CERT_FILE: optional,
+  LLM_EGRESS_CLIENT_KEY_FILE: optional,
+  LLM_UPSTREAM_CA_FILE: optional,
+})
+const schema = egressSchema.extend({
+  LLM_GATEWAY_PORT: envVar(
+    z.coerce.number().int().min(1).max(65_535).default(DEFAULT_LLM_GATEWAY_PORT),
+  ),
+  LLM_GATEWAY_LISTEN_HOST: optional,
+  LLM_GATEWAY_CLIENTS: optional,
+  LLM_GATEWAY_HOSTS: optional,
+  LLM_MAX_REQUESTS_PER_KEY: envVar(z.coerce.number().int().min(1).max(2).default(2)),
+})
+const invalid = (problems: readonly string[]) =>
+  new Error(`[llm] invalid configuration: ${[...new Set(problems)].join('; ')}`)
+
+function origin(raw: string): URL | null {
+  const url = URL.parse(raw)
+  return url &&
+    url.protocol === 'https:' &&
+    !url.username &&
+    !url.password &&
+    url.pathname === '/' &&
+    !url.search &&
+    !url.hash
+    ? url
+    : null
+}
+
+function validHost(host: string): boolean {
+  const parsed = URL.parse(`http://${host}`)
+  if (
+    !parsed ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== '/' ||
+    parsed.search ||
+    parsed.hash
+  )
+    return false
+  return (
+    /^[a-z0-9.[\]:_-]+$/i.test(host) &&
+    (parsed.host.toLowerCase() === host.toLowerCase() ||
+      (host.endsWith(':80') && `${parsed.hostname}:80`.toLowerCase() === host.toLowerCase()))
+  )
+}
+
+/** Validates without echoing an address, file path or potentially secret URL. */
+export function llmConfigFromEnv(
+  env: Env,
+  appEnv: AppEnv,
+  backends: readonly LlmBackend[] = llmBackends,
+): LlmConfig {
+  const own = parseEnv('llm', schema, env)
+  const production = isProduction(appEnv)
+  const problems: string[] = []
+  const listenHost = own.LLM_GATEWAY_LISTEN_HOST ?? (production ? '0.0.0.0' : '127.0.0.1')
+  if (!isIP(listenHost)) problems.push('LLM_GATEWAY_LISTEN_HOST: must be an IP address')
+  const writtenClients = (
+    own.LLM_GATEWAY_CLIENTS ?? (production ? '' : '127.0.0.1/32,172.16.0.0/12')
+  )
+    .split(',')
+    .map((value) => value.trim())
+  const clients: LlmClientRange[] = []
+  for (const value of writtenClients) {
+    const [written = '', prefix = '', ...extra] = value.split('/')
+    const address = ipLiteral(written)
+    const bits = Number(prefix)
+    const family = address?.includes(':') ? ('ipv6' as const) : ('ipv4' as const)
+    if (
+      !address ||
+      !/^\d{1,3}$/.test(prefix) ||
+      extra.length ||
+      bits > (family === 'ipv6' ? 128 : 32)
+    )
+      problems.push('LLM_GATEWAY_CLIENTS: must contain valid IP CIDRs')
+    else clients.push({ address, prefix: bits, family })
+  }
+  if (production && !own.LLM_GATEWAY_CLIENTS)
+    problems.push('LLM_GATEWAY_CLIENTS: required in production')
+  const hosts = (
+    own.LLM_GATEWAY_HOSTS ??
+    (production
+      ? ''
+      : `127.0.0.1:${own.LLM_GATEWAY_PORT},host.docker.internal:${own.LLM_GATEWAY_PORT}`)
+  )
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+  if (hosts.some((host) => !validHost(host)))
+    problems.push('LLM_GATEWAY_HOSTS: must contain exact host names with optional ports')
+  if (production && !own.LLM_GATEWAY_HOSTS)
+    problems.push('LLM_GATEWAY_HOSTS: required in production')
+
+  const egress = egressFrom(own, env, production, problems, backends)
+  if (problems.length) throw invalid(problems)
+  return {
+    appEnv,
+    port: own.LLM_GATEWAY_PORT,
+    listenHost,
+    clients,
+    hosts,
+    maxRequestsPerKey: own.LLM_MAX_REQUESTS_PER_KEY,
+    egress,
+  }
+}
+
+/** Only the egress channel, for operator commands that send through it but never listen. */
+export function egressConfigFromEnv(
+  env: Env,
+  appEnv: AppEnv,
+  backends: readonly LlmBackend[] = llmBackends,
+): EgressConfig | null {
+  const problems: string[] = []
+  const egress = egressFrom(
+    parseEnv('llm', egressSchema, env),
+    env,
+    isProduction(appEnv),
+    problems,
+    backends,
+  )
+  if (problems.length) throw invalid(problems)
+  return egress
+}
+
+function egressFrom(
+  own: z.output<typeof egressSchema>,
+  env: Env,
+  production: boolean,
+  problems: string[],
+  backends: readonly LlmBackend[],
+): EgressConfig | null {
+  const files = [
+    'LLM_EGRESS_CA_FILE',
+    'LLM_EGRESS_CLIENT_CERT_FILE',
+    'LLM_EGRESS_CLIENT_KEY_FILE',
+  ] as const
+  for (const name of [...files, 'LLM_UPSTREAM_CA_FILE'] as const)
+    if (own[name] && !isAbsolute(own[name])) problems.push(`${name}: must be an absolute path`)
+  const configured = [own.LLM_EGRESS_PROXY_URL, ...files.map((name) => own[name])]
+  if ((production || configured.some(Boolean)) && configured.some((value) => !value))
+    problems.push(
+      'LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE, LLM_EGRESS_CLIENT_KEY_FILE: required together',
+    )
+  const proxyUrl = own.LLM_EGRESS_PROXY_URL ? origin(own.LLM_EGRESS_PROXY_URL) : null
+  if (own.LLM_EGRESS_PROXY_URL && !proxyUrl)
+    problems.push('LLM_EGRESS_PROXY_URL: must be an HTTPS origin without credentials')
+
+  // Each adapter names the variable that points one of its origins at a stand's fake.
+  const declared = declaredOrigins(backends)
+  const overrides: Record<string, string | undefined> = parseEnv(
+    'llm',
+    z.object(Object.fromEntries(declared.map((entry) => [entry.overrideEnv, optional]))),
+    env,
+  )
+  const backendOrigins = new Map<string, string>()
+  for (const { origin: fixed, overrideEnv: name } of declared) {
+    const raw = overrides[name]
+    if (!raw) continue
+    if (production) problems.push(`${name}: forbidden in production`)
+    const replacement = origin(raw)
+    if (!replacement || !['localhost', '127.0.0.1', '[::1]'].includes(replacement.hostname))
+      problems.push(`${name}: must be a loopback HTTPS origin`)
+    else backendOrigins.set(fixed, replacement.origin)
+  }
+  if (production) {
+    for (const name of [
+      'LLM_UPSTREAM_CA_FILE',
+      'NODE_TLS_REJECT_UNAUTHORIZED',
+      'NODE_USE_SYSTEM_CA',
+    ])
+      if (env[name]?.trim()) problems.push(`${name}: forbidden in production`)
+    if (/(?:^|\s|["'])--use-(?:system|openssl)-ca(?:=|\s|["']|$)/.test(env.NODE_OPTIONS ?? ''))
+      problems.push('NODE_OPTIONS: provider CA override flags are forbidden in production')
+  }
+  return proxyUrl
+    ? {
+        proxyUrl,
+        caFile: own.LLM_EGRESS_CA_FILE!,
+        clientCertFile: own.LLM_EGRESS_CLIENT_CERT_FILE!,
+        clientKeyFile: own.LLM_EGRESS_CLIENT_KEY_FILE!,
+        upstreamCaFile: own.LLM_UPSTREAM_CA_FILE ?? null,
+        backendOrigins,
+      }
+    : null
+}

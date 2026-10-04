@@ -6,6 +6,7 @@ import {
   MAX_SANDBOX_TURN_MS,
   runnerReportSchema,
   SANDBOX_SECRETS_DIR,
+  withoutTurnCredentials,
   type AgentDriver,
   type AgentEvent,
   type RunnerCommand,
@@ -22,6 +23,7 @@ import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { sealSnapshotPart } from '../sessions/snapshot-parts.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+import { MemoryTurnCredentials, testTurnCredentialPolicy } from '../testing/turn-credentials.ts'
 import { LiveTurns } from '../turns/live-turns.ts'
 import { TurnSupervisor, type TurnRequest } from '../turns/turn-supervisor.ts'
 import { RemoteTurnExecutor } from './remote-turn-executor.ts'
@@ -284,14 +286,18 @@ describe('TurnSupervisor on a runner', () => {
 
     const finished = await new TurnSupervisor({
       leases,
-      executor: new RemoteTurnExecutor(hub, leases, assignments),
+      executor: new RemoteTurnExecutor(hub, leases, assignments, () => '127.0.0.1'),
+      credentials: new MemoryTurnCredentials({
+        llmApiKey: 'synthetic-llm-secret',
+        mcpToken: 'synthetic-mcp-secret',
+      }),
       assignments,
       driver,
       workspace,
       snapshots,
       journal,
       live: new LiveTurns(),
-    }).run(request)
+    }).run(withoutTurnCredentials(request), testTurnCredentialPolicy)
 
     expect(finished.result).toEqual(result)
     expect(runner.seen).toEqual(['prepare', 'launch', 'quiesce', 'capture', 'seal', 'destroy'])

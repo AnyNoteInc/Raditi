@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises'
 
+import { Logger } from '@nestjs/common'
 import {
   conflict,
   DomainError,
@@ -10,7 +11,6 @@ import {
   MAX_PRESIGN_TTL_MS,
   snapshotSaveWroteNothing,
   TURN_PUBLICATION_GRACE_MS,
-  turnResultSchema,
   turnSnapshotPrefix,
   withTimeout,
   type AgentDriver,
@@ -26,6 +26,8 @@ import {
   type TurnAssignment,
   type TurnAssignmentOutcome,
   type TurnAssignmentStore,
+  type TurnCredentialRef,
+  type TurnCredentialSource,
   type TurnEvidence,
   type TurnExecution,
   type TurnJournal,
@@ -43,10 +45,11 @@ import type {
   SnapshotParts,
 } from '../sessions/snapshot.service.ts'
 import { holdForRecovery, type LeaseGuard } from './lease-guard.ts'
+import { readTurnResult } from './turn-result.ts'
 
 export interface TurnSnapshotStore {
   load(reference: SnapshotReference): Promise<LoadedSnapshot>
-  /** Turn n−1 for the executor: presigned GETs of its parts that live `ttlMs`. */
+  /** The checkpoint a turn starts from, for the executor: presigned GETs of its parts that live `ttlMs`. */
   restoreSource(reference: SnapshotReference, ttlMs: number): Promise<TurnRestoreSource>
   /** An aborted `signal` must stop any S3 write that has not started yet (see SnapshotService). */
   save(
@@ -63,6 +66,8 @@ export interface TurnAttemptDependencies {
   workspace: TurnWorkspace
   snapshots: TurnSnapshotStore
   journal: TurnJournal
+  credentials: TurnCredentialSource
+  logger?: { warn(message: string): void }
 }
 
 export interface CompletedTurn {
@@ -100,6 +105,8 @@ export class TurnAttempt {
   execId: string | undefined
   /** Finished with the turn's outcome once its container is gone; a held turn stays assigned. */
   assignment: TurnAssignment | undefined
+  /** Issuance identity: recovery keeps the first epoch even after taking the lease over. */
+  credentialRef: TurnCredentialRef | undefined
   /** turnCredentials() of the run: a changed file of the candidate must not contain one. */
   credentials: readonly string[] = []
   #publication: TurnPublication | undefined
@@ -124,6 +131,8 @@ export class TurnAttempt {
   #ended = false
   /** Settles, never rejects, once the vacating entry was journaled or finally refused. */
   #vacatingRecorded: Promise<void> = Promise.resolve()
+  #revocation: Promise<void> | undefined
+  readonly #logger: { warn(message: string): void }
 
   constructor(
     private readonly deps: TurnAttemptDependencies,
@@ -131,6 +140,35 @@ export class TurnAttempt {
   ) {
     this.#sequence = init.sequence ?? 0
     this.#lastPhase = init.phase ?? 'leased'
+    this.#logger = deps.logger ?? new Logger('TurnAttempt')
+  }
+
+  /** Cleanup continues after five seconds; the durable core sweeper retries the revoke. */
+  #revoke(): Promise<void> {
+    if (!this.credentialRef) return Promise.resolve()
+    return (this.#revocation ??= (async () => {
+      try {
+        await withTimeout(
+          this.deps.credentials.revoke(this.credentialRef!),
+          5_000,
+          'Turn credential revocation timed out',
+        )
+      } catch {
+        this.#logger.warn('llm_turn_credentials_revoke_failed')
+      }
+    })())
+  }
+
+  /**
+   * As #revoke, unless recovery took the turn over under a newer epoch: the credentials are that
+   * owner's then, and serve the agent it resumed. TurnCredentialSource.revoke names no epoch, so
+   * the lease is read right before it; every other write of an owner that gives its turn up is
+   * fenced by its own statement. A vacating turn revokes at once: its agent never started, and
+   * recovery only removes what is left of it.
+   */
+  async #revokeOwned(): Promise<void> {
+    if (await this.#superseded()) return
+    await this.#revoke()
   }
 
   async record(phase: TurnPhase, extra: Partial<TurnEvidence> = {}): Promise<void> {
@@ -192,6 +230,7 @@ export class TurnAttempt {
       // Recovery took the turn over under a newer epoch: the container is its to remove.
       if (await this.#superseded()) return
       this.#heldByAttempt = true
+      await this.#revoke()
       await holdForRecovery(this.deps.leases, this.init.lease, this.#lastPhase)
       await this.record('recovery', { reason: 'destroy_failed', containerId }).catch(() => {})
       return
@@ -217,6 +256,7 @@ export class TurnAttempt {
     const { lease } = this.init
     await this.#vacatingRecorded
     await this.record('failed', { reason: this.#reason, outcome: 'failed' }).catch(() => {})
+    await this.#revoke()
     const released = await this.deps.leases.release(lease).catch(() => false)
     if (!released) {
       const now = await this.deps.leases.inspect(lease.siteId).catch(() => null)
@@ -291,7 +331,7 @@ export class TurnAttempt {
     await guard.assertFence()
     await ready.quiesce()
     await this.record('quiesced')
-    const result = turnResultSchema.parse(driver.extractResult(events, null))
+    const result = readTurnResult(driver, events)
     for (const event of events) {
       if (event.type === 'started' && event.nativeSessionId)
         run.context.nativeSessionId = event.nativeSessionId
@@ -383,6 +423,7 @@ export class TurnAttempt {
     })
     await this.#destroy(true)
     await this.record('destroyed')
+    await this.#revoke()
     await guard.assertFence()
     await this.record('publishing')
     this.#publishStarted = true
@@ -449,6 +490,7 @@ export class TurnAttempt {
       // Journaled before the supervisor leaves LiveTurns: a recovery pass of this process must
       // replay it, or it would close the turn `lost` instead of `failed`.
       await this.#vacatingRecorded
+      await this.#revoke()
       return 'vacating'
     }
     try {
@@ -466,6 +508,7 @@ export class TurnAttempt {
       this.#reason = 'destroy_failed'
     }
     if (!this.#completed) {
+      await this.#revokeOwned()
       if (recovery) await holdForRecovery(this.deps.leases, lease, this.#lastPhase)
       await this.record(
         recovery ? 'recovery' : 'failed',

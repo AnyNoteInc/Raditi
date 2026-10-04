@@ -1,10 +1,10 @@
 import type { AddressInfo } from 'node:net'
 
 import type { INestApplication } from '@nestjs/common'
-import { isDomainError } from '@repo/domain'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { OrchestratorConfig } from './config/config.ts'
+import { llmConfigFromEnv } from './config/llm-config.ts'
 import { LOCAL_HOST, listenHost, startMcp, startRoles, type RoleStarters } from './roles.ts'
 import { testCoreConfig, testMcpConfig, testRunnerConfig } from './testing/fakes.ts'
 
@@ -16,6 +16,7 @@ function starters(overrides: Partial<RoleStarters> = {}) {
     core: vi.fn<RoleStarters['core']>().mockResolvedValue(fakeApp()),
     mcp: vi.fn<RoleStarters['mcp']>().mockResolvedValue(fakeApp()),
     runner: vi.fn<RoleStarters['runner']>().mockResolvedValue(fakeApp()),
+    llm: vi.fn<RoleStarters['llm']>().mockResolvedValue(fakeApp()),
     ...overrides,
   }
 }
@@ -26,15 +27,25 @@ const devConfig = (overrides: Partial<OrchestratorConfig> = {}): OrchestratorCon
   core: testCoreConfig(),
   mcp: testMcpConfig(),
   runner: null,
+  llm: null,
   ...overrides,
 })
 
-const rejectsNotImplemented = (promise: Promise<unknown>, pattern: RegExp) =>
-  expect(promise).rejects.toSatisfy(
-    (err) => isDomainError(err) && err.code === 'NOT_IMPLEMENTED' && pattern.test(err.message),
-  )
-
 describe('startRoles', () => {
+  it('starts llm alone without core, MCP, runner or Redis', async () => {
+    const start = starters()
+    const llm = {
+      ...llmConfigFromEnv({}, 'test'),
+      db: testMcpConfig().db,
+      vault: testMcpConfig().vault,
+      metricsToken: 'test',
+    }
+    await startRoles(devConfig({ roles: ['llm'], core: null, mcp: null, llm }), start)
+    expect(start.llm).toHaveBeenCalledWith(llm)
+    expect(start.core).not.toHaveBeenCalled()
+    expect(start.mcp).not.toHaveBeenCalled()
+    expect(start.runner).not.toHaveBeenCalled()
+  })
   it('starts the runner role on its own, without the HTTP roles', async () => {
     const start = starters()
     const runner = testRunnerConfig()
@@ -46,18 +57,18 @@ describe('startRoles', () => {
     expect(start.mcp).not.toHaveBeenCalled()
   })
 
-  it('refuses the mcp role in production until the per-task token check exists', async () => {
+  it('starts the guarded mcp role alone in production', async () => {
     const start = starters()
     const config = devConfig({
       appEnv: 'production',
       roles: ['mcp'],
       core: null,
-      mcp: { ...testMcpConfig(), appEnv: 'production' },
+      mcp: { ...testMcpConfig(), appEnv: 'production', allowedHosts: ['mcp'] },
     })
 
-    await rejectsNotImplemented(startRoles(config, start), /mcp role in production.*P6/)
-
-    expect(start.mcp).not.toHaveBeenCalled()
+    await startRoles(config, start)
+    expect(start.mcp).toHaveBeenCalledWith(config.mcp)
+    expect(start.core).not.toHaveBeenCalled()
   })
 
   it('closes the roles already started when the next one fails to start', async () => {

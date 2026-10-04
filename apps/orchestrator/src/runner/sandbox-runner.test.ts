@@ -811,7 +811,7 @@ describe('SandboxRunner snapshot parts', () => {
       restore,
     })
 
-  it('restores only the previous turn of its session and zeroes the data key after use', async () => {
+  it('restores only the parts of the checkpoint core names and zeroes the data key after use', async () => {
     const side = sandboxSide()
     const core = scriptedCore()
     const prior = await previousTurn()
@@ -858,6 +858,34 @@ describe('SandboxRunner snapshot parts', () => {
     expect(side.transfer.get).toHaveBeenCalledTimes(3)
     expect(keys).toHaveLength(1)
     expect(keys[0]!.every((byte) => byte === 0)).toBe(true)
+  })
+
+  it('restores the older checkpoint a replacement turn starts from, never its own turn or a later one', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    const prior = await previousTurn()
+    side.transfer.get.mockImplementation(prior.memory.transfer.get)
+    core.transport.key.mockImplementation(async () => prior.source.dataKey())
+    startRunner(core.transport, side.executor, { s3Origin: 'https://s3.invalid/raditi-sessions' })
+    const turn = (number: number) =>
+      prepareCommand({
+        sandbox: { ...sandboxSpec(), labels: { ...labels, turn: number, leaseEpoch: 1 } },
+        restore: prior.restore,
+      })
+
+    // The snapshot of turn 1 is nothing turn 1 itself may start from: a forged core's command.
+    await core.send(turn(1))
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed']))
+    expect(core.reports[0]).toMatchObject({ code: 'SNAPSHOT_LOAD_FAILED' })
+    expect(side.sandboxes.create).not.toHaveBeenCalled()
+    expect(side.transfer.get).not.toHaveBeenCalled()
+    expect(core.transport.key).not.toHaveBeenCalled()
+
+    // Turn 3 replaces turn 2 and starts from what that one started from: the checkpoint of turn 1.
+    await core.send(turn(3))
+    await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'created', 'prepared']))
+    expect(side.snapshot.restore).toHaveBeenCalledWith(side.sandbox, home, expect.anything())
+    expect(side.transfer.get).toHaveBeenCalledTimes(3)
   })
 
   it('seals home only into its own turn, and logs neither presigned URLs nor refused bodies', async () => {

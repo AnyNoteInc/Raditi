@@ -6,6 +6,7 @@ import {
   TURN_FINALIZE_RESERVE_MS,
   TURN_PUBLICATION_GRACE_MS,
   MAX_SANDBOX_TURN_MS,
+  withoutTurnCredentials,
   type AgentDriver,
   type AgentEvent,
   type SiteLeaseGrant,
@@ -20,6 +21,7 @@ import { SandboxRunner } from '../runner/sandbox-runner.ts'
 import { loopbackTransport } from '../testing/runner-loopback.ts'
 import { MemorySiteLeases } from '../testing/site-leases.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+import { MemoryTurnCredentials, testTurnCredentialPolicy } from '../testing/turn-credentials.ts'
 import { MemoryTurnJournal } from '../testing/turn-journal.ts'
 import { LiveTurns } from './live-turns.ts'
 import { LocalTurnExecutor } from './local-turn-executor.ts'
@@ -201,7 +203,11 @@ describe('turn deadline chain (spec §8 «Срок контейнера и ар�
         leases,
         assignments,
         journal,
-        executor: new RemoteTurnExecutor(hub, leases, assignments),
+        executor: new RemoteTurnExecutor(hub, leases, assignments, () => '127.0.0.1'),
+        credentials: new MemoryTurnCredentials({
+          llmApiKey: 'synthetic-llm-secret',
+          mcpToken: 'synthetic-mcp-secret',
+        }),
         driver,
         live: new LiveTurns(),
         workspace: {
@@ -226,14 +232,16 @@ describe('turn deadline chain (spec §8 «Срок контейнера и ар�
         1_000 +
         Math.floor(random() * (MAX_SANDBOX_TURN_MS - TURN_FINALIZE_RESERVE_MS - 1_000))
       let settled = false
-      const running = supervisor.run(request(hardTimeoutMs)).then(
-        () => {
-          settled = true
-        },
-        () => {
-          settled = true
-        },
-      )
+      const running = supervisor
+        .run(withoutTurnCredentials(request(hardTimeoutMs)), testTurnCredentialPolicy)
+        .then(
+          () => {
+            settled = true
+          },
+          () => {
+            settled = true
+          },
+        )
       for (let step = 0; !settled && step < 600; step++) await vi.advanceTimersByTimeAsync(1_000)
       await running
       const stopping = runner.stop()

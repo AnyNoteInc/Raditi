@@ -9,6 +9,7 @@ import {
   runnerReportSchema,
   SANDBOX_SECRETS_DIR,
   TURN_PUBLICATION_GRACE_MS,
+  withoutTurnCredentials,
   type AgentDriver,
   type AgentEvent,
   type ExecCursor,
@@ -34,7 +35,7 @@ import { crashable } from '../testing/crash.ts'
 import { loopbackTransport, type LoopbackTransport } from '../testing/runner-loopback.ts'
 import { MemorySiteLeases } from '../testing/site-leases.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
-import { MemoryTurnCredentials } from '../testing/turn-credentials.ts'
+import { MemoryTurnCredentials, testTurnCredentialPolicy } from '../testing/turn-credentials.ts'
 import { MemoryTurnJournal } from '../testing/turn-journal.ts'
 import { LiveTurns } from './live-turns.ts'
 import { LocalTurnExecutor } from './local-turn-executor.ts'
@@ -189,7 +190,7 @@ function world(kind: string) {
   const leases = new MemorySiteLeases()
   const journal = new MemoryTurnJournal(leases)
   const assignments = new MemoryTurnAssignments(leases)
-  const credentials = new MemoryTurnCredentials()
+  const credentials = new MemoryTurnCredentials(values)
   const vm = docker()
   const driver: AgentDriver = {
     id: 'codex',
@@ -284,6 +285,8 @@ function world(kind: string) {
       journal: wrap(journal),
       workspace: wrap(workspace),
       snapshots: wrap(snapshots),
+      credentials: wrap(credentials),
+      logger,
     }
     let hub: RunnerHub | undefined
     let executor: TurnExecutor
@@ -291,7 +294,7 @@ function world(kind: string) {
     else {
       hub = new RunnerHub({ ...deps, logger: { warn: vi.fn() } })
       cleanups.push(async () => hub!.close())
-      executor = new RemoteTurnExecutor(hub, deps.leases, deps.assignments)
+      executor = new RemoteTurnExecutor(hub, deps.leases, deps.assignments, () => '127.0.0.1')
     }
     executor = wrap(executor)
     const live = new LiveTurns()
@@ -368,10 +371,12 @@ function world(kind: string) {
       if (entry.phase === phase) kill()
     }
     options.arm?.(kill)
-    const zombie = before.supervisor.run(request()).then(
-      () => 'completed',
-      (error: unknown) => error,
-    )
+    const zombie = before.supervisor
+      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy)
+      .then(
+        () => 'completed',
+        (error: unknown) => error,
+      )
     await vi.waitFor(() => expect(crashed).toBe(true))
     journal.onRecord = undefined
     if (options.stopRunner && runner) {
@@ -397,10 +402,12 @@ function world(kind: string) {
       stopped = true
       before.hub!.close()
     }
-    const ended = await before.supervisor.run(request()).then(
-      () => 'completed',
-      (error: unknown) => error,
-    )
+    const ended = await before.supervisor
+      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy)
+      .then(
+        () => 'completed',
+        (error: unknown) => error,
+      )
     journal.onRecord = undefined
     return { before, ended }
   }
@@ -445,7 +452,30 @@ function world(kind: string) {
 }
 
 const cleanups: Array<() => Promise<void>> = []
+
+/** kill -9 right after the turn was assigned: no runner has reserved it yet. */
+function stopAfterOpen(w: ReturnType<typeof world>, kill: () => void): void {
+  const open = w.assignments.open.bind(w.assignments)
+  vi.spyOn(w.assignments, 'open').mockImplementationOnce(async (input) => {
+    const assignment = await open(input)
+    kill()
+    return assignment
+  })
+}
+
+/**
+ * kill -9 while core clones the site: on a runner VM a slot is reserved and the turn's key
+ * issued by then, but its prepare has not been handed out.
+ */
+function stopInBundle(w: ReturnType<typeof world>, kill: () => void): void {
+  w.workspace.buildBaseBundle.mockImplementationOnce(async () => {
+    kill()
+    return new Promise<never>(() => {})
+  })
+}
+
 afterEach(async () => {
+  vi.useRealTimers()
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
   vi.restoreAllMocks()
 })
@@ -604,27 +634,30 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     expectGivenUp(w, 'run_failed')
     expect(w.vm.sandbox.destroy).toHaveBeenCalledWith('failed')
     expect(w.vm.sandbox.exec).not.toHaveBeenCalled()
-    expect(w.driver.prepare).toHaveBeenCalledOnce()
+    // The supervisor's dry run and its turn: recovery prepares nothing to remove a container.
+    expect(w.driver.prepare).toHaveBeenCalledTimes(2)
     // Only removed, no agent to resume: no attempt counts against the turn.
     expect(w.assignment().recoveryAttempts).toBe(phase === 'leased' ? 0 : 1)
   })
 
-  it('frees the site of a turn whose core died before any runner or container took it', async () => {
+  it.each([
+    ['right after the turn was assigned', stopAfterOpen],
+    ['while it cloned the site, before the prepare went out', stopInBundle],
+  ])('frees the site of a turn whose core died %s', async (_, arm) => {
     const w = world(kind)
-    await w.crashAt(undefined, {
-      arm: (kill) =>
-        w.workspace.buildBaseBundle.mockImplementationOnce(async () => {
-          kill()
-          return new Promise<never>(() => {})
-        }),
-    })
+    await w.crashAt(undefined, { arm: (kill) => arm(w, kill) })
     const { recovery } = await w.restart()
+    const abandon = vi.spyOn(w.assignments, 'abandon')
     await w.recover(recovery)
     expect(w.vm.sandboxes.create).not.toHaveBeenCalled()
     if (kind === 'runner') {
-      // Nobody claimed it: abandoned now, no runner ever will (P1), and the site is free at once.
+      // A runner is bound to a turn only when its prepare is handed out: nobody claimed this
+      // one. Abandoned now, no runner ever will (P1), and the site is free at once.
       // Recovery gave it up, not its owner: lost.
-      expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
+      expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 }, runner: null })
+      // The closure carries the reason journaled right after it: the product store projects
+      // the TaskTurn from it in the same transaction, as it does for any other closure.
+      expect(abandon).toHaveBeenCalledExactlyOnceWith(w.assignment().id, 'lost', 'run_failed')
       expect(w.journal.entries.at(-1)).toMatchObject({
         phase: 'failed',
         reason: 'run_failed',
@@ -904,28 +937,92 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     const w = world(kind)
     w.vm.finish()
     const { after } = await w.crashAt('completed')
+    const revoke = vi.spyOn(w.credentials, 'revoke')
+    const free = w.leases.free.bind(w.leases)
+    vi.spyOn(w.leases, 'free').mockImplementation(async (fence) => {
+      expect(revoke).toHaveBeenCalledExactlyOnceWith(reference)
+      return free(fence)
+    })
     await w.recover(after.recovery)
     expect(w.publish).toHaveBeenCalledOnce()
     expect(w.lease()).toMatchObject({ taskId: null, held: false })
     expect(w.assignment()).toMatchObject({ outcome: 'completed' })
   })
 
+  it('revokes a checkpointed turn before publication recovery reads its snapshot', async () => {
+    const w = world(kind)
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed')
+    const load = w.snapshots.load.getMockImplementation()!
+    const revoke = vi.spyOn(w.credentials, 'revoke')
+    w.snapshots.load.mockImplementation(async (reference) => {
+      expect(revoke).toHaveBeenCalledOnce()
+      expect(w.lease().taskId).toBe(labels.taskId)
+      return load(reference)
+    })
+    await w.recover(after.recovery)
+    expect(w.publish).toHaveBeenCalledOnce()
+    expect(w.assignment().outcome).toBe('completed')
+  })
+
+  it('revokes a resumed agent after removing its container and before publishing', async () => {
+    const w = world(kind)
+    const { after } = await w.crashAt('output')
+    w.publish.mockImplementation(async (assertFence) => {
+      expect(w.vm.exists()).toBe(false)
+      expect(w.credentials.revoked).toEqual([reference])
+      expect(w.lease().taskId).toBe(labels.taskId)
+      await assertFence()
+    })
+    w.vm.finish()
+    await w.recover(after.recovery)
+    expectCompleted(w)
+  })
+
   it('closes a failed turn whose assignment update was lost', async () => {
     const w = world(kind)
-    const { supervisor, recovery } = await w.restart()
+    const { supervisor, recovery, hub } = await w.restart()
+    if (hub) w.startRunner(hub)
     w.workspace.buildBaseBundle.mockRejectedValueOnce(new Error('clone failed'))
     vi.spyOn(w.assignments, 'finish').mockRejectedValueOnce(new Error('database unavailable'))
-    await expect(supervisor.run(request())).rejects.toThrow('clone failed')
+    await expect(
+      supervisor.run(withoutTurnCredentials(request()), testTurnCredentialPolicy),
+    ).rejects.toThrow('clone failed')
     expect(w.assignment().outcome).toBeNull()
+    expect(w.credentials.revoked).toEqual([reference])
     await w.recover(recovery)
     expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
     expect(w.journal.phases()).toEqual(['leased', 'failed'])
     expect(w.journal.entries.at(-1)).toMatchObject({ reason: 'run_failed', outcome: 'failed' })
   })
 
+  it('keeps the turn credentials when only its driver is unavailable', async () => {
+    const w = world(kind)
+    const { after } = await w.crashAt('output')
+    const recovery = new TurnExecRecovery({
+      leases: w.leases,
+      assignments: w.assignments,
+      journal: w.journal,
+      workspace: w.workspace,
+      snapshots: w.snapshots,
+      executor: after.executor,
+      driver: () => {
+        throw new Error('Missing driver')
+      },
+      credentials: w.credentials,
+      live: after.live,
+      logger: w.logger,
+    })
+    await w.recover(recovery)
+    expect(w.lease()).toMatchObject({ held: true, epoch: 1 })
+    expect(w.credentials.revoked).toEqual([])
+    expect(await w.credentials.recover(reference)).toEqual(values)
+  })
+
   it('keeps a turn recovery gave up lost when its assignment update was lost', async () => {
     const w = world(kind)
     const { after } = await w.crashAt('output')
+    w.credentials.values.clear()
     vi.spyOn(w.assignments, 'finish').mockRejectedValueOnce(new Error('database unavailable'))
     await w.recover(after.recovery)
     expect(w.assignment().outcome).toBeNull()
@@ -968,6 +1065,7 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
   it('gives the turn up when core cannot recover its credentials to check the output', async () => {
     const w = world(kind)
     const { after } = await w.crashAt('output')
+    w.credentials.values.clear()
     await w.recover(after.recovery)
     expect(w.credentials.recovered).toBe(1)
     expectGivenUp(w, 'exec_lost')
@@ -976,6 +1074,7 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
   it('gives the turn up when nobody holds its credentials any more', async () => {
     const w = world(kind)
     const { after } = await w.crashAt('output')
+    w.credentials.values.clear()
     if (kind === 'runner') await w.restartRunner()
     await w.recover(after.recovery)
     expect(w.credentials.recovered).toBe(1)
@@ -1008,7 +1107,7 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     })
     expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 2 })
     expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 2 } })
-    expect(w.credentials.revoked).toEqual([])
+    expect(w.credentials.revoked).toEqual([reference])
   })
 
   it('tries again later when the executor does not answer before the agent is back', async () => {
@@ -1140,7 +1239,9 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     w.journal.onRecord = (entry) => {
       if (entry.phase === 'output') crash.freeze()
     }
-    void core.supervisor.run(request()).catch(() => {})
+    void core.supervisor
+      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy)
+      .catch(() => {})
     await vi.waitFor(() => expect(w.journal.phases()).toContain('output'))
     // A recovery of the same process: it shares the supervisor's live turns.
     const recovery = new TurnExecRecovery({
@@ -1214,7 +1315,13 @@ describe('turn exec recovery of a turn given up before its container was reporte
       await created.promise
       return create(...args)
     })
-    await expect(core.supervisor.run(request(), cancellation.signal)).rejects.toMatchObject({
+    await expect(
+      core.supervisor.run(
+        withoutTurnCredentials(request()),
+        testTurnCredentialPolicy,
+        cancellation.signal,
+      ),
+    ).rejects.toMatchObject({
       code: 'TURN_INTERRUPTED',
     })
     expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
@@ -1294,9 +1401,11 @@ describe('turn exec recovery of a turn given up before its container was reporte
       return record(entry)
     })
     let left = false
-    const running = core.supervisor.run(request(), cancellation.signal).catch(() => {
-      left = true
-    })
+    const running = core.supervisor
+      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy, cancellation.signal)
+      .catch(() => {
+        left = true
+      })
     await vi.waitFor(() =>
       expect(journaling).toHaveBeenCalledWith(expect.objectContaining({ phase: 'vacating' })),
     )
@@ -1335,9 +1444,11 @@ describe('turn exec recovery of a turn given up before its container was reporte
       return record(entry)
     })
     let left = false
-    const running = core.supervisor.run(request(), cancellation.signal).catch(() => {
-      left = true
-    })
+    const running = core.supervisor
+      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy, cancellation.signal)
+      .catch(() => {
+        left = true
+      })
     await vi.waitFor(() => expect(tries).toBe(2))
     // A pass while the owner writes the entry again: the turn is still this process's own.
     await w.recover(core.recovery)
@@ -1368,7 +1479,13 @@ describe('turn exec recovery of a turn given up before its container was reporte
       await created.promise
       return sandbox
     })
-    await expect(core.supervisor.run(request(), cancellation.signal)).rejects.toMatchObject({
+    await expect(
+      core.supervisor.run(
+        withoutTurnCredentials(request()),
+        testTurnCredentialPolicy,
+        cancellation.signal,
+      ),
+    ).rejects.toMatchObject({
       code: 'TURN_INTERRUPTED',
     })
     expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
@@ -1564,13 +1681,7 @@ describe('turn exec recovery on a runner VM', () => {
     'never leaves a site %s held for good when freeing it fails after the turn was abandoned',
     async (_, heldBefore) => {
       const w = world('runner')
-      await w.crashAt(undefined, {
-        arm: (kill) =>
-          w.workspace.buildBaseBundle.mockImplementationOnce(async () => {
-            kill()
-            return new Promise<never>(() => {})
-          }),
-      })
+      await w.crashAt(undefined, { arm: (kill) => stopInBundle(w, kill) })
       if (heldBefore) w.lease().held = true
       const { recovery } = await w.restart()
       const hold = vi.spyOn(w.leases, 'holdForRecovery')
@@ -1618,7 +1729,8 @@ describe('turn exec recovery on a runner VM', () => {
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
     // The watchdog removed it by now: the site is freed, not left to its TTL.
     expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
-    expect(w.credentials.revoked).toEqual([reference, reference])
+    // The pass that closes the turn does not repeat the revoke that went through before it.
+    expect(w.credentials.revoked).toEqual([reference])
   })
 
   it('removes once a container the runner reports under the older epoch after recovery took the turn', async () => {
@@ -1635,7 +1747,13 @@ describe('turn exec recovery on a runner VM', () => {
       return sandbox
     })
     const onCreated = vi.fn()
-    await expect(core.supervisor.run(request(), cancellation.signal)).rejects.toMatchObject({
+    await expect(
+      core.supervisor.run(
+        withoutTurnCredentials(request()),
+        testTurnCredentialPolicy,
+        cancellation.signal,
+      ),
+    ).rejects.toMatchObject({
       code: 'TURN_INTERRUPTED',
     })
     expect(w.journal.phases(1)).toEqual(['leased', 'vacating'])
@@ -1675,7 +1793,9 @@ describe('turn exec recovery on a runner VM', () => {
       await create(...args)
       return new Promise<never>(() => {})
     })
-    const running = core.supervisor.run(request()).catch((error: unknown) => error)
+    const running = core.supervisor
+      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy)
+      .catch((error: unknown) => error)
     await vi.waitFor(() => expect(w.vm.exists()).toBe(true))
     await w.restartRunner()
     expect(await running).toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
@@ -1700,7 +1820,9 @@ describe('turn exec recovery on a runner VM', () => {
     w.startRunner(core.hub!)
     w.vm.sandboxes.create.mockImplementationOnce(() => new Promise<never>(() => {}))
     const release = vi.spyOn(w.leases, 'release')
-    const running = core.supervisor.run(request()).catch((error: unknown) => error)
+    const running = core.supervisor
+      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy)
+      .catch((error: unknown) => error)
     await vi.waitFor(() => expect(w.vm.sandboxes.create).toHaveBeenCalled())
     await w.restartRunner()
     expect(await running).toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
@@ -1949,5 +2071,216 @@ describe('turn exec recovery on a runner VM', () => {
     expect(w.credentials.recovered).toBe(1)
     expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
     expect(w.publish).toHaveBeenCalledOnce()
+  })
+})
+
+describe('turn exec recovery of an ended turn whose site an unresolved MCP write keeps', () => {
+  /**
+   * The PostgreSQL stores while a content write of the turn is unresolved: the site lease names
+   * its writer, so SiteLeaseStore.free matches no row, and the product store's finish closes
+   * nothing while the lease stays at the turn's epoch with that writer or a hold (packages/db).
+   * `resolve` is what the content maintenance or a late answer does: the writer marker goes, the
+   * hold stays for recovery.
+   */
+  function unresolvedWrite(w: ReturnType<typeof world>) {
+    let writer = true
+    const free = w.leases.free.bind(w.leases)
+    const finish = w.assignments.finish.bind(w.assignments)
+    const kept = (epoch: number) => {
+      const lease = w.lease()
+      return lease.taskId === labels.taskId && lease.epoch === epoch && (writer || lease.held)
+    }
+    return {
+      free: vi
+        .spyOn(w.leases, 'free')
+        .mockImplementation(async (fence) => (writer ? false : free(fence))),
+      finish: vi
+        .spyOn(w.assignments, 'finish')
+        .mockImplementation(async (input) => (kept(input.epoch) ? false : finish(input))),
+      resolve: () => {
+        writer = false
+      },
+    }
+  }
+
+  /**
+   * A content write of the running agent got no answer in time: McpJournal.markAmbiguous holds
+   * the site, the owner ends the turn `failed{lease_lost}`, and its release and finish are refused.
+   */
+  async function endedBehindWrite(w: ReturnType<typeof world>) {
+    const { supervisor, recovery } = await w.restart()
+    const write = unresolvedWrite(w)
+    w.journal.onRecord = (entry) => {
+      if (entry.phase === 'running') w.lease().held = true
+    }
+    await expect(
+      supervisor.run(withoutTurnCredentials(request()), testTurnCredentialPolicy),
+    ).rejects.toMatchObject({ code: 'TURN_INTERRUPTED', message: 'lease_lost' })
+    w.journal.onRecord = undefined
+    expect(w.journal.entries.at(-1)).toMatchObject({ phase: 'failed', reason: 'lease_lost' })
+    expect(w.assignment().outcome).toBeNull()
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+    write.free.mockClear()
+    write.finish.mockClear()
+    return {
+      recovery,
+      write,
+      replay: vi.spyOn(w.journal, 'replay'),
+      revoke: vi.spyOn(w.credentials, 'revoke'),
+    }
+  }
+
+  const leftToOperator =
+    'Turn recovery left a turn to an operator: unresolved site write (epoch 1, phase failed, attempts 0)'
+
+  it('parks the turn after one pass and closes it once the write is resolved', async () => {
+    const w = world('local')
+    const { recovery, write, replay, revoke } = await endedBehindWrite(w)
+    for (let pass = 0; pass < 5; pass++) await w.recover(recovery)
+    // Only the lease is asked again: no pass after the first loads the journal or revokes.
+    expect(replay).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledOnce()
+    expect(write.finish).toHaveBeenCalledOnce()
+    expect(write.free).toHaveBeenCalledTimes(5)
+    expect(w.logger.error).toHaveBeenCalledExactlyOnceWith(leftToOperator)
+    expect(w.assignment().outcome).toBeNull()
+    expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
+
+    write.resolve()
+    await w.recover(recovery)
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
+    expect(replay).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledOnce()
+    expect(w.logger.error).toHaveBeenCalledOnce()
+
+    // Closed: nothing is left for a pass to ask about.
+    await w.recover(recovery)
+    expect(write.free).toHaveBeenCalledTimes(6)
+  })
+
+  it('closes the parked turn once its site moved on without it', async () => {
+    const w = world('local')
+    const { recovery, write, replay, revoke } = await endedBehindWrite(w)
+    await w.recover(recovery)
+    await w.recover(recovery)
+    expect(w.logger.error).toHaveBeenCalledExactlyOnceWith(leftToOperator)
+    // An operator resolved the write and took the hold off; another task has the site by now.
+    const other = '00000000-0000-4000-8000-000000000004'
+    Object.assign(w.lease(), { taskId: other, epoch: 2, held: false })
+    await w.recover(recovery)
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+    expect(w.lease()).toMatchObject({ taskId: other, held: false, epoch: 2 })
+    expect(replay).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledOnce()
+    expect(write.finish).toHaveBeenCalledTimes(2)
+  })
+
+  it('closes the parked turn with the outcome its journal named: a turn recovery gave up stays lost', async () => {
+    const w = world('local')
+    const { after } = await w.crashAt('output')
+    // Nobody holds the turn's credentials any more: recovery gives the turn up as `lost`. A
+    // content write of the agent it removes stays unresolved, so its release is refused too.
+    w.credentials.values.clear()
+    vi.spyOn(w.leases, 'release').mockResolvedValue(false)
+    const write = unresolvedWrite(w)
+    await w.recover(after.recovery)
+    expect(w.journal.entries.at(-1)).toMatchObject({
+      phase: 'failed',
+      outcome: 'lost',
+      fence: { epoch: 2 },
+    })
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 2 } })
+    const replay = vi.spyOn(w.journal, 'replay')
+    for (let pass = 0; pass < 3; pass++) await w.recover(after.recovery)
+    expect(replay).toHaveBeenCalledOnce()
+    expect(w.logger.error).toHaveBeenCalledExactlyOnceWith(
+      'Turn recovery left a turn to an operator: unresolved site write (epoch 2, phase failed, attempts 1)',
+    )
+    expect(w.assignment().outcome).toBeNull()
+
+    write.resolve()
+    await w.recover(after.recovery)
+    // Not billed (P12): the remembered outcome is the journal's, not a plain `failed`.
+    expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 2 } })
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    expect(replay).toHaveBeenCalledOnce()
+  })
+
+  it('parks nothing when the finish is refused for a turn whose site is not kept', async () => {
+    const w = world('local')
+    const { supervisor, recovery } = await w.restart()
+    w.workspace.buildBaseBundle.mockRejectedValueOnce(new Error('clone failed'))
+    const finish = vi.spyOn(w.assignments, 'finish')
+    // The owner's assignment update is lost; its site is released.
+    finish.mockRejectedValueOnce(new Error('database unavailable'))
+    await expect(
+      supervisor.run(withoutTurnCredentials(request()), testTurnCredentialPolicy),
+    ).rejects.toThrow('clone failed')
+    expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 1 })
+    // Another owner has the assignment row at that moment: this pass closes nothing.
+    finish.mockResolvedValueOnce(false)
+    const replay = vi.spyOn(w.journal, 'replay')
+    await w.recover(recovery)
+    expect(w.assignment().outcome).toBeNull()
+    expect(w.logger.error).not.toHaveBeenCalled()
+    // Not parked: the next pass reads the turn again and closes it.
+    await w.recover(recovery)
+    expect(replay).toHaveBeenCalledTimes(2)
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+  })
+
+  it('recovers the parked turn from its journal again once it moved to another epoch', async () => {
+    const w = world('local')
+    const { recovery, replay } = await endedBehindWrite(w)
+    await w.recover(recovery)
+    await w.recover(recovery)
+    expect(replay).toHaveBeenCalledOnce()
+    // Another owner took the turn over meanwhile: what this process remembered no longer holds.
+    w.lease().epoch = 2
+    w.assignments.rows.get(w.assignment().id)!.fence.epoch = 2
+    await w.recover(recovery)
+    expect(replay).toHaveBeenCalledTimes(2)
+    expect(replay).toHaveBeenLastCalledWith(expect.objectContaining({ fromEpoch: 1, toEpoch: 2 }))
+  })
+
+  it('sends the revoke of the parked turn again while it fails, and no more once it went through', async () => {
+    const w = world('local')
+    const { recovery, replay, revoke } = await endedBehindWrite(w)
+    // Vault is away for the pass that parks the turn and for the one after it.
+    revoke.mockRejectedValueOnce(new Error('vault unavailable'))
+    revoke.mockRejectedValueOnce(new Error('vault unavailable'))
+    for (let pass = 0; pass < 5; pass++) await w.recover(recovery)
+    // A turn left to an operator does not keep its credentials: the first pass that can revokes.
+    expect(revoke).toHaveBeenCalledTimes(3)
+    expect(revoke).toHaveBeenLastCalledWith(reference)
+    expect(replay).toHaveBeenCalledOnce()
+    expect(w.assignment().outcome).toBeNull()
+  })
+})
+
+describe('turn exec recovery: the revoke of a turn over several passes', () => {
+  it('sends a revoke that failed again on the next pass, and one that went through never', async () => {
+    const w = world('local')
+    const { supervisor, recovery } = await w.restart()
+    w.workspace.buildBaseBundle.mockRejectedValueOnce(new Error('clone failed'))
+    const finish = vi.spyOn(w.assignments, 'finish')
+    // The owner's assignment update is lost, and so are the two after it.
+    for (let lost = 0; lost < 3; lost++)
+      finish.mockRejectedValueOnce(new Error('database unavailable'))
+    await expect(
+      supervisor.run(withoutTurnCredentials(request()), testTurnCredentialPolicy),
+    ).rejects.toThrow('clone failed')
+    expect(w.journal.phases()).toEqual(['leased', 'failed'])
+    const revoke = vi.spyOn(w.credentials, 'revoke')
+    revoke.mockRejectedValueOnce(new Error('vault unavailable'))
+    await w.recover(recovery)
+    expect(revoke).toHaveBeenCalledOnce()
+    await w.recover(recovery)
+    expect(revoke).toHaveBeenCalledTimes(2)
+    expect(w.assignment().outcome).toBeNull()
+    await w.recover(recovery)
+    expect(w.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+    expect(revoke).toHaveBeenCalledTimes(2)
   })
 })

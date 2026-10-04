@@ -6,6 +6,7 @@ import {
   execLost,
   isDomainError,
   TURN_PUBLICATION_GRACE_MS,
+  withTimeout,
   withTurnCredentials,
   type AgentDriver,
   type AgentDriverId,
@@ -71,18 +72,36 @@ const logged = (error: unknown) =>
 
 export interface TurnExecRecoveryDependencies {
   leases: SiteLeaseStore
-  assignments: TurnAssignmentStore
+  /**
+   * `abandon` is also told why recovery gives up a turn no runner took: the product store
+   * closes the TaskTurn in the same transaction, before the `failed` entry that names it is
+   * journaled (as RunnerHubDependencies). A store that keeps no TaskTurn ignores it.
+   */
+  assignments: TurnAssignmentStore & {
+    abandon(
+      id: string,
+      outcome?: TurnAssignmentOutcome,
+      reason?: NonNullable<TurnEvidence['reason']>,
+    ): Promise<boolean>
+  }
   executor: TurnExecutor
   journal: TurnJournal & { replay(range: TurnJournalRange): Promise<JournaledEvidence[]> }
   /** The driver a turn's plan names. */
   driver(id: AgentDriverId): AgentDriver
   workspace: TurnWorkspace
   snapshots: TurnSnapshotStore
-  /** The LiteLLM key and MCP token of a turn whose executor lost them (P3, P6). */
+  /** The subscription gateway key and MCP token of a turn whose executor lost them (P3, P6). */
   credentials: TurnCredentialSource
   /** Shared with the supervisor: a turn this process drives is never taken over. */
   live: LiveTurns
   logger?: { warn(message: string): void; error(message: string): void }
+}
+
+/** A parked turn whose journal ended and which only its site keeps open (#end). */
+interface Unfreed {
+  /** The epoch it ended at: moved to another one, it is recovered from its journal again. */
+  epoch: number
+  outcome: TurnAssignmentOutcome
 }
 
 /** A turn taken over under a newer epoch of its lease. */
@@ -107,8 +126,12 @@ interface Owner {
  */
 export class TurnExecRecovery {
   readonly #running = new Map<string, Promise<void>>()
+  /** Kept while the assignment is unfinished; a revoke that failed is forgotten after its pass. */
+  readonly #revocations = new Map<string, { settled: Promise<void>; failed: boolean }>()
   /** Left to an operator: this process does not try them again. */
   readonly #parked = new Set<string>()
+  /** The parked turns a pass still asks the lease store about, and nothing else (#end). */
+  readonly #unfreed = new Map<string, Unfreed>()
   readonly #publication: TurnPublicationRecovery
   readonly #logger: { warn(message: string): void; error(message: string): void }
   readonly #warn: ThrottledLog
@@ -149,17 +172,38 @@ export class TurnExecRecovery {
    */
   async tick(): Promise<void> {
     await this.#sweep()
-    for (const assignment of await this.deps.assignments.unfinished()) {
-      if (this.#running.has(assignment.id) || this.#parked.has(assignment.id)) continue
+    const unfinished = await this.deps.assignments.unfinished()
+    this.#forgetClosed(unfinished)
+    for (const assignment of unfinished) {
+      if (this.#running.has(assignment.id)) continue
+      let unfreed = this.#unfreed.get(assignment.id)
+      // Moved to another epoch meanwhile: what was remembered of the turn no longer holds.
+      if (unfreed && unfreed.epoch !== assignment.fence.epoch) {
+        this.#unpark(assignment.id)
+        unfreed = undefined
+      }
+      if (!unfreed && this.#parked.has(assignment.id)) continue
       if (!this.deps.live.enter(assignment.fence)) continue
-      const recovery = this.#recover(assignment.id)
+      const recovery = (
+        unfreed ? this.#endUnfreed(assignment, unfreed.outcome) : this.#recover(assignment.id)
+      )
         .catch((error: unknown) => this.#warn('turn recovery', logged(error)))
         .finally(() => {
           this.deps.live.leave(assignment.fence)
           this.#running.delete(assignment.id)
+          // Only a revoke that went through is remembered: the next pass sends a failed one again.
+          if (this.#revocations.get(assignment.id)?.failed) this.#revocations.delete(assignment.id)
         })
       this.#running.set(assignment.id, recovery)
     }
+  }
+
+  /** What this process remembered of assignments that are closed now. */
+  #forgetClosed(unfinished: readonly TurnAssignment[]): void {
+    const open = new Set(unfinished.map((assignment) => assignment.id))
+    for (const id of this.#revocations.keys())
+      if (!open.has(id) && !this.#running.has(id)) this.#revocations.delete(id)
+    for (const id of this.#unfreed.keys()) if (!open.has(id)) this.#unpark(id)
   }
 
   /**
@@ -210,14 +254,14 @@ export class TurnExecRecovery {
     const step = turn.step
     if (!step || !consistent(assignment, turn))
       return this.#park(assignment, step, 'journal mismatch')
-    if (doneSteps.includes(step)) return this.#done(assignment)
+    // Published and journaled: only the release of the site or the assignment update was lost,
+    // or the release failed and its owner held the site.
+    if (doneSteps.includes(step)) return this.#end(assignment, 'completed', step)
     // Written only with proof that the container is gone or after the deadline and its grace:
     // only the release of the site or the assignment update was lost. The entry names the
     // outcome, so a turn recovery gave up stays `lost`.
-    if (turn.lastPhase === 'failed') {
-      await this.#free(assignment)
-      return this.#close(assignment, turn.outcome ?? 'failed')
-    }
+    if (turn.lastPhase === 'failed')
+      return this.#end(assignment, turn.outcome ?? 'failed', 'failed')
     // No container reported yet: nothing to resume, only to remove, and no attempt to count.
     if (step === 'leased') return this.#vacate(assignment, turn, remainingMs())
     if (assignment.recoveryAttempts >= MAX_TURN_RECOVERY_ATTEMPTS)
@@ -294,16 +338,27 @@ export class TurnExecRecovery {
       undefined,
       performance.now() - started,
     )
-    const attempt = new TurnAttempt(this.deps, {
-      lease: grant,
-      guard,
-      plan: assignment.plan,
-      ...(driver ? { driver } : {}),
-      sequence: turn.sequence,
-      recoveredFromEpoch: assignment.fence.epoch,
-      phase,
-    })
+    const attempt = new TurnAttempt(
+      {
+        ...this.deps,
+        credentials: {
+          issue: (reference, grant) => this.deps.credentials.issue(reference, grant),
+          recover: (reference) => this.deps.credentials.recover(reference),
+          revoke: () => this.#revoke(assignment),
+        },
+      },
+      {
+        lease: grant,
+        guard,
+        plan: assignment.plan,
+        ...(driver ? { driver } : {}),
+        sequence: turn.sequence,
+        recoveredFromEpoch: assignment.fence.epoch,
+        phase,
+      },
+    )
     attempt.assignment = advanced
+    attempt.credentialRef = credentialRef(assignment)
     return { grant, guard, attempt, remainingMs }
   }
 
@@ -323,13 +378,14 @@ export class TurnExecRecovery {
       this.#warn('turn recovery read after a takeover', logged(error))
       return null
     })
-    if (now && now.outcome !== null)
+    if (now && now.outcome !== null) {
+      await this.#revoke(now)
       await this.#free(now).catch(() =>
         this.#logger.error(
           `Turn recovery could not free the site of a finished turn (epoch ${now.fence.epoch}, phase ${phase})`,
         ),
       )
-    else if (now && now.fence.epoch > assignment.fence.epoch)
+    } else if (now && now.fence.epoch > assignment.fence.epoch)
       await holdForRecovery(this.deps.leases, now.fence, phase)
     return now
   }
@@ -407,10 +463,9 @@ export class TurnExecRecovery {
       guard.close()
       return
     }
-    const settled = await attempt.settle(() =>
+    await attempt.settle(() =>
       this.#removeContainers(assignment, grant, turn, attempt.execution?.containerId),
     )
-    if (settled !== 'held') await this.deps.credentials.revoke(reference).catch(() => {})
   }
 
   /** Removes whatever is left of the turn, then releases the site; a failed removal holds it. */
@@ -422,9 +477,7 @@ export class TurnExecRecovery {
     outcome: TurnAssignmentOutcome = 'lost',
   ): Promise<void> {
     attempt.giveUp(reason, outcome)
-    const settled = await attempt.settle(() => this.#removeContainers(assignment, grant, turn))
-    if (settled !== 'held')
-      await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
+    await attempt.settle(() => this.#removeContainers(assignment, grant, turn))
   }
 
   /**
@@ -435,15 +488,16 @@ export class TurnExecRecovery {
    * attempt is counted and no driver is needed.
    */
   async #vacate(assignment: TurnAssignment, turn: ReplayedTurn, remainingMs: number) {
+    await this.#revoke(assignment)
     if (remainingMs + TURN_PUBLICATION_GRACE_MS <= 0) return this.#expire(assignment, turn)
     const outcome: TurnAssignmentOutcome = turn.vacating ? 'failed' : 'lost'
     const reason = turn.reason ?? 'run_failed'
     // Unclaimed after core died: no core waits for it any more, so no runner can take it (P1).
     if (assignment.executor === 'runner' && assignment.runner === null) {
-      if (!(await this.deps.assignments.abandon(assignment.id, outcome))) return
+      if (!(await this.deps.assignments.abandon(assignment.id, outcome, reason))) return
       await this.#journal(assignment, turn, 'failed', reason, outcome).catch(() => {})
-      await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
-      return this.#free(assignment)
+      await this.#free(assignment)
+      return
     }
     const takeover = this.deps.executor.takeover(assignment)
     // Away or silent: its container may still be created. The site is not held meanwhile.
@@ -479,7 +533,7 @@ export class TurnExecRecovery {
    * moved on: an open one would lock this turn of the task for good.
    */
   async #expire(assignment: TurnAssignment, turn: ReplayedTurn): Promise<void> {
-    await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
+    await this.#revoke(assignment)
     const reason = turn.vacating ? (turn.reason ?? 'timeout') : 'timeout'
     const outcome = turn.vacating ? 'failed' : 'lost'
     await this.#journal(assignment, turn, 'failed', reason, outcome).catch(() => {})
@@ -561,6 +615,7 @@ export class TurnExecRecovery {
     takeover: TurnTakeover | null,
     remainingMs: number,
   ): Promise<void> {
+    await this.#revoke(assignment)
     const removal: PublicationRemoval | null =
       turn.step === 'destroyed' || turn.step === 'publishing'
         ? 'confirmed'
@@ -614,7 +669,6 @@ export class TurnExecRecovery {
         return this.#park(now ?? assignment, turn.step, 'ambiguous container')
       throw error
     }
-    await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
   }
 
   /**
@@ -653,12 +707,61 @@ export class TurnExecRecovery {
   }
 
   /**
-   * Published and journaled: only the release of the site or the assignment update was lost,
-   * or the release failed and its owner held the site. The site is freed either way.
+   * Ends a turn whose journal ended: its epoch is taken off the site, held or not, and the
+   * assignment closed with what the journal says. While a content write of the turn is
+   * unresolved, the lease store frees nothing and the product store closes nothing (the lease
+   * names its MCP writer). Such a turn is parked like any other left to an operator, with one
+   * log entry, except that every pass still asks the lease store about it (#endUnfreed).
    */
-  async #done(assignment: TurnAssignment): Promise<void> {
-    await this.#free(assignment)
-    await this.#close(assignment, 'completed')
+  async #end(
+    assignment: TurnAssignment,
+    outcome: TurnAssignmentOutcome,
+    phase: TurnPhase,
+  ): Promise<void> {
+    await this.#revoke(assignment)
+    const freed = await this.#free(assignment)
+    const { id, fence } = assignment
+    if (await this.deps.assignments.finish({ id, epoch: fence.epoch, outcome })) return
+    // Closed or taken over by another owner meanwhile: the next pass reads it again.
+    if (freed || !(await this.#keepsSite(assignment))) return
+    this.#parked.add(id)
+    this.#unfreed.set(id, { epoch: fence.epoch, outcome })
+    this.#logger.error(
+      `Turn recovery left a turn to an operator: unresolved site write (epoch ${fence.epoch}, phase ${phase}, attempts ${assignment.recoveryAttempts})`,
+    )
+  }
+
+  /**
+   * A later pass over a turn #end parked: the lease store is asked again, and nothing else — no
+   * journal is loaded and no revoke that went through is repeated. Once the site lets the epoch
+   * go — the write was resolved, or the site moved on without the turn — the assignment is
+   * closed with the outcome its journal named.
+   */
+  async #endUnfreed(assignment: TurnAssignment, outcome: TurnAssignmentOutcome): Promise<void> {
+    await this.#revoke(assignment)
+    if (!(await this.#free(assignment)) && (await this.#keepsSite(assignment))) return
+    const { id, fence } = assignment
+    // A database error leaves the turn parked: the next pass finds the site gone and closes it.
+    const closed = await this.deps.assignments.finish({ id, epoch: fence.epoch, outcome })
+    this.#unpark(id)
+    if (closed)
+      this.#logger.warn(`Turn recovery closed a turn its site let go (epoch ${fence.epoch})`)
+  }
+
+  /** The site lease is still the assignment's, at its epoch. */
+  async #keepsSite({ fence }: TurnAssignment): Promise<boolean> {
+    const lease = await this.deps.leases.inspect(fence.siteId)
+    return (
+      lease !== null &&
+      lease.taskId === fence.taskId &&
+      lease.epoch === fence.epoch &&
+      lease.operation === fence.operation
+    )
+  }
+
+  #unpark(id: string): void {
+    this.#parked.delete(id)
+    this.#unfreed.delete(id)
   }
 
   /**
@@ -666,22 +769,52 @@ export class TurnExecRecovery {
    * or already released, nothing is left to free. One statement, so no step leaves the site held.
    * A database error propagates: the next pass tries again, or its sweep once the turn is closed.
    */
-  async #free(assignment: TurnAssignment): Promise<void> {
-    await this.deps.leases.free(assignment.fence)
+  #free(assignment: TurnAssignment): Promise<boolean> {
+    return this.deps.leases.free(assignment.fence)
   }
 
   async #close(assignment: TurnAssignment, outcome: TurnAssignmentOutcome): Promise<void> {
+    await this.#revoke(assignment)
     await this.deps.assignments.finish({
       id: assignment.id,
       epoch: assignment.fence.epoch,
       outcome,
     })
-    await this.deps.credentials.revoke(credentialRef(assignment)).catch(() => {})
+  }
+
+  /**
+   * One bounded revoke per recovery pass; an outage never keeps the site's cleanup waiting. One
+   * that failed is sent again by the next pass that needs it; one that went through is not sent
+   * again by this process.
+   */
+  #revoke(assignment: TurnAssignment): Promise<void> {
+    const pending = this.#revocations.get(assignment.id)
+    if (pending) return pending.settled
+    const revocation = {
+      settled: withTimeout(
+        Promise.resolve().then(() => this.deps.credentials.revoke(credentialRef(assignment))),
+        5_000,
+        'Turn credential revocation timed out',
+      ).catch(() => {
+        revocation.failed = true
+        // Its pass is over already: nothing else forgets it for the next one.
+        if (
+          !this.#running.has(assignment.id) &&
+          this.#revocations.get(assignment.id) === revocation
+        )
+          this.#revocations.delete(assignment.id)
+        this.#warn('llm_turn_credentials_revoke_failed', new Error('unavailable'))
+      }),
+      failed: false,
+    }
+    this.#revocations.set(assignment.id, revocation)
+    return revocation.settled
   }
 
   /** Holds the site for an operator; only the epoch, phase and attempts are logged. */
   async #park(assignment: TurnAssignment, phase: TurnPhase | undefined, why: string) {
     this.#parked.add(assignment.id)
+    if (why !== 'driver unavailable') await this.#revoke(assignment)
     await holdForRecovery(this.deps.leases, assignment.fence, phase ?? 'recovery')
     this.#logger.error(
       `Turn recovery left a turn to an operator: ${why} (epoch ${assignment.fence.epoch}, phase ${phase ?? 'none'}, attempts ${assignment.recoveryAttempts})`,

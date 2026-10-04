@@ -1,14 +1,24 @@
+import { readFileSync } from 'node:fs'
+import { parseEnv } from 'node:util'
+
 import type { Env } from '@repo/domain'
 import { DEV_METRICS_TOKEN } from '@repo/observability'
 import { describe, expect, it } from 'vitest'
 
+import { mcpHeadersAllowed } from '../mcp/mcp-policy.ts'
 import { ConfigError, loadConfig } from './config.ts'
+import { runnerCredentialAddress } from './runner-tokens.ts'
+
+/** .env.example exactly as `cp .env.example .env` gives it to a new developer. */
+const exampleEnv: Env = parseEnv(
+  readFileSync(new URL('../../../../.env.example', import.meta.url), 'utf8'),
+)
 
 /** The local setup of .env.example. */
 const devEnv: Env = {
   APP_ENV: 'development',
   ORCHESTRATOR_PORT: '8081',
-  ORCHESTRATOR_ROLES: 'core,mcp',
+  ORCHESTRATOR_ROLES: 'core,mcp,llm',
   MCP_PORT: '8082',
   DATABASE_URL: 'postgresql://raditi:raditi@localhost:5432/raditi',
   REDIS_URL: 'redis://localhost:6379',
@@ -22,7 +32,7 @@ const devEnv: Env = {
   VAULT_ROLE_ID: '',
   VAULT_SECRET_ID: '',
   SANDBOX_RUNTIME: 'runc',
-  SANDBOX_IMAGE_PREFIX: 'raditi/agent',
+  SANDBOX_IMAGE: `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`,
   SENDSAY_API_KEY: '',
   METRICS_TOKEN: DEV_METRICS_TOKEN,
 }
@@ -42,10 +52,28 @@ const prodEnv = (overrides: Env = {}): Env => ({
   VAULT_ROLE_ID: 'core-role',
   VAULT_SECRET_ID: 'core-secret',
   SANDBOX_RUNTIME: 'runsc',
-  SANDBOX_IMAGE_PREFIX: 'gitea.internal:3300/raditi/agent',
+  SANDBOX_IMAGE: `gitea.internal:3300/raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`,
   SENDSAY_API_KEY: 'sendsay-key',
   METRICS_TOKEN: PROD_METRICS_TOKEN,
   RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@10.20.0.11`,
+  ...overrides,
+})
+
+/** The subscription gateway alone, as infra/app runs it: no core beside it to check the token. */
+const llmEnv = (overrides: Env = {}): Env => ({
+  APP_ENV: 'production',
+  ORCHESTRATOR_ROLES: 'llm',
+  DATABASE_URL: 'postgresql://raditi:secret@db.internal:5432/raditi',
+  VAULT_ADDR: 'https://vault.internal:8200',
+  VAULT_ROLE_ID: 'llm-role',
+  VAULT_SECRET_ID: 'llm-secret',
+  LLM_GATEWAY_CLIENTS: '10.20.0.0/24',
+  LLM_GATEWAY_HOSTS: '10.20.0.4:8084',
+  LLM_EGRESS_PROXY_URL: 'https://192.0.2.1',
+  LLM_EGRESS_CA_FILE: '/run/raditi/llm/ca.pem',
+  LLM_EGRESS_CLIENT_CERT_FILE: '/run/raditi/llm/client.pem',
+  LLM_EGRESS_CLIENT_KEY_FILE: '/run/raditi/llm/key.pem',
+  METRICS_TOKEN: PROD_METRICS_TOKEN,
   ...overrides,
 })
 
@@ -68,11 +96,58 @@ function problemsOf(env: Env): readonly string[] {
 }
 
 describe('loadConfig — development', () => {
-  it('reads the .env.example setup: core and mcp in one process on two ports', () => {
+  it('defaults the private pool control endpoint and conservative turn quota', () => {
+    expect(loadConfig(devEnv).core).toMatchObject({
+      llmControlUrl: 'http://127.0.0.1:8084',
+      minTurnHeadroomPct: 5,
+    })
+    expect(
+      loadConfig({
+        ...devEnv,
+        LLM_CONTROL_URL: 'http://localhost:9876',
+        LLM_POOL_MIN_TURN_HEADROOM_PCT: '7.5',
+      }).core,
+    ).toMatchObject({ llmControlUrl: 'http://127.0.0.1:9876', minTurnHeadroomPct: 7.5 })
+    expect(
+      loadConfig({
+        ...devEnv,
+        ORCHESTRATOR_ROLES: 'mcp',
+        LLM_CONTROL_URL: 'unused',
+        LLM_POOL_MIN_TURN_HEADROOM_PCT: 'unused',
+      }).mcp,
+    ).not.toBeNull()
+  })
+
+  it('loads llm alone with database and Vault, without core dependencies', () => {
+    const config = loadConfig({
+      APP_ENV: 'test',
+      ORCHESTRATOR_ROLES: 'llm',
+      DATABASE_URL: devEnv.DATABASE_URL,
+      VAULT_ADDR: devEnv.VAULT_ADDR,
+    })
+    expect(config).toMatchObject({
+      roles: ['llm'],
+      core: null,
+      mcp: null,
+      runner: null,
+      llm: { port: 8084, egress: null, maxRequestsPerKey: 2, metricsToken: DEV_METRICS_TOKEN },
+    })
+    expect(
+      loadConfig({ ...devEnv, ORCHESTRATOR_ROLES: 'mcp', LLM_GATEWAY_PORT: 'unused' }).llm,
+    ).toBeNull()
+  })
+
+  it('refuses llm port collisions before opening a listener', () => {
+    for (const value of ['8081', '8082'])
+      expect(problemsOf({ ...devEnv, LLM_GATEWAY_PORT: value })).toContain(
+        'LLM_GATEWAY_PORT: must differ from the other role ports',
+      )
+  })
+  it('reads the .env.example setup: three HTTP roles on separate ports', () => {
     const config = loadConfig(devEnv)
 
     expect(config.appEnv).toBe('development')
-    expect(config.roles).toEqual(['core', 'mcp'])
+    expect(config.roles).toEqual(['core', 'mcp', 'llm'])
     expect(config.core).toMatchObject({
       port: 8081,
       redisUrl: 'redis://localhost:6379',
@@ -80,19 +155,120 @@ describe('loadConfig — development', () => {
       db: { databaseUrl: 'postgresql://raditi:raditi@localhost:5432/raditi' },
       vault: { addr: 'http://localhost:8200', token: 'raditi-dev-root' },
       sandbox: { runtime: 'runc' },
-      agentDrivers: { imagePrefix: 'raditi/agent' },
+      agentDrivers: { image: `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}` },
       mailer: { sendsayApiKey: undefined },
     })
     expect(config.core?.storage.buckets.artifacts).toBe('raditi-artifacts')
     expect(config.mcp).toEqual({
       appEnv: 'development',
       port: 8082,
+      allowedHosts: ['localhost', '127.0.0.1', '[::1]', 'host.docker.internal'],
       db: { databaseUrl: 'postgresql://raditi:raditi@localhost:5432/raditi' },
       vault: { addr: 'http://localhost:8200', token: 'raditi-dev-root' },
+      // Published-content tools stay off until MCP_CONTENT_PROFILE turns them on.
+      contentProfile: 'off',
+      storage: null,
+    })
+    expect(loadConfig(exampleEnv).mcp).toMatchObject({ contentProfile: 'off', storage: null })
+  })
+
+  describe('the content profile of the mcp role', () => {
+    const mcpEnv = (overrides: Env = {}): Env => ({
+      APP_ENV: 'development',
+      ORCHESTRATOR_ROLES: 'mcp',
+      DATABASE_URL: devEnv.DATABASE_URL,
+      VAULT_ADDR: devEnv.VAULT_ADDR,
+      ...overrides,
+    })
+    const s3 = {
+      S3_ENDPOINT: 'http://localhost:8333',
+      S3_ACCESS_KEY_ID: 'raditi',
+      S3_SECRET_ACCESS_KEY: 'raditi-dev-secret',
+      S3_FORCE_PATH_STYLE: 'true',
+    }
+
+    it('is off by default and then needs no S3', () => {
+      for (const value of [undefined, '', 'off'])
+        expect(loadConfig(mcpEnv({ MCP_CONTENT_PROFILE: value })).mcp).toMatchObject({
+          contentProfile: 'off',
+          storage: null,
+        })
+      // Off, the S3 settings of the shared .env are not even read.
+      expect(
+        loadConfig(mcpEnv({ MCP_CONTENT_PROFILE: 'off', S3_ENDPOINT: 'not a url' })).mcp?.storage,
+      ).toBeNull()
+    })
+
+    it('reads the S3 connection and the artifacts bucket alone for the local profile', () => {
+      const config = loadConfig(
+        mcpEnv({
+          ...s3,
+          MCP_CONTENT_PROFILE: 'local',
+          S3_BUCKET_ARTIFACTS: 'raditi-test-artifacts',
+          // Buckets and addresses of the other roles: the mcp role neither reads nor checks them.
+          S3_BUCKET_SESSIONS: 'NOT A BUCKET',
+          S3_BUCKET_BACKUPS: 'NOT A BUCKET',
+          S3_RUNNER_ENDPOINT: 'not a url',
+        }),
+      )
+      expect(config.mcp).toMatchObject({ contentProfile: 'local' })
+      expect(config.mcp?.storage).toEqual({
+        endpoint: 'http://localhost:8333',
+        region: 'ru-central1',
+        accessKeyId: 'raditi',
+        secretAccessKey: 'raditi-dev-secret',
+        forcePathStyle: true,
+        buckets: { artifacts: 'raditi-test-artifacts' },
+      })
+      expect(
+        loadConfig(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: 'local' })).mcp?.storage?.buckets,
+      ).toEqual({ artifacts: 'raditi-artifacts' })
+    })
+
+    it('requires the S3 settings with the local profile and never prints their values', () => {
+      const problems = problemsOf(
+        mcpEnv({ MCP_CONTENT_PROFILE: 'local', S3_SECRET_ACCESS_KEY: 'very-secret-s3-key' }),
+      )
+      expect(problems).toHaveLength(1)
+      expect(problems[0]).toMatch(/S3_ENDPOINT/)
+      expect(problems[0]).toMatch(/S3_ACCESS_KEY_ID/)
+      expect(problems.join('\n')).not.toContain('very-secret-s3-key')
+      expect(
+        problemsOf(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: 'local', S3_BUCKET_ARTIFACTS: 'BAD' }))[0],
+      ).toMatch(/S3_BUCKET_ARTIFACTS/)
+    })
+
+    it('knows no other profile', () => {
+      for (const value of ['on', 'true', 'production', 'LOCAL', 'local,off'])
+        expect(problemsOf(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: value }))).toEqual([
+          'MCP_CONTENT_PROFILE: must be one of off, local',
+        ])
+    })
+
+    it('is read only for the mcp role', () => {
+      const config = loadConfig({
+        ...devEnv,
+        ORCHESTRATOR_ROLES: 'core',
+        MCP_CONTENT_PROFILE: 'unused',
+      })
+      expect(config.mcp).toBeNull()
+    })
+
+    it('runs beside core and llm in the local process with the shared S3 settings', () => {
+      const config = loadConfig({ ...devEnv, MCP_CONTENT_PROFILE: 'local' })
+      expect(config.mcp?.storage).toEqual({
+        endpoint: 'http://localhost:8333',
+        region: 'ru-central1',
+        accessKeyId: 'raditi',
+        secretAccessKey: 'raditi-dev-secret',
+        forcePathStyle: true,
+        buckets: { artifacts: 'raditi-artifacts' },
+      })
+      expect(config.core?.storage.buckets.sessions).toBe('raditi-sessions')
     })
   })
 
-  it('defaults to core,mcp, ports 8081/8082 and the dev metrics token', () => {
+  it('defaults to core,mcp,llm and the dev metrics token', () => {
     const config = loadConfig({
       ...devEnv,
       ORCHESTRATOR_ROLES: undefined,
@@ -101,9 +277,10 @@ describe('loadConfig — development', () => {
       METRICS_TOKEN: '',
     })
 
-    expect(config.roles).toEqual(['core', 'mcp'])
+    expect(config.roles).toEqual(['core', 'mcp', 'llm'])
     expect(config.core?.port).toBe(8081)
     expect(config.mcp?.port).toBe(8082)
+    expect(config.llm).toMatchObject({ port: 8084, egress: null, listenHost: '127.0.0.1' })
     expect(config.core?.metricsToken).toBe(DEV_METRICS_TOKEN)
   })
 
@@ -133,6 +310,64 @@ describe('loadConfig — development', () => {
         VAULT_ADDR: devEnv.VAULT_ADDR,
       }),
     ).not.toThrow()
+  })
+
+  it('ignores settings of inactive roles in the shared local environment', () => {
+    const unrelated = {
+      ORCHESTRATOR_PORT: 'unused',
+      TURN_EXECUTOR: 'unused',
+      REDIS_URL: 'unused',
+      RUNNER_API_PORT: 'unused',
+      RUNNER_TOKENS: 'unused',
+      RUNNER_CORE_URL: 'unused',
+      RUNNER_S3_ORIGIN: 'unused',
+      RUNNER_MAX_TURNS: '4',
+    }
+    expect(loadConfig({ ...devEnv, ...unrelated, ORCHESTRATOR_ROLES: 'mcp' }).mcp?.port).toBe(8082)
+    expect(
+      loadConfig({
+        ...devEnv,
+        ORCHESTRATOR_ROLES: 'core',
+        MCP_PORT: 'unused',
+        RUNNER_API_PORT: 'unused',
+        RUNNER_CORE_URL: 'unused',
+        RUNNER_S3_ORIGIN: 'unused',
+        RUNNER_MAX_TURNS: '4',
+      }).core?.port,
+    ).toBe(8081)
+    expect(
+      loadConfig({
+        APP_ENV: 'development',
+        ORCHESTRATOR_ROLES: 'runner',
+        ORCHESTRATOR_PORT: 'unused',
+        MCP_PORT: 'unused',
+        REDIS_URL: 'unused',
+        RUNNER_API_PORT: 'unused',
+        TURN_EXECUTOR: 'unused',
+        RUNNER_CORE_URL: 'http://127.0.0.1:8083',
+        RUNNER_TOKEN_FILE: '/tmp/runner-token',
+      }).runner?.coreUrl,
+    ).toEqual(new URL('http://127.0.0.1:8083'))
+  })
+
+  it('still rejects invalid settings when their role or runner API is active', () => {
+    expect(problemsOf({ ...devEnv, ORCHESTRATOR_ROLES: 'mcp', MCP_PORT: 'unused' })[0]).toMatch(
+      /^MCP_PORT:/,
+    )
+    expect(
+      problemsOf({ ...devEnv, TURN_EXECUTOR: 'runner', RUNNER_API_PORT: 'unused' })[0],
+    ).toMatch(/^RUNNER_API_PORT:/)
+    expect(
+      problemsOf({
+        APP_ENV: 'development',
+        ORCHESTRATOR_ROLES: 'runner',
+        RUNNER_CORE_URL: 'unused',
+        RUNNER_MAX_TURNS: '4',
+      }),
+    ).toEqual([
+      'RUNNER_CORE_URL: must be an http(s):// URL',
+      'RUNNER_MAX_TURNS: one turn per runner until several runners are supported (stage 2)',
+    ])
   })
 
   it('builds the runner role from its own settings only: core, token file, Docker', () => {
@@ -198,7 +433,7 @@ describe('loadConfig — development', () => {
     const runner = loadConfig({
       ...devEnv,
       TURN_EXECUTOR: 'runner',
-      RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}`,
+      RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
       SANDBOX_RUNTIME: 'kata',
     })
     expect(runner.core?.sandbox).toBeNull()
@@ -209,7 +444,7 @@ describe('loadConfig — development', () => {
     const runner = loadConfig({
       ...devEnv,
       TURN_EXECUTOR: 'runner',
-      RUNNER_TOKENS: ` sandbox-1:${RUNNER_HASH}, sandbox-1:${'B'.repeat(64)},sandbox-2:${'c'.repeat(64)} `,
+      RUNNER_TOKENS: ` sandbox-1:${RUNNER_HASH}@127.0.0.1, sandbox-1:${'B'.repeat(64)}@127.0.0.1,sandbox-2:${'c'.repeat(64)}@[::1] `,
     }).core
     expect(runner?.turnExecutor).toBe('runner')
     expect(runner?.runnerApi?.port).toBe(8083)
@@ -217,6 +452,37 @@ describe('loadConfig — development', () => {
     expect(
       runner!.runnerApi!.tokens.get('sandbox-1')!.map((hash) => hash.digest.toString('hex')),
     ).toEqual([RUNNER_HASH, 'b'.repeat(64)])
+  })
+
+  it('binds every runner to one address at start: its turn keys are issued for it', () => {
+    const runner = { ...devEnv, TURN_EXECUTOR: 'runner' }
+    // Outside production a runner on this machine reaches core from loopback.
+    const tokens = loadConfig({ ...runner, RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@127.0.0.1` })
+      .core!.runnerApi!.tokens
+    expect(runnerCredentialAddress(tokens, 'sandbox-1')).toBe('127.0.0.1')
+    const unbound =
+      'RUNNER_TOKENS: runner sandbox-1 needs one @<IP address> on every hash (its turn keys are bound to it)'
+    for (const RUNNER_TOKENS of [
+      `sandbox-1:${RUNNER_HASH}`,
+      `sandbox-1:${RUNNER_HASH}@127.0.0.1,sandbox-1:${'b'.repeat(64)}`,
+      `sandbox-1:${RUNNER_HASH}@127.0.0.1,sandbox-1:${'b'.repeat(64)}@10.0.0.2`,
+    ]) {
+      const problems = problemsOf({ ...runner, RUNNER_TOKENS })
+      expect(problems).toEqual([unbound])
+      expect(problems.join('\n')).not.toMatch(/aaaa|bbbb|10\.0\.0\.2/)
+    }
+    // A rotation in production: both hashes of a VM name its one private address.
+    expect(
+      problemsOf(
+        prodEnv({
+          RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@10.20.0.11,sandbox-1:${'b'.repeat(64)}@10.20.0.12`,
+        }),
+      ),
+    ).toEqual([unbound])
+    // The local executor serves no runner API: its tokens are not read.
+    expect(
+      loadConfig({ ...devEnv, RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}` }).core?.runnerApi,
+    ).toBe(null)
   })
 
   it('refuses runner settings it cannot serve, naming entries and never their values', () => {
@@ -230,10 +496,10 @@ describe('loadConfig — development', () => {
       RUNNER_API_PORT: '8082',
       RUNNER_TOKENS: [
         leaked,
-        `sandbox-1:${RUNNER_HASH}`,
-        `sandbox-1:${RUNNER_HASH}`,
-        `sandbox-1:${'b'.repeat(64)}`,
-        `sandbox-1:${'c'.repeat(64)}`,
+        `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
+        `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
+        `sandbox-1:${'b'.repeat(64)}@127.0.0.1`,
+        `sandbox-1:${'c'.repeat(64)}@127.0.0.1`,
         `Sandbox:${RUNNER_HASH}`,
       ].join(','),
     })
@@ -250,7 +516,7 @@ describe('loadConfig — development', () => {
 
   it('rejects unknown roles and an empty list', () => {
     expect(problemsOf({ ...devEnv, ORCHESTRATOR_ROLES: 'core,worker' })).toEqual([
-      'ORCHESTRATOR_ROLES: unknown role "worker"; expected core, mcp, runner',
+      'ORCHESTRATOR_ROLES: unknown role "worker"; expected core, mcp, runner, llm',
     ])
     expect(problemsOf({ ...devEnv, ORCHESTRATOR_ROLES: ' , ' })).toEqual([
       'ORCHESTRATOR_ROLES: at least one role is required',
@@ -274,12 +540,62 @@ describe('loadConfig — development', () => {
     ])
   })
 
+  it('starts the roles of `pnpm dev` and `pnpm e2e` from a fresh copy of .env.example', () => {
+    expect(loadConfig(exampleEnv)).toMatchObject({
+      roles: ['core', 'mcp', 'llm'],
+      core: { turnExecutor: 'local', agentDrivers: { image: exampleEnv.SANDBOX_IMAGE } },
+    })
+    // apps/e2e/playwright.config.ts on top of the same file.
+    const e2e = loadConfig({
+      ...exampleEnv,
+      APP_ENV: 'test',
+      ORCHESTRATOR_ROLES: 'core,mcp',
+      ORCHESTRATOR_PORT: '8181',
+      MCP_PORT: '8182',
+      TURN_EXECUTOR: 'local',
+    })
+    expect(e2e).toMatchObject({ roles: ['core', 'mcp'], core: { port: 8181 }, mcp: { port: 8182 } })
+  })
+
+  it('lets a local sandbox-gw reach MCP and llm at the host Docker Desktop names them by', () => {
+    // sandbox-gw sends its upstream's Host: SANDBOX_MCP_UPSTREAM=http://host.docker.internal:8082.
+    const config = loadConfig(exampleEnv)
+    expect(config.llm?.hosts).toContain('host.docker.internal:8084')
+    expect(
+      mcpHeadersAllowed(
+        { host: 'host.docker.internal:8082' },
+        { allowedHosts: config.mcp!.allowedHosts, allowLocalOrigin: true },
+      ),
+    ).toBe(true)
+  })
+
+  it('starts core outside production without SANDBOX_IMAGE: nothing reads the image before P12', () => {
+    // A .env from before P4, or none at all: the image stands for the .env.example placeholder.
+    const { SANDBOX_IMAGE: placeholder, ...older } = exampleEnv
+    expect(placeholder).toMatch(/@sha256:0{64}$/)
+    for (const env of [
+      older,
+      { ...older, APP_ENV: 'test', SANDBOX_IMAGE: ' ' },
+      {
+        ...devEnv,
+        SANDBOX_IMAGE: undefined,
+        TURN_EXECUTOR: 'runner',
+        RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
+      },
+    ])
+      expect(loadConfig(env).core?.agentDrivers).toEqual({ image: placeholder })
+    // A value that is set is still checked.
+    expect(problemsOf({ ...older, SANDBOX_IMAGE: 'raditi/sbx-wordpress:latest' })).toEqual([
+      expect.stringMatching(/^\[agent drivers\] invalid configuration: SANDBOX_IMAGE: /),
+    ])
+  })
+
   it('lists every broken section at once without leaking values', () => {
     const problems = problemsOf({
       ...devEnv,
       DATABASE_URL: 'mysql://root:hunter2@localhost/raditi',
       S3_ENDPOINT: '',
-      SANDBOX_IMAGE_PREFIX: 'Raditi/Agent:latest',
+      SANDBOX_IMAGE: 'Raditi/Agent:latest',
     })
 
     expect(problems).toHaveLength(3)
@@ -287,12 +603,188 @@ describe('loadConfig — development', () => {
       '[db] invalid configuration: DATABASE_URL: must be a postgresql:// connection string',
     )
     expect(problems[1]).toMatch(/^\[storage\] invalid configuration: S3_ENDPOINT: /)
-    expect(problems[2]).toMatch(/^\[agent drivers\] invalid configuration: SANDBOX_IMAGE_PREFIX: /)
+    expect(problems[2]).toMatch(/^\[agent drivers\] invalid configuration: SANDBOX_IMAGE: /)
     expect(problems.join('\n')).not.toMatch(/hunter2|raditi-dev-secret/)
+  })
+
+  describe('git for site repositories (spec §10)', () => {
+    const gitEnv = (overrides: Env = {}): Env => ({
+      ...devEnv,
+      GITEA_URL: 'https://gitea.raditi.test:3443',
+      GITEA_TOKEN: 'synthetic-bot-token',
+      ...overrides,
+    })
+
+    it('configures git from an https Gitea, its bot token and an optional CA file', () => {
+      expect(loadConfig(gitEnv()).core?.git).toEqual({
+        kind: 'gitea',
+        baseUrl: 'https://gitea.raditi.test:3443',
+        token: 'synthetic-bot-token',
+        caFile: null,
+      })
+      expect(
+        loadConfig(
+          gitEnv({
+            GITEA_URL: 'https://host.raditi.test/gitea/',
+            GIT_CA_FILE: '/run/raditi/gitea-ca.pem',
+          }),
+        ).core?.git,
+      ).toEqual({
+        kind: 'gitea',
+        baseUrl: 'https://host.raditi.test/gitea',
+        token: 'synthetic-bot-token',
+        caFile: '/run/raditi/gitea-ca.pem',
+      })
+    })
+
+    it('leaves git unconfigured, and core starting, with the plain-http Gitea of .env.example', () => {
+      expect(exampleEnv.GITEA_URL).toBe('http://localhost:3300')
+      expect(loadConfig(exampleEnv).core?.git).toBeNull()
+      // A token does not make plain http a git transport (spec §19).
+      expect(loadConfig(gitEnv({ GITEA_URL: 'http://localhost:3300' })).core?.git).toBeNull()
+      expect(loadConfig(devEnv).core?.git).toBeNull()
+    })
+
+    it('names what is wrong with a half-configured git, never the values', () => {
+      expect(problemsOf(gitEnv({ GITEA_TOKEN: '' }))).toEqual([
+        'GITEA_TOKEN: required with an https GITEA_URL',
+      ])
+      expect(problemsOf(gitEnv({ GITEA_TOKEN: 'two words' }))).toEqual([
+        'GITEA_TOKEN: must be printable ASCII without whitespace',
+      ])
+      expect(problemsOf(gitEnv({ GIT_CA_FILE: 'gitea-ca.pem' }))).toEqual([
+        'GIT_CA_FILE: must be an absolute path',
+      ])
+      for (const url of [
+        'https://bot:password@gitea.raditi.test',
+        'https://gitea.raditi.test/?token=1',
+        'https://gitea.raditi.test/#x',
+      ])
+        expect(problemsOf(gitEnv({ GITEA_URL: url }))).toEqual([
+          'GITEA_URL: expected an address without credentials, query or fragment',
+        ])
+      expect(problemsOf(gitEnv({ GITEA_URL: 'ssh://gitea.raditi.test' }))).toEqual([
+        'GITEA_URL: must be an http(s):// URL',
+      ])
+    })
+
+    it('reads the git settings only for the core role', () => {
+      const config = loadConfig({
+        ...gitEnv({ GITEA_URL: 'not a url', GIT_CA_FILE: 'relative' }),
+        ORCHESTRATOR_ROLES: 'mcp',
+      })
+      expect(config.core).toBeNull()
+    })
+  })
+
+  describe('the ЮKassa shop for renewal charges', () => {
+    const shop = { YOOKASSA_SHOP_ID: '123456', YOOKASSA_SECRET_KEY: 'test_shop-secret-key' }
+
+    it('leaves payments off, and core starting, without the shop credentials', () => {
+      expect(exampleEnv.YOOKASSA_SHOP_ID).toBe('')
+      expect(exampleEnv.YOOKASSA_SECRET_KEY).toBe('')
+      expect(exampleEnv.YOOKASSA_API_URL).toBe('')
+      expect(exampleEnv.YOOKASSA_WEBHOOK_ALLOWLIST).toBe('')
+      expect(loadConfig(exampleEnv).core?.yookassa).toBeNull()
+      expect(loadConfig(devEnv).core?.yookassa).toBeNull()
+    })
+
+    it('reads the shop, the address of a local fake and its notification senders', () => {
+      expect(loadConfig({ ...devEnv, ...shop }).core?.yookassa).toEqual({
+        shopId: '123456',
+        secretKey: 'test_shop-secret-key',
+      })
+      expect(
+        loadConfig({
+          ...devEnv,
+          ...shop,
+          YOOKASSA_API_URL: 'http://127.0.0.1:4010/v3/',
+          YOOKASSA_WEBHOOK_ALLOWLIST: '127.0.0.1, ::1',
+        }).core?.yookassa,
+      ).toEqual({
+        shopId: '123456',
+        secretKey: 'test_shop-secret-key',
+        baseUrl: 'http://127.0.0.1:4010/v3',
+        webhookAllowlist: ['127.0.0.1', '::1'],
+      })
+    })
+
+    it('names what is wrong with a half-configured shop, never the values', () => {
+      expect(problemsOf({ ...devEnv, YOOKASSA_SECRET_KEY: shop.YOOKASSA_SECRET_KEY })).toEqual([
+        '[yookassa] invalid configuration: YOOKASSA_SHOP_ID: YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be set together',
+      ])
+      expect(problemsOf({ ...devEnv, YOOKASSA_SHOP_ID: shop.YOOKASSA_SHOP_ID })).toEqual([
+        '[yookassa] invalid configuration: YOOKASSA_SECRET_KEY: YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be set together',
+      ])
+      const problems = problemsOf({
+        ...devEnv,
+        ...shop,
+        YOOKASSA_API_URL: 'http://shop:hunter2@127.0.0.1:4010/v3',
+        YOOKASSA_WEBHOOK_ALLOWLIST: 'localhost',
+      })
+      expect(problems).toEqual([
+        '[yookassa] invalid configuration: ' +
+          'YOOKASSA_WEBHOOK_ALLOWLIST: must be IP addresses or CIDR ranges separated by commas; ' +
+          'YOOKASSA_API_URL: expected an address without credentials, query or fragment',
+      ])
+      expect(problems.join('\n')).not.toMatch(/hunter2|test_shop-secret-key/)
+    })
+
+    it('neither requires nor reads the shop settings in the other roles', () => {
+      const broken = {
+        YOOKASSA_SHOP_ID: 'not digits',
+        YOOKASSA_API_URL: 'not a url',
+        YOOKASSA_WEBHOOK_ALLOWLIST: 'not an address',
+      }
+      for (const role of ['mcp', 'llm'] as const) {
+        const config = loadConfig({ ...devEnv, ...broken, ORCHESTRATOR_ROLES: role })
+        expect(config.core).toBeNull()
+        expect(config[role]).not.toBeNull()
+      }
+      expect(
+        loadConfig({
+          APP_ENV: 'development',
+          ORCHESTRATOR_ROLES: 'runner',
+          RUNNER_CORE_URL: 'http://127.0.0.1:8083',
+          RUNNER_TOKEN_FILE: '/tmp/runner-token',
+          ...broken,
+        }).core,
+      ).toBeNull()
+      // The same settings stop core.
+      expect(problemsOf({ ...devEnv, ...broken, ORCHESTRATOR_ROLES: 'core' })[0]).toMatch(
+        /^\[yookassa\] invalid configuration: /,
+      )
+    })
   })
 })
 
 describe('loadConfig — production', () => {
+  it('leaves the control endpoint absent until an operator configures its private origin', () => {
+    expect(loadConfig(prodEnv()).core?.llmControlUrl).toBeUndefined()
+    expect(
+      loadConfig(prodEnv({ LLM_CONTROL_URL: 'http://10.20.0.4:8084' })).core?.llmControlUrl,
+    ).toBe('http://10.20.0.4:8084')
+    for (const origin of [
+      'https://public.example',
+      'http://8.8.8.8',
+      'http://10.20.0.4/path',
+      'http://secret:private@10.20.0.4',
+      'http://10.20.0.4?secret=private',
+    ]) {
+      const problems = problemsOf(prodEnv({ LLM_CONTROL_URL: origin }))
+      expect(problems).toContain(
+        'LLM_CONTROL_URL: must be an http(s) origin at a private IP or loopback address',
+      )
+      expect(problems.join(' ')).not.toContain('secret')
+    }
+    for (const value of ['0', '-1', '101', 'NaN'])
+      expect(
+        problemsOf(prodEnv({ LLM_POOL_MIN_TURN_HEADROOM_PCT: value })).some((problem) =>
+          problem.startsWith('LLM_POOL_MIN_TURN_HEADROOM_PCT:'),
+        ),
+      ).toBe(true)
+  })
+
   it('starts one role with production settings', () => {
     const config = loadConfig(prodEnv())
 
@@ -304,6 +796,46 @@ describe('loadConfig — production', () => {
       vault: { appRole: { roleId: 'core-role', secretId: 'core-secret' } },
       sandbox: null,
     })
+  })
+
+  it('takes a ЮKassa shop or none, and never the settings of a local fake', () => {
+    const shop = { YOOKASSA_SHOP_ID: '123456', YOOKASSA_SECRET_KEY: 'live_shop-secret-key' }
+    expect(loadConfig(prodEnv()).core?.yookassa).toBeNull()
+    expect(loadConfig(prodEnv(shop)).core?.yookassa).toEqual({
+      shopId: '123456',
+      secretKey: 'live_shop-secret-key',
+    })
+    const fake = {
+      YOOKASSA_API_URL: 'https://fake.internal/v3',
+      YOOKASSA_WEBHOOK_ALLOWLIST: '10.20.0.5',
+    }
+    for (const credentials of [shop, {}]) {
+      const problems = problemsOf(prodEnv({ ...credentials, ...fake }))
+      expect(problems).toEqual([
+        '[yookassa] invalid configuration: ' +
+          'YOOKASSA_API_URL: not allowed in production (the real API address is built in); ' +
+          'YOOKASSA_WEBHOOK_ALLOWLIST: not allowed in production (notifications come from the published ranges only)',
+      ])
+      expect(problems.join('\n')).not.toContain('live_shop-secret-key')
+    }
+    expect(problemsOf(prodEnv({ YOOKASSA_SHOP_ID: shop.YOOKASSA_SHOP_ID }))).toEqual([
+      '[yookassa] invalid configuration: YOOKASSA_SECRET_KEY: YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be set together',
+    ])
+    // The subscription gateway and the MCP gateway hold no shop settings and read none.
+    expect(loadConfig(llmEnv(fake)).llm).not.toBeNull()
+    expect(
+      loadConfig(prodEnv({ ...fake, ORCHESTRATOR_ROLES: 'mcp', MCP_ALLOWED_HOSTS: 'mcp' })).mcp,
+    ).not.toBeNull()
+  })
+
+  it('requires the digest of the built stack image in production', () => {
+    expect(problemsOf(prodEnv({ SANDBOX_IMAGE: undefined }))).toEqual([
+      expect.stringMatching(/^\[agent drivers\] invalid configuration: SANDBOX_IMAGE: /),
+    ])
+    // What infra/app/env.example and .env.example carry until an image is built.
+    expect(problemsOf(prodEnv({ SANDBOX_IMAGE: exampleEnv.SANDBOX_IMAGE }))).toEqual([
+      '[agent drivers] invalid configuration: SANDBOX_IMAGE: the all-zero digest is the env.example placeholder: set the digest of the built stack image',
+    ])
   })
 
   it('runs turns only on runner VMs', () => {
@@ -404,9 +936,93 @@ describe('loadConfig — production', () => {
     expect(loadConfig({ ...devEnv, METRICS_TOKEN: 'short' }).core?.metricsToken).toBe('short')
   })
 
+  it('refuses a METRICS_TOKEN with whitespace in any environment: no Bearer header carries it', () => {
+    const refused = 'METRICS_TOKEN: must not contain whitespace (it is sent as a Bearer token)'
+    const spaced = 'my long metrics token with spaces 1234567890'
+    for (const env of [
+      prodEnv({ METRICS_TOKEN: spaced }),
+      prodEnv({ METRICS_TOKEN: `${PROD_METRICS_TOKEN}\n` }),
+      llmEnv({ METRICS_TOKEN: ` ${PROD_METRICS_TOKEN}` }),
+      { ...devEnv, METRICS_TOKEN: 'dev token' },
+      { ...devEnv, ORCHESTRATOR_ROLES: 'llm', METRICS_TOKEN: 'dev-token\t' },
+    ]) {
+      const problems = problemsOf(env)
+      expect(problems).toEqual([refused])
+      expect(problems.join('\n')).not.toMatch(/spaces|dev token|xxxx/)
+    }
+  })
+
+  it('gives core and llm of one process the same token', () => {
+    const config = loadConfig({ ...devEnv, METRICS_TOKEN: 'local-token' })
+    expect(config.core?.metricsToken).toBe('local-token')
+    expect(config.llm?.metricsToken).toBe('local-token')
+  })
+
   it('does not ask the MCP gateway for a metrics token: it serves no /metrics', () => {
-    const config = loadConfig(prodEnv({ ORCHESTRATOR_ROLES: 'mcp', METRICS_TOKEN: '' }))
+    const config = loadConfig(
+      prodEnv({ ORCHESTRATOR_ROLES: 'mcp', MCP_ALLOWED_HOSTS: 'mcp', METRICS_TOKEN: '' }),
+    )
     expect(config.mcp?.port).toBe(8082)
+  })
+
+  it('refuses every content profile but off for the mcp role in production', () => {
+    const mcp = (overrides: Env = {}) =>
+      prodEnv({ ORCHESTRATOR_ROLES: 'mcp', MCP_ALLOWED_HOSTS: 'mcp', ...overrides })
+    for (const value of [undefined, '', 'off'])
+      expect(loadConfig(mcp({ MCP_CONTENT_PROFILE: value })).mcp).toMatchObject({
+        contentProfile: 'off',
+        storage: null,
+      })
+    // With every S3 setting in place: the refusal is the profile itself, not a missing value.
+    expect(problemsOf(mcp({ MCP_CONTENT_PROFILE: 'local' }))).toEqual([
+      'MCP_CONTENT_PROFILE: only off is allowed in production (published content is not open there)',
+    ])
+    expect(
+      problemsOf(mcp({ MCP_CONTENT_PROFILE: 'local', S3_ENDPOINT: '', S3_ACCESS_KEY_ID: '' })),
+    ).toEqual([
+      'MCP_CONTENT_PROFILE: only off is allowed in production (published content is not open there)',
+    ])
+  })
+
+  it('starts the subscription gateway alone with production settings', () => {
+    const config = loadConfig(llmEnv())
+    expect(config).toMatchObject({ roles: ['llm'], core: null, mcp: null, runner: null })
+    expect(config.llm).toMatchObject({
+      appEnv: 'production',
+      listenHost: '0.0.0.0',
+      metricsToken: PROD_METRICS_TOKEN,
+      db: { databaseUrl: 'postgresql://raditi:secret@db.internal:5432/raditi' },
+      vault: { addr: 'https://vault.internal:8200', appRole: { roleId: 'llm-role' } },
+    })
+    expect(config.llm?.vault.token).toBeUndefined()
+  })
+
+  it('refuses the gateway alone an empty, dev or short METRICS_TOKEN, without leaking it', () => {
+    // The token opens /metrics and the pool probe endpoint core calls (POST /internal/…).
+    const refused =
+      'METRICS_TOKEN: set a unique token in production (the dev placeholder is refused)'
+    expect(problemsOf(llmEnv({ METRICS_TOKEN: '' }))).toEqual([refused])
+    expect(problemsOf(llmEnv({ METRICS_TOKEN: undefined }))).toEqual([refused])
+    expect(problemsOf(llmEnv({ METRICS_TOKEN: DEV_METRICS_TOKEN }))).toEqual([refused])
+    const short = 'k'.repeat(31)
+    const problems = problemsOf(llmEnv({ METRICS_TOKEN: short }))
+    expect(problems).toEqual(['METRICS_TOKEN: must be at least 32 characters in production'])
+    expect(problems.join('\n')).not.toContain(short)
+  })
+
+  it('keeps the Vault rules for the gateway alone: https, AppRole, never the dev root token', () => {
+    const problems = problemsOf(
+      llmEnv({
+        VAULT_ADDR: 'http://vault.internal:8200',
+        VAULT_ROLE_ID: '',
+        VAULT_SECRET_ID: '',
+        VAULT_DEV_ROOT_TOKEN: 'raditi-dev-root',
+      }),
+    ).join('\n')
+    expect(problems).toMatch(/VAULT_ADDR: must use https in production/)
+    expect(problems).toMatch(/VAULT_DEV_ROOT_TOKEN: the dev root token is not allowed/)
+    expect(problems).toMatch(/VAULT_ROLE_ID: services log in by AppRole in production/)
+    expect(problems).not.toContain('raditi-dev-root')
   })
 
   it('keeps the package rules: https Vault, AppRole and SendSay are mandatory', () => {
@@ -533,8 +1149,8 @@ describe('loadConfig — production', () => {
         VAULT_SECRET_ID: 'core-secret',
         S3_SECRET_ACCESS_KEY: 'very-secret-s3-key',
         GITEA_TOKEN: 'gitea-secret',
-        LITELLM_MASTER_KEY: 'sk-master-secret',
-        YANDEX_API_KEY: 'yandex-secret',
+        OPENAI_API_KEY: 'sk-provider-secret',
+        KIMI_MODEL_API_KEY: 'kimi-secret',
         BETTER_AUTH_SECRET: 'auth-secret',
         METRICS_TOKEN: 'metrics-secret',
         NODE_OPTIONS: '--require /tmp/hook.js',
@@ -545,14 +1161,14 @@ describe('loadConfig — production', () => {
       'BETTER_AUTH_SECRET: must not be set for the runner role in production',
       'DATABASE_URL: must not be set for the runner role in production',
       'GITEA_TOKEN: must not be set for the runner role in production',
-      'LITELLM_MASTER_KEY: must not be set for the runner role in production',
+      'KIMI_MODEL_API_KEY: must not be set for the runner role in production',
       'METRICS_TOKEN: must not be set for the runner role in production',
       'NODE_OPTIONS: must not be set for the runner role in production',
+      'OPENAI_API_KEY: must not be set for the runner role in production',
       'REDIS_URL: must not be set for the runner role in production',
       'S3_SECRET_ACCESS_KEY: must not be set for the runner role in production',
       'VAULT_ADDR: must not be set for the runner role in production',
       'VAULT_SECRET_ID: must not be set for the runner role in production',
-      'YANDEX_API_KEY: must not be set for the runner role in production',
     ])
     expect(problems.join('\n')).not.toMatch(/secret|hook/)
   })
@@ -584,5 +1200,30 @@ describe('loadConfig — production', () => {
         DATABASE_URL: 'postgresql://raditi:raditi@localhost:5432/raditi',
       }).runner,
     ).not.toBeNull()
+  })
+
+  it('refuses a plain-http Gitea in production and takes an https one', () => {
+    expect(
+      problemsOf(prodEnv({ GITEA_URL: 'http://10.20.0.6:3000', GITEA_TOKEN: 'synthetic-token' })),
+    ).toEqual(['GITEA_URL: must use https in production (spec §19)'])
+    expect(problemsOf(prodEnv({ GITEA_URL: 'https://gitea.raditi.internal' }))).toEqual([
+      'GITEA_TOKEN: required with an https GITEA_URL',
+    ])
+    expect(
+      loadConfig(
+        prodEnv({
+          GITEA_URL: 'https://gitea.raditi.internal',
+          GITEA_TOKEN: 'synthetic-token',
+          GIT_CA_FILE: '/run/raditi/gitea-ca.pem',
+        }),
+      ).core?.git,
+    ).toEqual({
+      kind: 'gitea',
+      baseUrl: 'https://gitea.raditi.internal',
+      token: 'synthetic-token',
+      caFile: '/run/raditi/gitea-ca.pem',
+    })
+    // Until the turn handler is wired (P12) a core without git still starts.
+    expect(loadConfig(prodEnv()).core?.git).toBeNull()
   })
 })

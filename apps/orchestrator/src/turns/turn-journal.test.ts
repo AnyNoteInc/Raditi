@@ -243,6 +243,67 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).status).toBe('queued')
   })
 
+  it('projects session and checkpoint metadata together with fenced journal evidence', async () => {
+    const f = await fixture()
+    const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+    await db.agentDriver.upsert({
+      where: { id: 'codex' },
+      update: {},
+      create: {
+        id: 'codex',
+        image,
+        capabilities: {},
+        enabled: true,
+      },
+    })
+    const turn = await db.taskTurn.create({
+      data: {
+        taskId: f.task.id,
+        turnNo: 1,
+        status: 'running',
+        driverId: 'codex',
+        image,
+      },
+    })
+    await f.journal.record({
+      ...f.evidence,
+      phase: 'output',
+      cursor: { stdout: 42, stderr: 0 },
+      events: [{ type: 'started', nativeSessionId: 'synthetic-native-session' }],
+    })
+    await f.journal.record({
+      ...f.evidence,
+      sequence: 2,
+      phase: 'checkpointed',
+      candidateHeadSha: 'c'.repeat(40),
+      snapshotPrefix: 'sessions/synthetic/turns/0001/',
+    })
+    expect(await db.taskTurn.findUniqueOrThrow({ where: { id: turn.id } })).toMatchObject({
+      status: 'running',
+      nativeSessionId: 'synthetic-native-session',
+      headSha: 'c'.repeat(40),
+      snapshotPrefix: 'sessions/synthetic/turns/0001/',
+      finishedAt: null,
+    })
+    const entries = await db.taskEvent.findMany({ where: { taskId: f.task.id } })
+    expect(entries).toHaveLength(2)
+    expect(entries.every((entry) => entry.turnId === turn.id)).toBe(true)
+    const next = await f.nextEpoch()
+    await expect(
+      f.journal.record({
+        ...f.evidence,
+        phase: 'checkpointed',
+        candidateHeadSha: 'd'.repeat(40),
+        nativeSessionId: 'stale-session',
+      }),
+    ).rejects.toMatchObject({ code: 'LEASE_LOST' })
+    expect(await db.taskTurn.findUniqueOrThrow({ where: { id: turn.id } })).toMatchObject({
+      nativeSessionId: 'synthetic-native-session',
+      headSha: 'c'.repeat(40),
+    })
+    await f.leases.free(next)
+  })
+
   it('permits recovery evidence under a held lease but refuses normal progress', async () => {
     const f = await fixture()
     await f.leases.holdForRecovery(f.fence)

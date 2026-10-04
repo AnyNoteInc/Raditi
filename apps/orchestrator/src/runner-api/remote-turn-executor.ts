@@ -8,6 +8,7 @@ import {
   presignedGetSchema,
   presignedPutSchema,
   runnerTimings,
+  runnerUnavailable,
   sandboxSpecSchema,
   sessionStateSchema,
   snapshotSealBaseSchema,
@@ -67,19 +68,74 @@ const get = (request: PresignedRequest) => presignedGetSchema.parse(wire(request
  */
 export class RemoteTurnExecutor implements TurnExecutor {
   readonly kind = 'runner'
+  /** The runner session whose address a turn's key was issued for, until its prepare. */
+  readonly #reservations = new Map<string, TurnAssignmentRunner>()
 
   constructor(
     private readonly hub: RunnerHub,
     private readonly leases: Pick<SiteLeaseStore, 'assert'>,
     private readonly assignments: Pick<TurnAssignmentStore, 'get'>,
+    private readonly sourceAddress?: (runnerId: string) => string,
   ) {}
+
+  /**
+   * Reserves a slot of a runner VM for the turn and names that VM's trusted address. Nothing
+   * durable binds the turn to the runner yet: that is prepare's, when the command goes out.
+   */
+  async credentialAddress(assignmentId: string, signal: AbortSignal): Promise<string> {
+    try {
+      const runner = await this.hub.reserve(assignmentId, signal)
+      signal.throwIfAborted()
+      const source = this.#trustedAddress(runner.id)
+      this.#reservations.set(assignmentId, runner)
+      return source
+    } catch (error) {
+      this.forgetCredentialAddress(assignmentId)
+      throw error
+    }
+  }
+
+  forgetCredentialAddress(assignmentId: string): void {
+    this.#reservations.delete(assignmentId)
+    this.hub.forgetReservation(assignmentId)
+  }
+
+  /**
+   * The one address RUNNER_TOKENS binds the runner to. A runner without it — an entry without
+   * `@ip`, or two hashes with different addresses — cannot get a key: a fault of the platform's
+   * configuration, never of the client's input, and nothing of that configuration is repeated.
+   */
+  #trustedAddress(runnerId: string): string {
+    let source: string | undefined
+    try {
+      source = this.sourceAddress?.(runnerId)
+    } catch {
+      source = undefined
+    }
+    if (!source)
+      throw runnerUnavailable('The sandbox runner has no trusted address for turn credentials')
+    return source
+  }
 
   async prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution> {
     if (input.sandbox.secrets.length !== 0)
       throw badRequest('Turn secrets are installed only after restore')
     const started = performance.now()
-    const runner = await this.hub.awaitClaim(input.assignmentId, signal)
-    signal.throwIfAborted()
+    let runner: TurnAssignmentRunner
+    try {
+      runner =
+        this.#reservations.get(input.assignmentId) ??
+        (await this.hub.reserve(input.assignmentId, signal))
+      signal.throwIfAborted()
+      // The VM that reserved the turn — the one its key is bound to — claims it now, durably:
+      // an assignment has a runner only once its prepare is handed out (spec §8).
+      await this.hub.claim(input.assignmentId, runner)
+      signal.throwIfAborted()
+    } catch (error) {
+      this.forgetCredentialAddress(input.assignmentId)
+      throw error
+    }
+    this.#reservations.delete(input.assignmentId)
     const remainingMs = Math.floor(input.remainingMs - (performance.now() - started))
     const live = this.hub.attach({
       id: input.assignmentId,

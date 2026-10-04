@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks'
 
 import { Logger } from '@nestjs/common'
 import {
+  badRequest,
   conflict,
   DomainError,
   leaseLost,
@@ -37,10 +38,13 @@ import {
   type TurnExecutor,
   type TurnRestoreSource,
   type TurnResult,
+  withoutTurnCredentials,
 } from '@repo/domain'
+import { createCodexDriver, createKimiDriver } from '@repo/agent-drivers'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
+import type { newTurnKeys } from '../llm/turn-key.ts'
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
 import { RunnerHub } from '../runner-api/runner-hub.ts'
 import { SandboxRunner } from '../runner/sandbox-runner.ts'
@@ -54,6 +58,7 @@ import {
 import { loopbackTransport } from '../testing/runner-loopback.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+import { MemoryTurnCredentials, testTurnCredentialPolicy } from '../testing/turn-credentials.ts'
 import { LiveTurns } from './live-turns.ts'
 import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from './local-turn-executor.ts'
 import {
@@ -68,6 +73,20 @@ import {
   type TurnRequest,
   type TurnSupervisorDependencies,
 } from './turn-supervisor.ts'
+
+/** Every pair llm/turn-key.ts made: the one owner of the two key formats. */
+const madeTurnKeys = vi.hoisted(() => [] as Array<{ llmApiKey: string; mcpToken: string }>)
+vi.mock('../llm/turn-key.ts', async (importOriginal) => {
+  const original = await importOriginal<{ newTurnKeys: typeof newTurnKeys }>()
+  return {
+    ...original,
+    newTurnKeys: () => {
+      const keys = original.newTurnKeys()
+      madeTurnKeys.push(keys)
+      return keys
+    },
+  }
+})
 
 const labels = {
   workspaceId: '00000000-0000-4000-8000-000000000001',
@@ -136,7 +155,7 @@ const executors: Record<
       // The runner zeroed every data key right after using it.
       expect(transport.keys.every((key) => key.every((byte) => byte === 0))).toBe(true)
     })
-    return new RemoteTurnExecutor(hub, core.leases, core.assignments)
+    return new RemoteTurnExecutor(hub, core.leases, core.assignments, () => '127.0.0.1')
   },
 }
 const executorKinds = Object.keys(executors)
@@ -264,10 +283,15 @@ function turnFixture(kind: string) {
       }
     },
     sessionState: vi.fn(() => home),
-    extractResult: vi.fn(
-      (events: readonly AgentEvent[]) =>
-        JSON.parse(events.findLast((event) => event.type === 'message')?.text ?? 'null') as unknown,
-    ),
+    extractResult: vi.fn((events: readonly AgentEvent[], lastMessage: string | null) => {
+      const text = lastMessage ?? events.findLast((event) => event.type === 'message')?.text
+      try {
+        return JSON.parse(text ?? 'null') as unknown
+      } catch {
+        // As the real drivers: a final message that is no JSON carries no result.
+        return null
+      }
+    }),
   }
   const publication = {
     baseSha,
@@ -383,6 +407,12 @@ function turnFixture(kind: string) {
     { leases, assignments },
   )
   const live = new LiveTurns()
+  const credentials = new MemoryTurnCredentials({
+    llmApiKey: request.context.llm.apiKey,
+    mcpToken: request.context.mcp.token,
+  })
+  vi.spyOn(credentials, 'issue')
+  vi.spyOn(credentials, 'revoke')
   const deps: TurnSupervisorDependencies = {
     leases,
     executor,
@@ -392,6 +422,7 @@ function turnFixture(kind: string) {
     snapshots,
     journal,
     live,
+    credentials,
   }
   return {
     request,
@@ -399,6 +430,7 @@ function turnFixture(kind: string) {
     order,
     evidence,
     deps,
+    credentials,
     handle,
     sandbox,
     lease,
@@ -416,7 +448,12 @@ function turnFixture(kind: string) {
     stdout: (value: string) => {
       stdout = value
     },
-    run: (signal?: AbortSignal) => new TurnSupervisor(deps).run(request, signal),
+    run: (signal?: AbortSignal) =>
+      new TurnSupervisor(deps).run(
+        withoutTurnCredentials(request),
+        testTurnCredentialPolicy,
+        signal,
+      ),
   }
 }
 
@@ -457,6 +494,16 @@ function delayGrant<A extends unknown[]>(
 }
 
 type Fixture = ReturnType<typeof turnFixture>
+
+/**
+ * A run the driver's own output condemns is refused by the dry run before the lease, when the
+ * stand-in credentials show it, and right after the turn's credentials were issued otherwise.
+ * Either way the site is not left leased.
+ */
+function expectSiteFree(f: Fixture): void {
+  expect(f.leases.release).toHaveBeenCalledTimes(f.leases.acquire.mock.calls.length)
+  expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
+}
 
 async function expectLeaseCoversLatePush(
   f: Fixture,
@@ -502,11 +549,254 @@ async function expectLeaseCoversLatePush(
 describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
   const fixture = () => turnFixture(kind)
 
+  it('undoes a replaced first turn before importing Git or creating its next container', async () => {
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.replacesTurn = 1
+    f.request.workspace = { ...f.request.workspace, expectedBranchSha: null }
+    const rollback = vi.fn(async () => {
+      expect(f.sandboxes.create).not.toHaveBeenCalled()
+      expect(f.workspace.buildBaseBundle).not.toHaveBeenCalled()
+      // Only the dry run before the lease: the turn's own run is prepared after the undo.
+      expect(f.driver.prepare).toHaveBeenCalledOnce()
+      f.order.push('undo')
+    })
+    f.deps.contentRollback = { rollback }
+    await f.run()
+    // Admitted by the fence of the lease alone: exactly these two keys, no credential of the turn.
+    expect(rollback).toHaveBeenCalledExactlyOnceWith({
+      fence: expect.objectContaining({
+        siteId: labels.siteId,
+        taskId: labels.taskId,
+        operation: 'turn',
+        epoch: 1,
+      }),
+      turn: 1,
+    })
+    expect(JSON.stringify(vi.mocked(rollback).mock.calls)).not.toMatch(/synthetic-[a-z]+-secret/)
+    expect(f.order.indexOf('undo')).toBeLessThan(f.order.indexOf('create'))
+    expect(f.workspace.preparePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedBranchSha: null,
+        expectedBaseSha: baseSha,
+        turn: 2,
+      }),
+    )
+    expect([...f.assignments.rows.values()][0]!.plan.replacesTurn).toBe(1)
+  })
+
+  it('does not prepare an agent or checkpoint when replacement undo fails', async () => {
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.replacesTurn = 1
+    f.request.workspace = { ...f.request.workspace, expectedBranchSha: null }
+    f.deps.contentRollback = {
+      rollback: vi.fn(async () => {
+        throw conflict('Synthetic content drift')
+      }),
+    }
+    await expect(f.run()).rejects.toThrow('Synthetic content drift')
+    // The dry run before the lease, with stand-ins for the credentials, and nothing after it.
+    expect(f.driver.prepare).toHaveBeenCalledOnce()
+    expect(JSON.stringify(vi.mocked(f.driver.prepare).mock.calls)).not.toMatch(
+      /synthetic-[a-z]+-secret/,
+    )
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.credentials.revoke).toHaveBeenCalledOnce()
+    expect([...f.assignments.rows.values()][0]!.outcome).toBe('failed')
+  })
+
+  it('rejects replacement without an undo dependency before taking a lease', async () => {
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.replacesTurn = 1
+    f.request.workspace = { ...f.request.workspace, expectedBranchSha: null }
+    await expect(f.run()).rejects.toThrow('requires content rollback')
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(f.credentials.issue).not.toHaveBeenCalled()
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
+
+  it('issues against the persisted assignment and revokes before publication', async () => {
+    const f = fixture()
+    vi.mocked(f.credentials.issue).mockImplementation(async (ref) => {
+      const assignment = [...f.assignments.rows.values()][0]!
+      expect(assignment).toMatchObject({ fence: { taskId: labels.taskId }, firstEpoch: ref.epoch })
+      expect(JSON.stringify(assignment.plan)).not.toMatch(/synthetic-[a-z]+-secret/)
+      expect(f.sandboxes.create).not.toHaveBeenCalled()
+      // A runner slot is reserved by now (boundSource below), yet the turn is bound to its
+      // runner only when the prepare goes out: a core that dies here left nothing handed out.
+      expect(assignment.runner).toBeNull()
+      f.order.push('issue')
+      return { llmApiKey: f.request.context.llm.apiKey, mcpToken: f.request.context.mcp.token }
+    })
+    vi.mocked(f.credentials.revoke).mockImplementation(async () => {
+      expect(f.sandbox.destroy).toHaveBeenCalled()
+      expect(f.publication.publish).not.toHaveBeenCalled()
+      f.order.push('revoke')
+    })
+    await f.run()
+    const assignment = [...f.assignments.rows.values()][0]!
+    expect(f.credentials.issue).toHaveBeenCalledWith(
+      { taskId: labels.taskId, sessionId: labels.sessionId, turn: 1, epoch: assignment.firstEpoch },
+      expect.objectContaining({
+        ...testTurnCredentialPolicy,
+        ttlMs: expect.any(Number),
+        deadlineAt: assignment.deadlineAt,
+        boundSource: kind === 'runner' ? '127.0.0.1' : null,
+      }),
+    )
+    expect(f.order.indexOf('issue')).toBeLessThan(f.order.indexOf('create'))
+    expect(f.order.indexOf('revoke')).toBeLessThan(f.order.indexOf('publish'))
+    if (kind === 'runner') expect(assignment.runner).toMatchObject({ id: 'sandbox-1' })
+  })
+
+  it('closes credential intent when issuance fails before creating a container', async () => {
+    const f = fixture()
+    vi.mocked(f.credentials.issue).mockRejectedValueOnce(new Error('Synthetic issuance failure'))
+    await expect(f.run()).rejects.toThrow('Synthetic issuance failure')
+    expect(f.credentials.revoke).toHaveBeenCalledOnce()
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(f.workspace.buildBaseBundle).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
+  it('refuses supplied keys and a mismatched policy before leasing', async () => {
+    const f = fixture()
+    const supervisor = new TurnSupervisor(f.deps)
+    await expect(supervisor.run(f.request, testTurnCredentialPolicy)).rejects.toThrow()
+    await expect(
+      supervisor.run(withoutTurnCredentials(f.request), {
+        ...testTurnCredentialPolicy,
+        driverId: 'kimi',
+      }),
+    ).rejects.toThrow()
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(f.credentials.issue).not.toHaveBeenCalled()
+  })
+
+  it.each(['medium', null])(
+    'persists and prepares the issued reasoning profile %s when the request omits it',
+    async (reasoningEffort) => {
+      const f = fixture()
+      await new TurnSupervisor(f.deps).run(withoutTurnCredentials(f.request), {
+        ...testTurnCredentialPolicy,
+        reasoningEffort,
+      })
+      const assignment = [...f.assignments.rows.values()][0]!
+      expect(assignment.plan.context.llm.reasoningEffort).toBe(reasoningEffort)
+      expect(f.driver.prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ llm: expect.objectContaining({ reasoningEffort }) }),
+      )
+      expect(f.credentials.issue).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ reasoningEffort }),
+      )
+      expect(f.request.context.llm).not.toHaveProperty('reasoningEffort')
+    },
+  )
+
+  it.each(['medium', null])('accepts an explicit matching reasoning profile %s', async (effort) => {
+    const f = fixture()
+    f.request.context.llm.reasoningEffort = effort
+    await new TurnSupervisor(f.deps).run(withoutTurnCredentials(f.request), {
+      ...testTurnCredentialPolicy,
+      reasoningEffort: effort,
+    })
+    expect(f.driver.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ llm: expect.objectContaining({ reasoningEffort: effort }) }),
+    )
+  })
+
+  it.each([
+    ['high', 'medium'],
+    ['low', null],
+    [null, 'medium'],
+  ])('refuses reasoning profile %s under policy %s before leasing', async (effort, allowed) => {
+    const f = fixture()
+    f.request.context.llm.reasoningEffort = effort
+    await expect(
+      new TurnSupervisor(f.deps).run(withoutTurnCredentials(f.request), {
+        ...testTurnCredentialPolicy,
+        reasoningEffort: allowed,
+      }),
+    ).rejects.toThrow('Turn reasoning effort differs from credential policy')
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(f.credentials.issue).not.toHaveBeenCalled()
+    expect(f.driver.prepare).not.toHaveBeenCalled()
+  })
+
+  it('refuses a turn its driver cannot launch before the lease, the key and the content undo', async () => {
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.replacesTurn = 1
+    f.request.workspace = { ...f.request.workspace, expectedBranchSha: null }
+    const rollback = vi.fn(async () => {})
+    f.deps.contentRollback = { rollback }
+    vi.mocked(f.driver.command).mockImplementation(() => {
+      throw badRequest('Synthetic driver refuses this turn input')
+    })
+    await expect(f.run()).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(f.assignments.rows.size).toBe(0)
+    expect(f.credentials.issue).not.toHaveBeenCalled()
+    expect(rollback).not.toHaveBeenCalled()
+    // The dry run saw stand-ins, never a credential of the turn: none was issued yet.
+    expect(JSON.stringify(vi.mocked(f.driver.prepare).mock.calls)).not.toMatch(
+      /synthetic-[a-z]+-secret/,
+    )
+  })
+
+  it('takes the stand-in credentials of its dry run from the owner of the turn key formats', async () => {
+    const f = fixture()
+    madeTurnKeys.length = 0
+    // The turn ends right after the dry run: the site is busy.
+    f.leases.acquire.mockResolvedValueOnce(null as never)
+    await expect(f.run()).rejects.toMatchObject({ code: 'SITE_BUSY' })
+    // One pair, made by llm/turn-key.ts: the supervisor spells neither format itself, so the
+    // dry run always sees what the driver will get from the turn's real credentials.
+    expect(madeTurnKeys).toHaveLength(1)
+    const [context] = vi.mocked(f.driver.prepare).mock.calls[0]!
+    expect({ llmApiKey: context.llm.apiKey, mcpToken: context.mcp.token }).toEqual(madeTurnKeys[0])
+  })
+
+  it.each([
+    ['codex', createCodexDriver({ image }), 'openai-chatgpt', 'medium', 'turbo'],
+    ['kimi', createKimiDriver({ image }), 'kimi-code', 'high', 'medium'],
+  ] as const)(
+    'refuses a reasoning profile the real %s driver cannot launch before the lease',
+    async (driverId, driver, backend, known, unknown) => {
+      const f = fixture()
+      f.deps.driver = driver
+      const policy = { ...testTurnCredentialPolicy, driverId, backend }
+      const run = (reasoningEffort: string | null) =>
+        new TurnSupervisor(f.deps).run(withoutTurnCredentials(f.request), {
+          ...policy,
+          reasoningEffort,
+        })
+      // The provider default (null) is a profile neither CLI is launched with.
+      for (const effort of [null, unknown])
+        await expect(run(effort)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+      expect(f.leases.acquire).not.toHaveBeenCalled()
+      expect(f.credentials.issue).not.toHaveBeenCalled()
+      // A profile of this driver passes the same dry run and reaches the lease.
+      f.leases.acquire.mockResolvedValueOnce(null as never)
+      await expect(run(known)).rejects.toMatchObject({ code: 'SITE_BUSY' })
+    },
+  )
+
   it('snapshots the candidate before destroying the container and publishing', async () => {
     const f = fixture()
     const finished = await f.run()
     expect(finished.result).toEqual(result)
     expect(f.order).toEqual([
+      // The dry run before the lease, then the run of the turn with its credentials.
+      'prepare',
       'bundle',
       'prepare',
       'create',
@@ -736,8 +1026,8 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.publication.publish).not.toHaveBeenCalled()
   })
 
-  it('restores turn n−1 through presigned GETs before installing the new turn secrets', async () => {
-    const f = fixture()
+  /** The committed checkpoint of turn 1, whose candidate is the fixture's base commit. */
+  async function checkpointOfTurnOne(f: Fixture) {
     const memory = memoryStorage()
     const transit = memoryTransit()
     const service = new SnapshotService(memory.storage, transit.secrets)
@@ -767,9 +1057,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       service.restoreSource(reference, ttlMs),
     )
     f.transfer.get.mockImplementation(memory.transfer.get)
-    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
-    f.request.context = { ...f.request.context, turn: 2 }
-    f.request.previous = {
+    const reference: SnapshotReference = {
       workspaceId: labels.workspaceId,
       sessionId: labels.sessionId,
       turn: 1,
@@ -777,6 +1065,15 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       driver: { id: 'codex', version: '1.0.0' },
       home,
     }
+    return { prior, transit, reference }
+  }
+
+  it('restores turn n−1 through presigned GETs before installing the new turn secrets', async () => {
+    const f = fixture()
+    const { prior, transit, reference } = await checkpointOfTurnOne(f)
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = reference
     await f.run()
     expect(f.transport.restore).toHaveBeenCalledWith(f.sandbox, home, {
       home: Buffer.from(prior.home),
@@ -798,6 +1095,31 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     )
     // The data key reached the sandbox side only to open the parts, and was zeroed there.
     expect(transit.secrets.transitDecryptDataKey).toHaveBeenCalledOnce()
+    expect(transit.allZeroed()).toBe(true)
+  })
+
+  it('restores the checkpoint the replaced turn started from, older than turn n−1', async () => {
+    const f = fixture()
+    const { prior, transit, reference } = await checkpointOfTurnOne(f)
+    // Turn 2 continued turn 1 and failed: turn 3 replaces it and starts where turn 2 started.
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 3 } }
+    f.request.context = { ...f.request.context, turn: 3 }
+    f.request.replacesTurn = 2
+    f.request.workspace = { ...f.request.workspace, expectedBranchSha: baseSha }
+    f.request.previous = reference
+    const rollback = vi.fn(async () => {})
+    f.deps.contentRollback = { rollback }
+    await f.run()
+    expect(rollback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ turn: 2 }))
+    expect(f.transport.restore).toHaveBeenCalledWith(f.sandbox, home, {
+      home: Buffer.from(prior.home),
+      untracked: Buffer.from(prior.untracked),
+      patch: Buffer.from(prior.patch),
+    })
+    expect(f.driver.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ nativeSessionId: 'prior-native' }),
+    )
+    expect(f.evidence.at(-1)?.phase).toBe('completed')
     expect(transit.allZeroed()).toBe(true)
   })
 
@@ -944,10 +1266,13 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     const f = fixture()
     const cancellation = new AbortController()
     const prepare = vi.mocked(f.driver.prepare).getMockImplementation()!
-    vi.mocked(f.driver.prepare).mockImplementation(async (context) => {
-      cancellation.abort()
-      return prepare(context)
-    })
+    vi.mocked(f.driver.prepare)
+      // The dry run before the lease.
+      .mockImplementationOnce(prepare)
+      .mockImplementationOnce(async (context) => {
+        cancellation.abort()
+        return prepare(context)
+      })
     await expect(f.run(cancellation.signal)).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
     expect(f.sandboxes.create).not.toHaveBeenCalled()
     expect(f.leases.release).toHaveBeenCalledOnce()
@@ -1059,11 +1384,12 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.sandboxes.create).not.toHaveBeenCalled()
   })
 
-  it('rejects a turn credential in the container env before the lease: docker inspect shows it', async () => {
+  it('rejects an issued turn credential in container env before creating the container', async () => {
     const f = fixture()
     f.request.sandbox.env = { AGENT_FLAGS: `--auth=${f.request.context.mcp.token}` }
     await expect(f.run()).rejects.toThrow('env contains a turn credential')
-    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(f.credentials.revoke).toHaveBeenCalledOnce()
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
   })
 
   it('requires the previous checkpoint for every resumed turn', async () => {
@@ -1475,7 +1801,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       expect(f.sandbox.fs.write).not.toHaveBeenCalled()
       expect(f.sandbox.exec).not.toHaveBeenCalled()
       expect(f.driver.sessionState).not.toHaveBeenCalled()
-      expect(f.leases.release).toHaveBeenCalledOnce()
+      expectSiteFree(f)
     },
   )
 
@@ -1488,7 +1814,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     await expect(f.run()).rejects.toMatchObject({ code: 'DRIVER_PREPARE_INVALID' })
     expect(f.sandbox.fs.write).not.toHaveBeenCalled()
     expect(f.sandbox.exec).not.toHaveBeenCalled()
-    expect(f.leases.release).toHaveBeenCalledOnce()
+    expectSiteFree(f)
   })
 
   it('releases the site without saving when the captured work holds a turn credential', async () => {
@@ -1546,8 +1872,51 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
         '\n' +
         'x'.repeat(256 * 1024 + 1),
     )
-    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_OUTPUT_TOO_LARGE' })
+    // The line is skipped, and what is left in its place is the last message: no result.
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
     expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
+  it('goes on after an over-long line in the middle of the output', async () => {
+    const f = fixture()
+    const [started, ...rest] = nativeEvents.map((event) => JSON.stringify(event))
+    f.stdout([started, 'x'.repeat(1024 * 1024), ...rest].join('\n') + '\n')
+    await expect(f.run()).resolves.toMatchObject({ result })
+    expect(f.evidence.at(-1)?.phase).toBe('completed')
+  })
+
+  it('accepts a result its agent wrapped in a sentence and a code fence', async () => {
+    const f = fixture()
+    const wrapped = 'Готово, итог:\n```json\n' + JSON.stringify(result) + '\n```\nПишите, если что.'
+    f.stdout(
+      [nativeEvents[0], { type: 'message', text: wrapped }, nativeEvents[2]]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
+    )
+    await expect(f.run()).resolves.toMatchObject({ result })
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'completed', result })
+  })
+
+  it('ends a turn whose result fails its schema as rejected output, naming nothing the agent wrote', async () => {
+    const f = fixture()
+    const invalid = { ...result, risk: 'agent-chosen-risk', 'agent-chosen-key': true }
+    f.stdout(
+      [nativeEvents[0], { type: 'message', text: JSON.stringify(invalid) }, nativeEvents[2]]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
+    )
+    const error = await f.run().then(
+      () => undefined,
+      (reason: unknown) => reason,
+    )
+    // «Не удалось принять результат работы агента»: the agent's output, not a platform fault.
+    expect(error).toMatchObject({ code: 'TURN_OUTPUT_REJECTED', httpStatus: 502 })
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toMatch(/agent-chosen/)
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.sandbox.destroy).toHaveBeenCalledOnce()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'run_failed' })
   })
 
   it.each([
@@ -1576,7 +1945,10 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     [
       'an LLM key above the size of a secret',
       (f: ReturnType<typeof fixture>) => {
-        f.request.context.llm.apiKey = 'k'.repeat(preparedRunLimits.secretChars + 1)
+        vi.mocked(f.credentials.issue).mockResolvedValueOnce({
+          llmApiKey: 'k'.repeat(preparedRunLimits.secretChars + 1),
+          mcpToken: f.request.context.mcp.token,
+        })
       },
       'credential is too long',
     ],
@@ -1589,7 +1961,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     })
     expect(f.sandboxes.create).not.toHaveBeenCalled()
     expect(f.sandbox.fs.write).not.toHaveBeenCalled()
-    expect(f.leases.release).toHaveBeenCalledOnce()
+    expectSiteFree(f)
   })
 
   it('does not write prepared files outside allowed roots', async () => {
@@ -1599,10 +1971,10 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       code: 'DRIVER_PREPARE_INVALID',
       message: expect.stringContaining('file path'),
     })
-    // Refused in core before any container exists.
+    // Refused in core by the dry run: before the lease, and so before any container exists.
+    expect(f.leases.acquire).not.toHaveBeenCalled()
     expect(f.sandboxes.create).not.toHaveBeenCalled()
     expect(f.sandbox.exec).not.toHaveBeenCalled()
-    expect(f.leases.release).toHaveBeenCalledOnce()
   })
 
   it.each([

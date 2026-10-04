@@ -192,7 +192,8 @@ describe('CoreModule', () => {
       turnExecutor: 'runner',
       runnerApi: {
         port: 0,
-        tokens: parseRunnerTokens(`sandbox-1:${hashRunnerToken(token)}`).hashes,
+        // As loadConfig demands with this executor: the runner's one address.
+        tokens: parseRunnerTokens(`sandbox-1:${hashRunnerToken(token)}@127.0.0.1`).hashes,
       },
     })
     expect(core.get<TurnExecutor>(TURN_EXECUTOR).kind).toBe('runner')

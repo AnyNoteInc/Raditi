@@ -1,11 +1,31 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseRunnerTokens } from './runner-tokens.ts'
+import { parseRunnerTokens, runnerCredentialAddress } from './runner-tokens.ts'
 
 const a = 'a'.repeat(64)
 const b = 'B'.repeat(64)
 
 describe('parseRunnerTokens', () => {
+  it('binds issuance to the same configured address across token rotation', () => {
+    const { hashes } = parseRunnerTokens(
+      `sandbox-1:${a}@10.20.0.11,sandbox-1:${b}@::ffff:10.20.0.11`,
+    )
+    expect(runnerCredentialAddress(hashes, 'sandbox-1')).toBe('10.20.0.11')
+  })
+
+  it('refuses absent, unbound and inconsistent VM addresses without echoing identity', () => {
+    for (const raw of [
+      '',
+      `sandbox-1:${a}`,
+      `sandbox-1:${a}@10.20.0.11,sandbox-1:${b}`,
+      `sandbox-1:${a}@10.20.0.11,sandbox-1:${b}@10.20.0.12`,
+    ]) {
+      const { hashes } = parseRunnerTokens(raw)
+      expect(() => runnerCredentialAddress(hashes, 'sandbox-1')).toThrow(
+        'Runner credential source unavailable',
+      )
+    }
+  })
   it('reads id:sha256 with an optional VM address in one canonical form', () => {
     const { hashes, problems } = parseRunnerTokens(
       ` sandbox-1:${a}@10.20.0.11, sandbox-1:${b}@::ffff:10.20.0.11 ,sandbox-2:${a}@[FD00:0::12],sandbox-3:${a}`,

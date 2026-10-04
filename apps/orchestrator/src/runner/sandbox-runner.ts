@@ -557,7 +557,11 @@ export class SandboxRunner {
     }
   }
 
-  /** Turn n−1: only the three parts of the previous turn of this session. */
+  /**
+   * The checkpoint core names: only the three parts of one earlier turn of this session. A
+   * continuation restores turn n−1; a replacement restores what the turn it replaces started
+   * from, which is older (TurnRequest.replacesTurn).
+   */
   #restoreSource(
     held: Held,
     command: Command<'prepare'>,
@@ -569,7 +573,7 @@ export class SandboxRunner {
     const part = (name: SnapshotPartName): PresignedRequest => {
       if (
         manifest.sessionId !== labels.sessionId ||
-        manifest.turn !== labels.turn - 1 ||
+        manifest.turn >= labels.turn ||
         !isTurnSnapshotUrl(
           parts[name].url,
           manifest.sessionId,
@@ -580,7 +584,7 @@ export class SandboxRunner {
       )
         throw new DomainError(
           'SNAPSHOT_LOAD_FAILED',
-          'Restore source is not the previous turn',
+          'Restore source is not an earlier turn of the session',
           502,
         )
       // The URL signs its own expiry; the runner only knows an upper bound.

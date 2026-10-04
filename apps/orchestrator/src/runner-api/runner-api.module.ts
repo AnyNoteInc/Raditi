@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common'
 import type { SiteLeaseStore, TurnAssignmentStore } from '@repo/domain'
 
 import type { CoreConfig } from '../config/config.ts'
+import { runnerCredentialAddress } from '../config/runner-tokens.ts'
 import { CORE_CONFIG, SITE_LEASES, TURN_ASSIGNMENTS } from '../infra/tokens.ts'
 import { RemoteTurnExecutor } from './remote-turn-executor.ts'
 import { RunnerApiServer } from './runner-api.server.ts'
@@ -30,9 +31,18 @@ import { RunnerHub } from './runner-hub.ts'
     },
     {
       provide: RemoteTurnExecutor,
-      useFactory: (hub: RunnerHub, leases: SiteLeaseStore, assignments: TurnAssignmentStore) =>
-        new RemoteTurnExecutor(hub, leases, assignments),
-      inject: [RunnerHub, SITE_LEASES, TURN_ASSIGNMENTS],
+      useFactory: (
+        hub: RunnerHub,
+        leases: SiteLeaseStore,
+        assignments: TurnAssignmentStore,
+        config: CoreConfig,
+      ) =>
+        // loadConfig refuses at start a runner bound to no single address (TURN_EXECUTOR=runner).
+        new RemoteTurnExecutor(hub, leases, assignments, (id) => {
+          if (!config.runnerApi) throw new Error('Runner credential source unavailable')
+          return runnerCredentialAddress(config.runnerApi.tokens, id)
+        }),
+      inject: [RunnerHub, SITE_LEASES, TURN_ASSIGNMENTS, CORE_CONFIG],
     },
   ],
   exports: [RunnerHub, RunnerApiServer, RemoteTurnExecutor],

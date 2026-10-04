@@ -228,9 +228,31 @@ describe('LocalTurnExecutor', () => {
     ).toEqual([
       ['/agent-home/codex/config.toml', { mode: 0o600 }],
       ['/agent-home/codex/run.sh', { mode: 0o700 }],
-      [`${SANDBOX_SECRETS_DIR}/llm`, { mode: 0o600 }],
+      // A secret nobody asked to rewrite is read-only even for the agent's own uid.
+      [`${SANDBOX_SECRETS_DIR}/llm`, { mode: 0o400 }],
     ])
     expect(f.transit.allZeroed()).toBe(true)
+  })
+
+  it('writes a secret with the mode its driver asks for, never open beyond its owner', async () => {
+    const f = await fixture()
+    const input = f.input()
+    input.prepared.secrets = [
+      { path: `${SANDBOX_SECRETS_DIR}/llm`, content: credentials[0]!, mode: 0o400 },
+      { path: `${SANDBOX_SECRETS_DIR}/refreshed`, content: 'synthetic-refresh', mode: 0o600 },
+      { path: `${SANDBOX_SECRETS_DIR}/wide`, content: 'synthetic-wide', mode: 0o755 },
+    ]
+    await f.executor.prepare(input, f.signal)
+    expect(
+      vi
+        .mocked(f.sandbox.fs.write)
+        .mock.calls.filter(([path]) => path.startsWith(SANDBOX_SECRETS_DIR))
+        .map(([path, , options]) => [path, options]),
+    ).toEqual([
+      [`${SANDBOX_SECRETS_DIR}/llm`, { mode: 0o400 }],
+      [`${SANDBOX_SECRETS_DIR}/refreshed`, { mode: 0o600 }],
+      [`${SANDBOX_SECRETS_DIR}/wide`, { mode: 0o600 }],
+    ])
   })
 
   it.each([

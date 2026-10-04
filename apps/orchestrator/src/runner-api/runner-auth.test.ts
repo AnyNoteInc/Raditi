@@ -109,13 +109,16 @@ describe('scripts/runner-token.mjs', { timeout: 30_000 }, () => {
     )
     expect(await readFile(file, 'utf8')).toBe(value)
 
-    // The printed entry is what core needs: RUNNER_TOKENS takes it as is.
+    // The parser and the authenticator take the printed entry as is. loadConfig does not: with
+    // TURN_EXECUTOR=runner a turn key is bound to its runner's address, so every entry needs
+    // `@<IP>` (locally @127.0.0.1). The entry names no address, and the script says so.
     const { hashes } = parseRunnerTokens(issued.stdout.trim())
     expect(new RunnerAuthenticator(hashes, { warn: vi.fn() }).authenticate(bearer(value), vm)).toBe(
       'sandbox-1',
     )
-    // Outside production only: the entry names no address, and the script says so.
     expect(issued.stderr).toMatch(/--ip/)
+    expect(issued.stderr).toMatch(/@127\.0\.0\.1/)
+    expect(issued.stderr).not.toMatch(/accepted/)
   })
 
   it('prints the production entry bound to the private address of the VM', async () => {
