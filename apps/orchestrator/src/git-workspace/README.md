@@ -1,11 +1,27 @@
 # Проверка доверенной публикации P2
 
 `GitWorkspaceService` получает репозиторий и короткие credentials через `GitProvider`.
-Реализация HTTP API провайдеров остаётся в P8. Production transport разрешает только HTTPS
+Для Gitea два нужных ходу метода (`getRepository`, `issueCredentials`) реализованы в N4, остальные
+методы и другие провайдеры остаются в P8. Production transport разрешает только HTTPS
 origins из конфигурации; local transport доступен явно и только при `NODE_ENV=test`.
 Credentials живут 5–125 секунд, передаются Git через `--config-env`, не попадают в URL,
 аргументы с их значениями, конфигурацию клона, bundle или песочницу. Исходный клон делается
 без checkout, хуков, сабмодулей, внешних credential helpers и перенаправлений HTTP.
+
+Свой CA сервера git задаёт `transport.caFile` (`GIT_CA_FILE`): абсолютный путь к существующему
+файлу проверяется в конструкторе и передаётся Git как `GIT_SSL_CAINFO`. Это ещё один доверенный
+CA, а не замена: в образе orchestrator (Debian, libcurl-gnutls) системный набор CA остаётся
+доверенным. Проверка сертификата не отключается. `readBranchHead({ repo, branch })` читает голову
+ветки одним `ls-remote` с доступом на чтение, без клона; отсутствующая ветка — `null`.
+`GitWorkspaceModule` даёт `GIT_PROVIDER` и `GitWorkspaceService` из `CoreConfig.git`; пока git
+не настроен (нет `GITEA_URL` либо адрес `http:` вне production), оба — `null`.
+`GitCredentialRuntime` того же модуля при старте `core` просит провайдера удалить просроченные
+доступы прошлых процессов (`sweepCredentials`, не ждёт ответа, при `background: false` не
+вызывается), а при остановке — удалить доступы, выданные этим процессом (`revokeCredentials`,
+в `onApplicationShutdown`). Сбой любого из двух — строка `warn` без текста ошибки; старту и
+остановке он не мешает.
+Настоящую Gitea 1.27.3 по HTTPS проверяет `pnpm verify:gitea`
+([стенд](../../../../infra/dev/gitea-verify/README.md), [отчёт](../../../../docs/plan/32-gitea-turn-git.md)).
 
 Патч применяется к доверенному `expectedBaseSha`. Отдельно проверяются numstat, summary,
 итоговый index, CI/CMS-пути и типы файлов. Повторные пути и copy/rename headers запрещены;
@@ -79,4 +95,5 @@ node apps/orchestrator/scripts/verify-publication.mjs
 
 Проверено на macOS arm64: архив SHA-256 `b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5`,
 распакованный бинарник SHA-256 `ba52fb1bfabbcde42f032afad3d6e0b19dff8ed105229a16e7caa338bbc0e84f`.
-Smoke не подтверждает P8 HTTPS credentials API, реальный push в Gitea или Linux/runsc networking.
+Этот smoke не подтверждает HTTPS credentials API, реальный push в Gitea (их проверяет
+`pnpm verify:gitea`) или Linux/runsc networking.

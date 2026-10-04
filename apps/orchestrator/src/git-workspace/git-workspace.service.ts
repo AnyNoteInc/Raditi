@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { statSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
@@ -34,6 +35,7 @@ import {
   type TurnWorkspace,
   withTimeout,
 } from '@repo/domain'
+import { z } from 'zod'
 
 import { emptyUntrackedArchive, untrackedFiles } from './archive.ts'
 import { BASE_BUNDLE_REF } from './base-bundle.ts'
@@ -43,7 +45,17 @@ import { CLONE_PREFIX } from './stale-clones.ts'
 
 export interface GitWorkspaceOptions {
   transport:
-    { kind: 'https'; allowedOrigins: readonly string[] } | { kind: 'local-test'; root: string }
+    | {
+        kind: 'https'
+        allowedOrigins: readonly string[]
+        /**
+         * Absolute path of a PEM bundle git also trusts (GIT_SSL_CAINFO): the CA of our own
+         * Gitea. It adds trust and removes none: with the libcurl of the orchestrator image the
+         * system store stays trusted. HTTPS and certificate checks stay on either way.
+         */
+        caFile?: string
+      }
+    | { kind: 'local-test'; root: string }
   gitleaksBinary?: string
 }
 
@@ -74,6 +86,17 @@ const SCAN_PREFIX = Buffer.from('GIF89a\n')
 export const scanCopy = (blob: Buffer): Buffer => Buffer.concat([SCAN_PREFIX, blob])
 const failed = () =>
   new DomainError('GIT_OPERATION_FAILED', 'Trusted repository operation failed', 502)
+/** Any branch of the site, not only `agent/<taskId>`: the default branch is read too. */
+const branchHeadSchema = z
+  .object({
+    repo: publicationSourceSchema.shape.repo,
+    branch: z
+      .string()
+      .max(200)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/)
+      .refine((value) => !/\.\.|\/\/|\/$|\.$|\.lock$/.test(value)),
+  })
+  .strict()
 type Refusal = (message: string) => Error
 /** Who answers for a listed entry or blob that cannot be published. */
 interface Scope {
@@ -147,6 +170,41 @@ export class GitWorkspaceService implements TurnWorkspace {
       })
     )
       throw badRequest('Invalid repository origin allowlist')
+    if (options.transport.kind === 'https' && options.transport.caFile !== undefined) {
+      const { caFile } = options.transport
+      let regular = false
+      try {
+        regular = typeof caFile === 'string' && isAbsolute(caFile) && statSync(caFile).isFile()
+      } catch {
+        // A missing file fails here, at start, and not inside the first turn's clone.
+      }
+      if (!regular) throw badRequest('Repository CA file must be an absolute path of a file')
+    }
+  }
+
+  /**
+   * The commit a branch of the site points at, or null when the branch does not exist: read
+   * with a short read-only credential and without a clone. The planner takes a turn's
+   * `expectedBaseSha` from it.
+   */
+  async readBranchHead(input: { repo: RepoRef; branch: string }): Promise<string | null> {
+    const parsed = branchHeadSchema.safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid repository branch')
+    const { repo, branch } = parsed.data
+    const url = await this.repositoryUrl(repo)
+    const root = await mkdtemp(join(tmpdir(), CLONE_PREFIX))
+    // No clone: ls-remote runs in the empty private directory.
+    const workspace = { root, repo: root, url, ref: repo }
+    try {
+      const auth = await this.auth(repo, 'read')
+      return (await this.remoteHead(workspace, `refs/heads/${branch}`, auth)) || null
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
   }
 
   /** A trusted bundle carries objects and one ref, with no remote credentials, config or hooks. */
@@ -362,13 +420,13 @@ export class GitWorkspaceService implements TurnWorkspace {
     return result.data
   }
 
-  private async clone(input: PublicationSource): Promise<Workspace> {
-    const source = this.source(input)
+  /** The checked address of exactly the repository that was asked for. */
+  private async repositoryUrl(repo: RepoRef): Promise<string> {
     let info
     try {
       // A late answer is discarded: nothing from it is used or cached.
       info = await withTimeout(
-        this.provider.getRepository(source.repo),
+        this.provider.getRepository(repo),
         publicationLimits.commandMs,
         'Repository lookup timed out',
       )
@@ -377,12 +435,17 @@ export class GitWorkspaceService implements TurnWorkspace {
     }
     if (!info) throw notFound('Repository does not exist')
     if (
-      info.ref.provider !== source.repo.provider ||
-      info.ref.owner !== source.repo.owner ||
-      info.ref.name !== source.repo.name
+      info.ref.provider !== repo.provider ||
+      info.ref.owner !== repo.owner ||
+      info.ref.name !== repo.name
     )
       throw forbidden('Repository scope mismatch')
-    const url = await this.cloneUrl(info.cloneUrl)
+    return this.cloneUrl(info.cloneUrl)
+  }
+
+  private async clone(input: PublicationSource): Promise<Workspace> {
+    const source = this.source(input)
+    const url = await this.repositoryUrl(source.repo)
     const root = await mkdtemp(join(tmpdir(), CLONE_PREFIX))
     const workspace = { root, repo: join(root, 'repo'), url, ref: source.repo }
     try {
@@ -494,7 +557,12 @@ export class GitWorkspaceService implements TurnWorkspace {
   }
 
   private environment(workspace: Workspace): NodeJS.ProcessEnv {
+    const { transport } = this.options
     return {
+      // One more trusted CA when set; nothing here can switch certificate checks off.
+      ...(transport.kind === 'https' && transport.caFile !== undefined
+        ? { GIT_SSL_CAINFO: transport.caFile }
+        : {}),
       PATH: process.env.PATH,
       HOME: workspace.root,
       XDG_CONFIG_HOME: workspace.root,
@@ -865,19 +933,12 @@ export class GitWorkspaceService implements TurnWorkspace {
   ): Promise<void> {
     const auth = await this.auth(metadata.repo, 'write')
     const ref = `refs/heads/${metadata.branch}`
-    const existing = (
-      await this.git(workspace, ['ls-remote', '--refs', workspace.url, ref], undefined, 1024, auth)
-    ).stdout
-    const remote = text(existing).trim()
-    const match = remote ? /^([a-f0-9]{40})\t([^\n]+)$/.exec(remote) : null
-    if (remote && (!match || match[2] !== ref)) throw failed()
-    const expected = match?.[1] ?? ''
-    if (
-      expected !== headSha &&
-      expected !== metadata.expectedBaseSha &&
-      !(expected === '' && metadata.turn === 1)
-    )
-      throw conflict('Task branch changed before publication')
+    const expected = await this.remoteHead(workspace, ref, auth)
+    const permitted =
+      metadata.expectedBranchSha !== undefined
+        ? expected === (metadata.expectedBranchSha ?? '')
+        : expected === metadata.expectedBaseSha || (expected === '' && metadata.turn === 1)
+    if (expected !== headSha && !permitted) throw conflict('Task branch changed before publication')
     await assertFence()
     if (expected === headSha) return
     await this.git(
@@ -893,6 +954,21 @@ export class GitWorkspaceService implements TurnWorkspace {
       16 * 1024,
       auth,
     )
+  }
+
+  /** The commit a remote ref points at; empty when the ref does not exist. */
+  private async remoteHead(
+    workspace: Workspace,
+    ref: string,
+    auth: NodeJS.ProcessEnv,
+  ): Promise<string> {
+    const existing = (
+      await this.git(workspace, ['ls-remote', '--refs', workspace.url, ref], undefined, 1024, auth)
+    ).stdout
+    const remote = text(existing).trim()
+    const match = remote ? /^([a-f0-9]{40})\t([^\n]+)$/.exec(remote) : null
+    if (remote && (!match || match[2] !== ref)) throw failed()
+    return match?.[1] ?? ''
   }
 
   private async dispose(workspace: Workspace): Promise<void> {

@@ -492,6 +492,76 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
     })
   })
 
+  it('publishes a replacement from its original base against the pinned previous task head', async () => {
+    const f = await fixture()
+    const first = await f.prepare(
+      Buffer.alloc(0),
+      await archive([{ name: 'first.txt', content: 'old proposal' }]),
+    )
+    await first.publish(async () => {})
+    const second = await f.prepare(
+      Buffer.alloc(0),
+      await archive([{ name: 'second.txt', content: 'new proposal' }]),
+      {
+        turn: 2,
+        expectedBranchSha: first.headSha,
+      },
+    )
+    expect(second.baseSha).toBe(f.baseSha)
+    await second.publish(async () => {})
+    expect((await git(f.remote, 'rev-parse', 'agent/task1')).toString().trim()).toBe(second.headSha)
+    expect(
+      (await git(f.remote, 'ls-tree', '--name-only', second.headSha)).toString(),
+    ).not.toContain('first.txt')
+    expect((await git(f.remote, 'show', `${second.headSha}:second.txt`)).toString()).toBe(
+      'new proposal',
+    )
+    await second.publish(async () => {})
+  })
+
+  it('allows a proven absent replacement branch and refuses an unexpected reset to its base', async () => {
+    const f = await fixture()
+    const first = await f.prepare(
+      Buffer.alloc(0),
+      await archive([{ name: 'first.txt', content: 'retry' }]),
+      {
+        turn: 2,
+        expectedBranchSha: null,
+      },
+    )
+    await first.publish(async () => {})
+    const second = await f.prepare(
+      Buffer.alloc(0),
+      await archive([{ name: 'second.txt', content: 'replacement' }]),
+      {
+        turn: 3,
+        expectedBranchSha: first.headSha,
+      },
+    )
+    await git(f.remote, 'update-ref', 'refs/heads/agent/task1', f.baseSha)
+    await expect(second.publish(async () => {})).rejects.toThrow('Task branch changed')
+    expect((await git(f.remote, 'rev-parse', 'agent/task1')).toString().trim()).toBe(f.baseSha)
+  })
+
+  it('keeps compare-and-swap when a pinned replacement branch changes during its final fence', async () => {
+    const f = await fixture()
+    const first = await f.prepare(
+      Buffer.alloc(0),
+      await archive([{ name: 'first.txt', content: 'old' }]),
+    )
+    await first.publish(async () => {})
+    const replacement = await f.prepare(Buffer.alloc(0), emptyUntrackedArchive(), {
+      turn: 2,
+      expectedBranchSha: first.headSha,
+    })
+    await expect(
+      replacement.publish(async () => {
+        await git(f.remote, 'update-ref', 'refs/heads/agent/task1', f.baseSha)
+      }),
+    ).rejects.toThrow('Trusted repository operation failed')
+    expect((await git(f.remote, 'rev-parse', 'agent/task1')).toString().trim()).toBe(f.baseSha)
+  })
+
   it('checks fencing immediately before push and never changes a branch after lost ownership', async () => {
     const f = await fixture()
     const candidate = await f.prepare(
@@ -810,6 +880,71 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
     )
   })
 
+  it('reads the head of a branch: the base of a first turn and the head of a published task', async () => {
+    const f = await fixture()
+    const cwds: string[] = []
+    vi.mocked(runProcess).mockImplementation((binary, argv, options) => {
+      cwds.push(options.cwd)
+      return realRunProcess(binary, argv, options)
+    })
+    await expect(f.service.readBranchHead({ repo: f.repo, branch: 'main' })).resolves.toBe(
+      f.baseSha,
+    )
+    await expect(
+      f.service.readBranchHead({ repo: f.repo, branch: 'agent/task1' }),
+    ).resolves.toBeNull()
+    // One ls-remote per read, in a private directory that is gone afterwards.
+    expect(cwds).toHaveLength(2)
+    for (const cwd of cwds) await expect(readFile(cwd)).rejects.toMatchObject({ code: 'ENOENT' })
+    vi.mocked(runProcess).mockImplementation(realRunProcess)
+
+    await writeFile(join(f.work, 'index.php'), 'updated\n')
+    const candidate = await f.prepare(await f.patch())
+    await candidate.publish(async () => {})
+    await expect(f.service.readBranchHead({ repo: f.repo, branch: 'agent/task1' })).resolves.toBe(
+      candidate.headSha,
+    )
+    expect(f.provider.issueCredentials).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '',
+    '-main',
+    'main --upload-pack=x',
+    'a..b',
+    'a//b',
+    'main/',
+    'main.lock',
+    'refs/heads/main\n',
+    'x'.repeat(201),
+  ])('refuses the branch name %j before looking the repository up', async (branch) => {
+    const f = await fixture()
+    await expect(f.service.readBranchHead({ repo: f.repo, branch })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+    await expect(
+      f.service.readBranchHead({ repo: { ...f.repo, provider: 'github' }, branch: 'main' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(f.provider.getRepository).not.toHaveBeenCalled()
+  })
+
+  it('refuses to read a branch of another repository than the one it asked for', async () => {
+    const f = await fixture()
+    vi.mocked(f.provider.getRepository).mockResolvedValueOnce({
+      ref: { ...f.repo, name: 'other' },
+      cloneUrl: f.remote,
+      defaultBranch: 'main',
+      private: true,
+    })
+    await expect(f.service.readBranchHead({ repo: f.repo, branch: 'main' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    })
+    vi.mocked(f.provider.getRepository).mockResolvedValueOnce(null)
+    await expect(f.service.readBranchHead({ repo: f.repo, branch: 'main' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+  })
+
   it('transfers a credential-free trusted bundle through exec stdin into a fresh sandbox', async () => {
     const f = await fixture()
     const calls: { argv: readonly string[]; stdin: Buffer }[] = []
@@ -953,6 +1088,99 @@ describe('production boundaries', { timeout: 30_000 }, () => {
       }
     },
   )
+
+  it('hands the configured CA file to git and leaves certificate checks on', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'raditi-publication-test-'))
+    roots.push(root)
+    const caFile = join(root, 'ca.pem')
+    await writeFile(caFile, 'synthetic CA placeholder\n')
+    const seen: { argv: string[]; env: NodeJS.ProcessEnv }[] = []
+    vi.mocked(runProcess).mockImplementation(async (_binary, argv, options) => {
+      seen.push({ argv, env: options.env })
+      return { code: 1, stdout: Buffer.alloc(0) }
+    })
+    const origin = { allowedOrigins: ['https://git.example.test'] }
+    for (const transport of [
+      { kind: 'https' as const, ...origin, caFile },
+      { kind: 'https' as const, ...origin },
+    ]) {
+      const p = provider('https://git.example.test/repo', new Date(Date.now() + 60_000))
+      const service = new GitWorkspaceService(p, { transport })
+      await expect(service.buildBaseBundle(source)).rejects.toMatchObject({
+        code: 'GIT_OPERATION_FAILED',
+      })
+    }
+    expect(seen).toHaveLength(2)
+    expect(seen[0]!.argv).toContain('clone')
+    expect(seen[0]!.env.GIT_SSL_CAINFO).toBe(caFile)
+    expect('GIT_SSL_CAINFO' in seen[1]!.env).toBe(false)
+    for (const { argv, env } of seen) {
+      expect(Object.keys(env).filter((name) => /SSL_NO_VERIFY|CAPATH|PROXY/i.test(name))).toEqual(
+        [],
+      )
+      expect(argv.filter((arg) => /sslVerify|sslCAInfo|proxy/i.test(arg))).toEqual([])
+    }
+  })
+
+  it.each(['ca.pem', './ca.pem', '', '/nonexistent/raditi/ca.pem', tmpdir()])(
+    'refuses the CA file %j at construction',
+    (caFile) => {
+      expect(
+        () =>
+          new GitWorkspaceService({} as GitProvider, {
+            transport: { kind: 'https', allowedOrigins: ['https://git.example.test'], caFile },
+          }),
+      ).toThrow('CA file')
+    },
+  )
+
+  it('reads a branch head over https with a short read-only credential', async () => {
+    const seen: { argv: string[]; env: NodeJS.ProcessEnv }[] = []
+    const head = 'b'.repeat(40)
+    vi.mocked(runProcess).mockImplementation(async (_binary, argv, options) => {
+      seen.push({ argv, env: options.env })
+      return { code: 0, stdout: Buffer.from(`${head}\trefs/heads/main\n`) }
+    })
+    const p = provider('https://git.example.test/owner/repo.git', new Date(Date.now() + 60_000))
+    const service = new GitWorkspaceService(p, {
+      transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
+    })
+    await expect(service.readBranchHead({ repo: ref, branch: 'main' })).resolves.toBe(head)
+    expect(p.issueCredentials).toHaveBeenCalledExactlyOnceWith(ref, 'read', 120)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.argv.slice(-4)).toEqual([
+      'ls-remote',
+      '--refs',
+      'https://git.example.test/owner/repo.git',
+      'refs/heads/main',
+    ])
+    // The credential travels in the environment, never in the arguments or the URL.
+    expect(seen[0]!.argv).toContain('--config-env=http.extraHeader=RADITI_GIT_AUTH')
+    expect(seen[0]!.env.RADITI_GIT_AUTH).toBe(
+      `Authorization: Basic ${Buffer.from('bot:synthetic-grant').toString('base64')}`,
+    )
+    expect(seen[0]!.argv.join(' ')).not.toContain('synthetic-grant')
+  })
+
+  it('fails closed when the remote answers a branch read with anything but one ref', async () => {
+    const p = provider('https://git.example.test/owner/repo.git', new Date(Date.now() + 60_000))
+    const service = new GitWorkspaceService(p, {
+      transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
+    })
+    for (const stdout of [
+      `${'b'.repeat(40)}\trefs/heads/other\n`,
+      `${'b'.repeat(40)}\trefs/heads/main\n${'c'.repeat(40)}\trefs/heads/x/refs/heads/main\n`,
+      'not a ref line\n',
+    ]) {
+      vi.mocked(runProcess).mockImplementation(async () => ({
+        code: 0,
+        stdout: Buffer.from(stdout),
+      }))
+      await expect(service.readBranchHead({ repo: ref, branch: 'main' })).rejects.toMatchObject({
+        code: 'GIT_OPERATION_FAILED',
+      })
+    }
+  })
 
   it('refuses local transport outside test mode', () => {
     const previous = process.env.NODE_ENV

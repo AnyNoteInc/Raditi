@@ -3,7 +3,11 @@ import { z } from 'zod'
 export const gitProviderConfigSchema = z.object({
   /** API root: GITEA_URL for Gitea, https://api.github.com, https://gitlab.com. */
   baseUrl: z.url({ protocol: /^https?$/ }),
-  /** Bot token, read from Vault in production (CLAUDE.md rule 2). TODO(P8): require it. */
+  /**
+   * Bot token, read from Vault in production (CLAUDE.md rule 2). Webhook parsing needs none;
+   * the Gitea API refuses to run without one or over plain http (gitea-client.ts).
+   * TODO(P8): require it for GitHub and GitLab with their API clients.
+   */
   token: z.string(),
 })
 export type GitProviderConfig = z.infer<typeof gitProviderConfigSchema>
