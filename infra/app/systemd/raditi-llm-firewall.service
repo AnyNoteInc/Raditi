@@ -1,0 +1,22 @@
+# /etc/systemd/system/raditi-llm-firewall.service. Install together with docker-llm.conf.
+# The policy uses interface names, so the bridges and dockerd need not exist yet.
+[Unit]
+Description=Raditi llm network boundary
+Before=docker.service
+After=local-fs.target nftables.service
+# nftables.service flushes the whole ruleset on reload, restart and stop: reapply after the
+# first two, and go down with the third instead of staying "active" without a table.
+PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Host-installed helper outlives application releases, including a rollback to pre-llm code.
+ExecStart=/usr/bin/node /usr/local/lib/raditi/llm-firewall.mjs apply --env-file /opt/raditi/app/.env
+ExecReload=/usr/bin/node /usr/local/lib/raditi/llm-firewall.mjs apply --env-file /opt/raditi/app/.env
+# No ExecStop: stopping the profile/service must not expose restartable containers.
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

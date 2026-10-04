@@ -5,6 +5,7 @@ services:
   traefik: { logging: { driver: local } }
   web: { logging: { driver: local } }
   core: { logging: { driver: local } }
+  llm: { logging: { driver: local } }
   migrate: { logging: { driver: local } }
   seed: { logging: { driver: local } }
   postgres: { logging: { driver: local } }

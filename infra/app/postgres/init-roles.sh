@@ -1,39 +1,64 @@
 #!/bin/sh
-# Roles of the platform database (spec §15). The image's superuser runs only this script; the
-# schema belongs to raditi (migrate, seed); web and core get DML through raditi_app, except on
-# the migration history. Idempotent: run it again after the first migration and after a password
-# rotation (README.md). superuser-password serves the first initdb
-# only: the script drops it, so the superuser has the socket and nothing over the network.
+# One application login, raditi, owns the database and schema (spec §15).
+# Run again after changing postgres/password or upgrading an older role layout.
+# superuser-password serves the first initdb only; postgres keeps socket access
+# for maintenance and has no password for network connections.
 set -eu
+[ -r /run/raditi/password ] && [ -s /run/raditi/password ] || {
+  echo 'PostgreSQL bootstrap: /run/raditi/password is missing, unreadable or empty' >&2
+  exit 1
+}
 psql -v ON_ERROR_STOP=1 --username postgres --dbname raditi <<'SQL'
-\set owner_pw `cat /run/raditi/owner-password`
-\set web_pw `cat /run/raditi/web-password`
-\set core_pw `cat /run/raditi/core-password`
-SELECT 'CREATE ROLE raditi LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE'
+\set app_pw `cat /run/raditi/password`
+BEGIN;
+SELECT 'CREATE ROLE raditi LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
   WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'raditi') \gexec
-SELECT 'CREATE ROLE raditi_app NOLOGIN'
-  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'raditi_app') \gexec
-SELECT 'CREATE ROLE raditi_web LOGIN IN ROLE raditi_app'
-  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'raditi_web') \gexec
-SELECT 'CREATE ROLE raditi_core LOGIN IN ROLE raditi_app'
-  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'raditi_core') \gexec
-ALTER ROLE raditi PASSWORD :'owner_pw';
-ALTER ROLE raditi_web PASSWORD :'web_pw';
-ALTER ROLE raditi_core PASSWORD :'core_pw';
+ALTER ROLE raditi LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'app_pw';
 ALTER ROLE postgres PASSWORD NULL;
 ALTER DATABASE raditi OWNER TO raditi;
 ALTER SCHEMA public OWNER TO raditi;
 REVOKE ALL ON DATABASE raditi FROM PUBLIC;
-GRANT CONNECT ON DATABASE raditi TO raditi, raditi_app;
+GRANT CONNECT ON DATABASE raditi TO raditi;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO raditi_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE raditi IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO raditi_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE raditi IN SCHEMA public
-  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO raditi_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO raditi_app;
-GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO raditi_app;
--- After the grants, so that no run gives it back: the history decides which DDL migrate runs.
-SELECT 'REVOKE ALL ON TABLE public._prisma_migrations FROM raditi_app'
-  WHERE to_regclass('public._prisma_migrations') IS NOT NULL \gexec
+
+-- Previous releases granted table, column and default privileges to these roles.
+-- Remove only that known layout, atomically. Unexpected ownership or dependencies
+-- in another database require manual review; never delete or reassign their data.
+-- Historical migrations remain unchanged and skip grants when legacy roles are absent.
+DO $legacy_roles$
+DECLARE
+  legacy_name TEXT;
+  legacy_oid OID;
+  database_oid OID := (SELECT oid FROM pg_database WHERE datname = current_database());
+BEGIN
+  FOREACH legacy_name IN ARRAY ARRAY['raditi_web', 'raditi_core', 'raditi_llm', 'raditi_app', 'postgres_exporter']
+  LOOP
+    SELECT oid INTO legacy_oid FROM pg_roles WHERE rolname = legacy_name;
+    IF legacy_oid IS NULL THEN
+      CONTINUE;
+    END IF;
+    IF EXISTS (
+      SELECT FROM pg_shdepend
+      WHERE refclassid = 'pg_authid'::regclass AND refobjid = legacy_oid AND deptype = 'o'
+        AND classid <> 'pg_default_acl'::regclass
+    ) THEN
+      RAISE EXCEPTION 'Legacy role % owns objects; review ownership before rerunning bootstrap', legacy_name;
+    END IF;
+    IF EXISTS (
+      SELECT FROM pg_shdepend
+      WHERE refclassid = 'pg_authid'::regclass AND refobjid = legacy_oid
+        AND (
+          (dbid <> 0 AND dbid <> database_oid)
+          OR (dbid = 0 AND classid = 'pg_database'::regclass AND objid <> database_oid)
+        )
+    ) THEN
+      RAISE EXCEPTION 'Legacy role % has dependencies in another database; review them before rerunning bootstrap', legacy_name;
+    END IF;
+    -- Only grants and default ACL settings remain after the ownership guard.
+    EXECUTE format('DROP OWNED BY %I RESTRICT', legacy_name);
+    EXECUTE format('DROP ROLE %I', legacy_name);
+  END LOOP;
+END;
+$legacy_roles$;
+COMMIT;
 SQL

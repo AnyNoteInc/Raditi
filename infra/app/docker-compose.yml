@@ -2,7 +2,8 @@
 # (8083) is published only on APP_PRIVATE_IP, which the cloud security group opens to the sandbox
 # VMs' subnet only; it is plain HTTP (owner's decision of 27.09.2026). No secret lives in this file
 # or in `environment:`: each service reads its own files from ${SECRETS_DIR}/<service> (host tmpfs,
-# rendered before docker.service starts). LiteLLM (P3) and mcp (P6) join with their own networks.
+# rendered before docker.service starts). llm has its own networks and an opt-in profile;
+# mcp joins in P6. The llm firewall must be installed before dockerd starts (README.md).
 # Runbook: README.md.
 name: raditi-app
 
@@ -38,6 +39,14 @@ x-platform-env: &platform-env
   S3_BUCKET_BACKUPS: raditi-backups
   S3_BUCKET_PLATFORM: raditi-platform
   VAULT_ADDR: ${VAULT_ADDR:?Set VAULT_ADDR}
+  # Vault serves TLS from the internal CA (spec §19). Node reads this variable at process start
+  # only, never from --env-file; the CA is rendered into the service's own secret directory.
+  NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
+
+# Vault by its pinned TLS name for every service that talks to it: no resolver is involved, and
+# core writes the turn keys to the very host llm reads them from.
+x-vault-host: &vault-host
+  - vault.raditi.internal:${VAULT_PRIVATE_IP:?Set the private address of the Vault VM}
 
 x-node-health: &node-health
   interval: 10s
@@ -148,6 +157,10 @@ services:
     volumes:
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
       - acme:/acme
+    # The body limit (api-body-limit in raditi.yml) opens a temporary file to refuse a body that
+    # declares no length. It stays empty: without it the answer is 500 instead of 413.
+    tmpfs:
+      - /tmp:size=1m,uid=65532,gid=65532,mode=0700
     healthcheck:
       test:
         - CMD
@@ -177,6 +190,7 @@ services:
       BETTER_AUTH_URL: https://${APP_DOMAIN}
       HOSTNAME: 0.0.0.0
       PORT: '3000'
+    extra_hosts: *vault-host
     # No `ports:` and no network shared with core: only Traefik reaches web, so X-Forwarded-For
     # is always the single address Traefik set.
     volumes:
@@ -210,15 +224,18 @@ services:
       S3_RUNNER_ENDPOINT: ${S3_RUNNER_ENDPOINT:-}
       ORCHESTRATOR_ROLES: core
       ORCHESTRATOR_PORT: '8081'
+      # Cross the host's private published endpoint: core and llm share no container network.
+      LLM_CONTROL_URL: http://${APP_PRIVATE_IP}:${LLM_GATEWAY_PUBLISH:-8084}
       TURN_EXECUTOR: runner
       RUNNER_API_PORT: '8083'
       # SHA-256 of the VM tokens bound to the VMs' private addresses: not a secret (spec §15)
       RUNNER_TOKENS: ${RUNNER_TOKENS:?Set the runner token hashes}
-      # Agent images live in the platform registry: <prefix>-<driver>
-      SANDBOX_IMAGE_PREFIX: ${SANDBOX_IMAGE_PREFIX:?Set the agent image repository prefix}
+      # One stack image from the platform registry for every agent driver, pinned by digest
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:?Set the digest-pinned stack image}
       # Publication clones (git-workspace.service.ts) go to core's own volume, not to RAM
       TMPDIR: /work/tmp
       HOME: /work/home
+    extra_hosts: *vault-host
     ports:
       # The runner API only, only on the private address: plain HTTP to the sandbox VMs
       - '${APP_PRIVATE_IP:?Set the private address of this VM}:${RUNNER_API_PUBLISH:-8083}:8083'
@@ -238,6 +255,62 @@ services:
     mem_limit: 3g
     pids_limit: 1024
     networks: [core-data, core-egress]
+
+  llm:
+    <<: *node
+    image: ${ORCHESTRATOR_IMAGE:?Set the digest-pinned orchestrator image}
+    profiles: [llm]
+    user: '10008:10008'
+    command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
+    deploy: { replicas: 1 }
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      ORCHESTRATOR_ROLES: llm
+      VAULT_ADDR: ${VAULT_ADDR:?Set VAULT_ADDR}
+      NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
+      LLM_GATEWAY_PORT: '8084'
+      LLM_GATEWAY_LISTEN_HOST: 0.0.0.0
+      LLM_GATEWAY_CLIENTS: 127.0.0.1/32,${LLM_GATEWAY_CLIENTS:-}
+      LLM_GATEWAY_HOSTS: 127.0.0.1:8084,${APP_PRIVATE_IP}:${LLM_GATEWAY_PUBLISH:-8084}
+      LLM_MAX_REQUESTS_PER_KEY: '2'
+      # A missing IP deliberately yields an invalid origin; preflight also refuses it.
+      # The transport verifies the proxy certificate for egress-1.raditi.internal.
+      LLM_EGRESS_PROXY_URL: https://${EGRESS_PROXY_IP:-}:443
+      LLM_EGRESS_CA_FILE: /run/raditi/egress-ca.pem
+      LLM_EGRESS_CLIENT_CERT_FILE: /run/raditi/egress-client.pem
+      LLM_EGRESS_CLIENT_KEY_FILE: /run/raditi/egress-client-key.pem
+      HOME: /tmp
+    ports:
+      - '${APP_PRIVATE_IP:?Set the private address of this VM}:${LLM_GATEWAY_PUBLISH:-8084}:8084'
+    volumes:
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/llm' }
+    tmpfs:
+      - /tmp:size=64m,uid=10008,gid=10008,mode=0700
+    # Docker DNS still resolves the local postgres service, but has no external resolver.
+    dns: [127.0.0.1]
+    extra_hosts: *vault-host
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: '1'
+      net.ipv6.conf.default.disable_ipv6: '1'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:8084/health').then(r => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1))
+      <<: *node-health
+    stop_grace_period: 40s
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 512
+    networks:
+      llm-edge: {}
+      llm-data: {}
+      llm-out: { gw_priority: 1 }
 
   # Explicit deploy steps, never started by `up`: `docker compose run --rm migrate`, then `seed`.
   migrate: &migrate
@@ -297,7 +370,7 @@ services:
     cpus: 2
     mem_limit: 3g
     pids_limit: 512
-    networks: [web-data, core-data]
+    networks: [web-data, core-data, llm-data]
 
   redis:
     <<: *hardened
@@ -322,7 +395,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - REDISCLI_AUTH="$$(cat /run/raditi/health-password)" redis-cli --user health ping | grep -q PONG
+        - REDISCLI_AUTH="$$(cat /run/raditi/password)" redis-cli ping | grep -q PONG
       interval: 5s
       timeout: 5s
       retries: 20
@@ -343,6 +416,19 @@ networks:
     driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-web' }
   core-egress:
     driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-core' }
+  # Dedicated bridges are matched by the early host firewall, even before Docker creates them.
+  llm-edge:
+    internal: true
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-llmedge' }
+  llm-data:
+    internal: true
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-llmdb' }
+  llm-out:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-llmout' }
+    ipam:
+      config:
+        - subnet: ${LLM_OUT_SUBNET:-172.29.84.0/24}
+          gateway: ${LLM_OUT_GATEWAY:-172.29.84.1}
   metrics-edge: { internal: true } # Prometheus (M9) → traefik:9000 only
 
 volumes:

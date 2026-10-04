@@ -1,0 +1,71 @@
+# Disposable B14 fixtures. Logging and dependency names change on the production llm service;
+# the verifier prepares these private PostgreSQL/OpenBao/proxy fixtures before starting it.
+# This does not install the production host firewall or prove its packet filtering.
+services:
+  # Only `compose run` for the Vault wiring check: a daemon without journald cannot start it.
+  core:
+    logging: { driver: local }
+  llm:
+    logging: { driver: local }
+    depends_on: !override
+      verify-postgres: { condition: service_started }
+      verify-vault: { condition: service_started }
+      verify-egress: { condition: service_started }
+  verify-postgres:
+    image: ${POSTGRES_IMAGE}
+    environment:
+      POSTGRES_DB: raditi
+      POSTGRES_PASSWORD_FILE: /run/raditi/superuser-password
+    volumes:
+      - ${VERIFY_DIR}/postgres:/run/raditi:ro
+    tmpfs: [/var/lib/postgresql/data]
+    ports: ['127.0.0.1::5432']
+    networks: [llm-data, verify-management]
+  verify-vault:
+    image: ghcr.io/openbao/openbao:2.7.0
+    command: ['server', '-config=/verify/bao.hcl']
+    volumes:
+      - ${VERIFY_DIR}/bao.hcl:/verify/bao.hcl:ro
+      - ${VERIFY_DIR}/vault-tls:/tls:ro
+    tmpfs: [/tmp]
+    # The TLS listener stays private. The second listener is only for owned fixture setup.
+    ports: ['127.0.0.1::8201']
+    networks:
+      llm-out: { ipv4_address: '${VAULT_PRIVATE_IP}' }
+      verify-management: {}
+  verify-egress:
+    image: ${ORCHESTRATOR_IMAGE}
+    user: '10008:10008'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ['node', '/verify/llm-egress.mjs']
+    environment:
+      EGRESS_TLS_DIR: /tls
+      EGRESS_CLIENT_CN_ALLOW: b14-llm
+      # As on egress-1: the leaf of llm's client certificate is pinned, not only its CN.
+      EGRESS_CLIENT_SHA256: ${VERIFY_EGRESS_CLIENT_SHA256:?Set by the verifier}
+      EGRESS_LISTEN_PORT: '443'
+      LLM_EGRESS_ALLOW: chatgpt.com:443,auth.openai.com:443,api.kimi.ai:443
+    volumes:
+      - ${VERIFY_ROOT}/infra/egress/llm-egress.mjs:/verify/llm-egress.mjs:ro
+      - ${VERIFY_DIR}/egress-tls:/tls:ro
+    networks:
+      llm-out: { ipv4_address: '${EGRESS_PROXY_IP}' }
+  verify-core:
+    image: ${ORCHESTRATOR_IMAGE}
+    user: '10002:10002'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ['node', '-e', 'setInterval(() => {}, 60000)']
+    extra_hosts: ['host.docker.internal:host-gateway']
+    networks: [core-egress]
+networks:
+  verify-management: {}
+# `compose run core` resolves every volume of the project, and the runbook's external ones do
+# not exist here. No service of this stand mounts them.
+volumes:
+  acme: !override {}
+  pgdata: !override {}
+  redis-data: !override {}

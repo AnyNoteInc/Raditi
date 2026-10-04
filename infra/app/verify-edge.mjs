@@ -3,8 +3,9 @@
 // Let's Encrypt (verify/compose.verify.yml). Proves that Traefik gets real certificates and serves
 // web over HTTPS; that core, its port 8081 and the runner API never show through the edge or to
 // web; that the runner API is plain HTTP on the private address only, its token bound to the VM;
-// that broken settings stop web; that the database roles and the Redis ACL hold; that the dump
-// before a migration (dump-db.sh) brings the database back.
+// that broken settings stop web; that the shared database user and the Redis ACL work; that the dump
+// before a migration (dump-db.sh) brings the database back; that an oversize body sent to the API
+// stops at the edge, and at web's own smaller limits behind it.
 //
 //   pnpm verify:edge [-- --no-build] [--keep] [--renewal] [--real-address]
 //
@@ -19,7 +20,7 @@
 // The output names the checks, never a secret. The results go to docs/plan/04-edge-verification.md.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { X509Certificate, createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
   chmod,
   copyFile,
@@ -59,6 +60,8 @@ const PROJECT = 'raditi-edge-verify'
 const DOMAIN = 'raditi.test'
 const PORTS = { http: 18080, https: 18443, runner: 18083, pebble: 15000 }
 const UP_TIMEOUT_S = 180
+// Never contacted: a documentation address (RFC 5737) the pinned Vault name must resolve to.
+const VAULT_PRIVATE_IP = '192.0.2.20'
 // --real-address: a client outside the host. Docker masquerades every connection the host itself
 // opens to a published port (the source becomes the bridge gateway), so only a client in its own
 // network namespace, reaching the host over a veth pair, shows the real address.
@@ -302,6 +305,72 @@ function request(url, { method = 'GET', headers = {}, host, port, servername, ca
   })
 }
 
+/**
+ * A POST to the edge whose body goes out in pieces, as a browser uploads. The edge or web may
+ * answer before the body is over: the rest is then not sent, and a connection the server closes
+ * afterwards is not an error. An answer lost to such a close is asked for again.
+ */
+async function upload(url, { host, port, ca, headers = {}, body, chunked = false }) {
+  const target = new URL(url)
+  const once = () =>
+    new Promise((resolve, reject) => {
+      let answered = false
+      let sent = 0
+      const req = https.request(
+        {
+          host,
+          port,
+          path: target.pathname,
+          method: 'POST',
+          headers: {
+            host: target.host,
+            ...(chunked ? {} : { 'content-length': body.length }),
+            ...headers,
+          },
+          servername: target.hostname,
+          ca,
+          agent: false,
+          timeout: 30_000,
+        },
+        (response) => {
+          answered = true
+          const chunks = []
+          response.on('data', (chunk) => chunks.push(chunk))
+          response.on('end', () =>
+            resolve({
+              status: response.statusCode,
+              headers: response.headers,
+              body: Buffer.concat(chunks).toString(),
+            }),
+          )
+          response.on('error', reject)
+        },
+      )
+      req.once('timeout', () => req.destroy(new Error('request timed out')))
+      req.on('error', (error) => {
+        if (!answered) reject(error)
+      })
+      const pump = () => {
+        if (answered || req.destroyed) return
+        if (sent >= body.length) return req.end()
+        const piece = body.subarray(sent, sent + 64 * 1024)
+        sent += piece.length
+        if (req.write(piece)) setImmediate(pump)
+        else req.once('drain', pump)
+      }
+      pump()
+    })
+  let last
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await once()
+    } catch (error) {
+      last = error
+    }
+  }
+  throw last
+}
+
 /** The error code of a TCP connection attempt, or 'connected'. */
 function tcpConnect(host, port) {
   return new Promise((resolve) => {
@@ -350,16 +419,16 @@ const appEnv = (entries) =>
     .join('\n')}\n`
 
 function secrets() {
-  const pg = { superuser: hex(), owner: hex(), web: hex(), core: hex() }
-  const redis = { web: hex(), core: hex(), health: hex() }
+  const pg = { superuser: hex(), raditi: hex() }
+  const redis = { password: hex() }
   const pair = randomBytes(15).toString('base64url') // 20 characters shared by the captcha keys
   // With `#`: an unquoted value would be cut there by node --env-file, and check 3b would fail.
   const metricsToken = `${hex(16)}#${hex(16)}`
   const s3 = { S3_ACCESS_KEY_ID: `verify-${hex(8)}`, S3_SECRET_ACCESS_KEY: hex() }
   const vault = { VAULT_ROLE_ID: randomUUID(), VAULT_SECRET_ID: randomUUID() }
   const web = {
-    DATABASE_URL: `postgresql://raditi_web:${pg.web}@postgres:5432/raditi`,
-    REDIS_URL: `redis://web:${redis.web}@redis:6379`,
+    DATABASE_URL: `postgresql://raditi:${pg.raditi}@postgres:5432/raditi`,
+    REDIS_URL: `redis://:${redis.password}@redis:6379`,
     BETTER_AUTH_SECRET: randomBytes(48).toString('base64'),
     SMARTCAPTCHA_CLIENT_KEY: `ysc1_${pair}${hex(10)}`,
     SMARTCAPTCHA_SERVER_KEY: `ysc2_${pair}${hex(10)}`,
@@ -368,33 +437,23 @@ function secrets() {
     METRICS_TOKEN: metricsToken,
   }
   const core = {
-    DATABASE_URL: `postgresql://raditi_core:${pg.core}@postgres:5432/raditi`,
-    REDIS_URL: `redis://core:${redis.core}@redis:6379`,
+    DATABASE_URL: `postgresql://raditi:${pg.raditi}@postgres:5432/raditi`,
+    REDIS_URL: `redis://:${redis.password}@redis:6379`,
     ...s3,
     ...vault,
     METRICS_TOKEN: metricsToken,
     SENDSAY_API_KEY: hex(16),
   }
-  const acl = (user) =>
-    `user ${user} on #${sha256(redis[user])} ~* &* +@all -@admin -flushall -flushdb -keys -swapdb`
   const files = {
     'web/app.env': appEnv(web),
     'core/app.env': appEnv(core),
     'migrate/app.env': appEnv({
-      DATABASE_URL: `postgresql://raditi:${pg.owner}@postgres:5432/raditi`,
+      DATABASE_URL: `postgresql://raditi:${pg.raditi}@postgres:5432/raditi`,
     }),
     'postgres/superuser-password': pg.superuser,
-    'postgres/owner-password': pg.owner,
-    'postgres/web-password': pg.web,
-    'postgres/core-password': pg.core,
-    'redis/users.acl': [
-      'user default off',
-      acl('web'),
-      acl('core'),
-      `user health on #${sha256(redis.health)} -@all +ping`,
-      '',
-    ].join('\n'),
-    'redis/health-password': redis.health,
+    'postgres/password': pg.raditi,
+    'redis/users.acl': `user default on #${sha256(redis.password)} ~* &* +@all -@admin -flushall -flushdb -keys -swapdb\n`,
+    'redis/password': redis.password,
   }
   const { BETTER_AUTH_SECRET: _, ...broken } = web
   return {
@@ -550,6 +609,10 @@ try {
   const secret = secrets()
   await writeTree(join(work, 'secrets'), secret.files)
   await writeTree(join(work, 'secrets-broken'), { 'web/app.env': appEnv(secret.broken) })
+  // web and core start with NODE_EXTRA_CA_CERTS=/run/raditi/vault-ca.pem. This stand has no
+  // Vault: any CA certificate shows that each service loads the file of its own directory.
+  for (const service of ['web', 'core'])
+    await copyFile(join(work, 'minica.pem'), join(work, 'secrets', service, 'vault-ca.pem'))
   const tokenEntries = [`verify-1:${sha256(runnerTokens.foreign)}@10.0.0.1`]
   if (realAddress) tokenEntries.push(`verify-2:${sha256(runnerTokens.own)}@${CLIENT.address}`)
   envFile = join(work, 'compose.env')
@@ -577,12 +640,13 @@ try {
       TRAEFIK_IMAGE,
       POSTGRES_IMAGE,
       REDIS_IMAGE,
-      SANDBOX_IMAGE_PREFIX: 'raditi-verify/agent',
+      SANDBOX_IMAGE: `raditi-verify/sbx-wordpress@sha256:${'a'.repeat(64)}`,
       RUNNER_TOKENS: tokenEntries.join(','),
       S3_ENDPOINT: 'https://s3.invalid',
       S3_REGION: 'ru-central1',
       S3_RUNNER_ENDPOINT: '',
       VAULT_ADDR: 'https://vault.invalid:8200',
+      VAULT_PRIVATE_IP,
     }),
     { mode: 0o644 },
   )
@@ -611,7 +675,7 @@ try {
   if (realAddress) await createOutsideClient()
   try {
     await compose(['--profile', 'ops', 'run', '--rm', 'migrate'])
-    // As the runbook does after the first migration: the history is not the apps' to change.
+    // Reapply the shared-user bootstrap as the runbook does after the first migration.
     await compose(['exec', '-T', 'postgres', 'sh', '-s'], {
       input: await readFile(join(app, 'postgres/init-roles.sh')),
     })
@@ -666,7 +730,7 @@ try {
     assert.ok([200, 503].includes(health.status), `status ${health.status}`)
     assert.deepEqual(Object.keys(JSON.parse(health.body)), ['status'])
   })
-  /** web and core reach PostgreSQL and Redis under their own roles and users. */
+  /** Web and core reach PostgreSQL and Redis with the shared credentials. */
   const dataReachable = async () => {
     const web = await edge(DOMAIN, '/api/health', {
       headers: { authorization: `Bearer ${secret.metricsToken}` },
@@ -686,7 +750,28 @@ try {
     assert.equal(coreChecks.database, 'ok')
     assert.equal(coreChecks.redis, 'ok')
   }
-  await check('3b. web and core work under their own database roles and Redis users', dataReachable)
+  await check('3b. web and core reach PostgreSQL and Redis with shared credentials', dataReachable)
+  await check(
+    '3c. web and core trust the Vault CA of their own secrets and resolve the pinned Vault name',
+    async () => {
+      const expected = new X509Certificate(minica).fingerprint256
+      for (const service of ['web', 'core']) {
+        const answer = await inside(service, [
+          'node',
+          '-e',
+          "const tls = require('node:tls'); const { X509Certificate } = require('node:crypto'); require('node:dns').lookup('vault.raditi.internal', 4, (error, address) => console.log(JSON.stringify({ trusted: tls.getCACertificates('extra').map((pem) => new X509Certificate(pem).fingerprint256), address: error ? error.code : address })))",
+        ])
+        assert.deepEqual(
+          JSON.parse(answer.stdout.trim().split('\n').at(-1)),
+          { trusted: [expected], address: VAULT_PRIVATE_IP },
+          service,
+        )
+        // The running process read the same variable at its own start, without a complaint.
+        const logs = await compose(['logs', '--no-log-prefix', service])
+        assert.doesNotMatch(logs.stdout + logs.stderr, /extra certs/i, service)
+      }
+    },
+  )
   await check('4. http:// redirects to https:// on 443, without a port', async () => {
     const answer = await request(`http://${DOMAIN}:${PORTS.http}/x?y=1`, { host: '127.0.0.1' })
     assert.ok([301, 308].includes(answer.status), `status ${answer.status}`)
@@ -952,58 +1037,108 @@ try {
     for (const value of secret.values)
       assert.ok(!output.includes(value), 'a secret value is in the output')
   })
-  await check('21. PostgreSQL: web has no DDL, superuser only over the socket', async () => {
-    // By the service name, not 127.0.0.1: loopback is `trust` in the image's pg_hba
-    const psql = (password, user, sql) =>
-      inside('postgres', [
-        'env',
-        `PGPASSWORD=${password}`,
-        'psql',
-        '-h',
-        'postgres',
-        '-U',
-        user,
-        '-d',
+  await check(
+    '21. PostgreSQL: one raditi owner for every service, superuser only over the socket',
+    async () => {
+      // By the service name, not 127.0.0.1: loopback is `trust` in the image's pg_hba
+      const psql = (password, user, sql) =>
+        inside('postgres', [
+          'env',
+          `PGPASSWORD=${password}`,
+          'psql',
+          '-h',
+          'postgres',
+          '-U',
+          user,
+          '-d',
+          'raditi',
+          '-v',
+          'ON_ERROR_STOP=1',
+          '-tAc',
+          sql,
+        ])
+      const ddl = await psql(
+        secret.pg.raditi,
         'raditi',
-        '-v',
-        'ON_ERROR_STOP=1',
-        '-tAc',
-        sql,
+        "BEGIN; CREATE TABLE verify_edge_x (id int PRIMARY KEY, value text); INSERT INTO verify_edge_x VALUES (1, 'before'); UPDATE verify_edge_x SET value = 'after'; SELECT value FROM verify_edge_x; DELETE FROM verify_edge_x; DROP TABLE verify_edge_x; ROLLBACK",
+      )
+      assert.equal(ddl.code, 0, ddl.stderr)
+      assert.match(ddl.stdout, /after/)
+      const dml = await psql(secret.pg.raditi, 'raditi', 'SELECT count(*) >= 0 FROM users')
+      assert.equal(dml.stdout.trim(), 't', dml.stderr)
+      const roles = await psql(
+        secret.pg.raditi,
+        'raditi',
+        "SELECT current_user || ',' || rolsuper || ',' || rolcreatedb || ',' || rolcreaterole || ',' || rolreplication || ',' || rolbypassrls FROM pg_roles WHERE rolname = current_user",
+      )
+      assert.equal(roles.stdout.trim(), 'raditi,false,false,false,false,false', roles.stderr)
+      const owner = await psql(
+        secret.pg.raditi,
+        'raditi',
+        "SELECT pg_get_userbyid(datdba) || ',' || (SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'public') FROM pg_database WHERE datname = 'raditi'",
+      )
+      assert.equal(owner.stdout.trim(), 'raditi,raditi', owner.stderr)
+      const legacy = await psql(
+        secret.pg.raditi,
+        'raditi',
+        "SELECT count(*) FROM pg_roles WHERE rolname IN ('raditi_app', 'raditi_web', 'raditi_core', 'raditi_llm', 'postgres_exporter')",
+      )
+      assert.equal(legacy.stdout.trim(), '0', legacy.stderr)
+      for (const table of [
+        'llm_keys',
+        'llm_calls',
+        'task_account_bindings',
+        'subscription_accounts',
+        'token_usage',
+        'cross_border_clearances',
+        '_prisma_migrations',
+      ]) {
+        for (const sql of [
+          `SELECT * FROM ${table} LIMIT 0`,
+          `INSERT INTO ${table} SELECT * FROM ${table} WHERE false`,
+          `DELETE FROM ${table} WHERE false`,
+        ]) {
+          const answer = await psql(secret.pg.raditi, 'raditi', sql)
+          assert.equal(answer.code, 0, answer.stderr)
+        }
+      }
+      for (const sql of [
+        'SELECT id FROM llm_keys WHERE false FOR UPDATE',
+        'UPDATE llm_keys SET budget_rub = 750, revoked_at = NULL WHERE false',
+        'UPDATE subscription_accounts SET enabled = true, max_concurrent_turns = 8, updated_at = now() WHERE false',
+        "UPDATE llm_calls SET state = 'lost', finished_at = now() WHERE false",
+        'SELECT * FROM credit_ledger LIMIT 0',
+      ]) {
+        const answer = await psql(secret.pg.raditi, 'raditi', sql)
+        assert.equal(answer.code, 0, answer.stderr)
+      }
+      const wrong = await psql(secret.pg.raditi.replace(/.$/, 'x'), 'raditi', 'SELECT 1')
+      assert.match(wrong.stderr, /password authentication failed/)
+      const superuser = await psql(secret.pg.superuser, 'postgres', 'SELECT 1')
+      assert.notEqual(superuser.code, 0)
+      assert.match(superuser.stderr, /password authentication failed/)
+    },
+  )
+  await check(
+    '22. Redis: one password, authentication required, no admin or mass commands',
+    async () => {
+      const cli = (password, ...args) =>
+        inside('redis', ['env', `REDISCLI_AUTH=${password}`, 'redis-cli', ...args])
+      for (const args of [
+        ['FLUSHALL'],
+        ['FLUSHDB'],
+        ['CONFIG', 'GET', 'maxmemory'],
+        ['KEYS', '*'],
+        ['SWAPDB', '0', '1'],
       ])
-    const ddl = await psql(secret.pg.web, 'raditi_web', 'CREATE TABLE verify_edge_x ()')
-    assert.notEqual(ddl.code, 0)
-    assert.match(ddl.stderr, /permission denied/)
-    const dml = await psql(secret.pg.core, 'raditi_core', 'SELECT count(*) >= 0 FROM users')
-    assert.equal(dml.stdout.trim(), 't', dml.stderr)
-    for (const [password, user] of [
-      [secret.pg.web, 'raditi_web'],
-      [secret.pg.core, 'raditi_core'],
-    ]) {
-      const history = await psql(password, user, 'DELETE FROM _prisma_migrations')
-      assert.notEqual(history.code, 0)
-      assert.match(history.stderr, /permission denied/)
-    }
-    const roles = await psql(
-      secret.pg.web,
-      'raditi_web',
-      "SELECT string_agg(rolsuper::text, ',') FROM pg_roles WHERE rolname IN ('raditi', 'raditi_web', 'raditi_core')",
-    )
-    assert.equal(roles.stdout.trim(), 'false,false,false')
-    const wrong = await psql(secret.pg.owner.replace(/.$/, 'x'), 'raditi', 'SELECT 1')
-    assert.match(wrong.stderr, /password authentication failed/)
-    const superuser = await psql(secret.pg.superuser, 'postgres', 'SELECT 1')
-    assert.notEqual(superuser.code, 0)
-    assert.match(superuser.stderr, /password authentication failed/)
-  })
-  await check('22. Redis: no admin or mass commands for web, only PING for health', async () => {
-    const cli = (user, password, ...args) =>
-      inside('redis', ['env', `REDISCLI_AUTH=${password}`, 'redis-cli', '--user', user, ...args])
-    for (const args of [['FLUSHALL'], ['CONFIG', 'GET', 'maxmemory'], ['KEYS', '*']])
-      assert.match((await cli('web', secret.redis.web, ...args)).stdout, /NOPERM/, args[0])
-    assert.match((await cli('health', secret.redis.health, 'GET', 'x')).stdout, /NOPERM/)
-    assert.match((await cli('web', secret.redis.web, 'PING')).stdout, /PONG/)
-  })
-  // Last: it restarts web and core.
+        assert.match((await cli(secret.redis.password, ...args)).stdout, /NOPERM/, args[0])
+      assert.match((await inside('redis', ['redis-cli', 'PING'])).stdout, /NOAUTH/)
+      const wrong = await cli(`${secret.redis.password}-wrong`, 'PING')
+      assert.match(`${wrong.stdout}${wrong.stderr}`, /WRONGPASS/)
+      assert.match((await cli(secret.redis.password, 'PING')).stdout, /PONG/)
+    },
+  )
+  // It restarts web and core; the checks after it keep no state of their own.
   await check('23. the dump before a migration takes the database back (dump-db.sh)', async () => {
     // The script from a copy of the app directory, as on the VM: its .env and the record for
     // rollback; compose reaches this stack through its own variables.
@@ -1047,7 +1182,7 @@ try {
     const owner = (sql) =>
       inside('postgres', [
         'env',
-        `PGPASSWORD=${secret.pg.owner}`,
+        `PGPASSWORD=${secret.pg.raditi}`,
         'psql',
         '-h',
         'postgres',
@@ -1081,15 +1216,21 @@ try {
         '--clean',
         '--if-exists',
         '--create',
+        '--no-acl',
         '--exit-on-error',
       ],
       { input: await readFile(file) },
     )
     assert.equal(restored.code, 0, restored.stderr)
+    // --no-acl skips legacy role grants, including database ACLs. Reapply the
+    // current bootstrap before checking PUBLIC access or restarting services.
+    await compose(['exec', '-T', 'postgres', 'sh', '-s'], {
+      input: await readFile(join(app, 'postgres/init-roles.sh')),
+    })
     assert.equal(await superuser(plans), before)
     // --create: a table the dump does not know goes too, even with a key into a restored one
     assert.equal(await superuser("SELECT to_regclass('verify_edge_broken') IS NULL"), 't')
-    // The owner and the grants of the database and the schema came back with it
+    // The restored owner and current database/schema access settings are in place.
     assert.equal(
       await superuser(
         "SELECT pg_get_userbyid(datdba) || ',' || has_database_privilege('public', 'raditi', 'CONNECT') FROM pg_database WHERE datname = 'raditi'",
@@ -1113,17 +1254,17 @@ try {
       'core',
     ])
     await dataReachable()
-    // So did the default privileges: the next migration's tables are open to web and core
+    // The shared user also owns and can read the next migration's tables.
     const next = await owner('CREATE TABLE verify_edge_next (id int)')
     assert.equal(next.code, 0, next.stderr)
     const read = await inside('postgres', [
       'env',
-      `PGPASSWORD=${secret.pg.core}`,
+      `PGPASSWORD=${secret.pg.raditi}`,
       'psql',
       '-h',
       'postgres',
       '-U',
-      'raditi_core',
+      'raditi',
       '-d',
       'raditi',
       '-tAc',
@@ -1134,6 +1275,192 @@ try {
     const migrate = await compose(['--profile', 'ops', 'run', '--rm', 'migrate'])
     assert.match(migrate.stdout + migrate.stderr, /No pending migrations to apply/)
   })
+  // After 17: Traefik logs every body it refuses as an error.
+  const post = (path, body, init = {}) =>
+    upload(`https://${DOMAIN}${path}`, {
+      host: edgeHost,
+      port: PORTS.https,
+      ca,
+      body,
+      ...init,
+      headers: { 'content-type': 'application/json', origin: `https://${DOMAIN}`, ...init.headers },
+    })
+  const tooLarge = JSON.stringify({ message: 'Запрос слишком большой.' })
+  await check(
+    '24. an API body over the edge limit stops at Traefik: web never sees the request',
+    async () => {
+      // To refuse a body that declares no length Traefik opens a temporary file, which it never
+      // fills. On its read-only root that needs the tmpfs on /tmp: without it the answer is 500.
+      const temporary = await inside('traefik', [
+        'sh',
+        '-c',
+        ': > /tmp/.verify-edge && rm /tmp/.verify-edge && ls -A /tmp',
+      ])
+      assert.equal(temporary.code, 0, 'Traefik cannot write to /tmp')
+      const body = Buffer.alloc(8 * 1024 * 1024, 0x61)
+      const sent = [
+        ['/api/auth/sign-in/email', false],
+        ['/api/auth/sign-in/email', true],
+        ['/api/trpc/user.updateProfile', false],
+        // The reset path has a router of its own, outside the access log
+        ['/api/auth/reset-password/TOKENOVERSIZE456', false],
+        ['/api/auth/reset-password/TOKENOVERSIZE456', true],
+      ]
+      for (const [path, chunked] of sent) {
+        const answer = await post(path, body, { chunked })
+        const got = `${path}, chunked: ${chunked}: ${answer.status} ${answer.body.slice(0, 80)}`
+        assert.equal(answer.status, 413, got)
+        // Traefik's own answer: web would send JSON under its security headers
+        assert.equal(answer.body.trim(), 'Request Entity Too Large', got)
+        assert.equal(answer.headers['x-content-type-options'], undefined, got)
+      }
+      await sleep(1000)
+      // Nothing of a refused body stays behind: the tmpfs is 1 MiB for the life of the container.
+      const left = await inside('traefik', ['sh', '-c', 'ls -A /tmp && du -sk /tmp'])
+      assert.match(left.stdout, /^0\s+\/tmp\n$/, 'Traefik left temporary files of refused bodies')
+      const logs = (await compose(['logs', 'traefik'])).stdout
+      // The limit writes an error line for each body it refuses. The reset router keeps its
+      // token out of the access log (check 16); the limit on it must not put it back there.
+      const errors = logs
+        .split('\n')
+        .filter((line) => /"level":"error"/.test(line) && /oxy\/buffer/.test(line))
+      assert.ok(errors.length >= sent.length, `${errors.length} error lines for refused bodies`)
+      // assert.ok, not assert.match: a failure must not print the whole log
+      assert.ok(
+        !logs.includes('TOKENOVERSIZE456'),
+        'a refused body puts the reset token in the log',
+      )
+      const refused = logs
+        .split('\n')
+        .filter(
+          (line) =>
+            /"DownstreamStatus":413/.test(line) &&
+            /"RequestPath":"\/api\/(auth\/sign-in\/email|trpc\/user\.updateProfile)"/.test(line),
+        )
+      // At least: an answer lost to a closed connection is asked for again
+      assert.ok(refused.length >= 3, `${refused.length} refused requests in the access log`)
+      for (const line of refused) {
+        assert.ok(/"RouterName":"web-api-body@file"/.test(line), 'another router took the request')
+        assert.ok(/"OriginStatus":0/.test(line) && !/"ServiceAddr"/.test(line), 'web was called')
+      }
+    },
+  )
+  await check(
+    '25. a body within the edge limit reaches web, and so does a 5 MiB avatar upload',
+    async () => {
+      // No session and no captcha answer: each answer below is web's own.
+      const signIn = await post(
+        '/api/auth/sign-in/email',
+        Buffer.from(JSON.stringify({ email: 'nobody@raditi.test', password: 'x'.repeat(32) })),
+      )
+      assert.equal(signIn.status, 400, signIn.body.slice(0, 80))
+      assert.equal(JSON.parse(signIn.body).code, 'CAPTCHA_REQUIRED')
+      // Without a declared length too: the edge holds a body under its limit in memory and
+      // needs no temporary file, which its read-only root does not have.
+      for (const chunked of [false, true]) {
+        const mutation = await post(
+          '/api/trpc/user.updateProfile',
+          Buffer.from(JSON.stringify({ json: { name: 'a'.repeat(200 * 1024), lastName: '' } })),
+          { chunked },
+        )
+        const got = `mutation, chunked: ${chunked}: ${mutation.status} ${mutation.body.slice(0, 80)}`
+        assert.equal(mutation.status, 401, got)
+        assert.equal(JSON.parse(mutation.body).error.json.data.code, 'UNAUTHORIZED', got)
+      }
+
+      const boundary = `verify-${hex(8)}`
+      const photo = Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="photo.png"\r\nContent-Type: image/png\r\n\r\n`,
+        ),
+        Buffer.alloc(5 * 1024 * 1024, 0x61),
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ])
+      for (const chunked of [false, true]) {
+        const avatar = await post('/api/profile/avatar', photo, {
+          chunked,
+          headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+        })
+        assert.equal(
+          avatar.status,
+          401,
+          `avatar upload, chunked: ${chunked}: ${avatar.status} ${avatar.body.slice(0, 80)}`,
+        )
+        assert.match(JSON.parse(avatar.body).message, /^Войдите в аккаунт/)
+        assert.equal(avatar.headers['x-content-type-options'], 'nosniff')
+      }
+    },
+  )
+  await check(
+    '25b. a GET to the API and the avatar upload never take the buffered router',
+    async () => {
+      // The buffer holds the whole answer back, and the task's SSE stream is a GET to the API.
+      await edge(DOMAIN, '/api/health')
+      await sleep(1000)
+      const lines = (await compose(['logs', 'traefik'])).stdout
+        .split('\n')
+        .filter((line) => line.includes(`"RequestHost":"${DOMAIN}"`))
+      const routers = (method, path) => [
+        ...new Set(
+          lines
+            .filter(
+              (line) =>
+                line.includes(`"RequestMethod":"${method}"`) &&
+                line.includes(`"RequestPath":"${path}"`),
+            )
+            .map((line) => /"RouterName":"([^"]+)"/.exec(line)?.[1]),
+        ),
+      ]
+      assert.deepEqual(routers('GET', '/api/health'), ['web@file'])
+      assert.deepEqual(routers('POST', '/api/profile/avatar'), ['web@file'])
+      assert.deepEqual(routers('POST', '/api/auth/sign-in/email'), ['web-api-body@file'])
+    },
+  )
+  await check(
+    '26. web keeps its own smaller limits behind the edge and inside the Docker network',
+    async () => {
+      // Under the 512 KiB of the edge, over the 64 KiB (auth) and 256 KiB (tRPC) of web.
+      for (const [path, kib] of [
+        ['/api/auth/sign-in/email', 100],
+        ['/api/auth/sign-out', 100],
+        ['/api/trpc/user.updateProfile', 300],
+      ]) {
+        const answer = await post(path, Buffer.alloc(kib * 1024, 0x61))
+        const got = `${path}: ${answer.status} ${answer.body.slice(0, 80)}`
+        assert.equal(answer.status, 413, got)
+        assert.equal(answer.body, tooLarge, got)
+        assert.equal(answer.headers['x-content-type-options'], 'nosniff', got)
+      }
+      // Without the edge, as another container on web's network would call it: 8 MiB with a
+      // declared length is refused unread; without one web stops reading and may drop the
+      // connection, but never handles the request and never hangs.
+      const direct = async (body) => {
+        const answer = await inside('web', [
+          'node',
+          '-e',
+          `const chunk = new Uint8Array(65536).fill(97)
+let sent = 0
+const stream = new ReadableStream({ pull(c) { if (sent === 128) return c.close(); sent += 1; c.enqueue(chunk) } })
+fetch('http://127.0.0.1:3000/api/auth/sign-in/email', { method: 'POST', headers: { 'content-type': 'application/json' }, body: ${body}, duplex: 'half', signal: AbortSignal.timeout(15000) }).then(
+  async (r) => console.log(JSON.stringify({ status: r.status, body: await r.text() })),
+  (e) => console.log(JSON.stringify({ error: e.name === 'TimeoutError' ? 'timeout' : 'closed' })),
+)`,
+        ])
+        return JSON.parse(answer.stdout.trim().split('\n').at(-1))
+      }
+      assert.deepEqual(await direct(`'a'.repeat(8 * 1024 * 1024)`), {
+        status: 413,
+        body: tooLarge,
+      })
+      const streamed = await direct('stream')
+      assert.ok(
+        streamed.error === 'closed' || (streamed.status === 413 && streamed.body === tooLarge),
+        `a streamed 8 MiB body: ${JSON.stringify(streamed)}`,
+      )
+      const health = await edge(DOMAIN, '/api/health')
+      assert.ok([200, 503].includes(health.status), `status ${health.status}`)
+    },
+  )
   console.log(`verify:edge: ${passed} checks passed`)
 } catch (error) {
   exitCode = 1
