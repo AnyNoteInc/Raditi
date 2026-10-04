@@ -1,0 +1,265 @@
+import { Logger, Module, type DynamicModule, type OnApplicationShutdown } from '@nestjs/common'
+import type { PrismaClient } from '@repo/db'
+import { withTimeout, type SecretStore } from '@repo/domain'
+import { llmBackends } from '@repo/llm-backends'
+import { cachedHealthProbe, databaseCheck, vaultCheck } from '@repo/observability'
+import { createVaultSecretStore } from '@repo/vault'
+
+import type { LlmRoleConfig } from '../config/config.ts'
+import { createOrchestratorPrisma } from '../infra/prisma.ts'
+import { PRISMA, SECRET_STORE } from '../infra/tokens.ts'
+import { createCredentialSource } from './credentials.ts'
+import { createControlEgress, createEgressTransport, EgressNotSentError } from './egress.ts'
+import { createEgressProbe, EgressHealth } from './egress-probe.ts'
+import { SubscriptionPoolHealth } from './pool-health.ts'
+import { SubscriptionRefresher } from './refresher.ts'
+import { SessionSubscriptionLock } from './session-lock.ts'
+import { createLlmGateway, type LlmGateway } from './server.ts'
+import { PostgresGatewayStore } from './store.ts'
+
+const refreshIntervalMs = 5 * 60_000
+
+/** The HTTP server and collector stop before the one database pool is disconnected. */
+export class LlmRuntime implements OnApplicationShutdown {
+  readonly gateway: LlmGateway
+  readonly #store: PostgresGatewayStore
+  readonly #logger = new Logger('LlmGateway')
+  readonly #channel: EgressHealth
+  readonly #refresher: SubscriptionRefresher
+  readonly #pool: SubscriptionPoolHealth
+  readonly #maintenance = new Set<ReturnType<typeof setInterval>>()
+  readonly #jobs = new Map<string, Promise<void>>()
+  #channelTimer: ReturnType<typeof setTimeout> | undefined
+  #refreshedAt = -Infinity
+  #collector: ReturnType<typeof setInterval> | undefined
+  #collecting: Promise<void> | undefined
+  #collectionWait: Promise<void> | undefined
+  #collectorHealthy = false
+  #closing = false
+
+  constructor(
+    config: LlmRoleConfig,
+    private readonly prisma: PrismaClient,
+    secrets: SecretStore,
+  ) {
+    this.#store = new PostgresGatewayStore(prisma, {
+      maxRequestsPerKey: config.maxRequestsPerKey,
+      logger: { warn: (message) => this.#logger.warn(message) },
+    })
+    const health = cachedHealthProbe({
+      database: databaseCheck(() => prisma),
+      vault: vaultCheck(() => secrets),
+    })
+    // The set the role's configuration read its provider origins and stand overrides from.
+    const backends = llmBackends
+    const credentials = createCredentialSource(secrets)
+    const transport = createEgressTransport(config.egress, backends)
+    this.#channel = new EgressHealth(createEgressProbe(config.egress), this.#logger)
+    const channelHealthy = () => this.#channel.healthy()
+    const onRegion = (accountId: string) => this.#channel.blockRegion(accountId)
+    // A closed gate sends nothing: a refresh token stays valid, a generation spends no quota.
+    const gate = (open: () => boolean) => ({
+      request: (...args: Parameters<typeof transport.request>) =>
+        open() ? transport.request(...args) : Promise.reject(new EgressNotSentError()),
+    })
+    const gatedTransport = gate(channelHealthy)
+    const http = createControlEgress(gatedTransport)
+    this.#refresher = new SubscriptionRefresher({
+      prisma,
+      secrets,
+      credentials,
+      backends,
+      http,
+      channelHealthy,
+      onRegion,
+      locks: new SessionSubscriptionLock(config.db.databaseUrl),
+      logger: (event) => this.#logger.warn(JSON.stringify({ event: `llm_${event}` })),
+    })
+    this.#pool = new SubscriptionPoolHealth({
+      prisma,
+      credentials,
+      backends,
+      http,
+      regionHttp: createControlEgress(gate(() => this.#channel.reachable())),
+      channelHealthy,
+      onRegion,
+      logger: this.#logger,
+    })
+    this.gateway = createLlmGateway({
+      config,
+      backends,
+      store: this.#store,
+      credentials,
+      egress: gatedTransport,
+      lifecycle: {
+        pause: (key) => this.#pool.pause(key.accountId),
+        refresh: (call, _backend, version) =>
+          this.#refresher.refresh(call.accountId, 'auth', version),
+        observe: (call, finish) => this.#pool.observe(call, finish),
+        // Both callers ask because the windows are unknown: admission and core's issue.
+        probeAccounts: async (accountIds, unknownWindows = {}) => {
+          await Promise.all(
+            accountIds.map((accountId) => this.#pool.probeAccount(accountId, unknownWindows)),
+          )
+        },
+      },
+      metricsToken: config.metricsToken,
+      ready: () => !this.#closing && this.#collectorHealthy && channelHealthy(),
+      health: async () =>
+        (await health()).status === 'ok' && this.#collectorHealthy && channelHealthy(),
+      logger: this.#logger,
+    })
+  }
+
+  #runJob(name: string, work: () => Promise<void>): Promise<void> {
+    if (this.#closing) return Promise.resolve()
+    const running = this.#jobs.get(name)
+    if (running) return running
+    const job = Promise.resolve()
+      .then(work)
+      .catch(() => {
+        this.#logger.warn(JSON.stringify({ event: 'llm_maintenance_failed', job: name }))
+      })
+      .finally(() => this.#jobs.delete(name))
+    this.#jobs.set(name, job)
+    return job
+  }
+
+  #every(name: string, milliseconds: number, work: () => Promise<void>): void {
+    const timer = setInterval(() => {
+      void this.#runJob(name, work)
+    }, milliseconds)
+    timer.unref()
+    this.#maintenance.add(timer)
+  }
+
+  #collect(): Promise<void> {
+    // A timeout closes admission but retains the underlying scan until it really settles.
+    // Retrying a hung query must never accumulate overlapping collectors or pool waiters.
+    if (this.#collecting) return this.#collectionWait ?? Promise.resolve()
+    let timedOut = false
+    this.#collecting = Promise.resolve()
+      .then(() => this.#store.collectLost())
+      .then(() => {
+        this.#collectorHealthy = !timedOut
+      })
+      .catch(() => {
+        this.#collectorHealthy = false
+        this.#logger.warn(JSON.stringify({ event: 'llm_collector_failed' }))
+      })
+      .finally(() => {
+        this.#collecting = undefined
+        this.#collectionWait = undefined
+      })
+    this.#collectionWait = withTimeout(this.#collecting, 10_000, 'LLM collector timed out').catch(
+      () => {
+        timedOut = true
+        this.#collectorHealthy = false
+        this.#logger.warn(JSON.stringify({ event: 'llm_collector_timeout' }))
+      },
+    )
+    return this.#collectionWait
+  }
+
+  #refresh(): void {
+    this.#refreshedAt = Date.now()
+    void this.#runJob('refresh', () => this.#refresher.tick())
+  }
+
+  /** The channel is probed again sooner after a failure and when a region recheck is due. */
+  #scheduleChannel(): void {
+    if (this.#closing) return
+    this.#channelTimer = setTimeout(() => {
+      void this.#runJob('channel', () => this.#checkChannel()).finally(() =>
+        this.#scheduleChannel(),
+      )
+    }, this.#channel.nextCheckMs())
+    this.#channelTimer.unref()
+  }
+
+  async #checkChannel(): Promise<void> {
+    await this.#channel.check()
+    const recheck = this.#channel.regionRecheck()
+    if (recheck && (await this.#pool.recheckRegion(recheck.accountId)))
+      this.#channel.clearRegion(recheck.revision)
+    // The refresher acts on the channel state this check has just settled.
+    if (Date.now() - this.#refreshedAt >= refreshIntervalMs) this.#refresh()
+  }
+
+  async listen() {
+    await Promise.all([this.#collect(), this.#channel.check()])
+    const address = await this.gateway.listen()
+    this.#collector = setInterval(() => {
+      void this.#collect()
+    }, 30_000)
+    this.#collector.unref()
+    this.#every('retire', 60_000, () => this.#refresher.retire())
+    this.#every('pool', 60_000, () => this.#pool.tick())
+    this.#refresh()
+    void this.#runJob('retire', () => this.#refresher.retire())
+    this.#scheduleChannel()
+    return address
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    this.#closing = true
+    clearInterval(this.#collector)
+    clearTimeout(this.#channelTimer)
+    for (const timer of this.#maintenance) clearInterval(timer)
+    const timedOut = () => {
+      this.#logger.warn(JSON.stringify({ event: 'llm_maintenance_shutdown_timeout' }))
+    }
+    try {
+      const drained = this.gateway.close()
+      // A provider-issued token rotation in flight gets its Vault write (≤25 s) alongside the
+      // HTTP drain (≤30 s): together they fit the 40 s stop grace period of the llm service.
+      const rotation = withTimeout(
+        this.#refresher.close(),
+        26_000,
+        'LLM refresher shutdown timed out',
+      ).catch(timedOut)
+      await drained
+      await withTimeout(
+        Promise.allSettled([this.#pool.close(), this.#channel.close()]),
+        3000,
+        'LLM maintenance shutdown timed out',
+      ).catch(timedOut)
+      await rotation
+      if (this.#jobs.size)
+        await withTimeout(
+          Promise.allSettled([...this.#jobs.values()]),
+          1000,
+          'LLM jobs shutdown timed out',
+        ).catch(() => {})
+      if (this.#collecting)
+        await withTimeout(this.#collecting, 1000, 'LLM collector shutdown timed out').catch(
+          () => {},
+        )
+    } finally {
+      await withTimeout(this.prisma.$disconnect(), 2000, 'LLM database shutdown timed out').catch(
+        () => {
+          this.#logger.warn(JSON.stringify({ event: 'llm_database_shutdown_timeout' }))
+        },
+      )
+    }
+  }
+}
+
+@Module({})
+export class LlmAppModule {
+  static forRoot(config: LlmRoleConfig): DynamicModule {
+    return {
+      module: LlmAppModule,
+      providers: [
+        { provide: PRISMA, useFactory: () => createOrchestratorPrisma(config.db) },
+        { provide: SECRET_STORE, useFactory: () => createVaultSecretStore(config.vault) },
+        {
+          provide: LlmRuntime,
+          useFactory: (prisma: PrismaClient, secrets: SecretStore) =>
+            new LlmRuntime(config, prisma, secrets),
+          inject: [PRISMA, SECRET_STORE],
+        },
+      ],
+    }
+  }
+}
