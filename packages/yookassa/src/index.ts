@@ -11,6 +11,7 @@ export {
   webhookEventSchema,
 } from './webhook.ts'
 export type {
+  PaymentMethodWebhookEvent,
   PaymentWebhookEvent,
   RefundWebhookEvent,
   VerifyTrustedIpOptions,

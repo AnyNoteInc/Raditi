@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import { YookassaError } from './errors.ts'
-import { YOOKASSA_WEBHOOK_IP_RANGES, parseWebhookEvent, verifyTrustedIp } from './webhook.ts'
+import {
+  YOOKASSA_WEBHOOK_IP_RANGES,
+  isIpAllowlistEntry,
+  parseWebhookEvent,
+  verifyTrustedIp,
+} from './webhook.ts'
 
 const paymentObject = (status: string, extra: Record<string, unknown> = {}) => ({
   id: 'pmt_1',
@@ -9,6 +14,15 @@ const paymentObject = (status: string, extra: Record<string, unknown> = {}) => (
   paid: status === 'succeeded' || status === 'waiting_for_capture',
   amount: { value: '4900.00', currency: 'RUB' },
   created_at: '2026-09-26T00:00:00Z',
+  ...extra,
+})
+
+const methodObject = (status: string, extra: Record<string, unknown> = {}) => ({
+  id: 'pm_1',
+  type: 'bank_card',
+  saved: status === 'active',
+  status,
+  holder: { account_id: '123456' },
   ...extra,
 })
 
@@ -69,6 +83,73 @@ describe('parseWebhookEvent', () => {
     })
     expect(event.event).toBe('refund.succeeded')
     if (event.event === 'refund.succeeded') expect(event.object.payment_id).toBe('pmt_1')
+  })
+
+  it('parses payment_method.active with the saved card', () => {
+    const event = parseWebhookEvent({
+      type: 'notification',
+      event: 'payment_method.active',
+      object: methodObject('active', {
+        title: 'Bank card *4444',
+        card: { last4: '4444', card_type: 'Mir', expiry_month: '12', expiry_year: '2030' },
+        metadata: { subscription_id: 'sub_1' },
+      }),
+    })
+    expect(event.event).toBe('payment_method.active')
+    if (event.event === 'payment_method.active') {
+      expect(event.object).toEqual({
+        id: 'pm_1',
+        type: 'bank_card',
+        saved: true,
+        status: 'active',
+        title: 'Bank card *4444',
+        card: { last4: '4444', card_type: 'Mir', expiry_month: '12', expiry_year: '2030' },
+        metadata: { subscription_id: 'sub_1' },
+      })
+    }
+  })
+
+  it.each(['pending', 'inactive'])(
+    'throws when payment_method.active carries a %s method',
+    (status) => {
+      expect(() =>
+        parseWebhookEvent({
+          type: 'notification',
+          event: 'payment_method.active',
+          object: methodObject(status),
+        }),
+      ).toThrow(/object\.status: event does not match the object status/)
+    },
+  )
+
+  it('throws when the object is not the one the event names', () => {
+    // A payment under a payment method event, and the reverse.
+    expect(() =>
+      parseWebhookEvent({
+        type: 'notification',
+        event: 'payment_method.active',
+        object: paymentObject('succeeded'),
+      }),
+    ).toThrow(YookassaError)
+    expect(() =>
+      parseWebhookEvent({
+        type: 'notification',
+        event: 'payment.succeeded',
+        object: methodObject('active'),
+      }),
+    ).toThrow(YookassaError)
+  })
+
+  it('parses the status of the method inside a payment', () => {
+    const event = parseWebhookEvent({
+      type: 'notification',
+      event: 'payment.succeeded',
+      object: paymentObject('succeeded', {
+        payment_method: { id: 'pm_1', type: 'bank_card', saved: false, status: 'inactive' },
+      }),
+    })
+    if (event.event !== 'payment.succeeded') throw new Error('unexpected event')
+    expect(event.object.payment_method).toMatchObject({ saved: false, status: 'inactive' })
   })
 
   it('throws on an unknown event', () => {
@@ -184,6 +265,23 @@ describe('verifyTrustedIp', () => {
     '1.2.3.4/24/1',
   ])('throws on the malformed allowlist entry %j', (entry) => {
     expect(() => verifyTrustedIp('1.2.3.4', [entry], prod)).toThrow(YookassaError)
+  })
+
+  it('tells an entry it takes from one it throws on', () => {
+    for (const entry of ['127.0.0.1', '::1', '10.20.0.0/24', '2a02:5180::/32', '0.0.0.0/0']) {
+      expect(isIpAllowlistEntry(entry)).toBe(true)
+      expect(() => verifyTrustedIp('1.2.3.4', [entry], prod)).not.toThrow()
+    }
+    for (const entry of [
+      '',
+      'localhost',
+      '127.0.0.1:3000',
+      '1.2.3.4/33',
+      '1.2.3.4/',
+      ' 127.0.0.1',
+    ]) {
+      expect(isIpAllowlistEntry(entry)).toBe(false)
+    }
   })
 
   it('covers every address ЮKassa publishes', () => {

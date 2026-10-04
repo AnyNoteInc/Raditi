@@ -3,7 +3,7 @@ import { BlockList, isIP } from 'node:net'
 import { z } from 'zod'
 
 import { YookassaError } from './errors.ts'
-import { paymentSchema, refundSchema } from './schemas.ts'
+import { paymentSchema, refundSchema, savedPaymentMethodSchema } from './schemas.ts'
 
 /**
  * Addresses ЮKassa sends HTTP notifications from.
@@ -32,15 +32,23 @@ const refundEventSchema = z.object({
   object: refundSchema,
 })
 
+/** A payment method saved without a payment (POST /payment_methods) was confirmed by the user. */
+const paymentMethodEventSchema = z.object({
+  type: z.literal('notification'),
+  event: z.literal('payment_method.active'),
+  object: savedPaymentMethodSchema,
+})
+
 const eventStatus = {
   'payment.succeeded': 'succeeded',
   'payment.waiting_for_capture': 'waiting_for_capture',
   'payment.canceled': 'canceled',
   'refund.succeeded': 'succeeded',
+  'payment_method.active': 'active',
 } as const
 
 export const webhookEventSchema = z
-  .discriminatedUnion('event', [paymentEventSchema, refundEventSchema])
+  .discriminatedUnion('event', [paymentEventSchema, refundEventSchema, paymentMethodEventSchema])
   .refine((e) => e.object.status === eventStatus[e.event], {
     message: 'event does not match the object status',
     path: ['object', 'status'],
@@ -49,10 +57,12 @@ export const webhookEventSchema = z
 export type WebhookEvent = z.infer<typeof webhookEventSchema>
 export type PaymentWebhookEvent = z.infer<typeof paymentEventSchema>
 export type RefundWebhookEvent = z.infer<typeof refundEventSchema>
+export type PaymentMethodWebhookEvent = z.infer<typeof paymentMethodEventSchema>
 
 /**
- * Parses a notification body. A notification is a hint, not proof: before crediting money
- * the handler reads the object back with getPayment/getRefund and acts on that answer.
+ * Parses a notification body. A notification is a hint, not proof: before crediting money or
+ * storing a payment method the handler reads the object back with getPayment, getRefund or
+ * getPaymentMethod and acts on that answer.
  * The handler answers 200 to everything it has accepted; otherwise ЮKassa retries for 24 hours.
  */
 export function parseWebhookEvent(body: unknown): WebhookEvent {
@@ -86,14 +96,25 @@ export function verifyTrustedIp(
   if (entries.length === 0) return !options.requireAllowlist
 
   const blockList = new BlockList()
-  for (const entry of entries) addEntry(blockList, entry)
+  for (const entry of entries) {
+    const subnet = parseAllowlistEntry(entry)
+    if (subnet === null) throw new YookassaError(`Invalid IP allowlist entry: ${entry}`)
+    blockList.addSubnet(subnet.address, subnet.prefix, subnet.family)
+  }
 
   const address = normalizeIp(ip)
   if (address === null) return false
   return blockList.check(address, isIP(address) === 4 ? 'ipv4' : 'ipv6')
 }
 
-function addEntry(blockList: BlockList, entry: string): void {
+/** Whether verifyTrustedIp takes the entry: one IPv4/IPv6 address or a CIDR range. */
+export function isIpAllowlistEntry(entry: string): boolean {
+  return parseAllowlistEntry(entry) !== null
+}
+
+function parseAllowlistEntry(
+  entry: string,
+): { address: string; prefix: number; family: 'ipv4' | 'ipv6' } | null {
   const [address = '', prefixText, ...rest] = entry.split('/')
   const family = isIP(address)
   const maxPrefix = family === 4 ? 32 : 128
@@ -104,9 +125,9 @@ function addEntry(blockList: BlockList, entry: string): void {
     (prefixText !== undefined && !/^\d{1,3}$/.test(prefixText)) ||
     prefix > maxPrefix
   ) {
-    throw new YookassaError(`Invalid IP allowlist entry: ${entry}`)
+    return null
   }
-  blockList.addSubnet(address, prefix, family === 4 ? 'ipv4' : 'ipv6')
+  return { address, prefix, family: family === 4 ? 'ipv4' : 'ipv6' }
 }
 
 function normalizeIp(ip: string | null | undefined): string | null {
