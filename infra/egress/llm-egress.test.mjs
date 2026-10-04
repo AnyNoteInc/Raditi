@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { Buffer } from 'node:buffer'
+import { X509Certificate } from 'node:crypto'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { request } from 'node:https'
 import { Socket, connect, createServer as createTcpServer } from 'node:net'
@@ -13,11 +14,13 @@ import { connect as tlsConnect, createServer as createTlsServer } from 'node:tls
 import { fileURLToPath } from 'node:url'
 
 import {
+  BLOCKED_IPV4,
   PROBE_LIMIT,
   createEgressProxy,
   isPublicIPv4,
   parseAllow,
   parseClientCns,
+  parseClientPins,
   parseProbeMax,
 } from './llm-egress.mjs'
 
@@ -571,4 +574,100 @@ test('the node files: three hosts by default, an unprivileged user and a closed 
   assert.match(nft, /^flush ruleset$/m)
   for (const hook of ['input', 'forward', 'output'])
     assert.match(nft, new RegExp(`type filter hook ${hook} priority filter; policy drop;`), hook)
+})
+
+test('the firewall drops every range the proxy refuses to dial: one list, not two', () => {
+  const nft = readFileSync(here('nftables.conf'), 'utf8')
+  const defined = /^define NON_PUBLIC = \{ ([^}]*) \}$/m.exec(nft)?.[1]
+  assert.ok(defined, 'NON_PUBLIC is missing')
+  assert.deepEqual(
+    defined
+      .split(',')
+      .map((item) => item.trim())
+      .sort(),
+    BLOCKED_IPV4.map(([network, prefix]) => `${network}/${prefix}`).sort(),
+  )
+  for (const [network] of BLOCKED_IPV4) assert.ok(!isPublicIPv4(network), network)
+})
+
+test('the firewall sample cannot be applied before its addresses are filled in', () => {
+  const nft = readFileSync(here('nftables.conf'), 'utf8')
+  // A placeholder in angle brackets is a syntax error for `nft -c`: the unedited file never loads,
+  // and no example address is ever trusted for SSH or the proxy.
+  for (const name of ['PROXY_CLIENTS', 'ADMIN', 'RESOLVERS']) {
+    const line = new RegExp(`^define ${name} = (.*)$`, 'm').exec(nft)?.[1]
+    assert.ok(line, name)
+    assert.match(line, /<[A-Z0-9_]+>/, name)
+    assert.doesNotMatch(line, /\d+\.\d+\.\d+\.\d+/, name)
+  }
+  const outsideNonPublic = nft.replace(/^define NON_PUBLIC = .*$/m, '')
+  for (const prefix of ['192.0.2.', '198.51.100.', '203.0.113.'])
+    assert.ok(!outsideNonPublic.includes(prefix), `documentation address ${prefix}x`)
+})
+
+const pinOf = (identity) =>
+  new X509Certificate(identity.cert).fingerprint256.replaceAll(':', '').toLowerCase()
+
+test(
+  'a stolen client key stops opening tunnels once its certificate is no longer pinned',
+  { skip },
+  async () => {
+    // Renewal with the same CN: chain and CN of the old pair stay valid until it expires.
+    const issue = () => {
+      make('client', join(tmp, 'ca'), 'app-2')
+      return client('app-2')
+    }
+    const stolen = issue()
+    const renewed = issue()
+    assert.notEqual(pinOf(stolen), pinOf(renewed))
+    const open = async (proxy, identity) => {
+      const opened = await tunnel(proxy.port, 'chatgpt.com:443', identity)
+      opened.socket.destroy()
+      return opened.status
+    }
+    const cnOnly = await start({ clientCns: new Set(['app-2']) })
+    try {
+      assert.equal(await open(cnOnly, stolen), 200)
+    } finally {
+      await cnOnly.close()
+    }
+    const pinned = await start({
+      clientCns: new Set(['app-2']),
+      clientPins: parseClientPins(pinOf(renewed)),
+    })
+    try {
+      assert.equal(await open(pinned, renewed), 200)
+      assert.equal(await open(pinned, stolen), 403)
+      assert.equal(pinned.dialled.length, 1)
+      await until(() => pinned.logs.some((log) => log.result === 'forbidden_client'))
+      const probe = await get(pinned.port, '/probe?bytes=10', { identity: stolen })
+      assert.equal(probe.status, 403)
+    } finally {
+      await pinned.close()
+    }
+  },
+)
+
+test('EGRESS_CLIENT_SHA256 takes colon or plain hex fingerprints and refuses anything else', () => {
+  const hex = 'ab'.repeat(32)
+  const colons = hex.toUpperCase().match(/../g).join(':')
+  assert.deepEqual([...parseClientPins(`${colons}, ${hex}`)], [hex])
+  assert.equal(parseClientPins(undefined), null)
+  for (const value of ['', ' , ', '<APP_1_SHA256>', 'ab', 'zz'.repeat(32), `${hex}:`, `${hex}0`])
+    assert.throws(() => parseClientPins(value), /EGRESS_CLIENT_SHA256/, value)
+  // The sample env lists placeholders: an unedited copy refuses to start the proxy.
+  const env = readFileSync(here('env.example'), 'utf8')
+  const sample = /^EGRESS_CLIENT_SHA256=(.*)$/m.exec(env)?.[1]
+  assert.ok(sample, 'env.example must list the pinned client certificates')
+  assert.throws(() => parseClientPins(sample), /EGRESS_CLIENT_SHA256/)
+})
+
+test('make-ca.sh prints the pin of every leaf it issues', { skip }, () => {
+  const output = make('client', join(tmp, 'ca'), 'pin-1').toString()
+  assert.equal(/^sha256=([0-9a-f]{64})$/m.exec(output)?.[1], pinOf(client('pin-1')))
+  const server = make('server', join(tmp, 'ca'), 'pin-1.raditi.internal').toString()
+  assert.equal(
+    /^sha256=([0-9a-f]{64})$/m.exec(server)?.[1],
+    pinOf({ cert: read('ca/server/pin-1.raditi.internal.pem') }),
+  )
 })

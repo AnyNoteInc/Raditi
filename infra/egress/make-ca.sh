@@ -8,7 +8,9 @@
 #   make-ca.sh server <dir> <dns-name>     server/<dns-name>.pem (with the server CA) and key
 #   make-ca.sh client <dir> <cn> [days]    clients/<cn>.pem (with the client CA) and key
 #
-# A leaf is issued again with a new key on every run (renewal); the CA only once.
+# A leaf is issued again with a new key on every run (renewal); the CA only once. Each leaf's
+# SHA-256 pin is printed: the old certificate stays valid by chain and CN until it expires, and
+# only taking its pin off EGRESS_CLIENT_SHA256 on egress-1 revokes it.
 set -eu
 
 fail() {
@@ -62,6 +64,9 @@ leaf() {
   cat "$dir/$1/$2.leaf.pem" "$dir/$5.pem" >"$dir/$1/$2.pem"
   rm -f "$dir/$1/$2.leaf.pem"
   echo "$dir/$1/$2.pem: $(openssl x509 -in "$dir/$1/$2.pem" -noout -enddate)"
+  # The pin for EGRESS_CLIENT_SHA256 (README.md, «Перевыпуск и отзыв»): lowercase hex, no colons.
+  echo "sha256=$(openssl x509 -in "$dir/$1/$2.pem" -noout -fingerprint -sha256 | sed 's/^.*=//' |
+    tr -d ':' | tr 'A-F' 'a-f')"
 }
 
 case $action in

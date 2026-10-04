@@ -18,26 +18,29 @@ export const PROBE_LIMIT = 1024 * 1024
 
 // Never dialled: private, loopback, link-local (cloud metadata), CGNAT, documentation,
 // benchmarking, multicast and reserved ranges. Only IPv4 is dialled at all: a provider must
-// always see the node's one fixed address.
+// always see the node's one fixed address. nftables.conf drops the same list (NON_PUBLIC) as the
+// second line; a test keeps the two equal.
+export const BLOCKED_IPV4 = Object.freeze(
+  [
+    ['0.0.0.0', 8],
+    ['10.0.0.0', 8],
+    ['100.64.0.0', 10],
+    ['127.0.0.0', 8],
+    ['169.254.0.0', 16],
+    ['172.16.0.0', 12],
+    ['192.0.0.0', 24],
+    ['192.0.2.0', 24],
+    ['192.88.99.0', 24],
+    ['192.168.0.0', 16],
+    ['198.18.0.0', 15],
+    ['198.51.100.0', 24],
+    ['203.0.113.0', 24],
+    ['224.0.0.0', 4],
+    ['240.0.0.0', 4],
+  ].map((range) => Object.freeze(range)),
+)
 const BLOCKED = new BlockList()
-for (const [network, prefix] of [
-  ['0.0.0.0', 8],
-  ['10.0.0.0', 8],
-  ['100.64.0.0', 10],
-  ['127.0.0.0', 8],
-  ['169.254.0.0', 16],
-  ['172.16.0.0', 12],
-  ['192.0.0.0', 24],
-  ['192.0.2.0', 24],
-  ['192.88.99.0', 24],
-  ['192.168.0.0', 16],
-  ['198.18.0.0', 15],
-  ['198.51.100.0', 24],
-  ['203.0.113.0', 24],
-  ['224.0.0.0', 4],
-  ['240.0.0.0', 4],
-])
-  BLOCKED.addSubnet(network, prefix, 'ipv4')
+for (const [network, prefix] of BLOCKED_IPV4) BLOCKED.addSubnet(network, prefix, 'ipv4')
 
 export const isPublicIPv4 = (address) => isIPv4(address) && !BLOCKED.check(address, 'ipv4')
 
@@ -72,6 +75,25 @@ export function parseClientCns(value) {
   return new Set(cns)
 }
 
+// Plain hex (make-ca.sh) or colon pairs (openssl, X509Certificate.fingerprint256).
+const PIN = /^([0-9a-f]{64}|[0-9a-f]{2}(:[0-9a-f]{2}){31})$/i
+
+/**
+ * `EGRESS_CLIENT_SHA256`: SHA-256 fingerprints of the client leaf certificates admitted at all,
+ * as `make-ca.sh` prints them, or in colon pairs of any case. A renewed or stolen certificate keeps
+ * its chain and CN until it expires: only taking its fingerprint off this list revokes it.
+ * Unset: CN only, for local runs; the node's env.example always lists the pins.
+ */
+export function parseClientPins(value) {
+  if (value === undefined) return null
+  const values = list(value)
+  if (!values.every((pin) => PIN.test(pin)))
+    throw new Error('EGRESS_CLIENT_SHA256: not a SHA-256 fingerprint')
+  const pins = values.map((pin) => pin.replaceAll(':', '').toLowerCase())
+  if (pins.length === 0) throw new Error('EGRESS_CLIENT_SHA256 is empty')
+  return new Set(pins)
+}
+
 /** `EGRESS_PROBE_MAX_BYTES`: at most 1 MiB; it may only lower the limit. */
 export function parseProbeMax(value) {
   if (value === undefined || value === '') return PROBE_LIMIT
@@ -90,12 +112,14 @@ const logJson = (entry) => console.log(JSON.stringify(entry))
  * `tls`: the server chain and key, the root, and the client CA. A client presents its certificate
  * with the client CA; OpenSSL checks the chain to the root and `clientAuth` on both, and the
  * proxy then requires the client CA as the issuer, so no certificate of the server CA ever
- * passes. `lookup` and `dial` are replaced only by tests.
+ * passes. With `clientPins`, the leaf's SHA-256 fingerprint must be listed too: that is how a
+ * renewed or stolen certificate is revoked. `lookup` and `dial` are replaced only by tests.
  */
 export function createEgressProxy({
   tls,
   allow,
   clientCns,
+  clientPins = null,
   probeMaxBytes = PROBE_LIMIT,
   maxTunnels = 64,
   idleMs = 11 * 60 * 1000,
@@ -116,6 +140,8 @@ export function createEgressProxy({
     const cn = socket.getPeerCertificate()?.subject?.CN
     if (!peer || typeof cn !== 'string' || !clientCns.has(cn)) return null
     if (!peer.checkIssued(clientCa) || !peer.verify(clientCa.publicKey)) return null
+    if (clientPins && !clientPins.has(peer.fingerprint256.replaceAll(':', '').toLowerCase()))
+      return null
     return peer.keyUsage?.includes(CLIENT_AUTH) ? cn : null
   }
 
@@ -289,11 +315,18 @@ if (process.argv[1]?.endsWith('/llm-egress.mjs')) {
       },
       allow: parseAllow(process.env.LLM_EGRESS_ALLOW),
       clientCns: parseClientCns(process.env.EGRESS_CLIENT_CN_ALLOW),
+      clientPins: parseClientPins(process.env.EGRESS_CLIENT_SHA256),
       probeMaxBytes: parseProbeMax(process.env.EGRESS_PROBE_MAX_BYTES),
     })
     const host = process.env.EGRESS_LISTEN_HOST || '0.0.0.0'
     const port = Number(process.env.EGRESS_LISTEN_PORT || 443)
-    proxy.listen(port, host, () => logJson({ event: 'listening', port: proxy.address().port }))
+    proxy.listen(port, host, () =>
+      logJson({
+        event: 'listening',
+        port: proxy.address().port,
+        pinned: process.env.EGRESS_CLIENT_SHA256 !== undefined,
+      }),
+    )
     proxy.on('error', (error) => {
       console.error(`Egress proxy listener failed: ${error.code ?? 'error'}`)
       process.exitCode = 1
