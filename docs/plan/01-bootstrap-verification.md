@@ -53,3 +53,22 @@ WordPress отвечает 200 и показывает первоначальн�
 Каркас проверен локально. GitHub Actions пока не запускался для этих изменений;
 его результат нужно подтвердить после отправки ветки. Основная функция изменения сайтов,
 песочницы и полноценный биллинг остаются задачами P/M. Следующий шаг по плану — P1.
+
+## Дополнение от 04.10.2026: что подтвердить в GitHub Actions
+
+Ветка `codex/p3-llm-gateway` не отправлена, поэтому ни один workflow на ней не запускался.
+После ревью 02–04.10.2026 ([отчёт](29-review-2026-10.md)) к списку «подтвердить после отправки» добавились:
+
+- `ci.yml`, job `gates`: шаг `WordPress plugin syntax` (синтаксис плагина `infra/wordpress`);
+- `ci.yml`, job `gateway-db`: миграции, шаг `Schema matches migrations` (сравнение базы с `schema.prisma`),
+  сиды и `pnpm --filter orchestrator test:db --testTimeout=30000` — интеграционные наборы
+  с `RADITI_GATEWAY_DB_TESTS=1` на PostgreSQL самого job;
+- `ci.yml`, job `storage-s3`: presigned-ссылки `@repo/storage` на SeaweedFS, который поднимает job;
+- `codex-driver.yml`, job `sandbox-isolation`: Docker-тесты `@repo/sandbox-providers` и watchdog под `runc`;
+- новый workflow `wordpress-content.yml`: `pnpm verify:mcp-content` на настоящем WordPress;
+- `llm-gateway.yml`: уборка стенда B13 на Linux (bind mounts, записанные контейнером CLI под uid 10001).
+
+`pnpm --filter orchestrator test:db` запускается только с `DATABASE_URL` одноразовой PostgreSQL:
+эти наборы меняют общие справочники. Локально их выполняет `pnpm verify:db`.
+Скрипт `test` orchestrator теперь `node --test scripts/*.test.mjs && vitest run`,
+поэтому `--testTimeout` доходит до Vitest.

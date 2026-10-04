@@ -1,6 +1,6 @@
 # P3. LLM-шлюз: проектное решение, редакция 2
 
-> **Заменён 28.09.2026; действуют §4.2–4.4.** Решение владельца от 28.09.2026 перевело доступ к моделям на подписки Codex и Kimi: LiteLLM, российские провайдеры моделей и GigaChat уходят. Новый проект — [p3-design.md](p3-design.md). Из этого документа в силе §4.2–4.4 (Vault `turns/`, `issue`, `recover` и `revoke`, окна сбоев и сборщик); что ещё берётся с поправками — p3-design.md §5.6. Остальное — история.
+> **Заменён 28.09.2026; действуют §4.2–4.4.** Решение владельца от 28.09.2026 перевело доступ к моделям на подписки Codex и Kimi: LiteLLM, российские провайдеры моделей и GigaChat уходят. Новый проект — [p3-design.md](p3-design.md). Из этого документа в силе §4.2–4.4 (Vault `turns/`, `issue`, `recover` и `revoke`, окна сбоев и сборщик); что ещё берётся с поправками — p3-design.md §5.6. Остальное — история. Решением владельца от 30.09.2026 все подключения PostgreSQL используют одного `raditi`, владельца базы и схемы; описанные ниже отдельные роли и ACL не действуют. AppRole Vault и контракты §4.2–4.4 сохраняются. Текущий контракт — [spec.md, §16](../../spec.md#16-модель-данных), переход — [отчёт](../../plan/11-postgres-single-user.md).
 
 Документ от 28.09.2026, ветка `codex/p3-llm-gateway`. Пути даны от корня репозитория на 28.09.2026.
 
@@ -614,7 +614,7 @@ export interface LlmGateway {
   - Через 25 минут версия перестаёт читаться, но значение остаётся в хранилище и в снапшотах Raft до `kvDestroy` (S10).
   - `undelete` и `destroy` запрещены политикой.
   - Аудит хеширует значения через HMAC. `log_raw` и `audit_non_hmac_*` на этом mount не включаются.
-- **Путь:** `turns/data/t_<taskId>_<turn>_<firstEpoch>`. Данные — `{v:"1", llmApiKey, mcpToken, sessionId, alias}`, метаданные — `custom_metadata = {sessionId, deadlineAt, validUntil}`.
+- **Путь:** `turns/data/t_<taskId>_<turn>_<firstEpoch>`. С B11 данные — `{v:"1", llmApiKey, mcpToken, sessionId, accountId, grant}`, где `grant` — строка JSON исходной политики с `expiresAt` и `validUntil`; `alias` больше не используется. Метаданные — `custom_metadata = {sessionId, deadlineAt, validUntil}`. `expiresAt` закрывает admission в шлюзе, `validUntil = min(deadlineAt + TURN_PUBLICATION_GRACE_MS, firstIssueClock + 25 минут)` сохраняет значения для финализации.
 - **Порядок записи** (S3). В OpenBao данные считаются существующими, если есть метаданные ([path_data.go L73-91](https://github.com/openbao/openbao/blob/main/internal/builtin/logical/kv/path_data.go#L73-L91)). Поэтому запись данных после метаданных — это `update`, и она получит 403.
   1. `POST turns/data/<name> {options:{cas:0}, data}` — операция `create`. На этом пути такая запись возможна один раз.
   2. `POST turns/metadata/<name> {custom_metadata}` — `update` на метаданных.
@@ -624,7 +624,10 @@ export interface LlmGateway {
 
   ```hcl
   path "turns/data/*"     { capabilities = ["create", "read", "delete"] }  # no update: write once
-  path "turns/metadata/*" { capabilities = ["read", "update", "list", "delete"] }
+  path "turns/metadata/*" {
+    capabilities = ["read", "update", "list", "delete"]
+    allowed_parameters = { "custom_metadata" = [] }  # B5: runtime cannot change retention knobs
+  }
   path "turns/metadata"   { capabilities = ["list"] }
   path "turns/undelete/*" { capabilities = ["deny"] }
   path "turns/destroy/*"  { capabilities = ["deny"] }  # kvDestroy = DELETE metadata: every version at once
@@ -635,68 +638,62 @@ export interface LlmGateway {
 
   ```ts
   kvCreateOnce(path: string, data: Record<string, string>, metadata: Record<string, string>): Promise<'created' | 'exists'>
-  kvRead(path: string): Promise<Record<string, string> | null>   // null: no data or a deleted version
+  kvRead(path: string): Promise<{ data: Record<string, string>; version: number } | null> // null: no data or a deleted version
   kvDelete(path: string): Promise<void>                          // soft delete of the latest version
-  kvDestroy(path: string): Promise<void>                         // DELETE metadata: every version
+  kvDestroyAll(path: string): Promise<void>                      // DELETE metadata: every version
   kvList(prefix: string, page?: { after?: string; limit: number }): Promise<string[]>
-  kvMetadata(path: string): Promise<{ custom: Record<string, string>; createdTime: Date; deleted: boolean } | null>
+  kvMetadata(path: string): Promise<{ currentVersion: number; custom: Record<string, string>; createdTime: Date; deleted: boolean; destroyed: boolean } | null>
   kvWrite(path, data, options?: { cas?: number }): Promise<{ version: number }>   // for P7's sites
   ```
 
   - Реализация — `packages/vault/src/kv.ts`. Вход по AppRole выносится из `transit.ts:74-105` в `session.ts`.
+  - B5 выполнен локально 30.09.2026: общий AppRole для KV и Transit, клиент KV v2 и реальные проверки политик на одноразовом OpenBao — [отчёт](../../plan/09-p3-vault-and-local-site.md). Пути включают mount, но не служебный сегмент `data`/`metadata`. Будущий срок `deletion_time` ещё не означает удаление; LIST — один снимок с сортировкой и курсором на клиенте.
   - `kvCreateOnce`: 403 или ошибка CAS на шаге 1 → `kvRead`. Запись есть — `'exists'`, записи нет — ошибка. Шаг 2 повторяется всегда: он идемпотентен.
 
 ### 4.3 Алгоритмы
 
-Реализация — `GatewayTurnCredentials` в `apps/orchestrator/src/llm/turn-credentials.ts`. Сигнатура порта (`packages/domain/src/ports/turn-executor.ts:223-229`):
+Действующая реализация B11 — `GatewayTurnCredentials` в `apps/orchestrator/src/llm/turn-credentials.ts`. Полный локальный проверочный проход ещё ожидается; [отчёт](../../plan/18-p3-turn-keys.md). Прежние `gateway.issueKey`, `/key/info`, `/key/block` и `/key/delete` не используются. Порт:
 
 ```ts
-export interface TurnCredentialGrant {
+interface TurnCredentialGrant {
   driverId: AgentDriverId
-  model: string
-  /** What is left of the agent's time: the key never outlives it. */
+  backend: LlmBackendId
+  modelSlug: string
+  modelClass: ModelClass
+  reasoningEffort: string | null
   ttlMs: number
-  /** turn_assignments.deadline_at, the database clock. */
   deadlineAt: Date
-  /** Decimal string in [llmKeyLimits.minCostRub, llmKeyLimits.maxCostRub]. */
-  maxCostRub: string
+  budgetRub: string
+  boundSource: string | null
 }
-issue(turn: TurnCredentialRef, grant: TurnCredentialGrant): Promise<TurnCredentialValues>
+issue(ref: TurnCredentialRef, grant: TurnCredentialGrant): Promise<TurnCredentialValues>
 ```
 
 **`issue(ref, grant)`:**
-0. **Сверка цен** (M11). `gateway.modelPrices()` (кэш 60 с) сравнивается с действующей строкой `llm_model_prices`, то есть с наибольшим `effective_from ≤ now()`, по всем четырём ценам как Decimal. Расхождение — `LLM_PRICE_MISMATCH` и метрика.
-1. Строка `llm_keys` по `(task_id, turn_no, first_epoch)`: если задан `revoke_requested_at` или `revoked_at` — `CONFLICT`.
-2. `kvRead`: запись есть и `sessionId` совпадает — значения из неё, переход к шагу 4. Версия удалена — `CONFLICT`.
-3. Генерация значений, `kvCreateOnce`; ответ `'exists'` — к шагу 2.
-4. INSERT в `llm_keys` под fence одним запросом, как `apps/orchestrator/src/turns/turn-journal.ts:58-73`:
-   `WITH owned AS (SELECT … FROM site_leases … FOR UPDATE) INSERT … SELECT …, t.attempt, … FROM owned JOIN tasks t ON … JOIN llm_models m ON m.slug = $model AND m.enabled ON CONFLICT DO NOTHING RETURNING *, clock_timestamp()`.
-   - Ноль строк — диагностика: fence потерян → `LEASE_LOST`; модель неизвестна или выключена → `BAD_REQUEST`; строка уже есть с тем же хешем → её значения; с другим хешем → `CONFLICT`.
-   - **При повторе `max_cost_rub` и `expires_at` берутся из строки, а не из нового `grant`** (M12).
-5. `guard.assertFence()` (делает вызывающий), затем `gateway.issueKey` с `durationS = floor((expires_at − clock_timestamp)/1000)` и проверка раздела 4.1.
 
-**`recover(ref)`** (S5):
-- `kvRead` + zod + `sessionId`;
-- строка `llm_keys` с `key_hash = sha256(llmApiKey)`, `revoke_requested_at IS NULL`, `revoked_at IS NULL`, `now() < valid_until`;
-- если хоть что-то не сходится — `null` (в лог только эпоха и фаза);
-- Vault или PostgreSQL ответили 5xx или 403, или не ответили — исключение: recovery отложит ход (`turn-exec-recovery.ts:384-395`).
+1. Короткая SQL-транзакция блокирует строку аренды сайта, проверяет `holder_task_id`, epoch, operation `turn`, отсутствие held и живой срок по свежим часам БД. Событие `llm.revoke_requested` для `(taskId, sessionId, turn, firstEpoch)` запрещает повтор. Текущая строка `llm_keys` не может быть отозвана или принадлежать другой сессии. Новый профиль проверяется по драйверу, оболочке, модели, классу, действующей ставке и разрешению трансграничной передачи; дата разрешения — сегодняшний день Москвы. Затем замок `pool:<backend>` сериализует предварительный выбор аккаунта через `pickAccount`.
+2. Все SQL-блокировки освобождаются. `kvRead` и write-once `kvCreateOnce` сохраняют ключ, MCP-токен, сессию, аккаунт и исходную политику со сроками. Данные с CAS=0 идут до метаданных; существующая версия читается обратно, metadata после частичного сбоя дописывается. Удалённая или несовместимая запись не возобновляется. `expiresAt = min(now + ttlMs, deadlineAt − TURN_FINALIZE_RESERVE_MS)`, а `validUntil` сохраняет значения до окончания публикации с потолком 25 минут.
+3. Вторая SQL-транзакция заново проверяет живую аренду и marker, под тем же замком пула выбирает только аккаунт из Vault и атомарно создаёт привязку задачи и `llm_keys`. Гонка за слот даёт ожидание, не смену аккаунта в уже записанном Vault. Повтор берёт бюджет, профиль, адрес и сроки из сохранённой политики/строки; неудачное решение не расходует перепривязку. Hash, сессия и аккаунт должны совпасть. После ожиданий ещё раз проверяются fence и свежие часы.
+4. Вызывающий проверяет свой `guard.assertFence()`; значения подставляются только в память и файлы секретов. Сетевых операций внутри SQL нет; `lock_timeout` и `statement_timeout` ограничивают ожидания и отменяют SQL на сервере.
 
-**`revoke(ref)`.** Каждый шаг можно повторять:
-0. `UPDATE llm_keys SET revoke_requested_at = coalesce(revoke_requested_at, clock_timestamp()) RETURNING key_hash, expires_at`. Строки нет — хеш считается из `kvRead`, пока запись не удалена.
-1. `kvDelete`: с этого момента `recover` отвечает `null`, а `cas=0` запись не воскресит.
-2. `gateway.blockKey(hash)`: `absent` — успех.
-3. `UPDATE llm_keys SET revoked_at = coalesce(revoked_at, clock_timestamp())`.
-4. `kvDestroy`, если шаг 2 прошёл или `now() > expires_at` (S10).
+Если выбору мешают неизвестные окна, `core` после освобождения SQL-блокировок однократно просит content-free probe через частный endpoint роли `llm`, затем читает новый снимок. Произвольный сбой пробы не создаёт доступность. Годного аккаунта нет — `SUBSCRIPTION_WAIT`/`SUBSCRIPTION_BUSY` до запуска контейнера; операторское решение и отсутствие ставки остаются отдельными отказами.
 
-Если LiteLLM лежит, запись в Vault всё равно уничтожается после конца ключа.
+**`recover(ref)`:**
 
-Ключ **блокируется, а не удаляется**:
-- `/key/delete` переносит строку в архив сразу ([L4895-4917](https://github.com/BerriAI/litellm/blob/v1.103.0/litellm/proxy/management_endpoints/key_management_endpoints.py#L4895-L4917));
-- пакетная запись `spend` через `update_many` молча пропускает удалённую строку ([db_spend_update_writer.py L1858-1866](https://github.com/BerriAI/litellm/blob/v1.103.0/litellm/proxy/db/db_spend_update_writer.py#L1858-L1866)), и сверка расходилась бы всегда (O1).
+- `kvRead` + строгая схема + `sessionId`;
+- `llm_keys.key_hash = sha256(llmApiKey)`, совпадение `subscription_account_id`, отсутствие `revoke_requested_at`/`revoked_at`, живой `validUntil` в Vault и SQL;
+- `expiresAt` отдельно закрывает запросы модели; до `validUntil` значения ещё нужны фильтрации вывода и финализации;
+- при несовпадении — `null`; здоровье и операторское состояние аккаунта здесь не меняют привязку;
+- транспортная ошибка Vault/SQL — исключение с безопасным текстом, recovery откладывает ход. Ключевые данные и ответы провайдера не логируются.
 
-`/key/delete` делает сборщик после закрытия учёта.
+**`revoke(ref)`:**
 
-**Где вызывается.** `TurnSupervisor.run` (`apps/orchestrator/src/turns/turn-supervisor.ts:59`) принимает `UnkeyedTurnRequest` (`context.llm` без `apiKey`, `mcp` без `token`) и `grant`.
+1. Под замком строки аренды сохраняется не клиентское событие `llm.revoke_requested` с `(sessionId, turn, firstEpoch)` и устанавливается `revoke_requested_at` имеющегося ключа. Marker действует и без строки ключа: поздний CAS прерванного `issue` не сможет затем создать admission, даже если lease ещё жива или metadata уже уничтожены. Повтор marker идемпотентен; бизнес-статус задачи не меняется.
+2. `kvDelete` закрывает чтение записи Vault.
+3. `revoked_at` фиксирует завершение отзыва; `usage_closed_at` ставится только при отсутствии открытых вызовов, под замком ключа.
+4. `kvDestroyAll` удаляет все версии и metadata. Каждый шаг повторяем; ошибка Vault не открывает SQL admission обратно.
+
+**Где вызывается.** `TurnSupervisor.run` (`apps/orchestrator/src/turns/turn-supervisor.ts:59`) принимает `UnkeyedTurnRequest` (`context.llm` без `apiKey`, `mcp` без `token`) и проверенную политику. После `assignments.open` он берёт сохранённый deadline; для раннера сначала ждёт доверенный claim ВМ и адрес из `RUNNER_TOKENS`, затем формирует полный `grant`.
 - После `assignments.open` (`:87-99`) и `guard.assertFence()` он выставляет `attempt.credentialRef` и вызывает `issue` через `guard.interruptible`.
 - Затем подставляет значения в контекст до `driver.prepare` (`:127`).
 - Проверка «в env песочницы нет учётных данных» (`:191-194`) переезжает на подставленные значения.
@@ -725,22 +722,25 @@ issue(turn: TurnCredentialRef, grant: TurnCredentialGrant): Promise<TurnCredenti
 
 | Где упал `core` | Что осталось | Что дальше |
 | --- | --- | --- |
-| До записи в Vault | ничего | `#vacate` → `revoke`: везде «нет записи» |
-| Данные в Vault, метаданных нет | запись без `custom_metadata` | повтор `issue` допишет их; сборщик берёт `created_time + 25 мин` |
-| Vault есть, `llm_keys` нет | запись Vault | повтор `issue` с шага 2; сборщик по LIST |
-| `llm_keys` есть, ключа в LiteLLM нет | Vault и строка | повтор `issue` → `generate`; `revoke` → `absent` |
-| Ключ создан, ответ потерян | всё | `/key/info` по хешу, повтор идемпотентен |
-| Между шагами `revoke` | `revoke_requested_at` | сборщик раз в минуту |
-| Зомби-`core` на старой эпохе | ничего нового | fence в INSERT и `assertFence` перед `issueKey` |
-| Вызовы идут после `revoke` | поздние строки и `spend` на заблокированном ключе | финализация через 11 мин (раздел 5.2) |
+| До записи в Vault | admission отсутствует | `revoke` сохраняет marker, чтобы поздняя запись не допускалась |
+| Данные Vault есть, metadata нет | запись без custom metadata | повтор `issue` допишет metadata; сборщик берёт `createdTime + 25 минут` |
+| Vault есть, `llm_keys` нет | write-once данные с аккаунтом и исходной политикой | повтор повторно проверит fence и тот же аккаунт; сборщик найдёт orphan через LIST |
+| SQL commit прошёл, ответ потерян | Vault, ключ и привязка | повтор возвращает те же значения, бюджет, профиль и сроки |
+| Отмена во время CAS Vault | marker отзыва, возможно ещё нет строки ключа | поздняя запись не создаёт admission; сборщик уничтожает запись по сроку |
+| Между шагами отзыва | marker и/или `revoke_requested_at` | повтор `revoke` раз в минуту |
+| Зомби на старой эпохе или lease истекла во время ожидания | новый admission отсутствует | свежая fenced проверка запрещает выдачу |
+| При отзыве открыт допущенный вызов | ключ закрыт для новых вызовов, учёт открыт | после последнего вызова сборщик ставит `usage_closed_at` |
 
-**Сборщик** — job scheduler `turn-credentials-sweep`, раз в 60 с:
-- (a) `revoke_requested_at IS NOT NULL AND revoked_at IS NULL` → `revoke`;
-- (b) `revoked_at IS NULL AND valid_until < now()` → `revoke`;
-- (c) каждый пятый запуск: `kvList('turns/', {after, limit: 100})` → `kvMetadata` → прошёл `validUntil` (или `createdTime + 25 мин`) → `revoke` по имени (ref разбирается из имени) или `kvDestroy`, если строка уже отозвана;
-- (d) `usage_state <> 'pending' AND revoked_at IS NOT NULL AND gateway_deleted_at IS NULL` → `deleteKey` и `gateway_deleted_at`.
+**Сборщик B11** подключён таймером `core` раз в 60 секунд, без наложения запусков:
 
-Метрика — `raditi_llm_credentials_swept_total{kind}`.
+- `revoke_requested_at IS NOT NULL AND revoked_at IS NULL` → повтор `revoke`;
+- `revoked_at IS NULL AND valid_until <= clock_timestamp()` → `revoke` после окна финализации;
+- каждый пятый запуск: страница `kvList('turns/', {after, limit: 100})`, metadata и удаление после `validUntil`, либо `createdTime + 25 минут` без срока; неудачная страница повторяется с прежним курсором;
+- отозванные ключи без открытых вызовов → `usage_closed_at` под замком ключа;
+- резервное восстановление открытых вызовов старше 30 минут через тот же алгоритм учёта, что в роли `llm`;
+- аккаунт с `retire_requested_at`: под тем же замком пула, что `issue`, `enabled=false` после истечения/отзыва активных ключей и закрытия всех открытых вызовов. Затем роль `llm` отзывает токен; окончательное уничтожение `subs/` делает оператор B12.
+
+Метрика — `raditi_llm_credentials_swept_total{kind}` с ограниченными агрегатными kind, без идентификаторов задач и аккаунтов. Очередь жизненного цикла задач относится к P12; текущий сборщик — локальный таймер роли `core`.
 
 ## 5. Журнал вызовов → `token_usage`
 
