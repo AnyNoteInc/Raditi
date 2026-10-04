@@ -1758,8 +1758,18 @@ describe('subscription HTTP gateway', () => {
     client.on('error', () => {})
     client.end(JSON.stringify(body))
     const response = await started.promise
-    await realDelay(100)
-    expect(vi.getTimerCount()).toBeGreaterThanOrEqual(2)
+    // The stall timer stays armed only once the buffers between the gateway and the paused client
+    // are full, and how much they hold depends on the platform (megabytes on Linux): a fixed pause
+    // here was a race, and a timer armed after the clock moved never fires. The request timer, the
+    // provider idle timer and the stall timer make three; wait until all three hold without a break.
+    let armedSince: number | undefined
+    for (const giveUpAt = performance.now() + 20_000; ;) {
+      if (vi.getTimerCount() < 3) armedSince = undefined
+      else if (performance.now() - (armedSince ??= performance.now()) >= 500) break
+      if (performance.now() > giveUpAt)
+        throw new Error('The gateway never stalled on the paused client')
+      await realDelay(20)
+    }
     await vi.advanceTimersByTimeAsync(60_000 - 1)
     expect(store.finish).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
@@ -1775,5 +1785,6 @@ describe('subscription HTTP gateway', () => {
     )
     response.destroy()
     client.destroy()
-  })
+    // Filling the buffers takes real time: seconds on a loaded machine, not the default five.
+  }, 30_000)
 })
