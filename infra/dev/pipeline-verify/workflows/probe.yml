@@ -1,0 +1,58 @@
+# Stand only (pnpm verify:pipeline): what a job container of each runner kind reaches. The stand
+# commits this file next to check.yml and deploy.yml into its own platform/ci; it is not a part of
+# the product pipeline (ci/). The stand reads every line `probe.<kind>.<key>=<value>` of the job
+# log through the API of Gitea. No secret value is printed: only whether it is visible.
+name: probe
+on:
+  push:
+    branches: ['probe/**']
+jobs:
+  probe:
+    if: gitea.repository_owner == 'sites'
+    strategy:
+      matrix:
+        runner: [check, deploy]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: probe
+        env:
+          KIND: ${{ matrix.runner }}
+          JOB_TOKEN: ${{ gitea.token }}
+          API: ${{ gitea.api_url }}
+          REPO: ${{ gitea.repository }}
+          OTHER_REPO: ${{ vars.RADITI_PROBE_OTHER_REPO }}
+          HOST_PORT: ${{ vars.RADITI_PROBE_HOST_PORT }}
+          RADITI_DEPLOY_WRAP: ${{ secrets.RADITI_DEPLOY_WRAP }}
+        run: |
+          p() { echo "probe.$KIND.$1=$2"; }
+          tcp() { if nc -z -w 3 "$1" "$2" 2>/dev/null; then echo open; else echo closed; fi; }
+          # The certificate of the stand's Gitea is not checked here: the job image has no CA of
+          # the stand. A probe, not a pattern for product steps.
+          http() {
+            code=$(wget -S --no-check-certificate -T 10 -O /dev/null \
+              --header "Authorization: token $JOB_TOKEN" "$@" 2>&1 |
+              sed -n 's/^.*HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*$/\1/p' | tail -n 1)
+            echo "${code:-none}"
+          }
+          json='Content-Type: application/json'
+          p uid "$(id -u)"
+          p cap_eff "$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status)"
+          p no_new_privs "$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status)"
+          p rootfs "$(if touch /probe-write 2>/dev/null; then echo writable; else echo read-only; fi)"
+          p docker_socket "$(if [ -e /var/run/docker.sock ]; then echo present; else echo absent; fi)"
+          p site_volume "$(if [ -d /site ]; then echo mounted; else echo absent; fi)"
+          p default_route "$(ip route 2>/dev/null | grep -c '^default')"
+          p deploy_secret "$(if [ -n "$RADITI_DEPLOY_WRAP" ]; then echo visible; else echo empty; fi)"
+          p tcp_gitea "$(tcp gitea 3000)"
+          p tcp_openbao "$(tcp openbao 8200)"
+          p tcp_host "$(tcp host.docker.internal "$HOST_PORT")"
+          p token_own_repo "$(http "$API/repos/$REPO")"
+          p token_other_site "$(http "$API/repos/$OTHER_REPO")"
+          p token_platform_ci "$(http "$API/repos/platform/ci")"
+          p token_own_secrets "$(http "$API/repos/$REPO/actions/secrets")"
+          # busybox wget speaks GET and POST only: the two writes below are POST requests.
+          p token_set_variable "$(http --header "$json" --post-data '{"value":"probe"}' \
+            "$API/repos/$REPO/actions/variables/RADITI_PROBE_WRITTEN_$KIND")"
+          p token_write_code "$(http --header "$json" \
+            --post-data "{\"content\":\"cHJvYmU=\",\"message\":\"probe\",\"branch\":\"main\",\"new_branch\":\"probe-written-$KIND\"}" \
+            "$API/repos/$REPO/contents/probe-written-$KIND.txt")"

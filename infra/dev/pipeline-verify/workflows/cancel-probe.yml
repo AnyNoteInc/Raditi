@@ -1,0 +1,31 @@
+# Stand only (pnpm verify:pipeline): which conditional steps a cancelled run still executes. A
+# scoped workflow of the stand's platform/ci with its own concurrency group: a push with `hold`
+# in the commit message holds, the next push cancels it.
+name: cancel-probe
+on:
+  push:
+    branches: ['cancel/**']
+concurrency:
+  group: cancel-probe-${{ gitea.repository }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  hold:
+    if: gitea.repository_owner == 'sites'
+    runs-on: check
+    steps:
+      - name: hold
+        env:
+          HEAD_MESSAGE: ${{ gitea.event.head_commit.message }}
+        run: |
+          case "$HEAD_MESSAGE" in *hold*) sleep 120 ;; esac
+      - name: failure-only
+        if: failure()
+        run: echo "failure() ran"
+      - name: failure-or-cancelled
+        if: failure() || cancelled()
+        run: echo "failure() || cancelled() ran"
+      - name: always
+        if: always()
+        run: echo "always() ran"

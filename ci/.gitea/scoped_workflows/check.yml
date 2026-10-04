@@ -1,0 +1,28 @@
+# Obligatory check of a pull request of a site repository (spec §10); deploy.yml tells how the
+# files of this directory reach a site repository.
+#
+# SPIKE (N18): a substitute. It proves that the workflow runs for a pull request of a repository
+# without CI files and posts the commit status `platform/ci: check / check (pull_request)` that a
+# required status check pattern is matched against. The real checks (PHP lint, asset build,
+# forbidden paths and secrets in the diff) are P8.
+name: check
+on:
+  pull_request:
+# By default the job token of Gitea may write to the repository of the job (the mode
+# `permissive`): a job of this pipeline only reads it.
+permissions:
+  contents: read
+jobs:
+  check:
+    if: gitea.repository_owner == 'sites'
+    runs-on: check
+    steps:
+      - name: check
+        env:
+          REPOSITORY: ${{ gitea.repository }}
+          HEAD_REF: ${{ gitea.head_ref }}
+          BASE_REF: ${{ gitea.base_ref }}
+          HEAD_SHA: ${{ gitea.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          echo "check: $REPOSITORY $HEAD_REF -> $BASE_REF at $HEAD_SHA"

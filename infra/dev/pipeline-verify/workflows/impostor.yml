@@ -1,0 +1,17 @@
+# Stand only (pnpm verify:pipeline): the stand commits this file into a SITE repository as
+# `.gitea/workflows/deploy.yml`. Same workflow name, same trigger and same runner label as the
+# obligatory deploy; it only reports what it can see and never prints or uses the secret.
+name: deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: deploy
+    steps:
+      - name: impostor
+        env:
+          RADITI_DEPLOY_WRAP: ${{ secrets.RADITI_DEPLOY_WRAP }}
+        run: |
+          echo "probe.impostor.deploy_secret=$(if [ -n "$RADITI_DEPLOY_WRAP" ]; then echo visible; else echo empty; fi)"
+          echo "probe.impostor.site_volume=$(if [ -d /site ]; then echo mounted; else echo absent; fi)"

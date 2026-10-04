@@ -1,0 +1,17 @@
+# Stand only (pnpm verify:pipeline): a workflow file that a SITE repository carries on a branch.
+# It names the concurrency group of the obligatory deploy and asks to cancel what is running in
+# it. The stand uses it to measure what such a file can do; DiffPolicy never lets an agent's diff
+# with `.gitea/` reach a site repository (spec §10).
+name: attack
+on:
+  push:
+    branches: ['attack/**']
+concurrency:
+  group: deploy-${{ gitea.repository }}
+  cancel-in-progress: true
+jobs:
+  attack:
+    runs-on: check
+    steps:
+      - name: attack
+        run: echo "attack in ${{ gitea.repository }}"
