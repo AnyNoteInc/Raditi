@@ -7,7 +7,7 @@
 
 const TOOLING = '^packages/(eslint-config|typescript-config)/'
 const ADAPTERS =
-  'db|storage|vault|git-providers|sandbox-providers|agent-drivers|site-adapters|yookassa|mail|telegram'
+  'db|storage|vault|git-providers|sandbox-providers|agent-drivers|llm-backends|site-adapters|yookassa|mail|telegram'
 const SERVICES = 'auth|notifications'
 // Every package must belong to a layer; an unclassified one would bypass all rules.
 const KNOWN = `^packages/(domain|observability|${ADAPTERS}|${SERVICES}|trpc|ui|eslint-config|typescript-config)/`
@@ -154,7 +154,7 @@ module.exports = {
     {
       name: 'runner-no-platform-access',
       comment:
-        'The runner role and the local executor it drives never reach PostgreSQL, Redis, Vault, S3 or core’s runner API, not even transitively: a sandbox VM holds no platform credentials (spec §8, §19).',
+        'The runner role and the local executor it drives never reach PostgreSQL, Redis, Vault, S3, the payment shop or core’s runner API, not even transitively: a sandbox VM holds no platform credentials (spec §8, §19).',
       severity: 'error',
       from: {
         path: '^apps/orchestrator/src/(runner/|turns/local-turn-executor\\.ts$)',
@@ -162,7 +162,7 @@ module.exports = {
       },
       to: {
         path: [
-          '^packages/(db|vault|storage)/',
+          '^packages/(db|vault|storage|llm-backends|yookassa)/',
           '^apps/orchestrator/src/runner-api/',
           ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+'),
         ],
@@ -171,10 +171,10 @@ module.exports = {
     },
     {
       name: 'web-no-sandbox',
-      comment: 'Only the orchestrator runs agents and sandboxes — not even transitively from web.',
+      comment: 'Only the orchestrator runs agents, sandboxes and subscription backends.',
       severity: 'error',
       from: { path: '^apps/web/' },
-      to: { path: '^packages/(sandbox-providers|agent-drivers)/', reachable: true },
+      to: { path: '^packages/(sandbox-providers|agent-drivers|llm-backends)/', reachable: true },
     },
   ],
   options: {

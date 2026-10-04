@@ -338,6 +338,9 @@ catalogs:
     bullmq:
       specifier: ^6.3.0
       version: 6.3.8
+    decimal.js:
+      specifier: ^10.6.0
+      version: 10.6.0
     dependency-cruiser:
       specifier: ^18.4.0
       version: 18.4.0
@@ -413,6 +416,9 @@ catalogs:
     server-only:
       specifier: ^0.0.1
       version: 0.0.1
+    sharp:
+      specifier: 0.35.4
+      version: 0.35.4
     superjson:
       specifier: ^2.2.6
       version: 2.2.6
@@ -544,6 +550,12 @@ importers:
       '@repo/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@repo/git-providers':
+        specifier: workspace:*
+        version: link:../../packages/git-providers
+      '@repo/llm-backends':
+        specifier: workspace:*
+        version: link:../../packages/llm-backends
       '@repo/mail':
         specifier: workspace:*
         version: link:../../packages/mail
@@ -556,12 +568,18 @@ importers:
       '@repo/sandbox-providers':
         specifier: workspace:*
         version: link:../../packages/sandbox-providers
+      '@repo/site-adapters':
+        specifier: workspace:*
+        version: link:../../packages/site-adapters
       '@repo/storage':
         specifier: workspace:*
         version: link:../../packages/storage
       '@repo/vault':
         specifier: workspace:*
         version: link:../../packages/vault
+      '@repo/yookassa':
+        specifier: workspace:*
+        version: link:../../packages/yookassa
       bullmq:
         specifier: 'catalog:'
         version: 6.3.8(ioredis@6.0.0(supports-color@7.2.0))(pg@8.23.0)
@@ -571,6 +589,9 @@ importers:
       ioredis:
         specifier: 'catalog:'
         version: 6.0.0(supports-color@7.2.0)
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.0
       reflect-metadata:
         specifier: 'catalog:'
         version: 0.2.2
@@ -605,6 +626,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.2
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
       '@types/supertest':
         specifier: 'catalog:'
         version: 7.2.1
@@ -704,6 +728,9 @@ importers:
       better-auth:
         specifier: 'catalog:'
         version: 1.7.6(@opentelemetry/api@1.9.1)(@prisma/client@7.10.0(@typescript/typescript6@6.0.2)(prisma@7.10.0(@typescript/typescript6@6.0.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)))(mysql2@3.15.3)(next@16.3.6(@opentelemetry/api@1.9.1)(@playwright/test@1.63.0)(@types/node@26.6.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(pg@8.23.0)(prisma@7.10.0(@typescript/typescript6@6.0.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0)))
+      decimal.js:
+        specifier: 'catalog:'
+        version: 10.6.0
       ioredis:
         specifier: 'catalog:'
         version: 6.0.0(supports-color@7.2.0)
@@ -722,6 +749,9 @@ importers:
       server-only:
         specifier: 'catalog:'
         version: 0.0.1
+      sharp:
+        specifier: 'catalog:'
+        version: 0.35.4(@types/node@26.6.2)
       superjson:
         specifier: 'catalog:'
         version: 2.2.6
@@ -894,6 +924,9 @@ importers:
 
   packages/domain:
     dependencies:
+      decimal.js:
+        specifier: 'catalog:'
+        version: 10.6.0
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -952,6 +985,37 @@ importers:
         version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
 
   packages/git-providers:
+    dependencies:
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/llm-backends:
     dependencies:
       '@repo/domain':
         specifier: workspace:*
@@ -8300,8 +8364,7 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
-  '@img/colour@1.1.0':
-    optional: true
+  '@img/colour@1.1.0': {}
 
   '@img/sharp-darwin-arm64@0.35.4':
     optionalDependencies:
@@ -13018,7 +13081,6 @@ snapshots:
       '@img/sharp-win32-ia32': 0.35.4
       '@img/sharp-win32-x64': 0.35.4
       '@types/node': 26.6.2
-    optional: true
 
   shebang-command@2.0.0:
     dependencies:
