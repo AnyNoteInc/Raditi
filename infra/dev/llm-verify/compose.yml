@@ -1,0 +1,113 @@
+# Disposable synthetic B13 stack. Values come only from the harness's private temporary file.
+services:
+  postgres:
+    image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_DB: raditi
+      POSTGRES_PASSWORD_FILE: /run/raditi/superuser-password
+    volumes:
+      - ${VERIFY_DIR}/postgres:/run/raditi:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports: ['127.0.0.1::5432']
+    networks: [trusted]
+  vault:
+    image: ghcr.io/openbao/openbao:2.7.0
+    command: ['server', '-config=/verify/bao.hcl']
+    volumes:
+      - ${VERIFY_DIR}/bao.hcl:/verify/bao.hcl:ro
+    tmpfs: [/tmp, '/audit:rw,nosuid,nodev,size=32m,uid=100,gid=1000,mode=0700']
+    ports: ['127.0.0.1::8200']
+    networks: [trusted]
+  fake-subscriptions:
+    image: ${VERIFY_NODE_IMAGE}
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ['node', '/verify/fake-subscriptions.mjs']
+    command:
+      [
+        '--tls-key',
+        '/tls/server-key.pem',
+        '--tls-cert',
+        '/tls/server.pem',
+        '--host',
+        '0.0.0.0',
+        '--port',
+        '443',
+        '--control-host',
+        '0.0.0.0',
+        '--control-port',
+        '8787',
+        '--mcp-host',
+        '0.0.0.0',
+        '--mcp-port',
+        '8788',
+      ]
+    volumes:
+      - ${VERIFY_ROOT}/infra/dev/llm-verify:/verify:ro
+      - ${VERIFY_DIR}/fake-tls:/tls:ro
+    ports: ['127.0.0.1::8787']
+    networks:
+      providers:
+        aliases: [chatgpt.com, auth.openai.com, api.kimi.ai]
+      trusted: {}
+  llm-egress:
+    image: ${VERIFY_NODE_IMAGE}
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ['node', '/repo/infra/dev/llm-verify/egress.mjs', '/tls']
+    volumes:
+      - ${VERIFY_ROOT}/infra:/repo/infra:ro
+      - ${VERIFY_DIR}/egress-tls:/tls:ro
+    ports: ['127.0.0.1::8443']
+    networks: [providers, trusted]
+  sandbox-gw:
+    image: ${VERIFY_NODE_IMAGE}
+    user: '10001:10001'
+    read_only: true
+    tmpfs: ['/run/raditi-gateway:rw,nosuid,nodev,size=1m,uid=10001,gid=10001']
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ['node', '/repo/gateway.mjs']
+    environment:
+      LISTEN_HOST: '0.0.0.0'
+      CLIENT_IPV4: ${VERIFY_CLI_IP}
+      # Both production groups: the drivers' CLIs need the platform MCP server at start.
+      ALLOWED_ROUTES: '["llm","mcp"]'
+      LLM_UPSTREAM: http://host.docker.internal:${VERIFY_LLM_PORT}
+      # The synthetic MCP of fake-subscriptions on the trusted network, never published; the
+      # agent-content stand names the real role mcp on the host instead (stack.mjs, mcpUpstream).
+      MCP_UPSTREAM: ${VERIFY_MCP_UPSTREAM:?}
+    extra_hosts: ['host.docker.internal:host-gateway']
+    volumes:
+      - ${VERIFY_ROOT}/infra/sandbox/gateway.mjs:/repo/gateway.mjs:ro
+    networks:
+      cli:
+        ipv4_address: ${VERIFY_GATEWAY_IP}
+      trusted: {}
+  # Only the agent-content stand (profile content): the role mcp keeps encrypted content
+  # snapshots here. The identity is the harness's own, written into its private directory.
+  s3:
+    profiles: [content]
+    image: chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
+    command: ['server', '-dir=/data', '-s3', '-s3.port=8333', '-s3.config=/config/s3.json']
+    volumes:
+      - ${VERIFY_DIR}/s3.json:/config/s3.json:ro
+    tmpfs: ['/data:rw,size=768m']
+    ports: ['127.0.0.1::8333']
+    networks: [trusted]
+networks:
+  trusted:
+    # Trusted services reach the host's separate core/llm processes. CLI uses only cli + guard.
+    internal: false
+  providers:
+    internal: true
+  cli:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${VERIFY_CLI_SUBNET}

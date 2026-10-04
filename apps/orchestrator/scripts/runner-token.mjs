@@ -10,8 +10,10 @@
 //   hash <token file> --ip <VM private IP>
 //                                   the RUNNER_TOKENS entry of an existing token
 //
-// Production binds each hash to the private address of its VM: --ip takes an RFC 1918 or IPv6
-// ULA literal, never a name. Without --ip the entry is accepted only outside production.
+// Every hash is bound to the address its runner connects from: core with TURN_EXECUTOR=runner
+// binds turn keys to it and refuses an entry without one. --ip takes the VM's RFC 1918 or IPv6
+// ULA literal, never a name. A local runner on this machine: issue without --ip and append
+// @127.0.0.1 to the printed entry (outside production only).
 // Rotation: infra/app/README.md, «Токены раннеров».
 import { createHash, randomBytes } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -52,7 +54,10 @@ const entry = (token, address) => {
   }
   const hash = createHash('sha256').update(token, 'utf8').digest('hex')
   if (address === undefined)
-    console.error('Without --ip the entry is accepted only outside production')
+    console.error(
+      'Without --ip the entry has no address, and core with TURN_EXECUTOR=runner refuses it: ' +
+        'append @127.0.0.1 for a local runner (outside production), or issue with --ip <VM private IP>',
+    )
   return `${parsed.runnerId}:${hash}${address === undefined ? '' : `@${address}`}`
 }
 
