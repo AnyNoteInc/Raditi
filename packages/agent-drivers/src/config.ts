@@ -1,23 +1,39 @@
-import { envVar, IMAGE_REPOSITORY, parseEnv, type Env } from '@repo/domain'
+import {
+  appEnvSchema,
+  DIGEST_PINNED_IMAGE,
+  envVar,
+  isProduction,
+  parseEnv,
+  type Env,
+} from '@repo/domain'
 import { z } from 'zod'
 
-/**
- * SANDBOX_IMAGE_PREFIX: a repository without tag or digest; a driver image is `<prefix>-<driver>`.
- * TODO(P4): sandboxSpecSchema accepts only digest-pinned images, so `<prefix>-<driver>` must be
- * resolved to `…@sha256:` (Gitea registry) before a SandboxSpec is built. Check against spec §8
- * first: it names one base image per stack, not one per driver.
- */
-const imagePrefix = z
+/** One stack image for every driver, resolved by the operator before scheduling a turn. */
+const image = z
   .string()
-  .regex(IMAGE_REPOSITORY, 'expected a repository without tag, e.g. raditi/agent')
+  .max(512)
+  .regex(DIGEST_PINNED_IMAGE, 'expected an image pinned by digest: repository@sha256:<64 hex>')
 
-export const agentDriverConfigSchema = z.object({ imagePrefix })
+export const agentDriverConfigSchema = z.object({ image })
 export type AgentDriverConfig = z.infer<typeof agentDriverConfigSchema>
 
-const envSchema = z.object({ SANDBOX_IMAGE_PREFIX: envVar(imagePrefix) })
+/** What .env.example and infra/app/env.example carry until an image is built: never real. */
+const PLACEHOLDER_DIGEST = `@sha256:${'0'.repeat(64)}`
+
+const envSchema = z
+  .object({
+    // Required, never defaulted: a missing APP_ENV must not switch the placeholder check off.
+    APP_ENV: envVar(appEnvSchema),
+    SANDBOX_IMAGE: envVar(image),
+  })
+  .refine((env) => !isProduction(env.APP_ENV) || !env.SANDBOX_IMAGE.endsWith(PLACEHOLDER_DIGEST), {
+    message:
+      'the all-zero digest is the env.example placeholder: set the digest of the built stack image',
+    path: ['SANDBOX_IMAGE'],
+  })
 
 export function agentDriverConfigFromEnv(env: Env): AgentDriverConfig {
-  return { imagePrefix: parseEnv('agent drivers', envSchema, env).SANDBOX_IMAGE_PREFIX }
+  return { image: parseEnv('agent drivers', envSchema, env).SANDBOX_IMAGE }
 }
 
 export function parseAgentDriverConfig(config: AgentDriverConfig): AgentDriverConfig {

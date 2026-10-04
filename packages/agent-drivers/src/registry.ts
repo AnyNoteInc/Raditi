@@ -18,7 +18,7 @@ export interface AgentDriverRegistry {
   list(): AgentDriver[]
 }
 
-/** Every driver implemented in this package; gigacode and sourcecraft come after the PoC. */
+/** Every implemented driver; qwen and opencode remain disabled in the application. */
 export function createAgentDrivers(config: AgentDriverConfig): AgentDriver[] {
   return [
     createCodexDriver(config),

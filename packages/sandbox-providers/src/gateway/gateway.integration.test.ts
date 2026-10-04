@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import { createServer } from 'node:http'
+import { createServer, type IncomingHttpHeaders } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
 import type { Sandbox } from '@repo/domain'
@@ -48,11 +48,19 @@ async function hostRule(client: Docker, bridge: string, op = '-C'): Promise<numb
 
 describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox network', () => {
   it(`${runtime}: allows only gateway routes and localhost; denies DNS, host, bridge, internet and tampered routes`, async () => {
-    const requests: string[] = []
+    const requests: { route: string; headers: IncomingHttpHeaders }[] = []
     const upstream = createServer((req, res) => {
-      requests.push(`${req.method} ${req.url}`)
+      requests.push({ route: `${req.method} ${req.url}`, headers: req.headers })
       req.resume()
-      res.writeHead(200, { 'content-type': 'application/json' })
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'x-codex-turn-state': 'next-state',
+        'retry-after': '7',
+        'mcp-session-id': 'mcp-response-session',
+        'mcp-protocol-version': '2025-06-18',
+        'x-ratelimit-remaining-requests': '11',
+        'set-cookie': 'provider-session=hidden',
+      })
       res.end('{"ok":true}')
     })
     await new Promise<void>((resolve) => upstream.listen(0, '0.0.0.0', resolve))
@@ -120,27 +128,116 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
       }
       expect((await provider.get(sandbox.id))?.id).toBe(sandbox.id)
 
-      for (const path of ['/v1/responses', '/v1/chat/completions', '/mcp']) {
+      const accepted: { path: string; headers: Record<string, string> }[] = [
+        {
+          path: '/codex/responses',
+          headers: {
+            'user-agent': 'codex_cli_rs/0.159.1 (Linux; aarch64)',
+            originator: 'codex_cli_rs',
+            'session-id': 'codex-session',
+            'thread-id': 'codex-thread',
+            'x-client-request-id': 'codex-request',
+            'x-openai-subagent': 'test-agent',
+            'x-codex-turn-state': 'previous-state',
+            'x-openai-internal-codex-responses-lite': 'true',
+          },
+        },
+        {
+          path: '/kimi/v1/chat/completions',
+          headers: {
+            'user-agent': 'kimi-code/2.1 (Linux; aarch64)',
+            'x-msh-platform': 'linux',
+            'x-msh-version': '2.1',
+          },
+        },
+        {
+          path: '/mcp',
+          headers: {
+            'mcp-session-id': 'mcp-request-session',
+            'mcp-protocol-version': '2025-06-18',
+            'last-event-id': 'mcp-event',
+          },
+        },
+      ]
+      for (const { path, headers } of accepted) {
         const result = await execute([
           'curl',
-          '-sS',
+          '-sSi',
           '--max-time',
           '5',
           '-X',
           'POST',
+          '-H',
+          'authorization: Bearer synthetic-turn-key',
+          '-H',
+          'content-type: application/json',
+          '-H',
+          'accept: text/event-stream',
+          '-H',
+          'x-codex-turn-metadata: private-path',
+          '-H',
+          'x-codex-window-id: private-window',
+          '-H',
+          'x-codex-routing-hint: private-route',
+          '-H',
+          'x-forwarded-for: 192.0.2.1',
+          ...Object.entries(headers).flatMap(([name, value]) => ['-H', `${name}: ${value}`]),
           `http://sandbox-gw:8080${path}`,
           '-d',
           '{}',
         ])
-        expect(result).toEqual({ output: '{"ok":true}', result: { code: 0, reason: 'exited' } })
+        expect(result.result).toEqual({ code: 0, reason: 'exited' })
+        const boundary = result.output.indexOf('\r\n\r\n')
+        const responseHeaders = result.output.slice(0, boundary).toLowerCase()
+        expect(result.output.slice(boundary + 4)).toBe('{"ok":true}')
+        expect(responseHeaders).toContain('content-type: application/json')
+        expect(responseHeaders).not.toContain('x-ratelimit-')
+        expect(responseHeaders).not.toContain('set-cookie:')
+        if (path === '/mcp') {
+          expect(responseHeaders).toContain('mcp-session-id: mcp-response-session')
+          expect(responseHeaders).toContain('mcp-protocol-version: 2025-06-18')
+          expect(responseHeaders).not.toContain('x-codex-turn-state:')
+          expect(responseHeaders).not.toContain('retry-after:')
+        } else {
+          expect(responseHeaders).toContain('x-codex-turn-state: next-state')
+          expect(responseHeaders).toContain('retry-after: 7')
+          expect(responseHeaders).not.toContain('mcp-session-id:')
+          expect(responseHeaders).not.toContain('mcp-protocol-version:')
+        }
+        const forwarded = requests.at(-1)!.headers
+        expect(forwarded).toMatchObject({
+          host: `${upstreamHost}:${port}`,
+          authorization: 'Bearer synthetic-turn-key',
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+          ...headers,
+        })
+        for (const name of [
+          'x-codex-turn-metadata',
+          'x-codex-window-id',
+          'x-codex-routing-hint',
+          'x-forwarded-for',
+        ])
+          expect(forwarded[name]).toBeUndefined()
       }
-      expect(requests).toEqual(['POST /v1/responses', 'POST /v1/chat/completions', 'POST /mcp'])
+      expect(requests.map(({ route }) => route)).toEqual([
+        'POST /codex/responses',
+        'POST /kimi/v1/chat/completions',
+        'POST /mcp',
+      ])
       for (const args of [
+        ['-X', 'POST', 'http://sandbox-gw:8080/v1/responses'],
+        ['-X', 'POST', 'http://sandbox-gw:8080/v1/chat/completions'],
         ['http://sandbox-gw:8080/v1/models'],
-        ['http://sandbox-gw:8080/v1/responses?target=evil'],
-        ['-H', 'Host: evil', '-X', 'POST', 'http://sandbox-gw:8080/v1/responses'],
+        ['http://sandbox-gw:8080/codex/models'],
+        ['-X', 'POST', 'http://sandbox-gw:8080/codex/responses/compact'],
+        ['-X', 'POST', 'http://sandbox-gw:8080/kimi/v1/search'],
+        ['-X', 'POST', 'http://sandbox-gw:8080/codex/responses?target=evil'],
+        ['-H', 'Host: evil', '-X', 'POST', 'http://sandbox-gw:8080/codex/responses'],
+        ['-X', 'GET', 'http://sandbox-gw:8080/codex/responses'],
+        ['-X', 'GET', 'http://sandbox-gw:8080/kimi/v1/chat/completions'],
         ['-X', 'PUT', 'http://sandbox-gw:8080/mcp'],
-        ['--path-as-is', 'http://sandbox-gw:8080/v1/../mcp'],
+        ['--path-as-is', 'http://sandbox-gw:8080/codex/../mcp'],
       ]) {
         const result = await execute([
           'curl',

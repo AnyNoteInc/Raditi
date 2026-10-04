@@ -20,8 +20,10 @@ export function parseCodexEvent(line: string): AgentEvent[] {
     const id = nativeSessionId(row.thread_id)
     return id ? events({ type: 'started', nativeSessionId: id }) : []
   }
+  // Only turn.failed is terminal. A top-level `error` row is also how the CLI reports a stream
+  // reconnect ("Reconnecting... n/5") before it finishes the turn successfully; a fatal one is
+  // followed by turn.failed and a non-zero exit code, which the supervisor checks itself.
   if (row.type === 'turn.failed') return failed(object(row.error)?.message)
-  if (row.type === 'error') return failed(row.message)
   if (row.type === 'turn.completed') {
     const usage = object(row.usage)
     const input = count(usage?.input_tokens)

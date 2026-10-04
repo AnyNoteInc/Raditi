@@ -5,7 +5,7 @@ import { gatewayConfigFromEnv } from './config.ts'
 const env = {
   SANDBOX_GATEWAY_IMAGE: `raditi/proxy@sha256:${'a'.repeat(64)}`,
   SANDBOX_NETWORK_GUARD_IMAGE: `raditi/guard@sha256:${'b'.repeat(64)}`,
-  SANDBOX_LLM_UPSTREAM: 'http://litellm:4000',
+  SANDBOX_LLM_UPSTREAM: 'http://llm:8084',
   SANDBOX_MCP_UPSTREAM: 'http://mcp:8082',
 }
 
@@ -15,7 +15,7 @@ describe('trusted gateway config', () => {
     expect(
       gatewayConfigFromEnv(Object.fromEntries(Object.keys(env).map((key) => [key, ' ']))),
     ).toBeUndefined()
-    expect(gatewayConfigFromEnv(env)?.llmUpstream).toBe('http://litellm:4000')
+    expect(gatewayConfigFromEnv(env)?.llmUpstream).toBe('http://llm:8084')
   })
   it.each([
     'SANDBOX_GATEWAY_IMAGE',
@@ -32,12 +32,12 @@ describe('trusted gateway config', () => {
     expect(message).toMatch(
       new RegExp(`^\\[sandbox gateway\\] invalid configuration: ${key}: [^;]+$`),
     )
-    expect(message).not.toMatch(/litellm|mcp:8082|a{64}|b{64}/)
+    expect(message).not.toMatch(/llm:8084|mcp:8082|a{64}|b{64}/)
   })
   it.each([
-    'http://user:synthetic@llm:4000',
-    'http://llm:4000/v1',
-    'http://llm:4000/?url=evil',
+    'http://user:synthetic@llm:8084',
+    'http://llm:8084/v1',
+    'http://llm:8084/?url=evil',
     'file:///tmp/a',
   ])('rejects credentials and configurable paths: %s', (url) => {
     expect(() => gatewayConfigFromEnv({ ...env, SANDBOX_LLM_UPSTREAM: url })).toThrow(

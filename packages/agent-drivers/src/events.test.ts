@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import {
   agentEventSchema,
   agentOutputLimits,
+  turnResultSchema,
   type AgentDriver,
   type AgentEvent,
 } from '@repo/domain'
@@ -12,10 +13,11 @@ import { createCodexDriver } from './codex.ts'
 import { MAX_EVENTS_PER_LINE, MAX_JSONL_BYTES } from './jsonl.ts'
 import { createKimiDriver } from './kimi.ts'
 import { createOpencodeDriver } from './opencode.ts'
+import { RESULT_SIZE_NOTE } from './output-schema.ts'
 import { createQwenDriver } from './qwen.ts'
 
 const drivers = [createCodexDriver, createKimiDriver, createQwenDriver, createOpencodeDriver].map(
-  (create) => create({ imagePrefix: 'raditi/agent' }),
+  (create) => create({ image: `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}` }),
 )
 const [codex, kimi, qwen, opencode] = drivers as [
   AgentDriver,
@@ -246,6 +248,35 @@ describe('adversarial known events', () => {
     },
   )
 
+  it.each([codex, kimi])(
+    '$id carries a result of exactly the size the model is told, and nothing longer',
+    (driver) => {
+      const asLine = (content: string) =>
+        driver.id === 'codex'
+          ? { type: 'item.completed', item: { type: 'agent_message', text: content } }
+          : { role: 'assistant', content }
+      const withFiles = (count: number, last = '') => ({
+        ...expectedResult,
+        files_changed: [
+          ...Array.from({ length: count }, (_, n) => `wp-content/plugins/shop/includes/f${n}.php`),
+          ...(last ? [last] : []),
+        ],
+      })
+      // The schema alone would admit 500 paths; one `message` event holds far fewer of them.
+      let count = 0
+      while (JSON.stringify(withFiles(count + 1)).length < agentOutputLimits.messageText) count++
+      const room = agentOutputLimits.messageText - JSON.stringify(withFiles(count, 'x')).length
+      const fits = withFiles(count, 'x'.repeat(room + 1))
+      expect(count).toBeLessThan(agentOutputLimits.filesChanged)
+      expect(JSON.stringify(fits)).toHaveLength(agentOutputLimits.messageText)
+      expect(RESULT_SIZE_NOTE).toContain(`${agentOutputLimits.messageText} characters`)
+      expect(driver.extractResult(parse(driver, asLine(JSON.stringify(fits))), null)).toEqual(fits)
+      const over = withFiles(count, 'x'.repeat(room + 2))
+      expect(turnResultSchema.safeParse(over).success).toBe(true)
+      expect(driver.extractResult(parse(driver, asLine(JSON.stringify(over))), null)).toBeNull()
+    },
+  )
+
   it('bounds fan-out and rejects traversal and overlong file paths without truncating paths', () => {
     const changes = Array.from({ length: MAX_EVENTS_PER_LINE + 10 }, (_, n) => ({
       path: `f${n}`,
@@ -326,6 +357,11 @@ describe('adversarial known events', () => {
         item: { type: 'error', message: 'retryable item error' },
       }),
     ).toEqual([])
+    // A top-level error is also how the CLI reports a reconnect; only turn.failed is terminal.
+    expect(parse(codex, { type: 'error', message: 'Reconnecting... 1/5 (stream closed)' })).toEqual(
+      [],
+    )
+    expect(parse(codex, { type: 'error' })).toEqual([])
     expect(
       parse(qwen, {
         type: 'result',
@@ -365,8 +401,7 @@ describe('adversarial known events', () => {
     const samples: [AgentDriver, unknown][] = [
       [codex, { type: 'turn.failed', error: {} }],
       [codex, { type: 'turn.failed', error: { message: '' } }],
-      [codex, { type: 'error' }],
-      [codex, { type: 'error', message: { text: 'nested' } }],
+      [codex, { type: 'turn.failed' }],
       [qwen, { type: 'result', subtype: 'error', is_error: true, error: { message: 42 } }],
       [qwen, { type: 'result', subtype: 'error', is_error: true, error: 'text' }],
       [opencode, { type: 'error' }],
@@ -376,6 +411,50 @@ describe('adversarial known events', () => {
     expect(parse(codex, { type: 'item.completed', item: { type: 'error', message: 42 } })).toEqual(
       [],
     )
+  })
+
+  // Lines printed by the pinned Codex 0.158.0 when the provider stream is cut mid-response.
+  const reconnect = (attempt: number) => ({
+    type: 'error',
+    message: `Reconnecting... ${attempt}/5 (stream disconnected before completion: Transport error: network error: error decoding response body)`,
+  })
+  const disconnected =
+    'stream disconnected before completion: Transport error: network error: error decoding response body'
+
+  it('keeps a Codex turn that reconnected and then completed', () => {
+    const events = [
+      { type: 'thread.started', thread_id: sid },
+      { type: 'turn.started' },
+      reconnect(1),
+      { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: finalText } },
+      {
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 100,
+          cached_input_tokens: 20,
+          cache_write_input_tokens: 0,
+          output_tokens: 12,
+          reasoning_output_tokens: 3,
+        },
+      },
+    ].flatMap((row) => parse(codex, row))
+    expect(events.map((event) => event.type)).toEqual(['started', 'message', 'usage', 'completed'])
+    expect(codex.extractResult(events, null)).toEqual(expectedResult)
+  })
+
+  it('fails a Codex turn once, by turn.failed, when every reconnect is exhausted', () => {
+    const events = [
+      { type: 'thread.started', thread_id: sid },
+      { type: 'turn.started' },
+      ...[1, 2, 3, 4, 5].map(reconnect),
+      { type: 'error', message: disconnected },
+      { type: 'turn.failed', error: { message: disconnected } },
+    ].flatMap((row) => parse(codex, row))
+    expect(events).toEqual([
+      { type: 'started', nativeSessionId: sid },
+      { type: 'failed', reason: disconnected },
+    ])
+    expect(codex.extractResult(events, null)).toBeNull()
   })
 
   it('never lets unknown native ids become snapshot path traversal', () => {

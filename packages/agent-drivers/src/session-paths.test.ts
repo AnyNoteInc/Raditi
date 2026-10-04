@@ -22,7 +22,7 @@ const run: PreparedRun = {
   env: {},
   secrets: [],
 }
-const config = { imagePrefix: 'raditi/agent' }
+const config = { image: `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}` }
 const drivers = [createCodexDriver, createKimiDriver, createQwenDriver, createOpencodeDriver].map(
   (create) => create(config),
 )

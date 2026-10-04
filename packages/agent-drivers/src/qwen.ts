@@ -16,10 +16,10 @@ const home = `${SANDBOX_AGENT_HOME}/qwen`
 const todo = (method: string) => notImplemented(`qwen.${method} (P5)`)
 
 export function createQwenDriver(config: AgentDriverConfig): AgentDriver {
-  const { imagePrefix } = parseAgentDriverConfig(config)
+  const { image } = parseAgentDriverConfig(config)
   return {
     id: 'qwen',
-    image: `${imagePrefix}-qwen`,
+    image,
     capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
     async prepare() {
       throw todo('prepare')
