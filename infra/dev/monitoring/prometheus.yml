@@ -24,6 +24,13 @@ scrape_configs:
     authorization: { credentials: raditi-dev-metrics }
     static_configs: [{ targets: ['host.docker.internal:8081'], labels: { app: orchestrator } }]
 
+  # Шлюз подписок (роль llm): собственный порт и собственный реестр метрик, на 8081 их нет.
+  # Host — из LLM_GATEWAY_HOSTS, адрес контейнера — из LLM_GATEWAY_CLIENTS (.env.example).
+  - job_name: llm
+    metrics_path: /metrics
+    authorization: { credentials: raditi-dev-metrics }
+    static_configs: [{ targets: ['host.docker.internal:8084'], labels: { app: llm } }]
+
   # Инфраструктура в compose
   - job_name: postgres
     static_configs: [{ targets: ['postgres-exporter:9187'] }]
@@ -47,21 +54,12 @@ scrape_configs:
   - job_name: gitea-runner
     static_configs: [{ targets: ['runner:9101'], labels: { compose_profile: ci } }]
 
-  # Ни хэшей ключей хода, ни пользователей в метках: вторая линия после prometheus_exclude_labels
-  # в litellm.config.yaml.
-  - job_name: litellm
-    static_configs: [{ targets: ['litellm:4001'], labels: { compose_profile: llm } }]
-    metric_relabel_configs:
-      - action: labeldrop
-        regex: 'hashed_api_key|api_key_alias|user|user_email|user_alias|end_user|team|team_alias|tag|client_ip|user_agent'
-
   - job_name: cadvisor
     static_configs:
       - targets: ['cadvisor:8080']
         labels: { compose_profile: monitoring-host }
 
-  # Проверки доступности через blackbox. LiteLLM здесь нет: blackbox не входит в сеть llm
-  # (иначе LiteLLM мог бы ходить через него куда угодно); его доступность — up{job="litellm"}.
+  # HTTP availability probes for applications and local infrastructure.
   - job_name: blackbox-http
     metrics_path: /probe
     params: { module: [http_2xx] }
@@ -75,6 +73,10 @@ scrape_configs:
           - http://s3:8333/healthz
       - targets: ['http://site:80/']
         labels: { compose_profile: site }
+      # Без прокси выхода и успешной пробы канала шлюз отвечает 503 (degraded): это штатное
+      # состояние dev, поэтому проба не входит в обязательные и в алерт EndpointDown.
+      - targets: ['http://host.docker.internal:8084/health']
+        labels: { compose_profile: llm }
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
