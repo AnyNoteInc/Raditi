@@ -21,6 +21,26 @@ export const conflict = (message: string): DomainError => new DomainError('CONFL
 export const notImplemented = (what: string): DomainError =>
   new DomainError('NOT_IMPLEMENTED', `${what} is not implemented yet`, 501)
 
+/** Pool decisions become retriable failures before a sandbox is created (P3, P12). */
+export function subscriptionWait(retryAt: Date): DomainError {
+  return subscriptionRetry('SUBSCRIPTION_WAIT', 'Subscription capacity is unavailable', retryAt)
+}
+export function subscriptionBusy(retryAt: Date): DomainError {
+  return subscriptionRetry('SUBSCRIPTION_BUSY', 'Subscription slots are occupied', retryAt)
+}
+function subscriptionRetry(code: string, message: string, retryAt: Date): DomainError {
+  if (!(retryAt instanceof Date) || !Number.isFinite(retryAt.getTime())) {
+    return badRequest('Invalid subscription retry time')
+  }
+  return new DomainError(code, message, 503, { retryAt: retryAt.toISOString() })
+}
+export const llmPriceMissing = (): DomainError =>
+  new DomainError('LLM_PRICE_MISSING', 'No approved model accounting rate', 503)
+export const llmGatewayUnavailable = (): DomainError =>
+  new DomainError('LLM_GATEWAY_UNAVAILABLE', 'Subscription gateway is unavailable', 503)
+export const crossBorderNotCleared = (): DomainError =>
+  new DomainError('CROSS_BORDER_NOT_CLEARED', 'Data transfer is not cleared for this backend', 403)
+
 /**
  * Size and count limits (spec §8): a 413 the client sees as «too much», never an outage.
  * The agent's changes to the site, its own session state, and the site repository itself.

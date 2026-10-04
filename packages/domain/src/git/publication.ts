@@ -40,6 +40,8 @@ export const publicationSourceSchema = z
       .max(200)
       .regex(/^agent\/[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
     expectedBaseSha: publicationShaSchema,
+    /** Trusted replacement CAS: last completed task head; null means no published branch yet. */
+    expectedBranchSha: publicationShaSchema.nullable().optional(),
     /** SiteAdapter.protectedPaths() of the site; required so a caller cannot silently omit it. */
     protectedPaths: z.array(z.string().min(1).max(1024)).max(100),
   })

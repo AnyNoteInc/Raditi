@@ -6,6 +6,7 @@ import {
   turnInputSchema,
   turnPlanSchema,
   withTurnCredentials,
+  withoutTurnCredentials,
   type TurnRequest,
 } from './turn-executor.ts'
 
@@ -54,6 +55,19 @@ const request = (): TurnRequest => ({
 })
 
 describe('turn plan', () => {
+  it('starts with an unkeyed request and preserves the original when issuing fresh values', () => {
+    const original = request()
+    const unkeyed = withoutTurnCredentials(original)
+    expect(unkeyed.context.llm).not.toHaveProperty('apiKey')
+    expect(unkeyed.context.mcp).not.toHaveProperty('token')
+    const plan = toTurnPlan(unkeyed, 'kimi')
+    expect(plan).toEqual(toTurnPlan(original, 'kimi'))
+    const keyed = withTurnCredentials(plan, { llmApiKey: 'fresh-llm', mcpToken: 'fresh-mcp' })
+    expect(keyed.context.llm.apiKey).toBe('fresh-llm')
+    expect(keyed.context.mcp.token).toBe('fresh-mcp')
+    expect(original.context.llm.apiKey).toBe('sk-turn-llm-key')
+    expect(plan.context.llm).not.toHaveProperty('apiKey')
+  })
   it('keeps everything of the request except its LLM key and MCP token', () => {
     const plan = toTurnPlan(request(), 'kimi')
     expect(JSON.stringify(plan)).not.toMatch(/sk-turn-llm-key|mcp-turn-token/)
@@ -64,6 +78,41 @@ describe('turn plan', () => {
       withTurnCredentials(plan, { llmApiKey: 'sk-turn-llm-key', mcpToken: 'mcp-turn-token' }),
     ).toEqual(request())
   })
+
+  it.each(['medium', 'provider-specific-effort', null, undefined])(
+    'preserves reasoning effort %s through persistence and credential recovery',
+    (reasoningEffort) => {
+      const original = request()
+      if (reasoningEffort !== undefined) original.context.llm.reasoningEffort = reasoningEffort
+      const plan = toTurnPlan(withoutTurnCredentials(original), 'kimi')
+      const restored = turnPlanSchema.parse(JSON.parse(JSON.stringify(plan)))
+      const recovered = withTurnCredentials(restored, {
+        llmApiKey: original.context.llm.apiKey,
+        mcpToken: original.context.mcp.token,
+      })
+      expect(recovered).toEqual(original)
+      expect(restored.context.llm.reasoningEffort).toBe(reasoningEffort)
+      expect(JSON.stringify(restored)).not.toMatch(/sk-turn-llm-key|mcp-turn-token/)
+      if (reasoningEffort === undefined)
+        expect(restored.context.llm).not.toHaveProperty('reasoningEffort')
+    },
+  )
+
+  it.each(['', 'x'.repeat(33), true, 1, {}, []])(
+    'refuses invalid reasoning effort %# in the request and the saved plan',
+    (reasoningEffort) => {
+      const original = request()
+      Object.assign(original.context.llm, { reasoningEffort })
+      expect(() => toTurnPlan(original, 'kimi')).toThrow('Invalid turn plan')
+      const plan = toTurnPlan(request(), 'kimi')
+      expect(
+        turnPlanSchema.safeParse({
+          ...plan,
+          context: { ...plan.context, llm: { ...plan.context.llm, reasoningEffort } },
+        }).success,
+      ).toBe(false)
+    },
+  )
 
   it('refuses to store a credential or an unknown field', () => {
     const plan = toTurnPlan(request(), 'kimi')

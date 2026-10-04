@@ -125,6 +125,30 @@ const sealCommand = () => {
 }
 
 describe('runner commands', () => {
+  it.each(['gigacode', 'sourcecraft'])(
+    'refuses removed driver %s when preparing or adopting work',
+    (driverId) => {
+      const commands = [
+        { value: { ...prepare(), driverId }, path: ['driverId'] },
+        {
+          value: {
+            ...envelope,
+            type: 'adopt',
+            containerId: 'c1',
+            labels,
+            purpose: 'work',
+            work: { remainingMs: 60_000, driverId },
+          },
+          path: ['work', 'driverId'],
+        },
+      ]
+      for (const { value, path } of commands) {
+        const result = runnerCommandSchema.safeParse(value)
+        expect(result.success).toBe(false)
+        if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([path])
+      }
+    },
+  )
   it('accepts a full prepare and every other command', () => {
     expect(runnerCommandSchema.parse(prepare())).toMatchObject({ type: 'prepare' })
     for (const cmd of [

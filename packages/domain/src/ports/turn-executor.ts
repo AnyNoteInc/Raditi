@@ -30,6 +30,7 @@ import {
   type SandboxSpec,
 } from './sandbox-provider.ts'
 import type { SiteLeaseFence, TurnBundleSource } from './turn-runner.ts'
+import { turnCredentialGrantSchema, type TurnCredentialGrant } from './turn-credential-grant.ts'
 
 /** Where a turn's container runs: core's own Docker (PoC, tests) or a runner VM. */
 export const turnExecutorKinds = ['local', 'runner'] as const
@@ -44,6 +45,10 @@ export type TurnExecutorKind = (typeof turnExecutorKinds)[number]
  */
 export interface TurnExecutor {
   readonly kind: TurnExecutorKind
+  /** Claim a remote assignment and return its trusted VM address before issuing its key. */
+  credentialAddress?(assignmentId: string, signal: AbortSignal): Promise<string>
+  /** Clear any local claim cache when issuance or prepare ends. Does not release the site. */
+  forgetCredentialAddress?(assignmentId: string): void
   /** Create the container, import the base bundle, restore turn n−1, write the driver files. */
   prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution>
   /**
@@ -217,11 +222,11 @@ export interface TurnCredentialValues {
 }
 
 /**
- * The LiteLLM key and MCP token of one turn (P3, P6). They live in memory only, so a restarted
+ * The subscription gateway key and MCP token of one turn (P3, P6). They live in memory only, so a restarted
  * core recovers them here or gives the turn up; P2 has only test implementations.
  */
 export interface TurnCredentialSource {
-  issue(turn: TurnCredentialRef): Promise<TurnCredentialValues>
+  issue(turn: TurnCredentialRef, grant: TurnCredentialGrant): Promise<TurnCredentialValues>
   /** null: the running agent's credentials cannot be recovered and the turn is given up. */
   recover(turn: TurnCredentialRef): Promise<TurnCredentialValues | null>
   /** Idempotent; after the turn ends or is given up. */
@@ -239,6 +244,22 @@ export interface TurnRequest {
   /** Trusted persisted time; retries use the identical value for deterministic publication. */
   committedAt: string
   previous?: SnapshotReference
+  /** Trusted user action: replace the latest run, restoring its input checkpoint after undo. */
+  replacesTurn?: number
+}
+
+/** The supervisor installs issued values after opening the assignment; callers carry no key. */
+export type UnkeyedTurnRequest = Omit<TurnRequest, 'context'> & {
+  context: Omit<RunContext, 'llm' | 'mcp'> & {
+    llm: Omit<RunContext['llm'], 'apiKey'>
+    mcp: Omit<RunContext['mcp'], 'token'>
+  }
+}
+
+export function withoutTurnCredentials(request: TurnRequest): UnkeyedTurnRequest {
+  const { apiKey: _key, ...llm } = request.context.llm
+  const { token: _token, ...mcp } = request.context.mcp
+  return { ...request, context: { ...request.context, llm, mcp } }
 }
 
 export const turnPlanLimits = Object.freeze({
@@ -293,7 +314,13 @@ export const turnPlanSchema = z
         taskId: snapshotIdSchema,
         sessionId: snapshotIdSchema,
         turn: z.number().int().positive().max(999_999),
-        llm: z.object({ baseUrl: httpUrl, model: z.string().min(1).max(200) }).strict(),
+        llm: z
+          .object({
+            baseUrl: httpUrl,
+            model: z.string().min(1).max(200),
+            reasoningEffort: turnCredentialGrantSchema.shape.reasoningEffort.optional(),
+          })
+          .strict(),
         mcp: z.object({ url: httpUrl }).strict(),
         instructions: z.string().max(turnPlanLimits.instructions),
         nativeSessionId: nativeSessionIdSchema.optional(),
@@ -306,17 +333,29 @@ export const turnPlanSchema = z
     workspace: publicationSourceSchema,
     committedAt: z.iso.datetime(),
     previous: snapshotReferenceSchema.optional(),
+    replacesTurn: z.number().int().positive().max(999_999).optional(),
   })
   .strict()
 export type TurnPlan = z.infer<typeof turnPlanSchema>
 
 /** The request without the LLM key and MCP token; refuses anything the plan cannot hold. */
-export function toTurnPlan(request: TurnRequest, driverId: AgentDriverId): TurnPlan {
+export function toTurnPlan(
+  request: TurnRequest | UnkeyedTurnRequest,
+  driverId: AgentDriverId,
+): TurnPlan {
   const { llm, mcp, ...context } = request.context
   const parsed = turnPlanSchema.safeParse({
     ...request,
     driverId,
-    context: { ...context, llm: { baseUrl: llm.baseUrl, model: llm.model }, mcp: { url: mcp.url } },
+    context: {
+      ...context,
+      llm: {
+        baseUrl: llm.baseUrl,
+        model: llm.model,
+        ...(llm.reasoningEffort !== undefined ? { reasoningEffort: llm.reasoningEffort } : {}),
+      },
+      mcp: { url: mcp.url },
+    },
   })
   // Issues name paths only: the request carries credentials and client text.
   if (!parsed.success) throw badRequest('Invalid turn plan')

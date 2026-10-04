@@ -5,6 +5,7 @@ import { agentDriverIds, nativeSessionIdSchema } from '../ports/agent-driver.ts'
 import { gitProviderKinds } from '../ports/git-provider.ts'
 import { DIGEST_PINNED_IMAGE } from '../ports/sandbox-provider.ts'
 import { sessionStateSchema, snapshotLimits } from './session-state.ts'
+import { workspaceTransitKey } from './workspace-transit-key.ts'
 
 /** First persisted format. Hashes and sizes describe stored ciphertext, not plaintext. */
 export const SNAPSHOT_SCHEMA_VERSION = 1
@@ -128,7 +129,7 @@ export const snapshotManifestSchema = snapshotMetadataSchema
     for (const [index, part] of manifest.parts.entries()) {
       if (
         part.key !== `${prefix}${snapshotPartFiles[part.name]}` ||
-        part.encryption.keyId !== `ws-${manifest.workspaceId}` ||
+        part.encryption.keyId !== workspaceTransitKey(manifest.workspaceId) ||
         (part.name === 'patch' && part.sizeBytes > snapshotLimits.patchBytes)
       ) {
         ctx.addIssue({

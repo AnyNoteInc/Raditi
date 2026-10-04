@@ -17,13 +17,54 @@ export interface IssuedToken {
   expiresAt: Date
 }
 
+/** The version is returned with the data, so a refresh needs no metadata permission. */
+export interface KvSecret {
+  data: Record<string, string>
+  version: number
+}
+
+export interface KvMetadata {
+  currentVersion: number
+  custom: Record<string, string>
+  createdTime: Date
+  /** A scheduled deletion in the future is still readable. */
+  deleted: boolean
+  destroyed: boolean
+}
+
+export interface KvWriteOptions {
+  /** 0 creates a new key; a positive value must match the current version. */
+  cas?: number
+}
+
+export interface KvListPage {
+  after?: string
+  limit: number
+}
+
 export interface SecretStore {
   health(): Promise<SecretStoreHealth>
 
-  /** KV v2: kv/sites/<siteId>/{ssh,ftp,wp,browser}, kv/llm/<provider>, kv/subscriptions/<id>. */
-  kvRead(path: string): Promise<Record<string, string> | null>
-  kvWrite(path: string, data: Record<string, string>): Promise<{ version: number }>
+  /** Logical KV v2 paths include the mount, e.g. turns/t_<id> or subs/<backend>/<id>. */
+  kvRead(path: string): Promise<KvSecret | null>
+  kvWrite(
+    path: string,
+    data: Record<string, string>,
+    options?: KvWriteOptions,
+  ): Promise<{ version: number }>
+  /** Data with CAS=0 first, custom metadata second; a retry cannot revive a deleted key. */
+  kvCreateOnce(
+    path: string,
+    data: Record<string, string>,
+    metadata: Record<string, string>,
+  ): Promise<'created' | 'exists'>
+  /** Soft-delete the latest version. */
   kvDelete(path: string): Promise<void>
+  /** DELETE metadata removes all versions and metadata; this is not POST destroy. */
+  kvDestroyAll(path: string): Promise<void>
+  /** KV LIST is one snapshot; sorting and cursor filtering happen in the adapter. */
+  kvList(prefix: string, page?: KvListPage): Promise<string[]>
+  kvMetadata(path: string): Promise<KvMetadata | null>
 
   /** Transit: per-workspace keys transit/keys/ws-<workspaceId> for sessions, logs and backups. */
   transitDataKey(key: string): Promise<{ plaintext: Uint8Array; ciphertext: string }>
