@@ -99,6 +99,8 @@ describe('user.me', () => {
       id: user.id,
       email: user.email,
       name: 'Анна',
+      lastName: null,
+      image: null,
       emailVerified: true,
     })
   })
@@ -311,6 +313,29 @@ describe('consentedProcedure', () => {
     })
 
     await expect(createBusinessCaller(ctx).sites()).resolves.toEqual(['site-1'])
+  })
+
+  it('guards every procedure of the app router except consent.*, user.me and health', async () => {
+    const open = (path: string) => path === 'user.me' || /^(?:consent|health)\./.test(path)
+    const guarded = Object.keys(appRouter._def.procedures).filter((path) => !open(path))
+    expect(guarded).toEqual(
+      expect.arrayContaining(['user.updateProfile', 'project.list', 'project.create']),
+    )
+
+    for (const path of guarded) {
+      const { prisma } = fakePrisma()
+      const procedure = path
+        .split('.')
+        .reduce<unknown>(
+          (node, key) => (node as Record<string, unknown>)[key],
+          createCaller(signedIn(prisma)),
+        ) as (input?: unknown) => Promise<unknown>
+      // The consent check precedes input validation, so no valid input is needed.
+      await expect(procedure(), path).rejects.toMatchObject({
+        code: 'PRECONDITION_REQUIRED',
+        cause: { code: CONSENT_REQUIRED },
+      })
+    }
   })
 
   it('answers over HTTP with 428, the domain code and the Russian text', async () => {

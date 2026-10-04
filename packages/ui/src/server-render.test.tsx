@@ -40,7 +40,7 @@ describe('server rendering', () => {
       </UiProvider>,
     )
 
-    expect(html).toContain('Вход в кабинет')
+    expect(html).toContain('Вход в проекты')
     expect(html).toContain('Зарегистрироваться')
   })
 })

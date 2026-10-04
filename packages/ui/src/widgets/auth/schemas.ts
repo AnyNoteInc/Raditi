@@ -37,7 +37,13 @@ export const loginSchema = z.object({
 
 export const registerSchema = z
   .object({
-    name: z.string().trim().min(1, 'Введите имя').max(100, 'Имя слишком длинное'),
+    name: z
+      .string()
+      .trim()
+      .min(1, 'Введите имя')
+      .max(100, 'Имя слишком длинное')
+      // The server refuses control characters in a name (INVALID_NAME); a pasted tab is one.
+      .regex(/^\P{Cc}*$/u, 'Уберите из имени табуляцию и другие служебные знаки'),
     email,
     password: newPassword,
     confirmPassword,

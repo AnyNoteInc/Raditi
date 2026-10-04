@@ -57,6 +57,17 @@ describe('webEnvFromEnv', () => {
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: 'short' }).metricsToken).toBe('short')
   })
 
+  it('refuses a metrics token with whitespace in every environment, as the orchestrator does', () => {
+    // It is compared with a Bearer token, which never carries a trailing newline or a space.
+    for (const env of [devEnv, prodEnv]) {
+      for (const METRICS_TOKEN of [`${PROD_METRICS_TOKEN}\n`, `${PROD_METRICS_TOKEN} x`]) {
+        expect(() => webEnvFromEnv({ ...env, METRICS_TOKEN })).toThrow(
+          /^\[web\] invalid configuration: METRICS_TOKEN: must not contain whitespace \(it is sent as a Bearer token\)$/,
+        )
+      }
+    }
+  })
+
   it('refuses the dev metrics token and plain http in production, without leaking values', () => {
     const error = (() => {
       try {

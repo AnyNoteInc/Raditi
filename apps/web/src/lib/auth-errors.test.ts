@@ -26,6 +26,17 @@ describe('mapAuthError', () => {
     })
   })
 
+  it('explains the name and image checks of sign-up', () => {
+    expect(mapAuthError({ code: 'INVALID_NAME', status: 400 }, signUpFields)).toEqual({
+      fieldErrors: {
+        name: 'Укажите имя: до 255 символов, без переносов строк и служебных знаков.',
+      },
+    })
+    expect(mapAuthError({ code: 'IMAGE_NOT_ALLOWED', status: 400 }, signUpFields)).toEqual({
+      error: 'Фото профиля можно загрузить в личном кабинете после регистрации.',
+    })
+  })
+
   it('shows field errors above the button when the form has no such field', () => {
     expect(mapAuthError({ code: 'USER_ALREADY_EXISTS', status: 422 })).toEqual({
       error: expect.stringContaining('уже зарегистрирован'),

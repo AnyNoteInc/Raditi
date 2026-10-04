@@ -28,7 +28,9 @@ const withMDX = createMDX({
   options: { remarkPlugins: ['remark-gfm'] },
 })
 
-// Directives that need no allowlist of hosts or scripts.
+// Directives that need no allowlist of scripts. Images come only from the site itself (the
+// avatar route, a chosen photo's preview as blob:) and the captcha, so a stored external
+// address can never make the browser call another host.
 // TODO(M8): full CSP (script-src and frame-src with per-request nonces from the proxy, plus
 // smartcaptcha.cloud.yandex.ru for the captcha script and frame).
 const contentSecurityPolicy = [
@@ -36,6 +38,7 @@ const contentSecurityPolicy = [
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
+  "img-src 'self' data: blob: https://smartcaptcha.cloud.yandex.ru",
 ].join('; ')
 
 const securityHeaders = [
@@ -52,6 +55,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Keep the development indicator clear of the account menu at the sidebar's foot.
+  devIndicators: { position: 'bottom-right' },
   poweredByHeader: false,
   // Workspace packages ship TypeScript sources (NodeNext imports with .ts extensions).
   transpilePackages: [
@@ -70,6 +75,13 @@ const nextConfig: NextConfig = {
   // Loaded by Node at runtime instead of being bundled: the pg driver and Prisma's runtime.
   serverExternalPackages: ['pg', '@prisma/client', '@prisma/adapter-pg'],
   ...(workspaceRoot ? { outputFileTracingRoot: workspaceRoot } : {}),
+  experimental: {
+    // Next copies the body of every request that passes proxy.ts (every page) into memory and
+    // holds it until the request ends, for any sender; the default is 10 MB. A page takes a
+    // body only as a server action, which Next limits to 1 MB by itself. The API routes do not
+    // pass the proxy: their limits are in server/body-limit.ts.
+    proxyClientMaxBodySize: '1mb',
+  },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }]
   },

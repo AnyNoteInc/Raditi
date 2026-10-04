@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-30T07:08:46Z",
+  "title": "Design System: Радити",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Кремовая бумага"
+      },
+      "paper-2": {
+        "role": "neutral",
+        "displayName": "Кремовая поверхность"
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "Светлая кремовая поверхность"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Шоколадные чернила"
+      },
+      "graphite": {
+        "role": "neutral",
+        "displayName": "Тёплый графит"
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Тёплый разделитель"
+      },
+      "marker": {
+        "role": "secondary",
+        "displayName": "Янтарный маркер"
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Мандариновый акцент"
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "Белый"
+      },
+      "accent-light": {
+        "role": "primary",
+        "displayName": "Светлый оранжевый тёмной темы"
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Оранжево-янтарное наведение"
+      },
+      "accent-soft": {
+        "role": "neutral",
+        "displayName": "Светлая оранжевая поверхность"
+      },
+      "accent-text": {
+        "role": "primary",
+        "displayName": "Тёмный оранжевый для текста"
+      },
+      "on-accent": {
+        "role": "neutral",
+        "displayName": "Текст на ярком акценте"
+      },
+      "on-accent-muted": {
+        "role": "neutral",
+        "displayName": "Вторичный текст на ярком акценте"
+      }
+    },
+    "shadows": [
+      {
+        "name": "demo-browser",
+        "value": "0 12px 36px -16px var(--raditi-shadow-soft)",
+        "purpose": "Окно демонстрационного сайта."
+      },
+      {
+        "name": "demo-chat",
+        "value": "0 23px 44px -23px var(--raditi-shadow-strong)",
+        "purpose": "Передний слой чата."
+      },
+      {
+        "name": "saved-version",
+        "value": "0 28px 60px -25px var(--raditi-shadow-strong)",
+        "purpose": "Передний снимок в блоке отмены."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Основная кривая входа и перемещения."
+      },
+      {
+        "name": "section-reveal",
+        "value": "750ms",
+        "purpose": "Одноразовый reveal через IntersectionObserver; без скрытия исходного контента."
+      },
+      {
+        "name": "hero-type",
+        "value": "900ms",
+        "purpose": "Появление строк hero."
+      },
+      {
+        "name": "hero-marker",
+        "value": "850ms",
+        "purpose": "Проявление янтарного маркера."
+      },
+      {
+        "name": "hero-demo",
+        "value": "1000ms",
+        "purpose": "Появление предметной сцены."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "none",
+        "purpose": "prefers-reduced-motion отключает переходы, keyframes и JS reveal."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact-desktop",
+        "value": "1100px"
+      },
+      {
+        "name": "stacked-hero",
+        "value": "800px"
+      },
+      {
+        "name": "stacked-pricing",
+        "value": "680px"
+      },
+      {
+        "name": "mobile-navigation",
+        "value": "800px"
+      },
+      {
+        "name": "compact-demo",
+        "value": "480px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Основное действие",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Основной CTA: гостю регистрация, авторизованному пользователю «Открыть проекты» с прямым переходом /projects. Превью показывает гостевой вариант.",
+      "html": "<a class=\"ds-primary\" href=\"/sign-up\">Начать с Радити <svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M6 18 18 6M6 6h12v12\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></a>",
+      "css": ".ds-primary{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:25px;min-height:56px;padding:0 23px;border-radius:32px;background:var(--raditi-accent);color:var(--raditi-on-accent);text-decoration:none;font-size:15px;font-weight:500;transition:background 220ms,transform 220ms cubic-bezier(.16,1,.3,1)}.ds-primary:hover{background:var(--raditi-accent-hover);transform:translateY(-2px)}.ds-primary:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}.ds-primary svg{transition:transform 350ms cubic-bezier(.16,1,.3,1)}.ds-primary:hover svg{transform:translate(3px,-3px)}@media(prefers-reduced-motion:reduce){.ds-primary,.ds-primary svg{transition:none;transform:none}}"
+    },
+    {
+      "name": "Вход",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Нейтральное действие гостя. Авторизованная шапка на всех ширинах показывает только кнопку аватара с UserMenu, без явного имени и отдельной ссылки «Проекты». Имя и адрес аккаунта видны в раскрытом меню; «Проекты» ведут на /projects и стоят над «Профиль», «Настройки» и «Выход».",
+      "html": "<a class=\"ds-outline\" href=\"/sign-in\">Войти <svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M6 18 18 6M6 6h12v12\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></a>",
+      "css": ".ds-outline{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;gap:28px;min-height:44px;padding:0 20px;border:1px solid var(--raditi-ink);border-radius:30px;color:var(--raditi-ink);background:transparent;font-size:14px;text-decoration:none;transition:background 200ms,color 200ms}.ds-outline:hover{background:var(--raditi-ink);color:var(--raditi-paper)}.ds-outline:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}@media(prefers-reduced-motion:reduce){.ds-outline{transition:none}}"
+    },
+    {
+      "name": "Сценарии демо",
+      "kind": "chip",
+      "description": "Выбор примера, активный вариант отмечен aria-pressed.",
+      "html": "<div class=\"ds-scenarios\" role=\"group\" aria-label=\"Примеры правок\"><button class=\"ds-scenario\" aria-pressed=\"true\">Цены</button><button class=\"ds-scenario\" aria-pressed=\"false\">Часы работы</button></div>",
+      "css": ".ds-scenarios{display:flex;gap:6px}.ds-scenario{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;min-height:44px;padding:8px 15px;border:1px solid var(--raditi-rule);border-radius:100px;background:transparent;color:var(--raditi-ink);font-size:11px;cursor:pointer;transition:color 220ms,background 220ms,border-color 220ms}.ds-scenario[aria-pressed=true]{background:var(--raditi-accent);border-color:var(--raditi-accent-text);color:var(--raditi-on-accent)}.ds-scenario:hover:not([aria-pressed=true]){border-color:var(--raditi-accent-text);color:var(--raditi-accent)}.ds-scenario:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}@media(prefers-reduced-motion:reduce){.ds-scenario{transition:none}}"
+    },
+    {
+      "name": "Навигация",
+      "kind": "nav",
+      "description": "Текстовые якоря с линией при наведении.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Разделы\"><a href=\"#how\">Как это работает</a><a href=\"#pricing\">Тарифы</a></nav>",
+      "css": ".ds-nav{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:flex;align-items:center;gap:32px;font-size:14px}.ds-nav a{position:relative;padding:13px 0;color:var(--raditi-ink);text-decoration:none}.ds-nav a:after{content:\"\";position:absolute;left:0;bottom:7px;width:100%;height:1px;background:currentColor;transform:scaleX(0);transform-origin:left;transition:transform 250ms cubic-bezier(.16,1,.3,1)}.ds-nav a:hover:after{transform:scaleX(1)}.ds-nav a:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}@media(prefers-reduced-motion:reduce){.ds-nav a:after{transition:none}}"
+    },
+    {
+      "name": "Количество правок",
+      "kind": "input",
+      "description": "Нативный range калькулятора; snippet показывает оформление, расчёт выполняет React-компонент.",
+      "html": "<label class=\"ds-range-label\">Сколько правок нужно в месяц?<input class=\"ds-range\" type=\"range\" min=\"10\" max=\"300\" step=\"5\" value=\"30\" aria-valuetext=\"30 правок в месяц\"/></label>",
+      "css": ".ds-range-label{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:block;font-size:17px;font-weight:500;color:var(--raditi-ink)}.ds-range{display:block;width:100%;height:36px;margin:14px 0 0;appearance:none;background:linear-gradient(to right,var(--raditi-accent) 0 6.9%,var(--raditi-rule) 6.9% 100%) center/100% 3px no-repeat;cursor:pointer;touch-action:pan-y}.ds-range::-webkit-slider-runnable-track{height:3px;background:transparent}.ds-range::-webkit-slider-thumb{width:24px;height:24px;margin-top:-10.5px;border:5px solid var(--raditi-accent);border-radius:50%;appearance:none;background:var(--raditi-paper);transition:transform 180ms ease}.ds-range::-moz-range-track{height:3px;background:transparent}.ds-range::-moz-range-thumb{width:14px;height:14px;border:5px solid var(--raditi-accent);border-radius:50%;background:var(--raditi-paper)}.ds-range:active::-webkit-slider-thumb{transform:scale(1.12)}.ds-range:focus-visible{outline:2px solid var(--raditi-accent-text);outline-offset:5px}@media(prefers-reduced-motion:reduce){.ds-range::-webkit-slider-thumb{transition:none}}"
+    },
+    {
+      "name": "Карточка сохранённой версии",
+      "kind": "card",
+      "refersTo": "version-card",
+      "description": "Передний слой демонстрации отмены; тень отличает его от сохранённой версии позади.",
+      "html": "<article class=\"ds-version\"><div class=\"ds-version-top\"><span>КРОШКА / МЕНЮ</span><span>Демо</span></div><p class=\"ds-version-title\">Сохранённая версия</p><button class=\"ds-undo\" type=\"button\">Отменить правку</button></article>",
+      "css": ".ds-version{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;max-width:400px;padding:26px;border-radius:12px;background:var(--raditi-paper);color:var(--raditi-ink);box-shadow:0 28px 60px -25px var(--raditi-shadow-strong);transform:rotate(2deg)}.ds-version-top{display:flex;justify-content:space-between;gap:16px;padding-bottom:25px;border-bottom:1px solid var(--raditi-rule);font-size:10px;letter-spacing:.06em;color:var(--raditi-graphite)}.ds-version-title{margin:32px 0;font-size:25px;letter-spacing:-.02em}.ds-undo{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;min-height:44px;padding:0 17px;border:1px solid var(--raditi-on-ink);border-radius:25px;background:transparent;color:var(--raditi-ink);font-size:12px;cursor:pointer;transition:background 200ms,border-color 200ms}.ds-undo:hover{background:var(--raditi-paper-2);border-color:var(--raditi-ink)}.ds-undo:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}@media(prefers-reduced-motion:reduce){.ds-undo{transition:none}}"
+    },
+    {
+      "name": "Применение в демо",
+      "kind": "button",
+      "description": "Яркое оранжевое основное действие с тёмным текстом на шоколадной панели чата; отмена остаётся вторичной.",
+      "html": "<div class=\"ds-demo-panel\"><button class=\"ds-demo-apply\" type=\"button\">Применить правку <svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M4 12h15m-6-6 6 6-6 6\" stroke=\"currentColor\" stroke-width=\"1.7\"/></svg></button></div>",
+      "css": ".ds-demo-panel{padding:19px;border-radius:14px;background:var(--raditi-ink)}.ds-demo-apply{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--raditi-accent-light);border-radius:6px;background:var(--raditi-accent);color:var(--raditi-on-accent);font-size:11px;font-weight:600;cursor:pointer;transition:background 220ms ease,color 220ms ease,border-color 220ms ease}.ds-demo-apply:hover:not(:disabled){background:var(--raditi-accent-hover)}.ds-demo-apply:focus-visible{outline:3px solid var(--raditi-paper);outline-offset:3px}.ds-demo-apply:disabled{cursor:wait;color:var(--raditi-snow);background:var(--raditi-rule-ink)}@media(prefers-reduced-motion:reduce){.ds-demo-apply{transition:none}}"
+    },
+    {
+      "name": "Рекомендованный тариф",
+      "kind": "card",
+      "description": "Светлая тёплая поверхность, тёмный текст и яркое оранжевое действие с тёмной подписью. Превью без цены: условия поступают из базы.",
+      "html": "<article class=\"ds-plan\"><div class=\"ds-plan-heading\"><h3>Тариф</h3><span class=\"ds-plan-badge\">Ваш вариант</span></div><p>По выбранному числу правок</p><a class=\"ds-plan-action\" href=\"/sign-up\">Создать аккаунт <svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M5 12h14m-6-6 6 6-6 6\" stroke=\"currentColor\" stroke-width=\"1.6\"/></svg></a></article>",
+      "css": ".ds-plan{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;padding:32px 28px 28px;background:var(--raditi-accent-soft);color:var(--raditi-ink)}.ds-plan-heading{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;min-height:32px}.ds-plan-heading h3{margin:0;font-size:24px;font-weight:600;letter-spacing:-.02em}.ds-plan-badge{padding:5px 9px;border-radius:3px;background:var(--raditi-marker);color:var(--raditi-ink);font-size:11px;font-weight:600}.ds-plan p{margin:10px 0 32px;color:var(--raditi-graphite);font-size:14px}.ds-plan-action{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:48px;padding:12px 18px;border:1px solid transparent;border-radius:6px;background:var(--raditi-accent);color:var(--raditi-on-accent);font-size:14px;font-weight:600;text-decoration:none;transition:background 180ms ease}.ds-plan-action:hover{background:var(--raditi-accent-hover)}.ds-plan-action svg{transition:transform 220ms cubic-bezier(.16,1,.3,1)}.ds-plan-action:hover svg{transform:translateX(4px)}.ds-plan-action:focus-visible{outline:2px solid var(--raditi-accent-text);outline-offset:5px}@media(prefers-reduced-motion:reduce){.ds-plan-action,.ds-plan-action svg{transition:none}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Написать. Увидеть. Поправить.",
+    "overview": "Рабочее описание реализованного языка: яркие мандариновые и янтарные поля, кремовая основа, шоколадный текст и чёткая широкая типографика. Цветовая директива — выразительные насыщенные тона, которые сочетаются друг с другом; основу задаёт соседняя оранжево-янтарная пара. Прототип остаётся источником композиции и характера движения, но не цветовой схемы. Название метафоры — описание реализации, а не новый брендовый слоган.\n\nОсновная композиция остаётся плоской и просторной. Небольшие повороты и мягкие тени выделяют только предметы демонстрации: окно сайта, чат и сохранённую версию. Движение показывает появление текста и результат действия; чтение и управление не зависят от его завершения.",
+    "keyCharacteristics": [
+      "Широкий Unbounded для выразительных заголовков, Golos Text для чтения.",
+      "Кремовые поля, шоколадные тёмные секции, яркие оранжевые действия и янтарные выделения.",
+      "Наглядное состояние «до / после» и управляемая пользователем отмена.",
+      "Видимый контент без анимации и отдельная поддержка reduced motion."
+    ],
+    "rules": [],
+    "dos": [
+      "**Do** брать все цвета из `packages/ui/src/theme/tokens.ts` через MUI-тему и `--raditi-*`, сохраняя согласованную оранжево-янтарную пару с кремовыми и шоколадными нейтралями.",
+      "**Do** использовать яркий `accent` для заливок с тёмным текстом, `accentText` для мелкого акцентного текста на светлом фоне и `marker` для выделений; проверять контраст каждой пары и состояния.",
+      "**Do** связывать движение с появлением содержания или понятным изменением состояния.",
+      "**Do** сохранять видимость содержания без анимации, клавиатурный фокус и reduced motion.",
+      "**Do** брать цены из базы и оставлять подпись демонстрационных сценариев."
+    ],
+    "donts": [
+      "**Don't** создавать отдельные палитры для демо, локальные цветовые литералы или новые оттенки вне центральных токенов.",
+      "**Don't** использовать белый текст на ярком `accent`, переносить яркие заливки в цвет мелкого текста или возвращать палитру исторического прототипа вместо действующей темы.",
+      "**Don't** считать недоступную проверку сессии доказательством выхода пользователя.",
+      "**Don't** превращать демонстрацию, расчёт тарифа или регистрацию в обещание работающей оплаты и подключённого агента.",
+      "**Don't** заменять self-hosted шрифты внешней загрузкой или применять шкалу hero к формам приложения."
+    ]
+  }
+}

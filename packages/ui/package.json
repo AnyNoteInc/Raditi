@@ -7,8 +7,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./theme": "./src/theme/index.ts",
+    "./theme/tokens": "./src/theme/tokens.ts",
     "./providers": "./src/providers/index.ts",
     "./components": "./src/components/index.ts",
+    "./brand-symbol": "./src/components/brand-symbol.tsx",
     "./widgets/auth": "./src/widgets/auth/index.ts",
     "./captcha": "./src/captcha/index.ts"
   },

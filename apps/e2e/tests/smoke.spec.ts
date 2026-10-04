@@ -3,12 +3,19 @@ import { expect, test } from '@playwright/test'
 // METRICS_TOKEN of the server under test; the fallback is the one in .env.example.
 const METRICS_TOKEN = process.env.METRICS_TOKEN ?? 'raditi-dev-metrics'
 
-test('home page renders', async ({ request }) => {
+test('home page renders the landing with the plans of the database', async ({ request }) => {
   const res = await request.get('/')
   expect(res.status()).toBe(200)
   const html = await res.text()
   expect(html).toContain('Радити')
-  expect(html).toContain('можно отменить в течение 7 дней')
+  // The hero and the demo the hero links to.
+  expect(html).toContain('id="hero-title"')
+  expect(html).toContain('Сайт поправим.')
+  expect(html).toContain('id="site-demo"')
+  // Plans come from the seeds (pnpm db:seed), never from a list kept in the page.
+  for (const plan of ['Старт', 'Бизнес', 'Агентство'])
+    expect(html).toContain(`aria-label="Создать аккаунт — ${plan}"`)
+  expect(html).not.toContain('Сейчас не удалось загрузить тарифы.')
 })
 
 test('legal documents are published', async ({ request }) => {

@@ -25,7 +25,7 @@ export function ConsentsForm({ documents }: { documents: ConsentDocumentLinks })
   const accept = useMutation(
     trpc.consent.acceptRequired.mutationOptions({
       onSuccess: () => {
-        router.replace('/app')
+        router.replace('/projects')
         router.refresh()
       },
     }),
@@ -47,7 +47,7 @@ export function ConsentsForm({ documents }: { documents: ConsentDocumentLinks })
     <Stack component="form" noValidate spacing={3} onSubmit={submit}>
       <AuthHeader
         title="Примите условия"
-        subtitle="Чтобы пользоваться кабинетом, нужно согласие с действующими редакциями документов."
+        subtitle="Чтобы работать с проектами, нужно согласие с действующими редакциями документов."
       />
       <ConsentsCheckboxes
         documents={documents}

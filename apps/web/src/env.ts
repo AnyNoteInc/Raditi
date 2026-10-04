@@ -3,6 +3,7 @@ import 'server-only'
 import { authConfigFromEnv, type AuthConfig } from '@repo/auth'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
+import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
 
 import { webEnvFromEnv } from '@/server/web-env'
 
@@ -27,4 +28,6 @@ export const env = {
   auth: lazy((): AuthConfig => authConfigFromEnv(process.env)),
   storage: lazy((): StorageConfig => storageConfigFromEnv(process.env)),
   vault: lazy((): VaultConfig => vaultConfigFromEnv(process.env)),
+  /** null — payments are off: both shop credentials are empty. */
+  yookassa: lazy((): YookassaConfig | null => yookassaConfigFromEnv(process.env)),
 }

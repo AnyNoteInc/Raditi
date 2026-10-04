@@ -14,18 +14,25 @@ const production = {
   APP_URL: 'https://raditi.ru',
   BETTER_AUTH_URL: 'https://raditi.ru',
   METRICS_TOKEN: 'test-metrics-token-'.padEnd(32, 'x'),
-  REDIS_URL: 'redis://web:secret@redis:6379',
+  REDIS_URL: 'redis://:secret@redis:6379',
   SMARTCAPTCHA_SERVER_KEY: `ysc2_${pair}SERVERSECRETPART`,
   SMARTCAPTCHA_CLIENT_KEY: `ysc1_${pair}CLIENTPUBLICPART`,
-  DATABASE_URL: 'postgresql://raditi_web:secret@postgres:5432/raditi',
+  DATABASE_URL: 'postgresql://raditi:secret@postgres:5432/raditi',
   S3_ENDPOINT: 'https://storage.yandexcloud.net',
   S3_ACCESS_KEY_ID: 'key-id',
   VAULT_ADDR: 'https://vault.internal:8200',
   VAULT_ROLE_ID: 'web-role',
   // A developer's shell may export it; production refuses it.
   VAULT_DEV_ROOT_TOKEN: undefined,
+  // Payments are off until the shop is connected; the last two are never set in production.
+  YOOKASSA_SHOP_ID: undefined,
+  YOOKASSA_SECRET_KEY: undefined,
+  YOOKASSA_API_URL: undefined,
+  YOOKASSA_WEBHOOK_ALLOWLIST: undefined,
   ...secrets,
 }
+
+const shop = { YOOKASSA_SHOP_ID: '123456', YOOKASSA_SECRET_KEY: 'live_shop-secret-key' }
 
 /** A fresh module graph: env.ts remembers what it parsed. */
 async function withEnv(values: Record<string, string | undefined>) {
@@ -66,6 +73,46 @@ describe('brokenSections', { timeout: 30_000 }, () => {
       }),
     ).toEqual(['b'])
   })
+
+  it('takes payments switched off or a complete shop, and nothing in between', async () => {
+    expect((await withEnv({ ...production, ...shop })).brokenSections()).toEqual([])
+    for (const half of [
+      { YOOKASSA_SHOP_ID: shop.YOOKASSA_SHOP_ID },
+      { YOOKASSA_SECRET_KEY: shop.YOOKASSA_SECRET_KEY },
+    ]) {
+      expect((await withEnv({ ...production, ...half })).brokenSections()).toEqual(['yookassa'])
+    }
+  })
+
+  it('refuses the settings of a local fake ЮKassa in production, with payments on or off', async () => {
+    for (const fake of [
+      { YOOKASSA_API_URL: 'http://127.0.0.1:4010/v3' },
+      { YOOKASSA_WEBHOOK_ALLOWLIST: '127.0.0.1' },
+    ]) {
+      for (const credentials of [shop, {}]) {
+        const { brokenSections } = await withEnv({ ...production, ...credentials, ...fake })
+        expect(brokenSections()).toEqual(['yookassa'])
+      }
+    }
+  })
+
+  it('takes the settings of a local fake ЮKassa outside production', async () => {
+    const { brokenSections } = await withEnv({
+      ...production,
+      ...shop,
+      APP_ENV: 'development',
+      YOOKASSA_API_URL: 'http://127.0.0.1:4010/v3',
+      YOOKASSA_WEBHOOK_ALLOWLIST: '127.0.0.1, ::1',
+    })
+    expect(brokenSections()).toEqual([])
+    const { env } = await import('@/env')
+    expect(env.yookassa()).toEqual({
+      shopId: shop.YOOKASSA_SHOP_ID,
+      secretKey: shop.YOOKASSA_SECRET_KEY,
+      baseUrl: 'http://127.0.0.1:4010/v3',
+      webhookAllowlist: ['127.0.0.1', '::1'],
+    })
+  })
 })
 
 describe('register', { timeout: 30_000 }, () => {
@@ -88,6 +135,18 @@ describe('register', { timeout: 30_000 }, () => {
     expect(JSON.stringify(error.mock.calls)).not.toMatch(
       new RegExp(Object.values(secrets).join('|')),
     )
+  })
+
+  it('stops a production server with half of the shop credentials, without leaking the key', async () => {
+    const { register } = await withEnv({
+      ...production,
+      YOOKASSA_SECRET_KEY: shop.YOOKASSA_SECRET_KEY,
+    })
+    const { exit, error } = stubExit()
+    await register()
+    expect(exit).toHaveBeenCalledWith(1)
+    expect(error).toHaveBeenCalledExactlyOnceWith('web: broken production settings: yookassa')
+    expect(JSON.stringify(error.mock.calls)).not.toContain(shop.YOOKASSA_SECRET_KEY)
   })
 
   it('starts with complete production settings', async () => {

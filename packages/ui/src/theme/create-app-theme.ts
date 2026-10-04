@@ -3,39 +3,50 @@ import { createTheme, type PaletteOptions, type Theme } from '@mui/material/styl
 import type { ElementType } from 'react'
 
 import type { ThemePreference } from './theme-preference.ts'
-import { brandColors, fontFamilies } from './tokens.ts'
+import {
+  actionColors,
+  brandColorRoles,
+  brandColors,
+  brandCssVariables,
+  fontFamilies,
+  semanticColors,
+} from './tokens.ts'
 
 const lightPalette = {
   mode: 'light',
-  primary: { main: brandColors.accent, contrastText: '#FFFFFF' },
+  common: { black: brandColors.ink, white: brandColors.white },
+  action: actionColors.light,
+  primary: { main: brandColors.accentText, contrastText: brandColors.white },
   secondary: { main: brandColors.ink, contrastText: brandColors.paper },
-  success: { main: brandColors.ok, contrastText: '#FFFFFF' },
-  error: { main: '#B42318', contrastText: '#FFFFFF' },
-  warning: { main: '#B54708', contrastText: '#FFFFFF' },
-  info: { main: brandColors.accent, contrastText: '#FFFFFF' },
+  success: { main: semanticColors.light.success, contrastText: brandColors.white },
+  error: { main: semanticColors.light.error, contrastText: brandColors.white },
+  warning: { main: semanticColors.light.warning, contrastText: brandColors.white },
+  info: { main: semanticColors.light.info, contrastText: brandColors.white },
   background: { default: brandColors.paper, paper: brandColors.card },
   text: {
     primary: brandColors.ink,
     secondary: brandColors.graphite,
-    disabled: 'rgba(21, 23, 26, 0.38)',
+    disabled: brandColorRoles.inkMuted,
   },
   divider: brandColors.rule,
 } satisfies PaletteOptions
 
-// Dark sections of the landing put the yellow marker where the light ones use the blue accent.
+// The same orange family in both schemes; peach keeps dark-surface actions legible.
 const darkPalette = {
   mode: 'dark',
-  primary: { main: brandColors.marker, contrastText: brandColors.ink },
+  common: { black: brandColors.ink, white: brandColors.white },
+  action: actionColors.dark,
+  primary: { main: brandColors.accentLight, contrastText: brandColors.ink },
   secondary: { main: brandColors.snow, contrastText: brandColors.ink },
-  success: { main: '#4CC38A', contrastText: brandColors.ink },
-  error: { main: '#F97066', contrastText: brandColors.ink },
-  warning: { main: '#F5B94A', contrastText: brandColors.ink },
-  info: { main: '#9AA2FF', contrastText: brandColors.ink },
+  success: { main: semanticColors.dark.success, contrastText: brandColors.ink },
+  error: { main: semanticColors.dark.error, contrastText: brandColors.ink },
+  warning: { main: semanticColors.dark.warning, contrastText: brandColors.ink },
+  info: { main: semanticColors.dark.info, contrastText: brandColors.ink },
   background: { default: brandColors.ink, paper: brandColors.ink2 },
   text: {
     primary: brandColors.snow,
     secondary: brandColors.onInk,
-    disabled: 'rgba(241, 242, 238, 0.38)',
+    disabled: brandColorRoles.snowMuted,
   },
   divider: brandColors.ruleInk,
 } satisfies PaletteOptions
@@ -90,6 +101,9 @@ export function createAppTheme(
       },
     },
     components: {
+      MuiCssBaseline: {
+        styleOverrides: { ':root': brandCssVariables },
+      },
       MuiButtonBase: {
         defaultProps: linkComponent ? { LinkComponent: linkComponent } : {},
       },
@@ -104,6 +118,17 @@ export function createAppTheme(
         defaultProps: { disableElevation: true },
         styleOverrides: {
           root: { borderRadius: 999 },
+          // Vivid fills have dark labels; text and outlined actions retain accessible text hues.
+          contained: ({ ownerState }) =>
+            ownerState.color === 'primary'
+              ? {
+                  backgroundColor: brandColors.accent,
+                  color: brandColorRoles.onAccent,
+                  border: `1px solid ${brandColors.accentText}`,
+                  '&:hover:not(.Mui-disabled)': { backgroundColor: brandColorRoles.accentHover },
+                  '&.Mui-disabled': { borderColor: 'transparent' },
+                }
+              : {},
           sizeMedium: { minHeight: 44, paddingInline: 18 },
           sizeLarge: { minHeight: 52, paddingInline: 26, fontSize: '1rem' },
         },

@@ -52,6 +52,13 @@ const rules: Record<string, Rule> = {
     message: 'Этот адрес уже зарегистрирован. Войдите или восстановите пароль.',
     target: { field: 'email' },
   },
+  INVALID_NAME: {
+    message: 'Укажите имя: до 255 символов, без переносов строк и служебных знаков.',
+    target: { field: 'name' },
+  },
+  IMAGE_NOT_ALLOWED: {
+    message: 'Фото профиля можно загрузить в личном кабинете после регистрации.',
+  },
   INVALID_EMAIL: {
     message: 'Проверьте адрес электронной почты: в нём есть ошибка.',
     target: { field: 'email' },
@@ -72,7 +79,7 @@ const rules: Record<string, Rule> = {
   },
   INVALID_TOKEN: { message: INVALID_LINK_ERROR },
   TOKEN_EXPIRED: { message: INVALID_LINK_ERROR },
-  EMAIL_ALREADY_VERIFIED: { message: 'Адрес уже подтверждён. Войдите в кабинет.' },
+  EMAIL_ALREADY_VERIFIED: { message: 'Адрес уже подтверждён. Войдите, чтобы открыть проекты.' },
   USER_NOT_FOUND: { message: INVALID_LINK_ERROR },
   TOO_MANY_REQUESTS: { message: RATE_LIMITED_ERROR },
 }

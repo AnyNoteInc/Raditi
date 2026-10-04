@@ -199,6 +199,24 @@ describe('RegisterForm', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
+  it('reports a pasted tab in the name under its field, as the server would refuse it', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderForm()
+    await fillFields(user)
+    fireEvent.change(screen.getByLabelText('Как к вам обращаться'), {
+      target: { value: 'Анна\tИванова' },
+    })
+
+    await acceptRequired(user)
+    await user.click(submitButton())
+
+    expect(
+      await screen.findByText('Уберите из имени табуляцию и другие служебные знаки'),
+    ).toBeVisible()
+    expect(screen.getByLabelText('Как к вам обращаться')).toHaveAttribute('aria-invalid', 'true')
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('shows field errors returned by the server', async () => {
     const user = userEvent.setup()
     const { onSubmit } = renderForm()
