@@ -1,0 +1,99 @@
+[
+  {
+    "at": "2026-10-05T07:36:41.217Z",
+    "kind": "dns",
+    "name": "account-control.test",
+    "type": 1,
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:36:41.218Z",
+    "kind": "http",
+    "port": 80,
+    "line": "GET /api/config HTTP/1.1",
+    "host": "account-control.test",
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:36:42.671Z",
+    "kind": "dns",
+    "name": "opencode.ai",
+    "type": 1,
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:36:42.672Z",
+    "kind": "tls",
+    "port": 443,
+    "sni": "opencode.ai",
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:36:46.218Z",
+    "kind": "dns",
+    "name": "account-control.test",
+    "type": 1,
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:36:46.218Z",
+    "kind": "http",
+    "port": 80,
+    "line": "GET /api/config HTTP/1.1",
+    "host": "account-control.test",
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:36:46.548Z",
+    "kind": "http",
+    "port": 80,
+    "line": "GET /api/config HTTP/1.1",
+    "host": "account-control.test",
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:36:59.485Z",
+    "kind": "dns",
+    "name": "account-control.test",
+    "type": 1,
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:36:59.486Z",
+    "kind": "http",
+    "port": 80,
+    "line": "GET /api/config HTTP/1.1",
+    "host": "account-control.test",
+    "from": "10.213.77.3"
+  },
+  {
+    "at": "2026-10-05T07:37:02.613Z",
+    "kind": "dns",
+    "name": "account-control.test",
+    "type": 1,
+    "from": "10.213.77.5"
+  },
+  {
+    "at": "2026-10-05T07:37:02.613Z",
+    "kind": "http",
+    "port": 80,
+    "line": "GET /api/config HTTP/1.1",
+    "host": "account-control.test",
+    "from": "10.213.77.5"
+  },
+  {
+    "at": "2026-10-05T07:37:09.871Z",
+    "kind": "dns",
+    "name": "account-control.test",
+    "type": 1,
+    "from": "10.213.77.5"
+  },
+  {
+    "at": "2026-10-05T07:37:09.871Z",
+    "kind": "http",
+    "port": 80,
+    "line": "GET /api/config HTTP/1.1",
+    "host": "account-control.test",
+    "from": "10.213.77.5"
+  }
+]

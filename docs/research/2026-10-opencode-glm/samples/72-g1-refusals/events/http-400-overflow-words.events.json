@@ -1,0 +1,28 @@
+{
+  "events": [
+    {
+      "type": "error",
+      "timestamp": 1791185354527,
+      "sessionID": "ses_00000000000000000000000043",
+      "error": {
+        "name": "ContextOverflowError",
+        "data": {
+          "message": "The request has too many tokens for this turn.",
+          "responseBody": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"raditi_policy\",\"message\":\"The request has too many tokens for this turn.\"}}"
+        }
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185354546,
+      "sessionID": "ses_00000000000000000000000043",
+      "error": {
+        "name": "ContextOverflowError",
+        "data": {
+          "message": "The request has too many tokens for this turn.",
+          "responseBody": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"raditi_policy\",\"message\":\"The request has too many tokens for this turn.\"}}"
+        }
+      }
+    }
+  ]
+}

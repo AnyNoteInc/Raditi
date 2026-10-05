@@ -1,0 +1,379 @@
+{
+  "cases": [
+    {
+      "case": "ok",
+      "exit": 0,
+      "wallS": 3.1,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 3311,
+      "llmRequests": 1,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → 200",
+        "POST notifications/initialized → 202",
+        "GET → 405",
+        "POST tools/list → 200"
+      ],
+      "raditiToolsDeclared": [
+        "raditi_site_info",
+        "raditi_wp_rest"
+      ],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 0,
+      "stderrWarnings": [],
+      "stderrOther": [],
+      "logFileLines": 0,
+      "logFileWarnings": [],
+      "logFileLast": "",
+      "hits": []
+    },
+    {
+      "case": "refused-401",
+      "exit": 0,
+      "wallS": 3.1,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 3333,
+      "llmRequests": 1,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → 401",
+        "GET → 405"
+      ],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 1,
+      "stderrWarnings": [
+        "level=WARN message=\"server unavailable\" key=raditi type=remote status=failed"
+      ],
+      "stderrOther": [],
+      "logFileLines": 0,
+      "logFileWarnings": [],
+      "logFileLast": "",
+      "hits": []
+    },
+    {
+      "case": "refused-500",
+      "exit": 0,
+      "wallS": 3.2,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 3456,
+      "llmRequests": 1,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → 500",
+        "GET → 405"
+      ],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 1,
+      "stderrWarnings": [
+        "level=WARN message=\"server unavailable\" key=raditi type=remote status=failed"
+      ],
+      "stderrOther": [],
+      "logFileLines": 0,
+      "logFileWarnings": [],
+      "logFileLast": "",
+      "hits": []
+    },
+    {
+      "case": "refused-rpc-error",
+      "exit": 0,
+      "wallS": 2.9,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 3149,
+      "llmRequests": 1,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → rpc-error",
+        "GET → 405"
+      ],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 1,
+      "stderrWarnings": [
+        "level=WARN message=\"server unavailable\" key=raditi type=remote status=failed"
+      ],
+      "stderrOther": [],
+      "logFileLines": 0,
+      "logFileWarnings": [],
+      "logFileLast": "",
+      "hits": []
+    },
+    {
+      "case": "refused-destroy",
+      "exit": 0,
+      "wallS": 2.8,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 3059,
+      "llmRequests": 1,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → destroy",
+        "GET → 405"
+      ],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 1,
+      "stderrWarnings": [
+        "level=WARN message=\"server unavailable\" key=raditi type=remote status=failed"
+      ],
+      "stderrOther": [],
+      "logFileLines": 0,
+      "logFileWarnings": [],
+      "logFileLast": "",
+      "hits": []
+    },
+    {
+      "case": "refused-hang",
+      "exit": 0,
+      "wallS": 7.8,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 8074,
+      "llmRequests": 1,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → hang",
+        "GET → 405"
+      ],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 1,
+      "stderrWarnings": [
+        "level=WARN message=\"server unavailable\" key=raditi type=remote status=failed"
+      ],
+      "stderrOther": [],
+      "logFileLines": 0,
+      "logFileWarnings": [],
+      "logFileLast": "",
+      "hits": []
+    },
+    {
+      "case": "dead-port",
+      "exit": 0,
+      "wallS": 2.6,
+      "firstRequestMs": 2817,
+      "llmRequests": 1,
+      "mcpRequests": [],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 1,
+      "stderrWarnings": [
+        "level=WARN message=\"server unavailable\" key=raditi type=remote status=failed"
+      ],
+      "stderrOther": [],
+      "logFileLines": 0,
+      "logFileWarnings": [],
+      "logFileLast": "",
+      "hits": []
+    },
+    {
+      "case": "refused-401-no-flags",
+      "exit": 0,
+      "wallS": 2.7,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 2873,
+      "llmRequests": 1,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → 401",
+        "GET → 405"
+      ],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 0,
+      "stderrWarnings": [],
+      "stderrOther": [],
+      "logFileLines": 12,
+      "logFileWarnings": [],
+      "logFileLast": "level=INFO message=loop session.id=ses_00000000000000000000000417 step=0",
+      "hits": []
+    },
+    {
+      "case": "refused-401-print-logs-info",
+      "exit": 0,
+      "wallS": 2.8,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 3036,
+      "llmRequests": 1,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → 401",
+        "GET → 405"
+      ],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "tools": [],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 23,
+      "stderrWarnings": [],
+      "stderrOther": [],
+      "logFileLines": 12,
+      "logFileWarnings": [],
+      "logFileLast": "level=INFO message=loop session.id=ses_00000000000000000000000418 step=0",
+      "hits": []
+    },
+    {
+      "case": "refused-401-model-calls-tool",
+      "exit": 0,
+      "wallS": 2.8,
+      "wrapperCheck": {
+        "status": 200,
+        "ok": true
+      },
+      "firstRequestMs": 2926,
+      "llmRequests": 2,
+      "mcpRequests": [
+        "POST initialize → 200",
+        "POST initialize → 401",
+        "GET → 405"
+      ],
+      "raditiToolsDeclared": [],
+      "events": {
+        "step_start": 2,
+        "tool_use": 1,
+        "step_finish": 2,
+        "text": 1
+      },
+      "stepReasons": [
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "invalid:completed:The arguments provided to the tool are invalid: Model tried to call unavailable tool 'raditi_site_info'. Available tools: bash, edit, glob, grep, invalid, read,"
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"c",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderrLines": 1,
+      "stderrWarnings": [
+        "level=WARN message=\"server unavailable\" key=raditi type=remote status=failed"
+      ],
+      "stderrOther": [],
+      "logFileLines": 0,
+      "logFileWarnings": [],
+      "logFileLast": "",
+      "hits": []
+    }
+  ]
+}

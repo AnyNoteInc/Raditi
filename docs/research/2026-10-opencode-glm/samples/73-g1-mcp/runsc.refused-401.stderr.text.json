@@ -1,0 +1,4 @@
+{
+  "source": "runsc/p6-refused-401/turn.stderr.txt",
+  "text": "timestamp=2026-10-05T07:39:27.390Z level=WARN run=236e333d message=\"server unavailable\" key=raditi type=remote status=failed\n"
+}

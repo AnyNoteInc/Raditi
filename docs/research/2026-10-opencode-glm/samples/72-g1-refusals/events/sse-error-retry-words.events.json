@@ -1,0 +1,81 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185371687,
+      "sessionID": "ses_00000000000000000000000152",
+      "part": {
+        "id": "prt_00000000000000000000000153",
+        "messageID": "msg_00000000000000000000000154",
+        "sessionID": "ses_00000000000000000000000152",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185373971,
+      "sessionID": "ses_00000000000000000000000152",
+      "part": {
+        "id": "prt_00000000000000000000000155",
+        "messageID": "msg_00000000000000000000000154",
+        "sessionID": "ses_00000000000000000000000152",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185378700,
+      "sessionID": "ses_00000000000000000000000152",
+      "part": {
+        "id": "prt_00000000000000000000000156",
+        "messageID": "msg_00000000000000000000000154",
+        "sessionID": "ses_00000000000000000000000152",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185387802,
+      "sessionID": "ses_00000000000000000000000152",
+      "part": {
+        "id": "prt_00000000000000000000000157",
+        "messageID": "msg_00000000000000000000000154",
+        "sessionID": "ses_00000000000000000000000152",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185405905,
+      "sessionID": "ses_00000000000000000000000152",
+      "part": {
+        "id": "prt_00000000000000000000000158",
+        "messageID": "msg_00000000000000000000000154",
+        "sessionID": "ses_00000000000000000000000152",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185435948,
+      "sessionID": "ses_00000000000000000000000152",
+      "part": {
+        "id": "prt_00000000000000000000000159",
+        "messageID": "msg_00000000000000000000000154",
+        "sessionID": "ses_00000000000000000000000152",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185435948,
+      "sessionID": "ses_00000000000000000000000152",
+      "error": {
+        "name": "UnknownError",
+        "data": {
+          "message": "{\"message\":\"The service is overloaded, try again later.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_busy\"}"
+        }
+      }
+    }
+  ]
+}

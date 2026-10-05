@@ -1,0 +1,30 @@
+{
+  "events": [
+    {
+      "type": "error",
+      "timestamp": 1791185326021,
+      "sessionID": "ses_00000000000000000000000042",
+      "error": {
+        "name": "APIError",
+        "data": {
+          "message": "The request is not allowed by the policy of this turn.",
+          "statusCode": 400,
+          "isRetryable": false,
+          "responseHeaders": {
+            "content-type": "application/json; charset=UTF-8"
+          },
+          "removedHeaderNames": [
+            "connection",
+            "date",
+            "keep-alive",
+            "transfer-encoding"
+          ],
+          "responseBody": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"raditi_policy\",\"message\":\"The request is not allowed by the policy of this turn.\",\"field\":\"messages[].content\"}}",
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-400-field/zai/v4/chat/completions"
+          }
+        }
+      }
+    }
+  ]
+}
