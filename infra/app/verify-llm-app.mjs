@@ -92,6 +92,22 @@ for (const signal of ['SIGINT', 'SIGTERM'])
     abortVerification()
   })
 
+// The engine of the app VM with the llm profile (README.md, «Первая выкладка»). core reaches llm
+// through the port llm publishes for another bridge network. Before Docker 29 that path is closed
+// once the userland proxy is off: the engine's inter-network isolation drops the forwarded
+// packets (DOCKER-ISOLATION-STAGE-2), and with the proxy on docker-proxy carries them instead of
+// the kernel path of the VM. The control call would only time out, without naming the cause.
+const APP_ENGINE_MAJOR = 29
+async function requireAppEngine() {
+  const server = (await docker(['version', '--format', '{{.Server.Version}}'])).stdout.trim()
+  const version = /^\d+\.\d+\.\d+/.exec(server)?.[0] ?? 'of an unknown version'
+  process.stdout.write(`Docker Engine ${version}\n`)
+  if (Number.parseInt(server, 10) >= APP_ENGINE_MAJOR) return
+  throw Object.assign(new Error('Unsupported Docker Engine'), {
+    infrastructureDiagnostic: `Docker Engine ${version}: the control call from core to llm needs Docker ${APP_ENGINE_MAJOR} or newer. Older engines close a published port to the other bridge networks once the userland proxy is off.`,
+  })
+}
+
 async function hairpinOnly() {
   setStage('native Linux Docker control hairpin')
   const context = (
@@ -104,6 +120,7 @@ async function hairpinOnly() {
     false,
     'A native Linux Docker VM is required',
   )
+  await requireAppEngine()
   await docker(['image', 'inspect', options.image])
   const ids = (await docker(['network', 'ls', '-q'])).stdout.trim().split(/\s+/).filter(Boolean)
   const networks = ids.length
@@ -216,6 +233,11 @@ async function main() {
   const endpoint = process.env.DOCKER_CONTEXT ? context : (process.env.DOCKER_HOST ?? context)
   assert.match(endpoint, /^(unix:\/\/\/[^\s?#]+|npipe:\/\/\/[/\\][^\s?#]+)$/)
   await docker(['image', 'inspect', options.image])
+  const desktop = (await docker(['info', '--format', '{{.OperatingSystem}}'])).stdout.includes(
+    'Docker Desktop',
+  )
+  // Before anything is created: only native Linux runs the control call across the bridges.
+  if (!desktop) await requireAppEngine()
   directory = await mkdtemp(join(tmpdir(), 'raditi-b14-app-'))
   project = `raditi-b14-app-${randomBytes(5).toString('hex')}`
   const networkIds = (await docker(['network', 'ls', '-q'])).stdout
@@ -227,9 +249,6 @@ async function main() {
     : []
   const subnet = chooseCliSubnet(
     networks.flatMap((network) => network.IPAM.Config ?? []).map((item) => item.Subnet ?? ''),
-  )
-  const desktop = (await docker(['info', '--format', '{{.OperatingSystem}}'])).stdout.includes(
-    'Docker Desktop',
   )
   // Desktop forwards published ports through macOS, where the Linux bridge IP does not exist.
   // Native Linux can exercise the exact core → host-private-IP → published-container hairpin.

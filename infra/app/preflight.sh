@@ -79,6 +79,10 @@ check_secrets redis 10003 users.acl password
 if printf '%s\n%s\n' "$(setting COMPOSE_PROFILES)" "${COMPOSE_PROFILES-}" |
   grep -Eq '(^|[,[:space:]])llm([,[:space:]]|$)'; then
   check_secrets llm 10008 app.env egress-client.pem egress-client-key.pem egress-ca.pem vault-ca.pem
+  # core reaches llm through the port llm publishes for another bridge network. Without the
+  # userland proxy (check 2) Docker 28 drops that path by its inter-network isolation.
+  [ "${server%%.*}" -ge 29 ] 2>/dev/null ||
+    fail "Docker server 29 or newer is required with the llm profile"
   firewall_helper=/usr/local/lib/raditi/llm-firewall.mjs
   cmp -s "$dir/llm-firewall.mjs" "$firewall_helper" ||
     fail "installed llm firewall helper must match this release"

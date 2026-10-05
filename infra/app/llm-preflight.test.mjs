@@ -181,6 +181,58 @@ test('the shell gate rejects Compose wildcard profiles before touching host stat
   }
 })
 
+test('the shell gate requires Docker 29 with the llm profile, Docker 28 without it', () => {
+  // core reaches llm through a port published for another bridge network: with the userland
+  // proxy off Docker 28 drops it (DOCKER-ISOLATION-STAGE-2), Docker 29 does not.
+  const root = mkdtempSync(join(directory, 'engine-gate-'))
+  const bin = join(root, 'bin')
+  mkdirSync(bin)
+  cpSync(fileURLToPath(new URL('./preflight.sh', import.meta.url)), join(root, 'preflight.sh'))
+  const stub = (name, body) =>
+    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+  // Only the engine gate is under test: the settings check passes, the daemon reports the
+  // version of the case, and the commands that would query the real host, daemon or firewall
+  // are stubs that fail.
+  stub('node', 'exit 0')
+  stub('docker', '[ "$1" = version ] || exit 1\necho "$PREFLIGHT_TEST_SERVER"')
+  for (const name of ['stat', 'ip', 'systemctl', 'pgrep', 'sysctl', 'timedatectl', 'getent', 'cmp'])
+    stub(name, 'exit 1')
+  const general = 'preflight: Docker server 28 or newer is required'
+  const llm = 'preflight: Docker server 29 or newer is required with the llm profile'
+  for (const [fileProfiles, ambientProfiles, server, expected] of [
+    ['llm', undefined, '28.0.4', [llm]],
+    ['ops,llm', undefined, '28.5.2', [llm]],
+    ['', 'llm', '28.0.4', [llm]],
+    ['llm', undefined, '27.5.1', [general, llm]],
+    ['llm', undefined, '', [general, llm]],
+    ['llm', undefined, '29.0.0', []],
+    ['ops,llm', undefined, '29.5.2', []],
+    ['llm', undefined, '30.1.0', []],
+    ['', undefined, '28.0.4', []],
+    ['ops', undefined, '27.5.1', [general]],
+  ]) {
+    writeFileSync(
+      join(root, '.env'),
+      dotenv({ COMPOSE_PROFILES: fileProfiles, SECRETS_DIR: join(root, 'absent-secrets') }),
+    )
+    const result = spawnSync('/bin/sh', [join(root, 'preflight.sh')], {
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        PREFLIGHT_TEST_SERVER: server,
+        ...(ambientProfiles === undefined ? {} : { COMPOSE_PROFILES: ambientProfiles }),
+      },
+    })
+    // The stubbed host fails the other checks; the engine lines are what the case decides.
+    assert.equal(result.status, 1)
+    assert.deepEqual(
+      result.stderr.split('\n').filter((line) => line.startsWith('preflight: Docker server ')),
+      expected,
+      `profiles "${fileProfiles}"/"${ambientProfiles ?? ''}", Docker ${server || 'unknown'}`,
+    )
+  }
+})
+
 test('env parser rejects ambiguity and never executes interpolation', () => {
   for (const value of [
     'A=one\nA=two',

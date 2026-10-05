@@ -247,6 +247,48 @@ test('CI runs the Docker isolation suites of the sandbox provider on a real daem
     'RADITI_DOCKER_TEST_UPSTREAM_HOST',
   ])
     assert.ok(sets(isolation, variable), `the job exports ${variable}`)
+  // The engine of the sandbox VM, not the one of the runner image: the gateway manager's fixed
+  // addresses on a subnet Docker picks need Docker Engine 29.1 (the runner image ships 28.0.4).
+  const [, major, minor] = /^ {6}SANDBOX_DOCKER_VERSION: (\d+)\.(\d+)\.\d+$/m.exec(isolation) ?? []
+  assert.ok(major, 'the job pins the version of Docker Engine')
+  assert.ok(+major > 29 || (+major === 29 && +minor >= 1), `Docker Engine ${major}.${minor}`)
+  // Installed, then checked on the daemon after its last restart, before the images are built.
+  const order = [
+    'grep -F ":$SANDBOX_DOCKER_VERSION-"',
+    '"docker-ce=$package" "docker-ce-cli=$package"',
+    'sudo systemctl restart docker',
+    `test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"`,
+    'docker build -f infra/sandbox/Dockerfile',
+    'pnpm --filter @repo/sandbox-providers test',
+  ].map((text) => isolation.indexOf(text))
+  assert.deepEqual(
+    order,
+    order.toSorted((left, right) => left - right),
+  )
+  assert.ok(order[0] >= 0, 'the job installs the pinned engine')
+  assert.equal(isolation.match(/sudo systemctl restart docker/g)?.length, 1)
+  // The record printed when a suite fails holds names, actions and exit codes: no exec event,
+  // whose action carries the command line, and no labels or environment.
+  const [, record] = /^ {10}nohup docker events ((?:.*\\\n)+.*)$/m.exec(isolation) ?? []
+  assert.ok(record, 'the job records daemon events')
+  assert.deepEqual(
+    [...record.matchAll(/--filter event=(\S+)/g)].map(([, event]) => event),
+    ['create', 'start', 'die', 'destroy', 'connect', 'disconnect'],
+  )
+  assert.deepEqual(
+    [...record.matchAll(/\{\{(.+?)\}\}/g)].map(([, field]) => field),
+    [
+      '.Time',
+      '.Type',
+      '.Action',
+      'index .Actor.Attributes "name"',
+      'index .Actor.Attributes "exitCode"',
+    ],
+  )
+  assert.match(
+    isolation,
+    /^ {8}if: failure\(\)\n {8}run: \|\n(?: {10}.*\n)*? {10}tail -n \d+ "\$RUNNER_TEMP\/docker-events\.log"/m,
+  )
   // runc: the variable that would select gVisor is not set on a GitHub runner.
   assert.ok(!sets(isolation, 'SANDBOX_RUNTIME'))
   // The one-line commands: what runs once the images are built and pinned.
@@ -468,4 +510,59 @@ test('a cached gate sees a source change in a package it depends on', () => {
   // A script of that name would run, and its outputs would be cached, in every package.
   for (const workspace of workspaces)
     assert.equal(scripts(workspace).transit, undefined, `${workspace} has a transit script`)
+})
+
+test('the llm profile of the app VM is verified on the engine of the VM, without the userland proxy', () => {
+  const source = workflow('llm-app')
+  // core reaches llm through the port llm publishes for another bridge network. With the
+  // userland proxy off Docker 28, which the runner image ships, drops that path by its
+  // inter-network isolation; the VM's preflight and the stand refuse such an engine by name.
+  const [, major] = /^ {6}APP_DOCKER_VERSION: (\d+)\.\d+\.\d+$/m.exec(source) ?? []
+  assert.ok(major, 'the job pins the version of Docker Engine')
+  const [, required] =
+    /^const APP_ENGINE_MAJOR = (\d+)$/m.exec(read('infra/app/verify-llm-app.mjs')) ?? []
+  assert.equal(required, '29')
+  assert.ok(+major >= +required, `Docker Engine ${major}`)
+  assert.match(
+    read('infra/app/preflight.sh'),
+    new RegExp(
+      `^ {2}\\[ "\\$\\{server%%\\.\\*\\}" -ge ${required} \\] 2>/dev/null \\|\\|\\n +fail "Docker server ${required} or newer is required with the llm profile"$`,
+      'm',
+    ),
+  )
+  // Installed from Docker's repository under its release key, the proxy switched off, the engine
+  // checked after its last restart; then the packet filter, the production image and the stand.
+  assert.match(source, /"\$fingerprint" != 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 \]/)
+  const order = [
+    'grep -F ":$APP_DOCKER_VERSION-"',
+    '"docker-ce=$package" "docker-ce-cli=$package"',
+    `jq '. + {"userland-proxy": false}'`,
+    'sudo systemctl restart docker',
+    'if pgrep -x docker-proxy; then',
+    `test "$(docker version --format '{{.Server.Version}}')" = "$APP_DOCKER_VERSION"`,
+    'run: pnpm verify:llm-firewall',
+    'run: docker build -f apps/orchestrator/Dockerfile --target runtime -t raditi-p3verify-orchestrator:b14 .',
+    'run: pnpm verify:llm-app',
+  ].map((text) => source.indexOf(text))
+  assert.deepEqual(
+    order,
+    order.toSorted((left, right) => left - right),
+  )
+  assert.ok(order[0] >= 0, 'the job installs the pinned engine')
+  assert.equal(source.match(/sudo systemctl restart docker/g)?.length, 1)
+  // The stand takes the image the job builds, and its engine gate has tests of its own.
+  assert.match(
+    read('infra/app/verify-llm-app.mjs'),
+    /^ {4}image: \{ type: 'string', default: 'raditi-p3verify-orchestrator:b14' \},$/m,
+  )
+  assert.match(source, /^ {8}run: node --test .* infra\/app\/verify-llm-app\.test\.mjs$/m)
+  const filter = pathFilter(source)
+  for (const file of [
+    '.github/workflows/llm-app.yml',
+    'infra/app/verify-llm-app.mjs',
+    'infra/app/preflight.sh',
+    'infra/app/docker-compose.yml',
+    'apps/orchestrator/Dockerfile',
+  ])
+    assert.ok(starts(filter, file), `${file} does not start the workflow`)
 })

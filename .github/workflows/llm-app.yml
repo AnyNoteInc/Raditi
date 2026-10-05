@@ -31,6 +31,12 @@ jobs:
   verify-llm-app:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The engine of the app VM with the llm profile (infra/app/README.md), the version the stand
+      # was verified on. core reaches llm through the port llm publishes for another bridge
+      # network; with the userland proxy off Docker 28 drops that path by its inter-network
+      # isolation (DOCKER-ISOLATION-STAGE-2), and the runner image ships 28.0.4.
+      APP_DOCKER_VERSION: 29.5.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,6 +45,31 @@ jobs:
         uses: ./.github/actions/setup
       - name: Generate Prisma client
         run: pnpm db:generate
+      # From Docker's own repository, where the runner image takes its engine from; the image
+      # drops the repository and its key afterwards. The key must be Docker's release key.
+      - name: Docker Engine of the app VM
+        run: |
+          key=$(mktemp)
+          curl -fsSL --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
+          fingerprint=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
+          if [ "$fingerprint" != 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 ]; then
+            echo "Unexpected fingerprint of the key of Docker's repository: $fingerprint" >&2
+            exit 1
+          fi
+          sudo install -D -m 0644 "$key" /etc/apt/keyrings/docker.asc
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+          sudo apt-get -q -o Acquire::Retries=3 update
+          package=$(apt-cache madison docker-ce | awk '{ print $3 }' \
+            | grep -F ":$APP_DOCKER_VERSION-" | head -n 1)
+          if [ -z "$package" ]; then
+            echo "Docker's repository has no docker-ce $APP_DOCKER_VERSION for $codename" >&2
+            exit 1
+          fi
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o Acquire::Retries=3 install \
+            --no-install-recommends --allow-downgrades --allow-change-held-packages \
+            "docker-ce=$package" "docker-ce-cli=$package"
       - name: Docker without userland-proxy
         run: |
           daemon=/etc/docker/daemon.json
@@ -47,8 +78,11 @@ jobs:
           sudo systemctl restart docker
           docker info >/dev/null
           if pgrep -x docker-proxy; then echo 'docker-proxy is still running' >&2; exit 1; fi
+          # The engine the stand runs on, after its last restart.
+          docker version --format 'Docker client {{.Client.Version}}, server {{.Server.Version}}'
+          test "$(docker version --format '{{.Server.Version}}')" = "$APP_DOCKER_VERSION"
       - name: Verify configuration and preflight
-        run: node --test infra/app/compose.test.mjs infra/app/llm-preflight.test.mjs infra/app/llm-firewall.test.mjs infra/app/verify-llm-firewall.test.mjs
+        run: node --test infra/app/compose.test.mjs infra/app/llm-preflight.test.mjs infra/app/llm-firewall.test.mjs infra/app/verify-llm-firewall.test.mjs infra/app/verify-llm-app.test.mjs
       - name: Verify packet filtering inside an isolated container
         run: pnpm verify:llm-firewall
       - name: Build production orchestrator
