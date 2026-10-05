@@ -1,0 +1,64 @@
+name: Subscription gateway
+
+# B13 exercises real pinned CLI containers against synthetic HTTPS providers and disposable
+# PostgreSQL/OpenBao. It needs no repository secrets, provider accounts or external test data.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/llm-gateway.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - .dockerignore
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - apps/orchestrator/**
+      - packages/domain/**
+      - packages/db/**
+      - packages/llm-backends/**
+      # The stand runs the drivers' real prepare and command in the production agent runtime.
+      - packages/agent-drivers/**
+      - packages/sandbox-providers/runtime/**
+      - packages/vault/**
+      - packages/observability/**
+      - packages/typescript-config/**
+      - infra/dev/llm-verify/**
+      - infra/egress/**
+      - infra/sandbox/**
+      - infra/vault/**
+      - infra/app/postgres/**
+  workflow_dispatch:
+
+concurrency:
+  group: llm-gateway-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-llm-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Leave room for the workspace dependencies, two CLI distributions and disposable images.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Verify the synthetic subscription gateway
+        run: pnpm verify:llm-gateway

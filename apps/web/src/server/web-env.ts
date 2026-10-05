@@ -20,7 +20,12 @@ const webEnvSchema = z
         .url({ protocol: /^https?$/, error: 'must be an http(s) URL' })
         .transform((url) => url.replace(/\/+$/, '')),
     ),
-    METRICS_TOKEN: envVar(z.string().optional()),
+    METRICS_TOKEN: envVar(
+      z
+        .string()
+        .regex(/^\S+$/, 'must not contain whitespace (it is sent as a Bearer token)')
+        .optional(),
+    ),
     REDIS_URL: envVar(z.url({ protocol: /^rediss?$/, error: 'must be a redis:// URL' }).optional()),
   })
   .superRefine((env, ctx) => {

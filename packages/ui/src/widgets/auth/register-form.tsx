@@ -121,7 +121,7 @@ export function RegisterForm({
         Зарегистрироваться
       </Button>
       <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
-        Уже есть кабинет? <Link href={loginHref}>Войти</Link>
+        Уже есть аккаунт? <Link href={loginHref}>Войти</Link>
       </Typography>
     </Stack>
   )

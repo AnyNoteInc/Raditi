@@ -8,16 +8,30 @@
     "BETTER_AUTH_SECRET",
     "BETTER_AUTH_URL",
     "CI",
-    "CLOUDRU_API_KEY",
     "DATABASE_URL",
-    "GIGACHAT_AUTH_KEY",
     "GITEA_RUNNER_TOKEN",
     "GITEA_TOKEN",
     "GITEA_URL",
     "GITEA_WEBHOOK_SECRET",
+    "GIT_CA_FILE",
     "GRAFANA_ADMIN_PASSWORD",
-    "LITELLM_MASTER_KEY",
-    "LITELLM_URL",
+    "LLM_AUTH_URL_OPENAI",
+    "LLM_BACKEND_URL_KIMI_CODE",
+    "LLM_BACKEND_URL_OPENAI_CHATGPT",
+    "LLM_CONTROL_URL",
+    "LLM_EGRESS_CA_FILE",
+    "LLM_EGRESS_CLIENT_CERT_FILE",
+    "LLM_EGRESS_CLIENT_KEY_FILE",
+    "LLM_EGRESS_PROXY_URL",
+    "LLM_GATEWAY_CLIENTS",
+    "LLM_GATEWAY_HOSTS",
+    "LLM_GATEWAY_LISTEN_HOST",
+    "LLM_GATEWAY_PORT",
+    "LLM_MAX_REQUESTS_PER_KEY",
+    "LLM_POOL_MIN_TURN_HEADROOM_PCT",
+    "LLM_UPSTREAM_CA_FILE",
+    "MCP_ALLOWED_HOSTS",
+    "MCP_CONTENT_PROFILE",
     "MCP_PORT",
     "METRICS_TOKEN",
     "NODE_ENV",
@@ -31,6 +45,7 @@
     "PUBLIC_DOMAIN",
     "RADITI_DOCKER_TEST_IMAGE",
     "RADITI_DOCKER_TEST_UPSTREAM_HOST",
+    "RADITI_GATEWAY_DB_TESTS",
     "REDIS_URL",
     "RUNNER_API_PORT",
     "RUNNER_CORE_CA_FILE",
@@ -54,7 +69,7 @@
     "S3_SECRET_ACCESS_KEY",
     "SANDBOX_DOCKER_SOCKET",
     "SANDBOX_GATEWAY_IMAGE",
-    "SANDBOX_IMAGE_PREFIX",
+    "SANDBOX_IMAGE",
     "SANDBOX_LLM_UPSTREAM",
     "SANDBOX_MCP_UPSTREAM",
     "SANDBOX_NETWORK_GUARD_IMAGE",
@@ -73,10 +88,10 @@
     "VAULT_DEV_ROOT_TOKEN",
     "VAULT_ROLE_ID",
     "VAULT_SECRET_ID",
-    "YANDEX_API_KEY",
-    "YANDEX_FOLDER_ID",
+    "YOOKASSA_API_URL",
     "YOOKASSA_SECRET_KEY",
-    "YOOKASSA_SHOP_ID"
+    "YOOKASSA_SHOP_ID",
+    "YOOKASSA_WEBHOOK_ALLOWLIST"
   ],
   "tasks": {
     "db:generate": {
@@ -88,12 +103,17 @@
       "dependsOn": ["^build", "^db:generate", "db:generate"],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
-    "typecheck": {
-      "dependsOn": ["^db:generate", "db:generate"]
+    "transit": {
+      "dependsOn": ["^transit"]
     },
-    "lint": {},
+    "typecheck": {
+      "dependsOn": ["^db:generate", "db:generate", "transit"]
+    },
+    "lint": {
+      "dependsOn": ["transit"]
+    },
     "test": {
-      "dependsOn": ["^db:generate", "db:generate"]
+      "dependsOn": ["^db:generate", "db:generate", "transit"]
     },
     "dev": {
       "dependsOn": ["^db:generate", "db:generate"],

@@ -272,12 +272,6 @@ catalogs:
     '@rekog/mcp-nest':
       specifier: ^2.0.7
       version: 2.0.7
-    '@semantic-release/changelog':
-      specifier: ^7.0.0
-      version: 7.0.0
-    '@semantic-release/git':
-      specifier: ^11.0.1
-      version: 11.0.1
     '@semantic-release/github':
       specifier: ^12.0.10
       version: 12.0.10
@@ -344,6 +338,9 @@ catalogs:
     bullmq:
       specifier: ^6.3.0
       version: 6.3.8
+    decimal.js:
+      specifier: ^10.6.0
+      version: 10.6.0
     dependency-cruiser:
       specifier: ^18.4.0
       version: 18.4.0
@@ -419,6 +416,9 @@ catalogs:
     server-only:
       specifier: ^0.0.1
       version: 0.0.1
+    sharp:
+      specifier: 0.35.4
+      version: 0.35.4
     superjson:
       specifier: ^2.2.6
       version: 2.2.6
@@ -463,12 +463,6 @@ importers:
       '@commitlint/config-conventional':
         specifier: 'catalog:'
         version: 21.2.3
-      '@semantic-release/changelog':
-        specifier: 'catalog:'
-        version: 7.0.0(semantic-release@25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0))
-      '@semantic-release/git':
-        specifier: 'catalog:'
-        version: 11.0.1(semantic-release@25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0))(supports-color@7.2.0)
       '@semantic-release/github':
         specifier: 'catalog:'
         version: 12.0.10(semantic-release@25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0))(supports-color@7.2.0)
@@ -556,6 +550,12 @@ importers:
       '@repo/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@repo/git-providers':
+        specifier: workspace:*
+        version: link:../../packages/git-providers
+      '@repo/llm-backends':
+        specifier: workspace:*
+        version: link:../../packages/llm-backends
       '@repo/mail':
         specifier: workspace:*
         version: link:../../packages/mail
@@ -568,12 +568,18 @@ importers:
       '@repo/sandbox-providers':
         specifier: workspace:*
         version: link:../../packages/sandbox-providers
+      '@repo/site-adapters':
+        specifier: workspace:*
+        version: link:../../packages/site-adapters
       '@repo/storage':
         specifier: workspace:*
         version: link:../../packages/storage
       '@repo/vault':
         specifier: workspace:*
         version: link:../../packages/vault
+      '@repo/yookassa':
+        specifier: workspace:*
+        version: link:../../packages/yookassa
       bullmq:
         specifier: 'catalog:'
         version: 6.3.8(ioredis@6.0.0(supports-color@7.2.0))(pg@8.23.0)
@@ -583,6 +589,9 @@ importers:
       ioredis:
         specifier: 'catalog:'
         version: 6.0.0(supports-color@7.2.0)
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.0
       reflect-metadata:
         specifier: 'catalog:'
         version: 0.2.2
@@ -617,6 +626,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.2
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
       '@types/supertest':
         specifier: 'catalog:'
         version: 7.2.1
@@ -716,6 +728,9 @@ importers:
       better-auth:
         specifier: 'catalog:'
         version: 1.7.6(@opentelemetry/api@1.9.1)(@prisma/client@7.10.0(@typescript/typescript6@6.0.2)(prisma@7.10.0(@typescript/typescript6@6.0.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)))(mysql2@3.15.3)(next@16.3.6(@opentelemetry/api@1.9.1)(@playwright/test@1.63.0)(@types/node@26.6.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(pg@8.23.0)(prisma@7.10.0(@typescript/typescript6@6.0.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0)))
+      decimal.js:
+        specifier: 'catalog:'
+        version: 10.6.0
       ioredis:
         specifier: 'catalog:'
         version: 6.0.0(supports-color@7.2.0)
@@ -734,6 +749,9 @@ importers:
       server-only:
         specifier: 'catalog:'
         version: 0.0.1
+      sharp:
+        specifier: 'catalog:'
+        version: 0.35.4(@types/node@26.6.2)
       superjson:
         specifier: 'catalog:'
         version: 2.2.6
@@ -906,6 +924,9 @@ importers:
 
   packages/domain:
     dependencies:
+      decimal.js:
+        specifier: 'catalog:'
+        version: 10.6.0
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -964,6 +985,37 @@ importers:
         version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
 
   packages/git-providers:
+    dependencies:
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/llm-backends:
     dependencies:
       '@repo/domain':
         specifier: workspace:*
@@ -3237,12 +3289,6 @@ packages:
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
 
-  '@semantic-release/changelog@7.0.0':
-    resolution: {integrity: sha512-TNPyag5db24o7jWjre7UwKB4EcL8oJxbRhnDQ7hmZRAYqzreAc6PgdxQuU3pppp5xQinYtiumL0iG8SSKvnlzg==}
-    engines: {node: ^22.22.2 || >=24.15}
-    peerDependencies:
-      semantic-release: '>=20.1.0'
-
   '@semantic-release/commit-analyzer@13.0.1':
     resolution: {integrity: sha512-wdnBPHKkr9HhNhXOhZD5a2LNl91+hs8CC2vsAVYxtZH3y0dV3wKn+uZSN61rdJQZ8EGxzWB3inWocBHV9+u/CQ==}
     engines: {node: '>=20.8.1'}
@@ -3252,12 +3298,6 @@ packages:
   '@semantic-release/error@4.0.0':
     resolution: {integrity: sha512-mgdxrHTLOjOddRVYIYDo0fR3/v61GNN1YGkfbrjuIKg/uMgCd+Qzo3UAXJ+woLQQpos4pl5Esuw5A7AoNlzjUQ==}
     engines: {node: '>=18'}
-
-  '@semantic-release/git@11.0.1':
-    resolution: {integrity: sha512-Zr8BUYCTZMc8V6wDKN2dpR7nJgewd9I6THL3ydLTnp3OEdTo1/4RBLNYaeRucYMsjMv+BXoCNfXA0NADj1kwhw==}
-    engines: {node: ^22.22.2 || >=24.15}
-    peerDependencies:
-      semantic-release: '>=20.1.0'
 
   '@semantic-release/github@12.0.10':
     resolution: {integrity: sha512-QskygvpX8hFx9UEbqJ+C46OIhaJjsysNQ8PYJPuRDc/ek5+dh8WYGD1ofUahCcGLAOmnnwZTcmCJCEXM8XxhRw==}
@@ -4935,10 +4975,6 @@ packages:
   events@3.3.0:
     resolution: {integrity: sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q==}
     engines: {node: '>=0.8.x'}
-
-  execa@10.0.1:
-    resolution: {integrity: sha512-ge98qjkRK4IB7tL7Ju/6qmm5LHoH1eEMt5FNZrz3f4UIYhF28lggX20z3FaX1sgc67msLEn0N0BscOs29iuwyw==}
-    engines: {node: '>=22'}
 
   execa@8.0.1:
     resolution: {integrity: sha512-VyhnebXciFV2DESc+p6B+y0LjSm0krU4OgJN44qFAhBY0TJ+1V61tYD2+wHusZ6F9n5K+vl8k0sTy7PEfV4qpg==}
@@ -7436,11 +7472,6 @@ packages:
     resolution: {integrity: sha512-TEZA+Zqxin7Jjsm2cjRohCmen5awh+hT6Zi3VZdqZlNRk7zvOI/9WpBFg/DWlA56bWnzwm6DuB8NS0EsxQH9uQ==}
     engines: {node: ^22.14.0 || >=24.0.0}
 
-  which-command@0.1.0:
-    resolution: {integrity: sha512-XZyoF5/5hZtXitIwzrU4NKK+Wtbb9aB9CezUEw2Q0wlYK8NUYQxC1rRXgNueYLtBAJwXIb+/tFVk4dozciNJMA==}
-    engines: {node: '>=22'}
-    hasBin: true
-
   which@2.0.2:
     resolution: {integrity: sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==}
     engines: {node: '>= 8'}
@@ -8333,8 +8364,7 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
-  '@img/colour@1.1.0':
-    optional: true
+  '@img/colour@1.1.0': {}
 
   '@img/sharp-darwin-arm64@0.35.4':
     optionalDependencies:
@@ -9286,13 +9316,6 @@ snapshots:
 
   '@sec-ant/readable-stream@0.4.1': {}
 
-  '@semantic-release/changelog@7.0.0(semantic-release@25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0))':
-    dependencies:
-      '@semantic-release/error': 4.0.0
-      aggregate-error: 5.0.0
-      lodash-es: 4.18.1
-      semantic-release: 25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0)
-
   '@semantic-release/commit-analyzer@13.0.1(semantic-release@25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
       conventional-changelog-angular: 8.3.1
@@ -9308,20 +9331,6 @@ snapshots:
       - supports-color
 
   '@semantic-release/error@4.0.0': {}
-
-  '@semantic-release/git@11.0.1(semantic-release@25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0))(supports-color@7.2.0)':
-    dependencies:
-      '@semantic-release/error': 4.0.0
-      aggregate-error: 5.0.0
-      debug: 4.4.3(supports-color@7.2.0)
-      dir-glob: 3.0.1
-      execa: 10.0.1
-      lodash-es: 4.18.1
-      micromatch: 4.0.8
-      p-reduce: 3.0.0
-      semantic-release: 25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0)
-    transitivePeerDependencies:
-      - supports-color
 
   '@semantic-release/github@12.0.10(semantic-release@25.0.9(@typescript/typescript6@6.0.2)(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
@@ -10952,21 +10961,6 @@ snapshots:
       - bare-abort-controller
 
   events@3.3.0: {}
-
-  execa@10.0.1:
-    dependencies:
-      '@sindresorhus/merge-streams': 4.0.0
-      figures: 6.1.0
-      get-stream: 9.0.1
-      human-signals: 8.0.1
-      is-plain-obj: 4.1.0
-      is-stream: 4.0.1
-      npm-run-path: 6.0.0
-      pretty-ms: 9.3.1
-      signal-exit: 4.1.0
-      strip-final-newline: 4.0.0
-      which-command: 0.1.0
-      yoctocolors: 2.2.0
 
   execa@8.0.1:
     dependencies:
@@ -13087,7 +13081,6 @@ snapshots:
       '@img/sharp-win32-ia32': 0.35.4
       '@img/sharp-win32-x64': 0.35.4
       '@types/node': 26.6.2
-    optional: true
 
   shebang-command@2.0.0:
     dependencies:
@@ -13742,8 +13735,6 @@ snapshots:
       webidl-conversions: 8.0.1
     transitivePeerDependencies:
       - '@noble/hashes'
-
-  which-command@0.1.0: {}
 
   which@2.0.2:
     dependencies:

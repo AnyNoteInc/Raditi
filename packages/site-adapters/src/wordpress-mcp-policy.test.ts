@@ -56,6 +56,24 @@ describe('wordpressMcpPolicy', () => {
     expect(wordpressMcpPolicy.maxChangedObjectsPerTurn).toBe(20)
   })
 
+  it('keeps comments and form entries of site visitors from the agent (spec §11)', () => {
+    expect(wordpressMcpPolicy.wpCli.deniedCommands).toContain('comment')
+    expect(wordpressMcpPolicy.rest.deniedRoutes).toEqual(
+      expect.arrayContaining(['/wp/v2/comments', '/wp/v2/feedback']),
+    )
+    expect(wordpressMcpPolicy.deniedPostTypes).toEqual(
+      expect.arrayContaining(['flamingo_inbound', 'flamingo_contact', 'feedback']),
+    )
+    expect(wordpressMcpPolicy.admin.deniedPages).toEqual(
+      expect.arrayContaining([
+        'edit-comments.php',
+        'comment.php',
+        'admin.php?page=flamingo*',
+        'admin.php?page=wpforms-entries',
+      ]),
+    )
+  })
+
   it('cannot be changed at runtime', () => {
     expect(Object.isFrozen(wordpressMcpPolicy)).toBe(true)
     expect(Object.isFrozen(wordpressMcpPolicy.wpCli.deniedCommands)).toBe(true)
@@ -101,6 +119,10 @@ describe('isWpCliCommandDenied', () => {
     'rewrite flush --hard',
     'login create admin',
     'USER list',
+    'comment list --fields=comment_author_email,comment_author_IP --format=json',
+    'comment get 3',
+    'comment meta list 3',
+    'Comment list',
   ])('denies the command group of %s', (command) => {
     expect(isWpCliCommandDenied(wp(command))).toBe(true)
   })
@@ -153,6 +175,12 @@ describe('isWpCliCommandDenied', () => {
     expect(isWpCliCommandDenied(wp('post list --post_type=page,shop_order_refund'))).toBe(true)
     expect(isWpCliCommandDenied(wp('post list --post_type=user_request'))).toBe(true)
     expect(isWpCliCommandDenied(wp('post create --post_type=Shop_Order'))).toBe(true)
+  })
+
+  it('denies form entries by post type', () => {
+    expect(isWpCliCommandDenied(wp('post list --post_type=flamingo_inbound'))).toBe(true)
+    expect(isWpCliCommandDenied(wp('post list --post_type=page,flamingo_contact'))).toBe(true)
+    expect(isWpCliCommandDenied(wp('post list --post_type=Feedback --format=json'))).toBe(true)
   })
 
   it('fails closed on empty, aliased and ambiguous input', () => {
@@ -221,6 +249,12 @@ describe('isRestRequestDenied', () => {
     ['GET', '/wc-analytics/reports/customers'],
     ['POST', '/batch/v1'],
     ['GET', '/oembed/1.0/proxy?url=http://169.254.169.254/'],
+    ['GET', '/wp/v2/comments'],
+    ['GET', '/wp/v2/comments/7?context=edit'],
+    ['POST', '/wp/v2/comments'],
+    ['GET', '/wp-json/wp/v2/feedback'],
+    ['GET', '/wp/v2/feedback/12'],
+    ['GET', '/wp/v2/pages?rest_route=/wp/v2/comments'],
   ])('denies %s %s', (method, route) => {
     expect(isRestRequestDenied(method, route)).toBe(true)
   })
@@ -229,6 +263,18 @@ describe('isRestRequestDenied', () => {
     expect(isRestRequestDenied('DELETE', '/wp/v2/pages/12')).toBe(true)
     expect(isRestRequestDenied('delete', '/wp/v2/pages/12')).toBe(true)
     expect(isRestRequestDenied('POST', '/wp/v2/pages/12?_method=DELETE')).toBe(true)
+  })
+
+  it('denies embedding: WordPress would run the denied comment and user routes itself', () => {
+    // ?_embed adds `replies` (/wp/v2/comments?post=ID) and `author` (/wp/v2/users/ID) to a post.
+    for (const route of [
+      '/wp/v2/posts/5?_embed',
+      '/wp/v2/posts?per_page=5&_embed=replies',
+      '/wp/v2/pages/2?context=view&_EMBED=1',
+      '/wp-json/wp/v2/posts/5?_embed=author,wp:term',
+    ])
+      expect(isRestRequestDenied('GET', route)).toBe(true)
+    expect(isRestRequestDenied('GET', '/wp/v2/posts/5?context=view&_fields=title')).toBe(false)
   })
 
   it('normalizes the route before matching', () => {
@@ -259,6 +305,8 @@ describe('isAdminUrlDenied', () => {
     '/wp-admin/nav-menus.php',
     '/wp-admin/upload.php',
     '/wp-admin/admin.php?page=wpcf7',
+    '/wp-admin/admin.php?page=wpforms-builder&view=fields&form_id=4',
+    '/wp-admin/admin.php?page=wpforms-overview',
     '/wp-admin/edit.php?post_type=product',
     '/shop/some-page/',
   ])('allows %s', (url) => {
@@ -289,6 +337,16 @@ describe('isAdminUrlDenied', () => {
     '/wp-admin/admin.php?page=dashboard&page=wc-settings',
     '/wp-admin/admin.php?page=WC-Settings',
     '/wp-admin/%zz',
+    '/wp-admin/edit-comments.php',
+    '/wp-admin/edit-comments.php?comment_status=moderated',
+    '/wp-admin/comment.php?action=editcomment&c=3',
+    '/wp-admin/admin.php?page=flamingo',
+    '/wp-admin/admin.php?page=flamingo_inbound&post=5&action=edit',
+    '/wp-admin/admin.php?page=Flamingo_Outbound',
+    '/wp-admin/admin.php?page=wpforms-entries&view=list&form_id=4',
+    '/wp-admin/edit.php?post_type=feedback',
+    '/wp-admin/edit.php?post_type=flamingo_inbound',
+    '/wp-admin/edit.php?post_type=flamingo_contact',
   ])('denies %s', (url) => {
     expect(isAdminUrlDenied(url)).toBe(true)
   })

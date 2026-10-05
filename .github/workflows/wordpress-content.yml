@@ -1,0 +1,76 @@
+name: WordPress content
+
+# The MCP content path on a real WordPress: the companion plugin (infra/wordpress), encrypted
+# snapshot, edit, replay, undo, drift and recovery, on disposable WordPress, MariaDB, PostgreSQL,
+# S3 and OpenBao. Synthetic content only: no repository secrets, client sites or provider accounts.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/wordpress-content.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - infra/wordpress/**
+      - infra/dev/site-verify/**
+      - packages/site-adapters/**
+      - apps/orchestrator/src/mcp/**
+      - apps/orchestrator/scripts/verify-content-*.mjs
+      # Containers, clean environment and data services of the stand.
+      - apps/orchestrator/scripts/verify-agent-supervisor.mjs
+      # What the stand's scripts load besides the MCP modules: the turn supervisor and DI tokens
+      # of the orchestrator build, the journal tables and migrations, snapshot storage, the diff
+      # path policy.
+      - apps/orchestrator/src/turns/**
+      - apps/orchestrator/src/infra/**
+      - packages/db/**
+      - packages/storage/**
+      - packages/domain/**
+      # What the MCP modules import besides those: the KV client that keeps the contact masks in
+      # the stand's OpenBao, and the health and error helpers.
+      - packages/vault/**
+      - packages/observability/**
+      # The stand configures its OpenBao with the real bootstrap and runs the role `mcp` under the
+      # real policies (mcp-content, sites-writer, workspace-provisioner).
+      - infra/vault/**
+  workflow_dispatch:
+
+concurrency:
+  group: wordpress-content-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-mcp-content:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      - name: Generate Prisma client
+        run: pnpm db:generate
+      # The stand never pulls. Its images are pinned by digest in verify-agent-supervisor.mjs
+      # (PostgreSQL, S3, OpenBao) and verify-site.mjs (WordPress, MariaDB, WP-CLI, forwarder);
+      # infra/app/ci.test.mjs keeps this list equal to them.
+      - name: Pull the pinned images
+        run: |
+          for image in \
+            postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24 \
+            chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882 \
+            ghcr.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315 \
+            wordpress:7.1.2-php8.3-apache@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 \
+            mariadb:11.4.13@sha256:70cc072b29b4a89ae07abb2d4da2c64678a7f2dfe092751bb51c87d67dc1338b \
+            wordpress@sha256:2b5e9d4d3e51909dca1aaa4732e9f5e5bf0377c2114dbd8ff39f060bff202586 \
+            alpine/socat@sha256:68b28fed1e6f5dc5cc7574315284573d89a655b0bc528720be4164f36b998680
+          do
+            docker pull --quiet "$image"
+          done
+      - name: Verify MCP content on a real WordPress
+        run: pnpm verify:mcp-content

@@ -18,10 +18,14 @@ export const SITE_LEASES = Symbol('SITE_LEASES')
 export const TURN_ASSIGNMENTS = Symbol('TURN_ASSIGNMENTS')
 /** TurnExecutor port: LocalTurnExecutor or the runner API, by TURN_EXECUTOR. */
 export const TURN_EXECUTOR = Symbol('TURN_EXECUTOR')
+/** Per-turn subscription gateway key and MCP token: Vault turns/ plus fenced PostgreSQL rows. */
+export const TURN_CREDENTIALS = Symbol('TURN_CREDENTIALS')
 /** SandboxProvider port (Docker in the PoC). */
 export const SANDBOX_PROVIDER = Symbol('SANDBOX_PROVIDER')
 /** AgentDriverRegistry of the enabled CLI agents. */
 export const AGENT_DRIVERS = Symbol('AGENT_DRIVERS')
+/** GitProvider port of site repositories, or null while git is not configured (CoreConfig.git). */
+export const GIT_PROVIDER = Symbol('GIT_PROVIDER')
 /** JobQueue port (BullMQ). */
 export const JOB_QUEUE = Symbol('JOB_QUEUE')
 /** ReadonlyMap<QueueName, Queue> of the BullMQ queues registered by QueueModule. */
@@ -35,3 +39,5 @@ export const HEALTH_CHECKS = Symbol('HEALTH_CHECKS')
 export const METRICS_REGISTRY = Symbol('METRICS_REGISTRY')
 /** Mailer from @repo/mail. */
 export const MAILER = Symbol('MAILER')
+/** YookassaClient from @repo/yookassa, or null while payments are off (CoreConfig.yookassa). */
+export const YOOKASSA = Symbol('YOOKASSA')

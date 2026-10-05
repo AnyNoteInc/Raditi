@@ -60,7 +60,10 @@ export const router = t.router
 export const createCallerFactory = t.createCallerFactory
 export const publicProcedure = t.procedure.use(domainErrors)
 
-/** A signed-in user. Only consent.* and user.me use it directly; the rest is consented. */
+/**
+ * A signed-in user. Only consent.* and user.me use it directly: the consent page needs them
+ * before the documents are accepted. Everything that writes or reads more is consented.
+ */
 export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   if (!ctx.user || !ctx.session) {
     throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Войдите, чтобы продолжить' })

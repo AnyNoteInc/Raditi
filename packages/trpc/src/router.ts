@@ -1,5 +1,6 @@
 import { consentRouter } from './routers/consent.ts'
 import { healthRouter } from './routers/health.ts'
+import { projectRouter } from './routers/project.ts'
 import { userRouter } from './routers/user.ts'
 import { createCallerFactory, router } from './trpc.ts'
 
@@ -7,6 +8,7 @@ export const appRouter = router({
   health: healthRouter,
   user: userRouter,
   consent: consentRouter,
+  project: projectRouter,
 })
 
 export type AppRouter = typeof appRouter

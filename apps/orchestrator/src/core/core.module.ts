@@ -6,6 +6,7 @@ import { StaleClonesSweep } from '../git-workspace/stale-clones.ts'
 import { HealthModule } from '../health/health.module.ts'
 import { InfraModule } from '../infra/infra.module.ts'
 import { CORE_CONFIG } from '../infra/tokens.ts'
+import { LlmModule } from '../llm/llm.module.ts'
 import { MetricsModule } from '../metrics/metrics.module.ts'
 import { NotificationsModule } from '../notifications/notifications.module.ts'
 import { OutboxModule } from '../outbox/outbox.module.ts'
@@ -30,6 +31,7 @@ export class CoreModule {
         QueueModule.forRoot({ redisUrl: options.config.redisUrl, background: options.background }),
         HealthModule,
         MetricsModule,
+        LlmModule,
         OutboxModule,
         NotificationsModule,
         DriversModule,

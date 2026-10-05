@@ -6,7 +6,9 @@ import { nextCookies } from 'better-auth/next-js'
 
 import { authConfigFromEnv, type AuthConfig } from './config.ts'
 import { consents } from './consents-plugin.ts'
-import { ipAddressOptions } from './request-meta.ts'
+import { signUpProfile } from './profile.ts'
+import { profileLastNameSchema } from './profile-schema.ts'
+import { ipAddressOptions, USER_AGENT_MAX } from './request-meta.ts'
 import { smartCaptcha } from './smart-captcha.ts'
 
 const VERIFY_EMAIL_TTL_S = 24 * 60 * 60
@@ -50,6 +52,30 @@ export function createAuth({
     telemetry: { enabled: false },
     // Counters live in PostgreSQL so every web replica sees the same limits.
     rateLimit: { enabled: true, storage: 'database' },
+    // The built-in profile update takes any `name` and `image` from a signed-in user. The
+    // profile changes only through user.updateProfile (tRPC) and the avatar upload of the web
+    // app, which validate what they store. The handler ignores this list for auth.api calls.
+    disabledPaths: ['/update-user'],
+    databaseHooks: {
+      session: {
+        create: {
+          // better-auth stores the raw header; a longer one than the column failed the sign-in.
+          before: async (session) =>
+            typeof session.userAgent === 'string' && session.userAgent.length > USER_AGENT_MAX
+              ? { data: { userAgent: session.userAgent.slice(0, USER_AGENT_MAX) } }
+              : undefined,
+        },
+      },
+    },
+    user: {
+      additionalFields: {
+        lastName: {
+          type: 'string',
+          required: false,
+          validator: { input: profileLastNameSchema },
+        },
+      },
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: true,
@@ -94,6 +120,7 @@ export function createAuth({
       // First: its hook must run before any other plugin touches the request.
       ...(config.captcha ? [smartCaptcha({ serverKey: config.captcha.serverKey, fetch })] : []),
       consents({ db: prisma }),
+      signUpProfile(),
       // Last, as better-auth requires: it copies Set-Cookie into Next's cookie store.
       nextCookies(),
     ],

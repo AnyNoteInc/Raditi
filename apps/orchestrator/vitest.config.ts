@@ -8,5 +8,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // Disposable DB collectors scan shared tables; concurrent files would steal one another's fixtures.
+    fileParallelism: process.env.RADITI_GATEWAY_DB_TESTS !== '1',
   },
 })

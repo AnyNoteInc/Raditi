@@ -1,4 +1,1 @@
-user default off
-user web on #<SHA-256 пароля web из Vault> ~* &* +@all -@admin -flushall -flushdb -keys -swapdb
-user core on #<SHA-256 пароля core из Vault> ~* &* +@all -@admin -flushall -flushdb -keys -swapdb
-user health on #<SHA-256 пароля health из Vault> -@all +ping
+user default on #<SHA-256 общего пароля Redis из Vault> ~* &* +@all -@admin -flushall -flushdb -keys -swapdb

@@ -13,10 +13,6 @@ groups:
       - alert: DeployRolledBack
         expr: sum(increase(raditi_deploys_total{result="rolled_back"}[15m])) > 0
         annotations: { summary: 'Выкладка откатилась' }
-      - alert: LlmProviderErrors
-        expr: sum by (api_provider) (rate(litellm_deployment_failure_responses_total[5m])) > 0.1
-        for: 5m
-        annotations: { summary: 'Провайдер моделей отвечает ошибками' }
       - alert: ServiceDown
         expr: up{job=~"postgres|redis|seaweedfs|openbao|gitea"} == 0
         for: 2m
@@ -26,3 +22,7 @@ groups:
         expr: probe_success{compose_profile=""} == 0
         for: 2m
         annotations: { summary: 'Проверка доступности не проходит' }
+      # Расход, который шлюз подписок не смог записать: деньги и квоты. Алерты пула — M9.
+      - alert: LlmUsageNotPersisted
+        expr: sum(increase(raditi_llm_persistence_failed_total[15m])) > 0
+        annotations: { summary: 'Шлюз подписок не записал расход' }

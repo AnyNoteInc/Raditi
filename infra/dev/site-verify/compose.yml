@@ -1,0 +1,88 @@
+# Disposable local WordPress fixture. Run verify-site.mjs, not this compose by hand.
+# All interpolated values come from the fixture's private temporary env file.
+services:
+  database:
+    image: ${VERIFY_DATABASE_IMAGE:?}
+    pull_policy: never
+    environment:
+      MARIADB_DATABASE: synthetic_site
+      MARIADB_USER: synthetic_site
+      MARIADB_PASSWORD: ${VERIFY_DATABASE_PASSWORD:?}
+      MARIADB_ROOT_PASSWORD: ${VERIFY_DATABASE_ROOT_PASSWORD:?}
+    volumes:
+      - database:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 2s
+      timeout: 5s
+      retries: 45
+
+  wordpress:
+    image: ${VERIFY_WORDPRESS_IMAGE:?}
+    pull_policy: never
+    depends_on:
+      database:
+        condition: service_healthy
+    environment: &wordpress_environment
+      WORDPRESS_DB_HOST: database
+      WORDPRESS_DB_USER: synthetic_site
+      WORDPRESS_DB_PASSWORD: ${VERIFY_DATABASE_PASSWORD:?}
+      WORDPRESS_DB_NAME: synthetic_site
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_ENVIRONMENT_TYPE', 'local');
+        define('DISABLE_WP_CRON', true);
+        define('WP_HTTP_BLOCK_EXTERNAL', true);
+        define('WP_AUTO_UPDATE_CORE', false);
+        define('AUTOMATIC_UPDATER_DISABLED', true);
+        define('DISALLOW_FILE_MODS', true);
+    volumes:
+      - wordpress:/var/www/html
+    healthcheck:
+      test:
+        - CMD
+        - php
+        - -r
+        - "exit(is_file('/var/www/html/wp-config.php') ? 0 : 1);"
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  wpcli:
+    image: ${VERIFY_WPCLI_IMAGE:?}
+    pull_policy: never
+    user: '33:33'
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    environment: *wordpress_environment
+    entrypoint: ['sh', '-c', 'exec sleep infinity']
+    volumes:
+      - wordpress:/var/www/html
+
+  # Docker does not publish ports for containers with only internal networks.
+  # This fixed TCP forwarder exposes the isolated site's HTTP on loopback only.
+  forwarder:
+    image: ${VERIFY_FORWARDER_IMAGE:?}
+    pull_policy: never
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    command: ['TCP-LISTEN:8080,fork,reuseaddr', 'TCP:wordpress:80']
+    ports:
+      - '127.0.0.1:${VERIFY_HTTP_PORT:?}:8080'
+    read_only: true
+    cap_drop: ['ALL']
+    security_opt: ['no-new-privileges:true']
+    networks:
+      default: {}
+      frontend:
+        gw_priority: 1
+
+networks:
+  default:
+    internal: true
+  frontend: {}
+
+volumes:
+  database:
+  wordpress:

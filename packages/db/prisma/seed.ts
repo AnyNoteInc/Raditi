@@ -1,5 +1,6 @@
 // Idempotent seed: `pnpm db:seed` (Node runs this file natively, no tsx). Reference data only —
-// tariffs, pricing rules, agent drivers, LLM providers, models and prices (seed/data.ts).
+// tariffs, pricing rules, agent drivers and disabled subscription defaults (seed/data.ts).
+// Existing LLM catalogue settings and all accounting rates stay operator-owned.
 import { createPrismaClient, dbConfigFromEnv } from '../src/client.ts'
 import { seedReferenceData, seededTables } from './seed/apply.ts'
 

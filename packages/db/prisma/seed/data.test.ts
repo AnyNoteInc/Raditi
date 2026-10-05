@@ -1,22 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
-import { agentDriverIds, type AgentCapabilities } from '@repo/domain'
-import { ModelClass, PlanKind } from '../../src/generated/prisma/enums.ts'
+import { agentDriverIds, llmBackendIds, type AgentCapabilities } from '@repo/domain'
+import { PlanKind } from '../../src/generated/prisma/enums.ts'
 import {
   PAYG_RULES_EFFECTIVE_FROM,
   agentDriverSeeds,
   llmModelSeeds,
   llmProviderSeeds,
-  moscowMidnight,
   planSeeds,
   pricingRuleSeeds,
+  referenceData,
 } from './data.ts'
 
 // Exact string formats per column precision (spec §16).
 const money12x2 = /^\d{1,10}\.\d{2}$/
 const markup8x4 = /^\d{1,4}\.\d{4}$/
-const vat5x4 = /^0\.\d{4}$/
-const price14x6 = /^\d{1,8}(\.\d{1,6})?$/
 
 describe('plans (docs/business.md §6)', () => {
   it('match the tariff table exactly', () => {
@@ -53,7 +51,7 @@ describe('plans (docs/business.md §6)', () => {
       },
       {
         slug: 'pack-10',
-        name: 'Пакет 10 правок',
+        name: 'Пакет из 10 правок',
         kind: 'pack',
         price: '1990.00',
         editsPerMonth: null,
@@ -168,62 +166,67 @@ describe('agent drivers', () => {
   })
 })
 
-describe('LLM providers, models and prices', () => {
-  it('seed Yandex AI Studio and Cloud.ru', () => {
-    expect(llmProviderSeeds).toEqual([
-      { slug: 'yandex-ai-studio', name: 'Yandex AI Studio' },
-      { slug: 'cloudru', name: 'Cloud.ru Evolution Foundation Models' },
+describe('default reference data', () => {
+  it('adds subscription defaults without accounting rates or a service profile', () => {
+    expect(Object.keys(referenceData).sort()).toEqual([
+      'agentDrivers',
+      'llmModels',
+      'llmProviders',
+      'plans',
+      'pricingRules',
     ])
-  })
-
-  it('price every model in RUB per 1M with VAT 22% (exact strings)', () => {
-    const table = llmModelSeeds.map(({ providerSlug, slug, modelClass, price }) => [
-      providerSlug,
-      slug,
-      modelClass,
-      price.inputPer1m,
-      price.cacheReadPer1m,
-      price.cacheWritePer1m,
-      price.outputPer1m,
-    ])
-    expect(table).toEqual([
-      ['yandex-ai-studio', 'qwen3.6-35b', 'light', '200', '50', null, '300'],
-      ['yandex-ai-studio', 'deepseek-v4-flash', 'light', '300', '75', null, '500'],
-      ['yandex-ai-studio', 'qwen3-235b', 'heavy', '500', '500', null, '500'],
-      ['cloudru', 'qwen3-coder-next', 'standard', '122', null, null, '244'],
-      ['cloudru', 'kimi-k2.6', 'standard', '175.68', null, null, '725.9'],
-      ['cloudru', 'glm-5.1', 'heavy', '198.86', null, null, '829.6'],
-      ['cloudru', 'deepseek-v4-pro', 'heavy', '183', null, null, '732'],
-      ['cloudru', 'gpt-oss-120b', 'service', '15.86', null, null, '61'],
-    ])
-  })
-
-  it('take effect on the tariff dates and fit the column precisions', () => {
-    const providers = llmProviderSeeds.map((p) => p.slug)
-    const keys = new Set<string>()
-    for (const { providerSlug, slug, modelClass, price } of llmModelSeeds) {
-      expect(providers).toContain(providerSlug)
-      expect(Object.values(ModelClass)).toContain(modelClass)
-      keys.add(`${providerSlug}/${slug}`)
-
-      const effective = providerSlug === 'cloudru' ? '2026-09-15' : '2026-09-26'
-      expect(price.effectiveFrom).toEqual(moscowMidnight(effective))
-      expect(price.vatRate).toBe('0.2200')
-      expect(price.vatRate).toMatch(vat5x4)
-      expect(price.sourceUrl).toMatch(/^https:\/\//)
-      for (const value of [price.inputPer1m, price.cacheReadPer1m, price.outputPer1m]) {
-        if (value !== null) expect(value).toMatch(price14x6)
-      }
-    }
-    expect(keys.size).toBe(llmModelSeeds.length)
+    expect(pricingRuleSeeds.map((rule) => rule.modelClass)).toEqual(['light', 'standard', 'heavy'])
   })
 
   it('keeps every amount a string, never a JS number', () => {
     const amounts = [
       ...planSeeds.map((p) => p.price),
       ...pricingRuleSeeds.flatMap((r) => [r.markup, r.feePerAction, r.minCharge, r.holdAmount]),
-      ...llmModelSeeds.flatMap(({ price: p }) => [p.inputPer1m, p.outputPer1m, p.vatRate]),
     ]
     for (const amount of amounts) expect(typeof amount).toBe('string')
+  })
+})
+
+describe('subscription catalogue defaults', () => {
+  it('creates only supported subscription backends, initially switched off', () => {
+    expect(llmProviderSeeds.map(({ slug }) => slug)).toEqual(llmBackendIds)
+    for (const provider of llmProviderSeeds) {
+      expect(provider.kind).toBe('subscription')
+      expect(provider.enabled).toBe(false)
+    }
+  })
+
+  it('uses separate disabled profiles with the explicit backend output reserves', () => {
+    const classes = (slug: string) =>
+      llmModelSeeds.filter((model) => model.providerSlug === slug).map((model) => model.modelClass)
+    expect(classes('openai-chatgpt')).toEqual(['light', 'standard', 'heavy'])
+    expect(classes('kimi-code')).toEqual(['standard'])
+    const naturalKeys = llmModelSeeds.map((model) => `${model.providerSlug}/${model.slug}`)
+    expect(new Set(naturalKeys).size).toBe(llmModelSeeds.length)
+    for (const model of llmModelSeeds) {
+      expect(llmBackendIds).toContain(model.providerSlug)
+      expect(model.enabled).toBe(false)
+      expect(model.reserveOutputTokens).toBe(model.providerSlug === 'kimi-code' ? 32_768 : 32_000)
+      expect(Object.keys(model).sort()).toEqual([
+        'enabled',
+        'modelClass',
+        'name',
+        'providerModelId',
+        'providerSlug',
+        'reserveOutputTokens',
+        'slug',
+      ])
+    }
+  })
+
+  it('does not substitute the spike model for an unconfirmed Codex profile id', () => {
+    expect(
+      llmModelSeeds
+        .filter((model) => model.providerSlug === 'openai-chatgpt')
+        .map((model) => model.providerModelId),
+    ).toEqual([null, null, null])
+    expect(llmModelSeeds.find((model) => model.providerSlug === 'kimi-code')?.providerModelId).toBe(
+      'k3-256k',
+    )
   })
 })

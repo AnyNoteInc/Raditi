@@ -10,8 +10,14 @@ export {
   type DbConfig,
 } from './client.ts'
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
+export {
+  activateSite,
+  type SiteActivationInput,
+  type SiteActivationResult,
+} from './site-activation.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
+export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 
 export { Prisma, PrismaClient } from './generated/prisma/client.ts'
 export {

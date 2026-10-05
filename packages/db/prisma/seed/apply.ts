@@ -1,14 +1,15 @@
 // Writes the reference data from data.ts by natural keys, in one transaction. A rerun writes
 // nothing: rows are compared first and only changed fields are updated. A failure rolls back all.
-// - Catalogue fields (plan names and order, provider and model names, driver capabilities) follow
-//   the seed.
+// - Catalogue fields (plan names and order, driver capabilities) follow the seed.
 // - Plan terms (kind, price, quotas, site limit) are what customers buy: set on create only, and a
 //   mismatch with the stored plan fails the seed. A new price is a deliberate migration or a new
 //   plan, never a side effect of a seed run.
-// - Operational switches (enabled flags, image digests, model classes, provider model ids) are
-//   set on create only: operators and later tasks own them.
-// - Versioned rows (pricing rules, model prices) are immutable history: a changed value must come
-//   as a new effective_from, so a mismatch with the stored row fails the seed.
+// - Driver operational switches (enabled flags and image digests) are set on create only:
+//   operators and later tasks own them.
+// - Pricing rules are immutable history: a changed value must come as a new effective_from,
+//   so a mismatch with the stored row fails the seed.
+// - Missing subscription providers and models are created disabled. Existing catalogue rows
+//   stay untouched; prices are never seeded and require owner approval (spec §17).
 import { isDeepStrictEqual } from 'node:util'
 
 import { Prisma, type PrismaClient } from '../../src/generated/prisma/client.ts'
@@ -20,7 +21,6 @@ export const seededTables = [
   'agent_drivers',
   'llm_providers',
   'llm_models',
-  'llm_model_prices',
 ] as const
 export type SeededTable = (typeof seededTables)[number]
 export type SeedCounts = Record<SeededTable, number>
@@ -36,7 +36,6 @@ const zeroCounts = (): SeedCounts => ({
   agent_drivers: 0,
   llm_providers: 0,
   llm_models: 0,
-  llm_model_prices: 0,
 })
 
 const IMMUTABLE_PLAN_TERMS =
@@ -104,56 +103,36 @@ export async function seedReferenceData(
       count('agent_drivers', diff ? 'updated' : 'unchanged')
     }
 
-    const providerIds = new Map<string, string>()
-    for (const { slug, name } of data.llmProviders) {
-      const stored = await tx.llmProvider.findUnique({ where: { slug } })
-      if (!stored) {
-        const created = await tx.llmProvider.create({ data: { slug, name } })
-        providerIds.set(slug, created.id)
-        count('llm_providers', 'created')
+    for (const provider of data.llmProviders) {
+      const stored = await tx.llmProvider.findUnique({ where: { slug: provider.slug } })
+      if (stored) {
+        assertSubscriptionProvider(provider.slug, stored.kind)
         continue
       }
-      providerIds.set(slug, stored.id)
-      const diff = changedFields(stored, { name })
-      if (diff) await tx.llmProvider.update({ where: { slug }, data: diff })
-      count('llm_providers', diff ? 'updated' : 'unchanged')
+      await tx.llmProvider.create({ data: provider })
+      count('llm_providers', 'created')
     }
 
-    for (const { providerSlug, slug, name, modelClass, price } of data.llmModels) {
-      const providerId = providerIds.get(providerSlug)
-      if (!providerId) throw new Error(`[seed] unknown provider ${providerSlug} for ${slug}`)
-      const where = { providerId_slug: { providerId, slug } }
-      let modelId: string
-      const stored = await tx.llmModel.findUnique({ where })
-      if (!stored) {
-        modelId = (await tx.llmModel.create({ data: { providerId, slug, name, modelClass } })).id
-        count('llm_models', 'created')
-      } else {
-        modelId = stored.id
-        const diff = changedFields(stored, { name })
-        if (diff) await tx.llmModel.update({ where, data: diff })
-        count('llm_models', diff ? 'updated' : 'unchanged')
-      }
-
-      const key = { modelId, effectiveFrom: price.effectiveFrom }
-      const storedPrice = await tx.llmModelPrice.findUnique({
-        where: { modelId_effectiveFrom: key },
-      })
-      if (!storedPrice) {
-        await tx.llmModelPrice.create({ data: { ...key, ...price } })
-        count('llm_model_prices', 'created')
-        continue
-      }
-      assertUnchanged(
-        `llm_model_prices ${providerSlug}/${slug}`,
-        storedPrice,
-        price,
-        IMMUTABLE_VERSIONED_ROW,
-      )
+    for (const { providerSlug, ...model } of data.llmModels) {
+      const provider = await tx.llmProvider.findUniqueOrThrow({ where: { slug: providerSlug } })
+      assertSubscriptionProvider(providerSlug, provider.kind)
+      const key = { providerId: provider.id, slug: model.slug }
+      const stored = await tx.llmModel.findUnique({ where: { providerId_slug: key } })
+      // Preserve every operator choice, including enabled, upstream id, class and reserve.
+      // No model price operation belongs in the seed: history is append-only and approved.
+      if (stored) continue
+      await tx.llmModel.create({ data: { ...model, providerId: provider.id } })
+      count('llm_models', 'created')
     }
 
     return report
   })
+}
+
+function assertSubscriptionProvider(slug: string, kind: string): void {
+  if (kind !== 'subscription') {
+    throw new Error(`[seed] llm_providers ${slug} is not a subscription; migrate it explicitly.`)
+  }
 }
 
 /** Fields of `wanted` that differ from the stored row, or null when nothing changed. */

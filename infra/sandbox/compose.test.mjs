@@ -36,3 +36,27 @@ test("the runner's logs go to journald on the host: they outlive a recreated con
     /^ {4}logging:\n {6}driver: journald\n {6}options:\n {8}tag: '\{\{\.Name\}\}'$/m,
   )
 })
+
+test('only the agent runtime receives the pinned CLIs verified by the subscription harness', async () => {
+  const dockerfile = await readFile(new URL('./Dockerfile', import.meta.url), 'utf8')
+  const verifier = await readFile(
+    new URL('../dev/llm-verify/cli.Dockerfile', import.meta.url),
+    'utf8',
+  )
+  const stages = dockerfile.split(/^FROM /m).slice(1)
+  const runtime = stages.find((stage) => stage.startsWith('base AS runtime\n'))
+  assert.ok(runtime)
+  for (const packageName of ['@openai/codex', '@moonshot-ai/kimi-code']) {
+    const version = (source) =>
+      new RegExp(`${packageName}@(\\d+\\.\\d+\\.\\d+)(?=\\s|$)`).exec(source)?.[1]
+    const expected = version(verifier)
+    assert.ok(expected, `the synthetic harness must pin ${packageName}`)
+    assert.equal(version(runtime), expected, `${packageName} must match the verified version`)
+    for (const stage of stages.filter((stage) => stage !== runtime))
+      assert.ok(!stage.includes(packageName), `${packageName} must stay in the agent runtime`)
+  }
+  assert.match(runtime, /USER 10001:10001/)
+  for (const stage of stages.filter((stage) => stage !== runtime)) {
+    assert.doesNotMatch(stage, /^runtime AS /)
+  }
+})

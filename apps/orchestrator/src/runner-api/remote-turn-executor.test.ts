@@ -87,10 +87,10 @@ function fixture() {
     },
   })
 
-  const open = async () =>
+  const open = async (otherFence = fence, sessionId = labels.sessionId) =>
     (await assignments.open({
-      fence,
-      sessionId: labels.sessionId,
+      fence: otherFence,
+      sessionId,
       turn: 1,
       executor: 'runner',
       plan: {} as TurnPlan,
@@ -174,6 +174,234 @@ function fixture() {
 }
 
 describe('RemoteTurnExecutor over the runner hub', () => {
+  it('reserves a VM slot while issuing credentials and releases it when issuance is given up', async () => {
+    const f = fixture()
+    const executor = new RemoteTurnExecutor(f.hub, f.leases, f.assignments, () => '10.20.0.11')
+    const vm = f.runner()
+    const first = await f.open()
+    const firstAddress = executor.credentialAddress(first.id, new AbortController().signal)
+    expect(await vm.poll()).toEqual([])
+    await expect(firstAddress).resolves.toBe('10.20.0.11')
+    const other = randomUUID()
+    const second = await f.open({ ...fence, taskId: other, siteId: other }, 'session2')
+    let secondReserved = false
+    const secondAddress = executor
+      .credentialAddress(second.id, new AbortController().signal)
+      .finally(() => {
+        secondReserved = true
+      })
+    secondAddress.catch(() => {})
+    expect(await vm.poll()).toEqual([])
+    expect(secondReserved).toBe(false)
+    expect(f.dispatched).not.toHaveBeenCalled()
+    await f.assignments.finish({ id: first.id, epoch: 1, outcome: 'failed' })
+    executor.forgetCredentialAddress(first.id)
+    expect(await vm.poll()).toEqual([])
+    await expect(secondAddress).resolves.toBe('10.20.0.11')
+    // A reservation is core's memory only: neither turn was bound to the runner (spec §8).
+    for (const id of [first.id, second.id]) expect((await f.assignments.get(id))!.runner).toBeNull()
+  })
+
+  it('transfers an early reservation to prepare accounting without counting the slot twice', async () => {
+    const f = fixture()
+    const executor = new RemoteTurnExecutor(f.hub, f.leases, f.assignments, () => '10.20.0.11')
+    const vm = f.runner()
+    const first = await f.open()
+    const address = executor.credentialAddress(first.id, new AbortController().signal)
+    expect(await vm.poll()).toEqual([])
+    await address
+    const other = randomUUID()
+    const second = await f.open({ ...fence, taskId: other, siteId: other }, 'session2')
+    const secondAddress = executor.credentialAddress(second.id, new AbortController().signal)
+    secondAddress.catch(() => {})
+    const preparing = executor.prepare(f.input(first.id), new AbortController().signal)
+    preparing.catch(() => {})
+    const [command] = await vm.poll({ capacity: 2 })
+    expect(command).toMatchObject({ type: 'prepare', assignmentId: first.id })
+    await expect(secondAddress).resolves.toBe('10.20.0.11')
+    // Bound to the runner once its prepare went out; the other turn only holds its slot.
+    expect((await f.assignments.get(first.id))!.runner).toEqual({
+      id: vm.runnerId,
+      session: vm.runnerSession,
+    })
+    expect((await f.assignments.get(second.id))!.runner).toBeNull()
+    await vm.report(first.id, {
+      type: 'created',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    await vm.report(first.id, {
+      type: 'prepared',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    await preparing
+  })
+
+  it.each(['source', 'abort'])(
+    'releases a reserved slot when %s fails before issuance',
+    async (failure) => {
+      const f = fixture()
+      const cancellation = new AbortController()
+      const executor = new RemoteTurnExecutor(f.hub, f.leases, f.assignments, () => {
+        if (failure === 'source') throw new Error('Source resolver unavailable')
+        return '10.20.0.11'
+      })
+      const vm = f.runner()
+      const first = await f.open()
+      if (failure === 'abort') {
+        const reserve = f.hub.reserve.bind(f.hub)
+        vi.spyOn(f.hub, 'reserve').mockImplementationOnce(async (id, signal) => {
+          const runner = await reserve(id, signal)
+          cancellation.abort(new Error('Issuance cancelled'))
+          return runner
+        })
+      }
+      const rejected = expect(
+        executor.credentialAddress(first.id, cancellation.signal),
+      ).rejects.toThrow(
+        failure === 'source'
+          ? 'The sandbox runner has no trusted address for turn credentials'
+          : 'Issuance cancelled',
+      )
+      expect(await vm.poll()).toEqual([])
+      await rejected
+      const other = randomUUID()
+      const second = await f.open({ ...fence, taskId: other, siteId: other }, 'session2')
+      const address = new RemoteTurnExecutor(
+        f.hub,
+        f.leases,
+        f.assignments,
+        () => '10.20.0.11',
+      ).credentialAddress(second.id, new AbortController().signal)
+      expect(await vm.poll()).toEqual([])
+      await expect(address).resolves.toBe('10.20.0.11')
+    },
+  )
+
+  it.each(['before the turn is bound to its runner', 'while the store binds it'])(
+    'releases the reserved slot and queues nothing when prepare is aborted %s',
+    async (moment) => {
+      const f = fixture()
+      const executor = new RemoteTurnExecutor(f.hub, f.leases, f.assignments, () => '10.20.0.11')
+      const vm = f.runner()
+      const first = await f.open()
+      const address = executor.credentialAddress(first.id, new AbortController().signal)
+      await vm.poll()
+      await address
+      const cancellation = new AbortController()
+      const early = moment.startsWith('before')
+      if (early) cancellation.abort(new Error('Prepare cancelled'))
+      else {
+        const claim = f.assignments.claim.bind(f.assignments)
+        vi.spyOn(f.assignments, 'claim').mockImplementationOnce(async (input) => {
+          const rows = await claim(input)
+          cancellation.abort(new Error('Prepare cancelled'))
+          return rows
+        })
+      }
+      await expect(executor.prepare(f.input(first.id), cancellation.signal)).rejects.toThrow(
+        'Prepare cancelled',
+      )
+      // Given up before the claim, the turn stays one no runner ever took.
+      expect((await f.assignments.get(first.id))!.runner === null).toBe(early)
+      const other = randomUUID()
+      const second = await f.open({ ...fence, taskId: other, siteId: other }, 'session2')
+      const secondAddress = executor.credentialAddress(second.id, new AbortController().signal)
+      expect(await vm.poll()).toEqual([])
+      await expect(secondAddress).resolves.toBe('10.20.0.11')
+      expect(f.dispatched).not.toHaveBeenCalled()
+    },
+  )
+
+  it('fails a prepare whose reserved runner restarted: its key is bound to the session that is gone', async () => {
+    const f = fixture()
+    const executor = new RemoteTurnExecutor(f.hub, f.leases, f.assignments, () => '10.20.0.11')
+    const vm = f.runner()
+    const assignment = await f.open()
+    const address = executor.credentialAddress(assignment.id, new AbortController().signal)
+    await vm.poll()
+    await address
+    const restarted = f.runner('sandbox-1')
+    expect(await restarted.poll()).toEqual([])
+    await expect(
+      executor.prepare(f.input(assignment.id), new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'RUNNER_UNAVAILABLE' })
+    // Nothing was bound or handed out: the turn is closed as one no runner took.
+    expect((await f.assignments.get(assignment.id))!.runner).toBeNull()
+    expect(await restarted.poll()).toEqual([])
+    expect(f.dispatched).not.toHaveBeenCalled()
+  })
+
+  it('reserves a trusted VM before credentials and binds the turn to it when its prepare goes out', async () => {
+    const f = fixture()
+    const sourceAddress = vi.fn((id: string) => {
+      expect(id).toBe('sandbox-1')
+      return '10.20.0.11'
+    })
+    const executor = new RemoteTurnExecutor(f.hub, f.leases, f.assignments, sourceAddress)
+    const vm = f.runner()
+    const assignment = await f.open()
+    const address = executor.credentialAddress(assignment.id, new AbortController().signal)
+    expect(sourceAddress).not.toHaveBeenCalled()
+    expect(await vm.poll()).toEqual([])
+    await expect(address).resolves.toBe('10.20.0.11')
+    expect(f.dispatched).not.toHaveBeenCalled()
+    // The key may be issued now; durably the turn is still nobody's.
+    expect((await f.assignments.get(assignment.id))!.runner).toBeNull()
+    const preparing = executor.prepare(f.input(assignment.id), new AbortController().signal)
+    const [command] = await vm.poll()
+    expect(command).toMatchObject({ type: 'prepare', assignmentId: assignment.id })
+    expect((await f.assignments.get(assignment.id))!.runner).toEqual({
+      id: vm.runnerId,
+      session: vm.runnerSession,
+    })
+    await vm.report(assignment.id, {
+      type: 'created',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    await vm.report(assignment.id, {
+      type: 'prepared',
+      commandId: command!.commandId,
+      containerId: 'container1',
+    })
+    await expect(preparing).resolves.toMatchObject({ containerId: 'container1' })
+    expect(sourceAddress).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['core knows no address source', undefined],
+    ['its RUNNER_TOKENS entry names no address', () => undefined as unknown as string],
+    [
+      'the source of addresses fails',
+      () => {
+        throw new Error('Runner credential source unavailable: 10.20.0.11 and 10.20.0.12')
+      },
+    ],
+  ])(
+    'refuses a VM without a trusted address as a platform fault, before any key or command: %s',
+    async (_, sourceAddress) => {
+      const f = fixture()
+      const executor = new RemoteTurnExecutor(f.hub, f.leases, f.assignments, sourceAddress)
+      const vm = f.runner()
+      const assignment = await f.open()
+      const refused = executor
+        .credentialAddress(assignment.id, new AbortController().signal)
+        .catch((error: unknown) => error)
+      expect(await vm.poll()).toEqual([])
+      // Not the client's input (400), and nothing of the configuration in the message.
+      expect(await refused).toMatchObject({
+        code: 'RUNNER_UNAVAILABLE',
+        httpStatus: 503,
+        message: 'The sandbox runner has no trusted address for turn credentials',
+      })
+      expect(f.dispatched).not.toHaveBeenCalled()
+      expect(f.created).not.toHaveBeenCalled()
+      expect((await f.assignments.get(assignment.id))!.runner).toBeNull()
+    },
+  )
+
   it('hands the prepare to a runner with a free slot and owns the container from `created`', async () => {
     const f = fixture()
     const vm = f.runner()
@@ -248,7 +476,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     expect(f.dispatched).not.toHaveBeenCalled()
   })
 
-  it('keeps a prepare undispatched when the poll that claimed it closed meanwhile', async () => {
+  it('keeps a prepare undispatched when the poll that reserved its slot closed before it was queued', async () => {
     const f = fixture()
     const vm = f.runner()
     const assignment = await f.open()
@@ -268,7 +496,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
       connection.signal,
     )
     await claiming.promise
-    // The runner's connection breaks while the claim query is out; then the claim commits.
+    // The runner's connection breaks while core binds the turn to it; then the claim commits.
     connection.abort()
     answer.resolve()
 

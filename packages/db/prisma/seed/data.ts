@@ -19,7 +19,7 @@ export interface PlanSeed {
   slug: string
   name: string
   kind: PlanKind
-  /** RUB including VAT, Decimal(12,2). */
+  /** RUB without VAT (the seller is self-employed), Decimal(12,2). */
   price: DecimalString
   editsPerMonth: number | null
   editsPerDay: number | null
@@ -62,9 +62,11 @@ export const planSeeds = [
     maxSites: 15,
     sortOrder: 30,
   },
+  // The name of the public offer. A stored «Пакет 10 правок» is renamed by the next seed run:
+  // names follow the seed, the terms below do not change.
   {
     slug: 'pack-10',
-    name: 'Пакет 10 правок',
+    name: 'Пакет из 10 правок',
     kind: 'pack',
     price: '1990.00',
     editsPerMonth: null,
@@ -127,7 +129,10 @@ export const pricingRuleSeeds: readonly PricingRuleSeed[] = [
 
 export interface AgentDriverSeed {
   id: AgentDriverId
-  /** Placeholder until P4 pins the driver's sandbox image by digest; set on create only. */
+  /**
+   * Unread placeholder, set on create only: drivers run the shared SANDBOX_IMAGE pinned by
+   * digest (spec §8). The column waits for the B16 contract migration.
+   */
   image: string
   /** Mirrors the adapter in packages/agent-drivers (db may not import an adapter). */
   capabilities: AgentCapabilities
@@ -173,128 +178,75 @@ export const agentDriverSeeds: readonly AgentDriverSeed[] = [
   },
 ]
 
-// ─── LLM providers, models and prices (spec §9, docs/business.md §5) ──────────
+// ─── Subscription catalogue (spec §9, §17; p3-design §15, B6) ──────────────────
 
+/** Defaults apply only to missing rows; all existing catalogue settings are operator-owned. */
 export interface LlmProviderSeed {
   slug: string
   name: string
+  kind: 'subscription'
+  enabled: false
 }
 
 export const llmProviderSeeds = [
-  { slug: 'yandex-ai-studio', name: 'Yandex AI Studio' },
-  { slug: 'cloudru', name: 'Cloud.ru Evolution Foundation Models' },
+  { slug: 'openai-chatgpt', name: 'ChatGPT', kind: 'subscription', enabled: false },
+  { slug: 'kimi-code', name: 'Kimi Code', kind: 'subscription', enabled: false },
 ] as const satisfies readonly LlmProviderSeed[]
 
-export type LlmProviderSlug = (typeof llmProviderSeeds)[number]['slug']
-
-/** RUB per 1M tokens including VAT, Decimal(14,6). NULL cache prices are charged as input. */
-export interface LlmPriceSeed {
-  effectiveFrom: Date
-  inputPer1m: DecimalString
-  cacheReadPer1m: DecimalString | null
-  cacheWritePer1m: DecimalString | null
-  outputPer1m: DecimalString
-  /** Decimal(5,4). */
-  vatRate: DecimalString
-  sourceUrl: string
-}
-
 export interface LlmModelSeed {
-  providerSlug: LlmProviderSlug
-  /** LiteLLM model_name. The provider model id stays NULL until the PoC confirms it. */
+  providerSlug: string
+  /** A stable profile id: standard and heavy can use the same upstream model. */
   slug: string
   name: string
-  /** Router class; set on create only (the router is tuned in the database). */
-  modelClass: ModelClass
-  price: LlmPriceSeed
+  providerModelId: string | null
+  modelClass: Exclude<ModelClass, 'service'>
+  reserveOutputTokens: number
+  enabled: false
 }
 
-const VAT_22 = '0.2200'
-
-/** Yandex AI Studio publishes RUB per 1K tokens with VAT; ×1000 here. No cache-write price. */
-const yandexPrice = (
-  input: DecimalString,
-  cacheRead: DecimalString,
-  output: DecimalString,
-): LlmPriceSeed => ({
-  effectiveFrom: moscowMidnight('2026-09-26'),
-  inputPer1m: input,
-  cacheReadPer1m: cacheRead,
-  cacheWritePer1m: null,
-  outputPer1m: output,
-  vatRate: VAT_22,
-  sourceUrl: 'https://aistudio.yandex.ru/docs/ru/ai-studio/pricing.html',
-})
-
-/** Cloud.ru tariff from 15.09.2026: RUB per 1M with VAT 22%; no cache prices for open models. */
-const cloudruPrice = (input: DecimalString, output: DecimalString): LlmPriceSeed => ({
-  effectiveFrom: moscowMidnight('2026-09-15'),
-  inputPer1m: input,
-  cacheReadPer1m: null,
-  cacheWritePer1m: null,
-  outputPer1m: output,
-  vatRate: VAT_22,
-  sourceUrl: 'https://cloud.ru/documents/tariffs/evolution/foundation-models',
-})
-
+// The design names GPT-6 profiles, but the local spike confirmed only gpt-6.1-sol.
+// Do not silently replace a profile or guess an upstream id: the operator confirms it before
+// enabling a model. Kimi's k3-256k is the explicit id in p3-design §3.6, still disabled here.
 export const llmModelSeeds: readonly LlmModelSeed[] = [
   {
-    providerSlug: 'yandex-ai-studio',
-    slug: 'qwen3.6-35b',
-    name: 'Qwen3.6 35B',
+    providerSlug: 'openai-chatgpt',
+    slug: 'gpt-6-luna-light',
+    name: 'GPT-6 Luna · light',
+    providerModelId: null,
     modelClass: 'light',
-    price: yandexPrice('200', '50', '300'),
+    reserveOutputTokens: 32_000,
+    enabled: false,
   },
   {
-    providerSlug: 'yandex-ai-studio',
-    slug: 'deepseek-v4-flash',
-    name: 'DeepSeek V4 Flash',
-    modelClass: 'light',
-    price: yandexPrice('300', '75', '500'),
-  },
-  {
-    providerSlug: 'yandex-ai-studio',
-    slug: 'qwen3-235b',
-    name: 'Qwen3 235B',
-    modelClass: 'heavy',
-    price: yandexPrice('500', '500', '500'),
-  },
-  {
-    providerSlug: 'cloudru',
-    slug: 'qwen3-coder-next',
-    name: 'Qwen3-Coder-Next',
+    providerSlug: 'openai-chatgpt',
+    slug: 'gpt-6-sol-standard',
+    name: 'GPT-6 Sol · standard',
+    providerModelId: null,
     modelClass: 'standard',
-    price: cloudruPrice('122', '244'),
+    reserveOutputTokens: 32_000,
+    enabled: false,
   },
   {
-    providerSlug: 'cloudru',
-    slug: 'kimi-k2.6',
-    name: 'Kimi-K2.6',
+    providerSlug: 'openai-chatgpt',
+    slug: 'gpt-6-sol-heavy',
+    name: 'GPT-6 Sol · heavy',
+    providerModelId: null,
+    modelClass: 'heavy',
+    reserveOutputTokens: 32_000,
+    enabled: false,
+  },
+  {
+    providerSlug: 'kimi-code',
+    slug: 'k3-256k-standard',
+    name: 'Kimi K3 256K · standard',
+    providerModelId: 'k3-256k',
     modelClass: 'standard',
-    price: cloudruPrice('175.68', '725.9'),
-  },
-  {
-    providerSlug: 'cloudru',
-    slug: 'glm-5.1',
-    name: 'GLM-5.1',
-    modelClass: 'heavy',
-    price: cloudruPrice('198.86', '829.6'),
-  },
-  {
-    providerSlug: 'cloudru',
-    slug: 'deepseek-v4-pro',
-    name: 'DeepSeek-V4-Pro',
-    modelClass: 'heavy',
-    price: cloudruPrice('183', '732'),
-  },
-  {
-    providerSlug: 'cloudru',
-    slug: 'gpt-oss-120b',
-    name: 'gpt-oss-120b',
-    modelClass: 'service',
-    price: cloudruPrice('15.86', '61'),
+    reserveOutputTokens: 32_768,
+    enabled: false,
   },
 ]
+
+// Accounting rates need owner approval and are never seeded (not even placeholder zeros).
 
 // ─── Everything the seed writes ───────────────────────────────────────────────
 

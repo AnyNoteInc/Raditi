@@ -1,19 +1,40 @@
 import { isIP } from 'node:net'
 
 import { clientIp } from '@repo/auth'
+import { isProduction, type AppEnv } from '@repo/domain'
 import {
   parseWebhookEvent,
   verifyTrustedIp,
   YOOKASSA_WEBHOOK_IP_RANGES,
   type WebhookEvent,
+  type YookassaConfig,
 } from '@repo/yookassa'
+
+import { readBodyWithin } from './body-limit'
 
 export interface YookassaWebhookOptions {
   /** Production: an empty allowlist denies everything instead of allowing everything. */
   requireAllowlist: boolean
+  /** Senders to accept instead of the published ЮKassa ranges. */
   allowlist?: readonly string[]
   /** Called with every accepted notification. */
   onEvent?: (event: WebhookEvent) => void | Promise<void>
+}
+
+/**
+ * Whom the route takes notifications from. Production trusts the published ЮKassa ranges and
+ * nothing else. Outside it YOOKASSA_WEBHOOK_ALLOWLIST replaces them, so that a local fake can
+ * send from loopback; the settings refuse that variable in production, and so does this.
+ */
+export function webhookSenders(
+  appEnv: AppEnv,
+  yookassa: Pick<YookassaConfig, 'webhookAllowlist'> | null,
+): Pick<YookassaWebhookOptions, 'requireAllowlist' | 'allowlist'> {
+  const production = isProduction(appEnv)
+  return {
+    requireAllowlist: production,
+    allowlist: production ? undefined : yookassa?.webhookAllowlist,
+  }
 }
 
 // A notification body is a few kilobytes; anything far larger is not from ЮKassa.
@@ -34,29 +55,6 @@ export function webhookSenderIp(headers: Headers): string | null {
 const json = (body: unknown, status: number) =>
   Response.json(body, { status, headers: { 'cache-control': 'no-store' } })
 
-/** The body as text, or null once it passes `limit` bytes: the rest is never read. */
-async function readBody(request: Request, limit: number): Promise<string | null> {
-  if (!request.body) return ''
-  const reader = request.body.getReader()
-  const chunks: Uint8Array[] = []
-  let bytes = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      bytes += value.byteLength
-      if (bytes > limit) {
-        await reader.cancel().catch(() => {})
-        return null
-      }
-      chunks.push(value)
-    }
-  } finally {
-    reader.releaseLock()
-  }
-  return new TextDecoder().decode(Buffer.concat(chunks))
-}
-
 /** Checks the sender and the body; 403 for a foreign address, 400 for a broken notification. */
 export async function handleYookassaWebhook(
   request: Request,
@@ -68,17 +66,12 @@ export async function handleYookassaWebhook(
     return json({ error: 'forbidden' }, 403)
   }
 
-  // A declared oversize body is refused unread; without a usable length (a chunked body) it is
-  // read only up to the limit.
-  if (Number(request.headers.get('content-length')) > MAX_BODY_BYTES) {
-    return json({ error: 'invalid notification' }, 400)
-  }
-  const text = await readBody(request, MAX_BODY_BYTES)
-  if (text === null) return json({ error: 'invalid notification' }, 400)
+  const body = await readBodyWithin(request, MAX_BODY_BYTES)
+  if (body === null) return json({ error: 'invalid notification' }, 400)
 
   let event: WebhookEvent
   try {
-    event = parseWebhookEvent(JSON.parse(text))
+    event = parseWebhookEvent(JSON.parse(new TextDecoder().decode(body)))
   } catch {
     return json({ error: 'invalid notification' }, 400)
   }

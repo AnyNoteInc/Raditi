@@ -91,7 +91,7 @@ describe('sandboxSpecSchema', () => {
 
   it.each([
     'KIMI_MODEL_API_KEY',
-    'LITELLM_KEY',
+    'LLM_GATEWAY_KEY',
     'MCP_TOKEN',
     'GITHUB_TOKEN',
     'CLIENT_SECRET',

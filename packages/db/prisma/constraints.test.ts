@@ -286,21 +286,128 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
           data: { taskId: t.id, turnNo: 1, driverId: driver.id, image: driver.image },
         })
         const p = await price(tx)
+        const m = await tx.llmModel.findUniqueOrThrow({ where: { id: p.modelId } })
+        await tx.llmProvider.update({
+          where: { id: m.providerId },
+          data: { kind: 'subscription' },
+        })
+        const credentialRef = await tx.credentialRef.create({
+          data: { kind: 'subscription', vaultPath: `subs/test-${randomUUID()}` },
+        })
+        const subscriptionAccount = await tx.subscriptionAccount.create({
+          data: {
+            providerId: m.providerId,
+            driverId: driver.id,
+            label: `test-${randomUUID()}`,
+            credentialRefId: credentialRef.id,
+            plan: 'test',
+            maxConcurrentTurns: 1,
+            maxConcurrentRequests: 2,
+          },
+        })
+        const now = new Date()
+        const expiresAt = new Date(now.getTime() + 60_000)
+        const key = await tx.llmKey.create({
+          data: {
+            keyHash: randomUUID().replaceAll('-', '').repeat(2),
+            taskId: t.id,
+            taskAttempt: t.attempt,
+            sessionId: randomUUID(),
+            turnNo: turn.turnNo,
+            firstEpoch: 1,
+            driverId: driver.id,
+            modelId: p.modelId,
+            subscriptionAccountId: subscriptionAccount.id,
+            budgetRub: '135.00',
+            issuedAt: now,
+            expiresAt,
+            validUntil: expiresAt,
+          },
+        })
+        const call = await tx.llmCall.create({
+          data: {
+            keyId: key.id,
+            subscriptionAccountId: subscriptionAccount.id,
+            modelId: p.modelId,
+            route: '/codex/responses',
+            state: 'completed',
+            reservedRub: '1.00',
+            requestBytes: 100,
+            startedAt: now,
+            finishedAt: now,
+          },
+        })
         await tx.tokenUsage.create({
           data: {
-            gatewayCallId: randomUUID(),
+            gatewayCallId: call.id,
+            keyId: key.id,
+            subscriptionAccountId: subscriptionAccount.id,
             taskId: t.id,
+            taskAttempt: t.attempt,
             turnId: turn.id,
             driverId: driver.id,
             modelId: p.modelId,
             priceId: p.id,
-            inputUncachedTokens: 100,
-            outputTokens: -1,
+            inputUncachedTokens: -1,
+            outputTokens: 1,
             costRub: '0.0000122000',
             occurredAt: new Date(),
           },
         })
       }))
+  })
+
+  describe('task_events', () => {
+    // The subscription gateway asks on every key lookup and admission, and the issuer on every
+    // key, whether the task was refused for content. Only this index keeps that from reading
+    // all events of the task.
+    const index = 'task_events_llm_policy_flagged_idx'
+
+    it('has the partial index of the content-refusal flag', async () => {
+      const rows = await db.$queryRaw<{ indexdef: string }[]>`
+        SELECT indexdef FROM pg_indexes
+        WHERE schemaname = current_schema() AND tablename = 'task_events' AND indexname = ${index}`
+      expect(rows.map((row) => row.indexdef)).toEqual([
+        `CREATE INDEX ${index} ON public.task_events USING btree (task_id) ` +
+          `WHERE ((type)::text = 'llm.policy_flagged'::text)`,
+      ])
+    })
+
+    it('answers the flag lookup from that index, not from the events of the task', async () => {
+      const plans: string[] = []
+      await expectAccepted(async (tx) => {
+        const t = await task(tx)
+        await tx.taskEvent.createMany({
+          data: [
+            ...Array.from({ length: 200 }, () => ({ taskId: t.id, type: 'message', payload: {} })),
+            { taskId: t.id, type: 'llm.policy_flagged', payload: {} },
+          ],
+        })
+        await tx.$executeRaw`SET LOCAL enable_seqscan = off`
+        const explain = async (sql: string, ...values: unknown[]) =>
+          plans.push(
+            (await tx.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(`EXPLAIN ${sql}`, ...values))
+              .map((row) => row['QUERY PLAN'])
+              .join('\n'),
+          )
+        // The gateway's query: the event type is part of the statement (the id is a uuid).
+        await explain(`SELECT EXISTS (SELECT 1 FROM task_events e
+          WHERE e.task_id = '${t.id}'::uuid AND e.type = 'llm.policy_flagged') AS flagged`)
+        // Prisma's own queries bind the type. This client sends unnamed statements, which
+        // PostgreSQL plans with the bound values; a named statement could fall back to a
+        // generic plan, which cannot prove the predicate of the index.
+        await explain(
+          `SELECT e.id FROM task_events e WHERE e.task_id = $1::uuid AND e.type = $2 LIMIT 1`,
+          t.id,
+          'llm.policy_flagged',
+        )
+      })
+      expect(plans).toHaveLength(2)
+      for (const plan of plans) {
+        expect(plan).toContain(index)
+        expect(plan).not.toContain('task_events_task_id_id_idx')
+      }
+    })
   })
 
   describe('orders', () => {

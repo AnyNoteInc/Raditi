@@ -16,7 +16,8 @@ const fullAddressOptions: BetterAuthOptions = {
   advanced: { ipAddress: { ...ipAddressOptions, ipv6Subnet: 128 } },
 }
 
-const USER_AGENT_MAX = 1024
+/** The width of `user_agent` in sessions and user_consents. */
+export const USER_AGENT_MAX = 1024
 
 export interface RequestMeta {
   ipAddress: string | null

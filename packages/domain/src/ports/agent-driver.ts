@@ -12,14 +12,7 @@ import {
  * every CLI-specific detail (flags, config files, event format) lives in the adapter
  * (packages/agent-drivers). No `if (driver === 'codex')` outside the driver.
  */
-export const agentDriverIds = [
-  'codex',
-  'kimi',
-  'qwen',
-  'opencode',
-  'gigacode',
-  'sourcecraft',
-] as const
+export const agentDriverIds = ['codex', 'kimi', 'qwen', 'opencode'] as const
 export type AgentDriverId = (typeof agentDriverIds)[number]
 
 export interface AgentCapabilities {
@@ -45,8 +38,14 @@ export interface RunContext {
   taskId: string
   sessionId: string
   turn: number
-  /** Per-turn LiteLLM virtual key with a budget and TTL; the only LLM credential in the sandbox. */
-  llm: { baseUrl: string; apiKey: string; model: string }
+  /** Per-turn subscription gateway key with a budget and TTL; the only LLM credential in the sandbox. */
+  llm: {
+    baseUrl: string
+    apiKey: string
+    model: string
+    /** Profile ceiling; null or absence leaves the provider's default unchanged. */
+    reasoningEffort?: string | null
+  }
   /** Per-turn MCP token scoped to the site and the task. */
   mcp: { url: string; token: string }
   /** Platform AGENTS.md + site AGENTS.md; drivers that ignore AGENTS.md get it as a system prompt. */
@@ -320,7 +319,10 @@ export interface AgentDriver {
   readonly image: string
   readonly capabilities: AgentCapabilities
   prepare(context: RunContext): Promise<PreparedRun>
-  /** argv of the turn: a fresh run or a resume of `context.nativeSessionId`. */
+  /**
+   * argv of the turn: a fresh run or a resume of `context.nativeSessionId`.
+   * May stage turn input in run.files; callers validate/write the prepared files after this call.
+   */
   command(run: PreparedRun, turn: TurnInput): string[]
   /** One stdout line → zero or more common events. Unknown lines yield []. */
   parseEvent(line: string): AgentEvent[]

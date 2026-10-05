@@ -6,12 +6,19 @@ import {
 } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
 import type { NestExpressApplication } from '@nestjs/platform-express'
-import { isProduction, notImplemented, type AppEnv } from '@repo/domain'
+import { isProduction, type AppEnv } from '@repo/domain'
 
-import type { CoreConfig, McpConfig, OrchestratorConfig, RunnerConfig } from './config/config.ts'
+import type {
+  CoreConfig,
+  LlmRoleConfig,
+  McpConfig,
+  OrchestratorConfig,
+  RunnerConfig,
+} from './config/config.ts'
 import { CoreModule } from './core/core.module.ts'
+import { LlmAppModule, LlmRuntime } from './llm-gateway/llm-app.module.ts'
 import { McpAppModule } from './mcp/mcp-app.module.ts'
-import { createMcpStrategy, mountMcp } from './mcp/mcp-server.ts'
+import { mountMcp } from './mcp/mcp-server.ts'
 import { RunnerApiServer } from './runner-api/runner-api.server.ts'
 import { RunnerModule } from './runner/runner.module.ts'
 
@@ -72,9 +79,12 @@ export async function startMcp(config: McpConfig): Promise<INestApplication> {
   })
   app.disable('x-powered-by')
   app.enableShutdownHooks([...SHUTDOWN_SIGNALS])
-  await mountMcp(app, createMcpStrategy())
+  await mountMcp(app)
   const address = await listen(app, config.port, config.appEnv)
-  logger.log(`mcp role listening on ${address} (/mcp, /health)`)
+  // The profile is the configuration's (MCP_CONTENT_PROFILE); the module refuses it in production.
+  logger.log(
+    `mcp role listening on ${address} (/mcp, /health); content profile ${config.contentProfile}`,
+  )
   return app
 }
 
@@ -98,17 +108,27 @@ export async function startRunner(config: RunnerConfig): Promise<INestApplicatio
   return app
 }
 
+export async function startLlm(config: LlmRoleConfig): Promise<INestApplicationContext> {
+  const app = await NestFactory.createApplicationContext(LlmAppModule.forRoot(config), {
+    abortOnError: false,
+    logger: appLogger(config.appEnv),
+  })
+  app.enableShutdownHooks([...SHUTDOWN_SIGNALS])
+  try {
+    const address = await app.get(LlmRuntime).listen()
+    logger.log(`llm role listening on ${address.address}:${address.port}`)
+  } catch (err) {
+    await app.close()
+    throw err
+  }
+  return app
+}
+
 export interface RoleStarters {
   core: (config: CoreConfig) => Promise<INestApplicationContext>
   mcp: (config: McpConfig) => Promise<INestApplicationContext>
   runner: (config: RunnerConfig) => Promise<INestApplicationContext>
-}
-
-/** Roles that cannot run yet fail before any port opens. */
-function assertStartable(config: OrchestratorConfig): void {
-  if (config.mcp && isProduction(config.appEnv)) {
-    throw notImplemented('mcp role in production: the per-task MCP token check (P6)')
-  }
+  llm: (config: LlmRoleConfig) => Promise<INestApplicationContext>
 }
 
 /**
@@ -119,14 +139,13 @@ function assertStartable(config: OrchestratorConfig): void {
  */
 export async function startRoles(
   config: OrchestratorConfig,
-  starters: RoleStarters = { core: startCore, mcp: startMcp, runner: startRunner },
+  starters: RoleStarters = { core: startCore, mcp: startMcp, runner: startRunner, llm: startLlm },
 ): Promise<INestApplicationContext[]> {
-  assertStartable(config)
-
   const apps: INestApplicationContext[] = []
   try {
     if (config.core) apps.push(await starters.core(config.core))
     if (config.mcp) apps.push(await starters.mcp(config.mcp))
+    if (config.llm) apps.push(await starters.llm(config.llm))
     if (config.runner) apps.push(await starters.runner(config.runner))
   } catch (err) {
     await Promise.allSettled(apps.map((app) => app.close()))

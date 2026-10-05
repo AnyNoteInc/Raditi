@@ -41,7 +41,7 @@ const rangeSchema = z.object({
   toEpoch: z.number().int().positive(),
 })
 
-/** Operational evidence only. It does not transition tasks, bill customers or dispatch jobs. */
+/** Operational evidence and TaskTurn metadata. No task transitions, billing or dispatch. */
 export class TaskEventTurnJournal implements TurnJournal {
   constructor(private readonly db: Pick<PrismaClient, '$queryRaw'>) {}
 
@@ -51,6 +51,9 @@ export class TaskEventTurnJournal implements TurnJournal {
     if (Buffer.byteLength(payload) > 1024 * 1024)
       throw badRequest('Turn evidence exceeds its limit')
     const { fence } = evidence
+    let nativeSessionId = evidence.nativeSessionId
+    for (const event of evidence.events ?? [])
+      if (event.type === 'started' && event.nativeSessionId) nativeSessionId = event.nativeSessionId
     const recovery = endings.includes(evidence.phase)
     // A failed, held or vacating owner may append evidence for its own epoch, never for a newer
     // owner.
@@ -61,7 +64,7 @@ export class TaskEventTurnJournal implements TurnJournal {
         WHERE site_id = ${fence.siteId}::uuid AND holder_task_id = ${fence.taskId}::uuid
           AND epoch = ${fence.epoch} AND operation = ${fence.operation}::"LeaseOperation"
         FOR UPDATE
-      )
+      ), inserted AS (
       INSERT INTO task_events (task_id, turn_id, type, payload, client_visible)
       SELECT task.id, turn.id, ${evidence.phase === 'output' ? 'turn.output' : 'turn.lifecycle'},
         ${payload}::jsonb, false
@@ -70,7 +73,21 @@ export class TaskEventTurnJournal implements TurnJournal {
       LEFT JOIN task_turns turn ON turn.task_id = task.id AND turn.turn_no = ${evidence.turn}
       WHERE task.id = ${fence.taskId}::uuid AND task.site_id = ${fence.siteId}::uuid
         AND (${recovery} OR (NOT lease.held_for_operator AND lease.expires_at > clock_timestamp()))
-      RETURNING id`
+      RETURNING id, turn_id
+      ), projected AS (
+        UPDATE task_turns tt SET
+          native_session_id = COALESCE(${nativeSessionId ?? null}::text, tt.native_session_id),
+          head_sha = COALESCE(${evidence.candidateHeadSha ?? null}::text, tt.head_sha),
+          snapshot_prefix = COALESCE(${evidence.snapshotPrefix ?? null}::text, tt.snapshot_prefix),
+          model_id = COALESCE(tt.model_id, (SELECT k.model_id FROM llm_keys k
+            JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no
+              AND a.session_id = k.session_id AND a.first_epoch = k.first_epoch
+            WHERE a.task_id = ${fence.taskId}::uuid AND a.turn_no = ${evidence.turn}
+              AND a.session_id = ${evidence.sessionId} AND a.lease_epoch = ${fence.epoch}
+            LIMIT 1))
+        FROM inserted WHERE tt.id = inserted.turn_id AND tt.status = 'running'
+        RETURNING tt.id
+      ) SELECT id FROM inserted`
     // Fence lost, not an outage: a failed statement rejects with its own database error.
     if (rows.length !== 1) throw leaseLost('Turn evidence no longer owns its site lease')
   }

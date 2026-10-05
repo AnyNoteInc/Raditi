@@ -23,10 +23,10 @@ const sessionFiles = [`${dataDir}/opencode.db`, `${dataDir}/opencode.db-wal`]
 const todo = (method: string) => notImplemented(`opencode.${method} (P5)`)
 
 export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
-  const { imagePrefix } = parseAgentDriverConfig(config)
+  const { image } = parseAgentDriverConfig(config)
   return {
     id: 'opencode',
-    image: `${imagePrefix}-opencode`,
+    image,
     capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
     async prepare() {
       throw todo('prepare')

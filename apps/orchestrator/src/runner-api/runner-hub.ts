@@ -22,8 +22,10 @@ import {
   type SandboxLabels,
   type SiteLeaseFence,
   type SiteLeaseStore,
+  type TurnAssignmentOutcome,
   type TurnAssignmentStore,
   type TurnBundleSource,
+  type TurnEvidence,
   type runnerReconcileRequestSchema,
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
@@ -49,8 +51,6 @@ export interface ClaimedRunner {
 /** A delivered command older than this on receipt is dropped by the runner. */
 const COMMAND_TTL_MS = 60_000
 const SWEEP_MS = 5_000
-/** A claim that lost its race to a runner waits this long for that runner's poll. */
-export const CLAIM_RACE_MS = 5_000
 const RETIRED_SESSIONS = 16
 /**
  * Polls in a row that miss a delivered prepare before it goes out again: the first may have
@@ -76,8 +76,6 @@ interface RunnerSession {
   inventoryAt: number
   queue: RunnerCommand[]
   wake: (() => void) | undefined
-  /** Counts wakes, so that one arriving while a poll's claim runs is not lost. */
-  woken: number
   gone: boolean
 }
 
@@ -104,7 +102,8 @@ interface OpenCommand {
   created?: Promise<void>
 }
 
-interface PendingClaim {
+/** A turn that waits for a runner session with a free slot. */
+interface PendingReservation {
   done: boolean
   expiring: boolean
   resolve(runner: ClaimedRunner): void
@@ -150,6 +149,12 @@ export class LiveAssignment {
    * for a container core did not know only sets `gone`, which a newer epoch asks again.
    */
   goneContainer: string | undefined
+  /**
+   * A poll took the turn's prepare, and its runner session has not said since that it holds
+   * nothing of the turn: the turn takes a slot of that session, whether or not core still waits
+   * for the prepare.
+   */
+  slot = false
   exec: ExecStream | undefined
   readonly commands = new Map<string, OpenCommand>()
   readonly answered = new Set<string>()
@@ -167,9 +172,8 @@ const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest(
 const clampMs = (ms: number) => Math.max(1, Math.min(MAX_SANDBOX_TURN_MS, Math.floor(ms)))
 const superseded = () => conflict('The turn was taken over under a newer fence')
 
-/** Ends the session's waiting poll, or makes the running one look again before it waits. */
+/** Ends the session's waiting poll: it looks at the waiting turns and its queue again. */
 function wakeSession(session: RunnerSession): void {
-  session.woken += 1
   session.wake?.()
 }
 
@@ -202,8 +206,29 @@ function lostLease(error: unknown): boolean {
   )
 }
 
+/** Why a turn that waited for a runner is given up: one of the journal's fixed reasons. */
+type AbandonReason = NonNullable<TurnEvidence['reason']>
+const interruptions: readonly string[] = ['cancelled', 'timeout', 'lease_lost']
+
+/** The owner's own reason (LeaseGuard aborts with it); anything else is a failed run. */
+function abandonReason(aborted: unknown): AbandonReason {
+  return isDomainError(aborted) &&
+    aborted.code === 'TURN_INTERRUPTED' &&
+    interruptions.includes(aborted.message)
+    ? (aborted.message as AbandonReason)
+    : 'run_failed'
+}
+
 export interface RunnerHubDependencies {
-  assignments: TurnAssignmentStore
+  /**
+   * `abandon` is also told why the turn is given up while it waits for a runner. Nobody has
+   * journaled that yet, and the product store closes the TaskTurn in the same transaction: with
+   * the reason a client's cancel ends `cancelled`, not `failed`. A store that keeps no TaskTurn
+   * ignores it.
+   */
+  assignments: TurnAssignmentStore & {
+    abandon(id: string, outcome?: TurnAssignmentOutcome, reason?: AbandonReason): Promise<boolean>
+  }
   leases: Pick<SiteLeaseStore, 'assert'>
   logger?: { warn(message: string): void }
 }
@@ -219,7 +244,13 @@ export class RunnerHub implements OnApplicationShutdown {
   readonly #sessions = new Map<string, RunnerSession>()
   readonly #retired = new Map<string, string[]>()
   readonly #live = new Map<string, LiveAssignment>()
-  readonly #pending = new Map<string, PendingClaim>()
+  /** In the order the turns began to wait: the oldest gets the next free slot. */
+  readonly #pending = new Map<string, PendingReservation>()
+  /**
+   * Reserved before key issuance: the slot of this runner session is taken, and nothing durable
+   * says so. The assignment is bound to the runner only by claim(), when its prepare goes out.
+   */
+  readonly #reserved = new Map<string, ClaimedRunner>()
   #sweep: NodeJS.Timeout | undefined
   #closed = false
   readonly #warn: ThrottledLog
@@ -232,23 +263,26 @@ export class RunnerHub implements OnApplicationShutdown {
   // --- Executor side ----------------------------------------------------------------------------
 
   /**
-   * Waits until a runner claims the assignment. Unclaimed after runnerTimings.claimTimeoutMs, or
-   * when `signal` aborts, the assignment is failed so that no runner takes it any more.
+   * Waits until a runner session with a free slot reserves the turn: its VM is the one the
+   * turn's key is bound to. The reservation lives in this core's memory only — the assignment
+   * stays unclaimed until claim(), so a turn that core gives up, or leaves behind when it dies,
+   * before its prepare went out is closed as one no runner ever took (spec §8, proof 1). Without
+   * a runner after runnerTimings.claimTimeoutMs, or when `signal` aborts, the assignment is
+   * closed so that no runner takes it any more.
    */
-  awaitClaim(assignmentId: string, signal: AbortSignal): Promise<ClaimedRunner> {
+  reserve(assignmentId: string, signal: AbortSignal): Promise<ClaimedRunner> {
     this.#assertOpen()
     signal.throwIfAborted()
-    if (this.#pending.has(assignmentId)) throw conflict('The turn already waits for a runner')
+    if (this.#pending.has(assignmentId) || this.#reserved.has(assignmentId))
+      throw conflict('The turn already waits for a runner')
     const deferred = Promise.withResolvers<ClaimedRunner>()
-    let race: NodeJS.Timeout | undefined
     const done = () => {
       pending.done = true
       this.#pending.delete(assignmentId)
       clearTimeout(timer)
-      clearTimeout(race)
       signal.removeEventListener('abort', onAbort)
     }
-    const pending: PendingClaim = {
+    const pending: PendingReservation = {
       done: false,
       expiring: false,
       resolve: (runner) => {
@@ -262,25 +296,69 @@ export class RunnerHub implements OnApplicationShutdown {
         deferred.reject(error)
       },
     }
-    const expire = (error: unknown) => {
+    const expire = (error: unknown, reason: AbandonReason) => {
       if (pending.done || pending.expiring) return
+      // From here no poll reserves it. Nothing but claim() binds a turn to a runner, and that
+      // comes after its reservation: whatever the store answers, no runner has or gets the turn.
       pending.expiring = true
-      this.deps.assignments.abandon(assignmentId).then(
-        (abandoned) => {
-          if (pending.done) return
-          if (abandoned) pending.reject(error)
-          // A runner claimed it meanwhile: its poll resolves the claim, or nobody will.
-          else race = setTimeout(() => pending.reject(error), CLAIM_RACE_MS)
-        },
-        () => pending.reject(error),
-      )
+      const settle = () => pending.reject(error)
+      this.deps.assignments.abandon(assignmentId, 'failed', reason).then(settle, settle)
     }
-    const onAbort = () => expire(signal.reason)
-    const timer = setTimeout(() => expire(runnerUnavailable()), runnerTimings.claimTimeoutMs)
+    const onAbort = () => expire(signal.reason, abandonReason(signal.reason))
+    const timer = setTimeout(
+      () => expire(runnerUnavailable(), 'run_failed'),
+      runnerTimings.claimTimeoutMs,
+    )
     signal.addEventListener('abort', onAbort, { once: true })
     this.#pending.set(assignmentId, pending)
     for (const session of this.#sessions.values()) wakeSession(session)
     return deferred.promise
+  }
+
+  /**
+   * Binds the assignment to `runner`, the session that reserved it — durably, and only now that
+   * its prepare is about to be queued: before this no container of the turn can come to exist,
+   * after it one may. RUNNER_UNAVAILABLE when that session no longer holds the reservation (it
+   * restarted or went silent: the turn's key is bound to its VM, so no other one takes its
+   * place) or the store does not answer; CONFLICT when the assignment was closed meanwhile. The
+   * reservation stays until attach() or forgetReservation().
+   */
+  async claim(assignmentId: string, runner: ClaimedRunner): Promise<void> {
+    this.#assertOpen()
+    const reserved = () => {
+      const held = this.#reserved.get(assignmentId)
+      return (
+        held?.id === runner.id &&
+        held.session === runner.session &&
+        this.session(runner.id) === runner.session
+      )
+    }
+    if (!reserved()) throw runnerUnavailable('The sandbox runner of the turn disconnected')
+    let claimed
+    try {
+      claimed = await this.deps.assignments.claim({
+        ids: [assignmentId],
+        runnerId: runner.id,
+        runnerSession: runner.session,
+        limit: 1,
+      })
+    } catch (error) {
+      this.#warn('runner claim', logged(error))
+      throw runnerUnavailable('The turn could not be bound to its sandbox runner')
+    }
+    // Closed meanwhile — given up, or past its deadline: nothing of it is handed out.
+    if (claimed.length !== 1) throw conflict('The turn assignment can no longer be claimed')
+    this.#assertOpen()
+    if (!reserved()) throw runnerUnavailable('The sandbox runner of the turn disconnected')
+  }
+
+  /** A turn given up before its prepare created no container: the reserved slot is free again. */
+  forgetReservation(assignmentId: string): void {
+    const runner = this.#reserved.get(assignmentId)
+    if (!runner) return
+    this.#reserved.delete(assignmentId)
+    const session = this.#sessions.get(runner.id)
+    if (session?.id === runner.session && !session.gone) wakeSession(session)
   }
 
   /** The live state of an assignment under `fence`; a newer epoch drops the older commands. */
@@ -310,12 +388,16 @@ export class RunnerHub implements OnApplicationShutdown {
         // Only a proven removal carries over; the new owner asks the runner about the rest.
         if (live.goneContainer === undefined) live.gone = false
       }
+      // The prepare went to another session of the runner: this one holds nothing of it yet.
+      if (live.runner.session !== input.runner.session) live.slot = false
       live.fence = fence
       live.runner = input.runner
       live.expiresAt = expiresAt
       if (input.credentials.length > 0) live.credentials = input.credentials
     }
     if (input.containerId) live.containerId = input.containerId
+    // The same JavaScript turn transfers the slot to live/prepare accounting.
+    this.#reserved.delete(input.id)
     this.#ensureSweep()
     return live
   }
@@ -409,6 +491,15 @@ export class RunnerHub implements OnApplicationShutdown {
     this.#live.delete(live.id)
     for (const open of live.commands.values()) this.#reject(open, released)
     live.exec?.fail(released)
+    this.#vacate(live)
+  }
+
+  /** The runner holds nothing of the turn any more: its session's held poll gives the slot away. */
+  #vacate(live: LiveAssignment): void {
+    if (!live.slot) return
+    live.slot = false
+    const session = this.#connected(live)
+    if (session) wakeSession(session)
   }
 
   /**
@@ -448,7 +539,7 @@ export class RunnerHub implements OnApplicationShutdown {
 
   // --- Runner side ------------------------------------------------------------------------------
 
-  /** The long poll: claims waiting turns for free slots and returns queued commands. */
+  /** The long poll: reserves free slots for waiting turns and returns queued commands. */
   async poll(
     runnerId: string,
     request: RunnerPollRequest,
@@ -469,17 +560,14 @@ export class RunnerHub implements OnApplicationShutdown {
       session.gone || this.#closed || signal.aborted || session.generation !== generation
     try {
       for (;;) {
+        // A poll whose connection closed takes nothing: what waits is the next poll's.
         if (over()) return { commands: [] }
-        const woken = session.woken
-        await this.#claim(session, request.capacity, active)
-        // Closed while the claim ran: a prepare it queued waits for the next poll, undispatched.
-        if (over()) return { commands: [] }
+        this.#reserveWaiting(session, request.capacity, active)
         const commands = this.#deliver(session)
         if (commands.length > 0) return { commands }
         const remaining = deadline - performance.now()
         if (remaining <= 0) return { commands: [] }
-        // A turn began to wait while the claim ran: claim again instead of sleeping.
-        if (session.woken !== woken) continue
+        // Nothing awaits between the look above and this wait: no wake is lost.
         await new Promise<void>((resolve) => {
           const wake = () => {
             clearTimeout(timer)
@@ -490,8 +578,6 @@ export class RunnerHub implements OnApplicationShutdown {
           const timer = setTimeout(wake, remaining)
           signal.addEventListener('abort', wake, { once: true })
           session.wake = wake
-          // Aborted while the claim ran: that abort event does not fire again.
-          if (signal.aborted) wake()
         })
       }
     } finally {
@@ -594,6 +680,7 @@ export class RunnerHub implements OnApplicationShutdown {
         if (live.containerId !== undefined) live.goneContainer = report.containerId
         live.containerId = report.containerId
         live.gone = true
+        this.#vacate(live)
         const removed = execLost('The runner removed the turn container')
         live.exec?.fail(removed)
         for (const open of [...live.commands.values()]) {
@@ -612,6 +699,9 @@ export class RunnerHub implements OnApplicationShutdown {
           // The prepare left no container (P3): believed only before any container was reported.
           if (report.absent && open.command.type === 'prepare' && live.containerId === undefined)
             open.onVacated?.()
+          // A runner that fails a prepare before it reported a container has dropped the turn;
+          // with one reported it holds the turn until that container is removed.
+          if (open.command.type === 'prepare' && live.containerId === undefined) this.#vacate(live)
           this.#reject(open, error)
           live.commands.delete(report.commandId)
           live.answered.add(report.commandId)
@@ -738,6 +828,7 @@ export class RunnerHub implements OnApplicationShutdown {
     for (const pending of this.#pending.values()) pending.reject(closing)
     for (const session of this.#sessions.values()) this.#retire(session, closing)
     for (const live of [...this.#live.values()]) this.#forget(live, closing)
+    this.#reserved.clear()
   }
 
   // --- Internals --------------------------------------------------------------------------------
@@ -764,7 +855,8 @@ export class RunnerHub implements OnApplicationShutdown {
     const out: RunnerCommand[] = []
     while (session.queue.length > 0 && out.length < runnerLimits.commands) {
       let queued = session.queue.shift()!
-      const open = this.#live.get(queued.assignmentId)?.commands.get(queued.commandId)
+      const live = this.#live.get(queued.assignmentId)
+      const open = live?.commands.get(queued.commandId)
       if (open?.deadline !== undefined) {
         const remainingMs = Math.floor(open.deadline - now)
         if (remainingMs <= 0) {
@@ -774,8 +866,9 @@ export class RunnerHub implements OnApplicationShutdown {
         queued = runnerCommandSchema.parse(withRemaining(queued, remainingMs))
         open.command = queued
       }
-      if (open && !open.delivered) {
+      if (live && open && !open.delivered) {
         open.delivered = true
+        if (queued.type === 'prepare') live.slot = true
         open.onDispatched?.()
       }
       out.push(queued)
@@ -789,7 +882,8 @@ export class RunnerHub implements OnApplicationShutdown {
    * goes out again, under its commandId, after PREPARE_MISSED_POLLS polls in a row; the runner
    * drops a copy it already took. Missing for runnerTimings.prepareMissingMs, it fails
    * RUNNER_UNAVAILABLE: without proof the turn vacates, but the runner's slot takes the next
-   * turn (spec §8).
+   * turn (spec §8). A prepare core gave up meanwhile is not sent again, yet its slot is counted
+   * and given away the same way.
    */
   #missed(session: RunnerSession, active: ReadonlySet<string>): void {
     const now = performance.now()
@@ -797,7 +891,8 @@ export class RunnerHub implements OnApplicationShutdown {
       if (live.runner.id !== session.runnerId || live.runner.session !== session.id) continue
       for (const open of live.commands.values()) {
         const { command } = open
-        if (command.type !== 'prepare' || !open.delivered || open.settled) continue
+        if (command.type !== 'prepare' || !open.delivered) continue
+        if (open.settled && !live.slot) continue
         if (
           active.has(live.id) ||
           live.containerId !== undefined ||
@@ -808,9 +903,10 @@ export class RunnerHub implements OnApplicationShutdown {
         }
         const missing = (open.missing ??= { since: now, polls: 0 })
         missing.polls += 1
-        if (now - missing.since >= runnerTimings.prepareMissingMs)
+        if (now - missing.since >= runnerTimings.prepareMissingMs) {
+          live.slot = false
           this.#reject(open, runnerUnavailable('The sandbox runner did not take the prepare'))
-        else if (missing.polls >= PREPARE_MISSED_POLLS) {
+        } else if (!open.settled && missing.polls >= PREPARE_MISSED_POLLS) {
           missing.polls = 0
           session.queue.unshift(command)
         }
@@ -843,7 +939,6 @@ export class RunnerHub implements OnApplicationShutdown {
       inventoryAt: performance.now(),
       queue: [],
       wake: undefined,
-      woken: 0,
       gone: false,
     }
     this.#sessions.set(runnerId, session)
@@ -876,6 +971,8 @@ export class RunnerHub implements OnApplicationShutdown {
     session.gone = true
     session.queue.length = 0
     wakeSession(session)
+    for (const [id, runner] of this.#reserved)
+      if (runner.id === session.runnerId && runner.session === session.id) this.#reserved.delete(id)
     for (const live of this.#live.values()) {
       if (live.runner.id !== session.runnerId || live.runner.session !== session.id) continue
       for (const open of live.commands.values()) this.#reject(open, error)
@@ -883,44 +980,41 @@ export class RunnerHub implements OnApplicationShutdown {
     }
   }
 
-  async #claim(
-    session: RunnerSession,
-    capacity: number,
-    active: ReadonlySet<string>,
-  ): Promise<void> {
-    // Oldest first, as many as the store takes: the map keeps the order turns began to wait in.
-    // One whose abandon is under way can no longer be claimed.
-    const ids = [...this.#pending]
-      .filter(([, pending]) => !pending.done && !pending.expiring)
-      .slice(0, runnerLimits.claimIds)
-      .map(([id]) => id)
-    if (ids.length === 0) return
-    // Prepares this session got but does not report as active yet still take a slot.
-    let delivering = 0
+  /**
+   * Gives the session's free slots to the turns that wait longest. Besides the turns the poll
+   * names as active, which its capacity already leaves out, a slot is taken by every turn
+   * reserved for the session, by every prepare that waits for a poll and by every turn whose
+   * prepare a poll took (LiveAssignment.slot) — settled or not: a poll sent before that prepare
+   * reached the runner counts neither the turn nor its slot, however long core holds it.
+   * Synchronous: two polls of a session never give one slot twice.
+   */
+  #reserveWaiting(session: RunnerSession, capacity: number, active: ReadonlySet<string>): void {
+    if (this.#pending.size === 0) return
+    const occupied = new Set<string>()
     for (const live of this.#live.values())
       if (
         live.runner.id === session.runnerId &&
         live.runner.session === session.id &&
         !active.has(live.id) &&
-        [...live.commands.values()].some((open) => !open.settled && open.command.type === 'prepare')
+        (live.slot ||
+          [...live.commands.values()].some(
+            (open) => !open.settled && open.command.type === 'prepare',
+          ))
       )
-        delivering += 1
-    const limit = Math.min(capacity - delivering, runnerLimits.capacity)
-    if (limit <= 0) return
-    let claimed
-    try {
-      claimed = await this.deps.assignments.claim({
-        ids,
-        runnerId: session.runnerId,
-        runnerSession: session.id,
-        limit,
-      })
-    } catch (error) {
-      this.#warn('runner claim', logged(error))
-      return
+        occupied.add(live.id)
+    for (const [id, runner] of this.#reserved)
+      if (runner.id === session.runnerId && runner.session === session.id && !active.has(id))
+        occupied.add(id)
+    let free = Math.min(capacity - occupied.size, runnerLimits.capacity)
+    for (const [id, pending] of this.#pending) {
+      if (free <= 0) return
+      // One whose abandon is under way can no longer be given to a runner.
+      if (pending.done || pending.expiring) continue
+      const runner = { id: session.runnerId, session: session.id }
+      this.#reserved.set(id, runner)
+      pending.resolve(runner)
+      free -= 1
     }
-    for (const row of claimed)
-      this.#pending.get(row.id)?.resolve({ id: session.runnerId, session: session.id })
   }
 
   async #authorize(

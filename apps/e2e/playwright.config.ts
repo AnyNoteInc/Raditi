@@ -2,7 +2,9 @@ import { fileURLToPath } from 'node:url'
 
 import { defineConfig } from '@playwright/test'
 
-// The smoke suite needs the local infrastructure (pnpm infra:up) and applied migrations.
+// The smoke suite needs the local infrastructure (pnpm infra:up), applied migrations and seeds
+// (pnpm db:deploy && pnpm db:seed): the landing shows the plans of the database. Connections
+// come from the repo .env; exported variables win, so DATABASE_URL may name another database.
 // Stop `pnpm dev` first: Next allows one dev server per app directory (.next/dev/lock), so a
 // second one exits at once. Its own port keeps APP_URL and auth origins on this server.
 const PORT = 3100
@@ -45,11 +47,15 @@ export default defineConfig({
       timeout: 180_000,
       reuseExistingServer: false,
       gracefulShutdown: { signal: 'SIGINT', timeout: 35_000 },
+      // Everything but the connections is set here, so a developer's .env cannot turn the smoke
+      // into another setup: turns stay with core (no runner API to bind or tokens to check),
+      // and core reads no stack image outside production (SANDBOX_IMAGE may be unset).
       env: {
         APP_ENV: 'test',
         ORCHESTRATOR_ROLES: 'core,mcp',
         ORCHESTRATOR_PORT: String(CORE_PORT),
         MCP_PORT: String(MCP_PORT),
+        TURN_EXECUTOR: 'local',
         METRICS_TOKEN: metricsToken,
       },
     },

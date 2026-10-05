@@ -5,13 +5,17 @@
 // it. Started by verify-runner.mjs only, which sends its configuration as the first message.
 import { randomUUID } from 'node:crypto'
 
-import { createCodexDriver } from '@repo/agent-drivers'
-import { createPrismaClient, PostgresSiteLeaseStore, PostgresTurnAssignmentStore } from '@repo/db'
-import { SANDBOX_SECRETS_DIR } from '@repo/domain'
+import { createCodexDriver, createKimiDriver } from '@repo/agent-drivers'
+import {
+  createPrismaClient,
+  PostgresSiteLeaseStore,
+  PostgresTaskTurnAssignmentStore,
+} from '@repo/db'
+import { SANDBOX_SECRETS_DIR, withoutTurnCredentials } from '@repo/domain'
 import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 
-import { parseRunnerTokens } from '../dist/config/runner-tokens.js'
+import { parseRunnerTokens, runnerCredentialAddress } from '../dist/config/runner-tokens.js'
 import { GitWorkspaceService } from '../dist/git-workspace/git-workspace.service.js'
 import { RemoteTurnExecutor } from '../dist/runner-api/remote-turn-executor.js'
 import { RunnerApiServer } from '../dist/runner-api/runner-api.server.js'
@@ -62,52 +66,64 @@ const result = (turn) => ({
 })
 
 /** codex's parser, session state and result; prepare and command are synthetic (no model). */
-const codex = createCodexDriver({ imagePrefix: 'raditi/agent' })
-const driver = {
-  ...codex,
-  async prepare(context) {
-    return {
-      context: { ...context },
-      files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true\n' }],
-      env: {},
-      secrets: [
-        { path: `${SANDBOX_SECRETS_DIR}/llm`, content: context.llm.apiKey },
-        { path: `${SANDBOX_SECRETS_DIR}/mcp`, content: context.mcp.token },
-      ],
+const codex = createCodexDriver({
+  image: config.driverId ? config.sandboxImage : `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`,
+})
+const driver = config.driverId
+  ? config.driverId === 'kimi'
+    ? createKimiDriver({ image: config.sandboxImage })
+    : codex
+  : {
+      ...codex,
+      async prepare(context) {
+        return {
+          context: { ...context },
+          files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true\n' }],
+          env: {},
+          secrets: [
+            { path: `${SANDBOX_SECRETS_DIR}/llm`, content: context.llm.apiKey },
+            { path: `${SANDBOX_SECRETS_DIR}/mcp`, content: context.mcp.token },
+          ],
+        }
+      },
+      command(prepared, input) {
+        const { turn, nativeSessionId } = prepared.context
+        const message = JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'verify', type: 'agent_message', text: JSON.stringify(result(turn)) },
+        })
+        const gated = JSON.parse(input.prompt).gated === true
+        return [
+          'sh',
+          '-c',
+          AGENT,
+          'synthetic-agent',
+          String(turn),
+          nativeSessionId ?? randomUUID(),
+          message,
+          gated ? '1' : '0',
+        ]
+      },
     }
-  },
-  command(prepared, input) {
-    const { turn, nativeSessionId } = prepared.context
-    const message = JSON.stringify({
-      type: 'item.completed',
-      item: { id: 'verify', type: 'agent_message', text: JSON.stringify(result(turn)) },
-    })
-    const gated = JSON.parse(input.prompt).gated === true
-    return [
-      'sh',
-      '-c',
-      AGENT,
-      'synthetic-agent',
-      String(turn),
-      nativeSessionId ?? randomUUID(),
-      message,
-      gated ? '1' : '0',
-    ]
-  },
-}
 
 const env = process.env
 const db = createPrismaClient({ databaseUrl: env.DATABASE_URL, log: [] })
 const leases = new PostgresSiteLeaseStore(db)
-const assignments = new PostgresTurnAssignmentStore(db)
+// The store the core role wires (InfraModule): each turn is a TaskTurn of its task as well.
+const assignments = new PostgresTaskTurnAssignmentStore(db)
 const journal = new TaskEventTurnJournal(db)
-// kill -9 of this core right after a phase of one task is journaled, before anything follows it.
+// kill -9 of this core right after a phase of one task is journaled, before anything follows it;
+// the point `issue` is the moment the turn's key is issued: a runner slot is reserved by then,
+// and the prepare has not gone out.
 const crashAfter = new Map()
 const record = journal.record.bind(journal)
 journal.record = async (input) => {
   await record(input)
   if (crashAfter.get(input.fence.taskId) === input.phase) process.kill(process.pid, 'SIGKILL')
 }
+// The client's «Отменить» at an exact moment of a task's turn: `issue` as above, `dispatch`
+// when a poll of the runner takes the prepare.
+const cancelAt = new Map()
 // Presigned URLs are signed for S3 as the VM sees it (S3_RUNNER_ENDPOINT).
 const snapshots = new SnapshotService(
   createS3ObjectStorage(storageConfigFromEnv(env)),
@@ -129,29 +145,40 @@ const workspace = new GitWorkspaceService(
   { transport: { kind: 'local-test', root: config.root }, gitleaksBinary: config.gitleaks },
 )
 const hub = new RunnerHub({ assignments, leases })
-const server = new RunnerApiServer(
-  hub,
-  new RunnerAuthenticator(parseRunnerTokens(config.runnerTokens).hashes),
+const runnerTokens = parseRunnerTokens(config.runnerTokens).hashes
+const server = new RunnerApiServer(hub, new RunnerAuthenticator(runnerTokens))
+// As RunnerApiModule: a turn's key is bound to the address RUNNER_TOKENS names for its runner.
+// The credentials themselves are synthetic, and nothing calls a model.
+const executor = new RemoteTurnExecutor(hub, leases, assignments, (id) =>
+  runnerCredentialAddress(runnerTokens, id),
 )
-const executor = new RemoteTurnExecutor(hub, leases, assignments)
+const prepare = executor.prepare.bind(executor)
+executor.prepare = (input, signal) =>
+  prepare(
+    {
+      ...input,
+      dispatched: () => {
+        input.dispatched()
+        if (cancelAt.get(input.fence.taskId) === 'dispatch')
+          cancels.get(input.fence.taskId)?.abort()
+      },
+    },
+    signal,
+  )
 const live = new LiveTurns()
-const supervisor = new TurnSupervisor({
-  leases,
-  assignments,
-  workspace,
-  snapshots,
-  journal,
-  executor,
-  driver,
-  live,
-})
 
 // A stand-in for P3's store: the values each turn started with, kept by the harness.
 const credentialKey = (ref) => `${ref.taskId}:${ref.sessionId}:${ref.turn}`
 const kept = new Map(config.credentials)
 const credentials = {
-  async issue() {
-    throw new Error('Turn credentials are issued in P3')
+  async issue(ref, grant) {
+    if (grant.boundSource !== config.runnerAddress)
+      throw new Error('The turn key is not bound to the address of its runner')
+    if (crashAfter.get(ref.taskId) === 'issue') process.kill(process.pid, 'SIGKILL')
+    if (cancelAt.get(ref.taskId) === 'issue') cancels.get(ref.taskId)?.abort()
+    const values = kept.get(credentialKey(ref))
+    if (!values) throw new Error('Synthetic turn credentials unavailable')
+    return values
   },
   async recover(ref) {
     process.send({ type: 'recovered' })
@@ -161,12 +188,39 @@ const credentials = {
     kept.delete(credentialKey(ref))
   },
 }
+const supervisor = new TurnSupervisor({
+  leases,
+  assignments,
+  workspace,
+  snapshots,
+  journal,
+  executor,
+  driver,
+  live,
+  credentials,
+})
+const credentialPolicy = {
+  driverId: driver.id,
+  backend: driver.id === 'kimi' ? 'kimi-code' : 'openai-chatgpt',
+  modelSlug: 'synthetic',
+  modelClass: 'standard',
+  reasoningEffort: 'medium',
+  ttlMs: 20 * 60_000,
+  budgetRub: '100.00',
+}
 // Only the turns of this verification's site: never other unfinished rows of the dev database.
 const unfinished = async (filter) =>
   (await assignments.unfinished(filter)).filter((row) => row.fence.siteId === config.siteId)
 const recovery = new TurnExecRecovery({
   leases,
-  assignments: Object.create(assignments, { unfinished: { value: unfinished } }),
+  // Every other method runs on the store itself: it keeps private state.
+  assignments: new Proxy(assignments, {
+    get(target, key) {
+      if (key === 'unfinished') return unfinished
+      const member = Reflect.get(target, key)
+      return typeof member === 'function' ? member.bind(target) : member
+    },
+  }),
   executor,
   journal,
   driver: (id) => {
@@ -194,13 +248,27 @@ const handlers = {
     const cancel = new AbortController()
     cancels.set(request.context.taskId, cancel)
     try {
-      return await supervisor.run(request, cancel.signal)
+      return await supervisor.run(
+        withoutTurnCredentials(request),
+        config.driverId
+          ? {
+              ...credentialPolicy,
+              modelSlug: request.context.llm.model,
+              reasoningEffort: request.context.llm.reasoningEffort,
+            }
+          : credentialPolicy,
+        cancel.signal,
+      )
     } finally {
       cancels.delete(request.context.taskId)
     }
   },
   async cancel({ taskId }) {
     cancels.get(taskId)?.abort()
+    return null
+  },
+  async cancelAt({ taskId, point }) {
+    cancelAt.set(taskId, point)
     return null
   },
   async crashAfter({ taskId, phase }) {

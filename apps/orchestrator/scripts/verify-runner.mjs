@@ -1,4 +1,4 @@
-/* global AbortSignal, Buffer, URL, console, fetch, process, setTimeout */
+/* global AbortSignal, Buffer, URL, console, fetch, process, setTimeout, clearTimeout */
 // P2 gates 2 and 3 (spec §8 «Раннер на песочной ВМ», «Восстановление незавершённого хода») on a
 // real runner VM: core runs on this host (verify-runner-core.mjs, over the local PostgreSQL, S3
 // and OpenBao), the runner role in a Linux VM under gVisor, next to the VM's Docker. No models:
@@ -8,14 +8,22 @@
 //   2. core killed -9 while the agent's output is journaled: a new core's recovery resumes it;
 //   3. the runner killed -9 there: the turn is given up, its container removed, the site freed;
 //   4. both killed: recovery resumes on the restarted runner with the turn's credentials;
-//   5. the turn cancelled while the runner creates its container: the site stays with the turn
-//      until the container is removed;
+//   5. the turn cancelled: before its prepare went out — a runner slot reserved, the key being
+//      issued — the site is free at once; when a poll has just taken the prepare, the site stays
+//      with the turn until the container the runner creates is removed;
 //   6. core killed after the checkpoint with the runner away: nothing is published until the
 //      runner is back and the container removed;
-// and a stale epoch or a runner session that is gone is refused. Synthetic data only; every
-// row, object, key, container, network and firewall rule it creates is removed.
+//   7. core killed before the prepare went out, a runner slot reserved: the next core closes the
+//      turn and frees the site at once, not at the turn's deadline;
+// and a stale epoch or a runner session that is gone is refused. Core runs the stores of the
+// core role: each turn is a TaskTurn of its task, and the turn's key is bound to the address
+// RUNNER_TOKENS names for the runner. Synthetic data only; every row, object, key, container,
+// network and firewall rule it creates is removed.
 //
 //   pnpm --filter orchestrator verify:runner
+// P4/P5: the driver supervisor launcher creates disposable platform services and enters --codex.
+// That mode runs the two-turn scenario with the real CLI and local LLM/MCP fixtures, including
+// encrypted snapshot restore and trusted publication. Crash scenarios still use the P2 agent.
 //
 // Needs: the local infrastructure from .env; P2_GITLEAKS_BINARY (gitleaks 8.30.1);
 // P2_RUNNER_DOCKER_SOCKET, the VM's Docker socket on this host; images built in that daemon and
@@ -31,6 +39,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseArgs } from 'node:util'
 import { zstdDecompressSync } from 'node:zlib'
 
 import { createPrismaClient } from '@repo/db'
@@ -41,6 +50,18 @@ import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 import { extract } from 'tar-stream'
 
 import { SnapshotService } from '../dist/sessions/snapshot.service.js'
+import { startCodexRunnerFixture } from './codex-runner-fixture.mjs'
+import { startKimiRunnerFixture } from './kimi-runner-fixture.mjs'
+
+const {
+  values: { codex = false, kimi = false },
+} = parseArgs({ options: { codex: { type: 'boolean' }, kimi: { type: 'boolean' } } })
+
+assert(!(codex && kimi), 'Select one verification driver')
+const realCli = codex || kimi
+const driverId = kimi ? 'kimi' : 'codex'
+const driverName = kimi ? 'Kimi' : 'Codex'
+const firstEffort = kimi ? 'low' : 'medium'
 
 const env = process.env
 const scripts = dirname(fileURLToPath(import.meta.url))
@@ -48,7 +69,28 @@ const repository = resolve(scripts, '../../..')
 const DIGEST = /^[^\s@]+@sha256:[a-f0-9]{64}$/
 const GATE = '/tmp/raditi-verify-go'
 const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
-const driverVersion = '0.0.0-verify'
+const driverVersion = kimi ? '2.1.1' : codex ? '0.158.0' : '0.0.0-verify'
+// The real-CLI mode is entered only by the launcher with disposable platform services.
+if (realCli)
+  assert.match(
+    env.P4_DISPOSABLE_ID ?? '',
+    /^[a-f0-9]{32}$/,
+    'Use the driver supervisor launcher to create an isolated verification stack',
+  )
+let fixture
+let interrupted = false
+let cleaning = false
+const pendingRequests = new Set()
+const interrupt = () => {
+  if (cleaning) return
+  interrupted = true
+  for (const reject of pendingRequests)
+    reject(new Error('Agent supervisor verification interrupted'))
+}
+if (realCli) {
+  process.on('SIGINT', interrupt)
+  process.on('SIGTERM', interrupt)
+}
 
 // --- Configuration: local endpoints, synthetic data, digest-pinned images ---------------------
 assert.notEqual(env.APP_ENV, 'production')
@@ -84,7 +126,10 @@ const gatewayConfig = {
 const runId = randomBytes(4).toString('hex')
 const runnerId = `verify-${runId}`
 const token = `rnr_${runnerId}.${randomBytes(32).toString('base64url')}`
-const runnerTokens = `${runnerId}:${createHash('sha256').update(token).digest('hex')}`
+// Core listens on this host's loopback, which the VM reaches through its own gateway address:
+// the runner's requests arrive from loopback, and its token opens nothing from elsewhere.
+const runnerAddress = '127.0.0.1'
+const runnerTokens = `${runnerId}:${createHash('sha256').update(token).digest('hex')}@${runnerAddress}`
 const tokenVolume = `raditi-verify-runner-${runId}`
 
 const db = createPrismaClient({ databaseUrl: env.DATABASE_URL, log: [] })
@@ -99,24 +144,42 @@ const sandboxes = createDockerSandboxProvider({
 // --- Processes: commands, Docker of the VM, core, runner ---------------------------------------
 function command(binary, args, { input, allowFailure = false, extraEnv = {} } = {}) {
   return new Promise((resolvePromise, reject) => {
+    if (realCli && interrupted && !cleaning) return reject(new Error('Verification interrupted'))
     const child = spawn(binary, args, { env: { ...env, ...extraEnv }, stdio: 'pipe' })
     const out = []
     const err = []
     child.stdout.on('data', (chunk) => out.push(chunk))
     child.stderr.on('data', (chunk) => err.push(chunk))
     child.on('error', reject)
+    const cancel = () => child.kill('SIGKILL')
+    if (realCli) pendingRequests.add(cancel)
+    const timer = realCli ? setTimeout(() => child.kill('SIGKILL'), 120_000) : undefined
     child.on('close', (code) => {
+      if (timer) clearTimeout(timer)
+      pendingRequests.delete(cancel)
       const stdout = Buffer.concat(out).toString()
       const stderr = Buffer.concat(err).toString()
-      if (code !== 0 && !allowFailure) reject(new Error(`${binary} ${args[0]} failed: ${stderr}`))
+      if (realCli && interrupted && !cleaning) reject(new Error('Verification interrupted'))
+      else if (code !== 0 && !allowFailure)
+        reject(new Error(`${binary} ${args[0]} failed: ${stderr}`))
       else resolvePromise({ code, stdout, stderr })
     })
+    child.stdin.on('error', () => {})
     child.stdin.end(input)
   })
 }
 /** The Docker CLI against the VM's daemon; `options` as for command(). */
 const dockerCommand = (args, options = {}) =>
-  command('docker', args, { ...options, extraEnv: { DOCKER_HOST: `unix://${socket}` } })
+  command('docker', ['--host', `unix://${socket}`, ...args], {
+    ...options,
+    extraEnv: {
+      DOCKER_HOST: undefined,
+      DOCKER_CONTEXT: undefined,
+      DOCKER_TLS: undefined,
+      DOCKER_TLS_VERIFY: undefined,
+      DOCKER_CERT_PATH: undefined,
+    },
+  })
 const docker = async (...args) => (await dockerCommand(args)).stdout.trim()
 const lines = (text) => text.split('\n').filter(Boolean)
 const git = async (...args) => (await command('git', args)).stdout
@@ -161,8 +224,11 @@ async function startCore() {
       siteId: site.id,
       runnerId,
       runnerTokens,
+      runnerAddress,
       credentials: [...turnCredentials],
       recoverEveryMs: 5_000,
+      driverId: realCli ? driverId : null,
+      sandboxImage: images.sandbox,
     },
   })
   const pending = new Map()
@@ -170,13 +236,25 @@ async function startCore() {
   const core = {
     child,
     recovered: 0,
-    exited: new Promise((done) => child.once('exit', done)),
+    exited: new Promise((done) => child.once('close', done)),
     request(type, body = {}) {
       const id = randomUUID()
       const reply = Promise.withResolvers()
       pending.set(id, reply)
       child.send({ ...body, type, id })
-      return reply.promise
+      if (!realCli) return reply.promise
+      const rejected = (error) => reply.reject(error)
+      pendingRequests.add(rejected)
+      const timer = setTimeout(
+        () => rejected(new Error('Core verification request timed out')),
+        180_000,
+      )
+      if (interrupted && !cleaning) rejected(new Error('Verification interrupted'))
+      return reply.promise.finally(() => {
+        clearTimeout(timer)
+        pendingRequests.delete(rejected)
+        pending.delete(id)
+      })
     },
     async kill() {
       child.kill('SIGKILL')
@@ -193,13 +271,28 @@ async function startCore() {
       else reply?.reject(Object.assign(new Error(message.error.message), message.error))
     }
   })
+  child.on('error', () => {
+    ready.reject(new Error('Could not start the verification core'))
+    for (const reply of pending.values()) reply.reject(new Error('Core process failed'))
+  })
   void core.exited.then(async () => {
     ready.reject(new Error('core exited before it was ready'))
     for (const reply of pending.values()) reply.reject(new Error('core exited'))
     await log.close()
   })
   cores.push(core)
-  await ready.promise
+  const rejectReady = (error) => ready.reject(error)
+  if (realCli) pendingRequests.add(rejectReady)
+  const timer = realCli
+    ? setTimeout(() => rejectReady(new Error('Core startup timed out')), 30_000)
+    : undefined
+  try {
+    if (realCli && interrupted) rejectReady(new Error('Verification interrupted'))
+    await ready.promise
+  } finally {
+    if (timer) clearTimeout(timer)
+    pendingRequests.delete(rejectReady)
+  }
   return core
 }
 
@@ -211,6 +304,8 @@ async function startCore() {
  */
 async function startRunner() {
   const name = `raditi-verify-runner-${runId}-${runners.length + 1}`
+  // Register before run: an interrupted Docker command may still have created its container.
+  runners.push(name)
   const runnerEnv = {
     NODE_ENV: 'production',
     APP_ENV: 'development',
@@ -270,7 +365,6 @@ async function startRunner() {
     images.node,
     'dist/main.js',
   )
-  runners.push(name)
   const names = JSON.parse(await docker('inspect', '--format', '{{json .Config.Env}}', name)).map(
     (entry) => entry.slice(0, entry.indexOf('=')),
   )
@@ -294,6 +388,7 @@ async function runnerSession(core) {
 async function waitFor(check, what, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
+    if (realCli && interrupted && !cleaning) throw new Error('Verification interrupted')
     const value = await check()
     if (value) return value
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`)
@@ -306,8 +401,15 @@ const journal = async (taskId) =>
   )
 const phases = (entries, epoch) =>
   entries.filter((entry) => entry.fence.epoch === epoch).map((entry) => entry.phase)
-const assignmentOf = (taskId) => db.turnAssignment.findFirst({ where: { taskId } })
+const assignmentOf = (taskId, turn) =>
+  db.turnAssignment.findFirst({
+    where: { taskId, ...(turn === undefined ? {} : { turnNo: turn }) },
+    orderBy: { firstEpoch: 'desc' },
+  })
 const leaseOf = () => db.siteLease.findUnique({ where: { siteId: site.id } })
+/** The product row of a turn: its status follows the assignment's outcome and its reason. */
+const taskTurnOf = (taskId, turn = 1) =>
+  db.taskTurn.findUnique({ where: { taskId_turnNo: { taskId, turnNo: turn } } })
 const turnContainers = async (label, value) =>
   lines(await docker('ps', '--all', '--quiet', '--filter', `label=${label}=${value}`))
 const running = async (container) =>
@@ -378,7 +480,7 @@ function expectEvents(entries) {
 
 /** Completed, published and removed; the site is free again. */
 async function expectCompleted(taskId, turn, headSha) {
-  const assignment = await assignmentOf(taskId)
+  const assignment = await assignmentOf(taskId, turn)
   assert.equal(assignment.outcome, 'completed')
   assert.equal(assignment.executor, 'runner')
   assert.equal(assignment.runnerId, runnerId)
@@ -386,6 +488,11 @@ async function expectCompleted(taskId, turn, headSha) {
   assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', taskId), [])
   const head = await branchHead(taskId)
   if (headSha) assert.equal(head, headSha)
+  const taskTurn = await taskTurnOf(taskId, turn)
+  assert.deepEqual(
+    [taskTurn.status, taskTurn.headSha, taskTurn.failureReason],
+    ['completed', head, null],
+  )
   const text = await git('--git-dir', join(work, 'remote.git'), 'show', `${head}:index.php`)
   assert(text.endsWith(`turn ${turn}\n`), 'The agent change is published')
   return assignment
@@ -393,6 +500,19 @@ async function expectCompleted(taskId, turn, headSha) {
 
 async function homeFiles(reference) {
   const loaded = await snapshots.load(reference)
+  if (realCli) {
+    // The persisted snapshot and journal may carry neither the old nor the new turn keys.
+    const bytes = [loaded.archives.home, loaded.archives.untracked].map((part) =>
+      zstdDecompressSync(part),
+    )
+    bytes.push(Buffer.from(loaded.archives.patch), Buffer.from(JSON.stringify(loaded.manifest)))
+    for (const values of turnCredentials.values())
+      for (const secret of Object.values(values))
+        assert(
+          bytes.every((part) => !part.includes(secret)),
+          'Snapshot contains a turn credential',
+        )
+  }
   const names = []
   const reader = extract()
   const listed = (async () => {
@@ -420,13 +540,33 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
     llm: {
       baseUrl: 'http://sandbox-gw.invalid',
       apiKey: `verify-llm-${randomBytes(16).toString('hex')}`,
-      model: 'synthetic',
+      model: kimi ? 'k3-256k' : codex ? 'gpt-6-sol' : 'synthetic',
+      ...(realCli ? { reasoningEffort: turn === 1 ? firstEffort : 'high' } : {}),
     },
     mcp: {
       url: 'http://sandbox-gw.invalid/mcp',
       token: `verify-mcp-${randomBytes(16).toString('hex')}`,
     },
-    instructions: 'Synthetic runner verification',
+    instructions: `Synthetic runner verification\nRADITI_PLATFORM_TURN_${turn}`,
+  }
+  const prompt = kimi
+    ? turn === 1
+      ? '-'
+      : `Synthetic Kimi continuation. ${'я'.repeat(99_900)}`
+    : codex
+      ? `Synthetic Codex supervisor turn ${turn}.`
+      : JSON.stringify({ gated })
+  if (realCli) {
+    context.llm.baseUrl = kimi ? 'http://sandbox-gw:8080/kimi/v1' : 'http://sandbox-gw:8080/codex'
+    context.mcp.url = 'http://sandbox-gw:8080/mcp'
+    fixture.addTurn({
+      turn,
+      llmKey: context.llm.apiKey,
+      mcpKey: context.mcp.token,
+      prompt,
+      effort: context.llm.reasoningEffort,
+      model: context.llm.model,
+    })
   }
   turnCredentials.set(`${taskId}:${sessionId}:${turn}`, {
     llmApiKey: context.llm.apiKey,
@@ -437,7 +577,7 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
       image: images.sandbox,
       labels: { workspaceId: site.workspaceId, siteId: site.id, taskId, sessionId, turn },
       runtime: 'runsc',
-      resources: { cpu: 1, memoryMiB: 512, pids: 128 },
+      resources: { cpu: 1, memoryMiB: realCli ? 1024 : 512, pids: 128 },
       user: { uid: 10001, gid: 10001 },
       env: {},
       secrets: [],
@@ -445,7 +585,7 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
       hardTimeoutMs: 10 * 60_000,
     },
     context,
-    input: { prompt: JSON.stringify({ gated }), attachments: [] },
+    input: { prompt, attachments: [] },
     driverVersion,
     workspace: {
       repo: { provider: 'gitea', owner: 'verify', name: 'site' },
@@ -458,13 +598,13 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
   }
 }
 
-const reference = ({ sessionId }, turn) => ({
+const reference = ({ sessionId }, turn, manifest) => ({
   workspaceId: site.workspaceId,
   sessionId,
   turn,
   image: images.sandbox,
-  driver: { id: 'codex', version: driverVersion },
-  home,
+  driver: { id: driverId, version: driverVersion },
+  home: manifest?.home ?? home,
 })
 
 // --- Main -----------------------------------------------------------------------------------------
@@ -497,6 +637,7 @@ const firewall = async () =>
 const helpers = async () =>
   lines(await docker('ps', '--all', '--quiet', '--filter', 'label=io.raditi.gateway.role=firewall'))
 let keyCreated = false
+let driverCreated = false
 let rulesBefore = []
 let helpersBefore
 let succeeded = false
@@ -521,6 +662,12 @@ try {
     await docker('image', 'inspect', '--format', '{{.Id}}', image)
   rulesBefore = await firewall()
   helpersBefore = await helpers()
+  if (realCli) {
+    fixture = await (kimi ? startKimiRunnerFixture() : startCodexRunnerFixture())
+    gatewayConfig.llmUpstream = `http://${hostAddress}:${fixture.port}`
+    gatewayConfig.mcpUpstream = gatewayConfig.llmUpstream
+    assert.equal((await command(gitleaks, ['version'])).stdout.trim(), '8.30.1')
+  }
 
   work = await mkdtemp(join(tmpdir(), 'raditi-runner-verify-'))
   await mkdir(join(work, 'tmp'))
@@ -531,6 +678,27 @@ try {
   await git('init', '--quiet', '--bare', '--initial-branch=main', remote)
   await git('init', '--quiet', '--initial-branch=main', seed)
   await writeFile(join(seed, 'index.php'), "<?php echo 'hello';\n")
+  if (kimi) {
+    // Print mode must refuse untrusted project MCP even when it shadows the platform server.
+    await mkdir(join(seed, '.kimi-code'))
+    const hostileMcp = JSON.stringify({
+      mcpServers: {
+        raditi: { transport: 'http', url: 'http://sandbox-gw:8080/mcp/disabled/project' },
+      },
+    })
+    await writeFile(join(seed, '.mcp.json'), hostileMcp)
+    await writeFile(join(seed, '.kimi-code/mcp.json'), hostileMcp)
+    await mkdir(join(seed, '.kimi-code/agents'))
+    for (const name of ['agent', 'raditi'])
+      await writeFile(
+        join(seed, `.kimi-code/agents/${name}.md`),
+        `---\nname: ${name}\ndescription: Synthetic hostile agent\noverride: true\ntools: [Bash]\n---\nHOSTILE_PROJECT_AGENT\n`,
+      )
+    await writeFile(
+      join(seed, '.kimi-code/config.toml'),
+      'auto_session_title = true\n[models.hostile]\nmodel = "foreign-model"\nprovider = "hostile"\n',
+    )
+  }
   await git('-C', seed, 'add', '.')
   await git(
     '-C',
@@ -547,6 +715,13 @@ try {
   await git('-C', seed, 'push', '--quiet', remote, 'HEAD:main')
   const mainSha = (await git('-C', seed, 'rev-parse', 'HEAD')).trim()
 
+  // A TaskTurn names its driver. A seeded database has the row; a migrated one gets it here.
+  if (!(await db.agentDriver.findUnique({ where: { id: driverId } }))) {
+    await db.agentDriver.create({
+      data: { id: driverId, image: images.sandbox, capabilities: {}, enabled: false },
+    })
+    driverCreated = true
+  }
   const workspace = await db.workspace.create({ data: { name: 'Synthetic runner verification' } })
   site = await db.site.create({
     data: {
@@ -601,7 +776,7 @@ try {
       request: turnRequest(task, {
         turn: 2,
         baseSha: first.manifest.git.headSha,
-        previous: reference(task, 1),
+        previous: reference(task, 1, first.manifest),
         gated: false,
       }),
     })
@@ -609,12 +784,94 @@ try {
     const entries = await journal(task.taskId)
     assert(entries.some((entry) => entry.phase === 'restored' && entry.nativeSessionId))
     // The agent of turn 2 exits non-zero unless turn 1's session and change were restored.
-    const files = await homeFiles(reference(task, 2))
-    for (const name of ['verify/turn-1.jsonl', 'verify/turn-2.jsonl'])
-      assert(
-        files.some((file) => file.endsWith(name)),
-        `turn 2 home keeps ${name}`,
+    const files = await homeFiles(reference(task, 2, second.manifest))
+    if (realCli) {
+      assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
+      fixture.assertComplete()
+      const nativeId = first.manifest.driver.nativeSessionId
+      assert.match(nativeId, kimi ? /^session_[a-f0-9-]{36}$/ : /^[a-f0-9-]{36}$/)
+      assert.equal(
+        second.manifest.driver.nativeSessionId,
+        nativeId,
+        'The same native session resumes',
       )
+      if (kimi) {
+        const workDirKey = `wd_repo_${createHash('sha256').update('/workspace/repo').digest('hex').slice(0, 12)}`
+        const sessionPath = `sessions/${workDirKey}/${nativeId}`
+        assert.deepEqual(second.manifest.home, {
+          root: '/agent-home/kimi',
+          include: ['session_index.jsonl', `${sessionPath}/state.json`, `${sessionPath}/agents`],
+          exclude: [],
+        })
+        assert(files.includes('session_index.jsonl'), 'Kimi session index was captured')
+        assert(
+          files.some((file) => file.endsWith(`/${nativeId}/state.json`)),
+          'Kimi native state was restored',
+        )
+        assert(
+          files.every((file) => file === 'session_index.jsonl' || file.startsWith('sessions/')),
+          'Only native Kimi session files are captured',
+        )
+        assert(
+          files
+            .filter((file) => file.startsWith('sessions/'))
+            .every((file) => file.includes(nativeId)),
+          'No unrelated Kimi session was captured',
+        )
+      } else {
+        assert(
+          files.some((file) => file.endsWith(`${nativeId}.jsonl`)),
+          'The Codex rollout is restored',
+        )
+        assert(
+          files.every((file) => file === 'sessions' || file.startsWith('sessions/')),
+          'Only the driver session allowlist is captured',
+        )
+      }
+      const firstAssignment = await assignmentOf(task.taskId, 1)
+      const secondAssignment = await assignmentOf(task.taskId, 2)
+      assert.notEqual(
+        firstAssignment.containerId,
+        secondAssignment.containerId,
+        'Resume must use a new container',
+      )
+      assert.equal(firstAssignment.plan.context.llm.reasoningEffort, firstEffort)
+      assert.equal(secondAssignment.plan.context.llm.reasoningEffort, 'high')
+      for (const turn of [1, 2]) {
+        const turnEntries = entries.filter((entry) => entry.turn === turn)
+        const phaseNames = turnEntries.map((entry) => entry.phase)
+        for (const phase of [
+          'running',
+          'output',
+          'quiesced',
+          'checkpointed',
+          'destroyed',
+          'publishing',
+          'completed',
+        ])
+          assert(phaseNames.includes(phase), `Turn ${turn} has no ${phase} evidence`)
+        assert(phaseNames.indexOf('destroyed') < phaseNames.indexOf('publishing'))
+        const events = turnEntries.flatMap((entry) => entry.events ?? [])
+        for (const type of kimi
+          ? ['started', 'command', 'message']
+          : ['started', 'command', 'usage', 'completed'])
+          assert(
+            events.some((event) => event.type === type),
+            `${driverName} ${type} was not journaled`,
+          )
+      }
+      const persisted = JSON.stringify([entries, firstAssignment, secondAssignment])
+      for (const values of turnCredentials.values())
+        for (const secret of Object.values(values))
+          assert(!persisted.includes(secret), 'Journal or assignment contains a turn credential')
+      await homeFiles(reference(task, 1, first.manifest))
+    } else {
+      for (const name of ['verify/turn-1.jsonl', 'verify/turn-2.jsonl'])
+        assert(
+          files.some((file) => file.endsWith(name)),
+          `turn 2 home keeps ${name}`,
+        )
+    }
     const tree = await git(
       '--git-dir',
       remote,
@@ -622,286 +879,390 @@ try {
       '--name-only',
       second.manifest.git.headSha,
     )
-    assert.deepEqual(lines(tree).sort(), ['index.php', 'turn-1.txt', 'turn-2.txt'])
-    verified.push(
-      `full turns on runsc with restore of the previous snapshot, runner-sealed home through presigned PUT, core publication (${Math.round((Date.now() - started) / 1000)} s)`,
-    )
-  }
-
-  // 2. kill -9 of core during the output: a new core's recovery resumes the agent.
-  {
-    const started = Date.now()
-    const task = await createTask()
-    sessions.push(task.sessionId)
-    const run = core.request('run', {
-      request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
-    })
-    run.catch(() => {})
-    const { epoch, assignment } = await untilOutput(task.taskId)
-    await core.kill()
-    const left = await journaledAgent(task.taskId)
-    assert(await running(assignment.containerId), 'The agent outlives core')
-    assert(await running(runner), 'The runner outlives core')
-    core = await startCore()
-    const resumed = await waitFor(async () => {
-      const entries = await journal(task.taskId)
-      return entries.find((entry) => entry.phase === 'resumed' && entry.fence.epoch > epoch)
-    }, 'recovery to resume the agent')
-    assert.equal(resumed.recoveredFromEpoch, epoch)
-    // The same exec, attached again from the journal's cursor.
-    assert.deepEqual([resumed.execId, resumed.cursor], [left.execId, left.cursor])
-    const current = await assignmentOf(task.taskId)
-    assert.equal(current.runnerSession, assignment.runnerSession, 'The same runner session')
-    // A stale epoch is refused with the fence to move to; another session of the runner is retired.
-    const stale = await report({
-      runnerSession: current.runnerSession,
-      assignmentId: current.id,
-      epoch,
-    })
-    assert.equal(stale.status, 409)
-    assert.equal(stale.body.error, 'FENCE_SUPERSEDED')
-    assert.equal(stale.body.fence.epoch, resumed.fence.epoch)
-    const foreign = await report({
-      runnerSession: randomUUID(),
-      assignmentId: current.id,
-      epoch: resumed.fence.epoch,
-    })
-    assert.deepEqual([foreign.status, foreign.body], [409, { error: 'SESSION_RETIRED' }])
-    await openGate(assignment.containerId)
-    await waitFor(async () => (await assignmentOf(task.taskId)).outcome, 'the resumed turn to end')
-    await expectCompleted(task.taskId, 1)
-    const entries = await journal(task.taskId)
-    expectEvents(entries)
-    assert.deepEqual(phases(entries, resumed.fence.epoch).slice(-6), [
-      'quiesced',
-      'checkpointing',
-      'checkpointed',
-      'destroyed',
-      'publishing',
-      'completed',
-    ])
-    assert(
-      entries
-        .filter((entry) => entry.fence.epoch === resumed.fence.epoch)
-        .every((entry) => entry.recoveredFromEpoch === epoch),
-    )
-    // Core checks the resumed output with keys from the source; the runner kept its own.
-    assert.equal(core.recovered, 1, 'Core recovered the credentials to check the output')
-    const finished = await report({
-      runnerSession: current.runnerSession,
-      assignmentId: current.id,
-      epoch: resumed.fence.epoch,
-    })
-    assert.deepEqual([finished.status, finished.body], [409, { error: 'LEASE_LOST' }])
-    verified.push(
-      `kill -9 of core during output: resumed from the journal cursor under epoch ${resumed.fence.epoch}, every event once, published; stale epoch → 409 FENCE_SUPERSEDED, another session → 409 SESSION_RETIRED, a finished turn → 409 LEASE_LOST (${Math.round((Date.now() - started) / 1000)} s)`,
-    )
-  }
-
-  // 3. kill -9 of the runner during the output: core gives the turn up, recovery removes it.
-  {
-    const started = Date.now()
-    const task = await createTask()
-    sessions.push(task.sessionId)
-    const run = core.request('run', {
-      request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
-    })
-    run.catch(() => {})
-    const { epoch, assignment } = await untilOutput(task.taskId)
-    await killRunner(runner)
-    assert(await running(assignment.containerId), 'The agent outlives the runner')
-    runner = await startRunner()
-    await assert.rejects(run, { code: 'RUNNER_UNAVAILABLE' })
-    await waitFor(async () => (await assignmentOf(task.taskId)).outcome, 'recovery to end the turn')
-    const current = await assignmentOf(task.taskId)
-    assert.equal(current.outcome, 'lost')
-    assert.notEqual(current.runnerSession, assignment.runnerSession)
-    const entries = await journal(task.taskId)
-    // No confirmed removal: the owner held the site; recovery removed the container, then freed it.
-    assert.equal(entries.find((entry) => entry.phase === 'recovery')?.reason, 'destroy_failed')
-    const last = entries.at(-1)
     assert.deepEqual(
-      [last.phase, last.reason, last.fence.epoch > epoch, last.recoveredFromEpoch],
-      ['failed', 'run_failed', true, epoch],
-    )
-    assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
-    assert.equal((await leaseOf()).holderTaskId, null)
-    assert.equal(await branchHead(task.taskId), '', 'Nothing of the lost turn is published')
-    const zombie = await report({
-      runnerSession: assignment.runnerSession,
-      assignmentId: current.id,
-      epoch: current.leaseEpoch,
-    })
-    assert.deepEqual([zombie.status, zombie.body], [409, { error: 'SESSION_RETIRED' }])
-    verified.push(
-      `kill -9 of the runner during output: the turn lost without publication, its container removed through the restarted runner, the site freed only after that; the old session → 409 SESSION_RETIRED (${Math.round((Date.now() - started) / 1000)} s)`,
-    )
-  }
-
-  // 4. kill -9 of core and of the runner: recovery resumes on the new runner session with the
-  //    credentials the stand-in for P3 kept.
-  {
-    const started = Date.now()
-    const task = await createTask()
-    sessions.push(task.sessionId)
-    const run = core.request('run', {
-      request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
-    })
-    run.catch(() => {})
-    const { epoch, assignment } = await untilOutput(task.taskId)
-    await core.kill()
-    await killRunner(runner)
-    const left = await journaledAgent(task.taskId)
-    assert(await running(assignment.containerId), 'The agent outlives core and the runner')
-    runner = await startRunner()
-    core = await startCore()
-    const resumed = await waitFor(async () => {
-      const entries = await journal(task.taskId)
-      return entries.find((entry) => entry.phase === 'resumed' && entry.fence.epoch > epoch)
-    }, 'recovery to resume the agent on the new runner session')
-    assert.equal(resumed.recoveredFromEpoch, epoch)
-    // The same exec, attached again from the journal's cursor.
-    assert.deepEqual([resumed.execId, resumed.cursor], [left.execId, left.cursor])
-    const current = await assignmentOf(task.taskId)
-    assert.notEqual(current.runnerSession, assignment.runnerSession)
-    assert.equal(core.recovered, 1, 'The credentials came from the source, not the runner')
-    const zombie = await report({
-      runnerSession: assignment.runnerSession,
-      assignmentId: current.id,
-      epoch,
-    })
-    assert.deepEqual([zombie.status, zombie.body], [409, { error: 'SESSION_RETIRED' }])
-    const stale = await report({
-      runnerSession: current.runnerSession,
-      assignmentId: current.id,
-      epoch,
-    })
-    assert.deepEqual([stale.status, stale.body.error], [409, 'FENCE_SUPERSEDED'])
-    await openGate(assignment.containerId)
-    await waitFor(async () => (await assignmentOf(task.taskId)).outcome, 'the resumed turn to end')
-    await expectCompleted(task.taskId, 1)
-    expectEvents(await journal(task.taskId))
-    verified.push(
-      `kill -9 of core and the runner during output: resumed on the new runner session with recovered credentials, the old session → 409 SESSION_RETIRED, published (${Math.round((Date.now() - started) / 1000)} s)`,
-    )
-  }
-
-  // 5. Cancelled while the runner creates the container: no proof that none is left, so the
-  //    site stays with the turn (vacating) until the late container is removed.
-  {
-    const started = Date.now()
-    const task = await createTask()
-    sessions.push(task.sessionId)
-    const run = core.request('run', {
-      request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
-    })
-    run.catch(() => {})
-    // Claimed and delivered in one poll; creating a gateway and a sandbox takes seconds.
-    await waitFor(
-      async () => (await assignmentOf(task.taskId))?.runnerSession,
-      'the runner to take the prepare',
-    )
-    assert(!(await journal(task.taskId)).some((entry) => entry.phase === 'created'))
-    await core.request('cancel', { taskId: task.taskId })
-    await assert.rejects(run, { code: 'TURN_INTERRUPTED', message: 'cancelled' })
-    let seen = false
-    await waitFor(async () => {
-      // The lease first: a container that exists after the site was freed breaks the rule.
-      const lease = await leaseOf()
-      const containers = await turnContainers('io.raditi.sandbox.taskId', task.taskId)
-      if (containers.length > 0) {
-        seen = true
-        assert.equal(lease.holderTaskId, task.taskId, 'The site stays with the turn meanwhile')
-      }
-      // Freed only after the proof: `failed` follows the removal and precedes the release.
-      if (lease.holderTaskId !== task.taskId)
-        assert.equal((await journal(task.taskId)).at(-1).phase, 'failed')
-      return containers.length === 0 && (await assignmentOf(task.taskId)).outcome
-    }, 'the cancelled turn to end')
-    const entries = await journal(task.taskId)
-    assert.deepEqual(
-      entries.map((entry) => [entry.phase, entry.reason, Boolean(entry.containerId)]),
+      lines(tree).sort(),
       [
-        ['leased', undefined, false],
-        ['vacating', 'cancelled', false],
-        ['vacating', 'cancelled', true],
-        ['failed', 'cancelled', false],
-      ],
+        ...(kimi ? ['.kimi-code', '.mcp.json'] : []),
+        'index.php',
+        'turn-1.txt',
+        'turn-2.txt',
+      ].sort(),
     )
-    assert.equal((await assignmentOf(task.taskId)).outcome, 'failed')
-    assert.equal((await leaseOf()).holderTaskId, null)
-    assert.equal(await branchHead(task.taskId), '', 'Nothing of the cancelled turn is published')
     verified.push(
-      `cancel while the runner creates the container: vacating without a release, the late container removed through the runner, then the site freed${seen ? ' (held while the container was seen)' : ''} (${Math.round((Date.now() - started) / 1000)} s)`,
+      `${realCli ? `real ${driverName} exec/resume, rotated keys and ${firstEffort} → high; ` : ''}full turns on runsc with restore of the previous snapshot, runner-sealed home through presigned PUT, core publication (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 
-  // 6. core killed -9 right after the checkpoint is journaled, the runner killed too and kept
-  //    away: recovery holds the site and publishes nothing until the runner is back and the
-  //    turn's container is removed through it.
-  {
-    const started = Date.now()
-    const task = await createTask()
-    sessions.push(task.sessionId)
-    await core.request('crashAfter', { taskId: task.taskId, phase: 'checkpointed' })
-    const run = core.request('run', {
-      request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: false }),
-    })
-    run.catch(() => {})
-    await core.exited
-    await killRunner(runner)
-    const left = await journal(task.taskId)
-    assert.equal(left.at(-1).phase, 'checkpointed')
-    const { epoch } = left.at(-1).fence
-    const { containerId } = await assignmentOf(task.taskId)
-    const exists = async () =>
-      (await dockerCommand(['inspect', '--format', '{{.Id}}', containerId], { allowFailure: true }))
-        .code === 0
-    assert(await exists(), 'The container outlives core and the runner')
-    core = await startCore()
-    const awaiting = (entries) =>
-      entries.filter((entry) => entry.phase === 'recovery' && entry.reason === 'awaiting_runner')
-    await waitFor(
-      async () => awaiting(await journal(task.taskId)).length > 0,
-      'recovery to wait for the runner',
-    )
-    // Three more passes with the runner away change nothing.
-    await new Promise((done) => setTimeout(done, 16_000))
-    const waiting = await journal(task.taskId)
-    assert.equal(awaiting(waiting).length, 1, 'The wait is journaled once')
-    assert(waiting.every((entry) => entry.fence.epoch === epoch))
-    const held = await leaseOf()
-    assert.deepEqual(
-      [held.holderTaskId, held.epoch, held.heldForOperator],
-      [task.taskId, epoch, true],
-    )
-    const open = await assignmentOf(task.taskId)
-    assert.deepEqual([open.outcome, open.recoveryAttempts], [null, 0])
-    assert.equal(await branchHead(task.taskId), '', 'Nothing is published while the runner is away')
-    assert(await exists(), 'The container waits for the runner')
-    runner = await startRunner()
-    await waitFor(async () => (await assignmentOf(task.taskId)).outcome, 'the checkpoint published')
-    assert(!(await exists()), 'The container is removed')
-    const done = await expectCompleted(task.taskId, 1)
-    assert.equal(done.recoveryAttempts, 1)
-    const entries = await journal(task.taskId)
-    const recovered = entries.at(-1).fence.epoch
-    assert.deepEqual(
-      entries
-        .filter((entry) => entry.fence.epoch > epoch)
-        .map((entry) => [entry.phase, entry.containerId ?? null, entry.recoveredFromEpoch]),
-      [
-        ['checkpointed', null, epoch],
-        ['destroyed', containerId, epoch],
-        ['publishing', null, epoch],
-        ['publication_recovered', null, epoch],
-      ],
-    )
-    verified.push(
-      `kill -9 of core after the checkpoint with the runner away: the site held, one recovery{awaiting_runner}, no attempt and nothing published over four passes; the returned runner removed the container by its id, then the checkpoint was published under epoch ${recovered} (${Math.round((Date.now() - started) / 1000)} s)`,
-    )
-  }
+  if (!realCli) {
+    // 2. kill -9 of core during the output: a new core's recovery resumes the agent.
+    {
+      const started = Date.now()
+      const task = await createTask()
+      sessions.push(task.sessionId)
+      const run = core.request('run', {
+        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+      })
+      run.catch(() => {})
+      const { epoch, assignment } = await untilOutput(task.taskId)
+      await core.kill()
+      const left = await journaledAgent(task.taskId)
+      assert(await running(assignment.containerId), 'The agent outlives core')
+      assert(await running(runner), 'The runner outlives core')
+      core = await startCore()
+      const resumed = await waitFor(async () => {
+        const entries = await journal(task.taskId)
+        return entries.find((entry) => entry.phase === 'resumed' && entry.fence.epoch > epoch)
+      }, 'recovery to resume the agent')
+      assert.equal(resumed.recoveredFromEpoch, epoch)
+      // The same exec, attached again from the journal's cursor.
+      assert.deepEqual([resumed.execId, resumed.cursor], [left.execId, left.cursor])
+      const current = await assignmentOf(task.taskId)
+      assert.equal(current.runnerSession, assignment.runnerSession, 'The same runner session')
+      // A stale epoch is refused with the fence to move to; another session of the runner is retired.
+      const stale = await report({
+        runnerSession: current.runnerSession,
+        assignmentId: current.id,
+        epoch,
+      })
+      assert.equal(stale.status, 409)
+      assert.equal(stale.body.error, 'FENCE_SUPERSEDED')
+      assert.equal(stale.body.fence.epoch, resumed.fence.epoch)
+      const foreign = await report({
+        runnerSession: randomUUID(),
+        assignmentId: current.id,
+        epoch: resumed.fence.epoch,
+      })
+      assert.deepEqual([foreign.status, foreign.body], [409, { error: 'SESSION_RETIRED' }])
+      await openGate(assignment.containerId)
+      await waitFor(
+        async () => (await assignmentOf(task.taskId)).outcome,
+        'the resumed turn to end',
+      )
+      await expectCompleted(task.taskId, 1)
+      const entries = await journal(task.taskId)
+      expectEvents(entries)
+      assert.deepEqual(phases(entries, resumed.fence.epoch).slice(-6), [
+        'quiesced',
+        'checkpointing',
+        'checkpointed',
+        'destroyed',
+        'publishing',
+        'completed',
+      ])
+      assert(
+        entries
+          .filter((entry) => entry.fence.epoch === resumed.fence.epoch)
+          .every((entry) => entry.recoveredFromEpoch === epoch),
+      )
+      // Core checks the resumed output with keys from the source; the runner kept its own.
+      assert.equal(core.recovered, 1, 'Core recovered the credentials to check the output')
+      const finished = await report({
+        runnerSession: current.runnerSession,
+        assignmentId: current.id,
+        epoch: resumed.fence.epoch,
+      })
+      assert.deepEqual([finished.status, finished.body], [409, { error: 'LEASE_LOST' }])
+      verified.push(
+        `kill -9 of core during output: resumed from the journal cursor under epoch ${resumed.fence.epoch}, every event once, published; stale epoch → 409 FENCE_SUPERSEDED, another session → 409 SESSION_RETIRED, a finished turn → 409 LEASE_LOST (${Math.round((Date.now() - started) / 1000)} s)`,
+      )
+    }
 
+    // 3. kill -9 of the runner during the output: core gives the turn up, recovery removes it.
+    {
+      const started = Date.now()
+      const task = await createTask()
+      sessions.push(task.sessionId)
+      const run = core.request('run', {
+        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+      })
+      run.catch(() => {})
+      const { epoch, assignment } = await untilOutput(task.taskId)
+      await killRunner(runner)
+      assert(await running(assignment.containerId), 'The agent outlives the runner')
+      runner = await startRunner()
+      await assert.rejects(run, { code: 'RUNNER_UNAVAILABLE' })
+      await waitFor(
+        async () => (await assignmentOf(task.taskId)).outcome,
+        'recovery to end the turn',
+      )
+      const current = await assignmentOf(task.taskId)
+      assert.equal(current.outcome, 'lost')
+      assert.notEqual(current.runnerSession, assignment.runnerSession)
+      const entries = await journal(task.taskId)
+      // No confirmed removal: the owner held the site; recovery removed the container, then freed it.
+      assert.equal(entries.find((entry) => entry.phase === 'recovery')?.reason, 'destroy_failed')
+      const last = entries.at(-1)
+      assert.deepEqual(
+        [last.phase, last.reason, last.fence.epoch > epoch, last.recoveredFromEpoch],
+        ['failed', 'run_failed', true, epoch],
+      )
+      assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
+      assert.equal((await leaseOf()).holderTaskId, null)
+      assert.equal(await branchHead(task.taskId), '', 'Nothing of the lost turn is published')
+      assert.equal((await taskTurnOf(task.taskId)).status, 'lost')
+      const zombie = await report({
+        runnerSession: assignment.runnerSession,
+        assignmentId: current.id,
+        epoch: current.leaseEpoch,
+      })
+      assert.deepEqual([zombie.status, zombie.body], [409, { error: 'SESSION_RETIRED' }])
+      verified.push(
+        `kill -9 of the runner during output: the turn lost without publication, its container removed through the restarted runner, the site freed only after that; the old session → 409 SESSION_RETIRED (${Math.round((Date.now() - started) / 1000)} s)`,
+      )
+    }
+
+    // 4. kill -9 of core and of the runner: recovery resumes on the new runner session with the
+    //    credentials the stand-in for P3 kept.
+    {
+      const started = Date.now()
+      const task = await createTask()
+      sessions.push(task.sessionId)
+      const run = core.request('run', {
+        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+      })
+      run.catch(() => {})
+      const { epoch, assignment } = await untilOutput(task.taskId)
+      await core.kill()
+      await killRunner(runner)
+      const left = await journaledAgent(task.taskId)
+      assert(await running(assignment.containerId), 'The agent outlives core and the runner')
+      runner = await startRunner()
+      core = await startCore()
+      const resumed = await waitFor(async () => {
+        const entries = await journal(task.taskId)
+        return entries.find((entry) => entry.phase === 'resumed' && entry.fence.epoch > epoch)
+      }, 'recovery to resume the agent on the new runner session')
+      assert.equal(resumed.recoveredFromEpoch, epoch)
+      // The same exec, attached again from the journal's cursor.
+      assert.deepEqual([resumed.execId, resumed.cursor], [left.execId, left.cursor])
+      const current = await assignmentOf(task.taskId)
+      assert.notEqual(current.runnerSession, assignment.runnerSession)
+      assert.equal(core.recovered, 1, 'The credentials came from the source, not the runner')
+      const zombie = await report({
+        runnerSession: assignment.runnerSession,
+        assignmentId: current.id,
+        epoch,
+      })
+      assert.deepEqual([zombie.status, zombie.body], [409, { error: 'SESSION_RETIRED' }])
+      const stale = await report({
+        runnerSession: current.runnerSession,
+        assignmentId: current.id,
+        epoch,
+      })
+      assert.deepEqual([stale.status, stale.body.error], [409, 'FENCE_SUPERSEDED'])
+      await openGate(assignment.containerId)
+      await waitFor(
+        async () => (await assignmentOf(task.taskId)).outcome,
+        'the resumed turn to end',
+      )
+      await expectCompleted(task.taskId, 1)
+      expectEvents(await journal(task.taskId))
+      verified.push(
+        `kill -9 of core and the runner during output: resumed on the new runner session with recovered credentials, the old session → 409 SESSION_RETIRED, published (${Math.round((Date.now() - started) / 1000)} s)`,
+      )
+    }
+
+    // 5. Cancelled. A runner is bound to a turn only when its prepare is handed out, so a turn
+    //    given up before that — its runner slot reserved, its key being issued — was never
+    //    handed out: the site is free at once (spec §8, proof 1). Cancelled when a poll has just
+    //    taken the prepare, there is no proof that no container is left: the site stays with
+    //    the turn (vacating) until the late container is removed.
+    {
+      const started = Date.now()
+      const early = await createTask()
+      sessions.push(early.sessionId)
+      await core.request('cancelAt', { taskId: early.taskId, point: 'issue' })
+      // Resolves once the supervisor settled the turn: nothing is left to wait for.
+      await assert.rejects(
+        core.request('run', {
+          request: turnRequest(early, { turn: 1, baseSha: mainSha, gated: true }),
+        }),
+        { code: 'TURN_INTERRUPTED', message: 'cancelled' },
+      )
+      assert.deepEqual(
+        (await journal(early.taskId)).map((entry) => [entry.phase, entry.reason]),
+        [
+          ['leased', undefined],
+          ['failed', 'cancelled'],
+        ],
+      )
+      const unclaimed = await assignmentOf(early.taskId)
+      assert.deepEqual(
+        [unclaimed.outcome, unclaimed.runnerId, unclaimed.runnerSession, unclaimed.containerId],
+        ['failed', null, null, null],
+      )
+      assert.equal((await leaseOf()).holderTaskId, null, 'The site is free at once')
+      assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', early.taskId), [])
+      assert.equal((await taskTurnOf(early.taskId)).status, 'cancelled')
+
+      const task = await createTask()
+      sessions.push(task.sessionId)
+      // The reserved slot was given back with the first turn: this one gets it.
+      await core.request('cancelAt', { taskId: task.taskId, point: 'dispatch' })
+      await assert.rejects(
+        core.request('run', {
+          request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+        }),
+        { code: 'TURN_INTERRUPTED', message: 'cancelled' },
+      )
+      // The prepare went out: the turn is its runner's. Creating a gateway and a sandbox takes
+      // the runner seconds, and the site stays with the turn meanwhile.
+      assert.equal((await assignmentOf(task.taskId)).runnerId, runnerId)
+      let seen = false
+      await waitFor(async () => {
+        // The lease first: a container that exists after the site was freed breaks the rule.
+        const lease = await leaseOf()
+        const containers = await turnContainers('io.raditi.sandbox.taskId', task.taskId)
+        if (containers.length > 0) {
+          seen = true
+          assert.equal(lease.holderTaskId, task.taskId, 'The site stays with the turn meanwhile')
+        }
+        // Freed only after the proof: `failed` follows the removal and precedes the release.
+        if (lease.holderTaskId !== task.taskId)
+          assert.equal((await journal(task.taskId)).at(-1).phase, 'failed')
+        return containers.length === 0 && (await assignmentOf(task.taskId)).outcome
+      }, 'the cancelled turn to end')
+      const entries = await journal(task.taskId)
+      assert.deepEqual(
+        entries.map((entry) => [entry.phase, entry.reason, Boolean(entry.containerId)]),
+        [
+          ['leased', undefined, false],
+          ['vacating', 'cancelled', false],
+          ['vacating', 'cancelled', true],
+          ['failed', 'cancelled', false],
+        ],
+      )
+      assert.equal((await assignmentOf(task.taskId)).outcome, 'failed')
+      assert.equal((await leaseOf()).holderTaskId, null)
+      assert.equal(await branchHead(task.taskId), '', 'Nothing of the cancelled turn is published')
+      assert.equal((await taskTurnOf(task.taskId)).status, 'cancelled')
+      verified.push(
+        `cancel before the prepare went out (a runner slot reserved, the key being issued): leased → failed, no runner bound, the site free at once; cancel when a poll took the prepare: vacating without a release, the late container removed through the runner, then the site freed${seen ? ' (held while the container was seen)' : ''} (${Math.round((Date.now() - started) / 1000)} s)`,
+      )
+    }
+
+    // 6. core killed -9 right after the checkpoint is journaled, the runner killed too and kept
+    //    away: recovery holds the site and publishes nothing until the runner is back and the
+    //    turn's container is removed through it.
+    {
+      const started = Date.now()
+      const task = await createTask()
+      sessions.push(task.sessionId)
+      await core.request('crashAfter', { taskId: task.taskId, phase: 'checkpointed' })
+      const run = core.request('run', {
+        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: false }),
+      })
+      run.catch(() => {})
+      await core.exited
+      await killRunner(runner)
+      const left = await journal(task.taskId)
+      assert.equal(left.at(-1).phase, 'checkpointed')
+      const { epoch } = left.at(-1).fence
+      const { containerId } = await assignmentOf(task.taskId)
+      const exists = async () =>
+        (
+          await dockerCommand(['inspect', '--format', '{{.Id}}', containerId], {
+            allowFailure: true,
+          })
+        ).code === 0
+      assert(await exists(), 'The container outlives core and the runner')
+      core = await startCore()
+      const awaiting = (entries) =>
+        entries.filter((entry) => entry.phase === 'recovery' && entry.reason === 'awaiting_runner')
+      await waitFor(
+        async () => awaiting(await journal(task.taskId)).length > 0,
+        'recovery to wait for the runner',
+      )
+      // Three more passes with the runner away change nothing.
+      await new Promise((done) => setTimeout(done, 16_000))
+      const waiting = await journal(task.taskId)
+      assert.equal(awaiting(waiting).length, 1, 'The wait is journaled once')
+      assert(waiting.every((entry) => entry.fence.epoch === epoch))
+      const held = await leaseOf()
+      assert.deepEqual(
+        [held.holderTaskId, held.epoch, held.heldForOperator],
+        [task.taskId, epoch, true],
+      )
+      const open = await assignmentOf(task.taskId)
+      assert.deepEqual([open.outcome, open.recoveryAttempts], [null, 0])
+      assert.equal(
+        await branchHead(task.taskId),
+        '',
+        'Nothing is published while the runner is away',
+      )
+      assert(await exists(), 'The container waits for the runner')
+      runner = await startRunner()
+      await waitFor(
+        async () => (await assignmentOf(task.taskId)).outcome,
+        'the checkpoint published',
+      )
+      assert(!(await exists()), 'The container is removed')
+      const done = await expectCompleted(task.taskId, 1)
+      assert.equal(done.recoveryAttempts, 1)
+      const entries = await journal(task.taskId)
+      const recovered = entries.at(-1).fence.epoch
+      assert.deepEqual(
+        entries
+          .filter((entry) => entry.fence.epoch > epoch)
+          .map((entry) => [entry.phase, entry.containerId ?? null, entry.recoveredFromEpoch]),
+        [
+          ['checkpointed', null, epoch],
+          ['destroyed', containerId, epoch],
+          ['publishing', null, epoch],
+          ['publication_recovered', null, epoch],
+        ],
+      )
+      verified.push(
+        `kill -9 of core after the checkpoint with the runner away: the site held, one recovery{awaiting_runner}, no attempt and nothing published over four passes; the returned runner removed the container by its id, then the checkpoint was published under epoch ${recovered} (${Math.round((Date.now() - started) / 1000)} s)`,
+      )
+    }
+
+    // 7. core killed -9 while the turn's key is issued: a runner slot is reserved in the dead
+    //    core's memory, nothing binds the turn to the runner and no prepare went out. The next
+    //    core's recovery closes the turn as one no runner took and frees the site at once — the
+    //    turn's own deadline is ten minutes away.
+    {
+      const started = Date.now()
+      const task = await createTask()
+      sessions.push(task.sessionId)
+      await core.request('crashAfter', { taskId: task.taskId, phase: 'issue' })
+      const run = core.request('run', {
+        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: false }),
+      })
+      run.catch(() => {})
+      await core.exited
+      const left = await assignmentOf(task.taskId)
+      assert.deepEqual([left.outcome, left.runnerId, left.containerId], [null, null, null])
+      assert.equal((await leaseOf()).holderTaskId, task.taskId)
+      assert.deepEqual(phases(await journal(task.taskId), left.leaseEpoch), ['leased'])
+      core = await startCore()
+      await waitFor(
+        async () => (await assignmentOf(task.taskId)).outcome,
+        'recovery to close the turn no runner took',
+        30_000,
+      )
+      const closed = await assignmentOf(task.taskId)
+      assert.deepEqual(
+        [closed.outcome, closed.runnerId, closed.recoveryAttempts],
+        ['lost', null, 0],
+      )
+      const last = (await journal(task.taskId)).at(-1)
+      assert.deepEqual([last.phase, last.reason, last.outcome], ['failed', 'run_failed', 'lost'])
+      await waitFor(
+        async () => (await leaseOf()).holderTaskId === null,
+        'the site to be freed',
+        10_000,
+      )
+      assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
+      assert.equal(await branchHead(task.taskId), '', 'Nothing of the lost turn is published')
+      assert.equal((await taskTurnOf(task.taskId)).status, 'lost')
+      // The runner outlived core and takes the next turn from the new one: its slot was not lost.
+      await runnerSession(core)
+      verified.push(
+        `kill -9 of core before the prepare went out (a runner slot reserved): the turn closed as lost with no runner bound, the site freed by the next core's first pass, ${Math.round((Date.now() - started) / 1000)} s after the kill instead of the turn's deadline`,
+      )
+    }
+  }
   // Nothing of the turns is left in the VM: containers, gateway networks, host firewall rules.
   assert.deepEqual(await turnContainers('io.raditi.sandbox.siteId', site.id), [])
   assert.deepEqual(await turnContainers('io.raditi.gateway.siteId', site.id), [])
@@ -926,6 +1287,7 @@ try {
 } catch (error) {
   failures.push(error)
 } finally {
+  cleaning = true
   const cleanup = []
   const settle = async (what, action) => {
     try {
@@ -937,8 +1299,18 @@ try {
   for (const core of cores)
     if (core.child.exitCode === null && core.child.signalCode === null)
       await settle('core', () => core.kill())
+  if (fixture) await settle('model and MCP fixture', () => fixture.close())
   for (const name of runners)
     await settle('runner', async () => {
+      const owned = await dockerCommand(
+        ['inspect', '--format', '{{index .Config.Labels "io.raditi.verify"}}', name],
+        { allowFailure: true },
+      )
+      if (owned.code !== 0) {
+        assert.match(owned.stderr, /No such (object|container)/)
+        return
+      }
+      assert.equal(owned.stdout.trim(), runId, 'Runner container ownership changed')
       if (work) {
         const logs = await dockerCommand(['logs', name], { allowFailure: true })
         await writeFile(join(work, `${name}.log`), logs.stdout + logs.stderr)
@@ -983,6 +1355,7 @@ try {
       await db.task.deleteMany({ where: { siteId: site.id } })
       await db.site.delete({ where: { id: site.id } })
       await db.workspace.delete({ where: { id: site.workspaceId } })
+      if (driverCreated) await db.agentDriver.delete({ where: { id: driverId } })
     })
     await settle('snapshot objects', async () => {
       for (const sessionId of sessions)
@@ -1006,6 +1379,10 @@ try {
   if (work && succeeded && cleanup.length === 0) await rm(work, { recursive: true, force: true })
   else if (work) console.error(`Logs of core and the runner are kept in ${work}`)
   failures.push(...cleanup)
+  if (realCli) {
+    process.removeListener('SIGINT', interrupt)
+    process.removeListener('SIGTERM', interrupt)
+  }
 }
 if (failures.length) throw new AggregateError(failures, 'Runner verification failed')
 console.log(

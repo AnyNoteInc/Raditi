@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { handleYookassaWebhook, MAX_BODY_BYTES, webhookSenderIp } from './yookassa-webhook'
+import {
+  handleYookassaWebhook,
+  MAX_BODY_BYTES,
+  webhookSenderIp,
+  webhookSenders,
+} from './yookassa-webhook'
 
 // Inside 185.71.76.0/27 from the published ЮKassa ranges.
 const YOOKASSA_IP = '185.71.76.10'
@@ -188,6 +193,93 @@ describe('handleYookassaWebhook', () => {
       expect(res.status).toBe(403)
     }
     expect(onEvent).not.toHaveBeenCalled()
+  })
+})
+
+describe('webhookSenders', () => {
+  const local = { webhookAllowlist: ['127.0.0.1', '::1'] }
+
+  it('trusts only the published ЮKassa ranges in production, whatever the settings say', () => {
+    for (const yookassa of [null, {}, local]) {
+      expect(webhookSenders('production', yookassa)).toEqual({
+        requireAllowlist: true,
+        allowlist: undefined,
+      })
+    }
+  })
+
+  it('replaces the published ranges with YOOKASSA_WEBHOOK_ALLOWLIST outside production', () => {
+    for (const appEnv of ['development', 'test'] as const) {
+      expect(webhookSenders(appEnv, local)).toEqual({
+        requireAllowlist: false,
+        allowlist: ['127.0.0.1', '::1'],
+      })
+      // Payments off, or no list: the published ranges stay.
+      expect(webhookSenders(appEnv, null).allowlist).toBeUndefined()
+      expect(webhookSenders(appEnv, {}).allowlist).toBeUndefined()
+    }
+  })
+})
+
+describe('handleYookassaWebhook with the senders of a local fake', () => {
+  const body = JSON.stringify(notification)
+  const development = webhookSenders('development', { webhookAllowlist: ['127.0.0.1', '::1'] })
+
+  it('accepts a notification from loopback, which the published ranges refuse', async () => {
+    const onEvent = vi.fn()
+    for (const ip of ['127.0.0.1', '::1']) {
+      const res = await handleYookassaWebhook(post(body, ip), { ...development, onEvent })
+      expect(res.status).toBe(200)
+    }
+    expect(onEvent).toHaveBeenCalledTimes(2)
+
+    const published = webhookSenders('development', null)
+    const res = await handleYookassaWebhook(post(body, '127.0.0.1'), { ...published, onEvent })
+    expect(res.status).toBe(403)
+    expect(onEvent).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses every other sender: the list replaces the ЮKassa ranges, it does not add to them', async () => {
+    const onEvent = vi.fn()
+    for (const ip of [YOOKASSA_IP, '127.0.0.2', '203.0.113.7']) {
+      const res = await handleYookassaWebhook(post(body, ip), { ...development, onEvent })
+      expect(res.status).toBe(403)
+    }
+    expect(onEvent).not.toHaveBeenCalled()
+  })
+
+  it('still takes the sender only from an X-Forwarded-For with exactly one address', async () => {
+    const onEvent = vi.fn()
+    // No header (a direct connection from loopback), a list of hops, and a forged first hop.
+    for (const ip of [undefined, '', '127.0.0.1, 127.0.0.1', '127.0.0.1, 203.0.113.7']) {
+      const res = await handleYookassaWebhook(post(body, ip), { ...development, onEvent })
+      expect(res.status).toBe(403)
+    }
+    expect(onEvent).not.toHaveBeenCalled()
+  })
+
+  it('ignores the list in production: loopback is refused, ЮKassa is accepted', async () => {
+    const production = webhookSenders('production', { webhookAllowlist: ['127.0.0.1'] })
+    expect((await handleYookassaWebhook(post(body, '127.0.0.1'), production)).status).toBe(403)
+    expect((await handleYookassaWebhook(post(body, YOOKASSA_IP), production)).status).toBe(200)
+  })
+
+  it('hands over a payment_method.active notification', async () => {
+    const onEvent = vi.fn()
+    const method = {
+      type: 'notification',
+      event: 'payment_method.active',
+      object: { id: 'pm_1', type: 'bank_card', saved: true, status: 'active' },
+    }
+    const res = await handleYookassaWebhook(post(JSON.stringify(method), '127.0.0.1'), {
+      ...development,
+      onEvent,
+    })
+    expect(res.status).toBe(200)
+    expect(onEvent.mock.calls[0]?.[0]).toMatchObject({
+      event: 'payment_method.active',
+      object: { id: 'pm_1', status: 'active' },
+    })
   })
 })
 

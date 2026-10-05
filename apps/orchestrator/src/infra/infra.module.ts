@@ -1,8 +1,13 @@
 import { Global, Module } from '@nestjs/common'
-import { PostgresSiteLeaseStore, PostgresTurnAssignmentStore, type PrismaClient } from '@repo/db'
+import {
+  PostgresSiteLeaseStore,
+  PostgresTaskTurnAssignmentStore,
+  type PrismaClient,
+} from '@repo/db'
 import { HEALTH_CHECK_TIMEOUT_MS } from '@repo/observability'
 import { createS3ObjectStorage } from '@repo/storage'
 import { createVaultSecretStore } from '@repo/vault'
+import { createYookassaClient, type YookassaClient } from '@repo/yookassa'
 
 import type { CoreConfig } from '../config/config.ts'
 import { PrismaLifecycle, RedisLifecycle } from './lifecycle.ts'
@@ -16,6 +21,7 @@ import {
   SECRET_STORE,
   SITE_LEASES,
   TURN_ASSIGNMENTS,
+  YOOKASSA,
 } from './tokens.ts'
 
 /** Adapters of the core role. Nothing connects here: Prisma and S3 connect on first use. */
@@ -52,12 +58,19 @@ import {
     },
     {
       provide: TURN_ASSIGNMENTS,
-      useFactory: (prisma: PrismaClient) => new PostgresTurnAssignmentStore(prisma),
+      useFactory: (prisma: PrismaClient) => new PostgresTaskTurnAssignmentStore(prisma),
       inject: [PRISMA],
+    },
+    {
+      // null while payments are off: whoever charges must check before it starts.
+      provide: YOOKASSA,
+      useFactory: (config: CoreConfig): YookassaClient | null =>
+        config.yookassa ? createYookassaClient(config.yookassa) : null,
+      inject: [CORE_CONFIG],
     },
     PrismaLifecycle,
     RedisLifecycle,
   ],
-  exports: [PRISMA, OBJECT_STORAGE, SECRET_STORE, REDIS, SITE_LEASES, TURN_ASSIGNMENTS],
+  exports: [PRISMA, OBJECT_STORAGE, SECRET_STORE, REDIS, SITE_LEASES, TURN_ASSIGNMENTS, YOOKASSA],
 })
 export class InfraModule {}

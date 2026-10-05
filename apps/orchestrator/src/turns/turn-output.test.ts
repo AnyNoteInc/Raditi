@@ -7,9 +7,22 @@ import {
   type ExecChunk,
   type ExecHandle,
 } from '@repo/domain'
+import { createCodexDriver, createKimiDriver } from '@repo/agent-drivers'
 import { describe, expect, it, vi } from 'vitest'
 
-import { readTurnOutput } from './turn-output.ts'
+import { readTurnOutput, SKIPPED_LINE_MESSAGE } from './turn-output.ts'
+
+const image = `registry.invalid/raditi/sbx@sha256:${'a'.repeat(64)}`
+/** A turn result as a real CLI prints it in its final message. */
+const finalResult = JSON.stringify({
+  summary: 'Готово',
+  change_type: 'none',
+  client_message: 'Готово.',
+  files_changed: [],
+  questions: [],
+  needs_approval: false,
+  risk: 'low',
+})
 
 const driver: Pick<AgentDriver, 'parseEvent'> = {
   parseEvent: (line: string) => [JSON.parse(line) as AgentEvent],
@@ -117,16 +130,139 @@ describe('bounded turn output', () => {
     ).rejects.toMatchObject({ ...rejected, message: 'Agent output contains a turn credential' })
   })
 
-  it('reports output over its limits as too large (413)', async () => {
-    const long = Buffer.alloc(256 * 1024 + 1, 'x')
-    await expect(
-      readTurnOutput(
-        handle([{ stream: 'stdout', offset: 0, data: long }]),
-        driver,
-        vi.fn(),
+  /** `stdout` as the exec yields it: chunks of at most `size` bytes, one after another. */
+  const chunked = (stdout: Buffer, size = 64 * 1024): ExecChunk[] => {
+    const chunks: ExecChunk[] = []
+    for (let offset = 0; offset < stdout.length; offset += size)
+      chunks.push({ stream: 'stdout', offset, data: stdout.subarray(offset, offset + size) })
+    return chunks
+  }
+  const line = (event: AgentEvent) => Buffer.from(JSON.stringify(event) + '\n')
+  const result = { type: 'message', text: '{"summary":"Готово"}' } as const
+
+  it('skips a line longer than the parsers read and goes on with the turn', async () => {
+    // Codex prints the whole output of a command, up to 1 MiB, as one item.completed line.
+    const before = line({ type: 'started', nativeSessionId: 'native1' })
+    const long = Buffer.concat([Buffer.alloc(1024 * 1024, 'x'), Buffer.from('\n')])
+    const after = line(result)
+    const parseEvent = vi.fn(driver.parseEvent)
+    const record = vi.fn(async () => {})
+    const read = await readTurnOutput(
+      handle(chunked(Buffer.concat([before, long, after]))),
+      { parseEvent },
+      record,
+      () => {},
+    )
+    expect(read.events).toEqual([
+      { type: 'started', nativeSessionId: 'native1' },
+      { type: 'message', text: SKIPPED_LINE_MESSAGE },
+      result,
+    ])
+    // Nothing of the long line is decoded or parsed.
+    expect(parseEvent).toHaveBeenCalledTimes(2)
+    // Its bytes are acknowledged only once it ended: a reconnect reads it again from its start.
+    expect(record.mock.calls).toEqual([
+      [{ stdout: before.length, stderr: 0 }, read.events.slice(0, 1)],
+      [{ stdout: before.length + long.length + after.length, stderr: 0 }, read.events.slice(1)],
+    ])
+  })
+
+  it.each([
+    [
+      'Codex: the output of a command in one item.completed line',
+      createCodexDriver({ image }),
+      (output: string) => [
+        { type: 'thread.started', thread_id: '01960000-0000-7000-8000-000000000001' },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'c',
+            type: 'command_execution',
+            command: 'cat wp-content/themes/shop/style.css',
+            aggregated_output: output,
+            exit_code: 0,
+            status: 'completed',
+          },
+        },
+        { type: 'item.completed', item: { id: 'm', type: 'agent_message', text: finalResult } },
+        { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } },
+      ],
+    ],
+    [
+      'Kimi: the output of a tool in one row',
+      createKimiDriver({ image }),
+      (output: string) => [
+        { role: 'tool', tool_call_id: 'c1', content: output },
+        { role: 'assistant', content: finalResult },
+      ],
+    ],
+  ])(
+    'keeps the result of a turn whose agent printed 1 MiB in one line (%s)',
+    async (_, cli, rows) => {
+      const stdout = Buffer.from(
+        rows('x'.repeat(1024 * 1024))
+          .map((row) => JSON.stringify(row) + '\n')
+          .join(''),
+      )
+      const read = await readTurnOutput(
+        handle(chunked(stdout)),
+        cli,
+        vi.fn(async () => {}),
         () => {},
-      ),
-    ).rejects.toMatchObject(tooLarge)
+      )
+      expect(read.events).toContainEqual({ type: 'message', text: SKIPPED_LINE_MESSAGE })
+      expect(cli.extractResult(read.events, null)).toEqual(JSON.parse(finalResult))
+    },
+  )
+
+  it('never lets an over-long final line revive an older result', async () => {
+    for (const ending of ['\n', '']) {
+      const stdout = Buffer.concat([
+        line(result),
+        Buffer.alloc(256 * 1024 + 1, 'x'),
+        Buffer.from(ending),
+      ])
+      const read = await readTurnOutput(
+        handle(chunked(stdout)),
+        driver,
+        vi.fn(async () => {}),
+        () => {},
+      )
+      // The last message is the one left in place of the skipped line, never the older result.
+      expect(read.events.findLast((event) => event.type === 'message')).toEqual({
+        type: 'message',
+        text: SKIPPED_LINE_MESSAGE,
+      })
+      expect(() => JSON.parse(SKIPPED_LINE_MESSAGE) as unknown).toThrow()
+      expect(read.cursor.stdout).toBe(stdout.length)
+    }
+  })
+
+  it('still reads a line of exactly the size the parsers accept', async () => {
+    const text = 'x'.repeat(256 * 1024 - JSON.stringify({ type: 'message', text: '' }).length)
+    const stdout = Buffer.from(JSON.stringify({ type: 'message', text }))
+    expect(stdout.length).toBe(256 * 1024)
+    const read = await readTurnOutput(
+      handle(chunked(stdout)),
+      { parseEvent: (value) => [{ type: 'message', text: String(value.length) }] },
+      vi.fn(async () => {}),
+      () => {},
+    )
+    expect(read.events).toEqual([{ type: 'message', text: String(256 * 1024) }])
+  })
+
+  it('reports output over its limits as too large (413)', async () => {
+    // A skipped line still counts against everything one turn may print.
+    const megabyte = Buffer.alloc(1024 * 1024, 'x')
+    const endless: ExecChunk[] = Array.from({ length: 33 }, (_, index) => ({
+      stream: 'stdout',
+      offset: index * megabyte.length,
+      data: megabyte,
+    }))
+    await expect(readTurnOutput(handle(endless), driver, vi.fn(), () => {})).rejects.toMatchObject({
+      ...tooLarge,
+      message: 'Agent output limit exceeded',
+    })
     const many = Buffer.from(
       `${JSON.stringify({ type: 'completed' })}\n`.repeat(agentOutputLimits.turnEvents + 1),
     )

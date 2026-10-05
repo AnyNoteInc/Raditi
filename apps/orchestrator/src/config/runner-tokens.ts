@@ -17,6 +17,16 @@ export interface RunnerTokenHash {
 /** SHA-256 hashes of whole runner tokens by runner id: RUNNER_TOKENS=id:hash[@ip],… */
 export type RunnerTokenHashes = ReadonlyMap<string, readonly RunnerTokenHash[]>
 
+/** Issuance uses configured VM identity, never a caller-supplied forwarding header. */
+export function runnerCredentialAddress(tokens: RunnerTokenHashes, runnerId: string): string {
+  const configured = tokens.get(runnerId)
+  const addresses = new Set(configured?.map((entry) => entry.address))
+  const address = addresses.values().next().value
+  if (!configured?.length || addresses.size !== 1 || address === undefined)
+    throw new Error('Runner credential source unavailable')
+  return address
+}
+
 /** The hex SHA-256 core keeps for a token; the token itself stays on the runner VM. */
 export function hashRunnerToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex')

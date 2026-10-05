@@ -21,7 +21,7 @@ describe('DriversModule and SandboxModule', () => {
 
     const drivers = moduleRef.get<AgentDriverRegistry>(AGENT_DRIVERS)
     expect(drivers.list().map((driver) => driver.id)).toEqual([...ENABLED_AGENT_DRIVERS])
-    expect(drivers.get('codex').image).toBe('raditi/agent-codex')
+    expect(drivers.get('codex').image).toBe(testCoreConfig().agentDrivers.image)
     expect(() => drivers.get('opencode')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
 
     const sandbox = moduleRef.get<SandboxProvider>(SANDBOX_PROVIDER)

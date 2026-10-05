@@ -66,7 +66,12 @@ function grant(raw: unknown): SiteLeaseGrant | null {
   }
 }
 
-/** Durable site serialization. No JS wall clock participates in ownership decisions. */
+/**
+ * Durable site serialization. No JS wall clock participates in ownership decisions. A site's
+ * epoch only ever grows: while the site exists its row is never deleted or reset, because the
+ * site itself fences content writes by the epoch it last saw (forgetting a receipt moves that
+ * fence to epoch + 1).
+ */
 export class PostgresSiteLeaseStore implements SiteLeaseStore {
   private readonly db: LeaseDatabase
 
@@ -93,6 +98,7 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
         epoch = site_leases.epoch + 1, acquired_at = EXCLUDED.acquired_at,
         expires_at = EXCLUDED.expires_at, held_for_operator = false, updated_at = EXCLUDED.updated_at
       WHERE NOT site_leases.held_for_operator
+        AND site_leases.inflight_mcp_call_id IS NULL
         AND (site_leases.holder_task_id IS NULL OR site_leases.expires_at <= (SELECT instant FROM lease_clock))
         AND site_leases.epoch < 2147483647
       RETURNING site_id, holder_task_id, operation, epoch, expires_at, held_for_operator,
@@ -144,7 +150,7 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
         expires_at = NULL, updated_at = clock_timestamp()
       WHERE site_id = ${f.siteId}::uuid AND holder_task_id = ${f.taskId}::uuid
         AND epoch = ${f.epoch} AND operation = ${f.operation}::"LeaseOperation"
-        AND NOT held_for_operator AND expires_at > clock_timestamp()
+        AND NOT held_for_operator AND inflight_mcp_call_id IS NULL AND expires_at > clock_timestamp()
       RETURNING site_id`
     return rows.length === 1
   }
@@ -177,6 +183,7 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
         expires_at = NULL, held_for_operator = false, updated_at = clock_timestamp()
       WHERE site_id = ${f.siteId}::uuid AND holder_task_id = ${f.taskId}::uuid
         AND epoch = ${f.epoch} AND operation = ${f.operation}::"LeaseOperation"
+        AND inflight_mcp_call_id IS NULL
       RETURNING site_id`
     return rows.length === 1
   }

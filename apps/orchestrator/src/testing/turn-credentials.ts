@@ -5,12 +5,14 @@ const key = (turn: TurnCredentialRef) =>
   `${turn.taskId}:${turn.sessionId}:${turn.turn}:${turn.epoch}`
 
 export class MemoryTurnCredentials implements TurnCredentialSource {
+  constructor(private readonly issued?: TurnCredentialValues) {}
   readonly values = new Map<string, TurnCredentialValues>()
   readonly revoked: TurnCredentialRef[] = []
   recovered = 0
 
   async issue(turn: TurnCredentialRef): Promise<TurnCredentialValues> {
-    const values = { llmApiKey: `llm-${key(turn)}`, mcpToken: `mcp-${key(turn)}` }
+    const values = this.values.get(key(turn)) ??
+      this.issued ?? { llmApiKey: `llm-${key(turn)}`, mcpToken: `mcp-${key(turn)}` }
     this.values.set(key(turn), values)
     return values
   }
@@ -29,4 +31,15 @@ export class MemoryTurnCredentials implements TurnCredentialSource {
     this.values.delete(key(turn))
     this.revoked.push(turn)
   }
+}
+
+/** Synthetic issuance policy for turn lifecycle tests; production reads the approved catalog. */
+export const testTurnCredentialPolicy = {
+  driverId: 'codex' as const,
+  backend: 'openai-chatgpt' as const,
+  modelSlug: 'synthetic',
+  modelClass: 'standard' as const,
+  reasoningEffort: 'medium',
+  ttlMs: 20 * 60_000,
+  budgetRub: '100.00',
 }

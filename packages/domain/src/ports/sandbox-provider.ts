@@ -220,7 +220,7 @@ const secretLikeEnvValues: readonly RegExp[] = [
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/,
   // Credentials inside a URL: https://user:password@host, https://token@host.
   /^[a-z][a-z0-9+.-]*:\/\/[^\s/@]+@/i,
-  // OpenAI-style keys, LiteLLM virtual keys included.
+  // OpenAI-style keys, including per-turn gateway keys.
   /\bsk-[A-Za-z0-9_-]{16,}/,
   // JWT.
   /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\./,

@@ -20,7 +20,7 @@ const testEnv = {
   S3_SECRET_ACCESS_KEY: 'raditi-dev-secret',
   VAULT_ADDR: 'http://localhost:8200',
   VAULT_DEV_ROOT_TOKEN: 'raditi-dev-root',
-  SANDBOX_IMAGE_PREFIX: 'raditi/agent',
+  SANDBOX_IMAGE: `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`,
   METRICS_TOKEN: TEST_METRICS_TOKEN,
 }
 

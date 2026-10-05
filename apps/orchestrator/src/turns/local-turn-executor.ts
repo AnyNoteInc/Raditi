@@ -47,7 +47,7 @@ export interface LocalTurnExecutorDependencies {
   /** The stateless event parser of a driver: an executor never prepares a turn itself. */
   parser(id: AgentDriverId): Pick<AgentDriver, 'parseEvent'>
   transport: Pick<SandboxSnapshotTransport, 'capture' | 'restore'>
-  /** Snapshot parts of turn n−1 in, the sealed home part out. */
+  /** Snapshot parts of the restored checkpoint in, the sealed home part out. */
   transfer: PresignedTransfer
   importBundle?: typeof importBaseBundle
 }
@@ -113,10 +113,13 @@ export class LocalTurnExecutor implements TurnExecutor {
       const { home, archives } = await this.#restoreSource(input.restore)
       await this.deps.transport.restore(sandbox, home, archives)
     }
-    // Secrets only after restore: an archive of turn n−1 never lands next to them.
+    // Secrets only after restore: an archive of an earlier turn never lands next to them. A
+    // secret is read-only unless its driver rewrites it, and never open beyond its owner. The
+    // agent's commands run under that same uid: what keeps a secret from them is the driver's
+    // wrapper, which removes the file once it read it.
     for (const [file, mode] of [
       ...files.map((file) => [file, file.mode ?? 0o600] as const),
-      ...secrets.map((file) => [file, 0o600] as const),
+      ...secrets.map((file) => [file, (file.mode ?? 0o400) & 0o600] as const),
     ]) {
       signal.throwIfAborted()
       await sandbox.fs.write(file.path, Buffer.from(file.content), { mode })

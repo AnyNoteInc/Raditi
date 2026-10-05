@@ -1,5 +1,5 @@
 /** Where to go after sign-in when `next` is missing or unsafe. */
-export const DEFAULT_AFTER_SIGN_IN = '/app'
+export const DEFAULT_AFTER_SIGN_IN = '/projects'
 
 const PLACEHOLDER_ORIGIN = 'http://raditi.invalid'
 const MAX_LENGTH = 2048

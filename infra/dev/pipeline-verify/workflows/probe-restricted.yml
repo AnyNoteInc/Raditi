@@ -1,0 +1,30 @@
+# Stand only (pnpm verify:pipeline): the same token checks as probe.yml, for a workflow that
+# declares `permissions: contents: read` the way check.yml and deploy.yml of ci/ do.
+name: probe-restricted
+on:
+  push:
+    branches: ['probe/**']
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: gitea.repository_owner == 'sites'
+    runs-on: check
+    steps:
+      - name: probe
+        env:
+          JOB_TOKEN: ${{ gitea.token }}
+          API: ${{ gitea.api_url }}
+          REPO: ${{ gitea.repository }}
+        run: |
+          p() { echo "probe.restricted.$1=$2"; }
+          http() {
+            code=$(wget -S --no-check-certificate -T 10 -O /dev/null \
+              --header "Authorization: token $JOB_TOKEN" "$@" 2>&1 |
+              sed -n 's/^.*HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*$/\1/p' | tail -n 1)
+            echo "${code:-none}"
+          }
+          p token_own_repo "$(http "$API/repos/$REPO")"
+          p token_write_code "$(http --header 'Content-Type: application/json' \
+            --post-data '{"content":"cHJvYmU=","message":"probe","branch":"main","new_branch":"probe-written-restricted"}' \
+            "$API/repos/$REPO/contents/probe-written-restricted.txt")"

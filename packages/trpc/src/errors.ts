@@ -49,6 +49,9 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   FORBIDDEN: 'Недостаточно прав',
   NOT_FOUND: 'Не нашли то, что вы ищете',
   CONFLICT: UNAVAILABLE_MESSAGE,
+  PROJECT_ALREADY_EXISTS: 'Сайт с таким адресом уже добавлен',
+  PROJECT_LIMIT_REACHED: 'Вы добавили максимальное число сайтов. Напишите нам, если нужно больше',
+  SITE_ADDRESS_NOT_PUBLIC: 'Укажите адрес сайта, который открывается из интернета',
   NOT_IMPLEMENTED: 'Эта возможность ещё в разработке',
   [CONSENT_REQUIRED]: CONSENT_REQUIRED_MESSAGE,
   // Size and count limits of a turn (spec §8): what the client can do about them.

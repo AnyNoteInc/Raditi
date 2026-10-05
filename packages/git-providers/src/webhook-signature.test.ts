@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createGitProvider } from './create-git-provider.ts'
 import {
   verifyGiteaSignature,
@@ -97,15 +97,45 @@ describe('createGitProvider', () => {
   })
 
   it('rejects API calls as not implemented until P8', async () => {
+    const github = createGitProvider('github', config)
+    const ref = { provider: 'github', owner: 'sites', name: 'shop' } as const
+    await expect(github.getRepository(ref)).rejects.toMatchObject({
+      code: 'NOT_IMPLEMENTED',
+      message: expect.stringContaining('GithubProvider.getRepository (P8)'),
+    })
+    // Gitea has getRepository and issueCredentials (gitea.test.ts); the rest waits for P8.
     const gitea = createGitProvider('gitea', config)
-    const ref = { provider: 'gitea', owner: 'sites', name: 'shop' } as const
-    await expect(gitea.getRepository(ref)).rejects.toMatchObject({
+    await expect(
+      gitea.mergePullRequest({ ...ref, provider: 'gitea' }, 1, 'abc'),
+    ).rejects.toMatchObject({
       code: 'NOT_IMPLEMENTED',
-      message: expect.stringContaining('GiteaProvider.getRepository (P8)'),
+      message: expect.stringContaining('GiteaProvider.mergePullRequest (P8)'),
     })
-    await expect(gitea.mergePullRequest(ref, 1, 'abc')).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
+  })
+
+  it('gives every kind the credential lifecycle; a kind that issues nothing has nothing to end', async () => {
+    for (const kind of ['github', 'gitlab'] as const) {
+      const provider = createGitProvider(kind, config)
+      await expect(provider.sweepCredentials()).resolves.toBeUndefined()
+      await expect(provider.revokeCredentials()).resolves.toBeUndefined()
+    }
+    // Gitea issues grants, so its sweep is a real API call: refused here for the plain-http address.
+    await expect(createGitProvider('gitea', config).sweepCredentials()).rejects.toMatchObject({
+      code: 'GIT_PROVIDER_NOT_CONFIGURED',
     })
+  })
+
+  it('passes the adapter options to the Gitea client', async () => {
+    const fetch = vi.fn(async () => new Response('{"message":"not found"}', { status: 404 }))
+    const gitea = createGitProvider(
+      'gitea',
+      { baseUrl: 'https://gitea.example.test', token: 't' },
+      { fetch: fetch as unknown as typeof globalThis.fetch },
+    )
+    await expect(
+      gitea.getRepository({ provider: 'gitea', owner: 'sites', name: 'shop' }),
+    ).resolves.toBeNull()
+    expect(fetch).toHaveBeenCalledOnce()
   })
 
   it('validates the configuration without echoing the token', () => {

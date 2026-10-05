@@ -7,6 +7,7 @@ import { createTRPCContext } from '@trpc/tanstack-react-query'
 import { useState, type ReactNode } from 'react'
 import superjson from 'superjson'
 
+import { MAX_BATCH_SIZE } from './batch'
 import { consentRedirectLink } from './consent-redirect'
 import { getQueryClient } from './query-client'
 
@@ -25,7 +26,11 @@ export function TRPCReactProvider({ userId, children }: { userId: string; childr
         splitLink({
           condition: (op) => op.type === 'subscription',
           true: httpSubscriptionLink({ url: TRPC_URL, transformer: superjson }),
-          false: httpBatchLink({ url: TRPC_URL, transformer: superjson }),
+          false: httpBatchLink({
+            url: TRPC_URL,
+            transformer: superjson,
+            maxItems: MAX_BATCH_SIZE,
+          }),
         }),
       ],
     }),

@@ -16,8 +16,13 @@ const context: RunContext = {
   taskId: 't',
   sessionId: 's',
   turn: 1,
-  llm: { baseUrl: 'http://gw.sandbox/llm', apiKey: 'test-llm-key', model: 'm' },
-  mcp: { url: 'http://gw.sandbox/mcp', token: 'test-mcp-token' },
+  llm: {
+    baseUrl: 'http://sandbox-gw:8080/codex',
+    apiKey: 'test-llm-key',
+    model: 'm',
+    reasoningEffort: 'medium' as const,
+  },
+  mcp: { url: 'http://sandbox-gw:8080/mcp', token: 'test-mcp-token' },
   instructions: '',
 }
 const run = (overrides: Partial<PreparedRun> = {}): PreparedRun => ({
@@ -73,12 +78,27 @@ describe('prepared run paths', () => {
     ).toBe(false)
   })
 
-  it.each(createAgentDrivers({ imagePrefix: 'registry.local:3300/raditi/agent' }))(
+  it.each(
+    createAgentDrivers({
+      image: `registry.local:3300/raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`,
+    }),
+  )(
     '$id.prepare output, once implemented, never writes into /workspace or exposes credentials',
     async (driver) => {
       let prepared: PreparedRun
       try {
-        prepared = await driver.prepare(context)
+        prepared = await driver.prepare(
+          driver.id === 'kimi'
+            ? {
+                ...context,
+                llm: {
+                  ...context.llm,
+                  baseUrl: 'http://sandbox-gw:8080/kimi/v1',
+                  reasoningEffort: 'low',
+                },
+              }
+            : context,
+        )
       } catch (error) {
         // P4/P5 implement prepare; until then the schema tests above carry the guarantee.
         expect(error).toMatchObject({ code: 'NOT_IMPLEMENTED' })

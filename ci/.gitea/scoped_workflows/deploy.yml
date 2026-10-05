@@ -1,0 +1,135 @@
+# Obligatory deploy pipeline of a site repository (spec §10). This directory is synchronised into
+# the repository platform/ci of the platform's Gitea. Gitea 1.27 runs the files of
+# .gitea/scoped_workflows of a registered source repository in every repository of the scope, in
+# that repository's own context: its commit, its secrets and its variables.
+#
+# SPIKE (N18): the steps are substitutes. The "site" is a directory of the deploy runner's site
+# volume (/site/<owner>/<repo>) and its state is the file `marker`. Nothing is fetched from the
+# network: plain `run:` steps on the image of the runner label `deploy`. The real steps
+# (drift-check, backup to S3, rsync or git-ftp, HTTP verification) are P8–P10 and wait for the
+# owner's answer about the way a site is connected.
+# A file with this mark is never synchronised into platform/ci of a real Gitea: its substitute
+# steps pass a Vault token as an argument of `wget` and reach Vault without TLS.
+name: deploy
+on:
+  push:
+    branches: [main]
+# One deploy of a site at a time: a run that arrives while another one is in progress waits.
+# Gitea keeps a single waiting run per group — a newer one cancels it (docs/plan/34).
+concurrency:
+  group: deploy-${{ gitea.repository }}
+  cancel-in-progress: false
+# By default the job token of Gitea may write to the repository of the job (the mode
+# `permissive`): a job of this pipeline only reads it.
+permissions:
+  contents: read
+jobs:
+  deploy:
+    # An organization can register only its own repositories as a source, so platform/ci is a
+    # source of the whole instance and its workflows are triggered in every repository, platform/ci
+    # included. Only repositories of the organization `sites` are sites.
+    if: gitea.repository_owner == 'sites'
+    runs-on: deploy
+    env:
+      SITE_DIR: /site/${{ gitea.repository }}
+      RUN_ID: ${{ gitea.run_id }}
+      # A re-run keeps the run id: the backup of one attempt must never serve another one.
+      BACKUP_ID: ${{ gitea.run_id }}-${{ gitea.run_attempt }}
+    # The address of Vault is RADITI_VAULT_ADDR of the deploy runner's own configuration
+    # (`runner.envs`). It is never a variable or a secret of the site repository: what a
+    # repository holds must not decide where the wrapped token is sent.
+    steps:
+      - name: vault-login
+        env:
+          # One-time response-wrapping token (spec §15): the orchestrator puts it into the Actions
+          # secret of the site repository right before the merge.
+          RADITI_DEPLOY_WRAP: ${{ secrets.RADITI_DEPLOY_WRAP }}
+        run: |
+          set -eu
+          umask 077
+          mkdir -p /tmp/raditi-deploy
+          test -n "${RADITI_VAULT_ADDR:-}" || { echo "vault-login: no Vault address"; exit 1; }
+          test -n "$RADITI_DEPLOY_WRAP" || { echo "vault-login: no wrapped token"; exit 1; }
+          # Substitute only: busybox wget takes a header as an argument, so the token is in the
+          # argument list of a process of this job container. The real action must not do that.
+          wget -q -T 10 -O /tmp/raditi-deploy/unwrap.json --post-data '' \
+            --header "X-Vault-Token: $RADITI_DEPLOY_WRAP" \
+            "$RADITI_VAULT_ADDR/v1/sys/wrapping/unwrap" ||
+            { echo "vault-login: the wrapped token was refused"; exit 1; }
+          sed -n 's/.*"client_token":"\([^"]*\)".*/\1/p' /tmp/raditi-deploy/unwrap.json \
+            > /tmp/raditi-deploy/token
+          rm -f /tmp/raditi-deploy/unwrap.json
+          test -s /tmp/raditi-deploy/token || { echo "vault-login: no token in the answer"; exit 1; }
+          echo "vault-login: unwrapped"
+      - name: backup
+        id: backup
+        run: |
+          set -eu
+          mkdir -p "$SITE_DIR/backup"
+          if [ -f "$SITE_DIR/marker" ]; then cp "$SITE_DIR/marker" "$SITE_DIR/backup/$BACKUP_ID"
+          else : > "$SITE_DIR/backup/$BACKUP_ID.empty"; fi
+          echo "backup run=$RUN_ID" >> "$SITE_DIR/pipeline.log"
+      - name: deploy
+        env:
+          HEAD_SHA: ${{ gitea.sha }}
+          # Text of a commit reaches the script only as a variable, never as a part of the script.
+          HEAD_MESSAGE: ${{ gitea.event.head_commit.message }}
+          SITE_NAME: ${{ gitea.event.repository.name }}
+          HOLD_SECONDS: ${{ vars.RADITI_DEPLOY_HOLD_SECONDS }}
+        run: |
+          set -eu
+          # The deploy access of this one site, read with the unwrapped token. Nothing of it is
+          # printed or written to the log of the site volume: only the fact that it was read.
+          # Substitute: the stand keeps it under the repository name and the kind `deploy`. The
+          # real step reads kv/sites/<siteId>/<kind> with the kinds of spec §15.
+          wget -q -T 10 -O /tmp/raditi-deploy/access.json \
+            --header "X-Vault-Token: $(cat /tmp/raditi-deploy/token)" \
+            "$RADITI_VAULT_ADDR/v1/kv/data/sites/$SITE_NAME/deploy" ||
+            { echo "deploy: the deploy access could not be read"; exit 1; }
+          target=$(sed -n 's/.*"target":"\([^"]*\)".*/\1/p' /tmp/raditi-deploy/access.json)
+          rm -f /tmp/raditi-deploy/access.json
+          test -n "$target" || { echo "deploy: no deploy access"; exit 1; }
+          echo "deploy-start run=$RUN_ID sha=$HEAD_SHA access=read" >> "$SITE_DIR/pipeline.log"
+          # A deploy is not atomic: between these two writes the site is half-deployed.
+          printf 'state=deploying\nsha=%s\n' "$HEAD_SHA" > "$SITE_DIR/marker"
+          sleep "${HOLD_SECONDS:-0}"
+          printf 'state=deployed\nsha=%s\nsubject=%s\n' "$HEAD_SHA" \
+            "$(printf '%s' "$HEAD_MESSAGE" | head -n 1)" > "$SITE_DIR/marker"
+          echo "deploy-end run=$RUN_ID sha=$HEAD_SHA" >> "$SITE_DIR/pipeline.log"
+      - name: verify
+        run: |
+          set -eu
+          # Substitute for the HTTP check of key pages: the deployed site itself says it is broken.
+          if grep -q 'raditi-fault' "$SITE_DIR/marker"; then
+            echo "verify-failed run=$RUN_ID" >> "$SITE_DIR/pipeline.log"
+            echo "verify: the site is broken"
+            exit 1
+          fi
+          echo "verify-ok run=$RUN_ID" >> "$SITE_DIR/pipeline.log"
+      - name: rollback
+        # `cancelled()` as well: a deploy cancelled in the middle must not leave the site
+        # half-deployed (`failure()` alone is skipped on a cancel). Only after the backup of this
+        # very attempt: a run that failed before it has changed nothing.
+        if: (failure() || cancelled()) && steps.backup.outcome == 'success'
+        run: |
+          set -eu
+          if [ -f "$SITE_DIR/backup/$BACKUP_ID" ]; then
+            cp "$SITE_DIR/backup/$BACKUP_ID" "$SITE_DIR/marker"
+            echo "rollback-restored run=$RUN_ID" >> "$SITE_DIR/pipeline.log"
+          elif [ -f "$SITE_DIR/backup/$BACKUP_ID.empty" ]; then
+            rm -f "$SITE_DIR/marker"
+            echo "rollback-removed run=$RUN_ID" >> "$SITE_DIR/pipeline.log"
+          else
+            echo "rollback-no-backup run=$RUN_ID" >> "$SITE_DIR/pipeline.log"
+            exit 1
+          fi
+      - name: vault-logout
+        if: always()
+        run: |
+          # The deploy token dies with the pipeline; the orchestrator revokes it by accessor too.
+          if [ -s /tmp/raditi-deploy/token ]; then
+            wget -q -T 10 -O /dev/null --post-data '' \
+              --header "X-Vault-Token: $(cat /tmp/raditi-deploy/token)" \
+              "$RADITI_VAULT_ADDR/v1/auth/token/revoke-self" || echo "vault-logout: the token was not revoked"
+          fi
+          rm -rf /tmp/raditi-deploy

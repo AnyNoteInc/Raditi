@@ -1,12 +1,13 @@
 # Радити — локальная инфраструктура для разработки. Не для прода.
 # Запуск из корня репозитория: pnpm infra:up
-#   (= docker compose --env-file .env -f infra/dev/docker-compose.yml up -d)
+#   (= docker compose --env-file .env -f infra/dev/docker-compose.yml up -d
+#    и pnpm vault:bootstrap — mounts turns/, subs/, kv/ и transit/ и политики в OpenBao,
+#    infra/vault/README.md)
 # Профили (--profile <имя> или COMPOSE_PROFILES в .env):
-#   site — тестовый WordPress, llm — LiteLLM, ci — раннер Gitea Actions,
+#   site — тестовый WordPress, ci — раннер Gitea Actions,
 #   monitoring — Prometheus и Grafana, monitoring-host — cAdvisor (только Linux).
 # Теги закреплены; порты публикуются только на 127.0.0.1.
-# Сети: default — всё, кроме LiteLLM; llm — LiteLLM, PostgreSQL (своя база litellm) и Prometheus.
-# Из llm не видно Vault, Redis, S3 и Gitea (spec §9).
+# The llm profile returns with the subscription fakes and local egress in P3.
 
 name: raditi-dev
 
@@ -22,7 +23,6 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
-    networks: [default, llm]
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U raditi -d raditi']
       interval: 5s
@@ -91,6 +91,9 @@ services:
     restart: 'no'
 
   # OpenBao в dev-режиме: данные в памяти, root-токен из .env; метрики без токена (только dev).
+  # Пересоздание контейнера стирает mounts, политики и секреты: pnpm infra:up создаёт mounts
+  # и политики заново (pnpm vault:bootstrap); в аккаунты подписок нужно войти заново, доступы
+  # сайтов и ключи рабочих пространств — создать заново.
   vault:
     image: ghcr.io/openbao/openbao:2.7.0
     environment:
@@ -141,32 +144,11 @@ services:
       - runnerdata:/data
       - ./runner.yaml:/config/runner.yaml:ro
 
-  # LiteLLM — единая точка к моделям. ID моделей — в litellm.config.yaml.
-  # Закреплён по digest: в марте 2026 пакеты LiteLLM на PyPI были скомпрометированы.
-  # Порт метрик 4001 без авторизации — наружу не публикуется.
-  # Своя сеть llm: видит только PostgreSQL (базу litellm) и Prometheus, но не Vault, Redis и S3.
-  litellm:
-    image: ghcr.io/berriai/litellm:v1.102.1@sha256:87f34979b9f8cb274fac90ca8a4fdda07d8480de22755562a26adeb95ce20d02
-    profiles: ['llm']
-    command: ['--config', '/app/config.yaml', '--port', '4000', '--prometheus_metrics_port', '4001']
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-raditi-dev}
-      DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm
-      YANDEX_API_KEY: ${YANDEX_API_KEY:-}
-      YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
-      CLOUDRU_API_KEY: ${CLOUDRU_API_KEY:-}
-      # Карта цен моделей — из образа, без запроса на GitHub при старте.
-      LITELLM_LOCAL_MODEL_COST_MAP: 'True'
-    networks: [llm]
-    ports:
-      - '127.0.0.1:4000:4000'
-    volumes:
-      - ./litellm.config.yaml:/app/config.yaml:ro
-
   # Тестовый сайт клиента: WordPress + MariaDB + WP-CLI.
+  # Сайт готов к контентному пути: тип окружения local (пароли приложений по HTTP), плагин
+  # «Радити» в mu-plugins только на чтение. Пока плагин не привязан к сайту платформы, он
+  # отклоняет всё; привязку, доступ в OpenBao и репозиторий делает доверенная команда
+  # infra/dev/site-verify/connect-local.mjs (README того же каталога).
   site-db:
     image: mariadb:11.4.13
     profiles: ['site']
@@ -177,38 +159,63 @@ services:
       MARIADB_ROOT_PASSWORD: wp-root
     volumes:
       - sitedb:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 2s
+      timeout: 5s
+      retries: 45
 
   site:
     image: wordpress:7.1.2-php8.3-apache
     profiles: ['site']
     depends_on:
-      - site-db
-    environment:
+      site-db:
+        condition: service_healthy
+    environment: &site_environment
       WORDPRESS_DB_HOST: site-db
       WORDPRESS_DB_USER: wp
       WORDPRESS_DB_PASSWORD: wp
       WORDPRESS_DB_NAME: wp
+      # Как у одноразового стенда (site-verify/compose.yml): без cron, обновлений и внешних
+      # HTTP-вызовов; файлы сайта из админки не меняются.
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_ENVIRONMENT_TYPE', 'local');
+        define('DISABLE_WP_CRON', true);
+        define('WP_HTTP_BLOCK_EXTERNAL', true);
+        define('WP_AUTO_UPDATE_CORE', false);
+        define('AUTOMATIC_UPDATER_DISABLED', true);
+        define('DISALLOW_FILE_MODS', true);
     ports:
       - '127.0.0.1:${SITE_PORT:-8080}:80'
     volumes:
       - sitefiles:/var/www/html
+      - ../wordpress/raditi-content.php:/var/www/html/wp-content/mu-plugins/raditi-content.php:ro
+    healthcheck:
+      test:
+        - CMD
+        - php
+        - -r
+        - "exit(is_file('/var/www/html/wp-config.php') ? 0 : 1);"
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
   # Разовый запуск: docker compose -f infra/dev/docker-compose.yml --profile site run --rm wpcli core version
+  # WP-CLI читает ту же конфигурацию и тот же плагин, что и веб-сервер. SITE_WPCLI_IMAGE нужен
+  # только стендам: закреплённый образ по digest, когда точного тега локально нет.
   wpcli:
-    image: wordpress:cli-2.12.0-php8.3
+    image: ${SITE_WPCLI_IMAGE:-wordpress:cli-2.12.0-php8.3}
     profiles: ['site']
     user: '33:33'
     depends_on:
-      - site
-    environment:
-      WORDPRESS_DB_HOST: site-db
-      WORDPRESS_DB_USER: wp
-      WORDPRESS_DB_PASSWORD: wp
-      WORDPRESS_DB_NAME: wp
+      site:
+        condition: service_healthy
+    environment: *site_environment
     entrypoint: ['wp']
     command: ['--info']
     volumes:
       - sitefiles:/var/www/html
+      - ../wordpress/raditi-content.php:/var/www/html/wp-content/mu-plugins/raditi-content.php:ro
 
   # --- Мониторинг (профиль monitoring) ---
   # Grafana — http://localhost:3030 (admin / GRAFANA_ADMIN_PASSWORD), Prometheus — http://localhost:9090.
@@ -229,8 +236,6 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/rules:/etc/prometheus/rules:ro
       - promdata:/prometheus
-    # llm — чтобы снимать метрики LiteLLM.
-    networks: [default, llm]
 
   grafana:
     image: grafana/grafana:13.2.2
@@ -264,10 +269,10 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Роль только с pg_monitor (postgres-init.sql), не владелец базы.
+      # The same application login and password as the local postgres service.
       DATA_SOURCE_URI: postgres:5432/raditi?sslmode=disable
-      DATA_SOURCE_USER: postgres_exporter
-      DATA_SOURCE_PASS: postgres_exporter
+      DATA_SOURCE_USER: raditi
+      DATA_SOURCE_PASS: raditi
 
   redis-exporter:
     image: oliver006/redis_exporter:v1.92.0-alpine
@@ -301,7 +306,6 @@ services:
 
 networks:
   default:
-  llm:
 
 volumes:
   pgdata:

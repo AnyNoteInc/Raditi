@@ -23,10 +23,10 @@ describe('redirectIfSignedIn', () => {
     expect(redirect).not.toHaveBeenCalled()
   })
 
-  it('sends a signed-in user to the given target, the cabinet by default', async () => {
+  it('sends a signed-in user to the given target, projects by default', async () => {
     getSession.mockResolvedValue({ user: { id: 'u1' } })
     await expect(redirectIfSignedIn('/app/tasks')).rejects.toThrow('NEXT_REDIRECT /app/tasks')
-    await expect(redirectIfSignedIn()).rejects.toThrow('NEXT_REDIRECT /app')
+    await expect(redirectIfSignedIn()).rejects.toThrow('NEXT_REDIRECT /projects')
   })
 
   it('still shows the page when the session cannot be looked up', async () => {

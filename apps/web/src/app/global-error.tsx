@@ -1,8 +1,9 @@
 'use client'
 
+import { brandColors } from '@repo/ui/theme/tokens'
 import { useEffect } from 'react'
 
-// Replaces the root layout, so no theme or MUI here: plain HTML with inline styles.
+// Replaces the root layout: use palette tokens directly without depending on its provider.
 export default function GlobalError({
   error,
   reset,
@@ -23,14 +24,14 @@ export default function GlobalError({
           display: 'grid',
           placeItems: 'center',
           padding: 24,
-          background: '#F4F5F1',
-          color: '#15171A',
+          background: brandColors.paper,
+          color: brandColors.ink,
           fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
         }}
       >
         <main style={{ maxWidth: 480 }}>
           <h1 style={{ fontSize: 28, margin: '0 0 12px' }}>Сервис временно недоступен</h1>
-          <p style={{ color: '#565C66', margin: '0 0 24px', lineHeight: 1.6 }}>
+          <p style={{ color: brandColors.graphite, margin: '0 0 24px', lineHeight: 1.6 }}>
             Мы уже разбираемся. Обновите страницу через пару минут.
             {error.digest ? ` Код ошибки для поддержки: ${error.digest}.` : ''}
           </p>
@@ -41,8 +42,8 @@ export default function GlobalError({
               padding: '12px 22px',
               border: 0,
               borderRadius: 999,
-              background: '#2A36D6',
-              color: '#FFFFFF',
+              background: brandColors.accent,
+              color: brandColors.ink,
               font: 'inherit',
               fontWeight: 600,
               cursor: 'pointer',

@@ -16,6 +16,7 @@ import {
   snapshotReferenceSchema,
   snapshotTooLarge,
   turnSnapshotPrefix,
+  workspaceTransitKey,
   type ObjectStorage,
   type PresignedRequest,
   type SealedTurnPart,
@@ -162,7 +163,7 @@ export class SnapshotService {
     const prefix = turnSnapshotPrefix(metadata.sessionId, metadata.turn)
     let dataKey: Uint8Array | undefined
     try {
-      const keyId = `ws-${metadata.workspaceId}`
+      const keyId = workspaceTransitKey(metadata.workspaceId)
       const issued = await this.secrets.transitDataKey(keyId)
       dataKey = issued.plaintext
       const base: SnapshotSealBase = {
@@ -361,7 +362,7 @@ export class SnapshotService {
   /** The schema requires one wrapped key shared by all parts. */
   private unwrap(manifest: SnapshotManifest): Promise<Uint8Array> {
     return this.secrets.transitDecryptDataKey(
-      `ws-${manifest.workspaceId}`,
+      workspaceTransitKey(manifest.workspaceId),
       manifest.parts[0]!.encryption.wrappedKey,
     )
   }

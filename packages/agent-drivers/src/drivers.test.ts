@@ -6,7 +6,7 @@ import { createKimiDriver } from './kimi.ts'
 import { createOpencodeDriver } from './opencode.ts'
 import { createQwenDriver } from './qwen.ts'
 
-const config = { imagePrefix: 'registry.local:3300/raditi/agent' }
+const config = { image: `registry.local:3300/raditi/sbx-wordpress@sha256:${'a'.repeat(64)}` }
 
 const expected: Array<{
   create: (c: typeof config) => AgentDriver
@@ -58,8 +58,13 @@ const run = {
     sessionId: 's',
     nativeSessionId: '01960000-0000-7000-8000-000000000001',
     turn: 1,
-    llm: { baseUrl: 'http://gw.sandbox/llm', apiKey: 'k', model: 'm' },
-    mcp: { url: 'http://gw.sandbox/mcp', token: 'x' },
+    llm: {
+      baseUrl: 'http://sandbox-gw:8080/codex',
+      apiKey: 'k',
+      model: 'm',
+      reasoningEffort: 'medium' as const,
+    },
+    mcp: { url: 'http://sandbox-gw:8080/mcp', token: 'x' },
     instructions: '',
   },
   files: [],
@@ -73,7 +78,7 @@ describe.each(expected)('$id driver', ({ create, id, task, capabilities, private
   it('matches the port: id, image and capabilities', () => {
     expect(agentDriverIds).toContain(driver.id)
     expect(driver.id).toBe(id)
-    expect(driver.image).toBe(`${config.imagePrefix}-${id}`)
+    expect(driver.image).toBe(config.image)
     expect(driver.capabilities).toStrictEqual(capabilities)
   })
 
@@ -96,19 +101,20 @@ describe.each(expected)('$id driver', ({ create, id, task, capabilities, private
     }
   })
 
-  it(`leaves the CLI-specific parts to ${task}`, async () => {
-    await expect(driver.prepare(run.context)).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
-      message: expect.stringContaining(`${id}.prepare (${task})`),
+  if (id !== 'codex' && id !== 'kimi')
+    it(`leaves the CLI-specific parts to ${task}`, async () => {
+      await expect(driver.prepare(run.context)).rejects.toMatchObject({
+        code: 'NOT_IMPLEMENTED',
+        message: expect.stringContaining(`${id}.prepare (${task})`),
+      })
+      expect(() => driver.command(run, { prompt: 'p', attachments: [] })).toThrow(
+        `${id}.command (${task})`,
+      )
+      expect(driver.parseEvent('{}')).toEqual([])
+      expect(driver.extractResult([], null)).toBeNull()
     })
-    expect(() => driver.command(run, { prompt: 'p', attachments: [] })).toThrow(
-      `${id}.command (${task})`,
-    )
-    expect(driver.parseEvent('{}')).toEqual([])
-    expect(driver.extractResult([], null)).toBeNull()
-  })
 
-  it('rejects an empty image prefix', () => {
-    expect(() => create({ imagePrefix: '' })).toThrow(/Invalid agent driver configuration/)
+  it('rejects an empty image', () => {
+    expect(() => create({ image: '' })).toThrow(/Invalid agent driver configuration/)
   })
 })

@@ -22,6 +22,9 @@ next-env.d.ts
 *.pem
 *.key
 
+# Журнал разведки P3.0 (record-proxy): непроверенная запись живых обменов
+spike-records/
+
 # Личные заметки для Claude Code
 CLAUDE.local.md
 .claude/settings.local.json

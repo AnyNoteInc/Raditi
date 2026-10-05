@@ -3,7 +3,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 
 import {
+  conflict,
   coreStopping,
+  leaseLost,
   MAX_SANDBOX_TURN_MS,
   runnerReportSchema,
   runnerUnavailable,
@@ -16,9 +18,10 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
-import { CLAIM_RACE_MS, RunnerHub } from '../runner-api/runner-hub.ts'
+import { RunnerHub } from '../runner-api/runner-hub.ts'
 import { MemorySiteLeases } from '../testing/site-leases.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+import { MemoryTurnCredentials } from '../testing/turn-credentials.ts'
 import { MemoryTurnJournal } from '../testing/turn-journal.ts'
 import { LeaseGuard } from './lease-guard.ts'
 import { TurnAttempt } from './turn-attempt.ts'
@@ -67,6 +70,7 @@ const hubs: RunnerHub[] = []
 afterEach(() => {
   for (const guard of guards.splice(0)) guard.close()
   for (const hub of hubs.splice(0)) hub.close()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -75,6 +79,9 @@ async function given() {
   const leases = new MemorySiteLeases()
   const journal = new MemoryTurnJournal(leases)
   const assignments = new MemoryTurnAssignments(leases)
+  const credentials = new MemoryTurnCredentials()
+  const revoke = vi.spyOn(credentials, 'revoke')
+  const logger = { warn: vi.fn() }
   const lease = (await leases.acquire({
     siteId: labels.siteId,
     taskId: labels.taskId,
@@ -86,7 +93,15 @@ async function given() {
   guards.push(guard)
   const plan = toTurnPlan(request, 'codex')
   const attempt = new TurnAttempt(
-    { leases, assignments, journal, workspace: {} as never, snapshots: {} as never },
+    {
+      leases,
+      assignments,
+      journal,
+      credentials,
+      logger,
+      workspace: {} as never,
+      snapshots: {} as never,
+    },
     { lease, guard, plan },
   )
   await attempt.record('leased')
@@ -98,6 +113,12 @@ async function given() {
     plan,
     remainingMs: MAX_SANDBOX_TURN_MS,
   }))!
+  attempt.credentialRef = {
+    taskId: labels.taskId,
+    sessionId: labels.sessionId,
+    turn: labels.turn,
+    epoch: attempt.assignment.firstEpoch,
+  }
   const destroy = vi.fn(async () => {})
   const execution = { containerId: 'container1', destroy } as unknown as TurnExecution
   const release = vi.spyOn(leases, 'release')
@@ -114,6 +135,9 @@ async function given() {
     destroy,
     release,
     finish,
+    credentials,
+    revoke,
+    logger,
     cancel: () => cancel.abort(),
     row: () => leases.rows.get(labels.siteId)!,
     outcome: () => [...assignments.rows.values()][0]!.outcome,
@@ -160,6 +184,7 @@ describe('TurnAttempt given up while its prepare was out (spec §8)', () => {
     // The supervisor leaves LiveTurns only once the entry is journaled.
     expect(settled).toBe(false)
     expect(t.release).not.toHaveBeenCalled()
+    expect(t.revoke).not.toHaveBeenCalled()
     slow.resolve()
     expect(await settling).toBe('vacating')
     await expect(late).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
@@ -245,6 +270,7 @@ describe('TurnAttempt given up while its prepare was out (spec §8)', () => {
     await vi.waitFor(() => expect(t.journal.phases().at(-1)).toBe('failed'))
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(t.finish).not.toHaveBeenCalled()
+    expect(t.revoke).toHaveBeenCalledOnce()
     expect(t.row()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
     // So its takeover is never lost to this attempt's finish.
     expect(
@@ -314,6 +340,7 @@ describe('TurnAttempt when core stops (spec §8 «Устройство ранн�
     expect(t.row()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
     expect(t.release).not.toHaveBeenCalled()
     expect(t.finish).not.toHaveBeenCalled()
+    expect(t.revoke).not.toHaveBeenCalled()
     expect(t.outcome()).toBeNull()
   })
 
@@ -326,6 +353,96 @@ describe('TurnAttempt when core stops (spec §8 «Устройство ранн�
     expect(t.journal.entries.at(-1)).toMatchObject({ phase: 'recovery', reason: 'destroy_failed' })
     expect(t.row()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 1 })
     expect(t.finish).not.toHaveBeenCalled()
+    expect(t.revoke).toHaveBeenCalledOnce()
+  })
+})
+
+describe('TurnAttempt credential cleanup', () => {
+  it('revokes after removal and before releasing the site', async () => {
+    const t = await given()
+    await t.attempt.created(t.execution)
+    t.revoke.mockImplementation(async () => {
+      expect(t.destroy).toHaveBeenCalledOnce()
+      expect(t.release).not.toHaveBeenCalled()
+      expect(t.row().taskId).toBe(labels.taskId)
+    })
+    expect(await t.attempt.settle()).toBe('released')
+    expect(t.revoke).toHaveBeenCalledExactlyOnceWith(t.attempt.credentialRef)
+    expect(t.release).toHaveBeenCalledOnce()
+  })
+
+  it('revokes a vacating turn before leaving it to recovery', async () => {
+    const t = await given()
+    t.attempt.dispatched()
+    expect(await t.attempt.settle()).toBe('vacating')
+    expect(t.revoke).toHaveBeenCalledOnce()
+    expect(t.release).not.toHaveBeenCalled()
+    t.attempt.vacated()
+    await vi.waitFor(() => expect(t.release).toHaveBeenCalledOnce())
+    expect(t.revoke).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['its executor refuses the stale removal', true],
+    ['its own removal still goes through', false],
+  ])(
+    'leaves the credentials to the owner that took the turn over under a newer epoch, when %s',
+    async (_, refused) => {
+      const t = await given()
+      await t.attempt.created(t.execution)
+      // Another core's recovery took the running turn over and resumed its agent with these keys.
+      await t.leases.holdForRecovery(t.lease)
+      await t.assignments.takeOver({ id: t.attempt.assignment!.id, fence: t.lease, ttlMs: 60_000 })
+      if (refused)
+        t.destroy.mockRejectedValue(conflict('The turn was taken over under a newer fence'))
+      // The stale owner finds its lease gone and settles.
+      t.attempt.failed(leaseLost())
+      await t.attempt.settle()
+      expect(t.revoke).not.toHaveBeenCalled()
+      // Everything else it tries is fenced by its epoch: the turn stays the new owner's.
+      expect(t.row()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 2 })
+      expect(t.outcome()).toBeNull()
+      expect(t.journal.phases()).toEqual(['leased', 'created'])
+    },
+  )
+
+  it('revokes the credentials of a turn whose site another task has by now', async () => {
+    const t = await given()
+    await t.attempt.created(t.execution)
+    // The lease ran out and another task took the site: nobody continues this turn.
+    t.row().expiresAt = Date.now() - 1
+    expect(
+      await t.leases.acquire({
+        siteId: labels.siteId,
+        taskId: '00000000-0000-4000-8000-000000000009',
+        operation: 'turn',
+        ttlMs: 60_000,
+      }),
+    ).toMatchObject({ epoch: 2 })
+    t.attempt.failed(leaseLost())
+    await t.attempt.settle()
+    expect(t.revoke).toHaveBeenCalledExactlyOnceWith(t.attempt.credentialRef)
+  })
+
+  it('releases the site after a rejected revoke and logs no storage error text', async () => {
+    const t = await given()
+    t.revoke.mockRejectedValue(new Error('secret-token-in-vault-response'))
+    expect(await t.attempt.settle()).toBe('released')
+    expect(t.release).toHaveBeenCalledOnce()
+    expect(t.logger.warn).toHaveBeenCalledExactlyOnceWith('llm_turn_credentials_revoke_failed')
+  })
+
+  it('releases the site after five seconds when Vault never answers', async () => {
+    const t = await given()
+    vi.useFakeTimers()
+    t.revoke.mockImplementation(() => new Promise(() => {}))
+    const settling = t.attempt.settle()
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(t.release).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await settling).toBe('released')
+    expect(t.release).toHaveBeenCalledOnce()
+    expect(t.logger.warn).toHaveBeenCalledExactlyOnceWith('llm_turn_credentials_revoke_failed')
   })
 })
 
@@ -500,7 +617,7 @@ describe('TurnAttempt over a runner: delivery against giving up (spec §8)', () 
     expect(t.row()).toMatchObject({ taskId: labels.taskId, held: false, epoch: 1 })
   })
 
-  /** The runner's claim commits at once; its answer reaches core only once `answer` resolves. */
+  /** The durable claim commits at once; its answer reaches core only once `answer` resolves. */
   function claimAnsweredLate(t: Awaited<ReturnType<typeof onRunner>>) {
     const claim = t.assignments.claim.bind(t.assignments)
     const committed = Promise.withResolvers<void>()
@@ -514,46 +631,22 @@ describe('TurnAttempt over a runner: delivery against giving up (spec §8)', () 
     return { committed: committed.promise, answer: () => answer.resolve() }
   }
 
-  it('never dispatches a prepare whose claim a runner won after the owner gave up', async () => {
+  it('never queues a prepare whose claim was answered after the owner gave the turn up', async () => {
     const t = await onRunner()
     const late = claimAnsweredLate(t)
     const polled = t.poll()
     await late.committed
-    // The abandon loses to the committed claim: the site is freed without waiting for it.
+    // The claim committed, its answer is still out: the owner frees the site without waiting
+    // for it — nothing was queued, so no container of the turn can exist.
     t.cancel()
     expect(await t.settled).toBe('released')
     expect(t.row()).toMatchObject({ taskId: null, held: false, epoch: 1 })
+    expect(t.outcome()).toBe('failed')
     late.answer()
     expect(await polled).toEqual([])
     await expect(t.preparing).rejects.toBeDefined()
     expect(await t.poll()).toEqual([])
     expect(t.dispatched).not.toHaveBeenCalled()
     expect(t.release).toHaveBeenCalledOnce()
-  })
-
-  it('stops waiting for a claim a runner won when its answer never reaches core', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-    const t = await onRunner()
-    const late = claimAnsweredLate(t)
-    try {
-      void t.poll().catch(() => {})
-      await late.committed
-      t.cancel()
-      expect(await t.settled).toBe('released')
-      let rejected = false
-      t.preparing.catch(() => {
-        rejected = true
-      })
-      await vi.advanceTimersByTimeAsync(CLAIM_RACE_MS - 1)
-      expect(rejected).toBe(false)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(rejected).toBe(true)
-      expect(t.dispatched).not.toHaveBeenCalled()
-      expect(t.release).toHaveBeenCalledOnce()
-      expect(t.row()).toMatchObject({ taskId: null, held: false, epoch: 1 })
-    } finally {
-      late.answer()
-      vi.useRealTimers()
-    }
   })
 })

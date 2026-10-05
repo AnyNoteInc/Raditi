@@ -3,7 +3,7 @@
   "title": "Радити — обзор",
   "tags": ["raditi"],
   "schemaVersion": 41,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "30s",
   "time": { "from": "now-6h", "to": "now" },
@@ -58,59 +58,17 @@
       "id": 3,
       "type": "timeseries",
       "title": "Задачи по статусам",
-      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum by (status) (raditi_tasks)", "legendFormat": "{{status}}" }
       ]
     },
     {
-      "id": 4,
-      "type": "timeseries",
-      "title": "LLM: запросы в секунду по модели",
-      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (requested_model) (rate(litellm_proxy_total_requests_metric_total[5m]))",
-          "legendFormat": "{{requested_model}}"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "type": "timeseries",
-      "title": "LLM: токены за час",
-      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (model) (increase(litellm_total_tokens_metric_total[1h]))",
-          "legendFormat": "{{model}}"
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "type": "timeseries",
-      "title": "LLM: задержка p95, с",
-      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(litellm_request_total_latency_metric_bucket[5m])))",
-          "legendFormat": "{{model}}"
-        }
-      ]
-    },
-    {
       "id": 7,
       "type": "timeseries",
       "title": "PostgreSQL: соединения",
-      "gridPos": { "x": 0, "y": 22, "w": 6, "h": 7 },
+      "gridPos": { "x": 0, "y": 14, "w": 6, "h": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum by (datname) (pg_stat_activity_count)", "legendFormat": "{{datname}}" }
@@ -120,7 +78,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "Redis: память",
-      "gridPos": { "x": 6, "y": 22, "w": 6, "h": 7 },
+      "gridPos": { "x": 6, "y": 14, "w": 6, "h": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "bytes" } },
       "targets": [{ "refId": "A", "expr": "redis_memory_used_bytes", "legendFormat": "used" }]
@@ -129,7 +87,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "S3: запросы в секунду",
-      "gridPos": { "x": 12, "y": 22, "w": 6, "h": 7 },
+      "gridPos": { "x": 12, "y": 14, "w": 6, "h": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum by (type) (rate(SeaweedFS_s3_request_total[5m]))", "legendFormat": "{{type}}" }
@@ -139,16 +97,44 @@
       "id": 10,
       "type": "timeseries",
       "title": "Node.js: задержка event loop p99, с",
-      "gridPos": { "x": 18, "y": 22, "w": 6, "h": 7 },
+      "gridPos": { "x": 18, "y": 14, "w": 6, "h": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "expr": "nodejs_eventloop_lag_p99_seconds", "legendFormat": "{{app}}" }]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Шлюз подписок: запросы в секунду",
+      "description": "Все запросы, отказы шлюза и завершённые вызовы. Рядов нет — роль llm не запущена или цель llm недоступна.",
+      "gridPos": { "x": 0, "y": 21, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(raditi_llm_requests_total[5m]))", "legendFormat": "запросы" },
+        { "refId": "B", "expr": "sum(rate(raditi_llm_refusals_total[5m]))", "legendFormat": "отказы" },
+        { "refId": "C", "expr": "sum(rate(raditi_llm_completed_total[5m]))", "legendFormat": "завершено" }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Шлюз подписок: активные запросы и учёт расхода",
+      "description": "Оценочный расход, повторы и ошибки записи, usage после закрытия потока — приросты за 5 минут.",
+      "gridPos": { "x": 12, "y": 21, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(raditi_llm_active_requests)", "legendFormat": "активные" },
+        { "refId": "B", "expr": "sum(increase(raditi_llm_estimated_total[5m]))", "legendFormat": "оценочный расход" },
+        { "refId": "C", "expr": "sum(increase(raditi_llm_persistence_retries_total[5m]))", "legendFormat": "повторы записи" },
+        { "refId": "D", "expr": "sum(increase(raditi_llm_persistence_failed_total[5m]))", "legendFormat": "ошибки записи" },
+        { "refId": "E", "expr": "sum(increase(raditi_llm_usage_late_total[5m]))", "legendFormat": "поздний usage" }
+      ]
     },
     {
       "id": 11,
       "type": "stat",
       "title": "Дополнительные профили: метрики",
       "description": "Выключенные профили имеют значение НЕТ. При включении профиля проверьте значение ОК. Алерты доступности для этих целей выключены.",
-      "gridPos": { "x": 0, "y": 29, "w": 12, "h": 6 },
+      "gridPos": { "x": 0, "y": 28, "w": 12, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -177,7 +163,7 @@
       "type": "stat",
       "title": "Дополнительные профили: доступность",
       "description": "Выключенные профили имеют значение НЕТ. При включении профиля проверьте значение ОК. Алерты доступности для этих целей выключены.",
-      "gridPos": { "x": 12, "y": 29, "w": 12, "h": 6 },
+      "gridPos": { "x": 12, "y": 28, "w": 12, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {

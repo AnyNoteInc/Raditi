@@ -1,4 +1,4 @@
-# One image for the core, mcp and runner roles; the uid comes from compose (core: 10002).
+# One image for core, llm, mcp and runner; the uid comes from compose (core: 10002, llm: 10008).
 #   docker build -f apps/orchestrator/Dockerfile --target runtime .   (and --target migrate)
 # No `# syntax=` line: Docker's built-in frontend already has cache mounts, and it pulls nothing
 # from Docker Hub. Mirrors keep upstream digests, so a mirror is just another NODE_IMAGE.
@@ -53,6 +53,6 @@ COPY --from=prod /repo /app
 ENV NODE_ENV=production
 WORKDIR /app/apps/orchestrator
 USER 10001:10001
-EXPOSE 8081 8082 8083
+EXPOSE 8081 8082 8083 8084
 ENTRYPOINT ["node"]
 CMD ["dist/main.js"]

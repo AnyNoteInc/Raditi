@@ -12,8 +12,14 @@ import {
 } from '@repo/domain'
 
 const MAX_BYTES = 32 * 1024 * 1024
+/** What the drivers' parsers read of one line: a longer one yields no events there either. */
 const MAX_LINE_BYTES = 256 * 1024
 const MAX_CHUNKS = 100_000
+/**
+ * Left in place of a stdout line longer than MAX_LINE_BYTES, as the agent's message: a result is
+ * read only from the last message, so a skipped final line never revives an older one. Not JSON.
+ */
+export const SKIPPED_LINE_MESSAGE = '[Часть вывода агента пропущена: слишком длинная строка]'
 
 /** Where reading starts: a re-attached exec continues from the journal's cursor and count. */
 export interface TurnOutputStart {
@@ -23,7 +29,10 @@ export interface TurnOutputStart {
 }
 
 /**
- * Strict byte accounting precedes decoding; oversized final lines cannot revive an older result.
+ * Strict byte accounting precedes decoding. A line longer than the parsers read — the whole
+ * output of a command in one Codex event, say — does not end the turn: it is skipped whole,
+ * neither kept nor decoded, and leaves SKIPPED_LINE_MESSAGE in its place, so an over-long final
+ * line cannot revive an older result. Everything a turn prints stays bounded by MAX_BYTES.
  * Returns only the events read here.
  */
 export async function readTurnOutput(
@@ -37,10 +46,17 @@ export async function readTurnOutput(
   const cursor = { stdout: start.cursor.stdout, stderr: start.cursor.stderr }
   const events: AgentEvent[] = []
   let pending = Buffer.alloc(0)
+  /** Bytes of the unfinished stdout line: kept in `pending`, or skipped once it is over-long. */
+  let lineBytes = 0
+  let skipping = false
   let chunks = 0
+  const accept = (parsed: AgentEvent[]): AgentEvent[] => {
+    if (start.eventCount + events.length + parsed.length > agentOutputLimits.turnEvents)
+      throw turnOutputTooLarge('Agent event limit exceeded')
+    events.push(...parsed)
+    return parsed
+  }
   const decode = (line: Uint8Array): AgentEvent[] => {
-    if (line.byteLength > MAX_LINE_BYTES)
-      throw turnOutputTooLarge('Agent output line exceeds its limit')
     let text: string
     try {
       text = new TextDecoder('utf-8', { fatal: true }).decode(line)
@@ -62,11 +78,9 @@ export async function readTurnOutput(
       return checked.data
     })
     if (containsSecret(parsed)) throw turnOutputRejected('Agent output contains a turn credential')
-    if (start.eventCount + events.length + parsed.length > agentOutputLimits.turnEvents)
-      throw turnOutputTooLarge('Agent event limit exceeded')
-    events.push(...parsed)
-    return parsed
+    return accept(parsed)
   }
+  const skipped = (): AgentEvent[] => accept([{ type: 'message', text: SKIPPED_LINE_MESSAGE }])
   for await (const chunk of handle.output()) {
     assertActive()
     if (++chunks > MAX_CHUNKS) throw turnOutputTooLarge('Agent output chunk limit exceeded')
@@ -87,12 +101,16 @@ export async function readTurnOutput(
       while (offset < bytes.length) {
         const newline = bytes.indexOf(10, offset)
         const end = newline < 0 ? bytes.length : newline
-        if (pending.length + end - offset > MAX_LINE_BYTES)
-          throw turnOutputTooLarge('Agent output line exceeds its limit')
-        pending = Buffer.concat([pending, bytes.subarray(offset, end)])
+        lineBytes += end - offset
+        if (lineBytes > MAX_LINE_BYTES) {
+          skipping = true
+          pending = Buffer.alloc(0)
+        } else pending = Buffer.concat([pending, bytes.subarray(offset, end)])
         if (newline < 0) break
-        batch.push(...decode(pending))
+        batch.push(...(skipping ? skipped() : decode(pending)))
         pending = Buffer.alloc(0)
+        lineBytes = 0
+        skipping = false
         offset = newline + 1
       }
     }
@@ -100,8 +118,9 @@ export async function readTurnOutput(
     // A durable stdout cursor only acknowledges complete lines. On reconnect the
     // trailing partial line is replayed in full instead of losing its prefix; replaying stderr
     // and lines without events is idempotent, so only chunks that yield events are journaled.
-    if (batch.length > 0) await record({ ...cursor, stdout: cursor.stdout - pending.length }, batch)
+    if (batch.length > 0) await record({ ...cursor, stdout: cursor.stdout - lineBytes }, batch)
   }
-  if (pending.length > 0) await record({ ...cursor }, decode(pending))
+  if (skipping) await record({ ...cursor }, skipped())
+  else if (pending.length > 0) await record({ ...cursor }, decode(pending))
   return { events, cursor }
 }

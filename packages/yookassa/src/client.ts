@@ -6,15 +6,19 @@ import { YookassaApiError, YookassaError } from './errors.ts'
 import {
   chargeSavedInputSchema,
   createPaymentInputSchema,
+  createPaymentMethodInputSchema,
   createRefundInputSchema,
   errorBodySchema,
   paymentSchema,
   refundSchema,
+  savedPaymentMethodSchema,
   type ChargeSavedInput,
   type CreatePaymentInput,
+  type CreatePaymentMethodInput,
   type CreateRefundInput,
   type Payment,
   type Refund,
+  type SavedPaymentMethod,
 } from './schemas.ts'
 
 export interface YookassaClientOptions {
@@ -33,13 +37,24 @@ export interface YookassaClient {
   createPayment(input: CreatePaymentInput, idempotenceKey: string): Promise<Payment>
   chargeWithSavedMethod(input: ChargeSavedInput, idempotenceKey: string): Promise<Payment>
   getPayment(paymentId: string): Promise<Payment>
+  /** Saves a payment method without a payment; the answer carries `confirmation_url`. */
+  createPaymentMethod(
+    input: CreatePaymentMethodInput,
+    idempotenceKey: string,
+  ): Promise<SavedPaymentMethod>
+  getPaymentMethod(paymentMethodId: string): Promise<SavedPaymentMethod>
   createRefund(input: CreateRefundInput, idempotenceKey: string): Promise<Refund>
   getRefund(refundId: string): Promise<Refund>
 }
 
 const DEFAULT_BASE_URL = 'https://api.yookassa.ru/v3'
 const DEFAULT_TIMEOUT_MS = 30_000
-const MAX_IDEMPOTENCE_KEY_LENGTH = 64
+/**
+ * Narrower than what ЮKassa accepts, on purpose: letters, digits, dot, hyphen and underscore.
+ * Our keys are UUIDs, `renew.<subscriptionId>.<ms>` and `refund.<orderId>`; a colon from a
+ * credit_ledger key must fail here, before the request, not at the API.
+ */
+const IDEMPOTENCE_KEY = /^[A-Za-z0-9._-]{1,64}$/
 
 /** The credentials stay in this closure: the client object has nothing secret to log. */
 export function createYookassaClient(options: YookassaClientOptions): YookassaClient {
@@ -113,6 +128,20 @@ export function createYookassaClient(options: YookassaClientOptions): YookassaCl
       return request(paymentSchema, `/payments/${pathId(paymentId)}`, { method: 'GET' })
     },
 
+    async createPaymentMethod(input, idempotenceKey) {
+      return request(savedPaymentMethodSchema, '/payment_methods', {
+        method: 'POST',
+        body: validate(createPaymentMethodInputSchema, input, 'payment method'),
+        idempotenceKey: checkIdempotenceKey(idempotenceKey),
+      })
+    },
+
+    async getPaymentMethod(paymentMethodId) {
+      return request(savedPaymentMethodSchema, `/payment_methods/${pathId(paymentMethodId)}`, {
+        method: 'GET',
+      })
+    },
+
     async createRefund(input, idempotenceKey) {
       return request(refundSchema, '/refunds', {
         method: 'POST',
@@ -139,8 +168,10 @@ function validate<S extends z.ZodType>(schema: S, input: unknown, what: string):
 }
 
 function checkIdempotenceKey(key: string): string {
-  if (key.length === 0 || key.length > MAX_IDEMPOTENCE_KEY_LENGTH) {
-    throw new YookassaError(`Idempotence-Key must be 1–${MAX_IDEMPOTENCE_KEY_LENGTH} characters`)
+  if (!IDEMPOTENCE_KEY.test(key)) {
+    throw new YookassaError(
+      'Idempotence-Key must be 1–64 characters: letters, digits, dot, hyphen and underscore',
+    )
   }
   return key
 }

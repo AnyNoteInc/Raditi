@@ -19,6 +19,8 @@ import {
   TURN_FINALIZE_RESERVE_MS,
   TURN_PUBLICATION_GRACE_MS,
   turnCredentials,
+  turnCredentialPolicySchema,
+  withTurnCredentials,
   type AgentDriver,
   type PreparedFiles,
   type PreparedRun,
@@ -27,9 +29,13 @@ import {
   type TurnExecutor,
   type TurnPlan,
   type TurnRequest,
+  type UnkeyedTurnRequest,
+  type TurnCredentialPolicy,
   type TurnRestoreSource,
+  type TurnContentRollback,
 } from '@repo/domain'
 
+import { newTurnKeys } from '../llm/turn-key.ts'
 import { LeaseGuard } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
 import {
@@ -39,7 +45,7 @@ import {
   type TurnSnapshotStore,
 } from './turn-attempt.ts'
 
-export type { CompletedTurn, TurnRequest, TurnSnapshotStore }
+export type { CompletedTurn, TurnRequest, UnkeyedTurnRequest, TurnSnapshotStore }
 
 export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   /** Owns the turn's container: in core's process (PoC) or on a runner VM. */
@@ -47,6 +53,8 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   driver: AgentDriver
   /** Shared with TurnExecRecovery: it never takes over a turn this process drives. */
   live: LiveTurns
+  /** Required for replacement actions; undo completes before the sandbox is prepared. */
+  contentRollback?: TurnContentRollback
 }
 
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
@@ -56,8 +64,26 @@ const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.l
 export class TurnSupervisor {
   constructor(private readonly deps: TurnSupervisorDependencies) {}
 
-  async run(request: TurnRequest, signal?: AbortSignal): Promise<CompletedTurn> {
+  async run(
+    request: UnkeyedTurnRequest,
+    policy: TurnCredentialPolicy,
+    signal?: AbortSignal,
+  ): Promise<CompletedTurn> {
     const plan = this.validate(request)
+    if (plan.replacesTurn !== undefined && !this.deps.contentRollback)
+      throw badRequest('Replacement requires content rollback')
+    const parsed = turnCredentialPolicySchema.safeParse(policy)
+    if (!parsed.success || parsed.data.driverId !== this.deps.driver.id)
+      throw badRequest('Invalid turn credential policy')
+    if (
+      plan.context.llm.reasoningEffort !== undefined &&
+      plan.context.llm.reasoningEffort !== parsed.data.reasoningEffort
+    )
+      throw badRequest('Turn reasoning effort differs from credential policy')
+    // Persist the same profile the key allows, including an explicit provider default.
+    // Older saved plans can still omit this field when recovery adopts their existing exec.
+    plan.context.llm.reasoningEffort = parsed.data.reasoningEffort
+    await this.assertLaunchable(plan)
     const labels = request.sandbox.labels
     const acquiredAt = performance.now()
     const lease = await this.deps.leases.acquire({
@@ -97,6 +123,49 @@ export class TurnSupervisor {
         throw conflict('The turn already has an unfinished assignment')
       }
       attempt.assignment = opened
+      attempt.credentialRef = {
+        taskId: labels.taskId,
+        sessionId: labels.sessionId,
+        turn: labels.turn,
+        epoch: opened.firstEpoch,
+      }
+      let boundSource: string | null = null
+      if (this.deps.executor.kind === 'runner') {
+        if (!this.deps.executor.credentialAddress)
+          throw badRequest('Runner credential source unavailable')
+        // A slot of a runner VM is reserved, and the key below is bound to that VM's address.
+        // Nothing durable binds the turn to the runner until executor.prepare hands the command
+        // out: a turn given up, or left by a core that died, before that was never handed out,
+        // and its site is freed at once (spec §8).
+        boundSource = await guard.interruptible(
+          this.deps.executor.credentialAddress(opened.id, guard.signal),
+        )
+      }
+      await guard.assertFence()
+      const values = await guard.interruptible(
+        this.deps.credentials.issue(attempt.credentialRef, {
+          ...parsed.data,
+          ttlMs: Math.min(
+            parsed.data.ttlMs,
+            guard.remainingBeforeReserveMs(TURN_FINALIZE_RESERVE_MS),
+          ),
+          deadlineAt: opened.deadlineAt,
+          boundSource,
+        }),
+      )
+      const keyed = withTurnCredentials(plan, values)
+      if (
+        containsCredential(Object.values(request.sandbox.env), turnCredentials(keyed.context, []))
+      )
+        throw badRequest('Sandbox env contains a turn credential')
+      if (plan.replacesTurn !== undefined) {
+        await guard.assertFence()
+        await guard.interruptible(
+          // Admitted by the fence of the site lease: no credential of the turn travels here.
+          this.deps.contentRollback!.rollback({ fence: lease, turn: plan.replacesTurn }),
+        )
+        await guard.assertFence()
+      }
       // Cloned on the host with a short read-only credential; the executor gets objects only.
       let bundle: TurnBundleSource | undefined = await guard.interruptible(
         this.deps.workspace.buildBaseBundle(request.workspace),
@@ -119,7 +188,7 @@ export class TurnSupervisor {
         }
       }
       const context = {
-        ...request.context,
+        ...keyed.context,
         ...(restore?.manifest.driver.nativeSessionId
           ? { nativeSessionId: restore.manifest.driver.nativeSessionId }
           : {}),
@@ -174,24 +243,44 @@ export class TurnSupervisor {
       attempt.failed(error)
       throw error
     } finally {
-      await attempt.settle()
-      this.deps.live.leave(lease)
+      try {
+        await attempt.settle()
+      } finally {
+        if (attempt.assignment) this.deps.executor.forgetCredentialAddress?.(attempt.assignment.id)
+        this.deps.live.leave(lease)
+      }
     }
   }
 
+  /**
+   * What the driver would refuse after the lease, the key and the content undo of a replacement,
+   * it refuses here: a dry run of its prepare and command over the plan, with stand-ins for the
+   * two credentials no turn has before its lease — a pair of the turn's own formats, never
+   * stored or admitted anywhere. A profile or an input the CLI cannot be launched with then
+   * costs neither a turn number nor an undo. Nothing of the run is kept.
+   */
+  private async assertLaunchable(plan: TurnPlan): Promise<void> {
+    const { context, input } = withTurnCredentials(plan, newTurnKeys())
+    const prepared = await this.deps.driver.prepare(context)
+    checkPreparedRun(context, prepared, this.deps.driver.command(prepared, input))
+  }
+
   /** Everything checked before the lease; the plan is what the assignment keeps. */
-  private validate(request: TurnRequest): TurnPlan {
+  private validate(request: UnkeyedTurnRequest): TurnPlan {
     assertSandboxSpec(request.sandbox)
     const labels = request.sandbox.labels
-    if (labels.turn > 1 && !request.previous)
+    if (request.replacesTurn !== undefined && request.replacesTurn !== labels.turn - 1)
+      throw badRequest('Replacement must name the latest turn')
+    if (request.replacesTurn !== undefined && request.workspace.expectedBranchSha === undefined)
+      throw badRequest('Replacement requires the published task branch fence')
+    if (request.replacesTurn !== undefined && !request.previous && request.context.nativeSessionId)
+      throw badRequest('A replacement without a checkpoint must start a fresh session')
+    if (labels.turn > 1 && !request.previous && request.replacesTurn === undefined)
       throw badRequest('A resumed turn requires the previous checkpoint')
     if (request.sandbox.secrets.length !== 0)
       throw badRequest('Turn secrets are installed only after restore')
-    // Container env is visible in docker inspect: credentials reach the sandbox as files only.
-    if (
-      containsCredential(Object.values(request.sandbox.env), turnCredentials(request.context, []))
-    )
-      throw badRequest('Sandbox env contains a turn credential')
+    if ('apiKey' in request.context.llm || 'token' in request.context.mcp)
+      throw badRequest('Turn credentials must be issued by the supervisor')
     if (request.sandbox.hardTimeoutMs <= TURN_FINALIZE_RESERVE_MS)
       throw badRequest('Turn limit leaves no time for the agent')
     if (
@@ -228,7 +317,9 @@ export class TurnSupervisor {
       if (
         prior.workspaceId !== labels.workspaceId ||
         prior.sessionId !== labels.sessionId ||
-        prior.turn !== labels.turn - 1 ||
+        (request.replacesTurn === undefined
+          ? prior.turn !== labels.turn - 1
+          : prior.turn >= request.replacesTurn) ||
         prior.image !== request.sandbox.image ||
         prior.driver.id !== this.deps.driver.id ||
         prior.driver.version !== request.driverVersion

@@ -297,6 +297,8 @@ export function createDockerGatewayManager(
         const ips = addresses(networkInfo.IPAM!.Config![0]!.Subnet ?? '')
         // Before anything that runs code joins the bridge.
         if (runsc) await hostFirewall(resourceId, ['install', bridgeName(resourceId)], signal)
+        // A fixed address on a subnet Docker picked needs Docker Engine 29.1: older engines
+        // refuse it unless the subnet is user-configured, and the attempt fails right here.
         const endpoints = (ip: string): Docker.EndpointsConfig => ({
           [network.id]: { IPAMConfig: { IPv4Address: ip } },
         })

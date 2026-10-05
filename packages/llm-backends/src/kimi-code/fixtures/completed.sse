@@ -1,0 +1,10 @@
+data: {"choices":[{"index":0,"delta":{"content":"Готово","reasoning_content":"мысль"},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\":1}"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"choices":[],"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":60},"completion_tokens":40,"completion_tokens_details":{"reasoning_tokens":30},"total_tokens":140}}
+
+data: [DONE]
+

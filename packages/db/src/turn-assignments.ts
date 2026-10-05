@@ -47,6 +47,8 @@ const openSchema = z.object({
   remainingMs: z.number().int().positive().max(MAX_SANDBOX_TURN_MS),
 })
 const idsSchema = z.array(id).max(runnerLimits.claimIds)
+/** Shared admission validation for the operational and product assignment adapters. */
+export const validateOpenTurnAssignment = (input: OpenTurnAssignment) => openSchema.parse(input)
 const runnerSchema = z.object({ runnerId: runnerIdSchema, runnerSession: id })
 const takenSchema = z.array(z.object({ lease_expires_at: z.coerce.date() })).length(1)
 /** Rows per query of unfinished(), which reads them all. */
@@ -151,7 +153,7 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
   }
 
   async open(input: OpenTurnAssignment): Promise<TurnAssignment | null> {
-    const parsed = openSchema.parse(input)
+    const parsed = validateOpenTurnAssignment(input)
     const { fence } = parsed
     const rows = assignments(
       await this.db.$queryRaw`
@@ -284,6 +286,7 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
         SELECT lease.site_id FROM site_leases lease JOIN a ON a.site_id = lease.site_id
         WHERE lease.holder_task_id = a.task_id AND lease.epoch = ${fence.epoch}
           AND lease.operation = 'turn'::"LeaseOperation" AND lease.held_for_operator
+          AND lease.inflight_mcp_call_id IS NULL
           AND lease.epoch < 2147483647
         FOR UPDATE OF lease
       ), lease AS (
@@ -341,6 +344,7 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
       UPDATE site_leases lease SET holder_task_id = NULL, operation = NULL, acquired_at = NULL,
         expires_at = NULL, held_for_operator = false, updated_at = clock_timestamp()
       WHERE lease.held_for_operator AND lease.operation = 'turn'::"LeaseOperation"
+        AND lease.inflight_mcp_call_id IS NULL
         AND EXISTS (SELECT 1 FROM turn_assignments a
           WHERE a.site_id = lease.site_id AND a.task_id = lease.holder_task_id
             AND a.lease_epoch = lease.epoch AND a.finished_at IS NOT NULL)

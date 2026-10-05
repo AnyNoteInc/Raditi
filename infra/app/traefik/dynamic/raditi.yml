@@ -24,10 +24,21 @@ http:
       entryPoints: [websecure]
       rule: '(Host(`{{ env "APP_DOMAIN" }}`) || Host(`www.{{ env "APP_DOMAIN" }}`)) && PathPrefix(`/api/auth/reset-password/`)'
       priority: 1000
-      middlewares: [www-to-apex]
+      middlewares: [www-to-apex, api-body-limit]
       service: web
       tls: {}
       observability: { accessLogs: false }
+    # Every request that can carry a body to the API: a body over the limit gets 413 here and web
+    # never sees the request. The middleware also holds the whole answer back, so pages and GET
+    # (the task's SSE stream) stay on `web`. The avatar upload stays there too: web reads its
+    # 5 MiB only after the session check, here they would sit in memory for any sender.
+    web-api-body:
+      entryPoints: [websecure]
+      rule: 'Host(`{{ env "APP_DOMAIN" }}`) && PathPrefix(`/api/`) && !Path(`/api/profile/avatar`) && !Method(`GET`) && !Method(`HEAD`)'
+      priority: 900
+      middlewares: [api-body-limit]
+      service: web
+      tls: {}
     # Prometheus (M9) scrapes web inside Docker; through the edge the answer is 403.
     web-metrics:
       entryPoints: [websecure]
@@ -45,6 +56,19 @@ http:
     # RemoteAddr strategy: no client is ever 127.0.0.1 at the edge.
     edge-deny:
       ipAllowList: { sourceRange: ['127.0.0.1/32'] }
+    # 512 KiB: twice the largest body web takes on these routes (tRPC, 256 KiB); an answer up to
+    # 8 MiB. Everything stays in memory (mem = max): the root file system is read-only, nothing
+    # may spill to disk. Each body in flight costs Traefik its size (256 MiB for the whole
+    # container), which is why the limit is not the avatar's 5 MiB. A body with a declared length
+    # over the limit gets 413 unread. One without a length is refused after 512 KiB, also with
+    # 413: for that Traefik opens a file in /tmp that it never fills (the tmpfs in compose; with
+    # no writable /tmp the answer would be 500).
+    api-body-limit:
+      buffering:
+        maxRequestBodyBytes: 524288
+        memRequestBodyBytes: 524288
+        maxResponseBodyBytes: 8388608
+        memResponseBodyBytes: 8388608
   services:
     web:
       loadBalancer:
