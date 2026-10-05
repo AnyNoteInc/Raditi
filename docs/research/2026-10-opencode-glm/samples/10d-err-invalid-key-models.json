@@ -1,0 +1,42 @@
+{
+  "name": "10d-err-invalid-key-models",
+  "request": {
+    "method": "GET",
+    "url": "https://api.z.ai/api/v1/models",
+    "auth": "invalid",
+    "headers": {},
+    "removedHeaderNames": [
+      "accept",
+      "authorization"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "statusText": "",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-length",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "strict-transport-security",
+      "vary",
+      "x-log-id"
+    ],
+    "elapsedMs": 261,
+    "body": {
+      "code": 401,
+      "msg": "token expired or incorrect",
+      "success": false
+    }
+  }
+}

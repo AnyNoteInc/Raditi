@@ -1,0 +1,1 @@
+Call the site_info tool, then read the page with REST path /wp/v2/pages/7 through the wp_rest tool, then reply with one line that holds the site url and the page title.

@@ -1,0 +1,10 @@
+{
+  "name": "raditi-agent-clis",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Probe copy: the OpenCode CLI pinned the way packages/agent-drivers/cli pins Codex and Kimi.",
+  "dependencies": {
+    "opencode-ai": "1.18.34"
+  }
+}

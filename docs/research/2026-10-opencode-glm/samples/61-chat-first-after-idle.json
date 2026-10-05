@@ -1,0 +1,48 @@
+{
+  "name": "61-chat-first-after-idle",
+  "at": "2026-10-05T06:14:55.756Z",
+  "request": {
+    "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "authorization"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ],
+    "body": {
+      "model": "glm-5.3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with the single word: ok"
+        }
+      ],
+      "max_tokens": 64,
+      "stream": false
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-length",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "vary",
+      "x-log-id",
+      "x-request-id"
+    ],
+    "body": "{\"choices\":[{\"finish_reason\":\"length\",\"index\":0,\"message\":{\"content\":\"\",\"reasoning_content\":\"The user has asked me to reply with the single word \\\"ok\\\". This is a straightforward request. There's nothing harmful or problematic here. The instruction is clear - they want just the word \\\"ok\\\" as my response.\\n\\nShould I comply? Yes, this is a benign request. Perhaps they're testing something, setting\",\"role\":\"assistant\"}}],\"created\":1767225600,\"id\":\"202601010000000000000000000014\",\"model\":\"glm-5.3\",\"object\":\"chat.completion\",\"request_id\":\"202601010000000000000000000014\",\"usage\":{\"completion_tokens\":64,\"completion_tokens_details\":{\"reasoning_tokens\":61},\"prompt_tokens\":19,\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":83}}"
+  }
+}

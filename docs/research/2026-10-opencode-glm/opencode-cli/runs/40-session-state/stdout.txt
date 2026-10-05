@@ -1,0 +1,126 @@
+### session list
+[
+  {
+    "id": "ses_00000000000000000000000002",
+    "title": "stand-dbg",
+    "updated": 1791144283573,
+    "created": 1791144282892,
+    "projectId": "0000000000000000000000000000000000000004",
+    "directory": "/workspace/repo"
+  },
+  {
+    "id": "ses_00000000000000000000000003",
+    "title": "stand-dbg",
+    "updated": 1791144270534,
+    "created": 1791144269802,
+    "projectId": "0000000000000000000000000000000000000004",
+    "directory": "/workspace/repo"
+  },
+  {
+    "id": "ses_00000000000000000000000004",
+    "title": "stand-err",
+    "updated": 1791144167711,
+    "created": 1791144167198,
+    "projectId": "0000000000000000000000000000000000000004",
+    "directory": "/workspace/repo"
+  },
+  {
+    "id": "ses_00000000000000000000000005",
+    "title": "stand-err",
+    "updated": 1791144093842,
+    "created": 1791144093367,
+    "projectId": "0000000000000000000000000000000000000004"
+### tables
+name account account_state control_account credential data_migration event event_sequence message migration part permission project project_directory session session_context_epoch session_input session_message session_share todo workspace 
+### counts
+session: 8
+message: 30
+part: 63
+project: 1
+### session row
+[
+  {
+    "id": "ses_00000000000000000000000006",
+    "project_id": "0000000000000000000000000000000000000004",
+    "workspace_id": null,
+    "parent_id": null,
+    "slug": "gentle-falcon",
+    "directory": "/workspace/repo",
+    "path": "",
+    "title": "stand-d",
+    "version": "1.18.34",
+    "share_url": null,
+    "summary_additions": 0,
+    "summary_deletions": 0,
+    "summary_files": 0,
+    "summary_diffs": null,
+    "metadata": null,
+    "cost": 0,
+    "tokens_input": 5035,
+    "tokens_output": 514,
+    "tokens_reasoning": 474,
+    "tokens_cache_read": 27136,
+    "tokens_cache_write": 0,
+    "revert": null,
+    "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+    "agent": "raditi",
+    "model": "{\"id\":\"glm-5.3\",\"providerID\":\"zai-stand\",\"variant\":\"default\"}",
+    "time_created": 1791143981464,
+    "time_updated": 1791144040660,
+    "time_compacting": null,
+    "time_archived": null
+  }
+]
+
+### pragma
+wal
+0	0	0
+-rw-r--r-- 1 10001 10001 483328 Oct  4 20:09 opencode.db
+-rw-r--r-- 1 10001 10001  32768 Oct  4 20:09 opencode.db-shm
+-rw-r--r-- 1 10001 10001      0 Oct  4 20:09 opencode.db-wal
+### export
+exit=0 bytes=25735
+Exporting session: ses_00000000000000000000000006
+{
+  "info": {
+    "id": "ses_00000000000000000000000006",
+    "slug": "gentle-falcon",
+    "projectID": "0000000000000000000000000000000000000004",
+    "directory": "/workspace/repo",
+    "path": "",
+    "title": "stand-d",
+    "agent": "raditi",
+    "model": {
+      "id": "glm-5.3",
+      "providerID": "zai-stand",
+      "variant": "default"
+    },
+    "version": "1.18.34",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 5035,
+      "output": 514,
+      "reasoning": 474,
+      "cache": {
+        "read": 27136,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+    
+export keys: [ 'info', 'messages' ] info keys: [
+  'id',         'slug',
+  'projectID',  'directory',
+  'path',       'title',
+  'agent',      'model',
+  'version',    'summary',
+  'cost',       'tokens',
+  'permission', 'time'
+] messages: 10 first message keys: [ 'info', 'parts' ] part types: [ 'text', 'step-start', 'reasoning', 'tool', 'step-finish' ]

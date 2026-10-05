@@ -1,0 +1,42 @@
+{
+  "name": "54-coding-err-no-key-stream",
+  "request": {
+    "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+    "auth": "none",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept"
+    ],
+    "body": {
+      "model": "glm-5.3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with the single word: ok"
+        }
+      ],
+      "stream": true,
+      "max_tokens": 64
+    }
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-length",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "vary",
+      "x-log-id",
+      "x-request-id"
+    ],
+    "elapsedMs": 225,
+    "body": "{\"error\":{\"code\":\"1001\",\"message\":\"Authentication parameter not received in Header, unable to authenticate\"}}"
+  }
+}

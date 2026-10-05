@@ -1,0 +1,164 @@
+{
+  "name": "46-tool-usage",
+  "request": {
+    "url": "https://api.z.ai/api/monitor/usage/tool-usage?startTime=2026-10-03%2023%3A14%3A18&endTime=2026-10-04%2023%3A14%3A18",
+    "authorizationScheme": "raw",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "accept-language",
+      "authorization"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json;charset=UTF-8"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-encoding",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "strict-transport-security",
+      "vary",
+      "x-log-id"
+    ],
+    "elapsedMs": 314,
+    "body": {
+      "code": 200,
+      "msg": "Operation successful",
+      "data": {
+        "x_time": [
+          "2026-10-03 23:00",
+          "2026-10-04 00:00",
+          "2026-10-04 01:00",
+          "2026-10-04 02:00",
+          "2026-10-04 03:00",
+          "2026-10-04 04:00",
+          "2026-10-04 05:00",
+          "2026-10-04 06:00",
+          "2026-10-04 07:00",
+          "2026-10-04 08:00",
+          "2026-10-04 09:00",
+          "2026-10-04 10:00",
+          "2026-10-04 11:00",
+          "2026-10-04 12:00",
+          "2026-10-04 13:00",
+          "2026-10-04 14:00",
+          "2026-10-04 15:00",
+          "2026-10-04 16:00",
+          "2026-10-04 17:00",
+          "2026-10-04 18:00",
+          "2026-10-04 19:00",
+          "2026-10-04 20:00",
+          "2026-10-04 21:00",
+          "2026-10-04 22:00",
+          "2026-10-04 23:00"
+        ],
+        "networkSearchCount": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "webReadMcpCount": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "zreadMcpCount": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "totalUsage": {
+          "totalNetworkSearchCount": 0,
+          "totalWebReadMcpCount": 0,
+          "totalZreadMcpCount": 0,
+          "totalSearchMcpCount": 0,
+          "toolDetails": [],
+          "toolSummaryList": []
+        },
+        "toolDataList": [],
+        "toolSummaryList": [],
+        "granularity": "hourly"
+      },
+      "success": true
+    }
+  }
+}

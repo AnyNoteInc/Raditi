@@ -1,0 +1,44 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "zai-anthropic/glm-5.3",
+  "small_model": "zai-anthropic/glm-5.3",
+  "autoupdate": false,
+  "share": "disabled",
+  "snapshot": false,
+  "lsp": false,
+  "formatter": false,
+  "plugin": [],
+  "enabled_providers": [
+    "zai-anthropic"
+  ],
+  "permission": {
+    "webfetch": "deny",
+    "websearch": "deny",
+    "task": "deny",
+    "skill": "deny",
+    "external_directory": "deny",
+    "doom_loop": "deny",
+    "question": "deny"
+  },
+  "provider": {
+    "zai-anthropic": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "Z.ai Anthropic form through the stand proxy",
+      "options": {
+        "baseURL": "http://172.30.250.2:8080/zai-anthropic/v1",
+        "apiKey": "{env:RADITI_LLM_KEY}"
+      },
+      "models": {
+        "glm-5.3": {
+          "name": "GLM-5.3",
+          "reasoning": true,
+          "tool_call": true,
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        }
+      }
+    }
+  }
+}

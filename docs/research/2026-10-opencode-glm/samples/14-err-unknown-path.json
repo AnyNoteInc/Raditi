@@ -1,0 +1,41 @@
+{
+  "name": "14-err-unknown-path",
+  "request": {
+    "method": "GET",
+    "url": "https://api.z.ai/api/v1/does-not-exist",
+    "auth": "real",
+    "headers": {},
+    "removedHeaderNames": [
+      "accept",
+      "authorization"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "statusText": "",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-length",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "strict-transport-security",
+      "vary"
+    ],
+    "elapsedMs": 256,
+    "body": {
+      "code": 500,
+      "msg": "404 NOT_FOUND",
+      "success": false
+    }
+  }
+}
