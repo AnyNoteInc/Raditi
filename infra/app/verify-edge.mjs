@@ -43,6 +43,8 @@ import tls from 'node:tls'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
+import { upload } from './verify-edge-upload.mjs'
+
 // Third-party images of the stack, pinned like env.example (images.test.mjs compares digests).
 const TRAEFIK_IMAGE =
   'ghcr.io/traefik/traefik:v3.7.13@sha256:f86a2cab1b5c649070c49f883c743dd32d8485a56e3368c5f93b9e91f1e91259'
@@ -303,72 +305,6 @@ function request(url, { method = 'GET', headers = {}, host, port, servername, ca
     req.once('error', reject)
     req.end(body)
   })
-}
-
-/**
- * A POST to the edge whose body goes out in pieces, as a browser uploads. The edge or web may
- * answer before the body is over: the rest is then not sent, and a connection the server closes
- * afterwards is not an error. An answer lost to such a close is asked for again.
- */
-async function upload(url, { host, port, ca, headers = {}, body, chunked = false }) {
-  const target = new URL(url)
-  const once = () =>
-    new Promise((resolve, reject) => {
-      let answered = false
-      let sent = 0
-      const req = https.request(
-        {
-          host,
-          port,
-          path: target.pathname,
-          method: 'POST',
-          headers: {
-            host: target.host,
-            ...(chunked ? {} : { 'content-length': body.length }),
-            ...headers,
-          },
-          servername: target.hostname,
-          ca,
-          agent: false,
-          timeout: 30_000,
-        },
-        (response) => {
-          answered = true
-          const chunks = []
-          response.on('data', (chunk) => chunks.push(chunk))
-          response.on('end', () =>
-            resolve({
-              status: response.statusCode,
-              headers: response.headers,
-              body: Buffer.concat(chunks).toString(),
-            }),
-          )
-          response.on('error', reject)
-        },
-      )
-      req.once('timeout', () => req.destroy(new Error('request timed out')))
-      req.on('error', (error) => {
-        if (!answered) reject(error)
-      })
-      const pump = () => {
-        if (answered || req.destroyed) return
-        if (sent >= body.length) return req.end()
-        const piece = body.subarray(sent, sent + 64 * 1024)
-        sent += piece.length
-        if (req.write(piece)) setImmediate(pump)
-        else req.once('drain', pump)
-      }
-      pump()
-    })
-  let last
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return await once()
-    } catch (error) {
-      last = error
-    }
-  }
-  throw last
 }
 
 /** The error code of a TCP connection attempt, or 'connected'. */
