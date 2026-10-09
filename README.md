@@ -158,6 +158,19 @@ Linux-ВМ с gVisor для раннера. Рабочий `.env` не чита�
 удаления песочницы. Настоящая подписка не используется; параметры запуска и оставшиеся гейты —
 [отчёт P5](docs/plan/23-p5-kimi-driver.md).
 
+Драйвер OpenCode 1.18.34 (G3 перехода на Z.ai) использует тот же образ:
+
+```sh
+docker build -f infra/sandbox/Dockerfile --target runtime -t raditi-g3verify-sandbox:local .
+pnpm verify:opencode
+```
+
+Проход идёт в контейнерах без сети на сценарном провайдере: ход, продолжение из файлов сессии,
+враждебные репозиторий и база сессии, отказы MCP, код в рабочей копии и в домашнем каталоге CLI.
+С `--runtime runsc` на демоне с gVisor те же сценарии идут под gVisor. Через супервизор и pull-раннер
+под gVisor — `pnpm verify:opencode-supervisor`, с теми же образами и переменными, что у
+`pnpm verify:codex-supervisor`. Ключ плана и подписки не нужны; [отчёт G3](docs/plan/42-opencode-driver.md).
+
 Первый локальный блок P6 защищает `/mcp` токеном хода и предоставляет `site_info`
 с публичным адресом и стеком назначенного сайта. Проверка на отдельной PostgreSQL —
 `pnpm verify:db`; настройка точных upstream Host — `MCP_ALLOWED_HOSTS`, обязательна для роли
