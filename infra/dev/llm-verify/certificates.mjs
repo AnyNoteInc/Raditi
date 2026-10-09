@@ -19,7 +19,7 @@ export async function createVerificationCertificates(root, directory) {
   const extensions = join(authority, 'fake.ext')
   await writeFile(
     extensions,
-    'basicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:chatgpt.com,DNS:auth.openai.com,DNS:api.kimi.ai,DNS:localhost\n',
+    'basicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:chatgpt.com,DNS:auth.openai.com,DNS:api.kimi.ai,DNS:api.z.ai,DNS:localhost\n',
   )
   const openssl = (...args) => execFileSync('openssl', args, { stdio: 'pipe', timeout: 30_000 })
   openssl(

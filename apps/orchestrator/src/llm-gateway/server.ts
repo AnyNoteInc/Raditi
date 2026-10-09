@@ -857,6 +857,16 @@ export class LlmGateway {
       }
       clearTimeout(upstreamIdle)
       decoder.end()
+      if (!failed && !terminalSeen) {
+        // The provider closed the stream itself, before an event its adapter took for the end.
+        // An adapter whose CLI cannot stop on that names the last event to send instead.
+        const ending = inspector.end?.()
+        if (ending) {
+          failed = true
+          signal = ending.signal
+          response.write(eventBytes(ending.event))
+        }
+      }
       meterResult = meter.end()
       if (meterResult.outcome === 'incomplete' && !failed)
         throw new Error('Incomplete upstream response')

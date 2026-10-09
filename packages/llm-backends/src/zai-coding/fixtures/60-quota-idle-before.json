@@ -1,0 +1,60 @@
+{
+  "name": "60-quota-idle-before",
+  "at": "2026-10-05T06:14:53.342Z",
+  "request": {
+    "url": "https://api.z.ai/api/monitor/usage/quota/limit",
+    "headers": {},
+    "removedHeaderNames": ["accept", "authorization"],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json;charset=UTF-8"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-encoding",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "strict-transport-security",
+      "vary",
+      "x-log-id"
+    ],
+    "body": {
+      "code": 200,
+      "msg": "Operation successful",
+      "data": {
+        "limits": [
+          {
+            "type": "CREDIT_LIMIT",
+            "unit": 3,
+            "number": 5,
+            "usage": 2000,
+            "currentValue": 0,
+            "remaining": 2000,
+            "percentage": 0
+          },
+          {
+            "type": "CREDIT_LIMIT",
+            "unit": 6,
+            "number": 1,
+            "usage": 10000,
+            "currentValue": 25,
+            "remaining": 9974,
+            "percentage": 1,
+            "nextResetTime": 1791740593998
+          }
+        ],
+        "level": "lite"
+      },
+      "success": true
+    }
+  }
+}

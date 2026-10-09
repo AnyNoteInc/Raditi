@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { kimiCodeBackend } from './kimi-code/backend.ts'
 import { codexBackend } from './openai-chatgpt/backend.ts'
+import { zaiCodingBackend } from './zai-coding/backend.ts'
 
 describe('CLI header profiles', () => {
   it('accepts the pinned Codex clients and rejects arbitrary or future versions', () => {
@@ -65,7 +66,7 @@ describe('native stream failure envelopes', () => {
     },
   )
 
-  it.each([codexBackend, kimiCodeBackend])(
+  it.each([codexBackend, kimiCodeBackend, zaiCodingBackend])(
     'stops %s accounting at the first failure in a shared chunk',
     (backend) => {
       const complete =
@@ -89,7 +90,7 @@ describe('native stream failure envelopes', () => {
     },
   )
 
-  it.each([codexBackend, kimiCodeBackend])(
+  it.each([codexBackend, kimiCodeBackend, zaiCodingBackend])(
     'never counts events after invalid JSON for %s',
     (backend) => {
       const meter = backend.usageMeter()

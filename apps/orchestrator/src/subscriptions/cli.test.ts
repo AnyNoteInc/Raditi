@@ -6,13 +6,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { badRequest, conflict, llmGatewayUnavailable } from '@repo/domain'
+import { agentDriverIds, badRequest, conflict, llmGatewayUnavailable } from '@repo/domain'
+import { llmBackends } from '@repo/llm-backends'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   operatorFailure,
   parseSubscriptionArguments,
   subscriptionHelp,
+  subscriptionImports,
   type SubscriptionCommand,
 } from './cli.ts'
 import { UnsavedSubscriptionLogin } from './device-login.ts'
@@ -88,6 +90,47 @@ describe('operator subscription commands', () => {
       expect(result.stderr).toBe('')
     },
   )
+  it('imports a Z.ai plan key for the OpenCode driver: one turn and two requests at a time', () => {
+    expect(
+      parseSubscriptionArguments('login', [
+        '--backend',
+        'zai-coding',
+        '--label',
+        'glm-a',
+        '--plan',
+        'lite',
+        '--vault-token-file',
+        '/tmp/writer',
+      ]),
+    ).toMatchObject({ command: 'login', value: { backend: 'zai-coding', plan: 'lite' } })
+    const entry = subscriptionImports.get('zai-coding')!
+    expect(entry.backend.id).toBe('zai-coding')
+    expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
+    // A key from stdin, no device page.
+    expect(entry.backend.importCredential).toBeTypeOf('function')
+    expect(entry.backend.login).toBeUndefined()
+    expect(entry.deviceUri).toBeUndefined()
+  })
+  it('has import settings for every backend the platform registers', () => {
+    // `--backend` accepts every registered id: one without settings would fail after parsing.
+    expect([...subscriptionImports.keys()]).toEqual(llmBackends.map((backend) => backend.id))
+    for (const [id, entry] of subscriptionImports) {
+      expect(entry.backend.id).toBe(id)
+      expect(agentDriverIds).toContain(entry.driverId)
+      expect(Boolean(entry.deviceUri)).toBe(entry.backend.login !== undefined)
+      expect(
+        entry.backend.login !== undefined || entry.backend.importCredential !== undefined,
+      ).toBe(true)
+    }
+  })
+  it('builds the help of login from the import settings', () => {
+    const help = subscriptionHelp('login')
+    expect(help).toContain('--backend openai-chatgpt|kimi-code|zai-coding ')
+    expect(help).toContain(
+      'Ключ подписки (kimi-code, zai-coding) поступает через stdin или скрытый ввод.',
+    )
+    expect(help).toContain('Код входа (openai-chatgpt) выводится только в интерактивный терминал.')
+  })
   it('accepts a fresh import and the separate relogin form', () => {
     expect(
       parseSubscriptionArguments('login', [

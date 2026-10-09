@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 /** Stable provider slugs, shared with llm_providers; provider details belong in adapters. */
-export const llmBackendIds = ['openai-chatgpt', 'kimi-code'] as const
+export const llmBackendIds = ['openai-chatgpt', 'kimi-code', 'zai-coding'] as const
 export const llmBackendIdSchema = z.enum(llmBackendIds)
 export type LlmBackendId = z.infer<typeof llmBackendIdSchema>
 
@@ -15,9 +15,15 @@ export interface LlmStreamEvent {
   data: string
 }
 
+export interface LlmStreamFailure {
+  kind: 'failure'
+  event: LlmStreamEvent
+  signal: CallSignal
+}
+
 export type LlmStreamInspection =
   | { kind: 'forward'; event: LlmStreamEvent; terminal?: true }
-  | { kind: 'failure'; event: LlmStreamEvent; signal: CallSignal }
+  | LlmStreamFailure
   | { kind: 'skip' }
   | { kind: 'invalid' }
 
@@ -102,7 +108,9 @@ export const callSignalSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('auth') }).strict(),
   z.object({ kind: z.literal('account_risk'), reason: signalCode }).strict(),
   z.object({ kind: z.literal('region') }).strict(),
-  z.object({ kind: z.literal('unconfirmed_block') }).strict(),
+  // A block nobody has confirmed: the account is probed. The code is the adapter's own name
+  // for what the provider answered, kept for the log of the role.
+  z.object({ kind: z.literal('unconfirmed_block'), code: signalCode.optional() }).strict(),
   z.object({ kind: z.literal('policy_flagged'), code: signalCode }).strict(),
   // The plan or the catalogue lacks the model of the turn's profile.
   z.object({ kind: z.literal('profile'), code: signalCode }).strict(),
@@ -356,8 +364,16 @@ export interface LlmBackend {
   credentialMetadata(credential: SubscriptionCredential): CredentialMetadata
   /** CLI identity is checked by its adapter before any call is reserved. */
   validateClientHeaders(headers: Headers): void
-  /** Per-stream policy: provider failure metadata must never reach the sandbox. */
-  streamInspector(): { inspect(event: LlmStreamEvent): LlmStreamInspection }
+  /**
+   * Per-stream policy: provider failure metadata must never reach the sandbox. `end` is asked
+   * once when the provider closes the stream cleanly before an event the inspector took for
+   * its end: an adapter whose CLI cannot stop on a silently ended stream answers with the
+   * failure to send as the last event; null leaves the ending to the gateway.
+   */
+  streamInspector(): {
+    inspect(event: LlmStreamEvent): LlmStreamInspection
+    end?(): LlmStreamFailure | null
+  }
   /** Null effort leaves provider defaults; a client cannot select its own effort in that case. */
   normalizeBody(
     route: LlmRoute,

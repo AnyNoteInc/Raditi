@@ -51,7 +51,7 @@ services:
     ports: ['127.0.0.1::8787']
     networks:
       providers:
-        aliases: [chatgpt.com, auth.openai.com, api.kimi.ai]
+        aliases: [chatgpt.com, auth.openai.com, api.kimi.ai, api.z.ai]
       trusted: {}
   llm-egress:
     image: ${VERIFY_NODE_IMAGE}

@@ -191,6 +191,7 @@ export interface LlmProviderSeed {
 export const llmProviderSeeds = [
   { slug: 'openai-chatgpt', name: 'ChatGPT', kind: 'subscription', enabled: false },
   { slug: 'kimi-code', name: 'Kimi Code', kind: 'subscription', enabled: false },
+  { slug: 'zai-coding', name: 'Z.ai GLM Coding Plan', kind: 'subscription', enabled: false },
 ] as const satisfies readonly LlmProviderSeed[]
 
 export interface LlmModelSeed {
@@ -244,6 +245,19 @@ export const llmModelSeeds: readonly LlmModelSeed[] = [
     reserveOutputTokens: 32_768,
     enabled: false,
   },
+  // One model of the GLM Coding Plan for every class: the classes differ by the level of
+  // reasoning of the turn (low, high, max). The reserve is the output ceiling of the adapter's
+  // request policy. Switched off like the rest: the operator enables the provider, the
+  // profiles and an approved rate.
+  ...(['light', 'standard', 'heavy'] as const).map((modelClass): LlmModelSeed => ({
+    providerSlug: 'zai-coding',
+    slug: `glm-5.3-${modelClass}`,
+    name: `GLM-5.3 · ${modelClass}`,
+    providerModelId: 'glm-5.3',
+    modelClass,
+    reserveOutputTokens: 32_000,
+    enabled: false,
+  })),
 ]
 
 // Accounting rates need owner approval and are never seeded (not even placeholder zeros).

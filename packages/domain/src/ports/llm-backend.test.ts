@@ -168,6 +168,7 @@ describe('the refusal a provider signal stands for', () => {
     [{ kind: 'auth' }, 'account'],
     [{ kind: 'account_risk', reason: 'usage_not_included' }, 'account'],
     [{ kind: 'unconfirmed_block' }, 'account'],
+    [{ kind: 'unconfirmed_block', code: 'zai_1234' }, 'account'],
     [{ kind: 'region' }, 'egress'],
     [{ kind: 'policy_flagged', code: 'cyber_policy' }, 'policy_flagged'],
     [{ kind: 'profile', code: 'model_access' }, 'profile'],
@@ -200,6 +201,8 @@ describe('backend signals', () => {
     { kind: 'account_risk', reason: 'risk_confirmed' },
     { kind: 'region' },
     { kind: 'unconfirmed_block' },
+    // The provider's own code of a block nobody has confirmed yet, for the log of the role.
+    { kind: 'unconfirmed_block', code: 'zai_1234' },
     { kind: 'policy_flagged', code: 'cyber_policy' },
     { kind: 'profile', code: 'model_unavailable' },
     { kind: 'request_rejected', code: 'context_length_exceeded' },
@@ -221,6 +224,9 @@ describe('backend signals', () => {
     { kind: 'account_risk', reason: 'a'.repeat(65) },
     { kind: 'policy_flagged', code: '' },
     { kind: 'policy_flagged', code: 'provider message with account details' },
+    { kind: 'unconfirmed_block', code: 'provider message with account details' },
+    { kind: 'unconfirmed_block', code: '' },
+    { kind: 'unconfirmed_block', reason: 'zai_1234' },
     { kind: 'profile', code: 'model\nunavailable' },
   ])('rejects invalid or unsanitized signal %j', (signal) => {
     expect(callSignalSchema.safeParse(signal).success).toBe(false)
@@ -393,10 +399,12 @@ describe('probe and metering boundaries', () => {
 })
 
 describe('account identity boundary', () => {
-  it('supports both provider slugs without accepting retired API backends', () => {
+  it('supports the subscription provider slugs without accepting retired API backends', () => {
     expect(llmBackendIdSchema.parse('openai-chatgpt')).toBe('openai-chatgpt')
     expect(llmBackendIdSchema.parse('kimi-code')).toBe('kimi-code')
-    for (const id of ['litellm', 'gigachat', 'codex', 'kimi'])
+    expect(llmBackendIdSchema.parse('zai-coding')).toBe('zai-coding')
+    // The slug is the backend, not its provider, shell or model.
+    for (const id of ['litellm', 'gigachat', 'codex', 'kimi', 'zai', 'opencode', 'glm-5.3'])
       expect(llmBackendIdSchema.safeParse(id).success).toBe(false)
   })
 

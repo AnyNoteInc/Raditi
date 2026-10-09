@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { setTimeout as realDelay } from 'node:timers/promises'
 
 import type { LlmBackend } from '@repo/domain'
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
+import { codexBackend, kimiCodeBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { LlmConfig } from '../config/llm-config.ts'
@@ -1787,4 +1787,224 @@ describe('subscription HTTP gateway', () => {
     client.destroy()
     // Filling the buffers takes real time: seconds on a loaded machine, not the default five.
   }, 30_000)
+})
+
+// The pinned OpenCode CLI answers these with the same request again, at once and without a limit
+// (docs/plan/40-opencode-spike.md, section 4): the sandbox must read one error object instead.
+describe('Z.ai streams the CLI cannot stop on', () => {
+  const zaiKey: GatewayKey = {
+    ...key,
+    backendId: 'zai-coding',
+    model: 'glm-5.3',
+    reasoningEffort: 'high',
+    driverId: 'opencode',
+    clientIdentity: {},
+  }
+  const zaiCredential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-zai-plan-key' }
+  const userAgent = 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14'
+  const zaiBody = {
+    model: 'glm-5.3',
+    max_tokens: 32_000,
+    messages: [{ role: 'user', content: 'synthetic prompt' }],
+    stream: true,
+    stream_options: { include_usage: true },
+  }
+  const chunk = (content: string, finish?: string) =>
+    event({
+      id: '202601010000000000000000000001',
+      created: 1767225600,
+      object: 'chat.completion.chunk',
+      model: 'glm-5.3',
+      choices: [
+        {
+          index: 0,
+          ...(finish ? { finish_reason: finish } : {}),
+          delta: { role: 'assistant', content },
+        },
+      ],
+      ...(finish
+        ? {
+            usage: {
+              prompt_tokens: 19,
+              completion_tokens: 6,
+              total_tokens: 25,
+              prompt_tokens_details: { cached_tokens: 3 },
+              completion_tokens_details: { reasoning_tokens: 2 },
+            },
+          }
+        : {}),
+    })
+  const done = 'data: [DONE]\n\n'
+  async function zai(
+    stream: string,
+    backend: LlmBackend = zaiCodingBackend,
+    // `cut`: the provider's connection breaks after the stream's bytes, without an HTTP end.
+    ending: 'end' | 'cut' = 'end',
+  ) {
+    const provider: { headers: IncomingMessage['headers']; body: string }[] = []
+    const stand = await setup(
+      (req, res) => {
+        const chunks: Buffer[] = []
+        req.on('data', (part: Buffer) => chunks.push(part))
+        req.on('end', () => {
+          provider.push({ headers: req.headers, body: Buffer.concat(chunks).toString() })
+          res.writeHead(200, {
+            'content-type': 'text/event-stream;charset=UTF-8',
+            'set-cookie': 'acw_tc=synthetic-cookie; Path=/; HttpOnly',
+            'x-log-id': 'synthetic-log-id',
+            'x-request-id': 'synthetic-request-id',
+            'retry-after': '999999',
+          })
+          if (ending === 'end') res.end(stream)
+          // Let the bytes leave before the socket goes.
+          else res.write(stream, () => void realDelay(20).then(() => res.destroy()))
+        })
+      },
+      {},
+      { backends: [backend] },
+    )
+    stand.store.lookup.mockResolvedValue(zaiKey)
+    stand.store.admit.mockImplementation(async (input) => ({
+      kind: 'admitted',
+      call: { ...makeCall(input.estimatedInputTokens), ...zaiKey },
+    }))
+    stand.credentials.get.mockResolvedValue(zaiCredential)
+    const persisted = Promise.withResolvers<GatewayFinish>()
+    stand.store.finish.mockImplementation(async (_callId, outcome) => {
+      persisted.resolve(outcome)
+      return storable(_callId, outcome)
+    })
+    const send = () =>
+      call(stand.gateway, {
+        path: '/zai/v4/chat/completions',
+        headers: {
+          'user-agent': userAgent,
+          'x-session-id': 'ses_synthetic',
+          cookie: 'acw_tc=client-cookie',
+        },
+        body: zaiBody,
+      })
+    return { ...stand, provider, persisted: persisted.promise, send }
+  }
+  const events = (text: string) =>
+    text
+      .split('\n\n')
+      .filter(Boolean)
+      .map((block) => block.replace(/^event: message\ndata: /, ''))
+
+  it('streams a finished answer, with the plan key and nothing of the client but its body', async () => {
+    const { send, provider, persisted, store } = await zai(
+      chunk('abcdef') + chunk('', 'stop') + done,
+    )
+    const result = await send()
+    expect(result.status).toBe(200)
+    expect(events(result.body).at(-1)).toBe('[DONE]')
+    expect(result.body).toContain('"finish_reason":"stop"')
+    // None of the provider's own headers reaches the sandbox, each one checked by itself.
+    for (const name of ['set-cookie', 'x-log-id', 'x-request-id'])
+      expect(result.headers[name], name).toBeUndefined()
+    // Decision 7(а) of the pivot plan belongs to G4: until then the pause a provider names on
+    // a successful answer still passes, and the CLI obeys it. G4 turns this line around.
+    expect(result.headers['retry-after']).toBe('999999')
+    expect(provider).toHaveLength(1)
+    expect(provider[0]!.headers.authorization).toBe('Bearer synthetic-zai-plan-key')
+    expect(provider[0]!.headers['user-agent']).toBe(userAgent)
+    expect(provider[0]!.headers.accept).toBe('text/event-stream')
+    expect(provider[0]!.headers['accept-encoding']).toBe('identity')
+    expect(provider[0]!.headers['x-session-id']).toBeUndefined()
+    expect(provider[0]!.headers.cookie).toBeUndefined()
+    expect(provider[0]!.body).not.toContain(turnKey)
+    // The profile of the turn, not the request, sets the level of reasoning.
+    expect(JSON.parse(provider[0]!.body)).toMatchObject({
+      model: 'glm-5.3',
+      max_tokens: 32_000,
+      thinking: { type: 'enabled', clear_thinking: false },
+      reasoning_effort: 'high',
+      stream: true,
+      stream_options: { include_usage: true },
+    })
+    expect(await persisted).toMatchObject({
+      state: 'completed',
+      estimated: false,
+      usage: { input: 19, cacheRead: 3, cacheWrite: 0, output: 6, reasoning: 2 },
+    })
+    expect(store.refuse).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['finish_reason sensitive', chunk('abcdef') + chunk('', 'sensitive') + done, 'policy_flagged'],
+    [
+      'finish_reason model_context_window_exceeded',
+      chunk('abcdef') + chunk('', 'model_context_window_exceeded') + done,
+      'request_rejected',
+    ],
+    [
+      'a finish_reason nobody has seen',
+      chunk('abcdef') + chunk('', 'later_value') + done,
+      'account',
+    ],
+    ['DONE alone', done, 'account'],
+    ['text and DONE without a finish_reason', chunk('abcdef') + done, 'account'],
+    ['text without a finish_reason and without DONE', chunk('abcdef'), 'account'],
+    ['an empty stream', '', 'account'],
+  ] as const)('answers %s with one final error object', async (_name, stream, refusal) => {
+    const { send, provider, persisted, store, egress } = await zai(stream)
+    const result = await send()
+    // The stream was already started: the refusal is its last event, and the response ends cleanly.
+    expect(result.status).toBe(200)
+    const sent = events(result.body)
+    expect(JSON.parse(sent.at(-1)!)).toEqual({
+      error: {
+        type: 'invalid_request_error',
+        code: `raditi_${refusal}`,
+        message: expect.any(String) as string,
+      },
+    })
+    expect(sent.filter((data) => data.includes('"error"'))).toHaveLength(1)
+    expect(result.body).not.toContain('[DONE]')
+    expect(result.body).not.toMatch(/sensitive|model_context_window_exceeded|later_value/)
+    expect(provider).toHaveLength(1)
+    expect(egress.request).toHaveBeenCalledOnce()
+    expect(store.refuse).toHaveBeenCalledExactlyOnceWith(zaiKey.keyId, refusal)
+    const finish = await persisted
+    expect(finish.state).toBe('failed')
+    expect(finish.signal?.kind).toBe(refusal === 'account' ? 'unconfirmed_block' : refusal)
+  })
+
+  it('leaves an unfinished stream of an adapter without an end rule to the cut connection', async () => {
+    const withoutEnd: LlmBackend = {
+      ...zaiCodingBackend,
+      streamInspector: () => ({ inspect: zaiCodingBackend.streamInspector().inspect }),
+    }
+    const { send, persisted, store } = await zai(chunk('abcdef'), withoutEnd)
+    await expect(send()).rejects.toThrow()
+    expect(store.refuse).toHaveBeenCalledExactlyOnceWith(zaiKey.keyId, 'transient')
+    expect((await persisted).state).toBe('failed')
+  })
+
+  it('asks the adapter for the end only when the provider closed the stream itself', async () => {
+    const end = vi.fn(() => null)
+    const counting: LlmBackend = {
+      ...zaiCodingBackend,
+      streamInspector: () => ({ inspect: zaiCodingBackend.streamInspector().inspect, end }),
+    }
+    // A finished answer and a failure inside the stream: the adapter has had its word.
+    for (const stream of [chunk('abcdef') + chunk('', 'stop') + done, done]) {
+      const { send, persisted } = await zai(stream, counting)
+      await send()
+      await persisted
+    }
+    // A connection that broke in the middle of the answer is no end of the stream: the sandbox
+    // gets the same cut, which the CLI repeats with pauses, and no final refusal is made of it.
+    const broken = await zai(chunk('abcdef'), counting, 'cut')
+    await expect(broken.send()).rejects.toThrow()
+    expect((await broken.persisted).state).toBe('failed')
+    expect(broken.store.refuse).toHaveBeenCalledExactlyOnceWith(zaiKey.keyId, 'transient')
+    expect(end).not.toHaveBeenCalled()
+    // Finished, yet without DONE: asked once, and its null leaves the ending as it was.
+    const { send, persisted } = await zai(chunk('abcdef') + chunk('', 'stop'), counting)
+    expect((await send()).status).toBe(200)
+    expect((await persisted).state).toBe('completed')
+    expect(end).toHaveBeenCalledOnce()
+  })
 })

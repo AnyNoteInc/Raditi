@@ -7,6 +7,8 @@ import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
+import { createFakeZaiState, handleZai, handleZaiControl, isZaiRequest } from './fake-zai.mjs'
+
 // Synthetic providers only. Run on the disposable verification network: the separate
 // control port intentionally exposes in-memory requests and synthetic credentials.
 // Neither server makes outbound requests or persists request contents.
@@ -204,6 +206,8 @@ export function createFakeSubscriptionState(initial = {}) {
     generation: 0,
     // The synthetic MCP server behind sandbox-gw: one registered turn token, never echoed.
     mcp: { token: null, tools: [], requests: [] },
+    // Z.ai keeps its own scenario, quota windows and request records (fake-zai.mjs).
+    zai: createFakeZaiState(),
     reset(options = {}) {
       const parsed = scenarioOptions(options)
       if (parsed.accountId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(parsed.accountId))
@@ -230,6 +234,7 @@ export function createFakeSubscriptionState(initial = {}) {
       state.deviceCodes.clear()
       state.generation = 0
       state.mcp = { token: null, tools: [], requests: [] }
+      state.zai.reset()
       state.setScenario({ ...parsed, backend: 'all' })
       return state.snapshot()
     },
@@ -290,6 +295,7 @@ export function createFakeSubscriptionState(initial = {}) {
         config: state.config,
         rounds: state.rounds,
         mcp: { requests: state.mcp.requests },
+        zai: state.zai.snapshot(),
       }
     },
     setMcp(value) {
@@ -819,6 +825,8 @@ function failureScenario(backend, state, res) {
 }
 
 async function handleProvider(req, res, state) {
+  // The two paths of Z.ai have their own handler, limits and records without credentials.
+  if (isZaiRequest(req)) return handleZai(req, res, state.zai)
   const body = await bodyOf(req)
   const path = new URL(req.url, 'https://synthetic.invalid').pathname
   if (state.requests.length >= 1000) return fail(res, 503, 'synthetic_request_limit')
@@ -1087,6 +1095,8 @@ export async function startFakeSubscriptions({
         return json(res, 200, { tokens: state.issueTokens(), credential: state.currentCredential })
       if (req.method === 'POST' && req.url === '/mcp')
         return json(res, 200, state.setMcp(await bodyOf(req)))
+      // GET reads, POST sets `{reset?, scenario?, quota?}` of the synthetic Z.ai.
+      if (req.url === '/zai') return handleZaiControl(req, res, state.zai)
       return fail(res, 404, 'synthetic_unknown_control')
     })().catch(() => fail(res, 400, 'synthetic_invalid_control'))
   })

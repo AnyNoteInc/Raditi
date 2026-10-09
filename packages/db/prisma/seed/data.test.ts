@@ -201,6 +201,7 @@ describe('subscription catalogue defaults', () => {
       llmModelSeeds.filter((model) => model.providerSlug === slug).map((model) => model.modelClass)
     expect(classes('openai-chatgpt')).toEqual(['light', 'standard', 'heavy'])
     expect(classes('kimi-code')).toEqual(['standard'])
+    expect(classes('zai-coding')).toEqual(['light', 'standard', 'heavy'])
     const naturalKeys = llmModelSeeds.map((model) => `${model.providerSlug}/${model.slug}`)
     expect(new Set(naturalKeys).size).toBe(llmModelSeeds.length)
     for (const model of llmModelSeeds) {
@@ -217,6 +218,38 @@ describe('subscription catalogue defaults', () => {
         'slug',
       ])
     }
+  })
+
+  it('offers one GLM model in three profiles of the Z.ai plan, all switched off', () => {
+    const profiles = llmModelSeeds.filter((model) => model.providerSlug === 'zai-coding')
+    expect(profiles.map((model) => model.slug)).toEqual([
+      'glm-5.3-light',
+      'glm-5.3-standard',
+      'glm-5.3-heavy',
+    ])
+    for (const model of profiles) {
+      // One model for every class: the classes differ by the level of reasoning of the turn.
+      expect(model.providerModelId).toBe('glm-5.3')
+      expect(model.enabled).toBe(false)
+    }
+    expect(llmProviderSeeds.find((provider) => provider.slug === 'zai-coding')).toEqual({
+      slug: 'zai-coding',
+      name: 'Z.ai GLM Coding Plan',
+      kind: 'subscription',
+      enabled: false,
+    })
+  })
+
+  it('reserves for a Z.ai profile no less output than its request policy may ask for', () => {
+    // The body policy of the adapter caps `max_tokens` of every request at this number
+    // (`zaiMaxOutputTokens`, packages/llm-backends/src/zai-coding/body.ts; its own test pins
+    // it). The seeds may not import an adapter, so the number is written here once more: a
+    // reserve below it would let one call outgrow what the gateway held for it.
+    const policyMaxOutputTokens = 32_000
+    const profiles = llmModelSeeds.filter((model) => model.providerSlug === 'zai-coding')
+    expect(profiles).toHaveLength(3)
+    for (const model of profiles)
+      expect(model.reserveOutputTokens).toBeGreaterThanOrEqual(policyMaxOutputTokens)
   })
 
   it('does not substitute the spike model for an unconfirmed Codex profile id', () => {

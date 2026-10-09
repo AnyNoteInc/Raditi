@@ -1,5 +1,5 @@
 import type { LlmBackend } from '@repo/domain'
-import { codexBackend, kimiCodeBackend, llmBackends } from '@repo/llm-backends'
+import { codexBackend, kimiCodeBackend, llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it } from 'vitest'
 
 import { egressConfigFromEnv, llmConfigFromEnv, providerOrigins } from './llm-config.ts'
@@ -89,7 +89,7 @@ describe('subscription gateway configuration', () => {
   })
 
   it('takes the provider origins and their stand overrides from what the adapters declare', () => {
-    expect(llmBackends).toEqual([codexBackend, kimiCodeBackend])
+    expect(llmBackends).toEqual([codexBackend, kimiCodeBackend, zaiCodingBackend])
     expect(providerOrigins).toEqual(
       llmBackends.flatMap((backend) => backend.egress.map((entry) => entry.origin)),
     )
@@ -97,6 +97,7 @@ describe('subscription gateway configuration', () => {
       'https://chatgpt.com',
       'https://auth.openai.com',
       'https://api.kimi.ai',
+      'https://api.z.ai',
     ])
     // Every declared origin can be pointed at a loopback fake on a stand, as before.
     const env = Object.fromEntries(
@@ -108,12 +109,32 @@ describe('subscription gateway configuration', () => {
       'LLM_BACKEND_URL_OPENAI_CHATGPT',
       'LLM_AUTH_URL_OPENAI',
       'LLM_BACKEND_URL_KIMI_CODE',
+      'LLM_BACKEND_URL_ZAI_CODING',
     ])
     expect([...llmConfigFromEnv({ ...complete, ...env }, 'test').egress!.backendOrigins]).toEqual([
       ['https://chatgpt.com', 'https://localhost:9443'],
       ['https://auth.openai.com', 'https://localhost:9444'],
       ['https://api.kimi.ai', 'https://localhost:9445'],
+      ['https://api.z.ai', 'https://localhost:9446'],
     ])
+  })
+
+  it('points the Z.ai origin at a loopback fake of a stand and nowhere else', () => {
+    const fake = { ...complete, LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:9443' }
+    expect(llmConfigFromEnv(fake, 'test').egress?.backendOrigins.get('https://api.z.ai')).toBe(
+      'https://localhost:9443',
+    )
+    for (const value of ['https://api.z.ai.example', 'http://localhost:9443', 'https://10.0.0.1'])
+      expect(() =>
+        llmConfigFromEnv({ ...complete, LLM_BACKEND_URL_ZAI_CODING: value }, 'test'),
+      ).toThrow('LLM_BACKEND_URL_ZAI_CODING')
+    expect(() => llmConfigFromEnv(fake, 'production')).toThrow(
+      'LLM_BACKEND_URL_ZAI_CODING: forbidden in production',
+    )
+    // The plan key is no setting of the role: it comes from Vault, never from the environment.
+    const withKey = llmConfigFromEnv({ ...complete, ZAI_API_KEY: 'synthetic-zai-plan-key' }, 'test')
+    expect(JSON.stringify(withKey)).not.toContain('synthetic-zai-plan-key')
+    expect(withKey).toEqual(llmConfigFromEnv(complete, 'test'))
   })
 
   it('reads the override of an adapter it has never heard of, and refuses it in production', () => {
@@ -184,6 +205,7 @@ describe('subscription gateway configuration', () => {
     ['LLM_BACKEND_URL_OPENAI_CHATGPT', 'https://localhost:9443'],
     ['LLM_AUTH_URL_OPENAI', 'https://localhost:9443'],
     ['LLM_BACKEND_URL_KIMI_CODE', 'https://localhost:9443'],
+    ['LLM_BACKEND_URL_ZAI_CODING', 'https://localhost:9443'],
     ['NODE_TLS_REJECT_UNAUTHORIZED', '1'],
     ['NODE_USE_SYSTEM_CA', '1'],
     ['NODE_OPTIONS', '--use-system-ca'],

@@ -144,7 +144,11 @@ describe('llm role lifecycle', () => {
     )
     const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
     expect(options.ready?.()).toBe(false)
-    expect(options.backends.map((backend) => backend.id)).toEqual(['openai-chatgpt', 'kimi-code'])
+    expect(options.backends.map((backend) => backend.id)).toEqual([
+      'openai-chatgpt',
+      'kimi-code',
+      'zai-coding',
+    ])
     await runtime.onApplicationShutdown()
     expect(prisma.$disconnect).toHaveBeenCalledOnce()
   })

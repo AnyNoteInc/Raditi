@@ -10,7 +10,7 @@ import {
   type Env,
   type LlmBackend,
 } from '@repo/domain'
-import { codexBackend, kimiCodeBackend, llmBackends } from '@repo/llm-backends'
+import { codexBackend, kimiCodeBackend, llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { createDevSubscriptionToken, createVaultSecretStore } from '@repo/vault'
 import { z } from 'zod'
 
@@ -155,16 +155,14 @@ export function parseSubscriptionArguments(
 const backends = llmBackends
 // Composition selects an adapter and its configured driver/capacity, without provider branches.
 // A device-flow backend also names the only page the operator terminal may show.
-const imports = new Map<
-  string,
-  {
-    backend: LlmBackend
-    driverId: string
-    turns: number
-    requests: number
-    deviceUri?: string
-  }
->([
+export interface SubscriptionImport {
+  backend: LlmBackend
+  driverId: string
+  turns: number
+  requests: number
+  deviceUri?: string
+}
+const imports = new Map<string, SubscriptionImport>([
   [
     codexBackend.id,
     {
@@ -176,12 +174,26 @@ const imports = new Map<
     },
   ],
   [kimiCodeBackend.id, { backend: kimiCodeBackend, driverId: 'kimi', turns: 2, requests: 3 }],
+  // One turn at a time until the plan's real concurrency is measured (owner's question П4).
+  [zaiCodingBackend.id, { backend: zaiCodingBackend, driverId: 'opencode', turns: 1, requests: 2 }],
 ])
+/** Every backend `--backend` accepts has an entry: a login never meets an id without settings. */
+export const subscriptionImports: ReadonlyMap<string, SubscriptionImport> = imports
 
 export function subscriptionHelp(command: SubscriptionCommand): string {
+  // Built from the settings above: a backend added there is named here.
+  const entries = [...imports.values()]
+  const ids = (list: SubscriptionImport[]) => list.map((entry) => entry.backend.id).join(', ')
+  const keyed = entries.filter((entry) => entry.backend.importCredential)
+  const device = entries.filter((entry) => entry.backend.login)
+  const input = [
+    keyed.length ? `Ключ подписки (${ids(keyed)}) поступает через stdin или скрытый ввод.` : '',
+    device.length ? `Код входа (${ids(device)}) выводится только в интерактивный терминал.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   const usage = {
-    login:
-      'subscriptions:login -- --backend openai-chatgpt|kimi-code --label <имя> [--plan <план>] [--paid-until YYYY-MM-DD] --vault-token-file <абсолютный путь>\nПовторный вход: --backend <оболочка> --relogin <UUID> --vault-token-file <путь>.\nKimi: ключ поступает через stdin или скрытый ввод. Codex: код выводится только в интерактивный терминал.',
+    login: `subscriptions:login -- --backend ${[...imports.keys()].join('|')} --label <имя> [--plan <план>] [--paid-until YYYY-MM-DD] --vault-token-file <абсолютный путь>\nПовторный вход: --backend <оболочка> --relogin <UUID> --vault-token-file <путь>.\n${input}`,
     retire:
       'subscriptions:retire -- --account <UUID> --label <метка> [--compromised --turns-token-file <путь>]\nОкончательное удаление: --account <UUID> --label <метка> --finalize --vault-token-file <путь> [--console-revoked].\n--console-revoked подтверждает ручной отзыв ключа в консоли провайдера.\nОтмена запроса, пока токены не отозваны: --account <UUID> --cancel.',
     token:
