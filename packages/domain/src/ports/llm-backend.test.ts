@@ -139,6 +139,14 @@ describe('the outgoing requests an adapter declares', () => {
     expect(llmEgressOriginSchema.parse(declared)).toEqual(declared)
   })
 
+  it('lets an adapter say that its origin needs no egress node, by a flag alone', () => {
+    const direct = { ...declared, direct: true }
+    expect(llmEgressOriginSchema.parse(direct)).toEqual(direct)
+    expect(llmEgressOriginSchema.parse({ ...declared, direct: false }).direct).toBe(false)
+    for (const value of ['true', 1, null, 'https://provider.invalid'])
+      expect(llmEgressOriginSchema.safeParse({ ...declared, direct: value }).success).toBe(false)
+  })
+
   it.each([
     { origin: 'http://provider.invalid' },
     { origin: 'https://provider.invalid/' },

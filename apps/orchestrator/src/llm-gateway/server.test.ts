@@ -4,7 +4,7 @@ import { createServer, request, type IncomingMessage, type ServerResponse } from
 import { once } from 'node:events'
 import { setTimeout as realDelay } from 'node:timers/promises'
 
-import type { LlmBackend } from '@repo/domain'
+import { badRequest, type LlmBackend } from '@repo/domain'
 import { codexBackend, kimiCodeBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -42,6 +42,7 @@ const key: GatewayKey = {
   credentialVersion: 1,
   clientIdentity: { installationId: 'synthetic-installation' },
   maxConcurrentRequests: 2,
+  staleWindows: false,
 }
 const makeCall = (estimatedInputTokens = 10, estimatedCacheReadTokens = 0): GatewayCall => ({
   ...key,
@@ -143,6 +144,7 @@ const controlLifecycle = () => ({
   refresh: vi.fn().mockResolvedValue(null),
   observe: vi.fn().mockResolvedValue(undefined),
   probeAccounts: vi.fn().mockResolvedValue(undefined),
+  refreshAccount: vi.fn().mockResolvedValue(undefined),
 })
 
 afterEach(async () => {
@@ -222,7 +224,9 @@ async function setup(
     clients: [{ address: '127.0.0.1', prefix: 32, family: 'ipv4' }],
     hosts: ['llm.local'],
     maxRequestsPerKey: 2,
-    egress: null,
+    maxCallsPerKey30s: 20,
+    maxCallsPerKey: 600,
+    egress: { proxyUrl: null, upstreamCaFile: null, backendOrigins: new Map() },
     ...patch,
   }
   const gateway = createLlmGateway({
@@ -349,6 +353,24 @@ describe('private core pool probe endpoint', () => {
     expect(JSON.stringify(logger.log.mock.calls)).not.toContain(accountIds[0])
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(token)
     expect(gateway.stats().activeRequests).toBe(0)
+  })
+
+  it('refreshes old snapshots for core by the rule of freshness, not of unknown windows', async () => {
+    const lifecycle = controlLifecycle()
+    const { gateway } = await setup(
+      (_request, response) => response.end(),
+      {},
+      { lifecycle, metricsToken: token },
+    )
+    const accountIds = [randomUUID(), randomUUID()]
+    const result = await call(gateway, { path, headers, body: { accountIds, stale: true } })
+    expect(result.status).toBe(204)
+    expect(lifecycle.refreshAccount.mock.calls).toEqual(accountIds.map((id) => [id]))
+    expect(lifecycle.probeAccounts).not.toHaveBeenCalled()
+    // The flag is the literal true or absent: nothing else selects a rule.
+    for (const stale of [false, 'true', 1])
+      expect((await call(gateway, { path, headers, body: { accountIds, stale } })).status).toBe(400)
+    expect(lifecycle.refreshAccount).toHaveBeenCalledTimes(2)
   })
 
   it('requires the control bearer token and never accepts a turn key', async () => {
@@ -669,10 +691,10 @@ describe('subscription HTTP gateway', () => {
     expect(result.status).toBe(200)
     expect(result.body).toContain('abcdef')
     expect(result.body).toContain('response.completed')
-    expect(result.headers).toMatchObject({
-      'x-codex-turn-state': 'synthetic-next',
-      'retry-after': '5',
-    })
+    expect(result.headers['x-codex-turn-state']).toBe('synthetic-next')
+    // A pause the provider names on a successful answer is no instruction for the CLI: only a
+    // refusal the gateway builds itself carries one.
+    expect(result.headers['retry-after']).toBeUndefined()
     expect(result.headers['set-cookie']).toBeUndefined()
     expect(result.headers['x-codex-primary-used-percent']).toBeUndefined()
     expect(upstreamHeaders.authorization).toBe(`Bearer ${credential.accessToken}`)
@@ -915,14 +937,31 @@ describe('subscription HTTP gateway', () => {
   })
 
   it('fails closed for unknown keys, backend mismatches, invalid CLI identity and atomic refusals', async () => {
-    const { gateway, store, egress } = await setup(success)
+    const { gateway, store, egress, logger } = await setup(success)
     store.lookup.mockResolvedValueOnce(null)
     expect((await call(gateway)).status).toBe(401)
     expect((await call(gateway, { path: '/kimi/v1/chat/completions' })).status).toBe(403)
     expect((await call(gateway, { headers: { 'user-agent': 'wrong-cli' } })).status).toBe(403)
+    const logged = () => JSON.parse(logger.log.mock.calls.at(-1)![0] as string) as object
     store.admit.mockResolvedValueOnce({ kind: 'refused', reason: 'budget', keyId: key.keyId })
     expect((await call(gateway)).status).toBe(429)
     expect(store.refuse).toHaveBeenCalledWith(key.keyId, 'budget')
+    expect(logged()).toMatchObject({ event: 'llm_refusal', status: 429 })
+    expect(logged()).not.toHaveProperty('limit')
+    // The answer and the journal say `budget` for the money, the pace and the ceiling of a
+    // key alike; which of them refused is in the log of the role alone.
+    for (const limit of ['money', 'pace', 'calls'] as const) {
+      store.admit.mockResolvedValueOnce({
+        kind: 'refused',
+        reason: 'budget',
+        keyId: key.keyId,
+        limit,
+      })
+      const refused = await call(gateway)
+      expect(refused.status).toBe(429)
+      expect(refused.body).not.toContain(limit)
+      expect(logged()).toMatchObject({ event: 'llm_refusal', status: 429, limit })
+    }
     expect(egress.request).not.toHaveBeenCalled()
   })
 
@@ -945,6 +984,61 @@ describe('subscription HTTP gateway', () => {
     expect(egress.request).not.toHaveBeenCalled()
     expect(store.refuse).toHaveBeenCalledWith(key.keyId, 'policy')
     expect(JSON.stringify(logger.log.mock.calls)).not.toContain('secret-sensitive-unknown-field')
+  })
+
+  it('names a rejected field without its indices in the refusal and in full in the log', async () => {
+    // An adapter the gateway has never heard of, which numbers the items of its path. A number
+    // in the body of a refusal is what a CLI may read as a status worth a retry.
+    const adapter: LlmBackend = {
+      ...codexBackend,
+      normalizeBody() {
+        throw badRequest('Request body violates policy', {
+          path: 'messages[502].content[3].text',
+        })
+      },
+    }
+    const { gateway, store, logger } = await setup(success, {}, { backends: [adapter] })
+    const result = await call(gateway)
+    expect(result.status).toBe(400)
+    expect(JSON.parse(result.body).error.field).toBe('messages[].content[].text')
+    expect(result.body).not.toContain('502')
+    expect(store.refuse).toHaveBeenCalledExactlyOnceWith(key.keyId, 'policy')
+    expect(JSON.parse(logger.log.mock.calls.at(-1)![0] as string)).toMatchObject({
+      event: 'llm_refusal',
+      field: 'messages[502].content[3].text',
+    })
+  })
+
+  it.each([
+    // The number of an item lies across the 64 characters a path is cut to.
+    [
+      `messages[1].content[2].${'x'.repeat(37)}[429].text`,
+      `messages[].content[].${'x'.repeat(37)}[].tex`,
+    ],
+    // The cut falls inside the brackets the number was taken out of.
+    [`messages[1].${'x'.repeat(52)}[503].text`, `messages[].${'x'.repeat(52)}`],
+    // A number that is no index of an item cannot be taken out: nothing of the path is echoed.
+    ['messages.502.content', 'unknown'],
+    ['input_429.text', 'unknown'],
+    ['messages[1].content[2x].text', 'unknown'],
+  ])('never echoes a digit of the rejected path %s to the sandbox', async (path, field) => {
+    const adapter: LlmBackend = {
+      ...codexBackend,
+      normalizeBody() {
+        throw badRequest('Request body violates policy', { path })
+      },
+    }
+    const { gateway, logger } = await setup(success, {}, { backends: [adapter] })
+    const result = await call(gateway)
+    expect(result.status).toBe(400)
+    expect(JSON.parse(result.body).error.field).toBe(field)
+    expect(field.length).toBeLessThanOrEqual(64)
+    // No digit anywhere in the answer: a CLI may read one as a status worth a retry.
+    expect(result.body).not.toMatch(/\d/)
+    expect(JSON.parse(logger.log.mock.calls.at(-1)![0] as string)).toMatchObject({
+      event: 'llm_refusal',
+      field: path.slice(0, 64),
+    })
   })
 
   it('does not pass off a crash of the body normalizer as a policy violation', async () => {
@@ -979,6 +1073,30 @@ describe('subscription HTTP gateway', () => {
     expect((await call(gateway)).status).toBe(200)
     expect(store.admit).toHaveBeenCalledTimes(2)
     expect(store.admit.mock.calls[0]).toEqual(store.admit.mock.calls[1])
+  })
+
+  it('refreshes an old window snapshot once before the first call of a key, whatever comes of it', async () => {
+    const lifecycle = controlLifecycle()
+    const { gateway, store, egress } = await setup(success, {}, { lifecycle })
+    // A key that has started a call, or whose account was seen lately: nothing to refresh.
+    expect((await call(gateway)).status).toBe(200)
+    expect(lifecycle.refreshAccount).not.toHaveBeenCalled()
+    store.lookup.mockResolvedValue({ ...key, staleWindows: true })
+    expect((await call(gateway)).status).toBe(200)
+    expect(lifecycle.refreshAccount).toHaveBeenCalledExactlyOnceWith(key.accountId)
+    expect(lifecycle.refreshAccount.mock.invocationCallOrder[0]).toBeLessThan(
+      store.admit.mock.invocationCallOrder[1]!,
+    )
+    // An old snapshot closes nothing by itself, and a refresh that failed changes nothing.
+    lifecycle.refreshAccount.mockRejectedValueOnce(new Error('synthetic probe failure'))
+    expect((await call(gateway)).status).toBe(200)
+    expect(lifecycle.refreshAccount).toHaveBeenCalledTimes(2)
+    expect(store.refuse).not.toHaveBeenCalled()
+    expect(egress.request).toHaveBeenCalledTimes(3)
+    // A paused account is refused before anything is asked of the provider.
+    lifecycle.pause.mockReturnValue({ reason: 'transient', retryAfterMs: 1000 })
+    expect((await call(gateway)).status).toBe(503)
+    expect(lifecycle.refreshAccount).toHaveBeenCalledTimes(2)
   })
 
   it('probes an account with unknown windows once, then admits the running turn afresh', async () => {
@@ -1840,6 +1958,8 @@ describe('Z.ai streams the CLI cannot stop on', () => {
     backend: LlmBackend = zaiCodingBackend,
     // `cut`: the provider's connection breaks after the stream's bytes, without an HTTP end.
     ending: 'end' | 'cut' = 'end',
+    // An answer with an error status instead of the stream.
+    refusal?: { status: number; body: unknown },
   ) {
     const provider: { headers: IncomingMessage['headers']; body: string }[] = []
     const stand = await setup(
@@ -1848,6 +1968,11 @@ describe('Z.ai streams the CLI cannot stop on', () => {
         req.on('data', (part: Buffer) => chunks.push(part))
         req.on('end', () => {
           provider.push({ headers: req.headers, body: Buffer.concat(chunks).toString() })
+          if (refusal) {
+            res.writeHead(refusal.status, { 'content-type': 'application/json' })
+            res.end(JSON.stringify(refusal.body))
+            return
+          }
           res.writeHead(200, {
             'content-type': 'text/event-stream;charset=UTF-8',
             'set-cookie': 'acw_tc=synthetic-cookie; Path=/; HttpOnly',
@@ -1903,9 +2028,8 @@ describe('Z.ai streams the CLI cannot stop on', () => {
     // None of the provider's own headers reaches the sandbox, each one checked by itself.
     for (const name of ['set-cookie', 'x-log-id', 'x-request-id'])
       expect(result.headers[name], name).toBeUndefined()
-    // Decision 7(а) of the pivot plan belongs to G4: until then the pause a provider names on
-    // a successful answer still passes, and the CLI obeys it. G4 turns this line around.
-    expect(result.headers['retry-after']).toBe('999999')
+    // Nor does the pause it names on a successful answer: the pinned CLI would obey it.
+    expect(result.headers['retry-after']).toBeUndefined()
     expect(provider).toHaveLength(1)
     expect(provider[0]!.headers.authorization).toBe('Bearer synthetic-zai-plan-key')
     expect(provider[0]!.headers['user-agent']).toBe(userAgent)
@@ -1969,6 +2093,75 @@ describe('Z.ai streams the CLI cannot stop on', () => {
     const finish = await persisted
     expect(finish.state).toBe('failed')
     expect(finish.signal?.kind).toBe(refusal === 'account' ? 'unconfirmed_block' : refusal)
+  })
+
+  /** The one `llm_call` line of a stand's log, once the call has been closed. */
+  async function callLine(logger: { log: ReturnType<typeof vi.fn> }) {
+    const lines = () =>
+      logger.log.mock.calls
+        .map(([line]) => JSON.parse(line as string) as Record<string, unknown>)
+        .filter((line) => line.event === 'llm_call')
+    await vi.waitFor(() => expect(lines()).toHaveLength(1))
+    return lines()[0]!
+  }
+
+  it.each([
+    ['an error status with a code nobody has listed', 429, '1399', 'unconfirmed_block', 'zai_1399'],
+    ['a model the plan lacks', 400, '1211', 'profile', 'zai_1211'],
+    ['an account the provider holds back', 429, '1113', 'account_risk', 'zai_1113'],
+  ] as const)(
+    'writes the signal of %s into the call line of the log, by its code alone',
+    async (_name, status, code, kind, logged) => {
+      const { send, logger, persisted } = await zai('', zaiCodingBackend, 'end', {
+        status,
+        body: { error: { code, message: 'private provider text' } },
+      })
+      expect((await send()).status).toBeGreaterThanOrEqual(400)
+      await persisted
+      expect(await callLine(logger)).toMatchObject({
+        event: 'llm_call',
+        backend: 'zai-coding',
+        status,
+        signal: kind,
+        code: logged,
+      })
+      expect(JSON.stringify(logger.log.mock.calls)).not.toContain('private provider text')
+    },
+  )
+
+  it('names the signal of a refusal inside the stream and nothing for a finished answer', async () => {
+    const unseen = await zai(chunk('abcdef') + chunk('', 'later_value') + done)
+    await unseen.send()
+    expect(await callLine(unseen.logger)).toMatchObject({
+      status: 200,
+      signal: 'unconfirmed_block',
+      code: 'zai_finish_reason',
+    })
+    const finished = await zai(chunk('abcdef') + chunk('', 'stop') + done)
+    await finished.send()
+    const line = await callLine(finished.logger)
+    expect(line).not.toHaveProperty('signal')
+    expect(line).not.toHaveProperty('code')
+  })
+
+  it('never logs a signal code outside the allowlisted form', async () => {
+    // An adapter that broke its contract and put provider text where its own code belongs.
+    const leaking: LlmBackend = {
+      ...zaiCodingBackend,
+      classify: () => ({ kind: 'unconfirmed_block', code: 'provider said: "private text"' }),
+    }
+    const { send, logger, persisted } = await zai('', leaking, 'end', {
+      status: 429,
+      body: { error: { code: '1399' } },
+    })
+    await send()
+    await persisted
+    const line = await callLine(logger)
+    expect(line).toMatchObject({ event: 'llm_call', status: 429, signal: 'invalid' })
+    expect(line).not.toHaveProperty('code')
+    expect(JSON.stringify(logger.log.mock.calls)).not.toContain('private text')
+    // The store refuses to record such an outcome; that is its own check, kept here as a fact.
+    expect(unstorable.splice(0)).toHaveLength(1)
   })
 
   it('leaves an unfinished stream of an adapter without an end rule to the cut connection', async () => {

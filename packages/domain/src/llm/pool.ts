@@ -6,6 +6,9 @@ import { limitWindowsSchema, llmBackendIdSchema } from '../ports/llm-backend.ts'
 export const poolPolicy = Object.freeze({
   minTurnHeadroomPct: 5,
   newTaskFiveHourHeadroomPct: 10,
+  // A window snapshot older than this is refreshed by one probe before a key is issued and
+  // before the first call of a key. Its age alone closes nothing.
+  windowsFreshMs: 10 * 60_000,
   busyRetryMs: 60_000,
   unknownRetryMs: 15 * 60_000,
   boundWaitMs: 45 * 60_000,

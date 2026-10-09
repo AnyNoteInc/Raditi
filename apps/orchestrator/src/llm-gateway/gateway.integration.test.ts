@@ -720,12 +720,34 @@ describe.skipIf(!enabled)(
       })
       servers.push(server)
       const port = (await server.listen(0)).port
+      // The same role with no egress node configured: it reaches the fake on a connection of
+      // its own, because the adapter of this backend declares that it needs no node.
+      const directConfig = llmConfigFromEnv(
+        {
+          LLM_GATEWAY_HOSTS: 'gateway.test',
+          LLM_GATEWAY_CLIENTS: '127.0.0.1/32',
+          LLM_UPSTREAM_CA_FILE: certificates.certFile,
+          LLM_BACKEND_URL_ZAI_CODING: `https://localhost:${fakePort}`,
+        },
+        'test',
+      )
+      const directServer = createLlmGateway({
+        config: directConfig,
+        backends: [zaiCodingBackend],
+        store: new PostgresGatewayStore(db),
+        credentials: createCredentialSource({ kvRead }),
+        egress: createEgressTransport(directConfig.egress),
+        logger: { log: (message) => logs.push(message), warn: (message) => logs.push(message) },
+      })
+      servers.push(directServer)
+      const directPort = (await directServer.listen(0)).port
       return {
         accountId,
         kvRead,
         tunnels,
         logs,
         port,
+        directPort,
         async key(budgetRub = '100') {
           const task = await db.task.create({ data: { workspaceId, siteId } })
           taskIds.push(task.id)
@@ -891,6 +913,81 @@ describe.skipIf(!enabled)(
         })
         expect(JSON.stringify(sent.body)).not.toContain(key.token)
         for (const secret of [zaiKey, key.token]) expect(f.logs.join('\n')).not.toContain(secret)
+      } finally {
+        await f.close()
+      }
+    })
+
+    it('streams GLM on a connection of its own when no proxy is configured', async () => {
+      const f = await fixture({ scenario: 'text' })
+      try {
+        const key = await f.key()
+        const result = await call(f.directPort, key.token)
+        expect(result.status).toBe(200)
+        expect(events(result.body).at(-1)).toBe('[DONE]')
+        for (const name of providerHeaderNames) expect(result.headers[name]).toBeUndefined()
+        await expect
+          .poll(() => db.llmCall.count({ where: { keyId: key.id, state: 'completed' } }))
+          .toBe(1)
+        expect(await db.tokenUsage.findFirstOrThrow({ where: { keyId: key.id } })).toMatchObject({
+          inputUncachedTokens: 321,
+          cacheReadTokens: 6784,
+          outputTokens: 94,
+          reasoningTokens: 54,
+          estimated: false,
+        })
+        // No tunnel was asked for: the proxy of this fixture saw nothing of the call.
+        expect(f.tunnels).toEqual([])
+        const { requests } = await provider()
+        expect(requests).toHaveLength(1)
+        expect(requests[0]).toMatchObject({
+          path: '/api/coding/paas/v4/chat/completions',
+          credential: 'plan-key',
+          userAgent: zaiUserAgent,
+        })
+        for (const secret of [zaiKey, key.token]) expect(f.logs.join('\n')).not.toContain(secret)
+      } finally {
+        await f.close()
+      }
+    })
+
+    it('keeps the pause a provider names on a successful answer from the sandbox, on both paths', async () => {
+      const f = await fixture({ scenario: 'text', retryAfter: '999999' })
+      try {
+        for (const port of [f.port, f.directPort]) {
+          const result = await call(port, (await f.key()).token)
+          expect(result.status).toBe(200)
+          expect(events(result.body).at(-1)).toBe('[DONE]')
+          expect(result.headers['retry-after']).toBeUndefined()
+        }
+        expect((await provider()).requests).toHaveLength(2)
+      } finally {
+        await f.close()
+      }
+    })
+
+    it('writes the code of an answer nobody has listed into the log of the role, and no text of it', async () => {
+      const f = await fixture({ scenario: 'error', code: 1399, status: 429 })
+      try {
+        const key = await f.key()
+        const result = await call(f.directPort, key.token)
+        expect(result.status).toBe(403)
+        expect(JSON.parse(result.body)).toMatchObject({ error: { code: 'raditi_account' } })
+        await expect
+          .poll(() => db.llmCall.count({ where: { keyId: key.id, state: 'failed' } }))
+          .toBe(1)
+        await expect
+          .poll(() => f.logs.filter((line) => line.includes('"event":"llm_call"')))
+          .toHaveLength(1)
+        const line = f.logs.find((entry) => entry.includes('"event":"llm_call"'))!
+        expect(JSON.parse(line)).toMatchObject({
+          backend: 'zai-coding',
+          status: 429,
+          signal: 'unconfirmed_block',
+          code: 'zai_1399',
+        })
+        expect(f.logs.join('\n')).not.toContain('synthetic-zai-provider-text-canary')
+        expect(result.body).not.toContain('synthetic-zai-provider-text-canary')
       } finally {
         await f.close()
       }

@@ -48,7 +48,9 @@ services:
     volumes:
       - ${VERIFY_ROOT}/infra/dev/llm-verify:/verify:ro
       - ${VERIFY_DIR}/fake-tls:/tls:ro
-    ports: ['127.0.0.1::8787']
+    # The control port, and the provider's TLS port on loopback: the role llm of a stand that has
+    # no egress proxy configured connects to the fake itself, under the name localhost.
+    ports: ['127.0.0.1::8787', '127.0.0.1::443']
     networks:
       providers:
         aliases: [chatgpt.com, auth.openai.com, api.kimi.ai, api.z.ai]

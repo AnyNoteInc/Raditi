@@ -1,14 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
-import type { AddressInfo } from 'node:net'
-import { connect } from 'node:net'
+import type { AddressInfo, Socket } from 'node:net'
+import { connect, createServer as createTcpServer } from 'node:net'
 import type { Duplex } from 'node:stream'
 
 import type { EgressRequest, LlmBackend } from '@repo/domain'
-import { codexBackend } from '@repo/llm-backends'
+import { codexBackend, llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { llmConfigFromEnv } from '../config/llm-config.ts'
+import { llmConfigFromEnv, type EgressConfig } from '../config/llm-config.ts'
 import { createLlmTestCertificates } from '../testing/llm-certificates.ts'
 import { createControlEgress, createEgressTransport, EgressNotSentError } from './egress.ts'
 import { EgressNotDelivered } from './types.ts'
@@ -111,7 +111,8 @@ async function fixture({
       LLM_BACKEND_URL_OPENAI_CHATGPT: `https://localhost:${providerPort}`,
     },
     'test',
-  ).egress!
+  ).egress
+  if (config.proxyUrl === null) throw new Error('The fixture configures a proxy')
   return {
     config,
     tunnels,
@@ -129,6 +130,21 @@ async function fixture({
       )
     },
   }
+}
+
+/**
+ * A role with no egress node: it connects itself, and only where an adapter allows it. Every
+ * origin of the real adapters points at a closed loopback port, so a transport that lost that
+ * rule fails here and never reaches a provider from a test run.
+ */
+const withoutProxy: EgressConfig = {
+  proxyUrl: null,
+  upstreamCaFile: null,
+  backendOrigins: new Map(
+    llmBackends.flatMap((backend) =>
+      backend.egress.map((entry) => [entry.origin, 'https://localhost:1'] as const),
+    ),
+  ),
 }
 
 const input = (changes: Partial<EgressRequest> = {}): EgressRequest => ({
@@ -255,9 +271,9 @@ describe('mTLS subscription egress', () => {
     }
   })
 
-  it('rejects disabled egress, foreign origins and credential-bearing URLs before a connection', async () => {
+  it('rejects an origin that needs the absent proxy, foreign origins and credential-bearing URLs before a connection', async () => {
     await expect(
-      createEgressTransport(null).request(input(), { signal: AbortSignal.timeout(2000) }),
+      createEgressTransport(withoutProxy).request(input(), { signal: AbortSignal.timeout(2000) }),
     ).rejects.toThrow(/^Subscription egress unavailable$/)
     const f = await fixture()
     try {
@@ -302,7 +318,7 @@ describe('mTLS subscription egress', () => {
         },
         'test',
         [adapter],
-      ).egress!
+      ).egress
       const transport = createEgressTransport(config, [adapter])
       const signal = () => AbortSignal.timeout(2000)
       const answer = await transport.request(
@@ -385,9 +401,9 @@ describe('mTLS subscription egress', () => {
       return error instanceof EgressNotSentError
     }
     const signal = () => AbortSignal.timeout(2000)
-    expect(await notSent(createEgressTransport(null).request(input(), { signal: signal() }))).toBe(
-      true,
-    )
+    expect(
+      await notSent(createEgressTransport(withoutProxy).request(input(), { signal: signal() })),
+    ).toBe(true)
     const refused = await fixture({ proxyStatus: 403 })
     try {
       const transport = createEgressTransport(refused.config)
@@ -448,6 +464,28 @@ describe('mTLS subscription egress', () => {
     }
   })
 
+  it('reports a provider TLS session that could not even be started as a request never sent', async () => {
+    const f = await fixture()
+    try {
+      // TLS takes no IP address for a server name: Node refuses it before any handshake. The
+      // configuration accepts no such override; a transport handed one still says the truth.
+      const config = {
+        ...f.config,
+        backendOrigins: new Map([['https://chatgpt.com', `https://127.0.0.1:${f.providerPort}`]]),
+      }
+      const started = Date.now()
+      await expect(
+        createEgressTransport(config).request(input(), { signal: AbortSignal.timeout(5000) }),
+      ).rejects.toBeInstanceOf(EgressNotSentError)
+      // At once, not when the caller gives up: the tunnel is closed and nothing is left hanging.
+      expect(Date.now() - started).toBeLessThan(2000)
+      expect(f.tunnels).toHaveLength(1)
+      expect(f.requests).toHaveLength(0)
+    } finally {
+      await f.close()
+    }
+  })
+
   it('bounds buffered control responses to 64 KiB', async () => {
     const f = await fixture({ bytes: 65_537 })
     try {
@@ -456,6 +494,390 @@ describe('mTLS subscription egress', () => {
           signal: AbortSignal.timeout(2000),
         }),
       ).rejects.toThrow(/^Subscription egress unavailable$/)
+    } finally {
+      await f.close()
+    }
+  })
+})
+
+describe('subscription egress without a proxy', () => {
+  const chat = 'https://api.z.ai/api/coding/paas/v4/chat/completions'
+  const quota = 'https://api.z.ai/api/monitor/usage/quota/limit'
+
+  /** The provider alone, under the loopback name a stand gives it; no proxy exists. */
+  async function direct({ stallResponse = false, redirect = false } = {}) {
+    const sockets = new Set<Socket>()
+    const requests: { method: string; path: string; body: string; headers: object }[] = []
+    const provider = createHttpsServer(
+      { cert: readFileSync(certFile), key: readFileSync(keyFile) },
+      (req, res) => {
+        const chunks: Buffer[] = []
+        req.on('data', (chunk: Buffer) => chunks.push(chunk))
+        req.on('end', () => {
+          requests.push({
+            method: req.method!,
+            path: req.url!,
+            body: Buffer.concat(chunks).toString(),
+            headers: req.headers,
+          })
+          if (stallResponse) return
+          res.writeHead(redirect ? 302 : 200, {
+            'content-type': 'text/event-stream',
+            ...(redirect ? { location: 'https://private.example/secret' } : {}),
+          })
+          res.write('data: first\n\n')
+          res.end('data: second\n\n')
+        })
+      },
+    )
+    // Every TCP connection, also one that never becomes a TLS session.
+    let connections = 0
+    provider.on('connection', (socket: Socket) => {
+      connections += 1
+      sockets.add(socket)
+    })
+    const port = await listen(provider)
+    const config = llmConfigFromEnv(
+      {
+        LLM_UPSTREAM_CA_FILE: certFile,
+        LLM_BACKEND_URL_ZAI_CODING: `https://localhost:${port}`,
+        // Pointed at the same fake: only the adapter's own word could let a request through.
+        LLM_BACKEND_URL_OPENAI_CHATGPT: `https://localhost:${port}`,
+      },
+      'test',
+    ).egress
+    return {
+      config,
+      requests,
+      port,
+      connections: () => connections,
+      async close() {
+        for (const socket of sockets) socket.destroy()
+        await new Promise<void>((resolve, reject) =>
+          provider.close((error) => (error ? reject(error) : resolve())),
+        )
+      },
+    }
+  }
+  const signal = () => AbortSignal.timeout(2000)
+  const notSent = async (promise: Promise<unknown>) => {
+    const error: unknown = await promise.then(
+      () => null,
+      (reason: unknown) => reason,
+    )
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe('Subscription egress unavailable')
+    return error instanceof EgressNotSentError
+  }
+
+  it('connects itself to an origin whose adapter allows it, with provider TLS and trusted framing', async () => {
+    const f = await direct()
+    try {
+      expect(f.config.proxyUrl).toBeNull()
+      const transport = createEgressTransport(f.config)
+      for (const [method, url] of [
+        ['POST', chat],
+        ['GET', quota],
+      ] as const) {
+        const response = await transport.request(
+          input({
+            method,
+            url,
+            headers: new Headers({
+              authorization: 'Bearer synthetic-plan-key',
+              'content-length': '9000',
+              'transfer-encoding': 'chunked',
+              host: 'attacker',
+              'proxy-authorization': 'Basic c2VjcmV0',
+            }),
+          }),
+          { signal: signal() },
+        )
+        const chunks: Buffer[] = []
+        for await (const chunk of response.body) chunks.push(Buffer.from(chunk))
+        expect(response.status).toBe(200)
+        expect(Buffer.concat(chunks).toString()).toBe('data: first\n\ndata: second\n\n')
+      }
+      expect(f.requests.map(({ method, path, body }) => ({ method, path, body }))).toEqual([
+        {
+          method: 'POST',
+          path: '/api/coding/paas/v4/chat/completions',
+          body: '{"synthetic":true}',
+        },
+        { method: 'GET', path: '/api/monitor/usage/quota/limit', body: '{"synthetic":true}' },
+      ])
+      for (const request of f.requests)
+        expect(request.headers).toMatchObject({
+          host: `localhost:${f.port}`,
+          authorization: 'Bearer synthetic-plan-key',
+          'content-length': '18',
+        })
+      expect(JSON.stringify(f.requests)).not.toMatch(/attacker|chunked|c2VjcmV0/)
+    } finally {
+      await f.close()
+    }
+  })
+
+  it('never connects to an origin whose adapter says nothing of going without the node', async () => {
+    const f = await direct()
+    try {
+      const transport = createEgressTransport(f.config)
+      expect(await notSent(transport.request(input(), { signal: signal() }))).toBe(true)
+      // Nor does a control call, which a login or a probe would make.
+      expect(
+        await notSent(
+          createControlEgress(transport).request(
+            input({ method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage' }),
+            { signal: signal() },
+          ),
+        ),
+      ).toBe(true)
+      expect(f.connections()).toBe(0)
+      // The adapter's word alone opens the way: the same origin, declared direct.
+      const allowed: LlmBackend = {
+        ...codexBackend,
+        egress: codexBackend.egress.map((entry) => ({ ...entry, direct: true })),
+      }
+      const answer = await createEgressTransport(f.config, [allowed]).request(input(), {
+        signal: signal(),
+      })
+      expect(answer.status).toBe(200)
+      answer.close()
+      expect(f.requests.map((request) => request.path)).toEqual(['/backend-api/codex/responses'])
+    } finally {
+      await f.close()
+    }
+  })
+
+  it('refuses to start when two adapters disagree on whether one origin needs the node', () => {
+    // A declaration without `direct` says the node is needed. Read by origin, it would be sent
+    // without the node as soon as another adapter said otherwise of the same origin.
+    const needsNode: LlmBackend = {
+      ...zaiCodingBackend,
+      egress: [
+        {
+          origin: 'https://api.z.ai',
+          overrideEnv: 'LLM_BACKEND_URL_SYNTHETIC',
+          requests: ['POST https://api.z.ai/api/paas/v4/chat/completions'],
+        },
+      ],
+    }
+    expect(() => createEgressTransport(withoutProxy, [zaiCodingBackend, needsNode])).toThrow(
+      /^LLM backends disagree on the egress node for https:\/\/api\.z\.ai$/,
+    )
+    expect(() => createEgressTransport(withoutProxy, [needsNode, zaiCodingBackend])).toThrow(
+      /disagree/,
+    )
+    // Adapters that say the same of an origin share it.
+    const agrees = { ...needsNode, egress: [{ ...needsNode.egress[0]!, direct: true }] }
+    expect(() => createEgressTransport(withoutProxy, [zaiCodingBackend, agrees])).not.toThrow()
+    expect(() => createEgressTransport(withoutProxy, [needsNode, codexBackend])).not.toThrow()
+  })
+
+  it('reports a connection that could not even be started as a request never sent', async () => {
+    // The role's own connection, under a server name TLS does not take: nothing was opened.
+    const config: EgressConfig = {
+      proxyUrl: null,
+      upstreamCaFile: certFile,
+      backendOrigins: new Map([['https://api.z.ai', 'https://127.0.0.1:1']]),
+    }
+    expect(
+      await notSent(
+        createEgressTransport(config).request(input({ url: chat }), { signal: signal() }),
+      ),
+    ).toBe(true)
+  })
+
+  it('sends exactly the requests the adapter declares, and nothing to any other host', async () => {
+    const f = await direct()
+    try {
+      const transport = createEgressTransport(f.config, [zaiCodingBackend])
+      for (const undeclared of [
+        input({ url: 'https://api.z.ai/api/coding/paas/v4/models' }),
+        input({ url: 'https://api.z.ai/api/paas/v4/chat/completions' }),
+        input({ url: chat, method: 'GET' }),
+        input({ url: quota }),
+        input({ url: `${chat}/` }),
+        input({ url: `${chat}?key=secret` }),
+        input({ url: `${chat}#fragment` }),
+        input({ url: chat.replace('https://', 'https://secret:token@') }),
+        input({ url: chat.replace('api.z.ai', 'api.z.ai.example') }),
+        input({ url: chat.replace('api.z.ai', 'api.z.ai:8443') }),
+        input({ url: chat.replace('https://', 'http://') }),
+        input({ url: `https://localhost:${f.port}/api/coding/paas/v4/chat/completions` }),
+        input({ url: 'https://private.example/secret' }),
+      ])
+        expect(await notSent(transport.request(undeclared, { signal: signal() }))).toBe(true)
+      expect(f.connections()).toBe(0)
+      expect(f.requests).toHaveLength(0)
+    } finally {
+      await f.close()
+    }
+  })
+
+  it('trusts the built-in roots unless a nonproduction fake CA was configured', async () => {
+    const f = await direct()
+    try {
+      // The fake's certificate is no certificate of the provider: the request is never written.
+      expect(
+        await notSent(
+          createEgressTransport({ ...f.config, upstreamCaFile: null }).request(
+            input({ url: chat }),
+            { signal: signal() },
+          ),
+        ),
+      ).toBe(true)
+      expect(f.requests).toHaveLength(0)
+    } finally {
+      await f.close()
+    }
+  })
+
+  it('returns a redirect as the provider answer and never follows it', async () => {
+    const f = await direct({ redirect: true })
+    try {
+      const answer = await createEgressTransport(f.config).request(input({ url: chat }), {
+        signal: signal(),
+      })
+      expect(answer.status).toBe(302)
+      answer.close()
+      expect(f.requests).toHaveLength(1)
+      expect(f.connections()).toBe(1)
+    } finally {
+      await f.close()
+    }
+  })
+
+  it('gives up a connection the provider does not complete, as a request never sent', async () => {
+    // Accepts TCP and stays silent: neither a TLS answer nor a close.
+    const sockets = new Set<Socket>()
+    const silent = createTcpServer((socket) => sockets.add(socket))
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve))
+    const port = (silent.address() as AddressInfo).port
+    const config = llmConfigFromEnv(
+      { LLM_UPSTREAM_CA_FILE: certFile, LLM_BACKEND_URL_ZAI_CODING: `https://localhost:${port}` },
+      'test',
+    ).egress
+    try {
+      // Its own deadline, long before the caller's: a turn does not wait out the kernel's.
+      const started = Date.now()
+      expect(
+        await notSent(
+          createEgressTransport(config, [zaiCodingBackend], { connectTimeoutMs: 150 }).request(
+            input({ url: chat }),
+            { signal: AbortSignal.timeout(5000) },
+          ),
+        ),
+      ).toBe(true)
+      expect(Date.now() - started).toBeLessThan(2000)
+      // The caller's abort during the handshake is the same fact.
+      expect(
+        await notSent(
+          createEgressTransport(config).request(input({ url: chat }), {
+            signal: AbortSignal.timeout(100),
+          }),
+        ),
+      ).toBe(true)
+      const aborted = new AbortController()
+      aborted.abort()
+      expect(
+        await notSent(
+          createEgressTransport(config).request(input({ url: chat }), { signal: aborted.signal }),
+        ),
+      ).toBe(true)
+      // Nothing listens: refused at once.
+      const closed = llmConfigFromEnv(
+        { LLM_UPSTREAM_CA_FILE: certFile, LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:1' },
+        'test',
+      ).egress
+      expect(
+        await notSent(
+          createEgressTransport(closed).request(input({ url: chat }), { signal: signal() }),
+        ),
+      ).toBe(true)
+    } finally {
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve) => silent.close(() => resolve()))
+    }
+  })
+
+  it('tells its owner whether a connection of its own was opened, and nothing of other refusals', async () => {
+    const f = await direct()
+    const seen: boolean[] = []
+    const options = { onDirectConnection: (established: boolean) => seen.push(established) }
+    try {
+      const transport = createEgressTransport(f.config, llmBackends, options)
+      const answer = await transport.request(input({ url: chat }), { signal: signal() })
+      answer.close()
+      expect(seen).toEqual([true])
+      // Refused before any connection, or given up by the caller: no word about the provider.
+      expect(await notSent(transport.request(input(), { signal: signal() }))).toBe(true)
+      expect(
+        await notSent(transport.request(input({ url: `${chat}/other` }), { signal: signal() })),
+      ).toBe(true)
+      const aborted = new AbortController()
+      aborted.abort()
+      expect(
+        await notSent(transport.request(input({ url: chat }), { signal: aborted.signal })),
+      ).toBe(true)
+      expect(seen).toEqual([true])
+      // Nothing listens there: the connection was never opened.
+      const closed: EgressConfig = {
+        ...f.config,
+        backendOrigins: new Map([['https://api.z.ai', 'https://localhost:1']]),
+      }
+      expect(
+        await notSent(
+          createEgressTransport(closed, llmBackends, options).request(input({ url: chat }), {
+            signal: signal(),
+          }),
+        ),
+      ).toBe(true)
+      expect(seen).toEqual([true, false])
+    } finally {
+      await f.close()
+    }
+    // An answer that was lost came over a connection that was opened.
+    const lost = await direct({ stallResponse: true })
+    try {
+      seen.length = 0
+      expect(
+        await notSent(
+          createEgressTransport(lost.config, llmBackends, options).request(input({ url: chat }), {
+            signal: AbortSignal.timeout(300),
+          }),
+        ),
+      ).toBe(false)
+      expect(seen).toEqual([true])
+    } finally {
+      await lost.close()
+    }
+    // Through a proxy the channel has a probe of its own: nothing is told.
+    const proxied = await fixture()
+    try {
+      seen.length = 0
+      const answer = await createEgressTransport(proxied.config, llmBackends, options).request(
+        input(),
+        { signal: signal() },
+      )
+      answer.close()
+      expect(seen).toEqual([])
+    } finally {
+      await proxied.close()
+    }
+  })
+
+  it('reports a request whose answer was lost as possibly delivered', async () => {
+    const f = await direct({ stallResponse: true })
+    try {
+      expect(
+        await notSent(
+          createControlEgress(createEgressTransport(f.config)).request(input({ url: chat }), {
+            signal: AbortSignal.timeout(300),
+          }),
+        ),
+      ).toBe(false)
+      expect(f.requests).toHaveLength(1)
     } finally {
       await f.close()
     }

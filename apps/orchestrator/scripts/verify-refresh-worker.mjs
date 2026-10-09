@@ -124,7 +124,7 @@ async function main() {
     !local(vault.addr) ||
     !vault.appRole ||
     vault.token ||
-    !config.egress ||
+    !config.egress.proxyUrl ||
     !local(config.egress.proxyUrl) ||
     !config.egress.upstreamCaFile
   )

@@ -24,6 +24,7 @@ import {
   startFakeZai,
   SYNTHETIC_ZAI_KEY,
   SYNTHETIC_ZAI_MARKER,
+  SYNTHETIC_ZAI_ROTATED_KEY,
   ZAI_ERROR_STATUS,
   ZAI_PATHS,
 } from './fake-zai.mjs'
@@ -53,6 +54,14 @@ const chatBody = (patch = {}) => ({
   stream_options: { include_usage: true },
   ...patch,
 })
+
+/** The CLI declares its tools in every request a model may answer with a call. */
+const withTools = (patch = {}) =>
+  chatBody({
+    tool_choice: 'auto',
+    tools: [{ type: 'function', function: { name: 'bash', parameters: { type: 'object' } } }],
+    ...patch,
+  })
 
 /** The handler alone behind plain HTTP: its answers do not depend on TLS. */
 async function plain(t, initial) {
@@ -203,7 +212,7 @@ test('text and tool answers have the frames of the recorded streams', async (t) 
     },
   ]) {
     target.state.setScenario(scenario)
-    const answer = await chat(target)
+    const answer = await chat(target, withTools())
     assert.equal(answer.status, 200)
     assert.equal(answer.headers['content-type'], recorded.response.headers['content-type'])
     // The headers the records had and the sanitiser removed: the gateway must not pass them on.
@@ -235,7 +244,7 @@ test('text and tool answers have the frames of the recorded streams', async (t) 
     assert.equal(meter.outcome, 'completed')
   }
   // Two calls in one answer, each whole in its own chunk; then the text once a result came.
-  const calls = chunks((await chat(target)).text).flatMap(
+  const calls = chunks((await chat(target, withTools())).text).flatMap(
     (chunk) => chunk.choices[0].delta.tool_calls ?? [],
   )
   assert.deepEqual(
@@ -247,7 +256,7 @@ test('text and tool answers have the frames of the recorded streams', async (t) 
   )
   const answered = await chat(
     target,
-    chatBody({
+    withTools({
       messages: [
         { role: 'user', content: 'x' },
         { role: 'assistant', content: '', tool_calls: [] },
@@ -256,6 +265,93 @@ test('text and tool answers have the frames of the recorded streams', async (t) 
     }),
   )
   assert.equal(chunks(answered.text).at(-1).choices[0].finish_reason, 'stop')
+})
+
+test('tool rounds follow the history of the request, and a request without tools gets text', async (t) => {
+  const target = await plain(t)
+  const tools = [{ type: 'function', function: { name: 'bash', parameters: { type: 'object' } } }]
+  const round = (name) => [{ name, arguments: { command: `echo ${name}` } }]
+  target.state.setScenario({
+    scenario: 'tools',
+    rounds: [round('first'), [...round('second'), ...round('third')]],
+    text: 'Synthetic result.',
+  })
+  const called = async (messages, patch = {}) => {
+    const answer = await chat(target, chatBody({ messages, tools, tool_choice: 'auto', ...patch }))
+    assert.equal(answer.status, 200)
+    const sent = chunks(answer.text)
+    return {
+      names: sent.flatMap((chunk) =>
+        (chunk.choices[0].delta.tool_calls ?? []).map((call) => call.function.name),
+      ),
+      text: sent.map((chunk) => chunk.choices[0].delta.content ?? '').join(''),
+      finish: sent.at(-1).choices[0].finish_reason,
+    }
+  }
+  const user = { role: 'user', content: 'Synthetic request.' }
+  const step = (id) => [
+    { role: 'assistant', content: '', tool_calls: [{ id, type: 'function', function: {} }] },
+    { role: 'tool', tool_call_id: id, content: 'done' },
+  ]
+  // The number of tool steps since the last message of the user picks the round.
+  assert.deepEqual(await called([user]), { names: ['first'], text: '', finish: 'tool_calls' })
+  assert.deepEqual(await called([user, ...step('a')]), {
+    names: ['second', 'third'],
+    text: '',
+    finish: 'tool_calls',
+  })
+  assert.deepEqual(await called([user, ...step('a'), ...step('b')]), {
+    names: [],
+    text: 'Synthetic result.',
+    finish: 'stop',
+  })
+  // A new message of the user starts over: the steps of an earlier turn are history.
+  assert.deepEqual((await called([user, ...step('a'), ...step('b'), user])).names, ['first'])
+  // A request that declares no tool (the CLI's context compaction) is answered with text.
+  assert.deepEqual(await called([user], { tools: undefined, tool_choice: undefined }), {
+    names: [],
+    text: 'Synthetic result.',
+    finish: 'stop',
+  })
+  // One list of calls is one round, as before.
+  target.state.setScenario({ scenario: 'tools', calls: round('only') })
+  assert.deepEqual((await called([user])).names, ['only'])
+  assert.deepEqual((await called([user, ...step('a')])).names, [])
+})
+
+test('the plan key can be replaced: the old one is then refused on both paths', async (t) => {
+  const target = await plain(t)
+  assert.notEqual(SYNTHETIC_ZAI_ROTATED_KEY, SYNTHETIC_ZAI_KEY)
+  const quota = (key) => send(target, ZAI_PATHS.quota, { method: 'GET', key })
+  assert.equal((await chat(target)).status, 200)
+  assert.equal(JSON.parse((await quota(SYNTHETIC_ZAI_KEY)).text).success, true)
+  // Before the change the new key is nobody's.
+  assert.equal((await chat(target, chatBody(), { key: SYNTHETIC_ZAI_ROTATED_KEY })).status, 401)
+  assert.equal(target.state.configure({ key: 'rotated' }).key, 'rotated')
+  const refused = await chat(target)
+  assert.equal(refused.status, 401)
+  assert.deepEqual(
+    zaiCodingBackend.classify(refused.status, new Headers(), JSON.parse(refused.text)),
+    { kind: 'auth' },
+  )
+  // The monitor path says the same inside HTTP 200, as the records show.
+  assert.deepEqual(JSON.parse((await quota(SYNTHETIC_ZAI_KEY)).text), {
+    code: 401,
+    msg: 'token expired or incorrect',
+    success: false,
+  })
+  assert.equal((await chat(target, chatBody(), { key: SYNTHETIC_ZAI_ROTATED_KEY })).status, 200)
+  assert.equal(JSON.parse((await quota(SYNTHETIC_ZAI_ROTATED_KEY)).text).success, true)
+  // The record still says only whether the current plan key came, never a value.
+  assert.deepEqual(
+    target.state.requests.map((request) => request.credential),
+    ['plan-key', 'plan-key', 'other', 'other', 'other', 'plan-key', 'plan-key'],
+  )
+  assert.equal(JSON.stringify(target.state.snapshot()).includes(SYNTHETIC_ZAI_ROTATED_KEY), false)
+  // A reset puts the first key back.
+  assert.equal(target.state.reset().key, 'first')
+  assert.equal((await chat(target)).status, 200)
+  assert.throws(() => target.state.configure({ key: 'another' }))
 })
 
 test('usage with and without a cache and reasoning is what the scenario names', async (t) => {
@@ -353,6 +449,25 @@ test('a short-lived failure can be limited to the first requests', async (t) => 
     [await chat(target), await chat(target), await chat(target)].map((answer) => answer.status),
     [429, 429, 200],
   )
+  // The numbers a limited scenario names are its own: the plain answers after it keep its
+  // text and count as usual. A step that fills the context is then followed by ordinary ones.
+  target.state.setScenario({
+    scenario: 'tools',
+    calls: [{ name: 'bash', arguments: { command: 'echo one' } }],
+    text: 'Synthetic result.',
+    usage: { prompt: 990_000 },
+    failures: 1,
+  })
+  const answers = [await chat(target, withTools()), await chat(target), await chat(target)]
+  assert.deepEqual(
+    answers.map((answer) => chunks(answer.text).at(-1).usage.prompt_tokens),
+    [990_000, 7105, 7105],
+  )
+  assert.deepEqual(
+    answers.map((answer) => chunks(answer.text).at(-1).choices[0].finish_reason),
+    ['tool_calls', 'stop', 'stop'],
+  )
+  assert.ok(answers[2].text.includes('result.'))
 })
 
 test('the three finishing values pass the inspector and every other one becomes a failure', async (t) => {
@@ -638,6 +753,15 @@ test('scenario options are closed', () => {
     { scenario: 'text', calls: [{ name: 'bash', arguments: {} }] },
     { scenario: 'tools', calls: [] },
     { scenario: 'tools', calls: [{ name: 'two words', arguments: {} }] },
+    { scenario: 'text', rounds: [[{ name: 'bash', arguments: {} }]] },
+    { scenario: 'tools', rounds: [] },
+    { scenario: 'tools', rounds: [[]] },
+    { scenario: 'tools', rounds: [{ name: 'bash', arguments: {} }] },
+    {
+      scenario: 'tools',
+      calls: [{ name: 'bash', arguments: {} }],
+      rounds: [[{ name: 'bash', arguments: {} }]],
+    },
     { failures: 0 },
     { delayMs: -1 },
     { retryAfter: 'line\nbreak' },

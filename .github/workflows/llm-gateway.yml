@@ -40,14 +40,16 @@ permissions:
 jobs:
   verify-llm-gateway:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Three groups since the Z.ai one (real OpenCode through its driver, about three minutes
+    # more, a third of them the pauses of short-lived refusals).
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # Leave room for the workspace dependencies, two CLI distributions and disposable images.
+      # Leave room for the workspace dependencies, three CLI distributions and disposable images.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \

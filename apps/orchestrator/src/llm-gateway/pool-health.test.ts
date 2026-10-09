@@ -178,6 +178,105 @@ describe('subscription pool health coordination', () => {
     expect(h.backendProbe).toHaveBeenCalledTimes(2)
   })
 
+  it('a refresh of an old snapshot is no confirmation of a signal that comes after it', async () => {
+    const h = harness()
+    // A key was issued on an old snapshot: one refresh, and the provider answers as before.
+    await h.health.refreshAccount(account.accountId)
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+    // Seconds later the provider refuses the plan key: the refresh says nothing about that.
+    h.advance(3_000)
+    h.backendProbe.mockResolvedValue(probe('auth'))
+    await h.health.observe(call('1'), finish({ kind: 'auth' }, 401))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    expect(h.store.probe).toHaveBeenLastCalledWith(account, probe('auth'), {
+      authNeedsRelogin: true,
+    })
+    // The confirming probe answers the signals of its five minutes and bounds the next refresh.
+    h.advance(60_000)
+    await h.health.observe(call('2'), finish({ kind: 'auth' }, 401))
+    await h.health.refreshAccount(account.accountId)
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    h.advance(240_000)
+    await h.health.refreshAccount(account.accountId)
+    expect(h.backendProbe).toHaveBeenCalledTimes(3)
+  })
+
+  it('a probe for unknown windows bounds a refresh and confirms no later signal', async () => {
+    const h = harness()
+    await h.health.probeAccount(account.accountId, {})
+    h.advance(3_000)
+    await h.health.refreshAccount(account.accountId)
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+    await h.health.observe(call('1'), finish({ kind: 'region' }, 403))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    // Signals closing together still share the one probe they started.
+    const h2 = harness()
+    await h2.health.refreshAccount(account.accountId)
+    await Promise.all([
+      h2.health.observe(call('1'), finish({ kind: 'auth' }, 401)),
+      h2.health.observe(call('2'), finish({ kind: 'auth' }, 401)),
+    ])
+    expect(h2.backendProbe).toHaveBeenCalledTimes(2)
+  })
+
+  it('a probe for the windows does not end the five minutes of the confirming probe before it', async () => {
+    const h = harness()
+    const signal = (id: string) => h.health.observe(call(id), finish({ kind: 'auth' }, 401))
+    await signal('1')
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+    // Twenty seconds later the windows are read as unknown: a probe of its own kind.
+    h.advance(20_000)
+    await h.health.probeAccount(account.accountId, {})
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    // The signal after it is still answered by the confirming probe of 21 seconds ago.
+    h.advance(1_000)
+    await signal('2')
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    h.advance(278_999)
+    await signal('3')
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    // Five minutes after the confirming probe the next signal is confirmed anew.
+    h.advance(1)
+    await signal('4')
+    expect(h.backendProbe).toHaveBeenCalledTimes(3)
+  })
+
+  it('a probe after cleared windows does not end those five minutes either', async () => {
+    const h = harness()
+    await h.health.observe(call('1'), finish({ kind: 'account_risk', reason: 'risk' }, 403))
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+    h.advance(1_000)
+    await h.health.observe(call('2'), finish({ kind: 'window_exhausted', until: null }, 429))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    h.advance(1_000)
+    await h.health.observe(call('3'), finish({ kind: 'account_risk', reason: 'risk' }, 403))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+  })
+
+  it('a remembered region answer closes egress again after a probe for the windows', async () => {
+    const h = harness()
+    h.backendProbe.mockResolvedValueOnce(probe('region'))
+    await h.health.observe(call('1'), finish({ kind: 'region' }, 403))
+    h.advance(20_000)
+    await h.health.probeAccount(account.accountId, {})
+    h.advance(1_000)
+    await h.health.observe(call('2'), finish({ kind: 'region' }, 403))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    expect(h.onRegion.mock.calls).toEqual([[account.accountId], [account.accountId]])
+  })
+
+  it('a refresh shares a probe in flight, whatever it was sent for', async () => {
+    const h = harness()
+    let answer: (result: ProbeResult) => void = () => {}
+    h.backendProbe.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+    const confirming = h.health.observe(call('1'), finish({ kind: 'auth' }, 401))
+    const refresh = h.health.refreshAccount(account.accountId)
+    await vi.waitFor(() => expect(h.backendProbe).toHaveBeenCalledTimes(1))
+    answer(probe())
+    await Promise.all([confirming, refresh])
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+  })
+
   describe('a probe asked for because the windows are unknown', () => {
     const at = (ms: number) => new Date(Date.UTC(2026, 9, 3) + ms)
     /** The durable state as admission reads it: the windows and when they were last written. */
@@ -229,10 +328,15 @@ describe('subscription pool health coordination', () => {
       advance(1)
       await h.health.probeAccount(account.accountId, { limitsSeenAt: state.limitsSeenAt })
       expect(h.backendProbe).toHaveBeenCalledTimes(2)
-      // A confirmation of a request signal keeps the five-minute interval.
+      // A request signal is confirmed by a probe of its own: both of these were sent for the
+      // windows, before whatever the provider refused afterwards.
       advance(60_000)
       await h.health.probeAccount(account.accountId)
-      expect(h.backendProbe).toHaveBeenCalledTimes(2)
+      expect(h.backendProbe).toHaveBeenCalledTimes(3)
+      // That confirmation keeps the five-minute interval.
+      advance(60_000)
+      await h.health.probeAccount(account.accountId)
+      expect(h.backendProbe).toHaveBeenCalledTimes(3)
     })
 
     it('shares a probe in flight and bounds repeats of one that failed', async () => {

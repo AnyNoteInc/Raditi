@@ -255,9 +255,9 @@ export const clientIdentitySchema = z
 export type ClientIdentity = z.infer<typeof clientIdentitySchema>
 
 /**
- * One fixed provider origin and every request an adapter sends there through the egress:
- * generation, probe, token refresh and revocation, device login. Nothing else leaves: the
- * transport refuses a request outside these lists before any connection.
+ * One fixed provider origin and every request an adapter sends there: generation, probe, token
+ * refresh and revocation, device login. Nothing else leaves: the transport refuses a request
+ * outside these lists before any connection, through the egress node and without it alike.
  */
 export interface LlmEgressOrigin {
   /** An https origin: scheme, host and optional port only. */
@@ -266,6 +266,12 @@ export interface LlmEgressOrigin {
   readonly requests: readonly string[]
   /** The variable that points the origin at a loopback fake on a stand; refused in production. */
   readonly overrideEnv: string
+  /**
+   * True: the provider needs no egress node, and a role that has none configured connects to
+   * this origin itself. Otherwise the origin is reached through the node's proxy only, and
+   * without one not at all. With a proxy configured every origin goes through it.
+   */
+  readonly direct?: boolean
 }
 
 /** Checked by every consumer before use: a declaration must never read wider than written. */
@@ -277,6 +283,7 @@ export const llmEgressOriginSchema = z
       .min(1)
       .readonly(),
     overrideEnv: z.string().regex(/^LLM_[A-Z0-9_]+$/),
+    direct: z.boolean().optional(),
   })
   .refine(
     (entry) =>

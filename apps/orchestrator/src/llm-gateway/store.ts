@@ -14,6 +14,7 @@ import {
   limitWindowSnapshotSchema,
   llmBackendIdSchema,
   llmCallCostRub,
+  poolPolicy,
   refusalForSignal,
   type CallUsage,
   type GatewayRefusal,
@@ -43,6 +44,8 @@ const int = z.number().int().nonnegative().max(2_147_483_647)
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/)
 const sourceSchema = z.string().refine((value) => isIP(value) !== 0)
 const usageBreakerMs = 15 * 60_000
+// The window the pace of one key is counted in.
+const callPaceMs = 30_000
 // An exhausted window stays exhausted this long past its reset, as cooling_until does.
 const resetMarginMs = 60_000
 // Retry-After of a turn held for unknown windows: the CLI's retries outlast one account probe.
@@ -99,6 +102,7 @@ interface KeyRow {
   reasoningEffort: string | null
   budgetRub: Prisma.Decimal
   expiresAt: Date
+  lastCallAt: Date | null
   backendId: string
   providerId: string
   providerEnabled: boolean
@@ -133,6 +137,7 @@ const keyColumns = Prisma.sql`
   k.id AS "keyId", k.task_id AS "taskId", k.task_attempt AS "taskAttempt",
   k.driver_id AS "driverId", k.model_id AS "modelId", k.subscription_account_id AS "accountId",
   k.reasoning_effort AS "reasoningEffort", k.budget_rub AS "budgetRub", k.expires_at AS "expiresAt",
+  k.last_call_at AS "lastCallAt",
   m.provider_model_id AS model, m.slug AS "modelSlug", m.enabled AS "modelEnabled",
   m.reserve_output_tokens AS "reserveOutputTokens", p.slug AS "backendId",
   p.id AS "providerId", p.enabled AS "providerEnabled", p.kind::text AS "providerKind",
@@ -151,6 +156,8 @@ const keyColumns = Prisma.sql`
 /** Every admission/close locks key → account → call. Stop flags additionally hold model/provider share locks. */
 export class PostgresGatewayStore implements GatewayStore {
   readonly #maxRequestsPerKey: number
+  readonly #maxCallsPerKey30s: number
+  readonly #maxCallsPerKey: number
   readonly #lostAfterMs: number
   readonly #logger: { warn(message: string): void }
 
@@ -158,6 +165,9 @@ export class PostgresGatewayStore implements GatewayStore {
     private readonly db: Database,
     options: {
       maxRequestsPerKey?: number
+      /** Calls one key may start within thirty seconds, and at all. */
+      maxCallsPerKey30s?: number
+      maxCallsPerKey?: number
       lostAfterMs?: number
       logger?: { warn(message: string): void }
     } = {},
@@ -169,6 +179,18 @@ export class PostgresGatewayStore implements GatewayStore {
       .min(1)
       .max(2)
       .parse(options.maxRequestsPerKey ?? 2)
+    this.#maxCallsPerKey30s = z
+      .number()
+      .int()
+      .min(1)
+      .max(1_000)
+      .parse(options.maxCallsPerKey30s ?? 20)
+    this.#maxCallsPerKey = z
+      .number()
+      .int()
+      .min(1)
+      .max(100_000)
+      .parse(options.maxCallsPerKey ?? 600)
     this.#lostAfterMs = z
       .number()
       .int()
@@ -209,6 +231,24 @@ export class PostgresGatewayStore implements GatewayStore {
       if (!row.modelEnabled || row.model === null) return this.#refused(tx, row.keyId, 'profile')
       // The task already failed for content; its next request would repeat it to the account.
       if (row.policyFlagged) return this.#refused(tx, row.keyId, 'policy_flagged')
+      // A turn asks once per step, and a model answers in seconds. A key that asks faster, or
+      // more often than any turn does, is a CLI repeating itself: each call would spend the
+      // account's quota until the money budget ran out. Refused for good, before it waits for
+      // a slot; a refusal opens no call and so is not counted.
+      const [calls, recentCalls] = await Promise.all([
+        tx.llmCall.count({ where: { keyId: row.keyId } }),
+        tx.llmCall.count({
+          where: {
+            keyId: row.keyId,
+            startedAt: { gt: new Date(row.serverNow.getTime() - callPaceMs) },
+          },
+        }),
+      ])
+      if (calls >= this.#maxCallsPerKey || recentCalls >= this.#maxCallsPerKey30s)
+        return {
+          ...(await this.#refused(tx, row.keyId, 'budget')),
+          limit: calls >= this.#maxCallsPerKey ? 'calls' : 'pace',
+        }
       const open = await tx.llmCall.count({ where: { keyId: row.keyId, state: 'open' } })
       if (open >= this.#maxRequestsPerKey) return this.#refused(tx, row.keyId, 'transient', 1_000)
       const price = await tx.llmModelPrice.findFirst({
@@ -240,7 +280,7 @@ export class PostgresGatewayStore implements GatewayStore {
           reserveRub: reservedRub,
         })
       )
-        return this.#refused(tx, row.keyId, 'budget')
+        return { ...(await this.#refused(tx, row.keyId, 'budget')), limit: 'money' }
       const blocked = accountRefusal(row)
       if (blocked === 'windows_unknown') {
         const refused = await this.#refused(tx, row.keyId, 'transient', unknownWindowsRetryMs)
@@ -644,8 +684,27 @@ function toKey(row: KeyRow): GatewayKey | null {
     credentialVersion: row.credentialVersion,
     clientIdentity: identity.data,
     maxConcurrentRequests: row.maxConcurrentRequests,
+    // Windows nobody has dated are unknown ones: admission asks for their probe itself. A key
+    // that admission is going to refuse for a stop flag asks for nothing: a provider, a model
+    // or an account that is switched off gets no request on its behalf, a quota request neither.
+    staleWindows:
+      row.lastCallAt === null &&
+      row.limitsSeenAt !== null &&
+      row.serverNow.getTime() - row.limitsSeenAt.getTime() > poolPolicy.windowsFreshMs &&
+      row.providerEnabled &&
+      row.providerKind === 'subscription' &&
+      row.modelEnabled &&
+      !accountOff(row),
   }
 }
+
+/** Switched off by the operator, out of the pool, unhealthy, or without live credentials. */
+const accountOff = (row: KeyRow): boolean =>
+  !row.accountEnabled ||
+  row.status !== 'active' ||
+  row.health !== 'ok' ||
+  row.credentialsRevokedAt !== null ||
+  row.credentialVersion < 1
 
 function sameProfile(key: GatewayKey, profile: GatewayProfile): boolean {
   return (
@@ -716,14 +775,7 @@ function usageFromRow(value: {
  * a fresh probe, because an authoritative exhaustion or a malformed report clears them.
  */
 function accountRefusal(row: KeyRow): GatewayRefusal | 'windows_unknown' | null {
-  if (
-    !row.accountEnabled ||
-    row.status !== 'active' ||
-    row.health !== 'ok' ||
-    row.credentialsRevokedAt !== null ||
-    row.credentialVersion < 1
-  )
-    return 'account'
+  if (accountOff(row)) return 'account'
   // Existing keys drain normally during retirement or an ambiguous refresh. New issue
   // rejects both in pickAccount; an existing ambiguous credential must still be live.
   if (

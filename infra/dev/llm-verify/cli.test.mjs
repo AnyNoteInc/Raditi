@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
+import { spawnSync } from 'node:child_process'
 import {
   chmod,
   lstat,
@@ -24,6 +26,8 @@ import {
   compileCodexConfig,
   compileKimiConfig,
   createCliSession,
+  filesHoldingResult,
+  filesHoldingSearch,
   removeMountedDirectory,
 } from './cli.mjs'
 
@@ -112,6 +116,21 @@ test('session mounts only its private temporary tree and sends keys through exec
       if (startup[i] === '--mount') assert.ok(startup[i + 1].includes(`src=${session.directory}/`))
     }
     assert.ok(startup.includes(`type=bind,src=${session.inbox},dst=/workspace/inbox,readonly`))
+    // The parent of the working copy is the agent's to write, as in a sandbox: the OpenCode
+    // driver keeps the site's own OpenCode files there while its CLI runs.
+    assert.ok(
+      startup.some((arg) => arg.startsWith('/workspace:rw,') && arg.includes('uid=10001')),
+      'The parent of the working copy must be a tmpfs of the agent',
+    )
+    // The home of the OpenCode driver is a tmpfs as well, as the whole /agent-home is in a
+    // sandbox: its wrapper closes directories by their mode, and a bind mount of a desktop
+    // host does not hold the agent to that.
+    assert.ok(
+      startup.some(
+        (arg) => arg.startsWith('/agent-home/opencode:rw,') && arg.includes('mode=0700'),
+      ),
+      'The home of the OpenCode driver must be a tmpfs',
+    )
     assert.ok(
       startup.some((arg) => arg.startsWith('/run/raditi/secrets:') && arg.includes('mode=0700')),
     )
@@ -365,10 +384,80 @@ test('the CLI image is the production agent runtime with the verified CLIs, run 
   assert.equal(RUNTIME_IMAGE, 'raditi-p3verify-runtime:b13')
   assert.match(source, /^FROM \$\{RUNTIME_IMAGE\}$/m)
   assert.doesNotMatch(source, /npm (install|i|ci)\b/)
+  assert.deepEqual(CLI_VERSIONS, { codex: '0.158.0', kimi: '2.1.1', opencode: '1.18.34' })
+  const packages = {
+    codex: '@openai/codex',
+    kimi: '@moonshot-ai/kimi-code',
+    opencode: 'opencode-ai',
+  }
   for (const [name, version] of Object.entries(CLI_VERSIONS)) {
-    const pkg = name === 'codex' ? '@openai/codex' : '@moonshot-ai/kimi-code'
     // The build fails unless the runtime holds exactly the verified version.
-    assert.ok(source.includes(`npm ls ${pkg}@${version} `), pkg)
+    assert.ok(source.includes(`npm ls ${packages[name]}@${version} `), packages[name])
   }
   assert.match(source, /^USER 10001:10001$/m)
+})
+
+test('the search for a secret in the files of a sandbox reads binary files as well', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'raditi-cli-search-'))
+  const home = join(directory, 'home')
+  try {
+    const needle = 'synthetic-needle-for-the-search'
+    await mkdir(join(home, '.local/share'), { recursive: true })
+    // As the session database of a CLI, the one thing a turn leaves to the next: text among
+    // bytes that a search for text lines alone would skip.
+    await writeFile(
+      join(home, '.local/share/session.db'),
+      Buffer.concat([
+        Buffer.from('SQLite format 3\0\0\u0001'),
+        Buffer.from(needle),
+        Buffer.from([0, 255, 0]),
+      ]),
+    )
+    await writeFile(join(home, 'plain.log'), `first line\n${needle}\n`)
+    await writeFile(join(home, 'other.log'), 'nothing of the kind\n')
+    const search = (needles, roots) => {
+      const { argv, input } = filesHoldingSearch(needles, roots)
+      // A secret searched for stands in no argument of a process.
+      for (const word of needles) assert.equal(argv.join(' ').includes(word), false)
+      const [program, ...args] = argv
+      const { status, stdout, stderr } = spawnSync(program, args, { input, encoding: 'utf8' })
+      return { code: status, stdout, stderr }
+    }
+    const found = (needles, roots) => filesHoldingResult(search(needles, roots)).sort()
+    // Nothing a shell would have to quote is a word here: the strings are data on the input.
+    assert.deepEqual(found(["an'other $(needle)", needle], [home]), [
+      join(home, '.local/share/session.db'),
+      join(home, 'plain.log'),
+    ])
+    assert.deepEqual(found(['absent-needle'], [directory]), [])
+
+    // A search that could not read everything is no answer, whatever it did find.
+    const missing = search([needle], [home, join(directory, 'missing')])
+    assert.match(missing.stdout, /plain\.log/)
+    assert.throws(() => filesHoldingResult(missing), /could not be searched.*missing/)
+    // A mode closes nothing to root.
+    if (process.getuid?.() !== 0) {
+      await chmod(join(home, 'plain.log'), 0o000)
+      assert.throws(() => found([needle], [home]), /could not be searched.*plain\.log/)
+      await chmod(join(home, 'plain.log'), 0o600)
+      await chmod(join(home, '.local'), 0o000)
+      assert.throws(() => found([needle], [home]), /could not be searched.*\.local/)
+    }
+    // No grep to run at all, as Docker reports it.
+    assert.throws(
+      () => filesHoldingResult({ code: 127, stdout: '', stderr: '' }),
+      /could not be searched: exit 127/,
+    )
+
+    // An empty line would match every file; a root is a path, never an option of grep.
+    for (const word of ['', 'two\nlines', 'a\r'])
+      assert.throws(() => filesHoldingSearch([word], ['/tmp']), /one line/)
+    for (const root of ['-rf', 'relative/path', '/tmp; id', ''])
+      assert.throws(() => filesHoldingSearch(['a'], [root]), /absolute path/)
+    assert.throws(() => filesHoldingSearch([], ['/tmp']))
+    assert.throws(() => filesHoldingSearch(['a'], []))
+  } finally {
+    await chmod(join(home, '.local'), 0o700).catch(() => {})
+    await rm(directory, { recursive: true, force: true })
+  }
 })

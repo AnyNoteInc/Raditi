@@ -83,6 +83,26 @@ describe('private pool snapshot control client', () => {
       })),
     )
   })
+  it('marks a request for snapshots that have only grown old', async () => {
+    const bodies: unknown[] = []
+    const origin = await fixture((request, response) => {
+      let body = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk: string) => {
+        body += chunk
+      })
+      request.on('end', () => {
+        bodies.push(JSON.parse(body))
+        response.writeHead(204)
+        response.end()
+      })
+    })
+    const id = randomUUID()
+    const probe = createPoolProbeClient(origin, 'synthetic-control-token')
+    await probe([id], { stale: true })
+    await probe([id], {})
+    expect(bodies).toEqual([{ accountIds: [id], stale: true }, { accountIds: [id] }])
+  })
   it.each([200, 301, 302, 401, 503])(
     'accepts only empty 204 and refuses status %s without redirects',
     async (status) => {

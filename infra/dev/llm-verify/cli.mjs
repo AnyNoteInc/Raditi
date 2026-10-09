@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url'
 export const CLI_IMAGE = 'raditi-p3verify-cli:b13'
 // The production agent runtime (infra/sandbox/Dockerfile, target runtime) the CLI image builds on.
 export const RUNTIME_IMAGE = 'raditi-p3verify-runtime:b13'
-export const CLI_VERSIONS = Object.freeze({ codex: '0.158.0', kimi: '2.1.1' })
+export const CLI_VERSIONS = Object.freeze({ codex: '0.158.0', kimi: '2.1.1', opencode: '1.18.34' })
 const GATEWAY = 'http://sandbox-gw:8080'
 const INSIDE = '/usr/local/lib/raditi/cli.mjs'
 // Hand-written configs live apart from what the drivers prepare under /agent-home/{codex,kimi}.
@@ -123,6 +123,36 @@ export function cliInvocation({ driver, key, prompt, resume, outputSchema, model
       KIMI_CODE_BUILTIN_PRODUCT_SKILLS: '0',
     },
   }
+}
+
+/**
+ * The search that lists the files under `roots` holding any of `needles`: the arguments of
+ * grep and what it reads on its input. A stand runs it inside the CLI container
+ * (`docker exec -i`) to show that a secret of the platform is in no file of the sandbox. The
+ * needles travel on the input alone: as arguments they would stand in the process list of the
+ * host and of the very container that is searched, and in Docker's record of the exec. Binary
+ * files are searched as text (`-a`): the session database of a CLI, the one thing a turn leaves
+ * to the next and to the session snapshots, is such a file.
+ */
+export function filesHoldingSearch(needles, roots) {
+  assert.ok(needles.length > 0 && roots.length > 0)
+  // One fixed string a line; an empty line would match every file.
+  for (const needle of needles) assert.match(needle, /^[^\r\n]+$/, 'Not one line to search for')
+  for (const root of roots) assert.match(root, /^\/[A-Za-z0-9_./-]*$/, 'Not an absolute path')
+  return { argv: ['grep', '-raFl', '-f', '-', '--', ...roots], input: `${needles.join('\n')}\n` }
+}
+
+/**
+ * The files the search has listed. grep answers 0 when it found a file and 1 when it found
+ * none; anything else — a root that is missing, a file or a directory it may not read, no grep
+ * at all — is a search that did not read everything, and no answer.
+ */
+export function filesHoldingResult({ code, stdout, stderr = '' }) {
+  assert.ok(
+    code === 0 || code === 1,
+    `The files could not be searched: ${stderr.trim().split('\n')[0] || `exit ${code}`}`,
+  )
+  return stdout.split('\n').filter(Boolean)
 }
 
 export function dockerCommand(args, { input, timeoutMs = 30_000 } = {}) {
@@ -320,6 +350,15 @@ export async function createCliSession({
         '--memory=4g',
         '--tmpfs',
         '/tmp:rw,nosuid,nodev,size=128m',
+        // As in a sandbox, the parent of the working copy belongs to the agent: the OpenCode
+        // driver keeps the site's own OpenCode files there while its CLI runs.
+        '--tmpfs',
+        '/workspace:rw,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0755',
+        // The home of the OpenCode driver, a tmpfs as /agent-home is in a sandbox: its wrapper
+        // closes the CLI's configuration directories by their mode, and the bind mount below
+        // does not hold the agent to that on a desktop host.
+        '--tmpfs',
+        '/agent-home/opencode:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
         // Per-turn secrets of the drivers, like the sandbox's tmpfs: never on a bind mount.
         '--tmpfs',
         `${SECRETS}:rw,nosuid,nodev,noexec,size=1m,uid=10001,gid=10001,mode=0700`,

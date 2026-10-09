@@ -25,6 +25,11 @@ import {
   SYNTHETIC_KIMI_KEY,
   SYNTHETIC_ERROR_MARKER,
 } from '../../../infra/dev/llm-verify/fake-subscriptions.mjs'
+import {
+  SYNTHETIC_ZAI_KEY,
+  SYNTHETIC_ZAI_MARKER,
+  SYNTHETIC_ZAI_ROTATED_KEY,
+} from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import { startWorker } from '../../../infra/dev/llm-verify/workers.mjs'
 import { llmConfigFromEnv } from '../src/config/llm-config.ts'
 import { createControlEgress, createEgressTransport } from '../src/llm-gateway/egress.ts'
@@ -36,6 +41,7 @@ import { verifyCrashes } from './verify-llm-crashes.mjs'
 import { verifyProtocol } from './verify-llm-protocol.mjs'
 import { verifyStreamFailures } from './verify-llm-gateway-stream.mjs'
 import { verifyDriverTurns } from './verify-llm-gateway-drivers.mjs'
+import { verifyZai } from './verify-llm-zai.mjs'
 
 const args = new Set(process.argv.slice(2))
 if (args.has('--help')) {
@@ -58,7 +64,14 @@ let stage = 'build',
   guard
 const workers = []
 const extraLogs = []
-const secretMarkers = new Set([SYNTHETIC_KIMI_KEY, SYNTHETIC_ERROR_MARKER])
+const secretMarkers = new Set([
+  SYNTHETIC_KIMI_KEY,
+  SYNTHETIC_ERROR_MARKER,
+  // Both plan keys of the synthetic Z.ai and the text its refusals carry.
+  SYNTHETIC_ZAI_KEY,
+  SYNTHETIC_ZAI_ROTATED_KEY,
+  SYNTHETIC_ZAI_MARKER,
+])
 const promptMarker = `synthetic-prompt-${randomBytes(12).toString('hex')}`
 const passed = (name) => {
   checks++
@@ -191,9 +204,10 @@ try {
     }
     return value
   }
-  const roleConfig = (name) => ({
+  // `base`: the environment of the role; the Z.ai group restarts llm without the egress proxy.
+  const roleConfig = (name, base = env) => ({
     env: {
-      ...env,
+      ...base,
       VAULT_ROLE_ID: stack.roles[name].roleId,
       VAULT_SECRET_ID: stack.roles[name].secretId,
     },
@@ -577,9 +591,9 @@ try {
   )
   await core.call('revoke', { ref: kimiTurn.ref })
   passed('durable early turn-key revocation')
-  const restartLlm = async () => {
+  const restartLlm = async (base = env) => {
     await llm.close()
-    llm = await startWorker('llm', roleConfig('llm'))
+    llm = await startWorker('llm', roleConfig('llm', base))
     workers.push(llm)
     await eventually(
       async () => (await fetch(`http://127.0.0.1:${stack.llmPort}/health`)).status === 200,
@@ -618,6 +632,15 @@ try {
   await verifyCrashes(context)
   stage = 'runtime lifecycle'
   await verifyLifecycle(context)
+  stage = 'Z.ai through the OpenCode driver'
+  await verifyZai({
+    ...context,
+    metricsToken,
+    writerFile,
+    setStage: (name) => {
+      stage = `Z.ai: ${name}`
+    },
+  })
   stage = 'log and database secrecy'
   const serviceLogs = (await stack.compose(['logs', '--no-color'])).stdout
   const audit = (await stack.compose(['exec', '-T', 'vault', 'cat', '/audit/audit.jsonl'])).stdout
@@ -658,7 +681,7 @@ try {
     )
   passed('no prompt, turn key or subscription value in platform logs, audit or SQL')
   console.log(
-    `Synthetic gateway verification passed: ${checks} checks; CLI Codex 0.158.0 / Kimi 2.1.1.`,
+    `Synthetic gateway verification passed: ${checks} checks; CLI Codex 0.158.0 / Kimi 2.1.1 / OpenCode 1.18.34.`,
   )
 } catch (error) {
   if (error.infrastructureDiagnostic) console.error(error.infrastructureDiagnostic)

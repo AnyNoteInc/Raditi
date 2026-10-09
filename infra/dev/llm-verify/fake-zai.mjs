@@ -12,6 +12,9 @@ import { fileURLToPath } from 'node:url'
 // request and keeps what it received in memory only. A request record never holds a credential:
 // it says whether the plan key came, and the names of the headers.
 export const SYNTHETIC_ZAI_KEY = 'zai-synthetic-plan-key-for-stands-only'
+/** The key an operator issues instead of the first one; the fake takes one of the two at a time. */
+export const SYNTHETIC_ZAI_ROTATED_KEY = 'zai-synthetic-rotated-plan-key-for-stands-only'
+const PLAN_KEYS = Object.freeze({ first: SYNTHETIC_ZAI_KEY, rotated: SYNTHETIC_ZAI_ROTATED_KEY })
 /** Stands in every text a real provider would write: it must never reach a sandbox or a log. */
 export const SYNTHETIC_ZAI_MARKER = 'synthetic-zai-provider-text-canary'
 export const ZAI_PATHS = Object.freeze({
@@ -67,8 +70,10 @@ const FINISH_REASONS = new Set([
 const SCENARIOS = new Set([
   // A stream: reasoning, text, the last chunk with finish_reason and usage, DONE.
   'text',
-  // The first answer calls the given tools (two calls in one answer when two are given); once
-  // the request ends with a tool result, the answer is the text.
+  // The answer calls the given tools (two calls in one answer when two are given): `calls` is
+  // one round, `rounds` a list of them. The round is the number of tool steps the request holds
+  // since the last message of the user; past the last round, and for a request that declares
+  // no tool (the CLI's context compaction), the answer is the text.
   'tools',
   // A stream that ends with the given finish_reason.
   'finish',
@@ -106,6 +111,7 @@ function scenarioOptions(value = {}) {
     'text',
     'reasoning',
     'calls',
+    'rounds',
     'finish',
     'code',
     'status',
@@ -124,22 +130,29 @@ function scenarioOptions(value = {}) {
     (typeof value.reasoning !== 'string' || value.reasoning.length > 16_384)
   )
     throw invalid('reasoning')
-  if (value.calls !== undefined) {
-    if (
-      scenario !== 'tools' ||
-      !Array.isArray(value.calls) ||
-      value.calls.length < 1 ||
-      value.calls.length > 8 ||
-      !value.calls.every(
-        (call) =>
-          isRecord(call) &&
-          typeof call.name === 'string' &&
-          /^[A-Za-z0-9_.-]{1,64}$/.test(call.name) &&
-          isRecord(call.arguments),
-      )
+  const callList = (calls) =>
+    Array.isArray(calls) &&
+    calls.length >= 1 &&
+    calls.length <= 8 &&
+    calls.every(
+      (call) =>
+        isRecord(call) &&
+        typeof call.name === 'string' &&
+        /^[A-Za-z0-9_.-]{1,64}$/.test(call.name) &&
+        isRecord(call.arguments),
     )
-      throw invalid('calls')
-  }
+  if (value.calls !== undefined && (scenario !== 'tools' || !callList(value.calls)))
+    throw invalid('calls')
+  if (
+    value.rounds !== undefined &&
+    (scenario !== 'tools' ||
+      value.calls !== undefined ||
+      !Array.isArray(value.rounds) ||
+      value.rounds.length < 1 ||
+      value.rounds.length > 32 ||
+      !value.rounds.every(callList))
+  )
+    throw invalid('rounds')
   if (value.finish !== undefined) {
     // Any value: the gateway must also cope with one nobody has documented.
     if (
@@ -220,6 +233,8 @@ export function createFakeZaiState(initial = {}) {
     config: {},
     attempts: 0,
     quota: {},
+    // Which of the two synthetic plan keys the provider takes; the other one is refused.
+    key: 'first',
     setScenario(options = {}) {
       state.config = scenarioOptions(options)
       state.attempts = 0
@@ -258,6 +273,7 @@ export function createFakeZaiState(initial = {}) {
       if (!isRecord(options)) throw invalid('reset')
       state.requests.length = 0
       state.counters = { chat: 0, quota: 0, generated: 0 }
+      state.key = 'first'
       // After a night without requests: the five-hour window is not started, the week runs.
       state.quota = {
         mode: 'live',
@@ -271,14 +287,16 @@ export function createFakeZaiState(initial = {}) {
       if (options.quota !== undefined) state.setQuota(options.quota)
       return state.snapshot()
     },
-    /** `{reset?, scenario?, quota?}`: the one message of the control port. */
+    /** `{reset?, scenario?, quota?, key?}`: the one message of the control port. */
     configure(options = {}) {
       if (!isRecord(options)) throw invalid('configuration')
       for (const name of Object.keys(options))
-        if (!['reset', 'scenario', 'quota'].includes(name)) throw invalid('configuration')
+        if (!['reset', 'scenario', 'quota', 'key'].includes(name)) throw invalid('configuration')
+      if (options.key !== undefined && !Object.hasOwn(PLAN_KEYS, options.key)) throw invalid('key')
       if (options.reset) state.reset({})
       if (options.scenario !== undefined) state.setScenario(options.scenario)
       if (options.quota !== undefined) state.setQuota(options.quota)
+      if (options.key !== undefined) state.key = options.key
       return state.snapshot()
     },
     snapshot() {
@@ -287,6 +305,7 @@ export function createFakeZaiState(initial = {}) {
         counters: state.counters,
         config: state.config,
         quota: state.quota,
+        key: state.key,
       }
     },
   }
@@ -367,9 +386,18 @@ export function zaiFrames(body, config, sequence) {
     choices: [{ index: 0, ...(finish ? { finish_reason: finish } : {}), delta }],
     ...(usage ? { usage } : {}),
   })
-  const answered = Array.isArray(body.messages) && body.messages.at(-1)?.role === 'tool'
-  const calling = config.scenario === 'tools' && !answered
-  const calls = config.calls ?? [{ name: 'bash', arguments: { command: 'echo synthetic' } }]
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  // The tool steps of this turn: what the request holds after the last message of the user.
+  const turn = messages.slice(messages.findLastIndex((message) => message?.role === 'user') + 1)
+  const round = turn.filter(
+    (message) => message?.role === 'assistant' && Array.isArray(message.tool_calls),
+  ).length
+  const rounds = config.rounds ?? [
+    config.calls ?? [{ name: 'bash', arguments: { command: 'echo synthetic' } }],
+  ]
+  const declared = Array.isArray(body.tools) && body.tools.length > 0
+  const calling = config.scenario === 'tools' && declared && round < rounds.length
+  const calls = rounds[Math.min(round, rounds.length - 1)]
   const frames = []
   const reasoning = config.reasoning ?? 'Synthetic reasoning.'
   for (const word of reasoning.split(/(?<= )/).filter(Boolean))
@@ -416,11 +444,10 @@ async function readJson(req, limit = 16 * 1024 * 1024) {
 }
 
 /** Which credential a request carried, without its value. The quota path takes a bare key too. */
-function credentialOf(req, bare) {
+function credentialOf(req, bare, key) {
   const value = req.headers.authorization
   if (value === undefined) return 'none'
-  if (value === `Bearer ${SYNTHETIC_ZAI_KEY}` || (bare && value === SYNTHETIC_ZAI_KEY))
-    return 'plan-key'
+  if (value === `Bearer ${key}` || (bare && value === key)) return 'plan-key'
   return 'other'
 }
 
@@ -434,7 +461,7 @@ export async function handleZai(req, res, state) {
   const record = {
     method: req.method,
     path,
-    credential: credentialOf(req, quotaPath),
+    credential: credentialOf(req, quotaPath, PLAN_KEYS[state.key]),
     headerNames: Object.keys(req.headers).sort(),
     // Values that are no secret and that the gateway's checks compare.
     userAgent: req.headers['user-agent'] ?? null,
@@ -494,7 +521,9 @@ export async function handleZai(req, res, state) {
     )
   state.counters.generated++
   spend(state)
-  const effective = scenario === config.scenario ? config : { ...config, scenario }
+  // Past its `failures` a scenario leaves plain answers with its text and the usual numbers.
+  const effective =
+    scenario === config.scenario ? config : { ...config, scenario, usage: undefined }
   const frames = zaiFrames(body, effective, sequence)
   if (scenario === 'plain200' || body.stream !== true) {
     // The whole answer as one object: what a request without `stream` gets (sample 61).

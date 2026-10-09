@@ -39,6 +39,22 @@ describe('gateway persistence boundaries', () => {
     expect(() => new PostgresGatewayStore(db, { lostAfterMs: 30 * 60_000 })).not.toThrow()
   })
 
+  it('takes only a positive pace and ceiling of the calls of one key', () => {
+    const db = {} as unknown as Pick<PrismaClient, '$transaction' | '$queryRaw'>
+    for (const options of [
+      { maxCallsPerKey30s: 0 },
+      { maxCallsPerKey30s: 1.5 },
+      { maxCallsPerKey30s: 1001 },
+      { maxCallsPerKey: 0 },
+      { maxCallsPerKey: Infinity },
+      { maxCallsPerKey: 100_001 },
+    ])
+      expect(() => new PostgresGatewayStore(db, options), JSON.stringify(options)).toThrow()
+    expect(
+      () => new PostgresGatewayStore(db, { maxCallsPerKey30s: 1, maxCallsPerKey: 1 }),
+    ).not.toThrow()
+  })
+
   function fixture() {
     const $transaction = vi.fn()
     const $queryRaw = vi.fn()

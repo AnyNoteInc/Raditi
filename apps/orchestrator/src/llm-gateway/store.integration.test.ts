@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
+import type { GatewayRefusal } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { PostgresGatewayStore } from './store.ts'
@@ -440,6 +441,108 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     expect(await one.admit(other.input)).toMatchObject({ kind: 'refused', reason: 'transient' })
   })
 
+  it('refuses for good a key that asks faster than its pace or more often than its ceiling', async () => {
+    const f = await fixture({ budget: '100' })
+    const k = await f.key()
+    const paced = new PostgresGatewayStore(db, { maxCallsPerKey30s: 3 })
+    // Every call is closed at once and costs next to nothing: only the pace is left to refuse.
+    for (let call = 0; call < 3; call++)
+      await paced.finish((await admitted(k.input, paced)).id, actual())
+    expect(await paced.admit(k.input)).toEqual({
+      kind: 'refused',
+      keyId: k.row.id,
+      reason: 'budget',
+      limit: 'pace',
+    })
+    expect((await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })).lastRefusal).toBe(
+      'budget',
+    )
+    // The refusal reserved nothing and opened no call.
+    expect(await db.llmCall.count({ where: { keyId: k.row.id } })).toBe(3)
+    // Another key of the same account has a pace of its own.
+    const other = await f.key()
+    await paced.finish((await admitted(other.input, paced)).id, actual())
+    // Calls that started more than thirty seconds ago no longer count against the pace...
+    await db.llmCall.updateMany({
+      where: { keyId: k.row.id },
+      data: { startedAt: new Date(Date.now() - 31_000) },
+    })
+    await paced.finish((await admitted(k.input, paced)).id, actual())
+    // ...but every call of the key counts against its ceiling, whenever it was made.
+    const capped = new PostgresGatewayStore(db, { maxCallsPerKey: 4 })
+    expect(await capped.admit(k.input)).toMatchObject({
+      kind: 'refused',
+      reason: 'budget',
+      limit: 'calls',
+    })
+    await admitted(k.input, new PostgresGatewayStore(db, { maxCallsPerKey: 5 }))
+  })
+
+  it('tells the gateway when the first call of a key meets a window snapshot grown old', async () => {
+    const f = await fixture()
+    const seen = (minutesAgo: number | null) =>
+      db.subscriptionAccount.update({
+        where: { id: f.account.id },
+        data: {
+          limitsSeenAt: minutesAgo === null ? null : new Date(Date.now() - minutesAgo * 60_000),
+        },
+      })
+    const k = await f.key()
+    const stale = async () => (await store.lookup(k.row.keyHash, '127.0.0.1'))?.staleWindows
+    await seen(9)
+    expect(await stale()).toBe(false)
+    await seen(11)
+    expect(await stale()).toBe(true)
+    // Windows nobody has dated are the business of the rule for unknown windows.
+    await seen(null)
+    expect(await stale()).toBe(false)
+    // Once the key has started a call its turn runs on: only the first call asks.
+    await seen(11)
+    await store.finish((await admitted(k.input)).id, actual())
+    expect(await stale()).toBe(false)
+    // An old snapshot refuses nothing.
+    await seen(600)
+    await admitted((await f.key()).input)
+    // A provider, a model or an account that is switched off, and an account that is out of
+    // use, are refused for good by admission: no refresh is asked for a key that has only that
+    // ahead of it, so nothing is sent to a provider on its behalf.
+    const idle = await f.key()
+    const staleOf = async () => (await store.lookup(idle.row.keyHash, '127.0.0.1'))?.staleWindows
+    expect(await staleOf()).toBe(true)
+    const switched = async (
+      reason: GatewayRefusal,
+      off: () => Promise<unknown>,
+      on: () => Promise<unknown>,
+    ) => {
+      await off()
+      try {
+        expect(await staleOf(), reason).toBe(false)
+        expect(await store.admit(idle.input)).toMatchObject({ kind: 'refused', reason })
+      } finally {
+        await on()
+      }
+      expect(await staleOf(), reason).toBe(true)
+    }
+    const providerOf = (enabled: boolean) => () =>
+      db.llmProvider.update({ where: { id: provider.id }, data: { enabled } })
+    const modelOf = (enabled: boolean) => () =>
+      db.llmModel.update({ where: { id: f.model.id }, data: { enabled } })
+    const accountOf = (data: Prisma.SubscriptionAccountUncheckedUpdateInput) => () =>
+      db.subscriptionAccount.update({ where: { id: f.account.id }, data })
+    await switched('provider_off', providerOf(false), providerOf(true))
+    await switched('profile', modelOf(false), modelOf(true))
+    await switched('account', accountOf({ enabled: false }), accountOf({ enabled: true }))
+    for (const health of ['needs_relogin', 'suspended'] as const)
+      await switched('account', accountOf({ health }), accountOf({ health: 'ok' }))
+    await switched('account', accountOf({ status: 'banned' }), accountOf({ status: 'active' }))
+    await switched(
+      'account',
+      accountOf({ credentialsRevokedAt: new Date() }),
+      accountOf({ credentialsRevokedAt: null }),
+    )
+    await admitted(idle.input)
+  })
+
   it('enforces global account slots across different keys, releasing slots after finish', async () => {
     const f = await fixture({ accountSlots: 1 })
     const keys = await Promise.all([f.key(), f.key()])
@@ -459,7 +562,9 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     const k = await f.key()
     const results = await Promise.all([store.admit(k.input), store.admit(k.input)])
     const open = results.find((r) => r.kind === 'admitted')
-    expect(results).toContainEqual(expect.objectContaining({ kind: 'refused', reason: 'budget' }))
+    expect(results).toContainEqual(
+      expect.objectContaining({ kind: 'refused', reason: 'budget', limit: 'money' }),
+    )
     if (open?.kind !== 'admitted') throw new Error('Missing admitted call')
     expect(open.call.reservedRub).toBe('0.2024000000')
     expect(await store.finish(open.call.id, actual())).toBe(true)

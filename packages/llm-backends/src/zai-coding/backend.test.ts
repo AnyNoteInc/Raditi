@@ -82,6 +82,8 @@ describe('the zai-coding backend as the platform sees it', () => {
         origin: 'https://api.z.ai',
         overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
         requests: [`POST ${chatUrl}`, `GET ${quotaUrl}`],
+        // The owner's decision of 05.10.2026: Z.ai needs no egress node.
+        direct: true,
       },
     ])
     for (const entry of backend.egress)
@@ -463,6 +465,7 @@ describe('a Z.ai offer is data', () => {
       windows: [{ unit: 9, number: 2, name: 'month' }],
     },
     overrideEnv: 'LLM_BACKEND_URL_ZAI_PAYGO',
+    direct: false,
   } as const
   const other: LlmBackend = createZaiBackend(offer)
 
@@ -480,12 +483,14 @@ describe('a Z.ai offer is data', () => {
         ],
       },
       overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
+      direct: true,
     })
     expect(Object.isFrozen(zaiCodingPlan)).toBe(true)
   })
 
   it('takes the route, both addresses and the windows from the description alone', async () => {
     expect(other.routes).toEqual([offer.route])
+    // The description said the egress node is needed: the declaration opens no direct way.
     expect(other.egress).toEqual([
       {
         origin: 'https://api.z.ai',

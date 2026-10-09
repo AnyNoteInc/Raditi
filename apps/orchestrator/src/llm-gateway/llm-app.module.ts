@@ -27,6 +27,7 @@ export class LlmRuntime implements OnApplicationShutdown {
   readonly #channel: EgressHealth
   readonly #refresher: SubscriptionRefresher
   readonly #pool: SubscriptionPoolHealth
+  readonly #egressPath: 'proxy' | 'direct'
   readonly #maintenance = new Set<ReturnType<typeof setInterval>>()
   readonly #jobs = new Map<string, Promise<void>>()
   #channelTimer: ReturnType<typeof setTimeout> | undefined
@@ -44,6 +45,8 @@ export class LlmRuntime implements OnApplicationShutdown {
   ) {
     this.#store = new PostgresGatewayStore(prisma, {
       maxRequestsPerKey: config.maxRequestsPerKey,
+      maxCallsPerKey30s: config.maxCallsPerKey30s,
+      maxCallsPerKey: config.maxCallsPerKey,
       logger: { warn: (message) => this.#logger.warn(message) },
     })
     const health = cachedHealthProbe({
@@ -53,8 +56,11 @@ export class LlmRuntime implements OnApplicationShutdown {
     // The set the role's configuration read its provider origins and stand overrides from.
     const backends = llmBackends
     const credentials = createCredentialSource(secrets)
-    const transport = createEgressTransport(config.egress, backends)
+    this.#egressPath = config.egress.proxyUrl === null ? 'direct' : 'proxy'
     this.#channel = new EgressHealth(createEgressProbe(config.egress), this.#logger)
+    const transport = createEgressTransport(config.egress, backends, {
+      onDirectConnection: (established) => this.#channel.observeDirect(established),
+    })
     const channelHealthy = () => this.#channel.healthy()
     const onRegion = (accountId: string) => this.#channel.blockRegion(accountId)
     // A closed gate sends nothing: a refresh token stays valid, a generation spends no quota.
@@ -102,11 +108,20 @@ export class LlmRuntime implements OnApplicationShutdown {
             accountIds.map((accountId) => this.#pool.probeAccount(accountId, unknownWindows)),
           )
         },
+        // The snapshot has only grown old: one probe of the account in five minutes is enough.
+        refreshAccount: async (accountId) => {
+          await this.#pool.refreshAccount(accountId)
+        },
       },
       metricsToken: config.metricsToken,
       ready: () => !this.#closing && this.#collectorHealthy && channelHealthy(),
+      // Without a proxy the last line is all that tells of a provider out of reach; it closes
+      // nothing, because only a request that is let through can find the provider again.
       health: async () =>
-        (await health()).status === 'ok' && this.#collectorHealthy && channelHealthy(),
+        (await health()).status === 'ok' &&
+        this.#collectorHealthy &&
+        channelHealthy() &&
+        this.#channel.directReachable(),
       logger: this.#logger,
     })
   }
@@ -187,6 +202,9 @@ export class LlmRuntime implements OnApplicationShutdown {
   }
 
   async listen() {
+    // The role serves with a proxy and without one: which of the two is read here, not guessed
+    // from a missing variable.
+    this.#logger.log(JSON.stringify({ event: 'llm_egress_path', path: this.#egressPath }))
     await Promise.all([this.#collect(), this.#channel.check()])
     const address = await this.gateway.listen()
     this.#collector = setInterval(() => {

@@ -9,6 +9,7 @@ USER root
 RUN cd /usr/local/lib/raditi/agent-clis \
     && npm ls @openai/codex@0.158.0 \
     && npm ls @moonshot-ai/kimi-code@2.1.1 \
+    && npm ls opencode-ai@1.18.34 \
     && mkdir -p /workspace/repo /workspace/inbox \
     && chown 10001:10001 /workspace/repo /workspace/inbox
 COPY cli.mjs /usr/local/lib/raditi/cli.mjs

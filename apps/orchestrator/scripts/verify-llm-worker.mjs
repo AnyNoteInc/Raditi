@@ -2,6 +2,7 @@
 // B13's isolated llm role. The harness supplies only disposable local configuration by IPC;
 // importing this worker never reads an env-file or the operator's subscription login.
 import { createPrismaClient, dbConfigFromEnv } from '@repo/db'
+import { llmBackends } from '@repo/llm-backends'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 import { z } from 'zod'
 
@@ -76,8 +77,18 @@ async function main() {
   if (!local(database.databaseUrl) || !local(vault.addr) || !vault.appRole || vault.token)
     throw new Error('Disposable local AppRole configuration required')
   const config = llmConfigFromEnv(env, 'test')
-  if (!config.egress || !local(config.egress.proxyUrl) || !config.egress.upstreamCaFile)
-    throw new Error('Local mTLS egress and an explicit synthetic upstream CA required')
+  // Never a real provider: through the stand's local proxy, or, without a proxy, only with
+  // every origin the role may reach itself pointed at a loopback fake. Either way the
+  // providers' TLS is checked against the stand's synthetic CA alone.
+  const { egress } = config
+  const fakes = llmBackends
+    .flatMap((backend) => backend.egress)
+    .filter((origin) => origin.direct)
+    .every((origin) => egress.backendOrigins.has(origin.origin))
+  if (!egress.upstreamCaFile || !(egress.proxyUrl ? local(egress.proxyUrl) : fakes))
+    throw new Error(
+      'A local mTLS proxy or loopback provider fakes, and an explicit synthetic upstream CA required',
+    )
   const metricsToken = z
     .string()
     .regex(/^\S{24,4096}$/)

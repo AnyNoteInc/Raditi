@@ -21,21 +21,36 @@ export const DEFAULT_LLM_GATEWAY_PORT = 8084
 const declaredOrigins = (backends: readonly LlmBackend[]) =>
   backends.flatMap((backend) => backend.egress.map((entry) => llmEgressOriginSchema.parse(entry)))
 
-/** The fixed provider origins of the platform's adapters; nothing else is behind the egress. */
+/** The fixed provider origins of the platform's adapters; the role connects to nothing else. */
 export const providerOrigins: readonly string[] = [
   ...new Set(declaredOrigins(llmBackends).map((entry) => entry.origin)),
 ]
 
+/** How a provider's own TLS is verified and where a stand points an origin, on either path. */
+interface ProviderAccess {
+  upstreamCaFile: string | null
+  /** Only nonproduction may replace the adapters' fixed origins with HTTPS fakes on localhost. */
+  backendOrigins: ReadonlyMap<string, string>
+}
+
 /** The proxy's CA is separate from the CA set used inside its CONNECT tunnel. */
-export interface EgressConfig {
+export interface ProxyEgressConfig extends ProviderAccess {
   proxyUrl: URL
   caFile: string
   clientCertFile: string
   clientKeyFile: string
-  upstreamCaFile: string | null
-  /** Only nonproduction may replace the adapters' fixed origins with loopback HTTPS fakes. */
-  backendOrigins: ReadonlyMap<string, string>
 }
+
+/**
+ * No egress node: the role connects itself, and only to the origins whose adapters declare
+ * that they need none (`LlmEgressOrigin.direct`). Any other origin stays unreachable.
+ */
+export interface DirectEgressConfig extends ProviderAccess {
+  proxyUrl: null
+}
+
+/** The one way out of the role: through the proxy of the egress node when it is configured. */
+export type EgressConfig = ProxyEgressConfig | DirectEgressConfig
 
 /** One allowed client range, already validated: an address, its prefix length and family. */
 export interface LlmClientRange {
@@ -51,8 +66,11 @@ export interface LlmConfig {
   clients: readonly LlmClientRange[]
   hosts: readonly string[]
   maxRequestsPerKey: number
-  /** No proxy configured means outgoing requests are disabled, never sent directly. */
-  egress: EgressConfig | null
+  /** Calls one turn key may start within thirty seconds; one more is refused for good. */
+  maxCallsPerKey30s: number
+  /** Calls one turn key may start at all. */
+  maxCallsPerKey: number
+  egress: EgressConfig
 }
 
 const optional = envVar(z.string().optional())
@@ -71,6 +89,10 @@ const schema = egressSchema.extend({
   LLM_GATEWAY_CLIENTS: optional,
   LLM_GATEWAY_HOSTS: optional,
   LLM_MAX_REQUESTS_PER_KEY: envVar(z.coerce.number().int().min(1).max(2).default(2)),
+  // The last line against a CLI that repeats a request without a pause, whatever the cause: a
+  // turn of the pinned CLI is one request per step, and a real model answers in seconds.
+  LLM_MAX_CALLS_PER_KEY_30S: envVar(z.coerce.number().int().min(1).max(1_000).default(20)),
+  LLM_MAX_CALLS_PER_KEY: envVar(z.coerce.number().int().min(1).max(100_000).default(600)),
 })
 const invalid = (problems: readonly string[]) =>
   new Error(`[llm] invalid configuration: ${[...new Set(problems)].join('; ')}`)
@@ -161,16 +183,18 @@ export function llmConfigFromEnv(
     clients,
     hosts,
     maxRequestsPerKey: own.LLM_MAX_REQUESTS_PER_KEY,
+    maxCallsPerKey30s: own.LLM_MAX_CALLS_PER_KEY_30S,
+    maxCallsPerKey: own.LLM_MAX_CALLS_PER_KEY,
     egress,
   }
 }
 
-/** Only the egress channel, for operator commands that send through it but never listen. */
+/** Only the way out, for operator commands that send through it but never listen. */
 export function egressConfigFromEnv(
   env: Env,
   appEnv: AppEnv,
   backends: readonly LlmBackend[] = llmBackends,
-): EgressConfig | null {
+): EgressConfig {
   const problems: string[] = []
   const egress = egressFrom(
     parseEnv('llm', egressSchema, env),
@@ -189,7 +213,7 @@ function egressFrom(
   production: boolean,
   problems: string[],
   backends: readonly LlmBackend[],
-): EgressConfig | null {
+): EgressConfig {
   const files = [
     'LLM_EGRESS_CA_FILE',
     'LLM_EGRESS_CLIENT_CERT_FILE',
@@ -197,8 +221,9 @@ function egressFrom(
   ] as const
   for (const name of [...files, 'LLM_UPSTREAM_CA_FILE'] as const)
     if (own[name] && !isAbsolute(own[name])) problems.push(`${name}: must be an absolute path`)
+  // All four or none, in every environment: half a proxy is a mistake, never the direct path.
   const configured = [own.LLM_EGRESS_PROXY_URL, ...files.map((name) => own[name])]
-  if ((production || configured.some(Boolean)) && configured.some((value) => !value))
+  if (configured.some(Boolean) && configured.some((value) => !value))
     problems.push(
       'LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE, LLM_EGRESS_CLIENT_KEY_FILE: required together',
     )
@@ -219,8 +244,10 @@ function egressFrom(
     if (!raw) continue
     if (production) problems.push(`${name}: forbidden in production`)
     const replacement = origin(raw)
-    if (!replacement || !['localhost', '127.0.0.1', '[::1]'].includes(replacement.hostname))
-      problems.push(`${name}: must be a loopback HTTPS origin`)
+    // The name alone: provider TLS runs under the host of the override, and TLS takes no IP
+    // address for a server name.
+    if (replacement?.hostname !== 'localhost')
+      problems.push(`${name}: must be an HTTPS origin on localhost`)
     else backendOrigins.set(fixed, replacement.origin)
   }
   if (production) {
@@ -233,14 +260,14 @@ function egressFrom(
     if (/(?:^|\s|["'])--use-(?:system|openssl)-ca(?:=|\s|["']|$)/.test(env.NODE_OPTIONS ?? ''))
       problems.push('NODE_OPTIONS: provider CA override flags are forbidden in production')
   }
+  const providers = { upstreamCaFile: own.LLM_UPSTREAM_CA_FILE ?? null, backendOrigins }
   return proxyUrl
     ? {
         proxyUrl,
         caFile: own.LLM_EGRESS_CA_FILE!,
         clientCertFile: own.LLM_EGRESS_CLIENT_CERT_FILE!,
         clientKeyFile: own.LLM_EGRESS_CLIENT_KEY_FILE!,
-        upstreamCaFile: own.LLM_UPSTREAM_CA_FILE ?? null,
-        backendOrigins,
+        ...providers,
       }
-    : null
+    : { proxyUrl: null, ...providers }
 }

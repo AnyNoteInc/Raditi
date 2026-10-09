@@ -12,9 +12,15 @@ export interface EgressProbe {
 
 export const egressProbeBytes = 65_536
 
-/** The proxy's authenticated probe measures the channel without exposing any provider token. */
-export function createEgressProbe(config: EgressConfig | null): EgressProbe {
-  if (!config) return { check: async () => false }
+/**
+ * The proxy's authenticated probe measures the channel without exposing any provider token.
+ * Without a proxy the platform has no channel of its own to measure: the way out is the network
+ * of the role's host, and the role opens no connection there of its own accord. Whether a
+ * provider can be reached is then what each request and each account probe finds, and what
+ * EgressHealth.observeDirect hears of them.
+ */
+export function createEgressProbe(config: EgressConfig): EgressProbe {
+  if (config.proxyUrl === null) return { check: async () => true }
   let credentials: { ca: Buffer; cert: Buffer; key: Buffer }
   try {
     credentials = {
@@ -85,6 +91,10 @@ const retryDelaysMs = [5_000, 15_000, 30_000] as const
 const closeAfterFailures = 2
 // p3-design §2.4 step 9: a confirmed region block is checked again after ten minutes.
 const regionRecheckMs = 10 * 60_000
+// Without a proxy nothing probes a provider. This many connections of the role's own in a row
+// that never opened, the last of them this recent, are the one sign that it is out of reach.
+const directFailuresUnreachable = 3
+const directFailureFreshMs = 5 * 60_000
 
 /**
  * The channel and the provider's region are separate facts. The byte probe proves only the
@@ -97,6 +107,8 @@ export class EgressHealth {
   #failures = 0
   #region: { accountId: string; recheckAt: number } | null = null
   #regionRevision = 0
+  #directFailures = 0
+  #directFailedAt = -Infinity
   #pending: Promise<void> | undefined
   #closing = false
   private readonly probe: EgressProbe
@@ -121,6 +133,30 @@ export class EgressHealth {
   /** The channel alone, for the one account probe that may lift a region block. */
   reachable(): boolean {
     return !this.#closing && this.#channel
+  }
+
+  /** A connection of the role's own to a provider was opened, or could not be (no proxy). */
+  observeDirect(established: boolean): void {
+    if (established) {
+      this.#directFailures = 0
+      return
+    }
+    this.#directFailures += 1
+    this.#directFailedAt = this.now()
+    if (this.#directFailures === directFailuresUnreachable)
+      this.logger.warn(JSON.stringify({ event: 'llm_egress_direct_unreachable' }))
+  }
+
+  /**
+   * For the health answer alone, never for admission: the role opens no connection of its own
+   * accord, so only the next request can find the provider again, and it must be let through.
+   * With nothing tried for five minutes nothing is known, as when the role started.
+   */
+  directReachable(): boolean {
+    return (
+      this.#directFailures < directFailuresUnreachable ||
+      this.now() - this.#directFailedAt >= directFailureFreshMs
+    )
   }
 
   blockRegion(accountId: string): void {

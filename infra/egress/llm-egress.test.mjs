@@ -93,11 +93,14 @@ async function start(options = {}) {
   })
   const sockets = new Set()
   proxy.on('connection', (socket) => sockets.add(socket))
+  const secured = []
+  proxy.on('secureConnection', (socket) => secured.push(socket))
   await listen(proxy)
   return {
     port: proxy.address().port,
     logs,
     dialled,
+    secured,
     async close() {
       for (const socket of sockets) socket.destroy()
       await new Promise((resolve) => proxy.close(resolve))
@@ -377,6 +380,172 @@ test('tunnels are limited in number and closed when idle', { skip }, async () =>
   }
 })
 
+/** A provider that answers a request and closes first, as one asked with `connection: close`. */
+async function closingProvider(onAnswer = () => {}) {
+  const provider = createTcpServer((socket) => {
+    socket.on('error', () => {})
+    socket.once('data', () => {
+      onAnswer()
+      socket.end('answer')
+    })
+  })
+  await listen(provider)
+  return provider
+}
+
+/**
+ * One exchange the way the llm role makes it: the provider's end reaches the client first, and
+ * only then do the client's own last bytes arrive (the close of its TLS session with the
+ * provider), followed by its close when `close` is set.
+ */
+async function exchange(proxy, { close = true } = {}) {
+  const opened = await tunnel(proxy.port, 'chatgpt.com:443', {
+    ...client('app-1'),
+    allowHalfOpen: true,
+  })
+  if (opened.status !== 200) {
+    opened.socket.destroy()
+    return opened
+  }
+  const ended = new Promise((resolve) => opened.socket.once('end', resolve))
+  opened.socket.write('request')
+  await receive(opened.socket, 'answer', opened.rest)
+  await ended
+  await delay(30)
+  opened.socket.write('the last bytes of the client')
+  if (close) {
+    await delay(30)
+    opened.socket.end()
+  }
+  return opened
+}
+
+test(
+  'a tunnel whose provider closed first ends with the client and frees its slot',
+  { skip },
+  async () => {
+    const provider = await closingProvider()
+    const proxy = await start({
+      maxTunnels: 2,
+      dial: () => connect(provider.address().port, '127.0.0.1'),
+    })
+    try {
+      // The idle time is eleven minutes: a tunnel left counted would refuse the third exchange.
+      for (let count = 1; count <= 4; count++) {
+        assert.equal((await exchange(proxy)).status, 200, `exchange ${count}`)
+        const logged = await until(() => {
+          const found = proxy.logs.filter((log) => log.event === 'connect')
+          return found.length === count && found
+        })
+        assert.partialDeepStrictEqual(logged.at(-1), { result: 'ok', up: 7, down: 6 })
+      }
+    } finally {
+      await proxy.close()
+      provider.close()
+    }
+  },
+)
+
+test(
+  'a client that never closes after the provider is cut off when the grace time is over',
+  { skip },
+  async () => {
+    // Long enough for the second exchange below to be refused while the first still has its time.
+    const GRACE = 1000
+    let answered
+    const provider = await closingProvider(() => (answered = Date.now()))
+    const logged = []
+    const proxy = await start({
+      maxTunnels: 1,
+      closeGraceMs: GRACE,
+      dial: () => connect(provider.address().port, '127.0.0.1'),
+      log: (entry) => logged.push({ ...entry, at: Date.now() }),
+    })
+    let silent
+    try {
+      silent = await exchange(proxy, { close: false })
+      assert.equal(silent.status, 200)
+      // The one slot is taken while the client is given its time.
+      assert.equal((await exchange(proxy)).status, 503)
+      const cut = await until(() =>
+        logged.find((log) => log.event === 'connect' && log.result !== 'busy'),
+      )
+      // Not `ok`: the journal tells a tunnel the proxy cut from one its client closed.
+      assert.equal(cut.result, 'client_lingered')
+      // The time starts no earlier than the provider's answer; a timer may fire 1 ms early.
+      assert.ok(cut.at - answered >= GRACE - 1, 'The client was not given its grace time')
+      assert.equal((await exchange(proxy)).status, 200)
+    } finally {
+      silent?.socket.destroy()
+      await proxy.close()
+      provider.close()
+    }
+  },
+)
+
+test('an answer the client has not yet taken is not cut by the grace time', { skip }, async () => {
+  const GRACE = 150
+  const PIECE = Buffer.alloc(16 * 1024)
+  let answering
+  const provider = createTcpServer((socket) => {
+    socket.on('error', () => {})
+    answering = socket
+  })
+  await listen(provider)
+  let upstream
+  const proxy = await start({
+    closeGraceMs: GRACE,
+    dial: () => (upstream = connect(provider.address().port, '127.0.0.1')),
+  })
+  let opened
+  try {
+    // `tunnel` leaves the socket paused: the client takes nothing until it is resumed.
+    opened = await tunnel(proxy.port, 'chatgpt.com:443')
+    assert.equal(opened.status, 200)
+    await until(() => answering)
+    const held = proxy.secured.at(-1)
+    // Turns of the event loop, not time: a write the kernel can take ends within one of them.
+    const stuck = async () => {
+      for (let turn = 0; turn < 20; turn++) {
+        if (held.writableLength === 0) return false
+        await delay(5)
+      }
+      return true
+    }
+    // The provider answers piece by piece until the kernels on the way to the client are full:
+    // the proxy has taken the last piece and cannot pass it on. How much that is differs
+    // between systems. One piece is far below the proxy's buffer, so the provider is not paused.
+    let sent = 0
+    do {
+      assert.ok(sent < 64 * 1024 * 1024, 'The client is not stalled: it takes the answer')
+      answering.write(PIECE)
+      sent += PIECE.length
+      for (const stop = Date.now() + 3000; upstream.bytesRead < sent; await delay(1))
+        assert.ok(Date.now() < stop, 'The proxy stopped reading its provider')
+    } while (!(await stuck()))
+    answering.end()
+    await until(() => upstream.destroyed)
+    assert.equal(held.writableFinished, false, 'The proxy holds no part of the answer')
+
+    // The provider has closed and the client reads nothing for longer than the grace time.
+    await delay(GRACE + 150)
+    const received = await new Promise((resolve) => {
+      let bytes = opened.rest.length
+      opened.socket.on('data', (chunk) => (bytes += chunk.length))
+      opened.socket.once('error', () => {})
+      opened.socket.once('close', () => resolve(bytes))
+      opened.socket.resume()
+    })
+    assert.equal(received, sent)
+    const entry = await until(() => proxy.logs.find((log) => log.event === 'connect'))
+    assert.equal(entry.down, sent)
+  } finally {
+    opened?.socket.destroy()
+    await proxy.close()
+    provider.close()
+  }
+})
+
 test('a failed dial answers 502 and a dial that hangs answers 504', { skip }, async () => {
   const closed = createTcpServer()
   await listen(closed)
@@ -552,11 +721,13 @@ test(
   },
 )
 
-test('the node files: three hosts by default, an unprivileged user and a closed firewall', () => {
+test('the node files: four hosts by default, an unprivileged user and a closed firewall', () => {
   const env = readFileSync(here('env.example'), 'utf8')
+  // api.z.ai: the role goes to Z.ai without the node, yet a role that has a proxy configured
+  // sends everything through it, so the node must let that host through as well.
   assert.equal(
     /^LLM_EGRESS_ALLOW=(.*)$/m.exec(env)?.[1],
-    'chatgpt.com:443,auth.openai.com:443,api.kimi.ai:443',
+    'chatgpt.com:443,auth.openai.com:443,api.kimi.ai:443,api.z.ai:443',
   )
   assert.doesNotMatch(env, /KEY|TOKEN|PASSWORD|SECRET/)
   const unit = readFileSync(here('raditi-egress.service'), 'utf8')

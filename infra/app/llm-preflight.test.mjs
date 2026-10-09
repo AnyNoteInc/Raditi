@@ -306,6 +306,7 @@ test('development TLS and upstream overrides cannot enter production settings', 
     'LLM_BACKEND_URL_OPENAI_CHATGPT',
     'LLM_AUTH_URL_OPENAI',
     'LLM_BACKEND_URL_KIMI_CODE',
+    'LLM_BACKEND_URL_ZAI_CODING',
     'LLM_EGRESS_PROXY_URL',
     'LLM_CONTROL_URL',
   ])

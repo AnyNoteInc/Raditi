@@ -14,17 +14,62 @@ const complete = {
 }
 
 describe('subscription gateway configuration', () => {
-  it('defaults to a local listener and disables outgoing requests without a proxy', () => {
+  it('defaults to a local listener and, without a proxy, to its own connections', () => {
     expect(llmConfigFromEnv({}, 'development')).toMatchObject({
       port: 8084,
       listenHost: '127.0.0.1',
       maxRequestsPerKey: 2,
-      egress: null,
+      maxCallsPerKey30s: 20,
+      maxCallsPerKey: 600,
+      egress: { proxyUrl: null, upstreamCaFile: null, backendOrigins: new Map() },
       clients: [
         { address: '127.0.0.1', prefix: 32, family: 'ipv4' },
         { address: '172.16.0.0', prefix: 12, family: 'ipv4' },
       ],
       hosts: ['127.0.0.1:8084', 'host.docker.internal:8084'],
+    })
+  })
+
+  it('goes without the egress node only to the origins whose adapters say they need none', () => {
+    // Rule 1 of the platform: every other provider is reached through the node alone. The list
+    // is the adapters' own; the role and its configuration name no provider.
+    expect(
+      llmBackends.flatMap((backend) =>
+        backend.egress.filter((entry) => entry.direct === true).map((entry) => entry.origin),
+      ),
+    ).toEqual(['https://api.z.ai'])
+  })
+
+  it('serves in production without a proxy, and never with half of one', () => {
+    const listener = {
+      LLM_GATEWAY_CLIENTS: complete.LLM_GATEWAY_CLIENTS,
+      LLM_GATEWAY_HOSTS: complete.LLM_GATEWAY_HOSTS,
+    }
+    const direct = { proxyUrl: null, upstreamCaFile: null, backendOrigins: new Map() }
+    expect(llmConfigFromEnv(listener, 'production').egress).toEqual(direct)
+    expect(egressConfigFromEnv({}, 'production')).toEqual(direct)
+    expect(egressConfigFromEnv({}, 'development')).toEqual(direct)
+    // What production forbids, it forbids on both paths: no fake origin, no other roots.
+    for (const [name, value] of [
+      ['LLM_BACKEND_URL_ZAI_CODING', 'https://localhost:9443'],
+      ['LLM_UPSTREAM_CA_FILE', '/tmp/secret-ca.pem'],
+      ['NODE_TLS_REJECT_UNAUTHORIZED', '0'],
+      ['NODE_USE_SYSTEM_CA', '1'],
+      ['NODE_OPTIONS', '--use-system-ca'],
+    ] as const)
+      expect(() => llmConfigFromEnv({ ...listener, [name]: value }, 'production')).toThrow(name)
+    // A stand points a direct origin at its loopback fake, with the fake's own CA.
+    const stand = llmConfigFromEnv(
+      {
+        LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:9443',
+        LLM_UPSTREAM_CA_FILE: '/tmp/test-ca.pem',
+      },
+      'test',
+    ).egress
+    expect(stand).toEqual({
+      proxyUrl: null,
+      upstreamCaFile: '/tmp/test-ca.pem',
+      backendOrigins: new Map([['https://api.z.ai', 'https://localhost:9443']]),
     })
   })
 
@@ -48,6 +93,12 @@ describe('subscription gateway configuration', () => {
     ['LLM_GATEWAY_PORT', '0'],
     ['LLM_GATEWAY_PORT', '65536'],
     ['LLM_MAX_REQUESTS_PER_KEY', '3'],
+    ['LLM_MAX_CALLS_PER_KEY_30S', '0'],
+    ['LLM_MAX_CALLS_PER_KEY_30S', '1001'],
+    ['LLM_MAX_CALLS_PER_KEY_30S', '2.5'],
+    ['LLM_MAX_CALLS_PER_KEY', '0'],
+    ['LLM_MAX_CALLS_PER_KEY', '100001'],
+    ['LLM_MAX_CALLS_PER_KEY', 'many'],
     ['LLM_GATEWAY_LISTEN_HOST', 'localhost'],
     ['LLM_GATEWAY_CLIENTS', 'localhost/32'],
     ['LLM_GATEWAY_CLIENTS', '10.0.0.1/33'],
@@ -72,6 +123,15 @@ describe('subscription gateway configuration', () => {
     if (value.length > 5) expect((error as Error).message).not.toContain(value)
   })
 
+  it('reads the pace and the ceiling of the calls of one turn key', () => {
+    expect(
+      llmConfigFromEnv(
+        { ...complete, LLM_MAX_CALLS_PER_KEY_30S: '40', LLM_MAX_CALLS_PER_KEY: '300' },
+        'production',
+      ),
+    ).toMatchObject({ maxCallsPerKey30s: 40, maxCallsPerKey: 300 })
+  })
+
   it('allows only loopback HTTPS fakes outside production', () => {
     const config = llmConfigFromEnv(
       {
@@ -86,6 +146,13 @@ describe('subscription gateway configuration', () => {
     expect(() =>
       llmConfigFromEnv({ ...complete, LLM_BACKEND_URL_KIMI_CODE: 'https://other.example' }, 'test'),
     ).toThrow('LLM_BACKEND_URL_KIMI_CODE')
+    // The name alone: TLS takes no IP address for a server name, so such an override could
+    // never carry a request, with a proxy or without one.
+    for (const address of ['https://127.0.0.1:9443', 'https://[::1]:9443'])
+      for (const egress of [complete, {}])
+        expect(() =>
+          llmConfigFromEnv({ ...egress, LLM_BACKEND_URL_ZAI_CODING: address }, 'test'),
+        ).toThrow('LLM_BACKEND_URL_ZAI_CODING: must be an HTTPS origin on localhost')
   })
 
   it('takes the provider origins and their stand overrides from what the adapters declare', () => {
@@ -148,9 +215,9 @@ describe('subscription gateway configuration', () => {
         },
       ],
     }
-    const env = { ...complete, LLM_BACKEND_URL_SYNTHETIC: 'https://127.0.0.1:9443' }
+    const env = { ...complete, LLM_BACKEND_URL_SYNTHETIC: 'https://localhost:9443' }
     expect([...llmConfigFromEnv(env, 'test', [adapter]).egress!.backendOrigins]).toEqual([
-      ['https://provider.invalid', 'https://127.0.0.1:9443'],
+      ['https://provider.invalid', 'https://localhost:9443'],
     ])
     expect([...egressConfigFromEnv(env, 'test', [adapter])!.backendOrigins]).toHaveLength(1)
     // Not declared by the adapters in use: the variable means nothing.
@@ -164,7 +231,7 @@ describe('subscription gateway configuration', () => {
         'test',
         [adapter],
       ),
-    ).toThrow('LLM_BACKEND_URL_SYNTHETIC: must be a loopback HTTPS origin')
+    ).toThrow('LLM_BACKEND_URL_SYNTHETIC: must be an HTTPS origin on localhost')
     // A declaration the transport could read too widely stops the configuration.
     const broken = {
       ...adapter,
@@ -188,8 +255,12 @@ describe('subscription gateway configuration', () => {
       caFile: '/run/raditi/llm/ca.pem',
       upstreamCaFile: null,
     })
-    expect(egressConfigFromEnv({}, 'development')).toBeNull()
-    expect(() => egressConfigFromEnv({}, 'production')).toThrow('LLM_EGRESS_PROXY_URL')
+    // Half a proxy is a mistake in every environment, never a silent direct path.
+    for (const name of Object.keys(egress))
+      for (const appEnv of ['development', 'production'] as const)
+        expect(() => egressConfigFromEnv({ ...egress, [name]: '' }, appEnv)).toThrow(
+          'LLM_EGRESS_PROXY_URL',
+        )
     for (const [name, value] of [
       ['LLM_BACKEND_URL_KIMI_CODE', 'https://localhost:9443'],
       ['NODE_TLS_REJECT_UNAUTHORIZED', '0'],

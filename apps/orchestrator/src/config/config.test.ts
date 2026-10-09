@@ -130,7 +130,13 @@ describe('loadConfig — development', () => {
       core: null,
       mcp: null,
       runner: null,
-      llm: { port: 8084, egress: null, maxRequestsPerKey: 2, metricsToken: DEV_METRICS_TOKEN },
+      llm: {
+        port: 8084,
+        // No egress node in dev: the role connects itself, where an adapter allows it.
+        egress: { proxyUrl: null },
+        maxRequestsPerKey: 2,
+        metricsToken: DEV_METRICS_TOKEN,
+      },
     })
     expect(
       loadConfig({ ...devEnv, ORCHESTRATOR_ROLES: 'mcp', LLM_GATEWAY_PORT: 'unused' }).llm,
@@ -280,7 +286,11 @@ describe('loadConfig — development', () => {
     expect(config.roles).toEqual(['core', 'mcp', 'llm'])
     expect(config.core?.port).toBe(8081)
     expect(config.mcp?.port).toBe(8082)
-    expect(config.llm).toMatchObject({ port: 8084, egress: null, listenHost: '127.0.0.1' })
+    expect(config.llm).toMatchObject({
+      port: 8084,
+      egress: { proxyUrl: null },
+      listenHost: '127.0.0.1',
+    })
     expect(config.core?.metricsToken).toBe(DEV_METRICS_TOKEN)
   })
 

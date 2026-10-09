@@ -25,6 +25,9 @@ test('disposable topology never joins CLI to provider, Vault or PostgreSQL netwo
   assert.match(source, /providers:\n\s+internal: true/)
   assert.match(source, /cli:\n\s+internal: true/)
   for (const port of [5432, 8200, 8787, 8443]) assert.ok(source.includes(`127.0.0.1::${port}`))
+  // The fake provider's TLS port, on loopback only: the role llm of a stand without a proxy
+  // connects to it itself, under the name localhost of the fake's certificate.
+  assert.match(source, /^ {4}ports: \['127\.0\.0\.1::8787', '127\.0\.0\.1::443'\]$/m)
   // The synthetic MCP is reachable only through sandbox-gw, never published to the host.
   assert.ok(!source.includes('::8788'))
   assert.match(source, /ALLOWED_ROUTES: '\["llm","mcp"\]'/)

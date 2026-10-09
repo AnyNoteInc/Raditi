@@ -412,6 +412,9 @@ export async function startVerificationStack({ onStage = () => {}, content = fal
       tokens,
       certificates,
       control,
+      // The fake provider itself, for a role llm with no egress proxy: the certificate of the
+      // fake names localhost, so the origin is written with that name and the published port.
+      providerOrigin: `https://localhost:${(await port('fake-subscriptions', 443)).split(':')[1]}`,
       egressUrl: `https://${await port('llm-egress', 8443)}`,
       compose,
       close,

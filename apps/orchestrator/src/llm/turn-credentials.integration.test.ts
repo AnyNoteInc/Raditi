@@ -681,6 +681,80 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(probeAccounts).toHaveBeenCalledTimes(1)
   })
 
+  it('refreshes the selected account once when its window snapshot has grown old', async () => {
+    const f = await fixture()
+    const seen = (minutesAgo: number) =>
+      db.subscriptionAccount.update({
+        where: { id: f.mainAccount.id },
+        data: { limitsSeenAt: new Date(Date.now() - minutesAgo * 60_000) },
+      })
+    const probeAccounts = vi.fn(async (_ids: readonly string[], _options?: { stale?: boolean }) => {
+      // The pool lock is free while the probe runs, as for unknown windows.
+      await db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT set_config('lock_timeout', '250ms', true)`
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('pool:kimi-code', 0))::text`
+      })
+    })
+    const credentials = new GatewayTurnCredentials({
+      prisma: db,
+      secrets: f.vault.port,
+      probeAccounts,
+    })
+    await seen(9)
+    await credentials.issue(f.ref, f.grant)
+    expect(probeAccounts).not.toHaveBeenCalled()
+    await credentials.revoke(f.ref)
+    // Old: one request, marked as a refresh, and the key is issued on what is stored.
+    await seen(11)
+    const second = await f.taskFixture()
+    await credentials.issue(second.ref, f.grant)
+    expect(probeAccounts).toHaveBeenCalledExactlyOnceWith([f.mainAccount.id], { stale: true })
+    await credentials.revoke(second.ref)
+    // A refresh that failed changes nothing: the old snapshot still admits.
+    probeAccounts.mockRejectedValueOnce(new Error('Synthetic probe failure'))
+    const third = await f.taskFixture()
+    await credentials.issue(third.ref, f.grant)
+    expect(probeAccounts).toHaveBeenCalledTimes(2)
+    expect(await db.llmKey.count({ where: { taskId: third.task.id } })).toBe(1)
+    await credentials.revoke(third.ref)
+    // What the refresh stored decides: the window it found spent leaves no account to select.
+    const window = (usedPct: number) => ({
+      name: '5h',
+      usedPct,
+      resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+    })
+    const foundSpent = async () => {
+      await db.subscriptionAccount.update({
+        where: { id: f.mainAccount.id },
+        data: { limitsSeenAt: new Date(), limitWindows: [window(99)] },
+      })
+    }
+    probeAccounts.mockImplementationOnce(foundSpent)
+    const fourth = await f.taskFixture()
+    await expect(credentials.issue(fourth.ref, f.grant)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_WAIT',
+    })
+    expect(probeAccounts).toHaveBeenCalledTimes(3)
+    // The selection was made again before anything was written for the turn.
+    expect(f.vault.entries.has(turnCredentialPath(fourth.ref))).toBe(false)
+    // With another account in the pool that fresh selection takes it at once: no record pins
+    // the turn to the account the refresh has just shown spent.
+    const spare = await f.account({ usedPct: 50 })
+    await db.subscriptionAccount.update({
+      where: { id: f.mainAccount.id },
+      data: { limitsSeenAt: new Date(Date.now() - 11 * 60_000), limitWindows: [window(10)] },
+    })
+    probeAccounts.mockImplementationOnce(foundSpent)
+    const fifth = await f.taskFixture()
+    await credentials.issue(fifth.ref, f.grant)
+    expect(probeAccounts).toHaveBeenCalledTimes(4)
+    expect(probeAccounts).toHaveBeenLastCalledWith([f.mainAccount.id], { stale: true })
+    expect(f.vault.entries.get(turnCredentialPath(fifth.ref))!.data.accountId).toBe(spare.id)
+    expect(await db.llmKey.findFirstOrThrow({ where: { taskId: fifth.task.id } })).toMatchObject({
+      subscriptionAccountId: spare.id,
+    })
+  })
+
   it('keeps the original Vault policy when the process crashed before SQL admission', async () => {
     const f = await fixture()
     const write = f.vault.kvCreateOnce.getMockImplementation()!

@@ -362,6 +362,7 @@ async function main() {
     'LLM_UPSTREAM_CA_FILE',
     'LLM_BACKEND_URL_OPENAI_CHATGPT',
     'LLM_BACKEND_URL_KIMI_CODE',
+    'LLM_BACKEND_URL_ZAI_CODING',
   ])
     assert.equal(config.services.llm.environment[name], undefined, `${name} is absent`)
   check('production role, uid, private port, three networks and no Redis/S3/provider override')

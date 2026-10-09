@@ -331,9 +331,11 @@ export async function runSubscriptionCommand(
         const entry = imports.get(value.backend)!
         if (!value.relogin && entry.backend.importCredential && !value.plan)
           throw new OperatorCommandError('Для нового аккаунта с ключом укажите --plan.')
-        // Only the egress channel: the command sends through it and never listens like the role.
+        // Only the way out: the command sends through it and never listens like the role.
         const egress = configuration(() => egressConfigFromEnv(env, appEnv))
-        if (!egress)
+        // Without the egress node the command reaches only a provider whose adapter says it
+        // needs none; for any other the node stays the only way, as for the role.
+        if (egress.proxyUrl === null && !entry.backend.egress.every((origin) => origin.direct))
           throw new OperatorCommandError(
             'Для входа требуется настроенный канал mTLS через узел выхода.',
           )

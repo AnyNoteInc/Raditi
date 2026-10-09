@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -23,6 +25,11 @@ import { retirementRefusals } from './retire.ts'
 
 const account = 'c96006db-9cfb-4d2c-819e-66802f97879f'
 const cwd = fileURLToPath(new URL('../../', import.meta.url))
+// A command is a process of its own, which the setup of the test run does not reach: the same
+// guard is loaded into it, so that no command of a test connects outside this machine. What
+// the guard refused there it writes to a file, and the command's test fails on it: a command
+// turns any failure into its own text and exit code.
+const networkGuard = new URL('../testing/network-guard.ts', import.meta.url).href
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close()
@@ -30,10 +37,19 @@ afterEach(async () => {
 function command(
   name: SubscriptionCommand,
   args: string[],
+  options: { env?: Record<string, string>; input?: string } = {},
+) {
+  return run([`scripts/subscription-${name}.mjs`, ...args], options)
+}
+/** A Node process under the network guard, with what it printed. */
+function run(
+  argv: string[],
   { env = {}, input = '' }: { env?: Record<string, string>; input?: string } = {},
 ) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, [`scripts/subscription-${name}.mjs`, ...args], {
+    const refusals = join(tmpdir(), `raditi-guard-${randomUUID()}`)
+    const guard = `${networkGuard}?report=${encodeURIComponent(refusals)}`
+    const child = spawn(process.execPath, ['--import', guard, ...argv], {
       cwd,
       env: { PATH: process.env.PATH, ...env },
       stdio: 'pipe',
@@ -47,6 +63,15 @@ function command(
     child.once('error', reject)
     child.once('close', (code) => {
       clearTimeout(timer)
+      // The file exists only when the guard refused something.
+      const refused = existsSync(refusals) ? readFileSync(refusals, 'utf8') : ''
+      rmSync(refusals, { force: true })
+      if (refused !== '')
+        return reject(
+          new Error(
+            `A command tried to connect or to resolve a name outside this machine: ${refused}`,
+          ),
+        )
       resolve({
         code,
         stdout: Buffer.concat(stdout).toString(),
@@ -77,6 +102,17 @@ async function fakeVault(auth: object) {
 }
 
 describe('operator subscription commands', () => {
+  it('fails a command that tried to leave this machine, whatever the command made of it', async () => {
+    // The process swallows the refusal of the guard and ends as if nothing had happened.
+    const script = `
+      const net = require('node:net')
+      if (net.Socket.prototype.connect.name !== 'guardedConnect') process.exit(3)
+      net.connect({ host: '0:0:0:0:0:0:0:1', port: 9 }).on('error', () => {})`
+    await expect(run(['-e', script])).rejects.toThrow(
+      'A command tried to connect or to resolve a name outside this machine',
+    )
+    expect(await run(['-e', 'process.exitCode = 4'])).toEqual({ code: 4, stdout: '', stderr: '' })
+  })
   it.each(['login', 'retire', 'token'] as const)(
     'native %s entrypoint supports help without env or service connections',
     async (name) => {
@@ -334,6 +370,46 @@ describe('operator subscription commands', () => {
     expect(invalid.stderr).toContain('Окружение задано неверно')
     expect(invalid.stderr).toContain('LLM_EGRESS_PROXY_URL')
     expect(invalid.stderr).not.toContain('private-')
+  })
+  it('logs in without the egress node only where the adapter of the backend needs none', async () => {
+    const env = {
+      APP_ENV: 'production',
+      VAULT_ADDR: 'https://127.0.0.1:1',
+      DATABASE_URL: 'postgresql://raditi:private-password@127.0.0.1:1/raditi',
+    }
+    const args = (backend: string) => [
+      '--backend',
+      backend,
+      '--label',
+      'account-a',
+      '--plan',
+      'lite',
+      '--vault-token-file',
+      '/nonexistent/raditi/writer.token',
+    ]
+    // Their providers are reached through the node alone: nothing is asked of the operator.
+    for (const backend of ['kimi-code', 'openai-chatgpt']) {
+      const refused = await command('login', args(backend), { env })
+      expect(refused.code).toBe(1)
+      expect(refused.stderr).toBe('Для входа требуется настроенный канал mTLS через узел выхода.\n')
+    }
+    // Z.ai needs none: the command goes on to its next step, the writer token it cannot read.
+    // That failure has no text of its own, and every refusal before it has one: the exact
+    // general text shows that neither the environment, nor the rule, nor the channel stopped
+    // the command. The case must stay unable to reach the transport: production takes no
+    // address override, so nothing here could point api.z.ai at this machine.
+    const direct = await command('login', args('zai-coding'), { env })
+    expect(direct.code).toBe(1)
+    expect(direct.stderr).toBe(
+      'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.\n',
+    )
+    // Half a proxy is a mistake of the environment, not a direct path.
+    const half = await command('login', args('zai-coding'), {
+      env: { ...env, LLM_EGRESS_PROXY_URL: 'https://127.0.0.1:1' },
+    })
+    expect(half.code).toBe(1)
+    expect(half.stderr).toContain('Окружение задано неверно')
+    expect(half.stderr).toContain('LLM_EGRESS_CA_FILE')
   })
   it('writes a minted token only to the new private file, never to output', async () => {
     const vault = await fakeVault({

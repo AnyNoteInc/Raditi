@@ -48,6 +48,8 @@ export interface ZaiOffer {
   }
   /** The variable that points the origin at a loopback fake on a stand. */
   readonly overrideEnv: string
+  /** Whether a role with no egress node may connect to the origin itself. */
+  readonly direct: boolean
 }
 
 /**
@@ -67,6 +69,8 @@ export const zaiCodingPlan: ZaiOffer = Object.freeze({
     ]),
   }),
   overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
+  // The owner's decision of 05.10.2026: Z.ai is reached without the egress node.
+  direct: true,
 } as const)
 
 export const zaiCredentialSchema = z
@@ -233,6 +237,7 @@ export function createZaiBackend(offer: ZaiOffer): LlmBackend {
         origin: offer.origin,
         overrideEnv: offer.overrideEnv,
         requests: [`POST ${chatUrl}`, `GET ${quotaUrl}`],
+        ...(offer.direct ? { direct: true } : {}),
       },
     ],
     validateClientHeaders: assertClient,

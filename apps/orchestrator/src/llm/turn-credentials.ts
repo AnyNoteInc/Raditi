@@ -9,6 +9,7 @@ import {
   llmGatewayUnavailable,
   llmPriceMissing,
   pickAccount,
+  poolPolicy,
   subscriptionBusy,
   subscriptionWait,
   turnCredentialExpiresAt,
@@ -100,6 +101,8 @@ interface Selection {
   decision: PoolDecision
   /** Admission only: the decision over the whole pool, free of the account pinned in Vault. */
   unpinned?: PoolDecision
+  /** The selected account, when its window snapshot is older than the pool keeps one for. */
+  staleAccountId: string | null
 }
 type Preparation =
   { kind: 'existing'; key: KeyRow; now: Date } | ({ kind: 'selection' } & Selection)
@@ -108,8 +111,11 @@ export interface GatewayTurnCredentialsOptions {
   prisma: Database
   secrets: SecretStore
   minTurnHeadroomPct?: number
-  /** Calls the content-free gateway control probe after all SQL locks were released. */
-  probeAccounts?: (accountIds: readonly string[]) => Promise<void>
+  /**
+   * Calls the content-free gateway control probe after all SQL locks were released. `stale`:
+   * the snapshot has only grown old, and the gateway probes at most once in five minutes.
+   */
+  probeAccounts?: (accountIds: readonly string[], options?: { stale?: boolean }) => Promise<void>
   /**
    * The application sets it: a key exists only for the open assignment of its turn, which
    * fixes its deadline and, for a runner, its source address. Tests and stands without
@@ -155,6 +161,13 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
           await this.#probeAccounts(ids).catch(() => undefined)
           prepared = await this.#prepare(ref, grant)
         }
+      }
+      if (prepared.kind === 'selection' && prepared.staleAccountId && this.#probeAccounts) {
+        // A provider that reports its windows only when asked: the account would be selected
+        // on a snapshot grown old. One refresh, then a fresh selection from what is stored; an
+        // old snapshot closes nothing by itself, so a failed refresh changes nothing.
+        await this.#probeAccounts([prepared.staleAccountId], { stale: true }).catch(() => undefined)
+        prepared = await this.#prepare(ref, grant)
       }
       const path = turnCredentialPath(ref)
       const written = { vault: false }
@@ -432,6 +445,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         coolingUntil: Date | null
         breakerOpenUntil: Date | null
         limitWindows: unknown
+        limitsSeenAt: Date | null
         activeTurns: bigint
         maxConcurrentTurns: number
         lastUsedAt: Date | null
@@ -443,14 +457,15 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         a.status::text AS status, a.health::text AS health, a.health_reason AS "healthReason",
         a.health_changed_at AS "healthChangedAt", a.retire_requested_at AS "retireRequestedAt",
         a.cooling_until AS "coolingUntil", a.breaker_open_until AS "breakerOpenUntil",
-        a.limit_windows AS "limitWindows", a.max_concurrent_turns AS "maxConcurrentTurns",
+        a.limit_windows AS "limitWindows", a.limits_seen_at AS "limitsSeenAt",
+        a.max_concurrent_turns AS "maxConcurrentTurns",
         a.last_used_at AS "lastUsedAt", (SELECT count(*) FROM llm_keys k
           WHERE k.subscription_account_id = a.id AND k.revoke_requested_at IS NULL
             AND k.revoked_at IS NULL AND k.expires_at > clock_timestamp()) AS "activeTurns"
       FROM subscription_accounts a WHERE a.provider_id = ${profile.providerId}::uuid
         AND a.driver_id = ${grant.driverId}`
     const renewedBy = new Date(task.now.getTime() + EXPIRED_ACCESS_WAIT_MS)
-    const snapshots = accounts.map(({ accessExpired, ...a }) => ({
+    const snapshots = accounts.map(({ accessExpired, limitsSeenAt: _seen, ...a }) => ({
       ...a,
       backend: grant.backend,
       activeTurns: Number(a.activeTurns),
@@ -488,7 +503,23 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         : snapshots,
     )
     await assertCurrentFence(tx, ref)
-    return { task, profile, decision, ...(requiredAccount ? { unpinned: pick(snapshots) } : {}) }
+    // Windows nobody has dated are unknown ones, which the selection sends to a probe itself.
+    const seenAt =
+      decision.kind === 'selected'
+        ? accounts.find((account) => account.id === decision.accountId)?.limitsSeenAt
+        : null
+    return {
+      task,
+      profile,
+      decision,
+      staleAccountId:
+        decision.kind === 'selected' &&
+        seenAt != null &&
+        task.now.getTime() - seenAt.getTime() > poolPolicy.windowsFreshMs
+          ? decision.accountId
+          : null,
+      ...(requiredAccount ? { unpinned: pick(snapshots) } : {}),
+    }
   }
 
   async #read(path: string, ref: TurnCredentialRef, strict = true): Promise<StoredSecret | null> {
