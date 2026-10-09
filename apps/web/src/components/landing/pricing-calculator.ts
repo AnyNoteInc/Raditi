@@ -1,5 +1,7 @@
 import { Decimal } from 'decimal.js'
 
+import { plural } from '@/lib/plural'
+
 export interface LandingPlan {
   slug: string
   name: string
@@ -24,6 +26,12 @@ export interface PlanRecommendation {
   packs: number
   total: string
   perEdit: string
+  /**
+   * The price of one edit in whole rubles, for an estimate that is read as «около»: kopecks
+   * there look like a price. Rounded half up once, from the exact quotient and not from
+   * `perEdit`: 495.495 rounded to kopecks and then to rubles would give 496.
+   */
+  perEditRounded: string
 }
 
 // Keep display estimates independent of global Decimal settings used by other features.
@@ -43,28 +51,32 @@ export function recommendPlan(
     const packs = extraEdits > 0 && pack ? Math.ceil(extraEdits / pack.edits) : 0
     const total = new Money(plan.price).plus(new Money(pack?.price ?? '0').times(packs))
     if (best && !total.lessThan(best.total)) continue
+    const perEdit = total.dividedBy(edits)
     best = {
       plan,
       packs,
       total: total.toFixed(2),
-      perEdit: total.dividedBy(edits).toFixed(2),
+      perEdit: perEdit.toFixed(2),
+      perEditRounded: perEdit.toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toFixed(2),
     }
   }
 
   return best
 }
 
-/** Format monetary strings without converting money to a binary floating point number. */
-export function formatRubles(value: string): string {
-  const [rubles = '0', kopecks = '00'] = new Money(value).toFixed(2).split('.')
-  const grouped = rubles.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0')
-  return `${grouped}${kopecks === '00' ? '' : `,${kopecks}`}`
+export function pluralEdits(count: number): string {
+  return plural(count, 'правка', 'правки', 'правок')
 }
 
-export function pluralEdits(count: number): string {
-  const lastTwo = count % 100
-  if (lastTwo >= 11 && lastTwo <= 14) return 'правок'
-  if (count % 10 === 1) return 'правка'
-  if (count % 10 >= 2 && count % 10 <= 4) return 'правки'
-  return 'правок'
+/** The extra packs of a recommendation in words: «4 дополнительных пакета по 10 правок». */
+export function packsInWords(packs: number, packEdits: number): string {
+  const packWord = plural(
+    packs,
+    'дополнительный пакет',
+    'дополнительных пакета',
+    'дополнительных пакетов',
+  )
+  // After «по» the count of one takes another case: «по 1 правке», but «по 2 правки».
+  const editWord = plural(packEdits, 'правке', 'правки', 'правок')
+  return `${packs} ${packWord} по ${packEdits} ${editWord}`
 }

@@ -6,12 +6,14 @@
   "type": "module",
   "scripts": {
     "test:e2e": "playwright test",
+    "test:landing": "playwright test -c playwright.landing.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
+    "@axe-core/playwright": "catalog:",
     "@playwright/test": "catalog:",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:",

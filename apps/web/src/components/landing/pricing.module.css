@@ -1,9 +1,36 @@
 .pricing {
   --pricing-ink: var(--raditi-ink);
   --pricing-paper: var(--raditi-paper);
-  --pricing-accent: var(--raditi-accent-text);
+  --pricing-accent-text: var(--raditi-accent-text);
   --pricing-marker: var(--raditi-marker);
+  /* How far the text of a plan stands from the edge of its column. The rows under the plans
+     repeat it, so what they say starts on the same verticals. */
+  --plan-inset: 28px;
   color: var(--pricing-ink);
+}
+
+/* The place of the plans while they load: about as tall as they will be, a little less rather
+   than more, so that what stands below moves down a little and not up under the header. The
+   numbers are the heights of the block with the plans of the seeds; a wrong one costs a small
+   move of the page below, nothing else. Only where scripts run: without them the plans never
+   take this place, and the room would stay an empty field for good. */
+@media (scripting: enabled) {
+  .fallback {
+    min-height: 750px;
+  }
+}
+
+@media (scripting: enabled) and (max-width: 900px) {
+  .fallback {
+    min-height: 845px;
+  }
+}
+
+/* One column; below 400px the texts of the plans take a line more every few pixels. */
+@media (scripting: enabled) and (max-width: 680px) {
+  .fallback {
+    min-height: max(1615px, calc(1615px + (400px - 100vw) * 2.5));
+  }
 }
 
 .calculator {
@@ -20,6 +47,14 @@
   font-weight: 500;
 }
 
+.hint {
+  max-width: 44ch;
+  margin: 8px 0 0;
+  color: var(--raditi-graphite);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .editCount {
   display: flex;
   align-items: baseline;
@@ -27,10 +62,12 @@
   margin: 18px 0 14px;
 }
 
+/* The number of edits is the question of the calculator, the sum is its answer: at every width
+   the count is a step smaller than the sum beside it. */
 .editCount output {
-  color: var(--pricing-accent);
+  color: var(--pricing-accent-text);
   font-family: var(--font-unbounded), sans-serif;
-  font-size: clamp(48px, 5vw, 68px);
+  font-size: clamp(28px, 3.1vw, 48px);
   font-weight: 500;
   line-height: 1.1;
   letter-spacing: -0.04em;
@@ -49,52 +86,61 @@
   margin: 0;
   border-radius: 0;
   appearance: none;
-  background: linear-gradient(
-      to right,
-      var(--pricing-accent) 0 var(--range-progress),
-      var(--raditi-rule) var(--range-progress) 100%
-    )
-    center / 100% 3px no-repeat;
+  /* The filled part is 3px thick; under it a 1px line of the control outline runs the whole
+     width. Painted in that colour, the empty part would merge with the filled one. */
+  background:
+    linear-gradient(
+        to right,
+        var(--pricing-accent-text) 0 var(--range-progress),
+        transparent var(--range-progress) 100%
+      )
+      center / 100% 3px no-repeat,
+    linear-gradient(var(--raditi-rule-strong), var(--raditi-rule-strong)) center / 100% 1px
+      no-repeat;
   cursor: pointer;
   touch-action: pan-y;
 }
 
+/* The track is that line once more, as a border: a forced palette paints no author background
+   and would leave the thumb alone, but it keeps a border and gives it a colour of its own. The
+   border is transparent, so the page looks the same: a painted one would lie over the filled
+   part, which is the background of the control under the track. The track is the border alone,
+   1px high, and stands on the middle of the control, where the line of the background runs. */
 .range::-webkit-slider-runnable-track {
-  height: 3px;
+  box-sizing: content-box;
+  height: 0;
+  border-top: 1px solid transparent;
   background: transparent;
 }
 
 .range::-webkit-slider-thumb {
   width: 24px;
   height: 24px;
-  margin-top: -10.5px;
-  border: 5px solid var(--pricing-accent);
+  /* From the box under the border up to the middle of the line: half of the thumb and half
+     of the border. */
+  margin-top: -12.5px;
+  border: 5px solid var(--pricing-accent-text);
   border-radius: 50%;
   appearance: none;
   background: var(--raditi-accent);
-  transition: transform 180ms ease;
+  transition: transform var(--raditi-motion-fast) var(--raditi-ease-out);
 }
 
+/* The same border for Firefox, which centres the thumb on the control itself. */
 .range::-moz-range-track {
-  height: 3px;
+  box-sizing: content-box;
+  height: 0;
+  border-top: 1px solid transparent;
   background: transparent;
 }
 
 .range::-moz-range-thumb {
   width: 14px;
   height: 14px;
-  border: 5px solid var(--pricing-accent);
+  border: 5px solid var(--pricing-accent-text);
   border-radius: 50%;
   background: var(--raditi-accent);
-}
-
-.range:active::-webkit-slider-thumb {
-  transform: scale(1.12);
-}
-
-.range:focus-visible {
-  outline: 2px solid var(--pricing-accent);
-  outline-offset: 5px;
+  transition: transform var(--raditi-motion-fast) var(--raditi-ease-out);
 }
 
 .scale {
@@ -111,19 +157,33 @@
 }
 
 .resultLabel,
-.perEdit {
+.resultSum,
+.perEdit,
+.sitesHint {
   color: var(--raditi-graphite);
   font-size: 14px;
 }
 
 .resultPlan {
-  margin: 12px 0 8px;
+  margin: 12px 0 0;
   font-size: 22px;
   font-weight: 600;
   line-height: 1.4;
 }
 
-.resultPlan span {
+.resultSum {
+  margin: 4px 0 0;
+}
+
+/* Another plan is told by a move, the same as a changed value in the demo: the name rises into
+   its place. A pack more or less changes the words beside it and moves nothing. The times and
+   the distance are of the scale of the page. */
+.resultName {
+  display: inline-block;
+  animation: valueRise var(--motion-swap) var(--raditi-ease-out) backwards;
+}
+
+.resultPacks {
   font-size: 17px;
   font-weight: 400;
 }
@@ -133,14 +193,30 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 12px;
-  margin: 0 0 8px;
+  margin: 8px 0;
 }
 
-.resultPrice strong {
-  font-size: clamp(28px, 3vw, 42px);
+/* A price is the answer of the section, so it is set as the expressive numbers of the page are:
+   the sum of the calculator and the prices of the plans alike. Digits of one width keep the sum
+   from shifting as the slider moves. */
+.resultPrice strong,
+.price strong {
+  font-family: var(--font-unbounded), sans-serif;
+  font-size: clamp(30px, 3.4vw, 52px);
   font-weight: 500;
-  letter-spacing: -0.03em;
+  line-height: 1.2;
+  letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The ruble sign is small and in the text face, as on the card of the saved version. */
+.resultPrice strong small,
+.price strong small {
+  font-family: var(--font-golos), sans-serif;
+  font-size: 0.46em;
+  font-weight: 400;
+  letter-spacing: 0;
 }
 
 .resultPrice span {
@@ -150,6 +226,23 @@
 
 .perEdit {
   margin: 0;
+}
+
+.sitesHint {
+  margin: 12px 0 0;
+}
+
+/* Heard, not seen: the result of the slider for a screen reader, once the slider rests. */
+.announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .plans {
@@ -162,10 +255,10 @@
 .plan {
   display: flex;
   flex-direction: column;
-  padding: 32px 28px 28px;
+  padding: 32px 28px;
   transition:
-    color 260ms ease,
-    background-color 260ms ease;
+    color var(--raditi-motion-fast) var(--raditi-ease-out),
+    background-color var(--raditi-motion-fast) var(--raditi-ease-out);
 }
 
 .plan + .plan {
@@ -197,7 +290,7 @@
   border-radius: 3px;
   color: var(--pricing-ink);
   background: var(--pricing-marker);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -215,14 +308,6 @@
   margin: 0;
 }
 
-.price strong {
-  font-size: clamp(26px, 3vw, 40px);
-  font-weight: 500;
-  letter-spacing: -0.04em;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
 .price > span {
   color: var(--raditi-graphite);
   font-size: 13px;
@@ -231,7 +316,7 @@
 .features {
   display: grid;
   gap: 14px;
-  margin: 28px 0 32px;
+  margin: 28px 0 0;
   padding: 24px 0 0;
   border-top: 1px solid var(--raditi-rule);
   list-style: none;
@@ -249,7 +334,6 @@
   justify-content: space-between;
   gap: 16px;
   min-height: 48px;
-  margin-top: auto;
   padding: 12px 18px;
   border: 1px solid currentColor;
   border-radius: 6px;
@@ -258,47 +342,115 @@
   font-weight: 600;
   text-decoration: none;
   transition:
-    color 180ms ease,
-    background-color 180ms ease;
+    color var(--raditi-motion-fast) var(--raditi-ease-out),
+    background-color var(--raditi-motion-fast) var(--raditi-ease-out),
+    transform var(--raditi-motion-fast) var(--raditi-ease-out);
 }
 
 .action svg {
   flex-shrink: 0;
-  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform var(--raditi-motion-base) var(--raditi-ease-out);
 }
 
-.pricing .action:hover {
+.pricing .action.primary {
+  border-color: var(--raditi-accent-text);
+  color: var(--raditi-on-accent);
+  background: var(--raditi-accent);
+}
+
+/* Pressed. The tap highlight of the system is off, and on a touch screen nothing hovers: these
+   rules are the whole answer to a finger. A press looks as the hover does: an outlined action
+   that leads away from the page turns over, a filled one takes the fill of its hover. */
+.pricing .action:active {
   color: var(--pricing-paper);
   background: var(--pricing-ink);
 }
 
-.action:hover svg {
-  transform: translateX(4px);
+.pricing .action.primary:active {
+  color: var(--raditi-on-accent);
+  background: var(--raditi-accent-hover);
 }
 
-.pricing .action:focus-visible {
-  outline: 2px solid var(--pricing-accent);
-  outline-offset: 5px;
+@media (hover: hover) {
+  .pricing .action:hover {
+    color: var(--pricing-paper);
+    background: var(--pricing-ink);
+  }
+
+  .pricing .action.primary:hover {
+    color: var(--raditi-on-accent);
+    background: var(--raditi-accent-hover);
+  }
+}
+
+/* What moves is declared only here: the block of reduced motion of the page takes away
+   transitions, not a transform, and a shift without its transition would be a jump. */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .action:hover svg {
+    transform: translateX(4px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pricing .action:active {
+    transform: scale(0.98);
+    transition-duration: var(--raditi-motion-press);
+  }
+
+  /* The thumb answers a grip in both engines. A rule for each: a browser drops a list of
+     selectors that names a pseudo-element of the other one. */
+  .range:active::-webkit-slider-thumb {
+    transform: scale(1.12);
+  }
+
+  .range:active::-moz-range-thumb {
+    transform: scale(1.12);
+  }
 }
 
 .recommended .features {
   border-color: var(--raditi-accent-border);
 }
 
-.pricing .recommended .action {
-  border-color: var(--raditi-accent-text);
-  color: var(--raditi-on-accent);
-  background: var(--raditi-accent);
+@keyframes valueRise {
+  from {
+    transform: translateY(var(--motion-shift));
+  }
 }
 
-.pricing .recommended .action:hover {
-  background: var(--raditi-accent-hover);
+.signup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px 40px;
+  padding: 28px var(--plan-inset) 0;
+}
+
+.included {
+  max-width: 58ch;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.signupAction {
+  flex: 0 0 auto;
+  /* As wide as the text of a plan, so the action stands under the third one edge to edge;
+     in a narrow column not narrower than its label needs. The pixel is the rule between plans. */
+  width: max(240px, calc((100% + 2 * var(--plan-inset)) / 3 - 2 * var(--plan-inset) - 1px));
+}
+
+.signupAction p {
+  margin: 8px 0 0;
+  color: var(--raditi-graphite);
+  font-size: 12px;
+  line-height: 1.5;
+  text-wrap: balance;
 }
 
 .notes {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 40px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-top: 22px;
   color: var(--raditi-graphite);
   font-size: 12px;
@@ -307,7 +459,12 @@
 
 .notes p {
   margin: 0;
-  max-width: 58ch;
+  padding-inline: var(--plan-inset);
+}
+
+/* The rule between two plans, which moves the text of the second one a pixel to the right. */
+.notes p + p {
+  border-left: 1px solid transparent;
 }
 
 .unavailable {
@@ -322,9 +479,13 @@
   margin: 0;
 }
 
-@media (width <= 900px) {
+@media (max-width: 900px) {
+  .pricing {
+    --plan-inset: 18px;
+  }
+
   .plan {
-    padding: 26px 18px 20px;
+    padding: 26px 18px;
   }
 
   .planHeading {
@@ -333,13 +494,30 @@
     min-height: 70px;
   }
 
+  /* Room for two lines whatever the line height: in a narrow column the longest description
+     wraps, and the prices of the three plans must stay on one line. 40px is for a browser
+     without the lh unit. */
   .description {
     min-height: 40px;
+    min-height: 2lh;
     margin-top: 8px;
+  }
+
+  /* In a narrow column «/ месяц» fits beside one price and not beside another: it stands under
+     every price, and the three plans keep one height. */
+  .price {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
   }
 }
 
-@media (width <= 680px) {
+@media (max-width: 680px) {
+  /* One column: the rows under the plans go back to the edge of the page text. */
+  .pricing {
+    --plan-inset: 0px;
+  }
+
   .calculator,
   .plans,
   .notes {
@@ -377,20 +555,38 @@
     margin-bottom: 26px;
   }
 
-  .price strong {
+  .price {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .editCount output {
+    font-size: 34px;
+  }
+
+  .resultPrice strong {
     font-size: 36px;
+  }
+
+  .price strong {
+    font-size: 32px;
+  }
+
+  .signup {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .signupAction {
+    width: 100%;
   }
 
   .notes {
     gap: 12px;
   }
-}
 
-@media (prefers-reduced-motion: reduce) {
-  .plan,
-  .action,
-  .action svg,
-  .range::-webkit-slider-thumb {
-    transition: none;
+  .notes p + p {
+    border-left: 0;
   }
 }

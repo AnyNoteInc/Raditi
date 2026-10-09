@@ -1,50 +1,30 @@
 'use client'
 
 import { BrandSymbol } from '@repo/ui/brand-symbol'
-import { useEffect, useReducer } from 'react'
+import { useEffect, useId, useReducer, type CSSProperties } from 'react'
+
+import { nbsp } from '@/lib/nbsp'
+
+import { LandingIcon } from './landing-icons'
+import { cafe, scenarioIds, scenarios, type ScenarioId } from './landing-story'
+import { PHASE_MS } from './motion'
 import styles from './site-demo.module.css'
 
-type ScenarioId = 'price' | 'hours' | 'promotion'
 type Phase = 'preparing' | 'review' | 'applying' | 'applied' | 'undone'
 
-const scenarios = {
-  price: {
-    label: 'Цена',
-    request: 'Поменяй цену капучино на 290 ₽',
-    field: 'Капучино, 250 мл',
-    before: '250 ₽',
-    after: '290 ₽',
-    result: 'Готово. В меню уже новая цена.',
-  },
-  hours: {
-    label: 'График',
-    request: 'По субботам открываемся в 8:00. Обнови сайт',
-    field: 'Часы работы в субботу',
-    before: '09:00–21:00',
-    after: '08:00–21:00',
-    result: 'Готово. По субботам — с восьми утра.',
-  },
-  promotion: {
-    label: 'Акция',
-    request: 'Добавь акцию: второй кофе за полцены',
-    field: 'Плашка над меню',
-    before: 'Без акции',
-    after: 'Второй кофе −50%',
-    result: 'Готово. Акция появилась на сайте.',
-  },
-} as const
-
-const scenarioIds: ScenarioId[] = ['price', 'hours', 'promotion']
-
-type DemoState = { scenario: ScenarioId; phase: Phase; revision: number }
-type DemoAction =
+export type DemoState = { scenario: ScenarioId; phase: Phase; revision: number }
+export type DemoAction =
   | { type: 'choose'; scenario: ScenarioId }
   | { type: 'apply' }
   | { type: 'undo' }
   | { type: 'finish'; revision: number; phase: Phase }
 
-function reducer(state: DemoState, action: DemoAction): DemoState {
+export const initialDemoState: DemoState = { scenario: 'price', phase: 'review', revision: 0 }
+
+export function reducer(state: DemoState, action: DemoAction): DemoState {
   if (action.type === 'choose') {
+    // Choosing the current scenario again must not drop an applied change.
+    if (action.scenario === state.scenario) return state
     return { scenario: action.scenario, phase: 'preparing', revision: state.revision + 1 }
   }
   if (action.type === 'apply' && (state.phase === 'review' || state.phase === 'undone')) {
@@ -64,62 +44,70 @@ function reducer(state: DemoState, action: DemoAction): DemoState {
   return state
 }
 
-function Arrow({ undo = false }: { undo?: boolean }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      {undo ? (
-        <>
-          <path d="m9 5-5 5 5 5" />
-          <path d="M4 10h10a5 5 0 0 1 0 10h-3" />
-        </>
-      ) : (
-        <>
-          <path d="M4 12h15" />
-          <path d="m13 6 6 6-6 6" />
-        </>
-      )}
-    </svg>
-  )
+type PhaseView = {
+  /** The status of the chat; the applied phase tells the result of the scenario instead. */
+  status?: string
+  /** The sign before the status: Радити is working, the change is on the site, it is taken back. */
+  sign?: 'activity' | 'check' | 'undo'
+  /** The label of the site window. */
+  site: string
+  /** The label of the action. */
+  action: string
+  /** A busy phase ends by a timer after this pause, and the action waits for it. */
+  pause?: number
 }
 
-function Check() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="m5 12 4 4L19 6" />
-    </svg>
-  )
+/** What each phase shows, in one place: the markup below asks this table, not the phase. */
+const phases: Record<Phase, PhaseView> = {
+  preparing: {
+    status: nbsp('Нахожу нужное место на странице…'),
+    sign: 'activity',
+    site: nbsp('До правки'),
+    action: 'Готовлю правку…',
+    pause: PHASE_MS.preparing,
+  },
+  review: {
+    status: 'Подготовил правку. Посмотрите:',
+    site: nbsp('До правки'),
+    action: 'Применить правку',
+  },
+  applying: {
+    status: nbsp('Сохраняю копию и применяю правку…'),
+    sign: 'activity',
+    site: nbsp('До правки'),
+    action: 'Применяю…',
+    pause: PHASE_MS.applying,
+  },
+  applied: { sign: 'check', site: 'Изменено', action: 'Отменить правку' },
+  undone: {
+    status: nbsp('Вернул как было. Всё под контролем.'),
+    sign: 'undo',
+    site: 'Возвращено',
+    action: 'Применить снова',
+  },
 }
+
+// The stroke of the demo icons, the same as `.demo svg` gives the other drawings of the demo.
+const line = { strokeWidth: 1.6, linecap: 'round', linejoin: 'round' } as const
 
 export function SiteDemo() {
-  const [state, dispatch] = useReducer(reducer, {
-    scenario: 'price',
-    phase: 'review',
-    revision: 0,
-  })
+  const [state, dispatch] = useReducer(reducer, initialDemoState)
+  const hintId = useId()
   const scenario = scenarios[state.scenario]
+  const view = phases[state.phase]
   const isApplied = state.phase === 'applied'
-  const isBusy = state.phase === 'preparing' || state.phase === 'applying'
+  const isBusy = view.pause !== undefined
 
   useEffect(() => {
-    if (state.phase !== 'preparing' && state.phase !== 'applying') return
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (view.pause === undefined) return
+    // The pause stays under reduced motion: it gives the status time to be read and keeps a
+    // double click from applying and undoing the change at once.
     const timer = window.setTimeout(
       () => dispatch({ type: 'finish', revision: state.revision, phase: state.phase }),
-      reducedMotion ? 0 : state.phase === 'preparing' ? 650 : 700,
+      view.pause,
     )
     return () => window.clearTimeout(timer)
-  }, [state.phase, state.revision])
-
-  const status =
-    state.phase === 'preparing'
-      ? 'Нахожу нужное место на странице…'
-      : state.phase === 'applying'
-        ? 'Сохраняю копию и применяю правку…'
-        : state.phase === 'applied'
-          ? scenario.result
-          : state.phase === 'undone'
-            ? 'Вернул как было. Всё под контролем.'
-            : 'Подготовил правку. Посмотрите:'
+  }, [view.pause, state.phase, state.revision])
 
   return (
     <figure
@@ -133,25 +121,38 @@ export function SiteDemo() {
           <span className={styles.liveDot} />
           Интерактивное демо
         </span>
-        <span className={styles.captionHint}>Выберите задачу</span>
       </figcaption>
 
-      <div className={styles.scenarios} role="group" aria-label="Выберите пример правки">
-        {scenarioIds.map((id) => (
-          <button
-            key={id}
-            type="button"
-            className={styles.scenario}
-            aria-pressed={state.scenario === id}
-            onClick={() => dispatch({ type: 'choose', scenario: id })}
-          >
-            {scenarios[id].label}
-          </button>
-        ))}
+      {/* The hint stands at the buttons and names their group: it is what the buttons answer. */}
+      <div className={styles.scenarios} role="group" aria-labelledby={hintId}>
+        <span className={styles.scenariosHint} id={hintId}>
+          Выберите, что попросить:
+        </span>
+        <div className={styles.scenarioList}>
+          {scenarioIds.map((id) => (
+            <button
+              key={id}
+              type="button"
+              className={styles.scenario}
+              aria-pressed={state.scenario === id}
+              onClick={() => dispatch({ type: 'choose', scenario: id })}
+            >
+              {/* Every button has the mark, CSS shows it in the chosen one: `aria-pressed`
+                  tells the choice to a screen reader, the mark tells it without colour. */}
+              <LandingIcon name="check" size={11} {...line} />
+              {scenarios[id].label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className={styles.stage} data-phase={state.phase}>
-        <div className={styles.browser}>
+      {/* The animations of a busy phase take its length from the same number as the timer. */}
+      <div
+        className={styles.stage}
+        data-phase={state.phase}
+        style={isBusy ? ({ '--demo-phase': `${view.pause}ms` } as CSSProperties) : undefined}
+      >
+        <div className={styles.browser} role="group" aria-label="Пример сайта кофейни">
           <div className={styles.browserBar}>
             <div className={styles.windowDots} aria-hidden="true">
               <i />
@@ -163,35 +164,31 @@ export function SiteDemo() {
                 <rect x="2" y="6" width="8" height="6" rx="1" />
                 <path d="M4 6V4a2 2 0 0 1 4 0v2" />
               </svg>
-              kroshka.example
+              {cafe.address}
             </span>
-            <span className={styles.browserLabel}>
-              {isApplied ? 'Изменено' : state.phase === 'undone' ? 'Возвращено' : 'До правки'}
-            </span>
+            <span className={styles.browserLabel}>{view.site}</span>
           </div>
 
           <div className={styles.cafe}>
             <div className={styles.cafeTopline}>
-              <span>КОФЕ · ВЫПЕЧКА · СОСЕДИ</span>
-              <span>С 2019</span>
+              <span>КОФЕ&nbsp;· ВЫПЕЧКА&nbsp;· СОСЕДИ</span>
+              <span>С&nbsp;2019</span>
             </div>
             <div className={styles.cafeIdentity}>
-              <span className={styles.cafeName}>КРОШКА</span>
+              <span className={styles.cafeName}>{cafe.name}</span>
               <svg className={styles.sun} viewBox="0 0 64 64" fill="none" aria-hidden="true">
                 <circle cx="32" cy="32" r="12" fill="currentColor" stroke="none" />
                 <path d="M32 3v9m0 40v9M3 32h9m40 0h9M11.5 11.5l6.4 6.4m28.2 28.2 6.4 6.4m0-41-6.4 6.4M17.9 46.1l-6.4 6.4" />
               </svg>
             </div>
-            <p className={styles.cafeTagline}>Большие планы начинаются с маленького кофе.</p>
+            <p className={styles.cafeTagline}>Большие планы начинаются с&nbsp;маленького кофе.</p>
 
             <div
               className={styles.promotion}
               data-selected={state.scenario === 'promotion'}
               data-changed={isApplied && state.scenario === 'promotion'}
             >
-              {isApplied && state.scenario === 'promotion'
-                ? 'ВТОРОЙ КОФЕ −50% · БЕРИТЕ ДРУГА'
-                : 'ХОРОШИЙ ДЕНЬ. ХОРОШИЙ КОФЕ.'}
+              {isApplied && state.scenario === 'promotion' ? cafe.banner.after : cafe.banner.before}
             </div>
 
             <div className={styles.cafeDetails}>
@@ -201,10 +198,12 @@ export function SiteDemo() {
                 data-changed={isApplied && state.scenario === 'price'}
               >
                 <span>
-                  Капучино <small>250 мл</small>
+                  {cafe.item} <small>{cafe.volume}</small>
                 </span>
                 <strong key={`price-${isApplied && state.scenario === 'price'}`}>
-                  {isApplied && state.scenario === 'price' ? '290 ₽' : '250 ₽'}
+                  {isApplied && state.scenario === 'price'
+                    ? scenarios.price.after
+                    : scenarios.price.before}
                 </strong>
               </div>
               <div
@@ -212,9 +211,11 @@ export function SiteDemo() {
                 data-selected={state.scenario === 'hours'}
                 data-changed={isApplied && state.scenario === 'hours'}
               >
-                <span>В субботу</span>
+                <span>В&nbsp;субботу</span>
                 <strong key={`hours-${isApplied && state.scenario === 'hours'}`}>
-                  {isApplied && state.scenario === 'hours' ? '08:00–21:00' : '09:00–21:00'}
+                  {isApplied && state.scenario === 'hours'
+                    ? scenarios.hours.after
+                    : scenarios.hours.before}
                 </strong>
               </div>
             </div>
@@ -227,65 +228,82 @@ export function SiteDemo() {
           <span />
         </div>
 
-        <div className={styles.chat}>
+        <div className={styles.chat} role="group" aria-label="Демонстрационный чат">
           <div className={styles.chatHeader}>
             <BrandSymbol size={30} />
             <div className={styles.agentTitle}>
               <strong>Радити</strong>
-              <span>Заботится о вашем сайте</span>
+              <span>{nbsp('ИИ-помощник для вашего сайта')}</span>
             </div>
-            <span className={styles.chatStatus} aria-label="Демонстрационный чат" />
+            <span className={styles.chatStatus} aria-hidden="true" />
           </div>
 
           <div className={styles.chatBody}>
+            <span className={styles.requestAuthor}>Вы</span>
             <div className={styles.request} key={state.scenario}>
               {scenario.request}
             </div>
             <div className={styles.reply}>
               <p className={styles.replyStatus} aria-live="polite" aria-atomic="true">
-                {isBusy && <span className={styles.activity} aria-hidden="true" />}
-                {isApplied && <Check />}
-                {status}
+                {view.sign === 'activity' && (
+                  <span className={styles.activity} aria-hidden="true" />
+                )}
+                {view.sign === 'check' && <LandingIcon name="check" size={16} {...line} />}
+                {view.sign === 'undo' && <LandingIcon name="undo-demo" size={16} {...line} />}
+                {view.status ?? scenario.result}
+                {/* The region is atomic: after «Готово» the offer would contradict the status,
+                    so the change is told in words only while it waits for the decision. */}
+                {state.phase === 'review' && (
+                  <span className={styles.srOnly}>
+                    {` ${scenario.field}: было ${scenario.before}, станет ${scenario.after}.`}
+                  </span>
+                )}
               </p>
               <div className={styles.diff}>
                 <span className={styles.diffLabel}>{scenario.field}</span>
                 <div className={styles.diffValues}>
-                  <span className={styles.before}>{scenario.before}</span>
-                  <Arrow />
-                  <span className={styles.after}>{scenario.after}</span>
+                  <span className={styles.before}>
+                    <span className={styles.srOnly}>Было: </span>
+                    {scenario.before}
+                  </span>
+                  <span className={styles.becomes}>
+                    <LandingIcon name="arrow-right-demo" size={18} {...line} />
+                    <span className={styles.after}>
+                      <span className={styles.srOnly}>Станет: </span>
+                      {scenario.after}
+                    </span>
+                  </span>
                 </div>
               </div>
+              {/* The reducer drops an action that does not fit the phase, so the busy button
+                  needs no `disabled`, which would take the focus of the keyboard away. */}
               <button
                 className={styles.action}
                 type="button"
-                disabled={isBusy}
+                aria-disabled={isBusy}
                 data-undo={isApplied}
                 onClick={() => dispatch({ type: isApplied ? 'undo' : 'apply' })}
               >
-                <span>
-                  {state.phase === 'preparing'
-                    ? 'Готовлю правку…'
-                    : state.phase === 'applying'
-                      ? 'Применяю…'
-                      : isApplied
-                        ? 'Отменить правку'
-                        : state.phase === 'undone'
-                          ? 'Применить снова'
-                          : 'Применить правку'}
-                </span>
-                <Arrow undo={isApplied} />
+                <span>{view.action}</span>
+                <LandingIcon
+                  name={isApplied ? 'undo-demo' : 'arrow-right-demo'}
+                  size={18}
+                  {...line}
+                />
               </button>
             </div>
           </div>
           <div className={styles.chatFooter}>
-            <Check />
+            <LandingIcon name="check" size={16} {...line} />
             Сначала копия. Потом изменения.
           </div>
         </div>
       </div>
 
       <p className={styles.disclaimer}>
-        Это вымышленная кофейня. Попробуйте правку и отмену — ваш сайт не изменится.
+        {nbsp(
+          'Это вымышленная кофейня, просьбы готовые. Попробуйте применить правку и отменить её — ваш сайт не изменится.',
+        )}
       </p>
     </figure>
   )

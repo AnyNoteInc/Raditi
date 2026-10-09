@@ -6,4 +6,10 @@ export {
   themePreferences,
   type ThemePreference,
 } from './theme-preference.ts'
-export { brandColors, brandCssVariables, fontFamilies, semanticColors } from './tokens.ts'
+export {
+  brandColors,
+  brandCssVariables,
+  fontFamilies,
+  motionTokens,
+  semanticColors,
+} from './tokens.ts'

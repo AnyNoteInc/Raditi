@@ -1,12 +1,37 @@
 // @vitest-environment node
 import CssBaseline from '@mui/material/CssBaseline'
-import { alpha, getContrastRatio, ThemeProvider } from '@mui/material/styles'
+import { alpha, createTheme, getContrastRatio, ThemeProvider } from '@mui/material/styles'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { createAppTheme } from './create-app-theme.ts'
-import { brandColorRoles, brandColors, brandCssVariables, semanticColors } from './tokens.ts'
+import {
+  brandColorRoles,
+  brandColors,
+  brandCssVariables,
+  motionTokens,
+  semanticColors,
+} from './tokens.ts'
+
+/** The colour of a role mixed in CSS from two palette tokens, as a browser computes it in sRGB. */
+function mixed(role: string): string {
+  const match =
+    /^color-mix\(in srgb, var\((--raditi-[a-z0-9-]+)\) (\d+)%, var\((--raditi-[a-z0-9-]+)\)\)$/.exec(
+      role,
+    )
+  if (!match) throw new Error(`Not a mix of two palette tokens: ${role}`)
+  const [, first, percent, second] = match
+  const share = Number(percent) / 100
+  const channels = (name: string | undefined) => {
+    const hex = name ? brandCssVariables[name as `--raditi-${string}`] : undefined
+    if (!hex || !/^#[0-9A-F]{6}$/.test(hex)) throw new Error(`Not a base colour: ${name}`)
+    return [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16))
+  }
+  const [from, to] = [channels(first), channels(second)]
+  const mix = from.map((value, index) => Math.round(value * share + (to[index] ?? 0) * (1 - share)))
+  return `rgb(${mix.join(', ')})`
+}
 
 describe('createAppTheme', () => {
   it('builds the light scheme from the brand tokens', () => {
@@ -116,6 +141,80 @@ describe('createAppTheme', () => {
       expect(palette.common.white).toBe(brandColors.white)
     },
   )
+
+  it('derives the outline of a control from the palette, at 3:1 against the light surfaces', () => {
+    const outline = mixed(brandColorRoles.ruleStrong)
+
+    expect(brandCssVariables['--raditi-rule-strong']).toBe(brandColorRoles.ruleStrong)
+    for (const surface of [brandColors.paper, brandColors.paper2, brandColors.card]) {
+      expect(getContrastRatio(outline, surface)).toBeGreaterThanOrEqual(3)
+    }
+    // The divider it replaces on controls stays a decoration.
+    expect(getContrastRatio(brandColors.rule, brandColors.paper)).toBeLessThan(3)
+    // Not for the amber fields.
+    expect(getContrastRatio(outline, brandColors.marker)).toBeLessThan(3)
+  })
+
+  it('keeps the hover of the vivid fill readable and apart from the fill at rest', () => {
+    const hover = mixed(brandColorRoles.accentHover)
+
+    expect(getContrastRatio(hover, brandColorRoles.onAccent)).toBeGreaterThanOrEqual(4.5)
+    // At 85% of the accent the two fills were 1.08:1 apart and could not be told from each other.
+    expect(getContrastRatio(hover, brandColors.accent)).toBeGreaterThanOrEqual(1.2)
+    // White never stands on the fill, hovered or not.
+    expect(getContrastRatio(hover, brandColors.white)).toBeLessThan(4.5)
+  })
+
+  it.each(['light', 'dark'] as const)(
+    'gives the contained primary button the vivid fill and its hover in %s mode',
+    (mode) => {
+      const theme = createAppTheme(mode)
+      const contained = theme.components?.MuiButton?.styleOverrides?.contained
+      if (typeof contained !== 'function') throw new Error('No rule for the contained button')
+      const rule = contained({ ownerState: { color: 'primary' }, theme } as never)
+
+      expect(rule).toMatchObject({
+        backgroundColor: brandColors.accent,
+        color: brandColors.ink,
+        '&:hover:not(.Mui-disabled)': { backgroundColor: brandColorRoles.accentHover },
+      })
+    },
+  )
+
+  it('publishes one radius for pills and no shadow role that repeats another', () => {
+    expect(brandCssVariables['--raditi-radius-pill']).toBe('999px')
+    expect(createAppTheme('light').components?.MuiButton?.styleOverrides?.root).toMatchObject({
+      borderRadius: Number.parseInt(brandCssVariables['--raditi-radius-pill'] ?? '', 10),
+    })
+    // The medium shadow stood one hundredth of opacity from the soft one.
+    expect(Object.keys(brandCssVariables).filter((name) => name.includes('shadow'))).toEqual([
+      '--raditi-shadow-soft',
+      '--raditi-shadow-strong',
+    ])
+  })
+
+  it('publishes the curves and the short durations of controls apart from the palette', () => {
+    expect(brandCssVariables['--raditi-ease-out']).toBe('cubic-bezier(0.16, 1, 0.3, 1)')
+    expect(brandCssVariables['--raditi-ease-in-out']).toBe('cubic-bezier(0.65, 0, 0.35, 1)')
+    expect(brandCssVariables['--raditi-motion-press']).toBe('90ms')
+    expect(brandCssVariables['--raditi-motion-fast']).toBe('160ms')
+    expect(brandCssVariables['--raditi-motion-base']).toBe('240ms')
+    // A press is shorter than its release, a hover shorter than a change of state.
+    const [press, fast, base] = [
+      motionTokens.motionPress,
+      motionTokens.motionFast,
+      motionTokens.motionBase,
+    ].map((duration) => Number.parseInt(duration, 10))
+    expect(press).toBeLessThan(fast ?? 0)
+    expect(fast).toBeLessThan(base ?? 0)
+    // A token of motion is no colour and no role of one.
+    for (const key of Object.keys(motionTokens)) {
+      expect({ ...brandColors, ...brandColorRoles }).not.toHaveProperty(key)
+    }
+    // The cabinet and the forms keep the transitions of MUI: the scale is for the landing.
+    expect(createAppTheme('light').transitions.duration).toEqual(createTheme().transitions.duration)
+    expect(createAppTheme('light').transitions.easing).toEqual(createTheme().transitions.easing)
+  })
 
   it('takes the fonts from the next/font variables, with fallbacks', () => {
     const { typography } = createAppTheme('light')

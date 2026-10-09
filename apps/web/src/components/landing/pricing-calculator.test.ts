@@ -1,7 +1,12 @@
 import { Decimal } from 'decimal.js'
 import { describe, expect, it } from 'vitest'
 
-import { formatRubles, recommendPlan, type LandingPricingData } from './pricing-calculator'
+import {
+  packsInWords,
+  pluralEdits,
+  recommendPlan,
+  type LandingPricingData,
+} from './pricing-calculator'
 
 const pricing: LandingPricingData = {
   plans: [
@@ -98,10 +103,81 @@ describe('landing plan recommendation', () => {
   )
 })
 
-describe('monetary display', () => {
-  it('groups rubles and preserves kopecks without floating point conversion', () => {
-    expect(formatRubles('12900.00')).toBe('12\u00a0900')
-    expect(formatRubles('12860.10')).toBe('12\u00a0860,10')
-    expect(formatRubles('0.30')).toBe('0,30')
+describe('estimate of one edit', () => {
+  /** The estimate for a plan of the given price that covers the edits without a pack. */
+  const estimate = (price: string, edits: number) => {
+    const plan = { ...pricing.plans[0]!, price, editsPerMonth: edits }
+    return recommendPlan({ plans: [plan], pack: null }, edits)
+  }
+
+  it('is rounded half up to whole rubles, and the amounts of the calculation stay exact', () => {
+    expect(recommendPlan(pricing, 30)).toMatchObject({
+      total: '4900.00',
+      perEdit: '163.33',
+      perEditRounded: '163.00',
+    })
+    expect(recommendPlan(pricing, 70)).toMatchObject({
+      perEdit: '183.71',
+      perEditRounded: '184.00',
+    })
+    expect(estimate('347.00', 2)?.perEditRounded).toBe('174.00')
+    expect(estimate('346.98', 2)?.perEditRounded).toBe('173.00')
+    expect(estimate('1.00', 2)?.perEditRounded).toBe('1.00')
+    expect(estimate('2599.00', 2)?.perEditRounded).toBe('1300.00')
+  })
+
+  // 495.495 is 495.50 in kopecks; rounded once more, that would be 496.
+  it('is rounded once, from the exact quotient and not from the kopecks', () => {
+    expect(estimate('4954.95', 10)).toMatchObject({
+      total: '4954.95',
+      perEdit: '495.50',
+      perEditRounded: '495.00',
+    })
+    expect(estimate('4954.99', 10)).toMatchObject({ perEdit: '495.50', perEditRounded: '495.00' })
+    expect(estimate('4955.00', 10)).toMatchObject({ perEdit: '495.50', perEditRounded: '496.00' })
+    // A quotient without an end: a third of a ruble under the half.
+    expect(estimate('1486.49', 3)).toMatchObject({ perEdit: '495.50', perEditRounded: '495.00' })
+  })
+
+  it('is rounded half up whatever the global Decimal settings are', () => {
+    const previous = { precision: Decimal.precision, rounding: Decimal.rounding }
+    try {
+      Decimal.set({ precision: 2, rounding: Decimal.ROUND_DOWN })
+      expect(estimate('25721.00', 2)?.perEditRounded).toBe('12861.00')
+    } finally {
+      Decimal.set(previous)
+    }
+  })
+})
+
+describe('words for counts', () => {
+  it.each([
+    [1, 'правка'],
+    [2, 'правки'],
+    [5, 'правок'],
+    [11, 'правок'],
+    [21, 'правка'],
+    [30, 'правок'],
+    [112, 'правок'],
+    [122, 'правки'],
+  ])('declines the edits of %i', (count, word) => {
+    expect(pluralEdits(count)).toBe(word)
+  })
+
+  it.each([
+    [1, 10, '1 дополнительный пакет по 10 правок'],
+    [2, 10, '2 дополнительных пакета по 10 правок'],
+    [4, 10, '4 дополнительных пакета по 10 правок'],
+    [5, 10, '5 дополнительных пакетов по 10 правок'],
+    [11, 10, '11 дополнительных пакетов по 10 правок'],
+    [14, 10, '14 дополнительных пакетов по 10 правок'],
+    [21, 10, '21 дополнительный пакет по 10 правок'],
+    [22, 10, '22 дополнительных пакета по 10 правок'],
+    [27, 10, '27 дополнительных пакетов по 10 правок'],
+    [3, 1, '3 дополнительных пакета по 1 правке'],
+    [3, 2, '3 дополнительных пакета по 2 правки'],
+    [3, 21, '3 дополнительных пакета по 21 правке'],
+  ])('names %i packs of %i edits', (packs, packEdits, words) => {
+    expect(packsInWords(packs, packEdits)).toBe(words)
   })
 })

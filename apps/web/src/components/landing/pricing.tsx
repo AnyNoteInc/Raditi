@@ -1,39 +1,59 @@
 'use client'
 
 import Link from 'next/link'
-import { useId, useState, type CSSProperties } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 
+import { nbsp } from '@/lib/nbsp'
+import { planDescription } from '@/lib/plan-description'
+import { formatRubles } from '@/lib/rubles'
+
+import { LandingIcon } from './landing-icons'
 import {
-  formatRubles,
+  packsInWords,
   pluralEdits,
   recommendPlan,
+  type LandingPack,
   type LandingPricingData,
+  type PlanRecommendation,
 } from './pricing-calculator'
 import styles from './pricing.module.css'
 
-const descriptions: Record<string, string> = {
-  start: 'Для своего дела',
-  business: 'Когда задач становится больше',
-  agency: 'Для сайтов ваших клиентов',
-}
+/** How long the slider rests before its result is announced: a drag passes many values. */
+export const ANNOUNCE_DELAY_MS = 500
 
-function Arrow() {
-  return (
-    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none">
-      <path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" strokeWidth="1.6" />
-    </svg>
-  )
+const NO_PACK = 'Для такого числа правок пока нет доступного пакета. Выберите меньше правок.'
+
+/** The result as one sentence for a screen reader, built from the strings of the visible one. */
+function resultInWords(recommendation: PlanRecommendation | null, pack: LandingPack | null) {
+  if (!recommendation) return NO_PACK
+  const packs =
+    pack && recommendation.packs > 0 ? ` и ${packsInWords(recommendation.packs, pack.edits)}` : ''
+  return `Тариф «${recommendation.plan.name}»${packs}, ${formatRubles(recommendation.total)} ₽ в месяц, около ${formatRubles(recommendation.perEditRounded)} ₽ за правку`
 }
 
 export function Pricing({
   plans,
   pack,
   actionHref = '/sign-up',
-  actionLabel = 'Создать аккаунт',
+  actionLabel = 'Зарегистрироваться',
 }: LandingPricingData & { actionHref?: '/sign-up' | '/projects'; actionLabel?: string }) {
   const [edits, setEdits] = useState(30)
+  // The value on which the slider came to rest; nothing is announced until the visitor moves it.
+  const [announcedEdits, setAnnouncedEdits] = useState<number | null>(null)
+  const moved = useRef(false)
   const rangeId = useId()
+  const hintId = useId()
   const recommendation = recommendPlan({ plans, pack }, edits)
+  const announcement =
+    announcedEdits === null
+      ? ''
+      : resultInWords(recommendPlan({ plans, pack }, announcedEdits), pack)
+
+  useEffect(() => {
+    if (!moved.current) return
+    const timer = window.setTimeout(() => setAnnouncedEdits(edits), ANNOUNCE_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [edits])
 
   if (plans.length === 0) {
     return (
@@ -42,11 +62,11 @@ export function Pricing({
         <p>
           Обновите страницу чуть позже.{' '}
           {actionHref === '/sign-up'
-            ? 'Создать аккаунт можно уже сейчас.'
-            : 'Перейти к проектам можно по ссылке ниже.'}
+            ? 'Зарегистрироваться можно уже сейчас.'
+            : nbsp('Перейти к проектам можно по ссылке ниже.')}
         </p>
         <Link className={styles.action} href={actionHref}>
-          {actionLabel} <Arrow />
+          {actionLabel} <LandingIcon name="arrow-right-pricing" size={20} strokeWidth={1.6} />
         </Link>
       </div>
     )
@@ -57,7 +77,12 @@ export function Pricing({
       <div className={styles.calculator}>
         <div className={styles.input}>
           <label htmlFor={rangeId}>Сколько правок нужно в месяц?</label>
-          <div className={styles.editCount}>
+          <p className={styles.hint} id={hintId}>
+            {nbsp('Правка — одна ваша просьба: поменять цены, заменить фото, добавить акцию.')}
+          </p>
+          {/* For the eye only: the slider names its value itself, and an `output` is a live
+              region that would say it a second time. */}
+          <div className={styles.editCount} aria-hidden="true">
             <output htmlFor={rangeId}>{edits}</output>
             <span>{pluralEdits(edits)}</span>
           </div>
@@ -70,40 +95,65 @@ export function Pricing({
             step={5}
             value={edits}
             aria-valuetext={`${edits} ${pluralEdits(edits)} в месяц`}
+            aria-describedby={hintId}
             style={{ '--range-progress': `${((edits - 10) / 290) * 100}%` } as CSSProperties}
-            onChange={(event) => setEdits(Number(event.target.value))}
+            onChange={(event) => {
+              moved.current = true
+              setEdits(Number(event.target.value))
+            }}
           />
           <div className={styles.scale} aria-hidden="true">
             <span>10</span>
             <span>300</span>
           </div>
         </div>
-        <div className={styles.result} aria-live="polite" aria-atomic="true">
+        <div className={styles.result}>
           {recommendation ? (
             <>
-              <span className={styles.resultLabel}>Самый выгодный вариант по числу правок</span>
+              <span className={styles.resultLabel}>
+                Самый выгодный вариант по&nbsp;числу правок
+              </span>
               <p className={styles.resultPlan}>
-                «{recommendation.plan.name}»
-                {recommendation.packs > 0 && (
-                  <span>
-                    {' '}
-                    + {recommendation.packs} × {pack?.edits} {pluralEdits(pack?.edits ?? 0)}
+                {/* Keyed by the plan: the name is drawn anew, and rises, when the plan changes
+                    and not when a pack is added. The sums are never animated. */}
+                <span key={recommendation.plan.slug} className={styles.resultName}>
+                  Тариф «{recommendation.plan.name}»
+                </span>
+                {pack && recommendation.packs > 0 && (
+                  <span className={styles.resultPacks}>
+                    {nbsp(` и ${packsInWords(recommendation.packs, pack.edits)}`)}
                   </span>
                 )}
               </p>
+              {pack && recommendation.packs > 0 && (
+                <p className={styles.resultSum}>
+                  {formatRubles(recommendation.plan.price)}&nbsp;₽ + {recommendation.packs} ×{' '}
+                  {formatRubles(pack.price)}&nbsp;₽
+                </p>
+              )}
               <p className={styles.resultPrice}>
-                <strong>{formatRubles(recommendation.total)} ₽</strong>
+                <strong>
+                  {formatRubles(recommendation.total)}
+                  <small>&nbsp;₽</small>
+                </strong>
                 <span>/ месяц</span>
               </p>
               <p className={styles.perEdit}>
-                Около {formatRubles(recommendation.perEdit)} ₽ за правку
+                Около {formatRubles(recommendation.perEditRounded)}&nbsp;₽ за&nbsp;правку, если
+                использовать все&nbsp;{edits}
               </p>
             </>
           ) : (
-            <p className={styles.resultPlan}>
-              Для такого числа правок пока нет доступного пакета. Выберите меньше правок.
-            </p>
+            <p className={styles.resultPlan}>{nbsp(NO_PACK)}</p>
           )}
+          <p className={styles.sitesHint}>
+            {nbsp('Если сайтов больше одного — смотрите число сайтов в тарифе.')}
+          </p>
+          {/* The one announcement of a step. The visible result is not a live region: with the
+              value of the slider and its `output` it was read three times on each of 58 steps. */}
+          <p className={styles.announcement} aria-live="polite" aria-atomic="true">
+            {announcement}
+          </p>
         </div>
       </div>
 
@@ -119,42 +169,50 @@ export function Pricing({
                 <h3>{plan.name}</h3>
                 {recommended && <span className={styles.recommendedLabel}>Ваш вариант</span>}
               </div>
-              <p className={styles.description}>
-                {descriptions[plan.slug] ?? 'Для регулярных задач на сайте'}
-              </p>
+              <p className={styles.description}>{nbsp(planDescription(plan.slug))}</p>
               <p className={styles.price}>
-                <strong>{formatRubles(plan.price)} ₽</strong>
+                <strong>
+                  {formatRubles(plan.price)}
+                  <small>&nbsp;₽</small>
+                </strong>
                 <span>/ месяц</span>
               </p>
               <ul className={styles.features}>
                 <li>
-                  <strong>{plan.editsPerMonth}</strong> {pluralEdits(plan.editsPerMonth)} в месяц
+                  <strong>{plan.editsPerMonth}</strong>
+                  {nbsp(
+                    `\u00a0${pluralEdits(plan.editsPerMonth)} в месяц, не больше\u00a0${plan.editsPerDay} в день`,
+                  )}
                 </li>
-                <li>
-                  {plan.maxSites === 1 ? 'Один сайт' : `До ${plan.maxSites} сайтов`} на WordPress
-                </li>
-                <li>До {plan.editsPerDay} правок в день</li>
-                <li>Тексты, фото и изменения на сайте</li>
+                <li>{plan.maxSites === 1 ? 'Один сайт' : nbsp(`До ${plan.maxSites} сайтов`)}</li>
               </ul>
-              <Link
-                className={styles.action}
-                href={actionHref}
-                aria-label={`${actionLabel} — ${plan.name}`}
-              >
-                {actionLabel} <Arrow />
-              </Link>
             </article>
           )
         })}
       </div>
-      <div className={styles.notes}>
-        <p>
-          {pack
-            ? `Нужно больше? Ещё ${pack.edits} ${pluralEdits(pack.edits)} — ${formatRubles(pack.price)} ₽. `
-            : ''}
-          Калькулятор учитывает полные пакеты. Число сайтов и дневной лимит — по выбранному тарифу.
+      {/* One action for all plans: the plan is chosen when the payment opens, not here. */}
+      <div className={styles.signup}>
+        <p className={styles.included}>
+          {nbsp(
+            'В каждый тариф войдут правки текстов, цен, фото, акций и страниц на сайтах WordPress, копия перед правкой и отмена.',
+          )}
         </p>
-        <p>Тарифы на запуске. Оплата появится после открытия сервиса. Цены в рублях, с НДС.</p>
+        <div className={styles.signupAction}>
+          <Link className={`${styles.action} ${styles.primary}`} href={actionHref}>
+            {actionLabel} <LandingIcon name="arrow-right-pricing" size={20} strokeWidth={1.6} />
+          </Link>
+          <p>Тариф выберете позже, когда откроется оплата</p>
+        </div>
+      </div>
+      <div className={styles.notes}>
+        {pack && (
+          <p>
+            {nbsp(
+              `Правок не хватит? Можно будет докупить пакет — ${pack.edits} ${pluralEdits(pack.edits)} за ${formatRubles(pack.price)} ₽. Пакеты будут продаваться целиком.`,
+            )}
+          </p>
+        )}
+        <p>Цены в&nbsp;рублях.</p>
       </div>
     </div>
   )

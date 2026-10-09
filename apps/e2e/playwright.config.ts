@@ -15,6 +15,8 @@ const metricsToken = process.env.METRICS_TOKEN ?? 'raditi-dev-metrics'
 
 export default defineConfig({
   testDir: './tests',
+  // A local tool with its own config (playwright.style-snapshot.config.ts), not a smoke test.
+  testIgnore: 'landing-style-snapshot.spec.ts',
   timeout: 60_000,
   reporter: 'list',
   use: { baseURL, trace: 'retain-on-failure' },

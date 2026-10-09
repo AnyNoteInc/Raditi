@@ -13,8 +13,7 @@ test('home page renders the landing with the plans of the database', async ({ re
   expect(html).toContain('Сайт поправим.')
   expect(html).toContain('id="site-demo"')
   // Plans come from the seeds (pnpm db:seed), never from a list kept in the page.
-  for (const plan of ['Старт', 'Бизнес', 'Агентство'])
-    expect(html).toContain(`aria-label="Создать аккаунт — ${plan}"`)
+  for (const plan of ['Старт', 'Бизнес', 'Агентство']) expect(html).toContain(`<h3>${plan}</h3>`)
   expect(html).not.toContain('Сейчас не удалось загрузить тарифы.')
 })
 

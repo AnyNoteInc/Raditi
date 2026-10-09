@@ -1,9 +1,19 @@
 .demo {
   --demo-ink: var(--raditi-ink);
-  --demo-paper: var(--raditi-paper-2);
-  --demo-accent: var(--raditi-accent);
   --demo-marker: var(--raditi-marker);
-  --demo-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  /* The scene of an applied change takes longer than a control does: the window levels out and
+     the banner unrolls, the bar of the window and the changed field take their colour, the new
+     value settles. A new message of the chat comes in with a time of its own. */
+  --demo-settle: 650ms;
+  --demo-bar: 400ms;
+  --demo-field: 500ms;
+  --demo-value: 600ms;
+  --demo-message: 500ms;
+  /* The three dots of a transfer start one after another. */
+  --demo-dot-step: 80ms;
+  /* Where the outline of a field starts when the demo finds its place: as far as the padding
+     of the window lets it, so that the edge of the window does not cut it. */
+  --locate-from: 12px;
   width: 100%;
   max-width: 600px;
   min-width: 0;
@@ -11,7 +21,9 @@
   font-family: var(--font-golos), sans-serif;
   color: var(--demo-ink);
   text-align: left;
-  scroll-margin-top: 108px;
+  /* 4px on top of the room that the page keeps for its header: the anchor of the demo stays
+     where it was, 108px from the top of a desktop window. */
+  scroll-margin-top: calc(var(--anchor-room, 104px) + 4px);
 }
 
 .demo * {
@@ -26,7 +38,7 @@
   stroke-linejoin: round;
 }
 
-.demo button {
+:where(.demo) button {
   font: inherit;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -37,7 +49,15 @@
   outline-offset: 4px;
 }
 
+/* A selection is ink with amber letters, seen on the paper and on the amber alike; on the dark
+   panel of the chat the pair is turned over. The chat rule outweighs the one of the page,
+   whichever stylesheet comes later. */
 .demo ::selection {
+  color: var(--demo-marker);
+  background: var(--demo-ink);
+}
+
+.demo .chat ::selection {
   color: var(--demo-ink);
   background: var(--demo-marker);
 }
@@ -65,10 +85,6 @@
   background: var(--raditi-accent);
 }
 
-.captionHint {
-  color: var(--raditi-graphite);
-}
-
 .stage {
   position: relative;
   padding-top: 18px;
@@ -81,11 +97,11 @@
   width: 94%;
   overflow: hidden;
   border-radius: 12px;
-  background: var(--demo-paper);
+  background: var(--raditi-paper-2);
   box-shadow: 0 12px 36px -16px var(--raditi-shadow-soft);
   transform: rotate(-1.5deg);
   transform-origin: 50% 50%;
-  transition: transform 650ms var(--demo-ease);
+  transition: transform var(--demo-settle) var(--raditi-ease-out);
 }
 
 .stage[data-phase='applied'] .browser {
@@ -100,7 +116,7 @@
   padding: 0 13px;
   background: var(--raditi-card);
   border-bottom: 1px solid var(--raditi-border-soft);
-  transition: background 400ms var(--demo-ease);
+  transition: background var(--demo-bar) var(--raditi-ease-out);
 }
 
 .stage[data-phase='applied'] .browserBar {
@@ -128,11 +144,18 @@
   color: var(--raditi-graphite);
   font-size: 10px;
   font-family: var(--font-jetbrains), monospace;
+  transition: color var(--demo-bar) var(--raditi-ease-out);
+}
+
+/* On the amber bar graphite is 4.46:1, under the threshold of a text; the lock follows the
+   colour of the text. */
+.stage[data-phase='applied'] .address {
+  color: var(--demo-ink);
 }
 
 .browserLabel {
   color: var(--demo-ink);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -190,18 +213,21 @@
   margin-top: 12px;
   border-top: 1px solid var(--raditi-accent-border);
   border-bottom: 1px solid var(--raditi-accent-border);
-  font-size: 10px;
+  /* One size in every state: the changed banner must take the room of the first one. */
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.09em;
+  text-align: center;
   transition:
-    background 500ms var(--demo-ease),
-    color 500ms var(--demo-ease);
+    background var(--demo-field) var(--raditi-ease-out),
+    color var(--demo-field) var(--raditi-ease-out);
 }
 
+/* Amber means «changed» in every request: the banner is marked as the changed rows are. */
 .promotion[data-changed='true'] {
-  background: var(--demo-accent);
-  color: var(--raditi-on-accent);
-  animation: revealBanner 650ms var(--demo-ease) both;
+  background: var(--demo-marker);
+  color: var(--demo-ink);
+  animation: revealBanner var(--demo-settle) var(--raditi-ease-out) both;
 }
 
 .cafeDetails {
@@ -209,6 +235,10 @@
 }
 
 .cafeRow {
+  /* A stacking context of its own: the highlight lies under the text of the row, not under
+     the window. */
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -216,7 +246,18 @@
   min-height: 38px;
   padding: 4px 0;
   font-size: 13px;
-  transition: background 500ms var(--demo-ease);
+}
+
+/* The highlight of a field and its outline are a layer of their own, 8px wider than the row on
+   both sides: the row keeps its padding, and its text stands still when the field is chosen,
+   changed and returned. */
+.cafeRow::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset-block: 0;
+  inset-inline: -8px;
+  transition: background var(--demo-field) var(--raditi-ease-out);
 }
 
 .cafeRow + .cafeRow {
@@ -225,7 +266,7 @@
 
 .cafeRow small {
   margin-left: 4px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .cafeRow strong {
@@ -234,34 +275,53 @@
   font-variant-numeric: tabular-nums;
 }
 
-.cafeRow[data-selected='true'],
+.cafeRow[data-selected='true']::before,
 .promotion[data-selected='true'] {
   outline: 1px dashed var(--raditi-accent-text);
   outline-offset: 3px;
 }
 
-.cafeRow[data-changed='true'],
+.cafeRow[data-changed='true']::before,
 .promotion[data-changed='true'] {
   outline-style: solid;
 }
 
 .cafeRow[data-changed='true'] {
-  padding-inline: 8px;
   color: var(--demo-ink);
+}
+
+.cafeRow[data-changed='true']::before {
   background: var(--demo-marker);
 }
 
-.cafeRow[data-changed='true'] strong {
-  animation: changeValue 600ms var(--demo-ease) both;
+/* The demo finds the place: when the visitor picks a request, the outline of its field closes
+   in on it while the status says so. The outline has its colour from the first frame. The first
+   phase of the page is the review, so nothing plays on load. */
+.stage[data-phase='preparing'] .cafeRow[data-selected='true']::before,
+.stage[data-phase='preparing'] .promotion[data-selected='true'] {
+  animation: locate var(--motion-move) var(--raditi-ease-out) backwards;
 }
 
+/* A direction has a meaning: a changed value rises from below, a returned one comes down from
+   above. The undo answers at once, and its gesture is the shorter of the two. */
+.cafeRow[data-changed='true'] strong {
+  animation: changeValue var(--demo-value) var(--raditi-ease-out) both;
+}
+
+.stage[data-phase='undone'] .cafeRow[data-selected='true'] strong {
+  animation: valueReturn var(--motion-swap) var(--raditi-ease-out) backwards;
+}
+
+/* Three dots in the gap between the window and the chat. The box has no coordinate of its own:
+   without offsets an absolute box stays where the flow would put it, right under the window,
+   whatever the height of the site. It is not inside the chat, which would cut it. */
 .connection {
   position: absolute;
-  top: 330px;
   left: 10%;
   display: flex;
   gap: 5px;
   align-items: center;
+  margin-top: 10px;
   transform: rotate(32deg);
 }
 
@@ -272,17 +332,21 @@
   background: var(--raditi-accent-text);
 }
 
+/* The dots go from the chat to the window while the change is being applied, and the last one
+   arrives when the phase ends: then the field lights up and the window levels out. The length
+   of the phase comes from the script, so the timer and the dots cannot drift apart. */
 .stage[data-phase='applying'] .connection span {
   background: var(--raditi-accent);
-  animation: transfer 700ms var(--demo-ease) both;
+  animation: transfer var(--motion-swap) var(--raditi-ease-in-out) both;
+  animation-delay: calc(var(--demo-phase) - var(--motion-swap) - 2 * var(--demo-dot-step));
 }
 
 .stage[data-phase='applying'] .connection span:nth-child(2) {
-  animation-delay: 80ms;
+  animation-delay: calc(var(--demo-phase) - var(--motion-swap) - var(--demo-dot-step));
 }
 
 .stage[data-phase='applying'] .connection span:nth-child(3) {
-  animation-delay: 160ms;
+  animation-delay: calc(var(--demo-phase) - var(--motion-swap));
 }
 
 .chat {
@@ -322,12 +386,16 @@
 
 .agentTitle > span {
   color: var(--raditi-on-ink);
-  font-size: 11px;
+  font-size: 12px;
+  /* On the narrowest phones the line does not fit: two even lines instead of one word below. */
+  text-wrap: balance;
 }
 
 .chatStatus {
   width: 5px;
   height: 5px;
+  /* On the narrowest phones the title takes all the row: the dot must stay round. */
+  flex-shrink: 0;
   margin-left: auto;
   border-radius: 50%;
   background: var(--demo-marker);
@@ -335,6 +403,14 @@
 
 .chatBody {
   padding: 12px 16px;
+}
+
+.requestAuthor {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--raditi-on-ink);
+  font-size: 12px;
+  text-align: right;
 }
 
 .request {
@@ -347,7 +423,7 @@
   background: var(--raditi-rule-ink);
   font-size: 13px;
   line-height: 1.45;
-  animation: messageIn 500ms var(--demo-ease) both;
+  animation: messageIn var(--demo-message) var(--raditi-ease-out) both;
 }
 
 .reply {
@@ -376,7 +452,8 @@
   flex-shrink: 0;
   border-radius: 50%;
   background: var(--demo-marker);
-  animation: activity 650ms var(--demo-ease) both;
+  /* One pulse for the whole busy phase, the same curve on the way up and on the way down. */
+  animation: activity var(--demo-phase) var(--raditi-ease-in-out) both;
 }
 
 .diff {
@@ -397,6 +474,15 @@
   font-size: 18px;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
+}
+
+/* The arrow goes with the value it points at: on a narrow phone the two move to the next line
+   together, and the arrow does not end a line pointing at nothing. */
+.becomes {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  white-space: nowrap;
 }
 
 .diffValues svg {
@@ -431,14 +517,19 @@
   font-size: 13px;
   font-weight: 600;
   transition:
-    background 220ms ease,
-    color 220ms ease,
-    border-color 220ms ease;
+    background var(--raditi-motion-fast) var(--raditi-ease-out),
+    color var(--raditi-motion-fast) var(--raditi-ease-out),
+    border-color var(--raditi-motion-fast) var(--raditi-ease-out),
+    transform var(--raditi-motion-fast) var(--raditi-ease-out);
+}
+
+.action svg {
+  transition: transform var(--raditi-motion-base) var(--raditi-ease-out);
 }
 
 .action[data-undo='true'] {
   background: transparent;
-  border-color: var(--raditi-graphite);
+  border-color: var(--raditi-on-ink);
   color: var(--raditi-paper);
 }
 
@@ -447,7 +538,8 @@
   outline-offset: 3px;
 }
 
-.action:disabled {
+/* Busy, not disabled: a disabled button would drop the focus of the keyboard. */
+.action[aria-disabled='true'] {
   cursor: wait;
   color: var(--raditi-snow);
   background: var(--raditi-rule-ink);
@@ -460,7 +552,7 @@
   gap: 5px;
   padding: 9px 12px;
   color: var(--raditi-on-ink);
-  font-size: 11px;
+  font-size: 12px;
   background: var(--raditi-ink-2);
 }
 
@@ -469,31 +561,76 @@
   height: 11px;
 }
 
+/* The hint and the buttons share a row while both fit; then the buttons go below as one row. */
 .scenarios {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.scenariosHint {
+  color: var(--raditi-graphite);
+  font-size: 12px;
+}
+
+.scenarioList {
+  display: flex;
   gap: 8px;
 }
 
+/* The room for the check mark is the left padding of every button, chosen or not: choosing
+   another request moves nothing in the row. */
 .demo .scenario {
+  position: relative;
   min-height: 44px;
-  padding: 8px 15px;
-  border: 1px solid var(--raditi-rule);
-  border-radius: 100px;
+  padding: 8px 22px;
+  border: 1px solid var(--raditi-rule-strong);
+  border-radius: var(--raditi-radius-pill);
   color: var(--demo-ink);
   background: transparent;
   font-size: 13px;
   transition:
-    color 220ms ease,
-    background 220ms ease,
-    border-color 220ms ease;
+    color var(--raditi-motion-fast) var(--raditi-ease-out),
+    background var(--raditi-motion-fast) var(--raditi-ease-out),
+    border-color var(--raditi-motion-fast) var(--raditi-ease-out),
+    transform var(--raditi-motion-fast) var(--raditi-ease-out);
 }
 
+/* The chosen request is a state, not an action: a soft surface, and the fill of the accent stays
+   with the two actions of the first screen. */
 .scenario[aria-pressed='true'] {
-  background: var(--raditi-accent);
+  background: var(--raditi-accent-soft);
   border-color: var(--raditi-accent-text);
-  color: var(--raditi-on-accent);
+}
+
+/* Tells the choice without colour. */
+.scenario svg {
+  position: absolute;
+  top: 50%;
+  left: 7px;
+  width: 11px;
+  height: 11px;
+  translate: 0 -50%;
+  opacity: 0;
+  transition: opacity var(--raditi-motion-base) var(--raditi-ease-out);
+}
+
+.scenario[aria-pressed='true'] svg {
+  opacity: 1;
+}
+
+/* Words for a screen reader, where the eye is told by a strikethrough, an arrow and a colour. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .disclaimer {
@@ -504,19 +641,53 @@
   line-height: 1.6;
 }
 
+/* Pressed. The tap highlight of the system is off, and on a touch screen nothing hovers: these
+   rules are the whole answer to a finger. A press looks as the hover does. */
+.action:active:not([aria-disabled='true']) {
+  background: var(--raditi-accent-hover);
+}
+
+.action[data-undo='true']:active {
+  background: var(--raditi-rule-ink);
+  border-color: var(--raditi-paper);
+}
+
+/* An action that stays on the page: the surface a step darker and an ink outline. */
+.scenario:active:not([aria-pressed='true']) {
+  background: var(--raditi-paper-2);
+  border-color: var(--demo-ink);
+}
+
 @media (hover: hover) {
-  .action:hover:not(:disabled) {
+  .action:hover:not([aria-disabled='true']) {
     background: var(--raditi-accent-hover);
   }
 
   .action[data-undo='true']:hover {
     background: var(--raditi-rule-ink);
-    border-color: var(--raditi-on-ink);
+    border-color: var(--raditi-paper);
   }
 
   .scenario:hover:not([aria-pressed='true']) {
-    border-color: var(--raditi-accent-text);
-    color: var(--raditi-accent-text);
+    background: var(--raditi-paper-2);
+    border-color: var(--demo-ink);
+  }
+}
+
+/* What moves is declared only here: the block of reduced motion of the page takes away
+   transitions, not a transform, and a shift without its transition would be a jump. */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  /* The arrow of the apply action leads on; the undo has a turn-back sign, which does not. */
+  .action:hover:not([aria-disabled='true'], [data-undo='true']) svg {
+    transform: translateX(4px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .action:active:not([aria-disabled='true']),
+  .scenario:active:not([aria-pressed='true']) {
+    transform: scale(0.98);
+    transition-duration: var(--raditi-motion-press);
   }
 }
 
@@ -542,12 +713,25 @@
   }
 }
 
+@keyframes valueReturn {
+  from {
+    transform: translateY(calc(-1 * var(--motion-shift)));
+  }
+}
+
+@keyframes locate {
+  from {
+    outline-offset: var(--locate-from);
+  }
+}
+
+/* The outline of the changed field stands 4px outside its box: the clip leaves room for it. */
 @keyframes revealBanner {
   from {
-    clip-path: inset(0 100% 0 0);
+    clip-path: inset(-4px 100% -4px -4px);
   }
   to {
-    clip-path: inset(0);
+    clip-path: inset(-4px);
   }
 }
 
@@ -576,13 +760,10 @@
   }
 }
 
-@media (min-width: 1600px) {
-  .cafeName {
-    font-size: 50px;
-  }
-}
-
 @media (max-width: 1100px) and (min-width: 801px) {
+  .demo {
+    --locate-from: 11px;
+  }
   .cafe {
     padding-inline: 20px;
   }
@@ -611,6 +792,9 @@
 }
 
 @media (max-width: 480px) {
+  .demo {
+    --locate-from: 7px;
+  }
   .browser {
     width: 97%;
     transform: rotate(-1deg);
@@ -624,9 +808,6 @@
   .cafeName {
     font-size: clamp(32px, 9.4vw, 43px);
   }
-  .cafeTagline {
-    font-size: 11px;
-  }
   .cafeTopline {
     font-size: 9px;
   }
@@ -634,13 +815,11 @@
     width: 32px;
     height: 32px;
   }
+  /* The longest banner keeps one line down to 320px with a tighter tracking, not a smaller size. */
   .promotion {
-    font-size: 9px;
+    font-size: 11px;
+    letter-spacing: 0.05em;
     margin-top: 13px;
-  }
-  .cafeRow {
-    min-height: 38px;
-    font-size: 13px;
   }
   .cafeRow strong {
     font-size: 15px;
@@ -655,33 +834,20 @@
   .chatBody {
     padding-inline: 15px;
   }
-  .caption {
-    font-size: 12px;
-  }
-  .captionHint {
-    font-size: 11px;
-  }
+  /* The chat leaves a narrow gap at its left: the dots stand in it one above another, so that
+     the chat hides none of them, and clear of the corner of the window. */
   .connection {
-    left: 0;
-    top: 330px;
+    left: -4px;
+    margin-top: 18px;
+    transform: rotate(70deg);
   }
-  .scenarios {
+  .scenarioList {
     gap: 5px;
   }
   .demo .scenario {
-    padding-inline: 13px;
+    padding-inline: 20px;
   }
-  .disclaimer {
-    font-size: 12px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .demo *,
-  .demo *::before,
-  .demo *::after {
-    animation: none !important;
-    transition: none !important;
-    scroll-behavior: auto !important;
+  .scenario svg {
+    left: 6px;
   }
 }
