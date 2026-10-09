@@ -37,8 +37,11 @@ pnpm dev
 ```
 
 Web: http://localhost:3000, core: http://localhost:8081/health, MCP: http://localhost:8082/health,
-шлюз подписок: http://127.0.0.1:8084/health (`ORCHESTRATOR_ROLES=core,mcp,llm`). Без настроенного
-mTLS-прокси и успешной пробы канала dev-шлюз отвечает `degraded` и не отправляет запросы к провайдерам;
+шлюз подписок: http://127.0.0.1:8084/health (`ORCHESTRATOR_ROLES=core,mcp,llm`). Без прокси узла выхода
+(четыре `LLM_EGRESS_*` пусты) dev-шлюз идёт прямым путём: допуск открыт, к провайдеру он соединяется сам
+и только к Z.ai. С заданным mTLS-прокси через него идут все провайдеры, допуск открывает успешная проба
+канала, иначе шлюз отвечает `degraded`. Темп и потолок вызовов одного ключа хода задают
+`LLM_MAX_CALLS_PER_KEY_30S` и `LLM_MAX_CALLS_PER_KEY` ([отчёт G4](docs/plan/43-zai-gateway-stand.md));
 [основной шлюз B9](docs/plan/16-p3-main-gateway.md), [обновление токенов и здоровье B10](docs/plan/17-p3-pool-health.md),
 [ключи хода B11](docs/plan/18-p3-turn-keys.md), [операторские команды B12](docs/plan/19-p3-subscription-commands.md).
 B9–B14 реализованы и проверены локально, в том числе стенд шлюза с CLI в контейнерах (B13) и production-профиль `llm` (B14).
@@ -184,7 +187,7 @@ pnpm verify:opencode
 WordPress с PostgreSQL, S3 и Vault — `pnpm verify:mcp-content` (Docker Desktop или обычный Docker
 на Linux; в CI — workflow `wordpress-content.yml`). Та же правка настоящими Codex и Kimi CLI через
 `sandbox-gw` и роли `llm` и `mcp`, на фейках подписок, — `pnpm verify:agent-content` (в CI — workflow
-`agent-content.yml`, не подтверждён до отправки ветки); [отчёт](docs/plan/30-agent-content-stand.md).
+`agent-content.yml`, прошёл 09.10.2026 в черновом PR #3); [отчёт](docs/plan/30-agent-content-stand.md).
 Контент в запущенной роли включает `MCP_CONTENT_PROFILE=local` (по умолчанию `off` — только `site_info`;
 в production допустим только `off`): доступ сайта роль читает из Vault по ссылке `credential_refs` —
 [отчёт](docs/plan/33-mcp-role-content-resolver.md); production-подключение и продуктовый откат остаются в P6. Границы и повтор —
