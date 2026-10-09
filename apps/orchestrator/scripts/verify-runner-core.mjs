@@ -5,7 +5,7 @@
 // it. Started by verify-runner.mjs only, which sends its configuration as the first message.
 import { randomUUID } from 'node:crypto'
 
-import { createCodexDriver, createKimiDriver } from '@repo/agent-drivers'
+import { createCodexDriver, createKimiDriver, createOpencodeDriver } from '@repo/agent-drivers'
 import {
   createPrismaClient,
   PostgresSiteLeaseStore,
@@ -72,7 +72,9 @@ const codex = createCodexDriver({
 const driver = config.driverId
   ? config.driverId === 'kimi'
     ? createKimiDriver({ image: config.sandboxImage })
-    : codex
+    : config.driverId === 'opencode'
+      ? createOpencodeDriver({ image: config.sandboxImage })
+      : codex
   : {
       ...codex,
       async prepare(context) {
@@ -201,7 +203,8 @@ const supervisor = new TurnSupervisor({
 })
 const credentialPolicy = {
   driverId: driver.id,
-  backend: driver.id === 'kimi' ? 'kimi-code' : 'openai-chatgpt',
+  // The provider each CLI of the stand belongs to; nothing here calls one.
+  backend: { kimi: 'kimi-code', opencode: 'zai-coding' }[driver.id] ?? 'openai-chatgpt',
   modelSlug: 'synthetic',
   modelClass: 'standard',
   reasoningEffort: 'medium',

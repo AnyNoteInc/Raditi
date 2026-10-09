@@ -18,7 +18,10 @@ export interface AgentDriverRegistry {
   list(): AgentDriver[]
 }
 
-/** Every implemented driver; qwen and opencode remain disabled in the application. */
+/**
+ * Every driver of the package. The application enables codex, kimi and opencode — the opencode
+ * row of agent_drivers stays off until the product is switched — and leaves qwen disabled.
+ */
 export function createAgentDrivers(config: AgentDriverConfig): AgentDriver[] {
   return [
     createCodexDriver(config),

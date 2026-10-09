@@ -314,6 +314,41 @@ test('CI runs the Docker isolation suites of the sandbox provider on a real daem
     assert.ok(starts(filter, file), `${file} does not start the workflow`)
 })
 
+test('CI runs the real OpenCode CLI of the sandbox image, without a key or a network', () => {
+  const source = workflow('codex-driver')
+  const opencode = /^ {2}verify-opencode:\n(?:(?: {4}.*)?\n)+/m.exec(`${source}\n`)?.[0] ?? ''
+  assert.ok(opencode, 'codex-driver.yml has the verify-opencode job')
+  // The stand takes an image that exists already: the job builds the one it looks for.
+  const stand = read('packages/agent-drivers/scripts/verify-opencode.mjs')
+  const [, image] = /image: \{ type: 'string', default: '([^']+)' \}/.exec(stand) ?? []
+  assert.ok(image, 'the stand names its default image')
+  const runs = [...opencode.matchAll(/^ {8}run: (.+)$/gm)].map(([, command]) => command)
+  assert.deepEqual(runs, [
+    `docker build -f infra/sandbox/Dockerfile --target runtime -t ${image} .`,
+    'pnpm verify:opencode',
+  ])
+  assert.equal(
+    JSON.parse(read('package.json')).scripts['verify:opencode'],
+    'exec node packages/agent-drivers/scripts/verify-opencode.mjs',
+  )
+  // The CLI of the image comes from the lock file; on x64 it is the build that needs no AVX2.
+  const runtime = read('infra/sandbox/Dockerfile')
+  assert.match(runtime, /npm ls [^\n]*opencode-ai@\d+\.\d+\.\d+/)
+  assert.match(runtime, /opencode-linux-x64-baseline/)
+  // No key of a plan, no secret of the repository, no option of a live run.
+  assert.doesNotMatch(opencode, /secrets\.|ZAI_|--live/)
+  assert.ok(!sets(opencode, 'SANDBOX_RUNTIME'))
+  const filter = pathFilter(source)
+  for (const file of [
+    'packages/agent-drivers/scripts/verify-opencode.mjs',
+    'packages/agent-drivers/src/opencode-wrapper.ts',
+    'packages/agent-drivers/cli/package-lock.json',
+    'infra/sandbox/Dockerfile',
+    'package.json',
+  ])
+    assert.ok(starts(filter, file), `${file} does not start the workflow`)
+})
+
 // Images pinned by digest in the object literal that follows `declaration` in a script.
 const pinnedImages = (script, declaration) => {
   const source = read(script)

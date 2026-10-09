@@ -87,17 +87,13 @@ describe('prepared run paths', () => {
     async (driver) => {
       let prepared: PreparedRun
       try {
+        // Each CLI has its own gateway path and its own reasoning profiles.
+        const llm = {
+          kimi: { baseUrl: 'http://sandbox-gw:8080/kimi/v1', reasoningEffort: 'low' },
+          opencode: { baseUrl: 'http://sandbox-gw:8080/zai/v4', reasoningEffort: 'high' },
+        }[driver.id as string]
         prepared = await driver.prepare(
-          driver.id === 'kimi'
-            ? {
-                ...context,
-                llm: {
-                  ...context.llm,
-                  baseUrl: 'http://sandbox-gw:8080/kimi/v1',
-                  reasoningEffort: 'low',
-                },
-              }
-            : context,
+          llm ? { ...context, llm: { ...context.llm, ...llm } } : context,
         )
       } catch (error) {
         // P4/P5 implement prepare; until then the schema tests above carry the guarantee.

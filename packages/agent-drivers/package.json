@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
-    "verify:codex": "node scripts/verify-codex.mjs"
+    "verify:codex": "node scripts/verify-codex.mjs",
+    "verify:opencode": "exec node scripts/verify-opencode.mjs"
   },
   "dependencies": {
     "@repo/domain": "workspace:*",

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import type { AgentDriver, RunContext } from '@repo/domain'
-import { badRequest, SANDBOX_AGENT_HOME, turnResultSchema } from '@repo/domain'
+import { badRequest, SANDBOX_AGENT_HOME } from '@repo/domain'
 import { z } from 'zod'
 import {
   assertAttachments,
@@ -14,7 +14,7 @@ import {
 import { parseAgentDriverConfig, type AgentDriverConfig } from './config.ts'
 import { extractJsonResult } from './jsonl.ts'
 import { parseKimiEvent } from './kimi-events.ts'
-import { RESULT_SIZE_NOTE } from './output-schema.ts'
+import { RESULT_CONTRACT as resultInstructions } from './output-schema.ts'
 import { KIMI_WORKDIR_KEY, requireNativeSessionId } from './session-paths.ts'
 
 const home = `${SANDBOX_AGENT_HOME}/kimi`
@@ -28,11 +28,6 @@ const cli = '/usr/local/lib/node_modules/@moonshot-ai/kimi-code/dist/main.mjs'
 const tools = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'AskUserQuestion', 'mcp__raditi__*']
 const effort = z.enum(['low', 'high', 'max'])
 const contextSchema = runContextSchema(effort)
-const resultInstructions =
-  'End the turn with one JSON object, without markdown fences, matching this JSON Schema. ' +
-  'The client_message must be in Russian and address the client respectfully. ' +
-  `${RESULT_SIZE_NOTE}\n` +
-  JSON.stringify(z.toJSONSchema(turnResultSchema, { target: 'draft-7' }))
 
 /**
  * Names one version of the platform instructions and the result contract inside the session.

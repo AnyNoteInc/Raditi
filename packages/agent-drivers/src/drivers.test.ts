@@ -40,13 +40,17 @@ const expected: Array<{
   {
     create: createOpencodeDriver,
     id: 'opencode',
-    task: 'P5',
+    task: 'G3',
     capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
     private: [
       '.local/share/opencode/auth.json',
       '.local/share/opencode/log/opencode.log',
       '.local/share/opencode/snapshot/x',
       '.config/opencode/opencode.json',
+      '.config/opencode/AGENTS.md',
+      'io-config/opencode/opencode.json',
+      'session-export.json',
+      'run.mjs',
       '.cache/opencode/bin/rg',
     ],
   },
@@ -101,7 +105,7 @@ describe.each(expected)('$id driver', ({ create, id, task, capabilities, private
     }
   })
 
-  if (id !== 'codex' && id !== 'kimi')
+  if (id === 'qwen')
     it(`leaves the CLI-specific parts to ${task}`, async () => {
       await expect(driver.prepare(run.context)).rejects.toMatchObject({
         code: 'NOT_IMPLEMENTED',

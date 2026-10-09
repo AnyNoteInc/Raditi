@@ -2,7 +2,7 @@ import { agentOutputLimits, turnResultSchema } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
-import { RESULT_SIZE_NOTE, strictOutputSchema } from './output-schema.ts'
+import { RESULT_CONTRACT, RESULT_SIZE_NOTE, strictOutputSchema } from './output-schema.ts'
 
 type Json = Record<string, unknown>
 
@@ -177,5 +177,23 @@ describe('strict output schema', () => {
       required: ['n', 'any', 'list'],
       additionalProperties: false,
     })
+  })
+})
+
+describe('result contract for a CLI without an output-schema flag', () => {
+  it('states the contract, the size note and the JSON Schema of the turn result', () => {
+    expect(RESULT_CONTRACT).toContain('End the turn with one JSON object, without markdown fences')
+    expect(RESULT_CONTRACT).toContain('client_message must be in Russian')
+    expect(RESULT_CONTRACT).toContain(RESULT_SIZE_NOTE)
+    const schema = JSON.parse(RESULT_CONTRACT.slice(RESULT_CONTRACT.indexOf('\n') + 1)) as Json
+    expect(schema).toEqual(z.toJSONSchema(turnResultSchema, { target: 'draft-7' }))
+    expect(schema.additionalProperties).toBe(false)
+    expect(schema.required).toEqual(Object.keys(turnResultSchema.shape))
+  })
+
+  it('holds no reference a CLI configuration would substitute', () => {
+    // OpenCode replaces {env:NAME} and {file:path} in the raw text of its configuration, and the
+    // contract is part of that text.
+    expect(RESULT_CONTRACT).not.toMatch(/\{(?:env|file):/)
   })
 })

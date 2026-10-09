@@ -22,7 +22,8 @@
     "subscriptions:retire": "node scripts/subscription-retire.mjs",
     "subscriptions:token": "node scripts/subscription-token.mjs",
     "verify:llm-gateway": "node scripts/verify-llm-gateway.mjs",
-    "verify:kimi-supervisor": "pnpm build && node scripts/verify-kimi-supervisor.mjs"
+    "verify:kimi-supervisor": "pnpm build && node scripts/verify-kimi-supervisor.mjs",
+    "verify:opencode-supervisor": "pnpm build && exec node scripts/verify-opencode-supervisor.mjs"
   },
   "dependencies": {
     "@repo/agent-drivers": "workspace:*",

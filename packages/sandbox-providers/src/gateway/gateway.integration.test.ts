@@ -151,6 +151,12 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
           },
         },
         {
+          path: '/zai/v4/chat/completions',
+          headers: {
+            'user-agent': 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14',
+          },
+        },
+        {
           path: '/mcp',
           headers: {
             'mcp-session-id': 'mcp-request-session',
@@ -181,6 +187,13 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
           'x-codex-routing-hint: private-route',
           '-H',
           'x-forwarded-for: 192.0.2.1',
+          // What the OpenCode CLI adds to every provider request: the session stays in the sandbox.
+          '-H',
+          'x-session-id: private-session',
+          '-H',
+          'x-session-affinity: private-session',
+          '-H',
+          'x-opencode-session-id: private-session',
           ...Object.entries(headers).flatMap(([name, value]) => ['-H', `${name}: ${value}`]),
           `http://sandbox-gw:8080${path}`,
           '-d',
@@ -217,12 +230,16 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
           'x-codex-window-id',
           'x-codex-routing-hint',
           'x-forwarded-for',
+          'x-session-id',
+          'x-session-affinity',
+          'x-opencode-session-id',
         ])
           expect(forwarded[name]).toBeUndefined()
       }
       expect(requests.map(({ route }) => route)).toEqual([
         'POST /codex/responses',
         'POST /kimi/v1/chat/completions',
+        'POST /zai/v4/chat/completions',
         'POST /mcp',
       ])
       for (const args of [
@@ -232,6 +249,9 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
         ['http://sandbox-gw:8080/codex/models'],
         ['-X', 'POST', 'http://sandbox-gw:8080/codex/responses/compact'],
         ['-X', 'POST', 'http://sandbox-gw:8080/kimi/v1/search'],
+        ['http://sandbox-gw:8080/zai/v4/models'],
+        ['-X', 'POST', 'http://sandbox-gw:8080/zai/v4/chat/completions?stream=false'],
+        ['-X', 'GET', 'http://sandbox-gw:8080/zai/v4/chat/completions'],
         ['-X', 'POST', 'http://sandbox-gw:8080/codex/responses?target=evil'],
         ['-H', 'Host: evil', '-X', 'POST', 'http://sandbox-gw:8080/codex/responses'],
         ['-X', 'GET', 'http://sandbox-gw:8080/codex/responses'],
@@ -292,7 +312,8 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
         "const h=require('http');const s=h.createServer((q,r)=>r.end('local'));s.listen(9231,'127.0.0.1',()=>h.get('http://127.0.0.1:9231',r=>{r.pipe(process.stdout);r.on('end',()=>s.close())}))",
       ])
       expect(localhost.output).toBe('local')
-      expect(requests).toHaveLength(3)
+      // Only the four allowed requests above reached the upstream.
+      expect(requests).toHaveLength(4)
 
       // Bridge traffic is not filtered, so a third endpoint on the attempt network is refused.
       intruder = await client.createContainer({

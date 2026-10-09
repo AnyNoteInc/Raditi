@@ -60,3 +60,22 @@ test('only the agent runtime receives the pinned CLIs verified by the subscripti
     assert.doesNotMatch(stage, /^runtime AS /)
   }
 })
+
+test('OpenCode stays in the agent runtime too, at the version of the CLI lock file', async () => {
+  const dockerfile = await readFile(new URL('./Dockerfile', import.meta.url), 'utf8')
+  const lock = JSON.parse(
+    await readFile(
+      new URL('../../packages/agent-drivers/cli/package-lock.json', import.meta.url),
+      'utf8',
+    ),
+  )
+  const stages = dockerfile.split(/^FROM /m).slice(1)
+  const runtime = stages.find((stage) => stage.startsWith('base AS runtime\n'))
+  const version = lock.packages['node_modules/opencode-ai']?.version
+  assert.match(version ?? '', /^\d+\.\d+\.\d+$/, 'the CLI lock file must pin opencode-ai')
+  assert.ok(runtime.includes(`npm ls opencode-ai@${version} `), 'the build checks that version')
+  // One path for the driver whatever the architecture of the sandbox VM.
+  assert.match(runtime, /ln -s "[^"\n]+\/bin\/opencode" \/usr\/local\/bin\/opencode/)
+  for (const stage of stages.filter((stage) => stage !== runtime))
+    assert.ok(!/opencode/i.test(stage), 'OpenCode must stay in the agent runtime')
+})

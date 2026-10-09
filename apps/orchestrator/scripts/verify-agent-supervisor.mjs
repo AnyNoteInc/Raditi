@@ -411,9 +411,9 @@ export async function verifyAgentSupervisor({
   signals = process,
   log = console.log,
 } = {}) {
-  assert(['codex', 'kimi'].includes(driverId), 'Unsupported verification driver')
-  const driverName = driverId === 'codex' ? 'Codex' : 'Kimi'
-  const milestone = driverId === 'codex' ? 'P4' : 'P5'
+  const drivers = { codex: ['Codex', 'P4'], kimi: ['Kimi', 'P5'], opencode: ['OpenCode', 'G3'] }
+  assert(Object.hasOwn(drivers, driverId), 'Unsupported verification driver')
+  const [driverName, milestone] = drivers[driverId]
   const settings = runnerSettings(environment)
   const controller = new AbortController()
   const connection = await localDesktop(environment, (binary, args, options) =>

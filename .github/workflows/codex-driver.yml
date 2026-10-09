@@ -1,7 +1,8 @@
 name: Codex driver
 
-# The real Codex CLI in the production agent runtime, and the sandbox provider's Docker isolation
-# suites on a real daemon. Local fixtures only: no repository secrets or provider accounts.
+# The real Codex CLI and the real OpenCode CLI in the production agent runtime, and the sandbox
+# provider's Docker isolation suites on a real daemon. Local fixtures only: no repository secrets
+# or provider accounts.
 on:
   pull_request:
     branches: [main]
@@ -46,6 +47,23 @@ jobs:
         run: docker build -f infra/sandbox/Dockerfile --target runtime -t raditi-p4verify-sandbox:local .
       - name: Verify real Codex with isolated local fixtures
         run: pnpm verify:codex
+
+  # The real OpenCode CLI of the same runtime image, through its driver: containers without a
+  # network, a scripted provider and an MCP stub on loopback, no key of a plan. On this runner
+  # the image carries the x64 baseline binary, which no local stand has run.
+  verify-opencode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      - name: Build sandbox runtime
+        run: docker build -f infra/sandbox/Dockerfile --target runtime -t raditi-g3verify-sandbox:local .
+      - name: Verify real OpenCode with isolated local fixtures
+        run: pnpm verify:opencode
 
   # The opt-in suites of @repo/sandbox-providers and the watchdog against a real daemon (rule 5):
   # internal network without DNS, host, bridge and internet unreachable, the route allowlist,

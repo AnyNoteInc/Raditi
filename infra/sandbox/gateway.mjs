@@ -7,7 +7,18 @@ import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 const sharedRequestHeaders = ['authorization', 'content-type', 'accept']
-const llmRequestHeaders = [
+/**
+ * The LLM surface of the sandbox as data: one exact path per CLI wire format and the request
+ * headers that go on to the role llm. Nothing else a CLI sends leaves the sandbox network — the
+ * session headers of OpenCode (x-session-id, x-session-affinity, x-opencode-session-id) and
+ * cookies stop here. The paths are the routes of the LLM backends of the role llm.
+ */
+export const llmPaths = Object.freeze([
+  '/codex/responses',
+  '/kimi/v1/chat/completions',
+  '/zai/v4/chat/completions',
+])
+export const llmRequestHeaders = Object.freeze([
   ...sharedRequestHeaders,
   'user-agent',
   'originator',
@@ -17,7 +28,7 @@ const llmRequestHeaders = [
   'x-openai-subagent',
   'x-codex-turn-state',
   'x-openai-internal-codex-responses-lite',
-]
+])
 const mcpRequestHeaders = [
   ...sharedRequestHeaders,
   'mcp-session-id',
@@ -65,7 +76,7 @@ export function createGateway({ listenHost, clientIp, routes, llmUpstream, mcpUp
     return new URL(path, url)
   }
   if (routes.includes('llm')) {
-    for (const path of ['/codex/responses', '/kimi/v1/chat/completions'])
+    for (const path of llmPaths)
       targets.set(path, { url: target(llmUpstream, path), methods: ['POST'], group: 'llm' })
   }
   if (routes.includes('mcp'))

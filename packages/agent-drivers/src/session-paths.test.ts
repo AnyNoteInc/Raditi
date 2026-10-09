@@ -104,11 +104,26 @@ describe('native session snapshot allowlists', () => {
       expect(includes(driver, path)).toBe(true)
     for (const path of [
       '.local/share/opencode/auth.json',
+      '.local/share/opencode/opencode.db-shm',
       '.config/opencode/opencode.json',
+      '.config/opencode/AGENTS.md',
+      'io-config/opencode/opencode.json',
+      'session-export.json',
+      'run.mjs',
+      'prompt.txt',
       '.local/share/opencode/log/trace.log',
       '.local/share/opencode/repos/private',
       '.local/share/opencode/snapshot/private',
       '.cache/opencode/bin/rg',
+      // Where the pinned CLI imports code from at start: a turn must not leave any of it for
+      // the next one, which gets a new home with these two database files only.
+      '.opencode/tool/planted.js',
+      '.opencode/tools/planted.ts',
+      '.config/opencode/plugin/planted.js',
+      '.config/opencode/plugins/planted.ts',
+      '.config/opencode/tool/planted.js',
+      '.config/opencode/opencode.jsonc',
+      '.local/share/opencode/bin/rg',
     ])
       expect(includes(driver, path)).toBe(false)
   })

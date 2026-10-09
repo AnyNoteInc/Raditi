@@ -1,4 +1,4 @@
-import { agentOutputLimits } from '@repo/domain'
+import { agentOutputLimits, turnResultSchema } from '@repo/domain'
 import { z } from 'zod'
 
 type JsonSchema = Record<string, unknown>
@@ -10,6 +10,17 @@ type JsonSchema = Record<string, unknown>
 export const RESULT_SIZE_NOTE =
   `The whole JSON object must not exceed ${agentOutputLimits.messageText} characters. ` +
   'When many files changed, list only the most important paths in files_changed.'
+
+/**
+ * The result contract of a CLI that has no output-schema flag: the text goes into the agent's
+ * instructions, and the final message is validated after the turn (turnResultSchema). The first
+ * line is the rule, the second the JSON Schema itself.
+ */
+export const RESULT_CONTRACT =
+  'End the turn with one JSON object, without markdown fences, matching this JSON Schema. ' +
+  'The client_message must be in Russian and address the client respectfully. ' +
+  `${RESULT_SIZE_NOTE}\n` +
+  JSON.stringify(z.toJSONSchema(turnResultSchema, { target: 'draft-7' }))
 
 const unsupported = (path: string, what: string): Error =>
   new Error(`Cannot build a strict output schema: ${what} at ${path}`)

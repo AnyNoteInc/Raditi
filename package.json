@@ -38,6 +38,8 @@
     "verify:llm-firewall": "node infra/app/verify-llm-firewall.mjs",
     "verify:codex": "pnpm --filter @repo/agent-drivers verify:codex",
     "verify:codex-supervisor": "pnpm --filter orchestrator verify:codex-supervisor",
+    "verify:opencode": "exec node packages/agent-drivers/scripts/verify-opencode.mjs",
+    "verify:opencode-supervisor": "pnpm --filter orchestrator build && exec node apps/orchestrator/scripts/verify-opencode-supervisor.mjs",
     "verify:edge": "node infra/app/verify-edge.mjs",
     "verify:kimi-supervisor": "pnpm --filter orchestrator verify:kimi-supervisor"
   },

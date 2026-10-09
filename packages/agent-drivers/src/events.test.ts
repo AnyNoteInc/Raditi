@@ -93,10 +93,14 @@ describe('pinned upstream JSONL fixtures', () => {
       { type: 'started', nativeSessionId: 'ses_test' },
       { type: 'tool_call', tool: 'bash', ok: true },
       { type: 'command', command: 'pwd', exitCode: 0 },
+      { type: 'tool_call', tool: 'write', ok: true },
+      { type: 'file_change', path: 'index.html', change: 'update' },
+      { type: 'tool_call', tool: 'raditi_site_info', ok: true },
       {
         type: 'usage',
         usage: { inputUncached: 50, cacheRead: 40, cacheWrite: 10, output: 20, reasoning: 5 },
       },
+      { type: 'started', nativeSessionId: 'ses_test' },
       { type: 'message', text: finalText },
       {
         type: 'usage',
@@ -152,23 +156,28 @@ describe.each(drivers)('$id untrusted stdout boundary', (driver) => {
     }
   })
 
+  // What a finished turn's output looks like around its messages. OpenCode prints no
+  // end-of-turn row, so its driver also requires the output to end with an answer step.
+  const turn = (...messages: string[]): AgentEvent[] =>
+    driver.id === 'opencode'
+      ? [
+          { type: 'started', nativeSessionId: 'ses_test' },
+          ...messages.map((text): AgentEvent => ({ type: 'message', text })),
+          { type: 'completed' },
+        ]
+      : messages.map((text): AgentEvent => ({ type: 'message', text }))
+
   it('accepts only the current, valid final JSON object, optionally in one code fence', () => {
-    expect(driver.extractResult([], finalText)).toEqual(expectedResult)
-    expect(driver.extractResult([], `\`\`\`json\n${finalText}\n\`\`\``)).toEqual(expectedResult)
-    expect(driver.extractResult([{ type: 'message', text: finalText }], null)).toEqual(
+    expect(driver.extractResult(turn(''), finalText)).toEqual(expectedResult)
+    expect(driver.extractResult(turn(''), `\`\`\`json\n${finalText}\n\`\`\``)).toEqual(
       expectedResult,
     )
-    expect(driver.extractResult([{ type: 'message', text: finalText }], 'broken final')).toBeNull()
+    expect(driver.extractResult(turn(finalText), null)).toEqual(expectedResult)
+    expect(driver.extractResult(turn(finalText), 'broken final')).toBeNull()
+    expect(driver.extractResult(turn(finalText, 'broken final'), null)).toBeNull()
     expect(
-      driver.extractResult(
-        [
-          { type: 'message', text: finalText },
-          { type: 'message', text: 'broken final' },
-        ],
-        null,
-      ),
+      driver.extractResult([...turn(''), { type: 'failed', reason: 'failed' }], finalText),
     ).toBeNull()
-    expect(driver.extractResult([{ type: 'failed', reason: 'failed' }], finalText)).toBeNull()
     for (const value of [
       '[]',
       '{}',
@@ -177,14 +186,196 @@ describe.each(drivers)('$id untrusted stdout boundary', (driver) => {
       '{"__proto__":{}}',
       'x'.repeat(MAX_JSONL_BYTES + 1),
     ]) {
-      expect(driver.extractResult([], value)).toBeNull()
+      expect(driver.extractResult(turn(''), value)).toBeNull()
     }
     expect(
-      driver.extractResult([], JSON.stringify({ ...expectedResult, risk: 'impossible' })),
+      driver.extractResult(turn(''), JSON.stringify({ ...expectedResult, risk: 'impossible' })),
     ).toBeNull()
     expect(
-      driver.extractResult([], JSON.stringify({ ...expectedResult, secret: 'must not pass' })),
+      driver.extractResult(
+        turn(''),
+        JSON.stringify({ ...expectedResult, secret: 'must not pass' }),
+      ),
     ).toBeNull()
+  })
+})
+
+describe('OpenCode 1.18.34 turns recorded by the G1 spike', () => {
+  const turns = JSON.parse(
+    readFileSync(new URL('./fixtures/opencode-turns.json', import.meta.url), 'utf8'),
+  ) as Record<string, unknown[]>
+  const eventsOf = (name: string) => turns[name]!.flatMap((row) => parse(opencode, row))
+  const types = (name: string) => eventsOf(name).map((event) => event.type)
+  const failures = (name: string) =>
+    eventsOf(name).flatMap((event) => (event.type === 'failed' ? [event.reason] : []))
+  const session = (id: number) => `ses_${String(id).padStart(26, '0')}`
+  const step = (text?: string): AgentEvent[] => [
+    { type: 'started', nativeSessionId: 'ses_test' },
+    ...(text === undefined ? [] : [{ type: 'message', text } as const]),
+    { type: 'completed' },
+  ]
+
+  it('does not take the stop of a context compaction for the end of the turn', () => {
+    const events = eventsOf('compaction')
+    expect(events.map((event) => event.type)).toEqual([
+      'started',
+      'tool_call',
+      'command',
+      'usage',
+      // The compaction request: its summary, then the stop of that step.
+      'started',
+      'message',
+      'usage',
+      'completed',
+      // The CLI's own «Continue if you have next steps…», outside any step.
+      'message',
+      'started',
+      'message',
+      'usage',
+      'completed',
+    ])
+    expect(turnResultSchema.safeParse(opencode.extractResult(events, null)).success).toBe(true)
+    // Cut after the compaction: neither its summary nor the CLI's own line is a result, and
+    // once the CLI's line or a new step followed, no text of that output is.
+    for (const cut of [8, 9, 10])
+      expect(opencode.extractResult(events.slice(0, cut), null)).toBe(null)
+    for (const cut of [9, 10])
+      expect(opencode.extractResult(events.slice(0, cut), finalText)).toBeNull()
+  })
+
+  it('refuses a run that exits 0 without a final answer step', () => {
+    // A rejected permission request ends the run after a tool-calls step, exit code 0.
+    const rejected = eventsOf('permission-request-rejected')
+    expect(rejected).toEqual([
+      { type: 'started', nativeSessionId: session(422) },
+      { type: 'tool_call', tool: 'bash', ok: false },
+      { type: 'command', command: 'echo denied-marker', exitCode: null },
+      expect.objectContaining({ type: 'usage' }),
+    ])
+    expect(opencode.extractResult(rejected, null)).toBeNull()
+    // An earlier answer does not count once another step followed it.
+    expect(opencode.extractResult([...step(finalText), ...rejected], null)).toBeNull()
+    expect(opencode.extractResult([...step(finalText), ...rejected], finalText)).toBeNull()
+    // A stop step without its own text, an answer outside a step, no step at all.
+    expect(opencode.extractResult([...step(finalText), ...step()], null)).toBeNull()
+    expect(opencode.extractResult([...step(), { type: 'message', text: finalText }], null)).toBe(
+      null,
+    )
+    expect(opencode.extractResult([{ type: 'message', text: finalText }], null)).toBeNull()
+    expect(opencode.extractResult([], finalText)).toBeNull()
+    expect(opencode.extractResult(step(finalText), null)).toEqual(expectedResult)
+  })
+
+  it('names the kind, the status and the gateway code of a refusal, never the address', () => {
+    expect(failures('refusal-http-403')).toEqual([
+      'APIError 403 raditi_budget: The budget of this turn is spent.',
+    ])
+    expect(failures('refusal-in-stream')).toEqual([
+      'UnknownError raditi_budget: The budget of this turn is spent.',
+    ])
+    expect(types('refusal-after-tool')).toEqual([
+      'started',
+      'tool_call',
+      'command',
+      'usage',
+      'started',
+      'failed',
+    ])
+    expect(failures('retry-exhausted')).toEqual(['APIError 503 raditi_busy: The gateway is busy.'])
+    expect(failures('context-overflow')).toEqual([
+      'ContextOverflowError raditi_policy: The request has too many tokens for this turn.',
+      'ContextOverflowError raditi_policy: The request has too many tokens for this turn.',
+    ])
+    for (const name of Object.keys(turns))
+      expect(JSON.stringify(eventsOf(name))).not.toMatch(/sandbox-gw|responseBody|metadata/)
+  })
+
+  it('fails a turn whose step ends with content-filter, length or an unknown reason', () => {
+    expect(types('finish-content-filter')).toEqual([
+      'started',
+      'message',
+      'usage',
+      'failed',
+      'failed',
+    ])
+    expect(failures('finish-content-filter')).toEqual([
+      'OpenCode step ended with reason content-filter',
+      "ContentFilterError: The response was blocked by the provider's content filter",
+    ])
+    expect(types('finish-length')).toEqual(['started', 'message', 'usage', 'failed'])
+    expect(failures('finish-length')).toEqual(['OpenCode step ended with reason length'])
+    // What the CLI prints, over and over, for a stream without a known finish reason.
+    expect(failures('finish-unknown')).toEqual([
+      'OpenCode step ended with reason unknown',
+      'OpenCode step ended with reason unknown',
+    ])
+    for (const name of ['finish-content-filter', 'finish-length', 'finish-unknown'])
+      expect(opencode.extractResult(eventsOf(name), finalText)).toBeNull()
+    for (const reason of ['error', 'other', 'future-reason'])
+      expect(
+        parse(opencode, { type: 'step_finish', part: { type: 'step-finish', reason } }),
+      ).toEqual([{ type: 'failed', reason: `OpenCode step ended with reason ${reason}` }])
+    // Only a short lower-case word is quoted; anything else is CLI text nobody asked for.
+    expect(
+      parse(opencode, {
+        type: 'step_finish',
+        part: { type: 'step-finish', reason: 'Bearer secret-marker\n' },
+      }),
+    ).toEqual([{ type: 'failed', reason: 'OpenCode step ended with an unexpected reason' }])
+    expect(
+      parse(opencode, { type: 'step_finish', part: { type: 'step-finish', reason: 'tool-calls' } }),
+    ).toEqual([])
+  })
+
+  it('reports written and edited files of the working copy, and a tool the CLI did not have', () => {
+    const tool = (name: string, state: Record<string, unknown>) =>
+      parse(opencode, { type: 'tool_use', part: { type: 'tool', tool: name, state } })
+    expect(
+      tool('write', {
+        status: 'completed',
+        input: { filePath: '/workspace/repo/wp-content/new.php', content: 'private' },
+        metadata: { filepath: '/workspace/repo/wp-content/new.php', exists: false },
+      }),
+    ).toEqual([
+      { type: 'tool_call', tool: 'write', ok: true },
+      { type: 'file_change', path: 'wp-content/new.php', change: 'add' },
+    ])
+    expect(
+      tool('edit', {
+        status: 'completed',
+        input: { filePath: '/workspace/repo/index.php', oldString: 'a', newString: 'b' },
+        metadata: { diff: 'private diff', filediff: { file: '/workspace/repo/index.php' } },
+      }),
+    ).toEqual([
+      { type: 'tool_call', tool: 'edit', ok: true },
+      { type: 'file_change', path: 'index.php', change: 'update' },
+    ])
+    // A refused or failed write changed nothing; a file outside the working copy is not a change
+    // of the site.
+    expect(
+      tool('write', { status: 'error', input: { filePath: '/workspace/repo/a.txt' }, error: 'x' }),
+    ).toEqual([{ type: 'tool_call', tool: 'write', ok: false }])
+    for (const filePath of [
+      '/workspace/inbox/a.txt',
+      '/etc/passwd',
+      '/workspace/repo/../inbox/a.txt',
+      '/workspace/repo/a\nb',
+      '/workspace/repo/',
+      42,
+    ])
+      expect(tool('write', { status: 'completed', input: { filePath }, metadata: {} })).toEqual([
+        { type: 'tool_call', tool: 'write', ok: true },
+      ])
+    expect(
+      tool('invalid', {
+        status: 'completed',
+        input: { tool: 'webfetch', error: "Model tried to call unavailable tool 'webfetch'." },
+        output: 'The arguments provided to the tool are invalid',
+      }),
+    ).toEqual([{ type: 'tool_call', tool: 'webfetch', ok: false }])
+    expect(tool('invalid', { status: 'completed', input: {} })).toEqual([
+      { type: 'tool_call', tool: 'invalid', ok: false },
+    ])
   })
 })
 
@@ -375,7 +566,7 @@ describe('adversarial known events', () => {
         type: 'error',
         error: { name: 'APIError', data: { message: 'failed', apiKey: 'secret-marker' } },
       }),
-    ).toEqual([{ type: 'failed', reason: 'failed' }])
+    ).toEqual([{ type: 'failed', reason: 'APIError: failed' }])
     expect(
       parse(qwen, {
         type: 'result',

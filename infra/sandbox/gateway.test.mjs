@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { test } from 'node:test'
 
-import { createGateway, gatewayLimits } from './gateway.mjs'
+import { createGateway, gatewayLimits, llmPaths, llmRequestHeaders } from './gateway.mjs'
 
 // Captured before any test mocks the clock: waits for real socket events.
 const realSetTimeout = globalThis.setTimeout
@@ -20,7 +20,6 @@ const tooLargeBody = JSON.stringify({
   },
 })
 
-const llmPaths = ['/codex/responses', '/kimi/v1/chat/completions']
 const clientHeaders = {
   'user-agent': 'synthetic-cli/1.0',
   originator: 'synthetic-cli',
@@ -137,6 +136,53 @@ const expectAbsent = (headers, names) => {
 const expectPreserved = (actual, expected) => {
   for (const [name, value] of Object.entries(expected)) assert.equal(actual[name], value, name)
 }
+
+test('the LLM paths and request headers are exported as data, one exact path per CLI wire format', () => {
+  // The contract test of the role llm compares the paths with the routes of its backends.
+  assert.deepEqual(llmPaths, [
+    '/codex/responses',
+    '/kimi/v1/chat/completions',
+    '/zai/v4/chat/completions',
+  ])
+  assert.ok(Object.isFrozen(llmPaths) && Object.isFrozen(llmRequestHeaders))
+  for (const path of llmPaths) assert.match(path, /^\/[a-z0-9]+(?:\/[a-z0-9]+)+$/)
+  for (const name of ['authorization', 'content-type', 'accept', 'user-agent'])
+    assert.ok(llmRequestHeaders.includes(name), name)
+  assert.deepEqual(llmRequestHeaders, [...new Set(llmRequestHeaders)])
+  for (const name of llmRequestHeaders) assert.equal(name, name.toLowerCase())
+  for (const name of ['cookie', 'host', 'x-session-id', 'x-session-affinity'])
+    assert.ok(!llmRequestHeaders.includes(name), name)
+})
+
+test('the session headers of the OpenCode CLI stop at the gateway', async (t) => {
+  const received = []
+  const { port } = await fixture(t, (req, res) => {
+    received.push(req.headers)
+    req.resume()
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'set-cookie': 'acw_tc=1' })
+    res.end('data: [DONE]\n\n')
+  })
+  const session = {
+    'x-opencode-session-id': 'ses_synthetic',
+    'x-session-affinity': 'ses_synthetic',
+    'x-session-id': 'ses_synthetic',
+  }
+  const result = await call(port, '/zai/v4/chat/completions', {
+    headers: {
+      ...sharedHeaders,
+      'user-agent': 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14',
+      'accept-encoding': 'gzip, deflate, br, zstd',
+      ...session,
+    },
+  })
+  assert.equal(result.status, 200)
+  expectAbsent(result.headers, ['set-cookie'])
+  expectPreserved(received[0], {
+    ...sharedHeaders,
+    'user-agent': 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14',
+  })
+  expectAbsent(received[0], [...Object.keys(session), 'accept-encoding'])
+})
 
 test('LLM routes preserve client identity while stripping platform, MCP and private headers', async (t) => {
   const received = []
@@ -280,6 +326,13 @@ test('only literal allowlisted paths and methods reach upstream', async (t) => {
     '/codex/responses?x=1',
     '/codex/responses#fragment',
     '/kimi/v1/chat/completions?x=1',
+    '/zai/v4/chat/completions?x=1',
+    '/zai/v4/chat/completions/',
+    '/zai/v4/models',
+    '/zai/v4/embeddings',
+    '/zai/chat/completions',
+    '/api/coding/paas/v4/chat/completions',
+    '/api/monitor/usage/quota/limit',
     '/mcp?x=1',
     'http://example.test/codex/responses',
   ]
@@ -354,7 +407,7 @@ test('x-msh headers accept eight distinct names at 256 characters and refuse lar
       403,
     )
   }
-  assert.equal(received.length, 2)
+  assert.equal(received.length, llmPaths.length)
 })
 
 test('Responses Lite accepts only the exact true value and refuses duplicate or alternative values', async (t) => {
@@ -378,7 +431,7 @@ test('Responses Lite accepts only the exact true value and refuses duplicate or 
         `${path}: ${String(value)}`,
       )
   }
-  assert.equal(received, 2)
+  assert.equal(received, llmPaths.length)
 })
 
 test('duplicate forwarded request headers are refused even when Node would discard one value', async (t) => {
