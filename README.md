@@ -197,7 +197,9 @@ CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетиче�
 [отчёт](docs/plan/30-agent-content-stand.md), [строка OpenCode](docs/plan/44-agent-content-opencode.md).
 С флагом `--live` оба стенда — этот и `pnpm verify:llm-gateway` — идут на настоящем GLM (`api.z.ai`): только
 вручную, с ключом плана в окружении команды (`ZAI_API_KEY`), только с синтетикой, не в CI; `--rehearsal` — тот же
-код на синтетическом Z.ai, без ключа. У стенда шлюза есть ещё `--live --results` — узкий замер итога хода:
+код на синтетическом Z.ai, без ключа. С G7 репетиции записаны шагами CI после детерминированного прохода
+(`llm-gateway.yml`, `agent-content.yml`); на GitHub они ещё не выполнялись
+([отчёт G7](docs/plan/47-common-scenarios-zai.md)). У стенда шлюза есть ещё `--live --results` — узкий замер итога хода:
 десять ходов, не больше 20 запросов провайдеру и 10 минут (`infra/dev/llm-verify/README.md`, «Живой режим»;
 [отчёт G6](docs/plan/45-zai-live.md), [отчёт об итоге хода](docs/plan/46-turn-result-glm.md)).
 Контент в запущенной роли включает `MCP_CONTENT_PROFILE=local` (по умолчанию `off` — только `site_info`;
