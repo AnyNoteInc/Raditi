@@ -1039,7 +1039,13 @@ function expectSuccess(run, expected, { carryOver = [] } = {}) {
     [],
     `Something left: ${describe()}`,
   )
-  assert.ok(output.llm[0].at <= 10_000, `First provider request after ${output.llm[0].at} ms`)
+  // A CLI process that waits for an address the sandbox does not have costs tens of seconds (the
+  // probe without the switches saw a start of 220 s). Each part of a launch has its own bound:
+  // the carry-over of a session — export and import, two CLI processes — before the wrapper asks
+  // the MCP server, and the CLI of the turn after it. One start took 6 s on a slow CI runner.
+  assert.ok(turnStarted <= 30_000, `The wrapper asked the MCP server after ${turnStarted} ms`)
+  const firstRequest = output.llm[0].at - turnStarted
+  assert.ok(firstRequest <= 15_000, `First provider request ${firstRequest} ms after the MCP check`)
   assert.deepEqual(output.after.pluginRan, [], `Code of the repository ran: ${describe()}`)
   assert.equal(output.after.preloadRan, false, `A preload of the repository ran: ${describe()}`)
   // The site's own OpenCode files are back in the working copy, and nothing is left beside it.
