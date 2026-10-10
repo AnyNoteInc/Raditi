@@ -185,9 +185,11 @@ pnpm verify:opencode
 и «Отменить» завершённой задачи под арендой `revert` ([отчёт](docs/plan/35-content-host-undo.md)); вызовы
 из очереди и интерфейса ещё впереди. Проверка настоящего
 WordPress с PostgreSQL, S3 и Vault — `pnpm verify:mcp-content` (Docker Desktop или обычный Docker
-на Linux; в CI — workflow `wordpress-content.yml`). Та же правка настоящими Codex и Kimi CLI через
-`sandbox-gw` и роли `llm` и `mcp`, на фейках подписок, — `pnpm verify:agent-content` (в CI — workflow
-`agent-content.yml`, прошёл 09.10.2026 в черновом PR #3); [отчёт](docs/plan/30-agent-content-stand.md).
+на Linux; в CI — workflow `wordpress-content.yml`). Та же правка настоящими Codex, Kimi и OpenCode
+CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетических провайдерах, —
+`pnpm verify:agent-content` (в CI — workflow `agent-content.yml`: со строками Codex и Kimi прошёл
+09.10.2026 в черновом PR #3, со строкой OpenCode на GitHub ещё не выполнялся);
+[отчёт](docs/plan/30-agent-content-stand.md), [строка OpenCode](docs/plan/44-agent-content-opencode.md).
 Контент в запущенной роли включает `MCP_CONTENT_PROFILE=local` (по умолчанию `off` — только `site_info`;
 в production допустим только `off`): доступ сайта роль читает из Vault по ссылке `credential_refs` —
 [отчёт](docs/plan/33-mcp-role-content-resolver.md); production-подключение и продуктовый откат остаются в P6. Границы и повтор —
