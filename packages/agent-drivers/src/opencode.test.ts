@@ -379,7 +379,9 @@ const PROJECT_FILES = ['.opencode', 'opencode.json', 'opencode.jsonc']
 const WARN_LINE =
   'timestamp=2026-10-05T07:39:41.603Z level=WARN run=8ece3ed8 message="server unavailable" key=raditi type=remote status=failed\n'
 
-describe('OpenCode driver: the launch wrapper', () => {
+// Every launch starts real processes, and a loaded macOS at times takes about three seconds to
+// start the stand-in CLI: a test with two launches then outlives the default five seconds.
+describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
   let server: Server
   let mcpUrl: string
   /** How the stand-in MCP endpoint answers `initialize`; each test sets it. */
