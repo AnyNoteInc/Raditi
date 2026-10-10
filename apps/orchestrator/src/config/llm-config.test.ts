@@ -2,7 +2,12 @@ import type { LlmBackend } from '@repo/domain'
 import { codexBackend, kimiCodeBackend, llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it } from 'vitest'
 
-import { egressConfigFromEnv, llmConfigFromEnv, providerOrigins } from './llm-config.ts'
+import {
+  egressConfigFromEnv,
+  llmConfigFromEnv,
+  PRODUCTION_VAULT_CA_FILE,
+  providerOrigins,
+} from './llm-config.ts'
 
 const complete = {
   LLM_GATEWAY_CLIENTS: '10.2.0.0/16,::1/128',
@@ -136,16 +141,19 @@ describe('subscription gateway configuration', () => {
     const config = llmConfigFromEnv(
       {
         ...complete,
-        LLM_BACKEND_URL_OPENAI_CHATGPT: 'https://localhost:9443',
+        LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:9443',
         LLM_UPSTREAM_CA_FILE: '/tmp/test-ca.pem',
       },
       'test',
     )
-    expect(config.egress?.backendOrigins.get('https://chatgpt.com')).toBe('https://localhost:9443')
+    expect(config.egress?.backendOrigins.get('https://api.z.ai')).toBe('https://localhost:9443')
     expect(config.egress?.upstreamCaFile).toBe('/tmp/test-ca.pem')
     expect(() =>
-      llmConfigFromEnv({ ...complete, LLM_BACKEND_URL_KIMI_CODE: 'https://other.example' }, 'test'),
-    ).toThrow('LLM_BACKEND_URL_KIMI_CODE')
+      llmConfigFromEnv(
+        { ...complete, LLM_BACKEND_URL_ZAI_CODING: 'https://other.example' },
+        'test',
+      ),
+    ).toThrow('LLM_BACKEND_URL_ZAI_CODING')
     // The name alone: TLS takes no IP address for a server name, so such an override could
     // never carry a request, with a proxy or without one.
     for (const address of ['https://127.0.0.1:9443', 'https://[::1]:9443'])
@@ -206,7 +214,7 @@ describe('subscription gateway configuration', () => {
 
   it('reads the override of an adapter it has never heard of, and refuses it in production', () => {
     const adapter: LlmBackend = {
-      ...kimiCodeBackend,
+      ...zaiCodingBackend,
       egress: [
         {
           origin: 'https://provider.invalid',
@@ -262,7 +270,7 @@ describe('subscription gateway configuration', () => {
           'LLM_EGRESS_PROXY_URL',
         )
     for (const [name, value] of [
-      ['LLM_BACKEND_URL_KIMI_CODE', 'https://localhost:9443'],
+      ['LLM_BACKEND_URL_ZAI_CODING', 'https://localhost:9443'],
       ['NODE_TLS_REJECT_UNAUTHORIZED', '0'],
     ] as const)
       expect(() => egressConfigFromEnv({ ...egress, [name]: value }, 'production')).toThrow(name)
@@ -283,5 +291,39 @@ describe('subscription gateway configuration', () => {
     ['NODE_OPTIONS', '--use-openssl-ca'],
   ])('rejects production trust or origin override %s', (name, value) => {
     expect(() => llmConfigFromEnv({ ...complete, [name]: value }, 'production')).toThrow(name)
+  })
+
+  it('takes one extra CA in production: the CA of Vault at the path the app VM pins', () => {
+    // The profile of the app VM gives the role this variable for Vault (infra/app): provider
+    // TLS never reads it, the transport verifies against the bundled roots alone.
+    const pinned = { ...complete, NODE_EXTRA_CA_CERTS: PRODUCTION_VAULT_CA_FILE }
+    expect(llmConfigFromEnv(pinned, 'production')).toEqual(llmConfigFromEnv(complete, 'production'))
+    for (const value of [
+      '/tmp/another-ca.pem',
+      '/run/raditi/egress-ca.pem',
+      `${PRODUCTION_VAULT_CA_FILE} `,
+      `${PRODUCTION_VAULT_CA_FILE}/../vault-ca.pem`,
+      'vault-ca.pem',
+      ' ',
+    ]) {
+      const env = { ...complete, NODE_EXTRA_CA_CERTS: value }
+      expect(() => llmConfigFromEnv(env, 'production')).toThrow('NODE_EXTRA_CA_CERTS')
+      // The refusal names the variable, never the path it was given.
+      expect(() => llmConfigFromEnv(env, 'production')).not.toThrow(/another-ca|egress-ca/)
+      // The rule is the role's: a command of the operator runs wherever the operator keeps the
+      // CA of Vault, and reaches the provider through the same transport as the role.
+      expect(egressConfigFromEnv(env, 'production')).toEqual(
+        egressConfigFromEnv(complete, 'production'),
+      )
+    }
+    // Node ignores an empty value, and so does the role.
+    expect(() =>
+      llmConfigFromEnv({ ...complete, NODE_EXTRA_CA_CERTS: '' }, 'production'),
+    ).not.toThrow()
+    // Outside production a stand names its own CA for its own Vault and Gitea.
+    for (const appEnv of ['development', 'test'] as const)
+      expect(() =>
+        llmConfigFromEnv({ NODE_EXTRA_CA_CERTS: '/tmp/stand/ca.pem' }, appEnv),
+      ).not.toThrow()
   })
 })

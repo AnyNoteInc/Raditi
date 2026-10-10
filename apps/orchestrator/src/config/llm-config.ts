@@ -16,6 +16,13 @@ import { z } from 'zod'
 import { ipLiteral } from './private-address.ts'
 
 export const DEFAULT_LLM_GATEWAY_PORT = 8084
+/**
+ * The one extra CA the role llm takes in production: the CA of Vault, at the path the profile
+ * of the app VM gives it (infra/app/docker-compose.yml; the contract test holds the two
+ * together). Provider TLS does not read the variable: the transport verifies against the
+ * bundled roots alone.
+ */
+export const PRODUCTION_VAULT_CA_FILE = '/run/raditi/vault-ca.pem'
 
 /** What the adapters declare, checked: a malformed declaration stops the configuration. */
 const declaredOrigins = (backends: readonly LlmBackend[]) =>
@@ -175,6 +182,11 @@ export function llmConfigFromEnv(
     problems.push('LLM_GATEWAY_HOSTS: required in production')
 
   const egress = egressFrom(own, env, production, problems, backends)
+  // The role alone: a command of the operator runs wherever the operator keeps the CA of Vault.
+  // Compared as written, the way Node opens it: any other file would add roots of its own.
+  const extraCa = env.NODE_EXTRA_CA_CERTS
+  if (production && extraCa && extraCa !== PRODUCTION_VAULT_CA_FILE)
+    problems.push('NODE_EXTRA_CA_CERTS: only the CA file of Vault is allowed in production')
   if (problems.length) throw invalid(problems)
   return {
     appEnv,

@@ -517,6 +517,29 @@ async function main() {
   assert.ok(inspected.HostConfig.SecurityOpt.includes('no-new-privileges:true'))
   check('running container retains the production hardening')
 
+  setStage('production image with another extra CA')
+  // The profile gives the role one extra CA, the CA of Vault at its pinned path, and the role
+  // takes no other: with a real CA file of the same directory under that variable — the CA of
+  // the proxy — the same service does not start, and says which variable stopped it.
+  const otherCa = await compose(
+    [
+      'run',
+      '--rm',
+      '--no-deps',
+      '-T',
+      '-e',
+      'NODE_EXTRA_CA_CERTS=/run/raditi/egress-ca.pem',
+      'llm',
+    ],
+    { allowFailure: true },
+  )
+  assert.notEqual(otherCa.code, 0, 'The production role started with another extra CA')
+  assert.match(
+    `${otherCa.stdout}${otherCa.stderr}`,
+    /NODE_EXTRA_CA_CERTS: only the CA file of Vault is allowed in production/,
+  )
+  check('the production role refuses to start with any extra CA but the CA of Vault')
+
   setStage('production core service: Vault CA and pinned Vault name')
   // core issues the turn keys llm reads. The service as Compose resolves it, without starting
   // the role: its own secret directory, environment and hosts file under its own uid.
@@ -609,7 +632,7 @@ async function main() {
   )
 
   assert.equal(
-    (await http('/codex/responses', 'POST', { model: 'gpt-5.4', input: [] })).status,
+    (await http('/zai/v4/chat/completions', 'POST', { model: 'glm-5.3', messages: [] })).status,
     401,
   )
   assert.equal((await http('/v1/chat/completions', 'POST', {})).status, 403)
@@ -627,7 +650,7 @@ async function main() {
   // authenticated control endpoint answers from the admission gate itself, before any probe.
   const probe = { accountIds: [randomUUID()] }
   assert.equal(
-    (await http('/codex/responses', 'POST', { model: 'gpt-5.4', input: [] })).status,
+    (await http('/zai/v4/chat/completions', 'POST', { model: 'glm-5.3', messages: [] })).status,
     401,
   )
   const blocked = await http('/internal/subscriptions/probe', 'POST', probe, true)
