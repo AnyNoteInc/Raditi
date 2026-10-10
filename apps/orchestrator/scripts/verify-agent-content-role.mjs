@@ -6,7 +6,7 @@
 // S3 client. It listens on loopback, as every role does outside production. What the stand used
 // to count inside its own composition of the role it now counts outside it: one proxy between
 // sandbox-gw and the role, one between the role and the site. They keep protocol names, statuses
-// and counters, never a header, an argument or a response.
+// and counters, never a credential, an argument or a response.
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
@@ -152,9 +152,9 @@ export function bridgeGatewayAddress(inspected) {
 const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade']
 
 /**
- * One HTTP hop the stand owns. `observe` sees the method, the path and the buffered request body
- * before the request is forwarded; throwing there answers 502 and forwards nothing. What it
- * returns is called with the status of the upstream's answer.
+ * One HTTP hop the stand owns. `observe` sees the method, the path, the headers and the buffered
+ * request body before the request is forwarded; throwing there answers 502 and forwards nothing.
+ * What it returns is called with the status of the upstream's answer.
  */
 export async function startObservingProxy({
   listenHost = LOOPBACK,
@@ -182,7 +182,7 @@ export async function startObservingProxy({
       const body = Buffer.concat(chunks)
       let answered
       try {
-        answered = await observe({ method: req.method, path: req.url, body })
+        answered = await observe({ method: req.method, path: req.url, headers: req.headers, body })
       } catch {
         res.writeHead(502).end()
         return
@@ -246,16 +246,25 @@ const SITE_ROUTES = [
  * The stand's two observation points and what they have seen so far. `beforeSiteWrite` is the
  * stand's check of the order the journal promises, run at the moment a write leaves for the
  * site; a failed check is kept as a violation and the write is not forwarded.
+ * `aroundCancelled` is the stand's look at what a `notifications/cancelled` changes: called when
+ * one arrives, before the role sees it, it returns a check that runs once the role has answered.
+ * A failed check, or a look that could not be taken, is kept as a violation; the notification
+ * is forwarded either way. `settled()` waits for the checks that still run.
  */
-export async function startContentObservers({ mcp, site, beforeSiteWrite }) {
+export async function startContentObservers({ mcp, site, beforeSiteWrite, aroundCancelled }) {
   const stats = {
     http: [],
     site: { reads: 0, writes: 0, operations: 0, reconciles: 0, forgets: 0 },
     snapshotBeforeWrite: 0,
+    cancelledUnchanged: 0,
     violations: [],
   }
-  const violation = (text) => {
+  const checks = new Set()
+  const noted = (text) => {
     if (stats.violations.length < 20) stats.violations.push(text)
+  }
+  const violation = (text) => {
+    noted(text)
     throw new Error(text)
   }
   const siteProxy = await startObservingProxy({
@@ -284,18 +293,42 @@ export async function startContentObservers({ mcp, site, beforeSiteWrite }) {
       upstream: mcp.upstream,
       // The role checks the Host sandbox-gw rewrote: it must arrive as it was sent.
       keepHost: true,
-      observe: ({ method, body }) => {
+      observe: async ({ method, headers, body }) => {
+        // The MCP version: the one a client asks for in `initialize`, and after that the one it
+        // took from the role's answer, which it names in a header of every later request.
         let rpc = null,
-          tool = null
+          tool = null,
+          protocol = name(headers['mcp-protocol-version'])
         try {
           const parsed = JSON.parse(body.toString('utf8'))
           rpc = name(parsed?.method)
           tool = parsed?.method === 'tools/call' ? name(parsed?.params?.name) : null
+          if (parsed?.method === 'initialize') protocol = name(parsed?.params?.protocolVersion)
         } catch {
           /* Not JSON: the role answers that itself. */
         }
+        // The stand's own look may fail; the request is the role's to answer all the same.
+        let unchanged = null
+        if (rpc === 'notifications/cancelled' && aroundCancelled)
+          try {
+            unchanged = await aroundCancelled()
+          } catch {
+            noted('A notifications/cancelled could not be looked at')
+          }
         return (status) => {
-          if (stats.http.length < MAX_ENTRIES) stats.http.push({ method, rpc, tool, status })
+          if (stats.http.length < MAX_ENTRIES)
+            stats.http.push({ method, rpc, tool, protocol, status })
+          if (!unchanged) return
+          const check = Promise.resolve()
+            .then(unchanged)
+            .then(
+              () => {
+                stats.cancelledUnchanged++
+              },
+              () => noted('A notifications/cancelled changed what the platform keeps'),
+            )
+            .finally(() => checks.delete(check))
+          checks.add(check)
         }
       },
     })
@@ -306,6 +339,10 @@ export async function startContentObservers({ mcp, site, beforeSiteWrite }) {
   return {
     siteOrigin: siteProxy.origin,
     stats: () => structuredClone(stats),
+    // A check that began while the others were waited for is waited for as well.
+    settled: async () => {
+      while (checks.size > 0) await Promise.all([...checks])
+    },
     close: async () => {
       await mcpProxy.close()
       await siteProxy.close()

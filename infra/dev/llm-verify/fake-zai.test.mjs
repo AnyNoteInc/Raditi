@@ -77,6 +77,12 @@ async function plain(t, initial) {
   })
   return { state, port: server.address().port }
 }
+/** The fake as the TLS server it is alone: there a scenario that cannot be answered is HTTP 400. */
+async function served(t, initial) {
+  const fake = await startFakeZai({ ...tls, ...initial })
+  t.after(() => fake.close())
+  return { state: fake.state, port: fake.address.port, ca }
+}
 function send(target, path, { method = 'POST', body, headers = {}, key = SYNTHETIC_ZAI_KEY } = {}) {
   return new Promise((resolve, reject) => {
     const secure = target.ca !== undefined
@@ -317,6 +323,169 @@ test('tool rounds follow the history of the request, and a request without tools
   target.state.setScenario({ scenario: 'tools', calls: round('only') })
   assert.deepEqual((await called([user])).names, ['only'])
   assert.deepEqual((await called([user, ...step('a')])).names, [])
+})
+
+// What the pinned CLI sent with the platform MCP server in its configuration, and what the real
+// model answered: the record of that run. Its request declares the tools, its history holds one
+// tool step, its answer calls the MCP tool by the name the CLI gave it.
+const mcpRun = fixture('34-run-c-mcp/12-llm-post_chat_completions.json')
+const recordedCall = chunks(mcpRun.response.sse)
+  .flatMap((chunk) => chunk.choices[0].delta.tool_calls ?? [])
+  .at(0)
+const contentEdit = {
+  scenario: 'content_edit',
+  route: '/wp/v2/pages/7',
+  idempotencyKey: 'synthetic-edit-1',
+  body: { content: '<p>Changed. Write to {{contact}}</p>' },
+  text: '{"ok":true}',
+}
+const privacyMarker = '[[raditi:email:0190a5c0-1111-7222-8333-444455556666]]'
+/** A request of the recorded run with the given tool steps after the message of the user. */
+function contentRequest(outputs, patch = {}) {
+  const { tools, messages } = mcpRun.request.body
+  const [system, user, called, result] = messages
+  assert.deepEqual(
+    [system.role, user.role, called.role, result.role],
+    ['system', 'user', 'assistant', 'tool'],
+  )
+  return chatBody({
+    messages: [system, user, ...outputs.flatMap((content) => [called, { ...result, content }])],
+    tools,
+    tool_choice: 'auto',
+    ...patch,
+  })
+}
+/** The one answer of the fake to a content request: its call, its text and how it finished. */
+async function contentAnswer(target, outputs, patch) {
+  const answer = await chat(target, contentRequest(outputs, patch))
+  if (answer.status !== 200) return { status: answer.status }
+  const sent = chunks(answer.text)
+  for (const chunk of sent)
+    assert.ok(recordedShapes.has(shapeOf(chunk)), `a recorded shape: ${shapeOf(chunk)}`)
+  assert.equal(inspect(answer.text).failure, undefined)
+  const calls = sent.flatMap((chunk) => chunk.choices[0].delta.tool_calls ?? [])
+  return {
+    status: 200,
+    calls,
+    arguments: calls.map((call) => JSON.parse(call.function.arguments)),
+    text: sent.map((chunk) => chunk.choices[0].delta.content ?? '').join(''),
+    finish: sent.at(-1).choices[0].finish_reason,
+  }
+}
+
+test('content_edit calls the tool the CLI declared for wp_rest: read, write with a key, the same write, the answer', async (t) => {
+  const target = await plain(t)
+  target.state.setScenario(contentEdit)
+  // The record: the CLI names an MCP tool <server>_<tool>, and the model called it by that name.
+  assert.deepEqual(
+    mcpRun.request.body.tools
+      .map((tool) => tool.function.name)
+      .filter((name) => name.startsWith('raditi_')),
+    ['raditi_site_info', 'raditi_wp_rest'],
+  )
+  assert.equal(recordedCall.function.name, 'raditi_wp_rest')
+  const read = await contentAnswer(target, [])
+  assert.equal(read.calls.length, 1)
+  assert.equal(read.calls[0].function.name, recordedCall.function.name)
+  assert.deepEqual(Object.keys(read.calls[0]), Object.keys(recordedCall))
+  assert.deepEqual(read.arguments, [{ method: 'GET', route: contentEdit.route }])
+  assert.equal(read.finish, 'tool_calls')
+  // The output of the read is a tool message; its privacy marker goes into the write.
+  const page = JSON.stringify({ content: `<p>Old ${privacyMarker}</p>` })
+  const write = await contentAnswer(target, [page])
+  assert.equal(write.calls[0].function.name, 'raditi_wp_rest')
+  assert.deepEqual(write.arguments, [
+    {
+      method: 'POST',
+      route: contentEdit.route,
+      body: { content: `<p>Changed. Write to ${privacyMarker}</p>` },
+      idempotencyKey: contentEdit.idempotencyKey,
+    },
+  ])
+  // The very same write again, then the answer of the turn.
+  const repeated = await contentAnswer(target, [page, '{"updated":true}'])
+  assert.deepEqual(repeated.arguments, write.arguments)
+  assert.equal(repeated.finish, 'tool_calls')
+  assert.deepEqual(await contentAnswer(target, [page, '{"updated":true}', '{"updated":true}']), {
+    status: 200,
+    calls: [],
+    arguments: [],
+    text: contentEdit.text,
+    finish: 'stop',
+  })
+  // A request that declares no tool (the CLI's context compaction) is answered with the text.
+  const compaction = await contentAnswer(target, [], { tools: undefined, tool_choice: undefined })
+  assert.deepEqual([compaction.calls, compaction.text], [[], contentEdit.text])
+})
+
+test('content_edit never invents a contact, and no content scenario invents a tool', async (t) => {
+  const target = await served(t)
+  target.state.setScenario(contentEdit)
+  // A template with the placeholder and a conversation without a marker to copy.
+  assert.equal((await contentAnswer(target, ['{"content":"<p>No contact</p>"}'])).status, 400)
+  // Without the placeholder the body goes as it is.
+  target.state.setScenario({ ...contentEdit, body: { title: 'Plain' } })
+  assert.deepEqual((await contentAnswer(target, ['{}'])).arguments[0].body, { title: 'Plain' })
+  // The MCP tool is not among the declared ones: the CLI lost its connection to the platform.
+  const builtin = mcpRun.request.body.tools.filter((tool) => !/wp_rest$/.test(tool.function.name))
+  assert.equal((await contentAnswer(target, [], { tools: builtin })).status, 400)
+  target.state.setScenario({ scenario: 'content_forbidden', route: '/wp/v2/comments/1' })
+  assert.equal((await contentAnswer(target, [], { tools: builtin })).status, 400)
+  // Two servers that both declare a wp_rest: the scenario does not choose between them.
+  const twice = [
+    ...mcpRun.request.body.tools,
+    { type: 'function', function: { name: 'other_wp_rest', parameters: { type: 'object' } } },
+  ]
+  assert.equal((await contentAnswer(target, [], { tools: twice })).status, 400)
+})
+
+test('content_forbidden calls wp_rest once, on the given route or as a write without a key, then answers', async (t) => {
+  const target = await plain(t)
+  target.state.setScenario({
+    scenario: 'content_forbidden',
+    route: '/wp/v2/comments/1',
+    text: '{"ok":true}',
+  })
+  const first = await contentAnswer(target, [])
+  assert.equal(first.calls[0].function.name, 'raditi_wp_rest')
+  assert.deepEqual(first.arguments, [{ method: 'GET', route: '/wp/v2/comments/1' }])
+  assert.equal(first.finish, 'tool_calls')
+  // Whatever the CLI told the model about the refused call, the next answer is the result.
+  const second = await contentAnswer(target, ['Synthetic tool error.'])
+  assert.deepEqual([second.calls, second.text, second.finish], [[], '{"ok":true}', 'stop'])
+  // With a body the refused call is a write without an idempotency key.
+  target.state.setScenario({
+    scenario: 'content_forbidden',
+    route: '/wp/v2/pages/7',
+    body: { title: 'Keyless' },
+  })
+  assert.deepEqual((await contentAnswer(target, [])).arguments, [
+    { method: 'POST', route: '/wp/v2/pages/7', body: { title: 'Keyless' } },
+  ])
+  assert.equal((await contentAnswer(target, ['Synthetic tool error.'])).finish, 'stop')
+})
+
+test('content options are bounded and belong to the content scenarios only', () => {
+  const state = createFakeZaiState()
+  for (const options of [
+    { scenario: 'content_edit' },
+    { ...contentEdit, route: 'wp/v2/pages/7' },
+    { ...contentEdit, route: '/wp/v2/pages/7?context=edit' },
+    { ...contentEdit, idempotencyKey: '' },
+    { ...contentEdit, idempotencyKey: 'has space' },
+    { ...contentEdit, body: {} },
+    { ...contentEdit, body: { content: 7 } },
+    { ...contentEdit, body: { status: 'draft' } },
+    { ...contentEdit, body: { content: 'x'.repeat(32 * 1024 + 1) } },
+    { ...contentEdit, calls: [{ name: 'bash', arguments: {} }] },
+    { scenario: 'content_forbidden' },
+    { scenario: 'content_forbidden', route: '/wp/v2/comments/1', body: { status: 'draft' } },
+    { scenario: 'content_forbidden', route: '/wp/v2/comments/1', idempotencyKey: 'k' },
+    { scenario: 'text', route: '/wp/v2/pages/7' },
+    { scenario: 'tools', body: { title: 'x' } },
+  ])
+    assert.throws(() => state.setScenario(options), JSON.stringify(options))
+  assert.equal(state.setScenario(contentEdit).config.route, contentEdit.route)
 })
 
 test('the plan key can be replaced: the old one is then refused on both paths', async (t) => {
@@ -810,6 +979,14 @@ test('the stand fake answers Z.ai next to Codex and Kimi and resets it with the 
   assert.equal(
     JSON.parse((await send(control, '/zai', { method: 'GET', key: null })).text).counters.chat,
     2,
+  )
+  // The content scenarios of the agent-content stand are set by the same message.
+  const content = await send(control, '/zai', { key: null, body: { scenario: contentEdit } })
+  assert.equal(JSON.parse(content.text).config.idempotencyKey, contentEdit.idempotencyKey)
+  assert.equal(
+    (await send(control, '/zai', { key: null, body: { scenario: { scenario: 'content_edit' } } }))
+      .status,
+    400,
   )
   await send(control, '/reset', { key: null, body: {} })
   assert.deepEqual(fake.state.zai.counters, { chat: 0, quota: 0, generated: 0 })

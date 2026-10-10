@@ -2,8 +2,9 @@
 // The glue stand below the queue: a turn key from the real issue, the real pinned CLIs in the
 // sandbox image, sandbox-gw, the role llm on the synthetic providers, the regular role mcp from
 // the build (content profile local, AppRole mcp, the site access from Vault through
-// credential_refs) and the WordPress plugin. Disposable services and synthetic content only:
-// no user env-file, login or subscription is loaded.
+// credential_refs) and the WordPress plugin. Codex and Kimi go through the stand's egress proxy,
+// OpenCode on Z.ai without one, as in the product. Disposable services and synthetic content
+// only: no user env-file, login or subscription is loaded.
 import assert from 'node:assert/strict'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
@@ -24,6 +25,7 @@ import { createVaultSecretStore } from '@repo/vault'
 import { seedReferenceData } from '../../../packages/db/prisma/seed/apply.ts'
 import { CLI_IMAGE, createCliSession, RUNTIME_IMAGE } from '../../../infra/dev/llm-verify/cli.mjs'
 import { SYNTHETIC_KIMI_KEY } from '../../../infra/dev/llm-verify/fake-subscriptions.mjs'
+import { SYNTHETIC_ZAI_KEY, SYNTHETIC_ZAI_MARKER } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import {
   abortVerification,
   eventually,
@@ -47,13 +49,21 @@ import {
   startContentObservers,
   startRegularRole,
 } from './verify-agent-content-role.mjs'
-import { verifyAgentContentTurns } from './verify-agent-content-turns.mjs'
+import { CONTENT_DRIVERS, verifyAgentContentTurns } from './verify-agent-content-turns.mjs'
+import {
+  switchOnZai,
+  ZAI_BACKEND,
+  zaiDirectEnvironment,
+  zaiLogin,
+  zaiOperator,
+} from './verify-llm-zai-setup.mjs'
 
 const GUARD_IMAGE = 'raditi-p3verify-guard:b13'
+const ZAI_LABEL = 'synthetic-zai'
 const args = new Set(process.argv.slice(2).filter((value) => value !== '--'))
 if (args.has('--help')) {
   console.log(
-    'verify:agent-content [--no-build]: real pinned CLIs edit a page of a disposable WordPress through the real roles llm and mcp. Synthetic providers and content; no real subscriptions or .env files.',
+    'verify:agent-content [--no-build]: real pinned CLIs (Codex, Kimi, OpenCode) edit a page of a disposable WordPress through the real roles llm and mcp. Synthetic providers and content; no real subscriptions or .env files.',
   )
   process.exit(0)
 }
@@ -72,7 +82,8 @@ let stage = 'build',
   s3Client,
   observers
 const workers = []
-const secretMarkers = new Set([SYNTHETIC_KIMI_KEY])
+// The plan key of the synthetic Z.ai and the text its refusals would carry, with the rest.
+const secretMarkers = new Set([SYNTHETIC_KIMI_KEY, SYNTHETIC_ZAI_KEY, SYNTHETIC_ZAI_MARKER])
 const passed = (name) => {
   checks++
   console.log(`PASS ${name}`)
@@ -148,7 +159,7 @@ async function prepareSite({ wp, compose, url }) {
   assert(applicationPassword.length > 10, 'Fixture application password is missing')
   secretMarkers.add(applicationPassword)
   const pages = {}
-  for (const driver of ['codex', 'kimi']) {
+  for (const driver of CONTENT_DRIVERS) {
     const original = `raditi-agent-original-${randomUUID()}`
     // A third party's contact on the page: the model must only ever see its opaque marker.
     const contact = `contact-${driver}-${randomBytes(4).toString('hex')}@example.test`
@@ -176,7 +187,7 @@ async function prepareSite({ wp, compose, url }) {
   return { siteId, origin: url, username: 'synthetic_admin', applicationPassword, pages, receipts }
 }
 
-/** Two synthetic accounts through the product's own login paths, as in B13. */
+/** Three synthetic accounts through the product's own login paths, as in B13. */
 async function importAccounts(env) {
   const writer = createVaultSecretStore({
     addr: stack.vaultAddress,
@@ -270,6 +281,18 @@ async function importAccounts(env) {
   await db.agentDriver.updateMany({
     where: { id: { in: ['codex', 'kimi'] } },
     data: { enabled: true },
+  })
+  // The plan key of Z.ai by the same operator command, on the direct path: that provider needs
+  // no egress node. Its windows are left unwritten: the first issue has the role llm probe them.
+  const planKey = await zaiLogin(zaiOperator(stack, env.LLM_UPSTREAM_CA_FILE), {
+    label: ZAI_LABEL,
+    writerFile,
+    key: SYNTHETIC_ZAI_KEY,
+  })
+  assert.equal(planKey.code, 0, 'The import of the synthetic plan key failed')
+  models[ZAI_BACKEND] = await switchOnZai(db, {
+    accountId: JSON.parse(planKey.stdout).accountId,
+    ratesUrl: 'https://synthetic.invalid/agent-content-rates',
   })
   return models
 }
@@ -376,6 +399,14 @@ async function stand(site) {
   s3Client = createS3Client(storageConfig)
   const storage = createS3ObjectStorage(storageConfig, s3Client)
   stage = "the stand's observers of the role mcp"
+  /** Every finished row of the content journal, whole, by its id. */
+  const finishedCalls = async () =>
+    new Map(
+      (await db.mcpCall.findMany({ where: { result: { not: null } } })).map((row) => [
+        row.id,
+        JSON.stringify(row, (_, value) => (typeof value === 'bigint' ? String(value) : value)),
+      ]),
+    )
   // The role is the regular one, so the stand looks at it from outside: one hop in front of
   // /mcp (where sandbox-gw sends), one in front of the site. The role itself listens on
   // loopback; only the first hop is reachable from the stand's containers.
@@ -400,6 +431,16 @@ async function stand(site) {
       const lease = await db.siteLease.findUniqueOrThrow({ where: { siteId: site.siteId } })
       assert.equal(lease.inflightMcpCallId, request.callId)
     },
+    // A client may tell the role that it has dropped a request, and one CLI does so after every
+    // call that has finished. Nothing the journal holds of a finished call may change for it:
+    // each row as it stood when the notification came, and again once the role has answered.
+    aroundCancelled: async () => {
+      const before = await finishedCalls()
+      return async () => {
+        const after = await finishedCalls()
+        for (const [id, row] of before) assert.equal(after.get(id), row)
+      }
+    },
   })
   stage = 'workspace, site, its access in OpenBao and the workspace key'
   const workspace = await db.workspace.create({
@@ -418,17 +459,33 @@ async function stand(site) {
   })
   await connectSite(workspace.id, site, observers.siteOrigin)
   stage = 'separate llm and mcp role processes'
-  const llm = await startWorker('llm', {
-    env: {
-      ...env,
-      VAULT_ROLE_ID: stack.roles.llm.roleId,
-      VAULT_SECRET_ID: stack.roles.llm.secretId,
-    },
-  })
-  workers.push(llm)
-  await eventually(
-    async () => (await fetch(`http://127.0.0.1:${stack.llmPort}/health`)).status === 200,
-  )
+  // One way to the providers per role process, as in the product: with an egress proxy
+  // everything goes through it, without one the role connects only to the provider that needs
+  // no egress node. The role is one replica behind the one LLM address of sandbox-gw, so the
+  // stand does not run a second one beside it: it starts the role anew when a row of the turns
+  // needs the other way.
+  const paths = { proxy: env, direct: zaiDirectEnvironment(env, stack) }
+  let llm, path
+  const rolePath = async (wanted) => {
+    if (path === wanted) return
+    await llm?.close()
+    llm = await startWorker('llm', {
+      env: {
+        ...paths[wanted],
+        VAULT_ROLE_ID: stack.roles.llm.roleId,
+        VAULT_SECRET_ID: stack.roles.llm.secretId,
+      },
+    })
+    workers.push(llm)
+    await eventually(
+      async () => (await fetch(`http://127.0.0.1:${stack.llmPort}/health`)).status === 200,
+    )
+    // The role says which way it goes when it starts.
+    const line = `{"event":"llm_egress_path","path":"${wanted}"}`
+    await eventually(async () => llm.logs.join('').includes(line), 10_000)
+    path = wanted
+  }
+  await rolePath('proxy')
   // Nothing the stand holds for its own setup may show up in what the platform keeps or logs.
   for (const value of [
     stack.s3.secretKey,
@@ -466,12 +523,15 @@ async function stand(site) {
   stage = 'trusted turn-key issuer'
   // The trusted side of the stand is this process: the product's issuer under the core AppRole.
   const { GatewayTurnCredentials } = await import('../dist/llm/turn-credentials.js')
+  const { createPoolProbeClient } = await import('../dist/llm/pool-probe-client.js')
   const { ContentSnapshotStorage, contentSnapshotKey } =
     await import('../dist/mcp/content-snapshots.js')
   const credentials = new GatewayTurnCredentials({
     prisma: db,
     secrets: createVaultSecretStore({ addr: stack.vaultAddress, appRole: stack.roles.core }),
     requireAssignment: true,
+    // As core does: windows nobody has written are the role llm's to probe before a selection.
+    probeAccounts: createPoolProbeClient(`http://127.0.0.1:${stack.llmPort}`, metricsToken),
   })
   // The stand opens a snapshot to compare it with the page: a token that can only unwrap data
   // keys of workspaces, not the operator's.
@@ -525,6 +585,7 @@ async function stand(site) {
     cli,
     control,
     stats: observers.stats,
+    settled: observers.settled,
     site,
     models,
     workspaceId: workspace.id,
@@ -538,10 +599,42 @@ async function stand(site) {
     bucket: stack.s3.buckets.artifacts,
     secretMarkers,
     passed,
+    rolePath,
     setStage: (name) => {
       stage = name
     },
   })
+  stage = 'the way of each provider'
+  // The stand's proxy logs a tunnel by its host when the tunnel ends: Codex and Kimi went
+  // through it, and nothing of the role without a proxy did.
+  const tunnels = (await stack.compose(['logs', '--no-color', 'llm-egress'])).stdout
+    .split('\n')
+    .filter((line) => line.includes('"event":"connect"'))
+  for (const host of ['chatgpt.com:443', 'api.kimi.ai:443'])
+    assert.ok(
+      tunnels.some((line) => line.includes(`"${host}"`)),
+      `No tunnel to ${host} through the proxy`,
+    )
+  assert.equal(
+    tunnels.some((line) => line.includes('"api.z.ai:443"')),
+    false,
+    'Z.ai was reached through the egress proxy',
+  )
+  assert.equal(path, 'direct')
+  // What the synthetic Z.ai got came with the plan key, which only the role llm reads; and the
+  // windows of the account, which nobody wrote, are what the role's probe stored at the first
+  // issue.
+  const zai = await control('zai')
+  assert.ok(zai.requests.length > 0, 'The synthetic Z.ai was not asked')
+  assert.ok(
+    zai.requests.every((request) => request.credential === 'plan-key'),
+    'A request reached Z.ai without the plan key',
+  )
+  const account = await db.subscriptionAccount.findFirstOrThrow({ where: { label: ZAI_LABEL } })
+  assert.deepEqual(account.limitWindows.map((window) => window.name).sort(), ['5h', 'week'])
+  passed(
+    "Codex and Kimi through the egress proxy, Z.ai on the role's own connection with the plan key; its windows from the role's probe",
+  )
   stage = 'log and database secrecy'
   const serviceLogs = (await stack.compose(['logs', '--no-color'])).stdout
   const audit = (await stack.compose(['exec', '-T', 'vault', 'cat', '/audit/audit.jsonl'])).stdout
@@ -617,7 +710,7 @@ try {
   })
   if (process.exitCode) throw new Error('Cleanup failed')
   console.log(
-    `Agent content verification passed: ${checks} checks; CLI Codex 0.158.0 / Kimi 2.1.1; synthetic providers, real role llm, regular role mcp under AppRole, real WordPress.`,
+    `Agent content verification passed: ${checks} checks; CLI Codex 0.158.0 / Kimi 2.1.1 / OpenCode 1.18.34; synthetic providers, real role llm, regular role mcp under AppRole, real WordPress.`,
   )
 } catch (error) {
   const cause = failure ?? error

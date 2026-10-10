@@ -8,7 +8,6 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import process from 'node:process'
 
 import { createOpencodeDriver } from '@repo/agent-drivers'
 import {
@@ -31,7 +30,7 @@ import {
   SYNTHETIC_ZAI_ROTATED_KEY,
   ZAI_PATHS,
 } from '../../../infra/dev/llm-verify/fake-zai.mjs'
-import { eventually, repository, run } from '../../../infra/dev/llm-verify/stack.mjs'
+import { eventually, run } from '../../../infra/dev/llm-verify/stack.mjs'
 import { opencodeUserAgent } from '../../../packages/llm-backends/src/zai-coding/backend.ts'
 import {
   cliReadsOverflow,
@@ -39,13 +38,21 @@ import {
   cliRetriesStreamError,
 } from '../../../packages/llm-backends/src/zai-coding/fixtures/opencode-cli.ts'
 import { productionMcpTools } from './verify-llm-gateway-drivers.mjs'
+import {
+  OPENCODE_HOME as HOME,
+  resetOpencodeHome,
+  switchOnZai,
+  ZAI_BACKEND as BACKEND,
+  ZAI_GATEWAY_BASE_URL,
+  ZAI_MODEL as MODEL,
+  ZAI_PROFILE as PROFILE,
+  zaiDirectEnvironment,
+  zaiLogin,
+  zaiOperator,
+} from './verify-llm-zai-setup.mjs'
 
 const GATEWAY = 'http://sandbox-gw:8080'
-const BACKEND = 'zai-coding'
-const MODEL = 'glm-5.3'
-const PROFILE = 'glm-5.3-standard'
 const LABEL = 'synthetic-zai'
-const HOME = '/agent-home/opencode'
 // Everything the agent can write to in the CLI container, the session database included.
 const SANDBOX_ROOTS = ['/agent-home', '/workspace', '/tmp', '/run/raditi']
 // What the fake counts for every answer unless a scenario names other numbers.
@@ -56,12 +63,6 @@ const FAKE_USAGE = {
   outputTokens: 94,
   reasoningTokens: 54,
 }
-const PROXY_VARIABLES = [
-  'LLM_EGRESS_PROXY_URL',
-  'LLM_EGRESS_CA_FILE',
-  'LLM_EGRESS_CLIENT_CERT_FILE',
-  'LLM_EGRESS_CLIENT_KEY_FILE',
-]
 // The headers the adapter sends and what HTTP itself needs; nothing a CLI wrote.
 const PROVIDER_HEADERS = new Set([
   'accept',
@@ -85,48 +86,12 @@ const resultFor = (summary, files = []) => ({
   risk: 'low',
 })
 
-/**
- * What survives between two turns of a task is the session state the driver names and nothing
- * else: the home of the CLI is new in every sandbox. `keep` leaves the two database files.
- */
-const RESET_HOME = `const fs=require('node:fs'),path=require('node:path');
-const home=${JSON.stringify(HOME)},data=path.join(home,'.local/share/opencode');
-const open=(dir)=>{try{fs.chmodSync(dir,0o700)}catch{}
-  for(const entry of fs.readdirSync(dir,{withFileTypes:true}))
-    if(entry.isDirectory()&&!entry.isSymbolicLink())open(path.join(dir,entry.name))};
-const saved=[];
-if(fs.existsSync(home)){open(home);
-  if(process.argv[1]==='keep')for(const name of['opencode.db','opencode.db-wal'])
-    try{saved.push([name,fs.readFileSync(path.join(data,name))])}catch{}
-  for(const name of fs.readdirSync(home))fs.rmSync(path.join(home,name),{recursive:true,force:true})}
-if(saved.length){fs.mkdirSync(data,{recursive:true,mode:0o700});
-  for(const[name,bytes]of saved)fs.writeFileSync(path.join(data,name),bytes,{mode:0o600})}
-fs.rmSync('/workspace/.raditi-opencode-held',{recursive:true,force:true});`
-
 export async function verifyZai(ctx) {
   const { db, core, stack, cli, control, passed, llmSecrets, restartLlm, llmGetter } = ctx
   const { secretMarkers, promptMarker, metricsToken, writerFile, setStage } = ctx
   const zai = (body) => control('zai', body)
-  const directEnv = {
-    ...Object.fromEntries(
-      Object.entries(ctx.env).filter(([name]) => !PROXY_VARIABLES.includes(name)),
-    ),
-    LLM_BACKEND_URL_ZAI_CODING: stack.providerOrigin,
-  }
-  // The operator commands on the direct path: no egress proxy in their environment either.
-  const operatorEnv = {
-    APP_ENV: 'test',
-    DATABASE_URL: stack.databaseUrl,
-    VAULT_ADDR: stack.vaultAddress,
-    LLM_UPSTREAM_CA_FILE: directEnv.LLM_UPSTREAM_CA_FILE,
-    LLM_BACKEND_URL_ZAI_CODING: stack.providerOrigin,
-  }
-  const operator = (command, args, input) =>
-    run(
-      process.execPath,
-      [join(repository, `apps/orchestrator/scripts/subscription-${command}.mjs`), ...args],
-      { input, env: operatorEnv, allowFailure: true },
-    )
+  const directEnv = zaiDirectEnvironment(ctx.env, stack)
+  const operator = zaiOperator(stack, directEnv.LLM_UPSTREAM_CA_FILE)
   /** Tunnels to api.z.ai the stand's proxy has ended: it logs each one when it ends. */
   const proxyTunnels = async () =>
     (await stack.compose(['logs', '--no-color', 'llm-egress'])).stdout
@@ -151,25 +116,18 @@ export async function verifyZai(ctx) {
   setStage('import of the plan key on the direct path')
   await zai({ reset: true })
   // A key the provider does not know never becomes an account.
-  const foreign = await operator(
-    'login',
-    ['--backend', BACKEND, '--label', 'synthetic-zai-foreign', '--plan', 'lite'].concat([
-      '--vault-token-file',
-      writerFile,
-    ]),
-    'zai-synthetic-foreign-key\n',
-  )
+  const foreign = await zaiLogin(operator, {
+    label: 'synthetic-zai-foreign',
+    writerFile,
+    key: 'zai-synthetic-foreign-key',
+  })
   assert.equal(foreign.code, 1)
   assert.equal(
     await db.subscriptionAccount.count({ where: { label: 'synthetic-zai-foreign' } }),
     0,
     'A refused plan key left an account',
   )
-  const imported = await operator(
-    'login',
-    ['--backend', BACKEND, '--label', LABEL, '--plan', 'lite', '--vault-token-file', writerFile],
-    `${SYNTHETIC_ZAI_KEY}\n`,
-  )
+  const imported = await zaiLogin(operator, { label: LABEL, writerFile, key: SYNTHETIC_ZAI_KEY })
   assert.equal(imported.code, 0, 'The import of the synthetic plan key failed')
   const { accountId } = JSON.parse(imported.stdout)
   assert.deepEqual(JSON.parse(imported.stdout), {
@@ -202,31 +160,8 @@ export async function verifyZai(ctx) {
   passed('Z.ai plan key import by the operator command on the direct path; a foreign key refused')
 
   setStage('provider, profile, rate and driver rows')
-  const provider = await db.llmProvider.update({
-    where: { slug: BACKEND },
-    data: { enabled: true },
-  })
-  const profile = await db.llmModel.findFirstOrThrow({
-    where: { providerId: provider.id, slug: PROFILE },
-  })
-  // The seeds' own profile: glm-5.3 with the reserve the body policy's output ceiling needs.
-  assert.equal(profile.providerModelId, MODEL)
-  assert.equal(profile.reserveOutputTokens, 32_000)
-  await db.llmModel.update({ where: { id: profile.id }, data: { enabled: true } })
-  await db.llmModelPrice.create({
-    data: {
-      modelId: profile.id,
-      effectiveFrom: new Date(Date.now() - 60_000),
-      inputPer1m: '10',
-      cacheReadPer1m: '1',
-      outputPer1m: '30',
-      vatRate: '0.22',
-      sourceUrl: 'https://synthetic.invalid/b13-rates',
-    },
-  })
-  await db.agentDriver.update({ where: { id: 'opencode' }, data: { enabled: true } })
   // The operator switches the account on; its windows are nobody's to write but a probe's.
-  await db.subscriptionAccount.update({ where: { id: accountId }, data: { enabled: true } })
+  await switchOnZai(db, { accountId, ratesUrl: 'https://synthetic.invalid/b13-rates' })
   const workspace = await db.workspace.create({
     data: { name: 'B13 synthetic Z.ai workspace', dataClass: 'synthetic' },
   })
@@ -371,22 +306,14 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
    * container, through sandbox-gw to the role llm and to the MCP route.
    */
   async function runTurn({ turn, prompt, nativeSessionId, model = MODEL, timeoutMs = 120_000 }) {
-    const reset = await dockerCommand([
-      'exec',
-      cli.containerName,
-      'node',
-      '-e',
-      RESET_HOME,
-      nativeSessionId ? 'keep' : 'new',
-    ])
-    assert.equal(reset.code, 0, 'The home of the CLI could not be prepared')
+    await resetOpencodeHome(cli.containerName, { keepSession: Boolean(nativeSessionId) })
     await control('mcp', { token: turn.values.mcpToken, tools })
     const context = {
       taskId: turn.ref.taskId,
       sessionId: turn.ref.sessionId,
       turn: turn.ref.turn,
       llm: {
-        baseUrl: `${GATEWAY}/zai/v4`,
+        baseUrl: ZAI_GATEWAY_BASE_URL,
         model,
         apiKey: turn.values.llmApiKey,
         // The level is the gateway's to set, from the profile of the key; the driver only

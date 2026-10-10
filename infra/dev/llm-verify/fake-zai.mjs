@@ -6,6 +6,8 @@ import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
+import { contentCall, contentOptions } from './content-scenario.mjs'
+
 // Synthetic Z.ai, the GLM Coding Plan only: the chat path and the quota path, in the shapes of
 // the recorded exchanges (docs/research/2026-10-opencode-glm/samples; the adapter's fixtures are
 // copies of them) and with the error codes of the provider's documentation. It makes no outbound
@@ -75,6 +77,11 @@ const SCENARIOS = new Set([
   // since the last message of the user; past the last round, and for a request that declares
   // no tool (the CLI's context compaction), the answer is the text.
   'tools',
+  // The agent-content stand: the model drives the platform MCP tool `wp_rest`, one call an
+  // answer, by the name the CLI declared for it. The rounds are those of `tools`; what each
+  // one calls is content-scenario.mjs.
+  'content_edit',
+  'content_forbidden',
   // A stream that ends with the given finish_reason.
   'finish',
   // An error with a status: `code` of ZAI_ERROR_STATUS, or any `code` with a `status`.
@@ -119,10 +126,14 @@ function scenarioOptions(value = {}) {
     'failures',
     'usage',
     'delayMs',
+    'route',
+    'idempotencyKey',
+    'body',
   ])
   for (const name of Object.keys(value)) if (!known.has(name)) throw invalid('scenario')
   const scenario = value.scenario ?? 'text'
   if (!SCENARIOS.has(scenario)) throw invalid('scenario')
+  contentOptions(scenario, value)
   if (value.text !== undefined && (typeof value.text !== 'string' || value.text.length > 16_384))
     throw invalid('text')
   if (
@@ -359,6 +370,19 @@ function chatError(res, sequence, code, status, retryAfter) {
 }
 
 const frame = (value) => `data: ${typeof value === 'string' ? value : JSON.stringify(value)}\n\n`
+
+/**
+ * The function the CLI declared for a tool of the platform MCP server. The pinned OpenCode names
+ * it `<server>_<tool>` (sample 34-run-c-mcp: `raditi_wp_rest`); the name of the server is the
+ * driver's, not the provider's to know. Nothing is called that the request does not declare.
+ */
+function declaredMcpTool(body, tool) {
+  const names = body.tools
+    .map((item) => item?.function?.name)
+    .filter((name) => typeof name === 'string' && name.endsWith(`_${tool}`))
+  if (names.length !== 1) throw new Error('Synthetic scenario requires one advertised MCP tool')
+  return names[0]
+}
 const usageOf = (config) => {
   const usage = { ...DEFAULT_USAGE, ...config.usage }
   return {
@@ -396,8 +420,13 @@ export function zaiFrames(body, config, sequence) {
     config.calls ?? [{ name: 'bash', arguments: { command: 'echo synthetic' } }],
   ]
   const declared = Array.isArray(body.tools) && body.tools.length > 0
-  const calling = config.scenario === 'tools' && declared && round < rounds.length
-  const calls = rounds[Math.min(round, rounds.length - 1)]
+  // A content scenario's own call of this round, by the name the request declares.
+  const content = declared ? contentCall(body, config, round) : null
+  const calling =
+    declared && (content !== null || (config.scenario === 'tools' && round < rounds.length))
+  const calls = content
+    ? [{ name: declaredMcpTool(body, 'wp_rest'), arguments: content }]
+    : rounds[Math.min(round, rounds.length - 1)]
   const frames = []
   const reasoning = config.reasoning ?? 'Synthetic reasoning.'
   for (const word of reasoning.split(/(?<= )/).filter(Boolean))

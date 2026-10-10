@@ -1,7 +1,8 @@
 name: Agent content
 
-# The glue below the queue: a turn key from the real issuer, the real pinned Codex and Kimi CLIs in
-# the sandbox image, sandbox-gw, the role llm on synthetic HTTPS providers, the real role mcp with
+# The glue below the queue: a turn key from the real issuer, the real pinned Codex, Kimi and
+# OpenCode CLIs in the sandbox image, sandbox-gw, the role llm on synthetic HTTPS providers (Codex
+# and Kimi through the stand's egress proxy, OpenCode on Z.ai without one), the real role mcp with
 # the local content profile and the WordPress plugin, on disposable PostgreSQL, OpenBao, S3,
 # WordPress and MariaDB. Synthetic content only: no repository secrets, client sites or provider
 # accounts.
@@ -49,6 +50,10 @@ permissions:
 jobs:
   verify-agent-content:
     runs-on: ubuntu-latest
+    # The job builds the agent runtime with the three CLIs, the CLI harness, the network guard and
+    # the orchestrator, then runs three rows of turns. With two rows it took five minutes on a
+    # hosted runner and once twenty-one; the OpenCode row (the role llm started anew without the
+    # egress proxy, three turns) adds about ten seconds on a desktop, so the limit stays.
     timeout-minutes: 45
 
     steps:
@@ -56,7 +61,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Leave room for the workspace dependencies, two CLI distributions and disposable images.
+      # Leave room for the workspace dependencies, three CLI distributions and disposable images.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \

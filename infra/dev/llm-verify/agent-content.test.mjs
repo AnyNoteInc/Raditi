@@ -46,6 +46,65 @@ test('the stand is one command over its own scripts', () => {
   assert.doesNotMatch(scripts.map(read).join('\n'), /--env-file|\.codex|auth\.json/)
 })
 
+test('every CLI of the stand is a row of one table and runs only what its driver prepared', () => {
+  const turns = read('apps/orchestrator/scripts/verify-agent-content-turns.mjs')
+  const main = read('apps/orchestrator/scripts/verify-agent-content.mjs')
+  const rows = [
+    ...turns.matchAll(/^ {2}([a-z]+): \{\n {4}name: '([A-Za-z]+)',\n {4}driver: (\w+),/gm),
+  ]
+  assert.deepEqual(
+    rows.map(([, id, name, driver]) => [id, name, driver]),
+    [
+      ['codex', 'Codex', 'createCodexDriver'],
+      ['kimi', 'Kimi', 'createKimiDriver'],
+      ['opencode', 'OpenCode', 'createOpencodeDriver'],
+    ],
+  )
+  // What a CLI needs differently is data of its row: the turns do not branch on its name.
+  assert.doesNotMatch(turns, /driver ===|=== '(?:codex|kimi|opencode)'/)
+  assert.match(turns, /await cli\.runPrepared\(\{ \.\.\.files, argv, timeoutMs: TURN_MS \}\)/)
+  // No configuration of a CLI is written by the stand: the files are the driver's prepare.
+  assert.doesNotMatch(scripts.map(read).join('\n'), /opencode\.json|config\.toml|cliInvocation/)
+  // Codex and Kimi through the stand's proxy, Z.ai without one: one way per role process, so
+  // the one role llm is started anew for the row that needs the other way.
+  assert.deepEqual(
+    [...turns.matchAll(/^ {4}path: '([a-z]+)',$/gm)].map(([, path]) => path),
+    ['proxy', 'proxy', 'direct'],
+  )
+  assert.match(main, /const paths = \{ proxy: env, direct: zaiDirectEnvironment\(env, stack\) \}/)
+  assert.match(turns, /await rolePath\(row\.path\)/)
+  assert.equal(main.match(/startWorker\('llm'/g).length, 1)
+  // The plan key of Z.ai is imported by the operator command, and its windows are the probe's
+  // to write: the issuer asks the role llm for one, as core does.
+  assert.match(main, /await zaiLogin\(zaiOperator\(stack, env\.LLM_UPSTREAM_CA_FILE\), \{/)
+  assert.match(main, /probeAccounts: createPoolProbeClient\(/)
+  const setup = read('apps/orchestrator/scripts/verify-llm-zai-setup.mjs')
+  assert.match(setup, /'--plan',\s+'lite',/)
+  assert.doesNotMatch(setup, /limitWindows|limitsSeenAt/)
+  // What both stands of OpenCode need is one module, not a copy in each.
+  assert.match(
+    read('apps/orchestrator/scripts/verify-llm-zai.mjs'),
+    /\} from '\.\/verify-llm-zai-setup\.mjs'/,
+  )
+})
+
+test('the edit turn reads what the write and its repeat were answered, not only their statuses', () => {
+  const turns = read('apps/orchestrator/scripts/verify-agent-content-turns.mjs')
+  const edit = turns.slice(turns.indexOf('// Turn A:'), turns.indexOf('// Turn B'))
+  // The role refuses a call after admission with HTTP 200 as well, so three statuses of 200 do
+  // not say that the repeat was replayed. What the CLI handed the model is judged against the
+  // journal row before the stand says so, for every row of the table.
+  assert.match(edit, /const outputs = row\.wire\.toolOutputs\(edited\.provider\.at\(-1\)\.body\)/)
+  const judged = edit.indexOf('replayProblem(outputs, kept)')
+  assert.ok(judged > 0, 'the answers of the edit turn are judged')
+  assert.ok(edit.indexOf('the repeat was answered from that row') > judged)
+  // The CLI that hands the model the text of the role is held to the stored answer word for
+  // word, and only then is the line about the repeat printed.
+  const verbatim = edit.indexOf('replayProblem(outputs, kept, { verbatim: true })')
+  assert.ok(verbatim > judged, 'the repeat is compared word for word')
+  assert.ok(edit.indexOf('got the stored answer word for word') > verbatim)
+})
+
 test('a repeated signal cannot end the cleanup and a silent role cannot pass the log check', () => {
   const main = read('apps/orchestrator/scripts/verify-agent-content.mjs')
   // With `once` no listener is left after the first signal: the second one (a CI cancellation
@@ -115,7 +174,15 @@ test('the workflow starts on every source the stand runs', () => {
   ])
   const packages = new Set()
   const builds = new Set()
-  for (const script of scripts) {
+  // The stand's scripts and what they import from beside them: the Z.ai setup of the gateway
+  // stand, shared by both.
+  const beside = scripts.flatMap((script) =>
+    [...read(script).matchAll(/'\.\/(verify-[a-z-]+\.mjs)'/g)].map(
+      ([, name]) => `apps/orchestrator/scripts/${name}`,
+    ),
+  )
+  assert.ok(beside.includes('apps/orchestrator/scripts/verify-llm-zai-setup.mjs'))
+  for (const script of new Set([...scripts, ...beside])) {
     sources.add(script)
     const text = read(script)
     for (const [, path] of text.matchAll(/'(?:\.\.\/)+(infra\/[A-Za-z0-9/_.-]+)'/g))
@@ -130,6 +197,7 @@ test('the workflow starts on every source the stand runs', () => {
     'infra/dev/llm-verify/cli.mjs',
     'infra/dev/llm-verify/workers.mjs',
     'infra/dev/llm-verify/fake-subscriptions.mjs',
+    'infra/dev/llm-verify/fake-zai.mjs',
     'infra/dev/site-verify/verify-site.mjs',
   ])
     assert.ok(sources.has(path), `the stand imports ${path}`)

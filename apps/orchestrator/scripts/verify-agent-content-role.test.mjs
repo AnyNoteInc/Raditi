@@ -182,13 +182,21 @@ test('the observers count MCP requests by protocol name and site requests by rou
   })
   t.after(() => observers.close())
   seen.length = 0
-  const mcp = (body, host) =>
+  const mcp = (body, headers = {}) =>
     fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(host ? { host } : {}) },
+      headers: { 'content-type': 'application/json', ...headers },
       body,
     })
-  await mcp(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }))
+  await mcp(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-11-25', clientInfo: { name: 'never kept' } },
+    }),
+  )
+  // After initialize a client names the version it took from the answer in a header.
   await mcp(
     JSON.stringify({
       jsonrpc: '2.0',
@@ -196,6 +204,7 @@ test('the observers count MCP requests by protocol name and site requests by rou
       method: 'tools/call',
       params: { name: 'wp_rest', arguments: { secret: 'never kept' } },
     }),
+    { 'mcp-protocol-version': '2025-11-25', authorization: 'Bearer never kept' },
   )
   await mcp('not json')
   await (await fetch(`http://127.0.0.1:${port}/refuse`)).arrayBuffer()
@@ -220,13 +229,14 @@ test('the observers count MCP requests by protocol name and site requests by rou
   const stats = observers.stats()
   assert.deepEqual(stats, {
     http: [
-      { method: 'POST', rpc: 'initialize', tool: null, status: 200 },
-      { method: 'POST', rpc: 'tools/call', tool: 'wp_rest', status: 200 },
-      { method: 'POST', rpc: null, tool: null, status: 200 },
-      { method: 'GET', rpc: null, tool: null, status: 400 },
+      { method: 'POST', rpc: 'initialize', tool: null, protocol: '2025-11-25', status: 200 },
+      { method: 'POST', rpc: 'tools/call', tool: 'wp_rest', protocol: '2025-11-25', status: 200 },
+      { method: 'POST', rpc: null, tool: null, protocol: null, status: 200 },
+      { method: 'GET', rpc: null, tool: null, protocol: null, status: 400 },
     ],
     site: { reads: 1, writes: 2, operations: 1, reconciles: 1, forgets: 1 },
     snapshotBeforeWrite: 1,
+    cancelledUnchanged: 0,
     violations: [
       'A write left for the site before its snapshot was stored and admitted',
       'A request outside the companion plugin routes was sent to the site',
@@ -237,6 +247,101 @@ test('the observers count MCP requests by protocol name and site requests by rou
   stats.site.reads = 99
   assert.equal(observers.stats().site.reads, 1)
   assert.doesNotMatch(JSON.stringify(observers.stats()), /never kept/)
+})
+
+test('what a notifications/cancelled changes is looked at before the role sees it and after its answer', async (t) => {
+  const port = await freePort()
+  const looks = []
+  let kept = 'journal-1'
+  const observers = await startContentObservers({
+    mcp: { listenHost: '127.0.0.1', port, upstream: upstreamOrigin() },
+    site: { upstream: upstreamOrigin() },
+    beforeSiteWrite: async () => {},
+    aroundCancelled: async () => {
+      const before = kept
+      looks.push(`before ${seen.length}`)
+      return async () => {
+        // Not at once: the stand waits for a check that is still running.
+        await new Promise((resolve) => setTimeout(resolve, 150))
+        looks.push(`after ${seen.length}`)
+        assert.equal(kept, before)
+      }
+    },
+  })
+  t.after(() => observers.close())
+  seen.length = 0
+  const mcp = (method) =>
+    fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method }),
+    }).then((response) => response.arrayBuffer())
+  // Any other request is not looked at.
+  await mcp('notifications/initialized')
+  assert.deepEqual(looks, [])
+  await mcp('notifications/cancelled')
+  await observers.settled()
+  // The first look was taken before the role got the request, the second after it answered.
+  assert.deepEqual(looks, ['before 1', 'after 2'])
+  assert.equal(observers.stats().cancelledUnchanged, 1)
+  assert.deepEqual(observers.stats().violations, [])
+  // A CLI may send several at once as it ends: a check that begins while another is waited
+  // for is waited for as well, so every answered notification has been compared.
+  await mcp('notifications/cancelled')
+  const waiting = observers.settled()
+  await mcp('notifications/cancelled')
+  await waiting
+  assert.equal(observers.stats().http.length, 4)
+  assert.equal(observers.stats().cancelledUnchanged, 3)
+  // Something the platform keeps changed between the two looks: a violation, not a count.
+  const second = mcp('notifications/cancelled')
+  await second
+  kept = 'journal-2'
+  await observers.settled()
+  assert.equal(observers.stats().cancelledUnchanged, 3)
+  assert.deepEqual(observers.stats().violations, [
+    'A notifications/cancelled changed what the platform keeps',
+  ])
+  assert.deepEqual(
+    observers.stats().http.map((entry) => [entry.rpc, entry.status]),
+    [
+      ['notifications/initialized', 200],
+      ['notifications/cancelled', 200],
+      ['notifications/cancelled', 200],
+      ['notifications/cancelled', 200],
+      ['notifications/cancelled', 200],
+    ],
+  )
+})
+
+test('a look that fails is a violation, and the notification still reaches the role', async (t) => {
+  const port = await freePort()
+  const observers = await startContentObservers({
+    mcp: { listenHost: '127.0.0.1', port, upstream: upstreamOrigin() },
+    site: { upstream: upstreamOrigin() },
+    beforeSiteWrite: async () => {},
+    aroundCancelled: async () => {
+      throw new Error('synthetic')
+    },
+  })
+  t.after(() => observers.close())
+  seen.length = 0
+  const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled' }),
+  })
+  // The stand's own failure is not the role's answer: the CLI gets what the role said.
+  assert.equal(response.status, 200)
+  assert.equal(seen.length, 1)
+  await observers.settled()
+  const stats = observers.stats()
+  assert.equal(stats.cancelledUnchanged, 0)
+  assert.deepEqual(stats.violations, ['A notifications/cancelled could not be looked at'])
+  assert.deepEqual(
+    stats.http.map((entry) => [entry.rpc, entry.status]),
+    [['notifications/cancelled', 200]],
+  )
 })
 
 const fixtureRole = `

@@ -8,8 +8,9 @@ import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 
-import { createCodexDriver, createKimiDriver } from '@repo/agent-drivers'
+import { createCodexDriver, createKimiDriver, createOpencodeDriver } from '@repo/agent-drivers'
 import {
   preparedFilesSchema,
   preparedRunExposesSecret,
@@ -18,22 +19,121 @@ import {
 } from '@repo/domain'
 
 import { CLI_IMAGE, CLI_VERSIONS } from '../../../infra/dev/llm-verify/cli.mjs'
+import { ZAI_PATHS } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import { repository, run } from '../../../infra/dev/llm-verify/stack.mjs'
+import {
+  resetOpencodeHome,
+  ZAI_BACKEND,
+  ZAI_GATEWAY_BASE_URL,
+  ZAI_MODEL,
+} from './verify-llm-zai-setup.mjs'
 
 const GATEWAY = 'http://sandbox-gw:8080'
 const TURN_MS = 180_000
-const BACKENDS = {
+const PLATFORM_TOOLS = ['site_info', 'wp_rest', 'restore']
+
+/** A provider request in the chat completions format: Kimi and Z.ai. */
+const chatCompletions = {
+  /** Tool names the request declares. */
+  declared: (body) => (body.tools ?? []).map((tool) => (tool.function ?? tool).name),
+  /** What the CLI told the model about its tool calls, oldest first. */
+  toolOutputs: (body) =>
+    (body.messages ?? [])
+      .filter((message) => message.role === 'tool')
+      .map((message) => message.content),
+}
+/** A provider request in the Responses format: Codex nests its tools in namespaces. */
+const responses = {
+  declared: (body) =>
+    [
+      ...(body.tools ?? []),
+      ...(body.input ?? [])
+        .filter((item) => item.type === 'additional_tools')
+        .flatMap((item) => item.tools ?? []),
+    ]
+      .flatMap((tool) => (tool.type === 'namespace' ? (tool.tools ?? []) : [tool]))
+      .map((tool) => tool.name),
+  toolOutputs: (body) =>
+    (body.input ?? [])
+      .filter((item) => /_output$/.test(item.type ?? ''))
+      .map((item) => item.output),
+}
+/** The scenario of the fake of Codex and Kimi, with the result in both of its forms. */
+const subscriptionScenario = (backend) => (control, content, result) =>
+  control('scenario', { ...content, backend, output: result, text: JSON.stringify(result) })
+
+/**
+ * The table of turns: one row a CLI. What the stand does differently for a CLI is in its row;
+ * the turns themselves are the same for every row.
+ */
+const ROWS = {
   codex: {
+    name: 'Codex',
+    driver: createCodexDriver,
     backend: 'openai-chatgpt',
-    path: '/backend-api/codex/responses',
+    // How the role llm reaches the provider. A role process has one way: the stand restarts
+    // the role when the next row needs the other one.
+    path: 'proxy',
     llm: { baseUrl: `${GATEWAY}/codex`, model: 'gpt-6-sol' },
+    effort: 'low',
+    wire: responses,
+    // Codex 0.158 in code mode declares only its `exec` tool and keeps the MCP tools inside
+    // it: there the proof is the call itself.
+    declares: [['exec', (name) => name === 'exec']],
+    requests: (state) =>
+      state.requests.filter((entry) => entry.path === '/backend-api/codex/responses'),
+    scenario: subscriptionScenario('codex'),
   },
   kimi: {
+    name: 'Kimi',
+    driver: createKimiDriver,
     backend: 'kimi-code',
-    path: '/coding/v1/chat/completions',
+    path: 'proxy',
     llm: { baseUrl: `${GATEWAY}/kimi/v1`, model: 'k3-256k' },
+    effort: 'low',
+    wire: chatCompletions,
+    // Kimi declares every MCP tool as a function.
+    declares: PLATFORM_TOOLS.map((tool) => [
+      tool,
+      (name) => new RegExp(`(^|[_.])${tool}$`).test(name ?? ''),
+    ]),
+    // Kimi 2.1.1 checks the arguments of a call against the input schema of tools/list itself:
+    // a route outside the schema's pattern never leaves the CLI.
+    checksArguments: true,
+    requests: (state) =>
+      state.requests.filter((entry) => entry.path === '/coding/v1/chat/completions'),
+    scenario: subscriptionScenario('kimi'),
+  },
+  opencode: {
+    name: 'OpenCode',
+    driver: createOpencodeDriver,
+    backend: ZAI_BACKEND,
+    // Z.ai needs no egress node: the role reaches it on a connection of its own.
+    path: 'direct',
+    llm: { baseUrl: ZAI_GATEWAY_BASE_URL, model: ZAI_MODEL },
+    // The level of the profile glm-5.3-standard; the gateway sets it from the turn key.
+    effort: 'high',
+    wire: chatCompletions,
+    // The pinned OpenCode names a tool of the MCP server `raditi` of the driver's
+    // configuration raditi_<tool>, and declares each one as a function.
+    declares: PLATFORM_TOOLS.map((tool) => [tool, (name) => name === `raditi_${tool}`]),
+    requests: (state) => state.zai.requests.filter((entry) => entry.path === ZAI_PATHS.chat),
+    // The synthetic Z.ai keeps its own scenario and answers with text alone.
+    scenario: (control, content, result) =>
+      control('zai', { scenario: { ...content, text: JSON.stringify(result) } }),
+    // The home of the CLI is new in every sandbox, and the driver's wrapper starts no CLI over
+    // what an earlier turn left in it.
+    prepare: (cli) => resetOpencodeHome(cli.containerName),
+    // The version of MCP the CLI asks for, the role answers and the CLI then names in every
+    // request: the first contact of this CLI with the role's own tools/list.
+    protocol: '2025-11-25',
+    // By the record of the reconnaissance the CLI tells the server that it has dropped a
+    // request after every call it has the answer of.
+    cancels: true,
   },
 }
+/** The CLIs of the stand, in the order of their rows: each gets a page of its own. */
+export const CONTENT_DRIVERS = Object.freeze(Object.keys(ROWS))
 const PRIVACY_MARKER = /\[\[raditi:email:[a-f0-9-]{36}\]\]/
 const { HeadObjectCommand, ListObjectsV2Command } = createRequire(
   join(repository, 'packages/storage/package.json'),
@@ -52,19 +152,6 @@ const resultFor = (summary, changeType) => ({
   risk: 'low',
 })
 
-/** Tool names one provider request declares; Codex nests them in namespaces. */
-function declaredTools(body, driver) {
-  if (driver === 'kimi') return (body.tools ?? []).map((tool) => (tool.function ?? tool).name)
-  return [
-    ...(body.tools ?? []),
-    ...(body.input ?? [])
-      .filter((item) => item.type === 'additional_tools')
-      .flatMap((item) => item.tools ?? []),
-  ]
-    .flatMap((tool) => (tool.type === 'namespace' ? (tool.tools ?? []) : [tool]))
-    .map((tool) => tool.name)
-}
-
 /** Protocol and tool names as one bounded printable line: never arguments, results or headers. */
 const printable = (names) =>
   [...names]
@@ -77,33 +164,60 @@ const printable = (names) =>
     .join(', ')
 
 /** What the CLI told the model about its last tool call, as one bounded printable line. */
-function lastToolOutput(body, driver) {
-  const outputs =
-    driver === 'kimi'
-      ? (body.messages ?? []).filter((message) => message.role === 'tool')
-      : (body.input ?? []).filter((item) => /_output$/.test(item.type ?? ''))
-  const last = outputs.at(-1)
-  if (!last) return null
-  const value = driver === 'kimi' ? last.content : last.output
+function lastToolOutput(outputs) {
+  const value = outputs.at(-1)
+  if (value === undefined || value === null) return null
   return (typeof value === 'string' ? value : JSON.stringify(value))
     .replace(/[^\x20-\x7e]+/g, ' ')
     .slice(0, 400)
 }
 
+/**
+ * What is wrong with the answers the model was handed for the three calls of the edit turn —
+ * the read, the write and the repeat of the write — or null. Their statuses cannot tell: the
+ * role answers a call it refuses after admission with HTTP 200 as well, as a tool result with a
+ * code alone, and a CLI hands the model either. Only the stored answer of the write names the
+ * snapshot of its journal row. With `verbatim`, for a CLI that passes the text of the role's
+ * result as it is, the repeat is held to that answer word for word: the object, the snapshot
+ * taken before the write, `updated`.
+ */
+export function replayProblem(outputs, stored, { verbatim = false } = {}) {
+  if (outputs.length !== 3)
+    return `${outputs.length} tool outputs instead of the read, the write and its repeat`
+  const [, write, repeat] = outputs.map((output) =>
+    typeof output === 'string' ? output : JSON.stringify(output),
+  )
+  if (!write.includes(stored.snapshotId)) return 'the write was not answered from the journal row'
+  if (!repeat.includes(stored.snapshotId))
+    return 'the repeat of the write was not answered from the journal row'
+  if (!verbatim) return null
+  if (repeat !== write) return 'the repeat of the write was answered differently from the write'
+  let answer = null
+  try {
+    answer = JSON.parse(repeat)
+  } catch {
+    /* Not the text of the role alone: judged below. */
+  }
+  return isDeepStrictEqual(answer, { ...stored, updated: true })
+    ? null
+    : 'the repeat of the write did not get the stored answer of the journal row'
+}
+
 export async function verifyAgentContentTurns(ctx) {
-  const { db, cli, control, stats, site, models, workspaceId, credentials, leases, assignments } =
-    ctx
-  const { snapshots, snapshotKey, s3Client, bucket, secretMarkers, passed, setStage } = ctx
+  const { db, cli, control, stats, settled, site, models, workspaceId, credentials } = ctx
+  const { leases, assignments, snapshots, snapshotKey, s3Client, bucket } = ctx
+  const { secretMarkers, passed, setStage, rolePath } = ctx
   const imageId = (
     await run('docker', ['image', 'inspect', '--format', '{{.Id}}', CLI_IMAGE])
   ).stdout.trim()
   assert.match(imageId, /^sha256:[a-f0-9]{64}$/)
   const image = `raditi-p3verify-cli@${imageId}`
-  const drivers = { codex: createCodexDriver({ image }), kimi: createKimiDriver({ image }) }
+  const drivers = Object.fromEntries(
+    Object.entries(ROWS).map(([driver, row]) => [driver, row.driver({ image })]),
+  )
   const instructions =
     '# Raditi platform rules (synthetic)\nEdit published content only through the platform MCP tools.\n'
-  const providerRequests = async (driver) =>
-    (await control('state')).requests.filter((entry) => entry.path === BACKENDS[driver].path)
+  const providerRequests = async (driver) => ROWS[driver].requests(await control('state'))
   const publicPage = async (page) => {
     const response = await fetch(page.url, {
       redirect: 'manual',
@@ -115,6 +229,7 @@ export async function verifyAgentContentTurns(ctx) {
 
   /** Admission as the product does it: lease, product assignment (TaskTurn), issued turn key. */
   async function openTurn(driver, prompt) {
+    const row = ROWS[driver]
     const task = await db.task.create({
       data: { workspaceId, siteId: site.siteId, status: 'running', modelClass: 'standard' },
     })
@@ -142,7 +257,7 @@ export async function verifyAgentContentTurns(ctx) {
         taskId: task.id,
         sessionId,
         turn: 1,
-        llm: { ...BACKENDS[driver].llm, reasoningEffort: 'low' },
+        llm: { ...row.llm, reasoningEffort: row.effort },
         mcp: { url: `${GATEWAY}/mcp` },
         instructions,
       },
@@ -169,10 +284,10 @@ export async function verifyAgentContentTurns(ctx) {
     const ref = { taskId: task.id, sessionId, turn: 1, epoch: assignment.firstEpoch }
     const grant = {
       driverId: driver,
-      backend: BACKENDS[driver].backend,
-      modelSlug: models[BACKENDS[driver].backend].slug,
+      backend: row.backend,
+      modelSlug: models[row.backend].slug,
       modelClass: 'standard',
-      reasoningEffort: 'low',
+      reasoningEffort: row.effort,
       ttlMs: 600_000,
       deadlineAt: assignment.deadlineAt,
       budgetRub: '135.00',
@@ -204,6 +319,7 @@ export async function verifyAgentContentTurns(ctx) {
       false,
       'A prepared file, env value or argument carries a turn credential',
     )
+    await ROWS[turn.driver].prepare?.(cli)
     const before = {
       provider: (await providerRequests(turn.driver)).length,
       mcp: stats(),
@@ -211,6 +327,8 @@ export async function verifyAgentContentTurns(ctx) {
       startedAt: Date.now(),
     }
     const result = await cli.runPrepared({ ...files, argv, timeoutMs: TURN_MS })
+    // The observers' own checks of this turn's requests have all finished.
+    await settled()
     const after = stats()
     // The stand's hops refuse what breaks a promise (a write before its snapshot, a request
     // outside the plugin's routes): the turn then fails for a reason that is named here.
@@ -221,6 +339,7 @@ export async function verifyAgentContentTurns(ctx) {
     )
     const events = result.stdout.split('\n').flatMap((line) => driver.parseEvent(line))
     return {
+      events,
       code: result.code,
       timedOut: result.timedOut === true,
       durationMs: Date.now() - before.startedAt,
@@ -232,6 +351,7 @@ export async function verifyAgentContentTurns(ctx) {
         Object.entries(after.site).map(([name, count]) => [name, count - before.mcp.site[name]]),
       ),
       snapshotBeforeWrite: after.snapshotBeforeWrite - before.mcp.snapshotBeforeWrite,
+      cancelledUnchanged: after.cancelledUnchanged - before.mcp.cancelledUnchanged,
       receipts: (await site.receipts()) - before.receipts,
     }
   }
@@ -290,28 +410,36 @@ export async function verifyAgentContentTurns(ctx) {
     }
   }
 
-  const handshake = (outcome, driver, label) => {
+  const handshake = (outcome, row, label) => {
     for (const rpc of ['initialize', 'tools/list'])
       assert.ok(
         outcome.http.some((entry) => entry.rpc === rpc && entry.status === 200),
         `${label}: the role mcp did not answer ${rpc}`,
       )
-    // Kimi declares every MCP tool as a function. Codex 0.158 in code mode declares only its
-    // `exec` tool and keeps the MCP tools inside it: there the proof is the call itself.
     for (const request of outcome.provider) {
-      const names = declaredTools(request.body, driver)
-      if (driver === 'codex') assert.ok(names.includes('exec'), `${label}: no exec tool declared`)
-      else
-        for (const tool of ['site_info', 'wp_rest', 'restore'])
-          assert.ok(
-            names.some((name) => new RegExp(`(^|[_.])${tool}$`).test(name ?? '')),
-            `${label}: ${tool} was not declared to the provider`,
-          )
+      const names = row.wire.declared(request.body)
+      for (const [tool, declared] of row.declares)
+        assert.ok(names.some(declared), `${label}: ${tool} was not declared to the provider`)
     }
+    // One version of MCP in the whole exchange: asked for in `initialize`, answered by the
+    // role, and named by the client in every request it sent after that answer.
+    if (row.protocol)
+      assert.deepEqual(
+        [
+          ...new Set(
+            outcome.http.filter((entry) => entry.rpc !== null).map((entry) => entry.protocol),
+          ),
+        ],
+        [row.protocol],
+        `${label}: the CLI and the role mcp did not agree on MCP ${row.protocol}`,
+      )
   }
 
-  for (const driver of ['codex', 'kimi']) {
-    const name = driver === 'codex' ? 'Codex' : 'Kimi'
+  for (const [driver, row] of Object.entries(ROWS)) {
+    const { name } = row
+    // The role llm as this provider needs it: through the egress proxy, or without one.
+    setStage(`${name}: the role llm on the ${row.path} path`)
+    await rolePath(row.path)
     const page = site.pages[driver]
     const route = `/wp/v2/pages/${page.id}`
     const changed = `raditi-agent-changed-${randomUUID()}`
@@ -321,20 +449,21 @@ export async function verifyAgentContentTurns(ctx) {
     setStage(label)
     const expected = resultFor(`Agent content ${name} edit`, 'content')
     assert.ok(turnResultSchema.safeParse(expected).success)
-    await control('scenario', {
-      scenario: 'content_edit',
-      backend: driver,
-      route,
-      idempotencyKey: `agent-content-${driver}`,
-      body: { content: `<p>${changed}. Напишите нам: {{contact}}</p>` },
-      output: expected,
-      text: JSON.stringify(expected),
-    })
+    await row.scenario(
+      control,
+      {
+        scenario: 'content_edit',
+        route,
+        idempotencyKey: `agent-content-${driver}`,
+        body: { content: `<p>${changed}. Напишите нам: {{contact}}</p>` },
+      },
+      expected,
+    )
     const edit = await openTurn(driver, 'Update the text of the synthetic page as requested.')
     const edited = await runCli(edit)
     assert.equal(edited.code, 0, `${label}: the CLI exited with ${edited.code}`)
     assert.deepEqual(edited.result, expected)
-    handshake(edited, driver, label)
+    handshake(edited, row, label)
     assert.deepEqual(
       edited.http.filter((entry) => entry.rpc === 'tools/call').map((e) => [e.tool, e.status]),
       [
@@ -347,7 +476,7 @@ export async function verifyAgentContentTurns(ctx) {
     assert.equal(edited.provider.length, 4, `${label}: unexpected number of provider requests`)
     // Observations for the report, names only: what the provider is told about the platform
     // tools, which tools the turn's requests declare, and what the CLI asked of the role mcp.
-    const named = ['site_info', 'wp_rest', 'restore'].filter((tool) =>
+    const named = PLATFORM_TOOLS.filter((tool) =>
       JSON.stringify(edited.provider[0].body).includes(tool),
     )
     console.log(
@@ -355,7 +484,7 @@ export async function verifyAgentContentTurns(ctx) {
     )
     console.log(
       `OBSERVED ${label}: tools declared to the provider: ${printable(
-        new Set(edited.provider.flatMap((request) => declaredTools(request.body, driver))),
+        new Set(edited.provider.flatMap((request) => row.wire.declared(request.body))),
       )}`,
     )
     console.log(
@@ -363,7 +492,14 @@ export async function verifyAgentContentTurns(ctx) {
         edited.http.map((entry) => `${entry.method} ${entry.rpc ?? '-'} ${entry.status}`),
       )}`,
     )
-    passed(`${label}: the role's tools/list is accepted and the model's wp_rest calls arrive`)
+    console.log(
+      `OBSERVED ${label}: MCP versions the client named: ${printable(
+        new Set(edited.http.map((entry) => entry.protocol ?? 'none')),
+      )}`,
+    )
+    passed(
+      `${label}: the role's tools/list is accepted${row.protocol ? ` under MCP ${row.protocol}` : ''} and the model's wp_rest calls arrive`,
+    )
 
     // One journal row, one snapshot and one plugin receipt for the repeated key.
     const calls = await db.mcpCall.findMany({
@@ -379,7 +515,52 @@ export async function verifyAgentContentTurns(ctx) {
     assert.equal(await db.snapshot.count({ where: { taskId: edit.task.id } }), 1)
     assert.deepEqual(edited.site, { reads: 2, writes: 1, operations: 0, reconciles: 0, forgets: 0 })
     assert.equal(edited.receipts, 1, `${label}: the plugin kept ${edited.receipts} receipts`)
-    passed(`${label}: one journal row, one snapshot and one plugin receipt for the repeated key`)
+    // Three statuses of 200 do not say that the repeat was replayed: the role refuses a call
+    // after admission with HTTP 200 as well. What the CLI then handed the model does.
+    assert(call.snapshot, `${label}: the journal row names no snapshot`)
+    const kept = { objectRef: call.objectRef, snapshotId: call.snapshot.id }
+    const outputs = row.wire.toolOutputs(edited.provider.at(-1).body)
+    const problem = replayProblem(outputs, kept)
+    assert.equal(problem, null, `${label}: ${problem}`)
+    passed(
+      `${label}: one journal row, one snapshot and one plugin receipt for the repeated key; the repeat was answered from that row`,
+    )
+
+    // A client may tell the server that it has dropped a request. The role takes every such
+    // notification and nothing follows from it: the stand compared the finished rows of the
+    // journal around each one (a difference is a violation, checked with the turn), and the
+    // lease names no write in flight.
+    const cancelled = edited.http.filter((entry) => entry.rpc === 'notifications/cancelled')
+    assert.ok(
+      cancelled.every((entry) => entry.status === 202),
+      `${label}: the role mcp did not take a notifications/cancelled`,
+    )
+    assert.equal(
+      edited.cancelledUnchanged,
+      cancelled.length,
+      `${label}: the journal was not compared around every notifications/cancelled`,
+    )
+    const held = await db.siteLease.findUniqueOrThrow({ where: { siteId: site.siteId } })
+    assert.equal(held.inflightMcpCallId, null, `${label}: the lease is blocked by a finished write`)
+    if (row.cancels) {
+      // This CLI sends one after every call, the write included. The stand's hop records a
+      // request when its answer has ended, and keeps no id that would say which call a
+      // notification names: what it shows is that the role answered one between its answers to
+      // the write and to the repeat. The repeat still got the stored answer of the one journal
+      // row, word for word as the write did: this CLI hands the model the text of the role.
+      const order = edited.http.map((entry) => entry.rpc)
+      const write = order.indexOf('tools/call', order.indexOf('tools/call') + 1)
+      const repeat = order.indexOf('tools/call', write + 1)
+      assert.ok(
+        order.slice(write + 1, repeat).includes('notifications/cancelled'),
+        `${label}: no notifications/cancelled answered between the write and its repeat`,
+      )
+      const differs = replayProblem(outputs, kept, { verbatim: true })
+      assert.equal(differs, null, `${label}: ${differs}`)
+      passed(
+        `${label}: ${cancelled.length} notifications/cancelled taken; the journal is the same before and after each, the repeat of the write, answered after one of them, got the stored answer word for word, the lease is not blocked`,
+      )
+    }
 
     // The snapshot was in S3 before the write was admitted, and decrypts to the original text.
     assert.equal(edited.snapshotBeforeWrite, 1, `${label}: the write preceded its snapshot`)
@@ -431,9 +612,9 @@ export async function verifyAgentContentTurns(ctx) {
     passed(`${label}: no second site lease during the turn; key revoked, turn closed`)
 
     // Turn B, a separate task: a route outside the profile (third parties' comments). Codex
-    // 0.158 sends the call and the role mcp refuses it at admission; Kimi 2.1.1 checks the
-    // arguments against the input schema of tools/list itself and sends nothing. Either way
-    // nothing is journaled and the site is not asked.
+    // 0.158 and OpenCode 1.18.34 send the call and the role mcp refuses it at admission; Kimi
+    // 2.1.1 checks the arguments against the input schema of tools/list itself and sends
+    // nothing. Either way nothing is journaled and the site is not asked.
     await refusedTurn({
       driver,
       page,
@@ -441,7 +622,7 @@ export async function verifyAgentContentTurns(ctx) {
       label: `${name} forbidden route`,
       prompt: 'Read the first comment of the synthetic site.',
       scenario: { route: '/wp/v2/comments/1' },
-      reachesRole: false,
+      reachesRole: !row.checksArguments,
     })
     // Turn C: a write without an idempotency key. The flat input schema allows it, so every
     // CLI sends it: the refusal is the role's own, before the journal and before the site.
@@ -467,9 +648,17 @@ export async function verifyAgentContentTurns(ctx) {
       .map((snapshot) => snapshot.s3Key)
       .sort(),
   )
-  assert.equal(listed.KeyCount, 2, 'Expected one snapshot object per edited page')
-  // The whole journal, whatever turn a row names: the two edits and nothing of the refused calls.
-  assert.equal(await db.mcpCall.count(), 2, 'Expected one journal row per edited page')
+  assert.equal(
+    listed.KeyCount,
+    CONTENT_DRIVERS.length,
+    'Expected one snapshot object per edited page',
+  )
+  // The whole journal, whatever turn a row names: the edits and nothing of the refused calls.
+  assert.equal(
+    await db.mcpCall.count(),
+    CONTENT_DRIVERS.length,
+    'Expected one journal row per edited page',
+  )
   passed('S3 holds exactly one snapshot object and the journal one row per edit')
 
   /**
@@ -481,21 +670,16 @@ export async function verifyAgentContentTurns(ctx) {
     setStage(label)
     const refusal = resultFor(`Agent content: ${label}`, 'none')
     assert.ok(turnResultSchema.safeParse(refusal).success)
-    await control('scenario', {
-      scenario: 'content_forbidden',
-      backend: driver,
-      ...scenario,
-      output: refusal,
-      text: JSON.stringify(refusal),
-    })
+    const row = ROWS[driver]
+    await row.scenario(control, { scenario: 'content_forbidden', ...scenario }, refusal)
     const turn = await openTurn(driver, prompt)
     const refused = await runCli(turn)
     assert.equal(refused.timedOut, false, `${label}: the turn hung`)
     assert.ok(refused.durationMs < TURN_MS, `${label}: the turn outlived its limit`)
     assert.equal(refused.code, 0, `${label}: the CLI exited with ${refused.code}`)
     assert.deepEqual(refused.result, refusal)
-    handshake(refused, driver, label)
-    const shown = lastToolOutput(refused.provider.at(-1).body, driver)
+    handshake(refused, row, label)
+    const shown = lastToolOutput(row.wire.toolOutputs(refused.provider.at(-1).body))
     assert.ok(shown, `${label}: the model was told nothing about its call`)
     for (const secret of secretMarkers) assert.equal(shown.includes(secret), false)
     const calls = refused.http.filter((entry) => entry.rpc === 'tools/call')
@@ -520,6 +704,16 @@ export async function verifyAgentContentTurns(ctx) {
     // only now: with no accepted call and no request to the site it cannot quote site content.
     console.log(
       `OBSERVED ${label}: ${calls.length} request(s) reached the role mcp, the turn took ${Math.round(refused.durationMs / 1000)} s; the CLI told the model: ${shown}`,
+    )
+    // What the platform itself learns of the refused call: the driver's common tool events.
+    console.log(
+      `OBSERVED ${label}: tool calls the driver reported: ${
+        printable(
+          refused.events
+            .filter((event) => event.type === 'tool_call')
+            .map((event) => `${event.tool} ${event.ok ? 'ok' : 'failed'}`),
+        ) || 'none'
+      }`,
     )
     const html = await publicPage(page)
     assert.ok(html.includes(changed) && !html.includes('Keyless'), `${label}: the page changed`)
