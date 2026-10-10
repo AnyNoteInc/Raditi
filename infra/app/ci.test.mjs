@@ -188,6 +188,20 @@ const workflows = readdirSync(join(root, '.github/workflows'))
 const sets = (source, variable) =>
   new RegExp(`^ +${variable}: \\S|\\b${variable}=`, 'm').test(source)
 
+test('the live mode of the stands never runs in CI: no workflow names it or the plan key', () => {
+  // A live run sends requests to the real provider on a plan with windows (infra/dev/llm-verify/
+  // live.mjs). It is started by a person who holds the key; a workflow has neither the option
+  // nor the variable, and the stand refuses to start when CI is set.
+  for (const { name, source } of workflows) {
+    assert.equal(source.includes('--live'), false, `${name} names --live`)
+    assert.equal(/ZAI_API_KEY/i.test(source), false, `${name} names ZAI_API_KEY`)
+  }
+  assert.match(
+    read('infra/dev/llm-verify/live.mjs'),
+    /if \(set\('CI'\)\) return 'CI is set: the live mode never runs in CI'/,
+  )
+})
+
 test('every test suite enabled by an environment variable is enabled by a workflow', () => {
   // Suites no workflow enables by their variable, each with the reason it is acceptable.
   const elsewhere = {

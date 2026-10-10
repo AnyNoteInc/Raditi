@@ -55,6 +55,33 @@ services:
       providers:
         aliases: [chatgpt.com, auth.openai.com, api.kimi.ai, api.z.ai]
       trusted: {}
+  # Only a live stack (profile live; stack.mjs starts its services by name): the MCP side of the
+  # synthetic services and its control port, and nothing of a provider — no listener for one, no
+  # name of one, no certificate. sandbox-gw of the gateway stand sends /mcp here.
+  synthetic-mcp:
+    profiles: [live]
+    image: ${VERIFY_NODE_IMAGE}
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ['node', '/verify/fake-subscriptions.mjs']
+    command:
+      [
+        '--mcp-only',
+        '--control-host',
+        '0.0.0.0',
+        '--control-port',
+        '8787',
+        '--mcp-host',
+        '0.0.0.0',
+        '--mcp-port',
+        '8788',
+      ]
+    volumes:
+      - ${VERIFY_ROOT}/infra/dev/llm-verify:/verify:ro
+    ports: ['127.0.0.1::8787']
+    networks: [trusted]
   llm-egress:
     image: ${VERIFY_NODE_IMAGE}
     user: '10001:10001'

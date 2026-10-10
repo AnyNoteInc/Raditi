@@ -377,6 +377,12 @@ test('the role is started from its entry point, waited for by /health and stoppe
   assert.match(role.logs.join(''), /listening/)
   assert.deepEqual(await role.close(), { code: 0, signal: null, spawned: true })
   assert.match(role.logs.join(''), /stopping/)
+  // Each pipe of the role by itself as well, for a search that must not miss a value a read of
+  // the pipe cut in two.
+  assert.deepEqual(
+    role.streams.map((chunks) => chunks.join('')),
+    ['listening\nstopping\n', ''],
+  )
   // Closing twice asks nothing twice.
   assert.deepEqual(await role.close(), { code: 0, signal: null, spawned: true })
   // A role that exits at startup is reported with what it printed: names of settings, no values.

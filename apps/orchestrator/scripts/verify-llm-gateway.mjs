@@ -1,5 +1,6 @@
 /* global AbortSignal, console, fetch */
 // A synthetic, disposable gateway-to-CLI verification. No user env-file or login is loaded.
+// With --live the same path ends at the real provider (verify-llm-live.mjs).
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -30,6 +31,7 @@ import {
   SYNTHETIC_ZAI_MARKER,
   SYNTHETIC_ZAI_ROTATED_KEY,
 } from '../../../infra/dev/llm-verify/fake-zai.mjs'
+import { standMode } from '../../../infra/dev/llm-verify/live.mjs'
 import { startWorker } from '../../../infra/dev/llm-verify/workers.mjs'
 import { llmConfigFromEnv } from '../src/config/llm-config.ts'
 import { createControlEgress, createEgressTransport } from '../src/llm-gateway/egress.ts'
@@ -41,17 +43,23 @@ import { verifyCrashes } from './verify-llm-crashes.mjs'
 import { verifyProtocol } from './verify-llm-protocol.mjs'
 import { verifyStreamFailures } from './verify-llm-gateway-stream.mjs'
 import { verifyDriverTurns } from './verify-llm-gateway-drivers.mjs'
+import { runLiveGateway } from './verify-llm-live.mjs'
 import { verifyZai } from './verify-llm-zai.mjs'
 
-const args = new Set(process.argv.slice(2))
-if (args.has('--help')) {
+if (process.argv.includes('--help')) {
   console.log(
-    'verify:llm-gateway [--no-build]: disposable PostgreSQL/OpenBao, synthetic TLS providers and real pinned CLI containers. No real subscriptions or .env files.',
+    'verify:llm-gateway [--no-build]: disposable PostgreSQL/OpenBao, synthetic TLS providers and real pinned CLI containers. No real subscriptions or .env files.\n' +
+      'verify:llm-gateway --live [--measure] [--no-build] [--keep=<directory>]: the same path to the real provider, with ZAI_API_KEY in the environment; never in CI.\n' +
+      'verify:llm-gateway --rehearsal [--no-build]: the live flow on the synthetic provider.\n' +
+      'infra/dev/llm-verify/README.md',
   )
   process.exit(0)
 }
-if ([...args].some((arg) => arg !== '--no-build'))
-  throw new Error('Only --no-build is supported; real subscriptions are not accepted')
+const mode = standMode(process.argv.slice(2), { stand: 'gateway' })
+// The live mode and its rehearsal are a run of their own: nothing below starts for them, and
+// the plan key leaves the environment before any other process exists.
+if (mode.live || mode.rehearsal) process.exit(await runLiveGateway(mode))
+const args = new Set(mode.noBuild ? ['--no-build'] : [])
 
 let stage = 'build',
   checks = 0,
@@ -659,8 +667,10 @@ try {
   ).stdout
   await control('state')
   const publicText = [
-    ...workers.flatMap((worker) => worker.logs),
-    ...extraLogs.flat(),
+    // One text a pipe, and one for each worker of an earlier scenario: a read of a pipe may
+    // end inside a value.
+    ...workers.flatMap((worker) => worker.streams.map((chunks) => chunks.join(''))),
+    ...extraLogs.map((chunks) => chunks.join('')),
     serviceLogs,
     audit,
     dump,

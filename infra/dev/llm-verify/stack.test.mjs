@@ -42,8 +42,12 @@ test('sandbox-gw reaches the synthetic MCP unless the stand runs the real role m
   // The role mcp is a process on the host, like the role llm.
   assert.equal(mcpUpstream(18082), 'http://host.docker.internal:18082')
   for (const port of [0, 65536, 1.5, '18082', null]) assert.throws(() => mcpUpstream(port))
+  // A live stack runs the MCP side of the synthetic services alone, under its own name; the
+  // real role mcp of the content stand is where it always was.
+  assert.equal(mcpUpstream(undefined, { live: true }), 'http://synthetic-mcp:8788')
+  assert.equal(mcpUpstream(18082, { live: true }), 'http://host.docker.internal:18082')
   const source = await readFile(new URL('./stack.mjs', import.meta.url), 'utf8')
-  assert.match(source, /VERIFY_MCP_UPSTREAM: mcpUpstream\(mcpPort\),/)
+  assert.match(source, /VERIFY_MCP_UPSTREAM: mcpUpstream\(mcpPort, \{ live \}\),/)
   assert.match(source, /const mcpPort = content \? await unusedPort\(\) : undefined/)
 })
 
@@ -51,9 +55,10 @@ test('the content profile adds one S3 for snapshots and leaves the gateway stand
   const source = await readFile(new URL('./compose.yml', import.meta.url), 'utf8')
   const [, s3] = /^ {2}s3:\n((?: {4}.*\n)+)/m.exec(source) ?? []
   assert.ok(s3, 'compose.yml has the s3 service')
-  // verify:llm-gateway starts without the profile: the same services as before.
+  // verify:llm-gateway starts without the profile: the same services as before. The one other
+  // profile is the MCP side a live stack starts by name (live.test.mjs).
   assert.match(s3, /^ {4}profiles: \[content\]$/m)
-  assert.equal(source.match(/profiles:/g).length, 1)
+  assert.deepEqual(source.match(/profiles: .*/g), ['profiles: [live]', 'profiles: [content]'])
   // The image every stand pins, published on loopback only, with the harness's own identity.
   assert.ok(s3.includes(` ${serviceImages.s3}\n`), "the S3 image differs from the stands' pin")
   assert.match(s3, /^ {4}ports: \['127\.0\.0\.1::8333'\]$/m)

@@ -4,7 +4,9 @@
 // the build (content profile local, AppRole mcp, the site access from Vault through
 // credential_refs) and the WordPress plugin. Codex and Kimi go through the stand's egress proxy,
 // OpenCode on Z.ai without one, as in the product. Disposable services and synthetic content
-// only: no user env-file, login or subscription is loaded.
+// only: no user env-file, login or subscription is loaded. With --live the provider at the end
+// of the OpenCode path is the real one (verify-agent-content-live.mjs; rules and limits in
+// infra/dev/llm-verify/README.md); --rehearsal runs that flow on the synthetic Z.ai.
 import assert from 'node:assert/strict'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
@@ -25,7 +27,12 @@ import { createVaultSecretStore } from '@repo/vault'
 import { seedReferenceData } from '../../../packages/db/prisma/seed/apply.ts'
 import { CLI_IMAGE, createCliSession, RUNTIME_IMAGE } from '../../../infra/dev/llm-verify/cli.mjs'
 import { SYNTHETIC_KIMI_KEY } from '../../../infra/dev/llm-verify/fake-subscriptions.mjs'
-import { SYNTHETIC_ZAI_KEY, SYNTHETIC_ZAI_MARKER } from '../../../infra/dev/llm-verify/fake-zai.mjs'
+import {
+  SYNTHETIC_ZAI_KEY,
+  SYNTHETIC_ZAI_MARKER,
+  ZAI_PATHS,
+} from '../../../infra/dev/llm-verify/fake-zai.mjs'
+import { LiveRefusal, standMode } from '../../../infra/dev/llm-verify/live.mjs'
 import {
   abortVerification,
   eventually,
@@ -49,7 +56,13 @@ import {
   startContentObservers,
   startRegularRole,
 } from './verify-agent-content-role.mjs'
+import {
+  CONTENT_TURN_CALLS,
+  liveContentPages,
+  liveContentTurns,
+} from './verify-agent-content-live.mjs'
 import { CONTENT_DRIVERS, verifyAgentContentTurns } from './verify-agent-content-turns.mjs'
+import { assertImages, openLiveRun, REFUSED } from './verify-llm-live-run.mjs'
 import {
   switchOnZai,
   ZAI_BACKEND,
@@ -60,16 +73,18 @@ import {
 
 const GUARD_IMAGE = 'raditi-p3verify-guard:b13'
 const ZAI_LABEL = 'synthetic-zai'
-const args = new Set(process.argv.slice(2).filter((value) => value !== '--'))
-if (args.has('--help')) {
+if (process.argv.includes('--help')) {
   console.log(
-    'verify:agent-content [--no-build]: real pinned CLIs (Codex, Kimi, OpenCode) edit a page of a disposable WordPress through the real roles llm and mcp. Synthetic providers and content; no real subscriptions or .env files.',
+    'verify:agent-content [--no-build]: real pinned CLIs (Codex, Kimi, OpenCode) edit a page of a disposable WordPress through the real roles llm and mcp. Synthetic providers and content; no real subscriptions or .env files.\n' +
+      'verify:agent-content --live [--no-build] [--keep=<directory>]: OpenCode alone, on the real provider, with ZAI_API_KEY in the environment; never in CI.\n' +
+      'verify:agent-content --rehearsal [--no-build]: the live flow on the synthetic provider.\n' +
+      'infra/dev/llm-verify/README.md',
   )
   process.exit(0)
 }
-if ([...args].some((arg) => arg !== '--no-build'))
-  throw new Error('Only --no-build is supported; real subscriptions and sites are not accepted')
-// The WordPress fixture reads the same argv and refuses any option: this stand's flag ends here.
+const mode = standMode(process.argv.slice(2), { stand: 'content' })
+const args = new Set(mode.noBuild ? ['--no-build'] : [])
+// The WordPress fixture reads the same argv and refuses any option: this stand's flags end here.
 process.argv.length = 2
 
 let stage = 'build',
@@ -100,6 +115,16 @@ const interrupt = () => {
 // Ctrl-C) would end the process in the middle of its cleanup and leave both stacks behind.
 process.on('SIGINT', interrupt)
 process.on('SIGTERM', interrupt)
+// A live run or its rehearsal: the plan key leaves the environment here, before any other
+// process exists, and a run that must not start ends here.
+const live =
+  mode.live || mode.rehearsal
+    ? await openLiveRun({ mode, kind: 'content', onExpire: interrupt })
+    : null
+if (live === REFUSED) process.exit(REFUSED)
+const cliOutputs = []
+// What a failed live run still holds beside what the run itself kept: named once the roles run.
+let whatIsLeft = () => [{ name: 'events and output of the CLI', texts: cliOutputs }]
 
 /** The images of B13: the production agent runtime, the CLI harness on it, the network guard. */
 async function build() {
@@ -128,8 +153,11 @@ async function build() {
   await image('network-guard', GUARD_IMAGE, 'infra/sandbox/Dockerfile', repository)
 }
 
-/** The bounded companion plugin, an application password and one page per CLI. */
-async function prepareSite({ wp, compose, url }) {
+/**
+ * The bounded companion plugin, an application password and the pages: one a CLI in the
+ * deterministic pass, one an attempt in the live flow.
+ */
+async function prepareSite({ wp, compose, url }, pageNames) {
   const siteId = randomUUID()
   const plugin = await readFile(join(repository, 'infra/wordpress/raditi-content.php'))
   const target = '/var/www/html/wp-content/mu-plugins/raditi-content.php'
@@ -159,7 +187,7 @@ async function prepareSite({ wp, compose, url }) {
   assert(applicationPassword.length > 10, 'Fixture application password is missing')
   secretMarkers.add(applicationPassword)
   const pages = {}
-  for (const driver of CONTENT_DRIVERS) {
+  for (const driver of pageNames) {
     const original = `raditi-agent-original-${randomUUID()}`
     // A third party's contact on the page: the model must only ever see its opaque marker.
     const contact = `contact-${driver}-${randomBytes(4).toString('hex')}@example.test`
@@ -348,30 +376,66 @@ async function stand(site) {
   stage = 'disposable stack'
   stack = await startVerificationStack({
     content: true,
+    live: mode.live,
     onStage: (name) => {
       stage = name
     },
   })
-  passed('disposable PostgreSQL, OpenBao, S3, synthetic providers, egress proxy and sandbox-gw')
+  await live?.useProvider(stack)
+  passed(
+    mode.live
+      ? 'disposable PostgreSQL, OpenBao, S3 and sandbox-gw; no synthetic provider, egress proxy or certificate'
+      : 'disposable PostgreSQL, OpenBao, S3, synthetic providers, egress proxy and sandbox-gw',
+  )
   db = createPrismaClient({ databaseUrl: stack.databaseUrl, log: [] })
   await seedReferenceData(db)
   const metricsToken = randomBytes(24).toString('hex')
-  const env = {
-    APP_ENV: 'test',
-    DATABASE_URL: stack.databaseUrl,
-    VAULT_ADDR: stack.vaultAddress,
-    METRICS_TOKEN: metricsToken,
-    LLM_GATEWAY_PORT: String(stack.llmPort),
-    LLM_GATEWAY_LISTEN_HOST: '0.0.0.0',
-    LLM_GATEWAY_CLIENTS: '127.0.0.1/32,172.16.0.0/12,192.168.0.0/16',
-    LLM_GATEWAY_HOSTS: `host.docker.internal:${stack.llmPort},127.0.0.1:${stack.llmPort}`,
-    LLM_EGRESS_PROXY_URL: stack.egressUrl,
-    LLM_EGRESS_CA_FILE: join(stack.certificates.authority, 'root.pem'),
-    LLM_EGRESS_CLIENT_CERT_FILE: join(stack.certificates.authority, 'clients/b13-llm.pem'),
-    LLM_EGRESS_CLIENT_KEY_FILE: join(stack.certificates.authority, 'clients/b13-llm-key.pem'),
-    LLM_UPSTREAM_CA_FILE: join(stack.certificates.authority, 'root.pem'),
-  }
+  // A live run puts its observer where sandbox-gw sends, and the role behind it on loopback.
+  const { observer, rolePort: llmPort } = live
+    ? await live.startObserver(stack)
+    : { observer: null, rolePort: stack.llmPort }
+  const env = live
+    ? live.roleEnvironment({
+        stack,
+        rolePort: llmPort,
+        metricsToken,
+        callsPerKey: CONTENT_TURN_CALLS,
+      })
+    : {
+        APP_ENV: 'test',
+        DATABASE_URL: stack.databaseUrl,
+        VAULT_ADDR: stack.vaultAddress,
+        METRICS_TOKEN: metricsToken,
+        LLM_GATEWAY_PORT: String(stack.llmPort),
+        LLM_GATEWAY_LISTEN_HOST: '0.0.0.0',
+        LLM_GATEWAY_CLIENTS: '127.0.0.1/32,172.16.0.0/12,192.168.0.0/16',
+        LLM_GATEWAY_HOSTS: `host.docker.internal:${stack.llmPort},127.0.0.1:${stack.llmPort}`,
+        LLM_EGRESS_PROXY_URL: stack.egressUrl,
+        LLM_EGRESS_CA_FILE: join(stack.certificates.authority, 'root.pem'),
+        LLM_EGRESS_CLIENT_CERT_FILE: join(stack.certificates.authority, 'clients/b13-llm.pem'),
+        LLM_EGRESS_CLIENT_KEY_FILE: join(stack.certificates.authority, 'clients/b13-llm-key.pem'),
+        LLM_UPSTREAM_CA_FILE: join(stack.certificates.authority, 'root.pem'),
+      }
+  /**
+   * What the CLI sent to the provider, as the stand's hop in front of the role llm saw it: a
+   * live run has no synthetic provider to ask. A request without tools is the CLI's context
+   * compaction and declares nothing.
+   */
+  const observed = () => ({
+    zai: {
+      requests: observer.exchanges().flatMap((exchange) => {
+        if (exchange.method !== 'POST') return []
+        try {
+          const body = JSON.parse(exchange.requestBody)
+          return body.tools === undefined ? [] : [{ path: ZAI_PATHS.chat, body }]
+        } catch {
+          return []
+        }
+      }),
+    },
+  })
   const control = async (path, body) => {
+    if (live && path === 'state') return observed()
     const result = await fetch(`${stack.control}/${path}`, {
       ...(body === undefined
         ? {}
@@ -385,8 +449,21 @@ async function stand(site) {
     assert.equal(result.status, 200, 'Synthetic control request failed')
     return result.json()
   }
-  stage = 'synthetic subscription accounts'
-  const models = await importAccounts(env)
+  stage = live ? 'import of the plan key' : 'synthetic subscription accounts'
+  let models, accountId
+  if (live) {
+    // One account: the plan key from the environment of the stand, by the operator command.
+    accountId = await live.importKey({ stack, db })
+    models = {
+      [ZAI_BACKEND]: await switchOnZai(db, {
+        accountId,
+        ratesUrl: 'https://synthetic.invalid/agent-content-rates',
+      }),
+    }
+    passed(
+      'the plan key went from the environment of the stand to the operator command on its input; the import passed on the quota answer of the provider',
+    )
+  } else models = await importAccounts(env)
   const storageEnv = {
     S3_ENDPOINT: stack.s3.endpoint,
     S3_REGION: stack.s3.region,
@@ -468,6 +545,14 @@ async function stand(site) {
   let llm, path
   const rolePath = async (wanted) => {
     if (path === wanted) return
+    if (live) {
+      // One way, the product's for this provider, under the request guard of the run.
+      assert.equal(wanted, 'direct')
+      llm = await live.startLlm({ stack, env })
+      workers.push(llm)
+      path = wanted
+      return
+    }
     await llm?.close()
     llm = await startWorker('llm', {
       env: {
@@ -485,7 +570,7 @@ async function stand(site) {
     await eventually(async () => llm.logs.join('').includes(line), 10_000)
     path = wanted
   }
-  await rolePath('proxy')
+  await rolePath(live ? 'direct' : 'proxy')
   // Nothing the stand holds for its own setup may show up in what the platform keeps or logs.
   for (const value of [
     stack.s3.secretKey,
@@ -531,7 +616,7 @@ async function stand(site) {
     secrets: createVaultSecretStore({ addr: stack.vaultAddress, appRole: stack.roles.core }),
     requireAssignment: true,
     // As core does: windows nobody has written are the role llm's to probe before a selection.
-    probeAccounts: createPoolProbeClient(`http://127.0.0.1:${stack.llmPort}`, metricsToken),
+    probeAccounts: createPoolProbeClient(`http://127.0.0.1:${llmPort}`, metricsToken),
   })
   // The stand opens a snapshot to compare it with the page: a token that can only unwrap data
   // keys of workspaces, not the operator's.
@@ -580,7 +665,55 @@ async function stand(site) {
         })
       ).code === 0,
   )
-  await verifyAgentContentTurns({
+  /** The trusted side of the role mcp in a process of its own, with the role's environment. */
+  const undo = async (request) => {
+    const { fence } = request
+    const result = await run(
+      process.execPath,
+      [join(repository, 'apps/orchestrator/scripts/verify-agent-content-undo.mjs')],
+      {
+        input: `${JSON.stringify({
+          fence: {
+            siteId: fence.siteId,
+            taskId: fence.taskId,
+            operation: fence.operation,
+            epoch: Number(fence.epoch),
+          },
+          turn: request.turn,
+        })}\n`,
+        env: roleEnvironment({
+          path: process.env.PATH,
+          home: roleHome(stack.directory),
+          port: rolePort,
+          allowedHosts: ['127.0.0.1'],
+          databaseUrl: stack.databaseUrl,
+          vault: { address: stack.vaultAddress, ...stack.roles.mcp },
+          s3: stack.s3,
+        }),
+        allowFailure: true,
+      },
+    )
+    live.logs.push([result.stdout], [result.stderr])
+    assert.equal(result.code, 0, `The trusted return failed: ${result.stderr.trim().slice(0, 200)}`)
+    return JSON.parse(result.stdout)
+  }
+  if (mode.rehearsal) await live.proveSandboxSearch(cli.containerName)
+  whatIsLeft = () => [
+    { name: 'logs of the roles llm and mcp', streams: workers.flatMap((w) => w.streams) },
+    { name: 'events and output of the CLI', texts: cliOutputs },
+  ]
+  const finished = await verifyAgentContentTurns({
+    live: live
+      ? liveContentTurns({
+          live,
+          accountId,
+          undo,
+          outputs: cliOutputs,
+          // Only a rehearsal has a provider to script.
+          script: mode.rehearsal ? (scenario) => control('zai', { scenario }) : null,
+        })
+      : undefined,
+    exchanges: () => observer.exchanges(),
     db,
     cli,
     control,
@@ -605,36 +738,44 @@ async function stand(site) {
     },
   })
   stage = 'the way of each provider'
-  // The stand's proxy logs a tunnel by its host when the tunnel ends: Codex and Kimi went
-  // through it, and nothing of the role without a proxy did.
-  const tunnels = (await stack.compose(['logs', '--no-color', 'llm-egress'])).stdout
-    .split('\n')
-    .filter((line) => line.includes('"event":"connect"'))
-  for (const host of ['chatgpt.com:443', 'api.kimi.ai:443'])
-    assert.ok(
-      tunnels.some((line) => line.includes(`"${host}"`)),
-      `No tunnel to ${host} through the proxy`,
-    )
-  assert.equal(
-    tunnels.some((line) => line.includes('"api.z.ai:443"')),
-    false,
-    'Z.ai was reached through the egress proxy',
-  )
   assert.equal(path, 'direct')
-  // What the synthetic Z.ai got came with the plan key, which only the role llm reads; and the
-  // windows of the account, which nobody wrote, are what the role's probe stored at the first
-  // issue.
-  const zai = await control('zai')
-  assert.ok(zai.requests.length > 0, 'The synthetic Z.ai was not asked')
-  assert.ok(
-    zai.requests.every((request) => request.credential === 'plan-key'),
-    'A request reached Z.ai without the plan key',
-  )
-  const account = await db.subscriptionAccount.findFirstOrThrow({ where: { label: ZAI_LABEL } })
-  assert.deepEqual(account.limitWindows.map((window) => window.name).sort(), ['5h', 'week'])
-  passed(
-    "Codex and Kimi through the egress proxy, Z.ai on the role's own connection with the plan key; its windows from the role's probe",
-  )
+  if (mode.rehearsal) await live.proveFailureSearch({ stack, places: whatIsLeft() })
+  if (live) {
+    // The windows the run ends on, by one more reading of the quota through the role.
+    const after = await live.quota({ llm, accountId, what: 'at the end' })
+    live.growth(finished.windows, after)
+    await live.keepExchanges()
+  } else {
+    // The stand's proxy logs a tunnel by its host when the tunnel ends: Codex and Kimi went
+    // through it, and nothing of the role without a proxy did.
+    const tunnels = (await stack.compose(['logs', '--no-color', 'llm-egress'])).stdout
+      .split('\n')
+      .filter((line) => line.includes('"event":"connect"'))
+    for (const host of ['chatgpt.com:443', 'api.kimi.ai:443'])
+      assert.ok(
+        tunnels.some((line) => line.includes(`"${host}"`)),
+        `No tunnel to ${host} through the proxy`,
+      )
+    assert.equal(
+      tunnels.some((line) => line.includes('"api.z.ai:443"')),
+      false,
+      'Z.ai was reached through the egress proxy',
+    )
+    // What the synthetic Z.ai got came with the plan key, which only the role llm reads; and
+    // the windows of the account, which nobody wrote, are what the role's probe stored at the
+    // first issue.
+    const zai = await control('zai')
+    assert.ok(zai.requests.length > 0, 'The synthetic Z.ai was not asked')
+    assert.ok(
+      zai.requests.every((request) => request.credential === 'plan-key'),
+      'A request reached Z.ai without the plan key',
+    )
+    const account = await db.subscriptionAccount.findFirstOrThrow({ where: { label: ZAI_LABEL } })
+    assert.deepEqual(account.limitWindows.map((window) => window.name).sort(), ['5h', 'week'])
+    passed(
+      "Codex and Kimi through the egress proxy, Z.ai on the role's own connection with the plan key; its windows from the role's probe",
+    )
+  }
   stage = 'log and database secrecy'
   const serviceLogs = (await stack.compose(['logs', '--no-color'])).stdout
   const audit = (await stack.compose(['exec', '-T', 'vault', 'cat', '/audit/audit.jsonl'])).stdout
@@ -654,9 +795,13 @@ async function stand(site) {
   // The role mcp writes with its production logger: an empty log would prove nothing below.
   assert.ok(mcp.logs.join('').includes('mcp role listening on'), 'The role mcp logged nothing')
   assert.deepEqual(observers.stats().violations, [], 'The stand observed a broken promise')
-  const platformText = [...workers.flatMap((worker) => worker.logs), serviceLogs, audit, dump].join(
-    '\n',
-  )
+  // The output of a role is one text a pipe: a read of the pipe may end inside a value.
+  const platformText = [
+    ...workers.flatMap((worker) => worker.streams.map((chunks) => chunks.join(''))),
+    serviceLogs,
+    audit,
+    dump,
+  ].join('\n')
   // Turn keys, MCP tokens, subscription values, the site's password and the visitors' contacts.
   for (const forbidden of [...secretMarkers, ...Object.values(site.pages).map((p) => p.contact)])
     assert.equal(
@@ -665,20 +810,60 @@ async function stand(site) {
       'A private marker reached platform storage or logs',
     )
   passed('no turn key, MCP token, site password or contact in platform logs, audit or SQL')
+  if (!live) return
+  stage = 'the search for the plan key'
+  const containers = (
+    await run('docker', [
+      'ps',
+      '-aq',
+      '--filter',
+      `label=com.docker.compose.project=${stack.project}`,
+    ])
+  ).stdout
+    .split('\n')
+    .filter(Boolean)
+  const inspected = await run('docker', ['inspect', ...containers, cli.containerName, guard])
+  const places = await live.assertKeyNowhere({
+    stack,
+    places: [
+      { name: 'logs of the services', text: serviceLogs },
+      { name: 'audit log of OpenBao', text: audit },
+      { name: 'database dump', text: dump },
+      { name: 'logs of the roles llm and mcp', streams: workers.flatMap((w) => w.streams) },
+      { name: 'events and output of the CLI', texts: cliOutputs },
+      { name: 'S3 objects', texts: finished.objects },
+      { name: 'content snapshots, opened', texts: finished.opened },
+      { name: 'docker inspect of the containers', text: inspected.stdout },
+    ],
+  })
+  passed(
+    `the plan key is in none of ${places} places: logs, audit, database, S3 objects and opened snapshots, CLI events, exchanges, docker inspect, the files of the sandbox and of the stand`,
+  )
+  live.settle()
 }
 
 let failure
 try {
-  if (!args.has('--no-build')) await build()
+  if (live) {
+    // A live run builds no image: those of the deterministic stand are its own.
+    if (!args.has('--no-build')) await run('pnpm', ['--filter', 'orchestrator', 'build'])
+    await assertImages()
+  } else if (!args.has('--no-build')) await build()
   stage = 'disposable WordPress'
   await verifySiteFoundation({
     scenario: async ({ wp, compose, url }) => {
       try {
         stage = 'WordPress plugin, application password and pages'
-        const site = await prepareSite({ wp, compose, url })
+        const site = await prepareSite(
+          { wp, compose, url },
+          live ? liveContentPages() : CONTENT_DRIVERS,
+        )
         await stand(site)
       } catch (error) {
         failure = error
+        // Before the cleanup removes it: the search for the key over what the run still holds,
+        // and with --keep the exchanges, for the diagnosis of the failure.
+        if (live) await live.afterFailure({ stack, places: whatIsLeft() })
         throw error
       } finally {
         const cleanup = [
@@ -692,6 +877,10 @@ try {
           () => locks?.close(),
           () => db?.$disconnect(),
           () => s3Client?.destroy(),
+          async () => {
+            if (live && !(await live.close())) throw new Error('cleanup')
+          },
+          // Last: the OpenBao container of a live run holds the plan key until it is removed.
           () => stack?.close(),
         ]
         let removed = true
@@ -709,29 +898,54 @@ try {
     },
   })
   if (process.exitCode) throw new Error('Cleanup failed')
-  console.log(
-    `Agent content verification passed: ${checks} checks; CLI Codex 0.158.0 / Kimi 2.1.1 / OpenCode 1.18.34; synthetic providers, real role llm, regular role mcp under AppRole, real WordPress.`,
-  )
+  if (live)
+    // The exit code is of what the platform owes: the last line says where the model's part is.
+    console.log(
+      mode.rehearsal
+        ? `Rehearsal of the live agent content verification passed: ${checks + live.checks()} checks.`
+        : `Live agent content verification passed: ${checks + live.checks()} checks; OpenCode 1.18.34 on the real provider, real role llm, regular role mcp under AppRole, real WordPress. The checks are of what the platform owes; the model's outcomes are shares in the REPORT lines.`,
+    )
+  else
+    console.log(
+      `Agent content verification passed: ${checks} checks; CLI Codex 0.158.0 / Kimi 2.1.1 / OpenCode 1.18.34; synthetic providers, real role llm, regular role mcp under AppRole, real WordPress.`,
+    )
 } catch (error) {
   const cause = failure ?? error
   if (cause.infrastructureDiagnostic) console.error(cause.infrastructureDiagnostic)
+  const text = String(cause.stack ?? cause.message ?? cause)
   // The diagnostic is private: assertion values may quote synthetic content or identifiers.
   // A signal is not a failure to diagnose: nothing is left behind for it.
-  if (interrupted) console.error(`Agent content verification interrupted at: ${stage}`)
+  if (cause instanceof LiveRefusal) {
+    console.error(`Live verification refused to start: ${cause.message}`)
+    process.exitCode = REFUSED
+  } else if (interrupted)
+    console.error(
+      `Agent content verification interrupted at: ${stage}${live?.expired() ? ' (the time limit of the run)' : ''}`,
+    )
+  // Nothing is written where the text could hold the plan key.
+  else if (live?.key.foundIn(text)) console.error(`Agent content verification failed at: ${stage}`)
   else
     try {
+      // The first line of a live failure is the stand's own words: names and numbers.
+      if (live)
+        console.error(
+          String(cause.message ?? '')
+            .split('\n')[0]
+            .slice(0, 400),
+        )
       const directory = await mkdtemp(join(tmpdir(), 'raditi-agent-content-diagnostic-'))
       await chmod(directory, 0o700)
       const path = join(directory, 'failure.log')
-      await writeFile(path, String(cause.stack ?? cause.message ?? cause).slice(-64 * 1024), {
-        mode: 0o600,
-      })
+      await writeFile(path, text.slice(-64 * 1024), { mode: 0o600 })
       console.error(`Agent content verification failed at: ${stage}; private diagnostic: ${path}`)
     } catch {
       console.error(`Agent content verification failed at: ${stage}`)
     }
-  process.exitCode = 1
+  process.exitCode ||= 1
 } finally {
+  // A run that failed before its stack started was not closed with the stack: its directory
+  // and its time limit end here. Closing twice does nothing twice.
+  await live?.close().catch(() => {})
   process.removeListener('SIGINT', interrupt)
   process.removeListener('SIGTERM', interrupt)
 }

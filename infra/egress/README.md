@@ -59,7 +59,7 @@ infra/egress/make-ca.sh client "$CA" op-1 14
 | `root.pem` | `egress-1`: `/etc/raditi/egress/root.pem`. app-ВМ: `/run/raditi/llm/egress-ca.pem` (M10). Машина владельца — для `curl` | Нет |
 | `client-ca.pem` | `egress-1`: `/etc/raditi/egress/client-ca.pem` | Нет |
 | `server/egress-1.raditi.internal.pem` и `…-key.pem` | `egress-1`: `server.pem` и `server-key.pem` в `/etc/raditi/egress/` | Ключ — да |
-| `clients/op-1.pem` и `op-1-key.pem` | На 14 дней: машина владельца (проверка канала и `verify:llm-gateway --real`) и, если разведка идёт через узел, `spike-1` | Ключ — да |
+| `clients/op-1.pem` и `op-1-key.pem` | На 14 дней: машина владельца (проверка канала) и, если разведка идёт через узел, `spike-1` | Ключ — да |
 | `clients/app-1.pem` и `app-1-key.pem` (M10) | app-ВМ: `/run/raditi/llm/egress-client.pem` и `egress-client-key.pem` через vault-agent | Ключ — да |
 
 - **Сроки:** корень — 10 лет, промежуточные CA — 5 лет, сервер и `app-1` — 397 дней, `op-1` — 14 дней. `make-ca.sh` печатает дату окончания.

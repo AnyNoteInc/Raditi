@@ -64,7 +64,7 @@ export function roleEnvironment({ path, home, port, allowedHosts, databaseUrl, v
 
 /**
  * Starts `node dist/main.js` and waits for /health. The returned object has the shape of the
- * stand's other role processes: `child`, `logs`, `close()`. The role is stopped the way a
+ * stand's other role processes: `child`, `logs`, `streams`, `close()`. The role is stopped the way a
  * deployment stops it, by SIGTERM; a role that has to be killed fails the cleanup.
  */
 export async function startRegularRole({
@@ -77,18 +77,26 @@ export async function startRegularRole({
 }) {
   const child = spawn(process.execPath, entry, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
   const logs = []
+  // The chunks of each pipe by themselves too (as a worker of the stand keeps them): whoever
+  // looks for a value joins the chunks of one pipe.
+  const streams = []
   let size = 0,
     exit
   const exited = new Promise((resolve) => {
     child.once('error', () => resolve((exit = { code: null, signal: null, spawned: false })))
     child.once('close', (code, signal) => resolve((exit ??= { code, signal, spawned: true })))
   })
-  for (const stream of [child.stdout, child.stderr])
+  for (const stream of [child.stdout, child.stderr]) {
+    const own = []
+    streams.push(own)
     stream.on('data', (chunk) => {
       size += chunk.length
-      if (size > MAX_LOG_BYTES) child.kill('SIGKILL')
-      else logs.push(chunk.toString())
+      if (size > MAX_LOG_BYTES) return child.kill('SIGKILL')
+      const text = chunk.toString()
+      logs.push(text)
+      own.push(text)
     })
+  }
   const within = (ms) => {
     let timer
     const timeout = new Promise((resolve) => {
@@ -128,7 +136,7 @@ export async function startRegularRole({
     }
     await sleep(200)
   }
-  return { child, logs, exited, close }
+  return { child, logs, streams, exited, close }
 }
 
 /**

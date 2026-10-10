@@ -435,6 +435,21 @@ export async function verifyAgentContentTurns(ctx) {
       )
   }
 
+  // The live mode has a model of its own instead of a script: its turns are another module's,
+  // over the same admission, the same run of the driver and the same observers.
+  if (ctx.live)
+    return ctx.live({
+      ctx,
+      openTurn,
+      runCli,
+      assertSiteBusy,
+      publicPage,
+      handshake,
+      assertNoLeak,
+      row: ROWS.opencode,
+      exchanges: ctx.exchanges,
+    })
+
   for (const [driver, row] of Object.entries(ROWS)) {
     const { name } = row
     // The role llm as this provider needs it: through the egress proxy, or without one.

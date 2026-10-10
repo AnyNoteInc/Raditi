@@ -846,6 +846,12 @@ test('the probe samples in the repository are sanitised', () => {
     '60-quota-idle-before.json',
     '61-chat-first-after-idle.json',
     '62-quota-idle-after.json',
+    // The live runs of G6 (docs/plan/45-zai-live.md): exchanges the stand's observer kept.
+    '80-g6-live-gateway/01-llm-post_chat_completions.json',
+    '80-g6-live-gateway/07-llm-post_chat_completions.json',
+    '80-g6-live-gateway/14-llm-post_chat_completions.json',
+    '81-g6-live-content/02-llm-post_chat_completions.json',
+    '81-g6-live-content/03-llm-post_chat_completions.json',
   ])
     assert.ok(names.includes(expected), `${expected} is missing`)
 

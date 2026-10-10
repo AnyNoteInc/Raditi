@@ -995,7 +995,12 @@ const address = (server, host, scheme) => ({
   url: `${scheme}://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`,
 })
 
-/** A TLS provider plus an HTTP control API bound to a separate internal port. */
+/**
+ * A TLS provider plus an HTTP control API bound to a separate internal port. With `mcpOnly` there
+ * is no provider at all — no TLS listener, no provider control — only the synthetic MCP server
+ * and the two control requests it needs: what a stand still runs locally when the provider at
+ * the end of its path is the real one (live.mjs).
+ */
 export async function startFakeSubscriptions({
   host = '127.0.0.1',
   port = 0,
@@ -1005,18 +1010,32 @@ export async function startFakeSubscriptions({
   controlPort = 0,
   mcpHost = '127.0.0.1',
   mcpPort,
+  mcpOnly = false,
   ...options
 } = {}) {
-  if (!key || !cert) throw new Error('Synthetic provider requires TLS key and certificate')
+  if (mcpOnly && (key || cert)) throw new Error('The MCP side alone takes no TLS material')
+  if (mcpOnly && mcpPort === undefined) throw new Error('The MCP side alone needs an MCP port')
+  if (!mcpOnly && (!key || !cert))
+    throw new Error('Synthetic provider requires TLS key and certificate')
   const state = createFakeSubscriptionState(options)
-  const provider = createHttpsServer({ key, cert, minVersion: 'TLSv1.2' }, (req, res) => {
-    handleProvider(req, res, state).catch(() => {
-      if (res.headersSent) res.destroy()
-      else fail(res, 400, 'synthetic_invalid_request')
-    })
-  })
+  const provider = mcpOnly
+    ? null
+    : createHttpsServer({ key, cert, minVersion: 'TLSv1.2' }, (req, res) => {
+        handleProvider(req, res, state).catch(() => {
+          if (res.headersSent) res.destroy()
+          else fail(res, 400, 'synthetic_invalid_request')
+        })
+      })
   const control = createHttpServer((req, res) => {
     ;(async () => {
+      if (req.method === 'POST' && req.url === '/mcp')
+        return json(res, 200, state.setMcp(await bodyOf(req)))
+      if (mcpOnly) {
+        // What the MCP side saw, and nothing that belongs to a provider.
+        if (req.method === 'GET' && req.url === '/state')
+          return json(res, 200, { mcp: state.snapshot().mcp })
+        return fail(res, 404, 'synthetic_unknown_control')
+      }
       if (req.method === 'GET' && req.url === '/state') return json(res, 200, state.snapshot())
       if (req.method === 'POST' && req.url === '/reset')
         return json(res, 200, state.reset((await bodyOf(req)) ?? {}))
@@ -1024,8 +1043,6 @@ export async function startFakeSubscriptions({
         return json(res, 200, state.setScenario((await bodyOf(req)) ?? {}))
       if (req.method === 'POST' && req.url === '/tokens')
         return json(res, 200, { tokens: state.issueTokens(), credential: state.currentCredential })
-      if (req.method === 'POST' && req.url === '/mcp')
-        return json(res, 200, state.setMcp(await bodyOf(req)))
       // GET reads, POST sets `{reset?, scenario?, quota?}` of the synthetic Z.ai.
       if (req.url === '/zai') return handleZaiControl(req, res, state.zai)
       return fail(res, 404, 'synthetic_unknown_control')
@@ -1041,9 +1058,9 @@ export async function startFakeSubscriptions({
             else json(res, 400, { error: 'invalid' })
           })
         })
-  const servers = [provider, control, ...(mcp ? [mcp] : [])]
+  const servers = [...(provider ? [provider] : []), control, ...(mcp ? [mcp] : [])]
   try {
-    await listen(provider, port, host)
+    if (provider) await listen(provider, port, host)
     await listen(control, controlPort, controlHost)
     if (mcp) await listen(mcp, mcpPort, mcpHost)
   } catch (error) {
@@ -1052,7 +1069,7 @@ export async function startFakeSubscriptions({
   }
   return {
     state,
-    address: address(provider, host, 'https'),
+    ...(provider ? { address: address(provider, host, 'https') } : {}),
     controlAddress: address(control, controlHost, 'http'),
     ...(mcp ? { mcpAddress: address(mcp, mcpHost, 'http') } : {}),
     close: async () => {
@@ -1063,16 +1080,23 @@ export async function startFakeSubscriptions({
 
 async function main(args) {
   const options = {}
+  // The MCP side alone: no provider, so no TLS option and no provider port either.
+  const mcpOnly = args[0] === '--mcp-only'
+  if (mcpOnly) args = args.slice(1)
   const names = {
-    '--host': 'host',
-    '--port': 'port',
     '--control-host': 'controlHost',
     '--control-port': 'controlPort',
     '--mcp-host': 'mcpHost',
     '--mcp-port': 'mcpPort',
-    '--tls-dir': 'tlsDir',
-    '--tls-key': 'tlsKey',
-    '--tls-cert': 'tlsCert',
+    ...(mcpOnly
+      ? {}
+      : {
+          '--host': 'host',
+          '--port': 'port',
+          '--tls-dir': 'tlsDir',
+          '--tls-key': 'tlsKey',
+          '--tls-cert': 'tlsCert',
+        }),
   }
   for (let i = 0; i < args.length; i += 2) {
     const name = names[args[i]]
@@ -1086,15 +1110,20 @@ async function main(args) {
     )
       throw new Error('Invalid port')
   }
-  const fake = await startFakeSubscriptions({
-    ...options,
-    key: readFileSync(options.tlsKey ?? join(options.tlsDir, 'server-key.pem')),
-    cert: readFileSync(options.tlsCert ?? join(options.tlsDir, 'server.pem')),
-  })
+  const { tlsDir, tlsKey, tlsCert, ...listeners } = options
+  const fake = await startFakeSubscriptions(
+    mcpOnly
+      ? { ...listeners, mcpOnly }
+      : {
+          ...listeners,
+          key: readFileSync(tlsKey ?? join(tlsDir, 'server-key.pem')),
+          cert: readFileSync(tlsCert ?? join(tlsDir, 'server.pem')),
+        },
+  )
   process.stdout.write(
     `${JSON.stringify({
       ready: true,
-      port: fake.address.port,
+      ...(fake.address ? { port: fake.address.port } : {}),
       controlPort: fake.controlAddress.port,
       ...(fake.mcpAddress ? { mcpPort: fake.mcpAddress.port } : {}),
     })}\n`,

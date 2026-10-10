@@ -30,20 +30,30 @@ const scripts = readdirSync(join(root, 'apps/orchestrator/scripts'))
 
 test('the stand is one command over its own scripts', () => {
   assert.deepEqual(scripts.sort(), [
+    // The turns of the live mode, and the trusted return they end with.
+    'apps/orchestrator/scripts/verify-agent-content-live.mjs',
     'apps/orchestrator/scripts/verify-agent-content-role.mjs',
     'apps/orchestrator/scripts/verify-agent-content-turns.mjs',
+    'apps/orchestrator/scripts/verify-agent-content-undo.mjs',
     'apps/orchestrator/scripts/verify-agent-content.mjs',
   ])
+  // `exec`: a signal sent to the command reaches the stand itself, which then removes its
+  // stacks — in a live run the OpenBao container that holds the plan key.
   assert.equal(
     JSON.parse(read('package.json')).scripts['verify:agent-content'],
-    'node apps/orchestrator/scripts/verify-agent-content.mjs',
+    'exec node apps/orchestrator/scripts/verify-agent-content.mjs',
   )
   // The role mcp is no worker of the stand: the shared launcher starts core and llm only.
   assert.doesNotMatch(read('infra/dev/llm-verify/workers.mjs'), /^ {2}mcp:/m)
-  // No real subscription, site or env-file can be named: one flag only.
+  // No real subscription, site, env-file or key file can be named: the options are those of
+  // live.mjs (standMode), and the plan key of a live run comes from the environment alone.
   const main = read('apps/orchestrator/scripts/verify-agent-content.mjs')
-  assert.match(main, /some\(\(arg\) => arg !== '--no-build'\)/)
-  assert.doesNotMatch(scripts.map(read).join('\n'), /--env-file|\.codex|auth\.json/)
+  assert.match(main, /const mode = standMode\(process\.argv\.slice\(2\), \{ stand: 'content' \}\)/)
+  assert.doesNotMatch(main, /process\.argv\.slice\(2\)(?!, \{ stand: 'content' \}\))/)
+  assert.doesNotMatch(
+    scripts.map(read).join('\n'),
+    /--env-file|\.codex|auth\.json|key-file|readFile[^\n]*ZAI/,
+  )
 })
 
 test('every CLI of the stand is a row of one table and runs only what its driver prepared', () => {
@@ -120,10 +130,29 @@ test('a repeated signal cannot end the cleanup and a silent role cannot pass the
 test('the role mcp is the regular one: the entry point of the build under its own AppRole', () => {
   const main = read('apps/orchestrator/scripts/verify-agent-content.mjs')
   const role = read('apps/orchestrator/scripts/verify-agent-content-role.mjs')
-  const all = scripts.map(read).join('\n')
+  // The trusted return of the live mode is the one script that puts the role's module
+  // together: the product has no network channel to the role's trusted side yet (N8).
+  const undo = 'apps/orchestrator/scripts/verify-agent-content-undo.mjs'
+  const all = scripts
+    .filter((name) => name !== undo)
+    .map(read)
+    .join('\n')
   // Not a composition of the stand: no module of the role is put together by its scripts.
   assert.match(role, /entry = \['dist\/main\.js'\],/)
   assert.doesNotMatch(all, /McpAppModule|mountMcp|NestFactory|wrapResolver/)
+  // That one script serves no MCP: an application context that listens on nothing, the
+  // regular resolver, and one call — the return by the fence of the turn lease.
+  const helper = read(undo)
+  assert.match(helper, /NestFactory\.createApplicationContext\(\n\s+McpAppModule\.forRoot\(\{/)
+  assert.doesNotMatch(helper, /mountMcp|wrapResolver|\.listen\(|wpRest|authenticate/)
+  assert.match(
+    helper,
+    /app\.get\(MCP_CONTENT\)\.undoTurn\(\{ fence: request\.fence, turn: request\.turn \}\)/,
+  )
+  assert.match(helper, /VAULT_DEV_ROOT_TOKEN, undefined/)
+  // Only the live turns start it, with the environment of the role mcp.
+  assert.equal(main.match(/verify-agent-content-undo\.mjs/g).length, 1)
+  assert.match(main, /live: live\n\s+\? liveContentTurns\(\{/)
   // load-env.ts opens the repository .env unless NODE_ENV is production; APP_ENV stays test,
   // because the content profile is refused in production.
   assert.match(role, /^ {4}NODE_ENV: 'production',$/m)
