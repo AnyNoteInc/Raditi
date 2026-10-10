@@ -45,7 +45,9 @@ Web: http://localhost:3000, core: http://localhost:8081/health, MCP: http://loca
 [основной шлюз B9](docs/plan/16-p3-main-gateway.md), [обновление токенов и здоровье B10](docs/plan/17-p3-pool-health.md),
 [ключи хода B11](docs/plan/18-p3-turn-keys.md), [операторские команды B12](docs/plan/19-p3-subscription-commands.md).
 B9–B14 реализованы и проверены локально, в том числе стенд шлюза с CLI в контейнерах (B13) и production-профиль `llm` (B14).
-Приёмка P3 на настоящих подписках, проверка Kimi и полный продуктовый e2e с WordPress остаются открытыми.
+Приёмка P3 по решению владельца от 05.10.2026 — живой проход на GLM и решение владельца. Живой проход сделан
+10.10.2026 командами `pnpm verify:llm-gateway --live` и `pnpm verify:agent-content --live`
+([отчёт G6](docs/plan/45-zai-live.md)); решение владельца и полный продуктовый e2e с WordPress остаются открытыми.
 
 Для проверок окон из `core` задайте `LLM_CONTROL_URL` частным origin шлюза: его Host должен
 входить в `LLM_GATEWAY_HOSTS`, адрес `core` — в `LLM_GATEWAY_CLIENTS`; авторизация —
@@ -190,6 +192,10 @@ CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетиче�
 `pnpm verify:agent-content` (в CI — workflow `agent-content.yml`: со строками Codex и Kimi прошёл
 09.10.2026 в черновом PR #3, со строкой OpenCode на GitHub ещё не выполнялся);
 [отчёт](docs/plan/30-agent-content-stand.md), [строка OpenCode](docs/plan/44-agent-content-opencode.md).
+С флагом `--live` оба стенда — этот и `pnpm verify:llm-gateway` — идут на настоящем GLM (`api.z.ai`): только
+вручную, с ключом плана в окружении команды (`ZAI_API_KEY`), только с синтетикой, не в CI; `--rehearsal` — тот же
+код на синтетическом Z.ai, без ключа (`infra/dev/llm-verify/README.md`, «Живой режим»;
+[отчёт G6](docs/plan/45-zai-live.md)).
 Контент в запущенной роли включает `MCP_CONTENT_PROFILE=local` (по умолчанию `off` — только `site_info`;
 в production допустим только `off`): доступ сайта роль читает из Vault по ссылке `credential_refs` —
 [отчёт](docs/plan/33-mcp-role-content-resolver.md); production-подключение и продуктовый откат остаются в P6. Границы и повтор —
