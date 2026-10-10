@@ -47,7 +47,10 @@ Web: http://localhost:3000, core: http://localhost:8081/health, MCP: http://loca
 B9–B14 реализованы и проверены локально, в том числе стенд шлюза с CLI в контейнерах (B13) и production-профиль `llm` (B14).
 Приёмка P3 по решению владельца от 05.10.2026 — живой проход на GLM и решение владельца. Живой проход сделан
 10.10.2026 командами `pnpm verify:llm-gateway --live` и `pnpm verify:agent-content --live`
-([отчёт G6](docs/plan/45-zai-live.md)); решение владельца и полный продуктовый e2e с WordPress остаются открытыми.
+([отчёт G6](docs/plan/45-zai-live.md)); в тот же день переписан текст контракта итога хода, и узкий замер
+`pnpm verify:llm-gateway --live --results` дважды дал 10 валидных итогов из 10 — две короткие серии
+([отчёт об итоге хода](docs/plan/46-turn-result-glm.md)); решение владельца и полный продуктовый e2e с WordPress
+остаются открытыми.
 
 Для проверок окон из `core` задайте `LLM_CONTROL_URL` частным origin шлюза: его Host должен
 входить в `LLM_GATEWAY_HOSTS`, адрес `core` — в `LLM_GATEWAY_CLIENTS`; авторизация —
@@ -194,8 +197,9 @@ CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетиче�
 [отчёт](docs/plan/30-agent-content-stand.md), [строка OpenCode](docs/plan/44-agent-content-opencode.md).
 С флагом `--live` оба стенда — этот и `pnpm verify:llm-gateway` — идут на настоящем GLM (`api.z.ai`): только
 вручную, с ключом плана в окружении команды (`ZAI_API_KEY`), только с синтетикой, не в CI; `--rehearsal` — тот же
-код на синтетическом Z.ai, без ключа (`infra/dev/llm-verify/README.md`, «Живой режим»;
-[отчёт G6](docs/plan/45-zai-live.md)).
+код на синтетическом Z.ai, без ключа. У стенда шлюза есть ещё `--live --results` — узкий замер итога хода:
+десять ходов, не больше 20 запросов провайдеру и 10 минут (`infra/dev/llm-verify/README.md`, «Живой режим»;
+[отчёт G6](docs/plan/45-zai-live.md), [отчёт об итоге хода](docs/plan/46-turn-result-glm.md)).
 Контент в запущенной роли включает `MCP_CONTENT_PROFILE=local` (по умолчанию `off` — только `site_info`;
 в production допустим только `off`): доступ сайта роль читает из Vault по ссылке `credential_refs` —
 [отчёт](docs/plan/33-mcp-role-content-resolver.md); production-подключение и продуктовый откат остаются в P6. Границы и повтор —
