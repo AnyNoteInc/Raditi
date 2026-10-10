@@ -50,12 +50,21 @@ test('the limits of a live run are the numbers of the plan', () => {
     gateway: { requests: 20, minutes: 10 },
     content: { requests: 30, minutes: 20 },
     measure: { requests: 40, minutes: 20 },
+    // The default of the owner's question П30: a live check of the result within 20 requests.
+    results: { requests: 20, minutes: 10 },
   })
   assert.deepEqual(PROVIDER, { host: 'api.z.ai', port: 443 })
 })
 
-test('a stand takes --live, --measure, --rehearsal, --no-build and --keep, and nothing else', () => {
-  const plain = { live: false, measure: false, rehearsal: false, noBuild: false, keep: null }
+test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --keep, and nothing else', () => {
+  const plain = {
+    live: false,
+    measure: false,
+    results: false,
+    rehearsal: false,
+    noBuild: false,
+    keep: null,
+  }
   assert.deepEqual(standMode([], { stand: 'gateway' }), plain)
   assert.deepEqual(standMode(['--', '--no-build'], { stand: 'gateway' }), {
     ...plain,
@@ -77,6 +86,18 @@ test('a stand takes --live, --measure, --rehearsal, --no-build and --keep, and n
     rehearsal: true,
     measure: true,
   })
+  // The narrow measurement of the turn result, live and rehearsed, with the other options.
+  assert.deepEqual(standMode(['--live', '--results'], { stand: 'gateway' }), {
+    ...plain,
+    live: true,
+    results: true,
+  })
+  assert.deepEqual(
+    standMode(['--results', '--rehearsal', '--no-build', '--keep=/private/x'], {
+      stand: 'gateway',
+    }),
+    { ...plain, rehearsal: true, results: true, noBuild: true, keep: '/private/x' },
+  )
   for (const [args, stand] of [
     // Never implemented, and gone from the documents.
     [['--real'], 'gateway'],
@@ -85,6 +106,14 @@ test('a stand takes --live, --measure, --rehearsal, --no-build and --keep, and n
     // The owner's answer П9: the key comes from the environment, there is no key file.
     [['--live', '--key-file', '/x'], 'gateway'],
     [['--measure'], 'gateway'],
+    [['--results'], 'gateway'],
+    [['--results', '--no-build'], 'gateway'],
+    // Two measurements are two runs, each under its own cap.
+    [['--live', '--measure', '--results'], 'gateway'],
+    [['--rehearsal', '--results', '--measure'], 'gateway'],
+    [['--live', '--results', '--results'], 'gateway'],
+    [['--live', '--results'], 'content'],
+    [['--rehearsal', '--results'], 'content'],
     [['--live', '--measure'], 'content'],
     [['--rehearsal', '--measure'], 'content'],
     [['--live', '--rehearsal'], 'gateway'],
@@ -1377,6 +1406,48 @@ for (const [stand, script] of Object.entries(stands))
       [],
     )
   })
+
+test('gateway stand: the measurement of results refuses and cleans up like the acceptance', async () => {
+  for (const [name, env, expected] of [
+    ['no key', {}, /ZAI_API_KEY is not set/],
+    ['CI', { CI: 'true', ZAI_API_KEY: SYNTHETIC_KEY }, /CI/],
+    [
+      'an address override',
+      { ZAI_API_KEY: SYNTHETIC_KEY, LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:9' },
+      /LLM_BACKEND_URL_ZAI_CODING/,
+    ],
+  ]) {
+    const result = started(stands.gateway, ['--live', '--results', '--no-build'], env)
+    const output = `${result.stdout}${result.stderr}`
+    assert.equal(result.status, 2, `${name}: exit ${result.status}: ${output.slice(0, 400)}`)
+    assert.match(output, /Live verification refused to start/, name)
+    assert.match(output, expected, name)
+    assert.equal(output.includes(SYNTHETIC_KEY), false, `${name}: the key was printed`)
+  }
+  // Without --live or --rehearsal it is no option of the stand, and never one of the content stand.
+  for (const [script, args] of [
+    [stands.gateway, ['--results']],
+    [stands.content, ['--live', '--results']],
+  ]) {
+    const result = started(script, args, { ZAI_API_KEY: SYNTHETIC_KEY })
+    assert.notEqual(result.status, 0)
+    assert.notEqual(result.status, 2)
+    assert.match(`${result.stdout}${result.stderr}`, /option/i)
+  }
+  // Its rehearsal with no Docker at all fails at the first command and leaves no run directory.
+  const temporary = await mkdtemp(join(directory, 'no-docker-results-'))
+  const result = started(stands.gateway, ['--rehearsal', '--results', '--no-build'], {
+    TMPDIR: temporary,
+    DOCKER_HOST: `unix://${join(temporary, 'no-engine.sock')}`,
+  })
+  const output = `${result.stdout}${result.stderr}`
+  assert.equal(result.status, 1, `exit ${result.status}: ${output.slice(0, 400)}`)
+  assert.match(output, /verification failed at: build/)
+  assert.deepEqual(
+    (await readdir(temporary)).filter((name) => name.startsWith('raditi-live-')),
+    [],
+  )
+})
 
 test('a signal sent to the command of a stand reaches the stand: its package line ends with exec', async () => {
   // The stand removes its stacks on SIGINT and SIGTERM; in a live run that is what removes the

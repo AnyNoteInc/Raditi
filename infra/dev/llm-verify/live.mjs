@@ -28,6 +28,7 @@ export const LIVE_LIMITS = Object.freeze({
   gateway: Object.freeze({ requests: 20, minutes: 10 }),
   content: Object.freeze({ requests: 30, minutes: 20 }),
   measure: Object.freeze({ requests: 40, minutes: 20 }),
+  results: Object.freeze({ requests: 20, minutes: 10 }),
 })
 /** Above these a run does not start: the checks must not take the plan's last capacity. */
 const WINDOW_START_LIMITS = Object.freeze({ '5h': 50, week: 80 })
@@ -41,11 +42,19 @@ export class LiveRefusal extends Error {
 
 /**
  * The options of a stand. `--live` is the real provider, `--rehearsal` the same flow on the
- * synthetic one; `--measure`, with either, is the measurement of the gateway stand;
- * `--keep=<directory>` writes the exchanges the stand observed, for sanitize-samples.mjs.
+ * synthetic one; with either, `--measure` is the measurement of the gateway stand and
+ * `--results` its narrow one, of the turn result alone; `--keep=<directory>` writes the
+ * exchanges the stand observed, for sanitize-samples.mjs.
  */
 export function standMode(argv, { stand }) {
-  const mode = { live: false, measure: false, rehearsal: false, noBuild: false, keep: null }
+  const mode = {
+    live: false,
+    measure: false,
+    results: false,
+    rehearsal: false,
+    noBuild: false,
+    keep: null,
+  }
   const refuse = (option) => new Error(`Unsupported option: ${option}`)
   const seen = new Set()
   for (const arg of argv) {
@@ -58,11 +67,14 @@ export function standMode(argv, { stand }) {
     else if (name === '--live') mode.live = true
     else if (name === '--rehearsal') mode.rehearsal = true
     else if (name === '--measure' && stand === 'gateway') mode.measure = true
+    else if (name === '--results' && stand === 'gateway') mode.results = true
     else if (name === '--keep' && isAbsolute(value) && outsideRepository(value)) mode.keep = value
     else throw refuse(name)
   }
   if (mode.live && mode.rehearsal) throw refuse('--live with --rehearsal')
   if (mode.measure && !mode.live && !mode.rehearsal) throw refuse('--measure without --live')
+  if (mode.results && !mode.live && !mode.rehearsal) throw refuse('--results without --live')
+  if (mode.measure && mode.results) throw refuse('--measure with --results')
   if (mode.keep && !mode.live && !mode.rehearsal) throw refuse('--keep without --live')
   return mode
 }

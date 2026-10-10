@@ -1,10 +1,12 @@
 /* global AbortSignal, console, fetch */
 // verify:llm-gateway --live: the real pinned OpenCode CLI through its driver, sandbox-gw and the
 // role llm to the real GLM on api.z.ai, which the role reaches itself, as in the product. With
-// --measure the same run measures instead of accepting; with --rehearsal the same code runs on
-// the synthetic Z.ai with a scripted model and proves the request cap, the start refusals and
-// the search for the key before anything is sent to the real provider. Only synthetic prompts
-// go to the model. Commands, limits and rules: infra/dev/llm-verify/README.md, «Живой режим».
+// --measure the same run measures instead of accepting, and with --results it measures one
+// thing under the cap of the acceptance: how often a turn ends with a valid result. With
+// --rehearsal the same code runs on the synthetic Z.ai with a scripted model and proves the
+// request cap, the start refusals and the search for the key before anything is sent to the
+// real provider. Only synthetic prompts go to the model. Commands, limits and rules:
+// infra/dev/llm-verify/README.md, «Живой режим».
 import assert from 'node:assert/strict'
 import { randomBytes, randomUUID } from 'node:crypto'
 import process from 'node:process'
@@ -14,6 +16,7 @@ import { createPrismaClient } from '@repo/db'
 import {
   preparedFilesSchema,
   preparedRunExposesSecret,
+  SANDBOX_WORKDIR,
   turnCredentials,
   turnResultSchema,
 } from '@repo/domain'
@@ -25,6 +28,7 @@ import {
   chatRequestSummary,
   createOutcome,
   failureLine,
+  LIVE_LIMITS,
   LiveRefusal,
   resultVerdict,
   STREAM_FORMS,
@@ -40,6 +44,14 @@ import {
 import { seedReferenceData } from '../../../packages/db/prisma/seed/apply.ts'
 import { opencodeUserAgent } from '../../../packages/llm-backends/src/zai-coding/backend.ts'
 import { productionMcpTools } from './verify-llm-gateway-drivers.mjs'
+import {
+  judgeResult,
+  REHEARSED_FORMS,
+  rehearsalScenario,
+  RESULTS_ACCEPTED_FROM,
+  resultShares,
+  resultTurns,
+} from './verify-llm-live-results.mjs'
 import { assertImages, openLiveRun, REFUSED } from './verify-llm-live-run.mjs'
 import {
   resetOpencodeHome,
@@ -93,9 +105,15 @@ const resultFor = (summary, files = []) => ({
 })
 
 export async function runLiveGateway(mode) {
-  const kind = mode.measure ? 'measure' : 'gateway'
+  const kind = mode.measure ? 'measure' : mode.results ? 'results' : 'gateway'
   let stage = 'build'
   let stack, db, llm, core, cli
+  // The ceiling of a turn key the role llm runs with: LLM_MAX_CALLS_PER_KEY of its process.
+  let roleCalls = null
+  // The turns of the narrow measurement; their files carry a marker of this run.
+  const resultPlan = mode.results
+    ? resultTurns(`live-result-${randomBytes(4).toString('hex')}`)
+    : null
   let interrupted = false
   const workers = []
   // What the CLI printed, for the search for the key: at the end, and after a failure.
@@ -155,8 +173,8 @@ export async function runLiveGateway(mode) {
     stage = 'import of the plan key'
     const accountId = await live.importKey({ stack, db })
     await switchOnZai(db, { accountId, ratesUrl: 'https://synthetic.invalid/live-rates' })
-    // The measurement asks the three classes: the same model at the three levels.
-    if (mode.measure)
+    // Both measurements ask the three classes: the same model at the three levels.
+    if (mode.measure || mode.results)
       for (const { slug } of [CLASSES.light, CLASSES.heavy]) {
         const profile = await db.llmModel.findFirstOrThrow({ where: { slug } })
         await db.llmModelPrice.create({
@@ -185,9 +203,10 @@ export async function runLiveGateway(mode) {
       await llm?.close()
       llm = await live.startLlm({ stack, env: roleEnv(callsPerKey, overrides) })
       workers.push(llm)
+      roleCalls = callsPerKey
       return llm
     }
-    await startLlm(mode.measure ? 2 : TURN_CALLS)
+    await startLlm(mode.measure ? 2 : (resultPlan?.[0].ceiling ?? TURN_CALLS))
     core = await live.startCore({ stack, env: roleEnv(TURN_CALLS), rolePort })
     workers.push(core)
     const workspace = await db.workspace.create({
@@ -506,11 +525,9 @@ export async function runLiveGateway(mode) {
       })
     const valid = (outcome) => turnResultSchema.safeParse(outcome.result).success
 
-    if (mode.measure) {
-      await measure()
-    } else {
-      await acceptance()
-    }
+    if (mode.measure) await measure()
+    else if (mode.results) await results()
+    else await acceptance()
 
     /**
      * The acceptance: a turn of each kind — tool, MCP, text and the continuation of the text
@@ -715,6 +732,15 @@ export async function runLiveGateway(mode) {
       }
     }
 
+    /** The scripted model of a rehearsal that never stops calling tools. */
+    function looping() {
+      return {
+        scenario: 'tools',
+        rounds: Array.from({ length: 30 }, (_, step) => [bash(`printf loop-${step}`)]),
+        text: JSON.stringify(resultFor('never reached')),
+      }
+    }
+
     /**
      * Rehearsal only: a model that never stops calling tools. The role's own ceiling ends such
      * a turn after TURN_CALLS calls with a final refusal; with that ceiling out of the way the
@@ -722,15 +748,10 @@ export async function runLiveGateway(mode) {
      */
     async function ceilingAndCap() {
       stage = 'rehearsal: the ceiling of a turn key'
-      const loop = {
-        scenario: 'tools',
-        rounds: Array.from({ length: 30 }, (_, step) => [bash(`printf loop-${step}`)]),
-        text: JSON.stringify(resultFor('never reached')),
-      }
       budget.afford(TURN_CALLS, 'the looping turn under the ceiling')
       const bounded = await issued()
-      await script(loop)
-      let asked = await fakeChat()
+      await script(looping())
+      const asked = await fakeChat()
       const stopped = await runTurn({ label: 'looping turn', turn: bounded, prompt: 'Loop.' })
       assert.equal(stopped.code, 1, 'The looping turn did not end with a failure')
       assert.equal((await fakeChat()) - asked, TURN_CALLS, 'The ceiling of the key did not hold')
@@ -742,17 +763,24 @@ export async function runLiveGateway(mode) {
       passed(
         `rehearsal: a model that never stops is ended by the role after ${TURN_CALLS} calls of its key`,
       )
+      await capOfTheRun()
+    }
 
+    /**
+     * Rehearsal only: the same model with the ceiling of the key out of the way. The guard cuts
+     * the run at its cap and the stand stops the turn itself.
+     */
+    async function capOfTheRun() {
       stage = 'rehearsal: the cap of the run'
       // The reading of the quota the run ends on comes first here: the rest goes to the loop.
       const after = await live.quota({ llm, accountId, what: 'at the end' })
       live.growth(before, after)
       await startLlm(600, { LLM_MAX_CALLS_PER_KEY_30S: '1000' })
       const unbounded = await issued()
-      await script(loop)
+      await script(looping())
       const left = budget.state().remaining
       assert.ok(left >= 1 && left < 30, `Nothing left for the runaway turn: ${left}`)
-      asked = await fakeChat()
+      const asked = await fakeChat()
       await assert.rejects(
         runTurn({ label: 'runaway turn', turn: unbounded, prompt: 'Loop.' }),
         /reached its cap of \d+ provider requests/,
@@ -761,10 +789,141 @@ export async function runLiveGateway(mode) {
       assert.equal((await fakeChat()) - asked, left, 'The provider saw a request past the cap')
       const state = budget.state()
       assert.equal(state.used, state.cap)
+      // The cap the guard held is the cap of this kind of run, not of another one.
+      assert.equal(state.cap, live.limits.requests)
       assert.ok(state.refused >= 1)
       passed(
         `rehearsal: with the ceiling of the key out of the way the guard cut the run at ${state.cap} provider requests and the stand stopped the turn`,
       )
+    }
+
+    /**
+     * The narrow measurement (--results): the ten turns of verify-llm-live-results.mjs, each
+     * under a key of its class whose ceiling is what the turn needs, and nothing else. What
+     * the platform owes is held in every turn. What the model made of the result contract goes
+     * to the report and never fails the run: by the strict reading of the driver, which the
+     * acceptance of П30 counts, and by the reading of the product.
+     */
+    async function results() {
+      // The ten turns were counted for the cap of this kind of run (spec §20, П30), and the
+      // limits of a run come from its kind alone: under those of another kind no turn starts.
+      assert.equal(live.kind, 'results')
+      assert.equal(live.limits.requests, LIVE_LIMITS.results.requests)
+      // The key issued for the windows of the account is of no turn of the plan.
+      await revoke(first)
+      const inRepo = (path) => `${SANDBOX_WORKDIR}/${path}`
+      const judged = []
+      for (const item of resultPlan) {
+        const label = `${item.label} (${item.kind}, ${item.modelClass})`
+        stage = label
+        // The cap of the run is counted on the ceilings: a turn it does not cover never starts.
+        budget.afford(item.ceiling, label)
+        if (roleCalls !== item.ceiling) await startLlm(item.ceiling)
+        const files = Object.entries(item.before ?? {})
+        const stale = [...files.map(([path]) => path), ...(item.written ? [item.written.path] : [])]
+        if (stale.length)
+          await dockerCommand(['exec', cli.containerName, 'rm', '-f', ...stale.map(inRepo)])
+        for (const [path, content] of files) {
+          const placed = await dockerCommand(
+            ['exec', '-i', cli.containerName, 'sh', '-c', `cat > ${inRepo(path)}`],
+            { input: content },
+          )
+          assert.equal(placed.code, 0, `${label}: a file of the turn could not be placed`)
+        }
+        const turn = await issued({ modelClass: item.modelClass })
+        await script(rehearsalScenario(item))
+        const asked = await fakeChat()
+        const outcome = await runTurn({
+          label,
+          turn,
+          effort: CLASSES[item.modelClass].effort,
+          prompt: item.prompt,
+        })
+        await invariants(turn, outcome, { ceiling: item.ceiling })
+        await revoke(turn)
+        const file = item.written
+          ? (await dockerCommand(['exec', cli.containerName, 'cat', inRepo(item.written.path)]))
+              .stdout
+          : null
+        const verdict = judgeResult({
+          turn: item,
+          events: outcome.events,
+          code: outcome.code,
+          driver,
+          file,
+        })
+        judged.push(verdict)
+        report(
+          `${label}: result: ${verdict.verdict}; the reading of the product: ${verdict.taken ? 'taken' : 'refused'}${verdict.unmet.length ? `; not as asked: ${verdict.unmet.join(', ')}` : ''}; the prompt ${item.reminded ? 'asked for the final result' : 'left the result to the contract'}`,
+        )
+        if (rehearsal) {
+          // The scripted model is certain: every turn is judged as its form says, and a turn
+          // costs what its script sends — one request where the role refused the second.
+          const { verdict: read, strict, taken } = verdict
+          assert.deepEqual(
+            { verdict: read, strict, taken },
+            item.miss
+              ? REHEARSED_FORMS[item.miss]
+              : { verdict: 'valid', strict: true, taken: true },
+            label,
+          )
+          assert.deepEqual(verdict.unmet, [], label)
+          const sent = item.miss === 'tool call' ? item.ceiling : (item.rounds?.length ?? 0) + 1
+          assert.equal((await fakeChat()) - asked, sent, `${label}: requests of the provider`)
+          assert.equal(outcome.requests, sent, `${label}: requests the guards counted`)
+          if (item.miss === 'tool call') {
+            // The model called a tool under a ceiling of one call: the role refused the next.
+            const key = await db.llmKey.findFirstOrThrow({ where: { taskId: turn.ref.taskId } })
+            assert.equal(key.lastRefusal, 'budget', `${label}: the ceiling of the key`)
+          }
+        }
+      }
+
+      stage = 'results: the shares'
+      const shares = resultShares(judged)
+      const of = (part) => `${part.strict} of ${part.turns} (the product takes ${part.taken})`
+      report(
+        `ten result turns: valid by the strict reading of the driver ${shares.strict} of ${shares.turns}; taken by the reading of the product (the supervisor's readTurnResult) ${shares.taken} of ${shares.turns}`,
+      )
+      report(
+        `by prompt: asked for the final result in words — ${of(shares.reminded)}; left to the contract in the instructions — ${of(shares.plain)}`,
+      )
+      report(
+        `by kind of turn: ${Object.entries(shares.kinds)
+          .map(([kind, part]) => `${kind} — ${of(part)}, as asked in ${part.met}`)
+          .join('; ')}`,
+      )
+      report(
+        `answers the strict reading did not take: ${
+          shares.missed
+            .map(
+              (item) =>
+                `${item.label} (${item.kind}) — ${item.verdict}${item.taken ? ', taken by the product' : ''}`,
+            )
+            .join('; ') || 'none'
+        }`,
+      )
+      report(
+        `acceptance of П30 (at least ${RESULTS_ACCEPTED_FROM} of ${shares.turns} valid by the strict reading): ${shares.accepted ? 'reached' : 'not reached'}; this share does not decide the run`,
+      )
+      passed(
+        `ten result turns: in each the provider usage in llm_calls equals the CLI and is not estimated, the platform tools were declared, MCP was asked only with the turn token, and the key of the turn stayed under its ceiling`,
+      )
+      if (rehearsal) {
+        const { turns, strict, taken, accepted } = shares
+        assert.deepEqual(
+          { turns, strict, taken, accepted },
+          { turns: 10, strict: 6, taken: 8, accepted: false },
+        )
+        passed(
+          'rehearsal: the scripted model answered in the three forms of the real one and called a tool under a ceiling of one call; the stand named each form, the role ended the turn of the tool call, and the shares were 6 of 10 by the strict reading and 8 of 10 by the product',
+        )
+        await live.proveFailureSearch({
+          stack,
+          places: [{ name: 'events and output of the CLI', texts: outputs }],
+        })
+        await capOfTheRun()
+      }
     }
 
     async function measure() {
@@ -1036,18 +1195,23 @@ console.log(JSON.stringify(await Promise.all([one(),one()])))})`,
     passed(
       `the plan key is in none of ${places} places: logs, audit, database, CLI events, exchanges, control port, docker inspect, the files of the sandbox and of the stand`,
     )
+    const what = mode.measure
+      ? 'measurement'
+      : mode.results
+        ? 'measurement of results'
+        : 'verification'
     if (rehearsal && !mode.measure) {
       // The cap was reached on purpose: the count of the run says so itself.
       assert.throws(() => live.settle(), /reached its cap of \d+ provider requests/)
       assert.equal(live.tripped(), true)
       console.log(
-        `Rehearsal of the live gateway verification passed: ${live.checks()} checks; the cap of ${live.limits.requests} provider requests was reached on purpose and held.`,
+        `Rehearsal of the live gateway ${what} passed: ${live.checks()} checks; the cap of ${live.limits.requests} provider requests was reached on purpose and held.`,
       )
     } else {
       const state = live.settle()
       // The exit code is of what the platform owes: the last line says where the model's part is.
       console.log(
-        `${rehearsal ? 'Rehearsal of the live' : 'Live'} gateway ${mode.measure ? 'measurement' : 'verification'} passed: ${live.checks()} checks; ${state.used} of ${state.cap} provider requests; OpenCode 1.18.34 on the ${rehearsal ? 'synthetic' : 'real'} provider.${mode.measure ? '' : " The checks are of what the platform owes; the model's outcomes are shares in the REPORT lines."}`,
+        `${rehearsal ? 'Rehearsal of the live' : 'Live'} gateway ${what} passed: ${live.checks()} checks; ${state.used} of ${state.cap} provider requests; OpenCode 1.18.34 on the ${rehearsal ? 'synthetic' : 'real'} provider.${mode.measure ? '' : " The checks are of what the platform owes; the model's outcomes are shares in the REPORT lines."}`,
       )
     }
   } catch (error) {
