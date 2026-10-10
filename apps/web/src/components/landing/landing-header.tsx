@@ -9,6 +9,7 @@ import type { LandingViewer } from '@/server/landing-viewer'
 
 import { LandingIcon } from './landing-icons'
 import styles from './landing.module.css'
+import { mainAction } from './main-action'
 
 const navigation = [
   { href: '#how', label: 'Как это работает' },
@@ -23,6 +24,7 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
   const [current, setCurrent] = useState<string | null>(null)
   const header = useRef<HTMLElement>(null)
   const toggle = useRef<HTMLButtonElement>(null)
+  const action = mainAction(viewer.status === 'guest')
   useEffect(() => {
     if (!('IntersectionObserver' in window)) return
     const crossing = new Set<string>()
@@ -108,8 +110,8 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
               registration is in the mobile menu; between the two the header has neither, and the
               registration is the main action of the first screen. */}
           {viewer.status === 'guest' && (
-            <Link href="/sign-up" className={styles.signUp}>
-              Зарегистрироваться
+            <Link href={action.href} className={styles.signUp}>
+              {action.label}
             </Link>
           )}
           <button
@@ -144,11 +146,7 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
             {label}
           </a>
         ))}
-        {viewer.status !== 'authenticated' && (
-          <Link href={viewer.status === 'guest' ? '/sign-up' : '/projects'}>
-            {viewer.status === 'guest' ? 'Зарегистрироваться' : 'Открыть проекты'}
-          </Link>
-        )}
+        {viewer.status !== 'authenticated' && <Link href={action.href}>{action.label}</Link>}
       </nav>
     </header>
   )

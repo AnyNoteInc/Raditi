@@ -1,42 +1,8 @@
 import { Decimal } from 'decimal.js'
 import { describe, expect, it } from 'vitest'
 
-import {
-  packsInWords,
-  pluralEdits,
-  recommendPlan,
-  type LandingPricingData,
-} from './pricing-calculator'
-
-const pricing: LandingPricingData = {
-  plans: [
-    {
-      slug: 'start',
-      name: 'Старт',
-      price: '4900.00',
-      editsPerMonth: 30,
-      editsPerDay: 5,
-      maxSites: 1,
-    },
-    {
-      slug: 'business',
-      name: 'Бизнес',
-      price: '12900.00',
-      editsPerMonth: 80,
-      editsPerDay: 10,
-      maxSites: 3,
-    },
-    {
-      slug: 'agency',
-      name: 'Агентство',
-      price: '39900.00',
-      editsPerMonth: 250,
-      editsPerDay: 30,
-      maxSites: 15,
-    },
-  ],
-  pack: { price: '1990.00', edits: 10 },
-}
+import { packsInWords, pluralEdits, recommendPlan } from './pricing-calculator'
+import { pricing } from './testing'
 
 describe('landing plan recommendation', () => {
   it('keeps the truly cheapest option when a larger plan costs less than 5% more', () => {
@@ -44,7 +10,6 @@ describe('landing plan recommendation', () => {
       plan: { slug: 'start' },
       packs: 4,
       total: '12860.00',
-      perEdit: '183.71',
     })
   })
 
@@ -73,15 +38,15 @@ describe('landing plan recommendation', () => {
     expect(recommendPlan({ plans: [], pack: null }, 30)).toBeNull()
   })
 
-  it('preserves kopecks with decimal arithmetic and rounds the per-edit estimate half up', () => {
+  it('preserves kopecks with decimal arithmetic', () => {
     const first = pricing.plans[0]!
     const fractional = {
       plans: [{ ...first, price: '0.10', editsPerMonth: 1 }],
       pack: { price: '0.20', edits: 1 },
     }
-    expect(recommendPlan(fractional, 2)).toMatchObject({ total: '0.30', perEdit: '0.15' })
+    expect(recommendPlan(fractional, 2)).toMatchObject({ total: '0.30' })
     expect(recommendPlan({ plans: [{ ...first, price: '1.01' }], pack: null }, 2)).toMatchObject({
-      perEdit: '0.51',
+      total: '1.01',
     })
   })
 
@@ -113,13 +78,9 @@ describe('estimate of one edit', () => {
   it('is rounded half up to whole rubles, and the amounts of the calculation stay exact', () => {
     expect(recommendPlan(pricing, 30)).toMatchObject({
       total: '4900.00',
-      perEdit: '163.33',
       perEditRounded: '163.00',
     })
-    expect(recommendPlan(pricing, 70)).toMatchObject({
-      perEdit: '183.71',
-      perEditRounded: '184.00',
-    })
+    expect(recommendPlan(pricing, 70)).toMatchObject({ perEditRounded: '184.00' })
     expect(estimate('347.00', 2)?.perEditRounded).toBe('174.00')
     expect(estimate('346.98', 2)?.perEditRounded).toBe('173.00')
     expect(estimate('1.00', 2)?.perEditRounded).toBe('1.00')
@@ -130,13 +91,12 @@ describe('estimate of one edit', () => {
   it('is rounded once, from the exact quotient and not from the kopecks', () => {
     expect(estimate('4954.95', 10)).toMatchObject({
       total: '4954.95',
-      perEdit: '495.50',
       perEditRounded: '495.00',
     })
-    expect(estimate('4954.99', 10)).toMatchObject({ perEdit: '495.50', perEditRounded: '495.00' })
-    expect(estimate('4955.00', 10)).toMatchObject({ perEdit: '495.50', perEditRounded: '496.00' })
+    expect(estimate('4954.99', 10)?.perEditRounded).toBe('495.00')
+    expect(estimate('4955.00', 10)?.perEditRounded).toBe('496.00')
     // A quotient without an end: a third of a ruble under the half.
-    expect(estimate('1486.49', 3)).toMatchObject({ perEdit: '495.50', perEditRounded: '495.00' })
+    expect(estimate('1486.49', 3)?.perEditRounded).toBe('495.00')
   })
 
   it('is rounded half up whatever the global Decimal settings are', () => {

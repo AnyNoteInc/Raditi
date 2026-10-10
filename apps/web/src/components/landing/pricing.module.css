@@ -1,36 +1,8 @@
 .pricing {
-  --pricing-ink: var(--raditi-ink);
-  --pricing-paper: var(--raditi-paper);
-  --pricing-accent-text: var(--raditi-accent-text);
-  --pricing-marker: var(--raditi-marker);
   /* How far the text of a plan stands from the edge of its column. The rows under the plans
      repeat it, so what they say starts on the same verticals. */
   --plan-inset: 28px;
-  color: var(--pricing-ink);
-}
-
-/* The place of the plans while they load: about as tall as they will be, a little less rather
-   than more, so that what stands below moves down a little and not up under the header. The
-   numbers are the heights of the block with the plans of the seeds; a wrong one costs a small
-   move of the page below, nothing else. Only where scripts run: without them the plans never
-   take this place, and the room would stay an empty field for good. */
-@media (scripting: enabled) {
-  .fallback {
-    min-height: 750px;
-  }
-}
-
-@media (scripting: enabled) and (max-width: 900px) {
-  .fallback {
-    min-height: 845px;
-  }
-}
-
-/* One column; below 400px the texts of the plans take a line more every few pixels. */
-@media (scripting: enabled) and (max-width: 680px) {
-  .fallback {
-    min-height: max(1615px, calc(1615px + (400px - 100vw) * 2.5));
-  }
+  color: var(--raditi-ink);
 }
 
 .calculator {
@@ -65,7 +37,7 @@
 /* The number of edits is the question of the calculator, the sum is its answer: at every width
    the count is a step smaller than the sum beside it. */
 .editCount output {
-  color: var(--pricing-accent-text);
+  color: var(--raditi-accent-text);
   font-family: var(--font-unbounded), sans-serif;
   font-size: clamp(28px, 3.1vw, 48px);
   font-weight: 500;
@@ -91,7 +63,7 @@
   background:
     linear-gradient(
         to right,
-        var(--pricing-accent-text) 0 var(--range-progress),
+        var(--raditi-accent-text) 0 var(--range-progress),
         transparent var(--range-progress) 100%
       )
       center / 100% 3px no-repeat,
@@ -119,7 +91,7 @@
   /* From the box under the border up to the middle of the line: half of the thumb and half
      of the border. */
   margin-top: -12.5px;
-  border: 5px solid var(--pricing-accent-text);
+  border: 5px solid var(--raditi-accent-text);
   border-radius: 50%;
   appearance: none;
   background: var(--raditi-accent);
@@ -137,7 +109,7 @@
 .range::-moz-range-thumb {
   width: 14px;
   height: 14px;
-  border: 5px solid var(--pricing-accent-text);
+  border: 5px solid var(--raditi-accent-text);
   border-radius: 50%;
   background: var(--raditi-accent);
   transition: transform var(--raditi-motion-fast) var(--raditi-ease-out);
@@ -232,24 +204,11 @@
   margin: 12px 0 0;
 }
 
-/* Heard, not seen: the result of the slider for a screen reader, once the slider rests. */
-.announcement {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
 .plans {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-top: 1px solid var(--pricing-ink);
-  border-bottom: 1px solid var(--pricing-ink);
+  border-top: 1px solid var(--raditi-ink);
+  border-bottom: 1px solid var(--raditi-ink);
 }
 
 .plan {
@@ -288,8 +247,8 @@
 .recommendedLabel {
   padding: 5px 9px;
   border-radius: 3px;
-  color: var(--pricing-ink);
-  background: var(--pricing-marker);
+  color: var(--raditi-ink);
+  background: var(--raditi-marker);
   font-size: 12px;
   font-weight: 600;
 }
@@ -362,8 +321,8 @@
    rules are the whole answer to a finger. A press looks as the hover does: an outlined action
    that leads away from the page turns over, a filled one takes the fill of its hover. */
 .pricing .action:active {
-  color: var(--pricing-paper);
-  background: var(--pricing-ink);
+  color: var(--raditi-paper);
+  background: var(--raditi-ink);
 }
 
 .pricing .action.primary:active {
@@ -373,8 +332,8 @@
 
 @media (hover: hover) {
   .pricing .action:hover {
-    color: var(--pricing-paper);
-    background: var(--pricing-ink);
+    color: var(--raditi-paper);
+    background: var(--raditi-ink);
   }
 
   .pricing .action.primary:hover {
@@ -488,12 +447,6 @@
     padding: 26px 18px;
   }
 
-  .planHeading {
-    align-items: flex-start;
-    flex-direction: column;
-    min-height: 70px;
-  }
-
   /* Room for two lines whatever the line height: in a narrow column the longest description
      wraps, and the prices of the three plans must stay on one line. 40px is for a browser
      without the lh unit. */
@@ -501,6 +454,15 @@
     min-height: 40px;
     min-height: 2lh;
     margin-top: 8px;
+  }
+}
+
+/* Three narrow columns, before the plans go one under another. */
+@media (min-width: 681px) and (max-width: 900px) {
+  .planHeading {
+    align-items: flex-start;
+    flex-direction: column;
+    min-height: 70px;
   }
 
   /* In a narrow column «/ месяц» fits beside one price and not beside another: it stands under
@@ -544,21 +506,9 @@
     border-left: 0;
   }
 
-  .planHeading {
-    flex-direction: row;
-    align-items: center;
-    min-height: 32px;
-  }
-
   .description {
     min-height: 0;
     margin-bottom: 26px;
-  }
-
-  .price {
-    flex-direction: row;
-    align-items: baseline;
-    gap: 8px;
   }
 
   .editCount output {

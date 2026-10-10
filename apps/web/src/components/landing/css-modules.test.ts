@@ -3,8 +3,6 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { MOVE_MS, RISE_PX } from './motion'
-
 // A CSS module reports neither a class that no markup uses nor a `styles.x` that no rule
 // defines (it is just undefined). This keeps the two lists equal for the landing modules.
 // It also holds the three modules to one discipline of states: a hover only where the device
@@ -241,21 +239,41 @@ describe('landing CSS modules', () => {
     })
   })
 
-  describe('numbers of motion shared with the scripts', () => {
-    const page = rulesOf(read('landing.module.css')).find(
-      (rule) => rule.selector === '.page' && rule.conditions.length === 0,
-    )
-    const variable = (name: string) =>
-      new RegExp(`${name}:\\s*([^;]+);`).exec(page?.declarations ?? '')?.[1]?.trim()
-
-    it('are the same in motion.ts and on .page', () => {
-      expect(variable('--motion-move')).toBe(`${MOVE_MS}ms`)
-      expect(variable('--motion-rise')).toBe(`${RISE_PX}px`)
-      // The curve of the reveal is the token of the theme on both sides.
-      expect(variable('--ease')).toBe('var(--raditi-ease-out)')
+  describe('motion shared with the scripts', () => {
+    // The observer of the page only marks a heading; the rise is here, in the variables of the
+    // page. A heading that waits is shifted, so the rule stands where motion is welcome.
+    it('keeps the rise of a heading in CSS, where motion is welcome', () => {
+      const rise = rulesOf(read('landing.module.css')).filter((rule) =>
+        rule.selector.startsWith(".page [data-reveal]:not([data-reveal='scene'])"),
+      )
+      const declared = (mark: string) =>
+        rise.find((rule) => rule.selector.endsWith(`[data-scene='${mark}']`))?.declarations.trim()
+      expect(rise).toHaveLength(2)
+      expect(rise.every((rule) => under(rule, '(prefers-reduced-motion: no-preference)'))).toBe(
+        true,
+      )
+      expect(declared('waiting')).toBe('transform: translateY(var(--motion-rise));')
+      expect(declared('playing')).toBe(
+        'animation: headingRise var(--motion-move) var(--raditi-ease-out) backwards;',
+      )
     })
 
-    it('leave the phases of the demo to the script alone', () => {
+    // The observer of the page marks the root element when the fonts are in. Until then the way
+    // to an anchor is a jump: the fonts of a first visit rewrap the lines above the target.
+    it('scrolls smoothly only after the fonts are in, where motion is welcome', () => {
+      const smooth = rulesOf(read('landing.module.css')).filter((rule) =>
+        /scroll-behavior:\s*smooth/.test(rule.declarations),
+      )
+      expect(smooth.map((rule) => rule.selector)).toEqual([
+        ":global(html[data-fonts='ready']):has(.page)",
+      ])
+      expect(smooth.every((rule) => under(rule, '(prefers-reduced-motion: no-preference)'))).toBe(
+        true,
+      )
+      expect(read('landing-motion.tsx')).toContain("root.dataset.fonts = 'ready'")
+    })
+
+    it('leaves the phases of the demo to the script alone', () => {
       const demo = read('site-demo.module.css')
       // The stage gets the length of its phase from site-demo.tsx; CSS only reads it.
       expect(demo).toContain('var(--demo-phase)')

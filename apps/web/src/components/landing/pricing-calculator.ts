@@ -1,6 +1,5 @@
-import { Decimal } from 'decimal.js'
-
 import { plural } from '@/lib/plural'
+import { Money } from '@/lib/rubles'
 
 export interface LandingPlan {
   slug: string
@@ -25,17 +24,13 @@ export interface PlanRecommendation {
   plan: LandingPlan
   packs: number
   total: string
-  perEdit: string
   /**
    * The price of one edit in whole rubles, for an estimate that is read as «около»: kopecks
-   * there look like a price. Rounded half up once, from the exact quotient and not from
-   * `perEdit`: 495.495 rounded to kopecks and then to rubles would give 496.
+   * there look like a price. Rounded half up once, from the exact quotient: 495.495 rounded to
+   * kopecks and then to rubles would give 496.
    */
   perEditRounded: string
 }
-
-// Keep display estimates independent of global Decimal settings used by other features.
-const Money = Decimal.clone({ precision: 40, rounding: Decimal.ROUND_HALF_UP })
 
 /** Cheapest monthly quota plus whole packs; missing packs never imply free extra edits. */
 export function recommendPlan(
@@ -51,13 +46,11 @@ export function recommendPlan(
     const packs = extraEdits > 0 && pack ? Math.ceil(extraEdits / pack.edits) : 0
     const total = new Money(plan.price).plus(new Money(pack?.price ?? '0').times(packs))
     if (best && !total.lessThan(best.total)) continue
-    const perEdit = total.dividedBy(edits)
     best = {
       plan,
       packs,
       total: total.toFixed(2),
-      perEdit: perEdit.toFixed(2),
-      perEditRounded: perEdit.toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toFixed(2),
+      perEditRounded: total.dividedBy(edits).toDecimalPlaces(0, Money.ROUND_HALF_UP).toFixed(2),
     }
   }
 

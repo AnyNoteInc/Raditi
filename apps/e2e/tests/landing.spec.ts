@@ -1,5 +1,17 @@
 import { AxeBuilder } from '@axe-core/playwright'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Expect, type Locator, type Page } from '@playwright/test'
+
+import {
+  applyChange,
+  finalAction,
+  heroAction,
+  hydrated,
+  menuToggle,
+  openAt,
+  plainName,
+  pricingAction,
+  settled,
+} from './landing-page.ts'
 
 // DOM and geometry assertions, not pixel snapshots: they hold on any OS and font rendering.
 // Needs the web server and a database with seeds (the pricing slider renders from the plans).
@@ -33,6 +45,41 @@ function contrast(first: string, second: string): number {
   return (lighter + 0.05) / (darker + 0.05)
 }
 
+/** A probe every 100ms: the default steps of a poll grow to a second, and a scroll that has ended
+ *  would wait for the next one. */
+const OFTEN = { intervals: [100] }
+
+/**
+ * Checks the page at rest in each window in turn, on a page that is already open: a new size
+ * needs no new load where nothing plays once per load. Each window is a step of the report, and
+ * `soft` goes on after a failure, so one window does not hide the others.
+ */
+async function atSizes(
+  page: Page,
+  sizes: readonly (readonly [width: number, height: number])[],
+  check: (width: number, height: number, soft: Expect) => Promise<void>,
+): Promise<void> {
+  for (const [width, height] of sizes) {
+    const size = `at ${width}x${height}px`
+    await test.step(size, async () => {
+      await page.setViewportSize({ width, height })
+      // A section that the new size brought into the window starts its entrance: wait it out.
+      await settled(page)
+      await check(width, height, expect.configure({ soft: true, message: size }))
+    })
+  }
+}
+
+/** The same at each width of a window 900px high. */
+function atWidths(
+  page: Page,
+  widths: readonly number[],
+  check: (width: number, soft: Expect) => Promise<void>,
+): Promise<void> {
+  const sizes = widths.map((width) => [width, 900] as const)
+  return atSizes(page, sizes, (width, _, soft) => check(width, soft))
+}
+
 /** Whether the highlighted word of the hero heading is really painted: not clipped, not covered. */
 function highlightedWordIsHit(page: Page): Promise<boolean> {
   return page.evaluate(() => {
@@ -41,39 +88,6 @@ function highlightedWordIsHit(page: Page): Promise<boolean> {
     const box = word.getBoundingClientRect()
     const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
     return hit !== null && (hit === word || word.contains(hit))
-  })
-}
-
-/** Waits until React has taken the element over: a key pressed or a value set before that is not heard. */
-function hydrated(element: Locator): Promise<void> {
-  return element.evaluate(
-    (node) =>
-      new Promise<void>((done) => {
-        // React keeps its props on a hydrated node.
-        const check = () =>
-          Object.keys(node).some((key) => key.startsWith('__reactProps'))
-            ? done()
-            : requestAnimationFrame(check)
-        check()
-      }),
-  )
-}
-
-/** Waits until no animation or transition is running: a reveal moves a section from under the
- *  pointer, and a colour read on the way belongs to neither state. */
-function settled(page: Page): Promise<void> {
-  return page.evaluate(async () => {
-    const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
-    // Frames are counted and the `finished` promises are not awaited: the answer of a closed
-    // question has an animation that is never painted and never ends.
-    for (let quiet = 0; quiet < 2;) {
-      await frame()
-      await frame()
-      const running = document
-        .getAnimations()
-        .some((animation) => animation.pending || animation.playState === 'running')
-      quiet = running ? 0 : quiet + 1
-    }
   })
 }
 
@@ -107,10 +121,11 @@ test.describe('hero heading', () => {
   // 541–800px is where the second line used to be clipped away after the entrance.
   for (const width of [320, 390, 541, 640, 768, 800, 1024, 1440]) {
     test(`shows every word at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
 
-      await expect.poll(() => highlightedWordIsHit(page), { timeout: 10_000 }).toBe(true)
+      // The entrance has played: the word is revealed, and the checks below read the page at rest.
+      await settled(page)
+      expect(await highlightedWordIsHit(page)).toBe(true)
       const heading = await page.evaluate(() => {
         const lines = [...document.querySelectorAll('#hero-title > span')]
         const title = document.querySelector('#hero-title')
@@ -145,21 +160,17 @@ test.describe('hero heading', () => {
       expect(heading.lastLine.tracking).toBeCloseTo(-0.04, 3)
       expect(heading.lastLine.lines).toBe(1)
       // The entrance must not leave a clip on the lines once it has played.
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            [...document.querySelectorAll('#hero-title > span')].map(
-              (line) => getComputedStyle(line).clipPath,
-            ),
-          ),
-        )
-        .toEqual(['none', 'none', 'none'])
+      const clips = await page.evaluate(() =>
+        [...document.querySelectorAll('#hero-title > span')].map(
+          (line) => getComputedStyle(line).clipPath,
+        ),
+      )
+      expect(clips).toEqual(['none', 'none', 'none'])
     })
   }
 })
 
 test.describe('first screen in a low window', () => {
-  const action = 'section[aria-labelledby="hero-title"] a[href="/sign-up"]'
   const headingSizes = (page: Page) =>
     page.evaluate(() =>
       [...document.querySelectorAll('#hero-title > span')].map((line) =>
@@ -168,22 +179,21 @@ test.describe('first screen in a low window', () => {
     )
 
   // A laptop of 1366x768 or 1280x720 leaves the page about this much under the browser chrome.
-  for (const [width, height] of [
-    [1366, 640],
-    [1280, 600],
-    [1024, 640],
-  ] as const) {
-    test(`keeps the main action above the fold at ${width}x${height}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height })
-      await page.goto('/')
-      await page.evaluate(() => document.fonts.ready)
-      const box = await page.locator(action).boundingBox()
+  test('keeps the main action above the fold', async ({ page }) => {
+    const sizes = [
+      [1366, 640],
+      [1280, 600],
+      [1024, 640],
+    ] as const
+    await openAt(page, ...sizes[0])
+    await atSizes(page, sizes, async (_, height, soft) => {
+      const box = await heroAction(page).boundingBox()
       if (!box) throw new Error('The first screen has no main action')
-      expect(box.y + box.height).toBeLessThanOrEqual(height)
+      soft(box.y + box.height).toBeLessThanOrEqual(height)
       // The heading gives way to the height, but not below the smallest size of the wide layout.
       const [first, , last] = await headingSizes(page)
-      expect(first).toBeGreaterThanOrEqual(52)
-      expect(last).toBeGreaterThanOrEqual(30)
+      soft(first).toBeGreaterThanOrEqual(52)
+      soft(last).toBeGreaterThanOrEqual(30)
       // Under the action the first line of the state of the service is above the fold too: it
       // starts with «Сервис готовится к запуску». The lead above it keeps to three lines for that.
       const status = page
@@ -194,28 +204,39 @@ test.describe('first screen in a low window', () => {
         range.selectNodeContents(paragraph)
         return range.getClientRects()[0]?.bottom ?? Infinity
       })
-      expect(firstLine).toBeLessThanOrEqual(height)
+      soft(firstLine).toBeLessThanOrEqual(height)
     })
-  }
+  })
 
-  test('does not change the type where the low window begins', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 761 })
-    await page.goto('/')
-    const tall = await headingSizes(page)
+  // The limits of the heading bite only below 754px (6.5vh is 49px there), and only in two
+  // columns: a single column has its own sizes, whatever the height of the window.
+  test('keeps the type of a tall window where the low one begins and in a single column', async ({
+    page,
+  }) => {
+    await openAt(page, 1440, 900)
+    expect(await headingSizes(page)).toEqual([90, 90, 49])
     await page.setViewportSize({ width: 1440, height: 760 })
-    expect(await headingSizes(page)).toEqual(tall)
-    expect(tall).toEqual([90, 90, 49])
+    expect(await headingSizes(page)).toEqual([90, 90, 49])
+    for (const [width, height] of [
+      [320, 480],
+      [390, 664],
+      [800, 600],
+      [800, 500],
+    ] as const) {
+      await page.setViewportSize({ width, height: 900 })
+      const tall = await headingSizes(page)
+      await page.setViewportSize({ width, height })
+      expect(await headingSizes(page), `at ${width}x${height}px`).toEqual(tall)
+    }
   })
 })
 
 test.describe('hero lead', () => {
   // Two columns from 358px: the lead must not end with a line of one word, and above 1100px,
   // where its type is larger, it must not grow a fourth line.
-  for (const width of [801, 900, 1024, 1100, 1101, 1440]) {
-    test(`ends with more than one word at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
-      await page.evaluate(() => document.fonts.ready)
+  test('ends with more than one word', async ({ page }) => {
+    await openAt(page, 801)
+    await atWidths(page, [801, 900, 1024, 1100, 1101, 1440], async (width, soft) => {
       const lead = await page.locator('#hero-title + p').evaluate((paragraph) => {
         const text = paragraph.firstChild
         if (!text?.textContent) throw new Error('The lead has no text')
@@ -235,42 +256,38 @@ test.describe('hero lead', () => {
         }
         return { lines: new Set(lines.map((line) => Math.round(line.top))).size, onLastLine }
       })
-      expect(lead.onLastLine).toBeGreaterThan(1)
+      soft(lead.onLastLine).toBeGreaterThan(1)
       // From 900px the column is wide enough for the lead in three lines.
-      expect(lead.lines).toBe(width >= 900 ? 3 : 4)
+      soft(lead.lines).toBe(width >= 900 ? 3 : 4)
     })
-  }
+  })
 })
 
 test.describe('lead of the steps', () => {
   // Two sentences, the second of which starts with two short words. Left at the end of a line,
-  // «Вот» or «Вот как» hangs there apart from what it introduces. The widths are a phone at its
-  // narrowest, the phones where the first sentence does not fit a line and where it does, both
-  // sides of the two breakpoints, a tablet and a desktop.
-  test('keeps the first words of its second sentence on the line of that sentence', async ({
+  // «Вот» or «Вот как» would hang there apart from what it introduces, so the text glues them to
+  // the third word. The widths are a phone at its narrowest, the phones where the first sentence
+  // does not fit a line and where it does, both sides of the two breakpoints, a tablet and a
+  // desktop.
+  test('keeps the first words of its second sentence on one line with the next one', async ({
     page,
   }) => {
     await page.goto('/')
     await page.evaluate(() => document.fonts.ready)
-    for (const width of [320, 360, 375, 390, 412, 430, 540, 541, 768, 800, 1024, 1440]) {
+    for (const width of [320, 360, 375, 390, 412, 430, 540, 541, 768, 800, 801, 1024, 1440]) {
       await page.setViewportSize({ width, height: 900 })
-      const words = await page.locator('#how h2 + div > p').evaluate((paragraph) => {
+      const lines = await page.locator('#how h2 + div > p').evaluate((paragraph) => {
         const text = paragraph.firstChild
         if (!(text instanceof Text)) throw new Error('The lead is not one run of text')
+        // What a line cannot break: non-breaking spaces keep the three words in one piece.
+        const start = text.data.indexOf('Вот\u00a0как\u00a0будет ')
+        if (start < 1) throw new Error('The lead has no glued «Вот как будет»')
         const range = document.createRange()
-        // What a line can break between: a non-breaking space keeps two words in one piece.
-        return [...text.data.matchAll(/[^ ]+/g)].map((match) => {
-          range.setStart(text, match.index)
-          range.setEnd(text, match.index + match[0].length)
-          return { word: match[0], top: Math.round(range.getBoundingClientRect().top) }
-        })
+        range.setStart(text, start)
+        range.setEnd(text, start + 'Вот как будет'.length)
+        return new Set([...range.getClientRects()].map((line) => Math.round(line.top))).size
       })
-      const start = words.findIndex(({ word }) => word === 'Вот')
-      const [first, second, third] = words.slice(start)
-      if (start < 1 || !first || !second || !third) throw new Error('The lead has no «Вот как …»')
-      expect(second.word).toBe('как')
-      expect(second.top, `«Вот» ends a line at ${width}px`).toBe(first.top)
-      expect(third.top, `«Вот как» ends a line at ${width}px`).toBe(first.top)
+      expect(lines, `«Вот как будет» is broken at ${width}px`).toBe(1)
     }
   })
 })
@@ -301,31 +318,27 @@ test.describe('description for search', () => {
 
 test.describe('header', () => {
   // The registration button comes at 1100px; below it the four links must still keep one row.
-  for (const width of [801, 900, 1024, 1099, 1100, 1440]) {
-    test(`keeps one row at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('keeps one row', async ({ page }) => {
+    await openAt(page, 801)
+    await atWidths(page, [801, 900, 1024, 1099, 1100, 1440], async (width, soft) => {
       const header = page.locator('#top > header')
       const navigation = header.getByRole('navigation', { name: 'Основная навигация' })
-      await expect(navigation.getByRole('link')).toHaveText([
+      await soft(navigation.getByRole('link')).toHaveText([
         'Как это работает',
         'Возможности',
         'Тарифы',
         'Вопросы',
       ])
-      await expect(navigation.getByRole('link', { name: 'Вопросы' })).toHaveAttribute(
-        'href',
-        '#faq',
-      )
+      await soft(navigation.getByRole('link', { name: 'Вопросы' })).toHaveAttribute('href', '#faq')
 
       const signUp = header.locator('a[href="/sign-up"]').first()
       if (width >= 1100) {
-        await expect(signUp).toBeVisible()
-        await expect(signUp).toHaveText('Зарегистрироваться')
-        await expect(signUp).toHaveCSS('color', INK)
-        expect((await signUp.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+        await soft(signUp).toBeVisible()
+        await soft(signUp).toHaveText('Зарегистрироваться')
+        await soft(signUp).toHaveCSS('color', INK)
+        soft((await signUp.boundingBox())?.height).toBeGreaterThanOrEqual(44)
       } else {
-        await expect(signUp).toBeHidden()
+        await soft(signUp).toBeHidden()
       }
 
       const row = await header.evaluate((element) => {
@@ -352,34 +365,33 @@ test.describe('header', () => {
           overflow: (parts.at(-1)?.right ?? 0) - (content.right - padding),
         }
       })
-      expect(row.lines.length).toBeGreaterThanOrEqual(6)
-      expect(new Set(row.lines)).toEqual(new Set([1]))
-      for (const gap of row.gaps) expect(gap).toBeGreaterThanOrEqual(16)
-      expect(row.overflow).toBeLessThanOrEqual(0.5)
+      soft(row.lines.length).toBeGreaterThanOrEqual(6)
+      soft(new Set(row.lines)).toEqual(new Set([1]))
+      for (const gap of row.gaps) soft(gap).toBeGreaterThanOrEqual(16)
+      soft(row.overflow).toBeLessThanOrEqual(0.5)
     })
-  }
+  })
 })
 
 test.describe('layout', () => {
-  for (const width of [320, 390, 768, 1024, 1440, 1920]) {
-    test(`does not scroll sideways at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('does not scroll sideways', async ({ page }) => {
+    await openAt(page, 320)
+    await atWidths(page, [320, 390, 768, 1024, 1440, 1920], async (_, soft) => {
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - window.innerWidth,
       )
-      expect(overflow).toBeLessThanOrEqual(0)
+      soft(overflow).toBeLessThanOrEqual(0)
     })
-  }
+  })
 
   test('keeps dark text on every orange action', async ({ page }) => {
     await page.goto('/')
     const actions = [
       page.locator('#top > header').getByRole('link', { name: 'Зарегистрироваться' }),
-      page.locator('section[aria-labelledby="hero-title"] a[href="/sign-up"]'),
+      heroAction(page),
       page.locator('#site-demo').getByRole('button', { name: 'Применить правку' }),
-      page.locator('#pricing a[href="/sign-up"]'),
-      page.locator('section[aria-labelledby="start-title"] a[href="/sign-up"]'),
+      pricingAction(page),
+      finalAction(page),
     ]
     for (const action of actions) await expect(action).toHaveCSS('color', INK)
     // Hover is where a neutral rule could turn the text light, and where the fill changes.
@@ -425,13 +437,13 @@ test.describe('hover and press', () => {
 
     test('shows the hover of an orange action, except on the amber field', async ({ page }) => {
       await page.goto('/')
-      const hero = page.locator('section[aria-labelledby="hero-title"] a[href="/sign-up"]')
-      const final = page.locator('section[aria-labelledby="start-title"] a[href="/sign-up"]')
+      const hero = heroAction(page)
+      const final = finalAction(page)
       const orange = [
         hero,
         page.locator('#top > header').getByRole('link', { name: 'Зарегистрироваться' }),
         page.locator('#site-demo').getByRole('button', { name: 'Применить правку' }),
-        page.locator('#pricing a[href="/sign-up"]'),
+        pricingAction(page),
       ]
       for (const action of orange) {
         expect(await fillOf(action)).toBe(ACCENT)
@@ -454,9 +466,9 @@ test.describe('hover and press', () => {
       await hydrated(apply)
 
       const filled = [
-        page.locator('section[aria-labelledby="hero-title"] a[href="/sign-up"]'),
+        heroAction(page),
         page.locator('#top > header').getByRole('link', { name: 'Зарегистрироваться' }),
-        page.locator('#pricing a[href="/sign-up"]'),
+        pricingAction(page),
         apply,
       ]
       for (const action of filled) {
@@ -517,8 +529,8 @@ test.describe('hover and press', () => {
   test.describe('motion', () => {
     test('lifts both main actions alike and presses them in', async ({ page }) => {
       await page.goto('/')
-      const hero = page.locator('section[aria-labelledby="hero-title"] a[href="/sign-up"]')
-      const final = page.locator('section[aria-labelledby="start-title"] a[href="/sign-up"]')
+      const hero = heroAction(page)
+      const final = finalAction(page)
       // One role: the final action differs from the first one in size only.
       for (const property of ['font-weight', 'border-top-left-radius', 'border-top-color']) {
         const value = await hero.evaluate(
@@ -549,7 +561,7 @@ test.describe('hover and press', () => {
         apply,
         demo.getByRole('button', { name: 'График' }),
         page.locator('#top > header a[href="/sign-in"]'),
-        page.locator('#pricing a[href="/sign-up"]'),
+        pricingAction(page),
         page.locator('#safety').getByRole('button', { name: 'Отменить правку' }),
       ]
       for (const action of pressed) {
@@ -562,10 +574,9 @@ test.describe('hover and press', () => {
   })
 
   test('keeps the weight and the size of the final action on a phone', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
-    const hero = page.locator('section[aria-labelledby="hero-title"] a[href="/sign-up"]')
-    const final = page.locator('section[aria-labelledby="start-title"] a[href="/sign-up"]')
+    await openAt(page, 390, 844)
+    const hero = heroAction(page)
+    const final = finalAction(page)
     // The narrow rules of the main button reach the final one too: it keeps its own room.
     await expect(hero).toHaveCSS('font-weight', '500')
     await expect(final).toHaveCSS('font-weight', '500')
@@ -642,18 +653,18 @@ test.describe('text overflow', () => {
   test.use({ reducedMotion: 'reduce' })
 
   // The narrowest phone and both single-column tablets, where the type is the largest for the width.
-  for (const width of [320, 640, 768]) {
-    test(`keeps every line of text inside the window at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
-      await expect(page.getByRole('slider')).toBeVisible()
-      await page.evaluate(() => document.fonts.ready)
-      expect(await textOutsideTheWindow(page)).toEqual([])
+  test('keeps every line of text inside the window', async ({ page }) => {
+    await openAt(page, 320)
+    await expect(page.getByRole('slider')).toBeVisible()
+    await atWidths(page, [320, 640, 768], async (_, soft) => {
+      soft(await textOutsideTheWindow(page)).toEqual([])
 
-      await page.addStyleTag({ content: TEXT_SPACING })
-      expect(await textOutsideTheWindow(page)).toEqual([])
+      const spacing = await page.addStyleTag({ content: TEXT_SPACING })
+      soft(await textOutsideTheWindow(page), 'with a wide spacing').toEqual([])
+      // The next width starts from the spacing of the page.
+      await spacing.evaluate((style) => (style as HTMLStyleElement).remove())
     })
-  }
+  })
 })
 
 // The floor of the type size and its named exceptions (apps/web/DESIGN.md, Typography): the
@@ -709,24 +720,26 @@ function textBelowTheFloor(page: Page, width: number): Promise<string[]> {
 
 test.describe('type size', () => {
   // Both sides of the breakpoints that used to make captions smaller: 480, 540, 800 and 1100px.
-  for (const width of [320, 390, 480, 481, 540, 768, 1024, 1440]) {
-    test(`keeps every text at ${TYPE_FLOOR}px or more at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
-      await expect(page.getByRole('slider')).toBeVisible()
-      expect(await textBelowTheFloor(page, width)).toEqual([])
+  const WIDTHS = [320, 390, 480, 481, 540, 768, 1024, 1440]
 
-      // The states bring their own texts: the changed banner, the labels of the window, the
-      // status of the card of the saved copy.
-      const demo = page.locator('#site-demo')
-      await demo.getByRole('button', { name: 'Акция' }).click()
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
-      await page.locator('#safety').getByRole('button', { name: 'Отменить правку' }).click()
-      await page.locator('#faq summary').first().click()
-      expect(await textBelowTheFloor(page, width)).toEqual([])
+  test(`keeps every text at ${TYPE_FLOOR}px or more`, async ({ page }) => {
+    await openAt(page, 320)
+    await expect(page.getByRole('slider')).toBeVisible()
+    await atWidths(page, WIDTHS, async (width, soft) => {
+      soft(await textBelowTheFloor(page, width)).toEqual([])
     })
-  }
+
+    // The states bring their own texts: the changed banner, the labels of the window, the
+    // status of the card of the saved copy.
+    const demo = page.locator('#site-demo')
+    await demo.getByRole('button', { name: 'Акция' }).click()
+    await applyChange(demo)
+    await page.locator('#safety').getByRole('button', { name: 'Отменить правку' }).click()
+    await page.locator('#faq summary').first().click()
+    await atWidths(page, WIDTHS, async (width, soft) => {
+      soft(await textBelowTheFloor(page, width), 'in the changed states').toEqual([])
+    })
+  })
 })
 
 test.describe('section headings', () => {
@@ -745,10 +758,9 @@ test.describe('section headings', () => {
     return { sections, answer: sections, final: clamp(32, width * 0.056, 44) }
   }
 
-  for (const width of [390, 540, 541, 640, 768, 800]) {
-    test(`are of one size in a single column at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('are of one size in a single column', async ({ page }) => {
+    await openAt(page, 390)
+    await atWidths(page, [390, 540, 541, 640, 768, 800], async (width, soft) => {
       const sizes = await page.evaluate(() => {
         const size = (selector: string) => {
           const heading = document.querySelector(selector)
@@ -768,15 +780,14 @@ test.describe('section headings', () => {
         }
       })
       const { sections, answer, final } = expected(width)
-      for (const size of sizes.sections) expect(size).toBeCloseTo(sections, 1)
-      expect(sizes.answer).toBeCloseTo(answer, 1)
-      expect(sizes.final).toBeCloseTo(final, 1)
+      for (const size of sizes.sections) soft(size).toBeCloseTo(sections, 1)
+      soft(sizes.answer).toBeCloseTo(answer, 1)
+      soft(sizes.final).toBeCloseTo(final, 1)
     })
-  }
+  })
 
   test('keeps each half of the first heading on its line at 541px', async ({ page }) => {
-    await page.setViewportSize({ width: 541, height: 900 })
-    await page.goto('/')
+    await openAt(page, 541)
     const lines = await page.locator('#how-title').evaluate((heading) => {
       const range = document.createRange()
       range.selectNodeContents(heading)
@@ -795,8 +806,7 @@ test.describe('highlights of the headings', () => {
   test('are one to a heading: an amber plate on a light field, an amber text on the dark one', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     await settled(page)
     const headings = await page.evaluate(() =>
       [...document.querySelectorAll('#top h1, #top h2')].map((heading) => {
@@ -846,8 +856,7 @@ test.describe('highlights of the headings', () => {
 
   for (const width of [390, 1440]) {
     test(`keeps a plate in one piece at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       for (const id of ['can-title', 'safety-title']) {
         const pieces = await page
           .locator(`#${id} em`)
@@ -863,8 +872,8 @@ test.describe('dark strip', () => {
   const DRAWN = ['none', 'matrix(1, 0, 0, 1, 0, 0)']
 
   /** The chores of the strip: the lines of their text and their strikes. */
-  const chores = (page: Page) =>
-    page.locator(`${STRIP} p > span`).evaluateAll((lines) =>
+  const chores = async (page: Page) => {
+    const read = await page.locator(`${STRIP} p > span`).evaluateAll((lines) =>
       lines.map((line) => {
         const text = document.createRange()
         text.selectNodeContents(line)
@@ -876,8 +885,7 @@ test.describe('dark strip', () => {
           strike: {
             line: `${strike.borderTopWidth} ${strike.borderTopStyle} ${strike.borderTopColor}`,
             transform: strike.transform,
-            // A CSS module adds a hash to the name written in the source.
-            animation: strike.animationName.split('__').pop()?.replace(/_.*$/, '') ?? '',
+            animation: strike.animationName,
             duration: strike.animationDuration,
             delay: strike.animationDelay,
             fill: strike.animationFillMode,
@@ -885,45 +893,41 @@ test.describe('dark strip', () => {
         }
       }),
     )
+    return read.map((line) => ({
+      ...line,
+      strike: { ...line.strike, animation: plainName(line.strike.animation) },
+    }))
+  }
 
   test.describe('at rest', () => {
     // Under reduced motion the strip is what CSS draws: no scene is prepared.
     test.use({ reducedMotion: 'reduce' })
 
-    for (const width of [320, 390, 1440]) {
-      test(`crosses out four chores, each in one line, at ${width}px`, async ({ page }) => {
-        await page.setViewportSize({ width, height: 900 })
-        await page.goto('/')
+    test('crosses out four chores, each in one line', async ({ page }) => {
+      await openAt(page, 320)
+      await atWidths(page, [320, 390, 1440], async (width, soft) => {
         const lines = await chores(page)
-        expect(lines.map((line) => line.text)).toEqual([
+        soft(lines.map((line) => line.text)).toEqual([
           'Надо найти разработчика.',
           'Объяснить.',
           'Напомнить.',
           'Подождать.',
         ])
-        await expect(page.locator(`${STRIP} p`).first()).not.toHaveAttribute('data-scene')
+        await soft(page.locator(`${STRIP} p`).first()).not.toHaveAttribute('data-scene')
         for (const line of lines) {
-          expect(line.lines, line.text ?? '').toBe(1)
-          expect(line.right, line.text ?? '').toBeLessThanOrEqual(width - 20)
-          expect(line.strike.line).toBe(`2px solid ${MARKER}`)
-          expect(DRAWN).toContain(line.strike.transform)
-          expect(line.strike.animation).toBe('none')
+          soft(line.lines, line.text ?? '').toBe(1)
+          soft(line.right, line.text ?? '').toBeLessThanOrEqual(width - 20)
+          soft(line.strike.line).toBe(`2px solid ${MARKER}`)
+          soft(DRAWN).toContain(line.strike.transform)
+          soft(line.strike.animation).toBe('none')
         }
       })
-    }
+    })
 
     // The answer is the main thought of the page: not smaller than a heading of a section.
-    for (const [width, size] of [
-      [801, null],
-      [1101, null],
-      [1440, null],
-      [1920, 56],
-    ] as const) {
-      test(`sets the answer not smaller than a section heading, in two lines, at ${width}px`, async ({
-        page,
-      }) => {
-        await page.setViewportSize({ width, height: 900 })
-        await page.goto('/')
+    test('sets the answer not smaller than a section heading, in two lines', async ({ page }) => {
+      await openAt(page, 801)
+      await atWidths(page, [801, 1101, 1440, 1920], async (width, soft) => {
         const read = await page.evaluate((strip) => {
           const answer = document.querySelector(`${strip} h2`)
           const mark = answer?.querySelector('em')
@@ -935,21 +939,21 @@ test.describe('dark strip', () => {
             pieces: mark.getClientRects().length,
           }
         }, STRIP)
-        expect(read.answer).toBeGreaterThanOrEqual(read.heading)
-        expect(read.answer).toBeLessThanOrEqual(56)
-        if (size) expect(read.answer).toBe(size)
+        soft(read.answer).toBeGreaterThanOrEqual(read.heading)
+        soft(read.answer).toBeLessThanOrEqual(56)
+        // The largest size is reached on a wide desktop.
+        if (width === 1920) soft(read.answer).toBe(56)
         // «просто написать.» stays one line beside the chores.
-        expect(read.pieces).toBe(1)
+        soft(read.pieces).toBe(1)
       })
-    }
+    })
   })
 
   test('draws the strikes one after another, once, when the strip comes into the window', async ({
     page,
   }) => {
     // A window that ends above the strip.
-    await page.setViewportSize({ width: 1440, height: 700 })
-    await page.goto('/')
+    await openAt(page, 1440, 700)
     const list = page.locator(`${STRIP} p`).first()
     await expect(list).toHaveAttribute('data-scene', 'waiting')
     // Below the window the first frame is held: no strike yet, the words in full contrast.
@@ -980,8 +984,7 @@ test.describe('dark strip', () => {
     test.use({ javaScriptEnabled: false })
 
     test('is crossed out from the start', async ({ page }) => {
-      await page.setViewportSize({ width: 1440, height: 700 })
-      await page.goto('/')
+      await openAt(page, 1440, 700)
       await expect(page.locator(`${STRIP} p`).first()).not.toHaveAttribute('data-scene')
       const lines = await chores(page)
       expect(lines).toHaveLength(4)
@@ -1029,8 +1032,7 @@ test.describe('capabilities', () => {
   test('are six rows of a request and its result, under the caveat about the launch', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     const section = page.locator('#possibilities')
     const table = await rows(page)
     expect(table).toHaveLength(6)
@@ -1052,12 +1054,9 @@ test.describe('capabilities', () => {
     expect(caveatBottom).toBeLessThanOrEqual(table[0]?.row.top ?? 0)
   })
 
-  for (const width of [390, 541, 768, 800, 1440]) {
-    test(`shows the heads of the columns once, over the cells of the first row, at ${width}px`, async ({
-      page,
-    }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('shows the heads of the columns once, over the cells of the first row', async ({ page }) => {
+    await openAt(page, 390)
+    await atWidths(page, [390, 541, 768, 800, 1440], async (width, soft) => {
       const [first, ...others] = await rows(page)
       if (!first) throw new Error('The table has no rows')
       const [requestHead, resultHead] = first.heads
@@ -1066,50 +1065,48 @@ test.describe('capabilities', () => {
         [requestHead, first.request],
         [resultHead, first.result],
       ] as const) {
-        expect(head.width).toBeGreaterThan(100)
-        expect(head.left).toBeCloseTo(cell.left, 0)
-        expect(head.bottom).toBeLessThanOrEqual(cell.top)
+        soft(head.width).toBeGreaterThan(100)
+        soft(head.left).toBeCloseTo(cell.left, 0)
+        soft(head.bottom).toBeLessThanOrEqual(cell.top)
       }
       // A head names the cell right under it: «Например, вы пишете» over a category would read
       // as the head of the categories. In one or two columns the category is the first line of
       // a row, and the head of the requests stands between it and the request.
       if (width <= 800) {
-        expect(first.heading.bottom).toBeLessThanOrEqual(requestHead.top)
-        expect(first.request.top - requestHead.bottom).toBeLessThanOrEqual(8)
+        soft(first.heading.bottom).toBeLessThanOrEqual(requestHead.top)
+        soft(first.request.top - requestHead.bottom).toBeLessThanOrEqual(8)
       }
       for (const row of others) {
         for (const head of row.heads) {
-          expect(head.width).toBeLessThanOrEqual(1)
-          expect(head.height).toBeLessThanOrEqual(1)
+          soft(head.width).toBeLessThanOrEqual(1)
+          soft(head.height).toBeLessThanOrEqual(1)
         }
       }
     })
-  }
+  })
 
   // Between the phone and the desktop a row is two columns under its category. The heads of
   // the columns are seen in the first row only, and the other rows keep no place for them.
-  for (const width of [541, 640, 768, 800]) {
-    test(`sets a row in two columns, as far from the line above as from the line below, at ${width}px`, async ({
-      page,
-    }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('sets a row in two columns, as far from the line above as from the line below', async ({
+    page,
+  }) => {
+    await openAt(page, 541)
+    await atWidths(page, [541, 640, 768, 800], async (_, soft) => {
       const table = await rows(page)
-      expect(table).toHaveLength(6)
+      soft(table).toHaveLength(6)
       for (const row of table) {
-        expect(row.heading.bottom, row.request.text ?? '').toBeLessThanOrEqual(row.request.top)
-        expect(row.request.right, row.request.text ?? '').toBeLessThanOrEqual(row.result.left)
+        soft(row.heading.bottom, row.request.text ?? '').toBeLessThanOrEqual(row.request.top)
+        soft(row.request.right, row.request.text ?? '').toBeLessThanOrEqual(row.result.left)
         const above = row.heading.top - row.row.top
         // The line under a row is its border of 1px.
         const below = row.row.bottom - 1 - Math.max(row.request.bottom, row.result.bottom)
-        expect(Math.abs(above - below), row.request.text ?? '').toBeLessThanOrEqual(1)
+        soft(Math.abs(above - below), row.request.text ?? '').toBeLessThanOrEqual(1)
       }
     })
-  }
+  })
 
   test('sets a row in three columns on a desktop and in one on a phone', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     for (const row of await rows(page)) {
       expect(row.heading.right).toBeLessThanOrEqual(row.request.left)
       expect(row.request.right).toBeLessThanOrEqual(row.result.left)
@@ -1134,14 +1131,13 @@ test.describe('capabilities', () => {
 test.describe('word in the footer', () => {
   // The sign of the brand closes the word; the row clips what does not fit it. At 541px the
   // word is at its smallest size above the phone, and the row is at its tightest.
-  for (const width of [320, 390, 541, 768, 1024, 1101, 1440, 1920]) {
-    test(`ends with the whole sign of the brand at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('ends with the whole sign of the brand', async ({ page }) => {
+    await openAt(page, 320)
+    await atWidths(page, [320, 390, 541, 768, 1024, 1101, 1440, 1920], async (width, soft) => {
       const word = page.locator('#top > footer > div[aria-hidden="true"]').last()
-      await expect(word).toHaveText('радити')
+      await soft(word).toHaveText('радити')
       const sign = word.locator('svg')
-      await expect(sign.locator('circle')).toHaveCount(1)
+      await soft(sign.locator('circle')).toHaveCount(1)
       const boxes = await word.evaluate((row) => {
         const svg = row.querySelector('svg')
         if (!svg) throw new Error('The word has no sign')
@@ -1162,17 +1158,17 @@ test.describe('word in the footer', () => {
       })
       // A circle in a square of whole pixels. The size follows the word and is a fraction of a
       // pixel at most widths; in such a box the browser draws the circle cut by its last row.
-      expect(boxes.sign.width).toBe(Math.round(boxes.sign.width))
-      expect(boxes.sign.height).toBe(boxes.sign.width)
+      soft(boxes.sign.width).toBe(Math.round(boxes.sign.width))
+      soft(boxes.sign.height).toBe(boxes.sign.width)
       // As tall as the lowercase letters: 0.55 of the size of the word, to the nearest pixel.
-      expect(Math.abs(boxes.sign.width - 0.55 * boxes.fontSize)).toBeLessThanOrEqual(0.5)
-      expect(boxes.sign.right).toBeLessThanOrEqual(boxes.row.right + 0.5)
+      soft(Math.abs(boxes.sign.width - 0.55 * boxes.fontSize)).toBeLessThanOrEqual(0.5)
+      soft(boxes.sign.right).toBeLessThanOrEqual(boxes.row.right + 0.5)
       // The circle of the sign ends on the axis: it has no side bearing to hang over it.
-      expect(Math.abs(boxes.sign.right - boxes.axis)).toBeLessThanOrEqual(0.5)
-      expect(boxes.sign.left).toBeGreaterThan(boxes.textRight)
-      expect(boxes.sign.top).toBeGreaterThanOrEqual(boxes.row.top)
+      soft(Math.abs(boxes.sign.right - boxes.axis)).toBeLessThanOrEqual(0.5)
+      soft(boxes.sign.left).toBeGreaterThan(boxes.textRight)
+      soft(boxes.sign.top).toBeGreaterThanOrEqual(boxes.row.top)
     })
-  }
+  })
 })
 
 test.describe('how it works', () => {
@@ -1181,9 +1177,6 @@ test.describe('how it works', () => {
     'Пример сообщения в чате: Поменяй цену капучино на 290 ₽',
     'Пример: Капучино, 250 мл — было 250 ₽, стало 290 ₽',
   ]
-  /** The name of an animation as the source writes it: a CSS module adds a hash to it. */
-  const plainName = (name: string) => name.split('__').pop()?.replace(/_.*$/, '') ?? ''
-
   /** What the scene of the frames moves: the message, the new value and its plate. */
   const scene = (page: Page) =>
     page.locator('#how').evaluate((section) => {
@@ -1221,7 +1214,7 @@ test.describe('how it works', () => {
     await expect(how.getByText('Пример', { exact: true })).toHaveCount(3)
     await expect(how.getByText('После запуска')).toBeVisible()
     // The steps describe the service after its launch: the lead keeps the future tense.
-    await expect(how.getByText(/Вот как будет устроена работа с.Радити\./)).toBeVisible()
+    await expect(how.getByText(/Вот.как.будет устроена работа с.Радити\./)).toBeVisible()
 
     // A frame is a picture: nothing to press, no status of success, no promise of one click.
     await expect(how.getByRole('button')).toHaveCount(0)
@@ -1255,10 +1248,9 @@ test.describe('how it works', () => {
     ).toBeGreaterThanOrEqual(7)
   })
 
-  for (const width of [390, 768, 1440]) {
-    test(`keeps the frames flat, of one height and readable at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('keeps the frames flat, of one height and readable', async ({ page }) => {
+    await openAt(page, 390)
+    await atWidths(page, [390, 768, 1440], async (width, soft) => {
       const frames = await page.locator('#how [role="img"] > div').evaluateAll((cards) =>
         cards.map((card) => {
           const style = getComputedStyle(card)
@@ -1280,20 +1272,20 @@ test.describe('how it works', () => {
           }
         }),
       )
-      expect(frames).toHaveLength(3)
+      soft(frames).toHaveLength(3)
       for (const frame of frames) {
-        expect(frame.transform).toBe('none')
-        expect(frame.shadow).toBe('none')
-        expect(frame.smallest).toBeGreaterThanOrEqual(12)
-        expect(frame.right).toBeLessThanOrEqual(width)
-        expect(frame.height).toBeCloseTo(frames[0]?.height ?? 0, 0)
+        soft(frame.transform).toBe('none')
+        soft(frame.shadow).toBe('none')
+        soft(frame.smallest).toBeGreaterThanOrEqual(12)
+        soft(frame.right).toBeLessThanOrEqual(width)
+        soft(frame.height).toBeCloseTo(frames[0]?.height ?? 0, 0)
       }
       // In a row the three frames stand on one line.
       if (width > 800) {
-        expect(new Set(frames.map((frame) => Math.round(frame.top))).size).toBe(1)
+        soft(new Set(frames.map((frame) => Math.round(frame.top))).size).toBe(1)
       }
     })
-  }
+  })
 
   for (const [width, delays] of [
     [1440, { value: '0.24s', plate: '0.48s' }],
@@ -1303,9 +1295,9 @@ test.describe('how it works', () => {
       page,
     }) => {
       // A window that ends above the frames.
-      await page.setViewportSize({ width, height: 700 })
-      await page.goto('/')
-      await expect(page.locator('#how [data-scene]')).toHaveCount(2)
+      await openAt(page, width, 700)
+      // The heading of the section carries a mark of the observer too: only the frames count.
+      await expect(page.locator('#how [data-reveal="scene"][data-scene]')).toHaveCount(2)
       const waiting = await scene(page)
       expect(waiting.marks).toEqual(['waiting', 'waiting'])
       // Held at the first frame, a step below the place, and never dimmed.
@@ -1349,8 +1341,7 @@ test.describe('how it works', () => {
     test.use({ reducedMotion: 'reduce' })
 
     test('shows the frames complete and prepares no scene', async ({ page }) => {
-      await page.setViewportSize({ width: 1440, height: 700 })
-      await page.goto('/')
+      await openAt(page, 1440, 700)
       await expect(page.getByRole('slider')).toBeVisible()
       const still = await scene(page)
       expect(still.marks).toEqual([null, null])
@@ -1366,8 +1357,7 @@ test.describe('how it works', () => {
     test.use({ javaScriptEnabled: false })
 
     test('shows the frames complete', async ({ page }) => {
-      await page.setViewportSize({ width: 1440, height: 700 })
-      await page.goto('/')
+      await openAt(page, 1440, 700)
       const still = await scene(page)
       expect(still.marks).toEqual([null, null])
       expect(still.message.transform).toBe('none')
@@ -1379,31 +1369,29 @@ test.describe('how it works', () => {
 })
 
 test.describe('demo', () => {
-  for (const width of [320, 390, 801, 1440]) {
-    test(`keeps the three requests in one row at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('keeps the three requests in one row', async ({ page }) => {
+    await openAt(page, 320)
+    await atWidths(page, [320, 390, 801, 1440], async (_, soft) => {
       const choice = page.getByRole('group', { name: 'Выберите, что попросить:' })
-      await expect(choice.getByRole('button')).toHaveCount(3)
+      await soft(choice.getByRole('button')).toHaveCount(3)
       // The place in the layout, not the painted box: the entrance of the demo turns it a little.
       const tops = await choice
         .getByRole('button')
         .evaluateAll((buttons) => buttons.map((button) => (button as HTMLElement).offsetTop))
-      expect(new Set(tops).size).toBe(1)
+      soft(new Set(tops).size).toBe(1)
       // The author of the message is named in the chat, not smaller than a caption.
       const author = page.locator('#site-demo').getByText('Вы', { exact: true })
-      await expect(author).toBeVisible()
-      expect(
+      await soft(author).toBeVisible()
+      soft(
         await author.evaluate((element) => parseFloat(getComputedStyle(element).fontSize)),
       ).toBeGreaterThanOrEqual(12)
     })
-  }
+  })
 
   // The banner request has the longest new value: on the narrowest phone it does not fit the
   // line of the old one, and the arrow must go to the next line with it.
   test('keeps the arrow of a change on one line with the new value at 320px', async ({ page }) => {
-    await page.setViewportSize({ width: 320, height: 800 })
-    await page.goto('/')
+    await openAt(page, 320, 800)
     const demo = page.locator('#site-demo')
     const choice = demo.getByRole('group', { name: 'Выберите, что попросить:' })
     await hydrated(choice.getByRole('button').first())
@@ -1438,8 +1426,7 @@ test.describe('demo', () => {
     test(`marks the chosen request with a check on a soft surface at ${width}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       const buttons = page
         .getByRole('group', { name: 'Выберите, что попросить:' })
         .getByRole('button')
@@ -1515,8 +1502,7 @@ test.describe('demo', () => {
     test(`keeps the site window as tall when the banner changes at ${width}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       const demo = page.locator('#site-demo')
       await demo.getByRole('button', { name: 'Акция' }).click()
       const apply = demo.getByRole('button', { name: 'Применить правку' })
@@ -1574,8 +1560,7 @@ test.describe('demo', () => {
       expect(await pair()).toBeGreaterThanOrEqual(4.5)
       const atRest = await address.evaluate((node) => getComputedStyle(node).color)
 
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
+      await applyChange(demo)
       await expect(bar).toHaveCSS('background-color', MARKER)
       await expect(address).toHaveCSS('color', INK)
       // The lock is drawn with the colour of the text.
@@ -1598,14 +1583,12 @@ test.describe('demo', () => {
           const surface = layer.content === 'none' ? getComputedStyle(node) : layer
           return { background: surface.backgroundColor, color: getComputedStyle(node).color }
         })
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
+      await applyChange(demo)
       const row = await marked()
       expect(row).toEqual({ background: MARKER, color: INK })
 
       await demo.getByRole('button', { name: 'Акция' }).click()
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
+      await applyChange(demo)
       expect(await marked()).toEqual(row)
     })
   })
@@ -1616,8 +1599,7 @@ test.describe('demo', () => {
     await page.goto('/')
     const demo = page.locator('#site-demo')
     await demo.getByRole('button', { name: 'Акция' }).click()
-    await demo.getByRole('button', { name: 'Применить правку' }).click()
-    await expect(demo.getByText('Изменено')).toBeVisible()
+    await applyChange(demo)
     await settled(page)
     const banner = await demo.locator('[data-changed="true"]').evaluate((node) => {
       const style = getComputedStyle(node)
@@ -1719,8 +1701,7 @@ test.describe('outlines of controls', () => {
   // The track of the slider is a border under the box of the thumb, which a margin lifts onto
   // the line: a wrong margin would hang the thumb above or below it.
   test('centre the thumb of the slider on the line of its track', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
+    await openAt(page, 390, 844)
     const slider = page.getByRole('slider')
     await slider.scrollIntoViewIfNeeded()
     const middle = (rows: number[]) => ((rows[0] ?? NaN) + (rows.at(-1) ?? NaN) + 1) / 2
@@ -1737,8 +1718,7 @@ test.describe('outlines of controls', () => {
   })
 
   test('bound the button of the mobile menu at 3:1', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
+    await openAt(page, 390, 844)
     const toggle = page.getByRole('button', { name: 'Открыть меню' })
     expect(contrast(await outline(toggle), PAPER)).toBeGreaterThanOrEqual(3)
   })
@@ -1749,8 +1729,7 @@ test.describe('safety', () => {
     test(`keeps the text on the orange field dark, and medium when small, at ${width}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       const texts = await page.locator('#safety').evaluate((section) => {
         const field = getComputedStyle(section).backgroundColor
         const found: { text: string; color: string; size: number; weight: number }[] = []
@@ -1832,8 +1811,7 @@ test.describe('safety', () => {
       page,
     }) => {
       await page.emulateMedia({ reducedMotion: 'reduce' })
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       const safety = page.locator('#safety')
       const note = safety.locator('p').filter({ hasText: 'Так будет устроена защита сайта.' })
       const [inviting, plain] = [note.locator('span').first(), note.locator('span').last()]
@@ -1938,8 +1916,7 @@ test.describe('safety', () => {
       await settled(page)
     }
 
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     await arrived()
     const desktop = await places()
     expect(desktop.note.left).toBe(desktop.list.left)
@@ -1982,12 +1959,11 @@ test.describe('pricing', () => {
   })
 
   // Three columns of 211 to 300px: the description of one plan wraps, of another does not.
-  for (const width of [700, 768, 900]) {
-    test(`keeps the prices of the plans on one line at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('keeps the prices of the plans on one line', async ({ page }) => {
+    await openAt(page, 700)
+    await atWidths(page, [700, 768, 900], async (width, soft) => {
       const plans = page.locator('#pricing article')
-      await expect(plans).toHaveCount(3)
+      await soft(plans).toHaveCount(3)
       const rows = await plans.evaluateAll((articles) =>
         articles.map((article) => {
           const [description, price] = article.querySelectorAll('p')
@@ -2004,22 +1980,21 @@ test.describe('pricing', () => {
       )
       // Up to 768px the descriptions take a different number of lines; without that the check
       // would hold by itself.
-      if (width <= 768) expect(new Set(rows.map((row) => row.lines)).size).toBeGreaterThan(1)
-      expect(new Set(rows.map((row) => row.price)).size).toBe(1)
-      expect(new Set(rows.map((row) => row.list)).size).toBe(1)
+      if (width <= 768) soft(new Set(rows.map((row) => row.lines)).size).toBeGreaterThan(1)
+      soft(new Set(rows.map((row) => row.price)).size).toBe(1)
+      soft(new Set(rows.map((row) => row.list)).size).toBe(1)
     })
-  }
+  })
 
   // A price is set as the expressive numbers of the page: in the face of the headings, with
   // digits of one width, the ruble sign small beside it. «39 900 ₽» is the widest of the three.
-  for (const width of [320, 768, 1440]) {
-    test(`sets the prices in the face of the headings, whole inside their columns, at ${width}px`, async ({
-      page,
-    }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('sets the prices in the face of the headings, whole inside their columns', async ({
+    page,
+  }) => {
+    await openAt(page, 320)
+    await atWidths(page, [320, 768, 1440], async (_, soft) => {
       const pricing = page.locator('#pricing')
-      await expect(pricing.locator('article')).toHaveCount(3)
+      await soft(pricing.locator('article')).toHaveCount(3)
       const read = await pricing.evaluate((section) => {
         const heading = section.querySelector('h2')
         const count = section.querySelector('output')
@@ -2066,32 +2041,29 @@ test.describe('pricing', () => {
           ),
         }
       })
-      expect(read.plans.map((plan) => plan.text?.replaceAll('\u00a0', ' '))).toContain('39 900 ₽')
+      soft(read.plans.map((plan) => plan.text?.replaceAll('\u00a0', ' '))).toContain('39 900 ₽')
       for (const price of [read.total, ...read.plans]) {
-        expect(price.family, price.text ?? '').toBe(read.heading)
-        expect(price.weight).toBe('500')
-        expect(price.numeric).toBe('tabular-nums')
-        expect(price.signFamily).toBe(read.body)
-        expect(price.signSize).toBeLessThan(price.size / 2)
-        expect(price.lines, price.text ?? '').toBe(1)
-        expect(price.signBeside, price.text ?? '').toBe(true)
-        expect(price.right, price.text ?? '').toBeLessThanOrEqual(price.columnRight + 0.5)
+        soft(price.family, price.text ?? '').toBe(read.heading)
+        soft(price.weight).toBe('500')
+        soft(price.numeric).toBe('tabular-nums')
+        soft(price.signFamily).toBe(read.body)
+        soft(price.signSize).toBeLessThan(price.size / 2)
+        soft(price.lines, price.text ?? '').toBe(1)
+        soft(price.signBeside, price.text ?? '').toBe(true)
+        soft(price.right, price.text ?? '').toBeLessThanOrEqual(price.columnRight + 0.5)
       }
       // The sum of the calculator stays its main number: the count of edits is a step smaller.
-      expect(read.count).toBeLessThan(read.total.size)
+      soft(read.count).toBeLessThan(read.total.size)
     })
-  }
+  })
 
   // The rows under the plans repeat the inset of a plan: what they say starts on the vertical
   // where the text of a plan starts. In one column they go back to the edge of the page text.
-  for (const width of [390, 768, 1024, 1440]) {
-    test(`starts the rows under the plans where the text of a plan starts at ${width}px`, async ({
-      page,
-    }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+  test('starts the rows under the plans where the text of a plan starts', async ({ page }) => {
+    await openAt(page, 390)
+    await atWidths(page, [390, 768, 1024, 1440], async (width, soft) => {
       const pricing = page.locator('#pricing')
-      await expect(pricing.locator('article')).toHaveCount(3)
+      await soft(pricing.locator('article')).toHaveCount(3)
       const edges = await pricing.evaluate((section) => {
         const text = (element: Element | null | undefined) => {
           if (!element) throw new Error('The pricing has no such text')
@@ -2121,26 +2093,25 @@ test.describe('pricing', () => {
       const [first = NaN, second = NaN, third = NaN] = edges.plans
       if (width <= 680) {
         for (const left of [edges.included, edges.packs, edges.vat, edges.action.left]) {
-          expect(left).toBeCloseTo(edges.heading, 1)
+          soft(left).toBeCloseTo(edges.heading, 1)
         }
         return
       }
-      expect(edges.included).toBeCloseTo(first, 1)
-      expect(edges.packs).toBeCloseTo(first, 1)
-      expect(edges.vat).toBeCloseTo(second, 1)
+      soft(edges.included).toBeCloseTo(first, 1)
+      soft(edges.packs).toBeCloseTo(first, 1)
+      soft(edges.vat).toBeCloseTo(second, 1)
       // The action ends where the text of the third plan ends, and starts with it where the
       // column is wide enough for the label.
-      expect(edges.action.right).toBeCloseTo(edges.lastPlanRight, 1)
-      if (width >= 1024) expect(edges.action.left).toBeCloseTo(third, 1)
-      else expect(edges.action.right - edges.action.left).toBeCloseTo(240, 1)
+      soft(edges.action.right).toBeCloseTo(edges.lastPlanRight, 1)
+      if (width >= 1024) soft(edges.action.left).toBeCloseTo(third, 1)
+      else soft(edges.action.right - edges.action.left).toBeCloseTo(240, 1)
     })
-  }
+  })
 
   // The longest result line: a plan, its packs in words and the sum below.
   for (const width of [320, 390]) {
     test(`keeps the result in words inside its column at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       const slider = page.getByRole('slider', { name: 'Сколько правок нужно в месяц?' })
       await hydrated(slider)
       await slider.fill('120')
@@ -2202,8 +2173,7 @@ test.describe('pricing', () => {
 
 test.describe('navigation and questions', () => {
   test('opens the mobile menu and closes it on Escape', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
+    await openAt(page, 390, 844)
     await page.getByRole('button', { name: 'Открыть меню' }).click()
     const menu = page.getByRole('navigation', { name: 'Мобильная навигация' })
     await expect(menu).toBeVisible()
@@ -2215,9 +2185,8 @@ test.describe('navigation and questions', () => {
   test('closes the mobile menu on a press outside the header and when the focus goes on', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
-    const toggle = page.locator('#top > header button[aria-controls]')
+    await openAt(page, 390, 844)
+    const toggle = menuToggle(page)
     const menu = page.getByRole('navigation', { name: 'Мобильная навигация' })
     await toggle.click()
     await expect(menu).toBeVisible()
@@ -2243,8 +2212,7 @@ test.describe('navigation and questions', () => {
     const header = page.locator('#top > header')
     // The room that an anchor keeps for a sticky header.
     const section = page.locator('#how')
-    await page.setViewportSize({ width: 320, height: 844 })
-    await page.goto('/')
+    await openAt(page, 320, 844)
     await expect(header).toHaveCSS('position', 'sticky')
     await expect(section).toHaveCSS('scroll-margin-top', '84px')
 
@@ -2268,14 +2236,12 @@ test.describe('navigation and questions', () => {
     expect(await bottom()).toBeLessThanOrEqual(256)
   })
 
-  for (const width of [320, 390, 1440]) {
-    test(`sets the questions a step above their answers at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
-      const first = page.locator('#faq details').first()
-      await first.locator('summary').click()
-      await expect(first.locator('p')).toBeVisible()
-
+  test('sets the questions a step above their answers', async ({ page }) => {
+    await openAt(page, 320)
+    const first = page.locator('#faq details').first()
+    await first.locator('summary').click()
+    await expect(first.locator('p')).toBeVisible()
+    await atWidths(page, [320, 390, 1440], async (width, soft) => {
       const questions = await page.locator('#faq summary').evaluateAll((summaries) =>
         summaries.map((summary) => {
           const style = getComputedStyle(summary)
@@ -2301,18 +2267,18 @@ test.describe('navigation and questions', () => {
         .locator('p')
         .evaluate((paragraph) => parseFloat(getComputedStyle(paragraph).fontSize))
 
-      expect(questions.length).toBeGreaterThanOrEqual(6)
+      soft(questions.length).toBeGreaterThanOrEqual(6)
       for (const question of questions) {
-        expect(question.size).toBe(width <= 540 ? 17 : 18)
-        expect(question.weight).toBe(500)
-        expect(question.leading).toBeCloseTo(1.35, 2)
-        expect(question.height).toBeGreaterThanOrEqual(44)
-        expect(question.lines).toBeLessThanOrEqual(2)
-        expect(Math.abs(question.signOffset)).toBeLessThanOrEqual(1)
+        soft(question.size).toBe(width <= 540 ? 17 : 18)
+        soft(question.weight).toBe(500)
+        soft(question.leading).toBeCloseTo(1.35, 2)
+        soft(question.height).toBeGreaterThanOrEqual(44)
+        soft(question.lines).toBeLessThanOrEqual(2)
+        soft(Math.abs(question.signOffset)).toBeLessThanOrEqual(1)
       }
-      expect(answer).toBe(15)
+      soft(answer).toBe(15)
     })
-  }
+  })
 
   test('opens the first question', async ({ page }) => {
     await page.goto('/')
@@ -2352,15 +2318,13 @@ test.describe('accessibility rules', () => {
 
   for (const width of [390, 1440]) {
     test(`hold in every state of the page at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       await expect(page.getByRole('slider')).toBeVisible()
       expect(await violations(page)).toEqual([])
 
       // The change applied, the card of the copy turned back, a question open.
       const demo = page.locator('#site-demo')
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
+      await applyChange(demo)
       await page.locator('#safety').getByRole('button', { name: 'Отменить правку' }).click()
       await page.locator('#faq summary').first().click()
       await expect(page.locator('#faq details').first().locator('p')).toBeVisible()
@@ -2488,7 +2452,9 @@ test.describe('scroll on the way between pages', () => {
   }) => {
     await page.goto('/')
     const root = page.locator('html')
-    // The page itself is smooth: that is what the attribute sets aside on the way.
+    // The page itself is smooth once its fonts are in: that is what the attribute sets aside on
+    // the way.
+    await expect(root).toHaveAttribute('data-fonts', 'ready')
     await expect(root).toHaveCSS('scroll-behavior', 'smooth')
     await expect(root).toHaveAttribute('data-scroll-behavior', 'smooth')
   })
@@ -2498,7 +2464,13 @@ test.describe('scroll on the way between pages', () => {
     await page.goto('/terms/user-agreement')
     const home = page.getByRole('link', { name: 'Радити — на главную' }).first()
     await hydrated(home)
-    await page.evaluate(() => window.scrollTo({ top: 700, behavior: 'instant' }))
+    // The browser reports a scroll with the next frame: the record starts after this one is told.
+    await page.evaluate(async () => {
+      const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+      window.scrollTo({ top: 700, behavior: 'instant' })
+      await frame()
+      await frame()
+    })
     const start = await page.evaluate(() => Math.round(window.scrollY))
     expect(start).toBeGreaterThan(500)
     await record(page)
@@ -2506,7 +2478,7 @@ test.describe('scroll on the way between pages', () => {
     // would scroll the page up to the link before the press.
     await home.dispatchEvent('click')
     await expect(page.locator('#hero-title')).toBeVisible()
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+    await expect.poll(() => page.evaluate(() => window.scrollY), OFTEN).toBe(0)
     await settled(page)
     // A client transition: the record of the first page is still there. A jump is one position;
     // a smooth scroll would pass dozens on its way.
@@ -2518,8 +2490,7 @@ test.describe('scroll on the way between pages', () => {
   test('jumps on the way from a scrolled landing to the registration and back', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     // The plans are in: the page is as tall as it will be.
     await expect(page.getByRole('slider')).toBeVisible()
     const signUp = page.getByRole('banner').getByRole('link', { name: 'Зарегистрироваться' })
@@ -2545,17 +2516,16 @@ test.describe('scroll on the way between pages', () => {
     // of the landing, which the attribute of the root does not set aside for a step back.
     await page.goBack()
     await page.waitForURL(/\/$/)
-    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(start)
+    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY)), OFTEN).toBe(start)
   })
 })
 
 test.describe('shapes and shadows', () => {
   test('gives every pill one radius and the open menu the soft shadow', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
+    await openAt(page, 390, 844)
     const pills = [
-      page.locator('section[aria-labelledby="hero-title"] a[href="/sign-up"]'),
-      page.locator('section[aria-labelledby="start-title"] a[href="/sign-up"]'),
+      heroAction(page),
+      finalAction(page),
       page.locator('#safety').getByRole('button', { name: 'Отменить правку' }),
       page.locator('#site-demo').getByRole('button', { name: 'Цена' }),
     ]
@@ -2588,8 +2558,7 @@ test.describe('sticky header', () => {
     [390, 68],
   ] as const) {
     test(`stops a section a step below the header at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       await expect(page.locator('#top > header > div').first()).toHaveCSS('height', `${height}px`)
       for (const id of ['how', 'pricing', 'faq']) {
         await page.evaluate((hash) => {
@@ -2609,8 +2578,7 @@ test.describe('sticky header', () => {
     test(`keeps the anchor of the demo ${anchor}px from the top at ${width}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       await page.locator('a[href="#site-demo"]').click()
       await expect.poll(() => miss(page, '#site-demo', anchor)).toBeLessThanOrEqual(0.5)
     })
@@ -2623,8 +2591,7 @@ test.describe('sticky header', () => {
     test(`leaves a scrolled page in place when the focus comes to the header at ${width}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       // The plans are in: the page below is as tall as it will be.
       await expect(page.getByRole('slider')).toBeVisible()
       await page.evaluate(() => window.scrollTo({ top: 2400, behavior: 'instant' }))
@@ -2666,8 +2633,7 @@ test.describe('sticky header', () => {
     test(`keeps the heading clear of the header after the skip link at ${width}x${height}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height })
-      await page.goto('/')
+      await openAt(page, width, height)
       await page.keyboard.press('Tab')
       await expect(page.getByRole('link', { name: 'Перейти к содержанию' })).toBeFocused()
       await page.keyboard.press('Enter')
@@ -2700,8 +2666,7 @@ test.describe('sticky header', () => {
     test(`keeps the focused element clear of the header on the way back at ${width}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height: 700 })
-      await page.goto('/')
+      await openAt(page, width, 700)
       await expect(page.getByRole('slider')).toBeVisible()
       // From the last stop of the page upwards, until the focus comes to the header itself.
       await page.locator('#top > footer a[href="#top"]').focus()
@@ -2733,33 +2698,21 @@ test.describe('sticky header', () => {
 })
 
 test.describe('anchor of the address on a first load', () => {
-  // The plans come from the database after the page, into a place under the anchors of the
-  // navigation that stand above them and over the questions. Their placeholder keeps about
-  // their height, and the page nudges the target into its place when they are in.
+  // The plans come with the page, so nothing above an anchor grows after the browser has gone to
+  // it. The page does nothing about the anchor of the address: the browser puts the target a
+  // step below the header by the margin of the target, and keeps the place over a reload. Every
+  // test here is a first visit: a new browser context has no fonts in its cache. The fonts
+  // rewrap the lines above the target, so until they are in the way to an anchor is a jump, and
+  // the browser keeps the target in its place.
 
-  /** How far the element stopped from its place under the header, and what the page did. */
+  /** How far the element stopped from its place under the header. */
   const arrival = (page: Page, selector: string) =>
     page.evaluate((selector) => {
       const target = document.querySelector(selector)
       if (!target) throw new Error(`No ${selector} on the page`)
       const place = parseFloat(getComputedStyle(target).scrollMarginTop)
-      return {
-        miss: Math.abs(target.getBoundingClientRect().top - place),
-        place,
-        nudges: (window as unknown as { nudges: string[] }).nudges,
-      }
+      return { miss: Math.abs(target.getBoundingClientRect().top - place), place }
     }, selector)
-  /** Counts the nudges of the page: it makes them with `scrollIntoView`, and nothing else does. */
-  const countNudges = (page: Page) =>
-    page.addInitScript(() => {
-      const nudges: string[] = []
-      Object.assign(window, { nudges })
-      const scroll = Element.prototype.scrollIntoView
-      Element.prototype.scrollIntoView = function (...options) {
-        nudges.push(this.id)
-        scroll.apply(this, options)
-      }
-    })
   /** Waits until the window stops: the way to an anchor is smooth here. */
   const stopped = async (page: Page) => {
     let last = -1
@@ -2772,42 +2725,114 @@ test.describe('anchor of the address on a first load', () => {
       })
       .toBe(true)
   }
+  /** The page is as it will be: the plans are taken over, the fonts are in, nothing moves. */
+  const arrived = async (page: Page) => {
+    await hydrated(page.getByRole('slider'))
+    await settled(page)
+    await stopped(page)
+  }
 
   // The header is 68 and 88px high; an anchor stops 16px below it.
   for (const [width, room] of [
     [390, 84],
     [1440, 104],
   ] as const) {
-    test(`stops the questions a step below the header when the page opens at them, at ${width}px`, async ({
+    // A section above the plans, the plans themselves and the questions below them.
+    for (const id of ['how', 'pricing', 'faq']) {
+      test(`stops #${id} a step below the header when the page opens at it, at ${width}px`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height: 900 })
+        await page.goto(`/#${id}`)
+        await expect
+          .poll(async () => (await arrival(page, `#${id}`)).miss, OFTEN)
+          .toBeLessThanOrEqual(0.5)
+        await arrived(page)
+        const { miss, place } = await arrival(page, `#${id}`)
+        expect(place).toBe(room)
+        expect(miss).toBeLessThanOrEqual(0.5)
+      })
+    }
+
+    test(`jumps to the questions while the fonts are on their way, at ${width}px`, async ({
       page,
     }) => {
       await page.setViewportSize({ width, height: 900 })
-      await countNudges(page)
-      await page.goto('/#faq')
-      await page.getByRole('slider').waitFor()
-      await expect.poll(async () => (await arrival(page, '#faq')).miss).toBeLessThanOrEqual(1)
-      await stopped(page)
-      const { miss, place, nudges } = await arrival(page, '#faq')
-      expect(place).toBe(room)
-      expect(miss).toBeLessThanOrEqual(1)
-      // One nudge at most; none when the plans came before the browser chose where to stop.
-      expect(nudges.length).toBeLessThanOrEqual(1)
-      expect(nudges.every((id) => id === 'faq')).toBe(true)
+      // The fonts are held back: the page stands in the system ones, as on a slow first visit.
+      let release: () => void = () => undefined
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let asked = 0
+      await page.route('**/*.woff2', async (route) => {
+        asked++
+        await held
+        await route.continue()
+      })
+      const root = page.locator('html')
+      // The load of the document waits for the fonts, so the test goes on without it.
+      await page.goto('/#faq', { waitUntil: 'domcontentloaded' })
+      await hydrated(page.getByRole('slider'))
+      await expect.poll(() => asked).toBeGreaterThan(0)
+      await expect(root).not.toHaveAttribute('data-fonts')
+      await expect(root).toHaveCSS('scroll-behavior', 'auto')
+      await expect
+        .poll(async () => (await arrival(page, '#faq')).miss, OFTEN)
+        .toBeLessThanOrEqual(0.5)
+
+      // The fonts come and rewrap the lines above: the questions stay where they are, and
+      // from now on the way to an anchor is smooth.
+      release()
+      await expect(root).toHaveAttribute('data-fonts', 'ready')
+      await expect(root).toHaveCSS('scroll-behavior', 'smooth')
+      await arrived(page)
+      expect((await arrival(page, '#faq')).miss).toBeLessThanOrEqual(0.5)
     })
 
-    test(`leaves the page to the browser when it opens at a section above the plans, at ${width}px`, async ({
+    test(`keeps the questions in their place after a reload at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 })
+      await page.goto('/#faq')
+      await expect
+        .poll(async () => (await arrival(page, '#faq')).miss, OFTEN)
+        .toBeLessThanOrEqual(0.5)
+      await arrived(page)
+
+      await page.reload()
+      await expect
+        .poll(async () => (await arrival(page, '#faq')).miss, OFTEN)
+        .toBeLessThanOrEqual(0.5)
+      await arrived(page)
+      expect((await arrival(page, '#faq')).miss).toBeLessThanOrEqual(0.5)
+    })
+
+    // After a reload Chromium either puts the window where the visitor left it or goes back to
+    // the anchor of the address: a matter of its own timing, which the page does not decide.
+    // Wherever it stops, it stops exactly there, and the page does not move it afterwards.
+    test(`leaves a reload to the browser for a visitor who scrolled past the anchor, at ${width}px`, async ({
       page,
     }) => {
+      const PAST = 60
       await page.setViewportSize({ width, height: 900 })
-      await countNudges(page)
-      await page.goto('/#how')
-      await page.getByRole('slider').waitFor()
-      await expect.poll(async () => (await arrival(page, '#how')).miss).toBeLessThanOrEqual(0.5)
-      await stopped(page)
-      const { miss, place, nudges } = await arrival(page, '#how')
-      expect(place).toBe(room)
-      expect(miss).toBeLessThanOrEqual(0.5)
-      expect(nudges).toEqual([])
+      // The page opens at the questions, and the visitor scrolls on, as a reader of the first
+      // answers would.
+      await page.goto('/#faq')
+      await expect
+        .poll(async () => (await arrival(page, '#faq')).miss, OFTEN)
+        .toBeLessThanOrEqual(0.5)
+      await arrived(page)
+      const start = await page.evaluate(() => window.scrollY)
+      await page.evaluate((top) => window.scrollBy({ top, behavior: 'instant' }), PAST)
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(start + PAST)
+
+      await page.reload()
+      const places = [start, start + PAST]
+      await expect
+        .poll(() => page.evaluate(() => window.scrollY), OFTEN)
+        .toBeGreaterThanOrEqual(start)
+      await arrived(page)
+      const place = await page.evaluate(() => window.scrollY)
+      expect(places).toContain(place)
+      expect((await arrival(page, '#faq')).miss).toBeCloseTo(place - start, 0)
     })
   }
 
@@ -2816,128 +2841,23 @@ test.describe('anchor of the address on a first load', () => {
 
     test('puts the questions into their place at once', async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 900 })
-      await countNudges(page)
       await page.goto('/#faq')
-      await page.getByRole('slider').waitFor()
-      // The nudge follows the page, and the page does not scroll smoothly here.
       await expect(page.locator('html')).toHaveCSS('scroll-behavior', 'auto')
-      await expect.poll(async () => (await arrival(page, '#faq')).miss).toBeLessThanOrEqual(1)
-      expect((await arrival(page, '#faq')).nudges.length).toBeLessThanOrEqual(1)
+      await expect.poll(async () => (await arrival(page, '#faq')).miss).toBeLessThanOrEqual(0.5)
     })
   })
-
-  // The nudge is for a document that the visitor opened by a link. After a reload the browser
-  // puts the window where the visitor left it; a target a little off its place stands there by
-  // their will, and a nudge would take them back to the anchor.
-  test.describe('for a visitor who scrolled a little past the anchor', () => {
-    const PAST = 60
-
-    /**
-     * Makes the browser lay the page out before its document ends. Chromium chooses at the end
-     * of the document: it has laid the page out and restored the place of the visitor by then,
-     * or it goes to the anchor of the address by itself, whatever the page does. Which of the
-     * two happens is a matter of timing that the page does not decide; left alone, the browser
-     * goes to the anchor more often than not. This takes the first case, the one where a nudge
-     * of the page would show.
-     */
-    const restoresThePlace = (page: Page) =>
-      page.addInitScript(() => {
-        document.addEventListener('DOMContentLoaded', () => void window.scrollY)
-      })
-    /** The plans are in and React has taken the page over; then the frames in which the page
-     *  would find the window still and nudge it. */
-    const timeForNudge = async (page: Page) => {
-      await hydrated(page.getByRole('slider'))
-      await page.evaluate(
-        () =>
-          new Promise<void>((done) => {
-            let frames = 0
-            const next = () => {
-              frames += 1
-              if (frames < 30) requestAnimationFrame(next)
-              else done()
-            }
-            requestAnimationFrame(next)
-          }),
-      )
-    }
-
-    for (const width of [390, 1440]) {
-      test(`keeps the place after a reload at ${width}px`, async ({ page }) => {
-        await page.setViewportSize({ width, height: 900 })
-        await countNudges(page)
-        await restoresThePlace(page)
-        // The page opens at the questions, and the visitor scrolls on, as a reader of the first
-        // answers would.
-        await page.goto('/#faq')
-        await page.getByRole('slider').waitFor()
-        await expect.poll(async () => (await arrival(page, '#faq')).miss).toBeLessThanOrEqual(1)
-        await stopped(page)
-        const start = await page.evaluate(() => window.scrollY)
-        await page.evaluate((top) => window.scrollBy({ top, behavior: 'instant' }), PAST)
-        await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(start + PAST)
-
-        await page.reload()
-        expect(
-          await page.evaluate(
-            () =>
-              (performance.getEntriesByType('navigation') as PerformanceNavigationTiming[])[0]
-                ?.type,
-          ),
-        ).toBe('reload')
-        await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(start + PAST)
-        await timeForNudge(page)
-        await stopped(page)
-        // The record of the nudges is of the new document: it starts empty.
-        const { miss, nudges } = await arrival(page, '#faq')
-        expect(nudges).toEqual([])
-        expect(await page.evaluate(() => window.scrollY)).toBe(start + PAST)
-        expect(Math.abs(miss - PAST)).toBeLessThanOrEqual(1)
-      })
-    }
-  })
-
-  // The nudge is only for a small move, so the placeholder must keep about the height of the
-  // plans: a little less rather than more, or the target would go up under the header.
-  for (const width of [320, 390, 768, 1024, 1440]) {
-    test(`keeps about the height of the plans for them while they load, at ${width}px`, async ({
-      page,
-    }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
-      await page.getByRole('slider').waitFor()
-      const heights = await page.locator('#pricing').evaluate((section) => {
-        const plans = section.lastElementChild
-        // The class of the placeholder as the stylesheet names it: the plans have taken its
-        // place by now, so a copy stands in for it.
-        const name = [...document.styleSheets]
-          .flatMap((sheet) => [...sheet.cssRules])
-          .flatMap((rule) => (rule instanceof CSSMediaRule ? [...rule.cssRules] : [rule]))
-          .map((rule) => (rule instanceof CSSStyleRule ? rule.selectorText : ''))
-          .find((selector) => /^\.[\w-]*__fallback$/.test(selector))
-        if (!plans || !name) throw new Error('No plans or no rule for their placeholder')
-        const copy = document.createElement('p')
-        copy.className = name.slice(1)
-        section.append(copy)
-        const kept = copy.getBoundingClientRect().height
-        copy.remove()
-        return { plans: plans.getBoundingClientRect().height, kept }
-      })
-      expect(heights.plans - heights.kept).toBeGreaterThanOrEqual(0)
-      expect(heights.plans - heights.kept).toBeLessThanOrEqual(80)
-    })
-  }
 
   test.describe('without scripts', () => {
     test.use({ javaScriptEnabled: false })
 
-    // The plans never take the place of the placeholder there: it must not hold a field open.
-    test('keeps no room for the plans', async ({ page }) => {
-      await page.setViewportSize({ width: 390, height: 900 })
-      await page.goto('/')
-      const placeholder = page.locator('#pricing [data-pending]')
-      await expect(placeholder).toHaveText('Загружаем тарифы…')
-      expect((await placeholder.boundingBox())?.height).toBeLessThan(60)
+    test('shows the plans', async ({ page }) => {
+      await openAt(page, 390)
+      const pricing = page.locator('#pricing')
+      await expect(pricing.locator('article')).toHaveCount(3)
+      await expect(pricing.getByRole('slider')).toBeVisible()
+      await expect(pricing.getByRole('link', { name: 'Зарегистрироваться' })).toBeVisible()
+      await expect(pricing.getByRole('status')).toHaveCount(0)
+      await expect(pricing).not.toContainText('Загружаем')
     })
   })
 })
@@ -2950,8 +2870,7 @@ test.describe('forced colours', () => {
   test('draws the lines of the menu button and of the question sign with borders', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
+    await openAt(page, 390, 844)
     const lines = await page.evaluate(() => {
       const line = (element: Element | null, pseudo?: string) => {
         if (!element) throw new Error('No sign on the page')
@@ -2981,8 +2900,7 @@ test.describe('forced colours', () => {
   // The two parts of the slider track are backgrounds of the control, which a forced palette
   // does not paint: without a border of the track only the thumb would be left.
   test('draws the line of the slider track with a border', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
+    await openAt(page, 390, 844)
     const slider = page.getByRole('slider')
     await slider.scrollIntoViewIfNeeded()
     // The palette has taken both layers of the background away.
@@ -3003,8 +2921,7 @@ test.describe('reduced motion', () => {
   test.use({ reducedMotion: 'reduce' })
 
   test('runs no animation and still shows the heading and the demo pause', async ({ page }) => {
-    await page.setViewportSize({ width: 768, height: 900 })
-    await page.goto('/')
+    await openAt(page, 768)
     expect(await highlightedWordIsHit(page)).toBe(true)
     expect(await page.evaluate(() => document.getAnimations().length)).toBe(0)
 
@@ -3020,8 +2937,7 @@ test.describe('reduced motion', () => {
   const moving = (page: Page) => page.evaluate(() => document.getAnimations().length)
 
   test('declares no transition and no animation on any element or its parts', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     await hydrated(page.getByRole('slider'))
     const declared = await page.evaluate(() => {
       const found: string[] = []
@@ -3048,14 +2964,14 @@ test.describe('reduced motion', () => {
     expect(declared.answer).toBe('none')
     // The headings below the window are in their places: the helper of the reveal did not start.
     for (const target of await revealTargets(page)) {
+      expect(target.mark, target.name).toBeNull()
       expect(target.animations, target.name).toEqual([])
       expect(target.transform, target.name).toBe('none')
     }
   })
 
   test('changes every state of the page at once', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     const slider = page.getByRole('slider')
     await hydrated(slider)
     expect(await moving(page)).toBe(0)
@@ -3137,9 +3053,8 @@ test.describe('reduced motion', () => {
   test('opens and closes the mobile menu at once and marks the section without a transition', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
-    const toggle = page.locator('#top > header button[aria-controls]')
+    await openAt(page, 390, 844)
+    const toggle = menuToggle(page)
     await hydrated(toggle)
     const step = () =>
       toggle.evaluate(async (node) => {
@@ -3161,9 +3076,8 @@ test.describe('reduced motion', () => {
   })
 
   test('draws the line of the current section without a transition', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
-    await hydrated(page.locator('#top > header button[aria-controls]'))
+    await openAt(page, 1440)
+    await hydrated(menuToggle(page))
     await page.getByRole('slider').waitFor()
     await bringIntoWindow(page, page.locator('#pricing'))
     const link = page.locator('#top > header nav a[aria-current="true"]').first()
@@ -3179,13 +3093,13 @@ test.describe('reduced motion', () => {
 })
 
 // A target of the observer either rises into the window or is a scene, which is not moved and
-// plays its own beats.
+// plays its own beats. The observer marks both alike; what plays is the business of CSS.
 const RISING = '[data-reveal]:not([data-reveal="scene"])'
 const SCENES = '[data-reveal="scene"]'
 
 /** The elements that rise into the window, in the order of the page, as a script sees them. */
-function revealTargets(page: Page) {
-  return page.evaluate(
+async function revealTargets(page: Page) {
+  const targets = await page.evaluate(
     (selector) =>
       [...document.querySelectorAll(selector)].map((element) => {
         const style = getComputedStyle(element)
@@ -3194,28 +3108,31 @@ function revealTargets(page: Page) {
           name: element.id || (element.closest('section')?.id ?? ''),
           top: box.top,
           inWindow: box.bottom > 0 && box.top < window.innerHeight,
+          // Where the observer says the target is: `waiting`, `playing` or no mark at all.
+          mark: element.getAttribute('data-scene'),
           opacity: style.opacity,
           transform: style.transform,
           animations: element.getAnimations().map((animation) => {
             const effect = animation.effect as KeyframeEffect
-            const { duration, easing, fill, delay } = effect.getTiming()
+            const { duration, fill, delay } = effect.getTiming()
+            const keyframes = effect.getKeyframes()
             return {
-              css: animation instanceof CSSAnimation || animation instanceof CSSTransition,
+              name:
+                animation instanceof CSSAnimation ? animation.animationName : 'not a CSS animation',
               state: animation.playState,
               duration,
               delay,
-              easing,
+              // CSS puts the curve of an animation on its keyframes.
+              easing: keyframes[0]?.easing,
               fill,
               // What the keyframes change, besides the fields every keyframe has.
               properties: [
                 ...new Set(
-                  effect
-                    .getKeyframes()
-                    .flatMap((keyframe) =>
-                      Object.keys(keyframe).filter(
-                        (key) => !['offset', 'computedOffset', 'easing', 'composite'].includes(key),
-                      ),
+                  keyframes.flatMap((keyframe) =>
+                    Object.keys(keyframe).filter(
+                      (key) => !['offset', 'computedOffset', 'easing', 'composite'].includes(key),
                     ),
+                  ),
                 ),
               ],
             }
@@ -3224,11 +3141,18 @@ function revealTargets(page: Page) {
       }),
     RISING,
   )
+  return targets.map((target) => ({
+    ...target,
+    animations: target.animations.map((animation) => ({
+      ...animation,
+      name: plainName(animation.name),
+    })),
+  }))
 }
 
-/** Waits until the helper of the reveal has put down the targets below the window. */
+/** Waits until the helper of the reveal has marked the targets below the window. */
 function revealPrepared(page: Page): Promise<unknown> {
-  return page.waitForFunction(() => document.getElementById('start-title')?.getAnimations().length)
+  return page.waitForFunction(() => document.getElementById('start-title')?.dataset.scene)
 }
 
 const PUT_DOWN = 'matrix(1, 0, 0, 1, 0, 24)'
@@ -3271,8 +3195,7 @@ test.describe('headings on the way into the window', () => {
     test(`are put down only below the window, with a shift alone, at ${width}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       await revealPrepared(page)
       const targets = await revealTargets(page)
 
@@ -3281,32 +3204,26 @@ test.describe('headings on the way into the window', () => {
         // Never dimmed: the text keeps its contrast even if the observer never reports.
         expect(target.opacity, target.name).toBe('1')
         expect(target.inWindow, target.name).toBe(false)
+        // Held by a style of the mark, not by an animation: nothing runs while it waits.
+        expect(target.mark, target.name).toBe('waiting')
         expect(target.transform, target.name).toBe(PUT_DOWN)
-        expect(target.animations, target.name).toEqual([
-          {
-            css: false,
-            state: 'paused',
-            duration: 560,
-            delay: 0,
-            easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-            fill: 'backwards',
-            properties: ['transform'],
-          },
-        ])
+        expect(target.animations, target.name).toEqual([])
       }
-      // The first screen is as the server drew it: no script animation on anything in it.
-      const touched = await page.evaluate(
-        () =>
-          document
-            .getAnimations()
-            .filter((animation) => !(animation instanceof CSSAnimation))
-            .map((animation) => (animation.effect as KeyframeEffect).target)
-            .filter((element) => {
-              const box = element?.getBoundingClientRect()
-              return box && box.bottom > 0 && box.top < window.innerHeight
-            }).length,
-      )
-      expect(touched).toBe(0)
+      // The first screen is as the server drew it: nothing in it is marked, and no script
+      // animates anything on the page.
+      const touched = await page.evaluate(() => ({
+        marked: [...document.querySelectorAll('[data-scene]')].filter((element) => {
+          const box = element.getBoundingClientRect()
+          return box.bottom > 0 && box.top < window.innerHeight
+        }).length,
+        scripted: document
+          .getAnimations()
+          .filter(
+            (animation) =>
+              !(animation instanceof CSSAnimation) && !(animation instanceof CSSTransition),
+          ).length,
+      }))
+      expect(touched).toEqual({ marked: 0, scripted: 0 })
       // The orange field of the safety block stands still: only its copy is a target.
       const field = await page.locator('#safety').evaluate((section) => ({
         transform: getComputedStyle(section).transform,
@@ -3317,62 +3234,108 @@ test.describe('headings on the way into the window', () => {
   }
 
   test('rise once, in 560ms, and leave nothing on the element', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     await revealPrepared(page)
     const heading = page.locator(`#how ${RISING}`)
     const state = () =>
       heading.evaluate((element) => ({
+        mark: element.getAttribute('data-scene'),
         states: element.getAnimations().map((animation) => animation.playState),
         transform: getComputedStyle(element).transform,
         opacity: getComputedStyle(element).opacity,
       }))
-    expect(await state()).toEqual({ states: ['paused'], transform: PUT_DOWN, opacity: '1' })
+    const how = async () => (await revealTargets(page)).find((target) => target.name === 'how')
+    expect(await state()).toEqual({
+      mark: 'waiting',
+      states: [],
+      transform: PUT_DOWN,
+      opacity: '1',
+    })
 
     await page.evaluate(() => {
       const top = document.querySelector('#how')?.getBoundingClientRect().top ?? 0
       window.scrollTo({ top: top - 200, behavior: 'instant' })
     })
-    await expect.poll(async () => (await state()).states).toEqual(['running'])
-    expect((await state()).opacity).toBe('1')
-    await expect.poll(async () => (await state()).states).toEqual([])
-    expect(await state()).toEqual({ states: [], transform: 'none', opacity: '1' })
+    // The rise is stopped on its first frame to be read: a running one would not wait for the
+    // test. It starts where the heading waited, moved and not dimmed.
+    const start = await heading.evaluate(async (element) => {
+      const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+      for (let frames = 0; frames < 120 && element.getAnimations().length === 0; frames++) {
+        await frame()
+      }
+      const [animation] = element.getAnimations()
+      if (!animation) throw new Error('The heading did not start to rise')
+      const running = animation.playState
+      animation.pause()
+      animation.currentTime = 0
+      const style = getComputedStyle(element)
+      return { running, transform: style.transform, opacity: style.opacity }
+    })
+    expect(start).toEqual({ running: 'running', transform: PUT_DOWN, opacity: '1' })
+    expect((await how())?.animations).toEqual([
+      {
+        name: 'headingRise',
+        state: 'paused',
+        duration: 560,
+        delay: 0,
+        easing: EASE_OUT,
+        fill: 'backwards',
+        properties: ['transform'],
+      },
+    ])
+    expect((await state()).mark).toBe('playing')
+    await heading.evaluate((element) => element.getAnimations().forEach((rise) => rise.play()))
+    await settled(page)
+    const risen = { mark: 'playing', states: [], transform: 'none', opacity: '1' }
+    expect(await state()).toEqual(risen)
 
     // Once: the way back and forth starts nothing.
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
+    expect(await state()).toEqual(risen)
     await page.evaluate(() => window.scrollTo({ top: 700, behavior: 'instant' }))
     await settled(page)
-    expect(await state()).toEqual({ states: [], transform: 'none', opacity: '1' })
+    expect(await state()).toEqual(risen)
   })
 
   test('take their places without a move when a jump carries the page past them', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     await page.getByRole('slider').waitFor()
     await revealPrepared(page)
     await page.evaluate(() =>
       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }),
     )
     await settled(page)
-    for (const target of await revealTargets(page)) {
+    const targets = await revealTargets(page)
+    for (const target of targets) {
+      expect(target.mark, target.name).not.toBe('waiting')
       expect(target.animations, target.name).toEqual([])
       expect(target.transform, target.name).toBe('none')
       expect(target.opacity, target.name).toBe('1')
     }
+    // What the jump carried above the window has no mark: it never played.
+    const passed = targets.filter((target) => !target.inWindow)
+    expect(passed.length).toBeGreaterThan(0)
+    for (const target of passed) expect(target.mark, target.name).toBeNull()
   })
 
   test('are not touched when the window shows them from the start', async ({ page }) => {
     // A window tall enough to hold the first section heading below the first screen.
-    await page.setViewportSize({ width: 1440, height: 2400 })
-    await page.goto('/')
+    await openAt(page, 1440, 2400)
     await revealPrepared(page)
     const [first, ...rest] = await revealTargets(page)
-    expect(first).toMatchObject({ name: 'how', inWindow: true, opacity: '1', transform: 'none' })
+    expect(first).toMatchObject({
+      name: 'how',
+      inWindow: true,
+      mark: null,
+      opacity: '1',
+      transform: 'none',
+    })
     expect(first?.animations).toEqual([])
     expect(rest.filter((target) => !target.inWindow).length).toBeGreaterThan(0)
     for (const target of rest.filter((target) => !target.inWindow)) {
+      expect(target.mark, target.name).toBe('waiting')
       expect(target.transform, target.name).toBe(PUT_DOWN)
     }
   })
@@ -3384,16 +3347,22 @@ test.describe('headings on the way into the window', () => {
       await page.setViewportSize({ width, height: 900 })
       await page.goto('/#faq')
       await page.getByRole('slider').waitFor()
-      await revealPrepared(page)
-      // The browser scrolls to the anchor smoothly, past the headings on the way.
+      // The browser jumps to the anchor before the fonts are in, so the helper of the reveal
+      // may find the headings already passed and the last one on the screen: it marks only what
+      // is still below. Its mark of the fonts tells that it has looked.
+      await expect(page.locator('html')).toHaveAttribute('data-fonts', 'ready')
       let last = -1
       await expect
-        .poll(async () => {
-          const now = await page.evaluate(() => window.scrollY)
-          const still = now === last && now > 0
-          last = now
-          return still
-        })
+        .poll(
+          async () => {
+            const now = await page.evaluate(() => window.scrollY)
+            const still = now === last && now > 0
+            last = now
+            return still
+          },
+          // Still is the same place a quarter of a second later; the steps do not grow.
+          { intervals: [250] },
+        )
         .toBe(true)
       await settled(page)
       // The line of the observer: 8% above the bottom of the window.
@@ -3402,6 +3371,7 @@ test.describe('headings on the way into the window', () => {
         // Whether passed, on the screen or still below: never dimmed.
         expect(target.opacity, target.name).toBe('1')
         if (target.top < line - 1) {
+          expect(target.mark, target.name).not.toBe('waiting')
           expect(target.transform, target.name).toBe('none')
           expect(target.animations, target.name).toEqual([])
         }
@@ -3413,8 +3383,7 @@ test.describe('headings on the way into the window', () => {
     test.use({ javaScriptEnabled: false })
 
     test('stand in their places with their text', async ({ page }) => {
-      await page.setViewportSize({ width: 1440, height: 900 })
-      await page.goto('/')
+      await openAt(page, 1440)
       const targets = page.locator(RISING)
       await expect(targets).toHaveCount(6)
       for (const target of await targets.all()) {
@@ -3428,8 +3397,8 @@ test.describe('headings on the way into the window', () => {
 })
 
 /** The animations and transitions of an element and of its pseudo-elements, as a script sees them. */
-function motionOf(element: Locator) {
-  return element.evaluate((node) =>
+async function motionOf(element: Locator) {
+  const motions = await element.evaluate((node) =>
     node.getAnimations({ subtree: true }).flatMap((animation) => {
       const effect = animation.effect as KeyframeEffect
       // Of the element itself, not of its children.
@@ -3444,8 +3413,7 @@ function motionOf(element: Locator) {
         {
           name:
             animation instanceof CSSAnimation
-              ? // A CSS module adds a hash to the name written in the source.
-                (animation.animationName.split('__').pop()?.replace(/_.*$/, '') ?? '')
+              ? animation.animationName
               : animation instanceof CSSTransition
                 ? `transition of ${animation.transitionProperty}`
                 : 'script',
@@ -3468,6 +3436,7 @@ function motionOf(element: Locator) {
       ]
     }),
   )
+  return motions.map((motion) => ({ ...motion, name: plainName(motion.name) }))
 }
 
 const EASE_OUT = 'cubic-bezier(0.16, 1, 0.3, 1)'
@@ -3476,8 +3445,7 @@ const EASE_IN_OUT = 'cubic-bezier(0.65, 0, 0.35, 1)'
 test.describe('demo in motion', () => {
   /** The demo with its buttons wired and the entrance of the first screen over. */
   async function openDemo(page: Page, width: number): Promise<Locator> {
-    await page.setViewportSize({ width, height: 900 })
-    await page.goto('/')
+    await openAt(page, width)
     const demo = page.locator('#site-demo')
     await hydrated(demo.getByRole('button', { name: 'Применить правку' }))
     await settled(page)
@@ -3525,8 +3493,7 @@ test.describe('demo in motion', () => {
       expect(before.layer.background).toBe('rgba(0, 0, 0, 0)')
       expect(before.room).toBeGreaterThanOrEqual(0)
 
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
+      await applyChange(demo)
       await settled(page)
       const applied = await read()
       expect(applied.layer.background).toBe(MARKER)
@@ -3809,8 +3776,7 @@ test.describe('safety card in motion', () => {
     test(`shows the saved price and brings the saved version out on an undo at ${width}px`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width, height: 900 })
-      await page.goto('/')
+      await openAt(page, width)
       const safety = page.locator('#safety')
       const undo = safety.getByRole('button', { name: 'Отменить правку' })
       await hydrated(undo)
@@ -3857,8 +3823,7 @@ test.describe('safety card in motion', () => {
   }
 
   test('answers a press in the middle of the way', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     const safety = page.locator('#safety')
     const undo = safety.getByRole('button', { name: 'Отменить правку' })
     await hydrated(undo)
@@ -3873,8 +3838,7 @@ test.describe('safety card in motion', () => {
   })
 
   test('keeps its turn and tells an undo with the direction of the price', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     const safety = page.locator('#safety')
     const undo = safety.getByRole('button', { name: 'Отменить правку' })
     await hydrated(undo)
@@ -3922,8 +3886,7 @@ test.describe('safety card in motion', () => {
     test.use({ reducedMotion: 'reduce' })
 
     test('brings the saved version out at once', async ({ page }) => {
-      await page.setViewportSize({ width: 1440, height: 900 })
-      await page.goto('/')
+      await openAt(page, 1440)
       const safety = page.locator('#safety')
       const undo = safety.getByRole('button', { name: 'Отменить правку' })
       await hydrated(undo)
@@ -3967,8 +3930,7 @@ test.describe('questions in motion', () => {
   test('opens an answer by its height without dimming it, and closes it faster', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     const first = page.locator('#faq details').first()
     const answer = first.locator('p')
     await bringIntoWindow(page, first)
@@ -4019,10 +3981,13 @@ test.describe('questions in motion', () => {
     const closing = await first.evaluate(async (node) => {
       const details = node as HTMLDetailsElement
       const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+      const style = getComputedStyle(details, '::details-content')
+      const full = style.blockSize
       details.querySelector('summary')?.click()
       await frame()
       await frame()
-      const style = getComputedStyle(details, '::details-content')
+      // A busy machine may give the transition its start time a few frames later.
+      for (let frames = 0; frames < 10 && style.blockSize === full; frames++) await frame()
       return {
         open: details.open,
         height: parseFloat(style.blockSize),
@@ -4041,8 +4006,7 @@ test.describe('questions in motion', () => {
   })
 
   test('opens the question in which a search of the browser finds its words', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     const third = page.locator('#faq details').nth(2)
     const words = ((await third.locator('p').textContent()) ?? '').split(/\s+/).slice(0, 4)
     expect(words).toHaveLength(4)
@@ -4072,9 +4036,8 @@ test.describe('mobile menu in motion', () => {
   test('comes down with a fade, leaves faster and takes no focus on its way out', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
-    const toggle = page.locator('#top > header button[aria-controls]')
+    await openAt(page, 390, 844)
+    const toggle = menuToggle(page)
     const menu = page.locator('#landing-navigation')
     await hydrated(toggle)
     await settled(page)
@@ -4099,9 +4062,17 @@ test.describe('mobile menu in motion', () => {
         await frame()
         const style = getComputedStyle(panel)
         const links = [...panel.querySelectorAll('a')]
+        const middle = links[1]?.getBoundingClientRect()
+        if (!middle) throw new Error('The mobile menu has no links')
         return {
           display: style.display,
-          pointer: style.pointerEvents,
+          // Whether a press on a link of the panel reaches the panel now.
+          pressable: panel.contains(
+            document.elementFromPoint(
+              middle.left + middle.width / 2,
+              middle.top + middle.height / 2,
+            ),
+          ),
           hidden: panel.hidden,
           inert: panel.inert,
           // Whether a link of the panel can take the focus now.
@@ -4128,7 +4099,13 @@ test.describe('mobile menu in motion', () => {
       })
 
     const opening = await stepOf(toggle)
-    expect(opening).toMatchObject({ display: 'flex', hidden: false, inert: false, reachable: true })
+    expect(opening).toMatchObject({
+      display: 'flex',
+      pressable: true,
+      hidden: false,
+      inert: false,
+      reachable: true,
+    })
     expect(opening.transitions).toEqual([
       { property: 'opacity', duration: 240, easing: EASE_OUT, from: '0' },
       { property: 'transform', duration: 240, easing: EASE_OUT, from: 'translateY(-8px)' },
@@ -4147,10 +4124,11 @@ test.describe('mobile menu in motion', () => {
 
     await toggle.focus()
     const closing = await stepOf(toggle)
-    // Still shown while it fades out, where it stood, and already out of reach.
+    // Still shown while it fades out, where it stood, and already out of reach: `inert` takes
+    // away the focus and the presses alike.
     expect(closing).toMatchObject({
       display: 'flex',
-      pointer: 'none',
+      pressable: false,
       hidden: true,
       inert: true,
       reachable: false,
@@ -4175,8 +4153,7 @@ test.describe('mobile menu in motion', () => {
 
 test.describe('pricing in motion', () => {
   test('tells another plan with a rise of its name and never animates a sum', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
+    await openAt(page, 1440)
     const pricing = page.locator('#pricing')
     const slider = pricing.getByRole('slider')
     await hydrated(slider)
@@ -4237,9 +4214,8 @@ test.describe('current section of the navigation', () => {
   test('draws the line under the section being read and under none between them', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto('/')
-    await hydrated(page.locator('#top > header button[aria-controls]'))
+    await openAt(page, 1440)
+    await hydrated(menuToggle(page))
     await page.getByRole('slider').waitFor()
     expect(await marked(page)).toEqual([])
 
@@ -4280,9 +4256,8 @@ test.describe('current section of the navigation', () => {
   test('marks it in the mobile menu with a line and the colour of an accent text', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto('/')
-    const toggle = page.locator('#top > header button[aria-controls]')
+    await openAt(page, 390, 844)
+    const toggle = menuToggle(page)
     await hydrated(toggle)
     await page.getByRole('slider').waitFor()
     await bringIntoWindow(page, page.locator('#how'))

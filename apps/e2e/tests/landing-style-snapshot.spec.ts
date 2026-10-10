@@ -4,6 +4,8 @@ import { dirname, resolve } from 'node:path'
 
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
+import { applyChange, heroAction, hydrated, openAt, settled } from './landing-page.ts'
+
 // A local tool for reworking the landing CSS, not a gate: it records what the browser computed
 // for every element of the page and tells whether a change left the page as it was.
 //   LANDING_STYLE_SNAPSHOT=record   writes the snapshot to LANDING_STYLE_SNAPSHOT_FILE
@@ -214,38 +216,13 @@ function read(target: Locator, options: Pick<ReadOptions, 'deep' | 'origin' | 'p
   })
 }
 
-/** Waits until no animation or transition is running: entrances, hover and demo phases alike. */
-async function settle(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
-    await document.fonts.ready
-    // Two quiet passes in a row: an observer may start an animation a frame after the last ended.
-    // Frames are counted, the `finished` promises are not awaited: the answer of a closed question
-    // has an animation too, it is never painted, and its promise never settles.
-    for (let quiet = 0; quiet < 2;) {
-      await frame()
-      await frame()
-      const running = document
-        .getAnimations()
-        .some((animation) => animation.pending || animation.playState === 'running')
-      quiet = running ? 0 : quiet + 1
-    }
-  })
-}
-
 async function openLanding(page: Page, width: number, height = HEIGHT): Promise<void> {
-  await page.setViewportSize({ width, height })
-  await page.goto('/')
-  // The plans stream in after the shell, so the slider is the last part to arrive and hydrate.
-  await page.getByRole('slider').waitFor()
-  await page.waitForFunction(() =>
-    ['#pricing input[type="range"]', '#site-demo button', 'header button'].every((selector) => {
-      const element = document.querySelector(selector)
-      // React keeps its props on a hydrated node; before that a click or an observer is not wired.
-      return element !== null && Object.keys(element).some((key) => key.startsWith('__reactProps'))
-    }),
-  )
-  await settle(page)
+  await openAt(page, width, height)
+  // Before the hydration a click or an observer is not wired.
+  for (const selector of ['#pricing input[type="range"]', '#site-demo button', 'header button']) {
+    await hydrated(page.locator(selector).first())
+  }
+  await settled(page)
 }
 
 function fieldsOf(key: string, snapshot: Snapshot): string[] {
@@ -330,9 +307,9 @@ async function playReveals(page: Page): Promise<void> {
       await frame()
     }
   })
-  await settle(page)
+  await settled(page)
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
-  await settle(page)
+  await settled(page)
 }
 
 /** Writes the part of the page that the elements take, as wide as the page. */
@@ -341,7 +318,7 @@ async function shoot(page: Page, name: string, selector: string, margin = 0): Pr
   // Out of the way of hover styles, and back to the top: the sticky header follows the scroll.
   await page.mouse.move(1, 1)
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
-  await settle(page)
+  await settled(page)
   const clip = await page.evaluate(
     ([selector, margin]) => {
       const boxes = [...document.querySelectorAll(selector)].map((element) =>
@@ -401,8 +378,7 @@ if (MODE === 'shots') {
         }
 
         const demo = page.locator('#site-demo')
-        await demo.getByRole('button', { name: 'Применить правку' }).click()
-        await expect(demo.getByText('Изменено')).toBeVisible()
+        await applyChange(demo)
         await shoot(page, `${width}-demo-applied`, '#site-demo', DEMO_MARGIN)
         await demo.getByRole('button', { name: 'Отменить правку' }).click()
         await expect(demo.getByText('Возвращено')).toBeVisible()
@@ -431,7 +407,7 @@ if (MODE === 'shots') {
           await toggle.click()
           await expect(page.getByRole('navigation', { name: 'Мобильная навигация' })).toBeVisible()
           await page.mouse.move(1, 1)
-          await settle(page)
+          await settled(page)
           await page.screenshot({ path: resolve(DIR ?? '', `${width}-menu-open.png`) })
         }
       })
@@ -458,7 +434,7 @@ if (MODE === 'shots') {
       await openLanding(page, STATE_WIDTH)
       const section: Section = {}
       const readFocused = async (prefix: string) => {
-        await settle(page)
+        await settled(page)
         const focused = page.locator(':focus')
         expect(await focused.evaluate((element) => element.matches(':focus-visible'))).toBe(true)
         Object.assign(section, await read(focused, { deep: false, origin: 'element', prefix }))
@@ -488,10 +464,7 @@ if (MODE === 'shots') {
     test('hover', async ({ page }) => {
       await openLanding(page, STATE_WIDTH)
       const targets: [string, Locator][] = [
-        [
-          'primary button ',
-          page.locator('section[aria-labelledby="hero-title"] a[href="/sign-up"]'),
-        ],
+        ['primary button ', heroAction(page)],
         ['sign in ', page.locator('header a[href="/sign-in"]')],
         [
           'sign up ',
@@ -502,7 +475,7 @@ if (MODE === 'shots') {
       const section: Section = {}
       for (const [prefix, target] of targets) {
         await target.hover()
-        await settle(page)
+        await settled(page)
         expect(await target.evaluate((element) => element.matches(':hover'))).toBe(true)
         Object.assign(section, await read(target, { deep: true, origin: 'element', prefix }))
       }
@@ -517,12 +490,11 @@ if (MODE === 'shots') {
       const readDemo = async (prefix: string) => {
         // The pointer leaves the button, so its hover colours stay out of the record.
         await page.mouse.move(1, 1)
-        await settle(page)
+        await settled(page)
         Object.assign(section, await read(demo, { deep: true, origin: 'element', prefix }))
       }
 
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
+      await applyChange(demo)
       await readDemo('applied ')
       await demo.getByRole('button', { name: 'Отменить правку' }).click()
       await expect(demo.getByText('Возвращено')).toBeVisible()

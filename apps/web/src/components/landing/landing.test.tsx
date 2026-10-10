@@ -7,51 +7,16 @@ import type { LandingViewer } from '@/server/landing-viewer'
 import { Landing } from './landing'
 import { cafe, story } from './landing-story'
 import { Pricing } from './pricing'
+import { guest, HANGING, member, plain, pricing } from './testing'
 
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
 
-const plans = [
-  {
-    slug: 'start',
-    name: 'Старт',
-    price: '4900.00',
-    editsPerMonth: 30,
-    editsPerDay: 5,
-    maxSites: 1,
-  },
-  {
-    slug: 'business',
-    name: 'Бизнес',
-    price: '12900.00',
-    editsPerMonth: 80,
-    editsPerDay: 10,
-    maxSites: 3,
-  },
-  {
-    slug: 'agency',
-    name: 'Агентство',
-    price: '39900.00',
-    editsPerMonth: 250,
-    editsPerDay: 30,
-    maxSites: 15,
-  },
-]
-const pack = { price: '1990.00', edits: 10 }
-
-const guest: LandingViewer = { status: 'guest', user: null }
-const member: LandingViewer = {
-  status: 'authenticated',
-  user: { name: 'Анна', lastName: 'Иванова', email: 'anna@example.ru', image: null },
-}
-
 function renderLanding(viewer: LandingViewer) {
-  const href = viewer.status === 'guest' ? '/sign-up' : '/projects'
-  const label = viewer.status === 'guest' ? 'Зарегистрироваться' : 'Открыть проекты'
   return render(
     <Landing
       viewer={viewer}
-      pricing={<Pricing plans={plans} pack={pack} actionHref={href} actionLabel={label} />}
+      pricing={<Pricing {...pricing} isGuest={viewer.status === 'guest'} />}
     />,
   ).container
 }
@@ -66,9 +31,6 @@ function textsOf(container: HTMLElement): { text: string; parent: HTMLElement }[
   }
   return texts
 }
-
-/** The text as it reads: non-breaking spaces are the business of the first tests only. */
-const plain = (text: string | null | undefined) => (text ?? '').replaceAll('\u00a0', ' ')
 
 // The names of controls keep plain spaces: they are looked up by exact name.
 const isControl = (element: HTMLElement) => element.closest('a, button, label') !== null
@@ -86,12 +48,10 @@ describe('landing texts', () => {
   })
 
   it('leaves no short preposition or conjunction at the end of a line of prose', () => {
-    const hanging =
-      /(?<![\p{L}\p{N}-])(в|во|с|со|к|ко|о|об|у|и|а|но|на|до|за|по|не|ни|от|из|для|без|при|про|над|под) /iu
     for (const viewer of [guest, member]) {
       const prose = textsOf(renderLanding(viewer)).filter(({ parent }) => !isControl(parent))
 
-      expect(prose.filter(({ text }) => hanging.test(text)).map(({ text }) => text)).toEqual([])
+      expect(prose.filter(({ text }) => HANGING.test(text)).map(({ text }) => text)).toEqual([])
     }
   })
 

@@ -4,12 +4,11 @@
  *
  * The icons are gathered here as they were drawn in their places, so the page looks as it did:
  * every place passes its own size, stroke width and line ends, and the outlines that the demo and
- * the pricing drew differently keep their own entries.
+ * the pricing drew to another measure keep their own entries. The demo passes a size alone: the
+ * stroke of every icon in it is set by its style sheet.
  */
 const outlines = {
   'arrow-right': ['M4 12h15m-6-6 6 6-6 6'],
-  /** The same arrow as two paths, as the demo drew it. */
-  'arrow-right-demo': ['M4 12h15', 'm13 6 6 6-6 6'],
   /** The shaft is one unit shorter, as the pricing drew it. */
   'arrow-right-pricing': ['M5 12h14m-6-6 6 6-6 6'],
   'arrow-up-right': ['M6 18 18 6M6 6h12v12'],
@@ -27,8 +26,8 @@ type LandingIconProps = {
   name: LandingIconName
   /** Width and height in px; a CSS rule of the place may still resize the icon. */
   size: number
-  /** In units of the 24px grid. */
-  strokeWidth: number
+  /** In units of the 24px grid; without it the stroke is the one the place inherits. */
+  strokeWidth?: number
   linecap?: 'round'
   linejoin?: 'round'
 }

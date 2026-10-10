@@ -5,9 +5,11 @@ import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 
 import { nbsp } from '@/lib/nbsp'
 import { planDescription } from '@/lib/plan-description'
+import { plural } from '@/lib/plural'
 import { formatRubles } from '@/lib/rubles'
 
 import { LandingIcon } from './landing-icons'
+import { mainAction } from './main-action'
 import {
   packsInWords,
   pluralEdits,
@@ -21,22 +23,31 @@ import styles from './pricing.module.css'
 /** How long the slider rests before its result is announced: a drag passes many values. */
 export const ANNOUNCE_DELAY_MS = 500
 
+/** The ends of the slider, in edits a month. */
+const MIN_EDITS = 10
+const MAX_EDITS = 300
+
 const NO_PACK = 'Для такого числа правок пока нет доступного пакета. Выберите меньше правок.'
+
+/** « и 4 дополнительных пакета по 10 правок» after the name of the plan, or nothing. */
+function packsPhrase(recommendation: PlanRecommendation, pack: LandingPack | null) {
+  return pack && recommendation.packs > 0
+    ? ` и ${packsInWords(recommendation.packs, pack.edits)}`
+    : ''
+}
 
 /** The result as one sentence for a screen reader, built from the strings of the visible one. */
 function resultInWords(recommendation: PlanRecommendation | null, pack: LandingPack | null) {
   if (!recommendation) return NO_PACK
-  const packs =
-    pack && recommendation.packs > 0 ? ` и ${packsInWords(recommendation.packs, pack.edits)}` : ''
-  return `Тариф «${recommendation.plan.name}»${packs}, ${formatRubles(recommendation.total)} ₽ в месяц, около ${formatRubles(recommendation.perEditRounded)} ₽ за правку`
+  return `Тариф «${recommendation.plan.name}»${packsPhrase(recommendation, pack)}, ${formatRubles(recommendation.total)} ₽ в месяц, около ${formatRubles(recommendation.perEditRounded)} ₽ за правку`
 }
 
 export function Pricing({
   plans,
   pack,
-  actionHref = '/sign-up',
-  actionLabel = 'Зарегистрироваться',
-}: LandingPricingData & { actionHref?: '/sign-up' | '/projects'; actionLabel?: string }) {
+  isGuest = true,
+}: LandingPricingData & { isGuest?: boolean }) {
+  const action = mainAction(isGuest)
   const [edits, setEdits] = useState(30)
   // The value on which the slider came to rest; nothing is announced until the visitor moves it.
   const [announcedEdits, setAnnouncedEdits] = useState<number | null>(null)
@@ -44,6 +55,7 @@ export function Pricing({
   const rangeId = useId()
   const hintId = useId()
   const recommendation = recommendPlan({ plans, pack }, edits)
+  const packsText = recommendation ? packsPhrase(recommendation, pack) : ''
   const announcement =
     announcedEdits === null
       ? ''
@@ -61,12 +73,12 @@ export function Pricing({
         <p>Сейчас не удалось загрузить тарифы.</p>
         <p>
           Обновите страницу чуть позже.{' '}
-          {actionHref === '/sign-up'
+          {isGuest
             ? 'Зарегистрироваться можно уже сейчас.'
             : nbsp('Перейти к проектам можно по ссылке ниже.')}
         </p>
-        <Link className={styles.action} href={actionHref}>
-          {actionLabel} <LandingIcon name="arrow-right-pricing" size={20} strokeWidth={1.6} />
+        <Link className={styles.action} href={action.href}>
+          {action.label} <LandingIcon name="arrow-right-pricing" size={20} strokeWidth={1.6} />
         </Link>
       </div>
     )
@@ -90,21 +102,25 @@ export function Pricing({
             className={styles.range}
             id={rangeId}
             type="range"
-            min={10}
-            max={300}
+            min={MIN_EDITS}
+            max={MAX_EDITS}
             step={5}
             value={edits}
             aria-valuetext={`${edits} ${pluralEdits(edits)} в месяц`}
             aria-describedby={hintId}
-            style={{ '--range-progress': `${((edits - 10) / 290) * 100}%` } as CSSProperties}
+            style={
+              {
+                '--range-progress': `${((edits - MIN_EDITS) / (MAX_EDITS - MIN_EDITS)) * 100}%`,
+              } as CSSProperties
+            }
             onChange={(event) => {
               moved.current = true
               setEdits(Number(event.target.value))
             }}
           />
           <div className={styles.scale} aria-hidden="true">
-            <span>10</span>
-            <span>300</span>
+            <span>{MIN_EDITS}</span>
+            <span>{MAX_EDITS}</span>
           </div>
         </div>
         <div className={styles.result}>
@@ -119,13 +135,9 @@ export function Pricing({
                 <span key={recommendation.plan.slug} className={styles.resultName}>
                   Тариф «{recommendation.plan.name}»
                 </span>
-                {pack && recommendation.packs > 0 && (
-                  <span className={styles.resultPacks}>
-                    {nbsp(` и ${packsInWords(recommendation.packs, pack.edits)}`)}
-                  </span>
-                )}
+                {packsText && <span className={styles.resultPacks}>{nbsp(packsText)}</span>}
               </p>
-              {pack && recommendation.packs > 0 && (
+              {pack && packsText && (
                 <p className={styles.resultSum}>
                   {formatRubles(recommendation.plan.price)}&nbsp;₽ + {recommendation.packs} ×{' '}
                   {formatRubles(pack.price)}&nbsp;₽
@@ -149,9 +161,10 @@ export function Pricing({
           <p className={styles.sitesHint}>
             {nbsp('Если сайтов больше одного — смотрите число сайтов в тарифе.')}
           </p>
-          {/* The one announcement of a step. The visible result is not a live region: with the
-              value of the slider and its `output` it was read three times on each of 58 steps. */}
-          <p className={styles.announcement} aria-live="polite" aria-atomic="true">
+          {/* The one announcement of a step, heard and not seen, once the slider rests. The visible
+              result is not a live region: with the value of the slider and its `output` it was
+              read three times on each of 58 steps. */}
+          <p data-sr-only aria-live="polite" aria-atomic="true">
             {announcement}
           </p>
         </div>
@@ -184,7 +197,13 @@ export function Pricing({
                     `\u00a0${pluralEdits(plan.editsPerMonth)} в месяц, не больше\u00a0${plan.editsPerDay} в день`,
                   )}
                 </li>
-                <li>{plan.maxSites === 1 ? 'Один сайт' : nbsp(`До ${plan.maxSites} сайтов`)}</li>
+                <li>
+                  {plan.maxSites === 1
+                    ? 'Один сайт'
+                    : nbsp(
+                        `До ${plan.maxSites} ${plural(plan.maxSites, 'сайта', 'сайтов', 'сайтов')}`,
+                      )}
+                </li>
               </ul>
             </article>
           )
@@ -198,8 +217,8 @@ export function Pricing({
           )}
         </p>
         <div className={styles.signupAction}>
-          <Link className={`${styles.action} ${styles.primary}`} href={actionHref}>
-            {actionLabel} <LandingIcon name="arrow-right-pricing" size={20} strokeWidth={1.6} />
+          <Link className={`${styles.action} ${styles.primary}`} href={action.href}>
+            {action.label} <LandingIcon name="arrow-right-pricing" size={20} strokeWidth={1.6} />
           </Link>
           <p>Тариф выберете позже, когда откроется оплата</p>
         </div>

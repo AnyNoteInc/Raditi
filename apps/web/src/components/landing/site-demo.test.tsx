@@ -1,17 +1,11 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { scenarioIds, scenarios, story } from './landing-story'
 import { PHASE_MS } from './motion'
 import { initialDemoState, reducer, SiteDemo, type DemoState } from './site-demo'
-
-/** The text as it reads: the matchers below collapse a non-breaking space into a plain one. */
-const plain = (text: string) => text.replaceAll('\u00a0', ' ')
-
-/** A short preposition or conjunction before a plain space: a line may end with it. */
-const HANGING =
-  /(?<![\p{L}\p{N}-])(в|во|с|со|к|ко|о|об|у|и|а|но|на|до|за|по|не|ни|от|из|для|без|при|про|над|под) /iu
+import { HANGING, pass, plain } from './testing'
 
 const phases = ['preparing', 'review', 'applying', 'applied', 'undone'] as const
 
@@ -142,14 +136,10 @@ describe('SiteDemo', () => {
     expect(busy).toHaveFocus()
     // A second click during the pause must neither finish nor undo the change.
     fireEvent.click(busy)
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.applying - 1)
-    })
+    pass(PHASE_MS.applying - 1)
     expect(screen.getByText('До правки')).toBeInTheDocument()
 
-    act(() => {
-      vi.advanceTimersByTime(1)
-    })
+    pass(1)
     expect(screen.getByText('Изменено')).toBeInTheDocument()
     expect(screen.getByText('Готово. В меню уже новая цена.')).toBeInTheDocument()
     const undo = screen.getByRole('button', { name: 'Отменить правку' })
@@ -183,9 +173,7 @@ describe('SiteDemo', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
     expect(status).toHaveTextContent(/^Сохраняю копию и применяю правку…$/)
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.applying)
-    })
+    pass(PHASE_MS.applying)
     // «Готово» must not be followed by the change it has already made.
     expect(plain(status.textContent)).toBe(plain(story.result))
     fireEvent.click(screen.getByRole('button', { name: 'Отменить правку' }))
@@ -196,9 +184,7 @@ describe('SiteDemo', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'График' }))
     expect(status).toHaveTextContent(/^Нахожу нужное место на странице…$/)
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.preparing)
-    })
+    pass(PHASE_MS.preparing)
     const { hours } = scenarios
     expect(status).toHaveTextContent(
       plain(
@@ -219,9 +205,7 @@ describe('SiteDemo', () => {
     expect(signs()).toHaveLength(1)
     expect(signs()[0]).toHaveAttribute('aria-hidden', 'true')
     expect(signs()[0]?.localName).toBe('span')
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.applying)
-    })
+    pass(PHASE_MS.applying)
     expect(signs()).toHaveLength(1)
     expect(signs()[0]).toHaveAttribute('aria-hidden', 'true')
     const check = outline()
@@ -246,9 +230,7 @@ describe('SiteDemo', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
     // Nothing is drawn anew while the change is only being applied.
     expect(value()).toBe(before)
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.applying)
-    })
+    pass(PHASE_MS.applying)
     const applied = value()
     expect(applied).toHaveTextContent(plain(story.after))
     expect(applied).not.toBe(before)
@@ -272,16 +254,12 @@ describe('SiteDemo', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
     expect(length()).toBe(`${PHASE_MS.applying}ms`)
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.applying)
-    })
+    pass(PHASE_MS.applying)
     expect(length()).toBe('')
 
     fireEvent.click(screen.getByRole('button', { name: 'График' }))
     expect(length()).toBe(`${PHASE_MS.preparing}ms`)
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.preparing)
-    })
+    pass(PHASE_MS.preparing)
     expect(length()).toBe('')
   })
 
@@ -299,9 +277,7 @@ describe('SiteDemo', () => {
   it('keeps an applied change when its scenario is chosen again', () => {
     render(<SiteDemo />)
     fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.applying)
-    })
+    pass(PHASE_MS.applying)
     fireEvent.click(screen.getByRole('button', { name: 'Цена' }))
     expect(screen.getByText('Изменено')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Цена' })).toHaveAttribute('aria-pressed', 'true')
@@ -315,9 +291,7 @@ describe('SiteDemo', () => {
     expect(busy).toHaveAttribute('aria-disabled', 'true')
     // A click before the change is ready applies nothing.
     fireEvent.click(busy)
-    act(() => {
-      vi.advanceTimersByTime(PHASE_MS.preparing)
-    })
+    pass(PHASE_MS.preparing)
     expect(screen.getByRole('button', { name: 'Применить правку' })).toHaveAttribute(
       'aria-disabled',
       'false',

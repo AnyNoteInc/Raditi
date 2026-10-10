@@ -1,39 +1,11 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ANNOUNCE_DELAY_MS, Pricing } from './pricing'
+import { pass, plain, pricing } from './testing'
 
-const plans = [
-  {
-    slug: 'start',
-    name: 'Старт',
-    price: '4900.00',
-    editsPerMonth: 30,
-    editsPerDay: 5,
-    maxSites: 1,
-  },
-  {
-    slug: 'business',
-    name: 'Бизнес',
-    price: '12900.00',
-    editsPerMonth: 80,
-    editsPerDay: 10,
-    maxSites: 3,
-  },
-  {
-    slug: 'agency',
-    name: 'Агентство',
-    price: '39900.00',
-    editsPerMonth: 250,
-    editsPerDay: 30,
-    maxSites: 15,
-  },
-]
-const pack = { price: '1990.00', edits: 10 }
-
-/** The text as it reads: the page sets non-breaking spaces, the expectations are typed with plain ones. */
-const plain = (text: string | null) => (text ?? '').replaceAll('\u00a0', ' ')
+const { plans, pack } = pricing
 
 function planCard(name: string): HTMLElement {
   const card = screen.getByRole('heading', { name }).closest('article')
@@ -133,23 +105,17 @@ describe('landing pricing', () => {
       expect(screen.getByText(/^Тариф «Старт»/).closest('[aria-live]')).toBeNull()
 
       // Nothing is said until the visitor moves the slider.
-      act(() => {
-        vi.advanceTimersByTime(ANNOUNCE_DELAY_MS * 2)
-      })
+      pass(ANNOUNCE_DELAY_MS * 2)
       expect(announcement).toBeEmptyDOMElement()
 
       // A drag passes several values: only the one it stops on is announced.
       const slider = screen.getByRole('slider', { name: 'Сколько правок нужно в месяц?' })
       for (const value of ['35', '80', '120']) {
         fireEvent.change(slider, { target: { value } })
-        act(() => {
-          vi.advanceTimersByTime(ANNOUNCE_DELAY_MS - 1)
-        })
+        pass(ANNOUNCE_DELAY_MS - 1)
         expect(announcement).toBeEmptyDOMElement()
       }
-      act(() => {
-        vi.advanceTimersByTime(1)
-      })
+      pass(1)
       const business =
         'Тариф «Бизнес» и 4 дополнительных пакета по 10 правок, 20 860 ₽ в месяц, около 174 ₽ за правку'
       expect(plain(announcement.textContent)).toBe(business)
@@ -157,13 +123,9 @@ describe('landing pricing', () => {
       // The next step keeps the last words until it rests too; then the plan alone is named,
       // as no pack is needed.
       fireEvent.change(slider, { target: { value: '30' } })
-      act(() => {
-        vi.advanceTimersByTime(ANNOUNCE_DELAY_MS - 1)
-      })
+      pass(ANNOUNCE_DELAY_MS - 1)
       expect(plain(announcement.textContent)).toBe(business)
-      act(() => {
-        vi.advanceTimersByTime(1)
-      })
+      pass(1)
       expect(plain(announcement.textContent)).toBe(
         'Тариф «Старт», 4 900 ₽ в месяц, около 163 ₽ за правку',
       )
@@ -174,9 +136,7 @@ describe('landing pricing', () => {
       const { container } = render(<Pricing plans={plans.slice(0, 1)} pack={null} />)
 
       fireEvent.change(screen.getByRole('slider'), { target: { value: '120' } })
-      act(() => {
-        vi.advanceTimersByTime(ANNOUNCE_DELAY_MS)
-      })
+      pass(ANNOUNCE_DELAY_MS)
       const message = 'Для такого числа правок пока нет доступного пакета. Выберите меньше правок.'
       const announcement = container.querySelector('[aria-live]')
       expect(announcement).toHaveTextContent(message)
@@ -249,9 +209,7 @@ describe('landing pricing', () => {
   })
 
   it('leads a signed-in visitor to the projects with the same single action', () => {
-    render(
-      <Pricing plans={plans} pack={pack} actionHref="/projects" actionLabel="Открыть проекты" />,
-    )
+    render(<Pricing plans={plans} pack={pack} isGuest={false} />)
 
     expect(screen.getAllByRole('link')).toHaveLength(1)
     expect(screen.getByRole('link', { name: 'Открыть проекты' })).toHaveAttribute(
@@ -273,7 +231,7 @@ describe('landing pricing', () => {
   })
 
   it('leads a signed-in visitor to the projects when the plans are unavailable', () => {
-    render(<Pricing plans={[]} pack={null} actionHref="/projects" actionLabel="Открыть проекты" />)
+    render(<Pricing plans={[]} pack={null} isGuest={false} />)
 
     const way = screen.getByText(/Перейти к проектам можно по ссылке ниже\./)
     // The prepositions stay with their words.

@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import { cafe, scenarioIds, scenarios, story } from './landing-story'
+import { plain } from './testing'
 
 const NBSP = '\u00a0'
-const plain = (text: string) => text.replaceAll(NBSP, ' ')
 
 describe('landing story', () => {
-  it('lists every request of the demo once', () => {
-    expect([...scenarioIds].sort()).toEqual(Object.keys(scenarios).sort())
+  it('lists the requests of the demo in the order of their buttons', () => {
+    expect(scenarioIds).toEqual(['price', 'hours', 'promotion'])
+    expect(Object.keys(scenarios)).toEqual(scenarioIds)
   })
 
   it('writes the price of the story once: the request, the change and the amounts agree', () => {

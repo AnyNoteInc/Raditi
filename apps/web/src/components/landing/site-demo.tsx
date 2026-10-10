@@ -87,15 +87,14 @@ const phases: Record<Phase, PhaseView> = {
   },
 }
 
-// The stroke of the demo icons, the same as `.demo svg` gives the other drawings of the demo.
-const line = { strokeWidth: 1.6, linecap: 'round', linejoin: 'round' } as const
-
 export function SiteDemo() {
   const [state, dispatch] = useReducer(reducer, initialDemoState)
   const hintId = useId()
   const scenario = scenarios[state.scenario]
   const view = phases[state.phase]
   const isApplied = state.phase === 'applied'
+  // The field of the site that shows its new value: the one of the request, once it is applied.
+  const changed = isApplied ? state.scenario : null
   const isBusy = view.pause !== undefined
 
   useEffect(() => {
@@ -139,7 +138,7 @@ export function SiteDemo() {
             >
               {/* Every button has the mark, CSS shows it in the chosen one: `aria-pressed`
                   tells the choice to a screen reader, the mark tells it without colour. */}
-              <LandingIcon name="check" size={11} {...line} />
+              <LandingIcon name="check" size={11} />
               {scenarios[id].label}
             </button>
           ))}
@@ -186,36 +185,32 @@ export function SiteDemo() {
             <div
               className={styles.promotion}
               data-selected={state.scenario === 'promotion'}
-              data-changed={isApplied && state.scenario === 'promotion'}
+              data-changed={changed === 'promotion'}
             >
-              {isApplied && state.scenario === 'promotion' ? cafe.banner.after : cafe.banner.before}
+              {changed === 'promotion' ? cafe.banner.after : cafe.banner.before}
             </div>
 
             <div className={styles.cafeDetails}>
               <div
                 className={styles.cafeRow}
                 data-selected={state.scenario === 'price'}
-                data-changed={isApplied && state.scenario === 'price'}
+                data-changed={changed === 'price'}
               >
                 <span>
                   {cafe.item} <small>{cafe.volume}</small>
                 </span>
-                <strong key={`price-${isApplied && state.scenario === 'price'}`}>
-                  {isApplied && state.scenario === 'price'
-                    ? scenarios.price.after
-                    : scenarios.price.before}
+                <strong key={`price-${changed === 'price'}`}>
+                  {scenarios.price[changed === 'price' ? 'after' : 'before']}
                 </strong>
               </div>
               <div
                 className={styles.cafeRow}
                 data-selected={state.scenario === 'hours'}
-                data-changed={isApplied && state.scenario === 'hours'}
+                data-changed={changed === 'hours'}
               >
                 <span>В&nbsp;субботу</span>
-                <strong key={`hours-${isApplied && state.scenario === 'hours'}`}>
-                  {isApplied && state.scenario === 'hours'
-                    ? scenarios.hours.after
-                    : scenarios.hours.before}
+                <strong key={`hours-${changed === 'hours'}`}>
+                  {scenarios.hours[changed === 'hours' ? 'after' : 'before']}
                 </strong>
               </div>
             </div>
@@ -248,13 +243,13 @@ export function SiteDemo() {
                 {view.sign === 'activity' && (
                   <span className={styles.activity} aria-hidden="true" />
                 )}
-                {view.sign === 'check' && <LandingIcon name="check" size={16} {...line} />}
-                {view.sign === 'undo' && <LandingIcon name="undo-demo" size={16} {...line} />}
+                {view.sign === 'check' && <LandingIcon name="check" size={16} />}
+                {view.sign === 'undo' && <LandingIcon name="undo-demo" size={16} />}
                 {view.status ?? scenario.result}
                 {/* The region is atomic: after «Готово» the offer would contradict the status,
                     so the change is told in words only while it waits for the decision. */}
                 {state.phase === 'review' && (
-                  <span className={styles.srOnly}>
+                  <span data-sr-only>
                     {` ${scenario.field}: было ${scenario.before}, станет ${scenario.after}.`}
                   </span>
                 )}
@@ -263,13 +258,13 @@ export function SiteDemo() {
                 <span className={styles.diffLabel}>{scenario.field}</span>
                 <div className={styles.diffValues}>
                   <span className={styles.before}>
-                    <span className={styles.srOnly}>Было: </span>
+                    <span data-sr-only>Было: </span>
                     {scenario.before}
                   </span>
                   <span className={styles.becomes}>
-                    <LandingIcon name="arrow-right-demo" size={18} {...line} />
+                    <LandingIcon name="arrow-right" size={18} />
                     <span className={styles.after}>
-                      <span className={styles.srOnly}>Станет: </span>
+                      <span data-sr-only>Станет: </span>
                       {scenario.after}
                     </span>
                   </span>
@@ -285,16 +280,12 @@ export function SiteDemo() {
                 onClick={() => dispatch({ type: isApplied ? 'undo' : 'apply' })}
               >
                 <span>{view.action}</span>
-                <LandingIcon
-                  name={isApplied ? 'undo-demo' : 'arrow-right-demo'}
-                  size={18}
-                  {...line}
-                />
+                <LandingIcon name={isApplied ? 'undo-demo' : 'arrow-right'} size={18} />
               </button>
             </div>
           </div>
           <div className={styles.chatFooter}>
-            <LandingIcon name="check" size={16} {...line} />
+            <LandingIcon name="check" size={16} />
             Сначала копия. Потом изменения.
           </div>
         </div>

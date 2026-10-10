@@ -1,6 +1,4 @@
 .demo {
-  --demo-ink: var(--raditi-ink);
-  --demo-marker: var(--raditi-marker);
   /* The scene of an applied change takes longer than a control does: the window levels out and
      the banner unrolls, the bar of the window and the changed field take their colour, the new
      value settles. A new message of the chat comes in with a time of its own. */
@@ -11,23 +9,22 @@
   --demo-message: 500ms;
   /* The three dots of a transfer start one after another. */
   --demo-dot-step: 80ms;
-  /* Where the outline of a field starts when the demo finds its place: as far as the padding
-     of the window lets it, so that the edge of the window does not cut it. */
-  --locate-from: 12px;
+  /* The side padding of the window of the site; the breakpoints below change only it. */
+  --cafe-pad: 22px;
+  /* Where the outline of a field starts when the demo finds its place: 12px away, or as far as
+     the padding of the window lets it, so that the edge of the window does not cut it. The
+     highlight layer of a field is 8px wider than the field, and the outline is 1px thick. */
+  --locate-from: min(12px, calc(var(--cafe-pad) - 9px));
   width: 100%;
   max-width: 600px;
   min-width: 0;
   margin: 0;
   font-family: var(--font-golos), sans-serif;
-  color: var(--demo-ink);
+  color: var(--raditi-ink);
   text-align: left;
   /* 4px on top of the room that the page keeps for its header: the anchor of the demo stays
      where it was, 108px from the top of a desktop window. */
-  scroll-margin-top: calc(var(--anchor-room, 104px) + 4px);
-}
-
-.demo * {
-  box-sizing: border-box;
+  scroll-margin-top: calc(var(--anchor-room) + 4px);
 }
 
 .demo svg {
@@ -49,17 +46,11 @@
   outline-offset: 4px;
 }
 
-/* A selection is ink with amber letters, seen on the paper and on the amber alike; on the dark
-   panel of the chat the pair is turned over. The chat rule outweighs the one of the page,
-   whichever stylesheet comes later. */
-.demo ::selection {
-  color: var(--demo-marker);
-  background: var(--demo-ink);
-}
-
+/* The selection of the page is ink with amber letters; on the dark panel of the chat the pair is
+   turned over. The chat rule outweighs the one of the page, whichever stylesheet comes later. */
 .demo .chat ::selection {
-  color: var(--demo-ink);
-  background: var(--demo-marker);
+  color: var(--raditi-ink);
+  background: var(--raditi-marker);
 }
 
 .caption {
@@ -96,7 +87,7 @@
   position: relative;
   width: 94%;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   background: var(--raditi-paper-2);
   box-shadow: 0 12px 36px -16px var(--raditi-shadow-soft);
   transform: rotate(-1.5deg);
@@ -120,7 +111,7 @@
 }
 
 .stage[data-phase='applied'] .browserBar {
-  background: var(--demo-marker);
+  background: var(--raditi-marker);
 }
 
 .windowDots {
@@ -150,18 +141,18 @@
 /* On the amber bar graphite is 4.46:1, under the threshold of a text; the lock follows the
    colour of the text. */
 .stage[data-phase='applied'] .address {
-  color: var(--demo-ink);
+  color: var(--raditi-ink);
 }
 
 .browserLabel {
-  color: var(--demo-ink);
+  color: var(--raditi-ink);
   font-size: 12px;
   font-weight: 500;
 }
 
 .cafe {
   position: relative;
-  padding: 14px 22px 20px;
+  padding: 14px var(--cafe-pad) 20px;
   color: var(--raditi-accent-text);
 }
 
@@ -225,8 +216,8 @@
 
 /* Amber means «changed» in every request: the banner is marked as the changed rows are. */
 .promotion[data-changed='true'] {
-  background: var(--demo-marker);
-  color: var(--demo-ink);
+  background: var(--raditi-marker);
+  color: var(--raditi-ink);
   animation: revealBanner var(--demo-settle) var(--raditi-ease-out) both;
 }
 
@@ -287,11 +278,11 @@
 }
 
 .cafeRow[data-changed='true'] {
-  color: var(--demo-ink);
+  color: var(--raditi-ink);
 }
 
 .cafeRow[data-changed='true']::before {
-  background: var(--demo-marker);
+  background: var(--raditi-marker);
 }
 
 /* The demo finds the place: when the visitor picks a request, the outline of its field closes
@@ -357,7 +348,7 @@
   margin-left: auto;
   overflow: hidden;
   border-radius: 14px;
-  background: var(--demo-ink);
+  background: var(--raditi-ink);
   color: var(--raditi-paper);
   box-shadow: 0 23px 44px -23px var(--raditi-shadow-strong);
   transform: rotate(1deg);
@@ -398,7 +389,7 @@
   flex-shrink: 0;
   margin-left: auto;
   border-radius: 50%;
-  background: var(--demo-marker);
+  background: var(--raditi-marker);
 }
 
 .chatBody {
@@ -441,7 +432,7 @@
 }
 
 .replyStatus > svg {
-  color: var(--demo-marker);
+  color: var(--raditi-marker);
   width: 13px;
   height: 13px;
 }
@@ -451,7 +442,7 @@
   height: 7px;
   flex-shrink: 0;
   border-radius: 50%;
-  background: var(--demo-marker);
+  background: var(--raditi-marker);
   /* One pulse for the whole busy phase, the same curve on the way up and on the way down. */
   animation: activity var(--demo-phase) var(--raditi-ease-in-out) both;
 }
@@ -498,7 +489,7 @@
 }
 
 .after {
-  color: var(--demo-marker);
+  color: var(--raditi-marker);
   font-weight: 500;
 }
 
@@ -587,7 +578,7 @@
   padding: 8px 22px;
   border: 1px solid var(--raditi-rule-strong);
   border-radius: var(--raditi-radius-pill);
-  color: var(--demo-ink);
+  color: var(--raditi-ink);
   background: transparent;
   font-size: 13px;
   transition:
@@ -620,19 +611,6 @@
   opacity: 1;
 }
 
-/* Words for a screen reader, where the eye is told by a strikethrough, an arrow and a colour. */
-.srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
 .disclaimer {
   max-width: 48ch;
   margin: 12px 0 0;
@@ -655,7 +633,7 @@
 /* An action that stays on the page: the surface a step darker and an ink outline. */
 .scenario:active:not([aria-pressed='true']) {
   background: var(--raditi-paper-2);
-  border-color: var(--demo-ink);
+  border-color: var(--raditi-ink);
 }
 
 @media (hover: hover) {
@@ -670,7 +648,7 @@
 
   .scenario:hover:not([aria-pressed='true']) {
     background: var(--raditi-paper-2);
-    border-color: var(--demo-ink);
+    border-color: var(--raditi-ink);
   }
 }
 
@@ -762,10 +740,7 @@
 
 @media (max-width: 1100px) and (min-width: 801px) {
   .demo {
-    --locate-from: 11px;
-  }
-  .cafe {
-    padding-inline: 20px;
+    --cafe-pad: 20px;
   }
   .cafeName {
     font-size: 42px;
@@ -786,21 +761,15 @@
   .cafeName {
     font-size: clamp(36px, 7vw, 50px);
   }
-  .chat {
-    width: 80%;
-  }
 }
 
 @media (max-width: 480px) {
   .demo {
-    --locate-from: 7px;
+    --cafe-pad: 16px;
   }
   .browser {
     width: 97%;
     transform: rotate(-1deg);
-  }
-  .cafe {
-    padding: 14px 16px 20px;
   }
   .cafeIdentity {
     gap: 8px;

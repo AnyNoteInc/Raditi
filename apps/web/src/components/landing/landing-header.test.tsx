@@ -3,13 +3,20 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { LandingHeader } from './landing-header'
+import { guest, member, stubIntersectionObserver, type ObserverStub } from './testing'
 
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
 
+/** Opens the mobile menu with its button and returns the navigation inside it. */
+function openMenu(): HTMLElement {
+  fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))
+  return screen.getByRole('navigation', { name: 'Мобильная навигация' })
+}
+
 describe('landing account navigation', () => {
   it('offers sign-in and registration to a guest, in the header and in the mobile menu', () => {
-    render(<LandingHeader viewer={{ status: 'guest', user: null }} />)
+    render(<LandingHeader viewer={guest} />)
 
     expect(screen.getByRole('link', { name: 'Войти' })).toHaveAttribute('href', '/sign-in')
     // The mobile menu is closed, so this is the button of the header itself.
@@ -18,8 +25,7 @@ describe('landing account navigation', () => {
       '/sign-up',
     )
     expect(screen.queryByRole('button', { name: 'Меню пользователя' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))
-    const mobile = screen.getByRole('navigation', { name: 'Мобильная навигация' })
+    const mobile = openMenu()
     expect(within(mobile).getByRole('link', { name: 'Зарегистрироваться' })).toHaveAttribute(
       'href',
       '/sign-up',
@@ -27,14 +33,7 @@ describe('landing account navigation', () => {
   })
 
   it('keeps only the account avatar in the authenticated header and puts projects in its menu', () => {
-    render(
-      <LandingHeader
-        viewer={{
-          status: 'authenticated',
-          user: { name: 'Анна', lastName: 'Иванова', email: 'anna@example.ru', image: null },
-        }}
-      />,
-    )
+    render(<LandingHeader viewer={member} />)
 
     const account = screen.getByRole('button', { name: 'Меню пользователя' })
     expect(within(account).getByText('АИ')).toBeVisible()
@@ -43,8 +42,7 @@ describe('landing account navigation', () => {
     expect(screen.queryByText('Анна Иванова')).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Проекты' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Войти' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))
-    const mobile = screen.getByRole('navigation', { name: 'Мобильная навигация' })
+    const mobile = openMenu()
     expect(within(mobile).queryByRole('link', { name: 'Открыть проекты' })).not.toBeInTheDocument()
     expect(within(mobile).getAllByRole('link')).toHaveLength(4)
     // Neither in the open mobile menu nor in the header itself.
@@ -83,8 +81,7 @@ describe('landing account navigation', () => {
     expect(projects).toHaveAttribute('href', '/projects')
     expect(projects).not.toHaveAttribute('aria-label')
     expect(screen.queryByRole('button', { name: 'Меню пользователя' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))
-    const mobile = screen.getByRole('navigation', { name: 'Мобильная навигация' })
+    const mobile = openMenu()
     expect(within(mobile).getByRole('link', { name: 'Открыть проекты' })).toHaveAttribute(
       'href',
       '/projects',
@@ -94,7 +91,7 @@ describe('landing account navigation', () => {
   })
 
   it('leads to the questions from both navigations', () => {
-    render(<LandingHeader viewer={{ status: 'guest', user: null }} />)
+    render(<LandingHeader viewer={guest} />)
 
     const desktop = screen.getByRole('navigation', { name: 'Основная навигация' })
     expect(
@@ -107,13 +104,12 @@ describe('landing account navigation', () => {
       ['Тарифы', '#pricing'],
       ['Вопросы', '#faq'],
     ])
-    fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))
-    const mobile = screen.getByRole('navigation', { name: 'Мобильная навигация' })
+    const mobile = openMenu()
     expect(within(mobile).getByRole('link', { name: 'Вопросы' })).toHaveAttribute('href', '#faq')
   })
 
   it('keeps the links of the closed menu out of reach while it is leaving', () => {
-    render(<LandingHeader viewer={{ status: 'guest', user: null }} />)
+    render(<LandingHeader viewer={guest} />)
     // CSS lets the closed panel fade out, so `hidden` alone would leave its links focusable
     // for that moment: `inert` takes them away at once.
     const menu = () => document.getElementById('landing-navigation')
@@ -134,43 +130,22 @@ describe('landing account navigation', () => {
   })
 
   describe('with the page scrolled', () => {
-    type Report = (id: string, isIntersecting: boolean) => void
-    let report: Report = () => undefined
-    let options: IntersectionObserverInit | undefined
+    let observers: ObserverStub[] = []
+    /** The observer of the header reports a section by its id. */
+    const report = (id: string, isIntersecting: boolean) => {
+      const target = document.getElementById(id)
+      const observer = observers.at(-1)
+      if (!target || !observer?.observed.has(target)) throw new Error(`${id} is not observed`)
+      observer.report(target, isIntersecting)
+    }
 
     beforeEach(() => {
-      const sections = ['how', 'possibilities', 'safety', 'pricing', 'faq'].map((id) => {
+      for (const id of ['how', 'possibilities', 'safety', 'pricing', 'faq']) {
         const section = document.createElement('section')
         section.id = id
         document.body.append(section)
-        return section
-      })
-      vi.stubGlobal(
-        'IntersectionObserver',
-        class {
-          observed: Element[] = []
-          constructor(
-            callback: (
-              entries: Pick<IntersectionObserverEntry, 'target' | 'isIntersecting'>[],
-            ) => void,
-            init?: IntersectionObserverInit,
-          ) {
-            options = init
-            report = (id, isIntersecting) => {
-              const target = sections.find((section) => section.id === id)
-              if (!target || !this.observed.includes(target))
-                throw new Error(`${id} is not observed`)
-              act(() => callback([{ target, isIntersecting }]))
-            }
-          }
-          observe(target: Element) {
-            this.observed.push(target)
-          }
-          disconnect() {
-            this.observed = []
-          }
-        },
-      )
+      }
+      observers = stubIntersectionObserver()
     })
 
     afterEach(() => {
@@ -189,9 +164,9 @@ describe('landing account navigation', () => {
         ])
 
     it('marks the section being read in both navigations and no link between the sections', () => {
-      render(<LandingHeader viewer={{ status: 'guest', user: null }} />)
+      render(<LandingHeader viewer={guest} />)
       // A thin band above the middle of the window.
-      expect(options?.rootMargin).toBe('-45% 0px -50% 0px')
+      expect(observers.at(-1)?.options?.rootMargin).toBe('-45% 0px -50% 0px')
       expect(current()).toEqual([])
 
       report('pricing', true)
@@ -211,7 +186,7 @@ describe('landing account navigation', () => {
     })
 
     it('watches only the sections of the navigation', () => {
-      render(<LandingHeader viewer={{ status: 'guest', user: null }} />)
+      render(<LandingHeader viewer={guest} />)
 
       expect(() => report('how', false)).not.toThrow()
       expect(() => report('safety', true)).toThrow('safety is not observed')
@@ -220,10 +195,9 @@ describe('landing account navigation', () => {
   })
 
   it('closes the mobile menu on Escape and returns the focus to its toggle', () => {
-    render(<LandingHeader viewer={{ status: 'guest', user: null }} />)
+    render(<LandingHeader viewer={guest} />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))
-    expect(screen.getByRole('navigation', { name: 'Мобильная навигация' })).toBeVisible()
+    expect(openMenu()).toBeVisible()
 
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(
@@ -235,12 +209,11 @@ describe('landing account navigation', () => {
   it('closes the mobile menu on a press outside the header, not on one inside it', () => {
     render(
       <>
-        <LandingHeader viewer={{ status: 'guest', user: null }} />
+        <LandingHeader viewer={guest} />
         <main>Страница</main>
       </>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))
-    const menu = screen.getByRole('navigation', { name: 'Мобильная навигация' })
+    const menu = openMenu()
 
     fireEvent.pointerDown(within(menu).getByRole('link', { name: 'Тарифы' }))
     fireEvent.pointerDown(screen.getByRole('link', { name: 'Радити — на главную' }))
@@ -259,12 +232,11 @@ describe('landing account navigation', () => {
   it('closes the mobile menu when the focus goes on past the header, not when it stays in it', () => {
     render(
       <>
-        <LandingHeader viewer={{ status: 'guest', user: null }} />
+        <LandingHeader viewer={guest} />
         <button type="button">Дальше</button>
       </>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Открыть меню' }))
-    const menu = screen.getByRole('navigation', { name: 'Мобильная навигация' })
+    const menu = openMenu()
     const last = within(menu).getByRole('link', { name: 'Зарегистрироваться' })
 
     act(() => last.focus())

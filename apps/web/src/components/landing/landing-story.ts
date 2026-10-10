@@ -56,7 +56,8 @@ const words = {
 
 export type ScenarioId = keyof typeof words
 
-export const scenarioIds: ScenarioId[] = ['price', 'hours', 'promotion']
+/** The requests of the demo, in the order of their buttons. */
+export const scenarioIds = Object.keys(words) as ScenarioId[]
 
 /** The visible text: a price keeps its ruble sign, a line its preposition. The label of a
  *  button stays as typed, it is looked up by its exact name. */
@@ -69,12 +70,9 @@ const typeset = ({ label, request, field, before, after, result }: Scenario): Sc
   result: nbsp(result),
 })
 
-/** The requests of the demo, in the order of their buttons. */
-export const scenarios: Record<ScenarioId, Scenario> = {
-  price: typeset(words.price),
-  hours: typeset(words.hours),
-  promotion: typeset(words.promotion),
-}
+export const scenarios = Object.fromEntries(
+  scenarioIds.map((id) => [id, typeset(words[id])]),
+) as Record<ScenarioId, Scenario>
 
 /** The site of the cafe, as its window in the examples shows it. */
 export const cafe = {

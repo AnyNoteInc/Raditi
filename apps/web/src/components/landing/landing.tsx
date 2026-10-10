@@ -3,14 +3,15 @@ import { BrandSymbol } from '@repo/ui/brand-symbol'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
+import { legalDocumentHref } from '@/lib/legal'
 import { nbsp } from '@/lib/nbsp'
 import type { LandingViewer } from '@/server/landing-viewer'
 
-import { LandingAnchor } from './landing-anchor'
 import { LandingHeader } from './landing-header'
 import { LandingIcon } from './landing-icons'
 import { LandingMotion } from './landing-motion'
 import { cafe, story } from './landing-story'
+import { mainAction } from './main-action'
 import { SafetyDemo } from './safety-demo'
 import { SiteDemo } from './site-demo'
 import styles from './landing.module.css'
@@ -117,24 +118,13 @@ function readable(text: string): ReactNode {
     )
 }
 
-function Wordmark() {
-  return (
-    <span className={styles.wordmark}>
-      <BrandSymbol size={35} className={styles.logoSymbol} />
-      Радити
-    </span>
-  )
-}
-
 export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: LandingViewer }) {
   const isGuest = viewer.status === 'guest'
-  const actionHref = isGuest ? '/sign-up' : '/projects'
+  const action = mainAction(isGuest)
   return (
     <div className={styles.page} id="top">
-      {/* Raises the elements marked with `data-reveal` as they come into the window. */}
+      {/* Tells the elements marked with `data-reveal` when they come into the window. */}
       <LandingMotion />
-      {/* The plans arrive after the page: a link to an anchor below them is put right then. */}
-      <LandingAnchor after="pricing" />
       <a href="#main-content" className={styles.skip}>
         Перейти к содержанию
       </a>
@@ -156,9 +146,8 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
                 )}
               </p>
               <div className={styles.heroActions}>
-                <Link href={actionHref} className={styles.primaryButton}>
-                  {isGuest ? 'Зарегистрироваться' : 'Открыть проекты'}{' '}
-                  <LandingIcon name="arrow-up-right" {...arrow} />
+                <Link href={action.href} className={styles.primaryButton}>
+                  {action.label} <LandingIcon name="arrow-up-right" {...arrow} />
                 </Link>
                 <a href="#site-demo" className={styles.textLink}>
                   Попробовать демо <LandingIcon name="arrow-down" size={16} strokeWidth={1.7} />
@@ -220,11 +209,13 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
               <br />
               до&nbsp;«уже готово».
             </h2>
-            <div className={`${styles.sectionLead} ${styles.stepsLead}`}>
+            <div className={styles.sectionLead}>
               <span className={styles.launchLabel}>После запуска</span>
+              {/* The second sentence starts with two short words: glued to the third, they
+                  never end a line apart from what they introduce. */}
               <p>
                 {nbsp(
-                  'Без технических заданий на десять страниц. Вот как будет устроена работа с Радити.',
+                  'Без технических заданий на десять страниц. Вот\u00a0как\u00a0будет устроена работа с Радити.',
                 )}
               </p>
             </div>
@@ -465,8 +456,8 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
                   : 'Подключение сайта откроется позже.'}
               </p>
             </div>
-            <Link href={actionHref} className={`${styles.primaryButton} ${styles.finalButton}`}>
-              {isGuest ? 'Зарегистрироваться' : 'Открыть проекты'}
+            <Link href={action.href} className={`${styles.primaryButton} ${styles.finalButton}`}>
+              {action.label}
               <LandingIcon name="arrow-up-right" {...arrow} />
             </Link>
           </div>
@@ -479,7 +470,10 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
       <footer className={styles.footer}>
         <div className={styles.footerTop}>
           <Link href="/" aria-label="Радити — на главную">
-            <Wordmark />
+            <span className={styles.wordmark}>
+              <BrandSymbol size={35} className={styles.logoSymbol} />
+              Радити
+            </span>
           </Link>
           <p>Ваш сайт в&nbsp;заботливых руках.</p>
           <Link href={isGuest ? '/sign-in' : '/projects'}>
@@ -488,7 +482,7 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
         </div>
         <nav aria-label="Юридические документы" className={styles.legalLinks}>
           {legalDocuments.map((document) => (
-            <Link key={document.slug} href={`/terms/${document.slug}`}>
+            <Link key={document.slug} href={legalDocumentHref(document.slug)}>
               {document.title}
             </Link>
           ))}
