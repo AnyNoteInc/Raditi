@@ -3,14 +3,15 @@ import { randomUUID } from 'node:crypto'
 import { Prisma, type PrismaClient } from '@repo/db'
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleBackendId, sampleRoutePath } from '../testing/ids.ts'
 import { PostgresGatewayStore } from './store.ts'
 import { GatewayRecordRejected, type GatewayAdmitInput, type GatewayFinish } from './types.ts'
 
 const input = (): GatewayAdmitInput => ({
   keyHash: 'a'.repeat(64),
   source: '127.0.0.1',
-  backendId: 'openai-chatgpt',
-  route: { method: 'POST', path: '/codex/responses' },
+  backendId: sampleBackendId,
+  route: { method: 'POST', path: sampleRoutePath },
   profile: {
     keyId: randomUUID(),
     modelId: randomUUID(),

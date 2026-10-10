@@ -221,6 +221,8 @@ export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
         listenHost,
         port: stack.llmPort,
         upstream: `http://127.0.0.1:${rolePort}`,
+        // Only a rehearsal may answer a request of the sandbox in place of the role.
+        scripted: rehearsal,
       })
       closers.push(() => observer.close())
       return { observer, rolePort }

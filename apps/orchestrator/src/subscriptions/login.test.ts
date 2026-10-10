@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto'
 
 import type { Prisma, PrismaClient } from '@repo/db'
 import type { LlmBackend } from '@repo/domain'
-import { kimiCodeBackend } from '@repo/llm-backends'
+import { zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import {
   createSubscriptionClientIdentity,
   SubscriptionLogin,
@@ -12,9 +13,9 @@ import {
   type SubscriptionImportInput,
 } from './login.ts'
 
-const secret = { v: '1', kind: 'kimi_api_key', apiKey: 'synthetic-key-never-log' }
+const secret = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-key-never-log' }
 const backend: LlmBackend = {
-  ...kimiCodeBackend,
+  ...zaiCodingBackend,
   credentialMetadata: () => ({
     externalAccountId: 'synthetic-account',
     plan: 'synthetic',
@@ -40,7 +41,7 @@ function fixture() {
     $queryRaw: vi.fn(async (_query: Prisma.Sql | TemplateStringsArray) => [{ now: new Date() }]),
     $executeRaw: vi.fn(async () => 1),
     llmProvider: { findUnique: vi.fn(async () => provider) },
-    agentDriver: { findUnique: vi.fn(async () => ({ id: 'kimi' })) },
+    agentDriver: { findUnique: vi.fn(async () => ({ id: sampleDriverId })) },
     credentialRef: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         ref = { id: randomUUID(), ...data }
@@ -121,7 +122,7 @@ function fixture() {
   })
   const input: SubscriptionImportInput = {
     backend: backend.id,
-    driverId: 'kimi',
+    driverId: sampleDriverId,
     credential: secret,
     label: 'synthetic',
     clientIdentity: createSubscriptionClientIdentity(),
@@ -263,7 +264,7 @@ describe('write-only subscription login', () => {
       prisma: f.prisma as unknown as Pick<PrismaClient, '$transaction'>,
       writer: f.writer,
       locks: f.locks,
-      backends: [kimiCodeBackend],
+      backends: [zaiCodingBackend],
     })
     await expect(service.importAccount(f.input)).rejects.toMatchObject({ code: 'invalid_input' })
     const result = await service.importAccount({ ...f.input, plan: 'synthetic' })

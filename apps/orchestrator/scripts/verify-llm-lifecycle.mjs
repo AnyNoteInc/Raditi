@@ -1,49 +1,251 @@
 /* global AbortSignal, fetch */
 // Real B13 gateway traffic against the owned PostgreSQL/OpenBao and synthetic provider stack.
 // Time-dependent fixture resets below are explicit; no production clock or backend is replaced.
+// The scenarios of the platform run once, on the group they are given (its ids and forms are
+// data: verify-llm-zai-forms.mjs); what belongs to OAuth and to Codex stays below them until
+// both are removed.
 import assert from 'node:assert/strict'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
+import { codexBackend, kimiCodeBackend, llmBackends } from '@repo/llm-backends'
 
 import { eventually } from '../../../infra/dev/llm-verify/stack.mjs'
 import { SubscriptionRetirement } from '../src/subscriptions/retire.ts'
 
-const backends = [codexBackend, kimiCodeBackend]
-const codeFor = (backend) => (backend === 'openai-chatgpt' ? 'codex' : 'kimi')
+/** The code of a refusal of the gateway, when the answer of a request is one. */
+async function answerOf(response) {
+  const text = await response.text()
+  let code = null
+  try {
+    code = JSON.parse(text).error?.code ?? null
+  } catch {
+    /* A stream, or the plain text of sandbox-gw. */
+  }
+  return { status: response.status, code }
+}
 
-export async function verifyLifecycle(ctx) {
-  const {
-    db,
-    core,
-    stack,
-    codex,
-    kimi,
-    control,
-    task,
-    issued,
-    passed,
-    llmSecrets,
-    admin,
-    locks,
-    restartLlm,
-  } = ctx
-  const origin = `http://127.0.0.1:${stack.llmPort}`
-  const accounts = { 'openai-chatgpt': codex.accountId, 'kimi-code': kimi.accountId }
-  const account = (backend) =>
-    db.subscriptionAccount.findUniqueOrThrow({ where: { id: accounts[backend] } })
-  const scenario = (backend, value, options = {}) =>
-    control('scenario', { backend: codeFor(backend), scenario: value, ...options })
-  const keyRow = (turn) =>
-    db.llmKey.findUniqueOrThrow({
-      where: {
-        taskId_turnNo_firstEpoch: {
-          taskId: turn.ref.taskId,
-          turnNo: turn.ref.turn,
-          firstEpoch: turn.ref.epoch,
-        },
+export async function verifyLifecycle(group) {
+  const { db, passed, ids, answers } = group
+  const request = async (turn) =>
+    answerOf(await group.roleRequest(turn, { signal: AbortSignal.timeout(25_000) }))
+  const notRemoved = async () => {
+    const row = await group.account()
+    assert.equal(row.enabled, true)
+    assert.equal(row.status, 'active')
+    assert.equal(row.health, 'ok')
+    assert.equal(row.retireRequestedAt, null)
+  }
+  const usageOf = (turn) => db.tokenUsage.findMany({ where: { taskId: turn.ref.taskId } })
+
+  await group.restartRole()
+  await group.provider(answers.text())
+  const priced = await group.issued()
+  assert.equal((await request(priced)).status, 200)
+  await group.settled(priced, 1)
+  const [cost] = await usageOf(priced)
+  assert.partialDeepStrictEqual(cost, { ...group.usage, estimated: false, billable: true })
+  assert.equal(cost.costRub.toFixed(10), group.answerCostRub)
+  await group.revoke(priced)
+  passed('accounting divides per-million rates once: a call costs its provider usage at the rates')
+
+  await group.provider(answers.shortLived)
+  const transient = await group.issued()
+  assert.deepEqual(await request(transient), { status: 503, code: 'raditi_transient' })
+  await group.settled(transient, 1)
+  const reached = await group.providerRequests()
+  assert.deepEqual(await request(transient), { status: 503, code: 'raditi_transient' })
+  assert.equal(await group.providerRequests(), reached)
+  assert.equal((await group.calls(transient)).length, 1)
+  await notRemoved()
+  await group.revoke(transient)
+  await group.provider(answers.text())
+  await group.restartRole()
+  passed(
+    'a short-lived refusal pauses provider requests without changing the durable account state',
+  )
+
+  // The key first: the probe of an issue must still find the account in order.
+  const risk = await group.issued()
+  await group.provider(answers.accountRisk)
+  await group.quota(answers.accountRiskConfirmed)
+  assert.equal((await request(risk)).code, 'raditi_account')
+  await group.settled(risk, 1)
+  await eventually(async () => (await group.account()).healthReason === 'risk_confirmed')
+  assert.equal((await group.account()).health, 'suspended')
+  await group.revoke(risk)
+  await group.provider(answers.text())
+  await group.quota(answers.accountHealthy)
+  await db.subscriptionAccount.update({
+    where: { id: group.accountId },
+    data: { health: 'ok', healthReason: null },
+  })
+  await group.restartRole()
+  passed(
+    'an account-risk refusal suspends the account only after the separate quota probe confirms it',
+  )
+
+  await group.provider(answers.paymentRequired)
+  for (let index = 0; index < 3; index++) {
+    // 402s inside one pause window are one payment check (5/15/45 min). Age the earlier
+    // 402 calls of this owned fixture past their pause so each request is a separate check.
+    await db.$executeRaw`UPDATE llm_calls SET started_at = started_at - interval '20 minutes', finished_at = finished_at - interval '20 minutes' WHERE subscription_account_id = ${group.accountId}::uuid AND upstream_status = 402`
+    const payment = await group.issued()
+    assert.deepEqual(await request(payment), { status: 503, code: 'raditi_transient' })
+    await group.settled(payment, 1)
+    await group.revoke(payment)
+    if (index < 2) await group.restartRole()
+  }
+  await eventually(async () => (await group.account()).healthReason === 'payment_pending')
+  assert.equal((await group.account()).health, 'suspended')
+  await group.provider(answers.text())
+  // Recovery is operator-owned; reset this synthetic fixture rather than claim automatic recovery.
+  await db.subscriptionAccount.update({
+    where: { id: group.accountId },
+    data: { health: 'ok', healthReason: null },
+  })
+  await group.restartRole()
+  passed('three 402s survive llm restarts and suspend the account with payment_pending')
+
+  const model = await db.llmModel.findFirstOrThrow({
+    where: { provider: { slug: ids.backend }, slug: ids.profile },
+  })
+  // The rates below are chosen for the reserve of this profile: 32 000 output tokens a call.
+  assert.equal(model.reserveOutputTokens, 32_000)
+  const price = (outputPer1m) =>
+    db.llmModelPrice.create({
+      data: {
+        modelId: model.id,
+        effectiveFrom: new Date(),
+        ...group.rates,
+        outputPer1m,
+        sourceUrl: 'https://synthetic.invalid/b13-budget-rates',
       },
     })
+  await price(group.rates.outputPer1m)
+  const smallBudget = await group.issued({ budgetRub: '30.00' })
+  // One call now reserves 3 200 ₽.
+  await price('100000')
+  await group.provider(answers.text())
+  const callsBeforeBudget = await group.providerRequests()
+  assert.equal((await request(smallBudget)).code, 'raditi_budget')
+  assert.equal(await group.providerRequests(), callsBeforeBudget)
+  assert.equal((await group.calls(smallBudget)).length, 0)
+  assert.equal((await group.keyRow(smallBudget)).lastRefusal, 'budget')
+  await group.revoke(smallBudget)
+  passed('a 30-ruble key refuses an oversized reserve before any provider request')
+
+  // A reserve of 96 ₽: one call fits the key of 135 ₽, a second beside it does not.
+  await price('3000')
+  const lowActual = await group.issued()
+  await group.provider(answers.held(1000))
+  const lowActualStart = await group.providerRequests()
+  const firstLow = request(lowActual)
+  await eventually(async () => (await group.calls(lowActual)).some((call) => call.state === 'open'))
+  assert.equal((await request(lowActual)).code, 'raditi_budget')
+  assert.equal((await firstLow).status, 200)
+  const lowCalls = await group.settled(lowActual, 1)
+  assert.equal(lowCalls.length, 1)
+  const lowUsage = await db.tokenUsage.findUniqueOrThrow({
+    where: { gatewayCallId: lowCalls[0].id },
+  })
+  const lowKey = await group.keyRow(lowActual)
+  assert.equal(lowKey.lastRefusal, 'budget')
+  assert.ok(lowUsage.costRub.plus(lowCalls[0].reservedRub).lt(lowKey.budgetRub))
+  await sleep(200)
+  assert.equal((await group.providerRequests()) - lowActualStart, 1)
+  assert.equal((await group.calls(lowActual)).length, 1)
+  await group.revoke(lowActual)
+  passed(
+    'a final budget refusal remains recorded after the pending call costs less than its reserve; no retry starts automatically',
+  )
+
+  // A reserve of 64 ₽: two calls fit the key together, and each then costs more than it
+  // reserved — the provider counts 40 000 output tokens.
+  await price('2000')
+  const budget = await group.issued()
+  await group.provider(
+    answers.held(700, { input: 100, cacheRead: 20, output: 40_000, reasoning: 3 }),
+  )
+  assert.deepEqual(
+    (await Promise.all([request(budget), request(budget)])).map(statusOf),
+    [200, 200],
+  )
+  const budgetCalls = await group.settled(budget, 2)
+  assert.equal(budgetCalls.length, 2)
+  assert.ok(
+    budgetCalls[0].reservedRub
+      .plus(budgetCalls[1].reservedRub)
+      .lte((await group.keyRow(budget)).budgetRub),
+  )
+  const overshoots = await usageOf(budget)
+  assert.equal(overshoots.length, 2)
+  for (const call of budgetCalls) {
+    const usage = overshoots.find((entry) => entry.gatewayCallId === call.id)
+    assert.equal(usage.estimated, false)
+    assert.ok(usage.costRub.gt(call.reservedRub))
+    // (80 × 10 + 20 × 1 + 40 000 × 2 000) / 1 000 000: input, cached input, output.
+    assert.equal(usage.costRub.toFixed(10), '80.0008200000')
+  }
+  assert.ok(
+    overshoots[0].costRub.plus(overshoots[1].costRub).gt((await group.keyRow(budget)).budgetRub),
+  )
+  assert.equal((await request(budget)).code, 'raditi_budget')
+  assert.equal((await group.keyRow(budget)).lastRefusal, 'budget')
+  assert.equal((await group.calls(budget)).length, 2)
+  await group.revoke(budget)
+  await price(group.rates.outputPer1m)
+  await group.provider(answers.text())
+  passed(
+    'two admitted parallel calls both exceed their reserves; the exact combined cost closes later admission',
+  )
+}
+const statusOf = (answer) => answer.status
+
+/**
+ * A compromised account, on an account of the group imported for it: admission stops at once,
+ * the issued key dies with it, and the secret is destroyed only after the operator says the key
+ * was revoked at the provider.
+ */
+export async function verifyEmergencyRetirement(group) {
+  const { db, core, passed, ids } = group
+  const accountId = await group.importAccount('synthetic-emergency')
+  const account = () => db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
+  const retirement = new SubscriptionRetirement({
+    prisma: db,
+    locks: group.locks,
+    backends: llmBackends,
+    secrets: group.admin,
+    credentials: { revoke: (ref) => core.call('revoke', { ref }) },
+  })
+  const emergency = await group.issued()
+  assert.equal((await group.keyRow(emergency)).subscriptionAccountId, accountId)
+  await retirement.request({ accountId, compromised: true })
+  assert.equal((await account()).enabled, false)
+  assert.equal(await core.call('recover', { ref: emergency.ref }), null)
+  const refused = await group.roleRequest(emergency, { signal: AbortSignal.timeout(25_000) })
+  assert.equal(refused.status, 401)
+  await refused.arrayBuffer()
+  const revoked = await group.keyRow(emergency)
+  assert.ok(revoked.revokeRequestedAt && revoked.revokedAt)
+  assert.equal((await retirement.finalize({ accountId })).stage, 'console_revocation_required')
+  assert.equal((await retirement.finalize({ accountId, consoleRevoked: true })).stage, 'retired')
+  assert.equal(await group.llmSecrets.kvRead(`subs/${ids.backend}/${accountId}`), null)
+  passed(
+    'emergency retirement disables admission, revokes durable turn keys and requires the operator acknowledgement before destruction',
+  )
+}
+
+/**
+ * What belongs to OAuth and to Codex alone, on the old accounts: one rotation for concurrent
+ * 401s, the credit balance of a response, and a retirement that revokes the tokens at the
+ * provider by itself. Removed with them (G8).
+ */
+export async function verifyOauthLifecycle(ctx) {
+  const { db, core, stack, codex, control, task, issued, passed, llmSecrets, admin, locks } = ctx
+  const { restartLlm } = ctx
+  const origin = `http://127.0.0.1:${stack.llmPort}`
+  const account = () => db.subscriptionAccount.findUniqueOrThrow({ where: { id: codex.accountId } })
+  const scenario = (value) => control('scenario', { backend: 'codex', scenario: value })
   const callRows = (turn) =>
     db.llmCall.findMany({
       where: { key: { taskId: turn.ref.taskId } },
@@ -55,39 +257,27 @@ export async function verifyLifecycle(ctx) {
       return rows.length >= count && rows.every((row) => row.state !== 'open') ? rows : null
     })
   const revoke = (turn) => core.call('revoke', { ref: turn.ref })
-  const request = async (backend, turn) => {
-    const codex = backend === 'openai-chatgpt'
-    const response = await fetch(
-      `${origin}${codex ? '/codex/responses' : '/kimi/v1/chat/completions'}`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${turn.values.llmApiKey}`,
-          'content-type': 'application/json',
-          'user-agent': codex ? 'codex_exec/0.158.0' : 'kimi-code-cli/2.1.1',
-        },
-        body: JSON.stringify(
-          codex
-            ? {
-                model: 'gpt-6-sol',
-                input: 'Synthetic lifecycle verification.',
-                stream: true,
-                store: false,
-              }
-            : {
-                model: 'k3-256k',
-                messages: [{ role: 'user', content: 'Synthetic lifecycle verification.' }],
-                stream: true,
-              },
-        ),
-        signal: AbortSignal.timeout(25_000),
+  const request = async (turn) => {
+    const response = await fetch(`${origin}/codex/responses`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${turn.values.llmApiKey}`,
+        'content-type': 'application/json',
+        'user-agent': 'codex_exec/0.158.0',
       },
-    )
+      body: JSON.stringify({
+        model: 'gpt-6-sol',
+        input: 'Synthetic lifecycle verification.',
+        stream: true,
+        store: false,
+      }),
+      signal: AbortSignal.timeout(25_000),
+    })
     await response.text()
     return response.status
   }
-  const notRemoved = async (backend) => {
-    const row = await account(backend)
+  const notRemoved = async () => {
+    const row = await account()
     assert.equal(row.enabled, true)
     assert.equal(row.status, 'active')
     assert.equal(row.health, 'ok')
@@ -96,16 +286,13 @@ export async function verifyLifecycle(ctx) {
 
   assert.equal(typeof restartLlm, 'function', 'The lifecycle check requires a real llm restart')
   await restartLlm()
-  await scenario('openai-chatgpt', 'auth_once')
+  await scenario('auth_once')
   const rotation = await issued('openai-chatgpt')
   const beforeRefresh = (await control('state')).counters.refresh
-  const beforeVersion = (await account('openai-chatgpt')).credentialVersion
-  assert.deepEqual(
-    await Promise.all([request('openai-chatgpt', rotation), request('openai-chatgpt', rotation)]),
-    [200, 200],
-  )
+  const beforeVersion = (await account()).credentialVersion
+  assert.deepEqual(await Promise.all([request(rotation), request(rotation)]), [200, 200])
   await settled(rotation, 2)
-  const rotated = await account('openai-chatgpt')
+  const rotated = await account()
   assert.equal((await control('state')).counters.refresh - beforeRefresh, 1)
   assert.equal(rotated.credentialVersion, beforeVersion + 1)
   const stored = await llmSecrets.kvRead(`subs/openai-chatgpt/${codex.accountId}`)
@@ -119,298 +306,41 @@ export async function verifyLifecycle(ctx) {
     'concurrent 401s share one OAuth rotation and CAS; accounting divides per-million rates once',
   )
 
-  for (const [backend, mode, status] of [
-    ['kimi-code', 'profile401', 400],
-    ['kimi-code', 'html403', 429],
-    ['kimi-code', 'content_risk', 400],
-    ['openai-chatgpt', 'content_risk', 400],
-  ]) {
-    await scenario(backend, mode)
-    const beforeLimits = (await account(backend)).limitsSeenAt
-    const turn = await issued(backend)
-    assert.equal(await request(backend, turn), status, 'Unexpected scrubbed content refusal')
-    await settled(turn, 1)
-    if (mode === 'html403')
-      await eventually(async () => (await account(backend)).limitsSeenAt > beforeLimits)
-    await notRemoved(backend)
-    await revoke(turn)
-  }
-  passed(
-    'Kimi profile/content refusals, HTML 403 with healthy probe and Codex cyber policy keep the pool account',
-  )
-
-  await scenario('openai-chatgpt', 'transient503')
-  const transient = await issued('openai-chatgpt')
-  assert.equal(await request('openai-chatgpt', transient), 503)
-  await settled(transient, 1)
-  const transientCount = (await control('state')).counters.codex
-  assert.equal(await request('openai-chatgpt', transient), 503)
-  assert.equal((await control('state')).counters.codex, transientCount)
-  assert.equal((await callRows(transient)).length, 1)
-  await notRemoved('openai-chatgpt')
-  await revoke(transient)
-  await scenario('openai-chatgpt', 'text')
-  await restartLlm()
-  passed('a transient 503 pauses provider requests without changing the durable account state')
-
-  await scenario('kimi-code', 'concurrent403')
-  const risk = await issued('kimi-code')
-  assert.equal(await request('kimi-code', risk), 429)
-  await settled(risk, 1)
-  await eventually(async () => (await account('kimi-code')).healthReason === 'risk_confirmed')
-  assert.equal((await account('kimi-code')).health, 'suspended')
-  await revoke(risk)
-  await scenario('kimi-code', 'text')
-  await db.subscriptionAccount.update({
-    where: { id: kimi.accountId },
-    data: { health: 'ok', healthReason: null },
-  })
-  await restartLlm()
-  passed(
-    'a concurrent-use 403 suspends the account only after the separate usage probe confirms it',
-  )
-
-  await scenario('openai-chatgpt', 'credits')
+  await scenario('credits')
   const credits = await issued('openai-chatgpt')
-  assert.equal(await request('openai-chatgpt', credits), 200)
+  assert.equal(await request(credits), 200)
   await settled(credits, 1)
-  await eventually(async () => (await account('openai-chatgpt')).healthReason === 'credits_balance')
-  await notRemoved('openai-chatgpt')
+  await eventually(async () => (await account()).healthReason === 'credits_balance')
+  await notRemoved()
   await revoke(credits)
-  await scenario('openai-chatgpt', 'text')
+  await scenario('text')
   passed('a positive credit balance records a warning without disabling the subscription')
-
-  await scenario('openai-chatgpt', 'window429')
-  const cooling = await issued('openai-chatgpt')
-  assert.equal(await request('openai-chatgpt', cooling), 429)
-  await settled(cooling, 1)
-  await eventually(async () => (await account('openai-chatgpt')).coolingUntil > new Date())
-  const waiting = await task('openai-chatgpt')
-  await assert.rejects(
-    core.call('issue', { ref: waiting.ref, grant: waiting.grant }),
-    (error) => error.code === 'SUBSCRIPTION_WAIT',
-  )
-  assert.equal(await request('openai-chatgpt', cooling), 429)
-  assert.equal((await callRows(cooling)).length, 1)
-  await revoke(cooling)
-  // Advance only the owned fixture's exhausted window before the next independent scenario.
-  await db.subscriptionAccount.update({
-    where: { id: codex.accountId },
-    data: {
-      coolingUntil: null,
-      headroomPct: '90',
-      limitsSeenAt: new Date(),
-      limitWindows: [
-        { name: '5h', usedPct: 10, resetsAt: new Date(Date.now() + 3_600_000).toISOString() },
-      ],
-    },
-  })
-  await scenario('openai-chatgpt', 'text')
-  passed('exhausted subscription windows persist cooling and refuse fresh and existing admission')
-
-  await scenario('kimi-code', 'payment402')
-  for (let index = 0; index < 3; index++) {
-    // 402s inside one pause window are one payment check (5/15/45 min). Age the earlier
-    // 402 calls of this owned fixture past their pause so each request is a separate check.
-    await db.$executeRaw`UPDATE llm_calls SET started_at = started_at - interval '20 minutes', finished_at = finished_at - interval '20 minutes' WHERE subscription_account_id = ${kimi.accountId}::uuid AND upstream_status = 402`
-    const payment = await issued('kimi-code')
-    assert.equal(await request('kimi-code', payment), 503)
-    await settled(payment, 1)
-    await revoke(payment)
-    if (index < 2) await restartLlm()
-  }
-  await eventually(async () => (await account('kimi-code')).healthReason === 'payment_pending')
-  assert.equal((await account('kimi-code')).health, 'suspended')
-  await scenario('kimi-code', 'text')
-  // Recovery is operator-owned; reset this synthetic fixture rather than claim automatic recovery.
-  await db.subscriptionAccount.update({
-    where: { id: kimi.accountId },
-    data: { health: 'ok', healthReason: null },
-  })
-  await restartLlm()
-  passed('three 402s survive llm restarts and suspend the account with payment_pending')
-
-  await scenario('openai-chatgpt', 'no_usage')
-  const missing = await issued('openai-chatgpt')
-  for (let index = 1; index <= 3; index++) {
-    assert.equal(await request('openai-chatgpt', missing), 200)
-    await settled(missing, index)
-  }
-  const broken = await account('openai-chatgpt')
-  assert.equal(broken.usageMissingStreak, 3)
-  assert.ok(broken.breakerOpenUntil > new Date())
-  assert.equal(await request('openai-chatgpt', missing), 429)
-  assert.equal((await callRows(missing)).length, 3)
-  const estimated = await db.tokenUsage.findMany({ where: { taskId: missing.ref.taskId } })
-  assert.equal(estimated.length, 3)
-  assert.ok(estimated.every((usage) => usage.estimated && usage.estimateReason === 'no_usage'))
-  // Move the fixture past the real breaker's deadline to test the single trial admission.
-  await db.subscriptionAccount.update({
-    where: { id: codex.accountId },
-    data: { breakerOpenUntil: new Date(Date.now() - 1000) },
-  })
-  await scenario('openai-chatgpt', 'delayed', { delayMs: 700 })
-  assert.deepEqual(
-    (
-      await Promise.all([request('openai-chatgpt', missing), request('openai-chatgpt', missing)])
-    ).sort(),
-    [200, 429],
-  )
-  await settled(missing, 4)
-  const recovered = await account('openai-chatgpt')
-  assert.equal(recovered.usageMissingStreak, 0)
-  assert.equal(recovered.breakerOpenUntil, null)
-  await revoke(missing)
-  passed('three terminal streams without usage open the breaker; one successful trial restores it')
-
-  const model = await db.llmModel.findFirstOrThrow({
-    where: { provider: { slug: 'openai-chatgpt' }, slug: 'gpt-6-sol-standard' },
-  })
-  const price = async (outputPer1m) =>
-    db.llmModelPrice.create({
-      data: {
-        modelId: model.id,
-        effectiveFrom: new Date(),
-        inputPer1m: '10',
-        outputPer1m,
-        vatRate: '0.22',
-        sourceUrl: 'https://synthetic.invalid/b13-budget-rates',
-      },
-    })
-  await price('30')
-  const smallBudget = await issued('openai-chatgpt', { budgetRub: '30.00' })
-  await price('100000')
-  await scenario('openai-chatgpt', 'text')
-  const callsBeforeBudget = (await control('state')).counters.codex
-  assert.equal(await request('openai-chatgpt', smallBudget), 429)
-  assert.equal((await control('state')).counters.codex, callsBeforeBudget)
-  assert.equal((await callRows(smallBudget)).length, 0)
-  assert.equal((await keyRow(smallBudget)).lastRefusal, 'budget')
-  await revoke(smallBudget)
-  passed('a 30-ruble key refuses an oversized reserve before any provider request')
-
-  const lowActual = await issued('openai-chatgpt')
-  await scenario('openai-chatgpt', 'delayed', { delayMs: 1000 })
-  const lowActualStart = (await control('state')).counters.codex
-  const firstLow = request('openai-chatgpt', lowActual)
-  await eventually(async () => (await callRows(lowActual)).some((call) => call.state === 'open'))
-  assert.equal(await request('openai-chatgpt', lowActual), 429)
-  assert.equal(await firstLow, 200)
-  const lowCalls = await settled(lowActual, 1)
-  assert.equal(lowCalls.length, 1)
-  const lowUsage = await db.tokenUsage.findUniqueOrThrow({
-    where: { gatewayCallId: lowCalls[0].id },
-  })
-  const lowKey = await keyRow(lowActual)
-  assert.equal(lowKey.lastRefusal, 'budget')
-  assert.ok(lowUsage.costRub.plus(lowCalls[0].reservedRub).lt(lowKey.budgetRub))
-  await sleep(200)
-  assert.equal((await control('state')).counters.codex - lowActualStart, 1)
-  assert.equal((await callRows(lowActual)).length, 1)
-  await revoke(lowActual)
-  passed(
-    'a final budget refusal remains recorded after the pending call costs less than its reserve; no retry starts automatically',
-  )
-
-  await price('50000')
-  const budget = await issued('openai-chatgpt')
-  await scenario('openai-chatgpt', 'delayed', {
-    delayMs: 700,
-    usage: { input: 100, cacheRead: 20, output: 6000, reasoning: 3 },
-  })
-  assert.deepEqual(
-    (
-      await Promise.all([request('openai-chatgpt', budget), request('openai-chatgpt', budget)])
-    ).sort(),
-    [200, 200],
-  )
-  const budgetCalls = await settled(budget, 2)
-  assert.equal(budgetCalls.length, 2)
-  assert.ok(
-    budgetCalls[0].reservedRub
-      .plus(budgetCalls[1].reservedRub)
-      .lte((await keyRow(budget)).budgetRub),
-  )
-  const overshoots = await db.tokenUsage.findMany({ where: { taskId: budget.ref.taskId } })
-  assert.equal(overshoots.length, 2)
-  for (const call of budgetCalls) {
-    const usage = overshoots.find((entry) => entry.gatewayCallId === call.id)
-    assert.equal(usage.estimated, false)
-    assert.ok(usage.costRub.gt(call.reservedRub))
-    assert.equal(usage.costRub.toFixed(10), '300.0010000000')
-  }
-  assert.ok(overshoots[0].costRub.plus(overshoots[1].costRub).gt((await keyRow(budget)).budgetRub))
-  assert.equal(await request('openai-chatgpt', budget), 429)
-  assert.equal((await keyRow(budget)).lastRefusal, 'budget')
-  assert.equal((await callRows(budget)).length, 2)
-  await revoke(budget)
-  await price('30')
-  await scenario('openai-chatgpt', 'text')
-  passed(
-    'two admitted parallel calls both exceed their reserves; the exact combined cost closes later admission',
-  )
 
   const retirement = new SubscriptionRetirement({
     prisma: db,
     locks,
-    backends,
+    backends: [codexBackend, kimiCodeBackend],
     secrets: admin,
     credentials: { revoke: (ref) => core.call('revoke', { ref }) },
   })
   const ordinary = await issued('openai-chatgpt')
   assert.equal((await retirement.request({ accountId: codex.accountId })).stage, 'draining')
+  // Refused by the retirement itself: an account that only held its turn would answer BUSY.
   const forbidden = await task('openai-chatgpt')
   await assert.rejects(
     core.call('issue', { ref: forbidden.ref, grant: forbidden.grant }),
-    (error) => ['SUBSCRIPTION_WAIT', 'SUBSCRIPTION_BUSY'].includes(error.code),
+    (error) => error.code === 'SUBSCRIPTION_WAIT',
   )
-  if (ctx.cli) {
-    const continuation = await ctx.cli.run({
-      driver: 'codex',
-      key: ordinary.values.llmApiKey,
-      prompt: 'Complete the synthetic turn while its subscription drains.',
-    })
-    assert.equal(continuation.code, 0, 'The issued CLI turn must finish while draining')
-  } else {
-    assert.equal(await request('openai-chatgpt', ordinary), 200)
-  }
+  assert.equal(await request(ordinary), 200)
   await settled(ordinary, 1)
   await revoke(ordinary)
   await core.call('sweep')
-  assert.equal((await account('openai-chatgpt')).enabled, false)
-  await eventually(
-    async () => (await account('openai-chatgpt')).credentialsRevokedAt !== null,
-    80_000,
-  )
+  assert.equal((await account()).enabled, false)
+  await eventually(async () => (await account()).credentialsRevokedAt !== null, 80_000)
   assert.equal((await retirement.finalize({ accountId: codex.accountId })).stage, 'retired')
   assert.equal(await llmSecrets.kvRead(`subs/openai-chatgpt/${codex.accountId}`), null)
   assert.ok((await control('state')).counters.revoke >= 1)
   passed(
-    `ordinary retirement drains an issued ${ctx.cli ? 'CLI' : 'HTTP'} turn, fences fresh keys, automatically revokes OAuth and destroys all versions`,
+    'retirement of an OAuth account drains its issued turn, revokes the tokens at the provider by itself and destroys all versions',
   )
-
-  const emergency = await issued('kimi-code')
-  await retirement.request({ accountId: kimi.accountId, compromised: true })
-  assert.equal((await account('kimi-code')).enabled, false)
-  assert.equal(await core.call('recover', { ref: emergency.ref }), null)
-  assert.equal(await request('kimi-code', emergency), 401)
-  const revoked = await keyRow(emergency)
-  assert.ok(revoked.revokeRequestedAt && revoked.revokedAt)
-  assert.equal(
-    (await retirement.finalize({ accountId: kimi.accountId })).stage,
-    'console_revocation_required',
-  )
-  assert.equal(
-    (await retirement.finalize({ accountId: kimi.accountId, consoleRevoked: true })).stage,
-    'retired',
-  )
-  assert.equal(await llmSecrets.kvRead(`subs/kimi-code/${kimi.accountId}`), null)
-  passed(
-    'emergency retirement disables admission, revokes durable turn keys and requires the operator acknowledgement before destruction',
-  )
-  return {
-    limitations: [
-      'The synthetic clock-window resets do not test elapsed 15-minute or hour-long waits.',
-    ],
-  }
 }

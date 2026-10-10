@@ -68,6 +68,14 @@ export const zaiLogin = (operator, { label, writerFile, key }) =>
     `${key}\n`,
   )
 
+/** The stand rates of the profile, ₽ per million tokens with VAT: nobody's approved rates. */
+export const ZAI_STAND_RATES = Object.freeze({
+  inputPer1m: '10',
+  cacheReadPer1m: '1',
+  outputPer1m: '30',
+  vatRate: '0.22',
+})
+
 /**
  * What an operator switches on after the import: the provider, the seeds' own profile (glm-5.3
  * with the reserve the body policy's output ceiling needs), a stand rate — without one the
@@ -88,10 +96,7 @@ export async function switchOnZai(db, { accountId, ratesUrl }) {
     data: {
       modelId: profile.id,
       effectiveFrom: new Date(Date.now() - 60_000),
-      inputPer1m: '10',
-      cacheReadPer1m: '1',
-      outputPer1m: '30',
-      vatRate: '0.22',
+      ...ZAI_STAND_RATES,
       sourceUrl: ratesUrl,
     },
   })

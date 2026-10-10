@@ -131,6 +131,149 @@ const successStreams = [
     usage: '"prompt_tokens":10',
   },
 ]
+const zaiKey: GatewayKey = {
+  ...key,
+  backendId: 'zai-coding',
+  model: 'glm-5.3',
+  reasoningEffort: 'high',
+  driverId: 'opencode',
+  clientIdentity: {},
+}
+const zaiCredential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-zai-plan-key' }
+const zaiUserAgent = 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14'
+const zaiBody = {
+  model: 'glm-5.3',
+  max_tokens: 32_000,
+  messages: [{ role: 'user', content: 'synthetic prompt' }],
+  stream: true,
+  stream_options: { include_usage: true },
+}
+const zaiUsage = {
+  prompt_tokens: 19,
+  completion_tokens: 6,
+  total_tokens: 25,
+  prompt_tokens_details: { cached_tokens: 3 },
+  completion_tokens_details: { reasoning_tokens: 2 },
+}
+const chunk = (content: string, finish?: string, usage: unknown = zaiUsage) =>
+  event({
+    id: '202601010000000000000000000001',
+    created: 1767225600,
+    object: 'chat.completion.chunk',
+    model: 'glm-5.3',
+    choices: [
+      {
+        index: 0,
+        ...(finish ? { finish_reason: finish } : {}),
+        delta: { role: 'assistant', content },
+      },
+    ],
+    ...(finish ? { usage } : {}),
+  })
+const done = 'data: [DONE]\n\n'
+
+/**
+ * What a test of the role needs of the adapter whose route it calls: the key of the turn, the
+ * credential, a request the body policy accepts, and a finished stream. The same usage in both:
+ * 10 input tokens with 2 from the cache, 3 output tokens with 1 of reasoning.
+ */
+const wires = [
+  {
+    name: 'Codex',
+    backend: codexBackend,
+    key,
+    credential: credential as Record<string, unknown>,
+    authorization: `Bearer ${credential.accessToken}`,
+    path: '/codex/responses',
+    userAgent: 'codex_exec/0.159.1 (Mac OS 15.0; arm64)',
+    body: body as Record<string, unknown>,
+    // The field of a request that carries the conversation.
+    conversation: 'input',
+    delta,
+    text: (content: string) => event({ type: 'response.output_text.delta', delta: content }),
+    completed,
+    // What the provider sends when a started stream fails for a short-lived reason.
+    overloaded: event({
+      type: 'response.failed',
+      response: { error: { code: 'server_is_overloaded' } },
+    }),
+    // The body of its HTTP 429 «try later», with a text of the provider's own.
+    busy: { error: { code: 'rate_limit_exceeded', message: 'private account id and plan' } },
+    // A request the provider refuses for good: the body of its HTTP 400, the same refusal
+    // inside a stream, the code the role keeps of it and what the sandbox reads in the stream.
+    rejected: {
+      http: { error: { code: 'context_length_exceeded' } } as unknown,
+      stream: event({
+        type: 'response.failed',
+        response: { error: { code: 'context_length_exceeded' } },
+      }),
+      code: 'context_length_exceeded',
+      seen: '"code":"context_length_exceeded"',
+    },
+    terminal: 'response.completed',
+    // A spent budget: this CLI stops on 429, the other on a final 403.
+    budgetStatus: 429,
+    usage: (input: number, cached?: number, output?: number): unknown => ({
+      input_tokens: input,
+      ...(cached === undefined ? {} : { input_tokens_details: { cached_tokens: cached } }),
+      ...(output === undefined ? {} : { output_tokens: output }),
+    }),
+  },
+  {
+    name: 'Z.ai',
+    backend: zaiCodingBackend,
+    key: zaiKey,
+    credential: zaiCredential as Record<string, unknown>,
+    authorization: `Bearer ${zaiCredential.apiKey}`,
+    path: '/zai/v4/chat/completions',
+    userAgent: zaiUserAgent,
+    body: zaiBody as Record<string, unknown>,
+    conversation: 'messages',
+    delta: chunk('abcdef'),
+    text: (content: string) => chunk(content),
+    completed: (
+      usage: unknown = {
+        prompt_tokens: 10,
+        completion_tokens: 3,
+        total_tokens: 13,
+        prompt_tokens_details: { cached_tokens: 2 },
+        completion_tokens_details: { reasoning_tokens: 1 },
+      },
+    ) => chunk('', 'stop', usage) + done,
+    overloaded: event({ error: { code: '1302', message: 'synthetic' } }),
+    busy: { error: { code: '1302', message: 'private account id and plan' } },
+    rejected: {
+      http: { error: { code: '1261', message: 'synthetic' } } as unknown,
+      stream: event({ error: { code: '1261', message: 'synthetic' } }),
+      code: 'zai_1261',
+      seen: '"code":"raditi_request_rejected"',
+    },
+    terminal: '[DONE]',
+    budgetStatus: 403,
+    usage: (input: number, cached?: number, output?: number): unknown => ({
+      prompt_tokens: input,
+      ...(cached === undefined ? {} : { prompt_tokens_details: { cached_tokens: cached } }),
+      ...(output === undefined ? {} : { completion_tokens: output }),
+    }),
+  },
+]
+type Wire = (typeof wires)[number]
+const codexWire = wires[0]!
+// One finished stream of every adapter, for what the role does at the end of any of them.
+const finishedStreams = [
+  ...successStreams,
+  {
+    name: 'Z.ai',
+    profile: zaiKey,
+    credential: zaiCredential,
+    path: wires[1]!.path,
+    userAgent: zaiUserAgent,
+    body: zaiBody,
+    stream: wires[1]!.delta + wires[1]!.completed(),
+    terminal: '[DONE]',
+    usage: '"prompt_tokens":10',
+  },
+]
 const cleanups: Array<() => Promise<void>> = []
 // The fake store closes calls without PostgreSQL; the real store would reject these outcomes.
 const unstorable: GatewayFinish[] = []
@@ -159,23 +302,24 @@ async function setup(
   runtime: Partial<
     Pick<LlmGatewayOptions, 'ready' | 'health' | 'metricsToken' | 'lifecycle' | 'backends'>
   > = {},
+  wire: Wire = codexWire,
 ) {
   const upstream = createServer(handler)
   upstream.listen(0, '127.0.0.1')
   await once(upstream, 'listening')
   const originPort = (upstream.address() as { port: number }).port
   const store = {
-    lookup: vi.fn<GatewayStore['lookup']>().mockResolvedValue(key),
+    lookup: vi.fn<GatewayStore['lookup']>().mockResolvedValue(wire.key),
     admit: vi.fn<GatewayStore['admit']>().mockImplementation(async (input) => ({
       kind: 'admitted',
-      call: makeCall(input.estimatedInputTokens),
+      call: { ...makeCall(input.estimatedInputTokens), ...wire.key },
     })),
     refuse: vi.fn<GatewayStore['refuse']>().mockResolvedValue(undefined),
     finish: vi.fn<GatewayStore['finish']>(storable),
     collectLost: vi.fn<GatewayStore['collectLost']>().mockResolvedValue(0),
   }
   const credentials = {
-    get: vi.fn().mockResolvedValue(credential),
+    get: vi.fn().mockResolvedValue(wire.credential),
     versionOf: vi.fn().mockReturnValue(null),
   }
   const logger = { log: vi.fn(), warn: vi.fn() }
@@ -231,7 +375,7 @@ async function setup(
   }
   const gateway = createLlmGateway({
     config,
-    backends: [codexBackend, kimiCodeBackend],
+    backends: [codexBackend, kimiCodeBackend, zaiCodingBackend],
     store,
     credentials,
     egress,
@@ -258,6 +402,7 @@ function call(
     headers?: Record<string, string | string[]>
     body?: unknown
   } = {},
+  wire: Wire = codexWire,
 ) {
   return new Promise<{ status: number; headers: IncomingMessage['headers']; body: string }>(
     (resolve, reject) => {
@@ -266,14 +411,14 @@ function call(
         {
           hostname: '127.0.0.1',
           port,
-          path: options.path ?? '/codex/responses',
+          path: options.path ?? wire.path,
           method: options.method ?? 'POST',
           agent: false,
           headers: {
             host: 'llm.local',
             authorization: `Bearer ${turnKey}`,
             'content-type': 'application/json',
-            'user-agent': 'codex_exec/0.159.1 (Mac OS 15.0; arm64)',
+            'user-agent': wire.userAgent,
             ...options.headers,
           },
         },
@@ -296,26 +441,26 @@ function call(
           ? undefined
           : typeof options.body === 'string'
             ? options.body
-            : JSON.stringify(options.body ?? body),
+            : JSON.stringify(options.body ?? wire.body),
       )
     },
   )
 }
 
-/** A Codex request whose caller decides when to disconnect; errors after that are expected. */
-function stream(gateway: LlmGateway, onData: () => void = () => {}) {
+/** A request whose caller decides when to disconnect; errors after that are expected. */
+function stream(gateway: LlmGateway, onData: () => void = () => {}, wire: Wire = codexWire) {
   const client = request(
     {
       hostname: '127.0.0.1',
       port: (gateway.server.address() as { port: number }).port,
-      path: '/codex/responses',
+      path: wire.path,
       method: 'POST',
       agent: false,
       headers: {
         host: 'llm.local',
         authorization: `Bearer ${turnKey}`,
         'content-type': 'application/json',
-        'user-agent': 'codex_exec/0.159.1',
+        'user-agent': wire.userAgent,
       },
     },
     (res) => {
@@ -324,7 +469,7 @@ function stream(gateway: LlmGateway, onData: () => void = () => {}) {
     },
   )
   client.on('error', () => {})
-  client.end(JSON.stringify(body))
+  client.end(JSON.stringify(wire.body))
   return client
 }
 
@@ -484,19 +629,44 @@ describe('private core pool probe endpoint', () => {
   })
 })
 
-const success = (req: IncomingMessage, res: ServerResponse) => {
-  req.resume()
-  res.writeHead(200, {
-    'content-type': 'text/event-stream',
-    'x-codex-turn-state': 'synthetic-next',
-    'retry-after': '5',
-    'set-cookie': 'secret=must-not-forward',
-    'x-codex-primary-used-percent': '20',
-  })
-  res.end(delta + completed())
-}
+// The harness of the module under the names the tests below shadow with their adapter's forms.
+const base = { setup, call, stream, makeCall }
+/** Registers nothing: a test of one adapter's own behaviour is not a test of the other. */
+const never = Object.assign((..._args: unknown[]) => {}, {
+  each:
+    (..._table: unknown[]) =>
+    (..._args: unknown[]) => {},
+}) as unknown as typeof it
 
-describe('subscription HTTP gateway', () => {
+describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) => {
+  const { key, credential, body, delta, completed, backend } = wire
+  const setup = (
+    handler: Parameters<typeof base.setup>[0],
+    patch: Parameters<typeof base.setup>[1] = {},
+    runtime: Parameters<typeof base.setup>[2] = {},
+  ) => base.setup(handler, patch, runtime, wire)
+  const call = (gateway: LlmGateway, options: Parameters<typeof base.call>[1] = {}) =>
+    base.call(gateway, options, wire)
+  const stream = (gateway: LlmGateway, onData?: () => void) => base.stream(gateway, onData, wire)
+  const makeCall = (...estimates: Parameters<typeof base.makeCall>): GatewayCall => ({
+    ...base.makeCall(...estimates),
+    ...key,
+  })
+  // What only the OAuth adapter does: token refresh, its headers, the events of its stream. A
+  // test of the platform is not registered here: it takes the forms of its wire and runs on both.
+  const codexIt = wire === codexWire ? it : never
+  const success = (req: IncomingMessage, res: ServerResponse) => {
+    req.resume()
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'x-codex-turn-state': 'synthetic-next',
+      'retry-after': '5',
+      'set-cookie': 'secret=must-not-forward',
+      'x-codex-primary-used-percent': '20',
+    })
+    res.end(delta + completed())
+  }
+
   it('checks an account pause before reserving money or contacting the provider', async () => {
     const lifecycle = {
       pause: vi.fn().mockReturnValue({ reason: 'transient', retryAfterMs: 120_000 }),
@@ -512,47 +682,50 @@ describe('subscription HTTP gateway', () => {
     expect(lifecycle.observe).not.toHaveBeenCalled()
   })
 
-  it('refreshes a rejected token and retries once within the same journal reservation', async () => {
-    const next = { ...credential, accessToken: jwt({ synthetic_new_token: true }) }
-    const seenTokens: Array<string | undefined> = []
-    const lifecycle = {
-      pause: vi.fn().mockReturnValue(null),
-      refresh: vi.fn().mockResolvedValue(next),
-      observe: vi.fn().mockResolvedValue(undefined),
-    }
-    const { gateway, store } = await setup(
-      (req, res) => {
-        seenTokens.push(req.headers.authorization)
-        if (seenTokens.length === 1) {
-          req.resume()
-          res.writeHead(401, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
-        } else success(req, res)
-      },
-      {},
-      { lifecycle },
-    )
-    const result = await call(gateway)
-    expect(result.status).toBe(200)
-    expect(seenTokens).toEqual([`Bearer ${credential.accessToken}`, `Bearer ${next.accessToken}`])
-    expect(lifecycle.refresh).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'synthetic-call', credentialVersion: 1 }),
-      codexBackend,
-      1,
-    )
-    expect(store.admit).toHaveBeenCalledOnce()
-    await vi.waitFor(() => expect(lifecycle.observe).toHaveBeenCalledOnce())
-    expect(store.finish).toHaveBeenCalledOnce()
-    expect(store.finish).toHaveBeenCalledWith(
-      'synthetic-call',
-      expect.objectContaining({ state: 'completed', estimated: false, billable: true }),
-    )
-    expect(store.finish.mock.invocationCallOrder[0]).toBeLessThan(
-      lifecycle.observe.mock.invocationCallOrder[0]!,
-    )
-  })
+  codexIt(
+    'refreshes a rejected token and retries once within the same journal reservation',
+    async () => {
+      const next = { ...credential, accessToken: jwt({ synthetic_new_token: true }) }
+      const seenTokens: Array<string | undefined> = []
+      const lifecycle = {
+        pause: vi.fn().mockReturnValue(null),
+        refresh: vi.fn().mockResolvedValue(next),
+        observe: vi.fn().mockResolvedValue(undefined),
+      }
+      const { gateway, store } = await setup(
+        (req, res) => {
+          seenTokens.push(req.headers.authorization)
+          if (seenTokens.length === 1) {
+            req.resume()
+            res.writeHead(401, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
+          } else success(req, res)
+        },
+        {},
+        { lifecycle },
+      )
+      const result = await call(gateway)
+      expect(result.status).toBe(200)
+      expect(seenTokens).toEqual([`Bearer ${credential.accessToken}`, `Bearer ${next.accessToken}`])
+      expect(lifecycle.refresh).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'synthetic-call', credentialVersion: 1 }),
+        codexBackend,
+        1,
+      )
+      expect(store.admit).toHaveBeenCalledOnce()
+      await vi.waitFor(() => expect(lifecycle.observe).toHaveBeenCalledOnce())
+      expect(store.finish).toHaveBeenCalledOnce()
+      expect(store.finish).toHaveBeenCalledWith(
+        'synthetic-call',
+        expect.objectContaining({ state: 'completed', estimated: false, billable: true }),
+      )
+      expect(store.finish.mock.invocationCallOrder[0]).toBeLessThan(
+        lifecycle.observe.mock.invocationCallOrder[0]!,
+      )
+    },
+  )
 
-  it.each([null, { ...credential, accessToken: jwt({ synthetic_new_token: true }) }])(
+  codexIt.each([null, { ...credential, accessToken: jwt({ synthetic_new_token: true }) }])(
     'does not loop on a final 401 or charge a rejected generation',
     async (fresh) => {
       const lifecycle = {
@@ -623,104 +796,117 @@ describe('subscription HTTP gateway', () => {
     },
   )
 
-  it('reports the version actually sent when a concurrent rotation overtook admission', async () => {
-    const lifecycle = {
-      pause: vi.fn().mockReturnValue(null),
-      refresh: vi.fn().mockResolvedValue(null),
-      observe: vi.fn().mockResolvedValue(undefined),
-    }
-    const { gateway, credentials } = await setup(
-      (req, res) => {
-        req.resume()
-        res.writeHead(401, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
-      },
-      {},
-      { lifecycle },
-    )
-    credentials.versionOf.mockReturnValue(2)
-    await call(gateway)
-    expect(lifecycle.refresh).toHaveBeenCalledWith(
-      expect.objectContaining({ credentialVersion: 1 }),
-      codexBackend,
-      2,
-    )
-  })
+  codexIt(
+    'reports the version actually sent when a concurrent rotation overtook admission',
+    async () => {
+      const lifecycle = {
+        pause: vi.fn().mockReturnValue(null),
+        refresh: vi.fn().mockResolvedValue(null),
+        observe: vi.fn().mockResolvedValue(undefined),
+      }
+      const { gateway, credentials } = await setup(
+        (req, res) => {
+          req.resume()
+          res.writeHead(401, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
+        },
+        {},
+        { lifecycle },
+      )
+      credentials.versionOf.mockReturnValue(2)
+      await call(gateway)
+      expect(lifecycle.refresh).toHaveBeenCalledWith(
+        expect.objectContaining({ credentialVersion: 1 }),
+        codexBackend,
+        2,
+      )
+    },
+  )
 
-  it('never starts token refresh after provider response bytes have reached the client', async () => {
-    const lifecycle = {
-      pause: vi.fn().mockReturnValue(null),
-      refresh: vi.fn(),
-      observe: vi.fn().mockResolvedValue(undefined),
-    }
-    const { gateway, store } = await setup(
-      (req, res) => {
-        req.resume()
-        res.writeHead(200, { 'content-type': 'text/event-stream' })
-        res.end(
-          delta +
-            event({ type: 'response.failed', response: { error: { code: 'invalid_api_key' } } }),
-        )
-      },
-      {},
-      { lifecycle },
-    )
-    expect((await call(gateway)).status).toBe(200)
-    expect(lifecycle.refresh).not.toHaveBeenCalled()
-    await vi.waitFor(() => expect(store.finish).toHaveBeenCalledOnce())
-    expect(store.finish).toHaveBeenCalledWith(
-      'synthetic-call',
-      expect.objectContaining({ billable: false }),
-    )
-  })
+  codexIt(
+    'never starts token refresh after provider response bytes have reached the client',
+    async () => {
+      const lifecycle = {
+        pause: vi.fn().mockReturnValue(null),
+        refresh: vi.fn(),
+        observe: vi.fn().mockResolvedValue(undefined),
+      }
+      const { gateway, store } = await setup(
+        (req, res) => {
+          req.resume()
+          res.writeHead(200, { 'content-type': 'text/event-stream' })
+          res.end(
+            delta +
+              event({ type: 'response.failed', response: { error: { code: 'invalid_api_key' } } }),
+          )
+        },
+        {},
+        { lifecycle },
+      )
+      expect((await call(gateway)).status).toBe(200)
+      expect(lifecycle.refresh).not.toHaveBeenCalled()
+      await vi.waitFor(() => expect(store.finish).toHaveBeenCalledOnce())
+      expect(store.finish).toHaveBeenCalledWith(
+        'synthetic-call',
+        expect.objectContaining({ billable: false }),
+      )
+    },
+  )
 
-  it('normalizes the body before atomic admission, injects credentials, streams and persists exact usage', async () => {
-    let upstreamHeaders: IncomingMessage['headers'] = {}
-    let normalized = ''
-    const { gateway, store, logger } = await setup((req, res) => {
-      upstreamHeaders = req.headers
-      req.on('data', (chunk: Buffer) => {
-        normalized += chunk.toString()
+  codexIt(
+    'normalizes the body before atomic admission, injects credentials, streams and persists exact usage',
+    async () => {
+      let upstreamHeaders: IncomingMessage['headers'] = {}
+      let normalized = ''
+      const { gateway, store, logger } = await setup((req, res) => {
+        upstreamHeaders = req.headers
+        req.on('data', (chunk: Buffer) => {
+          normalized += chunk.toString()
+        })
+        req.on('end', () => success(req, res))
       })
-      req.on('end', () => success(req, res))
-    })
-    const result = await call(gateway, {
-      body: { ...body, service_tier: 'priority', prompt_cache_key: 'untrusted' },
-      headers: { cookie: 'must-not-forward' },
-    })
-    expect(result.status).toBe(200)
-    expect(result.body).toContain('abcdef')
-    expect(result.body).toContain('response.completed')
-    expect(result.headers['x-codex-turn-state']).toBe('synthetic-next')
-    // A pause the provider names on a successful answer is no instruction for the CLI: only a
-    // refusal the gateway builds itself carries one.
-    expect(result.headers['retry-after']).toBeUndefined()
-    expect(result.headers['set-cookie']).toBeUndefined()
-    expect(result.headers['x-codex-primary-used-percent']).toBeUndefined()
-    expect(upstreamHeaders.authorization).toBe(`Bearer ${credential.accessToken}`)
-    expect(upstreamHeaders.cookie).toBeUndefined()
-    expect(JSON.parse(normalized)).toMatchObject({ prompt_cache_key: key.cacheKey })
-    expect(JSON.parse(normalized)).not.toHaveProperty('service_tier')
-    expect(store.lookup).toHaveBeenCalledWith(
-      createHash('sha256').update(turnKey).digest('hex'),
-      '127.0.0.1',
-    )
-    expect(store.admit.mock.calls[0]![0]).toMatchObject({ profile: key, backendId: key.backendId })
-    expect(store.finish).toHaveBeenCalledWith(
-      'synthetic-call',
-      expect.objectContaining({
-        state: 'completed',
-        estimated: false,
-        billable: true,
-        estimateReason: null,
-        usage: { input: 10, cacheRead: 2, cacheWrite: 0, output: 3, reasoning: 1 },
-      }),
-    )
-    expect(JSON.stringify(logger.log.mock.calls)).not.toContain(turnKey)
-    expect(JSON.stringify(logger.log.mock.calls)).not.toContain(credential.accessToken)
-  })
+      const result = await call(gateway, {
+        body: { ...body, service_tier: 'priority', prompt_cache_key: 'untrusted' },
+        headers: { cookie: 'must-not-forward' },
+      })
+      expect(result.status).toBe(200)
+      expect(result.body).toContain('abcdef')
+      expect(result.body).toContain('response.completed')
+      expect(result.headers['x-codex-turn-state']).toBe('synthetic-next')
+      // A pause the provider names on a successful answer is no instruction for the CLI: only a
+      // refusal the gateway builds itself carries one.
+      expect(result.headers['retry-after']).toBeUndefined()
+      expect(result.headers['set-cookie']).toBeUndefined()
+      expect(result.headers['x-codex-primary-used-percent']).toBeUndefined()
+      expect(upstreamHeaders.authorization).toBe(`Bearer ${credential.accessToken}`)
+      expect(upstreamHeaders.cookie).toBeUndefined()
+      expect(JSON.parse(normalized)).toMatchObject({ prompt_cache_key: key.cacheKey })
+      expect(JSON.parse(normalized)).not.toHaveProperty('service_tier')
+      expect(store.lookup).toHaveBeenCalledWith(
+        createHash('sha256').update(turnKey).digest('hex'),
+        '127.0.0.1',
+      )
+      expect(store.admit.mock.calls[0]![0]).toMatchObject({
+        profile: key,
+        backendId: key.backendId,
+      })
+      expect(store.finish).toHaveBeenCalledWith(
+        'synthetic-call',
+        expect.objectContaining({
+          state: 'completed',
+          estimated: false,
+          billable: true,
+          estimateReason: null,
+          usage: { input: 10, cacheRead: 2, cacheWrite: 0, output: 3, reasoning: 1 },
+        }),
+      )
+      expect(JSON.stringify(logger.log.mock.calls)).not.toContain(turnKey)
+      expect(JSON.stringify(logger.log.mock.calls)).not.toContain(credential.accessToken)
+    },
+  )
 
-  it.each(successStreams)(
+  // Registered once: the rows name their adapters themselves.
+  codexIt.each(finishedStreams)(
     '$name ignores invalid UTF-8 after a successful terminal in the same chunk',
     async (fixture) => {
       const { gateway, store, credentials } = await setup((req, res) => {
@@ -756,7 +942,8 @@ describe('subscription HTTP gateway', () => {
     },
   )
 
-  it.each(successStreams)(
+  // Registered once: the rows name their adapters themselves.
+  codexIt.each(finishedStreams)(
     '$name completes and closes an upstream that stays open after its terminal',
     async (fixture) => {
       let upstreamClosed = false
@@ -805,6 +992,11 @@ describe('subscription HTTP gateway', () => {
       '/codex/%72esponses',
       '/codex/responses?x=1',
       'http://evil.test/codex/responses',
+      `${wire.path}?x=1`,
+      `${wire.path}/`,
+      // The last letter of the route as a percent escape.
+      wire.path.replace(/s$/, '%73'),
+      `http://evil.test${wire.path}`,
     ])
       expect((await call(gateway, { path })).status).toBe(403)
     expect((await call(gateway, { method: 'GET' })).status).toBe(403)
@@ -819,12 +1011,16 @@ describe('subscription HTTP gateway', () => {
 
   it("refuses a duplicate of a header it reads or its route's adapter declares, and a Connection-nominated authorization", async () => {
     const { gateway, store } = await setup(success)
+    expect(backend.clientHeaders).not.toHaveLength(0)
     const duplicated: Array<[string | undefined, Record<string, string[]>]> = [
       [undefined, { authorization: [`Bearer ${turnKey}`, `Bearer ${turnKey}`] }],
       [undefined, { 'content-type': ['application/json', 'application/json'] }],
       // Declared by the adapter of the route, not by the gateway.
-      [undefined, { 'session-id': ['first', 'second'] }],
-      [undefined, { 'x-openai-internal-codex-responses-lite': ['true', 'true'] }],
+      ...backend.clientHeaders.map((name): [undefined, Record<string, string[]>] => [
+        undefined,
+        { [name]: ['first', 'second'] },
+      ]),
+      // And by the adapter of another route, on that route.
       ['/kimi/v1/chat/completions', { 'x-msh-platform': ['first', 'second'] }],
     ]
     for (const [path, headers] of duplicated) {
@@ -857,7 +1053,7 @@ describe('subscription HTTP gateway', () => {
     expect(store.lookup).toHaveBeenCalledExactlyOnceWith(turnKeyHash(turnKey), '127.0.0.1')
   })
 
-  it('leaves the value rules of provider headers to the adapter of the key', async () => {
+  codexIt('leaves the value rules of provider headers to the adapter of the key', async () => {
     const { gateway, store, egress } = await setup(success)
     const lite = await call(gateway, {
       headers: { 'x-openai-internal-codex-responses-lite': 'false' },
@@ -881,12 +1077,12 @@ describe('subscription HTTP gateway', () => {
     let provider: IncomingMessage['headers'] = {}
     // An adapter the gateway has never heard of: its lists alone decide what passes.
     const adapter: LlmBackend = {
-      ...codexBackend,
+      ...backend,
       clientHeaders: ['user-agent', 'x-synthetic-client'],
       responseHeaders: ['x-synthetic-response'],
       upstream(route, normalized, headers, secret, identity) {
         seen.push(headers)
-        const target = codexBackend.upstream(route, normalized, headers, secret, identity)
+        const target = backend.upstream(route, normalized, headers, secret, identity)
         target.headers.set('x-synthetic-client', headers.get('x-synthetic-client') ?? 'missing')
         return target
       },
@@ -940,13 +1136,22 @@ describe('subscription HTTP gateway', () => {
     const { gateway, store, egress, logger } = await setup(success)
     store.lookup.mockResolvedValueOnce(null)
     expect((await call(gateway)).status).toBe(401)
-    expect((await call(gateway, { path: '/kimi/v1/chat/completions' })).status).toBe(403)
-    expect((await call(gateway, { headers: { 'user-agent': 'wrong-cli' } })).status).toBe(403)
+    // The route of another backend, asked with a client its adapter accepts: the key is what
+    // is refused.
+    const foreign = await call(gateway, {
+      path: '/kimi/v1/chat/completions',
+      headers: { 'user-agent': 'kimi-code-cli/2.1.1' },
+    })
+    expect(foreign.status).toBe(403)
+    expect(JSON.parse(foreign.body).error.code).toBe('raditi_backend')
+    const stranger = await call(gateway, { headers: { 'user-agent': 'wrong-cli' } })
+    expect(stranger.status).toBe(403)
+    expect(JSON.parse(stranger.body).error.code).toBe('raditi_client')
     const logged = () => JSON.parse(logger.log.mock.calls.at(-1)![0] as string) as object
     store.admit.mockResolvedValueOnce({ kind: 'refused', reason: 'budget', keyId: key.keyId })
-    expect((await call(gateway)).status).toBe(429)
+    expect((await call(gateway)).status).toBe(wire.budgetStatus)
     expect(store.refuse).toHaveBeenCalledWith(key.keyId, 'budget')
-    expect(logged()).toMatchObject({ event: 'llm_refusal', status: 429 })
+    expect(logged()).toMatchObject({ event: 'llm_refusal', status: wire.budgetStatus })
     expect(logged()).not.toHaveProperty('limit')
     // The answer and the journal say `budget` for the money, the pace and the ceiling of a
     // key alike; which of them refused is in the log of the role alone.
@@ -958,9 +1163,9 @@ describe('subscription HTTP gateway', () => {
         limit,
       })
       const refused = await call(gateway)
-      expect(refused.status).toBe(429)
+      expect(refused.status).toBe(wire.budgetStatus)
       expect(refused.body).not.toContain(limit)
-      expect(logged()).toMatchObject({ event: 'llm_refusal', status: 429, limit })
+      expect(logged()).toMatchObject({ event: 'llm_refusal', status: wire.budgetStatus, limit })
     }
     expect(egress.request).not.toHaveBeenCalled()
   })
@@ -973,7 +1178,7 @@ describe('subscription HTTP gateway', () => {
       '{broken',
       JSON.stringify({ ...body, model: 'unapproved-model' }),
       JSON.stringify({ ...body, metadata: { secret: 'hidden' } }),
-      `{"model":"gpt-6-sol","input":${'['.repeat(65)}null${']'.repeat(65)}}`,
+      `{"model":"${key.model}","${wire.conversation}":${'['.repeat(65)}null${']'.repeat(65)}}`,
     ]) {
       const result = await call(gateway, { body: invalid })
       expect(result.status).toBe(400)
@@ -990,7 +1195,7 @@ describe('subscription HTTP gateway', () => {
     // An adapter the gateway has never heard of, which numbers the items of its path. A number
     // in the body of a refusal is what a CLI may read as a status worth a retry.
     const adapter: LlmBackend = {
-      ...codexBackend,
+      ...backend,
       normalizeBody() {
         throw badRequest('Request body violates policy', {
           path: 'messages[502].content[3].text',
@@ -1023,7 +1228,7 @@ describe('subscription HTTP gateway', () => {
     ['messages[1].content[2x].text', 'unknown'],
   ])('never echoes a digit of the rejected path %s to the sandbox', async (path, field) => {
     const adapter: LlmBackend = {
-      ...codexBackend,
+      ...backend,
       normalizeBody() {
         throw badRequest('Request body violates policy', { path })
       },
@@ -1043,7 +1248,7 @@ describe('subscription HTTP gateway', () => {
 
   it('does not pass off a crash of the body normalizer as a policy violation', async () => {
     const { gateway, store, egress, logger } = await setup(success)
-    const normalize = vi.spyOn(codexBackend, 'normalizeBody').mockImplementationOnce(() => {
+    const normalize = vi.spyOn(backend, 'normalizeBody').mockImplementationOnce(() => {
       throw new RangeError('Maximum call stack size exceeded')
     })
     try {
@@ -1055,7 +1260,7 @@ describe('subscription HTTP gateway', () => {
       expect(store.admit).not.toHaveBeenCalled()
       expect(egress.request).not.toHaveBeenCalled()
       expect(logger.warn).toHaveBeenCalledWith(
-        JSON.stringify({ event: 'llm_body_normalization_failed', backend: codexBackend.id }),
+        JSON.stringify({ event: 'llm_body_normalization_failed', backend: backend.id }),
       )
     } finally {
       normalize.mockRestore()
@@ -1172,11 +1377,7 @@ describe('subscription HTTP gateway', () => {
     const { gateway, store } = await setup((req, res) => {
       req.resume()
       res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '9999' })
-      res.end(
-        JSON.stringify({
-          error: { code: 'rate_limit_exceeded', message: 'private account id and plan' },
-        }),
-      )
+      res.end(JSON.stringify(wire.busy))
     })
     const result = await call(gateway)
     // Provider overload is short-lived: the CLI must retry, after at most thirty seconds.
@@ -1198,15 +1399,10 @@ describe('subscription HTTP gateway', () => {
         req.resume()
         if (kind === 'http') {
           res.writeHead(400, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: { code: 'context_length_exceeded' } }))
+          res.end(JSON.stringify(wire.rejected.http))
         } else {
           res.writeHead(200, { 'content-type': 'text/event-stream' })
-          res.end(
-            event({
-              type: 'response.failed',
-              response: { error: { code: 'context_length_exceeded' } },
-            }),
-          )
+          res.end(wire.rejected.stream)
         }
       })
       const result = await call(gateway)
@@ -1215,12 +1411,12 @@ describe('subscription HTTP gateway', () => {
         expect(result.status).toBe(400)
         expect(result.headers['retry-after']).toBeUndefined()
         expect(JSON.parse(result.body).error.code).toBe('raditi_request_rejected')
-      } else expect(result.body).toContain('"code":"context_length_exceeded"')
+      } else expect(result.body).toContain(wire.rejected.seen)
       expect(store.refuse).toHaveBeenCalledExactlyOnceWith(key.keyId, 'request_rejected')
       await vi.waitFor(() => expect(store.finish).toHaveBeenCalledOnce())
       expect(store.finish.mock.calls[0]![1]).toMatchObject({
         state: 'failed',
-        signal: { kind: 'request_rejected', code: 'context_length_exceeded' },
+        signal: { kind: 'request_rejected', code: wire.rejected.code },
       })
     },
   )
@@ -1300,17 +1496,12 @@ describe('subscription HTTP gateway', () => {
       const { gateway, store } = await setup((req, res) => {
         req.resume()
         if (kind === 'http') {
+          // Short-lived for either adapter by its status, whatever the body names.
           res.writeHead(500, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ error: { code: 'server_is_overloaded' } }))
         } else {
           res.writeHead(200, { 'content-type': 'text/event-stream' })
-          res.end(
-            delta +
-              event({
-                type: 'response.failed',
-                response: { error: { code: 'server_is_overloaded' } },
-              }),
-          )
+          res.end(delta + wire.overloaded)
         }
       })
       const refusing = Promise.withResolvers<void>()
@@ -1325,14 +1516,14 @@ describe('subscription HTTP gateway', () => {
         {
           hostname: '127.0.0.1',
           port: (gateway.server.address() as { port: number }).port,
-          path: '/codex/responses',
+          path: wire.path,
           method: 'POST',
           agent: false,
           headers: {
             host: 'llm.local',
             authorization: `Bearer ${turnKey}`,
             'content-type': 'application/json',
-            'user-agent': 'codex_exec/0.159.1',
+            'user-agent': wire.userAgent,
           },
         },
         (res) => {
@@ -1369,38 +1560,41 @@ describe('subscription HTTP gateway', () => {
     },
   )
 
-  it('sanitizes native failed SSE events before forwarding and retains the structural refusal', async () => {
-    const { gateway, store } = await setup((req, res) => {
-      req.resume()
-      res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.end(
-        delta +
-          event({
-            type: 'response.failed',
-            response: {
-              id: 'private-response-id',
-              error: { code: 'cyber_policy', message: 'private account and prompt' },
-            },
-          }),
+  codexIt(
+    'sanitizes native failed SSE events before forwarding and retains the structural refusal',
+    async () => {
+      const { gateway, store } = await setup((req, res) => {
+        req.resume()
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.end(
+          delta +
+            event({
+              type: 'response.failed',
+              response: {
+                id: 'private-response-id',
+                error: { code: 'cyber_policy', message: 'private account and prompt' },
+              },
+            }),
+        )
+      })
+      const result = await call(gateway)
+      expect(result.status).toBe(200)
+      expect(result.body).toContain('response.failed')
+      expect(result.body).not.toContain('private account')
+      expect(result.body).not.toContain('private-response-id')
+      expect(store.refuse).toHaveBeenCalledWith(key.keyId, 'policy_flagged')
+      expect(store.finish).toHaveBeenCalledWith(
+        'synthetic-call',
+        expect.objectContaining({
+          state: 'failed',
+          estimated: true,
+          billable: false,
+          estimateReason: 'aborted_platform',
+          usage: expect.objectContaining({ output: 2 }),
+        }),
       )
-    })
-    const result = await call(gateway)
-    expect(result.status).toBe(200)
-    expect(result.body).toContain('response.failed')
-    expect(result.body).not.toContain('private account')
-    expect(result.body).not.toContain('private-response-id')
-    expect(store.refuse).toHaveBeenCalledWith(key.keyId, 'policy_flagged')
-    expect(store.finish).toHaveBeenCalledWith(
-      'synthetic-call',
-      expect.objectContaining({
-        state: 'failed',
-        estimated: true,
-        billable: false,
-        estimateReason: 'aborted_platform',
-        usage: expect.objectContaining({ output: 2 }),
-      }),
-    )
-  })
+    },
+  )
 
   it('estimates only delta text for completed streams with missing or invalid usage', async () => {
     let index = 0
@@ -1412,8 +1606,8 @@ describe('subscription HTTP gateway', () => {
         current === 0
           ? null
           : current === 1
-            ? { input_tokens: 1, input_tokens_details: { cached_tokens: 2 }, output_tokens: 3 }
-            : { input_tokens: 2_147_483_648, output_tokens: 3 }
+            ? wire.usage(1, 2, 3)
+            : wire.usage(2_147_483_648, undefined, 3)
       res.end(delta + completed(usage))
     })
     for (const reason of ['no_usage', 'invalid_usage', 'invalid_usage']) {
@@ -1433,12 +1627,7 @@ describe('subscription HTTP gateway', () => {
     const { gateway, store, egress } = await setup((req, res) => {
       req.resume()
       res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.end(
-        delta +
-          completed(
-            index++ === 0 ? null : { input_tokens: 1, input_tokens_details: { cached_tokens: 2 } },
-          ),
-      )
+      res.end(delta + completed(index++ === 0 ? null : wire.usage(1, 2)))
     })
     let estimatedInputTokens = 0
     store.admit.mockImplementation(async (input) => {
@@ -1672,37 +1861,40 @@ describe('subscription HTTP gateway', () => {
     )
   })
 
-  it('does not bill a client that leaves a refreshed retry the provider has not answered', async () => {
-    const next = { ...credential, accessToken: jwt({ synthetic_new_token: true }) }
-    const lifecycle = { ...controlLifecycle(), refresh: vi.fn().mockResolvedValue(next) }
-    let attempts = 0
-    const { gateway, store, egress } = await setup(
-      (req, res) => {
-        req.resume()
-        attempts += 1
-        if (attempts > 1) return
-        res.writeHead(401, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
-      },
-      {},
-      { lifecycle },
-    )
-    const client = stream(gateway)
-    await vi.waitFor(() => expect(egress.request).toHaveBeenCalledTimes(2))
-    await realDelay(20)
-    client.destroy()
-    await vi.waitFor(() => expect(store.finish).toHaveBeenCalled())
-    // The 401 was the provider's answer to the first request, not to the one the client left.
-    expect(store.finish).toHaveBeenCalledWith(
-      'synthetic-call',
-      expect.objectContaining({
-        state: 'aborted',
-        estimated: true,
-        billable: false,
-        estimateReason: 'aborted_platform',
-      }),
-    )
-  })
+  codexIt(
+    'does not bill a client that leaves a refreshed retry the provider has not answered',
+    async () => {
+      const next = { ...credential, accessToken: jwt({ synthetic_new_token: true }) }
+      const lifecycle = { ...controlLifecycle(), refresh: vi.fn().mockResolvedValue(next) }
+      let attempts = 0
+      const { gateway, store, egress } = await setup(
+        (req, res) => {
+          req.resume()
+          attempts += 1
+          if (attempts > 1) return
+          res.writeHead(401, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
+        },
+        {},
+        { lifecycle },
+      )
+      const client = stream(gateway)
+      await vi.waitFor(() => expect(egress.request).toHaveBeenCalledTimes(2))
+      await realDelay(20)
+      client.destroy()
+      await vi.waitFor(() => expect(store.finish).toHaveBeenCalled())
+      // The 401 was the provider's answer to the first request, not to the one the client left.
+      expect(store.finish).toHaveBeenCalledWith(
+        'synthetic-call',
+        expect.objectContaining({
+          state: 'aborted',
+          estimated: true,
+          billable: false,
+          estimateReason: 'aborted_platform',
+        }),
+      )
+    },
+  )
 
   it('cancels upstream on client disconnect and preserves the delta-only client estimate', async () => {
     const { gateway, store } = await setup((req, res) => {
@@ -1715,14 +1907,14 @@ describe('subscription HTTP gateway', () => {
       {
         hostname: '127.0.0.1',
         port,
-        path: '/codex/responses',
+        path: wire.path,
         method: 'POST',
         agent: false,
         headers: {
           host: 'llm.local',
           authorization: `Bearer ${turnKey}`,
           'content-type': 'application/json',
-          'user-agent': 'codex_exec/0.159.1',
+          'user-agent': wire.userAgent,
         },
       },
       (res) => {
@@ -1758,14 +1950,14 @@ describe('subscription HTTP gateway', () => {
     const client = request({
       hostname: '127.0.0.1',
       port,
-      path: '/codex/responses',
+      path: wire.path,
       method: 'POST',
       agent: false,
       headers: {
         host: 'llm.local',
         authorization: `Bearer ${turnKey}`,
         'content-type': 'application/json',
-        'user-agent': 'codex_exec/0.159.1',
+        'user-agent': wire.userAgent,
       },
     })
     client.on('error', () => {})
@@ -1805,14 +1997,14 @@ describe('subscription HTTP gateway', () => {
       {
         hostname: '127.0.0.1',
         port: (gateway.server.address() as { port: number }).port,
-        path: '/codex/responses',
+        path: wire.path,
         method: 'POST',
         agent: false,
         headers: {
           host: 'llm.local',
           authorization: `Bearer ${turnKey}`,
           'content-type': 'application/json',
-          'user-agent': 'codex_exec/0.159.1',
+          'user-agent': wire.userAgent,
         },
       },
       (res) => {
@@ -1838,7 +2030,7 @@ describe('subscription HTTP gateway', () => {
   })
 
   it('aborts after sixty seconds when a paused client stops draining the SSE stream', async () => {
-    const hugeDelta = event({ type: 'response.output_text.delta', delta: 'x'.repeat(512 * 1024) })
+    const hugeDelta = wire.text('x'.repeat(512 * 1024))
     const { gateway, store } = await setup((req, res) => {
       req.resume()
       res.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -1857,14 +2049,14 @@ describe('subscription HTTP gateway', () => {
       {
         hostname: '127.0.0.1',
         port: (gateway.server.address() as { port: number }).port,
-        path: '/codex/responses',
+        path: wire.path,
         method: 'POST',
         agent: false,
         headers: {
           host: 'llm.local',
           authorization: `Bearer ${turnKey}`,
           'content-type': 'application/json',
-          'user-agent': 'codex_exec/0.159.1',
+          'user-agent': wire.userAgent,
         },
       },
       (res) => {
@@ -1910,49 +2102,7 @@ describe('subscription HTTP gateway', () => {
 // The pinned OpenCode CLI answers these with the same request again, at once and without a limit
 // (docs/plan/40-opencode-spike.md, section 4): the sandbox must read one error object instead.
 describe('Z.ai streams the CLI cannot stop on', () => {
-  const zaiKey: GatewayKey = {
-    ...key,
-    backendId: 'zai-coding',
-    model: 'glm-5.3',
-    reasoningEffort: 'high',
-    driverId: 'opencode',
-    clientIdentity: {},
-  }
-  const zaiCredential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-zai-plan-key' }
-  const userAgent = 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14'
-  const zaiBody = {
-    model: 'glm-5.3',
-    max_tokens: 32_000,
-    messages: [{ role: 'user', content: 'synthetic prompt' }],
-    stream: true,
-    stream_options: { include_usage: true },
-  }
-  const chunk = (content: string, finish?: string) =>
-    event({
-      id: '202601010000000000000000000001',
-      created: 1767225600,
-      object: 'chat.completion.chunk',
-      model: 'glm-5.3',
-      choices: [
-        {
-          index: 0,
-          ...(finish ? { finish_reason: finish } : {}),
-          delta: { role: 'assistant', content },
-        },
-      ],
-      ...(finish
-        ? {
-            usage: {
-              prompt_tokens: 19,
-              completion_tokens: 6,
-              total_tokens: 25,
-              prompt_tokens_details: { cached_tokens: 3 },
-              completion_tokens_details: { reasoning_tokens: 2 },
-            },
-          }
-        : {}),
-    })
-  const done = 'data: [DONE]\n\n'
+  const userAgent = zaiUserAgent
   async function zai(
     stream: string,
     backend: LlmBackend = zaiCodingBackend,

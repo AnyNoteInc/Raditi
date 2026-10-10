@@ -59,10 +59,10 @@ describe('Vault KV size budgets', () => {
     const { store, responseSizes } = memoryVault()
     const data = fullData(pattern)
     expect(Buffer.byteLength(JSON.stringify({ data, options: { cas: 0 } }))).toBe(64 * 1024)
-    expect(await store.kvWrite('subs/openai-chatgpt/large', data, { cas: 0 })).toEqual({
+    expect(await store.kvWrite('subs/zai-coding/large', data, { cas: 0 })).toEqual({
       version: 1,
     })
-    expect(await store.kvRead('subs/openai-chatgpt/large')).toEqual({ data, version: 1 })
+    expect(await store.kvRead('subs/zai-coding/large')).toEqual({ data, version: 1 })
     expect(responseSizes[0]).toBeGreaterThan(64 * 1024)
   })
 

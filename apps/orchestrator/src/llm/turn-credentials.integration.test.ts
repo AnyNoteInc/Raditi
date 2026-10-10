@@ -5,6 +5,12 @@ import { createPrismaClient, type PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialGrant, TurnCredentialRef } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import {
+  sampleBackendId,
+  sampleDriverId,
+  sampleProviderSlug,
+  sampleRoutePath,
+} from '../testing/ids.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 import { turnCredentialPath } from './turn-key.ts'
 import { PostgresGatewayStore } from '../llm-gateway/store.ts'
@@ -60,6 +66,7 @@ function memoryVault() {
 describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission closure', () => {
   let db: PrismaClient
   let providerId: string
+  let driverWasEnabled: boolean
   const tracked: {
     workspaceId: string
     modelId: string
@@ -70,10 +77,16 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
 
   beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
-    const provider = await db.llmProvider.findUniqueOrThrow({ where: { slug: 'kimi-code' } })
+    const provider = await db.llmProvider.findUniqueOrThrow({
+      where: { slug: sampleProviderSlug },
+    })
     providerId = provider.id
-    // Other suites use synthetic drivers. These fixtures exclusively use the seeded kimi driver.
+    // Other suites use synthetic drivers. These fixtures use the seeded driver of the sample
+    // backend; the seeds keep the provider and that driver disabled, so the suite enables both.
     await db.llmProvider.update({ where: { id: providerId }, data: { enabled: true } })
+    const driver = await db.agentDriver.findUniqueOrThrow({ where: { id: sampleDriverId } })
+    driverWasEnabled = driver.enabled
+    await db.agentDriver.update({ where: { id: sampleDriverId }, data: { enabled: true } })
   })
 
   afterEach(async () => {
@@ -102,6 +115,10 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
   afterAll(async () => {
     // This database is discarded by verify:db. The store suite owns provider flags and may
     // still be running; this suite must never disable its provider from another worker.
+    await db.agentDriver.update({
+      where: { id: sampleDriverId },
+      data: { enabled: driverWasEnabled },
+    })
     await db.$disconnect()
   })
 
@@ -183,7 +200,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     ) {
       const id = randomUUID()
       const credential = await db.credentialRef.create({
-        data: { kind: 'subscription', vaultPath: `subs/kimi-code/${id}` },
+        data: { kind: 'subscription', vaultPath: `subs/${sampleBackendId}/${id}` },
       })
       row.credentialIds.push(credential.id)
       row.accountIds.push(id)
@@ -191,7 +208,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
         data: {
           id,
           providerId,
-          driverId: 'kimi',
+          driverId: sampleDriverId,
           label: `turn-${id}`,
           credentialRefId: credential.id,
           plan: 'synthetic',
@@ -219,8 +236,8 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       })
     const initial = await task()
     const grant: TurnCredentialGrant = {
-      driverId: 'kimi',
-      backend: 'kimi-code',
+      driverId: sampleDriverId,
+      backend: sampleBackendId,
       modelSlug: model.slug,
       modelClass: 'standard',
       reasoningEffort: null,
@@ -665,7 +682,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       // Reacquiring the same pool lock in a different connection proves it was released.
       await db.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT set_config('lock_timeout', '250ms', true)`
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('pool:kimi-code', 0))::text`
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pool:${sampleBackendId}`}, 0))::text`
         await tx.subscriptionAccount.update({
           where: { id: f.mainAccount.id },
           data: { limitWindows: [{ name: 'week', usedPct: 10, resetsAt: null }] },
@@ -692,7 +709,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       // The pool lock is free while the probe runs, as for unknown windows.
       await db.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT set_config('lock_timeout', '250ms', true)`
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('pool:kimi-code', 0))::text`
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pool:${sampleBackendId}`}, 0))::text`
       })
     })
     const credentials = new GatewayTurnCredentials({
@@ -845,7 +862,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
         keyId: key.id,
         subscriptionAccountId: f.mainAccount.id,
         modelId: f.model.id,
-        route: '/kimi/v1/chat/completions',
+        route: sampleRoutePath,
         reservedRub: '1',
         requestBytes: 1,
       },
@@ -1020,7 +1037,11 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
   it('waits one refresher cycle for a bound account whose access token has just expired', async () => {
     const f = await fixture()
     await db.taskAccountBinding.create({
-      data: { taskId: f.task.id, driverId: 'kimi', subscriptionAccountId: f.mainAccount.id },
+      data: {
+        taskId: f.task.id,
+        driverId: sampleDriverId,
+        subscriptionAccountId: f.mainAccount.id,
+      },
     })
     await db.subscriptionAccount.update({
       where: { id: f.mainAccount.id },
@@ -1083,7 +1104,11 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
   it('a permitted rebind commits once, while an unavailable replacement consumes no rebind', async () => {
     const f = await fixture()
     await db.taskAccountBinding.create({
-      data: { taskId: f.task.id, driverId: 'kimi', subscriptionAccountId: f.mainAccount.id },
+      data: {
+        taskId: f.task.id,
+        driverId: sampleDriverId,
+        subscriptionAccountId: f.mainAccount.id,
+      },
     })
     await db.subscriptionAccount.update({
       where: { id: f.mainAccount.id },

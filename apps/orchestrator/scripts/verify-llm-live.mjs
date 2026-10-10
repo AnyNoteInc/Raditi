@@ -1,4 +1,4 @@
-/* global AbortSignal, console, fetch */
+/* global AbortSignal, console, fetch, URL */
 // verify:llm-gateway --live: the real pinned OpenCode CLI through its driver, sandbox-gw and the
 // role llm to the real GLM on api.z.ai, which the role reaches itself, as in the product. With
 // --measure the same run measures instead of accepting, and with --results it measures one
@@ -8,17 +8,19 @@
 // real provider. Only synthetic prompts go to the model. Commands, limits and rules:
 // infra/dev/llm-verify/README.md, «Живой режим».
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID } from 'node:crypto'
+import { request as httpRequest } from 'node:http'
 import process from 'node:process'
 
 import { createOpencodeDriver } from '@repo/agent-drivers'
 import { createPrismaClient } from '@repo/db'
 import {
+  llmJsonLimits,
   preparedFilesSchema,
   preparedRunExposesSecret,
   SANDBOX_WORKDIR,
   turnCredentials,
-  turnResultSchema,
 } from '@repo/domain'
 
 import { CLI_IMAGE, createCliSession, dockerCommand } from '../../../infra/dev/llm-verify/cli.mjs'
@@ -30,7 +32,6 @@ import {
   failureLine,
   LIVE_LIMITS,
   LiveRefusal,
-  resultVerdict,
   STREAM_FORMS,
   streamSummary,
   sumUsage,
@@ -46,9 +47,11 @@ import { opencodeUserAgent } from '../../../packages/llm-backends/src/zai-coding
 import { productionMcpTools } from './verify-llm-gateway-drivers.mjs'
 import {
   judgeResult,
+  readingShares,
   REHEARSED_FORMS,
   rehearsalScenario,
   RESULTS_ACCEPTED_FROM,
+  resultReadings,
   resultShares,
   resultTurns,
 } from './verify-llm-live-results.mjs'
@@ -68,14 +71,18 @@ const TURN_CALLS = 5
 const ATTEMPTS = 3
 /**
  * What the scripted model of a rehearsal answers instead of a valid result, by kind of turn and
- * attempt — the two forms the real model gave (docs/plan/45-zai-live.md): a sentence before the
- * object, and the object without `files_changed`. The text turn misses its outcome in all three
- * attempts and the continuation in its first, so that every rehearsal shows what a missed
- * outcome costs: attempts and a line of the report, never the run.
+ * attempt — the two forms the real model gave (docs/plan/45-zai-live.md): the object without
+ * `files_changed`, which neither reading takes, and a sentence before the object, which the
+ * product takes and the strict reading of the driver does not. The text turn misses its outcome
+ * in all three attempts; the continuation misses its first and reaches its second on an answer
+ * only the product takes. So every rehearsal shows what a missed outcome costs — attempts and a
+ * line of the report, never the run — and where the two readings part. In the measurement the
+ * second and the third of the ten result turns answer in the two forms.
  */
 const REHEARSED_MISSES = {
-  'text turn': ['prose', 'prose', 'prose'],
-  continuation: ['field'],
+  'text turn': ['field', 'field', 'field'],
+  continuation: ['field', 'prose'],
+  'result turn': [undefined, 'prose', 'field'],
 }
 const rehearsedText = (label, attempt, expected) => {
   const form = REHEARSED_MISSES[label]?.[attempt - 1]
@@ -84,6 +91,40 @@ const rehearsedText = (label, attempt, expected) => {
   const { files_changed: _omitted, ...rest } = expected
   return JSON.stringify(rest)
 }
+/**
+ * The measurement of a refused body (rehearsal of --measure): calls the key of such a turn may
+ * start, and how many requests in a row the stand refuses at most before it lets the CLI through.
+ */
+const BODY_TURN_CALLS = 4
+const BODY_REFUSALS_AT_MOST = 12
+/**
+ * What OpenCode 1.18.34 did with HTTP 413 `raditi_body`, measured on 10.10.2026 (docs/plan/
+ * 47-common-scenarios-zai.md). It takes any 413 for an overflow of the context: it reports the
+ * failure, asks once for a compaction and, when that is answered, sends the turn on once more —
+ * and exits 1 whatever came back. With every request refused it stops after the compaction
+ * request: two requests, none past the stand. The rehearsal holds the CLI to these numbers, so
+ * a CLI that reacts otherwise shows here before the answer of the gateway is decided anew.
+ */
+const BODY_REFUSAL_MEASURED = Object.freeze({
+  once: {
+    exit: 1,
+    refused: 1,
+    requests: ['turn 413', 'compaction 200', 'turn 200'],
+    provider: 2,
+    calls: 2,
+    result: false,
+    failures: ['ContextOverflowError raditi_body'],
+  },
+  every: {
+    exit: 1,
+    refused: 2,
+    requests: ['turn 413', 'compaction 413'],
+    provider: 0,
+    calls: 0,
+    result: false,
+    failures: ['ContextOverflowError raditi_body', 'ContextOverflowError raditi_body'],
+  },
+})
 const TURN_MS = 240_000
 const CLASSES = {
   light: { slug: 'glm-5.3-light', effort: 'low' },
@@ -416,6 +457,9 @@ export async function runLiveGateway(mode) {
       )
       const events = result.stdout.split('\n').flatMap((line) => driver.parseEvent(line))
       const exchanges = observer.exchanges().slice(from.exchanges)
+      // The answer as the product would read it and, beside it, by the strict reading of the
+      // driver; `result` is the product's, or null.
+      const reading = resultReadings({ driver, events, code: result.code })
       const outcome = {
         label,
         code: result.code,
@@ -423,7 +467,8 @@ export async function runLiveGateway(mode) {
         events,
         lines: result.lines,
         nativeSessionId: events.find((event) => event.type === 'started')?.nativeSessionId,
-        result: driver.extractResult(events, null),
+        result: reading.result,
+        reading,
         exchanges,
         mcp: (await control('state')).mcp.requests.slice(from.mcp),
         requests: budget.state().used - from.requests,
@@ -500,8 +545,8 @@ export async function runLiveGateway(mode) {
       return { rows, completed, failed, usage: fromRole }
     }
 
-    /** What each turn's last message was worth as a result, by the drivers' own strict reading. */
-    const verdicts = []
+    /** What each turn's last message was worth as a result, by the two readings. */
+    const readings = []
     /**
      * An outcome that depends on the model (live.mjs, createOutcome): up to three attempts,
      * each of which holds the invariants; the share goes to the report and never fails the run.
@@ -515,15 +560,16 @@ export async function runLiveGateway(mode) {
         once: async (attempt) => {
           stage = `${label}, attempt ${attempt}`
           const made = await once(attempt)
-          const verdict = resultVerdict(made.outcome.events, turnResultSchema)
-          verdicts.push(verdict)
+          const { verdict, strict, taken } = made.outcome.reading
+          readings.push(made.outcome.reading)
           report(
-            `${label}, attempt ${attempt}: ${made.ok ? 'outcome reached' : 'outcome missed'}; result: ${verdict}${made.missed?.length ? `; missed: ${made.missed.join(', ')}` : ''}`,
+            `${label}, attempt ${attempt}: ${made.ok ? 'outcome reached' : 'outcome missed'}; result: ${taken ? 'taken' : 'refused'} by the reading of the product; by the strict reading of the driver: ${verdict}${made.missed?.length ? `; missed: ${made.missed.join(', ')}` : ''}`,
           )
-          return { ...made, verdict }
+          return { ...made, verdict, strict, taken }
         },
       })
-    const valid = (outcome) => turnResultSchema.safeParse(outcome.result).success
+    // «The result is valid» is what the product would do with it (spec §20, П38).
+    const valid = (outcome) => outcome.reading.taken
 
     if (mode.measure) await measure()
     else if (mode.results) await results()
@@ -696,8 +742,9 @@ export async function runLiveGateway(mode) {
         report(
           `${share.label}: the model's outcome reached in ${share.reached ? 1 : 0} of ${share.attempts} attempt(s)${share.ended === 'budget' ? '; the request budget of the run did not cover another attempt' : ''}`,
         )
+      const read = readingShares(readings)
       report(
-        `results of ${verdicts.length} turns by the drivers' strict reading: valid in ${verdicts.filter((verdict) => verdict === 'valid').length}; the outcomes above and this share do not decide the run`,
+        `results of ${read.turns} turns: taken by the reading of the product (the supervisor's readTurnResult) in ${read.taken}; valid by the strict reading of the driver in ${read.strict}; the outcomes above and these shares do not decide the run`,
       )
       const held = (share) =>
         `in ${share.attempts} attempt(s) the provider usage in llm_calls equals the CLI and is not estimated, the platform tools were declared, MCP was asked only with the turn token`
@@ -716,13 +763,18 @@ export async function runLiveGateway(mode) {
           { label: 'text turn', reached: false, attempts: 3, ended: 'attempts' },
           { label: 'continuation', reached: true, attempts: 2, ended: 'reached' },
         ])
+        // The last text answer is one neither reading takes; the continuation was reached on
+        // one the product takes and the strict reading does not.
         assert.deepEqual(
-          [text.last().verdict, continuation.last().verdict],
-          ['text before the JSON object', 'valid'],
+          [text.last(), continuation.last()].map(
+            ({ verdict, strict, taken }) =>
+              `${verdict}: ${strict ? 'strict' : taken ? 'taken' : 'refused'}`,
+          ),
+          ['schema: files_changed: refused', 'text before the JSON object: taken'],
         )
-        assert.equal(verdicts.filter((verdict) => verdict === 'schema: files_changed').length, 1)
+        assert.deepEqual(read, { turns: 7, taken: 3, strict: 2 })
         passed(
-          'rehearsal: the scripted model missed the text outcome in all three attempts and the continuation in its first; both went to the report as shares, the retries followed the first attempt of every kind, and the run went on',
+          'rehearsal: the scripted model missed the text outcome in all three attempts and the continuation in its first; the continuation was reached on an answer the product takes and the strict reading of the driver does not (3 of 7 results by the product, 2 by the strict reading); the shares went to the report, the retries followed the first attempt of every kind, and the run went on',
         )
         await live.proveFailureSearch({
           stack,
@@ -971,7 +1023,10 @@ export async function runLiveGateway(mode) {
         budget.afford(2 + 13, `result turn ${index + 1}`)
         const [a, b] = [10 + index * 7, 31 + index * 3]
         const turn = await issued({ modelClass })
-        await script({ scenario: 'text', text: JSON.stringify(resultFor(`The sum is ${a + b}`)) })
+        await script({
+          scenario: 'text',
+          text: rehearsedText('result turn', index + 1, resultFor(`The sum is ${a + b}`)),
+        })
         const sentBefore = rehearsal ? (await providerChats()).length : 0
         const outcome = await runTurn({
           label: `result turn ${index + 1} (${modelClass})`,
@@ -1000,17 +1055,16 @@ export async function runLiveGateway(mode) {
         }
         results.push({
           modelClass,
-          verdict: resultVerdict(outcome.events, turnResultSchema),
+          reading: outcome.reading,
           accepted: rows.some((row) => row.state === 'completed'),
-          valid: outcome.code === 0 && valid(outcome),
-          right:
-            outcome.code === 0 && valid(outcome) && outcome.result.summary.includes(String(a + b)),
+          right: valid(outcome) && outcome.result.summary.includes(String(a + b)),
           usage,
           requests: outcome.requests,
         })
       }
+      const counted = readingShares(results.map((item) => item.reading))
       report(
-        `ten turns with a result: valid ${results.filter((item) => item.valid).length} of ${results.length}, with the right sum ${results.filter((item) => item.right).length}; verdicts by turn: ${results.map((item) => `${item.modelClass}=${item.verdict}`).join('; ')}`,
+        `ten turns with a result: taken by the reading of the product ${counted.taken} of ${counted.turns}, valid by the strict reading of the driver ${counted.strict}, with the right sum ${results.filter((item) => item.right).length}; the strict reading by turn: ${results.map((item) => `${item.modelClass}=${item.reading.verdict}`).join('; ')}`,
       )
       // «Completed» is what a live run can see of a level: a call of a key of that class went
       // through. That the role sends the level of the class is shown by the rehearsal above.
@@ -1024,6 +1078,15 @@ export async function runLiveGateway(mode) {
         assert.deepEqual([...levels].sort(), ['high', 'low', 'max'])
         passed(
           'rehearsal: every request of the ten result turns reached the synthetic provider with the reasoning_effort of the class of its key (low, high, max) and thinking enabled',
+        )
+        // The scripted model wrapped one result in a sentence and left a key out of another.
+        assert.deepEqual(counted, { turns: 10, taken: 9, strict: 8 })
+        assert.deepEqual(
+          results.slice(1, 3).map(({ reading }) => `${reading.verdict}: ${reading.taken}`),
+          ['text before the JSON object: true', 'schema: files_changed: false'],
+        )
+        passed(
+          'rehearsal: of the ten result turns the product took nine and the strict reading of the driver eight; the answer with a sentence before the object counts as a result, the one without files_changed does not',
         )
       }
       budget.afford(1 + 12, 'the reading of the quota after the result turns')
@@ -1091,7 +1154,7 @@ console.log(JSON.stringify(await Promise.all([one(),one()])))})`,
       const seriesRows = (await invariants(series, ran, { ceiling: SERIES })).rows
       await revoke(series)
       report(
-        `series turn: exit ${ran.code}; result: ${resultVerdict(ran.events, turnResultSchema)}; tool calls the driver reported: ${ran.events.filter((event) => event.type === 'tool_call' || event.type === 'command').length}`,
+        `series turn: exit ${ran.code}; result: ${ran.reading.taken ? 'taken' : 'refused'} by the reading of the product; by the strict reading of the driver: ${ran.reading.verdict}; tool calls the driver reported: ${ran.events.filter((event) => event.type === 'tool_call' || event.type === 'command').length}`,
       )
       const starts = seriesRows.map((row) => row.startedAt.getTime())
       const pace = Math.max(
@@ -1101,6 +1164,7 @@ console.log(JSON.stringify(await Promise.all([one(),one()])))})`,
       report(
         `series turn: ${seriesRows.length} calls, at most ${pace} within any 30 s (the pace limit of a key is 20); steps took ${ran.exchanges.map((exchange) => `${exchange.ms}ms`).join(' ')}`,
       )
+      if (rehearsal) await bodyRefusals()
       const end = await read('at the end')
       live.growth(before, end)
 
@@ -1118,6 +1182,164 @@ console.log(JSON.stringify(await Promise.all([one(),one()])))})`,
         `cache without x-session-affinity: ${cached} of ${input} input tokens (${input ? ((cached * 100) / input).toFixed(1) : '0'} %) over ${completed.length} completed calls; per call ${completed.map((row) => `${row.tokenUsage.cacheReadTokens}/${row.tokenUsage.cacheReadTokens + row.tokenUsage.inputUncachedTokens}`).join(' ')}`,
       )
       passed('measurement finished: the numbers are in the REPORT lines')
+    }
+
+    /**
+     * Rehearsal only, and a measurement, not a rule of the gateway (spec §20, П23): what the
+     * pinned CLI does when a request of its turn is answered HTTP 413 `raditi_body`, the refusal
+     * of a body that is too large. The CLI reads any 413 as an overflow of the context. Both
+     * refusals are the real ones: sandbox-gw is asked from the CLI container by a request that
+     * declares one byte more than it takes, the role llm by the very request of the CLI, declared
+     * one byte longer. The observer gives them to the CLI where an answer of the role would
+     * come, through sandbox-gw, so no body of sixteen megabytes is ever sent. Three turns: one
+     * request refused by sandbox-gw, one by the role, and every request refused — a body that is
+     * too large stays too large, the request for a compaction carries it too.
+     */
+    async function bodyRefusals() {
+      stage = 'measurement: the refusal of a body that is too large'
+      const declared = String(llmJsonLimits.bytes + 1)
+      const chat = new URL(`${ZAI_GATEWAY_BASE_URL}/chat/completions`)
+      const asked = await dockerCommand(
+        [
+          'exec',
+          cli.containerName,
+          'node',
+          '-e',
+          `const request=require('node:http').request({host:process.argv[1],port:process.argv[2],
+path:process.argv[3],method:'POST',headers:{'content-type':'application/json',
+'content-length':process.argv[4]}},(answer)=>{let body='';answer.on('data',(chunk)=>{body+=chunk})
+.on('end',()=>{console.log(JSON.stringify({status:answer.statusCode,
+contentType:answer.headers['content-type'],body}));process.exit(0)})});
+request.on('error',()=>process.exit(1));request.flushHeaders()`,
+          chat.hostname,
+          chat.port,
+          chat.pathname,
+          declared,
+        ],
+        { timeoutMs: 30_000 },
+      )
+      assert.equal(
+        asked.code,
+        0,
+        'sandbox-gw did not answer a request that declares too long a body',
+      )
+      const ofGateway = JSON.parse(asked.stdout)
+      assert.deepEqual([ofGateway.status, ofGateway.contentType], [413, 'application/json'])
+      const refusalOf = (message) => ({
+        error: { type: 'invalid_request_error', code: 'raditi_body', message },
+      })
+      assert.deepEqual(JSON.parse(ofGateway.body), refusalOf('Request body is too large'))
+      const fromGateway = async () => ({
+        status: ofGateway.status,
+        headers: { 'content-type': ofGateway.contentType },
+        body: ofGateway.body,
+      })
+      /** The role's own refusal of this request of the CLI, were its body one byte too long. */
+      const fromRole = ({ method, path, headers }) =>
+        new Promise((resolve, reject) => {
+          const { 'transfer-encoding': _chunked, ...sent } = headers
+          const request = httpRequest(
+            {
+              host: '127.0.0.1',
+              port: rolePort,
+              method,
+              path,
+              agent: false,
+              headers: { ...sent, host: `127.0.0.1:${rolePort}`, 'content-length': declared },
+            },
+            (answer) => {
+              const chunks = []
+              answer.on('data', (chunk) => chunks.push(chunk))
+              answer.on('error', reject)
+              answer.on('end', () => {
+                resolve({
+                  status: answer.statusCode,
+                  headers: { 'content-type': answer.headers['content-type'] },
+                  body: Buffer.concat(chunks),
+                })
+                request.destroy()
+              })
+            },
+          )
+          request.on('error', reject)
+          // The headers alone: the role refuses by the declared length, before it reads a byte.
+          request.flushHeaders()
+        })
+
+      await startLlm(BODY_TURN_CALLS)
+      const measured = []
+      for (const { label, answer, refusals } of [
+        { label: 'one request refused by sandbox-gw', answer: fromGateway, refusals: 1 },
+        { label: 'one request refused by the role llm', answer: fromRole, refusals: 1 },
+        {
+          label: 'every request refused by sandbox-gw',
+          answer: fromGateway,
+          refusals: BODY_REFUSALS_AT_MOST,
+        },
+      ]) {
+        stage = `measurement: ${label}`
+        budget.afford(BODY_TURN_CALLS, label)
+        const turn = await issued()
+        await script({
+          scenario: 'text',
+          text: JSON.stringify(resultFor('Synthetic turn after a refused body')),
+        })
+        for (let count = 0; count < refusals; count += 1) observer.answerNext(answer)
+        const sentBefore = await fakeChat()
+        const outcome = await runTurn({
+          label,
+          turn,
+          prompt: 'Synthetic check. Do not call any tool. Reply with the final result only.',
+        })
+        const refused = refusals - observer.dropAnswers()
+        const { rows } = await invariants(turn, outcome, { ceiling: BODY_TURN_CALLS })
+        await revoke(turn)
+        // What the CLI sent, in its order: a request of the turn or one for a compaction (it
+        // declares no tools), the status it got, and its size against the first request.
+        const first = outcome.exchanges[0]?.requestBody.length ?? 0
+        const requests = outcome.exchanges.map((exchange) => {
+          const request = chatRequestSummary(exchange.requestBody)
+          return {
+            kind: request?.compaction ? 'compaction' : 'turn',
+            status: exchange.status,
+            messages: request?.messages ?? null,
+            grew: exchange.requestBody.length > first,
+            byStand: exchange.answeredByStand,
+          }
+        })
+        for (const exchange of outcome.exchanges.filter((item) => item.answeredByStand))
+          assert.equal(JSON.parse(exchange.responseText).error.code, 'raditi_body', label)
+        const failures = outcome.events
+          .filter((event) => event.type === 'failed')
+          .map((event) => event.reason)
+        measured.push({
+          label,
+          exit: outcome.code,
+          refused,
+          requests: requests.map((request) => `${request.kind} ${request.status}`),
+          provider: (await fakeChat()) - sentBefore,
+          calls: rows.length,
+          result: outcome.reading.taken,
+          failures: failures.map((reason) => reason.split(':')[0]),
+        })
+        report(
+          `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s; the CLI sent ${requests.length} request(s): ${requests.map((request) => `${request.kind}/${request.status}/${request.messages} messages${request.grew ? '/longer than the first' : ''}`).join(', ')}; refused by the stand ${refused} of ${refusals} prepared; reached the role ${requests.filter((request) => !request.byStand).length + (answer === fromRole ? refused : 0)}, the provider ${measured.at(-1).provider}; calls of the key ${rows.length} of ${BODY_TURN_CALLS}; result ${outcome.reading.taken ? 'taken' : 'none'}; failures the driver reported: ${failures.join(' | ') || 'none'}`,
+        )
+      }
+      report(`refused bodies, measured: ${JSON.stringify(measured)}`)
+      const { once, every } = BODY_REFUSAL_MEASURED
+      assert.deepEqual(
+        measured,
+        [
+          { label: 'one request refused by sandbox-gw', ...once },
+          { label: 'one request refused by the role llm', ...once },
+          { label: 'every request refused by sandbox-gw', ...every },
+        ],
+        'The pinned CLI reacted to HTTP 413 raditi_body otherwise than measured',
+      )
+      passed(
+        'rehearsal: HTTP 413 raditi_body, the real refusal of sandbox-gw and of the role llm, as the pinned OpenCode takes it: a failure reported, one request for a compaction, one more request of the turn when that was answered, exit 1 either way; two requests and no more when every request is refused',
+      )
     }
 
     stage = 'the end of the run'

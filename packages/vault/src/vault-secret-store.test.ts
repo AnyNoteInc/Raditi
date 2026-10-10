@@ -189,7 +189,7 @@ describe('createVaultSecretStore().health with KV mounts in use', () => {
   it('reports a mount that never existed after the first attempt to use it', async () => {
     const { store } = vault(new Set())
     expect(await store.health()).toMatchObject({ initialized: true, sealed: false })
-    expect(await store.kvRead('subs/openai-chatgpt/account_1')).toBeNull()
+    expect(await store.kvRead('subs/zai-coding/account_1')).toBeNull()
     const error = await store.health().catch((e: unknown) => e)
     expect(error).toBeInstanceOf(VaultError)
     expect((error as Error).message).toBe('Vault KV mount subs/ is not available')
@@ -197,14 +197,14 @@ describe('createVaultSecretStore().health with KV mounts in use', () => {
 
   it('does not log in again for every failed mount probe', async () => {
     const { fetchMock, store } = vault(new Set())
-    expect(await store.kvRead('subs/openai-chatgpt/account_1')).toBeNull()
+    expect(await store.kvRead('subs/zai-coding/account_1')).toBeNull()
     for (let probe = 0; probe < 3; probe += 1) await expect(store.health()).rejects.toThrow()
     expect(paths(fetchMock).filter((path) => path === 'auth/approle/login')).toHaveLength(1)
   })
 
   it('leaves the mounts of a sealed node alone', async () => {
     const { fetchMock, store } = vault(new Set(), () => json(503, healthBody({ sealed: true })))
-    expect(await store.kvRead('subs/openai-chatgpt/account_1')).toBeNull()
+    expect(await store.kvRead('subs/zai-coding/account_1')).toBeNull()
     expect(await store.health()).toMatchObject({ sealed: true })
     expect(paths(fetchMock).some((path) => path.startsWith('sys/internal/'))).toBe(false)
   })

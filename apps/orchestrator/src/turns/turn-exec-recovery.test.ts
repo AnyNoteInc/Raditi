@@ -32,6 +32,7 @@ import { RunnerHub } from '../runner-api/runner-hub.ts'
 import { SandboxRunner } from '../runner/sandbox-runner.ts'
 import type { SealedElsewhere, SnapshotParts } from '../sessions/snapshot.service.ts'
 import { crashable } from '../testing/crash.ts'
+import { sampleDriverId } from '../testing/ids.ts'
 import { loopbackTransport, type LoopbackTransport } from '../testing/runner-loopback.ts'
 import { MemorySiteLeases } from '../testing/site-leases.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
@@ -51,7 +52,7 @@ const labels = {
 }
 const baseSha = 'b'.repeat(40)
 const headSha = 'c'.repeat(40)
-const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 const values = { llmApiKey: 'synthetic-llm-secret', mcpToken: 'synthetic-mcp-secret' }
 const result: TurnResult = {
   summary: 'Готово',
@@ -193,12 +194,17 @@ function world(kind: string) {
   const credentials = new MemoryTurnCredentials(values)
   const vm = docker()
   const driver: AgentDriver = {
-    id: 'codex',
+    id: sampleDriverId,
     image,
     capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
     prepare: vi.fn(async (context) => ({
       context: { ...context },
-      files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true' }],
+      files: [
+        {
+          path: `/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
+          content: '{"synthetic":true}',
+        },
+      ],
       env: {},
       secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: context.llm.apiKey }],
     })),
@@ -206,7 +212,7 @@ function world(kind: string) {
     parseEvent: (text) => [JSON.parse(text) as AgentEvent],
     // The saved home depends on the driver session: recovery must derive the same one.
     sessionState: vi.fn((run) => ({
-      root: '/agent-home/codex',
+      root: `/agent-home/${sampleDriverId}`,
       include: [`sessions/${run.context.nativeSessionId ?? 'new'}`],
       exclude: [],
     })),
@@ -552,8 +558,12 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
       ).toEqual(events)
       expect(w.snapshots.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          driver: { id: 'codex', version: '1.0.0', nativeSessionId: 'native1' },
-          home: { root: '/agent-home/codex', include: ['sessions/native1'], exclude: [] },
+          driver: { id: sampleDriverId, version: '1.0.0', nativeSessionId: 'native1' },
+          home: {
+            root: `/agent-home/${sampleDriverId}`,
+            include: ['sessions/native1'],
+            exclude: [],
+          },
         }),
         expect.anything(),
         expect.anything(),

@@ -13,7 +13,7 @@ import { PostgresSiteLeaseStore } from './site-leases.ts'
 import { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 
 const databaseUrl = process.env.DATABASE_URL
-const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+const image = `registry.invalid/raditi/opencode@sha256:${'a'.repeat(64)}`
 const baseSha = 'b'.repeat(40)
 const headSha = 'c'.repeat(40)
 
@@ -23,17 +23,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
   let store: PostgresTaskTurnAssignmentStore
   const workspaces: string[] = []
   beforeAll(async () => {
-    // A product turn needs the `codex` row of agent_drivers. In a schema of its own the test
+    // A product turn needs the `opencode` row of agent_drivers. In a schema of its own the test
     // neither depends on the seeds of the database it was given nor leaves that row in it.
     schema = await createMigratedSchema(databaseUrl ?? '', 'product_turns')
     await schema.migrate()
     db = schemaClient(databaseUrl ?? '', schema)
     store = new PostgresTaskTurnAssignmentStore(db)
     await db.agentDriver.upsert({
-      where: { id: 'codex' },
+      where: { id: 'opencode' },
       update: {},
       create: {
-        id: 'codex',
+        id: 'opencode',
         image,
         capabilities: {},
         enabled: true,
@@ -95,7 +95,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         instructions: 'Synthetic',
       },
       input: { prompt: 'Synthetic', attachments: [] },
-      driverId: 'codex',
+      driverId: 'opencode',
       driverVersion: '1.0.0',
       workspace: {
         repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
@@ -140,7 +140,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       expect.objectContaining({
         turnNo: 1,
         status: 'running',
-        driverId: 'codex',
+        driverId: 'opencode',
         driverVersion: '1.0.0',
         image,
         baseSha,
@@ -168,7 +168,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
   it('rolls assignment creation back when TaskTurn persistence fails', async () => {
     const f = await fixture()
     // A pre-existing product row must never leave an orphan assignment after its uniqueness failure.
-    await db.taskTurn.create({ data: { taskId: f.task.id, turnNo: 1, driverId: 'codex', image } })
+    await db.taskTurn.create({
+      data: { taskId: f.task.id, turnNo: 1, driverId: 'opencode', image },
+    })
     await expect(store.open(f.input)).rejects.toThrow()
     expect(await db.turnAssignment.count({ where: { taskId: f.task.id } })).toBe(0)
     expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).turnNo).toBe(0)

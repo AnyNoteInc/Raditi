@@ -4,6 +4,7 @@ import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
 import type { GatewayRefusal } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
+import { sampleBackendId, sampleProviderSlug, sampleRoutePath } from '../testing/ids.ts'
 import { PostgresGatewayStore } from './store.ts'
 import {
   GatewayRecordRejected,
@@ -42,14 +43,15 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
   beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
     store = new PostgresGatewayStore(db)
-    // The HTTP integration suite exclusively owns openai-chatgpt; use the other seeded backend.
-    const existing = await db.llmProvider.findUnique({ where: { slug: 'kimi-code' } })
+    // The seeded provider of the sample backend. Files with a database run one at a time
+    // (vitest.config.ts), and this suite puts the flags of the row back when it ends.
+    const existing = await db.llmProvider.findUnique({ where: { slug: sampleProviderSlug } })
     createdProvider = existing === null
     provider =
       existing ??
       (await db.llmProvider.create({
         data: {
-          slug: 'kimi-code',
+          slug: sampleProviderSlug,
           name: 'Synthetic store verification',
           kind: 'subscription',
           enabled: true,
@@ -131,7 +133,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     })
     tracked.driverId = driver.id
     const credential = await db.credentialRef.create({
-      data: { kind: 'subscription', vaultPath: `subs/kimi-code/${suffix}` },
+      data: { kind: 'subscription', vaultPath: `subs/${sampleBackendId}/${suffix}` },
     })
     tracked.credentialId = credential.id
     const account = await db.subscriptionAccount.create({
@@ -210,8 +212,8 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       const input: GatewayAdmitInput = {
         keyHash: row.keyHash,
         source: '127.0.0.1',
-        backendId: 'kimi-code',
-        route: { method: 'POST', path: '/kimi/v1/chat/completions' },
+        backendId: sampleBackendId,
+        route: { method: 'POST', path: sampleRoutePath },
         profile,
         requestBytes: 600,
         estimatedInputTokens: 1_000,

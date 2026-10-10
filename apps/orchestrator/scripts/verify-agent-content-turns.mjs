@@ -21,6 +21,7 @@ import {
 import { CLI_IMAGE, CLI_VERSIONS } from '../../../infra/dev/llm-verify/cli.mjs'
 import { ZAI_PATHS } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import { repository, run } from '../../../infra/dev/llm-verify/stack.mjs'
+import { resultReadings } from './verify-llm-live-results.mjs'
 import {
   resetOpencodeHome,
   ZAI_BACKEND,
@@ -345,6 +346,8 @@ export async function verifyAgentContentTurns(ctx) {
       durationMs: Date.now() - before.startedAt,
       stdout: result.stdout,
       result: driver.extractResult(events, null),
+      // The same answer as the product would read it, for the live flow (spec §20, П38).
+      reading: resultReadings({ driver, events, code: result.code }),
       provider: (await providerRequests(turn.driver)).slice(before.provider),
       http: after.http.slice(before.mcp.http.length),
       site: Object.fromEntries(

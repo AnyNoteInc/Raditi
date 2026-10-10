@@ -24,7 +24,7 @@ const valid = (): SandboxSpec => ({
   runtime: 'runsc',
   resources: { cpu: 2, memoryMiB: 4096, pids: 512 },
   user: { uid: 10001, gid: 10001 },
-  env: { HOME: '/agent-home/codex', KIMI_DISABLE_TELEMETRY: '1', LANG: 'C.UTF-8' },
+  env: { HOME: '/agent-home/opencode', OPENCODE_DISABLE_AUTOUPDATE: '1', LANG: 'C.UTF-8' },
   secrets: [{ path: '/run/raditi/secrets/llm-key', value: 'sk-turn-key-0123456789abcdef' }],
   network: { mode: 'gateway', routes: ['llm', 'mcp'] },
   hardTimeoutMs: MAX_SANDBOX_TURN_MS,
@@ -43,7 +43,7 @@ describe('sandboxSpecSchema', () => {
   it('accepts less than the limits and no network at all', () => {
     const spec = {
       ...valid(),
-      image: `raditi/agent-codex@sha256:${digest}`,
+      image: `raditi/agent-opencode@sha256:${digest}`,
       runtime: 'runc' as const,
       resources: { cpu: 0.5, memoryMiB: 512, pids: 64 },
       network: { mode: 'none' as const },
@@ -90,7 +90,7 @@ describe('sandboxSpecSchema', () => {
   })
 
   it.each([
-    'KIMI_MODEL_API_KEY',
+    'ZAI_API_KEY',
     'LLM_GATEWAY_KEY',
     'MCP_TOKEN',
     'GITHUB_TOKEN',
@@ -125,7 +125,7 @@ describe('sandboxSpecSchema', () => {
   it('keeps secret files outside the snapshotted /workspace, absolute and unique', () => {
     for (const path of [
       '/workspace/repo/.env',
-      '/agent-home/codex/auth.json',
+      '/agent-home/opencode/.local/share/opencode/auth.json',
       '/agent-home',
       '/workspace',
       'run/secrets/key',
@@ -161,7 +161,7 @@ describe('assertSandboxSpec', () => {
     const spec = {
       ...valid(),
       user: { uid: 0, gid: 0 },
-      env: { OPENAI_API_KEY: 'sk-top-secret-value-123456', URL: 'https://u:top-secret@h' },
+      env: { LLM_API_KEY: 'sk-top-secret-value-123456', URL: 'https://u:top-secret@h' },
     }
     let error: unknown
     try {
@@ -172,7 +172,7 @@ describe('assertSandboxSpec', () => {
     expect(error).toMatchObject({ code: 'BAD_REQUEST', httpStatus: 400 })
     const text = `${String(error)} ${JSON.stringify((error as { details: unknown }).details)}`
     expect(text).toMatch(/user\.uid/)
-    expect(text).toMatch(/OPENAI_API_KEY/)
+    expect(text).toMatch(/LLM_API_KEY/)
     expect(text).toMatch(/env URL/)
     expect(text).not.toContain('top-secret')
   })

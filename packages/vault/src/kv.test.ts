@@ -58,12 +58,12 @@ afterEach(() => vi.restoreAllMocks())
 describe('Vault KV v2 requests', () => {
   it('reads data and its CAS version together from the selected mount', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(read(7))
-    expect(await withFetch(fetch).kvRead('subs/openai-chatgpt/account_1')).toEqual({
+    expect(await withFetch(fetch).kvRead('subs/zai-coding/account_1')).toEqual({
       data: credential,
       version: 7,
     })
     const [url, init] = fetch.mock.calls[0]!
-    expect(url).toBe(`${address}/v1/subs/data/openai-chatgpt/account_1`)
+    expect(url).toBe(`${address}/v1/subs/data/zai-coding/account_1`)
     expect(init).toMatchObject({ method: 'GET', redirect: 'error' })
     expect(init?.body).toBeUndefined()
     expect(init?.signal).toBeInstanceOf(AbortSignal)
@@ -76,10 +76,10 @@ describe('Vault KV v2 requests', () => {
     async (cas) => {
       const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(written(cas + 1))
       expect(
-        await withFetch(fetch).kvWrite('subs/openai-chatgpt/account_1', credential, { cas }),
+        await withFetch(fetch).kvWrite('subs/zai-coding/account_1', credential, { cas }),
       ).toEqual({ version: cas + 1 })
       const [url, init] = fetch.mock.calls[0]!
-      expect(url).toBe(`${address}/v1/subs/data/openai-chatgpt/account_1`)
+      expect(url).toBe(`${address}/v1/subs/data/zai-coding/account_1`)
       expect(init).toMatchObject({ method: 'POST', redirect: 'error' })
       expect(JSON.parse(String(init?.body))).toEqual({ options: { cas }, data: credential })
       expect(new Headers(init?.headers).get('content-type')).toBe('application/json')
@@ -105,10 +105,10 @@ describe('Vault KV v2 requests', () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(empty())
     const store = withFetch(fetch)
     await store.kvDelete('turns/t_task_1_1')
-    await store.kvDestroyAll('subs/openai-chatgpt/account_1')
+    await store.kvDestroyAll('subs/zai-coding/account_1')
     expect(fetch.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
       [`${address}/v1/turns/data/t_task_1_1`, 'DELETE'],
-      [`${address}/v1/subs/metadata/openai-chatgpt/account_1`, 'DELETE'],
+      [`${address}/v1/subs/metadata/zai-coding/account_1`, 'DELETE'],
     ])
     expect(fetch.mock.calls.every(([, init]) => init?.body === undefined)).toBe(true)
   })
@@ -118,7 +118,7 @@ describe('Vault KV v2 requests', () => {
       .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(reply({ errors: ['check-and-set parameter did not match'] }, 400))
     await expect(
-      withFetch(fetch).kvWrite('subs/openai-chatgpt/account_1', credential, { cas: 3 }),
+      withFetch(fetch).kvWrite('subs/zai-coding/account_1', credential, { cas: 3 }),
     ).rejects.toMatchObject({ name: 'VaultError', status: 400 })
     expect(fetch).toHaveBeenCalledTimes(1)
   })
@@ -281,14 +281,14 @@ describe('Vault metadata and listing', () => {
 
   it('returns the current version and custom metadata without reading credential data', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(reply(metadataBody(3)))
-    expect(await withFetch(fetch).kvMetadata('subs/openai-chatgpt/account_1')).toEqual({
+    expect(await withFetch(fetch).kvMetadata('subs/zai-coding/account_1')).toEqual({
       currentVersion: 3,
       custom,
       createdTime: new Date(createdTime),
       deleted: false,
       destroyed: false,
     })
-    expect(fetch.mock.calls[0]?.[0]).toBe(`${address}/v1/subs/metadata/openai-chatgpt/account_1`)
+    expect(fetch.mock.calls[0]?.[0]).toBe(`${address}/v1/subs/metadata/zai-coding/account_1`)
     expect(fetch.mock.calls[0]?.[1]?.method).toBe('GET')
     expect(fetch).toHaveBeenCalledTimes(1)
   })
@@ -317,7 +317,7 @@ describe('Vault metadata and listing', () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(reply(metadataBody(2, { destroyed: true })))
-    expect(await withFetch(fetch).kvMetadata('subs/openai-chatgpt/account_1')).toMatchObject({
+    expect(await withFetch(fetch).kvMetadata('subs/zai-coding/account_1')).toMatchObject({
       currentVersion: 2,
       destroyed: true,
     })
@@ -347,7 +347,7 @@ describe('Vault metadata and listing', () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(reply({ data: { ...metadataBody().data, custom_metadata: null } }))
-    expect(await withFetch(fetch).kvMetadata('subs/kimi-code/account_1')).toMatchObject({
+    expect(await withFetch(fetch).kvMetadata('subs/zai-coding/account_1')).toMatchObject({
       currentVersion: 1,
       custom: {},
       deleted: false,
@@ -387,11 +387,8 @@ describe('Vault metadata and listing', () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(reply({ data: { keys: ['account_2', 'account_1'] } }))
-    expect(await withFetch(fetch).kvList('subs/openai-chatgpt/')).toEqual([
-      'account_1',
-      'account_2',
-    ])
-    expect(fetch.mock.calls[0]?.[0]).toBe(`${address}/v1/subs/metadata/openai-chatgpt`)
+    expect(await withFetch(fetch).kvList('subs/zai-coding/')).toEqual(['account_1', 'account_2'])
+    expect(fetch.mock.calls[0]?.[0]).toBe(`${address}/v1/subs/metadata/zai-coding`)
   })
 })
 
@@ -442,7 +439,7 @@ describe('Vault boundary validation', () => {
     }) as Record<string, string>
     const fetch = vi.fn<typeof globalThis.fetch>()
     const store = createVaultSecretStore({ addr: address, appRole: role, fetch })
-    const error = await failure(store.kvWrite('subs/openai-chatgpt/account_1', data, { cas: 0 }))
+    const error = await failure(store.kvWrite('subs/zai-coding/account_1', data, { cas: 0 }))
     expect(error).toBeInstanceOf(VaultError)
     expect(inspect(error)).not.toContain(secret)
     expect(inspect(error)).not.toContain(token)
@@ -456,7 +453,7 @@ describe('Vault boundary validation', () => {
       const fetch = vi.fn<typeof globalThis.fetch>()
       const store = createVaultSecretStore({ addr: address, appRole: role, fetch })
       await expect(
-        store.kvWrite('subs/openai-chatgpt/account_1', credential, { cas }),
+        store.kvWrite('subs/zai-coding/account_1', credential, { cas }),
       ).rejects.toBeInstanceOf(VaultError)
       expect(fetch).not.toHaveBeenCalled()
     },
@@ -477,7 +474,7 @@ describe('Vault boundary validation', () => {
     const store = createVaultSecretStore({ addr: address, appRole: role, fetch })
     const invalid = data as unknown as Record<string, string>
     await expect(
-      store.kvWrite('subs/openai-chatgpt/account_1', invalid, { cas: 0 }),
+      store.kvWrite('subs/zai-coding/account_1', invalid, { cas: 0 }),
     ).rejects.toBeInstanceOf(VaultError)
     await expect(
       store.kvCreateOnce('turns/t_task_1_1', credential, invalid),
@@ -504,7 +501,7 @@ describe('Vault boundary validation', () => {
     { data: credential },
   ])('rejects malformed successful reads without interpreting them as missing', async (body) => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(reply(body))
-    await expect(withFetch(fetch).kvRead('subs/openai-chatgpt/account_1')).rejects.toBeInstanceOf(
+    await expect(withFetch(fetch).kvRead('subs/zai-coding/account_1')).rejects.toBeInstanceOf(
       VaultError,
     )
   })
@@ -516,7 +513,7 @@ describe('Vault boundary validation', () => {
         .fn<typeof globalThis.fetch>()
         .mockResolvedValueOnce(reply({ data: { version } }))
       await expect(
-        withFetch(fetch).kvWrite('subs/openai-chatgpt/account_1', credential, { cas: 0 }),
+        withFetch(fetch).kvWrite('subs/zai-coding/account_1', credential, { cas: 0 }),
       ).rejects.toBeInstanceOf(VaultError)
     },
   )
@@ -542,8 +539,8 @@ describe('Vault boundary validation', () => {
         .mockResolvedValueOnce(reply({ data: { ...metadataBody().data, custom_metadata: unsafe } }))
       const store = withFetch(fetch)
       for (const promise of [
-        store.kvRead('subs/openai-chatgpt/account_1'),
-        store.kvMetadata('subs/openai-chatgpt/account_1'),
+        store.kvRead('subs/zai-coding/account_1'),
+        store.kvMetadata('subs/zai-coding/account_1'),
       ]) {
         const error = await failure(promise)
         expect(error).toBeInstanceOf(VaultError)
@@ -561,7 +558,7 @@ describe('Vault response and credential safety', () => {
       const fetch = vi
         .fn<typeof globalThis.fetch>()
         .mockResolvedValueOnce(reply({ errors: [`${secret}:${token}:${role.secretId}`] }, status))
-      const error = await failure(withFetch(fetch).kvRead('subs/openai-chatgpt/account_1'))
+      const error = await failure(withFetch(fetch).kvRead('subs/zai-coding/account_1'))
       expect(error).toMatchObject({ name: 'VaultError', status })
       expect(inspect(error)).not.toContain(secret)
       expect(inspect(error)).not.toContain(token)
@@ -576,7 +573,7 @@ describe('Vault response and credential safety', () => {
       .fn<typeof globalThis.fetch>()
       .mockRejectedValueOnce(new Error(`${secret}:${token}:${role.secretId}`))
     const error = await failure(
-      withFetch(fetch).kvWrite('subs/openai-chatgpt/account_1', credential, { cas: 2 }),
+      withFetch(fetch).kvWrite('subs/zai-coding/account_1', credential, { cas: 2 }),
     )
     expect(error).toBeInstanceOf(VaultError)
     expect(inspect(error)).not.toContain(secret)
@@ -592,7 +589,7 @@ describe('Vault response and credential safety', () => {
     () => new Response(' '.repeat(1024 * 1024 + 1), { status: 200 }),
   ])('rejects invalid, oversized or non-UTF8 bodies without exposing input', async (response) => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(response())
-    const error = await failure(withFetch(fetch).kvRead('subs/openai-chatgpt/account_1'))
+    const error = await failure(withFetch(fetch).kvRead('subs/zai-coding/account_1'))
     expect(error).toBeInstanceOf(VaultError)
     expect(inspect(error)).not.toContain(secret)
     expect(error).not.toHaveProperty('cause')
@@ -607,7 +604,7 @@ describe('Vault response and credential safety', () => {
     )
     const store = createVaultSecretStore({ ...options, fetch, timeoutMs: 10 })
     await expect(
-      store.kvWrite('subs/openai-chatgpt/account_1', credential, { cas: 1 }),
+      store.kvWrite('subs/zai-coding/account_1', credential, { cas: 1 }),
     ).rejects.toBeInstanceOf(VaultError)
     expect(fetch).toHaveBeenCalledTimes(1)
   })
@@ -626,11 +623,11 @@ describe('Vault response and credential safety', () => {
         }),
       )
     const store = createVaultSecretStore({ ...options, appRole: role, fetch })
-    await store.kvRead('subs/openai-chatgpt/account_1')
+    await store.kvRead('subs/zai-coding/account_1')
     await store.transitDataKey('ws-test')
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       `${address}/v1/auth/approle/login`,
-      `${address}/v1/subs/data/openai-chatgpt/account_1`,
+      `${address}/v1/subs/data/zai-coding/account_1`,
       `${address}/v1/transit/datakey/plaintext/ws-test`,
     ])
     for (const [, init] of fetch.mock.calls.slice(1)) {
@@ -647,10 +644,10 @@ describe('Vault response and credential safety', () => {
       .mockResolvedValueOnce(read())
     const store = createVaultSecretStore({ ...options, appRole: role, fetch })
     await expect(
-      store.kvWrite('subs/openai-chatgpt/account_1', credential, { cas: 2 }),
+      store.kvWrite('subs/zai-coding/account_1', credential, { cas: 2 }),
     ).rejects.toMatchObject({ status: 403 })
     expect(fetch).toHaveBeenCalledTimes(2)
-    expect(await store.kvRead('subs/openai-chatgpt/account_1')).toMatchObject({ version: 1 })
+    expect(await store.kvRead('subs/zai-coding/account_1')).toMatchObject({ version: 1 })
     expect(fetch.mock.calls.map(([, init]) => init?.method)).toEqual([
       'POST',
       'POST',

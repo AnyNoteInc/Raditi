@@ -75,7 +75,9 @@ const SCENARIOS = new Set([
   // The answer calls the given tools (two calls in one answer when two are given): `calls` is
   // one round, `rounds` a list of them. The round is the number of tool steps the request holds
   // since the last message of the user; past the last round, and for a request that declares
-  // no tool (the CLI's context compaction), the answer is the text.
+  // no tool (the CLI's context compaction), the answer is the text. With `beside` an answer
+  // that calls says that sentence first, in the same answer: the form the real model showed
+  // (sample 81-g6-live-content/02).
   'tools',
   // The agent-content stand: the model drives the platform MCP tool `wp_rest`, one call an
   // answer, by the name the CLI declared for it. The rounds are those of `tools`; what each
@@ -119,6 +121,7 @@ function scenarioOptions(value = {}) {
     'reasoning',
     'calls',
     'rounds',
+    'beside',
     'finish',
     'code',
     'status',
@@ -164,6 +167,14 @@ function scenarioOptions(value = {}) {
       !value.rounds.every(callList))
   )
     throw invalid('rounds')
+  if (
+    value.beside !== undefined &&
+    (scenario !== 'tools' ||
+      typeof value.beside !== 'string' ||
+      value.beside.length < 1 ||
+      value.beside.length > 16_384)
+  )
+    throw invalid('text beside the calls')
   if (value.finish !== undefined) {
     // Any value: the gateway must also cope with one nobody has documented.
     if (
@@ -194,6 +205,7 @@ function scenarioOptions(value = {}) {
     throw invalid('retry-after')
   if (value.failures !== undefined && (!whole(value.failures, 100) || value.failures < 1))
     throw invalid('failure count')
+  // How long a stream is held after its first frame: a call the role keeps open meanwhile.
   if (value.delayMs !== undefined && !whole(value.delayMs, 120_000)) throw invalid('delay')
   if (value.usage !== undefined) {
     if (!isRecord(value.usage)) throw invalid('usage')
@@ -396,7 +408,8 @@ const usageOf = (config) => {
 
 /**
  * The frames of one answer in the recorded order: reasoning, text or tool calls (each call
- * whole in one chunk), the last chunk with finish_reason and usage together, DONE.
+ * whole in one chunk; with `beside`, that sentence before them), the last chunk with
+ * finish_reason and usage together, DONE.
  */
 export function zaiFrames(body, config, sequence) {
   const base = {
@@ -431,7 +444,12 @@ export function zaiFrames(body, config, sequence) {
   const reasoning = config.reasoning ?? 'Synthetic reasoning.'
   for (const word of reasoning.split(/(?<= )/).filter(Boolean))
     frames.push(frame(chunk({ role: 'assistant', reasoning_content: word })))
-  if (calling)
+  const say = (text) => {
+    for (const word of text.split(/(?<= )/).filter(Boolean))
+      frames.push(frame(chunk({ role: 'assistant', content: word })))
+  }
+  if (calling) {
+    if (config.beside !== undefined) say(config.beside)
     calls.forEach((call, index) =>
       frames.push(
         frame(
@@ -448,9 +466,7 @@ export function zaiFrames(body, config, sequence) {
         ),
       ),
     )
-  else
-    for (const word of (config.text ?? 'Synthetic Z.ai answer.').split(/(?<= )/).filter(Boolean))
-      frames.push(frame(chunk({ role: 'assistant', content: word })))
+  } else say(config.text ?? 'Synthetic Z.ai answer.')
   const finish = config.scenario === 'finish' ? config.finish : calling ? 'tool_calls' : 'stop'
   return {
     body: frames,
@@ -587,7 +603,15 @@ export async function handleZai(req, res, state) {
     ...providerHeaders(sequence),
     ...(config.retryAfter ? { 'retry-after': config.retryAfter } : {}),
   })
+  // What is still to be sent of the frames before the last one.
+  let text = frames.body.join('')
   if (config.delayMs) {
+    // A held answer has started: its first frame leaves, then the provider is silent. The two
+    // streams that hold no answer at all are only late.
+    if (scenario !== 'empty' && scenario !== 'done_only') {
+      res.write(frames.body[0])
+      text = frames.body.slice(1).join('')
+    }
     const cancelled = new AbortController()
     const onClose = () => cancelled.abort()
     res.once('close', onClose)
@@ -599,10 +623,9 @@ export async function handleZai(req, res, state) {
       res.off('close', onClose)
     }
   }
-  const text = frames.body.join('')
   if (scenario === 'stream_error')
     return res.end(
-      frames.body[0] +
+      (config.delayMs ? '' : frames.body[0]) +
         frame({
           error: {
             code: String(config.code),

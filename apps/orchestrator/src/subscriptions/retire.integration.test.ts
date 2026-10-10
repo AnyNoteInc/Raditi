@@ -3,7 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
 import type { EgressHttp, LlmBackend, SecretStore, TurnCredentialGrant } from '@repo/domain'
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
+import { codexBackend, kimiCodeBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createCredentialSource, encodeSubscriptionCredential } from '../llm-gateway/credentials.ts'
@@ -12,6 +12,7 @@ import { SessionSubscriptionLock } from '../llm-gateway/session-lock.ts'
 import { PostgresGatewayStore } from '../llm-gateway/store.ts'
 import { CredentialSweeper } from '../llm/credential-sweeper.ts'
 import { GatewayTurnCredentials } from '../llm/turn-credentials.ts'
+import { sampleBackendId, sampleDriverId, sampleRoutePath } from '../testing/ids.ts'
 import { retirementRefusals, SubscriptionRetirement } from './retire.ts'
 
 // Only verify:db's owned disposable database; no repository env-file is loaded here.
@@ -67,6 +68,7 @@ function memoryVault() {
 
 describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () => {
   let db: PrismaClient
+  let driverWasEnabled: boolean
   const cleanups: (() => Promise<void>)[] = []
   const fixtures: {
     workspaceId: string
@@ -75,8 +77,13 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     credentialId: string
   }[] = []
 
-  beforeAll(() => {
+  beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
+    // The seeds keep the driver of the sample backend disabled: a key is issued only to an
+    // enabled one, so the suite enables it and puts the flag back.
+    const driver = await db.agentDriver.findUniqueOrThrow({ where: { id: sampleDriverId } })
+    driverWasEnabled = driver.enabled
+    await db.agentDriver.update({ where: { id: sampleDriverId }, data: { enabled: true } })
   })
   afterEach(async () => {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
@@ -98,13 +105,18 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     }
   })
   afterAll(async () => {
+    await db.agentDriver.update({
+      where: { id: sampleDriverId },
+      data: { enabled: driverWasEnabled },
+    })
     await db.$disconnect()
   })
 
-  async function fixture(backend: 'kimi-code' | 'openai-chatgpt' = 'kimi-code') {
+  /** An account whose key the operator revokes in the console, or one the role revokes itself. */
+  async function fixture(backend: typeof sampleBackendId | 'openai-chatgpt' = sampleBackendId) {
     const provider = await db.llmProvider.findUniqueOrThrow({ where: { slug: backend } })
     await db.llmProvider.update({ where: { id: provider.id }, data: { enabled: true } })
-    const driverId = backend === 'kimi-code' ? 'kimi' : 'codex'
+    const driverId = backend === sampleBackendId ? sampleDriverId : 'codex'
     const accountId = randomUUID()
     const credential = await db.credentialRef.create({
       data: { kind: 'subscription', vaultPath: `subs/${backend}/${accountId}` },
@@ -165,7 +177,7 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
       secrets: { kvDestroyAll: vault.kvDestroyAll },
       credentials,
       locks,
-      backends: [codexBackend, kimiCodeBackend],
+      backends: [codexBackend, zaiCodingBackend],
     }
     const service = new SubscriptionRetirement(options)
     const sweeper = new CredentialSweeper({ prisma: db, secrets: vault.port, credentials })
@@ -270,8 +282,8 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     const admission = await f.store.admit({
       keyHash: hash(values.llmApiKey),
       source: '127.0.0.1',
-      backendId: 'kimi-code',
-      route: { method: 'POST', path: '/v1/chat/completions' },
+      backendId: sampleBackendId,
+      route: { method: 'POST', path: sampleRoutePath },
       profile: profile!,
       requestBytes: 100,
       estimatedInputTokens: 10,
@@ -540,7 +552,7 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     await f.ready()
     await db.credentialRef.update({
       where: { id: f.account.credentialRefId },
-      data: { vaultPath: `subs/kimi-code/${randomUUID()}` },
+      data: { vaultPath: `subs/${sampleBackendId}/${randomUUID()}` },
     })
     await expect(f.service.finalize({ accountId: f.accountId })).rejects.toMatchObject({
       code: 'CONFLICT',

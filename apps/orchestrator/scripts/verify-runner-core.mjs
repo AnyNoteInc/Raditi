@@ -3,7 +3,7 @@
 // over the local PostgreSQL, S3 and Vault, as P12 will wire them. The harness sends it turns over
 // IPC and kills it with SIGKILL: only the database, S3, the Git remote and the runner VM outlive
 // it. Started by verify-runner.mjs only, which sends its configuration as the first message.
-import { randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 
 import { createCodexDriver, createKimiDriver, createOpencodeDriver } from '@repo/agent-drivers'
 import {
@@ -31,28 +31,33 @@ if (!process.send) throw new Error('Started by verify-runner.mjs only')
 const { config } = await new Promise((resolve) => process.once('message', resolve))
 
 /**
- * The synthetic agent, run by the runner as uid 10001 in /workspace/repo: codex JSONL, a session
- * file in the home the snapshot keeps, a tracked and a new file. A later turn first checks what
- * restore brought back. A gated agent then waits until the harness opens its gate: core or the
- * runner may be killed meanwhile.
+ * The synthetic agent, run by the runner as uid 10001 in /workspace/repo: the rows of
+ * `opencode run --format json`, the session database and its journal in the home the snapshot
+ * keeps, a log next to them that the snapshot must leave behind, a tracked and a new file. A
+ * later turn first checks what restore brought back: both session files and the working copy. A
+ * gated agent then waits until the harness opens its gate: core or the runner may be killed
+ * meanwhile.
  */
 const AGENT = `set -eu
-turn=$1 thread=$2 message=$3 gated=$4
-sessions=/agent-home/codex/sessions/verify
+turn=$1 started=$2 message=$3 finished=$4 gated=$5
+data=/agent-home/opencode/.local/share/opencode
 if [ "$turn" -gt 1 ]; then
-  test -f "$sessions/turn-$((turn - 1)).jsonl"
+  grep -qx "turn $((turn - 1))" "$data/opencode.db"
+  grep -qx "turn $((turn - 1))" "$data/opencode.db-wal"
   grep -qx "turn $((turn - 1))" index.php
 fi
-printf '{"type":"thread.started","thread_id":"%s"}\\n' "$thread"
-mkdir -p "$sessions"
-printf '{"turn":%s}\\n' "$turn" > "$sessions/turn-$turn.jsonl"
+printf '%s\\n' "$started"
+mkdir -p "$data/log"
+printf 'turn %s\\n' "$turn" >> "$data/opencode.db"
+printf 'turn %s\\n' "$turn" >> "$data/opencode.db-wal"
+printf 'turn %s\\n' "$turn" > "$data/log/synthetic.log"
 printf 'turn %s\\n' "$turn" >> index.php
 printf 'turn %s\\n' "$turn" > "turn-$turn.txt"
 printf '%s\\n' "$message"
 if [ "$gated" = 1 ]; then
   while [ ! -e /tmp/raditi-verify-go ]; do sleep 0.2; done
 fi
-printf '{"type":"turn.completed"}\\n'
+printf '%s\\n' "$finished"
 `
 
 const result = (turn) => ({
@@ -65,22 +70,32 @@ const result = (turn) => ({
   risk: 'low',
 })
 
-/** codex's parser, session state and result; prepare and command are synthetic (no model). */
-const codex = createCodexDriver({
-  image: config.driverId ? config.sandboxImage : `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`,
-})
+/** One row of the CLI's output: a part of the answer of the session. */
+const row = (type, sessionID, part) =>
+  JSON.stringify({
+    type,
+    timestamp: Date.now(),
+    sessionID,
+    part: { messageID: 'msg_verify', sessionID, ...part },
+  })
+
+/** The parser, session state and result of the sample driver; prepare and command are synthetic (no model). */
+const sample = createOpencodeDriver({ image: `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}` })
 const driver = config.driverId
-  ? config.driverId === 'kimi'
-    ? createKimiDriver({ image: config.sandboxImage })
-    : config.driverId === 'opencode'
-      ? createOpencodeDriver({ image: config.sandboxImage })
-      : codex
+  ? { codex: createCodexDriver, kimi: createKimiDriver, opencode: createOpencodeDriver }[
+      config.driverId
+    ]({ image: config.sandboxImage })
   : {
-      ...codex,
+      ...sample,
       async prepare(context) {
         return {
           context: { ...context },
-          files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true\n' }],
+          files: [
+            {
+              path: '/agent-home/opencode/.config/opencode/opencode.json',
+              content: '{"synthetic":true}\n',
+            },
+          ],
           env: {},
           secrets: [
             { path: `${SANDBOX_SECRETS_DIR}/llm`, content: context.llm.apiKey },
@@ -90,10 +105,7 @@ const driver = config.driverId
       },
       command(prepared, input) {
         const { turn, nativeSessionId } = prepared.context
-        const message = JSON.stringify({
-          type: 'item.completed',
-          item: { id: 'verify', type: 'agent_message', text: JSON.stringify(result(turn)) },
-        })
+        const session = nativeSessionId ?? `ses_${randomBytes(12).toString('hex')}`
         const gated = JSON.parse(input.prompt).gated === true
         return [
           'sh',
@@ -101,8 +113,20 @@ const driver = config.driverId
           AGENT,
           'synthetic-agent',
           String(turn),
-          nativeSessionId ?? randomUUID(),
-          message,
+          row('step_start', session, { type: 'step-start' }),
+          row('text', session, { type: 'text', text: JSON.stringify(result(turn)) }),
+          row('step_finish', session, {
+            type: 'step-finish',
+            reason: 'stop',
+            tokens: {
+              total: 40,
+              input: 20,
+              output: 8,
+              reasoning: 2,
+              cache: { write: 0, read: 10 },
+            },
+            cost: 0,
+          }),
           gated ? '1' : '0',
         ]
       },

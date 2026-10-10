@@ -5,6 +5,7 @@ import { isSnapshotCredential, snapshotLimits, type SessionState } from '@repo/d
 import { pack, type Header } from 'tar-stream'
 import { describe, expect, it } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import {
   validateSnapshotArchives,
   validateUntrackedArchive,
@@ -12,7 +13,7 @@ import {
 } from './archive-validation.ts'
 
 const state: SessionState = {
-  root: '/agent-home/codex',
+  root: `/agent-home/${sampleDriverId}`,
   include: ['sessions'],
   exclude: ['sessions/private'],
 }

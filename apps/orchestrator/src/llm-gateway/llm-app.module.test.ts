@@ -338,7 +338,7 @@ describe('llm role lifecycle', () => {
       options.egress.request(
         {
           method: 'GET',
-          url: 'https://chatgpt.com/backend-api/wham/usage',
+          url: 'https://api.z.ai/api/monitor/usage/quota/limit',
           headers: new Headers(),
         },
         { signal: new AbortController().signal },
@@ -363,7 +363,7 @@ describe('llm role lifecycle', () => {
     expect(options.ready?.()).toBe(false)
     const usage = {
       method: 'GET' as const,
-      url: 'https://chatgpt.com/backend-api/wham/usage',
+      url: 'https://api.z.ai/api/monitor/usage/quota/limit',
       headers: new Headers(),
     }
     const signal = new AbortController().signal

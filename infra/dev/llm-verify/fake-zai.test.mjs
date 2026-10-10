@@ -28,6 +28,7 @@ import {
   ZAI_ERROR_STATUS,
   ZAI_PATHS,
 } from './fake-zai.mjs'
+import { streamSummary } from './live.mjs'
 import { checkSanitized } from './sanitize-samples.mjs'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
@@ -323,6 +324,119 @@ test('tool rounds follow the history of the request, and a request without tools
   target.state.setScenario({ scenario: 'tools', calls: round('only') })
   assert.deepEqual((await called([user])).names, ['only'])
   assert.deepEqual((await called([user, ...step('a')])).names, [])
+})
+
+// The form the real model showed and no scripted answer had (docs/plan/45-zai-live.md): the
+// stand's observer recorded it in front of the role, so its events carry the role's `event:` line.
+const besideRun = fixture('81-g6-live-content/02-llm-post_chat_completions.json')
+const observedChunks = (text) =>
+  text
+    .split('\n\n')
+    .filter(Boolean)
+    .map((block) => block.slice('event: message\ndata: '.length))
+    .filter((data) => data !== '[DONE]')
+    .map((data) => JSON.parse(data))
+/** What an answer is made of, in its order: runs of chunks of one kind, then how it finished. */
+const kindsOf = (parsed) => {
+  const kinds = []
+  for (const chunk of parsed) {
+    const { delta, finish_reason: finish } = chunk.choices[0]
+    const kind = finish
+      ? `finish ${finish}`
+      : delta.tool_calls
+        ? 'tool_calls'
+        : (delta.content ?? '') !== ''
+          ? 'content'
+          : (delta.reasoning_content ?? '') !== ''
+            ? 'reasoning'
+            : 'empty'
+    if (kinds.at(-1) !== kind) kinds.push(kind)
+  }
+  return kinds
+}
+
+test('a tool answer can say a sentence beside its call, in the order the real model gave', async (t) => {
+  const target = await plain(t)
+  const sentence = 'The page was read. Now one write follows.'
+  const call = { name: 'raditi_wp_rest', arguments: { method: 'GET', path: '/wp/v2/pages/7' } }
+  target.state.setScenario({
+    scenario: 'tools',
+    calls: [call],
+    beside: sentence,
+    text: 'Synthetic result.',
+  })
+  const answer = await chat(target, withTools())
+  assert.equal(answer.status, 200)
+  const sent = chunks(answer.text)
+  // The record and the fake: reasoning, the sentence, the call, the finish with the usage.
+  const order = ['reasoning', 'content', 'tool_calls', 'finish tool_calls']
+  assert.deepEqual(kindsOf(observedChunks(besideRun.response.sse)), order)
+  assert.deepEqual(kindsOf(sent), order)
+  const recorded = new Set(observedChunks(besideRun.response.sse).map(shapeOf))
+  for (const chunk of sent)
+    assert.ok(recorded.has(shapeOf(chunk)), `a recorded shape: ${shapeOf(chunk)}`)
+  assert.equal(sent.map((chunk) => chunk.choices[0].delta.content ?? '').join(''), sentence)
+  assert.deepEqual(
+    sent
+      .flatMap((chunk) => chunk.choices[0].delta.tool_calls ?? [])
+      .map((item) => [item.function.name, JSON.parse(item.function.arguments)]),
+    [[call.name, call.arguments]],
+  )
+  // The stand's own reading names the form in the record and in the fake's answer alike.
+  assert.deepEqual(streamSummary(besideRun.response.sse).forms, ['text_beside_tool_call'])
+  assert.deepEqual(streamSummary(answer.text).forms, ['text_beside_tool_call'])
+  // The production inspector forwards every frame and the meter reads the fake's numbers.
+  const { seen, meter, failure } = inspect(answer.text)
+  assert.equal(failure, undefined)
+  assert.equal(seen.length, frames(answer.text).length)
+  assert.equal(meter.outcome, 'completed')
+  assert.deepEqual(meter.usage, {
+    input: 7105,
+    cacheRead: 6784,
+    cacheWrite: 0,
+    output: 94,
+    reasoning: 54,
+  })
+  // Past the round the answer is the text alone, and so is one to a request without tools.
+  for (const body of [
+    withTools({
+      messages: [
+        { role: 'user', content: 'x' },
+        { role: 'assistant', content: sentence, tool_calls: [] },
+        { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
+      ],
+    }),
+    chatBody(),
+  ]) {
+    const later = chunks((await chat(target, body)).text)
+    assert.deepEqual(kindsOf(later), ['reasoning', 'content', 'finish stop'])
+    assert.equal(
+      later.map((chunk) => chunk.choices[0].delta.content ?? '').join(''),
+      'Synthetic result.',
+    )
+  }
+  // Every round of a list says it; an answer without the option says nothing beside its call.
+  target.state.setScenario({ scenario: 'tools', rounds: [[call], [call]], beside: sentence })
+  for (const history of [[], [{ role: 'assistant', content: '', tool_calls: [] }]])
+    assert.deepEqual(
+      kindsOf(
+        chunks(
+          (
+            await chat(
+              target,
+              withTools({ messages: [{ role: 'user', content: 'x' }, ...history] }),
+            )
+          ).text,
+        ),
+      ),
+      order,
+    )
+  target.state.setScenario({ scenario: 'tools', calls: [call] })
+  assert.deepEqual(kindsOf(chunks((await chat(target, withTools())).text)), [
+    'reasoning',
+    'tool_calls',
+    'finish tool_calls',
+  ])
 })
 
 // What the pinned CLI sent with the platform MCP server in its configuration, and what the real
@@ -639,6 +753,65 @@ test('a short-lived failure can be limited to the first requests', async (t) => 
   assert.ok(answers[2].text.includes('result.'))
 })
 
+test('a held answer has started: its first frame leaves at once, the rest after the delay', async (t) => {
+  const target = await plain(t)
+  const whole = await chat(target)
+  target.state.setScenario({ scenario: 'text', delayMs: 400 })
+  // The moments the first bytes and the end of the answer reach the client.
+  const held = await new Promise((resolve, reject) => {
+    const started = Date.now()
+    const req = httpRequest(
+      {
+        hostname: '127.0.0.1',
+        port: target.port,
+        path: ZAI_PATHS.chat,
+        method: 'POST',
+        agent: false,
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${SYNTHETIC_ZAI_KEY}`,
+        },
+      },
+      (res) => {
+        const parts = []
+        let firstMs
+        res.on('data', (chunk) => {
+          firstMs ??= Date.now() - started
+          parts.push(chunk)
+        })
+        res.on('error', reject)
+        res.on('end', () =>
+          resolve({
+            first: parts[0].toString('utf8'),
+            firstMs,
+            endMs: Date.now() - started,
+            text: Buffer.concat(parts).toString('utf8'),
+          }),
+        )
+      },
+    )
+    req.on('error', reject)
+    req.end(JSON.stringify(chatBody()))
+  })
+  // A stream that has begun: one whole frame of the answer, well before the delay is over …
+  assert.equal(frames(held.first).length, 1)
+  assert.ok(chunks(held.first)[0].choices[0].delta.reasoning_content)
+  assert.ok(held.firstMs < 300, `the first frame came after ${held.firstMs} ms`)
+  // … and then the same answer as without a delay, no frame twice and none lost.
+  assert.ok(held.endMs >= 400, `the answer ended after ${held.endMs} ms`)
+  assert.deepEqual(chunks(held.text).map(shapeOf), chunks(whole.text).map(shapeOf))
+  assert.equal(frames(held.text).at(-1), '[DONE]')
+  assert.equal(inspect(held.text).meter.outcome, 'completed')
+  // The protocol-breaking streams keep their shape when held: nothing but DONE, an error
+  // object after the first frame.
+  target.state.setScenario({ scenario: 'done_only', delayMs: 50 })
+  assert.deepEqual(frames((await chat(target)).text), ['[DONE]'])
+  target.state.setScenario({ scenario: 'stream_error', code: 1301, delayMs: 50 })
+  const failed = frames((await chat(target)).text)
+  assert.equal(failed.length, 2)
+  assert.equal(JSON.parse(failed[1]).error.code, '1301')
+})
+
 test('the three finishing values pass the inspector and every other one becomes a failure', async (t) => {
   const target = await plain(t)
   for (const finish of ['stop', 'tool_calls', 'length']) {
@@ -931,6 +1104,11 @@ test('scenario options are closed', () => {
       calls: [{ name: 'bash', arguments: {} }],
       rounds: [[{ name: 'bash', arguments: {} }]],
     },
+    { scenario: 'text', beside: 'A sentence.' },
+    { scenario: 'content_edit', beside: 'A sentence.' },
+    { scenario: 'tools', beside: '' },
+    { scenario: 'tools', beside: 7 },
+    { scenario: 'tools', beside: 'x'.repeat(16_385) },
     { failures: 0 },
     { delayMs: -1 },
     { retryAfter: 'line\nbreak' },
@@ -1068,7 +1246,7 @@ const walk = (directory) =>
 
 test('every fixture of the adapter is a sanitised copy of a record of the research directory', () => {
   const copied = walk(fixtures).filter((file) => /\.(json|txt)$/.test(file))
-  assert.equal(copied.length, 24)
+  assert.equal(copied.length, 25)
   let headers = 0
   for (const file of copied) {
     const name = relative(fixtures, file)

@@ -11,11 +11,11 @@ import {
 
 const now = new Date('2026-09-29T00:00:00Z')
 const grant = (): TurnCredentialGrant => ({
-  driverId: 'codex',
-  backend: 'openai-chatgpt',
+  driverId: 'opencode',
+  backend: 'zai-coding',
   modelSlug: 'synthetic-model',
   modelClass: 'standard',
-  reasoningEffort: 'medium',
+  reasoningEffort: 'high',
   ttlMs: 20 * 60_000,
   deadlineAt: new Date(now.getTime() + 20 * 60_000),
   budgetRub: '285.00',

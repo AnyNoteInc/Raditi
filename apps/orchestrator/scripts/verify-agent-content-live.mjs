@@ -5,24 +5,24 @@
 // journal row, no privacy marker on the public page, the lease, the version of MCP, the
 // declared tool names, the accounting, no credential anywhere. What depends on the model — the
 // page changed, the result is valid — gets up to three attempts, each on a page of its own,
-// and goes to the report as a share: it does not decide the run. The repeat of a write and the
-// refusal of a forbidden route are not here: only the scripted model makes them certain.
+// and goes to the report as a share: it does not decide the run. A result is valid when the
+// product would take it (the supervisor's readTurnResult); the strict reading of the driver is
+// reported beside it. The repeat of a write and the refusal of a forbidden route are not here:
+// only the scripted model makes them certain.
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
-import { turnResultSchema } from '@repo/domain'
-
 import {
   chatRequestSummary,
-  resultVerdict,
   STREAM_FORMS,
   streamSummary,
   sumUsage,
 } from '../../../infra/dev/llm-verify/live.mjs'
 import { repository } from '../../../infra/dev/llm-verify/stack.mjs'
+import { readingShares } from './verify-llm-live-results.mjs'
 
 /** Calls one turn key of the content run may start: the role's LLM_MAX_CALLS_PER_KEY. */
 export const CONTENT_TURN_CALLS = 8
@@ -48,10 +48,13 @@ export const publishedMarkerProblem = (html, applied) =>
 
 /**
  * What the scripted model of a rehearsal answers as its result, by attempt: the two forms the
- * real model gave instead of a valid one (docs/plan/45-zai-live.md), then a valid one. Every
- * rehearsal so runs all the attempts, each on its page, and ends with a share of one in three.
+ * real model gave instead of a valid one (docs/plan/45-zai-live.md). The object without
+ * `files_changed` twice — neither reading takes it — then a sentence before the object, which
+ * the product takes and the strict reading of the driver does not. Every rehearsal so runs all
+ * the attempts, each on its page, and ends with a share of one in three by the product and of
+ * none by the strict reading.
  */
-const REHEARSED_RESULTS = ['prose', 'field', 'valid']
+const REHEARSED_RESULTS = ['field', 'field', 'prose']
 const rehearsedText = (attempt, expected) => {
   const form = REHEARSED_RESULTS[attempt - 1]
   if (form === 'prose') return `The page is updated.\n\n${JSON.stringify(expected)}`
@@ -76,7 +79,8 @@ export function liveContentTurns({ live, accountId, script, undo, outputs }) {
     let edits = 0
     let results = 0
     let appliedWrites = 0
-    const verdicts = []
+    // Both readings of every attempt's answer: the product's decides `results`.
+    const readings = []
     assert.deepEqual(Object.keys(site.pages), liveContentPages(), 'A page for every attempt')
     for (const page of Object.values(site.pages)) {
       // The first key of the run also has the role probe the quota for the account's windows.
@@ -264,17 +268,15 @@ export function liveContentTurns({ live, accountId, script, undo, outputs }) {
       // ── What depends on the model ───────────────────────────────────────────────────────
       const published =
         html.includes(`${changed}. Напишите нам: ${page.contact}`) && !html.includes(page.original)
-      const valid =
-        outcome.code === 0 &&
-        turnResultSchema.safeParse(outcome.result).success &&
-        outcome.result.change_type === 'content'
+      // The result as the product would read it; the strict reading of the driver beside it.
+      const { reading } = outcome
+      readings.push(reading)
+      const valid = reading.taken && reading.result.change_type === 'content'
       const edited = published && written.some((call) => call.result === 'ok')
-      const verdict = resultVerdict(outcome.events, turnResultSchema)
-      verdicts.push(verdict)
       if (edited) edits += 1
       if (valid) results += 1
       report(
-        `${label}: the page ${edited ? 'shows the new text with the contact back from its marker' : 'does not show the expected text'}; result: ${verdict}${verdict === 'valid' && !valid ? ' (but its change_type is not "content")' : ''}`,
+        `${label}: the page ${edited ? 'shows the new text with the contact back from its marker' : 'does not show the expected text'}; result: ${reading.taken ? 'taken' : 'refused'} by the reading of the product${reading.taken && !valid ? ' (but its change_type is not "content")' : ''}; by the strict reading of the driver: ${reading.verdict}`,
       )
 
       // ── The trusted return: the turn's key is revoked, the lease is still its own ───────
@@ -300,16 +302,26 @@ export function liveContentTurns({ live, accountId, script, undo, outputs }) {
       // Both outcomes seen at least once: no further attempt is needed.
       if (edits > 0 && results > 0) break
     }
+    const read = readingShares(readings)
     report(
-      `content edit: the page was changed in ${edits} of ${attempts} attempt(s); the result was valid in ${results} of ${attempts}; these shares do not decide the run`,
+      `content edit: the page was changed in ${edits} of ${attempts} attempt(s); the result was valid in ${results} of ${attempts} by the reading of the product (the supervisor's readTurnResult), in ${read.strict} by the strict reading of the driver; these shares do not decide the run`,
     )
     if (live.rehearsal) {
       // The scripted model is certain: every attempt edits its page, and the results are those
-      // of REHEARSED_RESULTS — a share of one in three, with which the run passes.
+      // of REHEARSED_RESULTS — the product takes the third, the strict reading none; with
+      // these shares the run passes.
       assert.deepEqual([attempts, edits, results], [CONTENT_ATTEMPTS, CONTENT_ATTEMPTS, 1])
-      assert.deepEqual(verdicts, ['text before the JSON object', 'schema: files_changed', 'valid'])
+      assert.deepEqual(read, { turns: CONTENT_ATTEMPTS, taken: 1, strict: 0 })
+      assert.deepEqual(
+        readings.map(({ verdict, taken }) => `${verdict}: ${taken ? 'taken' : 'refused'}`),
+        [
+          'schema: files_changed: refused',
+          'schema: files_changed: refused',
+          'text before the JSON object: taken',
+        ],
+      )
       passed(
-        'rehearsal: the scripted model gave an invalid result in two attempts of three; each attempt edited a page of its own, the share went to the report and the run went on',
+        'rehearsal: the scripted model left a key out of its result in two attempts and wrapped the third in a sentence; the product took that one and the strict reading of the driver none; each attempt edited a page of its own, the shares went to the report and the run went on',
       )
     }
     passed(

@@ -237,7 +237,9 @@ async function fakeRuntime() {
   }
 }
 
-for (const driverId of ['codex', 'kimi'])
+// Every shell the launcher runs, with the name its PASS line carries.
+const launchers = { codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode' }
+for (const [driverId, driverName] of Object.entries(launchers))
   for (const interrupt of [false, true])
     test(`launcher ${driverId} ${interrupt ? 'SIGTERM failure' : 'success'} cleans resources and keeps environment pinned`, async () => {
       const runtime = await fakeRuntime()
@@ -345,12 +347,7 @@ for (const driverId of ['codex', 'kimi'])
             (await readFile(failure.diagnosticPath, 'utf8')).trim(),
             childEnv.VAULT_DEV_ROOT_TOKEN,
           )
-        } else
-          assert(
-            log.some((line) =>
-              line.startsWith(`PASS real ${driverId === 'codex' ? 'Codex' : 'Kimi'} supervisor`),
-            ),
-          )
+        } else assert(log.some((line) => line.startsWith(`PASS real ${driverName} supervisor`)))
       } finally {
         if (failure?.diagnosticPath)
           await rm(dirname(failure.diagnosticPath), { recursive: true, force: true })

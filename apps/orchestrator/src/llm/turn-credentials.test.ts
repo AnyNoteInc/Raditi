@@ -4,6 +4,7 @@ import type { Prisma, PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialGrant, TurnCredentialRef } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleBackendId, sampleDriverId } from '../testing/ids.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 
 const decimal = (value: string) => ({ toFixed: (digits: number) => Number(value).toFixed(digits) })
@@ -19,8 +20,8 @@ function fixture() {
     epoch: 1,
   }
   const grant: TurnCredentialGrant = {
-    driverId: 'kimi',
-    backend: 'kimi-code',
+    driverId: sampleDriverId,
+    backend: sampleBackendId,
     modelSlug: 'synthetic',
     modelClass: 'standard',
     reasoningEffort: null,
@@ -44,7 +45,7 @@ function fixture() {
         return owned ? [{ id: ref.taskId, attempt: 1, dataClass: 'synthetic', now }] : []
       if (sql.includes('SELECT EXISTS')) return [{ owned }]
       if (sql.includes('FROM llm_models'))
-        return [{ modelId, providerId: randomUUID(), enabled: true, reserveOutputTokens: 32_768 }]
+        return [{ modelId, providerId: randomUUID(), enabled: true, reserveOutputTokens: 32_000 }]
       if (sql.includes('LEFT JOIN credit_holds'))
         return [{ payg: false, holdRub: null, feeRub: null, markup: null }]
       if (sql.includes('FROM subscription_accounts'))

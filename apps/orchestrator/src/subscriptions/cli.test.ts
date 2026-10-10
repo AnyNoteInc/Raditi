@@ -171,19 +171,19 @@ describe('operator subscription commands', () => {
     expect(
       parseSubscriptionArguments('login', [
         '--backend',
-        'kimi-code',
+        'zai-coding',
         '--label',
-        'local-kimi',
+        'local-plan',
         '--plan',
-        'pro',
+        'lite',
         '--vault-token-file',
         '/tmp/writer',
       ]),
-    ).toMatchObject({ command: 'login', value: { backend: 'kimi-code', plan: 'pro' } })
+    ).toMatchObject({ command: 'login', value: { backend: 'zai-coding', plan: 'lite' } })
     expect(
       parseSubscriptionArguments('login', [
         '--backend',
-        'openai-chatgpt',
+        'zai-coding',
         '--relogin',
         account,
         '--vault-token-file',
@@ -192,12 +192,12 @@ describe('operator subscription commands', () => {
     ).toMatchObject({ command: 'login', value: { relogin: account } })
   })
   it.each([
-    ['login', ['--backend', 'openai-chatgpt', '--label', 'a', '--vault-token-file', 'relative']],
+    ['login', ['--backend', 'zai-coding', '--label', 'a', '--vault-token-file', 'relative']],
     [
       'login',
       [
         '--backend',
-        'openai-chatgpt',
+        'zai-coding',
         '--relogin',
         account,
         '--label',
@@ -241,7 +241,7 @@ describe('operator subscription commands', () => {
       expect(() =>
         parseSubscriptionArguments('login', [
           '--backend',
-          'kimi-code',
+          'zai-coding',
           '--label',
           label,
           '--plan',
@@ -279,11 +279,11 @@ describe('operator subscription commands', () => {
     ).toThrow(/^Неверные параметры команды подписок\. Используйте --help\.$/)
   })
   it('accepts a one-line label in Cyrillic', () => {
-    const label = 'Кодекс — основной №1'
+    const label = 'План — основной №1'
     expect(
       parseSubscriptionArguments('login', [
         '--backend',
-        'openai-chatgpt',
+        'zai-coding',
         '--label',
         label,
         '--vault-token-file',
@@ -296,19 +296,19 @@ describe('operator subscription commands', () => {
   })
   it('names the account to retire twice, and cancels by its id alone', () => {
     expect(
-      parseSubscriptionArguments('retire', ['--account', account, '--label', 'codex-a']),
-    ).toMatchObject({ value: { account, label: 'codex-a', cancel: false } })
+      parseSubscriptionArguments('retire', ['--account', account, '--label', 'plan-a']),
+    ).toMatchObject({ value: { account, label: 'plan-a', cancel: false } })
     expect(
       parseSubscriptionArguments('retire', [
         '--account',
         account,
         '--label',
-        'codex-a',
+        'plan-a',
         '--finalize',
         '--vault-token-file',
         '/tmp/admin',
       ]),
-    ).toMatchObject({ value: { label: 'codex-a', finalize: true } })
+    ).toMatchObject({ value: { label: 'plan-a', finalize: true } })
     expect(parseSubscriptionArguments('retire', ['--account', account, '--cancel'])).toMatchObject({
       value: { account, cancel: true },
     })
@@ -351,11 +351,11 @@ describe('operator subscription commands', () => {
     }
     const args = [
       '--backend',
-      'kimi-code',
+      'zai-coding',
       '--label',
-      'kimi-a',
+      'plan-a',
       '--plan',
-      'pro',
+      'lite',
       '--vault-token-file',
       '/nonexistent/raditi/writer.token',
     ]

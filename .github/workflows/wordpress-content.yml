@@ -25,6 +25,8 @@ on:
       # path policy.
       - apps/orchestrator/src/turns/**
       - apps/orchestrator/src/infra/**
+      # The sample ids of the turns the stand's scripts make up, loaded from the sources.
+      - apps/orchestrator/src/testing/**
       - packages/db/**
       - packages/storage/**
       - packages/domain/**

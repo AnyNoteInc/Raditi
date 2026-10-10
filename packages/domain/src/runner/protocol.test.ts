@@ -55,8 +55,12 @@ const manifest = {
   turn: 1,
   createdAt: '2026-09-27T10:00:00.000Z',
   image: `registry.local/raditi/sbx@sha256:${digest}`,
-  driver: { id: 'kimi', version: '2.1.0' },
-  home: { root: '/agent-home/kimi', include: ['sessions'], exclude: [] },
+  driver: { id: 'opencode', version: '1.18.34' },
+  home: {
+    root: '/agent-home/opencode',
+    include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+    exclude: [],
+  },
   git: { provider: 'gitea', branch: 'agent/t', baseSha: 'b'.repeat(40), headSha: 'c'.repeat(40) },
   parts: (['home', 'untracked', 'patch'] as const).map((name) => ({
     name,
@@ -96,13 +100,15 @@ const prepare = () => ({
       patch: get('sessions/session-1/turns/0001/patch.diff'),
     },
   },
-  driverId: 'kimi',
+  driverId: 'opencode',
   prepared: {
-    files: [{ path: '/agent-home/kimi/config.toml', content: 'model = "m"' }],
-    env: { KIMI_DISABLE_TELEMETRY: '1' },
+    files: [
+      { path: '/agent-home/opencode/.config/opencode/opencode.json', content: '{"model":"m"}' },
+    ],
+    env: { OPENCODE_DISABLE_AUTOUPDATE: '1' },
     secrets: [{ path: '/run/raditi/secrets/llm', content: 'sk-turn-llm-key' }],
   },
-  argv: ['kimi', '-p', 'task'],
+  argv: ['opencode', 'run', 'task'],
   credentials: ['sk-turn-llm-key', 'mcp-turn-token'],
 })
 const sealCommand = () => {
@@ -164,7 +170,11 @@ describe('runner commands', () => {
       {
         ...envelope,
         type: 'capture',
-        home: { root: '/agent-home/kimi', include: ['sessions'], exclude: [] },
+        home: {
+          root: '/agent-home/opencode',
+          include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+          exclude: [],
+        },
         baseSha: 'b'.repeat(40),
       },
       sealCommand(),
@@ -177,7 +187,7 @@ describe('runner commands', () => {
         containerId: 'c1',
         labels,
         purpose: 'work',
-        work: { remainingMs: 60_000, driverId: 'codex' },
+        work: { remainingMs: 60_000, driverId: 'opencode' },
       },
     ])
       expect(runnerCommandSchema.safeParse(cmd).success, JSON.stringify(cmd.type)).toBe(true)
@@ -301,7 +311,7 @@ describe('runner commands', () => {
         containerId: 'c1',
         labels,
         purpose: 'removal',
-        work: { remainingMs: 60_000, driverId: 'codex' },
+        work: { remainingMs: 60_000, driverId: 'opencode' },
       },
     ],
   ])('refuses %s', (_label, cmd) => {
@@ -329,7 +339,7 @@ describe('runner credentials', () => {
       containerId: 'c1',
       labels,
       purpose: 'work',
-      work: { remainingMs: 1_000, driverId: 'kimi', credentials: values },
+      work: { remainingMs: 1_000, driverId: 'opencode', credentials: values },
     })
     expect(runnerCommandSchema.safeParse(adopt(credentials)).success).toBe(true)
     for (const values of [

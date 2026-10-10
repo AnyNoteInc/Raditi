@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { createPrismaClient, type PrismaClient } from '@repo/db'
 import type { LlmBackend, LlmBackendId, SecretStore } from '@repo/domain'
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
+import { codexBackend, kimiCodeBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -31,6 +31,13 @@ function credential(accountId: string, plan = 'plus') {
   }
 }
 
+/** A plan key: every import and relogin brings a new one, and it names no account or expiry. */
+const planKey = () => ({
+  v: '1',
+  kind: 'zai_api_key',
+  apiKey: `synthetic-plan-key-${randomUUID()}`,
+})
+
 describe.skipIf(!enabled)('subscription import and relogin on disposable PostgreSQL', () => {
   let db: PrismaClient
   const cleanup: (() => Promise<void>)[] = []
@@ -42,7 +49,14 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
   })
   afterAll(async () => db?.$disconnect())
 
-  async function fixture(original: LlmBackend = codexBackend) {
+  /**
+   * An account of a key-based backend by default. The OAuth adapter (`fixture(codexBackend,
+   * credential)`) brings what a key has not: an external identity, an expiry, a plan in the token.
+   */
+  async function fixture(
+    original: LlmBackend = zaiCodingBackend,
+    issue: (externalId: string, plan?: string) => Record<string, unknown> = planKey,
+  ) {
     const suffix = randomUUID().replaceAll('-', '')
     const backendId = `synthetic-login-${suffix}` as LlmBackendId
     const backend = { ...original, id: backendId }
@@ -103,17 +117,31 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
       backend: backendId,
       driverId: driver.id,
       label: `login-${suffix}`,
-      credential: credential(externalId),
+      credential: issue(externalId),
+      // A key names no plan: the operator does.
+      ...(issue === planKey ? { plan: 'lite' } : {}),
       clientIdentity: createSubscriptionClientIdentity(),
       maxConcurrentTurns: 1,
       maxConcurrentRequests: 2,
       paidUntil: new Date('2026-12-31T00:00:00Z'),
     }
-    return { service, input, writer, values, options, locks, pool, externalId, provider }
+    return {
+      service,
+      input,
+      writer,
+      values,
+      options,
+      locks,
+      pool,
+      externalId,
+      provider,
+      /** A fresh credential of the same account, as a relogin brings. */
+      issue: (plan?: string) => issue(externalId, plan),
+    }
   }
 
   it('imports Codex with CAS0, disabled status and matching SQL metadata without credential contents', async () => {
-    const f = await fixture()
+    const f = await fixture(codexBackend, credential)
     const result = await f.service.importAccount(f.input)
     const account = await db.subscriptionAccount.findUniqueOrThrow({
       where: { id: result.accountId },
@@ -149,29 +177,37 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
     expect(JSON.stringify(account)).not.toContain('synthetic-refresh-not-real')
   })
 
-  it('imports a Kimi API key with explicit plan and no invented expiry or external identity', async () => {
-    const f = await fixture(kimiCodeBackend)
-    const result = await f.service.importAccount({
-      ...f.input,
-      credential: { v: '1', kind: 'kimi_api_key', apiKey: 'synthetic-kimi-key' },
-      plan: 'synthetic',
-      maxConcurrentTurns: 2,
-      maxConcurrentRequests: 3,
-    })
-    const row = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: result.accountId } })
-    expect(row).toMatchObject({
-      enabled: false,
-      plan: 'synthetic',
-      externalAccountId: null,
-      credentialExpiresAt: null,
-      maxConcurrentTurns: 2,
-      maxConcurrentRequests: 3,
-    })
-    expect(row.credentialRefreshedAt).not.toBeNull()
-  })
+  it.each([
+    ['Kimi', kimiCodeBackend, { v: '1', kind: 'kimi_api_key', apiKey: 'synthetic-kimi-key' }],
+    ['Z.ai', zaiCodingBackend, { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-plan-key' }],
+  ])(
+    'imports a %s API key with explicit plan and no invented expiry or external identity',
+    async (_, backend, key) => {
+      const f = await fixture(backend)
+      const result = await f.service.importAccount({
+        ...f.input,
+        credential: key,
+        plan: 'synthetic',
+        maxConcurrentTurns: 2,
+        maxConcurrentRequests: 3,
+      })
+      const row = await db.subscriptionAccount.findUniqueOrThrow({
+        where: { id: result.accountId },
+      })
+      expect(row).toMatchObject({
+        enabled: false,
+        plan: 'synthetic',
+        externalAccountId: null,
+        credentialExpiresAt: null,
+        maxConcurrentTurns: 2,
+        maxConcurrentRequests: 3,
+      })
+      expect(row.credentialRefreshedAt).not.toBeNull()
+    },
+  )
 
   it('rejects another Codex account before touching metadata or writing Vault', async () => {
-    const f = await fixture()
+    const f = await fixture(codexBackend, credential)
     const imported = await f.service.importAccount(f.input)
     await expect(
       f.service.relogin({
@@ -190,7 +226,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
   })
 
   it('serializes duplicate external-identity imports under the pool lock before Vault', async () => {
-    const f = await fixture()
+    const f = await fixture(codexBackend, credential)
     const outcomes = await Promise.allSettled([
       f.service.importAccount(f.input),
       f.service.importAccount({ ...f.input, label: `${f.input.label}-second` }),
@@ -218,7 +254,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
     const request = {
       backend: f.input.backend,
       accountId: imported.accountId,
-      credential: credential(f.externalId),
+      credential: f.issue(),
     }
     await expect(f.service.relogin(request)).rejects.toMatchObject({ code: 'busy' })
     expect(f.writer.kvMetadata).not.toHaveBeenCalled()
@@ -236,7 +272,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
   })
 
   it('preserves banned operator state and stable device identity while resetting health and refresh markers', async () => {
-    const f = await fixture()
+    const f = await fixture(codexBackend, credential)
     const imported = await f.service.importAccount(f.input)
     await db.subscriptionAccount.update({
       where: { id: imported.accountId },
@@ -254,7 +290,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
     const result = await f.service.relogin({
       backend: f.input.backend,
       accountId: imported.accountId,
-      credential: credential(f.externalId, 'pro'),
+      credential: f.issue('pro'),
     })
     expect(result.enabled).toBe(true)
     const row = await db.subscriptionAccount.findUniqueOrThrow({
@@ -288,7 +324,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
     const result = await f.service.relogin({
       backend: f.input.backend,
       accountId: stub.id,
-      credential: credential(f.externalId),
+      credential: f.issue(),
     })
     expect(result).toMatchObject({ accountId: stub.id, credentialVersion: 1, enabled: false })
     expect(f.writer.kvWrite.mock.calls.map((call) => call[2]?.cas)).toEqual([0, 0])
@@ -302,7 +338,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
   ])(
     'retires an unfinished first import only after console revocation (written=$written, retry=$retryLogin)',
     async ({ written, retryLogin }) => {
-      const f = await fixture()
+      const f = await fixture(codexBackend, credential)
       const write = f.writer.kvWrite.getMockImplementation()!
       f.writer.kvWrite.mockImplementationOnce(async (...args) => {
         if (written) await write(...args)
@@ -318,7 +354,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
       const relogin = {
         backend: f.input.backend,
         accountId: stub.id,
-        credential: credential(f.externalId),
+        credential: f.issue(),
       }
       if (retryLogin) {
         f.writer.kvWrite.mockRejectedValueOnce(new Error('Synthetic writer offline'))
@@ -391,7 +427,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
     const input = {
       backend: f.input.backend,
       accountId: imported.accountId,
-      credential: credential(f.externalId),
+      credential: f.issue(),
     }
     await expect(f.service.relogin(input)).rejects.toMatchObject({ code: 'vault_unavailable' })
     const pending = await db.subscriptionAccount.findUniqueOrThrow({
@@ -433,7 +469,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
     const result = await f.service.relogin({
       backend: f.input.backend,
       accountId: stub.id,
-      credential: credential(f.externalId),
+      credential: f.issue(),
     })
     expect(result.credentialVersion).toBe(2)
     expect(f.writer.kvWrite.mock.calls[1]?.[2]).toEqual({ cas: 1 })
@@ -464,7 +500,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
   })
 
   it('imports the same label and ChatGPT account again after the old row was retired', async () => {
-    const f = await fixture()
+    const f = await fixture(codexBackend, credential)
     const first = await f.service.importAccount(f.input)
     await db.subscriptionAccount.update({
       where: { id: first.accountId },
@@ -538,7 +574,7 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
       f.service.relogin({
         backend: f.input.backend,
         accountId: imported.accountId,
-        credential: credential(f.externalId),
+        credential: f.issue(),
       }),
     ).rejects.toMatchObject({ code: 'account_unavailable' })
     const row = await db.subscriptionAccount.findUniqueOrThrow({

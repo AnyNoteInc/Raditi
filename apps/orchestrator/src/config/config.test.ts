@@ -1159,8 +1159,8 @@ describe('loadConfig — production', () => {
         VAULT_SECRET_ID: 'core-secret',
         S3_SECRET_ACCESS_KEY: 'very-secret-s3-key',
         GITEA_TOKEN: 'gitea-secret',
-        OPENAI_API_KEY: 'sk-provider-secret',
-        KIMI_MODEL_API_KEY: 'kimi-secret',
+        LLM_API_KEY: 'sk-provider-secret',
+        ZAI_API_KEY: 'plan-secret',
         BETTER_AUTH_SECRET: 'auth-secret',
         METRICS_TOKEN: 'metrics-secret',
         NODE_OPTIONS: '--require /tmp/hook.js',
@@ -1171,14 +1171,14 @@ describe('loadConfig — production', () => {
       'BETTER_AUTH_SECRET: must not be set for the runner role in production',
       'DATABASE_URL: must not be set for the runner role in production',
       'GITEA_TOKEN: must not be set for the runner role in production',
-      'KIMI_MODEL_API_KEY: must not be set for the runner role in production',
+      'LLM_API_KEY: must not be set for the runner role in production',
       'METRICS_TOKEN: must not be set for the runner role in production',
       'NODE_OPTIONS: must not be set for the runner role in production',
-      'OPENAI_API_KEY: must not be set for the runner role in production',
       'REDIS_URL: must not be set for the runner role in production',
       'S3_SECRET_ACCESS_KEY: must not be set for the runner role in production',
       'VAULT_ADDR: must not be set for the runner role in production',
       'VAULT_SECRET_ID: must not be set for the runner role in production',
+      'ZAI_API_KEY: must not be set for the runner role in production',
     ])
     expect(problems.join('\n')).not.toMatch(/secret|hook/)
   })

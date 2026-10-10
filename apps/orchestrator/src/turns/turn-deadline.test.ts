@@ -18,6 +18,7 @@ import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
 import { RunnerHub } from '../runner-api/runner-hub.ts'
 import { RunnerCallError } from '../runner/core-client.ts'
 import { SandboxRunner } from '../runner/sandbox-runner.ts'
+import { sampleDriverId } from '../testing/ids.ts'
 import { loopbackTransport } from '../testing/runner-loopback.ts'
 import { MemorySiteLeases } from '../testing/site-leases.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
@@ -34,7 +35,7 @@ const labels = {
   sessionId: 'session1',
   turn: 1,
 }
-const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 const baseSha = 'b'.repeat(40)
 const DEADLINE_LABEL = 'io.raditi.sandbox.deadline'
 
@@ -87,18 +88,27 @@ const request = (hardTimeoutMs: number): TurnRequest => ({
 })
 
 const driver: AgentDriver = {
-  id: 'codex',
+  id: sampleDriverId,
   image,
   capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
   prepare: async (context) => ({
     context: { ...context },
-    files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true' }],
+    files: [
+      {
+        path: `/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
+        content: '{"synthetic":true}',
+      },
+    ],
     env: {},
     secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: context.llm.apiKey }],
   }),
   command: () => ['synthetic-agent'],
   parseEvent: (text) => [JSON.parse(text) as AgentEvent],
-  sessionState: () => ({ root: '/agent-home/codex', include: ['sessions'], exclude: [] }),
+  sessionState: () => ({
+    root: `/agent-home/${sampleDriverId}`,
+    include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+    exclude: [],
+  }),
   extractResult: () => null,
 }
 

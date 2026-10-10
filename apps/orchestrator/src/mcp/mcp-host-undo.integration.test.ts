@@ -21,6 +21,7 @@ import {
 } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import { memoryStorage, memoryTransit } from '../testing/snapshots.ts'
 import { ContentPrivacy } from './content-privacy.ts'
 import { ContentSnapshotStorage } from './content-snapshots.ts'
@@ -171,7 +172,7 @@ describe.skipIf(!enabled)('trusted host undo in the MCP content journal with Pos
         instructions: 'Synthetic',
       },
       input: { prompt: 'Synthetic', attachments: [] },
-      driverId: 'codex',
+      driverId: sampleDriverId,
       driverVersion: '1.0.0',
       workspace: {
         repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },

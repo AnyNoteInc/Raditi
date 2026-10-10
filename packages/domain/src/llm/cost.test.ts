@@ -5,14 +5,14 @@ import type { CallUsage } from '../ports/llm-backend.ts'
 import { llmCallCostRub, type LlmModelPrices } from './cost.ts'
 
 const noUsage: CallUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 }
-// Historical vectors from p3-litellm-design §5.4, not live subscription rates.
-const historicalKimiPrices: LlmModelPrices = {
+// Historical vectors from p3-litellm-design §5.4 (its two price rows), not live subscription rates.
+const pricesWithoutCacheRates: LlmModelPrices = {
   inputPer1m: '175.680000',
   cacheReadPer1m: null,
   cacheWritePer1m: null,
   outputPer1m: '725.900000',
 }
-const historicalQwenPrices: LlmModelPrices = {
+const pricesWithCacheRead: LlmModelPrices = {
   inputPer1m: '200.000000',
   cacheReadPer1m: '50.000000',
   cacheWritePer1m: null,
@@ -20,14 +20,14 @@ const historicalQwenPrices: LlmModelPrices = {
 }
 
 describe('llmCallCostRub', () => {
-  it('matches the historical Kimi and Qwen cost vectors', () => {
+  it('matches the two historical cost vectors', () => {
     expect(
-      llmCallCostRub({ ...noUsage, input: 100_000, output: 2_000 }, historicalKimiPrices),
+      llmCallCostRub({ ...noUsage, input: 100_000, output: 2_000 }, pricesWithoutCacheRates),
     ).toBe('19.0198000000')
     expect(
       llmCallCostRub(
         { ...noUsage, input: 250_000, cacheRead: 200_000, output: 5_000 },
-        historicalQwenPrices,
+        pricesWithCacheRead,
       ),
     ).toBe('21.5000000000')
   })
@@ -40,16 +40,20 @@ describe('llmCallCostRub', () => {
       output: 10_000,
       reasoning: 10_000,
     }
-    const prices = { ...historicalQwenPrices, cacheWritePer1m: '250' }
+    const prices = { ...pricesWithCacheRead, cacheWritePer1m: '250' }
     expect(llmCallCostRub(usage, prices)).toBe('128.0000000000')
     expect(llmCallCostRub({ ...usage, reasoning: 0 }, prices)).toBe('128.0000000000')
   })
 
   it('uses the input rate for null cache rates and preserves an explicit zero rate', () => {
     const usage = { ...noUsage, input: 1_000_000, cacheRead: 600_000, cacheWrite: 400_000 }
-    expect(llmCallCostRub(usage, historicalKimiPrices)).toBe('175.6800000000')
+    expect(llmCallCostRub(usage, pricesWithoutCacheRates)).toBe('175.6800000000')
     expect(
-      llmCallCostRub(usage, { ...historicalKimiPrices, cacheReadPer1m: '0', cacheWritePer1m: '0' }),
+      llmCallCostRub(usage, {
+        ...pricesWithoutCacheRates,
+        cacheReadPer1m: '0',
+        cacheWritePer1m: '0',
+      }),
     ).toBe('0.0000000000')
   })
 
@@ -58,24 +62,24 @@ describe('llmCallCostRub', () => {
     ['0.000050', '0.0000000001'],
     ['0.000150', '0.0000000002'],
   ])('rounds rate %s HALF_UP to ten decimal places', (inputPer1m, expected) => {
-    expect(llmCallCostRub({ ...noUsage, input: 1 }, { ...historicalKimiPrices, inputPer1m })).toBe(
-      expected,
-    )
+    expect(
+      llmCallCostRub({ ...noUsage, input: 1 }, { ...pricesWithoutCacheRates, inputPer1m }),
+    ).toBe(expected)
   })
 
   it('returns fixed decimal zero and accepts the highest storable price', () => {
-    expect(llmCallCostRub(noUsage, historicalKimiPrices)).toBe('0.0000000000')
+    expect(llmCallCostRub(noUsage, pricesWithoutCacheRates)).toBe('0.0000000000')
     expect(
       llmCallCostRub(
         { ...noUsage, input: 1_000_000 },
-        { ...historicalKimiPrices, inputPer1m: '99999999.999999' },
+        { ...pricesWithoutCacheRates, inputPer1m: '99999999.999999' },
       ),
     ).toBe('99999999.9999990000')
   })
 
   it('rejects a result that does not fit Decimal(18,10)', () => {
     expect(() =>
-      llmCallCostRub({ ...noUsage, input: Number.MAX_SAFE_INTEGER }, historicalKimiPrices),
+      llmCallCostRub({ ...noUsage, input: Number.MAX_SAFE_INTEGER }, pricesWithoutCacheRates),
     ).toThrow(expect.objectContaining({ name: 'DomainError', code: 'BAD_REQUEST' }))
   })
 
@@ -84,7 +88,7 @@ describe('llmCallCostRub', () => {
     try {
       Decimal.set({ precision: 2, rounding: Decimal.ROUND_DOWN })
       expect(
-        llmCallCostRub({ ...noUsage, input: 100_000, output: 2_000 }, historicalKimiPrices),
+        llmCallCostRub({ ...noUsage, input: 100_000, output: 2_000 }, pricesWithoutCacheRates),
       ).toBe('19.0198000000')
     } finally {
       Decimal.set(previous)
@@ -110,7 +114,7 @@ describe('llmCallCostRub', () => {
     { model: 'secret-value' },
   ])('rejects invalid or inconsistent usage without exposing it: %o', (change) => {
     expect(() =>
-      llmCallCostRub({ ...noUsage, ...change } as CallUsage, historicalKimiPrices),
+      llmCallCostRub({ ...noUsage, ...change } as CallUsage, pricesWithoutCacheRates),
     ).toThrow('Invalid LLM call usage')
   })
 
@@ -133,7 +137,7 @@ describe('llmCallCostRub', () => {
     1,
     null,
   ])('rejects invalid prices without leaking raw values: %j', (inputPer1m) => {
-    const prices = { ...historicalKimiPrices, inputPer1m } as LlmModelPrices
+    const prices = { ...pricesWithoutCacheRates, inputPer1m } as LlmModelPrices
     try {
       llmCallCostRub(noUsage, prices)
       expect.fail('Expected invalid prices to be rejected')
@@ -146,12 +150,12 @@ describe('llmCallCostRub', () => {
 
   it('validates every rate even when its token partition is unused', () => {
     for (const field of ['inputPer1m', 'cacheReadPer1m', 'cacheWritePer1m', 'outputPer1m']) {
-      expect(() => llmCallCostRub(noUsage, { ...historicalKimiPrices, [field]: '-1' })).toThrow(
+      expect(() => llmCallCostRub(noUsage, { ...pricesWithoutCacheRates, [field]: '-1' })).toThrow(
         'Invalid LLM model prices',
       )
     }
     expect(() =>
-      llmCallCostRub(noUsage, { ...historicalKimiPrices, cacheReadPer1m: undefined } as never),
+      llmCallCostRub(noUsage, { ...pricesWithoutCacheRates, cacheReadPer1m: undefined } as never),
     ).toThrow('Invalid LLM model prices')
   })
 })

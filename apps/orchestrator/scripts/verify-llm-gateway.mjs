@@ -13,7 +13,6 @@ import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
 import { createVaultSecretStore } from '@repo/vault'
 
 import { seedReferenceData } from '../../../packages/db/prisma/seed/apply.ts'
-import { localVaultRequest } from '../../../infra/vault/bootstrap.mjs'
 import { CLI_IMAGE, createCliSession, RUNTIME_IMAGE } from '../../../infra/dev/llm-verify/cli.mjs'
 import {
   abortVerification,
@@ -38,10 +37,9 @@ import { createControlEgress, createEgressTransport } from '../src/llm-gateway/e
 import { SessionSubscriptionLock } from '../src/llm-gateway/session-lock.ts'
 import { authenticateSubscription } from '../src/subscriptions/device-login.ts'
 import { createSubscriptionClientIdentity, SubscriptionLogin } from '../src/subscriptions/login.ts'
-import { verifyLifecycle } from './verify-llm-lifecycle.mjs'
-import { verifyCrashes } from './verify-llm-crashes.mjs'
-import { verifyProtocol } from './verify-llm-protocol.mjs'
-import { verifyStreamFailures } from './verify-llm-gateway-stream.mjs'
+import { verifyOauthLifecycle } from './verify-llm-lifecycle.mjs'
+import { verifyRotationCrashes } from './verify-llm-crashes.mjs'
+import { verifyCodexPlanRound } from './verify-llm-protocol.mjs'
 import { verifyDriverTurns } from './verify-llm-gateway-drivers.mjs'
 import { runLiveGateway } from './verify-llm-live.mjs'
 import { verifyZai } from './verify-llm-zai.mjs'
@@ -300,45 +298,6 @@ try {
   )
   const kimi = JSON.parse(imported.stdout)
   passed('Codex device flow, foreign identity rejection and Kimi stdin import')
-  stage = 'Vault policy boundaries'
-  await assert.rejects(
-    writer.kvRead(`subs/openai-chatgpt/${codex.accountId}`),
-    (error) => error.status === 403,
-  )
-  const llmSecrets = roleSecret('llm')
-  await assert.rejects(
-    llmSecrets.kvMetadata(`subs/openai-chatgpt/${codex.accountId}`),
-    (error) => error.status === 403,
-  )
-  await assert.rejects(
-    roleSecret('core').kvRead(`subs/openai-chatgpt/${codex.accountId}`),
-    (error) => error.status === 403,
-  )
-  await assert.rejects(
-    llmSecrets.kvDestroyAll(`subs/openai-chatgpt/${codex.accountId}`),
-    (error) => error.status === 403,
-  )
-  await assert.rejects(
-    llmSecrets.kvDelete(`subs/openai-chatgpt/${codex.accountId}`),
-    (error) => error.status === 403,
-  )
-  for (const mount of ['subs', 'turns']) {
-    const configuration = await stack.request(`${mount}/config`)
-    assert.equal(configuration.data.max_versions, 1)
-    assert.equal(configuration.data.cas_required, true)
-  }
-  const versionPath = 'subs/openai-chatgpt/synthetic-version-check'
-  await assert.rejects(writer.kvWrite(versionPath, { value: 'first' }))
-  await writer.kvWrite(versionPath, { value: 'first' }, { cas: 0 })
-  await llmSecrets.kvWrite(versionPath, { value: 'second' }, { cas: 1 })
-  assert.equal((await llmSecrets.kvRead(versionPath)).version, 2)
-  const historical = await localVaultRequest(
-    stack.root,
-    'subs/data/openai-chatgpt/synthetic-version-check?version=1',
-  )
-  assert.equal(historical.status, 404)
-  await admin.kvDestroyAll(versionPath)
-  passed('distinct Vault capabilities, mandatory CAS and destruction of prior versions')
   const models = {}
   for (const [backend, accountId, slug, providerModelId] of [
     ['openai-chatgpt', codex.accountId, 'gpt-6-sol-standard', 'gpt-6-sol'],
@@ -421,7 +380,7 @@ try {
     })
     const ref = { taskId: record.id, sessionId: randomUUID(), turn: 1, epoch: 1 }
     const grant = {
-      driverId: backend === 'openai-chatgpt' ? 'codex' : 'kimi',
+      driverId: { 'openai-chatgpt': 'codex', 'kimi-code': 'kimi' }[backend],
       backend,
       modelSlug: models[backend].slug,
       modelClass: 'standard',
@@ -442,18 +401,6 @@ try {
     return { ...item, values }
   }
   const codexTurn = await issued('openai-chatgpt')
-  assert.deepEqual(await core.call('recover', { ref: codexTurn.ref }), codexTurn.values)
-  assert.deepEqual(
-    await core.call('issue', { ref: codexTurn.ref, grant: codexTurn.grant }),
-    codexTurn.values,
-  )
-  const busy = await task('openai-chatgpt')
-  // The only account is healthy but holds its one turn: occupied slots, not missing capacity.
-  await assert.rejects(
-    core.call('issue', { ref: busy.ref, grant: busy.grant }),
-    (error) => error.code === 'SUBSCRIPTION_BUSY',
-  )
-  passed('durable issuance, recovery and one-turn Codex capacity')
   stage = 'isolated CLI container'
   cli = await createCliSession({
     parentDirectory: stack.directory,
@@ -547,58 +494,10 @@ try {
     assert.equal(entry.reasoningTokens, 3)
   }
   passed('provider headers/body normalization and gateway-owned usage')
-  // Further protocol/lifecycle cases reuse the same real stack and trusted core worker.
-  stage = 'request policy refusals'
-  const valid = { model: 'gpt-6-sol', input: 'synthetic', stream: true, store: false }
-  for (const body of [
-    { ...valid, store: true },
-    { ...valid, unexpected: true },
-    { ...valid, tools: [{ type: 'web_search' }] },
-  ]) {
-    const response = await cli.request({
-      key: codexTurn.values.llmApiKey,
-      path: '/codex/responses',
-      headers: { 'content-type': 'application/json', 'user-agent': 'codex_exec/0.158.0' },
-      body: JSON.stringify(body),
-    })
-    assert.equal(response.status, 400)
-  }
-  for (const path of ['/kimi/v1/search', '/codex/wham/usage'])
-    assert.equal(
-      (await cli.request({ key: codexTurn.values.llmApiKey, path, body: '{}' })).status,
-      403,
-    )
-  assert.equal(
-    (
-      await cli.request({
-        key: codexTurn.values.llmApiKey,
-        path: '/kimi/v1/chat/completions',
-        headers: { 'content-type': 'application/json', 'user-agent': 'codex_exec/0.158.0' },
-        body: JSON.stringify({
-          model: 'k3-256k',
-          messages: [{ role: 'user', content: 'synthetic' }],
-          stream: true,
-        }),
-      })
-    ).status,
-    403,
-  )
-  passed('gateway body policy and sandbox route refusals')
+  // The keys of the driver turns go back before the scenarios below take the accounts.
   stage = 'revocation'
   await core.call('revoke', { ref: codexTurn.ref })
-  assert.equal(
-    (
-      await cli.request({
-        key: codexTurn.values.llmApiKey,
-        path: '/codex/responses',
-        headers: { 'content-type': 'application/json', 'user-agent': 'codex_exec/0.158.0' },
-        body: JSON.stringify(valid),
-      })
-    ).status,
-    401,
-  )
   await core.call('revoke', { ref: kimiTurn.ref })
-  passed('durable early turn-key revocation')
   const restartLlm = async (base = env) => {
     await llm.close()
     llm = await startWorker('llm', roleConfig('llm', base))
@@ -622,7 +521,8 @@ try {
     issued,
     passed,
     http,
-    llmSecrets,
+    llmSecrets: roleSecret('llm'),
+    coreSecrets: roleSecret('core'),
     writer,
     admin,
     locks,
@@ -632,19 +532,38 @@ try {
     secretMarkers,
     runDriver: driverRequests.runDriver,
   }
-  stage = 'CLI retry, admission and protocol boundaries'
-  await verifyProtocol(context)
-  stage = 'in-stream provider failures'
-  await verifyStreamFailures(context)
-  stage = 'crash and persistence recovery'
-  await verifyCrashes(context)
-  stage = 'runtime lifecycle'
-  await verifyLifecycle(context)
+  // What is left on the old accounts is theirs alone and goes with them (G8): Codex's plan
+  // tool, the OAuth rotation and what a retirement does with OAuth tokens. Every scenario of
+  // the platform runs once, in the Z.ai group, on a key of that backend.
+  stage = 'Codex plan round'
+  await verifyCodexPlanRound(context)
+  stage = 'crash barriers of the OAuth rotation'
+  await verifyRotationCrashes(context)
+  stage = 'OAuth and Codex lifecycle'
+  await verifyOauthLifecycle(context)
   stage = 'Z.ai through the OpenCode driver'
   await verifyZai({
     ...context,
     metricsToken,
     writerFile,
+    // A request of each other backend's route, with that backend's own client and body: a
+    // key of the group opens none of them. Gone with those routes (G8).
+    otherBackendRequests: [
+      {
+        path: '/codex/responses',
+        headers: { 'user-agent': 'codex_exec/0.158.0' },
+        body: { model: 'gpt-6-sol', input: 'synthetic', stream: true, store: false },
+      },
+      {
+        path: '/kimi/v1/chat/completions',
+        headers: { 'user-agent': 'kimi-code-cli/2.1.1' },
+        body: {
+          model: 'k3-256k',
+          messages: [{ role: 'user', content: 'synthetic' }],
+          stream: true,
+        },
+      },
+    ],
     setStage: (name) => {
       stage = `Z.ai: ${name}`
     },

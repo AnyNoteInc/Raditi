@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { createChatCompletionsUsageMeter } from '../chat-completions-usage.ts'
 import { createSseDecoder, type SseEvent } from '../sse.ts'
 import { cliReadsOverflow, cliRetriesStreamError } from './fixtures/opencode-cli.ts'
-import { chatSamples, sample } from './fixtures/samples.ts'
+import { chatSamples, liveSamples, sample } from './fixtures/samples.ts'
 import { createZaiStreamInspector } from './stream.ts'
 
 const bytes = (text: string) => new TextEncoder().encode(text)
@@ -91,6 +91,105 @@ describe('recorded Z.ai streams', () => {
       })
       expect(result.deltaTextBytes).toBeGreaterThan(0)
       expect(meterResultSchema.safeParse(result).success).toBe(true)
+    }
+  })
+})
+
+describe('an answer of the real model with text beside a tool call', () => {
+  // The form no scripted answer had until the live run showed it (docs/plan/45-zai-live.md).
+  const recorded = sample(liveSamples.textBesideToolCall).response.sse!
+  // What the record itself says, read without the meter and the inspector.
+  const payloads = recorded
+    .split('\n\n')
+    .filter((block) => block !== '')
+    .map((block) => {
+      expect(block.startsWith('event: message\ndata: ')).toBe(true)
+      return block.slice('event: message\ndata: '.length)
+    })
+  interface Chunk {
+    choices: {
+      finish_reason?: string
+      delta: {
+        content?: string
+        reasoning_content?: string
+        tool_calls?: { function: { name: string; arguments: string } }[]
+      }
+    }[]
+    usage?: {
+      prompt_tokens: number
+      completion_tokens: number
+      prompt_tokens_details: { cached_tokens: number }
+      completion_tokens_details: { reasoning_tokens: number }
+    }
+  }
+  const chunks = payloads.slice(0, -1).map((data) => JSON.parse(data) as Chunk)
+  const deltas = chunks.map((chunk) => chunk.choices[0]!.delta)
+  const said = deltas.map((delta) => delta.content ?? '').join('')
+  const thought = deltas.map((delta) => delta.reasoning_content ?? '').join('')
+  const called = deltas.flatMap((delta) => delta.tool_calls ?? [])
+  const counted = chunks.flatMap((chunk) => (chunk.usage ? [chunk.usage] : []))
+
+  it('holds the form: reasoning, a sentence and one tool call, finished as tool_calls', () => {
+    expect(payloads.at(-1)).toBe('[DONE]')
+    expect(said.trim().length).toBeGreaterThan(100)
+    expect(thought.length).toBeGreaterThan(0)
+    expect(called.map((call) => call.function.name)).toEqual(['raditi_wp_rest'])
+    expect(chunks.flatMap((chunk) => chunk.choices[0]!.finish_reason ?? [])).toEqual(['tool_calls'])
+    // The sentence comes before the call, and the finish reason with the usage after both.
+    const firstCall = deltas.findIndex((delta) => delta.tool_calls)
+    expect(deltas.findLastIndex((delta) => (delta.content ?? '') !== '')).toBeLessThan(firstCall)
+    expect(counted).toHaveLength(1)
+    expect(chunks.at(-1)!.usage).toBe(counted[0])
+  })
+
+  it('goes to the CLI event for event, with no failure and no signal', () => {
+    const { sent, failures, inspections } = run(recorded)
+    expect(failures).toEqual([])
+    expect(sent.map((event) => event.data)).toEqual(payloads)
+    expect(inspections.every((item) => item.kind === 'forward')).toBe(true)
+    expect(inspections.at(-1)).toEqual({
+      kind: 'forward',
+      event: { event: 'message', data: '[DONE]' },
+      terminal: true,
+    })
+  })
+
+  it('is metered by the usage of the record itself, in any chunking and either framing', () => {
+    const usage = counted[0]!
+    const expected = {
+      input: usage.prompt_tokens,
+      cacheRead: usage.prompt_tokens_details.cached_tokens,
+      cacheWrite: 0,
+      output: usage.completion_tokens,
+      reasoning: usage.completion_tokens_details.reasoning_tokens,
+    }
+    // The numbers of the record, written out: the provider counted the sentence and the call
+    // in one completion.
+    expect(expected).toEqual({
+      input: 5084,
+      cacheRead: 4928,
+      cacheWrite: 0,
+      output: 436,
+      reasoning: 266,
+    })
+    const text = said + thought + called.map((call) => call.function.arguments).join('')
+    // As the sandbox got it, and as the provider framed it for the role: `data:` lines alone.
+    for (const framed of [recorded, payloads.map((data) => `data: ${data}\n\n`).join('')]) {
+      const stream = bytes(framed)
+      for (const size of [1, 7, 1024, stream.length]) {
+        const meter = createChatCompletionsUsageMeter(createZaiStreamInspector)
+        for (let at = 0; at < stream.length; at += size) meter.push(stream.subarray(at, at + size))
+        const result = meter.end()
+        expect(result).toEqual({
+          outcome: 'completed',
+          signal: null,
+          usage: expected,
+          usageIssue: null,
+          // The sentence, the reasoning and the arguments of the call: all three were read.
+          deltaTextBytes: bytes(text).byteLength,
+        })
+        expect(meterResultSchema.safeParse(result).success).toBe(true)
+      }
     }
   })
 })

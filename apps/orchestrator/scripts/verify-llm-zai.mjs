@@ -1,9 +1,11 @@
-/* global fetch */
+/* global AbortSignal, fetch */
 // The Z.ai group of B13: the real pinned OpenCode CLI, started only through its driver's
 // prepare + command, on the path sandbox → sandbox-gw → role llm → synthetic Z.ai. The role
 // reaches the fake on a connection of its own (no egress proxy in its configuration), as it
 // reaches api.z.ai in the product; one turn before that goes through the stand's proxy, which
-// stays the way of every provider once a proxy is configured.
+// stays the way of every provider once a proxy is configured. The scenarios of the platform —
+// protocol boundaries, failures inside a stream, crash barriers, the lifecycle of the pool —
+// run here as well, once for the whole stand: the group hands them its ids and forms as data.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
@@ -30,14 +32,21 @@ import {
   SYNTHETIC_ZAI_ROTATED_KEY,
   ZAI_PATHS,
 } from '../../../infra/dev/llm-verify/fake-zai.mjs'
+import { sumUsage } from '../../../infra/dev/llm-verify/live.mjs'
 import { eventually, run } from '../../../infra/dev/llm-verify/stack.mjs'
+import { localVaultRequest } from '../../../infra/vault/bootstrap.mjs'
 import { opencodeUserAgent } from '../../../packages/llm-backends/src/zai-coding/backend.ts'
 import {
   cliReadsOverflow,
   cliRetriesHttp,
   cliRetriesStreamError,
 } from '../../../packages/llm-backends/src/zai-coding/fixtures/opencode-cli.ts'
+import { verifyCrashes } from './verify-llm-crashes.mjs'
 import { productionMcpTools } from './verify-llm-gateway-drivers.mjs'
+import { verifyStreamFailures } from './verify-llm-gateway-stream.mjs'
+import { verifyEmergencyRetirement, verifyLifecycle } from './verify-llm-lifecycle.mjs'
+import { verifyProtocol } from './verify-llm-protocol.mjs'
+import { zaiForms } from './verify-llm-zai-forms.mjs'
 import {
   OPENCODE_HOME as HOME,
   resetOpencodeHome,
@@ -56,13 +65,7 @@ const LABEL = 'synthetic-zai'
 // Everything the agent can write to in the CLI container, the session database included.
 const SANDBOX_ROOTS = ['/agent-home', '/workspace', '/tmp', '/run/raditi']
 // What the fake counts for every answer unless a scenario names other numbers.
-const FAKE_USAGE = {
-  inputUncachedTokens: 321,
-  cacheReadTokens: 6784,
-  cacheWriteTokens: 0,
-  outputTokens: 94,
-  reasoningTokens: 54,
-}
+const FAKE_USAGE = zaiForms.usage
 // The headers the adapter sends and what HTTP itself needs; nothing a CLI wrote.
 const PROVIDER_HEADERS = new Set([
   'accept',
@@ -89,6 +92,7 @@ const resultFor = (summary, files = []) => ({
 export async function verifyZai(ctx) {
   const { db, core, stack, cli, control, passed, llmSecrets, restartLlm, llmGetter } = ctx
   const { secretMarkers, promptMarker, metricsToken, writerFile, setStage } = ctx
+  const { writer, admin, coreSecrets } = ctx
   const zai = (body) => control('zai', body)
   const directEnv = zaiDirectEnvironment(ctx.env, stack)
   const operator = zaiOperator(stack, directEnv.LLM_UPSTREAM_CA_FILE)
@@ -159,6 +163,34 @@ export async function verifyZai(ctx) {
   assert.equal(await proxyTunnels(), 0)
   passed('Z.ai plan key import by the operator command on the direct path; a foreign key refused')
 
+  setStage('Vault policy boundaries')
+  // The secret of the account is the role llm's to read and nobody's to list or destroy but
+  // the admin's; the import wrote it and cannot read it back.
+  const secretPath = `subs/${BACKEND}/${accountId}`
+  await assert.rejects(writer.kvRead(secretPath), (error) => error.status === 403)
+  await assert.rejects(llmSecrets.kvMetadata(secretPath), (error) => error.status === 403)
+  await assert.rejects(coreSecrets.kvRead(secretPath), (error) => error.status === 403)
+  await assert.rejects(llmSecrets.kvDestroyAll(secretPath), (error) => error.status === 403)
+  await assert.rejects(llmSecrets.kvDelete(secretPath), (error) => error.status === 403)
+  assert.notEqual(await llmSecrets.kvRead(secretPath), null)
+  for (const mount of ['subs', 'turns']) {
+    const configuration = await stack.request(`${mount}/config`)
+    assert.equal(configuration.data.max_versions, 1)
+    assert.equal(configuration.data.cas_required, true)
+  }
+  const versionPath = `subs/${BACKEND}/synthetic-version-check`
+  await assert.rejects(writer.kvWrite(versionPath, { value: 'first' }))
+  await writer.kvWrite(versionPath, { value: 'first' }, { cas: 0 })
+  await llmSecrets.kvWrite(versionPath, { value: 'second' }, { cas: 1 })
+  assert.equal((await llmSecrets.kvRead(versionPath)).version, 2)
+  const historical = await localVaultRequest(
+    stack.root,
+    `subs/data/${BACKEND}/synthetic-version-check?version=1`,
+  )
+  assert.equal(historical.status, 404)
+  await admin.kvDestroyAll(versionPath)
+  passed('distinct Vault capabilities, mandatory CAS and destruction of prior versions')
+
   setStage('provider, profile, rate and driver rows')
   // The operator switches the account on; its windows are nobody's to write but a probe's.
   await switchOnZai(db, { accountId, ratesUrl: 'https://synthetic.invalid/b13-rates' })
@@ -220,14 +252,17 @@ export async function verifyZai(ctx) {
     }
   }
   const issue = (item) => core.call('issue', { ref: item.ref, grant: item.grant })
-  const issued = async (overrides, continued) => {
-    const item = await task(overrides, continued)
-    const values = await issue(item)
+  /** A task with the key and the token it was issued: both are searched for at the end. */
+  const keep = (item, values) => {
     secretMarkers.add(values.llmApiKey)
     secretMarkers.add(values.mcpToken)
     const turn = { ...item, values }
     refs.push(turn)
     return turn
+  }
+  const issued = async (overrides, continued) => {
+    const item = await task(overrides, continued)
+    return keep(item, await issue(item))
   }
   // The account takes one turn at a time: a scenario gives its key back before the next one.
   const revoke = (turn) => core.call('revoke', { ref: turn.ref })
@@ -250,6 +285,18 @@ export async function verifyZai(ctx) {
     assert.rejects(issue(item), (error) => error.code === 'SUBSCRIPTION_WAIT')
   /** The role afresh, without a proxy: its probe memory and account pauses are gone. */
   const direct = (overrides = {}) => restartLlm({ ...directEnv, ...overrides })
+  /** One generation asked of the role itself, from this host: the answer as it comes. */
+  const roleRequest = (turn, { body = zaiForms.body(), signal } = {}) =>
+    fetch(`http://127.0.0.1:${stack.llmPort}${zaiForms.route}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${turn.values.llmApiKey}`,
+        'content-type': 'application/json',
+        'user-agent': zaiForms.userAgent,
+      },
+      body: JSON.stringify(body),
+      signal: signal ?? AbortSignal.timeout(25_000),
+    })
 
   setStage('the driver and the CLI container')
   const imageId = (
@@ -396,6 +443,12 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
   const proxied = await issued()
   assert.deepEqual((await windows())['5h'], { name: '5h', usedPct: 0, resetsAt: null })
   assert.ok((await windows()).week.usedPct > 0 && (await windows()).week.usedPct < 1)
+  // The key is durable: recovered and issued again it is the same one. The only account is
+  // healthy but holds its one turn: occupied slots, not missing capacity.
+  assert.deepEqual(await core.call('recover', { ref: proxied.ref }), proxied.values)
+  assert.deepEqual(await issue(proxied), proxied.values)
+  await assert.rejects(issue(await task()), (error) => error.code === 'SUBSCRIPTION_BUSY')
+  passed('durable issuance, recovery and one-turn capacity of the account')
   const proxiedResult = resultFor('B13 OpenCode through the proxy')
   await zai({ scenario: { scenario: 'text', text: JSON.stringify(proxiedResult) } })
   const throughProxy = await runTurn({ turn: proxied, prompt: `${promptMarker}. Answer.` })
@@ -474,6 +527,15 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
   assert.ok(
     exec.mcp.some((request) => request.rpc === 'tools/call' && request.tool === 'site_info'),
   )
+  // The driver reports the platform tool by its own name, without the CLI's `<server>_` prefix.
+  // Sorted: the two calls of one answer end in the order the CLI ran them.
+  assert.deepEqual(
+    exec.events
+      .filter((event) => event.type === 'tool_call')
+      .map(({ tool, ok }) => `${tool} ${ok}`)
+      .sort(),
+    ['bash true', 'bash true', 'site_info true'],
+  )
   // The tool's answer went back to the model through the body policy of the gateway.
   assert.ok(
     JSON.stringify(exec.provider.at(-1).body).includes(SYNTHETIC_MCP_MARKER),
@@ -536,6 +598,76 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
   await settled(first, 7)
   await revoke(first)
   passed('the context compaction request of OpenCode passes the body policy')
+
+  // An answer that says a sentence beside its tool call: the form the real model gave in the
+  // live content run (docs/plan/45-zai-live.md) and no other scenario of the stand has. The
+  // usage is what the provider counted for the recorded answer of that form.
+  const besideTurn = await issued()
+  const besideResult = resultFor('B13 OpenCode text beside a tool call')
+  const sentence = 'The site information comes first; the result follows.'
+  await zai({
+    scenario: {
+      scenario: 'tools',
+      calls: [{ name: 'raditi_site_info', arguments: {} }],
+      beside: sentence,
+      text: JSON.stringify(besideResult),
+      usage: { prompt: 5084, cached: 4928, completion: 436, reasoning: 266 },
+    },
+  })
+  const beside = await runTurn({
+    turn: besideTurn,
+    prompt: 'Read the synthetic site information, then answer.',
+  })
+  assert.equal(beside.code, 0, `The turn with text beside a tool call failed: ${beside.code}`)
+  assert.deepEqual(beside.result, besideResult)
+  assert.equal(beside.provider.length, 2)
+  // The call was made once, and the driver reports it once.
+  assert.deepEqual(
+    beside.mcp.filter((request) => request.rpc === 'tools/call').map((request) => request.tool),
+    ['site_info'],
+  )
+  assert.deepEqual(
+    beside.events.filter((event) => event.type === 'tool_call'),
+    [{ type: 'tool_call', tool: 'site_info', ok: true }],
+  )
+  // The sentence reached the platform as a message of its own; the result is the last one.
+  assert.deepEqual(
+    beside.events.filter((event) => event.type === 'message').map((event) => event.text.trim()),
+    [sentence, JSON.stringify(besideResult)],
+  )
+  // The CLI sent the sentence back next to its call, and the body policy let that message pass.
+  const besideStep = beside.provider[1].body.messages.findLast(
+    (message) => message.role === 'assistant',
+  )
+  assert.equal(JSON.stringify(besideStep.content).includes(sentence), true)
+  assert.equal(besideStep.tool_calls.length, 1)
+  // Both calls were counted by the provider's numbers, and they add up to what the CLI printed.
+  const besideRows = await settled(besideTurn, 2)
+  const besideUsage = sumUsage(
+    besideRows.map(({ tokenUsage }) => ({
+      inputUncached: tokenUsage.inputUncachedTokens,
+      cacheRead: tokenUsage.cacheReadTokens,
+      cacheWrite: tokenUsage.cacheWriteTokens,
+      output: tokenUsage.outputTokens,
+      reasoning: tokenUsage.reasoningTokens,
+    })),
+  )
+  assert.ok(besideRows.every((row) => row.state === 'completed' && !row.tokenUsage.estimated))
+  assert.deepEqual(besideUsage, {
+    inputUncached: 2 * (5084 - 4928),
+    cacheRead: 2 * 4928,
+    cacheWrite: 0,
+    output: 2 * 436,
+    reasoning: 2 * 266,
+  })
+  assert.deepEqual(
+    sumUsage(beside.events.filter((event) => event.type === 'usage').map((event) => event.usage)),
+    besideUsage,
+  )
+  await revoke(besideTurn)
+  passed(
+    'text beside a tool call in one answer: the tool was called once, the sentence came as a message, the turn ended with its result, llm_calls equal the usage of the CLI',
+  )
 
   setStage('final refusals of the gateway')
   // Each ends the turn in one request: the role counts one request and the provider none.
@@ -651,6 +783,11 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
   // The provider was asked twice: the account's pause held the CLI's earlier retries back.
   assert.equal(repeat.provider.length, 2)
   assert.ok(repeat.ms >= 25_000 && repeat.ms < 90_000, `The repeat took ${repeat.ms} ms`)
+  // One call was refused and one answered; the journal of the key keeps the refusal after
+  // the later success.
+  const repeatRows = await settled(retried, 2)
+  assert.equal(repeatRows.filter((row) => row.state === 'completed').length, 1)
+  assert.equal((await keyRow(retried)).lastRefusal, 'transient')
   await revoke(retried)
   passed(
     'a short-lived provider refusal is repeated by OpenCode after the pause and the turn finishes',
@@ -773,16 +910,39 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     assert.equal(outcome.code, 0, `The answer without usage failed with exit ${outcome.code}`)
   }
   await settled(silent, 3)
-  await revoke(silent)
   const tripped = await account()
   assert.equal(tripped.usageMissingStreak, 3)
   assert.ok(tripped.breakerOpenUntil > new Date(Date.now() + 10 * 60_000))
+  // Each of the three is an estimate, and the key gets no fourth call while the breaker is open.
+  const unmetered = await db.tokenUsage.findMany({ where: { taskId: silent.ref.taskId } })
+  assert.equal(unmetered.length, 3)
+  assert.ok(unmetered.every((usage) => usage.estimated && usage.estimateReason === 'no_usage'))
+  const fourth = await chat(silent)
+  assert.equal(JSON.parse(fourth.body).error.code, 'raditi_account')
+  refusals.push({ status: fourth.status, body: fourth.body, message: '' })
+  assert.equal((await calls(silent)).length, 3)
+  await revoke(silent)
   await waiting(await task())
+  // Move the fixture past the real breaker's deadline: exactly one call is then let through as
+  // a trial, and its usage closes the breaker.
   await db.subscriptionAccount.update({
     where: { id: accountId },
-    data: { usageMissingStreak: 0, breakerOpenUntil: null },
+    data: { breakerOpenUntil: new Date(Date.now() - 1000) },
   })
-  passed('three answers without usage open the usage breaker of the account')
+  const trial = await issued()
+  await zai({ scenario: zaiForms.answers.held(700) })
+  const trials = await Promise.all([roleRequest(trial), roleRequest(trial)])
+  for (const answer of trials) await answer.arrayBuffer()
+  assert.deepEqual(trials.map((answer) => answer.status).sort(), [200, 403])
+  await settled(trial, 1)
+  assert.partialDeepStrictEqual(await account(), {
+    usageMissingStreak: 0,
+    breakerOpenUntil: null,
+  })
+  await revoke(trial)
+  passed(
+    'three answers without usage open the usage breaker of the account: estimates, no further call, no new key; one successful trial closes it',
+  )
 
   setStage('pause of the provider and the pace of a key')
   // What the sandbox itself receives, by one request through sandbox-gw.
@@ -874,9 +1034,17 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
   const cooling = (await account()).coolingUntil.getTime()
   assert.ok(Math.abs(cooling - (reset + 60_000)) < 2_000, 'The pause does not end at the reset')
   assert.equal((await windows())['5h'].usedPct, 100)
-  await revoke(spent)
-  // Until then nothing more is asked of the provider for this account.
+  // Until then nothing more is asked of the provider for this account: neither by the key
+  // that was refused, nor for a new task. The account itself stays in the pool.
   const generated = (await zai()).counters.chat
+  const again = await chat(spent)
+  assert.equal(JSON.parse(again.body).error.code, 'raditi_subscription_limit')
+  refusals.push({ status: again.status, body: again.body, message: '' })
+  assert.equal((await calls(spent)).length, 1)
+  assert.equal((await account()).health, 'ok')
+  await revoke(spent)
+  // Revocation keeps the journal of the final refusal.
+  assert.equal((await keyRow(spent)).lastRefusal, 'subscription_limit')
   await waiting(await task())
   assert.equal((await zai()).counters.chat, generated)
   await zai({ quota: { fiveHour: { idle: true } } })
@@ -995,6 +1163,72 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     'a refused plan key is confirmed by a probe; --relogin with the new key restores the account',
   )
 
+  // The scenarios of the platform, on this group: its ids and forms are their data, and what
+  // they leave at the provider and in the sandbox is checked with the rest below.
+  const group = {
+    ...zaiForms,
+    db,
+    core,
+    stack,
+    cli,
+    passed,
+    llmSecrets,
+    admin,
+    locks: ctx.locks,
+    accountId,
+    workspaceId: workspace.id,
+    otherBackendRequests: ctx.otherBackendRequests,
+    task,
+    issue,
+    keep,
+    issued,
+    revoke,
+    keyRow,
+    calls,
+    settled,
+    account,
+    resultFor,
+    runTurn,
+    roleRequest,
+    restartRole: direct,
+    roleGetter: llmGetter,
+    /** What the synthetic provider answers a generation and the quota with from now on. */
+    provider: (answer) => zai({ scenario: answer }),
+    quota: (options) => zai({ quota: options }),
+    providerRequests: async () => (await zai()).counters.chat,
+    lastProviderRequest: async () =>
+      (await zai()).requests.findLast((request) => request.path === ZAI_PATHS.chat),
+    /** One request of the group's route through sandbox-gw, as the sandbox would send it. */
+    request: (turn, { body = zaiForms.body(), headers = {}, path = zaiForms.route } = {}) =>
+      cli.request({
+        key: turn.values.llmApiKey,
+        path,
+        headers: {
+          'content-type': 'application/json',
+          'user-agent': zaiForms.userAgent,
+          ...headers,
+        },
+        body: typeof body === 'string' ? body : JSON.stringify(body),
+      }),
+    /** One more account of the group, imported with the key the provider takes now. */
+    importAccount: async (label) => {
+      const added = await zaiLogin(operator, { label, writerFile, key: SYNTHETIC_ZAI_ROTATED_KEY })
+      assert.equal(added.code, 0, 'The import of another account failed')
+      const { accountId: id } = JSON.parse(added.stdout)
+      await db.subscriptionAccount.update({ where: { id }, data: { enabled: true } })
+      return id
+    },
+  }
+  setStage('protocol boundaries')
+  await verifyProtocol(group)
+  setStage('in-stream provider failures')
+  await verifyStreamFailures(group)
+  setStage('crash and persistence recovery')
+  await verifyCrashes(group)
+  setStage('runtime lifecycle')
+  await verifyLifecycle(group)
+  await direct()
+
   setStage('what reached the provider and the sandbox')
   state = await zai()
   const turnSecrets = refs.flatMap((turn) => [turn.values.llmApiKey, turn.values.mcpToken])
@@ -1025,8 +1259,11 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
   for (const forbidden of [SYNTHETIC_ZAI_KEY, SYNTHETIC_ZAI_ROTATED_KEY, SYNTHETIC_ZAI_MARKER])
     assert.equal(printed.includes(forbidden), false, 'Provider data reached the CLI output')
   // No final refusal the sandbox received invites the CLI to repeat the request or to compact
-  // the context; the short-lived ones are meant to be repeated.
-  assert.ok(refusals.length >= 18)
+  // the context; the short-lived ones are meant to be repeated. The scenarios above collect 28
+  // of them, seven inside a started stream: fewer means a scenario stopped being checked here.
+  assert.ok(refusals.length >= 28, `Only ${refusals.length} refusals were collected`)
+  const inStream = refusals.filter((refusal) => refusal.stream !== undefined).length
+  assert.ok(inStream >= 7, `Only ${inStream} refusals inside a stream were collected`)
   let named = 0
   for (const refusal of refusals) {
     if (refusal.stream !== undefined) {
@@ -1058,8 +1295,21 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     assert.equal(result.code, 0, 'The retirement command failed')
     return result.stdout.trim()
   }
+  // An issued turn finishes while its account drains; no new key is issued meanwhile. The
+  // refusal is «no account to wait for»: an account that only holds its one turn answers BUSY.
+  const draining = await issued()
   assert.match(await retire(), /^Вывод запрошен\./)
-  await assert.rejects(issue(await task()))
+  await waiting(await task())
+  const drainedResult = resultFor('B13 OpenCode while the account drains')
+  await zai({ scenario: { scenario: 'text', text: JSON.stringify(drainedResult) } })
+  const drained = await runTurn({
+    turn: draining,
+    prompt: 'Complete the synthetic turn while its account drains.',
+  })
+  assert.equal(drained.code, 0, 'The issued CLI turn must finish while draining')
+  assert.deepEqual(drained.result, drainedResult)
+  await settled(draining, 1)
+  await revoke(draining)
   await core.call('sweep')
   assert.equal((await account()).enabled, false)
   // The provider has no revocation the role could call: the operator revokes the key in the
@@ -1072,5 +1322,10 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
   )
   assert.equal(await llmSecrets.kvRead(`subs/${BACKEND}/${accountId}`), null)
   assert.equal((await account()).status, 'retired')
-  passed('retirement of the Z.ai account by the operator command with --console-revoked')
+  passed(
+    'retirement of the Z.ai account by the operator command with --console-revoked: an issued turn finishes while the account drains',
+  )
+
+  setStage('emergency retirement')
+  await verifyEmergencyRetirement(group)
 }

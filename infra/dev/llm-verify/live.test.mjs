@@ -530,7 +530,7 @@ test('the guard of a live run lets a process open only so many provider connecti
   assert.deepEqual(JSON.parse(local.stdout), ['open', 'open'])
   const foreign = await guardedChild(url, CONNECTS, ['192.0.2.1', '443', '1'])
   assert.deepEqual(JSON.parse(foreign.stdout), ['ERR_LIVE_FOREIGN_HOST'])
-  const named = await guardedChild(url, CONNECTS, ['chatgpt.com', '443', '1'])
+  const named = await guardedChild(url, CONNECTS, ['other-provider.example', '443', '1'])
   assert.deepEqual(JSON.parse(named.stdout), ['ERR_LIVE_FOREIGN_HOST'])
   // The provider's name on another port is not the provider.
   const otherPort = await guardedChild(
@@ -539,7 +539,11 @@ test('the guard of a live run lets a process open only so many provider connecti
     ['api.z.ai', '80', '1'],
   )
   assert.deepEqual(JSON.parse(otherPort.stdout), ['ERR_LIVE_FOREIGN_HOST'])
-  assert.deepEqual(readLedger(ledger).foreign, ['192.0.2.1:443', 'chatgpt.com:443', 'api.z.ai:80'])
+  assert.deepEqual(readLedger(ledger).foreign, [
+    '192.0.2.1:443',
+    'other-provider.example:443',
+    'api.z.ai:80',
+  ])
   assert.partialDeepStrictEqual(readLedger(ledger), { requests: 3, refused: 4 })
 })
 
@@ -850,6 +854,94 @@ test('the observer in front of the role llm passes the stream on as it comes and
   })
   assert.equal(lost.status, 502)
   assert.equal(observer.exchanges().length, 2)
+})
+
+test('a rehearsal can have the observer answer a request in place of the role; a live run cannot', async (t) => {
+  const upstreamSaw = []
+  const upstream = createHttpServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      upstreamSaw.push(req.url)
+      res.writeHead(200, { 'content-type': 'text/event-stream' }).end('data: [DONE]\n\n')
+    })
+  })
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve))
+  t.after(() => upstream.close())
+  const options = { listenHost: '127.0.0.1', port: 0 }
+  const target = `http://127.0.0.1:${upstream.address().port}`
+  const observer = await startLlmObserver({ ...options, upstream: target, scripted: true })
+  t.after(() => observer.close())
+  const post = (body, path = '/zai/v4/chat/completions') =>
+    fetch(`http://127.0.0.1:${observer.port}${path}`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer rdt_turn_key_synthetic',
+        'content-type': 'application/json',
+      },
+      body,
+    })
+  const refusal = JSON.stringify({ error: { code: 'raditi_body', message: 'Synthetic refusal' } })
+  const asked = []
+  // Two requests answered by the stand, one after the other; the third goes to the role again.
+  for (const status of [413, 418])
+    observer.answerNext(async (request) => {
+      asked.push(request)
+      return { status, headers: { 'content-type': 'application/json' }, body: refusal }
+    })
+  assert.equal(observer.pendingAnswers(), 2)
+  const first = await post('{"model":"glm-5.3","tools":[]}')
+  assert.deepEqual([first.status, first.headers.get('content-type')], [413, 'application/json'])
+  assert.equal(await first.text(), refusal)
+  assert.equal((await post('{"n":2}')).status, 418)
+  assert.deepEqual(upstreamSaw, [], 'A request the stand answered reached the role')
+  const third = await post('{"n":3}')
+  assert.equal(third.status, 200)
+  await third.text()
+  assert.deepEqual(upstreamSaw, ['/zai/v4/chat/completions'])
+  assert.equal(observer.pendingAnswers(), 0)
+  // The answer is given the request as sandbox-gw sent it, whole.
+  assert.deepEqual(
+    asked.map((request) => [request.method, request.path, request.body.toString()]),
+    [
+      ['POST', '/zai/v4/chat/completions', '{"model":"glm-5.3","tools":[]}'],
+      ['POST', '/zai/v4/chat/completions', '{"n":2}'],
+    ],
+  )
+  assert.equal(asked[0].headers.authorization, 'Bearer rdt_turn_key_synthetic')
+  // The exchange is kept like any other, marked as the stand's own answer, without a header.
+  const kept = observer.exchanges()
+  assert.partialDeepStrictEqual(kept[0], {
+    status: 413,
+    contentType: 'application/json',
+    requestBody: '{"model":"glm-5.3","tools":[]}',
+    responseText: refusal,
+    answeredByStand: true,
+  })
+  assert.deepEqual(
+    kept.map((exchange) => exchange.answeredByStand),
+    [true, true, false],
+  )
+  assert.equal(JSON.stringify(kept).includes('rdt_turn_key_synthetic'), false)
+  // Answers nobody asked for are taken back, and their number is told.
+  observer.answerNext(async () => ({ status: 413, headers: {}, body: '' }))
+  assert.equal(observer.dropAnswers(), 1)
+  assert.equal((await post('{"n":4}')).status, 200)
+  // An answer that fails is the hop's own 502, never a hang.
+  observer.answerNext(async () => {
+    throw new Error('synthetic')
+  })
+  assert.equal((await post('{"n":5}')).status, 502)
+  // The observer of a live run passes every byte on and takes no answer of the stand.
+  const live = await startLlmObserver({ ...options, upstream: target })
+  t.after(() => live.close())
+  assert.throws(
+    () => live.answerNext(async () => ({ status: 413, headers: {}, body: '' })),
+    /rehearsal/,
+  )
+  assert.match(
+    await readFile(join(repository, 'apps/orchestrator/scripts/verify-llm-live-run.mjs'), 'utf8'),
+    /scripted: rehearsal,/,
+  )
 })
 
 test('the forms of a stream are read from its frames', () => {

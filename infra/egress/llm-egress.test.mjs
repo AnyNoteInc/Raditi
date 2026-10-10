@@ -61,8 +61,7 @@ async function until(check, ms = 3000) {
 }
 
 const ADDRESSES = {
-  'chatgpt.com': ['104.18.32.47'],
-  'api.kimi.ai': ['104.18.0.1'],
+  'api.z.ai': ['104.18.32.47'],
   'private.test': ['10.0.0.5'],
   'metadata.test': ['169.254.169.254'],
   'loopback.test': ['104.18.32.47', '127.0.0.1'],
@@ -191,7 +190,7 @@ test(
   async () => {
     const proxy = await start()
     try {
-      const opened = await tunnel(proxy.port, 'chatgpt.com:443', client('app-1'), 'hello ')
+      const opened = await tunnel(proxy.port, 'api.z.ai:443', client('app-1'), 'hello ')
       assert.equal(opened.status, 200)
       opened.socket.write('ping')
       await receive(opened.socket, 'hello ping', opened.rest)
@@ -199,13 +198,13 @@ test(
       const entry = await until(() => proxy.logs.find((log) => log.event === 'connect'))
       assert.deepEqual(proxy.dialled, ['104.18.32.47:443'])
       assert.equal(entry.cn, 'app-1')
-      assert.equal(entry.host, 'chatgpt.com:443')
+      assert.equal(entry.host, 'api.z.ai:443')
       assert.equal(entry.result, 'ok')
       assert.equal(entry.up, 10)
       assert.equal(entry.down, 10)
       assert.ok(Number.isInteger(entry.ms))
 
-      const upper = await tunnel(proxy.port, 'API.KIMI.AI:443', client('op-1'))
+      const upper = await tunnel(proxy.port, 'API.Z.AI:443', client('op-1'))
       assert.equal(upper.status, 200)
       upper.socket.destroy()
       await until(() => proxy.logs.filter((log) => log.event === 'connect').length === 2)
@@ -226,11 +225,11 @@ test(
     try {
       for (const target of [
         'example.com:443',
-        'chatgpt.com:8443',
-        'chatgpt.com:80',
+        'api.z.ai:8443',
+        'api.z.ai:80',
         '104.18.32.47:443',
-        'chatgpt.com.:443',
-        'sub.chatgpt.com:443',
+        'api.z.ai.:443',
+        'sub.api.z.ai:443',
       ]) {
         const refused = await tunnel(proxy.port, target)
         assert.equal(refused.status, 403, target)
@@ -264,14 +263,14 @@ test(
   async () => {
     const proxy = await start({ clientCns: new Set(['app-1', 'op-1', SERVER_NAME]) })
     try {
-      const anonymous = await tunnel(proxy.port, 'chatgpt.com:443', {})
+      const anonymous = await tunnel(proxy.port, 'api.z.ai:443', {})
       assert.equal(anonymous.status, null)
-      const rogue = await tunnel(proxy.port, 'chatgpt.com:443', client('app-1', 'rogue'))
+      const rogue = await tunnel(proxy.port, 'api.z.ai:443', client('app-1', 'rogue'))
       assert.equal(rogue.status, null)
       // The proxy's own certificate: issued by the server CA for serverAuth only.
-      const server = await tunnel(proxy.port, 'chatgpt.com:443', serverIdentity())
+      const server = await tunnel(proxy.port, 'api.z.ai:443', serverIdentity())
       assert.equal(server.status, null)
-      const unlisted = await tunnel(proxy.port, 'chatgpt.com:443', client('op-2'))
+      const unlisted = await tunnel(proxy.port, 'api.z.ai:443', client('op-2'))
       assert.equal(unlisted.status, 403)
       unlisted.socket.destroy()
       assert.deepEqual(proxy.dialled, [])
@@ -338,7 +337,7 @@ test(
         '/probe?bytes=10&x=1',
       ])
         assert.equal((await get(proxy.port, path)).status, 400, path)
-      for (const path of ['/', '/probex', 'http://chatgpt.com/', '/metrics'])
+      for (const path of ['/', '/probex', 'http://api.z.ai/', '/metrics'])
         assert.equal((await get(proxy.port, path)).status, 403, path)
       assert.equal((await get(proxy.port, '/probe?bytes=10', { method: 'POST' })).status, 405)
       const unlisted = await get(proxy.port, '/probe?bytes=10', { identity: client('op-2') })
@@ -354,7 +353,7 @@ test(
           { cn: 'op-1', result: 'ok', bytes: 100_000 },
         ],
       )
-      assert.doesNotMatch(JSON.stringify(proxy.logs), /127\.0\.0\.1|chatgpt|metrics/)
+      assert.doesNotMatch(JSON.stringify(proxy.logs), /127\.0\.0\.1|api\.z\.ai|metrics/)
     } finally {
       await proxy.close()
     }
@@ -364,15 +363,15 @@ test(
 test('tunnels are limited in number and closed when idle', { skip }, async () => {
   const proxy = await start({ maxTunnels: 1, idleMs: 300 })
   try {
-    const first = await tunnel(proxy.port, 'chatgpt.com:443')
+    const first = await tunnel(proxy.port, 'api.z.ai:443')
     assert.equal(first.status, 200)
-    const second = await tunnel(proxy.port, 'chatgpt.com:443')
+    const second = await tunnel(proxy.port, 'api.z.ai:443')
     assert.equal(second.status, 503)
     second.socket.destroy()
     first.socket.resume()
     await new Promise((resolve) => first.socket.once('close', resolve))
     await until(() => proxy.logs.some((log) => log.result === 'idle'))
-    const third = await tunnel(proxy.port, 'chatgpt.com:443')
+    const third = await tunnel(proxy.port, 'api.z.ai:443')
     assert.equal(third.status, 200)
     third.socket.destroy()
   } finally {
@@ -399,7 +398,7 @@ async function closingProvider(onAnswer = () => {}) {
  * provider), followed by its close when `close` is set.
  */
 async function exchange(proxy, { close = true } = {}) {
-  const opened = await tunnel(proxy.port, 'chatgpt.com:443', {
+  const opened = await tunnel(proxy.port, 'api.z.ai:443', {
     ...client('app-1'),
     allowHalfOpen: true,
   })
@@ -500,7 +499,7 @@ test('an answer the client has not yet taken is not cut by the grace time', { sk
   let opened
   try {
     // `tunnel` leaves the socket paused: the client takes nothing until it is resumed.
-    opened = await tunnel(proxy.port, 'chatgpt.com:443')
+    opened = await tunnel(proxy.port, 'api.z.ai:443')
     assert.equal(opened.status, 200)
     await until(() => answering)
     const held = proxy.secured.at(-1)
@@ -554,9 +553,9 @@ test('a failed dial answers 502 and a dial that hangs answers 504', { skip }, as
   const failing = await start({ dial: () => connect(port, '127.0.0.1') })
   const hanging = await start({ dial: () => new Socket(), connectTimeoutMs: 100 })
   try {
-    const refused = await tunnel(failing.port, 'chatgpt.com:443')
+    const refused = await tunnel(failing.port, 'api.z.ai:443')
     assert.equal(refused.status, 502)
-    const slow = await tunnel(hanging.port, 'chatgpt.com:443')
+    const slow = await tunnel(hanging.port, 'api.z.ai:443')
     assert.equal(slow.status, 504)
     await until(() => failing.logs.some((log) => log.result === 'connect_error'))
     await until(() => hanging.logs.some((log) => log.result === 'connect_timeout'))
@@ -579,13 +578,13 @@ test(
         lookups += 1
         return lookups === 1
           ? new Promise((resolve) => (resolveFirst = resolve))
-          : Promise.resolve(ADDRESSES['chatgpt.com'])
+          : Promise.resolve(ADDRESSES['api.z.ai'])
       },
     })
     try {
-      const pending = tunnel(proxy.port, 'chatgpt.com:443')
+      const pending = tunnel(proxy.port, 'api.z.ai:443')
       await until(() => resolveFirst)
-      const busy = await tunnel(proxy.port, 'chatgpt.com:443')
+      const busy = await tunnel(proxy.port, 'api.z.ai:443')
       assert.equal(busy.status, 503)
       busy.socket.destroy()
 
@@ -599,9 +598,9 @@ test(
       await until(() => proxy.logs.some((log) => log.result === 'connect_timeout'))
       assert.deepEqual(proxy.dialled, [])
 
-      const next = await tunnel(proxy.port, 'chatgpt.com:443')
+      const next = await tunnel(proxy.port, 'api.z.ai:443')
       assert.equal(next.status, 200)
-      resolveFirst(ADDRESSES['chatgpt.com'])
+      resolveFirst(ADDRESSES['api.z.ai'])
       // A late DNS answer must not dial, and an established tunnel outlives its setup deadline.
       await delay(150)
       next.socket.write('still open')
@@ -610,7 +609,7 @@ test(
       assert.equal(proxy.logs.filter((log) => log.result === 'connect_timeout').length, 1)
       next.socket.destroy()
     } finally {
-      resolveFirst?.(ADDRESSES['chatgpt.com'])
+      resolveFirst?.(ADDRESSES['api.z.ai'])
       await proxy.close()
     }
   },
@@ -633,7 +632,7 @@ test(
       EGRESS_TLS_DIR: dir,
       EGRESS_LISTEN_HOST: '127.0.0.1',
       EGRESS_LISTEN_PORT: '0',
-      LLM_EGRESS_ALLOW: 'chatgpt.com:443',
+      LLM_EGRESS_ALLOW: 'api.z.ai:443',
       EGRESS_CLIENT_CN_ALLOW: 'op-1',
     }
     const service = spawn(process.execPath, [here('llm-egress.mjs')], { env })
@@ -647,7 +646,7 @@ test(
       service.kill()
     }
     const bad = spawnSync(process.execPath, [here('llm-egress.mjs')], {
-      env: { ...env, LLM_EGRESS_ALLOW: '*.openai.com:443' },
+      env: { ...env, LLM_EGRESS_ALLOW: '*.z.ai:443' },
       encoding: 'utf8',
     })
     assert.equal(bad.status, 1)
@@ -657,18 +656,18 @@ test(
 
 test('configuration parsers accept only exact names, CNs and a probe of at most 1 MiB', () => {
   assert.deepEqual(
-    [...parseAllow(' chatgpt.com:443, auth.openai.com:443,api.kimi.ai:443 ')],
-    ['chatgpt.com:443', 'auth.openai.com:443', 'api.kimi.ai:443'],
+    [...parseAllow(' api.z.ai:443, one.example:443,two.example:443 ')],
+    ['api.z.ai:443', 'one.example:443', 'two.example:443'],
   )
   for (const value of [
     '',
-    'chatgpt.com',
-    '*.openai.com:443',
-    'Chatgpt.com:443',
+    'api.z.ai',
+    '*.z.ai:443',
+    'Api.z.ai:443',
     '1.2.3.4:443',
     'localhost:443',
-    'chatgpt.com:0',
-    'chatgpt.com:65536',
+    'api.z.ai:0',
+    'api.z.ai:65536',
   ])
     assert.throws(() => parseAllow(value), /LLM_EGRESS_ALLOW/, value)
   assert.deepEqual([...parseClientCns('app-1,op-1')], ['app-1', 'op-1'])
@@ -691,7 +690,7 @@ test('configuration parsers accept only exact names, CNs and a probe of at most 
     '255.255.255.255',
     '::1',
     '2606:4700::6812:1',
-    'chatgpt.com',
+    'api.z.ai',
   ])
     assert.ok(!isPublicIPv4(address), address)
 })
@@ -792,7 +791,7 @@ test(
     const renewed = issue()
     assert.notEqual(pinOf(stolen), pinOf(renewed))
     const open = async (proxy, identity) => {
-      const opened = await tunnel(proxy.port, 'chatgpt.com:443', identity)
+      const opened = await tunnel(proxy.port, 'api.z.ai:443', identity)
       opened.socket.destroy()
       return opened.status
     }

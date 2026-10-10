@@ -590,7 +590,7 @@ describe.skipIf(!enabled)(
       return (await response.json()) as ZaiState
     }
 
-    async function fixture(scenario: object = {}) {
+    async function fixture(scenario: object = {}, { accountSlots = 2 } = {}) {
       await provider({ reset: true, scenario })
       const workspaceId = randomUUID()
       const siteId = randomUUID()
@@ -658,7 +658,7 @@ describe.skipIf(!enabled)(
           plan: 'lite',
           // The import settings of the operator command for this backend.
           maxConcurrentTurns: 1,
-          maxConcurrentRequests: 2,
+          maxConcurrentRequests: accountSlots,
           credentialVersion: 1,
           clientIdentity: {},
           enabled: true,
@@ -1121,5 +1121,58 @@ describe.skipIf(!enabled)(
         }
       },
     )
+
+    // The role through the proxy and the role without one are two gateway processes over one
+    // database; the provider holds every answer after its first frame.
+    it('serializes an account slot across two gateway instances and different keys', async () => {
+      const f = await fixture({ scenario: 'text', delayMs: 2_500 }, { accountSlots: 1 })
+      try {
+        const [keyA, keyB] = await Promise.all([f.key(), f.key()])
+        const open = () =>
+          db.llmCall.count({ where: { subscriptionAccountId: f.accountId, state: 'open' } })
+        const first = call(f.port, keyA.token)
+        await expect.poll(async () => (await provider()).requests.length).toBe(1)
+        const second = call(f.directPort, keyB.token)
+        await expect
+          .poll(() =>
+            db.llmKey.findUnique({ where: { id: keyB.id } }).then((row) => row?.lastRefusal),
+          )
+          .toBe('transient')
+        // The second key waits for the slot: nothing of it is open or sent while the first runs.
+        expect(await open()).toBe(1)
+        expect((await provider()).requests).toHaveLength(1)
+        expect((await first).status).toBe(200)
+        expect((await second).status).toBe(200)
+        await expect
+          .poll(() =>
+            db.llmCall.count({ where: { subscriptionAccountId: f.accountId, state: 'completed' } }),
+          )
+          .toBe(2)
+        expect((await provider()).requests).toHaveLength(2)
+      } finally {
+        await f.close()
+      }
+    }, 30_000)
+
+    it('enforces two requests per key across distinct gateway instances before the provider', async () => {
+      const f = await fixture({ scenario: 'text', delayMs: 1_500 }, { accountSlots: 3 })
+      try {
+        const key = await f.key()
+        const running = [call(f.port, key.token), call(f.directPort, key.token)]
+        await expect.poll(async () => (await provider()).requests.length).toBe(2)
+        const third = await call(f.directPort, key.token)
+        expect(third.status).toBe(503)
+        expect(JSON.parse(third.body)).toMatchObject({ error: { code: 'raditi_transient' } })
+        expect(await db.llmCall.count({ where: { keyId: key.id, state: 'open' } })).toBe(2)
+        // The third request never left the gateway.
+        expect((await provider()).requests).toHaveLength(2)
+        expect((await Promise.all(running)).map((result) => result.status)).toEqual([200, 200])
+        await expect
+          .poll(() => db.llmCall.count({ where: { keyId: key.id, state: 'completed' } }))
+          .toBe(2)
+      } finally {
+        await f.close()
+      }
+    }, 30_000)
   },
 )

@@ -2,7 +2,8 @@
 // P2 gates 2 and 3 (spec §8 «Раннер на песочной ВМ», «Восстановление незавершённого хода») on a
 // real runner VM: core runs on this host (verify-runner-core.mjs, over the local PostgreSQL, S3
 // and OpenBao), the runner role in a Linux VM under gVisor, next to the VM's Docker. No models:
-// the synthetic agent prints codex JSONL and may wait at a gate. Scenarios:
+// the synthetic agent prints the rows of the sample driver's CLI (OpenCode), writes its session
+// files and may wait at a gate. Scenarios:
 //   1. two full turns of one session: turn 2 restores turn 1's snapshot through presigned GETs;
 //      each home is sealed by the runner through a presigned PUT; core publishes;
 //   2. core killed -9 while the agent's output is journaled: a new core's recovery resumes it;
@@ -51,6 +52,7 @@ import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 import { extract } from 'tar-stream'
 
 import { SnapshotService } from '../dist/sessions/snapshot.service.js'
+import { sampleDriverId } from '../src/testing/ids.ts'
 import { startCodexRunnerFixture } from './codex-runner-fixture.mjs'
 import { startKimiRunnerFixture } from './kimi-runner-fixture.mjs'
 import { startOpencodeRunnerFixture } from './opencode-runner-fixture.mjs'
@@ -67,7 +69,8 @@ const {
 
 assert([codex, kimi, opencode].filter(Boolean).length <= 1, 'Select one verification driver')
 const realCli = codex || kimi || opencode
-const driverId = opencode ? 'opencode' : kimi ? 'kimi' : 'codex'
+// Without a real CLI the turns are those of «a driver in general».
+const driverId = opencode ? 'opencode' : kimi ? 'kimi' : codex ? 'codex' : sampleDriverId
 const driverName = opencode ? 'OpenCode' : kimi ? 'Kimi' : 'Codex'
 const firstEffort = opencode || kimi ? 'low' : 'medium'
 
@@ -76,9 +79,11 @@ const scripts = dirname(fileURLToPath(import.meta.url))
 const repository = resolve(scripts, '../../..')
 const DIGEST = /^[^\s@]+@sha256:[a-f0-9]{64}$/
 const GATE = '/tmp/raditi-verify-go'
-const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
 const driverVersion = opencode ? '1.18.34' : kimi ? '2.1.1' : codex ? '0.158.0' : '0.0.0-verify'
-/** The session state of the OpenCode driver: the database and its WAL, nothing else. */
+/**
+ * The session state of the OpenCode driver: the database and its WAL, nothing else. The
+ * synthetic agent writes the same two files.
+ */
 const opencodeHome = {
   root: '/agent-home/opencode',
   include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
@@ -488,7 +493,7 @@ function expectEvents(entries) {
     entries
       .flatMap((entry) => (entry.phase === 'output' ? (entry.events ?? []) : []))
       .map((event) => event.type),
-    ['started', 'message', 'completed'],
+    ['started', 'message', 'usage', 'completed'],
   )
 }
 
@@ -512,7 +517,8 @@ async function expectCompleted(taskId, turn, headSha) {
   return assignment
 }
 
-async function homeFiles(reference) {
+/** The files of a turn's home archive: their names, each with its bytes. */
+async function homeEntries(reference) {
   const loaded = await snapshots.load(reference)
   if (realCli) {
     // The persisted snapshot and journal may carry neither the old nor the new turn keys.
@@ -527,18 +533,20 @@ async function homeFiles(reference) {
           'Snapshot contains a turn credential',
         )
   }
-  const names = []
+  const entries = new Map()
   const reader = extract()
   const listed = (async () => {
     for await (const entry of reader) {
-      names.push(entry.header.name)
-      entry.resume()
+      const chunks = []
+      for await (const chunk of entry) chunks.push(chunk)
+      entries.set(entry.header.name, Buffer.concat(chunks))
     }
   })()
   reader.end(zstdDecompressSync(loaded.archives.home))
   await listed
-  return names
+  return entries
 }
+const homeFiles = async (reference) => [...(await homeEntries(reference)).keys()]
 
 // --- Turns ---------------------------------------------------------------------------------------
 async function createTask() {
@@ -628,7 +636,7 @@ const reference = ({ sessionId }, turn, manifest) => ({
   turn,
   image: images.sandbox,
   driver: { id: driverId, version: driverVersion },
-  home: manifest?.home ?? home,
+  home: manifest?.home ?? opencodeHome,
 })
 
 // --- Main -----------------------------------------------------------------------------------------
@@ -972,11 +980,15 @@ try {
           assert(!persisted.includes(secret), 'Journal or assignment contains a turn credential')
       await homeFiles(reference(task, 1, first.manifest))
     } else {
-      for (const name of ['verify/turn-1.jsonl', 'verify/turn-2.jsonl'])
-        assert(
-          files.some((file) => file.endsWith(name)),
-          `turn 2 home keeps ${name}`,
-        )
+      // The home of a turn is the session state the driver names and nothing the agent wrote
+      // beside it: neither its log nor the configuration of the turn.
+      assert.deepEqual(second.manifest.home, opencodeHome)
+      assert.deepEqual([...files].sort(), [...opencodeHome.include].sort())
+      // Turn 1's line came back by restore in each of the two session files, and turn 2 added
+      // its own to both: a restore that brought back only one of them is not a restore.
+      const kept = await homeEntries(reference(task, 2, second.manifest))
+      for (const file of opencodeHome.include)
+        assert.equal(kept.get(file).toString(), 'turn 1\nturn 2\n', file)
     }
     const tree = await git(
       '--git-dir',

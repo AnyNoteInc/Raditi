@@ -1,6 +1,8 @@
 // TurnCredentialSource for *.test.ts files: P2 has no durable store of turn credentials (P3, P6).
 import type { TurnCredentialRef, TurnCredentialSource, TurnCredentialValues } from '@repo/domain'
 
+import { sampleBackendId, sampleDriverId } from './ids.ts'
+
 const key = (turn: TurnCredentialRef) =>
   `${turn.taskId}:${turn.sessionId}:${turn.turn}:${turn.epoch}`
 
@@ -35,11 +37,11 @@ export class MemoryTurnCredentials implements TurnCredentialSource {
 
 /** Synthetic issuance policy for turn lifecycle tests; production reads the approved catalog. */
 export const testTurnCredentialPolicy = {
-  driverId: 'codex' as const,
-  backend: 'openai-chatgpt' as const,
+  driverId: sampleDriverId,
+  backend: sampleBackendId,
   modelSlug: 'synthetic',
   modelClass: 'standard' as const,
-  reasoningEffort: 'medium',
+  reasoningEffort: 'high',
   ttlMs: 20 * 60_000,
   budgetRub: '100.00',
 }

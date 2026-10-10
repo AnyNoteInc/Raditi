@@ -57,7 +57,7 @@ async function fixture({
       if (stallResponse) return
       res.writeHead(redirect ? 302 : 200, {
         'content-type': 'text/event-stream',
-        'x-codex-turn-state': 'state',
+        'x-synthetic-state': 'state',
         ...(redirect ? { location: 'https://private.example/secret' } : {}),
       })
       if (stallBody) {
@@ -108,7 +108,7 @@ async function fixture({
       LLM_EGRESS_CLIENT_CERT_FILE: certFile,
       LLM_EGRESS_CLIENT_KEY_FILE: keyFile,
       LLM_UPSTREAM_CA_FILE: certFile,
-      LLM_BACKEND_URL_OPENAI_CHATGPT: `https://localhost:${providerPort}`,
+      LLM_BACKEND_URL_ZAI_CODING: `https://localhost:${providerPort}`,
     },
     'test',
   ).egress
@@ -147,8 +147,27 @@ const withoutProxy: EgressConfig = {
   ),
 }
 
+/** An adapter that says nothing of going without the node: an origin that needs the proxy. */
+const behindNode: LlmBackend = {
+  ...zaiCodingBackend,
+  egress: [
+    {
+      origin: 'https://provider.invalid',
+      overrideEnv: 'LLM_BACKEND_URL_SYNTHETIC',
+      requests: ['POST https://provider.invalid/v1/generate'],
+    },
+  ],
+}
+const behindNodeUrl = 'https://provider.invalid/v1/generate'
+const withoutProxyBehindNode: EgressConfig = {
+  ...withoutProxy,
+  backendOrigins: new Map([['https://provider.invalid', 'https://localhost:1']]),
+}
+
+const chatUrl = 'https://api.z.ai/api/coding/paas/v4/chat/completions'
+const quotaUrl = 'https://api.z.ai/api/monitor/usage/quota/limit'
 const input = (changes: Partial<EgressRequest> = {}): EgressRequest => ({
-  url: 'https://chatgpt.com/backend-api/codex/responses',
+  url: chatUrl,
   method: 'POST',
   headers: new Headers({
     'content-type': 'application/json',
@@ -176,10 +195,7 @@ describe('mTLS subscription egress', () => {
     try {
       const transport = createEgressTransport(f.config)
       for (const method of ['POST', 'GET'] as const) {
-        const url =
-          method === 'POST'
-            ? 'https://chatgpt.com/backend-api/codex/responses'
-            : 'https://chatgpt.com/backend-api/wham/usage'
+        const url = method === 'POST' ? chatUrl : quotaUrl
         const response = await transport.request(
           input({
             method,
@@ -195,12 +211,12 @@ describe('mTLS subscription egress', () => {
         const chunks: Buffer[] = []
         for await (const chunk of response.body) chunks.push(Buffer.from(chunk))
         expect(Buffer.concat(chunks).toString()).toBe('data: first\n\ndata: second\n\n')
-        expect(response.headers.get('x-codex-turn-state')).toBe('state')
-        expect(response.rawHeaders).toContain('x-codex-turn-state')
+        expect(response.headers.get('x-synthetic-state')).toBe('state')
+        expect(response.rawHeaders).toContain('x-synthetic-state')
       }
       expect(f.tunnels).toEqual([`localhost:${f.providerPort}`, `localhost:${f.providerPort}`])
       expect(f.requests).toEqual(
-        ['/backend-api/codex/responses', '/backend-api/wham/usage'].map((path) => ({
+        [new URL(chatUrl).pathname, new URL(quotaUrl).pathname].map((path) => ({
           path,
           body: '{"synthetic":true}',
           host: `localhost:${f.providerPort}`,
@@ -272,17 +288,23 @@ describe('mTLS subscription egress', () => {
   })
 
   it('rejects an origin that needs the absent proxy, foreign origins and credential-bearing URLs before a connection', async () => {
+    // A closed port ends in the same error: what tells the rule from it is that no connection
+    // of the role's own was even tried.
+    const tried: boolean[] = []
     await expect(
-      createEgressTransport(withoutProxy).request(input(), { signal: AbortSignal.timeout(2000) }),
-    ).rejects.toThrow(/^Subscription egress unavailable$/)
+      createEgressTransport(withoutProxyBehindNode, [behindNode], {
+        onDirectConnection: (established) => tried.push(established),
+      }).request(input({ url: behindNodeUrl }), { signal: AbortSignal.timeout(2000) }),
+    ).rejects.toBeInstanceOf(EgressNotSentError)
+    expect(tried).toEqual([])
     const f = await fixture()
     try {
       const transport = createEgressTransport(f.config)
       for (const url of [
         'https://private.example/secret',
-        'https://secret:token@chatgpt.com/',
-        'https://chatgpt.com/?secret=token',
-        'https://chatgpt.com/arbitrary',
+        'https://secret:token@api.z.ai/',
+        'https://api.z.ai/?secret=token',
+        'https://api.z.ai/arbitrary',
       ])
         await expect(
           transport.request(input({ url }), { signal: AbortSignal.timeout(2000) }),
@@ -298,7 +320,7 @@ describe('mTLS subscription egress', () => {
     try {
       // An adapter the transport has never heard of: its declaration alone opens the way.
       const adapter: LlmBackend = {
-        ...codexBackend,
+        ...zaiCodingBackend,
         egress: [
           {
             origin: 'https://provider.invalid',
@@ -333,7 +355,7 @@ describe('mTLS subscription egress', () => {
         input({ url: 'https://provider.invalid/v1/declared', method: 'GET' }),
         input({ url: 'https://provider.invalid/v1/declared/' }),
         // Declared by the real adapters only, which this transport was not given.
-        input({ url: 'https://chatgpt.com/backend-api/codex/responses' }),
+        input(),
       ])
         await expect(transport.request(undeclared, { signal: signal() })).rejects.toBeInstanceOf(
           EgressNotSentError,
@@ -401,15 +423,22 @@ describe('mTLS subscription egress', () => {
       return error instanceof EgressNotSentError
     }
     const signal = () => AbortSignal.timeout(2000)
+    // Refused by the rule, before any connection of the role's own.
+    const tried: boolean[] = []
     expect(
-      await notSent(createEgressTransport(withoutProxy).request(input(), { signal: signal() })),
+      await notSent(
+        createEgressTransport(withoutProxyBehindNode, [behindNode], {
+          onDirectConnection: (established) => tried.push(established),
+        }).request(input({ url: behindNodeUrl }), { signal: signal() }),
+      ),
     ).toBe(true)
+    expect(tried).toEqual([])
     const refused = await fixture({ proxyStatus: 403 })
     try {
       const transport = createEgressTransport(refused.config)
       expect(
         await notSent(
-          transport.request(input({ url: 'https://chatgpt.com/x' }), { signal: signal() }),
+          transport.request(input({ url: 'https://api.z.ai/x' }), { signal: signal() }),
         ),
       ).toBe(true)
       expect(
@@ -471,7 +500,7 @@ describe('mTLS subscription egress', () => {
       // configuration accepts no such override; a transport handed one still says the truth.
       const config = {
         ...f.config,
-        backendOrigins: new Map([['https://chatgpt.com', `https://127.0.0.1:${f.providerPort}`]]),
+        backendOrigins: new Map([['https://api.z.ai', `https://127.0.0.1:${f.providerPort}`]]),
       }
       const started = Date.now()
       await expect(
@@ -501,8 +530,10 @@ describe('mTLS subscription egress', () => {
 })
 
 describe('subscription egress without a proxy', () => {
-  const chat = 'https://api.z.ai/api/coding/paas/v4/chat/completions'
-  const quota = 'https://api.z.ai/api/monitor/usage/quota/limit'
+  const chat = chatUrl
+  const quota = quotaUrl
+  // The origin of an adapter of the tree that needs the node, until those adapters are removed.
+  const needsNodeUrl = 'https://chatgpt.com/backend-api/codex/responses'
 
   /** The provider alone, under the loopback name a stand gives it; no proxy exists. */
   async function direct({ stallResponse = false, redirect = false } = {}) {
@@ -622,7 +653,9 @@ describe('subscription egress without a proxy', () => {
     const f = await direct()
     try {
       const transport = createEgressTransport(f.config)
-      expect(await notSent(transport.request(input(), { signal: signal() }))).toBe(true)
+      expect(
+        await notSent(transport.request(input({ url: needsNodeUrl }), { signal: signal() })),
+      ).toBe(true)
       // Nor does a control call, which a login or a probe would make.
       expect(
         await notSent(
@@ -638,9 +671,10 @@ describe('subscription egress without a proxy', () => {
         ...codexBackend,
         egress: codexBackend.egress.map((entry) => ({ ...entry, direct: true })),
       }
-      const answer = await createEgressTransport(f.config, [allowed]).request(input(), {
-        signal: signal(),
-      })
+      const answer = await createEgressTransport(f.config, [allowed]).request(
+        input({ url: needsNodeUrl }),
+        { signal: signal() },
+      )
       expect(answer.status).toBe(200)
       answer.close()
       expect(f.requests.map((request) => request.path)).toEqual(['/backend-api/codex/responses'])
@@ -811,7 +845,9 @@ describe('subscription egress without a proxy', () => {
       answer.close()
       expect(seen).toEqual([true])
       // Refused before any connection, or given up by the caller: no word about the provider.
-      expect(await notSent(transport.request(input(), { signal: signal() }))).toBe(true)
+      expect(
+        await notSent(transport.request(input({ url: needsNodeUrl }), { signal: signal() })),
+      ).toBe(true)
       expect(
         await notSent(transport.request(input({ url: `${chat}/other` }), { signal: signal() })),
       ).toBe(true)

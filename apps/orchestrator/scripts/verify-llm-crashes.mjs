@@ -144,20 +144,21 @@ export async function startRefreshWorker(env) {
 }
 
 /** Advance the age of an owned synthetic row, then execute unchanged production collectors. */
-async function lostCall(ctx, minutes, collector) {
-  const { db, control, core, stack } = ctx
-  const turn = await ctx.issued('openai-chatgpt')
+async function lostCall(group, minutes, collector) {
+  const { db, core, stack } = group
+  const turn = await group.issued()
   let stream
   try {
-    await control('scenario', { scenario: 'delayed', backend: 'codex', delayMs: 60_000 })
-    stream = await beginStream(ctx, turn)
+    await group.provider(group.answers.held(60_000))
+    stream = await beginStream(group, turn)
     const call = await eventually(() =>
       db.llmCall.findFirst({ where: { key: { taskId: turn.ref.taskId }, state: 'open' } }),
     )
-    const worker = ctx.llmGetter()
+    const worker = group.roleGetter()
     worker.child.kill('SIGKILL')
     await worker.exited
-    await stream.finished
+    // The role died in the middle of the answer: its end never reached the client.
+    assert.equal((await stream.finished).text.trimEnd().endsWith(group.streamEnd), false)
     assert.equal((await db.llmCall.findUniqueOrThrow({ where: { id: call.id } })).state, 'open')
     const startedAt = new Date(Date.now() - minutes * 60_000)
     if (
@@ -192,7 +193,7 @@ async function lostCall(ctx, minutes, collector) {
     if (collector === 'core') {
       assert.ok(worker.signalCode === 'SIGKILL' || worker.child.signalCode === 'SIGKILL')
       await core.call('sweep')
-    } else await ctx.restartLlm()
+    } else await group.restartRole()
     const closed = await eventually(async () => {
       const result = await db.llmCall.findUniqueOrThrow({
         where: { id: call.id },
@@ -205,35 +206,24 @@ async function lostCall(ctx, minutes, collector) {
     assert.equal(closed.tokenUsage.estimateReason, 'lost')
     await core.call('sweep')
     assert.equal(await db.tokenUsage.count({ where: { gatewayCallId: call.id } }), 1)
-    if (collector === 'core') await ctx.restartLlm()
+    if (collector === 'core') await group.restartRole()
     await eventually(
       async () => (await fetch(`http://127.0.0.1:${stack.llmPort}/health`)).status === 200,
     )
-    ctx.passed(
+    group.passed(
       `SIGKILL mid-stream: ${collector} collector closes lost/nonbillable (synthetic age ${minutes}m)`,
     )
   } finally {
     stream?.abort()
-    await core.call('revoke', { ref: turn.ref })
-    await control('scenario', { scenario: 'text', backend: 'codex' })
+    await group.revoke(turn)
+    await group.provider(group.answers.text())
   }
 }
 
-async function beginStream(ctx, turn) {
+/** A generation straight at the role, read up to its first bytes: the call is open from here. */
+async function beginStream(group, turn) {
   const controller = new AbortController()
-  const response = await fetch(`http://127.0.0.1:${ctx.stack.llmPort}/codex/responses`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${turn.values.llmApiKey}`,
-      'content-type': 'application/json',
-      'user-agent': 'codex_exec/0.158.0',
-    },
-    body: JSON.stringify({
-      model: 'gpt-6-sol',
-      input: 'Synthetic B13 crash accounting.',
-      store: false,
-      stream: true,
-    }),
+  const response = await group.roleRequest(turn, {
     signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
   })
   assert.equal(response.status, 200, 'Synthetic stream was refused')
@@ -256,14 +246,14 @@ async function beginStream(ctx, turn) {
   return { finished, abort: () => controller.abort() }
 }
 
-async function databaseOutage(ctx) {
-  const { db, control, core, stack } = ctx
-  const turn = await ctx.issued('openai-chatgpt')
+async function databaseOutage(group) {
+  const { db, stack } = group
+  const turn = await group.issued()
   let stream,
     paused = false
   try {
-    await control('scenario', { scenario: 'delayed', backend: 'codex', delayMs: 3000 })
-    stream = await beginStream(ctx, turn)
+    await group.provider(group.answers.held(3000))
+    stream = await beginStream(group, turn)
     const call = await eventually(() =>
       db.llmCall.findFirst({ where: { key: { taskId: turn.ref.taskId }, state: 'open' } }),
     )
@@ -274,17 +264,12 @@ async function databaseOutage(ctx) {
     paused = false
     const completed = await stream.finished
     assert.equal(completed.interrupted, false)
-    assert.ok(completed.text.includes('response.completed'))
+    assert.ok(completed.text.trimEnd().endsWith(group.streamEnd))
     const usage = await eventually(
       () => db.tokenUsage.findUnique({ where: { gatewayCallId: call.id } }),
       60_000,
     )
-    assert.equal(usage.estimated, false)
-    assert.equal(usage.billable, true)
-    assert.equal(usage.inputUncachedTokens, 80)
-    assert.equal(usage.cacheReadTokens, 20)
-    assert.equal(usage.outputTokens, 12)
-    assert.equal(usage.reasoningTokens, 3)
+    assert.partialDeepStrictEqual(usage, { ...group.usage, estimated: false, billable: true })
     assert.equal(
       (await db.llmCall.findUniqueOrThrow({ where: { id: call.id } })).state,
       'completed',
@@ -293,26 +278,26 @@ async function databaseOutage(ctx) {
     await eventually(
       async () => (await fetch(`http://127.0.0.1:${stack.llmPort}/health`)).status === 200,
     )
-    ctx.passed(
+    group.passed(
       'PostgreSQL paused for 30s at stream completion: exact provider usage persisted once',
     )
   } finally {
     if (paused) await stack.compose(['unpause', 'postgres'], { cleanup: true })
     stream?.abort()
-    await core.call('revoke', { ref: turn.ref })
-    await control('scenario', { scenario: 'text', backend: 'codex' })
+    await group.revoke(turn)
+    await group.provider(group.answers.text())
   }
 }
 
-async function clientAborts(ctx) {
-  const { db, control, core, codex } = ctx
-  const turn = await ctx.issued('openai-chatgpt')
-  const before = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: codex.accountId } })
+async function clientAborts(group) {
+  const { db } = group
+  const turn = await group.issued()
+  const before = await group.account()
   assert.equal(before.breakerOpenUntil, null)
   try {
     for (let index = 0; index < 3; index++) {
-      await control('scenario', { scenario: 'delayed', backend: 'codex', delayMs: 60_000 })
-      const stream = await beginStream(ctx, turn)
+      await group.provider(group.answers.held(60_000))
+      const stream = await beginStream(group, turn)
       const call = await eventually(() =>
         db.llmCall.findFirst({ where: { key: { taskId: turn.ref.taskId }, state: 'open' } }),
       )
@@ -330,50 +315,36 @@ async function clientAborts(ctx) {
       assert.equal(closed.tokenUsage.billable, true)
       assert.ok(closed.tokenUsage.inputUncachedTokens > 0)
     }
-    const after = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: codex.accountId } })
+    const after = await group.account()
     assert.equal(after.breakerOpenUntil, null)
     assert.equal(after.usageMissingStreak, before.usageMissingStreak)
     assert.equal(after.health, 'ok')
-    ctx.passed(
+    group.passed(
       'three client aborts: estimated aborted accounting without opening the usage breaker',
     )
   } finally {
-    await core.call('revoke', { ref: turn.ref })
-    await control('scenario', { scenario: 'text', backend: 'codex' })
+    await group.revoke(turn)
+    await group.provider(group.answers.text())
   }
 }
 
-async function revokeDuringStream(ctx) {
-  const { db, control, core, stack } = ctx
-  const turn = await ctx.issued('openai-chatgpt')
+async function revokeDuringStream(group) {
+  const { db } = group
+  const turn = await group.issued()
   let stream
   try {
-    await control('scenario', { scenario: 'delayed', backend: 'codex', delayMs: 3000 })
-    stream = await beginStream(ctx, turn)
+    await group.provider(group.answers.held(3000))
+    stream = await beginStream(group, turn)
     const call = await eventually(() =>
       db.llmCall.findFirst({ where: { key: { taskId: turn.ref.taskId }, state: 'open' } }),
     )
-    await core.call('revoke', { ref: turn.ref })
-    const refused = await fetch(`http://127.0.0.1:${stack.llmPort}/codex/responses`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${turn.values.llmApiKey}`,
-        'content-type': 'application/json',
-        'user-agent': 'codex_exec/0.158.0',
-      },
-      body: JSON.stringify({
-        model: 'gpt-6-sol',
-        input: 'Synthetic revoked follow-up.',
-        stream: true,
-        store: false,
-      }),
-      signal: AbortSignal.timeout(10_000),
-    })
+    await group.revoke(turn)
+    const refused = await group.roleRequest(turn, { signal: AbortSignal.timeout(10_000) })
     assert.equal(refused.status, 401)
     await refused.arrayBuffer()
     const terminal = await stream.finished
     assert.equal(terminal.interrupted, false)
-    assert.ok(terminal.text.includes('response.completed'))
+    assert.ok(terminal.text.trimEnd().endsWith(group.streamEnd))
     const closed = await eventually(async () => {
       const record = await db.llmCall.findUniqueOrThrow({
         where: { id: call.id },
@@ -386,17 +357,36 @@ async function revokeDuringStream(ctx) {
     assert.equal(closed.tokenUsage.estimated, false)
     assert.ok(closed.key.revokedAt)
     assert.equal(await db.llmCall.count({ where: { keyId: closed.keyId, state: 'open' } }), 0)
-    ctx.passed(
+    group.passed(
       'turn revoked mid-stream: admitted stream finishes, next request401, key accounting closes',
     )
   } finally {
     stream?.abort()
-    await core.call('revoke', { ref: turn.ref })
-    await control('scenario', { scenario: 'text', backend: 'codex' })
+    await group.revoke(turn)
+    await group.provider(group.answers.text())
   }
 }
 
-export async function verifyCrashes(ctx) {
+/**
+ * The crash barriers of the platform, on the group they are given: a role killed in the middle
+ * of a stream, a client that goes away, a key revoked while its stream runs, a database that
+ * stops answering when a stream ends.
+ */
+export async function verifyCrashes(group) {
+  await group.restartRole()
+  await lostCall(group, 12, 'llm')
+  await lostCall(group, 31, 'core')
+  await clientAborts(group)
+  await revokeDuringStream(group)
+  await databaseOutage(group)
+}
+
+/**
+ * The crash barriers of an OAuth rotation: two writers, a process killed around the provider
+ * request and around the Vault write, a Vault that stops answering. Codex's tokens only; removed
+ * with OAuth (G8).
+ */
+export async function verifyRotationCrashes(ctx) {
   const { db, stack, env, codex, control, writer, llmSecrets, locks, passed } = ctx
   const accountId = codex.accountId
   const path = `subs/openai-chatgpt/${accountId}`
@@ -537,9 +527,4 @@ export async function verifyCrashes(ctx) {
       cleanupFailure = new AggregateError(failures, 'Synthetic crash worker cleanup failed')
   }
   if (cleanupFailure) throw cleanupFailure
-  await lostCall(ctx, 12, 'llm')
-  await lostCall(ctx, 31, 'core')
-  await clientAborts(ctx)
-  await revokeDuringStream(ctx)
-  await databaseOutage(ctx)
 }

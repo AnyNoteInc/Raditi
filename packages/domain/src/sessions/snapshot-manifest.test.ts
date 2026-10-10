@@ -10,7 +10,11 @@ import {
   turnSnapshotPrefix,
 } from './snapshot-manifest.ts'
 
-const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
+const home = {
+  root: '/agent-home/opencode',
+  include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+  exclude: [],
+}
 const manifest = () => ({
   schemaVersion: 1,
   workspaceId: 'ws1',
@@ -18,7 +22,7 @@ const manifest = () => ({
   turn: 1,
   createdAt: '2026-09-26T20:00:00.000Z',
   image: `registry/raditi@sha256:${'a'.repeat(64)}`,
-  driver: { id: 'codex', version: '0.157.1', nativeSessionId: 'thread-1' },
+  driver: { id: 'opencode', version: '1.18.34', nativeSessionId: 'ses_0001' },
   home,
   git: { provider: 'gitea', branch: 'task/t1', baseSha: 'b'.repeat(40), headSha: 'c'.repeat(40) },
   parts: snapshotPartNames.map((name) => ({
@@ -121,7 +125,7 @@ describe('pre-turn snapshot plan', () => {
     const { headSha: _head, ...git } = rest.git
     return {
       ...rest,
-      driver: { id: 'codex', version: '0.157.1' },
+      driver: { id: 'opencode', version: '1.18.34' },
       git: { ...git, publication: { taskId: 't1', committedAt: '2026-09-26T20:00:00.000Z' } },
     }
   }

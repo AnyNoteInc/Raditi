@@ -2,16 +2,17 @@ import { Prisma, type PrismaClient } from '@repo/db'
 import type { ProbeResult } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleBackendId } from '../testing/ids.ts'
 import { PostgresPoolHealthStore, type PoolHealthAccount } from './pool-health-store.ts'
 
-// Kimi authenticates with an API key: a confirmed 401 cannot be repaired by token refresh.
-const kimi = { authNeedsRelogin: true }
+// A backend that authenticates with an API key: a confirmed 401 cannot be repaired by a refresh.
+const withKey = { authNeedsRelogin: true }
 const now = new Date('2026-09-30T10:00:00Z')
 const reset = new Date('2026-10-01T00:00:00Z')
 const snapshot: PoolHealthAccount = {
   accountId: '00000000-0000-4000-8000-000000000001',
-  backendId: 'kimi-code',
-  credentialRef: 'subs/kimi-code/00000000-0000-4000-8000-000000000001',
+  backendId: sampleBackendId,
+  credentialRef: `subs/${sampleBackendId}/00000000-0000-4000-8000-000000000001`,
   credentialVersion: 1,
   clientIdentity: {},
   limitsSeenAt: now,
@@ -88,7 +89,7 @@ describe('bounded pool health SQL mutations', () => {
 
   it('replenishes capacity from a fresh probe, preserving operator fields', async () => {
     const h = harness()
-    expect(await h.store.probe(snapshot, result(), kimi)).toEqual({
+    expect(await h.store.probe(snapshot, result(), withKey)).toEqual({
       applied: true,
       alert: null,
       limitsSeenAt: now,
@@ -112,7 +113,7 @@ describe('bounded pool health SQL mutations', () => {
         { name: 'month', usedPct: 80, resetsAt: new Date(reset.getTime() + 1).toISOString() },
       ],
     })
-    await h.store.probe(snapshot, result(), kimi)
+    await h.store.probe(snapshot, result(), withKey)
     const data = h.update.mock.calls[0]![0].data
     expect(data.headroomPct).toBe('0')
     expect(data.limitWindows).toEqual([
@@ -125,7 +126,7 @@ describe('bounded pool health SQL mutations', () => {
     const overtakenAt = new Date(now.getTime() + 1)
     const h = harness({ limitsSeenAt: overtakenAt, limitWindows: [] })
     // The state the probe left is still the one that overtook it: it answers no newer caller.
-    expect(await h.store.probe(snapshot, result(), kimi)).toMatchObject({
+    expect(await h.store.probe(snapshot, result(), withKey)).toMatchObject({
       applied: true,
       limitsSeenAt: now,
     })
@@ -134,7 +135,7 @@ describe('bounded pool health SQL mutations', () => {
 
   it('restores windows that were unknown before the probe, though a late response overtook it', async () => {
     const h = harness({ limitsSeenAt: new Date(now.getTime() + 1), limitWindows: [] })
-    await h.store.probe({ ...snapshot, windowsKnown: false }, result(), kimi)
+    await h.store.probe({ ...snapshot, windowsKnown: false }, result(), withKey)
     expect(h.update.mock.calls[0]![0].data).toMatchObject({
       limitWindows: [{ name: 'week', usedPct: 10, resetsAt: reset.toISOString() }],
       headroomPct: '90',
@@ -151,7 +152,7 @@ describe('bounded pool health SQL mutations', () => {
 
   it('clears capacity for an authoritative unknown probe without changing health', async () => {
     const h = harness()
-    await h.store.probe(snapshot, result({ status: 'unknown', windows: null }), kimi)
+    await h.store.probe(snapshot, result({ status: 'unknown', windows: null }), withKey)
     expect(h.update).toHaveBeenCalledWith({
       where: { id: snapshot.accountId },
       data: { limitWindows: [], headroomPct: null, limitsSeenAt: now },
@@ -160,10 +161,10 @@ describe('bounded pool health SQL mutations', () => {
 
   it('ignores stale unknowns after newer headers and all probes after credential rotation', async () => {
     const newer = harness({ limitsSeenAt: new Date(now.getTime() + 1) })
-    await newer.store.probe(snapshot, result({ status: 'unknown', windows: null }), kimi)
+    await newer.store.probe(snapshot, result({ status: 'unknown', windows: null }), withKey)
     expect(newer.update).not.toHaveBeenCalled()
     const rotated = harness({ credentialVersion: 2 })
-    expect(await rotated.store.probe(snapshot, result({ status: 'auth' }), kimi)).toEqual({
+    expect(await rotated.store.probe(snapshot, result({ status: 'auth' }), withKey)).toEqual({
       applied: false,
       alert: null,
     })
@@ -175,7 +176,7 @@ describe('bounded pool health SQL mutations', () => {
     ['suspended', 'suspended', 'risk_confirmed'],
   ] as const)('confirms %s with independent control evidence', async (status, health, reason) => {
     const h = harness()
-    expect(await h.store.probe(snapshot, result({ status }), kimi)).toEqual({
+    expect(await h.store.probe(snapshot, result({ status }), withKey)).toEqual({
       applied: true,
       alert: reason,
       limitsSeenAt: now,
@@ -207,7 +208,7 @@ describe('bounded pool health SQL mutations', () => {
     'preserves the serious refresh reason %s during healthy probes and credit warnings',
     async (healthReason) => {
       const h = harness({ healthReason })
-      await h.store.probe(snapshot, result({ creditsBalance: '10' }), kimi)
+      await h.store.probe(snapshot, result({ creditsBalance: '10' }), withKey)
       expect(h.update.mock.calls[0]![0].data).not.toHaveProperty('healthReason')
       h.update.mockClear()
       await h.store.credits(snapshot.accountId, '10')
@@ -219,19 +220,19 @@ describe('bounded pool health SQL mutations', () => {
     'confirmed auth, risk, changed plan and payment take priority over %s',
     async (healthReason) => {
       const auth = harness({ healthReason })
-      await auth.store.probe(snapshot, result({ status: 'auth' }), kimi)
+      await auth.store.probe(snapshot, result({ status: 'auth' }), withKey)
       expect(auth.update.mock.calls[0]![0].data).toMatchObject({
         health: 'needs_relogin',
         healthReason: 'auth_confirmed',
       })
       const risk = harness({ healthReason })
-      await risk.store.probe(snapshot, result({ status: 'suspended' }), kimi)
+      await risk.store.probe(snapshot, result({ status: 'suspended' }), withKey)
       expect(risk.update.mock.calls[0]![0].data).toMatchObject({
         health: 'suspended',
         healthReason: 'risk_confirmed',
       })
       const plan = harness({ healthReason })
-      await plan.store.probe(snapshot, result({ plan: 'free' }), kimi)
+      await plan.store.probe(snapshot, result({ plan: 'free' }), withKey)
       expect(plan.update.mock.calls[0]![0].data).toMatchObject({
         health: 'suspended',
         healthReason: 'plan_changed',
@@ -248,7 +249,7 @@ describe('bounded pool health SQL mutations', () => {
 
   it('suspends a changed plan and preserves an existing suspension', async () => {
     const h = harness()
-    expect(await h.store.probe(snapshot, result({ plan: 'free' }), kimi)).toEqual({
+    expect(await h.store.probe(snapshot, result({ plan: 'free' }), withKey)).toEqual({
       applied: true,
       alert: 'plan_changed',
       limitsSeenAt: now,
@@ -259,7 +260,7 @@ describe('bounded pool health SQL mutations', () => {
       healthChangedAt: now,
     })
     const suspended = harness({ health: 'suspended', healthReason: 'risk_confirmed' })
-    await suspended.store.probe(snapshot, result({ plan: 'free', creditsBalance: '10' }), kimi)
+    await suspended.store.probe(snapshot, result({ plan: 'free', creditsBalance: '10' }), withKey)
     expect(suspended.update.mock.calls[0]![0].data).not.toHaveProperty('healthReason')
   })
 
@@ -346,7 +347,7 @@ describe('bounded pool health SQL mutations', () => {
         resetsAt: new Date(now.getTime() + 8 * 86_400_000 + 1),
       },
     ]
-    await h.store.probe(snapshot, result({ windows }), kimi)
+    await h.store.probe(snapshot, result({ windows }), withKey)
     expect(h.update.mock.calls[0]![0].data).toEqual({
       limitWindows: [],
       headroomPct: null,

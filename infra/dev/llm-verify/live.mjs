@@ -557,11 +557,17 @@ const MAX_EXCHANGE_BYTES = 4 * 1024 * 1024
  * the body the CLI sent, the answer the sandbox received, the status and the times. It keeps no
  * header but the content type — so no turn key — and nothing of the provider's side: what the
  * role sends on, with the plan key, is behind it.
+ *
+ * `scripted` is for a rehearsal alone: there the stand may answer a request itself, in place of
+ * the role (`answerNext`), to see what the CLI does with an answer no scenario of the synthetic
+ * provider can make the gateway give. The observer of a live run takes no such answer.
  */
-export async function startLlmObserver({ listenHost, port, upstream }) {
+export async function startLlmObserver({ listenHost, port, upstream, scripted = false }) {
   const target = new URL(upstream)
   const exchanges = []
   const sockets = new Set()
+  // The answers the stand gives in place of the role, one a request, in their order.
+  const answers = []
   const server = createServer((req, res) => {
     const startedAt = Date.now()
     const record = {
@@ -575,6 +581,7 @@ export async function startLlmObserver({ listenHost, port, upstream }) {
       firstByteMs: null,
       ms: null,
       truncated: false,
+      answeredByStand: false,
     }
     if (exchanges.length < MAX_EXCHANGES) exchanges.push(record)
     const kept = { request: [], response: [], bytes: 0 }
@@ -587,6 +594,34 @@ export async function startLlmObserver({ listenHost, port, upstream }) {
       record.ms ??= Date.now() - startedAt
       record.requestBody = Buffer.concat(kept.request).toString()
       record.responseText = Buffer.concat(kept.response).toString()
+    }
+    const answer = answers.shift()
+    if (answer) {
+      // The request is read whole and goes nowhere: the stand says what the sandbox gets.
+      record.answeredByStand = true
+      req.on('data', keep(kept.request))
+      req.on('end', async () => {
+        try {
+          const given = await answer({
+            method: req.method,
+            path: req.url,
+            headers: req.headers,
+            body: Buffer.concat(kept.request),
+          })
+          const body = Buffer.from(given.body)
+          record.status = given.status
+          record.contentType = String(given.headers['content-type'] ?? '').split(';')[0] || null
+          record.firstByteMs = Date.now() - startedAt
+          keep(kept.response)(body)
+          finish()
+          res.writeHead(given.status, given.headers).end(body)
+        } catch {
+          record.status = 502
+          finish()
+          res.writeHead(502, { 'content-type': 'text/plain' }).end('The stand did not answer')
+        }
+      })
+      return
     }
     const forward = httpRequest(
       {
@@ -648,6 +683,19 @@ export async function startLlmObserver({ listenHost, port, upstream }) {
     port: server.address().port,
     /** The exchanges so far, oldest first; the records are the observer's own, do not change them. */
     exchanges: () => exchanges.slice(),
+    /**
+     * A rehearsal only: the next request that has no answer yet is not passed on. `answer` is
+     * given it as sandbox-gw sent it — `{ method, path, headers, body }`, the turn key among the
+     * headers, so nothing of it may be kept — and returns what the sandbox gets instead:
+     * `{ status, headers, body }`.
+     */
+    answerNext(answer) {
+      assert.equal(scripted, true, 'Only the observer of a rehearsal answers in place of the role')
+      answers.push(answer)
+    },
+    pendingAnswers: () => answers.length,
+    /** Takes back the answers no request has asked for; returns how many there were. */
+    dropAnswers: () => answers.splice(0).length,
     close: () =>
       new Promise((resolve) => {
         for (const socket of sockets) socket.destroy()
@@ -742,10 +790,12 @@ function usageOf(raw) {
 }
 
 /**
- * The forms of a stream the stand looks for because no scenario of the synthetic Z.ai makes
- * them: a finish `tool_calls` with no call, a `stop` with no text, a stream with no finish
- * reason or no DONE, and text beside a tool call in one answer. A closed list: a form that is
- * not on it is not reported.
+ * The forms of a stream the stand looks for in the answers of a real model. No scenario of the
+ * synthetic Z.ai makes the first four: a finish `tool_calls` with no call, a `stop` with no
+ * text, a stream with no finish reason or no DONE. The fifth, text beside a tool call in one
+ * answer, the real model gave first; the synthetic one makes it only where a scenario asks for
+ * it (`beside`), which no rehearsal does. A closed list: a form that is not on it is not
+ * reported.
  */
 export const STREAM_FORMS = Object.freeze([
   'tool_calls_without_calls',

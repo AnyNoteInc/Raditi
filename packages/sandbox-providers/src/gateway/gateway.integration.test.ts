@@ -254,6 +254,7 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
         ['-X', 'GET', 'http://sandbox-gw:8080/zai/v4/chat/completions'],
         ['-X', 'POST', 'http://sandbox-gw:8080/codex/responses?target=evil'],
         ['-H', 'Host: evil', '-X', 'POST', 'http://sandbox-gw:8080/codex/responses'],
+        ['-H', 'Host: evil', '-X', 'POST', 'http://sandbox-gw:8080/zai/v4/chat/completions'],
         ['-X', 'GET', 'http://sandbox-gw:8080/codex/responses'],
         ['-X', 'GET', 'http://sandbox-gw:8080/kimi/v1/chat/completions'],
         ['-X', 'PUT', 'http://sandbox-gw:8080/mcp'],

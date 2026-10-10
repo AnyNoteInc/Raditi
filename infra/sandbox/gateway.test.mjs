@@ -328,6 +328,11 @@ test('only literal allowlisted paths and methods reach upstream', async (t) => {
     '/kimi/v1/chat/completions?x=1',
     '/zai/v4/chat/completions?x=1',
     '/zai/v4/chat/completions/',
+    '/zai/v4/chat/%63ompletions',
+    '/zai/v4//chat/completions',
+    '//zai/v4/chat/completions',
+    '/zai/v4/../v4/chat/completions',
+    '/zai/v4/chat/completions#fragment',
     '/zai/v4/models',
     '/zai/v4/embeddings',
     '/zai/chat/completions',
@@ -335,6 +340,7 @@ test('only literal allowlisted paths and methods reach upstream', async (t) => {
     '/api/monitor/usage/quota/limit',
     '/mcp?x=1',
     'http://example.test/codex/responses',
+    'http://example.test/zai/v4/chat/completions',
   ]
   for (const path of deniedPaths) assert.equal((await call(port, path)).status, 403, path)
   for (const path of llmPaths)
@@ -1029,6 +1035,7 @@ test(
     for (const raw of [
       'CONNECT example.test:443 HTTP/1.1\r\nHost: sandbox-gw\r\n\r\n',
       'GET /codex/responses HTTP/1.1\r\nHost: sandbox-gw\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n',
+      'GET /zai/v4/chat/completions HTTP/1.1\r\nHost: sandbox-gw\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n',
     ]) {
       const socket = connect({ host: '127.0.0.1', port })
       t.after(() => socket.destroy())

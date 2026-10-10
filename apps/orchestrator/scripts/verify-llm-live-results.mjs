@@ -4,7 +4,9 @@
 // question П30 counts, and by the reading of the product, which is the supervisor's — it also
 // takes an object the model wrapped in a sentence (src/turns/turn-result.ts). The plan of the
 // turns and the judgement are here, without the stand; the flow is `results()` in
-// verify-llm-live.mjs. Report: docs/plan/46-turn-result-glm.md.
+// verify-llm-live.mjs. Report: docs/plan/46-turn-result-glm.md. The two readings themselves
+// (resultReadings) serve every live flow of both stands: the outcome «the result is valid» of
+// the acceptances and of the measurement is the product's reading too (spec §20, П38).
 import { SANDBOX_WORKDIR, turnResultSchema } from '@repo/domain'
 
 import { resultVerdict } from '../../../infra/dev/llm-verify/live.mjs'
@@ -226,14 +228,15 @@ export function rehearsalScenario(turn) {
 }
 
 /**
- * What the answer of a turn is worth. `strict` — the driver alone takes its last message as a
- * result (extractResult, then the schema); `taken` — the product does (readTurnResult: the
- * driver, then once more from the one JSON candidate of the message). `verdict` says in words
- * of the report why the strict reading did not take it; `unmet` — what the kind of the turn
- * asked for and the result, or the file the stand read back (`file`), does not show. Names
- * and counts only, never the text of the model.
+ * The two readings of the answer of a turn, the same in every live flow of the stands. `taken`
+ * — the product takes its last message as a result (readTurnResult of the supervisor: the
+ * driver, then once more from the one JSON candidate of the message); `result` is then that
+ * result, the one a flow goes on with, else null. `strict` — the driver alone takes it
+ * (extractResult, then the schema); `verdict` says in words of the report why it did not.
+ * Whether a turn «ended with a valid result» is `taken`: what the product would do with it.
+ * The strict reading is printed beside it. Names and counts only, never the text of the model.
  */
-export function judgeResult({ turn, events, code, driver, file }) {
+export function resultReadings({ driver, events, code }) {
   const read = resultVerdict(events, turnResultSchema)
   const strict =
     code === 0 && turnResultSchema.safeParse(driver.extractResult(events, null)).success
@@ -250,6 +253,25 @@ export function judgeResult({ turn, events, code, driver, file }) {
       : code === 0
         ? 'no answer step at the end of the output'
         : `exit code ${code}`
+  return { verdict, strict, taken: result !== null, result }
+}
+
+/** How many of the turns the product took a result of, and how many the strict reading did. */
+export function readingShares(readings) {
+  return {
+    turns: readings.length,
+    taken: readings.filter((reading) => reading.taken).length,
+    strict: readings.filter((reading) => reading.strict).length,
+  }
+}
+
+/**
+ * What the answer of a turn of the narrow measurement is worth: its two readings
+ * (resultReadings) and `unmet` — what the kind of the turn asked for and the result, or the
+ * file the stand read back (`file`), does not show.
+ */
+export function judgeResult({ turn, events, code, driver, file }) {
+  const { verdict, strict, taken, result } = resultReadings({ driver, events, code })
   const unmet = result ? turn.expects.flatMap((expectation) => expectation(result)) : []
   if (turn.written) {
     const lines = String(file ?? '').split('\n')
@@ -263,7 +285,7 @@ export function judgeResult({ turn, events, code, driver, file }) {
     reminded: turn.reminded,
     verdict,
     strict,
-    taken: result !== null,
+    taken,
     unmet,
   }
 }

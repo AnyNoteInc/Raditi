@@ -1,5 +1,5 @@
 import type { EgressResponse, LlmBackend } from '@repo/domain'
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
+import { codexBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -217,32 +217,53 @@ describe('operator subscription authentication', () => {
     }
   })
   it('imports a key through the adapter and probes it without generation', async () => {
-    const { options, request, readSecret, showDeviceCode } = setup(kimiCodeBackend)
-    request.mockReset().mockResolvedValue(response({ usages: { limit_5h: { used_ratio: 0.1 } } }))
+    const { options, request, readSecret, showDeviceCode } = setup(zaiCodingBackend)
+    // The quota answer of an active plan, in the form of the recorded ones (zai-coding fixtures).
+    const window = (unit: number, number: number, usage: number, resetInMs: number) => ({
+      type: 'CREDIT_LIMIT',
+      unit,
+      number,
+      usage,
+      currentValue: 20,
+      remaining: usage - 21,
+      percentage: 1,
+      nextResetTime: Date.now() + resetInMs,
+    })
+    request.mockReset().mockResolvedValue(
+      response({
+        code: 200,
+        msg: 'Operation successful',
+        success: true,
+        data: {
+          level: 'lite',
+          limits: [window(3, 5, 2000, 3_600_000), window(6, 1, 10_000, 86_400_000)],
+        },
+      }),
+    )
     expect(await authenticateSubscription(options)).toEqual({
       v: '1',
-      kind: 'kimi_api_key',
+      kind: 'zai_api_key',
       apiKey: 'synthetic-api-key',
     })
     expect(readSecret).toHaveBeenCalledOnce()
     expect(showDeviceCode).not.toHaveBeenCalled()
-    expect(request.mock.calls[0]![0].url).toBe('https://api.kimi.ai/coding/v1/usages')
+    expect(request.mock.calls[0]![0].url).toBe('https://api.z.ai/api/monitor/usage/quota/limit')
     expect(request).toHaveBeenCalledOnce()
   })
   it.each([401, 403, 500, 200])('rejects an unconfirmed key probe (%i)', async (status) => {
-    const { options, request } = setup(kimiCodeBackend)
+    const { options, request } = setup(zaiCodingBackend)
     request.mockReset().mockResolvedValue(response({ private: 'secret' }, status))
     await expect(authenticateSubscription(options)).rejects.toThrow('Subscription login failed')
   })
   it('invalid secret input makes no HTTP call', async () => {
-    const { options, request, readSecret } = setup(kimiCodeBackend)
+    const { options, request, readSecret } = setup(zaiCodingBackend)
     readSecret.mockResolvedValue('private\napi-key')
     await expect(authenticateSubscription(options)).rejects.toThrow('Subscription login failed')
     expect(request).not.toHaveBeenCalled()
   })
   it('an unsupported import method makes no HTTP call', async () => {
     const { options, request } = setup({
-      ...kimiCodeBackend,
+      ...zaiCodingBackend,
       importCredential: undefined,
     } as LlmBackend)
     await expect(authenticateSubscription(options)).rejects.toThrow('Subscription login failed')

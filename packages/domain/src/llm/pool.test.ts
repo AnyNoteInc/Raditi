@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { LimitWindow } from '../ports/llm-backend.ts'
+import { llmBackendIds, type LimitWindow } from '../ports/llm-backend.ts'
 import { pickAccount, type PickAccountInput, type PoolAccountSnapshot } from './pool.ts'
 
 const NOW = new Date('2026-09-29T12:00:00.000Z')
@@ -14,7 +14,7 @@ const window = (name: LimitWindow['name'], usedPct: number, minutes = 120): Limi
 function account(id = 'a', overrides: Partial<PoolAccountSnapshot> = {}): PoolAccountSnapshot {
   return {
     id,
-    backend: 'openai-chatgpt',
+    backend: 'zai-coding',
     enabled: true,
     status: 'active',
     health: 'ok',
@@ -32,7 +32,7 @@ function account(id = 'a', overrides: Partial<PoolAccountSnapshot> = {}): PoolAc
 }
 function input(overrides: Partial<PickAccountInput> = {}): PickAccountInput {
   return {
-    backend: 'openai-chatgpt',
+    backend: 'zai-coding',
     providerEnabled: true,
     now: NOW,
     boundAccountId: null,
@@ -56,7 +56,7 @@ const selected = (accountId = 'a', binding: 'initial' | 'keep' | 'rebind' = 'ini
 })
 
 describe('pickAccount: new tasks', () => {
-  it.each(['openai-chatgpt', 'kimi-code'] as const)('uses the same policy for %s', (backend) => {
+  it.each(llmBackendIds)('uses the same policy for %s', (backend) => {
     expect(pickAccount(input({ backend, accounts: [account('a', { backend })] }))).toEqual(
       selected(),
     )

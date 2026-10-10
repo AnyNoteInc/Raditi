@@ -4,6 +4,7 @@ import type { Prisma, PrismaClient } from '@repo/db'
 import { DomainError, type TurnCredentialRef } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleBackendId } from '../testing/ids.ts'
 import { SubscriptionRetirement } from './retire.ts'
 
 type TestKey = {
@@ -107,10 +108,7 @@ function fixture(backend = 'openai-chatgpt') {
     secrets: { kvDestroyAll },
     credentials: { revoke },
     locks: { tryAcquire, close: vi.fn() },
-    backends: [
-      { id: 'openai-chatgpt' as const, revoke: providerRevoke },
-      { id: 'kimi-code' as const },
-    ],
+    backends: [{ id: 'openai-chatgpt' as const, revoke: providerRevoke }, { id: sampleBackendId }],
   }
   const service = new SubscriptionRetirement(options)
   const addKey = (overrides: Partial<TestKey> = {}) => {
@@ -418,7 +416,7 @@ describe('operator subscription retirement', () => {
   )
 
   it('requires a console revocation acknowledgement for backends without revoke capability', async () => {
-    const f = fixture('kimi-code')
+    const f = fixture(sampleBackendId)
     f.account.enabled = false
     f.account.retireRequestedAt = now
     expect(await f.service.finalize({ accountId: f.account.id })).toMatchObject({
@@ -429,7 +427,7 @@ describe('operator subscription retirement', () => {
   })
 
   it('persists console acknowledgement before Vault destruction and retries an outage without a second console action', async () => {
-    const f = fixture('kimi-code')
+    const f = fixture(sampleBackendId)
     f.account.enabled = false
     f.account.retireRequestedAt = now
     f.kvDestroyAll.mockRejectedValueOnce(new Error('secret provider token response'))
@@ -449,7 +447,7 @@ describe('operator subscription retirement', () => {
   })
 
   it('cannot acknowledge console revocation while retirement still drains', async () => {
-    const f = fixture('kimi-code')
+    const f = fixture(sampleBackendId)
     f.account.retireRequestedAt = now
     expect(
       await f.service.finalize({ accountId: f.account.id, consoleRevoked: true }),

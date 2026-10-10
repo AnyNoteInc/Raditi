@@ -1,15 +1,15 @@
 import type { SecretStore } from '@repo/domain'
-import { kimiCodeBackend } from '@repo/llm-backends'
+import { zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createCredentialSource, encodeSubscriptionCredential } from './credentials.ts'
 
 const context = {
   accountId: 'account_1',
-  credentialRef: 'subs/kimi-code/account_1',
+  credentialRef: `subs/${zaiCodingBackend.id}/account_1`,
   credentialVersion: 1,
 }
-const credential = { v: '1', kind: 'kimi_api_key', apiKey: 'synthetic-key' }
+const credential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-key' }
 const stored = (version = 1) => ({ data: encodeSubscriptionCredential(credential), version })
 
 describe('subscription credential source', () => {
@@ -17,11 +17,11 @@ describe('subscription credential source', () => {
     const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(stored())
     const source = createCredentialSource({ kvRead })
     const result = await Promise.all([
-      source.get(context, kimiCodeBackend),
-      source.get(context, kimiCodeBackend),
+      source.get(context, zaiCodingBackend),
+      source.get(context, zaiCodingBackend),
     ])
     expect(result).toEqual([credential, credential])
-    expect(await source.get(context, kimiCodeBackend)).toEqual(credential)
+    expect(await source.get(context, zaiCodingBackend)).toEqual(credential)
     expect(kvRead).toHaveBeenCalledExactlyOnceWith(context.credentialRef)
     expect(Object.isFrozen(result[0])).toBe(true)
   })
@@ -33,10 +33,10 @@ describe('subscription credential source', () => {
       .mockResolvedValueOnce(stored())
       .mockResolvedValue(stored(2))
     const source = createCredentialSource({ kvRead }, { ttlMs: 10, now: () => time })
-    await source.get(context, kimiCodeBackend)
-    await source.get({ ...context, credentialVersion: 2 }, kimiCodeBackend)
+    await source.get(context, zaiCodingBackend)
+    await source.get({ ...context, credentialVersion: 2 }, zaiCodingBackend)
     time = 11
-    await source.get({ ...context, credentialVersion: 2 }, kimiCodeBackend)
+    await source.get({ ...context, credentialVersion: 2 }, zaiCodingBackend)
     expect(kvRead).toHaveBeenCalledTimes(3)
   })
 
@@ -50,7 +50,7 @@ describe('subscription credential source', () => {
   ])('fails closed on missing, stale or malformed data', async (value) => {
     const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(value)
     const source = createCredentialSource({ kvRead })
-    await expect(source.get(context, kimiCodeBackend)).rejects.toThrow(
+    await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
       'Subscription credential unavailable',
     )
   })
@@ -61,10 +61,10 @@ describe('subscription credential source', () => {
       .mockResolvedValueOnce(stored())
       .mockRejectedValue(new Error('private-token'))
     const source = createCredentialSource({ kvRead })
-    await source.get(context, kimiCodeBackend)
-    await expect(source.get({ ...context, credentialVersion: 2 }, kimiCodeBackend)).rejects.toThrow(
-      /^Subscription credential unavailable$/,
-    )
+    await source.get(context, zaiCodingBackend)
+    await expect(
+      source.get({ ...context, credentialVersion: 2 }, zaiCodingBackend),
+    ).rejects.toThrow(/^Subscription credential unavailable$/)
   })
 
   it('serves the current version from memory while Vault cannot be read, for a bounded time', async () => {
@@ -74,13 +74,13 @@ describe('subscription credential source', () => {
       { kvRead },
       { ttlMs: 10, staleIfErrorMs: 1_000, now: () => time },
     )
-    await source.get(context, kimiCodeBackend)
+    await source.get(context, zaiCodingBackend)
     kvRead.mockRejectedValue(new Error('private-token sealed'))
     time = 999
-    expect(await source.get(context, kimiCodeBackend)).toEqual(credential)
+    expect(await source.get(context, zaiCodingBackend)).toEqual(credential)
     expect(kvRead).toHaveBeenCalledTimes(2)
     time = 1_000
-    await expect(source.get(context, kimiCodeBackend)).rejects.toThrow(
+    await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
       /^Subscription credential unavailable$/,
     )
   })
@@ -89,17 +89,17 @@ describe('subscription credential source', () => {
     let time = 0
     const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValueOnce(stored())
     const source = createCredentialSource({ kvRead }, { ttlMs: 10, now: () => time })
-    await source.get(context, kimiCodeBackend)
+    await source.get(context, zaiCodingBackend)
     time = 11
     kvRead.mockResolvedValue(stored(2))
-    await expect(source.get(context, kimiCodeBackend)).rejects.toThrow(
+    await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
       'Subscription credential unavailable',
     )
     kvRead.mockResolvedValueOnce(stored())
-    await source.get(context, kimiCodeBackend)
+    await source.get(context, zaiCodingBackend)
     source.invalidate(context.accountId)
     kvRead.mockRejectedValue(new Error('Vault unavailable'))
-    await expect(source.get(context, kimiCodeBackend)).rejects.toThrow(
+    await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
       'Subscription credential unavailable',
     )
   })
@@ -110,7 +110,7 @@ describe('subscription credential source', () => {
     { ...context, credentialVersion: 0 },
   ])('rejects untrusted paths or versions before Vault', async (value) => {
     const kvRead = vi.fn<SecretStore['kvRead']>()
-    await expect(createCredentialSource({ kvRead }).get(value, kimiCodeBackend)).rejects.toThrow(
+    await expect(createCredentialSource({ kvRead }).get(value, zaiCodingBackend)).rejects.toThrow(
       'Subscription credential unavailable',
     )
     expect(kvRead).not.toHaveBeenCalled()
@@ -132,21 +132,21 @@ describe('refresh-safe subscription credential cache', () => {
     const fresh = { ...credential, apiKey: 'synthetic-new-key' }
     const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(stored())
     const source = createCredentialSource({ kvRead }, { ttlMs: 10, now: () => time })
-    await source.get(context, kimiCodeBackend)
+    await source.get(context, zaiCodingBackend)
     const next = { ...context, credentialVersion: 2 }
-    source.install(next, kimiCodeBackend, fresh, 1)
+    source.install(next, zaiCodingBackend, fresh, 1)
     time = 1_000
-    expect(await source.get(context, kimiCodeBackend)).toEqual(fresh)
-    expect(await source.get(next, kimiCodeBackend)).toEqual(fresh)
-    expect(source.versionOf(await source.get(context, kimiCodeBackend))).toBe(2)
-    expect(source.versionOf(await source.get(next, kimiCodeBackend))).toBe(2)
+    expect(await source.get(context, zaiCodingBackend)).toEqual(fresh)
+    expect(await source.get(next, zaiCodingBackend)).toEqual(fresh)
+    expect(source.versionOf(await source.get(context, zaiCodingBackend))).toBe(2)
+    expect(source.versionOf(await source.get(next, zaiCodingBackend))).toBe(2)
     expect(kvRead).toHaveBeenCalledTimes(1)
     source.commit(next)
-    expect(source.versionOf(await source.get(context, kimiCodeBackend))).toBe(2)
+    expect(source.versionOf(await source.get(context, zaiCodingBackend))).toBe(2)
     time = 1_011
     kvRead.mockResolvedValue({ data: encodeSubscriptionCredential(fresh), version: 2 })
-    expect(await source.get(next, kimiCodeBackend)).toEqual(fresh)
-    expect(source.versionOf(await source.get(next, kimiCodeBackend))).toBe(2)
+    expect(await source.get(next, zaiCodingBackend)).toEqual(fresh)
+    expect(source.versionOf(await source.get(next, zaiCodingBackend))).toBe(2)
     expect(kvRead).toHaveBeenCalledTimes(2)
   })
 
@@ -156,12 +156,12 @@ describe('refresh-safe subscription credential cache', () => {
       .fn<SecretStore['kvRead']>()
       .mockImplementation(() => new Promise((resolve) => (finish = resolve)))
     const source = createCredentialSource({ kvRead })
-    const reading = source.get(context, kimiCodeBackend)
+    const reading = source.get(context, zaiCodingBackend)
     const fresh = { ...credential, apiKey: 'synthetic-new-key' }
-    source.install({ ...context, credentialVersion: 2 }, kimiCodeBackend, fresh, 1)
+    source.install({ ...context, credentialVersion: 2 }, zaiCodingBackend, fresh, 1)
     finish(stored())
     expect(await reading).toEqual(fresh)
-    expect(await source.get(context, kimiCodeBackend)).toEqual(fresh)
+    expect(await source.get(context, zaiCodingBackend)).toEqual(fresh)
   })
 
   it('invalidates an in-flight read after retirement', async () => {
@@ -170,7 +170,7 @@ describe('refresh-safe subscription credential cache', () => {
       .fn<SecretStore['kvRead']>()
       .mockImplementation(() => new Promise((resolve) => (finish = resolve)))
     const source = createCredentialSource({ kvRead })
-    const reading = source.get(context, kimiCodeBackend)
+    const reading = source.get(context, zaiCodingBackend)
     source.invalidate(context.accountId)
     finish(stored())
     await expect(reading).rejects.toThrow('Subscription credential unavailable')
@@ -180,11 +180,15 @@ describe('refresh-safe subscription credential cache', () => {
     const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(stored())
     const source = createCredentialSource({ kvRead }, { maxEntries: 1 })
     const fresh = { ...credential, apiKey: 'synthetic-new-key' }
-    source.install({ ...context, credentialVersion: 2 }, kimiCodeBackend, fresh, 1)
+    source.install({ ...context, credentialVersion: 2 }, zaiCodingBackend, fresh, 1)
     await source.get(
-      { ...context, accountId: 'account_2', credentialRef: 'subs/kimi-code/account_2' },
-      kimiCodeBackend,
+      {
+        ...context,
+        accountId: 'account_2',
+        credentialRef: `subs/${zaiCodingBackend.id}/account_2`,
+      },
+      zaiCodingBackend,
     )
-    expect(await source.get(context, kimiCodeBackend)).toEqual(fresh)
+    expect(await source.get(context, zaiCodingBackend)).toEqual(fresh)
   })
 })

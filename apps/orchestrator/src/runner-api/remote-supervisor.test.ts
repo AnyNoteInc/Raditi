@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
 import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { sealSnapshotPart } from '../sessions/snapshot-parts.ts'
+import { sampleDriverId } from '../testing/ids.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { MemoryTurnCredentials, testTurnCredentialPolicy } from '../testing/turn-credentials.ts'
@@ -38,8 +39,12 @@ const labels = {
 }
 const baseSha = 'b'.repeat(40)
 const headSha = 'c'.repeat(40)
-const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
-const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
+const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
+const home = {
+  root: `/agent-home/${sampleDriverId}`,
+  include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+  exclude: [],
+}
 const result: TurnResult = {
   summary: 'Готово',
   change_type: 'code',
@@ -226,7 +231,7 @@ describe('TurnSupervisor on a runner', () => {
       { type: 'completed' },
     ]
     const driver: AgentDriver = {
-      id: 'codex',
+      id: sampleDriverId,
       image,
       capabilities: {
         resume: true,
@@ -237,7 +242,12 @@ describe('TurnSupervisor on a runner', () => {
       },
       prepare: vi.fn(async (context) => ({
         context: { ...context },
-        files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true' }],
+        files: [
+          {
+            path: `/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
+            content: '{"synthetic":true}',
+          },
+        ],
         env: {},
         secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: context.llm.apiKey }],
       })),
@@ -260,7 +270,7 @@ describe('TurnSupervisor on a runner', () => {
       },
     }
     const captured = {
-      home: await tarZst({ 'sessions/turn.jsonl': 'native session' }),
+      home: await tarZst({ [home.include[0]!]: 'native session' }),
       patch: Buffer.from('tracked-patch'),
       untracked: emptyUntrackedArchive(),
     }
@@ -325,7 +335,7 @@ describe('TurnSupervisor on a runner', () => {
       sessionId: labels.sessionId,
       turn: 1,
       image,
-      driver: { id: 'codex', version: '1.0.0' },
+      driver: { id: sampleDriverId, version: '1.0.0' },
       home,
     })
     expect(finished.manifest).toEqual(loaded.manifest)

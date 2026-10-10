@@ -41,7 +41,8 @@ jobs:
   verify-llm-gateway:
     runs-on: ubuntu-latest
     # Three groups since the Z.ai one (real OpenCode through its driver, about three minutes
-    # more, a third of them the pauses of short-lived refusals).
+    # more, a third of them the pauses of short-lived refusals). The three rehearsals after the
+    # deterministic pass took under a minute each on a desktop.
     timeout-minutes: 60
 
     steps:
@@ -64,3 +65,16 @@ jobs:
 
       - name: Verify the synthetic subscription gateway
         run: pnpm verify:llm-gateway
+
+      # The live mode of the stand is started by a person who holds the plan key, never here.
+      # Its rehearsals run the same code on the synthetic Z.ai and need no key: the start
+      # refusals, the request cap and its guard, the search for the key, the stand's observer
+      # in front of the role. They build nothing: the pass above left the build and the images.
+      - name: Rehearse the live acceptance on the synthetic provider
+        run: pnpm verify:llm-gateway --rehearsal --no-build
+
+      - name: Rehearse the live measurement on the synthetic provider
+        run: pnpm verify:llm-gateway --rehearsal --measure --no-build
+
+      - name: Rehearse the live measurement of turn results on the synthetic provider
+        run: pnpm verify:llm-gateway --rehearsal --results --no-build

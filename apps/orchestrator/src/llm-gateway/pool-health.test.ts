@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@repo/db'
 import type { EgressHttp, LlmBackend, ProbeResult } from '@repo/domain'
-import { kimiCodeBackend } from '@repo/llm-backends'
+import { zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
 import { SubscriptionPoolHealth } from './pool-health.ts'
@@ -9,8 +9,8 @@ import type { GatewayCall, GatewayFinish } from './types.ts'
 
 const account: PoolHealthAccount = {
   accountId: 'synthetic-account',
-  backendId: 'kimi-code',
-  credentialRef: 'subs/kimi-code/synthetic-account',
+  backendId: zaiCodingBackend.id,
+  credentialRef: `subs/${zaiCodingBackend.id}/synthetic-account`,
   credentialVersion: 1,
   clientIdentity: {},
   limitsSeenAt: null,
@@ -50,7 +50,7 @@ function harness(backend: Partial<LlmBackend> = {}) {
       .mockResolvedValue({ count: 1, suspended: false, at: new Date(0) }),
     credits: vi.fn<PoolHealthStore['credits']>().mockResolvedValue(false),
   }
-  const backendProbe = vi.fn<typeof kimiCodeBackend.probe>().mockResolvedValue(probe())
+  const backendProbe = vi.fn<typeof zaiCodingBackend.probe>().mockResolvedValue(probe())
   const http = { request: vi.fn<EgressHttp['request']>() }
   const regionHttp = { request: vi.fn<EgressHttp['request']>() }
   const credentials = { get: vi.fn().mockResolvedValue({ synthetic: 'credential' }) }
@@ -60,7 +60,7 @@ function harness(backend: Partial<LlmBackend> = {}) {
   const health = new SubscriptionPoolHealth({
     prisma: {} as PrismaClient,
     store,
-    backends: [{ ...kimiCodeBackend, probe: backendProbe, ...backend }],
+    backends: [{ ...zaiCodingBackend, probe: backendProbe, ...backend }],
     credentials,
     http,
     regionHttp,
@@ -435,7 +435,11 @@ describe('subscription pool health coordination', () => {
       h.channelHealthy.mockReturnValue(false)
       h.backendProbe.mockImplementation(async (_credential, _identity, http) => {
         await http.request(
-          { method: 'GET', url: 'https://api.kimi.ai/coding/v1/usages', headers: new Headers() },
+          {
+            method: 'GET',
+            url: 'https://api.z.ai/api/monitor/usage/quota/limit',
+            headers: new Headers(),
+          },
           { signal: new AbortController().signal },
         )
         return probe(status)

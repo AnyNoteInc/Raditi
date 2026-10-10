@@ -228,14 +228,14 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
     const llm = scopedTokens['llm-subscriptions']
     const writer = scopedTokens['subscriptions-writer']
     const admin = scopedTokens['subscriptions-admin']
-    const sub = 'openai-chatgpt/synthetic-account'
+    const sub = 'zai-coding/synthetic-account'
     const turn = 't_synthetic_1_1'
 
     await expect(writer, `subs/data/${sub}`, 200, write({ token: 'synthetic-v1' }, 0))
     await expect(writer, `subs/data/${sub}`, 403)
     const writerMetadata = await expect(writer, `subs/metadata/${sub}`, 200)
     assert.equal(writerMetadata?.data?.current_version, 1)
-    await expect(writer, 'subs/metadata/openai-chatgpt', 403, { method: 'LIST' })
+    await expect(writer, 'subs/metadata/zai-coding', 403, { method: 'LIST' })
     await expect(writer, `subs/metadata/${sub}`, 403, {
       method: 'POST',
       body: { max_versions: 100 },
@@ -252,7 +252,7 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
     const old = await expect(llm, `subs/data/${sub}?version=1`, 404)
     assert.ok(old?.data?.data == null, 'A spent subscription credential remains readable')
     await expect(llm, `subs/data/${sub}`, 200, write({ token: 'synthetic-v3' }, 2))
-    await expect(llm, 'subs/data/openai-chatgpt/new-account', 403, write({ token: 'synthetic' }, 0))
+    await expect(llm, 'subs/data/zai-coding/new-account', 403, write({ token: 'synthetic' }, 0))
     for (const path of [
       `subs/metadata/${sub}`,
       'turns/data/unknown',
@@ -384,7 +384,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   const wp = `sites/${siteId}/wp`
   const ssh = `sites/${siteId}/ssh`
   const mask = `content-masks/${siteId}/${taskId}`
-  const sub = 'openai-chatgpt/synthetic-content'
+  const sub = 'zai-coding/synthetic-content'
 
   // workspace-provisioner: a new workspace key and nothing else about it.
   const provisioner = scopedTokens['workspace-provisioner']
@@ -887,7 +887,7 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     assert.deepEqual(await core.kvList(prefix, { limit, after }), [])
   })
 
-  const subscription = 'subs/kimi-code/client-account'
+  const subscription = 'subs/zai-coding/client-account'
   await checked('writer creates with CAS and reads only version metadata', async () => {
     assert.deepEqual(
       await writer.kvWrite(subscription, { apiKey: 'synthetic-first' }, { cas: 0 }),
@@ -1050,7 +1050,7 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     const disabled = await localVaultRequest(root, 'sys/mounts/subs', { method: 'DELETE' })
     assert.equal(disabled.status, 204)
     // What a restarted in-memory dev server looks like to a reader: no key, no error.
-    assert.equal(await llm.kvRead('subs/openai-chatgpt/after-restart'), null)
+    assert.equal(await llm.kvRead('subs/zai-coding/after-restart'), null)
     for (const store of [writer, llm, admin])
       await assert.rejects(
         store.health(),

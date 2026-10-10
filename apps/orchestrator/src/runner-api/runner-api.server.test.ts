@@ -16,6 +16,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { hashRunnerToken, parseRunnerTokens } from '../config/runner-tokens.ts'
+import { sampleDriverId } from '../testing/ids.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { RemoteTurnExecutor } from './remote-turn-executor.ts'
 import { RunnerApiServer } from './runner-api.server.ts'
@@ -98,7 +99,7 @@ async function start(binding = '') {
         assignmentId: assignment.id,
         fence,
         sandbox: {
-          image: `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`,
+          image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
           labels: { ...labels, leaseEpoch: 1 },
           runtime: 'runc',
           resources: { cpu: 1, memoryMiB: 256, pids: 64 },
@@ -126,9 +127,16 @@ async function start(binding = '') {
                   workspaceId: 'ws1',
                   sessionId: 'session1',
                   turn: 1,
-                  image: `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`,
-                  driver: { id: 'codex', version: '1.0.0' },
-                  home: { root: '/agent-home/codex', include: ['sessions'], exclude: [] },
+                  image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
+                  driver: { id: sampleDriverId, version: '1.0.0' },
+                  home: {
+                    root: `/agent-home/${sampleDriverId}`,
+                    include: [
+                      '.local/share/opencode/opencode.db',
+                      '.local/share/opencode/opencode.db-wal',
+                    ],
+                    exclude: [],
+                  },
                   git: {
                     provider: 'gitea',
                     branch: `agent/${taskId}`,
@@ -165,13 +173,13 @@ async function start(binding = '') {
               },
             }
           : {}),
-        driverId: 'codex',
+        driverId: sampleDriverId,
         prepared: {
           files: [],
           env: {},
           secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'synthetic-llm-secret' }],
         },
-        argv: ['codex'],
+        argv: ['opencode'],
         credentials: ['synthetic-llm-secret', 'synthetic-mcp-secret'],
         created: async () => {},
         dispatched: () => {},
@@ -420,7 +428,11 @@ describe('RunnerApiServer', () => {
     const execution = await preparing
     void execution
       .capture({
-        home: { root: '/agent-home/codex', include: ['sessions'], exclude: [] },
+        home: {
+          root: `/agent-home/${sampleDriverId}`,
+          include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+          exclude: [],
+        },
         baseSha: 'b'.repeat(40),
       })
       .catch(() => {})

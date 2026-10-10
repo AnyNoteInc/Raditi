@@ -63,10 +63,10 @@ const run = {
     nativeSessionId: '01960000-0000-7000-8000-000000000001',
     turn: 1,
     llm: {
-      baseUrl: 'http://sandbox-gw:8080/codex',
+      baseUrl: 'http://sandbox-gw:8080/zai/v4',
       apiKey: 'k',
       model: 'm',
-      reasoningEffort: 'medium' as const,
+      reasoningEffort: 'high' as const,
     },
     mcp: { url: 'http://sandbox-gw:8080/mcp', token: 'x' },
     instructions: '',

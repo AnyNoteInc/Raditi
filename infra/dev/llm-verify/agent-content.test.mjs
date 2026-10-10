@@ -276,8 +276,13 @@ test('the workflow runs the stand on a native Linux engine without secrets', () 
   const runs = [...workflow.matchAll(/^ {8}run: (.+)$/gm)]
     .map(([, command]) => command)
     .filter((command) => command !== '|')
-  // The orchestrator build inside the stand needs the generated Prisma client.
-  assert.deepEqual(runs, ['pnpm db:generate', 'pnpm verify:agent-content'])
+  // The orchestrator build inside the stand needs the generated Prisma client. The rehearsal of
+  // the live flow follows the deterministic pass and builds nothing of its own.
+  assert.deepEqual(runs, [
+    'pnpm db:generate',
+    'pnpm verify:agent-content',
+    'pnpm verify:agent-content --rehearsal --no-build',
+  ])
   assert.match(workflow, /^ {4}runs-on: ubuntu-latest$/m)
   assert.match(workflow, /^permissions:\n {2}contents: read$/m)
   assert.doesNotMatch(workflow, /secrets\./)

@@ -10,8 +10,10 @@ import { LIVE_LIMITS } from '../../../infra/dev/llm-verify/live.mjs'
 import {
   judgeResult,
   REHEARSED_FORMS,
+  readingShares,
   rehearsalScenario,
   RESULTS_ACCEPTED_FROM,
+  resultReadings,
   resultShares,
   resultTurns,
 } from './verify-llm-live-results.mjs'
@@ -190,6 +192,106 @@ test('an answer is judged twice: by the strict reading of the driver and by the 
   )
   assert.equal(resultShares(nine).accepted, true)
   assert.equal(resultShares(nine.slice(1)).accepted, false, 'nine turns are not the ten')
+})
+
+test('every live flow reads a result twice the same way: the product decides, the strict reading is told', () => {
+  const valid = turns[0].answer
+  const json = JSON.stringify(valid)
+  const { files_changed: _omitted, ...short } = valid
+  const read = (text, code = 0, events = answered(text)) => resultReadings({ driver, events, code })
+  const cases = [
+    [read(json), { verdict: 'valid', strict: true, taken: true }],
+    // The two forms the supervisor takes and the driver alone does not.
+    [
+      read(`The check is complete.\n\n${json}`),
+      { verdict: 'text before the JSON object', strict: false, taken: true },
+    ],
+    [
+      read(`${json}\n\nLet me know if anything else is needed.`),
+      { verdict: 'text after the JSON object', strict: false, taken: true },
+    ],
+    // What neither takes: an object without a key of the contract, a turn that failed, a CLI
+    // that exited with an error after a valid answer, an output with no answer step at its end.
+    [
+      read(JSON.stringify(short)),
+      { verdict: 'schema: files_changed', strict: false, taken: false },
+    ],
+    [
+      read(json, 1, [...answered(json), { type: 'failed', reason: 'synthetic refusal' }]),
+      { verdict: 'the turn failed', strict: false, taken: false },
+    ],
+    [read(json, 1), { verdict: 'exit code 1', strict: false, taken: false }],
+    [
+      read(json, 0, answered(json).slice(0, -1)),
+      { verdict: 'no answer step at the end of the output', strict: false, taken: false },
+    ],
+  ]
+  for (const [reading, expected] of cases) {
+    const { verdict, strict, taken, result } = reading
+    assert.deepEqual({ verdict, strict, taken }, expected)
+    // The result a flow goes on with is the product's: the object itself, or nothing.
+    assert.deepEqual(result, expected.taken ? valid : null, expected.verdict)
+  }
+  // The shares of a flow: how many turns the product took, and the strict count beside it.
+  assert.deepEqual(readingShares(cases.map(([reading]) => reading)), {
+    turns: 7,
+    taken: 3,
+    strict: 1,
+  })
+  assert.deepEqual(readingShares([]), { turns: 0, taken: 0, strict: 0 })
+  // The narrow measurement judges by the same reading.
+  const [judgement] = [
+    judgeResult({ turn: turns[0], events: answered(`Done.\n\n${json}`), code: 0, driver }),
+  ]
+  assert.deepEqual(
+    [judgement.verdict, judgement.strict, judgement.taken],
+    ['text before the JSON object', false, true],
+  )
+})
+
+test('no live flow asks the driver alone whether a turn ended with a valid result', async () => {
+  const gateway = await source('verify-llm-live.mjs')
+  const content = await source('verify-agent-content-live.mjs')
+  const turnsOfContent = await source('verify-agent-content-turns.mjs')
+  // The outcome «the result is valid» of the acceptances and of the measurement is the
+  // product's reading (the supervisor's readTurnResult); the strict one goes to the report.
+  for (const [name, text] of [
+    ['verify-llm-live.mjs', gateway],
+    ['verify-agent-content-live.mjs', content],
+  ]) {
+    assert.doesNotMatch(text, /turnResultSchema\.safeParse\(outcome\.result\)/, name)
+    assert.doesNotMatch(text, /driver\.extractResult\(/, name)
+    assert.match(text, /by the strict reading of the driver/, name)
+    assert.match(text, /readingShares\(/, name)
+  }
+  assert.match(gateway, /resultReadings\(\{ driver, events, code: result\.code \}\)/)
+  assert.match(turnsOfContent, /resultReadings\(\{ driver, events, code: result\.code \}\)/)
+  // The shares still decide nothing: no flow asserts on a count of valid results outside a
+  // rehearsal, whose scripted model is certain.
+  assert.doesNotMatch(content, /assert\.ok\((edits|results|strictResults) > 0/)
+})
+
+test('the reaction of the CLI to a refused body is measured in a rehearsal alone, under the budget of the run', async () => {
+  const live = await source('verify-llm-live.mjs')
+  // The stand answers in place of the role there: never on the way to the real provider.
+  assert.equal([...live.matchAll(/await bodyRefusals\(\)/g)].length, 1)
+  assert.match(live, /if \(rehearsal\) await bodyRefusals\(\)/)
+  const flow = live.slice(
+    live.indexOf('async function bodyRefusals()'),
+    live.indexOf("stage = 'the end of the run'"),
+  )
+  assert.ok(flow.length > 0, 'The measurement of a refused body is missing')
+  // Every turn is covered before it starts, held to the ceiling of its key, and owes the
+  // platform what every other turn owes.
+  assert.match(flow, /await startLlm\(BODY_TURN_CALLS\)/)
+  assert.match(flow, /budget\.afford\(BODY_TURN_CALLS, label\)/)
+  assert.match(flow, /await invariants\(turn, outcome, \{ ceiling: BODY_TURN_CALLS \}\)/)
+  // The refusals are asked of sandbox-gw and of the role themselves, one byte past the limit
+  // both hold; no answer of the stand is left for a later turn.
+  assert.match(flow, /llmJsonLimits\.bytes \+ 1/)
+  assert.match(flow, /observer\.dropAnswers\(\)/)
+  // A stable check of what was measured: a CLI that reacts otherwise fails the rehearsal.
+  assert.match(flow, /assert\.deepEqual\(\s*measured,/)
 })
 
 test('a result is checked against what its kind of turn asked for', () => {

@@ -202,6 +202,40 @@ test('the live mode of the stands never runs in CI: no workflow names it or the 
   )
 })
 
+test('the rehearsals of the live mode run in CI, each after the deterministic pass of its stand', () => {
+  // The code of a live run is executed by nobody but a person with the plan key; its rehearsal
+  // runs the same code on the synthetic Z.ai, without a key (infra/dev/llm-verify/README.md).
+  // In a workflow it follows the deterministic pass of the same job, which built the
+  // orchestrator and the images: a rehearsal builds neither (`--no-build`, assertImages).
+  const stands = (name) =>
+    [...workflow(name).matchAll(/^ {8}run: (pnpm verify:\S+(?: --\S+)*)$/gm)].map(
+      ([, command]) => command,
+    )
+  assert.deepEqual(stands('llm-gateway'), [
+    'pnpm verify:llm-gateway',
+    'pnpm verify:llm-gateway --rehearsal --no-build',
+    'pnpm verify:llm-gateway --rehearsal --measure --no-build',
+    'pnpm verify:llm-gateway --rehearsal --results --no-build',
+  ])
+  assert.deepEqual(stands('agent-content'), [
+    'pnpm verify:agent-content',
+    'pnpm verify:agent-content --rehearsal --no-build',
+  ])
+  // The options exist and mean what the steps take them for.
+  const live = read('infra/dev/llm-verify/live.mjs')
+  for (const option of ['--rehearsal', '--measure', '--results', '--no-build'])
+    assert.ok(live.includes(`name === '${option}'`), `${option} is an option of the stands`)
+  // GitHub sets CI in every job: that refuses a live run and must not refuse its rehearsal.
+  assert.match(
+    read('apps/orchestrator/scripts/verify-llm-live-run.mjs'),
+    /let refusal = rehearsal \? null : liveStartRefusal\(process\.env\)/,
+  )
+  // No other workflow runs a rehearsal: the images and the build are those of these two jobs.
+  for (const { name, source } of workflows)
+    if (!['llm-gateway.yml', 'agent-content.yml'].includes(name))
+      assert.equal(source.includes('--rehearsal'), false, `${name} runs a rehearsal`)
+})
+
 test('every test suite enabled by an environment variable is enabled by a workflow', () => {
   // Suites no workflow enables by their variable, each with the reason it is acceptable.
   const elsewhere = {
@@ -397,8 +431,9 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
   assert.ok(stand.length >= 9)
   for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
   // As for the gateway stand: the packages its scripts import, by name or by a path into their
-  // sources, and the orchestrator modules they load from the build. The journal tables, the
-  // snapshot storage and the turn undo are this path as much as the plugin is.
+  // sources, the orchestrator modules they load from the build and the orchestrator sources
+  // they load as they are. The journal tables, the snapshot storage and the turn undo are this
+  // path as much as the plugin is.
   const imported = new Set()
   for (const script of stand.filter((file) => file.endsWith('.mjs'))) {
     const text = read(script)
@@ -406,6 +441,8 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
       imported.add(`packages/${name}/src/index.ts`)
     for (const [, directory] of text.matchAll(/'\.\.\/dist\/([a-z-]+)\//g))
       imported.add(`apps/orchestrator/src/${directory}/index.ts`)
+    for (const [, file] of text.matchAll(/'\.\.\/src\/([^']+\.ts)'/g))
+      imported.add(`apps/orchestrator/src/${file}`)
   }
   for (const source of [
     'packages/db/src/index.ts',
@@ -414,6 +451,8 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     'packages/site-adapters/src/index.ts',
     'apps/orchestrator/src/mcp/index.ts',
     'apps/orchestrator/src/turns/index.ts',
+    // The sample ids of the turns the stand makes up.
+    'apps/orchestrator/src/testing/ids.ts',
   ])
     assert.ok(imported.has(source), `the stand loads ${source.replace('/index.ts', '')}`)
   for (const source of imported)

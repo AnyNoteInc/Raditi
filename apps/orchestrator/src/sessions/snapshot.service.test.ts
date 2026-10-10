@@ -14,6 +14,7 @@ import {
 import { pack } from 'tar-stream'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import { sealSnapshotPart } from './snapshot-parts.ts'
 import { SnapshotService, type SealedElsewhere } from './snapshot.service.ts'
 
@@ -22,16 +23,20 @@ const metadata: SnapshotMetadata = {
   sessionId: 's1',
   turn: 1,
   image: `registry/raditi@sha256:${'a'.repeat(64)}`,
-  driver: { id: 'codex', version: '0.157.1', nativeSessionId: 'thread-1' },
+  driver: { id: sampleDriverId, version: '1.18.34', nativeSessionId: 'ses_0001' },
   git: { provider: 'gitea', branch: 'task/t1', baseSha: 'b'.repeat(40), headSha: 'c'.repeat(40) },
-  home: { root: '/agent-home/codex', include: ['sessions'], exclude: [] },
+  home: {
+    root: `/agent-home/${sampleDriverId}`,
+    include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+    exclude: [],
+  },
 }
 const reference: SnapshotReference = {
   workspaceId: metadata.workspaceId,
   sessionId: metadata.sessionId,
   turn: metadata.turn,
   image: metadata.image,
-  driver: { id: 'codex', version: '0.157.1' },
+  driver: { id: sampleDriverId, version: '1.18.34' },
   home: metadata.home,
 }
 const prefix = turnSnapshotPrefix('s1', 1)
@@ -47,7 +52,7 @@ async function archive(name: string, content: string): Promise<Uint8Array> {
 }
 async function parts() {
   return {
-    home: await archive('sessions/turn.jsonl', 'native-session-data'),
+    home: await archive(metadata.home.include[0]!, 'native-session-data'),
     untracked: await archive('new.txt', 'new file'),
     patch: Buffer.from('binary patch\0\xff'),
   }
@@ -379,7 +384,7 @@ describe('host snapshot lifecycle', () => {
     const f = fixture()
     await expect(
       f.service.save(
-        { ...metadata, driver: { id: 'codex', version: 'bad version' } },
+        { ...metadata, driver: { id: sampleDriverId, version: 'bad version' } },
         await parts(),
       ),
     ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })

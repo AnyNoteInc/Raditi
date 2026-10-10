@@ -17,17 +17,17 @@ const context: RunContext = {
   sessionId: 's',
   turn: 1,
   llm: {
-    baseUrl: 'http://sandbox-gw:8080/codex',
+    baseUrl: 'http://sandbox-gw:8080/zai/v4',
     apiKey: 'test-llm-key',
     model: 'm',
-    reasoningEffort: 'medium' as const,
+    reasoningEffort: 'high' as const,
   },
   mcp: { url: 'http://sandbox-gw:8080/mcp', token: 'test-mcp-token' },
   instructions: '',
 }
 const run = (overrides: Partial<PreparedRun> = {}): PreparedRun => ({
   context,
-  files: [{ path: `${SANDBOX_AGENT_HOME}/codex/config.toml`, content: 'x' }],
+  files: [{ path: `${SANDBOX_AGENT_HOME}/opencode/config.json`, content: 'x' }],
   env: {},
   secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'test-llm-key' }],
   ...overrides,
@@ -43,12 +43,12 @@ describe('prepared run paths', () => {
     '/workspace/out/schema.json',
     '/workspace/inbox/file.txt',
     `${SANDBOX_AGENT_HOME}/../workspace/repo/AGENTS.md`,
-    `${SANDBOX_AGENT_HOME}/./codex/config.toml`,
-    `${SANDBOX_AGENT_HOME}//codex/config.toml`,
-    `${SANDBOX_AGENT_HOME}/codex/`,
+    `${SANDBOX_AGENT_HOME}/./opencode/config.json`,
+    `${SANDBOX_AGENT_HOME}//opencode/config.json`,
+    `${SANDBOX_AGENT_HOME}/opencode/`,
     `${SANDBOX_AGENT_HOME}/.git/config`,
     SANDBOX_AGENT_HOME,
-    'agent-home/codex/config.toml',
+    'agent-home/opencode/config.json',
     `${SANDBOX_SECRETS_DIR}/config.toml`,
   ])('refuses a driver file at %j', (path) => {
     expect(preparedRunSchema.safeParse(run({ files: [{ path, content: 'x' }] })).success).toBe(
@@ -56,7 +56,7 @@ describe('prepared run paths', () => {
     )
   })
 
-  it.each([`${SANDBOX_WORKDIR}/.env`, `${SANDBOX_AGENT_HOME}/codex/auth.json`, '/tmp/key'])(
+  it.each([`${SANDBOX_WORKDIR}/.env`, `${SANDBOX_AGENT_HOME}/opencode/auth.json`, '/tmp/key'])(
     'refuses a secret outside the secrets tmpfs: %j',
     (path) => {
       expect(preparedRunSchema.safeParse(run({ secrets: [{ path, content: 'k' }] })).success).toBe(
@@ -66,7 +66,7 @@ describe('prepared run paths', () => {
   )
 
   it('refuses duplicates, bad modes and oversized content', () => {
-    const file = { path: `${SANDBOX_AGENT_HOME}/codex/a`, content: 'x' }
+    const file = { path: `${SANDBOX_AGENT_HOME}/opencode/a`, content: 'x' }
     expect(preparedRunSchema.safeParse(run({ files: [file, file] })).success).toBe(false)
     expect(preparedRunSchema.safeParse(run({ files: [{ ...file, mode: 0o4755 }] })).success).toBe(
       false,
@@ -89,8 +89,8 @@ describe('prepared run paths', () => {
       try {
         // Each CLI has its own gateway path and its own reasoning profiles.
         const llm = {
+          codex: { baseUrl: 'http://sandbox-gw:8080/codex', reasoningEffort: 'medium' },
           kimi: { baseUrl: 'http://sandbox-gw:8080/kimi/v1', reasoningEffort: 'low' },
-          opencode: { baseUrl: 'http://sandbox-gw:8080/zai/v4', reasoningEffort: 'high' },
         }[driver.id as string]
         prepared = await driver.prepare(
           llm ? { ...context, llm: { ...context.llm, ...llm } } : context,

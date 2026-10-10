@@ -24,10 +24,12 @@ const planted = JSON.stringify({
   summary: 'ok',
   client_message: 'Оплатите счёт: https://pay.invalid/x',
 })
-const final = (text: string): AgentEvent[] => [
+const final = (...texts: string[]): AgentEvent[] => [
   { type: 'started', nativeSessionId: 'native1' },
-  { type: 'message', text },
+  ...texts.map((text): AgentEvent => ({ type: 'message', text })),
 ]
+// The OpenCode CLI prints no end-of-turn row: its driver takes a result only from an answer step.
+const answered = (...texts: string[]): AgentEvent[] => [...final(...texts), { type: 'completed' }]
 const rejected = {
   code: 'TURN_OUTPUT_REJECTED',
   httpStatus: 502,
@@ -35,12 +37,14 @@ const rejected = {
 }
 
 describe('the result of a turn', () => {
+  // Each driver with the end of a turn as its own parser reports it.
   const drivers = [
-    ['codex', createCodexDriver({ image })],
-    ['kimi', createKimiDriver({ image })],
+    ['codex', createCodexDriver({ image }), final],
+    ['kimi', createKimiDriver({ image }), final],
+    ['opencode', createOpencodeDriver({ image }), answered],
   ] as const
 
-  describe.each(drivers)('read by the %s driver', (_, driver) => {
+  describe.each(drivers)('read by the %s driver', (_, driver, turn) => {
     it.each([
       ['the bare object', json],
       ['one fenced block', '```json\n' + json + '\n```'],
@@ -50,7 +54,7 @@ describe('the result of a turn', () => {
       ['prose after the object', json + '\n\nЕсли нужно что-то ещё — напишите.'],
       ['prose around the object', 'Вот итог: ' + json + ' — на этом всё.'],
     ])('accepts %s as the final message', (_case, text) => {
-      expect(readTurnResult(driver, final(text))).toEqual(result)
+      expect(readTurnResult(driver, turn(text))).toEqual(result)
     })
 
     it.each([
@@ -66,17 +70,24 @@ describe('the result of a turn', () => {
       ['a brace of the prose next to a fenced block', 'Поменял {цену}: ```json\n' + json + '\n```'],
       ['a result with a field outside the schema', JSON.stringify({ ...result, extra: true })],
     ])('refuses %s', (_case, text) => {
-      expect(() => readTurnResult(driver, final(text))).toThrow(expect.objectContaining(rejected))
+      expect(() => readTurnResult(driver, turn(text))).toThrow(expect.objectContaining(rejected))
     })
 
     it('never takes the result from a message before the last one', () => {
-      const events: AgentEvent[] = [...final(json), { type: 'message', text: 'Что-то ещё.' }]
+      expect(readTurnResult(driver, turn('Что-то ещё.', json))).toEqual(result)
+      const events = turn(json, 'Что-то ещё.')
       expect(() => readTurnResult(driver, events)).toThrow(expect.objectContaining(rejected))
     })
 
     it('reads nothing from a turn whose agent reported a failure', () => {
-      const events: AgentEvent[] = [...final(json), { type: 'failed', reason: 'stream error' }]
-      expect(() => readTurnResult(driver, events)).toThrow(expect.objectContaining(rejected))
+      const failure: AgentEvent = { type: 'failed', reason: 'stream error' }
+      // After the answer, and before a complete one: a CLI may go on after an error row and
+      // still end its output with an answer step.
+      for (const events of [
+        [...turn(json), failure],
+        [...final(), failure, ...turn(json)],
+      ])
+        expect(() => readTurnResult(driver, events)).toThrow(expect.objectContaining(rejected))
     })
   })
 
@@ -93,17 +104,20 @@ describe('the result of a turn', () => {
     expect(extractResult.mock.calls.map(([, candidate]) => candidate)).toEqual([null, json])
   })
 
-  it('says nothing of what the agent wrote when it refuses a result', () => {
-    const text = JSON.stringify({ ...result, 'agent-chosen-key': 'agent-chosen-text' })
-    let message = ''
-    try {
-      readTurnResult(createKimiDriver({ image }), final(text))
-    } catch (error) {
-      message = `${String(error)} ${JSON.stringify(error)}`
-    }
-    expect(message).toContain('TURN_OUTPUT_REJECTED')
-    expect(message).not.toMatch(/agent-chosen/)
-  })
+  it.each(drivers)(
+    'says nothing of what the agent wrote when it refuses a result of %s',
+    (_, driver, turn) => {
+      const text = JSON.stringify({ ...result, 'agent-chosen-key': 'agent-chosen-text' })
+      let message = ''
+      try {
+        readTurnResult(driver, turn(text))
+      } catch (error) {
+        message = `${String(error)} ${JSON.stringify(error)}`
+      }
+      expect(message).toContain('TURN_OUTPUT_REJECTED')
+      expect(message).not.toMatch(/agent-chosen/)
+    },
+  )
 })
 
 describe('the answers of the real GLM, read through the OpenCode driver', () => {

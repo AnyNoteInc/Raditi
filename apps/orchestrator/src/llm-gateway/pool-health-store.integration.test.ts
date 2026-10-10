@@ -4,6 +4,7 @@ import { createPrismaClient, type PrismaClient } from '@repo/db'
 import type { ProbeResult } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
+import { sampleBackendId, sampleProviderSlug, sampleRoutePath } from '../testing/ids.ts'
 import { PostgresPoolHealthStore, type PoolHealthAccount } from './pool-health-store.ts'
 
 // Only verify:db's disposable database is allowed; never run against the working database.
@@ -11,7 +12,7 @@ const databaseUrl = process.env.DATABASE_URL
 const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '1')
 // Within the horizon of a weekly window: a reset further ahead is a broken report.
 const reset = new Date(Math.floor(Date.now() / 1000) * 1000 + 3 * 86_400_000)
-const kimi = { authNeedsRelogin: true }
+const withKey = { authNeedsRelogin: true }
 const probe = (overrides: Partial<ProbeResult> = {}): ProbeResult => ({
   status: 'ok',
   windows: [{ name: 'week', usedPct: 10, resetsAt: reset }],
@@ -35,7 +36,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
     store = new PostgresPoolHealthStore(db)
     // Other gateway suites own toggling providers; this suite only reads their IDs.
-    const provider = await db.llmProvider.findUniqueOrThrow({ where: { slug: 'kimi-code' } })
+    const provider = await db.llmProvider.findUniqueOrThrow({ where: { slug: sampleProviderSlug } })
     providerId = provider.id
   })
 
@@ -54,7 +55,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     const ref = await db.credentialRef.create({
       data: {
         kind: 'subscription',
-        vaultPath: `subs/kimi-code/${accountId}`,
+        vaultPath: `subs/${sampleBackendId}/${accountId}`,
       },
     })
     credentialId = ref.id
@@ -101,7 +102,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
   })
 
   it('writes health/capacity without changing the operator switch', async () => {
-    await store.probe(snapshot, probe({ status: 'auth' }), kimi)
+    await store.probe(snapshot, probe({ status: 'auth' }), withKey)
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     expect(account).toMatchObject({
       health: 'needs_relogin',
@@ -127,7 +128,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
       where: { id: accountId },
       data: { credentialVersion: 2 },
     })
-    expect(await store.probe(snapshot, probe({ status: 'auth' }), kimi)).toEqual({
+    expect(await store.probe(snapshot, probe({ status: 'auth' }), withKey)).toEqual({
       applied: false,
       alert: null,
     })
@@ -144,7 +145,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
         limitsSeenAt: new Date(snapshot.limitsSeenAt!.getTime() + 1),
       },
     })
-    await store.probe(snapshot, probe(), kimi)
+    await store.probe(snapshot, probe(), withKey)
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     expect(account.headroomPct?.toString()).toBe('0')
     expect(account.limitWindows).toEqual([
@@ -167,7 +168,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
       where: { id: accountId },
       data: { limitsSeenAt: overtakenAt },
     })
-    const update = await store.probe(unknown, probe(), kimi)
+    const update = await store.probe(unknown, probe(), withKey)
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     expect(account.limitWindows).toEqual([
       { name: 'week', usedPct: 10, resetsAt: reset.toISOString() },
@@ -185,12 +186,12 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
       where: { id: accountId },
       data: { limitWindows: [], headroomPct: null, limitsSeenAt: clearedAt },
     })
-    await store.probe(snapshot, probe(), kimi)
+    await store.probe(snapshot, probe(), withKey)
     expect(
       (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })).limitWindows,
     ).toEqual([])
     // The next probe starts from the cleared state and restores them.
-    await store.probe((await store.account(accountId))!, probe(), kimi)
+    await store.probe((await store.account(accountId))!, probe(), withKey)
     expect(
       (
         await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
@@ -205,7 +206,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     const exhausted = (resetsAt: Date) =>
       probe({ windows: [{ name: 'week', usedPct: 100, resetsAt }] })
     for (const resetsAt of [corrupted, new Date(Date.now() + 8 * day + 60_000)]) {
-      await store.probe((await store.account(accountId))!, exhausted(resetsAt), kimi)
+      await store.probe((await store.account(accountId))!, exhausted(resetsAt), withKey)
       const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
       // An unreadable report: capacity unknown until the next probe, and no pause from it.
       expect(account).toMatchObject({ limitWindows: [], headroomPct: null, coolingUntil: null })
@@ -234,7 +235,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
   })
 
   it('reports the snapshot a probe left, also when it wrote no windows', async () => {
-    const update = await store.probe(snapshot, probe({ status: 'auth', windows: null }), kimi)
+    const update = await store.probe(snapshot, probe({ status: 'auth', windows: null }), withKey)
     expect(update).toMatchObject({ applied: true, limitsSeenAt: snapshot.limitsSeenAt })
   })
 
@@ -243,7 +244,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
       where: { id: accountId },
       data: { healthReason: 'vault_write_pending' },
     })
-    await store.probe(snapshot, probe({ status: 'unknown', windows: null }), kimi)
+    await store.probe(snapshot, probe({ status: 'unknown', windows: null }), withKey)
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     expect(account).toMatchObject({
       limitWindows: [],
@@ -267,7 +268,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     await locked.promise
     const start = Date.now()
     try {
-      await expect(store.probe(snapshot, probe(), kimi)).rejects.toThrow()
+      await expect(store.probe(snapshot, probe(), withKey)).rejects.toThrow()
       expect(Date.now() - start).toBeLessThan(4_000)
     } finally {
       release.resolve()
@@ -318,7 +319,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
           keyId: key.id,
           subscriptionAccountId: accountId,
           modelId: model.id,
-          route: '/kimi/v1/chat/completions',
+          route: sampleRoutePath,
           state: 'failed',
           reservedRub: '0',
           requestBytes: 0,

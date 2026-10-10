@@ -13,9 +13,10 @@ import { describe, expect, it } from 'vitest'
 import { stageFiles, turnSecrets } from './cli-run.ts'
 import { createCodexDriver } from './codex.ts'
 import { createKimiDriver } from './kimi.ts'
+import { createOpencodeDriver } from './opencode.ts'
 
 const image = `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`
-const context = (path: string, reasoningEffort: 'medium' | 'low'): RunContext => ({
+const context = (path: string, reasoningEffort: 'medium' | 'low' | 'high'): RunContext => ({
   taskId: 'task',
   sessionId: 'session',
   turn: 1,
@@ -49,6 +50,7 @@ async function agrees(driver: AgentDriver, context: RunContext, attachments: str
 describe.each([
   { driver: createCodexDriver({ image }), context: context('codex', 'medium') },
   { driver: createKimiDriver({ image }), context: context('kimi/v1', 'low') },
+  { driver: createOpencodeDriver({ image }), context: context('zai/v4', 'high') },
 ])('$driver.id attachments', ({ driver, context }) => {
   // The plan is validated before the site lease and the turn key, the driver after both: a
   // path the plan accepts must launch, and a path it refuses must never reach the CLI.
@@ -79,7 +81,7 @@ describe.each([
 
 describe('per-turn files of a CLI run', () => {
   it('carries the two turn credentials only as read-only files of the secrets tmpfs', () => {
-    expect(turnSecrets(context('codex', 'medium'))).toEqual([
+    expect(turnSecrets(context('zai/v4', 'high'))).toEqual([
       { path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'synthetic-llm-token', mode: 0o400 },
       { path: `${SANDBOX_SECRETS_DIR}/mcp`, content: 'synthetic-mcp-token', mode: 0o400 },
     ])
@@ -87,19 +89,19 @@ describe('per-turn files of a CLI run', () => {
 
   it('replaces a staged file in place and appends a new one', () => {
     const file = (name: string, content: string) => ({
-      path: `${SANDBOX_AGENT_HOME}/codex/${name}`,
+      path: `${SANDBOX_AGENT_HOME}/opencode/${name}`,
       content,
       mode: 0o600,
     })
     const run: PreparedRun = {
-      context: context('codex', 'medium'),
-      files: [file('config.toml', 'config'), file('prompt.txt', 'first'), file('run.mjs', 'run')],
+      context: context('zai/v4', 'high'),
+      files: [file('opencode.json', 'config'), file('prompt.txt', 'first'), file('run.mjs', 'run')],
       env: {},
       secrets: [],
     }
     stageFiles(run, [file('prompt.txt', 'second'), file('cli-args.json', '[]')])
     expect(run.files).toEqual([
-      file('config.toml', 'config'),
+      file('opencode.json', 'config'),
       file('prompt.txt', 'second'),
       file('run.mjs', 'run'),
       file('cli-args.json', '[]'),

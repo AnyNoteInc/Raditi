@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:https'
 import { connect, type AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
 
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
+import { codexBackend, kimiCodeBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { llmConfigFromEnv } from '../config/llm-config.ts'
@@ -67,6 +67,27 @@ async function fixture({ redirect = false, untrustedClient = false } = {}) {
             },
           }),
         }
+      } else if (req.url === '/api/monitor/usage/quota/limit') {
+        // The quota answer of an active plan, in the form of the recorded ones.
+        const window = (unit: number, number: number, usage: number, resetInMs: number) => ({
+          type: 'CREDIT_LIMIT',
+          unit,
+          number,
+          usage,
+          currentValue: 20,
+          remaining: usage - 21,
+          percentage: 1,
+          nextResetTime: Date.now() + resetInMs,
+        })
+        reply = {
+          code: 200,
+          msg: 'Operation successful',
+          success: true,
+          data: {
+            level: 'lite',
+            limits: [window(3, 5, 2000, 3_600_000), window(6, 1, 10_000, 86_400_000)],
+          },
+        }
       } else reply = { usages: { limit_5h: { used_ratio: 0.15 } } }
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify(reply))
@@ -100,8 +121,10 @@ async function fixture({ redirect = false, untrustedClient = false } = {}) {
         ? certificates.otherKeyFile
         : certificates.keyFile,
       LLM_UPSTREAM_CA_FILE: certificates.certFile,
+      LLM_BACKEND_URL_OPENAI_CHATGPT: `https://localhost:${providerPort}`,
       LLM_AUTH_URL_OPENAI: `https://localhost:${providerPort}`,
       LLM_BACKEND_URL_KIMI_CODE: `https://localhost:${providerPort}`,
+      LLM_BACKEND_URL_ZAI_CODING: `https://localhost:${providerPort}`,
     },
     'test',
   )
@@ -146,57 +169,71 @@ describe('subscription login through an authenticated CONNECT tunnel', () => {
       await f.close()
     }
   })
-  it('validates a Kimi key through the usage endpoint without generation', async () => {
-    const f = await fixture()
-    try {
-      const credential = await authenticateSubscription({
-        backend: kimiCodeBackend,
-        identity,
-        http: f.http,
-        signal: AbortSignal.timeout(5000),
-        showDeviceCode: async () => {
-          throw new Error('unused')
-        },
-        readSecret: async () => 'synthetic-api-key',
-      })
-      expect(credential.kind).toBe('kimi_api_key')
-      expect(f.requests).toEqual(['GET /coding/v1/usages'])
-    } finally {
-      await f.close()
-    }
-  })
-  it('rejects an untrusted client certificate before any provider request', async () => {
-    const f = await fixture({ untrustedClient: true })
-    try {
-      await expect(
-        authenticateSubscription({
-          backend: codexBackend,
+  it.each([
+    ['Kimi', kimiCodeBackend, 'kimi_api_key', 'GET /coding/v1/usages'],
+    ['Z.ai', zaiCodingBackend, 'zai_api_key', 'GET /api/monitor/usage/quota/limit'],
+  ] as const)(
+    'validates a %s key through its probe endpoint without generation',
+    async (_, backend, kind, probe) => {
+      const f = await fixture()
+      try {
+        const credential = await authenticateSubscription({
+          backend,
           identity,
           http: f.http,
-          signal: AbortSignal.timeout(3000),
-          showDeviceCode: async () => undefined,
-          readSecret: async () => 'unused',
-        }),
-      ).rejects.toThrow(/^Subscription login failed$/)
-      expect(f.requests).toEqual([])
-    } finally {
-      await f.close()
-    }
-  })
-  it('refuses redirects without following an unallowlisted authentication path', async () => {
+          signal: AbortSignal.timeout(5000),
+          showDeviceCode: async () => {
+            throw new Error('unused')
+          },
+          readSecret: async () => 'synthetic-api-key',
+        })
+        expect(credential.kind).toBe(kind)
+        expect(f.requests).toEqual([probe])
+      } finally {
+        await f.close()
+      }
+    },
+  )
+  // The first request of each way in: the device flow of Codex, the key probe of Z.ai.
+  const entries = [
+    ['the device flow', codexBackend, 'POST /api/accounts/deviceauth/usercode'],
+    ['a key import', zaiCodingBackend, 'GET /api/monitor/usage/quota/limit'],
+  ] as const
+  it.each(entries)(
+    'rejects an untrusted client certificate before any provider request of %s',
+    async (_, backend) => {
+      const f = await fixture({ untrustedClient: true })
+      try {
+        await expect(
+          authenticateSubscription({
+            backend,
+            identity,
+            http: f.http,
+            signal: AbortSignal.timeout(3000),
+            showDeviceCode: async () => undefined,
+            readSecret: async () => 'synthetic-api-key',
+          }),
+        ).rejects.toThrow(/^Subscription login failed$/)
+        expect(f.requests).toEqual([])
+      } finally {
+        await f.close()
+      }
+    },
+  )
+  it.each(entries)('refuses a redirect of %s without following it', async (_, backend, first) => {
     const f = await fixture({ redirect: true })
     try {
       await expect(
         authenticateSubscription({
-          backend: codexBackend,
+          backend,
           identity,
           http: f.http,
           signal: AbortSignal.timeout(3000),
           showDeviceCode: async () => undefined,
-          readSecret: async () => 'unused',
+          readSecret: async () => 'synthetic-api-key',
         }),
       ).rejects.toThrow('Subscription login failed')
-      expect(f.requests).toEqual(['POST /api/accounts/deviceauth/usercode'])
+      expect(f.requests).toEqual([first])
     } finally {
       await f.close()
     }

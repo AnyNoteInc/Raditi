@@ -53,7 +53,9 @@ jobs:
     # The job builds the agent runtime with the three CLIs, the CLI harness, the network guard and
     # the orchestrator, then runs three rows of turns. With two rows it took five minutes on a
     # hosted runner and once twenty-one; the OpenCode row (the role llm started anew without the
-    # egress proxy, three turns) adds about ten seconds on a desktop, so the limit stays.
+    # egress proxy, three turns) adds about ten seconds on a desktop, so the limit stays. The
+    # rehearsal of the live flow after it (a stack of its own, three attempts) took a minute and
+    # a quarter there.
     timeout-minutes: 45
 
     steps:
@@ -90,3 +92,9 @@ jobs:
 
       - name: Verify the agent content path on a real WordPress
         run: pnpm verify:agent-content
+
+      # The live flow of the stand runs only by hand, with the plan key. Its rehearsal is the
+      # same code on the synthetic Z.ai, without a key, on the build and the images of the pass
+      # above: the request guard, the observer in front of the role llm, the search for the key.
+      - name: Rehearse the live content flow on the synthetic provider
+        run: pnpm verify:agent-content --rehearsal --no-build

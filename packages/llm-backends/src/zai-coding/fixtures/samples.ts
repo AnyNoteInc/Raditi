@@ -31,6 +31,16 @@ export const chatSamples = {
   plainText: '43-variant-low/01-llm-post_chat_completions.json',
 } as const
 
+/**
+ * Answers of the real model as the sandbox received them: recorded by the stand's observer in
+ * front of the role (the live runs of G6), so every event has the `event:` line the role writes.
+ * The payloads are the provider's own, forwarded unchanged.
+ */
+export const liveSamples = {
+  /** Text beside a tool call in one answer: reasoning, a sentence, one call of an MCP tool. */
+  textBesideToolCall: '81-g6-live-content/02-llm-post_chat_completions.json',
+} as const
+
 /** Six answers of one active window, then «not started» and «just started» after an idle night. */
 export const quotaSamples = [
   '46-quota-limit-raw.json',
