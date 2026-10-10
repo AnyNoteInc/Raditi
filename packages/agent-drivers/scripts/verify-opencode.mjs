@@ -1134,7 +1134,8 @@ try {
     )
     for (const expected of [
       { type: 'command', command: toolCheck, exitCode: 0 },
-      { type: 'tool_call', tool: 'raditi_site_info', ok: true },
+      // The tool's own name: the driver takes the CLI's `<server>_` prefix off.
+      { type: 'tool_call', tool: 'site_info', ok: true },
       { type: 'file_change', path: 'turn-1.txt', change: 'add' },
       { type: 'completed' },
     ])

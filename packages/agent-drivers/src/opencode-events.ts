@@ -11,6 +11,7 @@ import {
   text,
   type JsonObject,
 } from './jsonl.ts'
+import { platformToolName } from './opencode-mcp.ts'
 
 // `opencode run --format json` of the pinned 1.18.34: one row per finished part.
 //   step_start, text, tool_use (a tool part that is completed or failed), step_finish, error
@@ -85,11 +86,12 @@ function toolEvents(part: JsonObject): AgentEvent[] {
   if (tool === 'invalid')
     return events({
       type: 'tool_call',
-      tool: text(input?.tool, agentOutputLimits.tool) || tool,
+      tool: platformToolName(text(input?.tool, agentOutputLimits.tool) || tool),
       ok: false,
     })
   const ok = state.status === 'completed'
-  const result = events({ type: 'tool_call', tool, ok })
+  // Only the reported name: what a tool of the CLI itself did is read by the name of the row.
+  const result = events({ type: 'tool_call', tool: platformToolName(tool), ok })
   if (tool === 'bash') {
     const command = text(input?.command, agentOutputLimits.command)
     const exitCode = object(state.metadata)?.exit

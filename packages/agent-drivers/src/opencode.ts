@@ -14,6 +14,7 @@ import {
 import { parseAgentDriverConfig, type AgentDriverConfig } from './config.ts'
 import { extractJsonResult } from './jsonl.ts'
 import { parseOpencodeEvent } from './opencode-events.ts'
+import { mcpServer, mcpToolPrefix } from './opencode-mcp.ts'
 import { opencodeWrapper } from './opencode-wrapper.ts'
 import { RESULT_CONTRACT } from './output-schema.ts'
 
@@ -38,8 +39,6 @@ const cli = '/usr/local/bin/opencode'
 /** The platform's own provider id: with it the CLI knows no address or key name of a vendor. */
 const provider = 'raditi'
 const agent = 'raditi'
-/** The MCP server's name: its tools reach the model as raditi_<tool>. */
-const mcpServer = 'raditi'
 /** A session with a title of its own skips the CLI's separate request for one. */
 const title = 'raditi-turn'
 /** A write through the MCP role answers within its own deadline of 15 s; the CLI default is 5 s. */
@@ -126,7 +125,7 @@ const permission = {
   lsp: 'deny',
   doom_loop: 'deny',
   external_directory: { '*': 'deny', [`${SANDBOX_INBOX}/*`]: 'allow' },
-  [`${mcpServer}_*`]: 'allow',
+  [`${mcpToolPrefix}*`]: 'allow',
 }
 
 const agentPrompt =

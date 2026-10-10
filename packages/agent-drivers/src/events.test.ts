@@ -95,7 +95,7 @@ describe('pinned upstream JSONL fixtures', () => {
       { type: 'command', command: 'pwd', exitCode: 0 },
       { type: 'tool_call', tool: 'write', ok: true },
       { type: 'file_change', path: 'index.html', change: 'update' },
-      { type: 'tool_call', tool: 'raditi_site_info', ok: true },
+      { type: 'tool_call', tool: 'site_info', ok: true },
       {
         type: 'usage',
         usage: { inputUncached: 50, cacheRead: 40, cacheWrite: 10, output: 20, reasoning: 5 },
@@ -177,6 +177,10 @@ describe.each(drivers)('$id untrusted stdout boundary', (driver) => {
     expect(driver.extractResult(turn(finalText, 'broken final'), null)).toBeNull()
     expect(
       driver.extractResult([...turn(''), { type: 'failed', reason: 'failed' }], finalText),
+    ).toBeNull()
+    // A failure reported before a complete answer is a failure of the turn all the same.
+    expect(
+      driver.extractResult([{ type: 'failed', reason: 'failed' }, ...turn(finalText)], null),
     ).toBeNull()
     for (const value of [
       '[]',
@@ -264,6 +268,19 @@ describe('OpenCode 1.18.34 turns recorded by the G1 spike', () => {
     expect(opencode.extractResult([{ type: 'message', text: finalText }], null)).toBeNull()
     expect(opencode.extractResult([], finalText)).toBeNull()
     expect(opencode.extractResult(step(finalText), null)).toEqual(expectedResult)
+  })
+
+  it('takes no result from a turn that went on to an answer step after an error', () => {
+    // What the CLI printed after a refused request it read as a context overflow (measured on
+    // 1.18.34): the error, a compaction step, and one more step with a complete answer; the
+    // process exits with code 1.
+    const overflow = eventsOf('context-overflow').filter((event) => event.type === 'failed')
+    expect(overflow).not.toHaveLength(0)
+    const events = [...overflow.slice(0, 1), ...step('Summary of the session.'), ...step(finalText)]
+    expect(opencode.extractResult(events, null)).toBeNull()
+    expect(opencode.extractResult(events, finalText)).toBeNull()
+    // The same two steps without the error are a turn with its result.
+    expect(opencode.extractResult(events.slice(1), null)).toEqual(expectedResult)
   })
 
   it('names the kind, the status and the gateway code of a refusal, never the address', () => {
@@ -376,6 +393,43 @@ describe('OpenCode 1.18.34 turns recorded by the G1 spike', () => {
     expect(tool('invalid', { status: 'completed', input: {} })).toEqual([
       { type: 'tool_call', tool: 'invalid', ok: false },
     ])
+  })
+
+  it('names a tool of the platform MCP server by its own name, as the other drivers do', () => {
+    const tool = (name: string, state: Record<string, unknown> = { status: 'completed' }) =>
+      parse(opencode, { type: 'tool_use', part: { type: 'tool', tool: name, state } })
+    // The pinned CLI names a tool of an MCP server `<server>_<tool>`; the server is the driver's.
+    expect(tool('raditi_wp_rest')).toEqual([{ type: 'tool_call', tool: 'wp_rest', ok: true }])
+    expect(tool('raditi_wp_rest', { status: 'error', error: 'private' })).toEqual([
+      { type: 'tool_call', tool: 'wp_rest', ok: false },
+    ])
+    // Once: what follows the prefix is the tool's name, whatever it looks like.
+    expect(tool('raditi_raditi_x')).toEqual([{ type: 'tool_call', tool: 'raditi_x', ok: true }])
+    // A tool of the CLI itself, and a name that only begins with the same letters.
+    for (const name of ['bash', 'read', 'raditixyz', 'raditi', 'raditi_', 'Raditi_wp_rest'])
+      expect(tool(name)).toEqual([{ type: 'tool_call', tool: name, ok: true }])
+    expect(tool('xraditi_wp_rest')).toEqual([
+      { type: 'tool_call', tool: 'xraditi_wp_rest', ok: true },
+    ])
+    // A platform tool called like a tool of the CLI is no command and no change of a file.
+    expect(
+      tool('raditi_bash', {
+        status: 'completed',
+        input: { command: 'pwd' },
+        metadata: { exit: 0 },
+      }),
+    ).toEqual([{ type: 'tool_call', tool: 'bash', ok: true }])
+    expect(
+      tool('raditi_write', {
+        status: 'completed',
+        input: { filePath: '/workspace/repo/a.txt' },
+        metadata: { exists: false },
+      }),
+    ).toEqual([{ type: 'tool_call', tool: 'write', ok: true }])
+    // The name the model wrote for a call the CLI refused is read the same way.
+    expect(
+      tool('invalid', { status: 'completed', input: { tool: 'raditi_wp_rest', error: 'x' } }),
+    ).toEqual([{ type: 'tool_call', tool: 'wp_rest', ok: false }])
   })
 })
 

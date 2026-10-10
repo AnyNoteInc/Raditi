@@ -179,6 +179,27 @@ describe('OpenCode driver: prepared files and argv', () => {
     expect(text).not.toMatch(/reasoning_effort|variant|thinking|"high"/)
   })
 
+  it('gives the platform MCP server the one name its events parser takes off a tool', async () => {
+    const value = config(await driver.prepare(context))
+    const servers = Object.keys(value.mcp as Record<string, unknown>)
+    expect(servers).toHaveLength(1)
+    const [server] = servers
+    // The CLI rewrites every other character of a server name before it prefixes a tool with it.
+    expect(server).toMatch(/^[A-Za-z0-9-]+$/)
+    expect(value.permission[`${server}_*`]).toBe('allow')
+    const row = (tool: string) =>
+      JSON.stringify({
+        type: 'tool_use',
+        part: { type: 'tool', tool, state: { status: 'completed', input: {} } },
+      })
+    expect(driver.parseEvent(row(`${server}_site_info`))).toEqual([
+      { type: 'tool_call', tool: 'site_info', ok: true },
+    ])
+    expect(driver.parseEvent(row(`${server}site_info`))).toEqual([
+      { type: 'tool_call', tool: `${server}site_info`, ok: true },
+    ])
+  })
+
   it('gives export and import a configuration with no provider, no MCP server and no secret', async () => {
     const run = await driver.prepare({ ...context, nativeSessionId })
     const text = file(run, 'io-config/opencode/opencode.json')
