@@ -186,7 +186,7 @@ WordPress с PostgreSQL, S3 и Vault — `pnpm verify:mcp-content` (Docker Deskt
 на Linux; в CI — workflow `wordpress-content.yml`). Та же правка настоящим OpenCode
 CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетическом провайдере, —
 `pnpm verify:agent-content` (в CI — workflow `agent-content.yml`; строки Codex и Kimi удалены в G8,
-после удаления на GitHub стенд ещё не выполнялся);
+после удаления на GitHub стенд выполнен 11.10.2026);
 [отчёт](docs/plan/30-agent-content-stand.md), [строка OpenCode](docs/plan/44-agent-content-opencode.md).
 С флагом `--live` оба стенда — этот и `pnpm verify:llm-gateway` — идут на настоящем GLM (`api.z.ai`): только
 вручную, с ключом плана в окружении команды (`ZAI_API_KEY`), только с синтетикой, не в CI; `--rehearsal` — тот же
