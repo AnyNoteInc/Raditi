@@ -128,7 +128,7 @@ process.exit(accepted ? 0 : 1);
  * 5. The CLI starts with an environment built from scratch — a crash report of its runtime is
  *    uploaded only when the environment asks for it — and takes each credential once, from a
  *    named pipe the configuration names as `{file:…}`. The value exists in no file, no
- *    environment and no argv; the pipe is removed as soon as it was read.
+ *    environment and no argv; the pipe leaves its path before its value is written.
  * 6. The CLI's own MCP connection may still fail, and then the run goes on without the site's
  *    tools and exits 0. The only sign is one WARN line of `--print-logs`: on it the CLI is
  *    stopped and the turn fails.
@@ -309,8 +309,12 @@ try {
           throw error;
         }
         let written;
-        try { written = writeSync(pipe, secret.value); } finally { closeSync(pipe); }
-        rmSync(secret.path, { force: true });
+        // Off its path before the value is written: the reader already holds the pipe. Removed
+        // after it, a reader that opened the path once more in between would wait there for good.
+        try {
+          rmSync(secret.path, { force: true });
+          written = writeSync(pipe, secret.value);
+        } finally { closeSync(pipe); }
         if (written !== secret.value.length) throw new Error('short write');
         secret.value.fill(0);
         secret.done = true;
