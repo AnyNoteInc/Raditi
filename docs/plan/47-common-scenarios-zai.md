@@ -953,4 +953,18 @@ export const sampleRoutePath = '/zai/v4/chat/completions'
 
 **Порог времени стенда `verify:opencode`.** На коммите `2c8779c` job `verify-opencode` в GitHub Actions один раз упал: стенд требовал первый запрос провайдеру не позже 10 секунд от запуска, а сценарий продолжения хода, где CLI стартует трижды (экспорт, импорт, ход), на медленном раннере занял 10,4 секунды. На обычном он занимает 6,6–6,8 секунды; повтор job прошёл. Порог ловит CLI, который ждёт адрес, недоступный из песочницы, — это десятки секунд. Теперь у него две части: перенос сессии кончается не позже 30 секунд от запуска, а первый запрос CLI хода приходит не позже 15 секунд после проверки MCP. Прямая проверка — приёмник сети стенда — не менялась. Правка одна, в `packages/agent-drivers/scripts/verify-opencode.mjs`, отдельным коммитом.
 
-**Что остаётся за прогоном на GitHub.** Шаги репетиций, новая группа `verify:llm-app`, группа Z.ai с перенесёнными сценариями и переведённые тесты в job `gates` и `gateway-db` на x64 исполняются после отправки ветки; ссылки на прогоны — в описании PR #3.
+### Прогон на GitHub
+
+11.10.2026, коммит `3fd4c0f`, PR #3: первый полный прогон workflow GitHub Actions на x64 на новом пути. Все 11 job зелёные с первого раза.
+
+| Workflow | Job | Что впервые исполнено на x64 | Прогон |
+| --- | --- | --- | --- |
+| `ci.yml` | `gates`, `gateway-db`, `storage-s3` | тесты, переведённые на новые id; контрактный тест пути CA роли `llm`; 303 интеграционных теста на PostgreSQL | [38111067680](https://github.com/AnyNoteInc/Raditi/actions/runs/38111067680) |
+| `llm-gateway.yml` | `verify-llm-gateway` | 63 проверки с общими сценариями в группе Z.ai; три репетиции живого режима — 15, 11 и 11 проверок, в том числе точная сверка реакции OpenCode на HTTP 413 | [38111067691](https://github.com/AnyNoteInc/Raditi/actions/runs/38111067691) |
+| `agent-content.yml` | `verify-agent-content` | 27 проверок и репетиция живого режима, 12 проверок | [38111067725](https://github.com/AnyNoteInc/Raditi/actions/runs/38111067725) |
+| `llm-app.yml` | `verify-llm-app` | новая группа: сервис с другим файлом CA не стартует; на раннере 12 групп | [38111067706](https://github.com/AnyNoteInc/Raditi/actions/runs/38111067706) |
+| `codex-driver.yml` | `verify-opencode`, `verify-codex`, `sandbox-isolation` | стенд OpenCode с именем инструмента платформы и с новым порогом времени | [38111067766](https://github.com/AnyNoteInc/Raditi/actions/runs/38111067766) |
+| `wordpress-content.yml` | `verify-mcp-content` | фильтр путей с `apps/orchestrator/src/testing/**` | [38111067674](https://github.com/AnyNoteInc/Raditi/actions/runs/38111067674) |
+| `edge.yml` | `verify-edge` | без изменений в G7 | [38111067675](https://github.com/AnyNoteInc/Raditi/actions/runs/38111067675) |
+
+Репетиции впервые шли на Linux и с заданной переменной `CI`: путь наблюдателя стенда работает и там. В CI не входят и исполнены только локально: `verify:runner`, `verify:snapshots`, `verify:transport`, `verify:vault`, `verify:site-connect`, `verify:llm-firewall` отдельной командой и три стенда супервизора под gVisor. Внешняя проверка SonarCloud не проходит, как и на прежних PR.

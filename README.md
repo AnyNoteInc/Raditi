@@ -193,12 +193,12 @@ WordPress с PostgreSQL, S3 и Vault — `pnpm verify:mcp-content` (Docker Deskt
 на Linux; в CI — workflow `wordpress-content.yml`). Та же правка настоящими Codex, Kimi и OpenCode
 CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетических провайдерах, —
 `pnpm verify:agent-content` (в CI — workflow `agent-content.yml`: со строками Codex и Kimi прошёл
-09.10.2026 в черновом PR #3, со строкой OpenCode на GitHub ещё не выполнялся);
+09.10.2026 в черновом PR #3, со строкой OpenCode на GitHub выполнен 10.10.2026);
 [отчёт](docs/plan/30-agent-content-stand.md), [строка OpenCode](docs/plan/44-agent-content-opencode.md).
 С флагом `--live` оба стенда — этот и `pnpm verify:llm-gateway` — идут на настоящем GLM (`api.z.ai`): только
 вручную, с ключом плана в окружении команды (`ZAI_API_KEY`), только с синтетикой, не в CI; `--rehearsal` — тот же
 код на синтетическом Z.ai, без ключа. С G7 репетиции записаны шагами CI после детерминированного прохода
-(`llm-gateway.yml`, `agent-content.yml`); на GitHub они ещё не выполнялись
+(`llm-gateway.yml`, `agent-content.yml`) и на GitHub идут с 11.10.2026
 ([отчёт G7](docs/plan/47-common-scenarios-zai.md)). У стенда шлюза есть ещё `--live --results` — узкий замер итога хода:
 десять ходов, не больше 20 запросов провайдеру и 10 минут (`infra/dev/llm-verify/README.md`, «Живой режим»;
 [отчёт G6](docs/plan/45-zai-live.md), [отчёт об итоге хода](docs/plan/46-turn-result-glm.md)).
