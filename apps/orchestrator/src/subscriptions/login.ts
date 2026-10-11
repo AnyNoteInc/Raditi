@@ -1,10 +1,8 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 
 import type { Prisma, PrismaClient } from '@repo/db'
 import {
-  clientIdentitySchema,
   credentialMetadataSchema,
-  type ClientIdentity,
   type CredentialMetadata,
   type LlmBackend,
   type SecretStore,
@@ -54,7 +52,6 @@ export interface SubscriptionImportInput {
   paidUntil?: Date | null
   maxConcurrentTurns?: number
   maxConcurrentRequests?: number
-  clientIdentity?: ClientIdentity
 }
 
 export interface SubscriptionReloginInput {
@@ -108,7 +105,6 @@ const importSchema = z
     paidUntil: z.date().nullable().optional(),
     maxConcurrentTurns: z.number().int().min(1).max(8).default(1),
     maxConcurrentRequests: z.number().int().min(1).max(16).default(1),
-    clientIdentity: clientIdentitySchema.optional(),
   })
   .strict()
 const reloginSchema = z
@@ -122,20 +118,7 @@ type Account = Prisma.SubscriptionAccountGetPayload<{
   include: { provider: true; credentialRef: true }
 }>
 
-const deviceName = () => randomBytes(6).toString('hex')
-/** Before 03.10.2026 every account reported this name; relogin replaces it. */
-const LEGACY_DEVICE_NAME = 'raditi'
-
-/**
- * Generated once before login, then retained by every relogin and refresh. Providers receive
- * the device name: it names neither the service nor anything shared by the accounts of the
- * pool. Twelve hex digits are the host name a CLI reports from inside a container.
- */
-export function createSubscriptionClientIdentity(): ClientIdentity {
-  return { installationId: randomUUID(), deviceId: randomUUID(), deviceName: deviceName() }
-}
-
-/** Trusted provider login results enter Vault through a write-only operator capability. */
+/** A key the provider has confirmed enters Vault through a write-only operator capability. */
 export class SubscriptionLogin {
   readonly #options: SubscriptionLoginOptions
 
@@ -144,8 +127,8 @@ export class SubscriptionLogin {
   }
 
   /**
-   * Runs before the provider issues anything: a dead or unauthorized writer token, or a label
-   * already in use, would otherwise surface only after a 15-minute device flow. The import
+   * Runs before the key is asked for: a dead or unauthorized writer token, or a label already
+   * in use, would otherwise surface only after the operator has typed it in. The import
    * repeats both checks under its locks. The token's remaining lifetime is not known here.
    */
   async preflight(input: { backend: string; label?: string }): Promise<void> {
@@ -184,7 +167,6 @@ export class SubscriptionLogin {
       const plan = metadata.plan ?? value.plan
       if (!plan || (metadata.plan !== null && value.plan !== undefined && plan !== value.plan))
         throw new SubscriptionLoginError('invalid_input')
-      const identity = this.#identity(value.clientIdentity ?? createSubscriptionClientIdentity())
       accountId = randomUUID()
       lease = await this.#options.locks.tryAcquire(accountId)
       if (!lease) throw new SubscriptionLoginError('busy')
@@ -226,12 +208,10 @@ export class SubscriptionLogin {
             paidUntil: value.paidUntil ?? null,
             maxConcurrentTurns: value.maxConcurrentTurns,
             maxConcurrentRequests: value.maxConcurrentRequests,
-            clientIdentity: identity,
             enabled: false,
             health: 'needs_relogin',
             healthReason: 'import_pending',
             healthChangedAt: now,
-            refreshStartedAt: now,
           },
           include: { provider: true, credentialRef: true },
         })
@@ -301,18 +281,12 @@ export class SubscriptionLogin {
           throw new SubscriptionLoginError('account_conflict', accountId)
         const now = await this.#databaseNow(tx)
         this.#assertLease(lease!, accountId!)
-        const identity = clientIdentitySchema.safeParse(current!.clientIdentity)
         await tx.subscriptionAccount.update({
           where: { id: accountId },
           data: {
             health: 'needs_relogin',
             healthReason: 'relogin_pending',
             healthChangedAt: now,
-            refreshStartedAt: now,
-            refreshFinishedAt: null,
-            ...(identity.success && identity.data.deviceName === LEGACY_DEVICE_NAME
-              ? { clientIdentity: { ...identity.data, deviceName: deviceName() } }
-              : {}),
           },
         })
       })
@@ -346,19 +320,6 @@ export class SubscriptionLogin {
     } catch {
       throw new SubscriptionLoginError('invalid_input')
     }
-  }
-
-  #identity(input: ClientIdentity): Prisma.InputJsonObject {
-    const parsed = clientIdentitySchema.safeParse(input)
-    if (
-      !parsed.success ||
-      !parsed.data.installationId ||
-      !parsed.data.deviceId ||
-      !parsed.data.deviceName ||
-      Object.values(parsed.data).some((value) => !/^[\x21-\x7e][\x20-\x7e]{0,255}$/.test(value))
-    )
-      throw new SubscriptionLoginError('invalid_input')
-    return parsed.data
   }
 
   #checkAccount(
@@ -465,9 +426,6 @@ export class SubscriptionLogin {
           health: 'ok',
           healthReason: null,
           healthChangedAt: now,
-          refreshStartedAt: null,
-          refreshFinishedAt: null,
-          refreshFailures: 0,
         },
       })
       await tx.credentialRef.update({

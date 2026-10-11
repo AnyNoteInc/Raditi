@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 
-import { CLI_IMAGE, dockerCommand } from '../../../infra/dev/llm-verify/cli.mjs'
+import { CLI_IMAGE, dockerCommand, GUARD_IMAGE } from '../../../infra/dev/llm-verify/cli.mjs'
 import { SYNTHETIC_ZAI_KEY } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import {
   commandAnswer,
@@ -53,7 +53,6 @@ export const REFUSED = 2
 const LABEL = 'live-zai'
 // Everything the agent can write to in the CLI container, the session database included.
 const SANDBOX_ROOTS = ['/agent-home', '/workspace', '/tmp', '/run/raditi']
-const GUARD_IMAGE = 'raditi-p3verify-guard:b13'
 
 /**
  * Opens a run, or returns REFUSED after saying why. `kind` names the limits: gateway, content,

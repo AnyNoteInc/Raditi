@@ -12,7 +12,7 @@ import { chatSamples, sample } from './fixtures/samples.ts'
 
 const route = { method: 'POST', path: '/zai/v4/chat/completions' } as const
 const normalizeBody = createZaiBodyPolicy(route)
-const ctx = { model: 'glm-5.3', reasoningEffort: 'high', cacheKey: `rdt_${'a'.repeat(32)}` }
+const ctx = { model: 'glm-5.3', reasoningEffort: 'high' }
 const decode = (body: Uint8Array) =>
   JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
 const normalize = (
@@ -340,7 +340,7 @@ describe('the closed shape of a Z.ai request', () => {
 
   it('rejects other routes, malformed JSON and bodies that are no object without quoting them', () => {
     expect(() =>
-      normalizeBody({ method: 'POST', path: '/kimi/v1/chat/completions' }, encodeJson(cli()), ctx),
+      normalizeBody({ method: 'POST', path: '/other/v1/chat/completions' }, encodeJson(cli()), ctx),
     ).toThrow(DomainError)
     expect(() =>
       normalizeBody({ method: 'GET', path: route.path }, encodeJson(cli()), ctx),

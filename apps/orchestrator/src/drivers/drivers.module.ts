@@ -6,11 +6,11 @@ import type { CoreConfig } from '../config/config.ts'
 import { AGENT_DRIVERS, CORE_CONFIG } from '../infra/tokens.ts'
 
 /**
- * Product drivers (spec §8); qwen stays registered but disabled. OpenCode stands next to Codex
- * and Kimi until they are removed: it runs only once the operator enables its row in
- * agent_drivers and an account of its provider.
+ * The product runs one shell (spec §8). A turn of OpenCode needs, beside this, what the
+ * operator switches on in the database: the provider, a profile with an approved rate and an
+ * account.
  */
-export const ENABLED_AGENT_DRIVERS: readonly AgentDriverId[] = ['codex', 'kimi', 'opencode']
+export const ENABLED_AGENT_DRIVERS: readonly AgentDriverId[] = ['opencode']
 
 @Module({
   providers: [

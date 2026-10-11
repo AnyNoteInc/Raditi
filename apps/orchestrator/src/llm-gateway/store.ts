@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { isIP } from 'node:net'
 
 import { Prisma, type PrismaClient } from '@repo/db'
@@ -7,18 +6,15 @@ import {
   callReserveRub,
   callSignalSchema,
   callUsageSchema,
-  clientIdentitySchema,
   estimatedCacheReadTokens,
   gatewayRefusalSchema,
   limitResetPlausible,
-  limitWindowSnapshotSchema,
   llmBackendIdSchema,
   llmCallCostRub,
   poolPolicy,
   refusalForSignal,
   type CallUsage,
   type GatewayRefusal,
-  type LimitWindow,
   type LlmModelPrices,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -28,7 +24,6 @@ import {
   GatewayRecordRejected,
   limitWindowColumns,
   policyFlaggedEvent,
-  resetsPlausible,
   type GatewayAdmission,
   type GatewayAdmitInput,
   type GatewayFinish,
@@ -55,7 +50,6 @@ const profileSchema = z.object({
   modelId: z.uuid(),
   model: z.string().min(1).max(255),
   reasoningEffort: z.string().max(16).nullable(),
-  cacheKey: z.string().regex(/^rdt_[a-f0-9]{32}$/),
 })
 const admitSchema = z.strictObject({
   keyHash: hashSchema,
@@ -81,7 +75,6 @@ export const gatewayFinishSchema = z
     responseBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     upstreamStatus: z.number().int().min(100).max(599).optional(),
     signal: callSignalSchema.optional(),
-    windows: limitWindowSnapshotSchema.nullable().optional(),
   })
   .refine((value) => value.estimated === (value.estimateReason !== null))
   .refine(
@@ -111,13 +104,10 @@ interface KeyRow {
   reserveOutputTokens: number
   credentialRef: string
   credentialVersion: number
-  credentialExpiresAt: Date | null
-  clientIdentity: unknown
   maxConcurrentRequests: number
   accountEnabled: boolean
   status: string
   health: string
-  healthReason: string | null
   retireRequestedAt: Date | null
   credentialsRevokedAt: Date | null
   coolingUntil: Date | null
@@ -142,12 +132,11 @@ const keyColumns = Prisma.sql`
   m.reserve_output_tokens AS "reserveOutputTokens", p.slug AS "backendId",
   p.id AS "providerId", p.enabled AS "providerEnabled", p.kind::text AS "providerKind",
   a.enabled AS "accountEnabled", a.status::text AS status, a.health::text AS health,
-  a.health_reason AS "healthReason", a.retire_requested_at AS "retireRequestedAt",
+  a.retire_requested_at AS "retireRequestedAt",
   a.credentials_revoked_at AS "credentialsRevokedAt", a.cooling_until AS "coolingUntil",
   a.breaker_open_until AS "breakerOpenUntil", a.limit_windows AS "limitWindows",
   a.limits_seen_at AS "limitsSeenAt",
-  a.credential_version AS "credentialVersion", a.credential_expires_at AS "credentialExpiresAt",
-  a.client_identity AS "clientIdentity",
+  a.credential_version AS "credentialVersion",
   a.max_concurrent_requests AS "maxConcurrentRequests", ref.vault_path AS "credentialRef",
   EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = k.task_id
     AND e.type = ${policyFlaggedLiteral}) AS "policyFlagged",
@@ -298,11 +287,6 @@ export class PostgresGatewayStore implements GatewayStore {
         { instant: Date }[]
       >`SELECT clock_timestamp() AS instant`
       if (finalClock!.instant >= row.expiresAt) return { kind: 'refused', reason: 'unauthorized' }
-      if (
-        row.healthReason === 'refresh_ambiguous' &&
-        (row.credentialExpiresAt === null || finalClock!.instant >= row.credentialExpiresAt)
-      )
-        return this.#refused(tx, row.keyId, 'account')
       if (row.breakerOpenUntil !== null) {
         // The account lock admits exactly one generation trial after the breaker expires.
         // Hold all other keys until this trial supplies real usage, or another 15 minutes pass.
@@ -543,7 +527,6 @@ export class PostgresGatewayStore implements GatewayStore {
         where: { id: call.subscriptionAccountId },
         select: {
           limitWindows: true,
-          limitsSeenAt: true,
           coolingUntil: true,
           usageMissingStreak: true,
           breakerOpenUntil: true,
@@ -567,27 +550,6 @@ export class PostgresGatewayStore implements GatewayStore {
           accountData.breakerOpenUntil = null
         }
       }
-      if (value.windows !== undefined && value.windows !== null) {
-        // A response that named no window (a balance only) leaves the known windows as they are.
-        if (value.windows.windows !== null) {
-          // Concurrent provider responses may close in a different order from their headers.
-          // A late snapshot must never refill an already observed exhausted window.
-          const known = decodeLimitWindows(account.limitWindows)
-          const unknownSinceCall =
-            (known === null || known.length === 0) &&
-            account.limitsSeenAt !== null &&
-            account.limitsSeenAt >= call.startedAt
-          const windows =
-            unknownSinceCall || !resetsPlausible(value.windows.windows, now)
-              ? []
-              : mergeWindows(account.limitWindows, value.windows.windows)
-          Object.assign(accountData, limitWindowColumns(windows, now))
-        }
-        accountData.creditsSeen =
-          value.windows.creditsBalance === null
-            ? Prisma.JsonNull
-            : { balance: value.windows.creditsBalance }
-      }
       if (value.signal?.kind === 'window_exhausted') {
         // A reset no window can have is no reset: it must never become a pause of years.
         if (
@@ -599,10 +561,10 @@ export class PostgresGatewayStore implements GatewayStore {
           if (account.coolingUntil === null || account.coolingUntil < until)
             accountData.coolingUntil = until
         } else {
-          const windows = decodeLimitWindows(accountData.limitWindows ?? account.limitWindows)
+          const windows = decodeLimitWindows(account.limitWindows)
           if (!windows?.some((window) => window.usedPct >= 100)) {
             // Authoritative exhaustion with no usable reset cannot reuse an older spare
-            // snapshot. Only a fresh B10 probe may restore known capacity.
+            // snapshot. Only a fresh probe may restore known capacity.
             Object.assign(accountData, limitWindowColumns([], now))
           }
         }
@@ -663,14 +625,12 @@ function permanent(error: unknown): boolean {
 
 function toKey(row: KeyRow): GatewayKey | null {
   const backend = llmBackendIdSchema.safeParse(row.backendId)
-  const identity = clientIdentitySchema.safeParse(row.clientIdentity)
-  if (!backend.success || !identity.success || row.model === null) return null
+  if (!backend.success || row.model === null) return null
   return {
     keyId: row.keyId,
     modelId: row.modelId,
     model: row.model,
     reasoningEffort: row.reasoningEffort,
-    cacheKey: `rdt_${createHash('sha256').update(`raditi:${row.taskId}`).digest('hex').slice(0, 32)}`,
     backendId: backend.data,
     providerId: row.providerId,
     taskId: row.taskId,
@@ -682,7 +642,6 @@ function toKey(row: KeyRow): GatewayKey | null {
     budgetRub: row.budgetRub.toFixed(10),
     credentialRef: row.credentialRef,
     credentialVersion: row.credentialVersion,
-    clientIdentity: identity.data,
     maxConcurrentRequests: row.maxConcurrentRequests,
     // Windows nobody has dated are unknown ones: admission asks for their probe itself. A key
     // that admission is going to refuse for a stop flag asks for nothing: a provider, a model
@@ -711,8 +670,7 @@ function sameProfile(key: GatewayKey, profile: GatewayProfile): boolean {
     key.keyId === profile.keyId &&
     key.modelId === profile.modelId &&
     key.model === profile.model &&
-    key.reasoningEffort === profile.reasoningEffort &&
-    key.cacheKey === profile.cacheKey
+    key.reasoningEffort === profile.reasoningEffort
   )
 }
 
@@ -771,18 +729,12 @@ function usageFromRow(value: {
 /**
  * Admission of a running turn (p3-design §3.2 step 8): only a confirmed limit refuses for good.
  * A window past its reset has rolled over, so its old usage no longer applies; the next
- * response or probe reports the new period. Unknown windows hold the turn as short-lived until
+ * probe reports the new period. Unknown windows hold the turn as short-lived until
  * a fresh probe, because an authoritative exhaustion or a malformed report clears them.
  */
 function accountRefusal(row: KeyRow): GatewayRefusal | 'windows_unknown' | null {
   if (accountOff(row)) return 'account'
-  // Existing keys drain normally during retirement or an ambiguous refresh. New issue
-  // rejects both in pickAccount; an existing ambiguous credential must still be live.
-  if (
-    row.healthReason === 'refresh_ambiguous' &&
-    (row.credentialExpiresAt === null || row.credentialExpiresAt <= row.serverNow)
-  )
-    return 'account'
+  // Existing keys drain normally during retirement; a new issue rejects it in pickAccount.
   if (row.breakerOpenUntil !== null && row.breakerOpenUntil > row.serverNow) return 'account'
   if (row.coolingUntil !== null && row.coolingUntil > row.serverNow) return 'subscription_limit'
   const windows = decodeLimitWindows(row.limitWindows)
@@ -797,31 +749,4 @@ function accountRefusal(row: KeyRow): GatewayRefusal | 'windows_unknown' | null 
   )
     return 'subscription_limit'
   return null
-}
-
-function mergeWindows(current: unknown, incoming: readonly LimitWindow[]): LimitWindow[] {
-  // An explicitly unknown snapshot is never interpreted as unlimited capacity.
-  if (incoming.length === 0) return []
-  const known = decodeLimitWindows(current)
-  if (known === null || known.length === 0) return [...incoming]
-  const merged = new Map(known.map((window) => [window.name, window]))
-  for (const next of incoming) {
-    const previous = merged.get(next.name)
-    if (!previous) {
-      merged.set(next.name, next)
-      continue
-    }
-    const before = previous.resetsAt?.getTime() ?? null
-    const after = next.resetsAt?.getTime() ?? null
-    if (before !== null && after !== null && after > before) merged.set(next.name, next)
-    else if (before !== null && after !== null && after < before) continue
-    else
-      merged.set(next.name, {
-        ...next,
-        resetsAt: next.resetsAt ?? previous.resetsAt,
-        usedPct: Math.max(previous.usedPct, next.usedPct),
-      })
-  }
-  // Keep reported windows that an incomplete late snapshot omitted.
-  return [...merged.values()]
 }

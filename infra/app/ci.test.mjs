@@ -1,7 +1,7 @@
 // The CI contract: what the workflows of .github/workflows run against the scripts they reach, and
 // which changes start them. Text only: GitHub itself runs them after the branch is pushed.
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -188,6 +188,59 @@ const workflows = readdirSync(join(root, '.github/workflows'))
 const sets = (source, variable) =>
   new RegExp(`^ +${variable}: \\S|\\b${variable}=`, 'm').test(source)
 
+test('every path filter of a workflow names files the repository has', () => {
+  // A filter left behind by a removed stand starts nothing and hides that a moved file no
+  // longer starts its workflow.
+  let checked = 0
+  for (const { name, source } of workflows) {
+    const filter = pathFilter(source)
+    if (filter.includes(`.github/workflows/${name}`)) checked += 1
+    for (const pattern of filter) {
+      const found = pattern.endsWith('/**')
+        ? existsSync(join(root, pattern.slice(0, -3)))
+        : !pattern.includes('**') && globSync(pattern, { cwd: root }).length > 0
+      assert.ok(found, `${name}: the path filter ${pattern} matches no file`)
+    }
+  }
+  // Every filtered workflow starts on a change to itself, under the name it has now.
+  assert.equal(checked, workflows.filter(({ source }) => pathFilter(source).length > 0).length)
+  assert.ok(checked >= 6, 'the workflows with a path filter were read')
+})
+
+test('every package script a workflow runs exists', () => {
+  // `pnpm <script>` of the root and `pnpm --filter <package> <script>`; pnpm's own commands
+  // (install, exec, dlx) are not scripts. A script removed with its stand fails here, not on
+  // GitHub after the push.
+  const own = new Set(['install', 'exec', 'dlx'])
+  const names = new Map(
+    workspaces.map((workspace) => [JSON.parse(read(`${workspace}/package.json`)).name, workspace]),
+  )
+  const sources = [
+    ...workflows,
+    { name: 'actions/setup', source: read('.github/actions/setup/action.yml') },
+  ]
+  let checked = 0
+  for (const { name, source } of sources)
+    for (const [, command] of source.matchAll(
+      /^ +(?:run: )?(pnpm (?:--filter \S+ )*[a-z][\w:.-]*)/gm,
+    )) {
+      const words = command.split(' ').slice(1)
+      const script = words.at(-1)
+      if (own.has(script)) continue
+      const filters = words.filter((_, index) => words[index - 1] === '--filter')
+      for (const workspace of filters.length ? filters.map((filter) => names.get(filter)) : ['.']) {
+        assert.ok(workspace, `${name}: ${command} names an unknown package`)
+        assert.ok(
+          scripts(workspace)[script],
+          `${name}: ${command} — ${workspace}/package.json has no script ${script}`,
+        )
+        checked += 1
+      }
+    }
+  // A floor that only shows the loop read the workflows: a step removed is not a defect.
+  assert.ok(checked >= 20, `only ${checked} scripts of the workflows were checked`)
+})
+
 test('the live mode of the stands never runs in CI: no workflow names it or the plan key', () => {
   // A live run sends requests to the real provider on a plan with windows (infra/dev/llm-verify/
   // live.mjs). It is started by a person who holds the key; a workflow has neither the option
@@ -278,9 +331,9 @@ test('every test suite enabled by an environment variable is enabled by a workfl
 })
 
 test('CI runs the Docker isolation suites of the sandbox provider on a real daemon', () => {
-  const source = workflow('codex-driver')
+  const source = workflow('agent-driver')
   const isolation = /^ {2}sandbox-isolation:\n(?:(?: {4}.*)?\n)+/m.exec(`${source}\n`)?.[0] ?? ''
-  assert.ok(isolation, 'codex-driver.yml has the sandbox-isolation job')
+  assert.ok(isolation, 'agent-driver.yml has the sandbox-isolation job')
   // The provider takes images by digest only; the three it needs come from one Dockerfile.
   for (const target of ['runtime', 'gateway', 'network-guard'])
     assert.ok(copied('infra/sandbox/Dockerfile', target), target)
@@ -363,9 +416,14 @@ test('CI runs the Docker isolation suites of the sandbox provider on a real daem
 })
 
 test('CI runs the real OpenCode CLI of the sandbox image, without a key or a network', () => {
-  const source = workflow('codex-driver')
+  const source = workflow('agent-driver')
+  // One shell, one job with a real CLI: the workflow is named after the driver port, not a shell.
+  assert.deepEqual(
+    [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):$/gm)].map(([, name]) => name),
+    ['verify-opencode', 'sandbox-isolation'],
+  )
   const opencode = /^ {2}verify-opencode:\n(?:(?: {4}.*)?\n)+/m.exec(`${source}\n`)?.[0] ?? ''
-  assert.ok(opencode, 'codex-driver.yml has the verify-opencode job')
+  assert.ok(opencode, 'agent-driver.yml has the verify-opencode job')
   // The stand takes an image that exists already: the job builds the one it looks for.
   const stand = read('packages/agent-drivers/scripts/verify-opencode.mjs')
   const [, image] = /image: \{ type: 'string', default: '([^']+)' \}/.exec(stand) ?? []

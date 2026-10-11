@@ -7,7 +7,7 @@ import {
   type ExecChunk,
   type ExecHandle,
 } from '@repo/domain'
-import { createCodexDriver, createKimiDriver, createOpencodeDriver } from '@repo/agent-drivers'
+import { createOpencodeDriver } from '@repo/agent-drivers'
 import { describe, expect, it, vi } from 'vitest'
 
 import { readTurnOutput, SKIPPED_LINE_MESSAGE } from './turn-output.ts'
@@ -168,34 +168,6 @@ describe('bounded turn output', () => {
   })
 
   it.each([
-    [
-      'Codex: the output of a command in one item.completed line',
-      createCodexDriver({ image }),
-      (output: string) => [
-        { type: 'thread.started', thread_id: '01960000-0000-7000-8000-000000000001' },
-        {
-          type: 'item.completed',
-          item: {
-            id: 'c',
-            type: 'command_execution',
-            command: 'cat wp-content/themes/shop/style.css',
-            aggregated_output: output,
-            exit_code: 0,
-            status: 'completed',
-          },
-        },
-        { type: 'item.completed', item: { id: 'm', type: 'agent_message', text: finalResult } },
-        { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } },
-      ],
-    ],
-    [
-      'Kimi: the output of a tool in one row',
-      createKimiDriver({ image }),
-      (output: string) => [
-        { role: 'tool', tool_call_id: 'c1', content: output },
-        { role: 'assistant', content: finalResult },
-      ],
-    ],
     [
       'OpenCode: the output of a tool in one tool_use row',
       createOpencodeDriver({ image }),

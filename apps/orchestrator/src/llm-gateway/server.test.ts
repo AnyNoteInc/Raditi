@@ -4,8 +4,8 @@ import { createServer, request, type IncomingMessage, type ServerResponse } from
 import { once } from 'node:events'
 import { setTimeout as realDelay } from 'node:timers/promises'
 
-import { badRequest, type LlmBackend } from '@repo/domain'
-import { codexBackend, kimiCodeBackend, zaiCodingBackend } from '@repo/llm-backends'
+import { badRequest, llmJsonLimits, type LlmBackend, type LlmBackendId } from '@repo/domain'
+import { zaiCodingBackend } from '@repo/llm-backends'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { LlmConfig } from '../config/llm-config.ts'
@@ -26,21 +26,19 @@ const turnKey = `sk-rdt-${Buffer.alloc(32, 7).toString('base64url')}`
 const key: GatewayKey = {
   keyId: 'synthetic-key',
   modelId: 'synthetic-model',
-  model: 'gpt-6-sol',
-  reasoningEffort: 'medium',
-  cacheKey: `rdt_${'a'.repeat(32)}`,
-  backendId: 'openai-chatgpt',
+  model: 'glm-5.3',
+  reasoningEffort: 'high',
+  backendId: 'zai-coding',
   providerId: 'synthetic-provider',
   taskId: 'synthetic-task',
   taskAttempt: 0,
-  driverId: 'codex',
+  driverId: 'opencode',
   accountId: 'synthetic-account',
   modelSlug: 'synthetic-model',
   reserveOutputTokens: 100,
   budgetRub: '100.00',
   credentialRef: 'subs/synthetic-account',
   credentialVersion: 1,
-  clientIdentity: { installationId: 'synthetic-installation' },
   maxConcurrentRequests: 2,
   staleWindows: false,
 }
@@ -55,90 +53,7 @@ const makeCall = (estimatedInputTokens = 10, estimatedCacheReadTokens = 0): Gate
   startedAt: new Date(),
 })
 const noUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 }
-const jwt = (claims: unknown) =>
-  `${Buffer.from('{"alg":"RS256"}').toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.synthetic`
-const credential = {
-  v: '1',
-  kind: 'chatgpt_oauth',
-  accessToken: jwt({}),
-  refreshToken: 'synthetic-refresh-secret',
-  idToken: jwt({
-    'https://api.openai.com/auth': {
-      chatgpt_account_id: 'synthetic-account',
-      chatgpt_plan_type: 'plus',
-    },
-  }),
-  chatgptAccountId: 'synthetic-account',
-  accessExpiresAt: null,
-  refreshedAt: new Date().toISOString(),
-}
-const body = { model: key.model, store: false, stream: true, input: 'synthetic prompt' }
 const event = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`
-const delta = event({ type: 'response.output_text.delta', delta: 'abcdef' })
-const completed = (
-  usage: unknown = {
-    input_tokens: 10,
-    input_tokens_details: { cached_tokens: 2 },
-    output_tokens: 3,
-    output_tokens_details: { reasoning_tokens: 1 },
-  },
-) => event({ type: 'response.completed', response: { usage } })
-const kimiKey: GatewayKey = {
-  ...key,
-  backendId: 'kimi-code',
-  model: 'k3-256k',
-  reasoningEffort: 'high',
-  driverId: 'kimi',
-  clientIdentity: { deviceId: 'synthetic-device', deviceName: 'synthetic-device' },
-}
-const successStreams = [
-  {
-    name: 'Codex',
-    profile: key,
-    credential,
-    path: '/codex/responses',
-    userAgent: 'codex_exec/0.159.1',
-    body,
-    stream: delta + completed(),
-    terminal: 'response.completed',
-    usage: '"input_tokens":10',
-  },
-  {
-    name: 'Kimi',
-    profile: kimiKey,
-    credential: { v: '1', kind: 'kimi_api_key', apiKey: 'synthetic-kimi-secret' },
-    path: '/kimi/v1/chat/completions',
-    userAgent: 'kimi-code-cli/2.1.1',
-    body: {
-      model: kimiKey.model,
-      stream: true,
-      messages: [{ role: 'user', content: 'synthetic prompt' }],
-    },
-    stream:
-      event({ choices: [{ delta: { content: 'abcdef' }, finish_reason: null }] }) +
-      event({ choices: [{ delta: {}, finish_reason: 'stop' }] }) +
-      event({
-        choices: [],
-        usage: {
-          prompt_tokens: 10,
-          cached_tokens: 2,
-          completion_tokens: 3,
-          completion_tokens_details: { reasoning_tokens: 1 },
-        },
-      }) +
-      'data: [DONE]\n\n',
-    terminal: '[DONE]',
-    usage: '"prompt_tokens":10',
-  },
-]
-const zaiKey: GatewayKey = {
-  ...key,
-  backendId: 'zai-coding',
-  model: 'glm-5.3',
-  reasoningEffort: 'high',
-  driverId: 'opencode',
-  clientIdentity: {},
-}
 const zaiCredential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-zai-plan-key' }
 const zaiUserAgent = 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14'
 const zaiBody = {
@@ -179,50 +94,9 @@ const done = 'data: [DONE]\n\n'
  */
 const wires = [
   {
-    name: 'Codex',
-    backend: codexBackend,
-    key,
-    credential: credential as Record<string, unknown>,
-    authorization: `Bearer ${credential.accessToken}`,
-    path: '/codex/responses',
-    userAgent: 'codex_exec/0.159.1 (Mac OS 15.0; arm64)',
-    body: body as Record<string, unknown>,
-    // The field of a request that carries the conversation.
-    conversation: 'input',
-    delta,
-    text: (content: string) => event({ type: 'response.output_text.delta', delta: content }),
-    completed,
-    // What the provider sends when a started stream fails for a short-lived reason.
-    overloaded: event({
-      type: 'response.failed',
-      response: { error: { code: 'server_is_overloaded' } },
-    }),
-    // The body of its HTTP 429 «try later», with a text of the provider's own.
-    busy: { error: { code: 'rate_limit_exceeded', message: 'private account id and plan' } },
-    // A request the provider refuses for good: the body of its HTTP 400, the same refusal
-    // inside a stream, the code the role keeps of it and what the sandbox reads in the stream.
-    rejected: {
-      http: { error: { code: 'context_length_exceeded' } } as unknown,
-      stream: event({
-        type: 'response.failed',
-        response: { error: { code: 'context_length_exceeded' } },
-      }),
-      code: 'context_length_exceeded',
-      seen: '"code":"context_length_exceeded"',
-    },
-    terminal: 'response.completed',
-    // A spent budget: this CLI stops on 429, the other on a final 403.
-    budgetStatus: 429,
-    usage: (input: number, cached?: number, output?: number): unknown => ({
-      input_tokens: input,
-      ...(cached === undefined ? {} : { input_tokens_details: { cached_tokens: cached } }),
-      ...(output === undefined ? {} : { output_tokens: output }),
-    }),
-  },
-  {
     name: 'Z.ai',
     backend: zaiCodingBackend,
-    key: zaiKey,
+    key: key,
     credential: zaiCredential as Record<string, unknown>,
     authorization: `Bearer ${zaiCredential.apiKey}`,
     path: '/zai/v4/chat/completions',
@@ -249,6 +123,7 @@ const wires = [
       seen: '"code":"raditi_request_rejected"',
     },
     terminal: '[DONE]',
+    // A spent budget ends the turn of the pinned CLI on a final 403.
     budgetStatus: 403,
     usage: (input: number, cached?: number, output?: number): unknown => ({
       prompt_tokens: input,
@@ -258,22 +133,41 @@ const wires = [
   },
 ]
 type Wire = (typeof wires)[number]
-const codexWire = wires[0]!
+const defaultWire = wires[0]!
 // One finished stream of every adapter, for what the role does at the end of any of them.
 const finishedStreams = [
-  ...successStreams,
   {
     name: 'Z.ai',
-    profile: zaiKey,
+    profile: key,
     credential: zaiCredential,
-    path: wires[1]!.path,
+    path: defaultWire.path,
     userAgent: zaiUserAgent,
     body: zaiBody,
-    stream: wires[1]!.delta + wires[1]!.completed(),
+    stream: defaultWire.delta + defaultWire.completed(),
     terminal: '[DONE]',
     usage: '"prompt_tokens":10',
   },
 ]
+/**
+ * A second adapter with a route, a client and a declared header of its own. What the role does
+ * between two backends — a key of one on the route of the other, a header one of them declares —
+ * is shown on it, whatever the one adapter of the platform is.
+ */
+const otherRoute = '/other/v1/chat/completions'
+const otherUserAgent = 'other-cli/1.0.0'
+const otherBackend: LlmBackend = {
+  ...zaiCodingBackend,
+  id: 'synthetic-other' as LlmBackendId,
+  routes: [{ method: 'POST', path: otherRoute }],
+  clientHeaders: ['user-agent', 'x-other-session'],
+  validateClientHeaders(headers) {
+    if (headers.get('user-agent') !== otherUserAgent) throw badRequest('Invalid client identity')
+    // A rule for the value of a header it declares: the gateway knows none of it.
+    if ((headers.get('x-other-session')?.length ?? 0) > 16)
+      throw badRequest('Invalid client identity')
+  },
+}
+const otherKey: GatewayKey = { ...key, backendId: otherBackend.id }
 const cleanups: Array<() => Promise<void>> = []
 // The fake store closes calls without PostgreSQL; the real store would reject these outcomes.
 const unstorable: GatewayFinish[] = []
@@ -284,7 +178,6 @@ const storable = async (_callId: string, outcome: GatewayFinish) => {
 
 const controlLifecycle = () => ({
   pause: vi.fn().mockReturnValue(null),
-  refresh: vi.fn().mockResolvedValue(null),
   observe: vi.fn().mockResolvedValue(undefined),
   probeAccounts: vi.fn().mockResolvedValue(undefined),
   refreshAccount: vi.fn().mockResolvedValue(undefined),
@@ -302,7 +195,7 @@ async function setup(
   runtime: Partial<
     Pick<LlmGatewayOptions, 'ready' | 'health' | 'metricsToken' | 'lifecycle' | 'backends'>
   > = {},
-  wire: Wire = codexWire,
+  wire: Wire = defaultWire,
 ) {
   const upstream = createServer(handler)
   upstream.listen(0, '127.0.0.1')
@@ -318,10 +211,7 @@ async function setup(
     finish: vi.fn<GatewayStore['finish']>(storable),
     collectLost: vi.fn<GatewayStore['collectLost']>().mockResolvedValue(0),
   }
-  const credentials = {
-    get: vi.fn().mockResolvedValue(wire.credential),
-    versionOf: vi.fn().mockReturnValue(null),
-  }
+  const credentials = { get: vi.fn().mockResolvedValue(wire.credential) }
   const logger = { log: vi.fn(), warn: vi.fn() }
   const egress: StreamingEgress = {
     request: vi.fn<StreamingEgress['request']>(
@@ -375,7 +265,7 @@ async function setup(
   }
   const gateway = createLlmGateway({
     config,
-    backends: [codexBackend, kimiCodeBackend, zaiCodingBackend],
+    backends: [zaiCodingBackend, otherBackend],
     store,
     credentials,
     egress,
@@ -402,7 +292,7 @@ function call(
     headers?: Record<string, string | string[]>
     body?: unknown
   } = {},
-  wire: Wire = codexWire,
+  wire: Wire = defaultWire,
 ) {
   return new Promise<{ status: number; headers: IncomingMessage['headers']; body: string }>(
     (resolve, reject) => {
@@ -448,7 +338,7 @@ function call(
 }
 
 /** A request whose caller decides when to disconnect; errors after that are expected. */
-function stream(gateway: LlmGateway, onData: () => void = () => {}, wire: Wire = codexWire) {
+function stream(gateway: LlmGateway, onData: () => void = () => {}, wire: Wire = defaultWire) {
   const client = request(
     {
       hostname: '127.0.0.1',
@@ -594,9 +484,10 @@ describe('private core pool probe endpoint', () => {
         })
       ).status,
     ).toBe(400)
-    expect((await call(gateway, { path, headers, body: 'x'.repeat(2 * 1024 + 1) })).status).toBe(
-      413,
-    )
+    // Too large is a body the role does not take, like a malformed one: the same final 400.
+    const large = await call(gateway, { path, headers, body: 'x'.repeat(2 * 1024 + 1) })
+    expect(large.status).toBe(400)
+    expect(JSON.parse(large.body).error.code).toBe('raditi_body')
     expect(
       (await call(gateway, { path: `${path}?detail=1`, headers, body: { accountIds: [id] } }))
         .status,
@@ -631,15 +522,8 @@ describe('private core pool probe endpoint', () => {
 
 // The harness of the module under the names the tests below shadow with their adapter's forms.
 const base = { setup, call, stream, makeCall }
-/** Registers nothing: a test of one adapter's own behaviour is not a test of the other. */
-const never = Object.assign((..._args: unknown[]) => {}, {
-  each:
-    (..._table: unknown[]) =>
-    (..._args: unknown[]) => {},
-}) as unknown as typeof it
-
 describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) => {
-  const { key, credential, body, delta, completed, backend } = wire
+  const { key, body, delta, completed, backend } = wire
   const setup = (
     handler: Parameters<typeof base.setup>[0],
     patch: Parameters<typeof base.setup>[1] = {},
@@ -652,17 +536,14 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     ...base.makeCall(...estimates),
     ...key,
   })
-  // What only the OAuth adapter does: token refresh, its headers, the events of its stream. A
-  // test of the platform is not registered here: it takes the forms of its wire and runs on both.
-  const codexIt = wire === codexWire ? it : never
   const success = (req: IncomingMessage, res: ServerResponse) => {
     req.resume()
     res.writeHead(200, {
       'content-type': 'text/event-stream',
-      'x-codex-turn-state': 'synthetic-next',
+      'x-provider-state': 'synthetic-next',
       'retry-after': '5',
       'set-cookie': 'secret=must-not-forward',
-      'x-codex-primary-used-percent': '20',
+      'x-provider-used-percent': '20',
     })
     res.end(delta + completed())
   }
@@ -670,7 +551,6 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
   it('checks an account pause before reserving money or contacting the provider', async () => {
     const lifecycle = {
       pause: vi.fn().mockReturnValue({ reason: 'transient', retryAfterMs: 120_000 }),
-      refresh: vi.fn(),
       observe: vi.fn(),
     }
     const { gateway, store, egress } = await setup(success, {}, { lifecycle })
@@ -682,97 +562,69 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     expect(lifecycle.observe).not.toHaveBeenCalled()
   })
 
-  codexIt(
-    'refreshes a rejected token and retries once within the same journal reservation',
-    async () => {
-      const next = { ...credential, accessToken: jwt({ synthetic_new_token: true }) }
-      const seenTokens: Array<string | undefined> = []
-      const lifecycle = {
-        pause: vi.fn().mockReturnValue(null),
-        refresh: vi.fn().mockResolvedValue(next),
-        observe: vi.fn().mockResolvedValue(undefined),
-      }
-      const { gateway, store } = await setup(
-        (req, res) => {
-          seenTokens.push(req.headers.authorization)
-          if (seenTokens.length === 1) {
-            req.resume()
-            res.writeHead(401, { 'content-type': 'application/json' })
-            res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
-          } else success(req, res)
-        },
-        {},
-        { lifecycle },
-      )
-      const result = await call(gateway)
-      expect(result.status).toBe(200)
-      expect(seenTokens).toEqual([`Bearer ${credential.accessToken}`, `Bearer ${next.accessToken}`])
-      expect(lifecycle.refresh).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'synthetic-call', credentialVersion: 1 }),
-        codexBackend,
-        1,
-      )
-      expect(store.admit).toHaveBeenCalledOnce()
+  const refusedKey = (req: IncomingMessage, res: ServerResponse) => {
+    req.resume()
+    res.writeHead(401, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: { code: '1000' } }))
+  }
+
+  // The pool health learns of a call only here, and it reads what the journal has just written
+  // about it: the count of payment refusals, the windows a spent quota has dropped.
+  it.each([
+    ['a completed call', success, 'completed'],
+    ['a provider refusal', refusedKey, 'failed'],
+  ] as const)(
+    'reports %s to the pool health once, after the journal has it',
+    async (_name, handler, state) => {
+      const lifecycle = controlLifecycle()
+      const { gateway, store } = await setup(handler, {}, { lifecycle })
+      await call(gateway)
       await vi.waitFor(() => expect(lifecycle.observe).toHaveBeenCalledOnce())
       expect(store.finish).toHaveBeenCalledOnce()
-      expect(store.finish).toHaveBeenCalledWith(
-        'synthetic-call',
-        expect.objectContaining({ state: 'completed', estimated: false, billable: true }),
-      )
+      const admission = await store.admit.mock.results[0]!.value
+      const [callId, finish] = store.finish.mock.calls[0]!
+      expect(admission).toMatchObject({ kind: 'admitted', call: { id: callId } })
+      expect(finish.state).toBe(state)
+      expect(lifecycle.observe).toHaveBeenCalledWith(admission.call, finish)
       expect(store.finish.mock.invocationCallOrder[0]).toBeLessThan(
         lifecycle.observe.mock.invocationCallOrder[0]!,
       )
     },
   )
 
-  codexIt.each([null, { ...credential, accessToken: jwt({ synthetic_new_token: true }) }])(
-    'does not loop on a final 401 or charge a rejected generation',
-    async (fresh) => {
-      const lifecycle = {
-        pause: vi.fn().mockReturnValue(null),
-        refresh: vi.fn().mockResolvedValue(fresh),
-        observe: vi.fn().mockResolvedValue(undefined),
-      }
-      const { gateway, store, egress } = await setup(
-        (req, res) => {
-          req.resume()
-          res.writeHead(401, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
-        },
-        {},
-        { lifecycle },
-      )
-      const result = await call(gateway)
-      expect(result.status).toBe(429)
-      expect(lifecycle.refresh).toHaveBeenCalledOnce()
-      expect(egress.request).toHaveBeenCalledTimes(fresh ? 2 : 1)
-      await vi.waitFor(() => expect(store.finish).toHaveBeenCalledOnce())
-      // A provider that refuses the token generates nothing: the attempt ceiling stays intact.
-      expect(store.finish).toHaveBeenCalledWith(
-        'synthetic-call',
-        expect.objectContaining({
-          state: 'failed',
-          usage: noUsage,
-          estimated: false,
-          estimateReason: null,
-          upstreamStatus: 401,
-        }),
-      )
-    },
-  )
+  it('answers and journals the same when the pool health fails to take a finished call', async () => {
+    const plain = await setup(success)
+    const expected = await call(plain.gateway)
+    const lifecycle = controlLifecycle()
+    lifecycle.observe.mockRejectedValue(new Error('private pool error'))
+    const { gateway, store, logger } = await setup(success, {}, { lifecycle })
+    const result = await call(gateway)
+    expect({ status: result.status, body: result.body }).toEqual({
+      status: expected.status,
+      body: expected.body,
+    })
+    await vi.waitFor(() =>
+      expect(JSON.stringify(logger.warn.mock.calls)).toContain('llm_pool_update_failed'),
+    )
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('private pool error')
+    expect(store.finish.mock.calls).toEqual(plain.store.finish.mock.calls)
+    // The journal has the call: nothing closes admission for the next one.
+    expect(gateway.stats().healthy).toBe(true)
+    expect((await call(gateway)).status).toBe(200)
+  })
 
   it.each([
-    [401, 'invalid_api_key'],
-    [403, 'unsupported_country_region_territory'],
-    [429, 'usage_limit_reached'],
-    [429, 'rate_limit_exceeded'],
-    [400, 'context_length_exceeded'],
-    [500, 'server_error'],
-    [503, 'server_is_overloaded'],
+    [401, '1000'],
+    [403, '1113'],
+    [429, '1308'],
+    [429, '1302'],
+    [400, '1261'],
+    [500, '500'],
+    [503, '1305'],
   ])(
-    'records no provider usage when the provider answers HTTP %i (%s) before generating',
+    'asks the provider once and records no provider usage when it answers HTTP %i (%s) before generating',
     async (status, code) => {
-      const { gateway, store } = await setup((req, res) => {
+      const { gateway, store, egress } = await setup((req, res) => {
         req.resume()
         res.writeHead(status, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: { code } }))
@@ -783,6 +635,8 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
       }))
       await call(gateway)
       await vi.waitFor(() => expect(store.finish).toHaveBeenCalledOnce())
+      // A refusal is the provider's answer: the role never repeats the request by itself.
+      expect(egress.request).toHaveBeenCalledOnce()
       expect(store.finish).toHaveBeenCalledWith(
         'synthetic-call',
         expect.objectContaining({
@@ -796,117 +650,7 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     },
   )
 
-  codexIt(
-    'reports the version actually sent when a concurrent rotation overtook admission',
-    async () => {
-      const lifecycle = {
-        pause: vi.fn().mockReturnValue(null),
-        refresh: vi.fn().mockResolvedValue(null),
-        observe: vi.fn().mockResolvedValue(undefined),
-      }
-      const { gateway, credentials } = await setup(
-        (req, res) => {
-          req.resume()
-          res.writeHead(401, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
-        },
-        {},
-        { lifecycle },
-      )
-      credentials.versionOf.mockReturnValue(2)
-      await call(gateway)
-      expect(lifecycle.refresh).toHaveBeenCalledWith(
-        expect.objectContaining({ credentialVersion: 1 }),
-        codexBackend,
-        2,
-      )
-    },
-  )
-
-  codexIt(
-    'never starts token refresh after provider response bytes have reached the client',
-    async () => {
-      const lifecycle = {
-        pause: vi.fn().mockReturnValue(null),
-        refresh: vi.fn(),
-        observe: vi.fn().mockResolvedValue(undefined),
-      }
-      const { gateway, store } = await setup(
-        (req, res) => {
-          req.resume()
-          res.writeHead(200, { 'content-type': 'text/event-stream' })
-          res.end(
-            delta +
-              event({ type: 'response.failed', response: { error: { code: 'invalid_api_key' } } }),
-          )
-        },
-        {},
-        { lifecycle },
-      )
-      expect((await call(gateway)).status).toBe(200)
-      expect(lifecycle.refresh).not.toHaveBeenCalled()
-      await vi.waitFor(() => expect(store.finish).toHaveBeenCalledOnce())
-      expect(store.finish).toHaveBeenCalledWith(
-        'synthetic-call',
-        expect.objectContaining({ billable: false }),
-      )
-    },
-  )
-
-  codexIt(
-    'normalizes the body before atomic admission, injects credentials, streams and persists exact usage',
-    async () => {
-      let upstreamHeaders: IncomingMessage['headers'] = {}
-      let normalized = ''
-      const { gateway, store, logger } = await setup((req, res) => {
-        upstreamHeaders = req.headers
-        req.on('data', (chunk: Buffer) => {
-          normalized += chunk.toString()
-        })
-        req.on('end', () => success(req, res))
-      })
-      const result = await call(gateway, {
-        body: { ...body, service_tier: 'priority', prompt_cache_key: 'untrusted' },
-        headers: { cookie: 'must-not-forward' },
-      })
-      expect(result.status).toBe(200)
-      expect(result.body).toContain('abcdef')
-      expect(result.body).toContain('response.completed')
-      expect(result.headers['x-codex-turn-state']).toBe('synthetic-next')
-      // A pause the provider names on a successful answer is no instruction for the CLI: only a
-      // refusal the gateway builds itself carries one.
-      expect(result.headers['retry-after']).toBeUndefined()
-      expect(result.headers['set-cookie']).toBeUndefined()
-      expect(result.headers['x-codex-primary-used-percent']).toBeUndefined()
-      expect(upstreamHeaders.authorization).toBe(`Bearer ${credential.accessToken}`)
-      expect(upstreamHeaders.cookie).toBeUndefined()
-      expect(JSON.parse(normalized)).toMatchObject({ prompt_cache_key: key.cacheKey })
-      expect(JSON.parse(normalized)).not.toHaveProperty('service_tier')
-      expect(store.lookup).toHaveBeenCalledWith(
-        createHash('sha256').update(turnKey).digest('hex'),
-        '127.0.0.1',
-      )
-      expect(store.admit.mock.calls[0]![0]).toMatchObject({
-        profile: key,
-        backendId: key.backendId,
-      })
-      expect(store.finish).toHaveBeenCalledWith(
-        'synthetic-call',
-        expect.objectContaining({
-          state: 'completed',
-          estimated: false,
-          billable: true,
-          estimateReason: null,
-          usage: { input: 10, cacheRead: 2, cacheWrite: 0, output: 3, reasoning: 1 },
-        }),
-      )
-      expect(JSON.stringify(logger.log.mock.calls)).not.toContain(turnKey)
-      expect(JSON.stringify(logger.log.mock.calls)).not.toContain(credential.accessToken)
-    },
-  )
-
-  // Registered once: the rows name their adapters themselves.
-  codexIt.each(finishedStreams)(
+  it.each(finishedStreams)(
     '$name ignores invalid UTF-8 after a successful terminal in the same chunk',
     async (fixture) => {
       const { gateway, store, credentials } = await setup((req, res) => {
@@ -942,8 +686,7 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     },
   )
 
-  // Registered once: the rows name their adapters themselves.
-  codexIt.each(finishedStreams)(
+  it.each(finishedStreams)(
     '$name completes and closes an upstream that stays open after its terminal',
     async (fixture) => {
       let upstreamClosed = false
@@ -988,10 +731,7 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     const { gateway, store } = await setup(success)
     for (const path of [
       '/v1/responses',
-      '/codex/models',
-      '/codex/%72esponses',
-      '/codex/responses?x=1',
-      'http://evil.test/codex/responses',
+      '/zai/v4/models',
       `${wire.path}?x=1`,
       `${wire.path}/`,
       // The last letter of the route as a percent escape.
@@ -1021,7 +761,7 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
         { [name]: ['first', 'second'] },
       ]),
       // And by the adapter of another route, on that route.
-      ['/kimi/v1/chat/completions', { 'x-msh-platform': ['first', 'second'] }],
+      [otherRoute, { 'x-other-session': ['first', 'second'] }],
     ]
     for (const [path, headers] of duplicated) {
       const result = await call(gateway, { path, headers })
@@ -1030,6 +770,82 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     }
     expect((await call(gateway, { headers: { connection: ' AUTHORIZATION ' } })).status).toBe(401)
     expect(store.lookup).not.toHaveBeenCalled()
+  })
+
+  it('refuses a body beyond the limit with a final 400, by its declared length and by its bytes, before admission', async () => {
+    let reached = 0
+    const { gateway, store } = await setup((req, res) => {
+      reached += 1
+      req.resume()
+      res.end()
+    })
+    const port = (gateway.server.address() as { port: number }).port
+    const refused = (declared: number | undefined, send: Buffer[]) =>
+      new Promise<{ status: number; headers: IncomingMessage['headers']; body: string }>(
+        (resolve, reject) => {
+          const req = request(
+            {
+              hostname: '127.0.0.1',
+              port,
+              path: wire.path,
+              method: 'POST',
+              agent: false,
+              headers: {
+                host: 'llm.local',
+                authorization: `Bearer ${turnKey}`,
+                'content-type': 'application/json',
+                'user-agent': wire.userAgent,
+                ...(declared === undefined ? {} : { 'content-length': String(declared) }),
+              },
+            },
+            (res) => {
+              const chunks: Buffer[] = []
+              res.on('data', (chunk: Buffer) => chunks.push(chunk))
+              res.on('error', reject)
+              res.on('end', () => {
+                resolve({
+                  status: res.statusCode!,
+                  headers: res.headers,
+                  body: Buffer.concat(chunks).toString(),
+                })
+                req.destroy()
+              })
+            },
+          )
+          req.on('error', reject)
+          // Never ended: the answer must not wait for the rest of the body.
+          req.flushHeaders()
+          for (const chunk of send) req.write(chunk)
+        },
+      )
+    const megabyte = Buffer.alloc(1024 * 1024, 0x20)
+    const results = [
+      // The headers alone: one byte more than the role takes is refused before a byte is read.
+      await refused(llmJsonLimits.bytes + 1, []),
+      // No declared length: refused with the first byte past the limit.
+      await refused(undefined, [
+        ...Array.from({ length: llmJsonLimits.bytes / megabyte.length }, () => megabyte),
+        Buffer.from(' '),
+      ]),
+    ]
+    for (const result of results) {
+      // 400, not 413: the pinned CLI reads any 413 as an overflow of its context and answers
+      // it with a request for a compaction instead of the end of the turn.
+      expect(result.status).toBe(400)
+      expect(JSON.parse(result.body)).toEqual({
+        error: {
+          type: 'invalid_request_error',
+          code: 'raditi_body',
+          message: 'Gateway request is not allowed',
+        },
+      })
+      expect(result.headers['retry-after']).toBeUndefined()
+    }
+    // After the key and the client were checked, before admission: no call, a final refusal.
+    expect(store.lookup).toHaveBeenCalledTimes(2)
+    expect(store.refuse.mock.calls.map(([, reason]) => reason)).toEqual(['policy', 'policy'])
+    expect(store.admit).not.toHaveBeenCalled()
+    expect(reached).toBe(0)
   })
 
   it('looks a turn key up only in the format its issuer writes, by the hash its issuer stores', async () => {
@@ -1053,21 +869,17 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     expect(store.lookup).toHaveBeenCalledExactlyOnceWith(turnKeyHash(turnKey), '127.0.0.1')
   })
 
-  codexIt('leaves the value rules of provider headers to the adapter of the key', async () => {
+  it('leaves the value rules of provider headers to the adapter of the key', async () => {
     const { gateway, store, egress } = await setup(success)
-    const lite = await call(gateway, {
-      headers: { 'x-openai-internal-codex-responses-lite': 'false' },
-    })
-    expect(lite.status).toBe(403)
-    expect(JSON.parse(lite.body).error.code).toBe('raditi_client')
-    store.lookup.mockResolvedValue(kimiKey)
+    store.lookup.mockResolvedValue(otherKey)
+    // The header is declared, so the gateway passes it; its value is the adapter's to refuse.
     const oversized = await call(gateway, {
-      path: '/kimi/v1/chat/completions',
-      headers: { 'user-agent': 'kimi-code-cli/2.1.1', 'x-msh-version': 'x'.repeat(257) },
+      path: otherRoute,
+      headers: { 'user-agent': otherUserAgent, 'x-other-session': 'x'.repeat(17) },
     })
     expect(oversized.status).toBe(403)
     expect(JSON.parse(oversized.body).error.code).toBe('raditi_client')
-    expect(store.lookup).toHaveBeenCalledTimes(2)
+    expect(store.lookup).toHaveBeenCalledOnce()
     expect(store.admit).not.toHaveBeenCalled()
     expect(egress.request).not.toHaveBeenCalled()
   })
@@ -1080,9 +892,9 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
       ...backend,
       clientHeaders: ['user-agent', 'x-synthetic-client'],
       responseHeaders: ['x-synthetic-response'],
-      upstream(route, normalized, headers, secret, identity) {
+      upstream(route, normalized, headers, secret) {
         seen.push(headers)
-        const target = backend.upstream(route, normalized, headers, secret, identity)
+        const target = backend.upstream(route, normalized, headers, secret)
         target.headers.set('x-synthetic-client', headers.get('x-synthetic-client') ?? 'missing')
         return target
       },
@@ -1094,7 +906,7 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
         res.writeHead(200, {
           'content-type': 'text/event-stream',
           'x-synthetic-response': 'declared',
-          'x-codex-turn-state': 'not-declared-by-this-adapter',
+          'x-provider-state': 'not-declared-by-this-adapter',
           'x-synthetic-other': 'undeclared',
         })
         res.end(delta + completed())
@@ -1106,9 +918,9 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
       headers: {
         'x-synthetic-client': 'declared',
         'x-synthetic-undeclared': 'dropped',
-        // Declared by the real adapters only: this one does not, so they never reach it.
+        // Declared by another adapter or by none: this one does not, so they never reach it.
         'session-id': 'dropped',
-        'x-msh-platform': 'dropped',
+        'x-other-session': 'dropped',
       },
     })
     expect(result.status).toBe(200)
@@ -1121,7 +933,7 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     expect(provider['x-synthetic-client']).toBe('declared')
     expect(provider['session-id']).toBeUndefined()
     expect(result.headers['x-synthetic-response']).toBe('declared')
-    expect(result.headers['x-codex-turn-state']).toBeUndefined()
+    expect(result.headers['x-provider-state']).toBeUndefined()
     expect(result.headers['x-synthetic-other']).toBeUndefined()
     // A duplicate of a header this adapter declares is refused before the key lookup.
     store.lookup.mockClear()
@@ -1139,8 +951,8 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     // The route of another backend, asked with a client its adapter accepts: the key is what
     // is refused.
     const foreign = await call(gateway, {
-      path: '/kimi/v1/chat/completions',
-      headers: { 'user-agent': 'kimi-code-cli/2.1.1' },
+      path: otherRoute,
+      headers: { 'user-agent': otherUserAgent },
     })
     expect(foreign.status).toBe(403)
     expect(JSON.parse(foreign.body).error.code).toBe('raditi_backend')
@@ -1560,41 +1372,35 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     },
   )
 
-  codexIt(
-    'sanitizes native failed SSE events before forwarding and retains the structural refusal',
-    async () => {
-      const { gateway, store } = await setup((req, res) => {
-        req.resume()
-        res.writeHead(200, { 'content-type': 'text/event-stream' })
-        res.end(
-          delta +
-            event({
-              type: 'response.failed',
-              response: {
-                id: 'private-response-id',
-                error: { code: 'cyber_policy', message: 'private account and prompt' },
-              },
-            }),
-        )
-      })
-      const result = await call(gateway)
-      expect(result.status).toBe(200)
-      expect(result.body).toContain('response.failed')
-      expect(result.body).not.toContain('private account')
-      expect(result.body).not.toContain('private-response-id')
-      expect(store.refuse).toHaveBeenCalledWith(key.keyId, 'policy_flagged')
-      expect(store.finish).toHaveBeenCalledWith(
-        'synthetic-call',
-        expect.objectContaining({
-          state: 'failed',
-          estimated: true,
-          billable: false,
-          estimateReason: 'aborted_platform',
-          usage: expect.objectContaining({ output: 2 }),
-        }),
+  it('scrubs a provider failure inside a started stream, keeps its refusal and estimates the call at the cost of the platform', async () => {
+    const { gateway, store } = await setup((req, res) => {
+      req.resume()
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.end(
+        delta +
+          event({
+            id: 'private-response-id',
+            error: { code: '1301', message: 'private account and prompt' },
+          }),
       )
-    },
-  )
+    })
+    const result = await call(gateway)
+    expect(result.status).toBe(200)
+    expect(result.body).toContain('"code":"raditi_policy_flagged"')
+    expect(result.body).not.toContain('private account')
+    expect(result.body).not.toContain('private-response-id')
+    expect(store.refuse).toHaveBeenCalledWith(key.keyId, 'policy_flagged')
+    expect(store.finish).toHaveBeenCalledWith(
+      'synthetic-call',
+      expect.objectContaining({
+        state: 'failed',
+        estimated: true,
+        billable: false,
+        estimateReason: 'aborted_platform',
+        usage: expect.objectContaining({ output: 2 }),
+      }),
+    )
+  })
 
   it('estimates only delta text for completed streams with missing or invalid usage', async () => {
     let index = 0
@@ -1861,41 +1667,6 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     )
   })
 
-  codexIt(
-    'does not bill a client that leaves a refreshed retry the provider has not answered',
-    async () => {
-      const next = { ...credential, accessToken: jwt({ synthetic_new_token: true }) }
-      const lifecycle = { ...controlLifecycle(), refresh: vi.fn().mockResolvedValue(next) }
-      let attempts = 0
-      const { gateway, store, egress } = await setup(
-        (req, res) => {
-          req.resume()
-          attempts += 1
-          if (attempts > 1) return
-          res.writeHead(401, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }))
-        },
-        {},
-        { lifecycle },
-      )
-      const client = stream(gateway)
-      await vi.waitFor(() => expect(egress.request).toHaveBeenCalledTimes(2))
-      await realDelay(20)
-      client.destroy()
-      await vi.waitFor(() => expect(store.finish).toHaveBeenCalled())
-      // The 401 was the provider's answer to the first request, not to the one the client left.
-      expect(store.finish).toHaveBeenCalledWith(
-        'synthetic-call',
-        expect.objectContaining({
-          state: 'aborted',
-          estimated: true,
-          billable: false,
-          estimateReason: 'aborted_platform',
-        }),
-      )
-    },
-  )
-
   it('cancels upstream on client disconnect and preserves the delta-only client estimate', async () => {
     const { gateway, store } = await setup((req, res) => {
       req.resume()
@@ -2138,10 +1909,10 @@ describe('Z.ai streams the CLI cannot stop on', () => {
       {},
       { backends: [backend] },
     )
-    stand.store.lookup.mockResolvedValue(zaiKey)
+    stand.store.lookup.mockResolvedValue(key)
     stand.store.admit.mockImplementation(async (input) => ({
       kind: 'admitted',
-      call: { ...makeCall(input.estimatedInputTokens), ...zaiKey },
+      call: { ...makeCall(input.estimatedInputTokens), ...key },
     }))
     stand.credentials.get.mockResolvedValue(zaiCredential)
     const persisted = Promise.withResolvers<GatewayFinish>()
@@ -2168,11 +1939,18 @@ describe('Z.ai streams the CLI cannot stop on', () => {
       .map((block) => block.replace(/^event: message\ndata: /, ''))
 
   it('streams a finished answer, with the plan key and nothing of the client but its body', async () => {
-    const { send, provider, persisted, store } = await zai(
+    const { send, provider, persisted, store, logger } = await zai(
       chunk('abcdef') + chunk('', 'stop') + done,
     )
     const result = await send()
     expect(result.status).toBe(200)
+    // The key of the turn is looked up by its hash and the address of its sender, and the call
+    // is admitted under the profile of that key.
+    expect(store.lookup).toHaveBeenCalledWith(
+      createHash('sha256').update(turnKey).digest('hex'),
+      '127.0.0.1',
+    )
+    expect(store.admit.mock.calls[0]![0]).toMatchObject({ profile: key, backendId: key.backendId })
     expect(events(result.body).at(-1)).toBe('[DONE]')
     expect(result.body).toContain('"finish_reason":"stop"')
     // None of the provider's own headers reaches the sandbox, each one checked by itself.
@@ -2200,9 +1978,15 @@ describe('Z.ai streams the CLI cannot stop on', () => {
     expect(await persisted).toMatchObject({
       state: 'completed',
       estimated: false,
+      billable: true,
+      estimateReason: null,
       usage: { input: 19, cacheRead: 3, cacheWrite: 0, output: 6, reasoning: 2 },
     })
     expect(store.refuse).not.toHaveBeenCalled()
+    // Neither key is in what the role logs of the call.
+    const logged = JSON.stringify([logger.log.mock.calls, logger.warn.mock.calls])
+    expect(logged).not.toContain(turnKey)
+    expect(logged).not.toContain(zaiCredential.apiKey)
   })
 
   it.each([
@@ -2239,7 +2023,7 @@ describe('Z.ai streams the CLI cannot stop on', () => {
     expect(result.body).not.toMatch(/sensitive|model_context_window_exceeded|later_value/)
     expect(provider).toHaveLength(1)
     expect(egress.request).toHaveBeenCalledOnce()
-    expect(store.refuse).toHaveBeenCalledExactlyOnceWith(zaiKey.keyId, refusal)
+    expect(store.refuse).toHaveBeenCalledExactlyOnceWith(key.keyId, refusal)
     const finish = await persisted
     expect(finish.state).toBe('failed')
     expect(finish.signal?.kind).toBe(refusal === 'account' ? 'unconfirmed_block' : refusal)
@@ -2321,7 +2105,7 @@ describe('Z.ai streams the CLI cannot stop on', () => {
     }
     const { send, persisted, store } = await zai(chunk('abcdef'), withoutEnd)
     await expect(send()).rejects.toThrow()
-    expect(store.refuse).toHaveBeenCalledExactlyOnceWith(zaiKey.keyId, 'transient')
+    expect(store.refuse).toHaveBeenCalledExactlyOnceWith(key.keyId, 'transient')
     expect((await persisted).state).toBe('failed')
   })
 
@@ -2342,7 +2126,7 @@ describe('Z.ai streams the CLI cannot stop on', () => {
     const broken = await zai(chunk('abcdef'), counting, 'cut')
     await expect(broken.send()).rejects.toThrow()
     expect((await broken.persisted).state).toBe('failed')
-    expect(broken.store.refuse).toHaveBeenCalledExactlyOnceWith(zaiKey.keyId, 'transient')
+    expect(broken.store.refuse).toHaveBeenCalledExactlyOnceWith(key.keyId, 'transient')
     expect(end).not.toHaveBeenCalled()
     // Finished, yet without DONE: asked once, and its null leaves the ending as it was.
     const { send, persisted } = await zai(chunk('abcdef') + chunk('', 'stop'), counting)

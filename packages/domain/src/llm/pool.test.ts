@@ -94,11 +94,9 @@ describe('pickAccount: new tasks', () => {
     ['retire requested', { retireRequestedAt: at(-1) }],
     ['needs login', { health: 'needs_relogin' }],
     ['suspended', { health: 'suspended', healthChangedAt: at(-2_000) }],
-    ['refresh ambiguous', { healthReason: 'refresh_ambiguous' }],
     ['breaker open', { breakerOpenUntil: at(1) }],
     ['cooling', { coolingUntil: at(1) }],
     ['busy', { activeTurns: 1 }],
-    ['other provider', { backend: 'kimi-code' }],
   ] satisfies [string, Partial<PoolAccountSnapshot>][])(
     'skips %s accounts',
     (_label, overrides) => {
@@ -108,9 +106,9 @@ describe('pickAccount: new tasks', () => {
     },
   )
 
-  it('does not treat an alert such as credits_balance as an account suspension', () => {
+  it('goes by the health of an account, not by a reason recorded beside it', () => {
     expect(
-      pickAccount(input({ accounts: [account('a', { healthReason: 'credits_balance' })] })),
+      pickAccount(input({ accounts: [account('a', { healthReason: 'operator_note' })] })),
     ).toEqual(selected())
   })
 
@@ -319,7 +317,6 @@ describe('pickAccount: bound tasks', () => {
     ['retired', { status: 'retired' }],
     ['retire requested', { retireRequestedAt: at(-1) }],
     ['needs login', { health: 'needs_relogin' }],
-    ['refresh ambiguous', { healthReason: 'refresh_ambiguous' }],
   ] satisfies [string, Partial<PoolAccountSnapshot>][])(
     'rebinds an existing %s account',
     (_label, overrides) => {
@@ -414,14 +411,10 @@ describe('pickAccount: bound tasks', () => {
     })
   })
 
-  it('fails closed when the bound account is missing or belongs to a different backend', () => {
+  it('fails closed when the bound account is missing', () => {
     expect(pickAccount(input({ boundAccountId: 'missing' }))).toEqual({
       kind: 'operator',
       reason: 'binding_missing',
-    })
-    expect(pickAccount(bound({ backend: 'kimi-code' }, [account('b')]))).toEqual({
-      kind: 'operator',
-      reason: 'binding_backend_mismatch',
     })
   })
 })
@@ -524,8 +517,6 @@ describe('pickAccount: unknown usage and exhausted pools', () => {
         account('retired', { ...unknown, status: 'retired' }),
         account('retiring', { ...unknown, retireRequestedAt: NOW }),
         account('relogin', { ...unknown, health: 'needs_relogin' }),
-        account('refresh', { ...unknown, healthReason: 'refresh_ambiguous' }),
-        account('foreign', { ...unknown, backend: 'kimi-code' }),
         account('busy', { ...unknown, activeTurns: 1 }),
         account('a', unknown),
       ],
@@ -599,7 +590,6 @@ describe('pickAccount: unknown usage and exhausted pools', () => {
             }),
             account('b', { limitWindows: [window('5h', 100, 30), window('month', 96, 20)] }),
             account('disabled', { enabled: false, coolingUntil: at(1) }),
-            account('foreign', { backend: 'kimi-code', coolingUntil: at(2) }),
           ],
         }),
       ),

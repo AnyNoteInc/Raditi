@@ -86,7 +86,6 @@ function outsideRepository(path) {
 
 const SWITCHES = [
   /^LLM_BACKEND_URL_/,
-  /^LLM_AUTH_URL_/,
   /^LLM_EGRESS_/,
   /^LLM_UPSTREAM_CA_FILE$/,
   /^NODE_TLS_REJECT_UNAUTHORIZED$/,

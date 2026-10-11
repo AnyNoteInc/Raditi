@@ -152,6 +152,17 @@ module.exports = {
       to: { path: '^packages/(trpc|ui)/' },
     },
     {
+      name: 'orchestrator-product-no-testing',
+      comment:
+        'apps/orchestrator/src/testing holds the fakes and the sample ids of tests and stands: no product module imports it.',
+      severity: 'error',
+      from: {
+        path: '^apps/orchestrator/src/',
+        pathNot: ['\\.test\\.ts$', '^apps/orchestrator/src/testing/'],
+      },
+      to: { path: '^apps/orchestrator/src/testing/' },
+    },
+    {
       name: 'runner-no-platform-access',
       comment:
         'The runner role and the local executor it drives never reach PostgreSQL, Redis, Vault, S3, the payment shop or core’s runner API, not even transitively: a sandbox VM holds no platform credentials (spec §8, §19).',

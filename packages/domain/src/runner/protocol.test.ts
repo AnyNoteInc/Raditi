@@ -131,7 +131,9 @@ const sealCommand = () => {
 }
 
 describe('runner commands', () => {
-  it.each(['gigacode', 'sourcecraft'])(
+  // Ids the platform once had: the three shells removed with the move to one shell, and the two
+  // provider ids of theirs, which were never a driver.
+  it.each(['gigacode', 'sourcecraft', 'codex', 'kimi', 'qwen', 'openai-chatgpt', 'kimi-code'])(
     'refuses removed driver %s when preparing or adopting work',
     (driverId) => {
       const commands = [

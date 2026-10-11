@@ -52,7 +52,7 @@ test('the stand is one command over its own scripts', () => {
   assert.doesNotMatch(main, /process\.argv\.slice\(2\)(?!, \{ stand: 'content' \}\))/)
   assert.doesNotMatch(
     scripts.map(read).join('\n'),
-    /--env-file|\.codex|auth\.json|key-file|readFile[^\n]*ZAI/,
+    /--env-file|auth\.json|key-file|readFile[^\n]*ZAI/,
   )
 })
 
@@ -64,24 +64,20 @@ test('every CLI of the stand is a row of one table and runs only what its driver
   ]
   assert.deepEqual(
     rows.map(([, id, name, driver]) => [id, name, driver]),
-    [
-      ['codex', 'Codex', 'createCodexDriver'],
-      ['kimi', 'Kimi', 'createKimiDriver'],
-      ['opencode', 'OpenCode', 'createOpencodeDriver'],
-    ],
+    [['opencode', 'OpenCode', 'createOpencodeDriver']],
   )
-  // What a CLI needs differently is data of its row: the turns do not branch on its name.
-  assert.doesNotMatch(turns, /driver ===|=== '(?:codex|kimi|opencode)'/)
+  // What a CLI needs is data of its row: the turns do not branch on its name.
+  assert.doesNotMatch(turns, /driver ===|=== 'opencode'/)
   assert.match(turns, /await cli\.runPrepared\(\{ \.\.\.files, argv, timeoutMs: TURN_MS \}\)/)
   // No configuration of a CLI is written by the stand: the files are the driver's prepare.
   assert.doesNotMatch(scripts.map(read).join('\n'), /opencode\.json|config\.toml|cliInvocation/)
-  // Codex and Kimi through the stand's proxy, Z.ai without one: one way per role process, so
-  // the one role llm is started anew for the row that needs the other way.
+  // Z.ai without the stand's proxy, as in the product: the one role llm is started on the way
+  // its row names.
   assert.deepEqual(
     [...turns.matchAll(/^ {4}path: '([a-z]+)',$/gm)].map(([, path]) => path),
-    ['proxy', 'proxy', 'direct'],
+    ['direct'],
   )
-  assert.match(main, /const paths = \{ proxy: env, direct: zaiDirectEnvironment\(env, stack\) \}/)
+  assert.match(main, /const paths = \{ direct: zaiDirectEnvironment\(env, stack\) \}/)
   assert.match(turns, /await rolePath\(row\.path\)/)
   assert.equal(main.match(/startWorker\('llm'/g).length, 1)
   // The plan key of Z.ai is imported by the operator command, and its windows are the probe's
@@ -225,15 +221,16 @@ test('the workflow starts on every source the stand runs', () => {
     'infra/dev/llm-verify/stack.mjs',
     'infra/dev/llm-verify/cli.mjs',
     'infra/dev/llm-verify/workers.mjs',
-    'infra/dev/llm-verify/fake-subscriptions.mjs',
     'infra/dev/llm-verify/fake-zai.mjs',
     'infra/dev/site-verify/verify-site.mjs',
   ])
     assert.ok(sources.has(path), `the stand imports ${path}`)
-  // What the shared stack itself mounts and runs: compose, the gateway, the egress proxy,
-  // the Vault bootstrap and the PostgreSQL role script.
+  // What the shared stack itself mounts and runs: compose, the process of the synthetic
+  // provider and MCP, the gateway, the egress proxy, the Vault bootstrap and the PostgreSQL
+  // role script.
   for (const path of [
     'infra/dev/llm-verify/compose.yml',
+    'infra/dev/llm-verify/fake-subscriptions.mjs',
     'infra/dev/site-verify/compose.yml',
     'infra/sandbox/gateway.mjs',
     'infra/sandbox/Dockerfile',
@@ -244,15 +241,18 @@ test('the workflow starts on every source the stand runs', () => {
   ])
     sources.add(path)
   for (const source of sources) assert.ok(starts(source), `${source} does not start the workflow`)
-  for (const name of ['agent-drivers', 'db', 'domain', 'llm-backends', 'storage', 'vault'])
+  for (const name of ['agent-drivers', 'db', 'domain', 'storage', 'vault'])
     assert.ok(packages.has(name), `the stand imports @repo/${name}`)
-  // What the regular role loads from the build besides those.
-  packages.add('site-adapters').add('observability')
+  // What the roles load from the build besides those: the adapters of the role llm among them.
+  packages.add('site-adapters').add('observability').add('llm-backends')
   for (const name of packages)
     assert.ok(starts(`packages/${name}/src/index.ts`), `packages/${name}/** does not start it`)
-  for (const directory of ['mcp', 'llm', 'llm-gateway', 'subscriptions'])
+  for (const directory of ['mcp', 'llm'])
     assert.ok(builds.has(directory), `the stand loads the orchestrator's ${directory}`)
-  for (const directory of builds) assert.ok(starts(`apps/orchestrator/src/${directory}/index.ts`))
+  // The role llm and the operator command of the plan key are processes of their own, started
+  // from the build.
+  for (const directory of [...builds, 'llm-gateway', 'subscriptions'])
+    assert.ok(starts(`apps/orchestrator/src/${directory}/index.ts`))
 })
 
 test('the workflow pulls exactly the images the WordPress fixture refuses to pull', () => {

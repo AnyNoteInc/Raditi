@@ -115,8 +115,21 @@ test('llm gets only its own role, TLS files and private endpoints; health requir
     LLM_EGRESS_CLIENT_KEY_FILE: 'egress-client-key.pem',
   }))
     assert.equal(env[name], `/run/raditi/${path}`)
-  assert.equal(env.LLM_UPSTREAM_CA_FILE, undefined)
-  assert.equal(env.NODE_TLS_REJECT_UNAUTHORIZED, undefined)
+  // Nothing the role refuses in production (apps/orchestrator/src/config/llm-config.ts).
+  for (const name of [
+    'LLM_UPSTREAM_CA_FILE',
+    'NODE_TLS_REJECT_UNAUTHORIZED',
+    'NODE_USE_SYSTEM_CA',
+    'NODE_USE_ENV_PROXY',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
+    'NODE_OPTIONS',
+  ])
+    assert.equal(env[name], undefined, name)
+  assert.deepEqual(
+    Object.keys(env).filter((name) => /^LLM_BACKEND_URL_/.test(name)),
+    [],
+  )
   assert.deepEqual(services.llm.dns, ['127.0.0.1'])
   assert.deepEqual(services.llm.extra_hosts, [`vault.raditi.internal=${example.VAULT_PRIVATE_IP}`])
   assert.equal(services.llm.sysctls['net.ipv6.conf.all.disable_ipv6'], '1')

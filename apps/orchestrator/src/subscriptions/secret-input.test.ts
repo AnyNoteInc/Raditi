@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { constants } from 'node:fs'
 import { chmod, mkdtemp, open, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import type * as FsPromises from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,8 +9,8 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  createOperatorTerminal,
   readSecretFile,
+  readSecretInput,
   readSecretInputFrom,
   writeSecretFile,
   type SecretInputStream,
@@ -264,92 +265,44 @@ describe('bounded secret input', () => {
   })
 })
 
-const deviceUri = 'https://auth.openai.com/codex/device'
-
-describe('operator device-code terminal', () => {
-  it('shows the address its backend was composed with, and only that one', async () => {
+describe('hidden input on the controlling terminal', () => {
+  const withTty = async (value: boolean, body: () => Promise<void>) => {
     const previous = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
-    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true })
-    const file = { writeFile: vi.fn(async () => undefined), close: vi.fn(async () => undefined) }
-    vi.mocked(open).mockResolvedValueOnce(file as unknown as Awaited<ReturnType<typeof open>>)
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value })
     try {
-      const other = 'https://login.provider.test/device'
-      const terminal = await createOperatorTerminal(other)
-      await terminal.showDeviceCode({ verificationUri: other, userCode: 'SYNTHETIC-CODE' })
-      expect(file.writeFile).toHaveBeenCalledExactlyOnceWith(
-        `Откройте ${other} и введите код: SYNTHETIC-CODE\n`,
-        'utf8',
-      )
-      await expect(
-        terminal.showDeviceCode({ verificationUri: deviceUri, userCode: 'CODE' }),
-      ).rejects.toThrow('безопасно')
-      await terminal.close()
-      vi.mocked(open).mockClear()
-      for (const invalid of [
-        'http://login.provider.test/device',
-        'https://user:secret@login.provider.test/device',
-        'https://login.provider.test/device?code=1',
-        'https://login.provider.test/\x1b[31m',
-      ])
-        await expect(createOperatorTerminal(invalid)).rejects.toThrow('безопасно')
-      expect(open).not.toHaveBeenCalled()
+      await body()
     } finally {
       if (previous) Object.defineProperty(process.stdin, 'isTTY', previous)
       else Reflect.deleteProperty(process.stdin, 'isTTY')
     }
+  }
+
+  it('opens only /dev/tty for its prompt, without following a link, and closes it', async () => {
+    const file = { writeFile: vi.fn(async () => undefined), close: vi.fn(async () => undefined) }
+    vi.mocked(open).mockClear()
+    vi.mocked(open).mockResolvedValueOnce(file as unknown as Awaited<ReturnType<typeof open>>)
+    await withTty(true, async () => {
+      // The stdin of a test run has no raw mode: the input is refused once the terminal is open.
+      await expect(readSecretInput('Введите ключ: ')).rejects.toThrow('безопасно')
+    })
+    expect(vi.mocked(open).mock.calls).toEqual([
+      [
+        '/dev/tty',
+        constants.O_WRONLY | constants.O_NOCTTY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      ],
+    ])
+    expect(file.writeFile).not.toHaveBeenCalled()
+    expect(file.close).toHaveBeenCalledOnce()
   })
 
-  it('refuses a noninteractive process before opening a terminal', async () => {
-    const previous = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
-    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: false })
-    try {
-      vi.mocked(open).mockClear()
-      await expect(createOperatorTerminal(deviceUri)).rejects.toThrow('безопасно')
-      expect(open).not.toHaveBeenCalled()
-    } finally {
-      if (previous) Object.defineProperty(process.stdin, 'isTTY', previous)
-      else Reflect.deleteProperty(process.stdin, 'isTTY')
-    }
-  })
-
-  it('writes only to /dev/tty and validates code and URI, with idempotent close', async () => {
-    const previous = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
-    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true })
-    const file = { writeFile: vi.fn(async () => undefined), close: vi.fn(async () => undefined) }
-    vi.mocked(open).mockResolvedValueOnce(file as unknown as Awaited<ReturnType<typeof open>>)
-    try {
-      const terminal = await createOperatorTerminal(deviceUri)
-      expect(vi.mocked(open).mock.lastCall?.[0]).toBe('/dev/tty')
-      await terminal.showDeviceCode({
-        verificationUri: 'https://auth.openai.com/codex/device',
-        userCode: 'SYNTHETIC-CODE',
-      })
-      expect(file.writeFile).toHaveBeenCalledWith(
-        'Откройте https://auth.openai.com/codex/device и введите код: SYNTHETIC-CODE\n',
-        'utf8',
-      )
-      await expect(
-        terminal.showDeviceCode({ verificationUri: 'https://attacker.invalid', userCode: 'CODE' }),
-      ).rejects.toThrow('безопасно')
-      await expect(
-        terminal.showDeviceCode({
-          verificationUri: 'https://auth.openai.com/codex/device',
-          userCode: 'CODE\x1b[31m',
-        }),
-      ).rejects.toThrow('безопасно')
-      expect(file.writeFile).toHaveBeenCalledTimes(1)
-      await terminal.close()
-      await terminal.close()
-      expect(file.close).toHaveBeenCalledTimes(1)
-      await expect(
-        terminal.showDeviceCode({
-          verificationUri: 'https://auth.openai.com/codex/device',
-          userCode: 'CODE',
-        }),
-      ).rejects.toThrow('безопасно')
-    } finally {
-      if (previous) Object.defineProperty(process.stdin, 'isTTY', previous)
-      else Reflect.deleteProperty(process.stdin, 'isTTY')
-    }
+  it('opens no terminal for a noninteractive process', async () => {
+    vi.mocked(open).mockClear()
+    await withTty(false, async () => {
+      const controller = new AbortController()
+      const reading = readSecretInput('Введите ключ: ', controller.signal)
+      controller.abort()
+      await expect(reading).rejects.toThrow('безопасно')
+    })
+    expect(open).not.toHaveBeenCalled()
   })
 })

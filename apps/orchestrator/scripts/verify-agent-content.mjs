@@ -1,12 +1,12 @@
 /* global AbortSignal, console, fetch */
-// The glue stand below the queue: a turn key from the real issue, the real pinned CLIs in the
-// sandbox image, sandbox-gw, the role llm on the synthetic providers, the regular role mcp from
+// The glue stand below the queue: a turn key from the real issue, the real pinned CLI in the
+// sandbox image, sandbox-gw, the role llm on the synthetic provider, the regular role mcp from
 // the build (content profile local, AppRole mcp, the site access from Vault through
-// credential_refs) and the WordPress plugin. Codex and Kimi go through the stand's egress proxy,
-// OpenCode on Z.ai without one, as in the product. Disposable services and synthetic content
-// only: no user env-file, login or subscription is loaded. With --live the provider at the end
-// of the OpenCode path is the real one (verify-agent-content-live.mjs; rules and limits in
-// infra/dev/llm-verify/README.md); --rehearsal runs that flow on the synthetic Z.ai.
+// credential_refs) and the WordPress plugin. The role llm reaches Z.ai without the egress node,
+// as in the product. Disposable services and synthetic content only: no user env-file, login
+// or subscription is loaded. With --live the provider at the end of the path is the real one
+// (verify-agent-content-live.mjs; rules and limits in infra/dev/llm-verify/README.md);
+// --rehearsal runs that flow on the synthetic Z.ai.
 import assert from 'node:assert/strict'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
@@ -20,13 +20,16 @@ import {
   PostgresTaskTurnAssignmentStore,
 } from '@repo/db'
 import { siteAccessPath, workspaceTransitKey } from '@repo/domain'
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
 import { createS3Client, createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore } from '@repo/vault'
 
 import { seedReferenceData } from '../../../packages/db/prisma/seed/apply.ts'
-import { CLI_IMAGE, createCliSession, RUNTIME_IMAGE } from '../../../infra/dev/llm-verify/cli.mjs'
-import { SYNTHETIC_KIMI_KEY } from '../../../infra/dev/llm-verify/fake-subscriptions.mjs'
+import {
+  CLI_IMAGE,
+  createCliSession,
+  GUARD_IMAGE,
+  RUNTIME_IMAGE,
+} from '../../../infra/dev/llm-verify/cli.mjs'
 import {
   SYNTHETIC_ZAI_KEY,
   SYNTHETIC_ZAI_MARKER,
@@ -43,11 +46,6 @@ import {
 import { startWorker } from '../../../infra/dev/llm-verify/workers.mjs'
 import { verifySiteFoundation } from '../../../infra/dev/site-verify/verify-site.mjs'
 import { localVaultRequest } from '../../../infra/vault/bootstrap.mjs'
-import { llmConfigFromEnv } from '../src/config/llm-config.ts'
-import { createControlEgress, createEgressTransport } from '../src/llm-gateway/egress.ts'
-import { SessionSubscriptionLock } from '../src/llm-gateway/session-lock.ts'
-import { authenticateSubscription } from '../src/subscriptions/device-login.ts'
-import { createSubscriptionClientIdentity, SubscriptionLogin } from '../src/subscriptions/login.ts'
 import {
   bridgeGatewayAddress,
   freePort,
@@ -71,12 +69,11 @@ import {
   zaiOperator,
 } from './verify-llm-zai-setup.mjs'
 
-const GUARD_IMAGE = 'raditi-p3verify-guard:b13'
 const ZAI_LABEL = 'synthetic-zai'
 if (process.argv.includes('--help')) {
   console.log(
-    'verify:agent-content [--no-build]: real pinned CLIs (Codex, Kimi, OpenCode) edit a page of a disposable WordPress through the real roles llm and mcp. Synthetic providers and content; no real subscriptions or .env files.\n' +
-      'verify:agent-content --live [--no-build] [--keep=<directory>]: OpenCode alone, on the real provider, with ZAI_API_KEY in the environment; never in CI.\n' +
+    'verify:agent-content [--no-build]: the real pinned OpenCode CLI edits a page of a disposable WordPress through the real roles llm and mcp. A synthetic provider and synthetic content; no real subscriptions or .env files.\n' +
+      'verify:agent-content --live [--no-build] [--keep=<directory>]: the same on the real provider, with ZAI_API_KEY in the environment; never in CI.\n' +
       'verify:agent-content --rehearsal [--no-build]: the live flow on the synthetic provider.\n' +
       'infra/dev/llm-verify/README.md',
   )
@@ -92,13 +89,12 @@ let stage = 'build',
   stack,
   db,
   cli,
-  locks,
   guard,
   s3Client,
   observers
 const workers = []
 // The plan key of the synthetic Z.ai and the text its refusals would carry, with the rest.
-const secretMarkers = new Set([SYNTHETIC_KIMI_KEY, SYNTHETIC_ZAI_KEY, SYNTHETIC_ZAI_MARKER])
+const secretMarkers = new Set([SYNTHETIC_ZAI_KEY, SYNTHETIC_ZAI_MARKER])
 const passed = (name) => {
   checks++
   console.log(`PASS ${name}`)
@@ -215,103 +211,13 @@ async function prepareSite({ wp, compose, url }, pageNames) {
   return { siteId, origin: url, username: 'synthetic_admin', applicationPassword, pages, receipts }
 }
 
-/** Three synthetic accounts through the product's own login paths, as in B13. */
+/** The synthetic account through the product's own login path, as in B13. */
 async function importAccounts(env) {
-  const writer = createVaultSecretStore({
-    addr: stack.vaultAddress,
-    token: stack.tokens['subscriptions-writer'],
-  })
-  locks = new SessionSubscriptionLock(stack.databaseUrl)
-  const login = new SubscriptionLogin({
-    prisma: db,
-    writer,
-    locks,
-    backends: [codexBackend, kimiCodeBackend],
-  })
-  const http = createControlEgress(createEgressTransport(llmConfigFromEnv(env, 'test').egress))
-  const identity = createSubscriptionClientIdentity()
-  const credential = await authenticateSubscription({
-    backend: codexBackend,
-    identity,
-    http,
-    signal: AbortSignal.timeout(20_000),
-    showDeviceCode: async () => {},
-    readSecret: async () => {
-      throw new Error('Unexpected secret input')
-    },
-  })
-  for (const value of [credential.accessToken, credential.refreshToken, credential.idToken])
-    secretMarkers.add(value)
-  const codex = await login.importAccount({
-    backend: codexBackend.id,
-    driverId: 'codex',
-    label: 'synthetic-codex',
-    credential,
-    clientIdentity: identity,
-    maxConcurrentTurns: 1,
-    maxConcurrentRequests: 2,
-  })
   const writerFile = join(stack.directory, 'writer.token')
   await writeFile(writerFile, stack.tokens['subscriptions-writer'], { mode: 0o400 })
-  const imported = await run(
-    process.execPath,
-    [
-      join(repository, 'apps/orchestrator/scripts/subscription-login.mjs'),
-      '--backend',
-      'kimi-code',
-      '--label',
-      'synthetic-kimi',
-      '--plan',
-      'kimi-code',
-      '--vault-token-file',
-      writerFile,
-    ],
-    { input: `${SYNTHETIC_KIMI_KEY}\n`, env },
-  )
-  const kimi = JSON.parse(imported.stdout)
   const models = {}
-  for (const [backend, accountId, slug, providerModelId] of [
-    ['openai-chatgpt', codex.accountId, 'gpt-6-sol-standard', 'gpt-6-sol'],
-    ['kimi-code', kimi.accountId, 'k3-256k-standard', 'k3-256k'],
-  ]) {
-    const provider = await db.llmProvider.update({
-      where: { slug: backend },
-      data: { enabled: true },
-    })
-    const model = await db.llmModel.findFirstOrThrow({ where: { providerId: provider.id, slug } })
-    models[backend] = await db.llmModel.update({
-      where: { id: model.id },
-      data: { enabled: true, providerModelId, reserveOutputTokens: 1024 },
-    })
-    // A synthetic accounting rate: without one the product issues no turn key.
-    await db.llmModelPrice.create({
-      data: {
-        modelId: model.id,
-        effectiveFrom: new Date(Date.now() - 60_000),
-        inputPer1m: '10',
-        outputPer1m: '30',
-        vatRate: '0.22',
-        sourceUrl: 'https://synthetic.invalid/agent-content-rates',
-      },
-    })
-    await db.subscriptionAccount.update({
-      where: { id: accountId },
-      data: {
-        enabled: true,
-        limitsSeenAt: new Date(),
-        headroomPct: '90',
-        limitWindows: [
-          { name: '5h', usedPct: 10, resetsAt: new Date(Date.now() + 3_600_000).toISOString() },
-        ],
-      },
-    })
-  }
-  await db.agentDriver.updateMany({
-    where: { id: { in: ['codex', 'kimi'] } },
-    data: { enabled: true },
-  })
-  // The plan key of Z.ai by the same operator command, on the direct path: that provider needs
-  // no egress node. Its windows are left unwritten: the first issue has the role llm probe them.
+  // The plan key of Z.ai by the operator command, on the direct path: that provider needs no
+  // egress node. Its windows are left unwritten: the first issue has the role llm probe them.
   const planKey = await zaiLogin(zaiOperator(stack, env.LLM_UPSTREAM_CA_FILE), {
     label: ZAI_LABEL,
     writerFile,
@@ -536,12 +442,9 @@ async function stand(site) {
   })
   await connectSite(workspace.id, site, observers.siteOrigin)
   stage = 'separate llm and mcp role processes'
-  // One way to the providers per role process, as in the product: with an egress proxy
-  // everything goes through it, without one the role connects only to the provider that needs
-  // no egress node. The role is one replica behind the one LLM address of sandbox-gw, so the
-  // stand does not run a second one beside it: it starts the role anew when a row of the turns
-  // needs the other way.
-  const paths = { proxy: env, direct: zaiDirectEnvironment(env, stack) }
+  // One way to the provider per role process, as in the product: without an egress proxy the
+  // role connects only to the provider that needs no egress node.
+  const paths = { direct: zaiDirectEnvironment(env, stack) }
   let llm, path
   const rolePath = async (wanted) => {
     if (path === wanted) return
@@ -570,7 +473,7 @@ async function stand(site) {
     await eventually(async () => llm.logs.join('').includes(line), 10_000)
     path = wanted
   }
-  await rolePath(live ? 'direct' : 'proxy')
+  await rolePath('direct')
   // Nothing the stand holds for its own setup may show up in what the platform keeps or logs.
   for (const value of [
     stack.s3.secretKey,
@@ -746,21 +649,12 @@ async function stand(site) {
     live.growth(finished.windows, after)
     await live.keepExchanges()
   } else {
-    // The stand's proxy logs a tunnel by its host when the tunnel ends: Codex and Kimi went
-    // through it, and nothing of the role without a proxy did.
+    // The stand's proxy logs a tunnel by its host when the tunnel ends: the role without a
+    // proxy opened none.
     const tunnels = (await stack.compose(['logs', '--no-color', 'llm-egress'])).stdout
       .split('\n')
       .filter((line) => line.includes('"event":"connect"'))
-    for (const host of ['chatgpt.com:443', 'api.kimi.ai:443'])
-      assert.ok(
-        tunnels.some((line) => line.includes(`"${host}"`)),
-        `No tunnel to ${host} through the proxy`,
-      )
-    assert.equal(
-      tunnels.some((line) => line.includes('"api.z.ai:443"')),
-      false,
-      'Z.ai was reached through the egress proxy',
-    )
+    assert.deepEqual(tunnels, [], 'A provider was reached through the egress proxy')
     // What the synthetic Z.ai got came with the plan key, which only the role llm reads; and
     // the windows of the account, which nobody wrote, are what the role's probe stored at the
     // first issue.
@@ -773,7 +667,7 @@ async function stand(site) {
     const account = await db.subscriptionAccount.findFirstOrThrow({ where: { label: ZAI_LABEL } })
     assert.deepEqual(account.limitWindows.map((window) => window.name).sort(), ['5h', 'week'])
     passed(
-      "Codex and Kimi through the egress proxy, Z.ai on the role's own connection with the plan key; its windows from the role's probe",
+      "Z.ai on the role's own connection with the plan key, nothing through the egress proxy; its windows from the role's probe",
     )
   }
   stage = 'log and database secrecy'
@@ -874,7 +768,6 @@ try {
             .slice()
             .reverse()
             .map((worker) => () => worker.close()),
-          () => locks?.close(),
           () => db?.$disconnect(),
           () => s3Client?.destroy(),
           async () => {
@@ -907,7 +800,7 @@ try {
     )
   else
     console.log(
-      `Agent content verification passed: ${checks} checks; CLI Codex 0.158.0 / Kimi 2.1.1 / OpenCode 1.18.34; synthetic providers, real role llm, regular role mcp under AppRole, real WordPress.`,
+      `Agent content verification passed: ${checks} checks; CLI OpenCode 1.18.34; synthetic provider, real role llm, regular role mcp under AppRole, real WordPress.`,
     )
 } catch (error) {
   const cause = failure ?? error

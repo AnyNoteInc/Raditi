@@ -4,13 +4,12 @@ import { isAbsolute } from 'node:path'
 import { createPrismaClient, dbConfigFromEnv } from '@repo/db'
 import {
   appEnvSchema,
-  clientIdentitySchema,
   isDomainError,
   llmBackendIdSchema,
   type Env,
   type LlmBackend,
 } from '@repo/domain'
-import { codexBackend, kimiCodeBackend, llmBackends, zaiCodingBackend } from '@repo/llm-backends'
+import { llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { createDevSubscriptionToken, createVaultSecretStore } from '@repo/vault'
 import { z } from 'zod'
 
@@ -19,29 +18,15 @@ import { createEgressProbe } from '../llm-gateway/egress-probe.ts'
 import { createControlEgress, createEgressTransport } from '../llm-gateway/egress.ts'
 import { SessionSubscriptionLock } from '../llm-gateway/session-lock.ts'
 import { GatewayTurnCredentials } from '../llm/turn-credentials.ts'
-import {
-  authenticateSubscription,
-  saveIssuedCredential,
-  UnsavedSubscriptionLogin,
-} from './device-login.ts'
-import {
-  createSubscriptionClientIdentity,
-  subscriptionLabelSchema,
-  SubscriptionLogin,
-  SubscriptionLoginError,
-} from './login.ts'
+import { authenticateSubscription } from './key-import.ts'
+import { subscriptionLabelSchema, SubscriptionLogin, SubscriptionLoginError } from './login.ts'
 import {
   retirementLabelSchema,
   retirementRefusals,
   SubscriptionRetirement,
   type SubscriptionRetirementStage,
 } from './retire.ts'
-import {
-  createOperatorTerminal,
-  readSecretFile,
-  readSecretInput,
-  writeSecretFile,
-} from './secret-input.ts'
+import { readSecretFile, readSecretInput, writeSecretFile } from './secret-input.ts'
 
 export type SubscriptionCommand = 'login' | 'retire' | 'token'
 const invalid = () => new Error('Неверные параметры команды подписок. Используйте --help.')
@@ -137,7 +122,7 @@ export function parseSubscriptionArguments(
   }
   if (command === 'login') {
     const parsed = loginSchema.safeParse(value)
-    if (!parsed.success) throw invalid()
+    if (!parsed.success || !imports.has(parsed.data.backend)) throw invalid()
     return { command, help: false, value: parsed.data }
   }
   if (command === 'retire') {
@@ -154,48 +139,37 @@ export function parseSubscriptionArguments(
 // its backends can be retired here. An import also needs the settings below.
 const backends = llmBackends
 // Composition selects an adapter and its configured driver/capacity, without provider branches.
-// A device-flow backend also names the only page the operator terminal may show.
 export interface SubscriptionImport {
   backend: LlmBackend
   driverId: string
   turns: number
   requests: number
-  deviceUri?: string
 }
 const imports = new Map<string, SubscriptionImport>([
-  [
-    codexBackend.id,
-    {
-      backend: codexBackend,
-      driverId: 'codex',
-      turns: 1,
-      requests: 2,
-      deviceUri: 'https://auth.openai.com/codex/device',
-    },
-  ],
-  [kimiCodeBackend.id, { backend: kimiCodeBackend, driverId: 'kimi', turns: 2, requests: 3 }],
   // One turn at a time until the plan's real concurrency is measured (owner's question П4).
   [zaiCodingBackend.id, { backend: zaiCodingBackend, driverId: 'opencode', turns: 1, requests: 2 }],
 ])
-/** Every backend `--backend` accepts has an entry: a login never meets an id without settings. */
+/** `--backend` accepts exactly these ids: a login never meets an id without settings. */
 export const subscriptionImports: ReadonlyMap<string, SubscriptionImport> = imports
+
+/**
+ * Whether a login to the backend needs the egress node: its adapter does not say of every
+ * origin that the role may connect to it itself. Without a configured node such a login is
+ * refused before the operator is asked for a key the command could not check.
+ */
+export const loginNeedsEgressNode = (backend: Pick<LlmBackend, 'egress'>): boolean =>
+  !backend.egress.every((origin) => origin.direct === true)
 
 export function subscriptionHelp(command: SubscriptionCommand): string {
   // Built from the settings above: a backend added there is named here.
-  const entries = [...imports.values()]
-  const ids = (list: SubscriptionImport[]) => list.map((entry) => entry.backend.id).join(', ')
-  const keyed = entries.filter((entry) => entry.backend.importCredential)
-  const device = entries.filter((entry) => entry.backend.login)
-  const input = [
-    keyed.length ? `Ключ подписки (${ids(keyed)}) поступает через stdin или скрытый ввод.` : '',
-    device.length ? `Код входа (${ids(device)}) выводится только в интерактивный терминал.` : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
+  const keyed = [...imports.values()]
+    .filter((entry) => entry.backend.importCredential)
+    .map((entry) => entry.backend.id)
+  const input = `Ключ подписки (${keyed.join(', ')}) поступает через stdin или скрытый ввод.`
   const usage = {
     login: `subscriptions:login -- --backend ${[...imports.keys()].join('|')} --label <имя> [--plan <план>] [--paid-until YYYY-MM-DD] --vault-token-file <абсолютный путь>\nПовторный вход: --backend <оболочка> --relogin <UUID> --vault-token-file <путь>.\n${input}`,
     retire:
-      'subscriptions:retire -- --account <UUID> --label <метка> [--compromised --turns-token-file <путь>]\nОкончательное удаление: --account <UUID> --label <метка> --finalize --vault-token-file <путь> [--console-revoked].\n--console-revoked подтверждает ручной отзыв ключа в консоли провайдера.\nОтмена запроса, пока токены не отозваны: --account <UUID> --cancel.',
+      'subscriptions:retire -- --account <UUID> --label <метка> [--compromised --turns-token-file <путь>]\nОкончательное удаление: --account <UUID> --label <метка> --finalize --vault-token-file <путь> [--console-revoked].\n--console-revoked подтверждает ручной отзыв ключа в консоли провайдера.\nОтмена запроса, пока ключ не отозван: --account <UUID> --cancel.',
     token:
       'subscriptions:token -- --policy writer|admin --out <абсолютный путь>\nТокен dev-root поступает через stdin или скрытый ввод. Новый файл создаётся с правами 0400.\nТолько development/test и числовой loopback VAULT_ADDR; срок — 15 минут.',
   }
@@ -206,7 +180,6 @@ const stages: Record<SubscriptionRetirementStage, string> = {
   draining: 'Вывод запрошен. Ожидается завершение действующих ходов и вызовов.',
   turn_revocation_pending:
     'Допуск закрыт. Отзыв ключей хода ещё не завершён; повторите с --turns-token-file.',
-  provider_revocation_pending: 'Допуск закрыт. Роль llm должна завершить отзыв токенов провайдера.',
   console_revocation_required:
     'Допуск закрыт. Отзовите ключ в консоли провайдера, затем выполните --finalize --console-revoked.',
   ready_for_finalization:
@@ -218,12 +191,10 @@ const stages: Record<SubscriptionRetirementStage, string> = {
 
 const retirementTexts: Record<string, string> = {
   [retirementRefusals.busy]:
-    'Аккаунт сейчас обновляет другой процесс (обновление токена, вход или вывод). Повторите команду позже.',
-  [retirementRefusals.automaticRevocation]:
-    'Для этого аккаунта --console-revoked не подходит: токены отзывает роль llm.',
+    'Аккаунт сейчас обновляет другой процесс (вход или вывод). Повторите команду позже.',
   [retirementRefusals.notRequested]:
     'Вывод аккаунта не запрошен. Сначала выполните subscriptions:retire без --finalize.',
-  [retirementRefusals.unconfirmed]: 'Отзыв токенов у провайдера ещё не подтверждён.',
+  [retirementRefusals.unconfirmed]: 'Отзыв ключа у провайдера ещё не подтверждён.',
   [retirementRefusals.changed]: 'Состояние вывода изменилось во время команды. Повторите её.',
   [retirementRefusals.notDrained]:
     'Ходы и вызовы аккаунта ещё не завершились. Повторите команду позже.',
@@ -235,30 +206,23 @@ const retirementTexts: Record<string, string> = {
     'Ссылка на учётные данные не совпадает с аккаунтом. Удаление остановлено, нужна ручная проверка.',
   [retirementRefusals.labelMismatch]: 'Метка не совпадает с аккаунтом. Проверьте UUID и --label.',
   [retirementRefusals.revoked]:
-    'Токены аккаунта уже отозваны, вывод нельзя отменить. Чтобы вернуть подписку в пул, импортируйте её заново.',
+    'Ключ аккаунта уже отозван, вывод нельзя отменить. Чтобы вернуть подписку в пул, импортируйте её заново.',
 }
 
 /** Only fixed texts reach the operator; anything else may carry a credential or a response. */
 export function operatorFailure(error: unknown): Error {
-  let revocation = ''
-  if (error instanceof UnsavedSubscriptionLogin) {
-    revocation = error.revoked
-      ? ' Выданный провайдером вход отозван.'
-      : ' Отозвать выданный провайдером вход не удалось: завершите его в настройках безопасности аккаунта у провайдера.'
-    error = error.failure
-  }
-  if (error instanceof OperatorCommandError) return new Error(`${error.message}${revocation}`)
+  if (error instanceof OperatorCommandError) return new Error(error.message)
   if (error instanceof SubscriptionLoginError) {
     const accountHint = error.accountId ? ` Аккаунт: ${error.accountId}.` : ''
     return new Error(
-      `Вход не завершён (${error.code}).${accountHint} Для незавершённого импорта повторите вход с --relogin.${revocation}`,
+      `Вход не завершён (${error.code}).${accountHint} Для незавершённого импорта повторите вход с --relogin.`,
     )
   }
   const known = isDomainError(error) ? retirementTexts[error.message] : undefined
-  if (known) return new Error(`${known}${revocation}`)
+  if (known) return new Error(known)
   // Do not rethrow driver, database, Vault or JSON errors, which may expose private input.
   return new Error(
-    `Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.${revocation}`,
+    'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.',
   )
 }
 
@@ -324,7 +288,6 @@ export async function runSubscriptionCommand(
     const config = configuration(() => dbConfigFromEnv(env))
     const prisma = createPrismaClient({ ...config, log: [] })
     const locks = new SessionSubscriptionLock(config.databaseUrl)
-    let terminal: Awaited<ReturnType<typeof createOperatorTerminal>> | undefined
     try {
       if (options.command === 'login') {
         const value = options.value
@@ -335,76 +298,54 @@ export async function runSubscriptionCommand(
         const egress = configuration(() => egressConfigFromEnv(env, appEnv))
         // Without the egress node the command reaches only a provider whose adapter says it
         // needs none; for any other the node stays the only way, as for the role.
-        if (egress.proxyUrl === null && !entry.backend.egress.every((origin) => origin.direct))
+        if (egress.proxyUrl === null && loginNeedsEgressNode(entry.backend))
           throw new OperatorCommandError(
             'Для входа требуется настроенный канал mTLS через узел выхода.',
           )
-        // Fail before opening a device flow or accepting a subscription key on a broken channel.
+        // Fail before accepting a subscription key on a broken channel.
         if (!(await channelHealthy(egress, controller.signal)))
           throw new OperatorCommandError('Проверка канала выхода не прошла.')
         const vaultToken = await readSecretFile(value.vaultTokenFile)
         const writer = createVaultSecretStore({ addr: address, token: vaultToken })
         const login = new SubscriptionLogin({ prisma, writer, locks, backends })
-        let identity = createSubscriptionClientIdentity()
         if (value.relogin) {
           const existing = await prisma.subscriptionAccount.findUnique({
             where: { id: value.relogin },
             include: { provider: true },
           })
-          const stable = clientIdentitySchema.safeParse(existing?.clientIdentity)
           if (
             !existing ||
             existing.provider.slug !== entry.backend.id ||
             existing.retireRequestedAt ||
-            existing.status === 'retired' ||
-            !stable.success
+            existing.status === 'retired'
           )
             throw new OperatorCommandError('Аккаунт недоступен для повторного входа.')
-          identity = stable.data
         }
-        // A dead writer token or a taken label is refused before the provider issues anything.
+        // A dead writer token or a taken label is refused before the key is asked for.
         await login.preflight({
           backend: value.backend,
           ...(value.relogin ? {} : { label: value.label! }),
         })
-        if (entry.backend.login) {
-          if (!entry.deviceUri)
-            throw new OperatorCommandError('Для этой оболочки не задан адрес страницы входа.')
-          terminal = await createOperatorTerminal(entry.deviceUri)
-        }
-        const http = createControlEgress(createEgressTransport(egress))
         const credential = await authenticateSubscription({
           backend: entry.backend,
-          identity,
-          http,
+          http: createControlEgress(createEgressTransport(egress)),
           signal: controller.signal,
           readSecret: () => readSecretInput('Ключ подписки: ', controller.signal),
-          showDeviceCode: async (state) => {
-            if (!terminal) throw new Error('Интерактивный терминал недоступен.')
-            await terminal.showDeviceCode(state)
-          },
         })
-        const result = await saveIssuedCredential({
-          backend: entry.backend,
-          credential,
-          http,
-          save: async () => {
-            if (controller.signal.aborted) throw new OperatorCommandError('Операция прервана.')
-            return value.relogin
-              ? login.relogin({ backend: value.backend, accountId: value.relogin, credential })
-              : login.importAccount({
-                  backend: value.backend,
-                  driverId: entry.driverId,
-                  credential,
-                  label: value.label!,
-                  plan: value.plan,
-                  paidUntil: value.paidUntil,
-                  clientIdentity: identity,
-                  maxConcurrentTurns: entry.turns,
-                  maxConcurrentRequests: entry.requests,
-                })
-          },
-        })
+        // A key that was not saved stays with its owner: nothing was issued for the platform.
+        if (controller.signal.aborted) throw new OperatorCommandError('Операция прервана.')
+        const result = value.relogin
+          ? await login.relogin({ backend: value.backend, accountId: value.relogin, credential })
+          : await login.importAccount({
+              backend: value.backend,
+              driverId: entry.driverId,
+              credential,
+              label: value.label!,
+              plan: value.plan,
+              paidUntil: value.paidUntil,
+              maxConcurrentTurns: entry.turns,
+              maxConcurrentRequests: entry.requests,
+            })
         process.stdout.write(
           JSON.stringify({
             accountId: result.accountId,
@@ -461,7 +402,6 @@ export async function runSubscriptionCommand(
         process.stdout.write(`${stages[result.stage]}\n`)
       }
     } finally {
-      await terminal?.close().catch(() => undefined)
       await locks.close().catch(() => undefined)
       await prisma.$disconnect().catch(() => undefined)
     }

@@ -8,18 +8,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { agentDriverIds, badRequest, conflict, llmGatewayUnavailable } from '@repo/domain'
+import { agentDriverIds, conflict, llmGatewayUnavailable } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  loginNeedsEgressNode,
   operatorFailure,
   parseSubscriptionArguments,
   subscriptionHelp,
   subscriptionImports,
   type SubscriptionCommand,
+  type SubscriptionImport,
 } from './cli.ts'
-import { UnsavedSubscriptionLogin } from './device-login.ts'
 import { SubscriptionLoginError } from './login.ts'
 import { retirementRefusals } from './retire.ts'
 
@@ -142,30 +143,63 @@ describe('operator subscription commands', () => {
     const entry = subscriptionImports.get('zai-coding')!
     expect(entry.backend.id).toBe('zai-coding')
     expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
-    // A key from stdin, no device page.
+    // A key from stdin.
     expect(entry.backend.importCredential).toBeTypeOf('function')
-    expect(entry.backend.login).toBeUndefined()
-    expect(entry.deviceUri).toBeUndefined()
   })
-  it('has import settings for every backend the platform registers', () => {
-    // `--backend` accepts every registered id: one without settings would fail after parsing.
+  it('has import settings for every backend the platform registers, each with a way in', () => {
     expect([...subscriptionImports.keys()]).toEqual(llmBackends.map((backend) => backend.id))
     for (const [id, entry] of subscriptionImports) {
       expect(entry.backend.id).toBe(id)
       expect(agentDriverIds).toContain(entry.driverId)
-      expect(Boolean(entry.deviceUri)).toBe(entry.backend.login !== undefined)
-      expect(
-        entry.backend.login !== undefined || entry.backend.importCredential !== undefined,
-      ).toBe(true)
+      // The key of a subscription from stdin is the one way in.
+      expect(entry.backend.importCredential).toBeTypeOf('function')
     }
+  })
+  it('accepts no backend without import settings, whatever the list of ids says', () => {
+    const login = (backend: string) => () =>
+      parseSubscriptionArguments('login', [
+        '--backend',
+        backend,
+        '--label',
+        'account-a',
+        '--plan',
+        'lite',
+        '--vault-token-file',
+        '/tmp/writer',
+      ])
+    expect(login('synthetic-backend')).toThrow('Неверные параметры команды подписок')
+    // The ids of the removed providers are refused like any id the platform never had.
+    for (const removed of ['openai-chatgpt', 'kimi-code'])
+      expect(login(removed)).toThrow('Неверные параметры команды подписок')
+    // An id of the port's list that has no settings would otherwise fail after parsing. Every
+    // id of the list has them, so the settings of one are taken away for the length of the check.
+    const settings = subscriptionImports as Map<string, SubscriptionImport>
+    const [id, entry] = [...settings][0]!
+    expect(login(id)).not.toThrow()
+    settings.delete(id)
+    try {
+      expect(login(id)).toThrow('Неверные параметры команды подписок')
+    } finally {
+      settings.set(id, entry)
+    }
+    expect(login(id)).not.toThrow()
   })
   it('builds the help of login from the import settings', () => {
     const help = subscriptionHelp('login')
-    expect(help).toContain('--backend openai-chatgpt|kimi-code|zai-coding ')
-    expect(help).toContain(
-      'Ключ подписки (kimi-code, zai-coding) поступает через stdin или скрытый ввод.',
-    )
-    expect(help).toContain('Код входа (openai-chatgpt) выводится только в интерактивный терминал.')
+    expect(help).toContain('--backend zai-coding ')
+    expect(help).toContain('Ключ подписки (zai-coding) поступает через stdin или скрытый ввод.')
+  })
+  it('asks for the egress node unless the adapter says of every origin that it needs none', () => {
+    const origin = {
+      origin: 'https://provider.invalid',
+      overrideEnv: 'LLM_BACKEND_URL_SYNTHETIC',
+      requests: ['POST https://provider.invalid/v1/generate'],
+    }
+    expect(loginNeedsEgressNode(subscriptionImports.get('zai-coding')!.backend)).toBe(false)
+    expect(loginNeedsEgressNode({ egress: [origin] })).toBe(true)
+    expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: false }] })).toBe(true)
+    expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: true }, origin] })).toBe(true)
+    expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: true }] })).toBe(false)
   })
   it('accepts a fresh import and the separate relogin form', () => {
     expect(
@@ -317,27 +351,19 @@ describe('operator subscription commands', () => {
     expect(operatorFailure(conflict(retirementRefusals.notRequested)).message).toBe(
       'Вывод аккаунта не запрошен. Сначала выполните subscriptions:retire без --finalize.',
     )
-    expect(operatorFailure(badRequest(retirementRefusals.automaticRevocation)).message).toContain(
-      '--console-revoked не подходит',
-    )
     for (const message of Object.values(retirementRefusals))
       expect(operatorFailure(conflict(message)).message).toMatch(/^[А-Я]/)
     for (const hidden of [
-      new Error('refresh_token=private-token'),
+      new Error('api_key=private-token'),
       conflict('private-unlisted refusal'),
       llmGatewayUnavailable(),
     ])
       expect(operatorFailure(hidden).message).toBe(
         'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.',
       )
-    expect(
-      operatorFailure(
-        new UnsavedSubscriptionLogin(new SubscriptionLoginError('account_conflict'), true),
-      ).message,
-    ).toMatch(/^Вход не завершён \(account_conflict\)\..* Выданный провайдером вход отозван\.$/)
-    expect(
-      operatorFailure(new UnsavedSubscriptionLogin(new Error('private-vault-body'), false)).message,
-    ).toMatch(/^Команда подписок не завершена\..*Отозвать выданный провайдером вход не удалось/)
+    expect(operatorFailure(new SubscriptionLoginError('account_conflict', account)).message).toBe(
+      `Вход не завершён (account_conflict). Аккаунт: ${account}. Для незавершённого импорта повторите вход с --relogin.`,
+    )
   })
   it('starts a production login with the documented environment and reports why it stopped', async () => {
     const env = {
@@ -371,7 +397,7 @@ describe('operator subscription commands', () => {
     expect(invalid.stderr).toContain('LLM_EGRESS_PROXY_URL')
     expect(invalid.stderr).not.toContain('private-')
   })
-  it('logs in without the egress node only where the adapter of the backend needs none', async () => {
+  it('logs in without the egress node to a backend whose adapter needs none', async () => {
     const env = {
       APP_ENV: 'production',
       VAULT_ADDR: 'https://127.0.0.1:1',
@@ -387,12 +413,6 @@ describe('operator subscription commands', () => {
       '--vault-token-file',
       '/nonexistent/raditi/writer.token',
     ]
-    // Their providers are reached through the node alone: nothing is asked of the operator.
-    for (const backend of ['kimi-code', 'openai-chatgpt']) {
-      const refused = await command('login', args(backend), { env })
-      expect(refused.code).toBe(1)
-      expect(refused.stderr).toBe('Для входа требуется настроенный канал mTLS через узел выхода.\n')
-    }
     // Z.ai needs none: the command goes on to its next step, the writer token it cannot read.
     // That failure has no text of its own, and every refusal before it has one: the exact
     // general text shows that neither the environment, nor the rule, nor the channel stopped

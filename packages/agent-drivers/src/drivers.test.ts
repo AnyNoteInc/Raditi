@@ -1,59 +1,28 @@
-import type { AgentCapabilities, AgentDriver, AgentDriverId } from '@repo/domain'
+import type { AgentCapabilities } from '@repo/domain'
 import { agentDriverIds, SANDBOX_AGENT_HOME } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
-import { createCodexDriver } from './codex.ts'
-import { createKimiDriver } from './kimi.ts'
 import { createOpencodeDriver } from './opencode.ts'
-import { createQwenDriver } from './qwen.ts'
 
 const config = { image: `registry.local:3300/raditi/sbx-wordpress@sha256:${'a'.repeat(64)}` }
-
-const expected: Array<{
-  create: (c: typeof config) => AgentDriver
-  id: AgentDriverId
-  task: string
-  capabilities: AgentCapabilities
-  /** Credential and config files under the driver home that must never be snapshotted. */
-  private: string[]
-}> = [
-  {
-    create: createCodexDriver,
-    id: 'codex',
-    task: 'P4',
-    capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: true, images: true },
-    private: ['auth.json', 'config.toml', 'log/codex-tui.log'],
-  },
-  {
-    create: createKimiDriver,
-    id: 'kimi',
-    task: 'P5',
-    capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
-    private: ['credentials/kimi.json', 'config.toml', 'logs/kimi.log', 'bin/rg'],
-  },
-  {
-    create: createQwenDriver,
-    id: 'qwen',
-    task: 'P5',
-    capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
-    private: ['.qwen/settings.json', '.qwen/oauth_creds.json', '.qwen/.env'],
-  },
-  {
-    create: createOpencodeDriver,
-    id: 'opencode',
-    task: 'G3',
-    capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
-    private: [
-      '.local/share/opencode/auth.json',
-      '.local/share/opencode/log/opencode.log',
-      '.local/share/opencode/snapshot/x',
-      '.config/opencode/opencode.json',
-      '.config/opencode/AGENTS.md',
-      'io-config/opencode/opencode.json',
-      'session-export.json',
-      'run.mjs',
-      '.cache/opencode/bin/rg',
-    ],
-  },
+const id = 'opencode'
+const capabilities: AgentCapabilities = {
+  resume: true,
+  jsonEvents: true,
+  outputSchema: false,
+  mcp: true,
+  images: false,
+}
+/** Credential and config files under the driver home that must never be snapshotted. */
+const secrets = [
+  '.local/share/opencode/auth.json',
+  '.local/share/opencode/log/opencode.log',
+  '.local/share/opencode/snapshot/x',
+  '.config/opencode/opencode.json',
+  '.config/opencode/AGENTS.md',
+  'io-config/opencode/opencode.json',
+  'session-export.json',
+  'run.mjs',
+  '.cache/opencode/bin/rg',
 ]
 
 const run = {
@@ -76,8 +45,8 @@ const run = {
   secrets: [],
 }
 
-describe.each(expected)('$id driver', ({ create, id, task, capabilities, private: secrets }) => {
-  const driver = create(config)
+describe('opencode driver', () => {
+  const driver = createOpencodeDriver(config)
 
   it('matches the port: id, image and capabilities', () => {
     expect(agentDriverIds).toContain(driver.id)
@@ -105,20 +74,7 @@ describe.each(expected)('$id driver', ({ create, id, task, capabilities, private
     }
   })
 
-  if (id === 'qwen')
-    it(`leaves the CLI-specific parts to ${task}`, async () => {
-      await expect(driver.prepare(run.context)).rejects.toMatchObject({
-        code: 'NOT_IMPLEMENTED',
-        message: expect.stringContaining(`${id}.prepare (${task})`),
-      })
-      expect(() => driver.command(run, { prompt: 'p', attachments: [] })).toThrow(
-        `${id}.command (${task})`,
-      )
-      expect(driver.parseEvent('{}')).toEqual([])
-      expect(driver.extractResult([], null)).toBeNull()
-    })
-
   it('rejects an empty image', () => {
-    expect(() => create({ image: '' })).toThrow(/Invalid agent driver configuration/)
+    expect(() => createOpencodeDriver({ image: '' })).toThrow(/Invalid agent driver configuration/)
   })
 })

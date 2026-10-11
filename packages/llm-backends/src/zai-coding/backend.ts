@@ -107,7 +107,6 @@ const emptyProbe = (status: ProbeResult['status']): ProbeResult => ({
   status,
   windows: null,
   plan: null,
-  creditsBalance: null,
 })
 const amount = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -166,7 +165,7 @@ function parseQuota(data: unknown, offer: ZaiOffer): ProbeResult {
   }
   // The level of the plan (`data.level`) is not the plan of the account's row: an operator
   // names that at import, and a probe that named another one would suspend the account.
-  return { status: 'ok', windows, plan: null, creditsBalance: null }
+  return { status: 'ok', windows, plan: null }
 }
 
 /** Every adapter of a Z.ai offer: the same protocol, the description's addresses and windows. */
@@ -184,11 +183,7 @@ export function createZaiBackend(offer: ZaiOffer): LlmBackend {
    * throttling, an unrecognized rejection) is therefore a rejection, which the caller ignores
    * and reports as a failed probe.
    */
-  async function probe(
-    credential: SubscriptionCredential,
-    _identity: unknown,
-    http: EgressHttp,
-  ): Promise<ProbeResult> {
+  async function probe(credential: SubscriptionCredential, http: EgressHttp): Promise<ProbeResult> {
     const headers = new Headers({
       authorization: `Bearer ${keyOf(credential)}`,
       accept: 'application/json',
@@ -263,8 +258,6 @@ export function createZaiBackend(offer: ZaiOffer): LlmBackend {
     },
     usageMeter: () => createChatCompletionsUsageMeter(createZaiStreamInspector),
     classify: classifyZai,
-    // Responses of Z.ai carry no limit: the windows come from the quota request alone.
-    windowsFromHeaders: () => null,
     refusal: zaiRefusal,
     probe,
   }

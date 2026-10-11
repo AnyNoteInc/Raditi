@@ -12,7 +12,7 @@ interface LockedPackage {
   hasInstallScript?: boolean
 }
 
-/** The sandbox image installs the agent CLIs from this lockfile (infra/sandbox/Dockerfile). */
+/** The sandbox image installs the agent CLI from this lockfile (infra/sandbox/Dockerfile). */
 describe('agent CLI lockfile', () => {
   const manifest = JSON.parse(read('../cli/package.json')) as {
     dependencies: Record<string, string>
@@ -26,11 +26,7 @@ describe('agent CLI lockfile', () => {
     .find((stage) => stage.startsWith('base AS runtime\n'))!
 
   it('pins every CLI to an exact version', () => {
-    expect(Object.keys(manifest.dependencies).sort()).toEqual([
-      '@moonshot-ai/kimi-code',
-      '@openai/codex',
-      'opencode-ai',
-    ])
+    expect(Object.keys(manifest.dependencies)).toEqual(['opencode-ai'])
     for (const [name, version] of Object.entries(manifest.dependencies)) {
       expect(version).toMatch(/^\d+\.\d+\.\d+$/)
       expect(lock.packages[`node_modules/${name}`]?.version).toBe(version)

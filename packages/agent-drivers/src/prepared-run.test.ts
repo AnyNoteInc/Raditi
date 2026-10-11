@@ -82,31 +82,14 @@ describe('prepared run paths', () => {
     createAgentDrivers({
       image: `registry.local:3300/raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`,
     }),
-  )(
-    '$id.prepare output, once implemented, never writes into /workspace or exposes credentials',
-    async (driver) => {
-      let prepared: PreparedRun
-      try {
-        // Each CLI has its own gateway path and its own reasoning profiles.
-        const llm = {
-          codex: { baseUrl: 'http://sandbox-gw:8080/codex', reasoningEffort: 'medium' },
-          kimi: { baseUrl: 'http://sandbox-gw:8080/kimi/v1', reasoningEffort: 'low' },
-        }[driver.id as string]
-        prepared = await driver.prepare(
-          llm ? { ...context, llm: { ...context.llm, ...llm } } : context,
-        )
-      } catch (error) {
-        // P4/P5 implement prepare; until then the schema tests above carry the guarantee.
-        expect(error).toMatchObject({ code: 'NOT_IMPLEMENTED' })
-        return
-      }
-      expect(preparedRunSchema.parse(prepared)).toBeTruthy()
-      for (const file of [...prepared.files, ...prepared.secrets])
-        expect(file.path.startsWith('/workspace')).toBe(false)
-      // /agent-home is packed into the S3 snapshot: credentials only as secret files.
-      expect(preparedRunExposesSecret(prepared, turnCredentials(context, prepared.secrets))).toBe(
-        false,
-      )
-    },
-  )
+  )('$id.prepare output never writes into /workspace or exposes credentials', async (driver) => {
+    const prepared = await driver.prepare(context)
+    expect(preparedRunSchema.parse(prepared)).toBeTruthy()
+    for (const file of [...prepared.files, ...prepared.secrets])
+      expect(file.path.startsWith('/workspace')).toBe(false)
+    // /agent-home is packed into the S3 snapshot: credentials only as secret files.
+    expect(preparedRunExposesSecret(prepared, turnCredentials(context, prepared.secrets))).toBe(
+      false,
+    )
+  })
 })

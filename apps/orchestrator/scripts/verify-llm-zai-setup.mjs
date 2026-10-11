@@ -79,8 +79,9 @@ export const ZAI_STAND_RATES = Object.freeze({
 /**
  * What an operator switches on after the import: the provider, the seeds' own profile (glm-5.3
  * with the reserve the body policy's output ceiling needs), a stand rate — without one the
- * product issues no turn key — the driver and the account. The windows of the account are
- * nobody's to write but a probe's.
+ * product issues no turn key — and the account. The driver is not the operator's to switch:
+ * its row is on as the migrations and the seeds leave it, and the stand stands on that. The
+ * windows of the account are nobody's to write but a probe's.
  */
 export async function switchOnZai(db, { accountId, ratesUrl }) {
   const provider = await db.llmProvider.update({
@@ -100,7 +101,10 @@ export async function switchOnZai(db, { accountId, ratesUrl }) {
       sourceUrl: ratesUrl,
     },
   })
-  await db.agentDriver.update({ where: { id: 'opencode' }, data: { enabled: true } })
+  assert.equal(
+    (await db.agentDriver.findUniqueOrThrow({ where: { id: 'opencode' } })).enabled,
+    true,
+  )
   await db.subscriptionAccount.update({ where: { id: accountId }, data: { enabled: true } })
   return db.llmModel.update({ where: { id: profile.id }, data: { enabled: true } })
 }

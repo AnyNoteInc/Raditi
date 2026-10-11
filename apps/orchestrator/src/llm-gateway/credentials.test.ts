@@ -85,7 +85,7 @@ describe('subscription credential source', () => {
     )
   })
 
-  it('does not fall back to memory when Vault answers with another version or after retirement', async () => {
+  it('does not fall back to memory when Vault answers with another version', async () => {
     let time = 0
     const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValueOnce(stored())
     const source = createCredentialSource({ kvRead }, { ttlMs: 10, now: () => time })
@@ -95,13 +95,23 @@ describe('subscription credential source', () => {
     await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
       'Subscription credential unavailable',
     )
-    kvRead.mockResolvedValueOnce(stored())
+  })
+
+  it('keeps no more entries than its bound: an evicted account is read from Vault again', async () => {
+    const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(stored())
+    const source = createCredentialSource({ kvRead }, { maxEntries: 1 })
+    const other = {
+      ...context,
+      accountId: 'account_2',
+      credentialRef: `subs/${zaiCodingBackend.id}/account_2`,
+    }
     await source.get(context, zaiCodingBackend)
-    source.invalidate(context.accountId)
-    kvRead.mockRejectedValue(new Error('Vault unavailable'))
-    await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
-      'Subscription credential unavailable',
-    )
+    await source.get(other, zaiCodingBackend)
+    expect(kvRead).toHaveBeenCalledTimes(2)
+    await source.get(other, zaiCodingBackend)
+    expect(kvRead).toHaveBeenCalledTimes(2)
+    await source.get(context, zaiCodingBackend)
+    expect(kvRead).toHaveBeenCalledTimes(3)
   })
 
   it.each([
@@ -123,72 +133,5 @@ describe('subscription credential source', () => {
     expect(() => encodeSubscriptionCredential({ token: 'x'.repeat(32_768) })).toThrow(
       'Subscription credential unavailable',
     )
-  })
-})
-
-describe('refresh-safe subscription credential cache', () => {
-  it('uses a pinned rotation for old DB metadata until the persistence is committed', async () => {
-    let time = 0
-    const fresh = { ...credential, apiKey: 'synthetic-new-key' }
-    const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(stored())
-    const source = createCredentialSource({ kvRead }, { ttlMs: 10, now: () => time })
-    await source.get(context, zaiCodingBackend)
-    const next = { ...context, credentialVersion: 2 }
-    source.install(next, zaiCodingBackend, fresh, 1)
-    time = 1_000
-    expect(await source.get(context, zaiCodingBackend)).toEqual(fresh)
-    expect(await source.get(next, zaiCodingBackend)).toEqual(fresh)
-    expect(source.versionOf(await source.get(context, zaiCodingBackend))).toBe(2)
-    expect(source.versionOf(await source.get(next, zaiCodingBackend))).toBe(2)
-    expect(kvRead).toHaveBeenCalledTimes(1)
-    source.commit(next)
-    expect(source.versionOf(await source.get(context, zaiCodingBackend))).toBe(2)
-    time = 1_011
-    kvRead.mockResolvedValue({ data: encodeSubscriptionCredential(fresh), version: 2 })
-    expect(await source.get(next, zaiCodingBackend)).toEqual(fresh)
-    expect(source.versionOf(await source.get(next, zaiCodingBackend))).toBe(2)
-    expect(kvRead).toHaveBeenCalledTimes(2)
-  })
-
-  it('does not let an in-flight old Vault read overwrite the installed rotation', async () => {
-    let finish!: (value: ReturnType<typeof stored>) => void
-    const kvRead = vi
-      .fn<SecretStore['kvRead']>()
-      .mockImplementation(() => new Promise((resolve) => (finish = resolve)))
-    const source = createCredentialSource({ kvRead })
-    const reading = source.get(context, zaiCodingBackend)
-    const fresh = { ...credential, apiKey: 'synthetic-new-key' }
-    source.install({ ...context, credentialVersion: 2 }, zaiCodingBackend, fresh, 1)
-    finish(stored())
-    expect(await reading).toEqual(fresh)
-    expect(await source.get(context, zaiCodingBackend)).toEqual(fresh)
-  })
-
-  it('invalidates an in-flight read after retirement', async () => {
-    let finish!: (value: ReturnType<typeof stored>) => void
-    const kvRead = vi
-      .fn<SecretStore['kvRead']>()
-      .mockImplementation(() => new Promise((resolve) => (finish = resolve)))
-    const source = createCredentialSource({ kvRead })
-    const reading = source.get(context, zaiCodingBackend)
-    source.invalidate(context.accountId)
-    finish(stored())
-    await expect(reading).rejects.toThrow('Subscription credential unavailable')
-  })
-
-  it('keeps pending rotations when an ordinary cache read evicts older entries', async () => {
-    const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(stored())
-    const source = createCredentialSource({ kvRead }, { maxEntries: 1 })
-    const fresh = { ...credential, apiKey: 'synthetic-new-key' }
-    source.install({ ...context, credentialVersion: 2 }, zaiCodingBackend, fresh, 1)
-    await source.get(
-      {
-        ...context,
-        accountId: 'account_2',
-        credentialRef: `subs/${zaiCodingBackend.id}/account_2`,
-      },
-      zaiCodingBackend,
-    )
-    expect(await source.get(context, zaiCodingBackend)).toEqual(fresh)
   })
 })

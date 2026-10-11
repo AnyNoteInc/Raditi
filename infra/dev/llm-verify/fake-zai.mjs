@@ -77,7 +77,9 @@ const SCENARIOS = new Set([
   // since the last message of the user; past the last round, and for a request that declares
   // no tool (the CLI's context compaction), the answer is the text. With `beside` an answer
   // that calls says that sentence first, in the same answer: the form the real model showed
-  // (sample 81-g6-live-content/02).
+  // (sample 81-g6-live-content/02). With `filler` an answer that calls thinks that many bytes
+  // first: the CLI sends the reasoning of a step back with the next request of the turn, which
+  // is how a stand gets a request larger than the gateway takes.
   'tools',
   // The agent-content stand: the model drives the platform MCP tool `wp_rest`, one call an
   // answer, by the name the CLI declared for it. The rounds are those of `tools`; what each
@@ -104,6 +106,9 @@ const SCENARIOS = new Set([
   'cut',
 ])
 const DEFAULT_USAGE = Object.freeze({ prompt: 7105, cached: 6784, completion: 94, reasoning: 54 })
+/** The most an answer thinks as filler, and the size of one chunk of it. */
+const MAX_FILLER_BYTES = 32 * 1024 * 1024
+const FILLER_CHUNK_BYTES = 64 * 1024
 const WINDOWS = Object.freeze([
   Object.freeze({ name: 'fiveHour', unit: 3, number: 5, usage: 2000, lengthMs: 5 * 3_600_000 }),
   Object.freeze({ name: 'week', unit: 6, number: 1, usage: 10_000, lengthMs: 7 * 86_400_000 }),
@@ -122,6 +127,7 @@ function scenarioOptions(value = {}) {
     'calls',
     'rounds',
     'beside',
+    'filler',
     'finish',
     'code',
     'status',
@@ -175,6 +181,11 @@ function scenarioOptions(value = {}) {
       value.beside.length > 16_384)
   )
     throw invalid('text beside the calls')
+  if (
+    value.filler !== undefined &&
+    (scenario !== 'tools' || !whole(value.filler, MAX_FILLER_BYTES) || value.filler < 1)
+  )
+    throw invalid('filler')
   if (value.finish !== undefined) {
     // Any value: the gateway must also cope with one nobody has documented.
     if (
@@ -449,6 +460,15 @@ export function zaiFrames(body, config, sequence) {
       frames.push(frame(chunk({ role: 'assistant', content: word })))
   }
   if (calling) {
+    for (let left = config.filler ?? 0; left > 0; left -= FILLER_CHUNK_BYTES)
+      frames.push(
+        frame(
+          chunk({
+            role: 'assistant',
+            reasoning_content: 'x'.repeat(Math.min(left, FILLER_CHUNK_BYTES)),
+          }),
+        ),
+      )
     if (config.beside !== undefined) say(config.beside)
     calls.forEach((call, index) =>
       frames.push(

@@ -31,6 +31,27 @@ describe('turn credential grant', () => {
       false,
     )
   })
+  // A turn plan saved before the removal names them; no key is issued for it again.
+  it.each([
+    ['driverId', 'codex'],
+    ['driverId', 'kimi'],
+    ['driverId', 'qwen'],
+    ['backend', 'openai-chatgpt'],
+    ['backend', 'kimi-code'],
+  ])('refuses the removed id in %s: %s', (field, id) => {
+    const { deadlineAt: _deadline, boundSource: _source, ...policy } = grant()
+    for (const [schema, value] of [
+      [turnCredentialGrantSchema, { ...grant(), [field]: id }],
+      [turnCredentialPolicySchema, { ...policy, [field]: id }],
+    ] as const) {
+      const result = schema.safeParse(value)
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([[field]])
+    }
+    expect(() =>
+      turnCredentialExpiresAt({ ...grant(), [field]: id } as TurnCredentialGrant, now),
+    ).toThrow(DomainError)
+  })
   it('reserves publication time and never extends a shorter TTL', () => {
     expect(turnCredentialExpiresAt(grant(), now).getTime()).toBe(
       now.getTime() + 20 * 60_000 - TURN_FINALIZE_RESERVE_MS,

@@ -20,7 +20,6 @@ import { envelopeSamples, errorSamples, quotaSamples, sample } from './fixtures/
 
 const route = { method: 'POST', path: '/zai/v4/chat/completions' } as const
 const credential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-zai-plan-key' }
-const identity = {}
 const quotaUrl = 'https://api.z.ai/api/monitor/usage/quota/limit'
 const chatUrl = 'https://api.z.ai/api/coding/paas/v4/chat/completions'
 const body = { body: encodeJson({}), estInputTokens: 1 }
@@ -34,8 +33,8 @@ function answering(status: number, payload: unknown, headers = new Headers()) {
   return { request }
 }
 const probe = (status: number, payload: unknown) =>
-  backend.probe(credential, identity, answering(status, payload))
-const unknown = { status: 'unknown', windows: null, plan: null, creditsBalance: null }
+  backend.probe(credential, answering(status, payload))
+const unknown = { status: 'unknown', windows: null, plan: null }
 const limit = (patch: Record<string, unknown> = {}) => ({
   type: 'CREDIT_LIMIT',
   unit: 3,
@@ -65,13 +64,8 @@ const quota = (limits: unknown) => ({
 const windowsOf = async (limits: unknown) => (await probe(200, quota(limits))).windows
 
 describe('the zai-coding backend as the platform sees it', () => {
-  it('is registered third, next to the two it will replace', () => {
-    expect(llmBackends.map((item) => item.id)).toEqual([
-      'openai-chatgpt',
-      'kimi-code',
-      'zai-coding',
-    ])
-    expect(llmBackends[2]).toBe(backend)
+  it('is the one backend the platform registers', () => {
+    expect(llmBackends).toEqual([backend])
   })
 
   it('serves one gateway route and declares every request it sends', () => {
@@ -90,17 +84,9 @@ describe('the zai-coding backend as the platform sees it', () => {
       expect(llmEgressOriginSchema.safeParse(entry).success).toBe(true)
   })
 
-  it('reads one client header, returns no provider header and finds no window in a response', () => {
+  it('reads one client header and returns no provider header', () => {
     expect(backend.clientHeaders).toEqual(['user-agent'])
     expect(backend.responseHeaders).toEqual([])
-    expect(
-      backend.windowsFromHeaders(
-        new Headers({ 'x-ratelimit-remaining-requests': '1', 'retry-after': '5' }),
-      ),
-    ).toBeNull()
-    expect(backend.refresh).toBeUndefined()
-    expect(backend.login).toBeUndefined()
-    expect(backend.revoke).toBeUndefined()
   })
 
   it('admits only the pinned CLI', () => {
@@ -115,7 +101,7 @@ describe('the zai-coding backend as the platform sees it', () => {
       `${opencodeUserAgent} extra`,
       `x ${opencodeUserAgent}`,
       opencodeUserAgent.toUpperCase(),
-      'kimi-code-cli/2.1.1',
+      'another-cli/2.1.1',
       'curl/8.0',
     ])
       expect(() => backend.validateClientHeaders(new Headers({ 'user-agent': agent }))).toThrow(
@@ -139,7 +125,7 @@ describe('Z.ai credential and the request to the provider', () => {
       expect(() => backend.importCredential!(secret)).toThrow(DomainError)
     for (const value of [
       { ...credential, v: '2' },
-      { ...credential, kind: 'kimi_api_key' },
+      { ...credential, kind: 'another_api_key' },
       { ...credential, extra: 1 },
       { v: '1', kind: 'zai_api_key' },
     ]) {
@@ -172,7 +158,7 @@ describe('Z.ai credential and the request to the provider', () => {
       'x-session-id': 'ses_1',
       cookie: 'acw_tc=1',
     })
-    const target = backend.upstream(route, body, client, credential, identity)
+    const target = backend.upstream(route, body, client, credential)
     expect(target.url).toBe(chatUrl)
     expect(target.method).toBe('POST')
     expect(Object.fromEntries(target.headers)).toEqual({
@@ -187,25 +173,18 @@ describe('Z.ai credential and the request to the provider', () => {
   it('builds no request for another route, another client or a broken credential', () => {
     expect(() =>
       backend.upstream(
-        { method: 'POST', path: '/kimi/v1/chat/completions' },
+        { method: 'POST', path: '/other/v1/chat/completions' },
         body,
         cliHeaders(),
         credential,
-        identity,
       ),
     ).toThrow(DomainError)
     expect(() =>
-      backend.upstream(
-        route,
-        body,
-        new Headers({ 'user-agent': 'curl/8.0' }),
-        credential,
-        identity,
-      ),
+      backend.upstream(route, body, new Headers({ 'user-agent': 'curl/8.0' }), credential),
     ).toThrow(DomainError)
-    expect(() =>
-      backend.upstream(route, body, cliHeaders(), { ...credential, v: '2' }, identity),
-    ).toThrow(DomainError)
+    expect(() => backend.upstream(route, body, cliHeaders(), { ...credential, v: '2' })).toThrow(
+      DomainError,
+    )
   })
 })
 
@@ -239,7 +218,6 @@ describe('the quota of the plan as the windows of the pool', () => {
     expect(result).toEqual({
       status: 'ok',
       plan: null,
-      creditsBalance: null,
       windows: [
         { name: '5h', usedPct: fiveHour, resetsAt: fiveHourReset },
         { name: 'week', usedPct: weekly, resetsAt: weekReset },
@@ -253,7 +231,6 @@ describe('the quota of the plan as the windows of the pool', () => {
     expect(await probe(record.response.status, record.response.body)).toEqual({
       status: 'ok',
       plan: null,
-      creditsBalance: null,
       windows: [
         { name: '5h', usedPct: 0, resetsAt: null },
         { name: 'week', usedPct: 26 / 100, resetsAt: weekReset },
@@ -419,7 +396,7 @@ describe('the quota of the plan as the windows of the pool', () => {
 
   it('asks the one quota address with the key and names nobody but the pinned CLI', async () => {
     const http = answering(200, quota([limit(), week()]))
-    await backend.probe(credential, identity, http)
+    await backend.probe(credential, http)
     expect(http.request).toHaveBeenCalledOnce()
     const [request, options] = http.request.mock.calls[0]!
     expect(request.url).toBe(quotaUrl)
@@ -438,18 +415,16 @@ describe('the quota of the plan as the windows of the pool', () => {
     const failing = {
       request: vi.fn<EgressHttp['request']>().mockRejectedValue(new Error('SECRET')),
     }
-    const error = await backend
-      .probe(credential, identity, failing)
-      .catch((caught: unknown) => caught)
+    const error = await backend.probe(credential, failing).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(DomainError)
     expect((error as Error).message).not.toContain('SECRET')
     expect(failing.request).toHaveBeenCalledOnce()
     await expect(
-      backend.probe(credential, identity, answering(200, 'x'.repeat(64 * 1024 + 1))),
+      backend.probe(credential, answering(200, 'x'.repeat(64 * 1024 + 1))),
     ).rejects.toBeInstanceOf(DomainError)
-    await expect(
-      backend.probe({ ...credential, v: '2' }, identity, failing),
-    ).rejects.toBeInstanceOf(DomainError)
+    await expect(backend.probe({ ...credential, v: '2' }, failing)).rejects.toBeInstanceOf(
+      DomainError,
+    )
   })
 })
 
@@ -502,17 +477,15 @@ describe('a Z.ai offer is data', () => {
       },
     ])
     expect(llmEgressOriginSchema.safeParse(other.egress[0]).success).toBe(true)
-    expect(other.upstream(offer.route, body, cliHeaders(), credential, identity).url).toBe(
+    expect(other.upstream(offer.route, body, cliHeaders(), credential).url).toBe(
       'https://api.z.ai/api/paas/v4/chat/completions',
     )
-    expect(() => other.upstream(route, body, cliHeaders(), credential, identity)).toThrow(
-      DomainError,
-    )
+    expect(() => other.upstream(route, body, cliHeaders(), credential)).toThrow(DomainError)
     const http = answering(
       200,
       quota([limit({ unit: 9, number: 2, nextResetTime: Date.now() + 86_400_000 })]),
     )
-    expect((await other.probe(credential, identity, http)).windows).toEqual([
+    expect((await other.probe(credential, http)).windows).toEqual([
       { name: 'month', usedPct: 1.05, resetsAt: expect.any(Date) as Date },
     ])
     expect(http.request.mock.calls[0]![0].url).toBe(
@@ -524,7 +497,7 @@ describe('a Z.ai offer is data', () => {
 
   it('normalizes a body for its own route only', () => {
     const request = encodeJson({ model: 'glm-5.3', messages: [{ role: 'user', content: 'x' }] })
-    const profile = { model: 'glm-5.3', reasoningEffort: 'low', cacheKey: `rdt_${'a'.repeat(32)}` }
+    const profile = { model: 'glm-5.3', reasoningEffort: 'low' }
     expect(() => other.normalizeBody(offer.route, request, profile)).not.toThrow()
     expect(() => other.normalizeBody(route, request, profile)).toThrow(DomainError)
     expect(() => backend.normalizeBody(offer.route, request, profile)).toThrow(DomainError)

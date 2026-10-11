@@ -1,5 +1,5 @@
 import type { LlmBackend } from '@repo/domain'
-import { codexBackend, kimiCodeBackend, llmBackends, zaiCodingBackend } from '@repo/llm-backends'
+import { llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -60,6 +60,9 @@ describe('subscription gateway configuration', () => {
       ['LLM_UPSTREAM_CA_FILE', '/tmp/secret-ca.pem'],
       ['NODE_TLS_REJECT_UNAUTHORIZED', '0'],
       ['NODE_USE_SYSTEM_CA', '1'],
+      ['NODE_USE_ENV_PROXY', '1'],
+      ['SSL_CERT_FILE', '/tmp/secret-ca.pem'],
+      ['SSL_CERT_DIR', '/tmp/secret-ca'],
       ['NODE_OPTIONS', '--use-system-ca'],
     ] as const)
       expect(() => llmConfigFromEnv({ ...listener, [name]: value }, 'production')).toThrow(name)
@@ -164,33 +167,35 @@ describe('subscription gateway configuration', () => {
   })
 
   it('takes the provider origins and their stand overrides from what the adapters declare', () => {
-    expect(llmBackends).toEqual([codexBackend, kimiCodeBackend, zaiCodingBackend])
+    expect(llmBackends).toEqual([zaiCodingBackend])
     expect(providerOrigins).toEqual(
       llmBackends.flatMap((backend) => backend.egress.map((entry) => entry.origin)),
     )
-    expect(providerOrigins).toEqual([
-      'https://chatgpt.com',
-      'https://auth.openai.com',
-      'https://api.kimi.ai',
-      'https://api.z.ai',
-    ])
-    // Every declared origin can be pointed at a loopback fake on a stand, as before.
+    expect(providerOrigins).toEqual(['https://api.z.ai'])
+    // Every declared origin can be pointed at a loopback fake on a stand: each by the variable
+    // its adapter names, in the order of the adapters. The second adapter is a synthetic one.
+    const other: LlmBackend = {
+      ...zaiCodingBackend,
+      egress: [
+        {
+          origin: 'https://provider.invalid',
+          overrideEnv: 'LLM_BACKEND_URL_SYNTHETIC',
+          requests: ['POST https://provider.invalid/v1/generate'],
+        },
+      ],
+    }
+    const backends = [other, zaiCodingBackend]
     const env = Object.fromEntries(
-      llmBackends
+      backends
         .flatMap((backend) => backend.egress)
         .map((entry, index) => [entry.overrideEnv, `https://localhost:${9443 + index}`]),
     )
-    expect(Object.keys(env)).toEqual([
-      'LLM_BACKEND_URL_OPENAI_CHATGPT',
-      'LLM_AUTH_URL_OPENAI',
-      'LLM_BACKEND_URL_KIMI_CODE',
-      'LLM_BACKEND_URL_ZAI_CODING',
-    ])
-    expect([...llmConfigFromEnv({ ...complete, ...env }, 'test').egress!.backendOrigins]).toEqual([
-      ['https://chatgpt.com', 'https://localhost:9443'],
-      ['https://auth.openai.com', 'https://localhost:9444'],
-      ['https://api.kimi.ai', 'https://localhost:9445'],
-      ['https://api.z.ai', 'https://localhost:9446'],
+    expect(Object.keys(env)).toEqual(['LLM_BACKEND_URL_SYNTHETIC', 'LLM_BACKEND_URL_ZAI_CODING'])
+    expect([
+      ...llmConfigFromEnv({ ...complete, ...env }, 'test', backends).egress!.backendOrigins,
+    ]).toEqual([
+      ['https://provider.invalid', 'https://localhost:9443'],
+      ['https://api.z.ai', 'https://localhost:9444'],
     ])
   })
 
@@ -272,6 +277,9 @@ describe('subscription gateway configuration', () => {
     for (const [name, value] of [
       ['LLM_BACKEND_URL_ZAI_CODING', 'https://localhost:9443'],
       ['NODE_TLS_REJECT_UNAUTHORIZED', '0'],
+      ['NODE_USE_ENV_PROXY', '1'],
+      ['SSL_CERT_FILE', '/tmp/secret-ca.pem'],
+      ['SSL_CERT_DIR', '/tmp/secret-ca'],
     ] as const)
       expect(() => egressConfigFromEnv({ ...egress, [name]: value }, 'production')).toThrow(name)
     expect(llmConfigFromEnv(complete, 'production').egress).toEqual(
@@ -281,16 +289,25 @@ describe('subscription gateway configuration', () => {
 
   it.each([
     ['LLM_UPSTREAM_CA_FILE', '/tmp/secret-ca.pem'],
-    ['LLM_BACKEND_URL_OPENAI_CHATGPT', 'https://localhost:9443'],
-    ['LLM_AUTH_URL_OPENAI', 'https://localhost:9443'],
-    ['LLM_BACKEND_URL_KIMI_CODE', 'https://localhost:9443'],
     ['LLM_BACKEND_URL_ZAI_CODING', 'https://localhost:9443'],
     ['NODE_TLS_REJECT_UNAUTHORIZED', '1'],
     ['NODE_USE_SYSTEM_CA', '1'],
+    // What the live profile of the stands refuses beside them (infra/dev/llm-verify/live.mjs):
+    // a proxy of the environment under the role's own requests, and the CA files of OpenSSL.
+    ['NODE_USE_ENV_PROXY', '1'],
+    ['SSL_CERT_FILE', '/tmp/secret-ca.pem'],
+    ['SSL_CERT_DIR', '/tmp/secret-ca'],
     ['NODE_OPTIONS', '--use-system-ca'],
     ['NODE_OPTIONS', '--use-openssl-ca'],
   ])('rejects production trust or origin override %s', (name, value) => {
-    expect(() => llmConfigFromEnv({ ...complete, [name]: value }, 'production')).toThrow(name)
+    const refused = () => llmConfigFromEnv({ ...complete, [name]: value }, 'production')
+    expect(refused).toThrow(name)
+    // The refusal names the variable, never what it was set to.
+    expect(refused).not.toThrow(/secret-ca|localhost:9443/)
+    // Outside production a stand sets what it needs; an empty value switches nothing.
+    expect(() => llmConfigFromEnv({ [name]: value }, 'test')).not.toThrow()
+    if (name !== 'NODE_OPTIONS')
+      expect(() => llmConfigFromEnv({ ...complete, [name]: ' ' }, 'production')).not.toThrow()
   })
 
   it('takes one extra CA in production: the CA of Vault at the path the app VM pins', () => {

@@ -263,10 +263,16 @@ function egressFrom(
     else backendOrigins.set(fixed, replacement.origin)
   }
   if (production) {
+    // The same switches the live profile of the stands refuses (infra/dev/llm-verify/live.mjs):
+    // other roots for provider TLS, and a proxy of the environment under the requests the role
+    // makes itself, to Vault among them.
     for (const name of [
       'LLM_UPSTREAM_CA_FILE',
       'NODE_TLS_REJECT_UNAUTHORIZED',
       'NODE_USE_SYSTEM_CA',
+      'NODE_USE_ENV_PROXY',
+      'SSL_CERT_FILE',
+      'SSL_CERT_DIR',
     ])
       if (env[name]?.trim()) problems.push(`${name}: forbidden in production`)
     if (/(?:^|\s|["'])--use-(?:system|openssl)-ca(?:=|\s|["']|$)/.test(env.NODE_OPTIONS ?? ''))

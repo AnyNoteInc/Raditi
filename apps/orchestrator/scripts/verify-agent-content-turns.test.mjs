@@ -3,9 +3,9 @@ import { test } from 'node:test'
 
 import { replayProblem } from './verify-agent-content-turns.mjs'
 
-// What each CLI handed the model for the three calls of the edit turn, in the form the stand's
-// synthetic providers recorded on 09.10.2026: OpenCode passes the text of the role's result as
-// it is, Kimi puts its own wall time before it, Codex wraps it in the output of its `exec` cell.
+// What a CLI hands the model for the three calls of the edit turn. The pinned OpenCode passes
+// the text of the role's result as it is (the stand's synthetic provider recorded it on
+// 09.10.2026); a CLI may also put a line of its own before the text or wrap it in a structure.
 const SNAPSHOT = '03ef56d5-cb21-4141-961e-132cc1156159'
 const stored = { objectRef: 'page:10', snapshotId: SNAPSHOT }
 const page = '{"content":"<p>synthetic</p>","excerpt":"","objectRef":"page:10","title":"Synthetic"}'
@@ -14,8 +14,8 @@ const answer = `{"objectRef":"page:10","snapshotId":"${SNAPSHOT}","updated":true
 const refusal = (code) => JSON.stringify({ code })
 const forms = {
   opencode: (texts) => texts,
-  kimi: (texts) => texts.map((text, index) => `Wall time: 0.0${index + 1}3 seconds\n${text}`),
-  codex: (texts) =>
+  prefixed: (texts) => texts.map((text, index) => `Wall time: 0.0${index + 1}3 seconds\n${text}`),
+  wrapped: (texts) =>
     texts.map((text, index) => [
       { type: 'input_text', text: `Script completed\nWall time 0.${index} seconds\nOutput:\n` },
       { type: 'input_text', text: JSON.stringify({ content: [{ type: 'text', text }] }) },
@@ -80,7 +80,7 @@ test('a CLI that hands the model the text of the role is held to the stored answ
     replayProblem([page, extra, extra], stored, verbatim),
     'the repeat of the write did not get the stored answer of the journal row',
   )
-  const wrapped = forms.kimi([page, answer, answer]).fill(`Wall time\n${answer}`, 1)
+  const wrapped = forms.prefixed([page, answer, answer]).fill(`Wall time\n${answer}`, 1)
   assert.equal(
     replayProblem(wrapped, stored, verbatim),
     'the repeat of the write did not get the stored answer of the journal row',

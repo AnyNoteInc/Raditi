@@ -21,12 +21,10 @@ describe('DriversModule and SandboxModule', () => {
 
     const drivers = moduleRef.get<AgentDriverRegistry>(AGENT_DRIVERS)
     expect(drivers.list().map((driver) => driver.id)).toEqual([...ENABLED_AGENT_DRIVERS])
-    // OpenCode joins the two earlier CLIs until they are removed; its row in agent_drivers
-    // stays switched off, so no key of a turn is issued for it yet.
-    expect(ENABLED_AGENT_DRIVERS).toEqual(['codex', 'kimi', 'opencode'])
+    // The product runs one shell.
+    expect(ENABLED_AGENT_DRIVERS).toEqual(['opencode'])
     for (const id of ENABLED_AGENT_DRIVERS)
       expect(drivers.get(id).image).toBe(testCoreConfig().agentDrivers.image)
-    expect(() => drivers.get('qwen')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
 
     const sandbox = moduleRef.get<SandboxProvider>(SANDBOX_PROVIDER)
     expect(sandbox.kind).toBe('docker')

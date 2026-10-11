@@ -20,67 +20,28 @@ import process from 'node:process'
 import test from 'node:test'
 
 import {
+  CLI_IMAGE,
   CLI_VERSIONS,
+  GUARD_IMAGE,
   RUNTIME_IMAGE,
-  cliInvocation,
-  compileCodexConfig,
-  compileKimiConfig,
   createCliSession,
   filesHoldingResult,
   filesHoldingSearch,
+  imageTag,
   removeMountedDirectory,
 } from './cli.mjs'
 
-const key = 'synthetic-turn-key-b13-only'
-const prompt = 'Synthetic verification only.'
+const key = 'synthetic-turn-key-only'
 const reply = (stdout = '', code = 0) => ({ stdout, stderr: '', code, timedOut: false })
-
-test('driver invocations isolate environment, keep keys out of argv, and preserve native resume', () => {
-  const previous = process.env.OPENAI_API_KEY
-  process.env.OPENAI_API_KEY = 'must-not-be-inherited'
-  try {
-    for (const driver of ['codex', 'kimi']) {
-      const command = cliInvocation({ driver, key, prompt, resume: 'synthetic-session' })
-      assert.ok(!JSON.stringify(command.args).includes(key))
-      assert.equal(command.env.OPENAI_API_KEY, undefined)
-      assert.equal(command.env.HOME, '/agent-home')
-      assert.ok(command.args.includes('synthetic-session'))
-      if (driver === 'codex') {
-        assert.deepEqual(command.args.slice(0, 2), ['exec', 'resume'])
-        assert.equal(command.env.RADITI_LLM_TOKEN, key)
-        assert.ok(!command.args.includes('--ephemeral'))
-      } else {
-        assert.equal(command.env.KIMI_MODEL_API_KEY, key)
-        assert.equal(command.env.KIMI_MODEL_PROVIDER_TYPE, 'kimi')
-        assert.equal(command.env.KIMI_MODEL_MAX_OUTPUT_SIZE, '65536')
-        assert.equal(command.env.KIMI_MODEL_THINKING_EFFORT, 'low')
-        assert.equal(command.env.KIMI_CODE_BUILTIN_PRODUCT_SKILLS, '0')
-        assert.ok(!command.args.some((arg) => ['--yolo', '--auto', '--plan'].includes(arg)))
-      }
-    }
-  } finally {
-    if (previous === undefined) delete process.env.OPENAI_API_KEY
-    else process.env.OPENAI_API_KEY = previous
-  }
-})
-
-test('synthetic configs disable unrelated traffic and never contain credentials', () => {
-  const config = compileCodexConfig()
-  assert.match(config, /requires_openai_auth = false/)
-  assert.match(config, /supports_websockets = false/)
-  assert.match(config, /base_url = "http:\/\/sandbox-gw:8080\/codex"/)
-  assert.match(config, /multi_agent = false/)
-  assert.ok(!config.includes(key))
-  assert.match(compileKimiConfig(), /auto_session_title = false/)
-  assert.ok(!compileKimiConfig().includes('secondary_model'))
-  assert.throws(() => compileCodexConfig({ model: 'model"\nmalicious=true' }))
-  assert.throws(() => cliInvocation({ driver: 'unknown', key, prompt }))
-  assert.throws(() => cliInvocation({ driver: 'kimi', key, prompt, outputSchema: {} }))
-  assert.throws(
-    () => cliInvocation({ driver: 'codex', key: 'bad\nsecret', prompt }),
-    (error) => !error.message.includes('bad\nsecret'),
-  )
-})
+/** What the OpenCode driver prepares for a turn, in the shape the sandbox runtime applies. */
+const prepared = {
+  files: [
+    { path: '/agent-home/opencode/.config/opencode/opencode.json', content: '{}\n', mode: 0o600 },
+  ],
+  secrets: [{ path: '/run/raditi/secrets/llm', content: key, mode: 0o400 }],
+  env: { HOME: '/agent-home/opencode', NO_COLOR: '1' },
+  argv: ['node', '/agent-home/opencode/run.mjs'],
+}
 
 test('session mounts only its private temporary tree and sends keys through exec stdin', async () => {
   const parentDirectory = await mkdtemp(join(tmpdir(), 'raditi-cli-test-'))
@@ -88,7 +49,7 @@ test('session mounts only its private temporary tree and sends keys through exec
   const docker = async (args, options) => {
     calls.push({ args, options })
     if (args[0] === 'network') return reply('true\n')
-    if (args[0] === 'exec') return reply('{"type":"thread.started","thread_id":"synthetic-id"}\n')
+    if (args[0] === 'exec') return reply('{"type":"step_start","sessionID":"ses_synthetic"}\n')
     return reply()
   }
   try {
@@ -100,12 +61,8 @@ test('session mounts only its private temporary tree and sends keys through exec
       docker,
     })
     assert.equal((await stat(session.directory)).mode & 0o777, 0o700)
-    // Hand-written configs stay apart from the drivers' /agent-home/{codex,kimi}.
-    assert.deepEqual(await readdir(session.home), ['b13'])
-    assert.deepEqual((await readdir(join(session.home, 'b13'))).sort(), ['codex', 'kimi'])
-    assert.ok(
-      (await readFile(join(session.home, 'b13/codex/config.toml'), 'utf8')).includes('raditi'),
-    )
+    // Nothing is written for a CLI ahead of its driver: the home starts empty.
+    assert.deepEqual(await readdir(session.home), [])
     const startup = calls.find((call) => call.args[0] === 'run').args
     assert.ok(startup.includes('--read-only'))
     assert.ok(startup.includes('10001:10001'))
@@ -134,29 +91,9 @@ test('session mounts only its private temporary tree and sends keys through exec
     assert.ok(
       startup.some((arg) => arg.startsWith('/run/raditi/secrets:') && arg.includes('mode=0700')),
     )
-    const result = await session.run({
-      driver: 'codex',
-      key,
-      prompt,
-      outputSchema: { type: 'object' },
-    })
-    assert.equal(result.threadId, 'synthetic-id')
-    const exec = calls.find((call) => call.args[0] === 'exec')
-    assert.ok(!JSON.stringify(exec.args).includes(key))
-    assert.equal(JSON.parse(exec.options.input).key, key)
-    assert.deepEqual(
-      JSON.parse(await readFile(join(session.home, 'b13/codex/output-schema.json'), 'utf8')),
-      { type: 'object' },
-    )
     // A driver's prepared run reaches the container only through exec stdin.
-    const prepared = {
-      files: [{ path: '/agent-home/codex/config.toml', content: 'model = "m"\n', mode: 0o600 }],
-      secrets: [{ path: '/run/raditi/secrets/llm', content: key, mode: 0o400 }],
-      env: { CODEX_HOME: '/agent-home/codex' },
-      argv: ['node', '/agent-home/codex/run.mjs'],
-    }
     const ran = await session.runPrepared(prepared)
-    assert.deepEqual(ran.lines, [{ type: 'thread.started', thread_id: 'synthetic-id' }])
+    assert.deepEqual(ran.lines, [{ type: 'step_start', sessionID: 'ses_synthetic' }])
     const preparedExec = calls.filter((call) => call.args[0] === 'exec').at(-1)
     assert.ok(!JSON.stringify(preparedExec.args).includes(key))
     assert.deepEqual(JSON.parse(preparedExec.options.input), {
@@ -166,7 +103,7 @@ test('session mounts only its private temporary tree and sends keys through exec
     })
     for (const unsafe of [
       { ...prepared, files: [{ path: '/workspace/repo/AGENTS.md', content: 'x' }] },
-      { ...prepared, secrets: [{ path: '/agent-home/codex/llm', content: key }] },
+      { ...prepared, secrets: [{ path: '/agent-home/opencode/llm', content: key }] },
       { ...prepared, files: [{ path: '/agent-home/../etc/passwd', content: 'x' }] },
       { ...prepared, argv: [] },
       { ...prepared, env: { KEY: 1 } },
@@ -214,11 +151,11 @@ test('a stuck exec removes its owned container instead of abandoning a running C
   }
   try {
     const session = await createCliSession({ parentDirectory, network: 'synthetic', docker })
-    const result = await session.run({ driver: 'codex', key, prompt, timeoutMs: 100 })
+    const result = await session.runPrepared({ ...prepared, timeoutMs: 100 })
     assert.equal(result.timedOut, true)
     assert.ok(calls.some((args) => args[0] === 'rm' && args.includes(session.containerName)))
     assert.deepEqual(await readdir(parentDirectory), [])
-    await assert.rejects(session.run({ driver: 'codex', key, prompt }), /closed or busy/)
+    await assert.rejects(session.runPrepared(prepared), /closed or busy/)
   } finally {
     await rm(parentDirectory, { recursive: true, force: true })
   }
@@ -228,21 +165,21 @@ test('a stuck exec removes its owned container instead of abandoning a running C
 // user can neither list nor unlink. This host cannot chown, so mode 000 on an own directory stands
 // in for it: the failing call (scandir without access) is the same.
 const foreignTree = async (session) => {
-  const sessions = join(session.home, 'codex/sessions')
-  await mkdir(sessions, { recursive: true, mode: 0o700 })
-  await writeFile(join(sessions, 'rollout.jsonl'), '{}\n')
-  await writeFile(join(session.workspace, 'b13-first.txt'), 'synthetic\n')
+  const data = join(session.home, 'opencode/.local/share/opencode')
+  await mkdir(data, { recursive: true, mode: 0o700 })
+  await writeFile(join(data, 'opencode.db'), 'synthetic\n')
+  await writeFile(join(session.workspace, 'first.txt'), 'synthetic\n')
   // Enough siblings that a removal which is still running in the background after its first
   // refusal would race whoever empties the directory next.
   await mkdir(join(session.workspace, 'node_modules'))
   for (let index = 0; index < 400; index++)
     await writeFile(join(session.workspace, 'node_modules', `file-${index}.js`), '')
-  await chmod(join(session.home, 'codex'), 0o000)
+  await chmod(join(session.home, 'opencode'), 0o000)
 }
 // The fake of a process that owns those files: it may enter and delete them. Like `find
 // -delete`, it fails on an entry that vanishes while it works.
 const deleteAsOwner = async (session, roots) => {
-  await chmod(join(session.home, 'codex'), 0o700)
+  await chmod(join(session.home, 'opencode'), 0o700)
   const remove = async (path) => {
     if ((await lstat(path)).isDirectory()) {
       for (const entry of await readdir(path)) await remove(join(path, entry))
@@ -282,7 +219,7 @@ test(
       )
       assert.deepEqual(await readdir(parentDirectory), [])
     } finally {
-      if (session) await chmod(join(session.home, 'codex'), 0o700).catch(() => {})
+      if (session) await chmod(join(session.home, 'opencode'), 0o700).catch(() => {})
       await rm(parentDirectory, { recursive: true, force: true })
     }
   },
@@ -325,7 +262,7 @@ test(
       )
       assert.deepEqual(await readdir(parentDirectory), [])
     } finally {
-      if (session) await chmod(join(session.home, 'codex'), 0o700).catch(() => {})
+      if (session) await chmod(join(session.home, 'opencode'), 0o700).catch(() => {})
       await rm(parentDirectory, { recursive: true, force: true })
     }
   },
@@ -336,10 +273,10 @@ test(
   { skip: hostIsRoot },
   async () => {
     const directory = await mkdtemp(join(tmpdir(), 'raditi-cli-test-'))
-    const locked = join(directory, 'cli-left/home/codex')
+    const locked = join(directory, 'cli-left/home/opencode')
     const calls = []
     try {
-      await mkdir(join(locked, 'sessions'), { recursive: true })
+      await mkdir(join(locked, '.local'), { recursive: true })
       await chmod(locked, 0o000)
       await removeMountedDirectory(directory, {
         image: 'synthetic-cli:test',
@@ -377,24 +314,38 @@ test(
   },
 )
 
-test('the CLI image is the production agent runtime with the verified CLIs, run as non-root', async () => {
+test('the CLI image is the production agent runtime with the verified CLI, run as non-root', async () => {
   const source = await readFile(new URL('./cli.Dockerfile', import.meta.url), 'utf8')
   // No CLI install of its own: the lockfile-built runtime stage of infra/sandbox/Dockerfile.
   assert.match(source, /^ARG RUNTIME_IMAGE=raditi-p3verify-runtime:b13$/m)
-  assert.equal(RUNTIME_IMAGE, 'raditi-p3verify-runtime:b13')
+  assert.equal(RUNTIME_IMAGE, `raditi-p3verify-runtime:${imageTag()}`)
   assert.match(source, /^FROM \$\{RUNTIME_IMAGE\}$/m)
   assert.doesNotMatch(source, /npm (install|i|ci)\b/)
-  assert.deepEqual(CLI_VERSIONS, { codex: '0.158.0', kimi: '2.1.1', opencode: '1.18.34' })
-  const packages = {
-    codex: '@openai/codex',
-    kimi: '@moonshot-ai/kimi-code',
-    opencode: 'opencode-ai',
-  }
+  assert.deepEqual(CLI_VERSIONS, { opencode: '1.18.34' })
+  const packages = { opencode: 'opencode-ai' }
   for (const [name, version] of Object.entries(CLI_VERSIONS)) {
     // The build fails unless the runtime holds exactly the verified version.
     assert.ok(source.includes(`npm ls ${packages[name]}@${version} `), packages[name])
   }
   assert.match(source, /^USER 10001:10001$/m)
+})
+
+test('the stands name their three images by one tag, which a run may choose', () => {
+  // Unset or empty, the tag a run without --no-build has always built.
+  for (const env of [{}, { RADITI_VERIFY_IMAGE_TAG: '' }]) assert.equal(imageTag(env), 'b13')
+  assert.equal(imageTag({ RADITI_VERIFY_IMAGE_TAG: 'g8' }), 'g8')
+  // A tag, never a repository, a digest or an option of docker.
+  for (const tag of ['g8:latest', 'other/image', '-f', 'a b', 'G8', 'x'.repeat(33), 'a@sha256'])
+    assert.throws(() => imageTag({ RADITI_VERIFY_IMAGE_TAG: tag }), /RADITI_VERIFY_IMAGE_TAG/)
+  const tag = imageTag()
+  assert.deepEqual(
+    [RUNTIME_IMAGE, CLI_IMAGE, GUARD_IMAGE],
+    [
+      `raditi-p3verify-runtime:${tag}`,
+      `raditi-p3verify-cli:${tag}`,
+      `raditi-p3verify-guard:${tag}`,
+    ],
+  )
 })
 
 test('the search for a secret in the files of a sandbox reads binary files as well', async () => {

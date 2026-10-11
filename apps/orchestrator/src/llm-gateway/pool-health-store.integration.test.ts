@@ -12,12 +12,10 @@ const databaseUrl = process.env.DATABASE_URL
 const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '1')
 // Within the horizon of a weekly window: a reset further ahead is a broken report.
 const reset = new Date(Math.floor(Date.now() / 1000) * 1000 + 3 * 86_400_000)
-const withKey = { authNeedsRelogin: true }
 const probe = (overrides: Partial<ProbeResult> = {}): ProbeResult => ({
   status: 'ok',
   windows: [{ name: 'week', usedPct: 10, resetsAt: reset }],
   plan: null,
-  creditsBalance: null,
   ...overrides,
 })
 
@@ -69,7 +67,6 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
         plan: 'synthetic',
         enabled: false,
         credentialVersion: 1,
-        clientIdentity: {},
         maxConcurrentTurns: 1,
         maxConcurrentRequests: 2,
         limitWindows: [{ name: 'week', usedPct: 20, resetsAt: reset.toISOString() }],
@@ -102,7 +99,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
   })
 
   it('writes health/capacity without changing the operator switch', async () => {
-    await store.probe(snapshot, probe({ status: 'auth' }), withKey)
+    await store.probe(snapshot, probe({ status: 'auth' }))
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     expect(account).toMatchObject({
       health: 'needs_relogin',
@@ -113,14 +110,23 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     expect(account.healthChangedAt).toBeInstanceOf(Date)
   })
 
-  it('keeps a refreshable account healthy when a probe sees an expired access token', async () => {
-    expect(
-      await store.probe(snapshot, probe({ status: 'auth', windows: null }), {
-        authNeedsRelogin: false,
-      }),
-    ).toMatchObject({ applied: true, alert: null })
-    const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
-    expect(account).toMatchObject({ health: 'ok', healthReason: null })
+  it('gives no account of a provider the platform has no backend for: its row is history', async () => {
+    // An account of a removed provider stays in the table, switched off by the migration.
+    const history = await db.llmProvider.create({
+      data: { slug: `history-${randomUUID().slice(0, 8)}`, name: 'History', kind: 'subscription' },
+    })
+    try {
+      await db.subscriptionAccount.update({
+        where: { id: accountId },
+        data: { providerId: history.id },
+      })
+      // Nothing to probe with and no error: the pool job passes such a row by.
+      expect(await store.account(accountId)).toBeNull()
+    } finally {
+      await db.subscriptionAccount.update({ where: { id: accountId }, data: { providerId } })
+      await db.llmProvider.delete({ where: { id: history.id } })
+    }
+    expect(await store.account(accountId)).toMatchObject({ backendId: sampleBackendId })
   })
 
   it('ignores a control response sent with the previous credential version', async () => {
@@ -128,7 +134,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
       where: { id: accountId },
       data: { credentialVersion: 2 },
     })
-    expect(await store.probe(snapshot, probe({ status: 'auth' }), withKey)).toEqual({
+    expect(await store.probe(snapshot, probe({ status: 'auth' }))).toEqual({
       applied: false,
       alert: null,
     })
@@ -137,7 +143,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     expect(account.headroomPct).toBeNull()
   })
 
-  it('a late probe cannot replenish newer exhausted headers', async () => {
+  it('a late probe cannot replenish a newer exhausted snapshot', async () => {
     await db.subscriptionAccount.update({
       where: { id: accountId },
       data: {
@@ -145,7 +151,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
         limitsSeenAt: new Date(snapshot.limitsSeenAt!.getTime() + 1),
       },
     })
-    await store.probe(snapshot, probe(), withKey)
+    await store.probe(snapshot, probe())
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     expect(account.headroomPct?.toString()).toBe('0')
     expect(account.limitWindows).toEqual([
@@ -168,7 +174,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
       where: { id: accountId },
       data: { limitsSeenAt: overtakenAt },
     })
-    const update = await store.probe(unknown, probe(), withKey)
+    const update = await store.probe(unknown, probe())
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     expect(account.limitWindows).toEqual([
       { name: 'week', usedPct: 10, resetsAt: reset.toISOString() },
@@ -186,12 +192,12 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
       where: { id: accountId },
       data: { limitWindows: [], headroomPct: null, limitsSeenAt: clearedAt },
     })
-    await store.probe(snapshot, probe(), withKey)
+    await store.probe(snapshot, probe())
     expect(
       (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })).limitWindows,
     ).toEqual([])
     // The next probe starts from the cleared state and restores them.
-    await store.probe((await store.account(accountId))!, probe(), withKey)
+    await store.probe((await store.account(accountId))!, probe())
     expect(
       (
         await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
@@ -206,7 +212,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     const exhausted = (resetsAt: Date) =>
       probe({ windows: [{ name: 'week', usedPct: 100, resetsAt }] })
     for (const resetsAt of [corrupted, new Date(Date.now() + 8 * day + 60_000)]) {
-      await store.probe((await store.account(accountId))!, exhausted(resetsAt), withKey)
+      await store.probe((await store.account(accountId))!, exhausted(resetsAt))
       const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
       // An unreadable report: capacity unknown until the next probe, and no pause from it.
       expect(account).toMatchObject({ limitWindows: [], headroomPct: null, coolingUntil: null })
@@ -235,22 +241,22 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
   })
 
   it('reports the snapshot a probe left, also when it wrote no windows', async () => {
-    const update = await store.probe(snapshot, probe({ status: 'auth', windows: null }), withKey)
+    const update = await store.probe(snapshot, probe({ status: 'auth', windows: null }))
     expect(update).toMatchObject({ applied: true, limitsSeenAt: snapshot.limitsSeenAt })
   })
 
-  it('clears authoritative unknown capacity and preserves a pending token write', async () => {
+  it('clears authoritative unknown capacity and leaves the recorded health reason alone', async () => {
     await db.subscriptionAccount.update({
       where: { id: accountId },
-      data: { healthReason: 'vault_write_pending' },
+      data: { healthReason: 'recorded_before' },
     })
-    await store.probe(snapshot, probe({ status: 'unknown', windows: null }), withKey)
+    await store.probe(snapshot, probe({ status: 'unknown', windows: null }))
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     expect(account).toMatchObject({
       limitWindows: [],
       headroomPct: null,
       health: 'ok',
-      healthReason: 'vault_write_pending',
+      healthReason: 'recorded_before',
     })
   })
 
@@ -268,7 +274,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     await locked.promise
     const start = Date.now()
     try {
-      await expect(store.probe(snapshot, probe(), withKey)).rejects.toThrow()
+      await expect(store.probe(snapshot, probe())).rejects.toThrow()
       expect(Date.now() - start).toBeLessThan(4_000)
     } finally {
       release.resolve()

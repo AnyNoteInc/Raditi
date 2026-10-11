@@ -10,9 +10,12 @@ import {
 /**
  * Agent driver port — spec §8. The core knows only this interface and the common events;
  * every CLI-specific detail (flags, config files, event format) lives in the adapter
- * (packages/agent-drivers). No `if (driver === 'codex')` outside the driver.
+ * (packages/agent-drivers). No `if (driver === 'opencode')` outside the driver.
+ *
+ * An id that leaves this list is refused wherever a stored row is read back as work: the runner
+ * protocol, a turn plan, an issuance policy, a snapshot. The rows that name it stay as history.
  */
-export const agentDriverIds = ['codex', 'kimi', 'qwen', 'opencode'] as const
+export const agentDriverIds = ['opencode'] as const
 export type AgentDriverId = (typeof agentDriverIds)[number]
 
 export interface AgentCapabilities {
@@ -27,7 +30,7 @@ export interface AgentCapabilities {
   images: boolean
 }
 
-/** Fixed paths: Kimi and Qwen bind their sessions to the working directory path. */
+/** Fixed paths: a CLI may bind its session to the path of the working directory. */
 export const SANDBOX_WORKDIR = '/workspace/repo'
 export const SANDBOX_INBOX = '/workspace/inbox'
 export const SANDBOX_OUT = '/workspace/out'

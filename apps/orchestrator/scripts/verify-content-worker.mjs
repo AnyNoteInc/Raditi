@@ -307,7 +307,7 @@ try {
     'site_info',
     'wp_rest',
   ])
-  // Codex and Kimi CLI refuse a whole tool list in which one tool has no object input schema.
+  // A strict MCP client refuses a whole tool list in which one tool has no object input schema.
   assert(ListToolsResultSchema.safeParse(listed).success, 'tools/list must match the MCP schema')
   assert(listed.tools.every((item) => item.inputSchema?.type === 'object'))
   const masked = json(await tool('wp_rest', { method: 'GET', route }))

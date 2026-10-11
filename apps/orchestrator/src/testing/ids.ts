@@ -10,6 +10,13 @@ export const sampleDriverId = 'opencode' as const satisfies AgentDriverId
 /** A backend in general. */
 export const sampleBackendId = 'zai-coding' as const satisfies LlmBackendId
 
+/**
+ * The other id of a pair that needs two different ones. No driver has it: a place that checks
+ * an id against its schema refuses it, a place that compares two ids of its own code sees a
+ * second one.
+ */
+export const otherDriverId = 'other-driver' as AgentDriverId
+
 /** The provider row of that backend: the seeds give it the backend id as its slug. */
 export const sampleProviderSlug = sampleBackendId
 

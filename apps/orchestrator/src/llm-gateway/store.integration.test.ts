@@ -147,7 +147,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
         status: 'active',
         health: 'ok',
         credentialVersion: 1,
-        clientIdentity: {},
         maxConcurrentTurns: 2,
         maxConcurrentRequests: options.accountSlots ?? 8,
         limitWindows: [
@@ -633,9 +632,20 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     expect(await store.admit({ ...k.input, source: '127.0.0.2' })).toMatchObject({
       reason: 'unauthorized',
     })
-    expect(await store.admit({ ...k.input, backendId: 'openai-chatgpt' })).toMatchObject({
-      reason: 'backend',
-    })
+    // The key of a provider the platform has no backend for — a row of history, say — opens
+    // nothing: the store reads no key from it. (A request for another backend than the key's
+    // needs two backends; the role holds that rule on its routes, server.test.ts.)
+    await db.llmProvider.update({ where: { id: provider.id }, data: { slug: 'other-provider' } })
+    try {
+      expect(await store.lookup(k.row.keyHash, k.input.source)).toBeNull()
+      expect(await store.admit(k.input)).toMatchObject({ reason: 'profile' })
+    } finally {
+      await db.llmProvider.update({
+        where: { id: provider.id },
+        data: { slug: sampleProviderSlug },
+      })
+    }
+    expect(await store.lookup(k.row.keyHash, k.input.source)).not.toBeNull()
     await db.llmKey.update({ where: { id: k.row.id }, data: { reasoningEffort: 'high' } })
     expect(await store.admit(k.input)).toMatchObject({ reason: 'profile' })
     await db.llmKey.update({ where: { id: k.row.id }, data: { reasoningEffort: 'low' } })
@@ -659,12 +669,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     ['retired', { status: 'retired', enabled: false }, 'account'],
     ['needs login', { health: 'needs_relogin' }, 'account'],
     ['suspended', { health: 'suspended' }, 'account'],
-    ['ambiguous refresh without expiry', { healthReason: 'refresh_ambiguous' }, 'account'],
-    [
-      'ambiguous refresh with expired credential',
-      { healthReason: 'refresh_ambiguous', credentialExpiresAt: new Date(Date.now() - 60_000) },
-      'account',
-    ],
     ['unwritten credential', { credentialVersion: 0 }, 'account'],
     ['credential revoked', { credentialsRevokedAt: new Date() }, 'account'],
     ['cooling', { coolingUntil: new Date(Date.now() + 60_000) }, 'subscription_limit'],
@@ -766,22 +770,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     await db.subscriptionAccount.update({ where: { id: f.account.id }, data: { enabled: false } })
     expect(await store.admit(k.input)).toMatchObject({ reason: 'account' })
     expect(await db.llmCall.count({ where: { keyId: k.row.id } })).toBe(1)
-  })
-
-  it('lets existing keys use an ambiguous refresh credential before its known expiry', async () => {
-    const f = await fixture()
-    const k = await f.key()
-    await db.subscriptionAccount.update({
-      where: { id: f.account.id },
-      data: {
-        healthReason: 'refresh_ambiguous',
-        credentialExpiresAt: new Date(Date.now() + 60_000),
-      },
-    })
-    await admitted(k.input)
-    expect(
-      (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })).health,
-    ).toBe('ok')
   })
 
   it('fails closed when no historical price exists', async () => {
@@ -985,37 +973,19 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     ).toBeInstanceOf(Date)
   })
 
-  it('persists usage windows and normalized refusals without an unconfirmed account downgrade', async () => {
+  it('persists normalized refusals without an unconfirmed account downgrade, and leaves the windows to the probe', async () => {
     const f = await fixture()
     const k = await f.key()
+    const before = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
     const call = await admitted(k.input)
-    const reset = new Date(Date.now() + 2 * 86_400_000)
-    await store.finish(call.id, {
-      ...actual(),
-      state: 'failed',
-      signal: { kind: 'region' },
-      windows: {
-        windows: [
-          { name: 'week', usedPct: 23.5, resetsAt: reset },
-          { name: 'month', usedPct: 10, resetsAt: null },
-        ],
-        creditsBalance: '12.5',
-      },
-    })
+    await store.finish(call.id, { ...actual(), state: 'failed', signal: { kind: 'region' } })
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-    expect(account).toMatchObject({
-      health: 'ok',
-      status: 'active',
-      enabled: true,
-      creditsSeen: { balance: '12.5' },
-    })
-    expect(account.headroomPct?.toFixed(2)).toBe('76.50')
-    expect(account.limitsSeenAt).toBeInstanceOf(Date)
+    expect(account).toMatchObject({ health: 'ok', status: 'active', enabled: true })
     expect(account.lastUsedAt).toBeInstanceOf(Date)
-    expect(account.limitWindows).toEqual([
-      { name: 'week', usedPct: 23.5, resetsAt: reset.toISOString() },
-      { name: 'month', usedPct: 10, resetsAt: null },
-    ])
+    // A response names no window: what the last probe stored stands, dated as it was.
+    expect(account.limitWindows).toEqual(before.limitWindows)
+    expect(account.limitsSeenAt).toEqual(before.limitsSeenAt)
+    expect(account.headroomPct).toEqual(before.headroomPct)
     expect((await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })).lastRefusal).toBe(
       'egress',
     )
@@ -1101,118 +1071,36 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     expect(await events()).toHaveLength(1)
   })
 
-  it('never refills windows when overlapping responses finish out of order', async () => {
-    const f = await fixture()
-    const k = await f.key()
-    const older = await admitted(k.input)
-    const newer = await admitted(k.input)
-    const reset = new Date(Date.now() + 2 * 86_400_000)
-    await store.finish(newer.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 100, resetsAt: reset }],
-        creditsBalance: null,
-      },
-    })
-    await store.finish(older.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 10, resetsAt: reset }],
-        creditsBalance: null,
-      },
-    })
-    expect(await store.admit(k.input)).toMatchObject({ reason: 'subscription_limit' })
-    expect(
-      (
-        await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-      ).headroomPct?.toFixed(2),
-    ).toBe('0.00')
-
-    // A genuinely later reset may advance the window; an older reset may never replace it.
-    await db.subscriptionAccount.update({
-      where: { id: f.account.id },
-      data: {
-        limitWindows: [
-          {
-            name: 'week',
-            usedPct: 20,
-            resetsAt: new Date(reset.getTime() + 86_400_000).toISOString(),
-          },
-        ],
-      },
-    })
-    const later = await admitted(k.input)
-    await store.finish(later.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 1, resetsAt: reset }],
-        creditsBalance: null,
-      },
-    })
-    expect(
-      (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } }))
-        .limitWindows,
-    ).toEqual([
-      { name: 'week', usedPct: 20, resetsAt: new Date(reset.getTime() + 86_400_000).toISOString() },
-    ])
-    const unknown = await admitted(k.input)
-    await store.finish(unknown.id, { ...actual(), windows: { windows: [], creditsBalance: null } })
-    expect(await store.admit(k.input)).toMatchObject({ reason: 'transient', probeAccount: true })
-  })
-
-  it('keeps known windows when a response reports credits only, and drops them for a report it cannot read', async () => {
-    const f = await fixture()
-    const k = await f.key()
-    const before = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-    const creditsOnly = await admitted(k.input)
-    await store.finish(creditsOnly.id, {
-      ...actual(),
-      windows: { windows: null, creditsBalance: '7.5' },
-    })
-    const kept = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-    expect(kept.limitWindows).toEqual(before.limitWindows)
-    expect(kept.limitsSeenAt).toEqual(before.limitsSeenAt)
-    expect(kept.creditsSeen).toEqual({ balance: '7.5' })
-    // The turn goes on: nothing about the windows changed.
-    const unreadable = await admitted(k.input)
-    await store.finish(unreadable.id, {
-      ...actual(),
-      windows: { windows: [], creditsBalance: null },
-    })
-    const dropped = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-    expect(dropped.limitWindows).toEqual([])
-    expect(dropped.headroomPct).toBeNull()
-    expect(dropped.limitsSeenAt!.getTime()).toBeGreaterThan(before.limitsSeenAt!.getTime())
-    expect(await store.admit(k.input)).toMatchObject({
-      reason: 'transient',
-      probeAccount: true,
-      limitsSeenAt: dropped.limitsSeenAt,
-    })
-  })
-
   it.each([false, true])(
-    'keeps exhaustion closed with an unknown reset and reported windows=%s',
-    async (reported) => {
+    'keeps exhaustion closed with an unknown reset, whether the stored windows show it or not (%s)',
+    async (shown) => {
       const f = await fixture()
       const k = await f.key()
       const call = await admitted(k.input)
+      // What a probe stored while the call was open: a window already spent, or nothing new.
+      if (shown)
+        await db.subscriptionAccount.update({
+          where: { id: f.account.id },
+          data: {
+            limitWindows: [{ name: 'week', usedPct: 100, resetsAt: null }],
+            headroomPct: '0',
+          },
+        })
       await store.finish(call.id, {
         ...actual(),
         state: 'failed',
         signal: { kind: 'window_exhausted', until: null },
-        windows: reported
-          ? { windows: [{ name: 'week', usedPct: 100, resetsAt: null }], creditsBalance: null }
-          : null,
       })
       const account = await db.subscriptionAccount.findUniqueOrThrow({
         where: { id: f.account.id },
       })
       expect(account.health).toBe('ok')
       expect(account.status).toBe('active')
-      expect(account.headroomPct?.toFixed(2) ?? null).toBe(reported ? '0.00' : null)
+      // A stored spent window stays; spare capacity nobody can vouch for any more is dropped.
+      expect(account.headroomPct?.toFixed(2) ?? null).toBe(shown ? '0.00' : null)
       expect(account.limitsSeenAt).toBeInstanceOf(Date)
       expect(await store.admit(k.input)).toMatchObject(
-        reported ? { reason: 'subscription_limit' } : { reason: 'transient', probeAccount: true },
+        shown ? { reason: 'subscription_limit' } : { reason: 'transient', probeAccount: true },
       )
     },
   )
@@ -1227,13 +1115,8 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       state: 'failed',
       signal: { kind: 'window_exhausted', until: null },
     })
-    await store.finish(late.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 1, resetsAt: new Date(Date.now() + 2 * 86_400_000) }],
-        creditsBalance: null,
-      },
-    })
+    // A response that completes afterwards says nothing of the windows: only a probe does.
+    await store.finish(late.id, actual())
     expect(
       (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } }))
         .limitWindows,
@@ -1347,7 +1230,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     ).toEqual(longer)
   })
 
-  it('never writes a pause or a window from a reset further ahead than a window is long', async () => {
+  it('never writes a pause from a reset further ahead than a window is long', async () => {
     const f = await fixture()
     const k = await f.key()
     const day = 86_400_000
@@ -1374,18 +1257,5 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
         },
       })
     }
-    // A window with such a reset would outrank every later, correct snapshot.
-    const call = await admitted(k.input)
-    await store.finish(call.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 100, resetsAt: corrupted }],
-        creditsBalance: null,
-      },
-    })
-    expect(
-      (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } }))
-        .limitWindows,
-    ).toEqual([])
   })
 })

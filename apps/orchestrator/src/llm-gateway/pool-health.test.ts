@@ -12,7 +12,6 @@ const account: PoolHealthAccount = {
   backendId: zaiCodingBackend.id,
   credentialRef: `subs/${zaiCodingBackend.id}/synthetic-account`,
   credentialVersion: 1,
-  clientIdentity: {},
   limitsSeenAt: null,
   windowsKnown: false,
 }
@@ -20,7 +19,6 @@ const probe = (status: ProbeResult['status'] = 'ok'): ProbeResult => ({
   status,
   windows: status === 'ok' ? [{ name: 'week', usedPct: 10, resetsAt: null }] : null,
   plan: null,
-  creditsBalance: null,
 })
 const call = (id = 'call-1', startedAt = new Date(0)): GatewayCall =>
   ({
@@ -48,7 +46,6 @@ function harness(backend: Partial<LlmBackend> = {}) {
     payment: vi
       .fn<PoolHealthStore['payment']>()
       .mockResolvedValue({ count: 1, suspended: false, at: new Date(0) }),
-    credits: vi.fn<PoolHealthStore['credits']>().mockResolvedValue(false),
   }
   const backendProbe = vi.fn<typeof zaiCodingBackend.probe>().mockResolvedValue(probe())
   const http = { request: vi.fn<EgressHttp['request']>() }
@@ -146,23 +143,10 @@ describe('subscription pool health coordination', () => {
         h.health.observe(call('2'), finish(signal, 403)),
       ])
       expect(h.backendProbe).toHaveBeenCalledTimes(1)
-      expect(h.store.probe).toHaveBeenCalledExactlyOnceWith(account, probe(), {
-        authNeedsRelogin: true,
-      })
+      expect(h.store.probe).toHaveBeenCalledExactlyOnceWith(account, probe())
       expect(h.onRegion).not.toHaveBeenCalled()
     },
   )
-
-  it('a confirmed 401 demotes only accounts whose backend cannot refresh', async () => {
-    const h = harness()
-    await h.health.observe(call('1'), finish({ kind: 'auth' }, 401))
-    expect(h.store.probe).toHaveBeenLastCalledWith(account, probe(), { authNeedsRelogin: true })
-    const refreshable = harness({ refresh: vi.fn() })
-    await refreshable.health.observe(call('2'), finish({ kind: 'auth' }, 401))
-    expect(refreshable.store.probe).toHaveBeenLastCalledWith(account, probe(), {
-      authNeedsRelogin: false,
-    })
-  })
 
   it('coalesces the same account and observes the five-minute interval', async () => {
     const h = harness()
@@ -188,9 +172,7 @@ describe('subscription pool health coordination', () => {
     h.backendProbe.mockResolvedValue(probe('auth'))
     await h.health.observe(call('1'), finish({ kind: 'auth' }, 401))
     expect(h.backendProbe).toHaveBeenCalledTimes(2)
-    expect(h.store.probe).toHaveBeenLastCalledWith(account, probe('auth'), {
-      authNeedsRelogin: true,
-    })
+    expect(h.store.probe).toHaveBeenLastCalledWith(account, probe('auth'))
     // The confirming probe answers the signals of its five minutes and bounds the next refresh.
     h.advance(60_000)
     await h.health.observe(call('2'), finish({ kind: 'auth' }, 401))
@@ -433,7 +415,7 @@ describe('subscription pool health coordination', () => {
     async (status, lifted) => {
       const h = harness()
       h.channelHealthy.mockReturnValue(false)
-      h.backendProbe.mockImplementation(async (_credential, _identity, http) => {
+      h.backendProbe.mockImplementation(async (_credential, http) => {
         await http.request(
           {
             method: 'GET',

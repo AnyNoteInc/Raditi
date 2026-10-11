@@ -42,7 +42,7 @@ import {
   cliRetriesStreamError,
 } from '../../../packages/llm-backends/src/zai-coding/fixtures/opencode-cli.ts'
 import { verifyCrashes } from './verify-llm-crashes.mjs'
-import { productionMcpTools } from './verify-llm-gateway-drivers.mjs'
+import { productionMcpTools } from './verify-llm-mcp-tools.mjs'
 import { verifyStreamFailures } from './verify-llm-gateway-stream.mjs'
 import { verifyEmergencyRetirement, verifyLifecycle } from './verify-llm-lifecycle.mjs'
 import { verifyProtocol } from './verify-llm-protocol.mjs'
@@ -164,8 +164,8 @@ export async function verifyZai(ctx) {
   passed('Z.ai plan key import by the operator command on the direct path; a foreign key refused')
 
   setStage('Vault policy boundaries')
-  // The secret of the account is the role llm's to read and nobody's to list or destroy but
-  // the admin's; the import wrote it and cannot read it back.
+  // The secret of the account is the role llm's to read — never to write — and nobody's to
+  // list or destroy but the admin's; the import wrote it and cannot read it back.
   const secretPath = `subs/${BACKEND}/${accountId}`
   await assert.rejects(writer.kvRead(secretPath), (error) => error.status === 403)
   await assert.rejects(llmSecrets.kvMetadata(secretPath), (error) => error.status === 403)
@@ -181,7 +181,14 @@ export async function verifyZai(ctx) {
   const versionPath = `subs/${BACKEND}/synthetic-version-check`
   await assert.rejects(writer.kvWrite(versionPath, { value: 'first' }))
   await writer.kvWrite(versionPath, { value: 'first' }, { cas: 0 })
-  await llmSecrets.kvWrite(versionPath, { value: 'second' }, { cas: 1 })
+  // The role reads the secrets of subs/ and writes none, with the right CAS as well.
+  await assert.rejects(
+    llmSecrets.kvWrite(versionPath, { value: 'second' }, { cas: 1 }),
+    (error) => error.status === 403,
+  )
+  assert.equal((await llmSecrets.kvRead(versionPath)).version, 1)
+  // A new key of an account is the writer's (a relogin), and the old version is gone for good.
+  await writer.kvWrite(versionPath, { value: 'second' }, { cas: 1 })
   assert.equal((await llmSecrets.kvRead(versionPath)).version, 2)
   const historical = await localVaultRequest(
     stack.root,
@@ -1177,7 +1184,6 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     locks: ctx.locks,
     accountId,
     workspaceId: workspace.id,
-    otherBackendRequests: ctx.otherBackendRequests,
     task,
     issue,
     keep,

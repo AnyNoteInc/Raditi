@@ -18,6 +18,36 @@ const runtime = process.env.SANDBOX_RUNTIME === 'runsc' ? 'runsc' : 'runc'
 // Where gateway containers reach this test process: Colima maps the macOS host to 192.168.5.2.
 const upstreamHost = process.env.RADITI_DOCKER_TEST_UPSTREAM_HOST || 'host.docker.internal'
 
+// A client on the runtime of the pinned CLI — bun, inside the OpenCode binary — that posts bodies
+// of the given sizes one after another and reports each outcome. The largest are above what the
+// gateway takes: it must refuse them, and the request that follows must be answered — it may
+// reuse the connection, because the refused upload was read to its end.
+const UPLOADS = `(async () => {
+  const post = async (bytes) => {
+    try {
+      const answer = await fetch('http://sandbox-gw:8080/zai/v4/chat/completions', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer synthetic-turn-key',
+          'content-type': 'application/json',
+          'user-agent': 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14',
+        },
+        body: '{"messages":"' + 'x'.repeat(bytes - 15) + '"}',
+      })
+      const text = await answer.text()
+      return answer.status + ' ' + (answer.status === 200 ? text : JSON.parse(text).error.code)
+    } catch (error) {
+      return 'failed ' + (error.code || error.name)
+    }
+  }
+  const outcomes = []
+  for (const bytes of JSON.parse(process.argv.at(-1))) outcomes.push(await post(bytes))
+  console.log(JSON.stringify({ runtime: typeof Bun === 'undefined' ? 'node' : 'bun', outcomes }))
+})()`
+const MiB = 1024 * 1024
+/** The limit of a request body at the gateway (gatewayLimits.requestBytes), and of the role llm. */
+const BODY_LIMIT = 16 * MiB
+
 // gVisor resolves ARP lazily: the first SYN to a live neighbour can stall, so every target gets
 // two attempts of 6 s and the gateway itself is a positive control (P2 gate 1 audit).
 const PROBE = `const net=require('net');const probe=(host,port)=>new Promise(done=>{const s=net.connect({host,port,timeout:6000});s.on('connect',()=>{s.destroy();done('connect')});s.on('timeout',()=>{s.destroy();done('timeout')});s.on('error',e=>done(e.code||'error'))});(async()=>{const out={};await Promise.all(JSON.parse(process.argv[1]).map(async([host,port])=>{let r;for(let i=0;i<2&&r!=='connect';i++)r=await probe(host,port);out[host+':'+port]=r}));process.stdout.write(JSON.stringify(out))})()`
@@ -54,7 +84,7 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
       req.resume()
       res.writeHead(200, {
         'content-type': 'application/json',
-        'x-codex-turn-state': 'next-state',
+        'x-provider-state': 'hidden-state',
         'retry-after': '7',
         'mcp-session-id': 'mcp-response-session',
         'mcp-protocol-version': '2025-06-18',
@@ -130,27 +160,6 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
 
       const accepted: { path: string; headers: Record<string, string> }[] = [
         {
-          path: '/codex/responses',
-          headers: {
-            'user-agent': 'codex_cli_rs/0.159.1 (Linux; aarch64)',
-            originator: 'codex_cli_rs',
-            'session-id': 'codex-session',
-            'thread-id': 'codex-thread',
-            'x-client-request-id': 'codex-request',
-            'x-openai-subagent': 'test-agent',
-            'x-codex-turn-state': 'previous-state',
-            'x-openai-internal-codex-responses-lite': 'true',
-          },
-        },
-        {
-          path: '/kimi/v1/chat/completions',
-          headers: {
-            'user-agent': 'kimi-code/2.1 (Linux; aarch64)',
-            'x-msh-platform': 'linux',
-            'x-msh-version': '2.1',
-          },
-        },
-        {
           path: '/zai/v4/chat/completions',
           headers: {
             'user-agent': 'opencode/1.18.34 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14',
@@ -180,11 +189,9 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
           '-H',
           'accept: text/event-stream',
           '-H',
-          'x-codex-turn-metadata: private-path',
+          'originator: private-client',
           '-H',
-          'x-codex-window-id: private-window',
-          '-H',
-          'x-codex-routing-hint: private-route',
+          'x-client-request-id: private-request',
           '-H',
           'x-forwarded-for: 192.0.2.1',
           // What the OpenCode CLI adds to every provider request: the session stays in the sandbox.
@@ -205,14 +212,13 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
         expect(result.output.slice(boundary + 4)).toBe('{"ok":true}')
         expect(responseHeaders).toContain('content-type: application/json')
         expect(responseHeaders).not.toContain('x-ratelimit-')
+        expect(responseHeaders).not.toContain('x-provider-state:')
         expect(responseHeaders).not.toContain('set-cookie:')
         if (path === '/mcp') {
           expect(responseHeaders).toContain('mcp-session-id: mcp-response-session')
           expect(responseHeaders).toContain('mcp-protocol-version: 2025-06-18')
-          expect(responseHeaders).not.toContain('x-codex-turn-state:')
           expect(responseHeaders).not.toContain('retry-after:')
         } else {
-          expect(responseHeaders).toContain('x-codex-turn-state: next-state')
           expect(responseHeaders).toContain('retry-after: 7')
           expect(responseHeaders).not.toContain('mcp-session-id:')
           expect(responseHeaders).not.toContain('mcp-protocol-version:')
@@ -226,9 +232,8 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
           ...headers,
         })
         for (const name of [
-          'x-codex-turn-metadata',
-          'x-codex-window-id',
-          'x-codex-routing-hint',
+          'originator',
+          'x-client-request-id',
           'x-forwarded-for',
           'x-session-id',
           'x-session-affinity',
@@ -237,8 +242,6 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
           expect(forwarded[name]).toBeUndefined()
       }
       expect(requests.map(({ route }) => route)).toEqual([
-        'POST /codex/responses',
-        'POST /kimi/v1/chat/completions',
         'POST /zai/v4/chat/completions',
         'POST /mcp',
       ])
@@ -246,19 +249,14 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
         ['-X', 'POST', 'http://sandbox-gw:8080/v1/responses'],
         ['-X', 'POST', 'http://sandbox-gw:8080/v1/chat/completions'],
         ['http://sandbox-gw:8080/v1/models'],
-        ['http://sandbox-gw:8080/codex/models'],
-        ['-X', 'POST', 'http://sandbox-gw:8080/codex/responses/compact'],
-        ['-X', 'POST', 'http://sandbox-gw:8080/kimi/v1/search'],
         ['http://sandbox-gw:8080/zai/v4/models'],
+        ['-X', 'POST', 'http://sandbox-gw:8080/zai/v4/chat/completions/compact'],
         ['-X', 'POST', 'http://sandbox-gw:8080/zai/v4/chat/completions?stream=false'],
+        ['-X', 'POST', 'http://sandbox-gw:8080/zai/v4/chat/completions?target=evil'],
         ['-X', 'GET', 'http://sandbox-gw:8080/zai/v4/chat/completions'],
-        ['-X', 'POST', 'http://sandbox-gw:8080/codex/responses?target=evil'],
-        ['-H', 'Host: evil', '-X', 'POST', 'http://sandbox-gw:8080/codex/responses'],
         ['-H', 'Host: evil', '-X', 'POST', 'http://sandbox-gw:8080/zai/v4/chat/completions'],
-        ['-X', 'GET', 'http://sandbox-gw:8080/codex/responses'],
-        ['-X', 'GET', 'http://sandbox-gw:8080/kimi/v1/chat/completions'],
         ['-X', 'PUT', 'http://sandbox-gw:8080/mcp'],
-        ['--path-as-is', 'http://sandbox-gw:8080/codex/../mcp'],
+        ['--path-as-is', 'http://sandbox-gw:8080/zai/../mcp'],
       ]) {
         const result = await execute([
           'curl',
@@ -313,8 +311,38 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
         "const h=require('http');const s=h.createServer((q,r)=>r.end('local'));s.listen(9231,'127.0.0.1',()=>h.get('http://127.0.0.1:9231',r=>{r.pipe(process.stdout);r.on('end',()=>s.close())}))",
       ])
       expect(localhost.output).toBe('local')
-      // Only the four allowed requests above reached the upstream.
-      expect(requests).toHaveLength(4)
+      // Only the two allowed requests above reached the upstream.
+      expect(requests).toHaveLength(2)
+
+      // A body really above the limit, uploaded by the runtime of the pinned CLI: a final 400,
+      // and the next request of the same client answered. That runtime keeps a connection it
+      // stopped uploading into, so the gateway answers a refused upload only after it has read
+      // it to its end, and the connection stays in order.
+      const sizes = Array.from({ length: 3 }, () => [
+        BODY_LIMIT + 1,
+        1024,
+        24 * MiB,
+        48 * MiB,
+        1024,
+      ]).flat()
+      const uploads = await execute(
+        ['env', 'BUN_BE_BUN=1', '/usr/local/bin/opencode', '-e', UPLOADS, JSON.stringify(sizes)],
+        90_000,
+      )
+      expect(uploads.result).toEqual({ code: 0, reason: 'exited' })
+      expect(JSON.parse(uploads.output)).toEqual({
+        runtime: 'bun',
+        outcomes: sizes.map((bytes) =>
+          bytes > BODY_LIMIT ? '400 raditi_body' : '200 {"ok":true}',
+        ),
+      })
+      // A body of exactly the limit is taken: only the six small ones and it went upstream.
+      const atLimit = await execute(
+        ['env', 'BUN_BE_BUN=1', '/usr/local/bin/opencode', '-e', UPLOADS, `[${BODY_LIMIT}]`],
+        60_000,
+      )
+      expect(JSON.parse(atLimit.output).outcomes).toEqual(['200 {"ok":true}'])
+      expect(requests).toHaveLength(2 + 6 + 1)
 
       // Bridge traffic is not filtered, so a third endpoint on the attempt network is refused.
       intruder = await client.createContainer({

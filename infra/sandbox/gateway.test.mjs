@@ -7,7 +7,13 @@ import { readFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { test } from 'node:test'
 
-import { createGateway, gatewayLimits, llmPaths, llmRequestHeaders } from './gateway.mjs'
+import {
+  createGateway,
+  gatewayLimits,
+  llmPaths,
+  llmRequestHeaders,
+  llmResponseHeaders,
+} from './gateway.mjs'
 
 // Captured before any test mocks the clock: waits for real socket events.
 const realSetTimeout = globalThis.setTimeout
@@ -20,18 +26,7 @@ const tooLargeBody = JSON.stringify({
   },
 })
 
-const clientHeaders = {
-  'user-agent': 'synthetic-cli/1.0',
-  originator: 'synthetic-cli',
-  'session-id': 'synthetic-session',
-  'thread-id': 'synthetic-thread',
-  'x-client-request-id': 'synthetic-request',
-  'x-openai-subagent': 'synthetic-subagent',
-  'x-codex-turn-state': 'synthetic-turn-state',
-  'x-openai-internal-codex-responses-lite': 'true',
-  'x-msh-platform': 'synthetic-platform',
-  'x-msh-version': 'synthetic-version',
-}
+const clientHeaders = { 'user-agent': 'synthetic-cli/1.0' }
 const mcpHeaders = {
   'mcp-session-id': 'synthetic-mcp-session',
   'mcp-protocol-version': '2025-06-18',
@@ -46,11 +41,12 @@ const privateHeaders = {
   cookie: 'must-not-forward=1',
   'x-forwarded-host': 'evil.test',
   'x-forwarded-for': '203.0.113.1',
-  'chatgpt-account-id': 'must-not-forward',
-  'x-codex-installation-id': 'must-not-forward',
-  'x-codex-turn-metadata': 'must-not-forward',
-  'x-codex-window-id': 'must-not-forward',
-  'x-codex-routing-hint': 'must-not-forward',
+  // What a CLI may add to identify itself or its session: none of it is declared by a backend.
+  originator: 'must-not-forward',
+  'session-id': 'must-not-forward',
+  'x-client-request-id': 'must-not-forward',
+  'x-session-id': 'must-not-forward',
+  'x-installation-id': 'must-not-forward',
 }
 
 const deferred = () => {
@@ -86,7 +82,7 @@ async function fixture(t, handler, options = {}) {
     await close(gateway)
     await close(upstream)
   })
-  return { port: gateway.address().port, upstreamHost: new URL(origin).host }
+  return { port: gateway.address().port, upstreamHost: new URL(origin).host, gateway }
 }
 
 function call(port, path, { method = 'POST', headers = {}, body = '{"input":"synthetic"}' } = {}) {
@@ -137,19 +133,18 @@ const expectPreserved = (actual, expected) => {
   for (const [name, value] of Object.entries(expected)) assert.equal(actual[name], value, name)
 }
 
-test('the LLM paths and request headers are exported as data, one exact path per CLI wire format', () => {
-  // The contract test of the role llm compares the paths with the routes of its backends.
-  assert.deepEqual(llmPaths, [
-    '/codex/responses',
-    '/kimi/v1/chat/completions',
-    '/zai/v4/chat/completions',
-  ])
-  assert.ok(Object.isFrozen(llmPaths) && Object.isFrozen(llmRequestHeaders))
+test('the LLM path and its headers are exported as data, the exact path of the CLI wire format', () => {
+  // The contract test of the role llm compares the three lists with what its backends declare.
+  assert.deepEqual(llmPaths, ['/zai/v4/chat/completions'])
+  assert.deepEqual(llmRequestHeaders, ['authorization', 'content-type', 'accept', 'user-agent'])
+  assert.deepEqual(llmResponseHeaders, ['content-type', 'retry-after'])
+  for (const list of [llmPaths, llmRequestHeaders, llmResponseHeaders]) {
+    assert.ok(Object.isFrozen(list))
+    assert.deepEqual(list, [...new Set(list)])
+  }
   for (const path of llmPaths) assert.match(path, /^\/[a-z0-9]+(?:\/[a-z0-9]+)+$/)
-  for (const name of ['authorization', 'content-type', 'accept', 'user-agent'])
-    assert.ok(llmRequestHeaders.includes(name), name)
-  assert.deepEqual(llmRequestHeaders, [...new Set(llmRequestHeaders)])
-  for (const name of llmRequestHeaders) assert.equal(name, name.toLowerCase())
+  for (const name of [...llmRequestHeaders, ...llmResponseHeaders])
+    assert.equal(name, name.toLowerCase())
   for (const name of ['cookie', 'host', 'x-session-id', 'x-session-affinity'])
     assert.ok(!llmRequestHeaders.includes(name), name)
 })
@@ -198,11 +193,10 @@ test('LLM routes preserve client identity while stripping platform, MCP and priv
       })
       res.writeHead(429, {
         'content-type': 'text/event-stream',
-        'x-codex-turn-state': 'next-synthetic-state',
         'retry-after': '42',
         'mcp-session-id': 'must-not-forward',
         'mcp-protocol-version': 'must-not-forward',
-        'x-codex-primary-used-percent': '99',
+        'x-provider-turn-state': 'must-not-forward',
         'x-ratelimit-remaining': '1',
         'set-cookie': 'must-not-forward=1',
         'x-private': 'must-not-forward',
@@ -218,13 +212,12 @@ test('LLM routes preserve client identity while stripping platform, MCP and priv
     assert.equal(result.body, 'data: {"synthetic":true}\n\n')
     expectPreserved(result.headers, {
       'content-type': 'text/event-stream',
-      'x-codex-turn-state': 'next-synthetic-state',
       'retry-after': '42',
     })
     expectAbsent(result.headers, [
       'mcp-session-id',
       'mcp-protocol-version',
-      'x-codex-primary-used-percent',
+      'x-provider-turn-state',
       'x-ratelimit-remaining',
       'set-cookie',
       'x-private',
@@ -248,17 +241,12 @@ test('MCP retains its own methods and headers without accepting LLM identity hea
       'content-type': 'application/json',
       'mcp-session-id': 'returned-mcp-session',
       'mcp-protocol-version': '2025-06-18',
-      'x-codex-turn-state': 'must-not-forward',
       'retry-after': '42',
       'set-cookie': 'must-not-forward=1',
     })
     res.end('{"ok":true}')
   })
-  const llmOnly = {
-    ...clientHeaders,
-    'x-openai-internal-codex-responses-lite': 'false',
-    ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`x-msh-${i}`, 'x'.repeat(257)])),
-  }
+  const llmOnly = clientHeaders
   for (const method of ['GET', 'POST', 'DELETE']) {
     const result = await call(port, '/mcp', {
       method,
@@ -271,7 +259,7 @@ test('MCP retains its own methods and headers without accepting LLM identity hea
       'mcp-session-id': 'returned-mcp-session',
       'mcp-protocol-version': '2025-06-18',
     })
-    expectAbsent(result.headers, ['x-codex-turn-state', 'retry-after', 'set-cookie'])
+    expectAbsent(result.headers, ['retry-after', 'set-cookie'])
     const actual = received.at(-1)
     assert.equal(actual.url, '/mcp')
     assert.equal(actual.method, method)
@@ -314,18 +302,6 @@ test('only literal allowlisted paths and methods reach upstream', async (t) => {
   const deniedPaths = [
     '/v1/responses',
     '/v1/chat/completions',
-    '/codex/models',
-    '/codex/responses/compact',
-    '/kimi/v1/usages',
-    '/kimi/v1/search',
-    '/codex/responses/',
-    '/codex/%72esponses',
-    '/codex//responses',
-    '//codex/responses',
-    '/codex/../codex/responses',
-    '/codex/responses?x=1',
-    '/codex/responses#fragment',
-    '/kimi/v1/chat/completions?x=1',
     '/zai/v4/chat/completions?x=1',
     '/zai/v4/chat/completions/',
     '/zai/v4/chat/%63ompletions',
@@ -339,7 +315,6 @@ test('only literal allowlisted paths and methods reach upstream', async (t) => {
     '/api/coding/paas/v4/chat/completions',
     '/api/monitor/usage/quota/limit',
     '/mcp?x=1',
-    'http://example.test/codex/responses',
     'http://example.test/zai/v4/chat/completions',
   ]
   for (const path of deniedPaths) assert.equal((await call(port, path)).status, 403, path)
@@ -391,55 +366,6 @@ test('source address and Host remain checked before any upstream connection', as
   assert.equal(received, 0)
 })
 
-test('x-msh headers accept eight distinct names at 256 characters and refuse larger input before upstream', async (t) => {
-  const received = []
-  const { port } = await fixture(t, (req, res) => {
-    received.push(req.headers)
-    req.resume()
-    res.end('allowed')
-  })
-  const maximum = Object.fromEntries(
-    Array.from({ length: 8 }, (_, i) => [`x-msh-${i}`, 'x'.repeat(256)]),
-  )
-  for (const path of llmPaths) {
-    assert.equal((await call(port, path, { headers: maximum })).status, 200)
-    expectPreserved(received.at(-1), maximum)
-    assert.equal(
-      (await call(port, path, { headers: { ...maximum, 'X-Msh-Ninth': 'extra' } })).status,
-      403,
-    )
-    assert.equal(
-      (await call(port, path, { headers: { 'x-msh-oversized': 'x'.repeat(257) } })).status,
-      403,
-    )
-  }
-  assert.equal(received.length, llmPaths.length)
-})
-
-test('Responses Lite accepts only the exact true value and refuses duplicate or alternative values', async (t) => {
-  let received = 0
-  const { port } = await fixture(t, (req, res) => {
-    received += 1
-    req.resume()
-    res.end('allowed')
-  })
-  for (const path of llmPaths) {
-    assert.equal(
-      (await call(port, path, { headers: { 'x-openai-internal-codex-responses-lite': 'true' } }))
-        .status,
-      200,
-    )
-    for (const value of ['false', 'True', '1', '', 'true, false', ['true', 'true']])
-      assert.equal(
-        (await call(port, path, { headers: { 'x-openai-internal-codex-responses-lite': value } }))
-          .status,
-        403,
-        `${path}: ${String(value)}`,
-      )
-  }
-  assert.equal(received, llmPaths.length)
-})
-
 test('duplicate forwarded request headers are refused even when Node would discard one value', async (t) => {
   let received = 0
   const { port } = await fixture(t, (req, res) => {
@@ -452,8 +378,7 @@ test('duplicate forwarded request headers are refused even when Node would disca
     [llmPaths[0], 'Authorization', 'Bearer synthetic'],
     [llmPaths[0], 'Content-Type', 'application/json'],
     [llmPaths[0], 'Accept', 'text/event-stream'],
-    [llmPaths[0], 'Session-Id', 'synthetic-session'],
-    [llmPaths[1], 'X-Msh-Platform', 'synthetic-platform'],
+    [llmPaths[0], 'User-Agent', 'synthetic-cli/1.0'],
     ['/mcp', 'Mcp-Session-Id', 'synthetic-session'],
     ['/mcp', 'Mcp-Protocol-Version', '2025-06-18'],
   ]) {
@@ -471,8 +396,7 @@ test('Connection-nominated request and response headers are removed across both 
     req.resume()
     res.writeHead(200, {
       'content-type': 'application/json',
-      connection: ' X-Codex-Turn-State , RETRY-AFTER , Mcp-Session-Id ',
-      'x-codex-turn-state': 'must-not-forward',
+      connection: ' RETRY-AFTER , Mcp-Session-Id ',
       'retry-after': '42',
       'mcp-session-id': 'must-not-forward',
       'mcp-protocol-version': '2025-06-18',
@@ -485,28 +409,23 @@ test('Connection-nominated request and response headers are removed across both 
         ...sharedHeaders,
         ...clientHeaders,
         ...mcpHeaders,
-        connection: ' AUTHORIZATION , Session-Id , X-Msh-Platform , MCP-Session-ID ',
+        connection: ' AUTHORIZATION , User-Agent , MCP-Session-ID ',
       },
     })
     assert.equal(result.status, 200)
-    expectAbsent(received.at(-1), [
-      'authorization',
-      'session-id',
-      'x-msh-platform',
-      'mcp-session-id',
-    ])
+    expectAbsent(received.at(-1), ['authorization', 'user-agent', 'mcp-session-id'])
     expectPreserved(received.at(-1), {
       accept: 'text/event-stream',
       'content-type': 'application/json',
     })
-    expectAbsent(result.headers, ['x-codex-turn-state', 'retry-after', 'mcp-session-id'])
+    expectAbsent(result.headers, ['retry-after', 'mcp-session-id'])
     assert.equal(result.headers['content-type'], 'application/json')
     if (path === '/mcp') assert.equal(result.headers['mcp-protocol-version'], '2025-06-18')
   }
 })
 
 test('duplicate allowed upstream response headers produce a generic failure', async (t) => {
-  const duplicates = ['content-type', 'x-codex-turn-state', 'retry-after', 'mcp-session-id']
+  const duplicates = ['content-type', 'retry-after', 'mcp-session-id']
   let index = 0
   const { port } = await fixture(t, (req, res) => {
     req.resume()
@@ -514,11 +433,11 @@ test('duplicate allowed upstream response headers produce a generic failure', as
     res.writeHead(200, [name, 'synthetic-first', name.toUpperCase(), 'synthetic-second'])
     res.end('must-not-forward')
   })
-  for (const path of [llmPaths[0], llmPaths[0], llmPaths[1], '/mcp']) {
+  for (const path of [llmPaths[0], llmPaths[0], '/mcp']) {
     const result = await call(port, path)
     assert.equal(result.status, 502)
     assert.equal(result.body, 'Gateway request failed\n')
-    expectAbsent(result.headers, ['x-codex-turn-state', 'retry-after', 'mcp-session-id'])
+    expectAbsent(result.headers, ['retry-after', 'mcp-session-id'])
   }
   assert.equal(index, duplicates.length)
 })
@@ -757,12 +676,11 @@ test(
       req.resume()
       res.on('close', () => closed.push(req.url))
       received += 1
-      if (received === 3) started.resolve()
+      if (received === 2) started.resolve()
     })
     t.mock.timers.enable({ apis: ['setTimeout'] })
     try {
-      const codex = call(port, llmPaths[0])
-      const kimi = call(port, llmPaths[1])
+      const llm = call(port, llmPaths[0])
       const mcp = call(port, '/mcp')
       await started.promise
       t.mock.timers.tick(11 * 60 * 1000 - 1)
@@ -770,8 +688,7 @@ test(
       await realDelay(100)
       assert.deepEqual(closed, [])
       t.mock.timers.tick(1)
-      assert.equal((await codex).status, 502)
-      assert.equal((await kimi).status, 502)
+      assert.equal((await llm).status, 502)
       assert.ok(!closed.includes('/mcp'))
       t.mock.timers.tick(9 * 60 * 1000 - 1)
       await realDelay(100)
@@ -870,86 +787,250 @@ test(
 )
 
 test(
-  'a declared body above 16 MiB is refused with a final 413 before any upstream connection',
-  { timeout: 5000 },
+  'a declared body above 16 MiB gets a final 400 once it has been read, with no upstream connection',
+  { timeout: 20000 },
   async (t) => {
-    let received = 0
-    const { port } = await fixture(t, (req, res) => {
-      received += 1
+    const received = []
+    const served = await fixture(t, (req, res) => {
+      received.push(req.url)
       req.resume()
-      res.end('unexpected')
+      res.end('allowed')
     })
+    let connections = 0
+    served.gateway.on('connection', () => {
+      connections += 1
+    })
+    const body = Buffer.alloc(gatewayLimits.requestBytes + 1, 'x')
     for (const path of [...llmPaths, '/mcp']) {
-      const done = deferred()
-      const client = request(
-        {
-          hostname: '127.0.0.1',
-          port,
-          path,
-          method: 'POST',
-          agent: false,
-          headers: {
-            host: 'sandbox-gw',
-            'content-type': 'application/json',
-            'content-length': String(gatewayLimits.requestBytes + 1),
-          },
-        },
-        (res) => {
-          const chunks = []
-          res.on('data', (chunk) => chunks.push(chunk))
-          res.on('end', () =>
-            done.resolve({
-              status: res.statusCode,
-              headers: res.headers,
-              body: Buffer.concat(chunks).toString(),
-            }),
+      // One connection for both requests, as the HTTP client of a CLI keeps it.
+      const agent = new Agent({ keepAlive: true, maxSockets: 1 })
+      t.after(() => agent.destroy())
+      const post = (payload) =>
+        new Promise((resolve, reject) => {
+          const client = request(
+            {
+              hostname: '127.0.0.1',
+              port: served.port,
+              path,
+              method: 'POST',
+              agent,
+              headers: {
+                host: 'sandbox-gw',
+                'content-type': 'application/json',
+                'content-length': String(payload.length),
+              },
+            },
+            (res) => {
+              const chunks = []
+              res.on('data', (chunk) => chunks.push(chunk))
+              res.on('error', reject)
+              res.on('end', () =>
+                resolve({
+                  status: res.statusCode,
+                  headers: res.headers,
+                  body: Buffer.concat(chunks).toString(),
+                }),
+              )
+            },
           )
-        },
-      )
-      client.on('error', done.reject)
-      // Only the headers are sent: the answer must not wait for the oversized upload.
-      client.flushHeaders()
-      t.after(() => client.destroy())
-      const result = await done.promise
-      assert.equal(result.status, 413, path)
+          client.on('error', reject)
+          client.end(payload)
+        })
+      const before = connections
+      const result = await post(body)
+      assert.equal(result.status, 400, path)
       assert.equal(result.headers['content-type'], 'application/json')
       assert.equal(result.headers['retry-after'], undefined)
       assert.equal(result.body, tooLargeBody)
-      client.destroy()
+      // Read to its end, the request left the connection in order: the next one is answered
+      // on it. A connection ended here would only race the next request of a client that
+      // had already taken it back.
+      assert.notEqual(result.headers.connection, 'close')
+      for (const next of [await post(Buffer.from('{}')), await post(Buffer.from('{}'))])
+        assert.deepEqual({ status: next.status, body: next.body }, { status: 200, body: 'allowed' })
+      assert.equal(connections - before, 1, path)
     }
-    assert.equal(received, 0)
+    // Nothing of a refused body went upstream: two small requests a path did.
+    assert.deepEqual(
+      received,
+      [...llmPaths, '/mcp'].flatMap((path) => [path, path]),
+    )
+  },
+)
+
+/** A raw client on a connection of its own, with the socket the gateway serves it on. */
+async function rawClient(t, { port, gateway }) {
+  const accepted = once(gateway, 'connection')
+  // Half-open: the end of what the gateway sends does not end what this client sends.
+  const socket = connect({ host: '127.0.0.1', port, allowHalfOpen: true })
+  t.after(() => socket.destroy())
+  const client = { socket, response: '', errors: [], length: gatewayLimits.requestBytes + 1 }
+  socket.on('data', (bytes) => {
+    client.response += bytes.toString()
+  })
+  socket.on('error', (error) => client.errors.push(error.code))
+  await once(socket, 'connect')
+  ;[client.served] = await accepted
+  return client
+}
+
+/** Writes the bytes of a body in pieces of 1 MiB, each framed by `frame` when it is given. */
+async function writeBody(socket, bytes, frame = (part) => [part]) {
+  const chunk = Buffer.alloc(1024 * 1024, 'x')
+  for (let left = bytes; left > 0; left -= chunk.length)
+    for (const piece of frame(left >= chunk.length ? chunk : chunk.subarray(0, left)))
+      if (!socket.write(piece)) await once(socket, 'drain')
+}
+
+/** A raw client that has sent the head of an oversized upload and a part of its body. */
+async function startedUpload(t, served) {
+  const upload = await rawClient(t, served)
+  upload.sent = 'partial'
+  upload.socket.write(
+    `POST ${llmPaths[0]} HTTP/1.1\r\nHost: sandbox-gw\r\nContent-Type: application/json\r\nContent-Length: ${upload.length}\r\n\r\n${upload.sent}`,
+  )
+  // The gateway has the head of the request: what it decides by the declared length is decided.
+  while (upload.served.bytesRead === 0) await realDelay(5)
+  return upload
+}
+
+test(
+  'a refused upload is answered only when it has been read to its end, and its connection serves the next request',
+  { timeout: 20000 },
+  async (t) => {
+    const received = []
+    const served = await fixture(t, (req, res) => {
+      received.push(req.url)
+      req.resume()
+      res.end('allowed')
+    })
+    const upload = await startedUpload(t, served)
+    // No answer while the body is still coming: the runtime of the pinned CLI stops uploading
+    // when an answer comes early, keeps the connection, and sends its next request into what
+    // the gateway still reads as this body.
+    await realDelay(200)
+    assert.equal(upload.response, '')
+    await writeBody(upload.socket, upload.length - upload.sent.length)
+    while (!upload.response.includes(tooLargeBody)) await realDelay(5)
+    const [head, body] = upload.response.split('\r\n\r\n')
+    assert.match(head, /^HTTP\/1\.1 400 /)
+    assert.doesNotMatch(head, /\r\nconnection: close/i)
+    assert.equal(body, tooLargeBody)
+    assert.deepEqual(received, [])
+    // The same connection, in order: the next request on it reaches upstream and is answered.
+    upload.response = ''
+    upload.socket.write(
+      `POST ${llmPaths[0]} HTTP/1.1\r\nHost: sandbox-gw\r\nContent-Length: 2\r\n\r\n{}`,
+    )
+    while (!upload.response.includes('allowed')) await realDelay(5)
+    assert.match(upload.response, /^HTTP\/1\.1 200 /)
+    assert.deepEqual(received, [llmPaths[0]])
+    assert.deepEqual(upload.errors, [])
+    assert.equal(upload.served.destroyed, false)
   },
 )
 
 test(
-  'an oversized upload that never ends keeps its socket only for a short linger',
+  'a streamed upload beyond the limit is answered only when it has ended, and its connection serves the next request',
+  { timeout: 20000 },
+  async (t) => {
+    const received = []
+    const served = await fixture(t, (req, res) => {
+      received.push(req.url)
+      req.resume()
+      req.on('error', () => {})
+      req.on('end', () => res.end('allowed'))
+    })
+    const upload = await rawClient(t, served)
+    upload.socket.write(
+      `POST ${llmPaths[0]} HTTP/1.1\r\nHost: sandbox-gw\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n`,
+    )
+    await writeBody(upload.socket, upload.length, (part) => [
+      `${part.length.toString(16)}\r\n`,
+      part,
+      '\r\n',
+    ])
+    // The limit is crossed and the upload has not ended: no byte of an answer, as with a
+    // declared length. Nothing tells the gateway beforehand how long such a body is.
+    await realDelay(200)
+    assert.equal(upload.response, '')
+    upload.socket.write('0\r\n\r\n')
+    while (!upload.response.includes(tooLargeBody)) await realDelay(5)
+    const [head, body] = upload.response.split('\r\n\r\n')
+    assert.match(head, /^HTTP\/1\.1 400 /)
+    assert.doesNotMatch(head, /\r\nconnection: close/i)
+    assert.equal(body, tooLargeBody)
+    upload.response = ''
+    upload.socket.write(
+      `POST ${llmPaths[0]} HTTP/1.1\r\nHost: sandbox-gw\r\nContent-Length: 2\r\n\r\n{}`,
+    )
+    while (!upload.response.includes('allowed')) await realDelay(5)
+    assert.match(upload.response, /^HTTP\/1\.1 200 /)
+    assert.equal(received.at(-1), llmPaths[0])
+    assert.deepEqual(upload.errors, [])
+    assert.equal(upload.served.destroyed, false)
+  },
+)
+
+test(
+  'refused uploads on one connection leave no listener on its socket',
+  { timeout: 30000 },
+  async (t) => {
+    const served = await fixture(t, (req, res) => {
+      req.resume()
+      res.end('unexpected')
+    })
+    const upload = await rawClient(t, served)
+    const before = upload.served.listenerCount('close')
+    // The connection outlives each refusal; what a refusal leaves on it would pile up. Twelve
+    // is beyond the ten listeners of one event at which Node warns of a leak.
+    for (let round = 0; round < 12; round += 1) {
+      upload.response = ''
+      upload.socket.write(
+        `POST ${llmPaths[0]} HTTP/1.1\r\nHost: sandbox-gw\r\nContent-Length: ${upload.length}\r\n\r\n`,
+      )
+      await writeBody(upload.socket, upload.length)
+      while (!upload.response.includes(tooLargeBody)) await realDelay(2)
+    }
+    assert.equal(upload.served.listenerCount('close'), before)
+    assert.deepEqual(upload.errors, [])
+  },
+)
+
+test(
+  'an oversized upload that does not end is answered after a short linger, with the end of the connection',
   { timeout: 5000 },
   async (t) => {
-    const { port } = await fixture(t, (req, res) => {
+    const served = await fixture(t, (req, res) => {
       req.resume()
       res.end('unexpected')
     })
     t.mock.timers.enable({ apis: ['setTimeout'] })
     try {
-      const socket = connect({ host: '127.0.0.1', port })
-      t.after(() => socket.destroy())
-      let response = ''
-      socket.on('data', (bytes) => {
-        response += bytes.toString()
-      })
-      socket.on('error', () => {})
-      const closed = once(socket, 'close')
-      await once(socket, 'connect')
-      socket.write(
-        `POST ${llmPaths[0]} HTTP/1.1\r\nHost: sandbox-gw\r\nContent-Length: ${gatewayLimits.requestBytes + 1}\r\n\r\npartial`,
-      )
-      while (!response.includes('\r\n\r\n')) await realDelay(5)
-      assert.match(response, /^HTTP\/1\.1 413 /)
+      const upload = await startedUpload(t, served)
+      const ended = once(upload.socket, 'end')
       t.mock.timers.tick(gatewayLimits.lingerMs - 1)
       await realDelay(100)
-      assert.equal(socket.closed, false)
+      assert.equal(upload.response, '')
       t.mock.timers.tick(1)
-      await closed
+      // The whole answer by its length, and behind it the end of what the gateway sends: the
+      // rest of the body will not be read, so nothing more may come on this connection.
+      await ended
+      const [head, body] = upload.response.split('\r\n\r\n')
+      assert.match(head, /^HTTP\/1\.1 400 /)
+      assert.match(head, /\r\nconnection: close(\r\n|$)/i)
+      assert.match(
+        head,
+        new RegExp(`\\r\\ncontent-length: ${Buffer.byteLength(tooLargeBody)}(\\r\\n|$)`, 'i'),
+      )
+      assert.equal(body, tooLargeBody)
+      // The socket itself goes one more linger later: a reset under a client that is still
+      // uploading could cost it the answer it has not read yet.
+      t.mock.timers.tick(gatewayLimits.lingerMs - 1)
+      await realDelay(100)
+      assert.equal(upload.served.destroyed, false)
+      t.mock.timers.tick(1)
+      if (!upload.served.destroyed) await once(upload.served, 'close')
     } finally {
       t.mock.timers.reset()
     }
@@ -957,7 +1038,42 @@ test(
 )
 
 test(
-  'a streamed body is forwarded at exactly 16 MiB and gets 413 instead of a retryable 502 beyond it',
+  'an upload that ends after the late answer ends its connection at once, and the gateway goes on',
+  { timeout: 20000 },
+  async (t) => {
+    const served = await fixture(t, (req, res) => {
+      req.resume()
+      res.end('allowed')
+    })
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const upload = await startedUpload(t, served)
+      t.mock.timers.tick(gatewayLimits.lingerMs)
+      while (!upload.response.includes(tooLargeBody)) await realDelay(5)
+      // The rest of the body arrives after all. The answer has gone: a second one would be an
+      // error thrown inside the gateway process, which nothing in it catches.
+      const closed = once(upload.served, 'close')
+      // The gateway may drop the connection under the last write: a reset is not a failure here.
+      await Promise.race([
+        writeBody(upload.socket, upload.length - upload.sent.length).catch(() => {}),
+        new Promise((resolve) => upload.socket.once('close', resolve)),
+      ])
+      await closed
+      assert.equal(upload.response.split('HTTP/1.1 ').length - 1, 1)
+    } finally {
+      t.mock.timers.reset()
+    }
+    const next = await rawClient(t, served)
+    next.socket.write(
+      `POST ${llmPaths[0]} HTTP/1.1\r\nHost: sandbox-gw\r\nContent-Length: 2\r\n\r\n{}`,
+    )
+    while (!next.response.includes('allowed')) await realDelay(5)
+    assert.match(next.response, /^HTTP\/1\.1 200 /)
+  },
+)
+
+test(
+  'a streamed body is forwarded at exactly 16 MiB and gets a final 400 instead of a retryable 502 beyond it',
   { timeout: 20000 },
   async (t) => {
     const received = []
@@ -987,8 +1103,12 @@ test(
             res.on('data', (chunk) => chunks.push(chunk))
             res.on('error', reject)
             res.on('end', () => {
-              resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() })
-              // Like the CLIs' HTTP clients: a final answer ends an unfinished upload.
+              resolve({
+                status: res.statusCode,
+                body: Buffer.concat(chunks).toString(),
+                closing: res.headers.connection === 'close',
+              })
+              // Like the HTTP client of a CLI: a final answer ends an unfinished upload.
               if (!client.writableEnded) client.destroy()
             })
           },
@@ -1006,19 +1126,27 @@ test(
           if (!client.destroyed) client.end()
         })().catch(reject)
       })
-    assert.deepEqual(await upload(gatewayLimits.requestBytes), { status: 200, body: 'accepted' })
+    assert.deepEqual(await upload(gatewayLimits.requestBytes), {
+      status: 200,
+      body: 'accepted',
+      closing: false,
+    })
     while (received.length < 1) await realDelay(5)
     assert.deepEqual(received, [{ bytes: gatewayLimits.requestBytes, complete: true }])
     for (const bytes of [gatewayLimits.requestBytes + 1, 24 * 1024 * 1024]) {
-      // The client reads the refusal even while it is still uploading.
-      assert.deepEqual(await upload(bytes), { status: 413, body: tooLargeBody }, String(bytes))
+      // Answered when the upload has ended: the connection is kept, and serves the next one.
+      assert.deepEqual(
+        await upload(bytes),
+        { status: 400, body: tooLargeBody, closing: false },
+        String(bytes),
+      )
       while (received.length < 2) await realDelay(5)
       const aborted = received.pop()
       assert.equal(aborted.complete, false)
       assert.ok(aborted.bytes <= gatewayLimits.requestBytes)
     }
     // The refused uploads released their slot.
-    assert.deepEqual(await upload(64), { status: 200, body: 'accepted' })
+    assert.deepEqual(await upload(64), { status: 200, body: 'accepted', closing: false })
   },
 )
 
@@ -1034,7 +1162,6 @@ test(
     })
     for (const raw of [
       'CONNECT example.test:443 HTTP/1.1\r\nHost: sandbox-gw\r\n\r\n',
-      'GET /codex/responses HTTP/1.1\r\nHost: sandbox-gw\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n',
       'GET /zai/v4/chat/completions HTTP/1.1\r\nHost: sandbox-gw\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n',
     ]) {
       const socket = connect({ host: '127.0.0.1', port })

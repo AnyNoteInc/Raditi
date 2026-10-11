@@ -17,7 +17,7 @@ type TestKey = {
 }
 const now = new Date('2026-09-30T15:00:00Z')
 
-function fixture(backend = 'openai-chatgpt') {
+function fixture(backend: string = sampleBackendId) {
   const account = {
     id: randomUUID(),
     enabled: true,
@@ -102,13 +102,12 @@ function fixture(backend = 'openai-chatgpt') {
     leaseHeld = true
     return { signal: controller.signal, release }
   })
-  const providerRevoke = vi.fn()
   const options = {
     prisma: { $transaction } as unknown as PrismaClient,
     secrets: { kvDestroyAll },
     credentials: { revoke },
     locks: { tryAcquire, close: vi.fn() },
-    backends: [{ id: 'openai-chatgpt' as const, revoke: providerRevoke }, { id: sampleBackendId }],
+    backends: [{ id: sampleBackendId }],
   }
   const service = new SubscriptionRetirement(options)
   const addKey = (overrides: Partial<TestKey> = {}) => {
@@ -145,7 +144,6 @@ function fixture(backend = 'openai-chatgpt') {
     release,
     tryAcquire,
     controller,
-    providerRevoke,
     addKey,
     ready,
   }
@@ -166,7 +164,7 @@ describe('operator subscription retirement', () => {
     const lock = f.queries.findIndex(({ sql }) => sql.includes('pg_advisory_xact_lock'))
     const update = f.queries.findIndex(({ sql }) => sql.includes('SET retire_requested_at'))
     expect(lock).toBeGreaterThan(-1)
-    expect(f.queries[lock]!.values).toEqual(['pool:openai-chatgpt'])
+    expect(f.queries[lock]!.values).toEqual([`pool:${sampleBackendId}`])
     expect(update).toBeGreaterThan(lock)
   })
 
@@ -175,7 +173,7 @@ describe('operator subscription retirement', () => {
     const first = f.addKey(),
       second = f.addKey({ firstEpoch: 31, sessionId: 'second-session' })
     expect(await f.service.request({ accountId: f.account.id, compromised: true })).toMatchObject({
-      stage: 'provider_revocation_pending',
+      stage: 'console_revocation_required',
     })
     expect(f.account.enabled).toBe(false)
     expect(f.revoke.mock.calls.map(([value]) => value)).toEqual(
@@ -187,7 +185,6 @@ describe('operator subscription retirement', () => {
       })),
     )
     expect(f.kvDestroyAll).not.toHaveBeenCalled()
-    expect(f.providerRevoke).not.toHaveBeenCalled()
     const keyUpdate = f.queries.findIndex(({ sql }) => sql.includes('UPDATE llm_keys'))
     const accountLock = f.queries.findIndex(({ sql }) =>
       sql.includes('FROM subscription_accounts WHERE id'),
@@ -208,7 +205,7 @@ describe('operator subscription retirement', () => {
     expect(first.revokedAt).toBeNull()
     expect(second.revokedAt).toBe(now)
     expect(await f.service.request({ accountId: f.account.id })).toMatchObject({
-      stage: 'provider_revocation_pending',
+      stage: 'console_revocation_required',
     })
     expect(first.revokedAt).toBe(now)
     expect(f.revoke).toHaveBeenCalledTimes(3)
@@ -228,11 +225,11 @@ describe('operator subscription retirement', () => {
     })
   })
 
-  it('keeps already disabled normal accounts disabled and waits for provider retirement', async () => {
+  it('keeps already disabled normal accounts disabled and asks for the revocation in the provider console', async () => {
     const f = fixture()
     f.account.enabled = false
     expect(await f.service.request({ accountId: f.account.id })).toMatchObject({
-      stage: 'provider_revocation_pending',
+      stage: 'console_revocation_required',
     })
     expect(f.account.enabled).toBe(false)
   })
@@ -302,20 +299,6 @@ describe('operator subscription retirement', () => {
     expect(f.kvDestroyAll).not.toHaveBeenCalled()
   })
 
-  it('requires automatic provider revocation to finish and rejects a console acknowledgement bypass', async () => {
-    const f = fixture()
-    f.account.enabled = false
-    f.account.retireRequestedAt = now
-    expect(await f.service.finalize({ accountId: f.account.id })).toMatchObject({
-      stage: 'provider_revocation_pending',
-    })
-    await expect(
-      f.service.finalize({ accountId: f.account.id, consoleRevoked: true }),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-    expect(f.kvDestroyAll).not.toHaveBeenCalled()
-    expect(f.account.credentialsRevokedAt).toBeNull()
-  })
-
   it.each(['import_pending', 'relogin_pending'])(
     'requires explicit console revocation to retire an unfinished initial login in %s',
     async (healthReason) => {
@@ -339,8 +322,9 @@ describe('operator subscription retirement', () => {
         await f.service.finalize({ accountId: f.account.id, consoleRevoked: true }),
       ).toMatchObject({ stage: 'retired' })
       expect(f.account.credentialsRevokedAt).toBe(now)
-      expect(f.kvDestroyAll).toHaveBeenCalledExactlyOnceWith(`subs/openai-chatgpt/${f.account.id}`)
-      expect(f.providerRevoke).not.toHaveBeenCalled()
+      expect(f.kvDestroyAll).toHaveBeenCalledExactlyOnceWith(
+        `subs/${sampleBackendId}/${f.account.id}`,
+      )
     },
   )
 
@@ -366,57 +350,8 @@ describe('operator subscription retirement', () => {
     },
   )
 
-  it.each([
-    {
-      credentialVersion: 1,
-      keyVersion: 1,
-      health: 'needs_relogin',
-      healthReason: 'relogin_pending',
-    },
-    {
-      credentialVersion: 0,
-      keyVersion: 1,
-      health: 'needs_relogin',
-      healthReason: 'import_pending',
-    },
-    {
-      credentialVersion: 1,
-      keyVersion: 0,
-      health: 'needs_relogin',
-      healthReason: 'import_pending',
-    },
-    { credentialVersion: 0, keyVersion: 0, health: 'ok', healthReason: 'import_pending' },
-    {
-      credentialVersion: 0,
-      keyVersion: 0,
-      health: 'needs_relogin',
-      healthReason: 'refresh_ambiguous',
-    },
-  ])(
-    'does not expand the console exception to $healthReason ($credentialVersion/$keyVersion)',
-    async (state) => {
-      const f = fixture()
-      Object.assign(f.account, {
-        enabled: false,
-        retireRequestedAt: now,
-        credentialVersion: state.credentialVersion,
-        health: state.health,
-        healthReason: state.healthReason,
-      })
-      f.account.credentialRef.keyVersion = state.keyVersion
-      expect(await f.service.finalize({ accountId: f.account.id })).toMatchObject({
-        stage: 'provider_revocation_pending',
-      })
-      await expect(
-        f.service.finalize({ accountId: f.account.id, consoleRevoked: true }),
-      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-      expect(f.account.credentialsRevokedAt).toBeNull()
-      expect(f.kvDestroyAll).not.toHaveBeenCalled()
-    },
-  )
-
-  it('requires a console revocation acknowledgement for backends without revoke capability', async () => {
-    const f = fixture(sampleBackendId)
+  it('destroys nothing until the operator acknowledges the revocation in the provider console', async () => {
+    const f = fixture()
     f.account.enabled = false
     f.account.retireRequestedAt = now
     expect(await f.service.finalize({ accountId: f.account.id })).toMatchObject({
@@ -427,7 +362,7 @@ describe('operator subscription retirement', () => {
   })
 
   it('persists console acknowledgement before Vault destruction and retries an outage without a second console action', async () => {
-    const f = fixture(sampleBackendId)
+    const f = fixture()
     f.account.enabled = false
     f.account.retireRequestedAt = now
     f.kvDestroyAll.mockRejectedValueOnce(new Error('secret provider token response'))
@@ -447,7 +382,7 @@ describe('operator subscription retirement', () => {
   })
 
   it('cannot acknowledge console revocation while retirement still drains', async () => {
-    const f = fixture(sampleBackendId)
+    const f = fixture()
     f.account.retireRequestedAt = now
     expect(
       await f.service.finalize({ accountId: f.account.id, consoleRevoked: true }),
@@ -460,18 +395,20 @@ describe('operator subscription retirement', () => {
     f.ready()
     expect(await f.service.finalize({ accountId: f.account.id })).toEqual({
       accountId: f.account.id,
-      backend: 'openai-chatgpt',
+      backend: sampleBackendId,
       stage: 'retired',
     })
     expect(f.tryAcquire).toHaveBeenCalledExactlyOnceWith(f.account.id)
-    expect(f.kvDestroyAll).toHaveBeenCalledExactlyOnceWith(`subs/openai-chatgpt/${f.account.id}`)
+    expect(f.kvDestroyAll).toHaveBeenCalledExactlyOnceWith(
+      `subs/${sampleBackendId}/${f.account.id}`,
+    )
     expect(f.release).toHaveBeenCalledOnce()
   })
 
   it.each([
-    'subs/openai-chatgpt/another-account',
+    `subs/${sampleBackendId}/another-account`,
     'turns/a-secret',
-    '../subs/openai-chatgpt/account',
+    `../subs/${sampleBackendId}/account`,
   ])('rejects a mismatched path %s before any destruction', async (path) => {
     const f = fixture()
     f.ready()

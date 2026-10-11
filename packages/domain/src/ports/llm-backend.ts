@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 /** Stable provider slugs, shared with llm_providers; provider details belong in adapters. */
-export const llmBackendIds = ['openai-chatgpt', 'kimi-code', 'zai-coding'] as const
+export const llmBackendIds = ['zai-coding'] as const
 export const llmBackendIdSchema = z.enum(llmBackendIds)
 export type LlmBackendId = z.infer<typeof llmBackendIdSchema>
 
@@ -120,29 +120,14 @@ export const callSignalSchema = z.discriminatedUnion('kind', [
 ])
 export type CallSignal = z.infer<typeof callSignalSchema>
 
-// Credits are provider units, not rubles; preserve their decimal precision as a string.
-const creditsBalance = z
-  .string()
-  .regex(/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/)
-  .nullable()
 export const probeResultSchema = z
   .object({
     status: z.enum(['ok', 'auth', 'region', 'suspended', 'unknown']),
     windows: limitWindowsSchema.nullable(),
     plan: z.string().min(1).nullable(),
-    creditsBalance,
   })
   .strict()
 export type ProbeResult = z.infer<typeof probeResultSchema>
-
-export const limitWindowSnapshotSchema = z
-  .object({
-    /** null: the response named no window. Empty: a window report that cannot be read. */
-    windows: limitWindowsSchema.nullable(),
-    creditsBalance,
-  })
-  .strict()
-export type LimitWindowSnapshot = z.infer<typeof limitWindowSnapshotSchema>
 
 export const meterResultSchema = z
   .object({
@@ -220,13 +205,13 @@ export function refusalForSignal(signal: CallSignal): GatewayRefusal {
 }
 
 /**
- * Adapter-owned Vault payload: the common port neither assumes OAuth fields nor knows
- * their meaning. credentialSchema validates the full versioned shape in each adapter.
- * Values exist only in Vault and the llm process's memory, never in plans, logs or DTOs.
+ * Adapter-owned Vault payload: the common port does not know the meaning of its fields.
+ * credentialSchema validates the full versioned shape in each adapter. Values exist only in
+ * Vault and the llm process's memory, never in plans, logs or DTOs.
  */
 export type SubscriptionCredential = Readonly<Record<string, unknown>>
 
-/** Provider-neutral facts for login and refresh scheduling, including a credential restored from Vault. */
+/** Provider-neutral facts an import or a relogin reads off the credential it was given. */
 export const credentialMetadataSchema = z
   .object({
     externalAccountId: z.string().min(1).nullable(),
@@ -244,20 +229,10 @@ export const credentialMetadataSchema = z
   )
 export type CredentialMetadata = z.infer<typeof credentialMetadataSchema>
 
-/** Stable, non-secret account identity. Each adapter validates the subset it needs. */
-export const clientIdentitySchema = z
-  .object({
-    installationId: z.string().min(1).optional(),
-    deviceId: z.string().min(1).optional(),
-    deviceName: z.string().min(1).optional(),
-  })
-  .strict()
-export type ClientIdentity = z.infer<typeof clientIdentitySchema>
-
 /**
- * One fixed provider origin and every request an adapter sends there: generation, probe, token
- * refresh and revocation, device login. Nothing else leaves: the transport refuses a request
- * outside these lists before any connection, through the egress node and without it alike.
+ * One fixed provider origin and every request an adapter sends there: generation and the probe.
+ * Nothing else leaves: the transport refuses a request outside these lists before any
+ * connection, through the egress node and without it alike.
  */
 export interface LlmEgressOrigin {
   /** An https origin: scheme, host and optional port only. */
@@ -309,47 +284,13 @@ export interface EgressResponse {
 }
 
 /**
- * Injected transport for probe, refresh, device flow and revoke. Implementations use only
- * the configured egress, reject redirects and bound response size. Every request needs a
- * bounded AbortSignal supplied by the adapter/gateway (refresh: 20 s), including body read.
- * The domain declares the contract and performs no I/O.
+ * Injected transport for the probe. Implementations use only the configured egress, reject
+ * redirects and bound response size. Every request needs a bounded AbortSignal supplied by
+ * the adapter/gateway, including body read. The domain declares the contract and performs
+ * no I/O.
  */
 export interface EgressHttp {
   request(request: EgressRequest, options: { signal: AbortSignal }): Promise<EgressResponse>
-}
-
-export type RefreshOutcome =
-  | { kind: 'ok'; credential: SubscriptionCredential }
-  | { kind: 'final'; reason: 'auth' | 'region' }
-  // A request may have rotated the refresh token. Retrying the old one can revoke the grant.
-  | { kind: 'ambiguous' }
-
-/** All device-flow state, including the user code and private state, stays in memory. */
-export interface DeviceLoginState {
-  verificationUri: string
-  userCode: string
-  expiresAt: Date
-  intervalMs: number
-  /** Adapter-owned, may contain device tokens or PKCE verifier; never serialize or log it. */
-  privateState: unknown
-}
-
-export type DeviceLoginResult =
-  | { kind: 'pending'; intervalMs: number }
-  | { kind: 'next'; request: EgressRequest; state: DeviceLoginState }
-  | {
-      kind: 'complete'
-      credential: SubscriptionCredential
-    }
-  | { kind: 'denied' }
-
-/** Pure builders/parsers; the caller owns transport, bounded polling and Vault writes. */
-export interface DeviceLogin {
-  start(identity: ClientIdentity): EgressRequest
-  parseStart(response: EgressResponse, now: Date): DeviceLoginState
-  poll(state: DeviceLoginState): EgressRequest
-  /** `next` also handles the code exchange; explicit now bounds login and dates the credential. */
-  parsePoll(response: EgressResponse, state: DeviceLoginState, now: Date): DeviceLoginResult
 }
 
 /** Subscription backend port (spec §9; p3-design §11). No provider branches in the core. */
@@ -385,24 +326,16 @@ export interface LlmBackend {
   normalizeBody(
     route: LlmRoute,
     body: Uint8Array,
-    ctx: { model: string; reasoningEffort: string | null; cacheKey: string },
+    ctx: { model: string; reasoningEffort: string | null },
   ): NormalizedBody
   upstream(
     route: LlmRoute,
     body: NormalizedBody,
     clientHeaders: Headers,
     credential: SubscriptionCredential,
-    identity: ClientIdentity,
   ): { url: string; method: string; headers: Headers }
   usageMeter(): { push(chunk: Uint8Array): void; end(): MeterResult }
   classify(status: number, headers: Headers, errorJson: unknown | null): CallSignal
-  /**
-   * The subscription's limits as a response reports them. null: it reported nothing, and the
-   * gateway keeps what it knows. `windows: null`: it named no window (a balance only), so the
-   * known windows stand. Empty `windows`: a window report it cannot read, so the account's
-   * capacity becomes unknown until the next probe — never unlimited.
-   */
-  windowsFromHeaders(headers: Headers): LimitWindowSnapshot | null
   /** CLI-shaped refusal, assembled locally; provider bodies never go back to the sandbox. */
   refusal(
     kind: GatewayRefusal,
@@ -413,14 +346,7 @@ export interface LlmBackend {
    * to judge the account by (transport failure, 5xx, an unknown status): the caller changes
    * nothing. `unknown` is an answer that drops the account's known capacity until a later probe.
    */
-  probe(
-    credential: SubscriptionCredential,
-    identity: ClientIdentity,
-    http: EgressHttp,
-  ): Promise<ProbeResult>
-  refresh?(credential: SubscriptionCredential, http: EgressHttp): Promise<RefreshOutcome>
-  login?: DeviceLogin
+  probe(credential: SubscriptionCredential, http: EgressHttp): Promise<ProbeResult>
   /** Import-only secret input; the adapter builds its versioned credential before a probe. */
   importCredential?(secret: string): SubscriptionCredential
-  revoke?(credential: SubscriptionCredential, http: EgressHttp): Promise<void>
 }

@@ -12,12 +12,8 @@ import { createCredentialSource } from './credentials.ts'
 import { createControlEgress, createEgressTransport, EgressNotSentError } from './egress.ts'
 import { createEgressProbe, EgressHealth } from './egress-probe.ts'
 import { SubscriptionPoolHealth } from './pool-health.ts'
-import { SubscriptionRefresher } from './refresher.ts'
-import { SessionSubscriptionLock } from './session-lock.ts'
 import { createLlmGateway, type LlmGateway } from './server.ts'
 import { PostgresGatewayStore } from './store.ts'
-
-const refreshIntervalMs = 5 * 60_000
 
 /** The HTTP server and collector stop before the one database pool is disconnected. */
 export class LlmRuntime implements OnApplicationShutdown {
@@ -25,13 +21,11 @@ export class LlmRuntime implements OnApplicationShutdown {
   readonly #store: PostgresGatewayStore
   readonly #logger = new Logger('LlmGateway')
   readonly #channel: EgressHealth
-  readonly #refresher: SubscriptionRefresher
   readonly #pool: SubscriptionPoolHealth
   readonly #egressPath: 'proxy' | 'direct'
   readonly #maintenance = new Set<ReturnType<typeof setInterval>>()
   readonly #jobs = new Map<string, Promise<void>>()
   #channelTimer: ReturnType<typeof setTimeout> | undefined
-  #refreshedAt = -Infinity
   #collector: ReturnType<typeof setInterval> | undefined
   #collecting: Promise<void> | undefined
   #collectionWait: Promise<void> | undefined
@@ -63,24 +57,13 @@ export class LlmRuntime implements OnApplicationShutdown {
     })
     const channelHealthy = () => this.#channel.healthy()
     const onRegion = (accountId: string) => this.#channel.blockRegion(accountId)
-    // A closed gate sends nothing: a refresh token stays valid, a generation spends no quota.
+    // A closed gate sends nothing: a generation spends no quota.
     const gate = (open: () => boolean) => ({
       request: (...args: Parameters<typeof transport.request>) =>
         open() ? transport.request(...args) : Promise.reject(new EgressNotSentError()),
     })
     const gatedTransport = gate(channelHealthy)
     const http = createControlEgress(gatedTransport)
-    this.#refresher = new SubscriptionRefresher({
-      prisma,
-      secrets,
-      credentials,
-      backends,
-      http,
-      channelHealthy,
-      onRegion,
-      locks: new SessionSubscriptionLock(config.db.databaseUrl),
-      logger: (event) => this.#logger.warn(JSON.stringify({ event: `llm_${event}` })),
-    })
     this.#pool = new SubscriptionPoolHealth({
       prisma,
       credentials,
@@ -99,8 +82,6 @@ export class LlmRuntime implements OnApplicationShutdown {
       egress: gatedTransport,
       lifecycle: {
         pause: (key) => this.#pool.pause(key.accountId),
-        refresh: (call, _backend, version) =>
-          this.#refresher.refresh(call.accountId, 'auth', version),
         observe: (call, finish) => this.#pool.observe(call, finish),
         // Both callers ask because the windows are unknown: admission and core's issue.
         probeAccounts: async (accountIds, unknownWindows = {}) => {
@@ -176,11 +157,6 @@ export class LlmRuntime implements OnApplicationShutdown {
     return this.#collectionWait
   }
 
-  #refresh(): void {
-    this.#refreshedAt = Date.now()
-    void this.#runJob('refresh', () => this.#refresher.tick())
-  }
-
   /** The channel is probed again sooner after a failure and when a region recheck is due. */
   #scheduleChannel(): void {
     if (this.#closing) return
@@ -197,8 +173,6 @@ export class LlmRuntime implements OnApplicationShutdown {
     const recheck = this.#channel.regionRecheck()
     if (recheck && (await this.#pool.recheckRegion(recheck.accountId)))
       this.#channel.clearRegion(recheck.revision)
-    // The refresher acts on the channel state this check has just settled.
-    if (Date.now() - this.#refreshedAt >= refreshIntervalMs) this.#refresh()
   }
 
   async listen() {
@@ -211,10 +185,7 @@ export class LlmRuntime implements OnApplicationShutdown {
       void this.#collect()
     }, 30_000)
     this.#collector.unref()
-    this.#every('retire', 60_000, () => this.#refresher.retire())
     this.#every('pool', 60_000, () => this.#pool.tick())
-    this.#refresh()
-    void this.#runJob('retire', () => this.#refresher.retire())
     this.#scheduleChannel()
     return address
   }
@@ -228,21 +199,13 @@ export class LlmRuntime implements OnApplicationShutdown {
       this.#logger.warn(JSON.stringify({ event: 'llm_maintenance_shutdown_timeout' }))
     }
     try {
-      const drained = this.gateway.close()
-      // A provider-issued token rotation in flight gets its Vault write (≤25 s) alongside the
-      // HTTP drain (≤30 s): together they fit the 40 s stop grace period of the llm service.
-      const rotation = withTimeout(
-        this.#refresher.close(),
-        26_000,
-        'LLM refresher shutdown timed out',
-      ).catch(timedOut)
-      await drained
+      // The HTTP drain (≤30 s) fits the 40 s stop grace period of the llm service.
+      await this.gateway.close()
       await withTimeout(
         Promise.allSettled([this.#pool.close(), this.#channel.close()]),
         3000,
         'LLM maintenance shutdown timed out',
       ).catch(timedOut)
-      await rotation
       if (this.#jobs.size)
         await withTimeout(
           Promise.allSettled([...this.#jobs.values()]),

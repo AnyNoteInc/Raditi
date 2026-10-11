@@ -1,13 +1,12 @@
-/* global AbortSignal, fetch */
+/* global AbortSignal */
 // Real B13 gateway traffic against the owned PostgreSQL/OpenBao and synthetic provider stack.
 // Time-dependent fixture resets below are explicit; no production clock or backend is replaced.
 // The scenarios of the platform run once, on the group they are given (its ids and forms are
-// data: verify-llm-zai-forms.mjs); what belongs to OAuth and to Codex stays below them until
-// both are removed.
+// data: verify-llm-zai-forms.mjs).
 import assert from 'node:assert/strict'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { codexBackend, kimiCodeBackend, llmBackends } from '@repo/llm-backends'
+import { llmBackends } from '@repo/llm-backends'
 
 import { eventually } from '../../../infra/dev/llm-verify/stack.mjs'
 import { SubscriptionRetirement } from '../src/subscriptions/retire.ts'
@@ -232,115 +231,5 @@ export async function verifyEmergencyRetirement(group) {
   assert.equal(await group.llmSecrets.kvRead(`subs/${ids.backend}/${accountId}`), null)
   passed(
     'emergency retirement disables admission, revokes durable turn keys and requires the operator acknowledgement before destruction',
-  )
-}
-
-/**
- * What belongs to OAuth and to Codex alone, on the old accounts: one rotation for concurrent
- * 401s, the credit balance of a response, and a retirement that revokes the tokens at the
- * provider by itself. Removed with them (G8).
- */
-export async function verifyOauthLifecycle(ctx) {
-  const { db, core, stack, codex, control, task, issued, passed, llmSecrets, admin, locks } = ctx
-  const { restartLlm } = ctx
-  const origin = `http://127.0.0.1:${stack.llmPort}`
-  const account = () => db.subscriptionAccount.findUniqueOrThrow({ where: { id: codex.accountId } })
-  const scenario = (value) => control('scenario', { backend: 'codex', scenario: value })
-  const callRows = (turn) =>
-    db.llmCall.findMany({
-      where: { key: { taskId: turn.ref.taskId } },
-      orderBy: { startedAt: 'asc' },
-    })
-  const settled = async (turn, count) =>
-    eventually(async () => {
-      const rows = await callRows(turn)
-      return rows.length >= count && rows.every((row) => row.state !== 'open') ? rows : null
-    })
-  const revoke = (turn) => core.call('revoke', { ref: turn.ref })
-  const request = async (turn) => {
-    const response = await fetch(`${origin}/codex/responses`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${turn.values.llmApiKey}`,
-        'content-type': 'application/json',
-        'user-agent': 'codex_exec/0.158.0',
-      },
-      body: JSON.stringify({
-        model: 'gpt-6-sol',
-        input: 'Synthetic lifecycle verification.',
-        stream: true,
-        store: false,
-      }),
-      signal: AbortSignal.timeout(25_000),
-    })
-    await response.text()
-    return response.status
-  }
-  const notRemoved = async () => {
-    const row = await account()
-    assert.equal(row.enabled, true)
-    assert.equal(row.status, 'active')
-    assert.equal(row.health, 'ok')
-    assert.equal(row.retireRequestedAt, null)
-  }
-
-  assert.equal(typeof restartLlm, 'function', 'The lifecycle check requires a real llm restart')
-  await restartLlm()
-  await scenario('auth_once')
-  const rotation = await issued('openai-chatgpt')
-  const beforeRefresh = (await control('state')).counters.refresh
-  const beforeVersion = (await account()).credentialVersion
-  assert.deepEqual(await Promise.all([request(rotation), request(rotation)]), [200, 200])
-  await settled(rotation, 2)
-  const rotated = await account()
-  assert.equal((await control('state')).counters.refresh - beforeRefresh, 1)
-  assert.equal(rotated.credentialVersion, beforeVersion + 1)
-  const stored = await llmSecrets.kvRead(`subs/openai-chatgpt/${codex.accountId}`)
-  assert.equal(stored.version, rotated.credentialVersion)
-  const rotationUsage = await db.tokenUsage.count({ where: { taskId: rotation.ref.taskId } })
-  assert.equal(rotationUsage, 2)
-  const pricedRotation = await db.tokenUsage.findMany({ where: { taskId: rotation.ref.taskId } })
-  assert.ok(pricedRotation.every((usage) => usage.costRub.toFixed(10) === '0.0013600000'))
-  await revoke(rotation)
-  passed(
-    'concurrent 401s share one OAuth rotation and CAS; accounting divides per-million rates once',
-  )
-
-  await scenario('credits')
-  const credits = await issued('openai-chatgpt')
-  assert.equal(await request(credits), 200)
-  await settled(credits, 1)
-  await eventually(async () => (await account()).healthReason === 'credits_balance')
-  await notRemoved()
-  await revoke(credits)
-  await scenario('text')
-  passed('a positive credit balance records a warning without disabling the subscription')
-
-  const retirement = new SubscriptionRetirement({
-    prisma: db,
-    locks,
-    backends: [codexBackend, kimiCodeBackend],
-    secrets: admin,
-    credentials: { revoke: (ref) => core.call('revoke', { ref }) },
-  })
-  const ordinary = await issued('openai-chatgpt')
-  assert.equal((await retirement.request({ accountId: codex.accountId })).stage, 'draining')
-  // Refused by the retirement itself: an account that only held its turn would answer BUSY.
-  const forbidden = await task('openai-chatgpt')
-  await assert.rejects(
-    core.call('issue', { ref: forbidden.ref, grant: forbidden.grant }),
-    (error) => error.code === 'SUBSCRIPTION_WAIT',
-  )
-  assert.equal(await request(ordinary), 200)
-  await settled(ordinary, 1)
-  await revoke(ordinary)
-  await core.call('sweep')
-  assert.equal((await account()).enabled, false)
-  await eventually(async () => (await account()).credentialsRevokedAt !== null, 80_000)
-  assert.equal((await retirement.finalize({ accountId: codex.accountId })).stage, 'retired')
-  assert.equal(await llmSecrets.kvRead(`subs/openai-chatgpt/${codex.accountId}`), null)
-  assert.ok((await control('state')).counters.revoke >= 1)
-  passed(
-    'retirement of an OAuth account drains its issued turn, revokes the tokens at the provider by itself and destroys all versions',
   )
 }

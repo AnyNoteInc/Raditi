@@ -208,6 +208,71 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     expect((await store.open(f.next(3, 2, headSha)))?.plan.replacesTurn).toBe(2)
   })
 
+  it('refuses a replacement that names any turn but the one before it, without creating a row', async () => {
+    // The supervisor refuses such a plan first; the store is the second line under the undo
+    // that precedes a replacement, which returns the content of the one turn the plan names.
+    const f = await fixture()
+    const first = (await store.open(f.input))!
+    await db.taskTurn.updateMany({ where: { taskId: f.task.id }, data: { headSha } })
+    await store.finish({ id: first.id, epoch: 1, outcome: 'completed' })
+    const second = (await store.open(f.next(2, 1, headSha)))!
+    await store.finish({ id: second.id, epoch: 1, outcome: 'failed' })
+    await expect(store.open(f.next(3, 1, headSha))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Product turn identity differs from its assignment',
+    })
+    expect(await db.turnAssignment.count({ where: { taskId: f.task.id } })).toBe(2)
+    expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(2)
+    expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).turnNo).toBe(2)
+  })
+
+  // These three alter a saved plan, so they belong in the schema of this file: in `public` an
+  // open assignment with such a plan would fail the recovery of a core that runs on the database.
+  it('keeps a closed assignment of a removed driver as history and never reads it back as work', async () => {
+    const f = await fixture()
+    const closed = (await store.open(f.input))!
+    expect(await store.finish({ id: closed.id, epoch: 1, outcome: 'completed' })).toBe(true)
+    // What the removal of a shell leaves behind: the saved plan names a driver no code knows.
+    await db.$executeRaw`UPDATE turn_assignments
+      SET plan = jsonb_set(plan, '{driverId}', '"codex"') WHERE id = ${closed.id}::uuid`
+    // Recovery lists the unfinished ones: the history row is not among them and breaks nothing.
+    expect(await store.unfinished()).toEqual([])
+    await expect(store.get(closed.id)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Invalid turn assignment returned by the database',
+    })
+    expect(await db.taskTurn.findMany({ where: { taskId: f.task.id } })).toMatchObject([
+      { turnNo: 1, status: 'completed', driverId: 'opencode' },
+    ])
+  })
+
+  it('refuses the whole list of unfinished work while one open plan names a removed driver', async () => {
+    // The state the migration 20261011090000_switch_to_opencode stops on: it must never be met.
+    const f = await fixture()
+    const open = (await store.open(f.input))!
+    await db.$executeRaw`UPDATE turn_assignments
+      SET plan = jsonb_set(plan, '{driverId}', '"kimi"') WHERE id = ${open.id}::uuid`
+    await expect(store.unfinished()).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Invalid turn assignment returned by the database',
+    })
+  })
+
+  it('refuses to replace a turn whose saved plan names a removed driver', async () => {
+    const f = await fixture()
+    const first = (await store.open(f.input))!
+    await store.finish({ id: first.id, epoch: 1, outcome: 'failed' })
+    // A task the removed shell left: its turn stays as history, its plan can no longer be read.
+    await db.$executeRaw`UPDATE turn_assignments
+      SET plan = jsonb_set(plan, '{driverId}', '"codex"') WHERE id = ${first.id}::uuid`
+    await expect(store.open(f.next(2, 1))).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'The replaced turn can no longer be restored',
+    })
+    expect(await db.turnAssignment.count({ where: { taskId: f.task.id } })).toBe(1)
+    expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(1)
+  })
+
   it('requires an explicit replacement after failure and blocks a still assigned predecessor', async () => {
     const f = await fixture()
     const first = (await store.open(f.input))!

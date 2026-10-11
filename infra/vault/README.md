@@ -9,7 +9,7 @@
 | Политика | Разрешения |
 | --- | --- |
 | `core-turns` | `create`, `read`, `delete` на `turns/data/*`; `read`, `update`, `list`, `delete` на metadata. Запись данных один раз: права `update` нет. `undelete` и отдельный endpoint `destroy` явно запрещены |
-| `llm-subscriptions` | `read`, `update` на `subs/data/*`; без создания нового аккаунта, metadata и удаления |
+| `llm-subscriptions` | Только `read` на `subs/data/*`: роль `llm` читает ключ аккаунта и ничего не пишет — без создания, замены, metadata и удаления. Новый ключ и его замену записывает команда оператора (`subscriptions-writer`) |
 | `subscriptions-writer` | `create`, `update` данных, `read` metadata ради версии CAS; чтение токена запрещено |
 | `subscriptions-admin` | `delete` metadata и `update` endpoint `destroy`; чтение токена и metadata запрещено |
 | `mcp-content` | Роль `mcp`. `read` на `kv/data/sites/+/wp` — только доступ WordPress, без `ssh`, `ftp` и `browser`, без записи. `create`, `read`, `update` на `kv/data/content-masks/*` и `delete` на `kv/metadata/content-masks/*` — карта контактов задачи. `update` на `transit/datakey/plaintext/ws-*` и `transit/decrypt/ws-*` — ключ данных снимка контента |

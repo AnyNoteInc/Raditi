@@ -248,6 +248,24 @@ describe('durable turn credentials', () => {
     },
   )
 
+  it.each([
+    ['driverId', 'codex'],
+    ['driverId', 'kimi'],
+    ['driverId', 'qwen'],
+    ['backend', 'openai-chatgpt'],
+    ['backend', 'kimi-code'],
+  ])('recovers no key whose stored policy names the removed %s %s', async (field, id) => {
+    // What a turn of a removed shell left in Vault until the sweeper takes it: history, not a
+    // key any turn gets back.
+    const f = fixture()
+    await f.credentials.issue(f.ref, f.grant)
+    const stored = JSON.parse(f.vault()!.grant as string) as Record<string, unknown>
+    expect(stored[field]).toBe(f.grant[field as 'driverId' | 'backend'])
+    f.alterVault({ grant: JSON.stringify({ ...stored, [field]: id }) })
+    expect(await f.credentials.recover(f.ref)).toBeNull()
+    await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
   it('recovers a running key without consulting current pool eligibility', async () => {
     const f = fixture()
     const values = await f.credentials.issue(f.ref, f.grant)

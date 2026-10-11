@@ -5,7 +5,7 @@ import { connect, createServer as createTcpServer } from 'node:net'
 import type { Duplex } from 'node:stream'
 
 import type { EgressRequest, LlmBackend } from '@repo/domain'
-import { codexBackend, llmBackends, zaiCodingBackend } from '@repo/llm-backends'
+import { llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { llmConfigFromEnv, type EgressConfig } from '../config/llm-config.ts'
@@ -154,7 +154,10 @@ const behindNode: LlmBackend = {
     {
       origin: 'https://provider.invalid',
       overrideEnv: 'LLM_BACKEND_URL_SYNTHETIC',
-      requests: ['POST https://provider.invalid/v1/generate'],
+      requests: [
+        'POST https://provider.invalid/v1/generate',
+        'GET https://provider.invalid/v1/usage',
+      ],
     },
   ],
 }
@@ -395,9 +398,13 @@ describe('mTLS subscription egress', () => {
     }
     const response = await fixture({ stallBody: true })
     try {
+      // The abort comes once the answer has started, whatever the pace of the machine: a
+      // deadline counted from the request would at times pass before the answer under load.
+      const controller = new AbortController()
       const answer = await createEgressTransport(response.config).request(input(), {
-        signal: AbortSignal.timeout(150),
+        signal: controller.signal,
       })
+      setTimeout(() => controller.abort(), 50)
       await expect(
         (async () => {
           for await (const _chunk of answer.body) {
@@ -532,8 +539,9 @@ describe('mTLS subscription egress', () => {
 describe('subscription egress without a proxy', () => {
   const chat = chatUrl
   const quota = quotaUrl
-  // The origin of an adapter of the tree that needs the node, until those adapters are removed.
-  const needsNodeUrl = 'https://chatgpt.com/backend-api/codex/responses'
+  // The adapter of the platform next to one whose origin needs the node.
+  const adapters = [zaiCodingBackend, behindNode]
+  const needsNodeUrl = behindNodeUrl
 
   /** The provider alone, under the loopback name a stand gives it; no proxy exists. */
   async function direct({ stallResponse = false, redirect = false } = {}) {
@@ -573,9 +581,10 @@ describe('subscription egress without a proxy', () => {
         LLM_UPSTREAM_CA_FILE: certFile,
         LLM_BACKEND_URL_ZAI_CODING: `https://localhost:${port}`,
         // Pointed at the same fake: only the adapter's own word could let a request through.
-        LLM_BACKEND_URL_OPENAI_CHATGPT: `https://localhost:${port}`,
+        LLM_BACKEND_URL_SYNTHETIC: `https://localhost:${port}`,
       },
       'test',
+      adapters,
     ).egress
     return {
       config,
@@ -652,7 +661,7 @@ describe('subscription egress without a proxy', () => {
   it('never connects to an origin whose adapter says nothing of going without the node', async () => {
     const f = await direct()
     try {
-      const transport = createEgressTransport(f.config)
+      const transport = createEgressTransport(f.config, adapters)
       expect(
         await notSent(transport.request(input({ url: needsNodeUrl }), { signal: signal() })),
       ).toBe(true)
@@ -660,7 +669,7 @@ describe('subscription egress without a proxy', () => {
       expect(
         await notSent(
           createControlEgress(transport).request(
-            input({ method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage' }),
+            input({ method: 'GET', url: 'https://provider.invalid/v1/usage' }),
             { signal: signal() },
           ),
         ),
@@ -668,8 +677,8 @@ describe('subscription egress without a proxy', () => {
       expect(f.connections()).toBe(0)
       // The adapter's word alone opens the way: the same origin, declared direct.
       const allowed: LlmBackend = {
-        ...codexBackend,
-        egress: codexBackend.egress.map((entry) => ({ ...entry, direct: true })),
+        ...behindNode,
+        egress: behindNode.egress.map((entry) => ({ ...entry, direct: true })),
       }
       const answer = await createEgressTransport(f.config, [allowed]).request(
         input({ url: needsNodeUrl }),
@@ -677,7 +686,7 @@ describe('subscription egress without a proxy', () => {
       )
       expect(answer.status).toBe(200)
       answer.close()
-      expect(f.requests.map((request) => request.path)).toEqual(['/backend-api/codex/responses'])
+      expect(f.requests.map((request) => request.path)).toEqual(['/v1/generate'])
     } finally {
       await f.close()
     }
@@ -705,7 +714,7 @@ describe('subscription egress without a proxy', () => {
     // Adapters that say the same of an origin share it.
     const agrees = { ...needsNode, egress: [{ ...needsNode.egress[0]!, direct: true }] }
     expect(() => createEgressTransport(withoutProxy, [zaiCodingBackend, agrees])).not.toThrow()
-    expect(() => createEgressTransport(withoutProxy, [needsNode, codexBackend])).not.toThrow()
+    expect(() => createEgressTransport(withoutProxy, [needsNode, behindNode])).not.toThrow()
   })
 
   it('reports a connection that could not even be started as a request never sent', async () => {
@@ -840,7 +849,7 @@ describe('subscription egress without a proxy', () => {
     const seen: boolean[] = []
     const options = { onDirectConnection: (established: boolean) => seen.push(established) }
     try {
-      const transport = createEgressTransport(f.config, llmBackends, options)
+      const transport = createEgressTransport(f.config, adapters, options)
       const answer = await transport.request(input({ url: chat }), { signal: signal() })
       answer.close()
       expect(seen).toEqual([true])

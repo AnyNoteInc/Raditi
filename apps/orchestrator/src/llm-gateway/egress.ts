@@ -34,8 +34,8 @@ export interface StreamingEgress {
 /**
  * The request provably never left this process for the provider: it was refused locally, or the
  * proxy tunnel, the role's own connection or provider TLS failed before the HTTP request was
- * written. A single-use refresh token in such a request is still valid, so the outcome is not
- * ambiguous, and a generation request spent no quota (EgressNotDelivered).
+ * written. The outcome is not ambiguous: nothing of the request reached the provider, and a
+ * generation request spent no quota (EgressNotDelivered).
  */
 export class EgressNotSentError extends EgressNotDelivered {
   constructor() {

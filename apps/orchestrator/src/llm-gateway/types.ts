@@ -3,10 +3,8 @@ import {
   limitWindowsSchema,
   type CallSignal,
   type CallUsage,
-  type ClientIdentity,
   type GatewayRefusal,
   type LimitWindow,
-  type LimitWindowSnapshot,
   type LlmBackendId,
   type LlmModelPrices,
   type LlmRoute,
@@ -25,7 +23,6 @@ export interface GatewayProfile {
   modelId: string
   model: string
   reasoningEffort: string | null
-  cacheKey: string
 }
 
 /** Non-secret database metadata. Subscription credentials are read separately from Vault. */
@@ -41,7 +38,6 @@ export interface GatewayKey extends GatewayProfile {
   budgetRub: string
   credentialRef: string
   credentialVersion: number
-  clientIdentity: ClientIdentity
   maxConcurrentRequests: number
   /**
    * The key has started no call yet and the window snapshot of its account is older than the
@@ -107,7 +103,6 @@ export interface GatewayFinish {
   responseBytes: number
   upstreamStatus?: number
   signal?: CallSignal
-  windows?: LimitWindowSnapshot | null
 }
 
 /**

@@ -8,6 +8,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import {
   sampleBackendId,
   sampleDriverId,
+  sampleModelSlug,
+  sampleProviderModelId,
   sampleProviderSlug,
   sampleRoutePath,
 } from '../testing/ids.ts'
@@ -63,10 +65,33 @@ function memoryVault() {
   return { entries, ...secrets, port: secrets as unknown as SecretStore }
 }
 
+/**
+ * What the operator runs to switch the product's model on after the migration
+ * 20261011090000_switch_to_opencode; docs/plan/48-removal.md quotes these statements. The rate
+ * takes the date it is effective from, the rates of input, cache read and output in RUB per
+ * 1M tokens with VAT, the VAT rate and the page the rates come from; the account takes its id.
+ */
+const operatorSwitchOn = {
+  providerAndProfiles: [
+    `UPDATE llm_providers SET enabled = true, updated_at = clock_timestamp()
+      WHERE slug = 'zai-coding' AND kind = 'subscription'`,
+    `UPDATE llm_models SET enabled = true, updated_at = clock_timestamp()
+      WHERE provider_id = (SELECT id FROM llm_providers WHERE slug = 'zai-coding')
+        AND slug IN ('glm-5.3-light', 'glm-5.3-standard', 'glm-5.3-heavy')`,
+  ],
+  rate: `INSERT INTO llm_model_prices
+      (id, model_id, effective_from, input_per_1m, cache_read_per_1m, output_per_1m, vat_rate, source_url)
+    SELECT gen_random_uuid(), m.id, $1::timestamptz, $2::numeric, $3::numeric, $4::numeric, $5::numeric, $6
+      FROM llm_models m JOIN llm_providers p ON p.id = m.provider_id
+     WHERE p.slug = 'zai-coding'
+       AND m.slug IN ('glm-5.3-light', 'glm-5.3-standard', 'glm-5.3-heavy')`,
+  account: `UPDATE subscription_accounts SET enabled = true, updated_at = clock_timestamp()
+     WHERE id = $1::uuid`,
+}
+
 describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission closure', () => {
   let db: PrismaClient
   let providerId: string
-  let driverWasEnabled: boolean
   const tracked: {
     workspaceId: string
     modelId: string
@@ -82,11 +107,9 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     })
     providerId = provider.id
     // Other suites use synthetic drivers. These fixtures use the seeded driver of the sample
-    // backend; the seeds keep the provider and that driver disabled, so the suite enables both.
+    // backend as the migrations and the seeds leave it: switched on. The provider is the
+    // operator's to switch on, so the suite does it.
     await db.llmProvider.update({ where: { id: providerId }, data: { enabled: true } })
-    const driver = await db.agentDriver.findUniqueOrThrow({ where: { id: sampleDriverId } })
-    driverWasEnabled = driver.enabled
-    await db.agentDriver.update({ where: { id: sampleDriverId }, data: { enabled: true } })
   })
 
   afterEach(async () => {
@@ -115,10 +138,6 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
   afterAll(async () => {
     // This database is discarded by verify:db. The store suite owns provider flags and may
     // still be running; this suite must never disable its provider from another worker.
-    await db.agentDriver.update({
-      where: { id: sampleDriverId },
-      data: { enabled: driverWasEnabled },
-    })
     await db.$disconnect()
   })
 
@@ -675,6 +694,76 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     await f.credentials.issue(f.ref, f.grant)
   })
 
+  it('issues no key for the product profile until the operator switches on the provider, the profile, a rate and the account', async () => {
+    const f = await fixture()
+    const grant = { ...f.grant, modelSlug: sampleModelSlug }
+    const profiles = { provider: { slug: sampleProviderSlug }, slug: { startsWith: 'glm-5.3-' } }
+    const issue = () => f.credentials.issue(f.ref, grant)
+    // The catalogue as the migrations and the seeds leave it: the driver of the product on,
+    // its provider and profiles off, no rate.
+    await db.llmProvider.update({ where: { id: providerId }, data: { enabled: false } })
+    await db.subscriptionAccount.update({
+      where: { id: f.mainAccount.id },
+      data: { enabled: false },
+    })
+    try {
+      expect(
+        await db.agentDriver.findUniqueOrThrow({ where: { id: sampleDriverId } }),
+      ).toMatchObject({ enabled: true })
+      expect(
+        await db.llmModel.findMany({ where: profiles, orderBy: { slug: 'asc' } }),
+      ).toMatchObject(
+        ['heavy', 'light', 'standard'].map((modelClass) => ({
+          slug: `glm-5.3-${modelClass}`,
+          providerModelId: sampleProviderModelId,
+          enabled: false,
+        })),
+      )
+      expect(await db.llmModelPrice.count({ where: { model: profiles } })).toBe(0)
+      await expect(issue()).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The requested model profile is unavailable',
+      })
+
+      for (const statement of operatorSwitchOn.providerAndProfiles)
+        await db.$executeRawUnsafe(statement)
+      // Owner question П3: without an approved rate the database issues no key.
+      await expect(issue()).rejects.toMatchObject({ code: 'LLM_PRICE_MISSING' })
+
+      expect(
+        await db.$executeRawUnsafe(
+          operatorSwitchOn.rate,
+          '2026-10-01T00:00:00Z',
+          '10',
+          '1',
+          '30',
+          '0.22',
+          'https://synthetic.invalid/rates',
+        ),
+      ).toBe(3)
+      await expect(issue()).rejects.toMatchObject({ code: 'SUBSCRIPTION_WAIT' })
+      expect(f.vault.entries.size).toBe(0)
+      expect(await db.llmKey.count({ where: { taskId: f.task.id } })).toBe(0)
+
+      expect(await db.$executeRawUnsafe(operatorSwitchOn.account, f.mainAccount.id)).toBe(1)
+      await issue()
+      const profile = await db.llmModel.findFirstOrThrow({
+        where: { provider: { slug: sampleProviderSlug }, slug: sampleModelSlug },
+      })
+      expect(await db.llmKey.findFirstOrThrow({ where: { taskId: f.task.id } })).toMatchObject({
+        driverId: sampleDriverId,
+        modelId: profile.id,
+        subscriptionAccountId: f.mainAccount.id,
+      })
+    } finally {
+      // The key of this task names the profile: it goes before the rate and the flags return.
+      await db.llmKey.deleteMany({ where: { taskId: f.task.id } })
+      await db.llmModelPrice.deleteMany({ where: { model: profiles } })
+      await db.llmModel.updateMany({ where: profiles, data: { enabled: false } })
+      await db.llmProvider.update({ where: { id: providerId }, data: { enabled: true } })
+    }
+  })
+
   it('releases SQL locks for a control probe, then selects from a fresh snapshot', async () => {
     const f = await fixture({ windows: false })
     const probeAccounts = vi.fn(async (ids: readonly string[]) => {
@@ -1034,7 +1123,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     ).toMatchObject({ subscriptionAccountId: f.mainAccount.id, rebinds: 0 })
   })
 
-  it('waits one refresher cycle for a bound account whose access token has just expired', async () => {
+  it('waits for a bound account that is cooling instead of moving the task, while a new task takes another account', async () => {
     const f = await fixture()
     await db.taskAccountBinding.create({
       data: {
@@ -1045,7 +1134,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     })
     await db.subscriptionAccount.update({
       where: { id: f.mainAccount.id },
-      data: { credentialExpiresAt: new Date(Date.now() - 1_000) },
+      data: { coolingUntil: new Date(Date.now() + 5 * 60_000) },
     })
     await f.account()
     const error = (await f.credentials
@@ -1065,6 +1154,33 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     // A task that is not bound yet takes the other account at once.
     const other = await f.taskFixture()
     await f.credentials.issue(other.ref, f.grant)
+  })
+
+  it('issues no key for a task whose pool binding a removed driver made', async () => {
+    const f = await fixture()
+    // What the removal of a shell leaves of its task: the driver row switched off and the
+    // binding still naming it. The task cannot go on under another driver.
+    const removed = `removed-${randomUUID().slice(0, 8)}`
+    await db.agentDriver.create({
+      data: { id: removed, image: 'synthetic.invalid/removed', capabilities: {}, enabled: false },
+    })
+    try {
+      await db.taskAccountBinding.create({
+        data: { taskId: f.task.id, driverId: removed, subscriptionAccountId: f.mainAccount.id },
+      })
+      await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'The task binding uses another driver',
+      })
+      expect(f.vault.entries.size).toBe(0)
+      expect(await db.llmKey.count({ where: { taskId: f.task.id } })).toBe(0)
+      expect(
+        await db.taskAccountBinding.findUniqueOrThrow({ where: { taskId: f.task.id } }),
+      ).toMatchObject({ driverId: removed, rebinds: 0 })
+    } finally {
+      await db.taskAccountBinding.deleteMany({ where: { taskId: f.task.id } })
+      await db.agentDriver.delete({ where: { id: removed } })
+    }
   })
 
   it('with assignments required, issues only for the open assignment of the turn', async () => {

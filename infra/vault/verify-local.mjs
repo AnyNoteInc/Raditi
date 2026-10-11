@@ -251,7 +251,11 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
     assert.ok(current?.data?.data?.token === 'synthetic-v2', 'Current subscription value differs')
     const old = await expect(llm, `subs/data/${sub}?version=1`, 404)
     assert.ok(old?.data?.data == null, 'A spent subscription credential remains readable')
-    await expect(llm, `subs/data/${sub}`, 200, write({ token: 'synthetic-v3' }, 2))
+    // The gateway reads and writes nothing: a replacement with the current CAS is refused as
+    // the creation of a new account is, and the stored value stays.
+    await expect(llm, `subs/data/${sub}`, 403, write({ token: 'synthetic-v3' }, 2))
+    const kept = await expect(llm, `subs/data/${sub}`, 200)
+    assert.equal(kept?.data?.metadata?.version, 2)
     await expect(llm, 'subs/data/zai-coding/new-account', 403, write({ token: 'synthetic' }, 0))
     for (const path of [
       `subs/metadata/${sub}`,
@@ -270,7 +274,7 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
     ]) {
       await expect(llm, path, 403, {
         method,
-        ...(method === 'POST' ? { body: { versions: [3] } } : {}),
+        ...(method === 'POST' ? { body: { versions: [2] } } : {}),
       })
     }
 
@@ -344,7 +348,7 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
 
     await expect(admin, `subs/data/${sub}`, 403)
     await expect(admin, `subs/metadata/${sub}`, 403)
-    await expect(admin, `subs/destroy/${sub}`, 204, { method: 'POST', body: { versions: [3] } })
+    await expect(admin, `subs/destroy/${sub}`, 204, { method: 'POST', body: { versions: [2] } })
     await expect(llm, `subs/data/${sub}`, 404)
     await expect(admin, `subs/metadata/${sub}`, 204, { method: 'DELETE' })
     await expect(writer, `subs/metadata/${sub}`, 404)
@@ -915,13 +919,18 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     () => writer.kvWrite(subscription, { apiKey: 'synthetic-no-cas' }),
     400,
   )
-  await checked('gateway reads version and rotates existing credentials', async () => {
+  await checked('gateway reads the current version of existing credentials', async () => {
     const current = await llm.kvRead(subscription)
     assert.ok(current?.version === 2 && current.data.apiKey === 'synthetic-second')
-    assert.deepEqual(
-      await llm.kvWrite(subscription, { apiKey: 'synthetic-third' }, { cas: current.version }),
-      { version: 3 },
-    )
+  })
+  await expectRejected(
+    'gateway cannot replace credentials, with the current CAS either',
+    () => llm.kvWrite(subscription, { apiKey: 'synthetic-third' }, { cas: 2 }),
+    403,
+  )
+  await checked('the refused write of the gateway left the credentials as they were', async () => {
+    const current = await llm.kvRead(subscription)
+    assert.ok(current?.version === 2 && current.data.apiKey === 'synthetic-second')
   })
   await expectRejected('gateway cannot read metadata', () => llm.kvMetadata(subscription), 403)
   await expectRejected('gateway cannot delete data', () => llm.kvDelete(subscription), 403)

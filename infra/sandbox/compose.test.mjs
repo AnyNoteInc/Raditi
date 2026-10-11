@@ -37,7 +37,7 @@ test("the runner's logs go to journald on the host: they outlive a recreated con
   )
 })
 
-test('only the agent runtime receives the pinned CLIs verified by the subscription harness', async () => {
+test('only the agent runtime receives the pinned CLI verified by the stand harness', async () => {
   const dockerfile = await readFile(new URL('./Dockerfile', import.meta.url), 'utf8')
   const verifier = await readFile(
     new URL('../dev/llm-verify/cli.Dockerfile', import.meta.url),
@@ -46,7 +46,7 @@ test('only the agent runtime receives the pinned CLIs verified by the subscripti
   const stages = dockerfile.split(/^FROM /m).slice(1)
   const runtime = stages.find((stage) => stage.startsWith('base AS runtime\n'))
   assert.ok(runtime)
-  for (const packageName of ['@openai/codex', '@moonshot-ai/kimi-code']) {
+  for (const packageName of ['opencode-ai']) {
     const version = (source) =>
       new RegExp(`${packageName}@(\\d+\\.\\d+\\.\\d+)(?=\\s|$)`).exec(source)?.[1]
     const expected = version(verifier)
@@ -61,7 +61,7 @@ test('only the agent runtime receives the pinned CLIs verified by the subscripti
   }
 })
 
-test('OpenCode stays in the agent runtime too, at the version of the CLI lock file', async () => {
+test('OpenCode stays in the agent runtime, at the version of the CLI lock file', async () => {
   const dockerfile = await readFile(new URL('./Dockerfile', import.meta.url), 'utf8')
   const lock = JSON.parse(
     await readFile(

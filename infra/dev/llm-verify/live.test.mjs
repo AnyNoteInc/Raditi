@@ -134,9 +134,7 @@ test('the live mode refuses to start in CI and with any address override or CA s
     ['CI', 'true'],
     ['CI', '1'],
     ['LLM_BACKEND_URL_ZAI_CODING', 'https://localhost:1'],
-    ['LLM_BACKEND_URL_OPENAI', 'https://localhost:1'],
     ['LLM_BACKEND_URL_ANYTHING_LATER', 'https://localhost:1'],
-    ['LLM_AUTH_URL_OPENAI', 'https://localhost:1'],
     ['LLM_EGRESS_PROXY_URL', 'https://localhost:1'],
     ['LLM_EGRESS_CA_FILE', '/x'],
     ['LLM_UPSTREAM_CA_FILE', '/x'],
@@ -371,7 +369,7 @@ test('the live stack starts no service that could answer in the name of a provid
     assert.doesNotMatch(body, /aliases:/, `${name} has a network alias`)
     assert.doesNotMatch(body, /\btls\b/i, `${name} mounts TLS material`)
     assert.doesNotMatch(body, /providers/, `${name} joins the network of the fakes`)
-    assert.doesNotMatch(body, /api\.z\.ai|chatgpt\.com|kimi/, `${name} names a provider`)
+    assert.doesNotMatch(body, /api\.z\.ai/, `${name} names the provider`)
   }
   // The MCP side alone, started only by the live stack; the fakes never start with it.
   const mcp = service('synthetic-mcp')
@@ -422,9 +420,8 @@ test('with --mcp-only the synthetic services hold no provider: an MCP server and
     ],
   )
   assert.equal(JSON.stringify(state).includes(turnToken), false)
-  // Nothing of the providers' control exists either.
-  for (const path of ['/zai', '/tokens', '/scenario', '/reset'])
-    assert.equal((await control(path, {})).status, 404, path)
+  // Nothing of the provider's control exists either.
+  for (const path of ['/zai', '/reset']) assert.equal((await control(path, {})).status, 404, path)
   await assert.rejects(startFakeSubscriptions({ mcpOnly: true }), /MCP/)
   await assert.rejects(
     startFakeSubscriptions({ mcpOnly: true, mcpPort: 0, key: 'k', cert: 'c' }),

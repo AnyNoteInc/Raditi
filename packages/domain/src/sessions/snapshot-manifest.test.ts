@@ -43,14 +43,18 @@ const manifest = () => ({
 describe('snapshot scope and compatibility metadata', () => {
   it('accepts a complete digest-pinned snapshot', () =>
     expect(snapshotManifestSchema.safeParse(manifest()).success).toBe(true))
-  it.each(['gigacode', 'sourcecraft'])('refuses a removed driver %s on restore', (id) => {
-    const value = manifest()
-    value.driver.id = id
-    const result = snapshotManifestSchema.safeParse(value)
-    expect(result.success).toBe(false)
-    if (!result.success)
-      expect(result.error.issues.map((issue) => issue.path)).toEqual([['driver', 'id']])
-  })
+  // A snapshot of a session of a removed shell stays in S3 as history; no turn restores it.
+  it.each(['gigacode', 'sourcecraft', 'codex', 'kimi', 'qwen', 'openai-chatgpt', 'kimi-code'])(
+    'refuses a removed driver %s on restore',
+    (id) => {
+      const value = manifest()
+      value.driver.id = id
+      const result = snapshotManifestSchema.safeParse(value)
+      expect(result.success).toBe(false)
+      if (!result.success)
+        expect(result.error.issues.map((issue) => issue.path)).toEqual([['driver', 'id']])
+    },
+  )
   it.each(['../s', '/s', 's/other', 's\n', '-s', ''])('refuses unsafe session id %j', (id) => {
     expect(() => turnSnapshotPrefix(id, 1)).toThrow('Invalid snapshot identity')
   })

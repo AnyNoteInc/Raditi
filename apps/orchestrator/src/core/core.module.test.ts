@@ -173,9 +173,8 @@ describe('CoreModule', () => {
     const core = await startCore(infra)
 
     const drivers = core.get<AgentDriverRegistry>(AGENT_DRIVERS)
-    // OpenCode stands next to the two earlier CLIs until they are removed.
-    expect(drivers.list().map((driver) => driver.id)).toEqual(['codex', 'kimi', 'opencode'])
-    expect(drivers.has('qwen')).toBe(false)
+    // One shell in the product.
+    expect(drivers.list().map((driver) => driver.id)).toEqual(['opencode'])
     expect(core.get<SandboxProvider>(SANDBOX_PROVIDER).kind).toBe('docker')
     expect(core.get(OutboxRelayService)).toBeInstanceOf(OutboxRelayService)
 

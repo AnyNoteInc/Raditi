@@ -44,7 +44,7 @@ import {
 } from '../../../infra/dev/llm-verify/stack.mjs'
 import { seedReferenceData } from '../../../packages/db/prisma/seed/apply.ts'
 import { opencodeUserAgent } from '../../../packages/llm-backends/src/zai-coding/backend.ts'
-import { productionMcpTools } from './verify-llm-gateway-drivers.mjs'
+import { productionMcpTools } from './verify-llm-mcp-tools.mjs'
 import {
   judgeResult,
   readingShares,
@@ -98,31 +98,34 @@ const rehearsedText = (label, attempt, expected) => {
 const BODY_TURN_CALLS = 4
 const BODY_REFUSALS_AT_MOST = 12
 /**
- * What OpenCode 1.18.34 did with HTTP 413 `raditi_body`, measured on 10.10.2026 (docs/plan/
- * 47-common-scenarios-zai.md). It takes any 413 for an overflow of the context: it reports the
- * failure, asks once for a compaction and, when that is answered, sends the turn on once more —
- * and exits 1 whatever came back. With every request refused it stops after the compaction
- * request: two requests, none past the stand. The rehearsal holds the CLI to these numbers, so
- * a CLI that reacts otherwise shows here before the answer of the gateway is decided anew.
+ * What OpenCode 1.18.34 did with HTTP 400 `raditi_body`, the refusal of a body that is too
+ * large, measured on 11.10.2026 (docs/plan/48-removal.md). It ends the turn in that request: a
+ * failure reported, no request for a compaction, no repeat, exit 1 — for the bytes of the
+ * refusal given where an answer of the role would come (`given`), and for a request of its own
+ * that really is above the limit, which sandbox-gw refuses itself once it has read it
+ * (`uploaded`: the step before it reached the provider and is the one call of the key). Until G8
+ * the answer was 413, which the CLI took for an overflow of its context and answered with a
+ * request for a compaction (docs/plan/47-common-scenarios-zai.md). The rehearsal holds the CLI
+ * to these numbers, so a CLI that reacts otherwise shows here.
  */
 const BODY_REFUSAL_MEASURED = Object.freeze({
-  once: {
+  given: {
     exit: 1,
     refused: 1,
-    requests: ['turn 413', 'compaction 200', 'turn 200'],
-    provider: 2,
-    calls: 2,
-    result: false,
-    failures: ['ContextOverflowError raditi_body'],
-  },
-  every: {
-    exit: 1,
-    refused: 2,
-    requests: ['turn 413', 'compaction 413'],
+    requests: ['turn 400'],
     provider: 0,
     calls: 0,
     result: false,
-    failures: ['ContextOverflowError raditi_body', 'ContextOverflowError raditi_body'],
+    failures: ['APIError 400 raditi_body'],
+  },
+  uploaded: {
+    exit: 1,
+    refused: 0,
+    requests: ['turn 200'],
+    provider: 1,
+    calls: 1,
+    result: false,
+    failures: ['APIError 400 raditi_body'],
   },
 })
 const TURN_MS = 240_000
@@ -1185,15 +1188,16 @@ console.log(JSON.stringify(await Promise.all([one(),one()])))})`,
     }
 
     /**
-     * Rehearsal only, and a measurement, not a rule of the gateway (spec §20, П23): what the
-     * pinned CLI does when a request of its turn is answered HTTP 413 `raditi_body`, the refusal
-     * of a body that is too large. The CLI reads any 413 as an overflow of the context. Both
-     * refusals are the real ones: sandbox-gw is asked from the CLI container by a request that
-     * declares one byte more than it takes, the role llm by the very request of the CLI, declared
-     * one byte longer. The observer gives them to the CLI where an answer of the role would
-     * come, through sandbox-gw, so no body of sixteen megabytes is ever sent. Three turns: one
-     * request refused by sandbox-gw, one by the role, and every request refused — a body that is
-     * too large stays too large, the request for a compaction carries it too.
+     * Rehearsal only, and a measurement, not a rule of the gateway (spec §20, П42): what the
+     * pinned CLI does when a request of its turn is answered HTTP 400 `raditi_body`, the refusal
+     * of a body that is too large. Three turns get the real bytes of a refusal where an answer
+     * of the role would come: sandbox-gw is asked from the CLI container by a request one byte
+     * longer than it takes (it answers once it has read the body), the role llm by the very
+     * request of the CLI, declared one byte longer; the observer gives them to the CLI through
+     * sandbox-gw — once from each side, and for every request of a turn. The fourth turn sends,
+     * from the CLI itself, a body that really is too large: the synthetic model thinks as many
+     * bytes as the gateway takes before it calls a tool, the CLI sends that reasoning back with
+     * its next request, and sandbox-gw itself refuses that request.
      */
     async function bodyRefusals() {
       stage = 'measurement: the refusal of a body that is too large'
@@ -1210,7 +1214,7 @@ path:process.argv[3],method:'POST',headers:{'content-type':'application/json',
 'content-length':process.argv[4]}},(answer)=>{let body='';answer.on('data',(chunk)=>{body+=chunk})
 .on('end',()=>{console.log(JSON.stringify({status:answer.statusCode,
 contentType:answer.headers['content-type'],body}));process.exit(0)})});
-request.on('error',()=>process.exit(1));request.flushHeaders()`,
+request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.argv[4]),120))`,
           chat.hostname,
           chat.port,
           chat.pathname,
@@ -1218,13 +1222,9 @@ request.on('error',()=>process.exit(1));request.flushHeaders()`,
         ],
         { timeoutMs: 30_000 },
       )
-      assert.equal(
-        asked.code,
-        0,
-        'sandbox-gw did not answer a request that declares too long a body',
-      )
+      assert.equal(asked.code, 0, 'sandbox-gw did not answer a request with too long a body')
       const ofGateway = JSON.parse(asked.stdout)
-      assert.deepEqual([ofGateway.status, ofGateway.contentType], [413, 'application/json'])
+      assert.deepEqual([ofGateway.status, ofGateway.contentType], [400, 'application/json'])
       const refusalOf = (message) => ({
         error: { type: 'invalid_request_error', code: 'raditi_body', message },
       })
@@ -1268,6 +1268,36 @@ request.on('error',()=>process.exit(1));request.flushHeaders()`,
 
       await startLlm(BODY_TURN_CALLS)
       const measured = []
+      /** What the CLI sent, in its order, and what the turn came to. */
+      const measure = async ({ label, outcome, rows, refused, sentBefore }) => {
+        // A request of the turn or one for a compaction (it declares no tools), the status it
+        // got, and its size against the first request.
+        const first = outcome.exchanges[0]?.requestBody.length ?? 0
+        const requests = outcome.exchanges.map((exchange) => {
+          const request = chatRequestSummary(exchange.requestBody)
+          return {
+            kind: request?.compaction ? 'compaction' : 'turn',
+            status: exchange.status,
+            messages: request?.messages ?? null,
+            grew: exchange.requestBody.length > first,
+            byStand: exchange.answeredByStand,
+          }
+        })
+        const failures = outcome.events
+          .filter((event) => event.type === 'failed')
+          .map((event) => event.reason)
+        measured.push({
+          label,
+          exit: outcome.code,
+          refused,
+          requests: requests.map((request) => `${request.kind} ${request.status}`),
+          provider: (await fakeChat()) - sentBefore,
+          calls: rows.length,
+          result: outcome.reading.taken,
+          failures: failures.map((reason) => reason.split(':')[0]),
+        })
+        return { requests, failures }
+      }
       for (const { label, answer, refusals } of [
         { label: 'one request refused by sandbox-gw', answer: fromGateway, refusals: 1 },
         { label: 'one request refused by the role llm', answer: fromRole, refusals: 1 },
@@ -1294,51 +1324,82 @@ request.on('error',()=>process.exit(1));request.flushHeaders()`,
         const refused = refusals - observer.dropAnswers()
         const { rows } = await invariants(turn, outcome, { ceiling: BODY_TURN_CALLS })
         await revoke(turn)
-        // What the CLI sent, in its order: a request of the turn or one for a compaction (it
-        // declares no tools), the status it got, and its size against the first request.
-        const first = outcome.exchanges[0]?.requestBody.length ?? 0
-        const requests = outcome.exchanges.map((exchange) => {
-          const request = chatRequestSummary(exchange.requestBody)
-          return {
-            kind: request?.compaction ? 'compaction' : 'turn',
-            status: exchange.status,
-            messages: request?.messages ?? null,
-            grew: exchange.requestBody.length > first,
-            byStand: exchange.answeredByStand,
-          }
-        })
         for (const exchange of outcome.exchanges.filter((item) => item.answeredByStand))
           assert.equal(JSON.parse(exchange.responseText).error.code, 'raditi_body', label)
-        const failures = outcome.events
-          .filter((event) => event.type === 'failed')
-          .map((event) => event.reason)
-        measured.push({
-          label,
-          exit: outcome.code,
-          refused,
-          requests: requests.map((request) => `${request.kind} ${request.status}`),
-          provider: (await fakeChat()) - sentBefore,
-          calls: rows.length,
-          result: outcome.reading.taken,
-          failures: failures.map((reason) => reason.split(':')[0]),
-        })
+        const { requests, failures } = await measure({ label, outcome, rows, refused, sentBefore })
         report(
           `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s; the CLI sent ${requests.length} request(s): ${requests.map((request) => `${request.kind}/${request.status}/${request.messages} messages${request.grew ? '/longer than the first' : ''}`).join(', ')}; refused by the stand ${refused} of ${refusals} prepared; reached the role ${requests.filter((request) => !request.byStand).length + (answer === fromRole ? refused : 0)}, the provider ${measured.at(-1).provider}; calls of the key ${rows.length} of ${BODY_TURN_CALLS}; result ${outcome.reading.taken ? 'taken' : 'none'}; failures the driver reported: ${failures.join(' | ') || 'none'}`,
         )
       }
+
+      {
+        const label = 'a request above the limit, refused by sandbox-gw itself'
+        stage = `measurement: ${label}`
+        budget.afford(BODY_TURN_CALLS, label)
+        const turn = await issued()
+        await script({
+          scenario: 'tools',
+          calls: [bash('echo filler')],
+          // As many bytes of reasoning as a whole request may have: the next one is above it.
+          filler: llmJsonLimits.bytes,
+          text: JSON.stringify(resultFor('never reached')),
+        })
+        const sentBefore = await fakeChat()
+        const outcome = await runTurn({
+          label,
+          turn,
+          prompt:
+            'Synthetic check. Run the shell command `echo filler` once, then reply with the final result.',
+        })
+        // Not `invariants`: the observer keeps the first megabytes of an exchange, and the usage
+        // of this answer stands behind sixteen of them.
+        const rows = await settled(turn)
+        await revoke(turn)
+        assert.deepEqual(
+          rows.map((row) => [row.state, row.tokenUsage?.estimated]),
+          [['completed', false]],
+          `${label}: the step before the refused request is the one call of the key`,
+        )
+        const { requests, failures } = await measure({
+          label,
+          outcome,
+          rows,
+          refused: 0,
+          sentBefore,
+        })
+        // The refused request never came to the observer, so not to the role either, and the
+        // text of the refusal is that of sandbox-gw: the role says another sentence.
+        assert.equal(outcome.exchanges.at(0)?.truncated, true, `${label}: the answer was short`)
+        assert.deepEqual(
+          failures,
+          ['APIError 400 raditi_body: Request body is too large'],
+          `${label}: the CLI did not report the refusal of sandbox-gw`,
+        )
+        assert.ok(
+          outcome.events.some((event) => event.type === 'command'),
+          `${label}: the CLI did not run the tool of the first step`,
+        )
+        report(
+          `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s; the CLI sent ${requests.length} request(s) that reached the role: ${requests.map((request) => `${request.kind}/${request.status}`).join(', ')}, the answer of ${llmJsonLimits.bytes} bytes of reasoning beside a tool call, and one more that sandbox-gw refused itself; the provider got ${measured.at(-1).provider}; calls of the key ${rows.length} of ${BODY_TURN_CALLS}; result ${outcome.reading.taken ? 'taken' : 'none'}; failures the driver reported: ${failures.join(' | ') || 'none'}`,
+        )
+      }
       report(`refused bodies, measured: ${JSON.stringify(measured)}`)
-      const { once, every } = BODY_REFUSAL_MEASURED
+      const { given, uploaded } = BODY_REFUSAL_MEASURED
       assert.deepEqual(
         measured,
         [
-          { label: 'one request refused by sandbox-gw', ...once },
-          { label: 'one request refused by the role llm', ...once },
-          { label: 'every request refused by sandbox-gw', ...every },
+          { label: 'one request refused by sandbox-gw', ...given },
+          { label: 'one request refused by the role llm', ...given },
+          { label: 'every request refused by sandbox-gw', ...given },
+          {
+            label: 'a request above the limit, refused by sandbox-gw itself',
+            ...uploaded,
+          },
         ],
-        'The pinned CLI reacted to HTTP 413 raditi_body otherwise than measured',
+        'The pinned CLI reacted to HTTP 400 raditi_body otherwise than measured',
       )
       passed(
-        'rehearsal: HTTP 413 raditi_body, the real refusal of sandbox-gw and of the role llm, as the pinned OpenCode takes it: a failure reported, one request for a compaction, one more request of the turn when that was answered, exit 1 either way; two requests and no more when every request is refused',
+        'rehearsal: HTTP 400 raditi_body, the real refusal of sandbox-gw and of the role llm, as the pinned OpenCode takes it: a failure reported and the end of the turn in that one request, exit 1, no request for a compaction and no repeat; the same for a request of the CLI that really is above the limit, which sandbox-gw refuses itself',
       )
     }
 

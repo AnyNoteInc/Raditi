@@ -17,7 +17,6 @@ const input = (): GatewayAdmitInput => ({
     modelId: randomUUID(),
     model: 'synthetic-model',
     reasoningEffort: 'low',
-    cacheKey: `rdt_${'a'.repeat(32)}`,
   },
   requestBytes: 300,
   estimatedInputTokens: 100,
@@ -84,7 +83,7 @@ describe('gateway persistence boundaries', () => {
     await expect(store.admit({ ...input(), estimatedInputTokens: 2_147_483_648 })).rejects.toThrow()
     const value = input()
     await expect(
-      store.admit({ ...value, profile: { ...value.profile, cacheKey: 'shared-cache' } }),
+      store.admit({ ...value, profile: { ...value.profile, modelId: 'shared-model' } }),
     ).rejects.toThrow()
     expect($transaction).not.toHaveBeenCalled()
   })

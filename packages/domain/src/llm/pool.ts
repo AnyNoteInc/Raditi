@@ -95,8 +95,6 @@ function eligible(account: PoolAccountSnapshot, input: ParsedInput): boolean {
     account.enabled &&
     account.status === 'active' &&
     account.health === 'ok' &&
-    // Current spec §9 excludes ambiguous refreshes for existing bindings too.
-    account.healthReason !== 'refresh_ambiguous' &&
     account.retireRequestedAt === null
   )
 }

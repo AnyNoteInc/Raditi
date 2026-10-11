@@ -40,8 +40,9 @@ const limits = Object.freeze({
   requestsPerSource: 16,
   requestMs: 600_000,
   stallMs: 60_000,
-  // A provider or channel silent this long has stalled. The pinned Codex CLI gives a silent
-  // stream the same five minutes, so a stream the CLI would still wait for is never cut.
+  // A provider or channel silent this long has stalled. The pinned CLI gives a silent stream
+  // the same five minutes (OpenCode's `chunkTimeout`), so a stream it would still wait for is
+  // never cut.
   upstreamIdleMs: 300_000,
   accountWaitMs: 20_000,
   persistenceMs: 600_000,
@@ -55,10 +56,11 @@ const limits = Object.freeze({
 })
 // Provider-neutral names only. The adapter of a route declares the client headers it reads or
 // forwards and the response headers that go back to the CLI, and owns the rules for their values.
-const requestHeaders = ['authorization', 'content-type', 'accept']
+// Exported for the contract with sandbox-gw, which lets nothing else through (the contract test).
+export const neutralRequestHeaders = Object.freeze(['authorization', 'content-type', 'accept'])
 // Of a successful answer. Not `retry-after`: a pause is the gateway's to name, in a refusal it
 // builds itself. A CLI obeys the value a provider writes there, be it weeks long.
-const responseHeaders = ['content-type']
+export const neutralResponseHeaders = Object.freeze(['content-type'])
 
 export interface GatewayLogger {
   log(message: string): void
@@ -66,11 +68,6 @@ export interface GatewayLogger {
 }
 export interface GatewayLifecycle {
   pause(key: GatewayKey): { reason: GatewayRefusal; retryAfterMs?: number } | null
-  refresh(
-    call: GatewayCall,
-    backend: LlmBackend,
-    observedVersion: number,
-  ): Promise<SubscriptionCredential | null>
   observe(call: GatewayCall, finish: GatewayFinish): Promise<void>
   /**
    * Probes accounts whose windows are unknown. Admission adds the snapshot it read for its one
@@ -164,7 +161,7 @@ function uniqueHeaders(raw: readonly string[], names: readonly string[]): boolea
 }
 
 function clientHeaders(request: IncomingMessage, declared: readonly string[]): Headers {
-  const names = [...requestHeaders, ...declared]
+  const names = [...neutralRequestHeaders, ...declared]
   if (!uniqueHeaders(request.rawHeaders, ['host', ...names]))
     throw new Rejected(403, 'raditi_headers')
   const nominated = new Set(
@@ -204,8 +201,10 @@ async function readBody(
   signal: AbortSignal,
   maximumBytes = llmJsonLimits.bytes,
 ): Promise<Buffer> {
+  // A final 400, as for any body the role does not take, and never 413: the pinned CLI reads
+  // every 413 as an overflow of its context and asks for a compaction instead of ending the turn.
   const declared = Number(request.headers['content-length'])
-  if (declared > maximumBytes) throw new Rejected(413, 'raditi_body')
+  if (declared > maximumBytes) throw new Rejected(400, 'raditi_body')
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let bytes = 0
@@ -227,7 +226,7 @@ async function readBody(
     const data = (chunk: Buffer) => {
       bytes += chunk.byteLength
       if (bytes > maximumBytes) {
-        fail(new Rejected(413, 'raditi_body'))
+        fail(new Rejected(400, 'raditi_body'))
         request.resume()
       } else chunks.push(chunk)
     }
@@ -784,39 +783,29 @@ export class LlmGateway {
         await this.#refuse(key, selected.backend, response, 'transient', 1000)
         return
       }
-      let retried = false
-      while (true) {
-        const target = selected.backend.upstream(
-          selected.route,
-          normalized,
-          headers,
-          credential,
-          call.clientIdentity,
+      const target = selected.backend.upstream(selected.route, normalized, headers, credential)
+      meter = selected.backend.usageMeter()
+      providerMayCharge = true
+      watchUpstream()
+      try {
+        upstream = await abortable(
+          this.options.egress.request(
+            {
+              url: target.url,
+              method: selected.route.method,
+              headers: target.headers,
+              body: normalized.body,
+            },
+            { signal: controller.signal },
+          ),
+          controller.signal,
         )
-        meter = selected.backend.usageMeter()
-        providerMayCharge = true
-        // Liveness is per request: an answer to the previous one says nothing about this one.
-        upstreamAt = undefined
-        watchUpstream()
-        try {
-          upstream = await abortable(
-            this.options.egress.request(
-              {
-                url: target.url,
-                method: selected.route.method,
-                headers: target.headers,
-                body: normalized.body,
-              },
-              { signal: controller.signal },
-            ),
-            controller.signal,
-          )
-        } catch (error) {
-          if (error instanceof EgressNotDelivered) providerMayCharge = false
-          throw error
-        }
-        upstreamProgress()
-        if (upstream.status >= 200 && upstream.status < 300) break
+      } catch (error) {
+        if (error instanceof EgressNotDelivered) providerMayCharge = false
+        throw error
+      }
+      upstreamProgress()
+      if (upstream.status < 200 || upstream.status >= 300) {
         // An HTTP error or redirect answers before any generation: no quota was spent.
         providerMayCharge = false
         if (upstream.status >= 300 && upstream.status < 400) throw new Error('Redirect refused')
@@ -826,50 +815,16 @@ export class LlmGateway {
           upstream.headers,
           await errorJson(upstream, controller.signal),
         )
-        if (
-          upstream.status !== 401 ||
-          signal.kind !== 'auth' ||
-          retried ||
-          response.headersSent ||
-          !selected.backend.refresh ||
-          !this.options.lifecycle
-        )
-          break
-        let refreshed: SubscriptionCredential | null = null
-        try {
-          // The shared refresher continues its durable rotation if this client stops waiting.
-          refreshed = await abortable(
-            withTimeout(
-              this.options.lifecycle.refresh(
-                call,
-                selected.backend,
-                this.options.credentials.versionOf?.(credential) ?? call.credentialVersion,
-              ),
-              15_000,
-              'Token refresh wait timed out',
-            ),
-            controller.signal,
-          )
-        } catch {
-          controller.signal.throwIfAborted()
-        }
-        if (!refreshed) break
-        credential = refreshed
-        retried = true
-        failed = false
-        signal = undefined
-      }
-      if (upstream.status < 200 || upstream.status >= 300) {
         await this.#refuse(
           key,
           selected.backend,
           response,
-          refusalForSignal(signal!),
-          signal?.kind === 'transient' ? signal.retryAfterMs : undefined,
+          refusalForSignal(signal),
+          signal.kind === 'transient' ? signal.retryAfterMs : undefined,
         )
         return
       }
-      const passedHeaders = [...responseHeaders, ...selected.backend.responseHeaders]
+      const passedHeaders = [...neutralResponseHeaders, ...selected.backend.responseHeaders]
       if (
         !uniqueHeaders(upstream.rawHeaders, passedHeaders) ||
         !/^text\/event-stream(?:;|$)/i.test(upstream.headers.get('content-type') ?? '')
@@ -1022,7 +977,6 @@ export class LlmGateway {
                 ? upstream.status
                 : undefined,
             signal: signal ?? meterResult.signal ?? undefined,
-            windows: upstream ? selected.backend.windowsFromHeaders(upstream.headers) : null,
           }
           if (estimated) this.#counters.estimated += 1
           else this.#counters.completed += 1

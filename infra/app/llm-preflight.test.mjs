@@ -302,15 +302,20 @@ test('development TLS and upstream overrides cannot enter production settings', 
     'NODE_EXTRA_CA_CERTS',
     'NODE_OPTIONS',
     'NODE_USE_SYSTEM_CA',
+    'NODE_USE_ENV_PROXY',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
     'LLM_UPSTREAM_CA_FILE',
-    'LLM_BACKEND_URL_OPENAI_CHATGPT',
-    'LLM_AUTH_URL_OPENAI',
-    'LLM_BACKEND_URL_KIMI_CODE',
     'LLM_BACKEND_URL_ZAI_CODING',
+    'LLM_BACKEND_URL_ANY_LATER_BACKEND',
     'LLM_EGRESS_PROXY_URL',
     'LLM_CONTROL_URL',
   ])
-    assert.throws(() => validateSettings({ ...base, [name]: 'injected' }))
+    assert.throws(
+      () => validateSettings({ ...base, [name]: 'injected' }),
+      /forbidden runtime override/,
+      name,
+    )
 })
 
 test('real synthetic CA chain, matching client key and isolated AppRole pass', () => {

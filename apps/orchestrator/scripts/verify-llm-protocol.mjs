@@ -1,9 +1,9 @@
 // Protocol checks on the owned B13 stack. No host login or external account is read. The
 // scenarios of the platform run once, on the group they are given (its ids and forms are data:
-// verify-llm-zai-forms.mjs); what is Codex's own stays below them until Codex is removed.
+// verify-llm-zai-forms.mjs).
 import assert from 'node:assert/strict'
 
-import { eventually, run } from '../../../infra/dev/llm-verify/stack.mjs'
+import { run } from '../../../infra/dev/llm-verify/stack.mjs'
 
 // Generate binary/large requests inside the unprivileged CLI namespace. Its key enters
 // only through stdin, never Docker arguments, environment or container configuration.
@@ -14,7 +14,8 @@ const value = JSON.parse(input);
 const data = value.kind === 'gzip' ? gzipSync(value.body) : value.body.replace(value.fill, 'x'.repeat(value.bytes ?? 0));
 try {
   const response = await fetch('http://sandbox-gw:8080' + value.path, {method:'POST',headers:{authorization:'Bearer '+value.key,'content-type':'application/json','user-agent':value.agent,...(value.kind === 'gzip' ? {'content-encoding':'gzip'} : {})},body:data,signal:AbortSignal.timeout(15000)});
-  const text = await response.text(); process.stdout.write(JSON.stringify({status:response.status,bytes:text.length}));
+  const text = await response.text(); let code; try { code = JSON.parse(text).error?.code } catch {}
+  process.stdout.write(JSON.stringify({status:response.status,bytes:text.length,code}));
 } catch { process.stdout.write(JSON.stringify({status:null,transportRejected:true})); }
 `
 const networkProbe = `
@@ -51,9 +52,6 @@ export async function verifyProtocol(group) {
       )
     for (const path of group.closedPaths)
       assert.equal((await group.request(turn, { path })).status, 403)
-    // A key of this backend opens no route of another one, while there is another one.
-    for (const other of group.otherBackendRequests)
-      assert.equal((await group.request(turn, other)).status, 403)
     assert.equal(await group.providerRequests(), before)
     assert.equal((await group.calls(turn)).length, 0)
 
@@ -90,9 +88,11 @@ export async function verifyProtocol(group) {
     assert.equal((await generate('large', 1024 * 1024 + 1024)).status, 200)
     await group.settled(turn, 1)
     assert.equal(await group.providerRequests(), before + 1)
+    // A final refusal of sandbox-gw, read by the client once its upload has ended.
     const oversized = await generate('large', 16 * 1024 * 1024 + 1024)
-    assert.ok(
-      oversized.status === 413 || oversized.status === 502 || oversized.transportRejected,
+    assert.deepEqual(
+      [oversized.status, oversized.code],
+      [400, 'raditi_body'],
       'A body beyond the gateway limit must fail before provider admission',
     )
     assert.equal(await group.providerRequests(), before + 1)
@@ -213,38 +213,4 @@ export async function verifyProtocol(group) {
       'Protocol turn-key cleanup failed',
     )
   }
-}
-
-/**
- * Codex's own plan tool between two answers: a form no other CLI of the stand has, run with the
- * hand-written configuration of the old path. Removed with Codex (G8).
- */
-export async function verifyCodexPlanRound(ctx) {
-  const { db, core, cli, control, issued, passed, secretMarkers } = ctx
-  const providerPath = '/backend-api/codex/responses'
-  const countRequests = async () =>
-    (await control('state')).requests.filter((request) => request.path === providerPath).length
-  await control('scenario', { backend: 'codex', scenario: 'plan-then-text' })
-  const turn = await issued('openai-chatgpt')
-  secretMarkers?.add(turn.values.llmApiKey)
-  try {
-    const before = await countRequests()
-    const result = await cli.run({
-      driver: 'codex',
-      key: turn.values.llmApiKey,
-      prompt: 'Prepare the synthetic plan, then report completion.',
-    })
-    assert.equal(result.code, 0, 'Codex plan-then-text did not finish')
-    assert.equal((await countRequests()) - before, 2)
-    assert.equal(result.lastMessage, 'Synthetic B13 complete.')
-    assert.equal(result.events.filter((event) => event.type === 'turn.completed').length, 1)
-    await eventually(async () => {
-      const rows = await db.llmCall.findMany({ where: { key: { taskId: turn.ref.taskId } } })
-      return rows.length === 2 && rows.every((row) => row.state !== 'open')
-    })
-  } finally {
-    await core.call('revoke', { ref: turn.ref })
-    await control('scenario', { backend: 'codex', scenario: 'text' })
-  }
-  passed('real Codex completes a plan/tool round followed by final text')
 }

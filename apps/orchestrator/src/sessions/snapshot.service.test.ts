@@ -288,6 +288,36 @@ describe('host snapshot lifecycle', () => {
     },
   )
 
+  it.each(['codex', 'kimi', 'qwen'])(
+    'loads no snapshot of a session of the removed driver %s: its objects stay as history',
+    async (id) => {
+      const f = fixture()
+      await f.service.save(metadata, await parts())
+      const stored = f.objects.size
+      // The reference a saved plan of that shell carries, and the manifest it left in S3.
+      const earlier = { ...reference, driver: { ...reference.driver, id } }
+      for (const read of [
+        () => f.service.load(earlier as typeof reference),
+        () => f.service.restoreSource(earlier as typeof reference, 30_000),
+      ])
+        await expect(read()).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'Invalid snapshot reference',
+        })
+      changeManifest(f, (m) => {
+        ;(m.driver as Record<string, unknown>).id = id
+      })
+      await expect(f.service.load(reference)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Invalid snapshot manifest',
+      })
+      // Refused before any key is asked for or any link is signed; nothing is removed.
+      expect(f.secrets.transitDecryptDataKey).not.toHaveBeenCalled()
+      expect(f.storage.presign).not.toHaveBeenCalled()
+      expect(f.objects.size).toBe(stored)
+    },
+  )
+
   it.each(['ciphertext', 'tag', 'resume-metadata', 'git-metadata', 'missing-part', 'foreign-key'])(
     'refuses %s and zeroes every data key',
     async (kind) => {

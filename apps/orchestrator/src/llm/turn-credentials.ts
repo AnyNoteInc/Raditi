@@ -93,8 +93,6 @@ interface Profile {
   reserveOutputTokens: number
 }
 type Price = NonNullable<Awaited<ReturnType<Transaction['llmModelPrice']['findFirst']>>>
-/** One cycle of the llm role's refresher, which renews an access token past its expiry. */
-const EXPIRED_ACCESS_WAIT_MS = 5 * 60_000
 interface Selection {
   task: OwnedTask
   profile: Profile
@@ -449,11 +447,9 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         activeTurns: bigint
         maxConcurrentTurns: number
         lastUsedAt: Date | null
-        accessExpired: boolean
       }>
     >`
       SELECT a.id, (a.enabled AND a.credential_version > 0 AND a.credentials_revoked_at IS NULL) AS enabled,
-        coalesce(a.credential_expires_at <= clock_timestamp(), false) AS "accessExpired",
         a.status::text AS status, a.health::text AS health, a.health_reason AS "healthReason",
         a.health_changed_at AS "healthChangedAt", a.retire_requested_at AS "retireRequestedAt",
         a.cooling_until AS "coolingUntil", a.breaker_open_until AS "breakerOpenUntil",
@@ -464,18 +460,11 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
             AND k.revoked_at IS NULL AND k.expires_at > clock_timestamp()) AS "activeTurns"
       FROM subscription_accounts a WHERE a.provider_id = ${profile.providerId}::uuid
         AND a.driver_id = ${grant.driverId}`
-    const renewedBy = new Date(task.now.getTime() + EXPIRED_ACCESS_WAIT_MS)
-    const snapshots = accounts.map(({ accessExpired, limitsSeenAt: _seen, ...a }) => ({
+    const snapshots = accounts.map(({ limitsSeenAt: _seen, ...a }) => ({
       ...a,
       backend: grant.backend,
       activeTurns: Number(a.activeTurns),
       limitWindows: decodeLimitWindows(a.limitWindows),
-      // An expired access token is a pause until the refresher renews it, not a disabled
-      // account: a bound task waits for it instead of moving to another account at once.
-      coolingUntil:
-        accessExpired && (a.coolingUntil === null || a.coolingUntil < renewedBy)
-          ? renewedBy
-          : a.coolingUntil,
     }))
     // Not llm_keys.last_refusal: any later refusal of the same key overwrites that one.
     const policyFlagged = await tx.taskEvent.findFirst({

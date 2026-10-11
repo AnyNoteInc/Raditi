@@ -2,18 +2,21 @@
 // A synthetic, disposable gateway-to-CLI verification. No user env-file or login is loaded.
 // With --live the same path ends at the real provider (verify-llm-live.mjs).
 import assert from 'node:assert/strict'
-import { Buffer } from 'node:buffer'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import process from 'node:process'
 
 import { createPrismaClient } from '@repo/db'
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
 import { createVaultSecretStore } from '@repo/vault'
 
 import { seedReferenceData } from '../../../packages/db/prisma/seed/apply.ts'
-import { CLI_IMAGE, createCliSession, RUNTIME_IMAGE } from '../../../infra/dev/llm-verify/cli.mjs'
+import {
+  CLI_IMAGE,
+  createCliSession,
+  GUARD_IMAGE,
+  RUNTIME_IMAGE,
+} from '../../../infra/dev/llm-verify/cli.mjs'
 import {
   abortVerification,
   eventually,
@@ -22,25 +25,13 @@ import {
   startVerificationStack,
 } from '../../../infra/dev/llm-verify/stack.mjs'
 import {
-  SYNTHETIC_KIMI_KEY,
-  SYNTHETIC_ERROR_MARKER,
-} from '../../../infra/dev/llm-verify/fake-subscriptions.mjs'
-import {
   SYNTHETIC_ZAI_KEY,
   SYNTHETIC_ZAI_MARKER,
   SYNTHETIC_ZAI_ROTATED_KEY,
 } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import { standMode } from '../../../infra/dev/llm-verify/live.mjs'
 import { startWorker } from '../../../infra/dev/llm-verify/workers.mjs'
-import { llmConfigFromEnv } from '../src/config/llm-config.ts'
-import { createControlEgress, createEgressTransport } from '../src/llm-gateway/egress.ts'
 import { SessionSubscriptionLock } from '../src/llm-gateway/session-lock.ts'
-import { authenticateSubscription } from '../src/subscriptions/device-login.ts'
-import { createSubscriptionClientIdentity, SubscriptionLogin } from '../src/subscriptions/login.ts'
-import { verifyOauthLifecycle } from './verify-llm-lifecycle.mjs'
-import { verifyRotationCrashes } from './verify-llm-crashes.mjs'
-import { verifyCodexPlanRound } from './verify-llm-protocol.mjs'
-import { verifyDriverTurns } from './verify-llm-gateway-drivers.mjs'
 import { runLiveGateway } from './verify-llm-live.mjs'
 import { verifyZai } from './verify-llm-zai.mjs'
 
@@ -71,14 +62,16 @@ let stage = 'build',
 const workers = []
 const extraLogs = []
 const secretMarkers = new Set([
-  SYNTHETIC_KIMI_KEY,
-  SYNTHETIC_ERROR_MARKER,
   // Both plan keys of the synthetic Z.ai and the text its refusals carry.
   SYNTHETIC_ZAI_KEY,
   SYNTHETIC_ZAI_ROTATED_KEY,
   SYNTHETIC_ZAI_MARKER,
 ])
 const promptMarker = `synthetic-prompt-${randomBytes(12).toString('hex')}`
+// A floor under the count of completed calls the usage check looks at: the stand completes 37
+// (the count is in its REPORT line), and a stand that lost a group of its turns must not pass
+// that check on what is left.
+const MIN_COMPLETED_CALLS = 30
 const passed = (name) => {
   checks++
   console.log(`PASS ${name}`)
@@ -137,7 +130,7 @@ try {
         '--target',
         'network-guard',
         '-t',
-        'raditi-p3verify-guard:b13',
+        GUARD_IMAGE,
         repository,
       ],
       { timeoutMs: 300_000 },
@@ -185,30 +178,13 @@ try {
         ? {}
         : {
             method: 'POST',
-            headers: { 'content-type': 'application/json', 'user-agent': 'codex_exec/0.158.0' },
+            headers: { 'content-type': 'application/json' },
             body: JSON.stringify(body),
           }),
       signal: AbortSignal.timeout(5000),
     })
     assert.equal(result.status, 200, 'Synthetic control request failed')
-    const value = await result.json()
-    for (const credential of [value.tokens, value.credential, value.currentCredential])
-      for (const field of [
-        'access_token',
-        'refresh_token',
-        'id_token',
-        'accessToken',
-        'refreshToken',
-        'idToken',
-      ])
-        if (typeof credential?.[field] === 'string') secretMarkers.add(credential[field])
-    for (const request of value.requests ?? []) {
-      const token = request.headers?.authorization?.replace(/^Bearer /, '')
-      if (token) secretMarkers.add(token)
-      for (const field of ['refresh_token', 'token'])
-        if (typeof request.body?.[field] === 'string') secretMarkers.add(request.body[field])
-    }
-    return value
+    return result.json()
   }
   // `base`: the environment of the role; the Z.ai group restarts llm without the egress proxy.
   const roleConfig = (name, base = env) => ({
@@ -229,115 +205,8 @@ try {
     token: stack.tokens['subscriptions-admin'],
   })
   locks = new SessionSubscriptionLock(stack.databaseUrl)
-  const login = new SubscriptionLogin({
-    prisma: db,
-    writer,
-    locks,
-    backends: [codexBackend, kimiCodeBackend],
-  })
-  const http = createControlEgress(createEgressTransport(llmConfigFromEnv(env, 'test').egress))
-  stage = 'device login and key import'
-  let displayed = false
-  const identity = createSubscriptionClientIdentity()
-  const credential = await authenticateSubscription({
-    backend: codexBackend,
-    identity,
-    http,
-    signal: AbortSignal.timeout(20_000),
-    showDeviceCode: async () => {
-      displayed = true
-    },
-    readSecret: async () => {
-      throw new Error('Unexpected secret input')
-    },
-  })
-  assert.equal(displayed, true)
-  const codex = await login.importAccount({
-    backend: codexBackend.id,
-    driverId: 'codex',
-    label: 'synthetic-codex',
-    credential,
-    clientIdentity: identity,
-    maxConcurrentTurns: 1,
-    maxConcurrentRequests: 2,
-  })
-  const otherIdentity = (token) => {
-    const parts = token.split('.')
-    const claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString())
-    claims['https://api.openai.com/auth'].chatgpt_account_id = 'another-synthetic-account'
-    parts[1] = Buffer.from(JSON.stringify(claims)).toString('base64url')
-    return parts.join('.')
-  }
-  const wrong = {
-    ...credential,
-    chatgptAccountId: 'another-synthetic-account',
-    accessToken: otherIdentity(credential.accessToken),
-    idToken: otherIdentity(credential.idToken),
-  }
-  await assert.rejects(
-    login.relogin({ backend: codexBackend.id, accountId: codex.accountId, credential: wrong }),
-    (error) => error.code === 'identity_mismatch',
-  )
-  const key = SYNTHETIC_KIMI_KEY
   const writerFile = join(stack.directory, 'writer.token')
   await writeFile(writerFile, stack.tokens['subscriptions-writer'], { mode: 0o400 })
-  const imported = await run(
-    process.execPath,
-    [
-      join(repository, 'apps/orchestrator/scripts/subscription-login.mjs'),
-      '--backend',
-      'kimi-code',
-      '--label',
-      'synthetic-kimi',
-      '--plan',
-      'kimi-code',
-      '--vault-token-file',
-      writerFile,
-    ],
-    { input: `${key}\n`, env },
-  )
-  const kimi = JSON.parse(imported.stdout)
-  passed('Codex device flow, foreign identity rejection and Kimi stdin import')
-  const models = {}
-  for (const [backend, accountId, slug, providerModelId] of [
-    ['openai-chatgpt', codex.accountId, 'gpt-6-sol-standard', 'gpt-6-sol'],
-    ['kimi-code', kimi.accountId, 'k3-256k-standard', 'k3-256k'],
-  ]) {
-    const provider = await db.llmProvider.update({
-      where: { slug: backend },
-      data: { enabled: true },
-    })
-    const model = await db.llmModel.findFirstOrThrow({ where: { providerId: provider.id, slug } })
-    models[backend] = await db.llmModel.update({
-      where: { id: model.id },
-      data: { enabled: true, providerModelId, reserveOutputTokens: 1024 },
-    })
-    await db.llmModelPrice.create({
-      data: {
-        modelId: model.id,
-        effectiveFrom: new Date(Date.now() - 60_000),
-        inputPer1m: '10',
-        outputPer1m: '30',
-        vatRate: '0.22',
-        sourceUrl: 'https://synthetic.invalid/b13-rates',
-      },
-    })
-    await db.subscriptionAccount.update({
-      where: { id: accountId },
-      data: {
-        enabled: true,
-        limitsSeenAt: new Date(),
-        headroomPct: '90',
-        limitWindows: [
-          { name: '5h', usedPct: 10, resetsAt: new Date(Date.now() + 3_600_000).toISOString() },
-        ],
-      },
-    })
-  }
-  await db.agentDriver.updateMany({
-    where: { id: { in: ['codex', 'kimi'] } },
-    data: { enabled: true },
-  })
   stage = 'separate application workers'
   llm = await startWorker('llm', roleConfig('llm'))
   workers.push(llm)
@@ -349,58 +218,6 @@ try {
     llmControlUrl: `http://127.0.0.1:${stack.llmPort}`,
   })
   workers.push(core)
-  const workspace = await db.workspace.create({
-    data: { name: 'B13 synthetic workspace', dataClass: 'synthetic' },
-  })
-  const task = async (backend, overrides = {}) => {
-    const site = await db.site.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'B13 synthetic site',
-        url: `https://${randomUUID()}.invalid`,
-        stack: 'wordpress',
-      },
-    })
-    const record = await db.task.create({
-      data: {
-        workspaceId: workspace.id,
-        siteId: site.id,
-        status: 'running',
-        modelClass: 'standard',
-      },
-    })
-    await db.siteLease.create({
-      data: {
-        siteId: site.id,
-        holderTaskId: record.id,
-        epoch: 1,
-        operation: 'turn',
-        expiresAt: new Date(Date.now() + 1_200_000),
-      },
-    })
-    const ref = { taskId: record.id, sessionId: randomUUID(), turn: 1, epoch: 1 }
-    const grant = {
-      driverId: { 'openai-chatgpt': 'codex', 'kimi-code': 'kimi' }[backend],
-      backend,
-      modelSlug: models[backend].slug,
-      modelClass: 'standard',
-      reasoningEffort: 'low',
-      ttlMs: 600_000,
-      deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
-      budgetRub: '135.00',
-      boundSource: null,
-      ...overrides,
-    }
-    return { ref, grant, record }
-  }
-  const issued = async (backend, overrides) => {
-    const item = await task(backend, overrides)
-    const values = await core.call('issue', { ref: item.ref, grant: item.grant })
-    secretMarkers.add(values.llmApiKey)
-    secretMarkers.add(values.mcpToken)
-    return { ...item, values }
-  }
-  const codexTurn = await issued('openai-chatgpt')
   stage = 'isolated CLI container'
   cli = await createCliSession({
     parentDirectory: stack.directory,
@@ -431,7 +248,7 @@ try {
     'GATEWAY_PORT=8080',
     '--entrypoint',
     'node',
-    'raditi-p3verify-guard:b13',
+    GUARD_IMAGE,
     '/usr/local/lib/raditi/network-guard.mjs',
   ])
   await eventually(
@@ -442,62 +259,6 @@ try {
         })
       ).code === 0,
   )
-  // Every production-shaped CLI run starts from its driver (prepare + command); hand-written
-  // configs remain only in the protocol scenarios below that need fixed retries or plain text.
-  stage = 'driver-prepared CLI turns'
-  const kimiTurn = await issued('kimi-code')
-  const driverRequests = await verifyDriverTurns({
-    cli,
-    control,
-    passed,
-    codexTurn,
-    kimiTurn,
-    promptMarker,
-    secretMarkers,
-  })
-  stage = 'request and accounting assertions'
-  const state = await control('state')
-  const codexRequests = state.requests.filter(
-    (entry) => entry.path === '/backend-api/codex/responses',
-  )
-  const kimiRequests = state.requests.filter(
-    (entry) => entry.path === '/coding/v1/chat/completions',
-  )
-  assert.equal(codexRequests.length, driverRequests.codexRequests)
-  assert.equal(kimiRequests.length, driverRequests.kimiRequests)
-  for (const request of codexRequests) {
-    assert.equal(request.body.store, false)
-    assert.equal(request.body.max_output_tokens, undefined)
-    assert.equal(request.headers['chatgpt-account-id'], credential.chatgptAccountId)
-    assert.match(request.body.prompt_cache_key, /^rdt_/)
-  }
-  const kimiAccount = await db.subscriptionAccount.findUniqueOrThrow({
-    where: { id: kimi.accountId },
-  })
-  for (const request of kimiRequests) {
-    assert.equal(request.headers['x-msh-device-id'], kimiAccount.clientIdentity.deviceId)
-    assert.equal(request.headers['user-agent'], 'kimi-code-cli/2.1.1')
-  }
-  const calls = await db.llmCall.findMany({ where: { state: 'completed' } })
-  const usage = await db.tokenUsage.findMany({
-    where: { gatewayCallId: { in: calls.map((call) => call.id) } },
-  })
-  assert.equal(usage.length, calls.length)
-  assert.ok(calls.length >= 8)
-  const kimiUsage = usage.filter((entry) => entry.taskId === kimiTurn.ref.taskId)
-  assert.equal(kimiUsage.length, kimiRequests.length)
-  for (const entry of kimiUsage) {
-    assert.equal(entry.estimated, false)
-    assert.equal(entry.inputUncachedTokens, 80)
-    assert.equal(entry.cacheReadTokens, 20)
-    assert.equal(entry.outputTokens, 12)
-    assert.equal(entry.reasoningTokens, 3)
-  }
-  passed('provider headers/body normalization and gateway-owned usage')
-  // The keys of the driver turns go back before the scenarios below take the accounts.
-  stage = 'revocation'
-  await core.call('revoke', { ref: codexTurn.ref })
-  await core.call('revoke', { ref: kimiTurn.ref })
   const restartLlm = async (base = env) => {
     await llm.close()
     llm = await startWorker('llm', roleConfig('llm', base))
@@ -507,20 +268,18 @@ try {
     )
     return llm
   }
-  const context = {
+  // Every scenario of the stand runs in this one group, on a key of its backend: the turns of
+  // the pinned CLI through its driver and the scenarios of the platform alike.
+  stage = 'Z.ai through the OpenCode driver'
+  await verifyZai({
     db,
     core,
     stack,
     env,
-    codex,
-    kimi,
     cli,
     promptMarker,
     control,
-    task,
-    issued,
     passed,
-    http,
     llmSecrets: roleSecret('llm'),
     coreSecrets: roleSecret('core'),
     writer,
@@ -530,44 +289,29 @@ try {
     llmGetter: () => llm,
     extraLogs,
     secretMarkers,
-    runDriver: driverRequests.runDriver,
-  }
-  // What is left on the old accounts is theirs alone and goes with them (G8): Codex's plan
-  // tool, the OAuth rotation and what a retirement does with OAuth tokens. Every scenario of
-  // the platform runs once, in the Z.ai group, on a key of that backend.
-  stage = 'Codex plan round'
-  await verifyCodexPlanRound(context)
-  stage = 'crash barriers of the OAuth rotation'
-  await verifyRotationCrashes(context)
-  stage = 'OAuth and Codex lifecycle'
-  await verifyOauthLifecycle(context)
-  stage = 'Z.ai through the OpenCode driver'
-  await verifyZai({
-    ...context,
     metricsToken,
     writerFile,
-    // A request of each other backend's route, with that backend's own client and body: a
-    // key of the group opens none of them. Gone with those routes (G8).
-    otherBackendRequests: [
-      {
-        path: '/codex/responses',
-        headers: { 'user-agent': 'codex_exec/0.158.0' },
-        body: { model: 'gpt-6-sol', input: 'synthetic', stream: true, store: false },
-      },
-      {
-        path: '/kimi/v1/chat/completions',
-        headers: { 'user-agent': 'kimi-code-cli/2.1.1' },
-        body: {
-          model: 'k3-256k',
-          messages: [{ role: 'user', content: 'synthetic' }],
-          stream: true,
-        },
-      },
-    ],
     setStage: (name) => {
       stage = `Z.ai: ${name}`
     },
   })
+  stage = 'usage of every completed call'
+  // The usage of a call is the gateway's own row, written once when the call closes: over
+  // every completed call of the stand, whatever scenario made it.
+  const completed = await db.llmCall.findMany({
+    where: { state: 'completed' },
+    select: { id: true },
+  })
+  const usage = await db.tokenUsage.findMany({
+    where: { gatewayCallId: { in: completed.map((call) => call.id) } },
+    select: { gatewayCallId: true },
+  })
+  // The number itself goes to the output: the floor above is set from it.
+  console.log(`REPORT completed calls of the stand: ${completed.length}`)
+  assert.ok(completed.length >= MIN_COMPLETED_CALLS, 'The stand completed too few calls')
+  assert.equal(usage.length, completed.length)
+  assert.equal(new Set(usage.map((row) => row.gatewayCallId)).size, completed.length)
+  passed('gateway-owned usage: every completed call of the stand has exactly one usage row')
   stage = 'log and database secrecy'
   const serviceLogs = (await stack.compose(['logs', '--no-color'])).stdout
   const audit = (await stack.compose(['exec', '-T', 'vault', 'cat', '/audit/audit.jsonl'])).stdout
@@ -594,24 +338,14 @@ try {
     audit,
     dump,
   ].join('\n')
-  for (const forbidden of [
-    ...secretMarkers,
-    promptMarker,
-    codexTurn.values.llmApiKey,
-    kimiTurn.values.llmApiKey,
-    credential.accessToken,
-    credential.refreshToken,
-    key,
-  ])
+  for (const forbidden of [...secretMarkers, promptMarker])
     assert.equal(
       publicText.includes(forbidden),
       false,
       'A private marker reached platform storage or logs',
     )
   passed('no prompt, turn key or subscription value in platform logs, audit or SQL')
-  console.log(
-    `Synthetic gateway verification passed: ${checks} checks; CLI Codex 0.158.0 / Kimi 2.1.1 / OpenCode 1.18.34.`,
-  )
+  console.log(`Synthetic gateway verification passed: ${checks} checks; CLI OpenCode 1.18.34.`)
 } catch (error) {
   if (error.infrastructureDiagnostic) console.error(error.infrastructureDiagnostic)
   const frame = error.stack

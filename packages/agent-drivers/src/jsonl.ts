@@ -53,9 +53,6 @@ export const text = (value: unknown, max: number): string | undefined =>
 export const count = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 
-export const optionalCount = (value: unknown): number | undefined =>
-  value === undefined ? 0 : count(value)
-
 /** Session identifiers are also used in literal snapshot paths; never truncate them. */
 export function nativeSessionId(value: unknown): string | undefined {
   const parsed = nativeSessionIdSchema.safeParse(value)

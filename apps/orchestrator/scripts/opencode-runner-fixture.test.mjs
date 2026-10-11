@@ -236,7 +236,7 @@ test('the shell command refuses a sandbox that is not the one of the product', a
 
 test('refuses what the driver must never send', async (t) => {
   const cases = [
-    ['Unexpected fixture route', (body) => ({ path: '/kimi/v1/chat/completions', body })],
+    ['Unexpected fixture route', (body) => ({ path: '/other/v1/chat/completions', body })],
     ['Unexpected fixture route', (body) => ({ path: '/zai/v4/models', body })],
     ['Wrong model profile', (body) => ({ body: { ...body, model: 'glm-planted' } })],
     [

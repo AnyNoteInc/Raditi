@@ -720,14 +720,12 @@ test(
   },
 )
 
-test('the node files: four hosts by default, an unprivileged user and a closed firewall', () => {
+test('the node files: one host by default, an unprivileged user and a closed firewall', () => {
   const env = readFileSync(here('env.example'), 'utf8')
   // api.z.ai: the role goes to Z.ai without the node, yet a role that has a proxy configured
-  // sends everything through it, so the node must let that host through as well.
-  assert.equal(
-    /^LLM_EGRESS_ALLOW=(.*)$/m.exec(env)?.[1],
-    'chatgpt.com:443,auth.openai.com:443,api.kimi.ai:443,api.z.ai:443',
-  )
+  // sends everything through it, so the node lets that host through — and no other: the list
+  // names the hosts of the adapters the platform has.
+  assert.equal(/^LLM_EGRESS_ALLOW=(.*)$/m.exec(env)?.[1], 'api.z.ai:443')
   assert.doesNotMatch(env, /KEY|TOKEN|PASSWORD|SECRET/)
   const unit = readFileSync(here('raditi-egress.service'), 'utf8')
   for (const line of [

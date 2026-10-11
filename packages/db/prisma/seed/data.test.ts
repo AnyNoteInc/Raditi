@@ -131,17 +131,12 @@ describe('pricing rules (spec §17 hypothesis)', () => {
 })
 
 describe('agent drivers', () => {
-  it('seed codex and kimi enabled, qwen and opencode disabled, with domain ids', () => {
-    expect(agentDriverSeeds.map(({ id, enabled }) => [id, enabled])).toEqual([
-      ['codex', true],
-      ['kimi', true],
-      ['qwen', false],
-      ['opencode', false],
-    ])
-    for (const driver of agentDriverSeeds) {
-      expect(agentDriverIds).toContain(driver.id)
-      expect(driver.image).toBe(`raditi/agent-${driver.id}`)
-    }
+  it('seed exactly the drivers of the domain, switched on', () => {
+    // The seeds create no row of a removed shell. A database seeded before the removal keeps
+    // such rows as history, switched off by the migration 20261011090000_switch_to_opencode.
+    expect(agentDriverSeeds.map(({ id }) => id)).toEqual(agentDriverIds)
+    expect(agentDriverSeeds.map(({ id, enabled }) => [id, enabled])).toEqual([['opencode', true]])
+    for (const driver of agentDriverSeeds) expect(driver.image).toBe(`raditi/agent-${driver.id}`)
   })
 
   it('carry exactly the AgentCapabilities keys', () => {
@@ -155,13 +150,14 @@ describe('agent drivers', () => {
     for (const driver of agentDriverSeeds) {
       expect(Object.keys(driver.capabilities).sort()).toEqual(keys)
     }
-    const codex = agentDriverSeeds.find((d) => d.id === 'codex')
-    expect(codex?.capabilities).toEqual({
+    // What the adapter declares (packages/agent-drivers/src/opencode.ts): the result contract
+    // is in the prompt, not a forced schema, and the shell takes no image.
+    expect(agentDriverSeeds.find((d) => d.id === 'opencode')?.capabilities).toEqual({
       resume: true,
       jsonEvents: true,
-      outputSchema: true,
+      outputSchema: false,
       mcp: true,
-      images: true,
+      images: false,
     })
   })
 })
@@ -197,17 +193,14 @@ describe('subscription catalogue defaults', () => {
   })
 
   it('uses separate disabled profiles with the explicit backend output reserves', () => {
-    const classes = (slug: string) =>
-      llmModelSeeds.filter((model) => model.providerSlug === slug).map((model) => model.modelClass)
-    expect(classes('openai-chatgpt')).toEqual(['light', 'standard', 'heavy'])
-    expect(classes('kimi-code')).toEqual(['standard'])
-    expect(classes('zai-coding')).toEqual(['light', 'standard', 'heavy'])
+    // Every profile belongs to a backend of the domain: none is seeded for a removed provider.
+    expect([...new Set(llmModelSeeds.map((model) => model.providerSlug))]).toEqual(llmBackendIds)
+    expect(llmModelSeeds.map((model) => model.modelClass)).toEqual(['light', 'standard', 'heavy'])
     const naturalKeys = llmModelSeeds.map((model) => `${model.providerSlug}/${model.slug}`)
     expect(new Set(naturalKeys).size).toBe(llmModelSeeds.length)
     for (const model of llmModelSeeds) {
-      expect(llmBackendIds).toContain(model.providerSlug)
       expect(model.enabled).toBe(false)
-      expect(model.reserveOutputTokens).toBe(model.providerSlug === 'kimi-code' ? 32_768 : 32_000)
+      expect(model.reserveOutputTokens).toBe(32_000)
       expect(Object.keys(model).sort()).toEqual([
         'enabled',
         'modelClass',
@@ -250,16 +243,5 @@ describe('subscription catalogue defaults', () => {
     expect(profiles).toHaveLength(3)
     for (const model of profiles)
       expect(model.reserveOutputTokens).toBeGreaterThanOrEqual(policyMaxOutputTokens)
-  })
-
-  it('does not substitute the spike model for an unconfirmed Codex profile id', () => {
-    expect(
-      llmModelSeeds
-        .filter((model) => model.providerSlug === 'openai-chatgpt')
-        .map((model) => model.providerModelId),
-    ).toEqual([null, null, null])
-    expect(llmModelSeeds.find((model) => model.providerSlug === 'kimi-code')?.providerModelId).toBe(
-      'k3-256k',
-    )
   })
 })

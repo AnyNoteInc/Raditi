@@ -16,7 +16,7 @@ import {
   zaiCodingPlan,
 } from '../../../packages/llm-backends/src/zai-coding/backend.ts'
 import { createVerificationCertificates } from './certificates.mjs'
-import { SYNTHETIC_KIMI_KEY, startFakeSubscriptions } from './fake-subscriptions.mjs'
+import { startFakeSubscriptions } from './fake-subscriptions.mjs'
 import {
   createFakeZaiState,
   handleZai,
@@ -154,7 +154,6 @@ function inspect(text) {
 const probe = (target, key = SYNTHETIC_ZAI_KEY) =>
   zaiCodingBackend.probe(
     { ...credential, apiKey: key },
-    {},
     {
       async request(asked) {
         assert.equal(asked.url, `${zaiCodingPlan.origin}${ZAI_PATHS.quota}`)
@@ -437,6 +436,39 @@ test('a tool answer can say a sentence beside its call, in the order the real mo
     'tool_calls',
     'finish tool_calls',
   ])
+})
+
+test('a tool answer can think a given number of bytes first, and only an answer that calls does', async (t) => {
+  const target = await plain(t)
+  const call = { name: 'bash', arguments: { command: 'echo synthetic' } }
+  const bytes = 3 * 64 * 1024 + 5
+  target.state.setScenario({ scenario: 'tools', calls: [call], filler: bytes, reasoning: 'Why.' })
+  const thought = (text) =>
+    chunks(text)
+      .map((chunk) => chunk.choices[0].delta.reasoning_content ?? '')
+      .join('')
+  const answer = await chat(target, withTools())
+  // The reasoning of the scenario, the filler in chunks, then the call and the end.
+  assert.equal(thought(answer.text) === `Why.${'x'.repeat(bytes)}`, true)
+  assert.deepEqual(
+    [...new Set(kindsOf(chunks(answer.text)))],
+    ['reasoning', 'tool_calls', 'finish tool_calls'],
+  )
+  assert.ok(Buffer.byteLength(answer.text) > bytes)
+  assert.equal(streamSummary(answer.text).usage !== null, true)
+  // Past the round, and for a request without tools, nothing is added.
+  const later = await chat(
+    target,
+    withTools({
+      messages: [
+        { role: 'user', content: 'x' },
+        { role: 'assistant', content: '', tool_calls: [] },
+        { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
+      ],
+    }),
+  )
+  assert.equal(thought(later.text), 'Why.')
+  assert.equal(thought((await chat(target, chatBody())).text), 'Why.')
 })
 
 // What the pinned CLI sent with the platform MCP server in its configuration, and what the real
@@ -923,7 +955,6 @@ test('the quota follows the requests the way the records show', async (t) => {
   assert.deepEqual(await probe(target), {
     status: 'ok',
     plan: null,
-    creditsBalance: null,
     windows: [
       { name: '5h', usedPct: 0, resetsAt: null },
       { name: 'week', usedPct: 0.26, resetsAt: (await probe(target)).windows[1].resetsAt },
@@ -997,7 +1028,6 @@ test('a broken quota answer and the HTTP 200 envelopes never read as capacity', 
     status: 'unknown',
     windows: null,
     plan: null,
-    creditsBalance: null,
   })
   target.state.setQuota({ mode: 'envelope', code: 500 })
   await assert.rejects(probe(target))
@@ -1109,6 +1139,11 @@ test('scenario options are closed', () => {
     { scenario: 'tools', beside: '' },
     { scenario: 'tools', beside: 7 },
     { scenario: 'tools', beside: 'x'.repeat(16_385) },
+    { scenario: 'text', filler: 1024 },
+    { scenario: 'tools', filler: 0 },
+    { scenario: 'tools', filler: 1.5 },
+    { scenario: 'tools', filler: '1024' },
+    { scenario: 'tools', filler: 32 * 1024 * 1024 + 1 },
     { failures: 0 },
     { delayMs: -1 },
     { retryAfter: 'line\nbreak' },
@@ -1124,7 +1159,7 @@ test('scenario options are closed', () => {
   )
 })
 
-test('the stand fake answers Z.ai next to Codex and Kimi and resets it with the rest', async (t) => {
+test('the stand process answers as the fake alone does and resets it with the rest', async (t) => {
   const fake = await startFakeSubscriptions({ ...tls })
   t.after(() => fake.close())
   const target = { port: fake.address.port, ca }
@@ -1132,13 +1167,13 @@ test('the stand fake answers Z.ai next to Codex and Kimi and resets it with the 
   assert.equal(answer.status, 200)
   assert.equal(frames(answer.text).at(-1), '[DONE]')
   assert.equal((await probe(target)).status, 'ok')
-  // Its requests are not among the records that keep whole headers.
-  assert.equal(fake.state.requests.length, 0)
   assert.equal(fake.state.zai.requests.length, 2)
-  // Kimi's path is answered as before.
-  const kimi = await send(target, '/coding/v1/usages', { method: 'GET', key: SYNTHETIC_KIMI_KEY })
-  assert.equal(kimi.status, 200)
-  assert.ok(JSON.parse(kimi.text).usages)
+  // A path of another provider is an unknown path of this one: the recorded HTTP 200 envelope.
+  const other = await send(target, '/coding/v1/usages', { method: 'GET' })
+  assert.deepEqual(
+    [other.status, JSON.parse(other.text)],
+    [200, fixture('14-err-unknown-path.json').response.body],
+  )
   // The control port: read, set, and the common reset.
   const control = { port: fake.controlAddress.port }
   const state = JSON.parse((await send(control, '/state', { method: 'GET', key: null })).text)
@@ -1223,15 +1258,14 @@ test('the stand names api.z.ai in the certificate, the aliases and the proxy lis
   const directory = mkdtempSync(join(temp, 'stand-'))
   const { fake } = await createVerificationCertificates(root, directory)
   const certificate = new X509Certificate(readFileSync(join(fake, 'server.pem')))
-  assert.ok(certificate.subjectAltName.split(', ').includes('DNS:api.z.ai'))
-  for (const name of ['chatgpt.com', 'auth.openai.com', 'api.kimi.ai', 'localhost'])
-    assert.ok(certificate.subjectAltName.includes(`DNS:${name}`), name)
+  // The provider's name and the loopback name a role without a proxy reaches it by, and no other.
+  assert.equal(certificate.subjectAltName, 'DNS:api.z.ai, DNS:localhost')
   const here = fileURLToPath(new URL('./', import.meta.url))
-  assert.match(readFileSync(join(here, 'egress.mjs'), 'utf8'), /'api\.z\.ai:443'/)
   assert.match(
-    readFileSync(join(here, 'compose.yml'), 'utf8'),
-    /aliases: \[chatgpt\.com, auth\.openai\.com, api\.kimi\.ai, api\.z\.ai\]/,
+    readFileSync(join(here, 'egress.mjs'), 'utf8'),
+    /allow: new Set\(\['api\.z\.ai:443'\]\)/,
   )
+  assert.match(readFileSync(join(here, 'compose.yml'), 'utf8'), /aliases: \[api\.z\.ai\]/)
   // The host is the adapter's origin.
   assert.equal(new URL(zaiCodingPlan.origin).host, 'api.z.ai')
 })

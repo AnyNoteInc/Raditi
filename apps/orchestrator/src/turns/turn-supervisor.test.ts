@@ -40,7 +40,7 @@ import {
   type TurnResult,
   withoutTurnCredentials,
 } from '@repo/domain'
-import { createCodexDriver, createKimiDriver, createOpencodeDriver } from '@repo/agent-drivers'
+import { createOpencodeDriver } from '@repo/agent-drivers'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
@@ -55,7 +55,7 @@ import {
   type SealedElsewhere,
   type SnapshotParts,
 } from '../sessions/snapshot.service.ts'
-import { sampleDriverId } from '../testing/ids.ts'
+import { otherDriverId, sampleDriverId } from '../testing/ids.ts'
 import { loopbackTransport } from '../testing/runner-loopback.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
@@ -619,6 +619,24 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect([...f.assignments.rows.values()][0]!.outcome).toBe('failed')
   })
 
+  it('refuses a replacement that names any turn but the one before it, with no lease and no undo', async () => {
+    // The undo before a replacement returns the content of the one turn the plan names: a plan
+    // of turn 3 that names turn 1 would leave what turn 2 changed on the site.
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 3 } }
+    f.request.context = { ...f.request.context, turn: 3 }
+    f.request.replacesTurn = 1
+    f.request.workspace = { ...f.request.workspace, expectedBranchSha: null }
+    const rollback = vi.fn(async () => {})
+    f.deps.contentRollback = { rollback }
+    await expect(f.run()).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Replacement must name the latest turn',
+    })
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(rollback).not.toHaveBeenCalled()
+  })
+
   it('rejects replacement without an undo dependency before taking a lease', async () => {
     const f = fixture()
     f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
@@ -682,7 +700,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     await expect(
       supervisor.run(withoutTurnCredentials(f.request), {
         ...testTurnCredentialPolicy,
-        driverId: 'kimi',
+        driverId: otherDriverId,
       }),
     ).rejects.toThrow()
     expect(f.leases.acquire).not.toHaveBeenCalled()
@@ -775,11 +793,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect({ llmApiKey: context.llm.apiKey, mcpToken: context.mcp.token }).toEqual(madeTurnKeys[0])
   })
 
-  it.each([
-    ['codex', createCodexDriver({ image }), 'openai-chatgpt', 'medium', 'turbo'],
-    ['kimi', createKimiDriver({ image }), 'kimi-code', 'high', 'medium'],
-    ['opencode', createOpencodeDriver({ image }), 'zai-coding', 'high', 'medium'],
-  ] as const)(
+  it.each([['opencode', createOpencodeDriver({ image }), 'zai-coding', 'high', 'medium']] as const)(
     'refuses a reasoning profile the real %s driver cannot launch before the lease',
     async (driverId, driver, backend, known, unknown) => {
       const f = fixture()
@@ -1416,7 +1430,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     ['session', { sessionId: 'other-session' }],
     ['turn', { turn: 2 }],
     ['image', { image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'e'.repeat(64)}` }],
-    ['driver', { driver: { id: 'kimi', version: '1.0.0' } }],
+    ['driver', { driver: { id: otherDriverId, version: '1.0.0' } }],
     ['driver version', { driver: { id: sampleDriverId, version: '2.0.0' } }],
   ])('rejects a foreign previous checkpoint (%s) before acquiring a lease', async (_, change) => {
     const f = fixture()

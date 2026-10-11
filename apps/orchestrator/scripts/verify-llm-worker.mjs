@@ -48,7 +48,7 @@ async function quota({ accountId }, { egress, secrets }) {
   )
   const transport = createControlEgress(createEgressTransport(egress))
   let answered = null
-  const probe = await backend.probe(credential, account.clientIdentity, {
+  const probe = await backend.probe(credential, {
     async request(input, options) {
       const response = await transport.request(input, options)
       answered = response.body

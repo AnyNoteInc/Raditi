@@ -130,6 +130,26 @@ describe('turn plan', () => {
     expect(turnPlanSchema.safeParse({ ...plan, driverId: 'other' }).success).toBe(false)
   })
 
+  // The plan of a turn of a removed shell stays in turn_assignments as history: it is never
+  // read back as a plan, so recovery cannot pick a driver for it.
+  it.each(['gigacode', 'codex', 'kimi', 'qwen'])(
+    'refuses a stored plan of the removed driver %s',
+    (driverId) => {
+      const plan = toTurnPlan(request(), 'opencode')
+      const result = turnPlanSchema.safeParse({ ...plan, driverId })
+      expect(result.success).toBe(false)
+      if (!result.success)
+        expect(result.error.issues.map((issue) => issue.path)).toEqual([['driverId']])
+      const previous = { ...plan.previous, driver: { ...plan.previous?.driver, id: driverId } }
+      const earlier = turnPlanSchema.safeParse({ ...plan, previous })
+      expect(earlier.success).toBe(false)
+      if (!earlier.success)
+        expect(earlier.error.issues.map((issue) => issue.path)).toEqual([
+          ['previous', 'driver', 'id'],
+        ])
+    },
+  )
+
   it('refuses a credential hidden in the LLM or MCP address', () => {
     for (const url of [
       'http://turn:sk-turn-llm-key@sandbox-gw:8080/llm',

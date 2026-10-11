@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 
-import { createCodexDriver, createKimiDriver, createOpencodeDriver } from '@repo/agent-drivers'
+import { createOpencodeDriver } from '@repo/agent-drivers'
 import { agentOutputLimits, type AgentDriver, type AgentEvent, type TurnResult } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -38,11 +38,7 @@ const rejected = {
 
 describe('the result of a turn', () => {
   // Each driver with the end of a turn as its own parser reports it.
-  const drivers = [
-    ['codex', createCodexDriver({ image }), final],
-    ['kimi', createKimiDriver({ image }), final],
-    ['opencode', createOpencodeDriver({ image }), answered],
-  ] as const
+  const drivers = [['opencode', createOpencodeDriver({ image }), answered]] as const
 
   describe.each(drivers)('read by the %s driver', (_, driver, turn) => {
     it.each([

@@ -16,7 +16,7 @@ const server = createEgressProxy({
     root: read('root.pem'),
     clientCa: read('client-ca.pem'),
   },
-  allow: new Set(['chatgpt.com:443', 'auth.openai.com:443', 'api.kimi.ai:443', 'api.z.ai:443']),
+  allow: new Set(['api.z.ai:443']),
   clientCns: new Set(['b13-llm']),
   clientPins: parseClientPins(read('client-pins.txt').toString().trim()),
   // An injected public address passes the same production DNS policy, while the injected

@@ -10,7 +10,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 
-import { createCodexDriver, createKimiDriver, createOpencodeDriver } from '@repo/agent-drivers'
+import { createOpencodeDriver } from '@repo/agent-drivers'
 import {
   preparedFilesSchema,
   preparedRunExposesSecret,
@@ -33,7 +33,7 @@ const GATEWAY = 'http://sandbox-gw:8080'
 const TURN_MS = 180_000
 const PLATFORM_TOOLS = ['site_info', 'wp_rest', 'restore']
 
-/** A provider request in the chat completions format: Kimi and Z.ai. */
+/** A provider request in the chat completions format. */
 const chatCompletions = {
   /** Tool names the request declares. */
   declared: (body) => (body.tools ?? []).map((tool) => (tool.function ?? tool).name),
@@ -43,73 +43,18 @@ const chatCompletions = {
       .filter((message) => message.role === 'tool')
       .map((message) => message.content),
 }
-/** A provider request in the Responses format: Codex nests its tools in namespaces. */
-const responses = {
-  declared: (body) =>
-    [
-      ...(body.tools ?? []),
-      ...(body.input ?? [])
-        .filter((item) => item.type === 'additional_tools')
-        .flatMap((item) => item.tools ?? []),
-    ]
-      .flatMap((tool) => (tool.type === 'namespace' ? (tool.tools ?? []) : [tool]))
-      .map((tool) => tool.name),
-  toolOutputs: (body) =>
-    (body.input ?? [])
-      .filter((item) => /_output$/.test(item.type ?? ''))
-      .map((item) => item.output),
-}
-/** The scenario of the fake of Codex and Kimi, with the result in both of its forms. */
-const subscriptionScenario = (backend) => (control, content, result) =>
-  control('scenario', { ...content, backend, output: result, text: JSON.stringify(result) })
 
 /**
- * The table of turns: one row a CLI. What the stand does differently for a CLI is in its row;
- * the turns themselves are the same for every row.
+ * The table of turns: one row a CLI. What the stand does for a CLI is in its row; the turns
+ * themselves do not name it.
  */
 const ROWS = {
-  codex: {
-    name: 'Codex',
-    driver: createCodexDriver,
-    backend: 'openai-chatgpt',
-    // How the role llm reaches the provider. A role process has one way: the stand restarts
-    // the role when the next row needs the other one.
-    path: 'proxy',
-    llm: { baseUrl: `${GATEWAY}/codex`, model: 'gpt-6-sol' },
-    effort: 'low',
-    wire: responses,
-    // Codex 0.158 in code mode declares only its `exec` tool and keeps the MCP tools inside
-    // it: there the proof is the call itself.
-    declares: [['exec', (name) => name === 'exec']],
-    requests: (state) =>
-      state.requests.filter((entry) => entry.path === '/backend-api/codex/responses'),
-    scenario: subscriptionScenario('codex'),
-  },
-  kimi: {
-    name: 'Kimi',
-    driver: createKimiDriver,
-    backend: 'kimi-code',
-    path: 'proxy',
-    llm: { baseUrl: `${GATEWAY}/kimi/v1`, model: 'k3-256k' },
-    effort: 'low',
-    wire: chatCompletions,
-    // Kimi declares every MCP tool as a function.
-    declares: PLATFORM_TOOLS.map((tool) => [
-      tool,
-      (name) => new RegExp(`(^|[_.])${tool}$`).test(name ?? ''),
-    ]),
-    // Kimi 2.1.1 checks the arguments of a call against the input schema of tools/list itself:
-    // a route outside the schema's pattern never leaves the CLI.
-    checksArguments: true,
-    requests: (state) =>
-      state.requests.filter((entry) => entry.path === '/coding/v1/chat/completions'),
-    scenario: subscriptionScenario('kimi'),
-  },
   opencode: {
     name: 'OpenCode',
     driver: createOpencodeDriver,
     backend: ZAI_BACKEND,
-    // Z.ai needs no egress node: the role reaches it on a connection of its own.
+    // How the role llm reaches the provider: Z.ai needs no egress node, the role reaches it on
+    // a connection of its own.
     path: 'direct',
     llm: { baseUrl: ZAI_GATEWAY_BASE_URL, model: ZAI_MODEL },
     // The level of the profile glm-5.3-standard; the gateway sets it from the turn key.
@@ -629,10 +574,9 @@ export async function verifyAgentContentTurns(ctx) {
     await closeTurn(edit)
     passed(`${label}: no second site lease during the turn; key revoked, turn closed`)
 
-    // Turn B, a separate task: a route outside the profile (third parties' comments). Codex
-    // 0.158 and OpenCode 1.18.34 send the call and the role mcp refuses it at admission; Kimi
-    // 2.1.1 checks the arguments against the input schema of tools/list itself and sends
-    // nothing. Either way nothing is journaled and the site is not asked.
+    // Turn B, a separate task: a route outside the profile (third parties' comments). The
+    // pinned OpenCode sends the call and the role mcp refuses it at admission: nothing is
+    // journaled and the site is not asked.
     await refusedTurn({
       driver,
       page,
@@ -640,7 +584,7 @@ export async function verifyAgentContentTurns(ctx) {
       label: `${name} forbidden route`,
       prompt: 'Read the first comment of the synthetic site.',
       scenario: { route: '/wp/v2/comments/1' },
-      reachesRole: !row.checksArguments,
+      reachesRole: true,
     })
     // Turn C: a write without an idempotency key. The flat input schema allows it, so every
     // CLI sends it: the refusal is the role's own, before the journal and before the site.
@@ -680,9 +624,9 @@ export async function verifyAgentContentTurns(ctx) {
   passed('S3 holds exactly one snapshot object and the journal one row per edit')
 
   /**
-   * A call the platform must refuse. How many requests reach the role is each CLI's own (Kimi
-   * repeats a refused POST as a transport failure): the contract is that none of them is
-   * accepted, journaled or sent to the site, and that the model is told and the turn goes on.
+   * A call the platform must refuse. How many requests reach the role is the CLI's own: the
+   * contract is that none of them is accepted, journaled or sent to the site, and that the
+   * model is told and the turn goes on.
    */
   async function refusedTurn({ driver, page, changed, label, prompt, scenario, reachesRole }) {
     setStage(label)

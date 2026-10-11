@@ -53,7 +53,7 @@ services:
     ports: ['127.0.0.1::8787', '127.0.0.1::443']
     networks:
       providers:
-        aliases: [chatgpt.com, auth.openai.com, api.kimi.ai, api.z.ai]
+        aliases: [api.z.ai]
       trusted: {}
   # Only a live stack (profile live; stack.mjs starts its services by name): the MCP side of the
   # synthetic services and its control port, and nothing of a provider — no listener for one, no

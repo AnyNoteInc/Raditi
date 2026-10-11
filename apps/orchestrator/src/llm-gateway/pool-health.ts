@@ -21,12 +21,7 @@ const probeIntervalMs = 5 * 60_000
 // brought no answer, is repeated for it this soon instead of after the whole interval.
 const unknownWindowsProbeMs = 20_000
 const transientDelays = [30_000, 60_000, 120_000] as const
-const unknownProbe = (): ProbeResult => ({
-  status: 'unknown',
-  windows: null,
-  plan: null,
-  creditsBalance: null,
-})
+const unknownProbe = (): ProbeResult => ({ status: 'unknown', windows: null, plan: null })
 
 /** Why a probe is asked for now: the caller read the account's windows as unknown. */
 export interface UnknownWindows {
@@ -136,10 +131,6 @@ export class SubscriptionPoolHealth {
         // A stream admitted before the 402 says nothing about the membership check since.
         if (paused?.paymentAt === undefined || call.startedAt.getTime() > paused.paymentAt)
           this.#pauses.delete(call.accountId)
-      }
-      if (finish.windows?.creditsBalance !== null && finish.windows?.creditsBalance !== undefined) {
-        if (await this.#store.credits(call.accountId, finish.windows.creditsBalance))
-          this.#alert('credits_balance')
       }
       if (signal?.kind === 'window_exhausted') {
         if (signal.until !== null) await this.#store.cool(call.accountId, signal.until)
@@ -283,14 +274,10 @@ export class SubscriptionPoolHealth {
             signal: AbortSignal.any([signal, this.#shutdown.signal]),
           }),
       }
-      const parsed = probeResultSchema.safeParse(
-        await backend.probe(credential, account.clientIdentity, http),
-      )
+      const parsed = probeResultSchema.safeParse(await backend.probe(credential, http))
       const result = parsed.success ? parsed.data : unknownProbe()
       if (this.#closing) return null
-      const update = await this.#store.probe(account, result, {
-        authNeedsRelogin: backend.refresh === undefined,
-      })
+      const update = await this.#store.probe(account, result)
       if (update.alert) this.#alert(update.alert)
       if (update.applied) memo.limitsSeenAt = update.limitsSeenAt?.getTime() ?? null
       if (update.applied && result.status === 'region') this.options.onRegion(accountId)
