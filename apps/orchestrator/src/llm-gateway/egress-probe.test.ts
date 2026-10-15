@@ -140,7 +140,7 @@ describe('authenticated egress channel probe', () => {
 })
 
 describe('egress readiness', () => {
-  it('coalesces probes and permits refresh only after a successful channel check', async () => {
+  it('coalesces probes and reports healthy only after a successful channel check', async () => {
     const answer = Promise.withResolvers<boolean>()
     const check = vi.fn(() => answer.promise)
     const health = new EgressHealth({ check })

@@ -66,7 +66,7 @@ export interface SandboxFile {
 export interface PreparedRun {
   context: RunContext
   /**
-   * Driver config, AGENTS.md, output schema — written before the turn starts, only under
+   * Driver config, instructions, the launch wrapper — written before the turn starts, only under
    * SANDBOX_AGENT_HOME. Never the working copy (SANDBOX_WORKDIR): capture would publish them
    * to the client's repository. preparedRunSchema enforces it.
    */

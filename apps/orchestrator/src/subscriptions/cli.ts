@@ -173,7 +173,7 @@ export function subscriptionHelp(command: SubscriptionCommand): string {
     token:
       'subscriptions:token -- --policy writer|admin --out <абсолютный путь>\nТокен dev-root поступает через stdin или скрытый ввод. Новый файл создаётся с правами 0400.\nТолько development/test и числовой loopback VAULT_ADDR; срок — 15 минут.',
   }
-  return `${usage[command]}\nОкружение задаётся явно; команда не загружает .env автоматически. APP_ENV и VAULT_ADDR обязательны; login/retire также требуют DATABASE_URL, login — ещё LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE и LLM_EGRESS_CLIENT_KEY_FILE.\n`
+  return `${usage[command]}\nОкружение задаётся явно; команда не загружает .env автоматически. APP_ENV и VAULT_ADDR обязательны; login/retire также требуют DATABASE_URL, login — ещё LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE и LLM_EGRESS_CLIENT_KEY_FILE, если провайдеру нужен узел выхода (zai-coding он не нужен).\n`
 }
 
 const stages: Record<SubscriptionRetirementStage, string> = {
