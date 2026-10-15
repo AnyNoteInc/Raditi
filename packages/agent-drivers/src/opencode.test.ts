@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { readdirSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -16,7 +17,7 @@ import {
   type PreparedRun,
   type RunContext,
 } from '@repo/domain'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { createOpencodeDriver } from './opencode.ts'
 import { RESULT_CONTRACT } from './output-schema.ts'
@@ -357,6 +358,14 @@ interface CliRecord {
   stdin?: string
   delivered?: Record<string, string>
   again?: Record<string, string>
+  /**
+   * What a read that does not wait found first in each pipe and the text it got in the end;
+   * `offPathHeld`: once the value was there, the path was gone while a writer still held the pipe.
+   */
+  probed?: Record<
+    string,
+    { first: 'waiting' | 'value' | 'end'; text: string; offPathHeld: boolean }
+  >
   imported?: string
 }
 interface Behaviour {
@@ -367,6 +376,8 @@ interface Behaviour {
     exit?: number
     readSecrets?: boolean
     readTwice?: boolean
+    /** Opens each pipe without waiting for a writer and says what its first read found. */
+    probe?: boolean
     stderr?: string
     stdout?: string
     hangMs?: number
@@ -375,6 +386,11 @@ interface Behaviour {
     plant?: string
     /** A command of the turn removes what the wrapper keeps out of the working copy. */
     dropHeld?: boolean
+    /**
+     * A process the CLI starts and leaves behind, holding the CLI's stderr for up to this many
+     * milliseconds: it watches the credential pipes and says how long they stayed on their paths.
+     */
+    helperMs?: number
   }
 }
 interface Launch {
@@ -385,6 +401,8 @@ interface Launch {
   stderr: string
   ms: number
   records: CliRecord[]
+  /** What the process the CLI left behind saw: the pipes still there when it stopped watching. */
+  helper?: { left: string[]; ms: number }
   left: {
     secrets: string[]
     home: string[]
@@ -402,6 +420,13 @@ const WARN_LINE =
 
 // Every launch starts real processes, and a loaded macOS at times takes about three seconds to
 // start the stand-in CLI: a test with two launches then outlives the default five seconds.
+//
+// A launch that does not end is stopped whole after 20 s and fails with what was left of the
+// pipes. On macOS the end of a value can be lost: a reader that enters its next read just as
+// the writer closes the pipe is not woken and waits for good (docs/plan/49-credential-pipe.md).
+// Twice on 10.10.2026 the stand-in stayed like that in about 2 600 launches. The wrapper now
+// closes a pipe a few milliseconds after its value, where the measurements saw no loss; the
+// kernel is unchanged, so a launch that hangs here is first suspected of this.
 describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
   let server: Server
   let mcpUrl: string
@@ -444,6 +469,21 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
   })
+  /** The wrappers that have not ended: each leads a process group that holds its CLI as well. */
+  const running = new Set<ChildProcess>()
+  /** The process group of the latest launch. */
+  let lastGroup = 0
+  const stopGroup = (child: ChildProcess) => {
+    try {
+      process.kill(-child.pid!, 'SIGKILL')
+    } catch {
+      // The group is gone already.
+    }
+  }
+  // A test that ran out of time leaves its launch behind: nothing of it may outlive the test.
+  afterEach(() => {
+    for (const child of running) stopGroup(child)
+  })
 
   /**
    * Writes the prepared run into a private directory, with the sandbox paths moved there and a
@@ -454,6 +494,7 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
     turn: { session?: string; prompt?: string } = {},
     behaviour: Behaviour = {},
     before?: (paths: { home: string; secrets: string; repo: string }) => Promise<void>,
+    limitMs = 20_000,
   ): Promise<Launch> {
     mcpRequests.length = 0
     const run = await driver.prepare({
@@ -486,6 +527,16 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       }
       await before?.(paths)
       await writeFile(join(directory, 'behaviour.json'), JSON.stringify(behaviour))
+      const helper = `const fs = require('node:fs');
+const started = Date.now();
+const sleeper = new Int32Array(new SharedArrayBuffer(4));
+let left = fs.readdirSync(${JSON.stringify(paths.secrets)});
+while (left.length > 0 && Date.now() - started < ${behaviour.run?.helperMs ?? 0}) {
+  Atomics.wait(sleeper, 0, 0, 10);
+  left = fs.readdirSync(${JSON.stringify(paths.secrets)});
+}
+fs.writeFileSync(${JSON.stringify(join(directory, 'helper.json'))}, JSON.stringify({ left, ms: Date.now() - started }));
+`
       // The stand-in reads the configuration the way the CLI does: each {file:…} reference once.
       await writeFile(
         paths.cli,
@@ -504,6 +555,7 @@ const record = {
 };
 const save = () => fs.appendFileSync(${JSON.stringify(join(directory, 'records.jsonl'))}, JSON.stringify(record) + '\\n');
 const step = behaviour[command] ?? {};
+if (command === 'run' && step.helperMs) require('node:child_process').spawn(process.execPath, ['--eval', ${JSON.stringify(helper)}], { stdio: ['ignore', 'ignore', 'inherit'] });
 if (command !== 'run' && step.plant) fs.writeFileSync(path.join(process.cwd(), step.plant), 'left by ' + command);
 if (step.plantHome) { fs.mkdirSync(path.dirname(path.join(process.env.HOME, step.plantHome)), { recursive: true }); fs.writeFileSync(path.join(process.env.HOME, step.plantHome), 'left by ' + command); }
 if (command === 'export') { save(); process.stdout.write(step.stdout ?? ''); process.exit(step.exit ?? 0); }
@@ -511,7 +563,27 @@ if (command === 'import') { record.imported = fs.readFileSync(rest[0], 'utf8'); 
 record.stdin = fs.readFileSync(0, 'utf8');
 const refs = [...fs.readFileSync(path.join(configHome, 'opencode/opencode.json'), 'utf8').matchAll(/\\{file:([^}]+)\\}/g)].map((match) => match[1]);
 const read = () => Object.fromEntries(refs.map((ref) => { try { return [path.basename(ref), fs.readFileSync(ref, 'utf8')]; } catch (error) { return [path.basename(ref), 'ERROR ' + error.code]; } }));
-if (step.readSecrets !== false) record.delivered = read();
+const probe = () => Object.fromEntries(refs.map((ref) => {
+  const fd = fs.openSync(ref, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  const buffer = Buffer.alloc(8192);
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  let first, text = '', offPathHeld = false;
+  for (const deadline = Date.now() + 10000; Date.now() < deadline; ) {
+    // Once the value is there, without a pause: the path leaves a few milliseconds before the end.
+    const offPath = text !== '' && !fs.existsSync(ref);
+    let found;
+    try { const n = fs.readSync(fd, buffer, 0, buffer.length, null); found = n === 0 ? 'end' : 'value'; text += buffer.toString('utf8', 0, n); }
+    catch (error) { if (error.code !== 'EAGAIN') throw error; found = 'waiting'; }
+    first ??= found;
+    if (offPath && found === 'waiting') offPathHeld = true;
+    if (found === 'end' && text !== '') break;
+    if (found !== 'value' && text === '') Atomics.wait(sleeper, 0, 0, 1);
+  }
+  fs.closeSync(fd);
+  return [path.basename(ref), { first, text, offPathHeld }];
+}));
+if (step.probe) record.probed = probe();
+else if (step.readSecrets !== false) record.delivered = read();
 if (step.readTwice) record.again = read();
 save();
 if (step.stderr) process.stderr.write(step.stderr);
@@ -538,16 +610,29 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
               RADITI_AMBIENT_VALUE: 'must-not-be-inherited',
             },
             stdio: ['ignore', 'pipe', 'pipe'],
+            // The leader of a process group, as under the sandbox runtime: the wrapper keeps the
+            // CLI in its own group, so a launch that has to be stopped is stopped whole.
+            detached: true,
           })
+          running.add(child)
+          lastGroup = child.pid!
           let stdout = ''
           let stderr = ''
+          let stuck: string | undefined
           child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()))
           child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
-          const timer = setTimeout(() => child.kill('SIGKILL'), 20_000)
+          const timer = setTimeout(() => {
+            // Killing the wrapper alone would leave a CLI that waits on a pipe: it holds the
+            // wrapper's output open, and the test would wait for its own limit over an orphan.
+            stuck = `The launch wrapper and its CLI did not end in ${limitMs / 1000} s and were stopped. Credential pipes still on their paths: ${JSON.stringify(readdirSync(paths.secrets))} (a pipe leaves its path when the wrapper has served it). A CLI that stays in read() of a served pipe has lost the end of its value, as macOS can: docs/plan/49-credential-pipe.md`
+            stopGroup(child)
+          }, limitMs)
           child.on('error', reject)
           child.on('close', (code) => {
             clearTimeout(timer)
-            resolve({ code, stdout, stderr })
+            running.delete(child)
+            if (stuck === undefined) resolve({ code, stdout, stderr })
+            else reject(new Error(stuck))
           })
         },
       )
@@ -555,8 +640,14 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
         .split('\n')
         .filter(Boolean)
         .map((line) => JSON.parse(line) as CliRecord)
+      const helperSeen = await readFile(join(directory, 'helper.json'), 'utf8').catch(
+        () => undefined,
+      )
       return {
         ...result,
+        ...(helperSeen === undefined
+          ? {}
+          : { helper: JSON.parse(helperSeen) as { left: string[]; ms: number } }),
         repo: paths.repo,
         ms: Date.now() - started,
         records,
@@ -640,6 +731,36 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     })
     expect(mcpRequests[0]!.body.params.protocolVersion).toBe('2025-11-25')
     expect(mcpRequests[0]!.at).toBeLessThanOrEqual(cli.at)
+  })
+
+  it('holds the write end of each pipe before the CLI starts: a reader never finds a pipe without a writer', async () => {
+    mcpAnswer = accept
+    const result = await launch({}, { run: { probe: true } })
+    expect(result.stderr).toBe('')
+    expect(result.code).toBe(0)
+    const [cli] = result.records as [CliRecord]
+    // A read that does not wait says in what state it found the pipe: `end` is a pipe nobody
+    // holds for writing. A wrapper that opens the pipe only once it sees a reader has to try and
+    // be refused until then, and under gVisor a refused open lets a reader's own open return
+    // without a writer: the CLI reads an empty credential (docs/plan/49-credential-pipe.md).
+    // With the write end held from the start the reader waits for the value itself.
+    //
+    // The path leaves before the pipe closes: a reader that has its value and opens the path
+    // once more finds nothing. A pipe still on its path after the close would keep that second
+    // open waiting for a writer for good (docs/plan/48-removal.md, «Что краснело само»).
+    expect(cli.probed).toEqual({
+      llm: {
+        first: expect.stringMatching(/^(waiting|value)$/),
+        text: context.llm.apiKey,
+        offPathHeld: true,
+      },
+      mcp: {
+        first: expect.stringMatching(/^(waiting|value)$/),
+        text: context.mcp.token,
+        offPathHeld: true,
+      },
+    })
+    expect(result.left.secrets).toEqual([])
   })
 
   it('accepts an MCP answer framed as a server-sent event', async () => {
@@ -848,6 +969,17 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     expect(result.ms).toBeLessThan(10_000)
     expect(result.left.secrets).toEqual([])
     expect(result.left.configMode).toBe(0o700)
+  })
+
+  it('forgets the credentials once the CLI exits, while a process it left still holds its output', async () => {
+    mcpAnswer = accept
+    // The CLI exits without reading; what it started keeps its stderr open for up to 5 s. The
+    // values, the pipes and the offer to any reader go with the CLI, not with that process.
+    const result = await launch({}, { run: { readSecrets: false, exit: 3, helperMs: 5_000 } })
+    expect(result.code).toBe(3)
+    expect(result.helper?.left).toEqual([])
+    expect(result.helper?.ms).toBeLessThan(3_000)
+    expect(result.left.secrets).toEqual([])
   })
 
   it("keeps the site's own OpenCode files away from every CLI process and puts them back", async () => {
@@ -1092,6 +1224,29 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     ])
     expect(result.left.aboveRepo).toContain('.raditi-opencode-held')
     expect(result.left.secrets).toEqual([])
+  })
+
+  it('stops a launch that does not end, with its CLI, and says what was left', async () => {
+    mcpAnswer = accept
+    // The stand-in takes no credential and stays: what a CLI stuck at its start looks like.
+    const stopped = launch({}, { run: { readSecrets: false, hangMs: 60_000 } }, undefined, 3_000)
+    await expect(stopped).rejects.toThrow(
+      /did not end in 3 s and were stopped\. Credential pipes still on their paths: \[/,
+    )
+    // Nothing of the launch outlives it: the group of the wrapper is gone, the CLI with it.
+    await expect
+      .poll(
+        () => {
+          try {
+            process.kill(-lastGroup, 0)
+            return 'alive'
+          } catch {
+            return 'gone'
+          }
+        },
+        { timeout: 5_000 },
+      )
+      .toBe('gone')
   })
 
   it('reports a CLI ended by a signal as a failed process', async () => {

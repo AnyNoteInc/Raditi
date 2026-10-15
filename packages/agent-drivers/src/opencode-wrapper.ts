@@ -128,7 +128,18 @@ process.exit(accepted ? 0 : 1);
  * 5. The CLI starts with an environment built from scratch — a crash report of its runtime is
  *    uploaded only when the environment asks for it — and takes each credential once, from a
  *    named pipe the configuration names as `{file:…}`. The value exists in no file, no
- *    environment and no argv; the pipe leaves its path before its value is written.
+ *    environment and no argv. The wrapper holds the write end of each pipe from before the CLI
+ *    starts, writes the value once a reader holds the pipe, takes the pipe off its path at once
+ *    and closes it a few milliseconds later. Two kernels shaped this
+ *    (docs/plan/49-credential-pipe.md). Under gVisor an open for writing that is refused
+ *    because nobody reads yet still counts as a writer for a moment; the open of a reader that
+ *    falls into that moment returns without a writer, and the CLI reads an empty credential.
+ *    So no open is ever tried and refused. On macOS a reader that enters its next read just as
+ *    the writer closes can miss the end of the value and wait for good. So the close comes
+ *    when that read has long been waiting. Under gVisor a reader whose open stalls for longer
+ *    than that hold, between counting itself and looking for the writer, can still miss the
+ *    writer and wait in open() for good; the report names this window. What the CLI has not
+ *    taken is forgotten as soon as it exits.
  * 6. The CLI's own MCP connection may still fail, and then the run goes on without the site's
  *    tools and exits 0. The only sign is one WARN line of `--print-logs`: on it the CLI is
  *    stopped and the turn fails.
@@ -147,6 +158,8 @@ const settings = ${JSON.stringify(settings)};
 const mcpCheck = ${JSON.stringify(MCP_CHECK)};
 const MAX_EXPORT_BYTES = 128 * 1024 * 1024;
 const IO_TIMEOUT_MS = 120_000;
+// From the value to its end: by then the CLI's next read of the pipe waits in the kernel.
+const PIPE_HOLD_MS = 5;
 const MCP_DOWN = new RegExp('level=WARN[^\\\\n]*message="server unavailable"[^\\\\n]*\\\\bkey=' + settings.mcpServer + '\\\\b');
 
 class Refusal extends Error {}
@@ -158,6 +171,8 @@ const secrets = [];
 const forget = () => {
   for (const secret of secrets) {
     secret.value.fill(0);
+    if (secret.pipe !== undefined) try { closeSync(secret.pipe); } catch {}
+    secret.pipe = undefined;
     try { remove(secret.path); } catch {}
   }
 };
@@ -282,7 +297,16 @@ try {
   });
   if (checked.status !== 0) refuse('The MCP server did not accept the turn');
 
-  for (const secret of secrets) execFileSync('mkfifo', ['-m', '600', secret.path], { stdio: 'ignore' });
+  for (const secret of secrets) {
+    execFileSync('mkfifo', ['-m', '600', secret.path], { stdio: 'ignore' });
+    // The write end, held until the value is handed over: the CLI never finds the pipe without
+    // a writer. A pipe opens for writing without blocking only while a reader holds it, and for
+    // this one open the reader is the wrapper itself.
+    const own = openSync(secret.path, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      secret.pipe = openSync(secret.path, constants.O_WRONLY | constants.O_NONBLOCK);
+    } finally { closeSync(own); }
+  }
   const input = openSync(settings.prompt, 'r');
   let child;
   try {
@@ -296,28 +320,34 @@ try {
     failure ??= message;
     child.kill('SIGKILL');
   };
-  // A named pipe opens for writing without blocking only once a reader holds it: ENXIO until then.
+  // A write into a pipe nobody reads fails with EPIPE and changes nothing (Node ignores
+  // SIGPIPE): the value leaves this process only when the CLI holds the pipe.
   const feeder = setInterval(() => {
     try {
       for (const secret of secrets) {
         if (secret.done) continue;
-        let pipe;
-        try {
-          pipe = openSync(secret.path, constants.O_WRONLY | constants.O_NONBLOCK);
-        } catch (error) {
-          if (error.code === 'ENXIO') continue;
-          throw error;
+        if (secret.served !== undefined) {
+          // The end of the value, which the reader is waiting for by now.
+          if (performance.now() - secret.served < PIPE_HOLD_MS) continue;
+          closeSync(secret.pipe);
+          secret.pipe = undefined;
+          secret.done = true;
+          continue;
         }
         let written;
-        // Off its path before the value is written: the reader already holds the pipe. Removed
-        // after it, a reader that opened the path once more in between would wait there for good.
         try {
-          rmSync(secret.path, { force: true });
-          written = writeSync(pipe, secret.value);
-        } finally { closeSync(pipe); }
+          written = writeSync(secret.pipe, secret.value);
+        } catch (error) {
+          if (error.code === 'EPIPE') continue;
+          throw error;
+        }
         if (written !== secret.value.length) throw new Error('short write');
         secret.value.fill(0);
-        secret.done = true;
+        // Off its path before the close: once the reader sees the end of the value, a second
+        // open of the path finds nothing. With the path still there it would wait for a writer
+        // for good.
+        rmSync(secret.path, { force: true });
+        secret.served = performance.now();
       }
       if (secrets.every((secret) => secret.done)) clearInterval(feeder);
     } catch {
@@ -349,6 +379,12 @@ try {
   child.on('error', () => {
     failure ??= 'Could not launch the CLI';
     end(1, null);
+  });
+  // The credentials go with the CLI. \`close\` waits for every holder of its stderr as well, and
+  // a process the CLI left behind may keep it open for the rest of the turn.
+  child.on('exit', () => {
+    clearInterval(feeder);
+    forget();
   });
   child.on('close', end);
 } catch (error) {
