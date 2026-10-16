@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const secretNames = ['DATABASE_URL', 'VAULT_ROLE_ID', 'VAULT_SECRET_ID', 'METRICS_TOKEN']
 const tlsOverrides =
-  /^(?:NODE_|LLM_(?:BACKEND_|AUTH_|UPSTREAM_|EGRESS_|GATEWAY_HOSTS|GATEWAY_PORT|GATEWAY_LISTEN_HOST)|LLM_CONTROL_URL$)/
+  /^(?:NODE_|SSL_CERT_|LLM_(?:BACKEND_|UPSTREAM_|EGRESS_|GATEWAY_HOSTS|GATEWAY_PORT|GATEWAY_LISTEN_HOST)|LLM_CONTROL_URL$)/
 class PreflightError extends Error {}
 const fail = (message) => {
   throw new PreflightError(message)

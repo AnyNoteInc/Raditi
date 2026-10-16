@@ -14,6 +14,7 @@ import { McpTurnContentRollback } from '../dist/mcp/mcp-turn-content-rollback.js
 import { TurnSupervisor } from '../dist/turns/turn-supervisor.js'
 import { TaskEventTurnJournal } from '../dist/turns/turn-journal.js'
 import { LiveTurns } from '../dist/turns/live-turns.js'
+import { sampleBackendId, sampleDriverId } from '../src/testing/ids.ts'
 import { verifyContentLifecycle } from './verify-content-lifecycle.mjs'
 import { verifyContentUndo } from './verify-content-undo.mjs'
 
@@ -33,12 +34,12 @@ export async function verifyContentTurns({
   origin,
   roleContent,
 }) {
-  const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+  const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
   await db.agentDriver.upsert({
-    where: { id: 'codex' },
+    where: { id: sampleDriverId },
     update: {},
     create: {
-      id: 'codex',
+      id: sampleDriverId,
       image,
       capabilities: {},
       enabled: true,
@@ -67,7 +68,7 @@ export async function verifyContentTurns({
       instructions: 'Synthetic content replacement',
     },
     input: { prompt: 'Synthetic', attachments: [] },
-    driverId: 'codex',
+    driverId: sampleDriverId,
     driverVersion: '1.0.0',
     workspace: {
       repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
@@ -118,7 +119,7 @@ export async function verifyContentTurns({
         sessionId,
         turnNo: ref.turn,
         firstEpoch: ref.epoch,
-        driverId: 'codex',
+        driverId: sampleDriverId,
         modelId,
         subscriptionAccountId: accountId,
         budgetRub: '100',
@@ -190,7 +191,7 @@ export async function verifyContentTurns({
     credentials: { issue, revoke, recover: async () => null },
     contentRollback: new McpTurnContentRollback(journal, content),
     driver: {
-      id: 'codex',
+      id: sampleDriverId,
       prepare: async (context) => ({ context, files: [], env: {}, secrets: [] }),
       command: () => ['synthetic-agent'],
     },
@@ -212,8 +213,8 @@ export async function verifyContentTurns({
     logger: { warn: () => {} },
   })
   const policy = {
-    driverId: 'codex',
-    backend: 'openai-chatgpt',
+    driverId: sampleDriverId,
+    backend: sampleBackendId,
     modelSlug: 'synthetic',
     modelClass: 'standard',
     reasoningEffort: null,
@@ -305,7 +306,7 @@ export async function verifyContentTurns({
     gateway,
     issue,
     revoke,
-    plan: { ...replace(4), driverId: 'codex' },
+    plan: { ...replace(4), driverId: sampleDriverId },
     pageId: pageIds[0],
   })
 }

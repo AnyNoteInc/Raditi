@@ -1,0 +1,653 @@
+{
+  "compaction": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185307208,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000428",
+        "messageID": "msg_00000000000000000000000429",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185307509,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_00000000000000000000000b",
+        "state": {
+          "status": "completed",
+          "input": {
+            "command": "echo step-one",
+            "description": "stand step"
+          },
+          "output": "step-one\n",
+          "metadata": {
+            "output": "step-one\n",
+            "exit": 0,
+            "truncated": false
+          },
+          "title": "echo step-one",
+          "time": {
+            "start": 1791185307203,
+            "end": 1791185307366
+          }
+        },
+        "id": "prt_00000000000000000000000430",
+        "sessionID": "ses_00000000000000000000000427",
+        "messageID": "msg_00000000000000000000000429"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185307509,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000431",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000429",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-finish",
+        "tokens": {
+          "total": 990000,
+          "input": 982216,
+          "output": 946,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185307568,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000432",
+        "messageID": "msg_00000000000000000000000433",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185307568,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000434",
+        "messageID": "msg_00000000000000000000000433",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "text",
+        "text": "SUMMARY-MARKER-9917: the stand conversation so far.",
+        "time": {
+          "start": 1791185307517,
+          "end": 1791185307518
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185307568,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000435",
+        "reason": "stop",
+        "messageID": "msg_00000000000000000000000433",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185307568,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000436",
+        "messageID": "msg_00000000000000000000000437",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "text",
+        "metadata": {
+          "compaction_continue": true
+        },
+        "synthetic": true,
+        "text": "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
+        "time": {
+          "start": 1791185307525,
+          "end": 1791185307525
+        }
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185307604,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000438",
+        "messageID": "msg_00000000000000000000000439",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185307604,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000440",
+        "messageID": "msg_00000000000000000000000439",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "text",
+        "text": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_changed\":[],\"questions\":[],\"needs_approval\":false,\"risk\":\"low\"}",
+        "time": {
+          "start": 1791185307592,
+          "end": 1791185307594
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185307604,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000441",
+        "reason": "stop",
+        "messageID": "msg_00000000000000000000000439",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ],
+  "permission-request-rejected": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185246381,
+      "sessionID": "ses_00000000000000000000000422",
+      "part": {
+        "id": "prt_00000000000000000000000423",
+        "messageID": "msg_00000000000000000000000424",
+        "sessionID": "ses_00000000000000000000000422",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185246664,
+      "sessionID": "ses_00000000000000000000000422",
+      "part": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_000000000000000000000001",
+        "state": {
+          "status": "error",
+          "input": {
+            "command": "echo denied-marker",
+            "description": "stand step"
+          },
+          "error": "The user rejected permission to use this specific tool call.",
+          "time": {
+            "start": 1791185246374,
+            "end": 1791185246492
+          }
+        },
+        "id": "prt_00000000000000000000000425",
+        "sessionID": "ses_00000000000000000000000422",
+        "messageID": "msg_00000000000000000000000424"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185246666,
+      "sessionID": "ses_00000000000000000000000422",
+      "part": {
+        "id": "prt_00000000000000000000000426",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000424",
+        "sessionID": "ses_00000000000000000000000422",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ],
+  "refusal-http-403": [
+    {
+      "type": "error",
+      "timestamp": 1791185330594,
+      "sessionID": "ses_00000000000000000000000046",
+      "error": {
+        "name": "APIError",
+        "data": {
+          "message": "The budget of this turn is spent.",
+          "statusCode": 403,
+          "isRetryable": false,
+          "responseHeaders": {
+            "content-type": "application/json; charset=UTF-8"
+          },
+          "removedHeaderNames": ["connection", "date", "keep-alive", "transfer-encoding"],
+          "responseBody": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\",\"message\":\"The budget of this turn is spent.\"}}",
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-403-budget/zai/v4/chat/completions"
+          }
+        }
+      }
+    }
+  ],
+  "refusal-in-stream": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185358708,
+      "sessionID": "ses_00000000000000000000000149",
+      "part": {
+        "id": "prt_00000000000000000000000150",
+        "messageID": "msg_00000000000000000000000151",
+        "sessionID": "ses_00000000000000000000000149",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185358709,
+      "sessionID": "ses_00000000000000000000000149",
+      "error": {
+        "name": "UnknownError",
+        "data": {
+          "message": "{\"message\":\"The budget of this turn is spent.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\"}"
+        }
+      }
+    }
+  ],
+  "refusal-after-tool": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185450214,
+      "sessionID": "ses_00000000000000000000000054",
+      "part": {
+        "id": "prt_00000000000000000000000055",
+        "messageID": "msg_00000000000000000000000056",
+        "sessionID": "ses_00000000000000000000000054",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185450585,
+      "sessionID": "ses_00000000000000000000000054",
+      "part": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_000000000000000000000002",
+        "state": {
+          "status": "completed",
+          "input": {
+            "command": "echo step-one",
+            "description": "first step"
+          },
+          "output": "step-one\n",
+          "metadata": {
+            "output": "step-one\n",
+            "exit": 0,
+            "truncated": false
+          },
+          "title": "echo step-one",
+          "time": {
+            "start": 1791185450206,
+            "end": 1791185450408
+          }
+        },
+        "id": "prt_00000000000000000000000057",
+        "sessionID": "ses_00000000000000000000000054",
+        "messageID": "msg_00000000000000000000000056"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185450585,
+      "sessionID": "ses_00000000000000000000000054",
+      "part": {
+        "id": "prt_00000000000000000000000058",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000056",
+        "sessionID": "ses_00000000000000000000000054",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185450673,
+      "sessionID": "ses_00000000000000000000000054",
+      "part": {
+        "id": "prt_00000000000000000000000059",
+        "messageID": "msg_00000000000000000000000060",
+        "sessionID": "ses_00000000000000000000000054",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185450673,
+      "sessionID": "ses_00000000000000000000000054",
+      "error": {
+        "name": "UnknownError",
+        "data": {
+          "message": "{\"message\":\"The budget of this turn is spent.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\"}"
+        }
+      }
+    }
+  ],
+  "retry-exhausted": [
+    {
+      "type": "error",
+      "timestamp": 1791185350170,
+      "sessionID": "ses_00000000000000000000000048",
+      "error": {
+        "name": "APIError",
+        "data": {
+          "message": "The gateway is busy.",
+          "statusCode": 503,
+          "isRetryable": true,
+          "responseHeaders": {
+            "content-type": "application/json; charset=UTF-8",
+            "retry-after": "3"
+          },
+          "removedHeaderNames": ["connection", "date", "keep-alive", "transfer-encoding"],
+          "responseBody": "{\"error\":{\"type\":\"api_error\",\"code\":\"raditi_busy\",\"message\":\"The gateway is busy.\"}}",
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-503-retry-after/zai/v4/chat/completions"
+          }
+        }
+      }
+    }
+  ],
+  "context-overflow": [
+    {
+      "type": "error",
+      "timestamp": 1791185354527,
+      "sessionID": "ses_00000000000000000000000043",
+      "error": {
+        "name": "ContextOverflowError",
+        "data": {
+          "message": "The request has too many tokens for this turn.",
+          "responseBody": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"raditi_policy\",\"message\":\"The request has too many tokens for this turn.\"}}"
+        }
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185354546,
+      "sessionID": "ses_00000000000000000000000043",
+      "error": {
+        "name": "ContextOverflowError",
+        "data": {
+          "message": "The request has too many tokens for this turn.",
+          "responseBody": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"raditi_policy\",\"message\":\"The request has too many tokens for this turn.\"}}"
+        }
+      }
+    }
+  ],
+  "finish-content-filter": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185401122,
+      "sessionID": "ses_00000000000000000000000160",
+      "part": {
+        "id": "prt_00000000000000000000000161",
+        "messageID": "msg_00000000000000000000000162",
+        "sessionID": "ses_00000000000000000000000160",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185401122,
+      "sessionID": "ses_00000000000000000000000160",
+      "part": {
+        "id": "prt_00000000000000000000000163",
+        "messageID": "msg_00000000000000000000000162",
+        "sessionID": "ses_00000000000000000000000160",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185401100,
+          "end": 1791185401102
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185401122,
+      "sessionID": "ses_00000000000000000000000160",
+      "part": {
+        "id": "prt_00000000000000000000000164",
+        "reason": "content-filter",
+        "messageID": "msg_00000000000000000000000162",
+        "sessionID": "ses_00000000000000000000000160",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185401123,
+      "sessionID": "ses_00000000000000000000000160",
+      "error": {
+        "name": "ContentFilterError",
+        "data": {
+          "message": "The response was blocked by the provider's content filter"
+        }
+      }
+    }
+  ],
+  "finish-length": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185418838,
+      "sessionID": "ses_00000000000000000000000165",
+      "part": {
+        "id": "prt_00000000000000000000000166",
+        "messageID": "msg_00000000000000000000000167",
+        "sessionID": "ses_00000000000000000000000165",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185418839,
+      "sessionID": "ses_00000000000000000000000165",
+      "part": {
+        "id": "prt_00000000000000000000000168",
+        "messageID": "msg_00000000000000000000000167",
+        "sessionID": "ses_00000000000000000000000165",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185418818,
+          "end": 1791185418821
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185418839,
+      "sessionID": "ses_00000000000000000000000165",
+      "part": {
+        "id": "prt_00000000000000000000000169",
+        "reason": "length",
+        "messageID": "msg_00000000000000000000000167",
+        "sessionID": "ses_00000000000000000000000165",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ],
+  "finish-unknown": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185407152,
+      "sessionID": "ses_00000000000000000000000270",
+      "part": {
+        "id": "prt_00000000000000000000000271",
+        "messageID": "msg_00000000000000000000000272",
+        "sessionID": "ses_00000000000000000000000270",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185407153,
+      "sessionID": "ses_00000000000000000000000270",
+      "part": {
+        "id": "prt_00000000000000000000000273",
+        "messageID": "msg_00000000000000000000000272",
+        "sessionID": "ses_00000000000000000000000270",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185407135,
+          "end": 1791185407138
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185407153,
+      "sessionID": "ses_00000000000000000000000270",
+      "part": {
+        "id": "prt_00000000000000000000000274",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000272",
+        "sessionID": "ses_00000000000000000000000270",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185407224,
+      "sessionID": "ses_00000000000000000000000270",
+      "part": {
+        "id": "prt_00000000000000000000000275",
+        "messageID": "msg_00000000000000000000000276",
+        "sessionID": "ses_00000000000000000000000270",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185407224,
+      "sessionID": "ses_00000000000000000000000270",
+      "part": {
+        "id": "prt_00000000000000000000000277",
+        "messageID": "msg_00000000000000000000000276",
+        "sessionID": "ses_00000000000000000000000270",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185407214,
+          "end": 1791185407216
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185407224,
+      "sessionID": "ses_00000000000000000000000270",
+      "part": {
+        "id": "prt_00000000000000000000000278",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000276",
+        "sessionID": "ses_00000000000000000000000270",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ]
+}

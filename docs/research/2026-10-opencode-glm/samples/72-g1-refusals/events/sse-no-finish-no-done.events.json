@@ -1,0 +1,618 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185434686,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000320",
+        "messageID": "msg_00000000000000000000000321",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185434686,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000322",
+        "messageID": "msg_00000000000000000000000321",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185434667,
+          "end": 1791185434669
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185434686,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000323",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000321",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185434767,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000324",
+        "messageID": "msg_00000000000000000000000325",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185434767,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000326",
+        "messageID": "msg_00000000000000000000000325",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185434715,
+          "end": 1791185434717
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185434768,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000327",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000325",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185434800,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000328",
+        "messageID": "msg_00000000000000000000000329",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185434801,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000330",
+        "messageID": "msg_00000000000000000000000329",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185434788,
+          "end": 1791185434790
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185434801,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000331",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000329",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185434884,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000332",
+        "messageID": "msg_00000000000000000000000333",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185434884,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000334",
+        "messageID": "msg_00000000000000000000000333",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185434871,
+          "end": 1791185434873
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185434884,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000335",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000333",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185434959,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000336",
+        "messageID": "msg_00000000000000000000000337",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185434959,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000338",
+        "messageID": "msg_00000000000000000000000337",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185434904,
+          "end": 1791185434906
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185434959,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000339",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000337",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185434993,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000340",
+        "messageID": "msg_00000000000000000000000341",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185434993,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000342",
+        "messageID": "msg_00000000000000000000000341",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185434980,
+          "end": 1791185434982
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185434993,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000343",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000341",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185435067,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000344",
+        "messageID": "msg_00000000000000000000000345",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185435067,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000346",
+        "messageID": "msg_00000000000000000000000345",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185435011,
+          "end": 1791185435013
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185435067,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000347",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000345",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185435105,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000348",
+        "messageID": "msg_00000000000000000000000349",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185435105,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000350",
+        "messageID": "msg_00000000000000000000000349",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185435091,
+          "end": 1791185435093
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185435105,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000351",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000349",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185435184,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000352",
+        "messageID": "msg_00000000000000000000000353",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185435184,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000354",
+        "messageID": "msg_00000000000000000000000353",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185435170,
+          "end": 1791185435173
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185435184,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000355",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000353",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185435216,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000356",
+        "messageID": "msg_00000000000000000000000357",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185435216,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000358",
+        "messageID": "msg_00000000000000000000000357",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185435204,
+          "end": 1791185435206
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185435216,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000359",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000357",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185435286,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000360",
+        "messageID": "msg_00000000000000000000000361",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185435286,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000362",
+        "messageID": "msg_00000000000000000000000361",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185435272,
+          "end": 1791185435273
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185435287,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000363",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000361",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185435319,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000364",
+        "messageID": "msg_00000000000000000000000365",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185435360,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000366",
+        "messageID": "msg_00000000000000000000000365",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185435308,
+          "end": 1791185435309
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185435360,
+      "sessionID": "ses_00000000000000000000000319",
+      "part": {
+        "id": "prt_00000000000000000000000367",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000365",
+        "sessionID": "ses_00000000000000000000000319",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185435389,
+      "sessionID": "ses_00000000000000000000000319",
+      "error": {
+        "name": "APIError",
+        "data": {
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "responseHeaders": {
+            "content-type": "application/json"
+          },
+          "removedHeaderNames": [
+            "connection",
+            "content-length",
+            "date",
+            "keep-alive"
+          ],
+          "responseBody": "{\"error\":{\"code\":\"401\",\"message\":\"spike cap reached\"}}",
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-no-finish-no-done/zai/v4/chat/completions"
+          }
+        }
+      }
+    }
+  ]
+}

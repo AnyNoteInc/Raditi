@@ -1,0 +1,28 @@
+{
+  "source": "runsc/p4-mid-http-403/records.json",
+  "requests": [
+    {
+      "n": 1,
+      "ms": 3805,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 2,
+      "ms": 4200,
+      "bodyBytes": 18064,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22) assistant(0,tool_calls:bash) tool(9)",
+      "answer": "http 403"
+    }
+  ],
+  "toolResults": [
+    "step-one\n"
+  ]
+}

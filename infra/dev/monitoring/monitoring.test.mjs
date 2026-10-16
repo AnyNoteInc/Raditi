@@ -35,8 +35,10 @@ test('the gateway health is probed apart from the required endpoints', () => {
   const groups = probes.split(/^ {6}- targets:/m).slice(1)
   const own = groups.filter((group) => group.includes(health))
   assert.equal(own.length, 1, 'one target group probes the gateway health')
-  // Without the egress proxy the dev gateway is degraded (503) by design: under a profile label
-  // the probe stays out of EndpointDown and of the required panel.
+  // In dev the role may be left out of ORCHESTRATOR_ROLES, and its health is degraded (503)
+  // with a proxy configured and no channel or with a provider out of reach on the direct path
+  // (without a proxy it answers 200 since G4): under a profile label the probe stays out of
+  // EndpointDown and of the required panel.
   assert.match(own[0], /^ {8}labels: \{ compose_profile: llm \}$/m)
   assert.match(rules, /expr: probe_success\{compose_profile=""\} == 0/)
 })

@@ -2,16 +2,15 @@ import { createHash, randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
-import type { EgressHttp, LlmBackend, SecretStore, TurnCredentialGrant } from '@repo/domain'
-import { codexBackend, kimiCodeBackend } from '@repo/llm-backends'
+import type { SecretStore, TurnCredentialGrant } from '@repo/domain'
+import { zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { createCredentialSource, encodeSubscriptionCredential } from '../llm-gateway/credentials.ts'
-import { SubscriptionRefresher } from '../llm-gateway/refresher.ts'
 import { SessionSubscriptionLock } from '../llm-gateway/session-lock.ts'
 import { PostgresGatewayStore } from '../llm-gateway/store.ts'
 import { CredentialSweeper } from '../llm/credential-sweeper.ts'
 import { GatewayTurnCredentials } from '../llm/turn-credentials.ts'
+import { sampleBackendId, sampleDriverId, sampleRoutePath } from '../testing/ids.ts'
 import { retirementRefusals, SubscriptionRetirement } from './retire.ts'
 
 // Only verify:db's owned disposable database; no repository env-file is loaded here.
@@ -75,7 +74,9 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     credentialId: string
   }[] = []
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    // A key is issued only to an enabled driver: the suite stands on the driver of the sample
+    // backend as the migrations and the seeds leave it, switched on.
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
   })
   afterEach(async () => {
@@ -101,10 +102,12 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     await db.$disconnect()
   })
 
-  async function fixture(backend: 'kimi-code' | 'openai-chatgpt' = 'kimi-code') {
+  /** An account whose key the operator revokes in the console of the provider. */
+  async function fixture() {
+    const backend = sampleBackendId
     const provider = await db.llmProvider.findUniqueOrThrow({ where: { slug: backend } })
     await db.llmProvider.update({ where: { id: provider.id }, data: { enabled: true } })
-    const driverId = backend === 'kimi-code' ? 'kimi' : 'codex'
+    const driverId = sampleDriverId
     const accountId = randomUUID()
     const credential = await db.credentialRef.create({
       data: { kind: 'subscription', vaultPath: `subs/${backend}/${accountId}` },
@@ -165,7 +168,7 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
       secrets: { kvDestroyAll: vault.kvDestroyAll },
       credentials,
       locks,
-      backends: [codexBackend, kimiCodeBackend],
+      backends: [zaiCodingBackend],
     }
     const service = new SubscriptionRetirement(options)
     const sweeper = new CredentialSweeper({ prisma: db, secrets: vault.port, credentials })
@@ -270,8 +273,8 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     const admission = await f.store.admit({
       keyHash: hash(values.llmApiKey),
       source: '127.0.0.1',
-      backendId: 'kimi-code',
-      route: { method: 'POST', path: '/v1/chat/completions' },
+      backendId: sampleBackendId,
+      route: { method: 'POST', path: sampleRoutePath },
       profile: profile!,
       requestBytes: 100,
       estimatedInputTokens: 10,
@@ -419,52 +422,6 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     })
   })
 
-  it('lets the llm retire timer invoke provider revoke only after disable, then permits admin destruction', async () => {
-    const f = await fixture('openai-chatgpt')
-    const syntheticCredential = { v: '1', kind: 'kimi_api_key', apiKey: 'synthetic-revoke-key' }
-    f.vault.entries.set(`subs/openai-chatgpt/${f.accountId}`, {
-      data: encodeSubscriptionCredential(syntheticCredential),
-      custom: {},
-      deleted: false,
-    })
-    const revoke = vi.fn<NonNullable<LlmBackend['revoke']>>().mockResolvedValue(undefined)
-    const backend: LlmBackend = { ...kimiCodeBackend, id: 'openai-chatgpt', revoke }
-    const refresher = new SubscriptionRefresher({
-      prisma: db,
-      secrets: f.vault.port,
-      credentials: createCredentialSource(f.vault.port),
-      backends: [backend],
-      // Separate core and llm processes own distinct connection pools for the same SQL lock.
-      locks: new SessionSubscriptionLock(databaseUrl ?? ''),
-      http: { request: vi.fn() } as unknown as EgressHttp,
-      channelHealthy: () => true,
-      onRegion: vi.fn(),
-    })
-    cleanups.push(() => refresher.close())
-    await f.service.request({ accountId: f.accountId })
-    await refresher.retire()
-    expect(revoke).not.toHaveBeenCalled()
-    expect((await f.current()).credentialsRevokedAt).toBeNull()
-    await f.sweeper.tick()
-    await refresher.retire()
-    expect(revoke).toHaveBeenCalledOnce()
-    expect((await f.current()).credentialsRevokedAt).toBeInstanceOf(Date)
-    expect(await f.service.finalize({ accountId: f.accountId })).toMatchObject({ stage: 'retired' })
-    expect(f.vault.entries.has(`subs/openai-chatgpt/${f.accountId}`)).toBe(false)
-  })
-
-  it('requires provider confirmation for an automatically revoked subscription and rejects console bypass', async () => {
-    const f = await fixture('openai-chatgpt')
-    await f.service.request({ accountId: f.accountId, compromised: true })
-    expect(await f.service.finalize({ accountId: f.accountId })).toMatchObject({
-      stage: 'provider_revocation_pending',
-    })
-    await expect(
-      f.service.finalize({ accountId: f.accountId, consoleRevoked: true }),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-    expect(f.vault.kvDestroyAll).not.toHaveBeenCalled()
-  })
-
   it('persists console confirmation through a Vault outage and idempotently finishes on the next invocation', async () => {
     const f = await fixture()
     await f.service.request({ accountId: f.accountId, compromised: true })
@@ -516,7 +473,7 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     expect(await f.service.finalize({ accountId: f.accountId })).toMatchObject({ stage: 'retired' })
   })
 
-  it('uses the same session lock as refresh and relogin to exclude destruction while another writer operates', async () => {
+  it('uses the same session lock as a relogin to exclude destruction while another writer operates', async () => {
     const f = await fixture()
     await f.ready()
     const otherLocks = new SessionSubscriptionLock(databaseUrl ?? '')
@@ -540,7 +497,7 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     await f.ready()
     await db.credentialRef.update({
       where: { id: f.account.credentialRefId },
-      data: { vaultPath: `subs/kimi-code/${randomUUID()}` },
+      data: { vaultPath: `subs/${sampleBackendId}/${randomUUID()}` },
     })
     await expect(f.service.finalize({ accountId: f.accountId })).rejects.toMatchObject({
       code: 'CONFLICT',
@@ -561,7 +518,7 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     expect(f.vault.kvDestroyAll).not.toHaveBeenCalled()
   })
 
-  it('cancels a mistaken request until the provider revoked the tokens, never afterwards', async () => {
+  it('cancels a mistaken request until the revocation of the key is acknowledged, never afterwards', async () => {
     const f = await fixture()
     expect(await f.service.request({ accountId: f.accountId })).toMatchObject({ stage: 'draining' })
     expect(await f.service.cancel({ accountId: f.accountId })).toMatchObject({ stage: 'cancelled' })
@@ -577,8 +534,8 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     expect((await f.current()).retireRequestedAt).not.toBeNull()
   })
 
-  it('a cancellation waits for the session lock of a revocation in progress', async () => {
-    const f = await fixture('openai-chatgpt')
+  it('refuses a cancellation while another writer holds the session lock of the account', async () => {
+    const f = await fixture()
     await f.service.request({ accountId: f.accountId })
     const lease = await f.locks.tryAcquire(f.accountId)
     try {

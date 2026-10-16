@@ -1,0 +1,91 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185450214,
+      "sessionID": "ses_00000000000000000000000054",
+      "part": {
+        "id": "prt_00000000000000000000000055",
+        "messageID": "msg_00000000000000000000000056",
+        "sessionID": "ses_00000000000000000000000054",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185450585,
+      "sessionID": "ses_00000000000000000000000054",
+      "part": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_000000000000000000000002",
+        "state": {
+          "status": "completed",
+          "input": {
+            "command": "echo step-one",
+            "description": "first step"
+          },
+          "output": "step-one\n",
+          "metadata": {
+            "output": "step-one\n",
+            "exit": 0,
+            "truncated": false
+          },
+          "title": "echo step-one",
+          "time": {
+            "start": 1791185450206,
+            "end": 1791185450408
+          }
+        },
+        "id": "prt_00000000000000000000000057",
+        "sessionID": "ses_00000000000000000000000054",
+        "messageID": "msg_00000000000000000000000056"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185450585,
+      "sessionID": "ses_00000000000000000000000054",
+      "part": {
+        "id": "prt_00000000000000000000000058",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000056",
+        "sessionID": "ses_00000000000000000000000054",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185450673,
+      "sessionID": "ses_00000000000000000000000054",
+      "part": {
+        "id": "prt_00000000000000000000000059",
+        "messageID": "msg_00000000000000000000000060",
+        "sessionID": "ses_00000000000000000000000054",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185450673,
+      "sessionID": "ses_00000000000000000000000054",
+      "error": {
+        "name": "UnknownError",
+        "data": {
+          "message": "{\"message\":\"The budget of this turn is spent.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\"}"
+        }
+      }
+    }
+  ]
+}

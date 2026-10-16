@@ -102,7 +102,10 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
           })
           if (previous.length !== 1 || previous[0]!.finishedAt === null)
             throw conflict('Replacement requires a closed product assignment')
-          const replaced = turnPlanSchema.parse(previous[0]!.plan)
+          // A plan saved by a driver the platform no longer has is history, not an input.
+          const saved = turnPlanSchema.safeParse(previous[0]!.plan)
+          if (!saved.success) throw conflict('The replaced turn can no longer be restored')
+          const replaced = saved.data
           if (
             previous[0]!.sessionId !== sessionId ||
             !isDeepStrictEqual(plan.previous, replaced.previous) ||

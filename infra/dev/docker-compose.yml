@@ -7,7 +7,7 @@
 #   site — тестовый WordPress, ci — раннер Gitea Actions,
 #   monitoring — Prometheus и Grafana, monitoring-host — cAdvisor (только Linux).
 # Теги закреплены; порты публикуются только на 127.0.0.1.
-# The llm profile returns with the subscription fakes and local egress in P3.
+# No llm profile: the synthetic Z.ai and the local egress proxy are started by `pnpm verify:llm-gateway`.
 
 name: raditi-dev
 

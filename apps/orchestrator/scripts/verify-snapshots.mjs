@@ -10,6 +10,7 @@ import { pack } from 'tar-stream'
 
 import { openSnapshotParts, sealSnapshotPart } from '../dist/sessions/snapshot-parts.js'
 import { SnapshotService } from '../dist/sessions/snapshot.service.js'
+import { sampleDriverId } from '../src/testing/ids.ts'
 
 // Explicit local integration check: no models, client data or production endpoints.
 const storageConfig = storageConfigFromEnv(process.env)
@@ -75,13 +76,19 @@ try {
   )
   assert.equal(claims.filter(Boolean).length, 1, 'S3 must enforce atomic conditional PUT')
 
-  const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
+  // The session state the sample driver names: its session database and the journal of it.
+  const home = {
+    root: `/agent-home/${sampleDriverId}`,
+    include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+    exclude: [],
+  }
+  const driver = { id: sampleDriverId, version: '0.0.0-verify' }
   const metadata = {
     workspaceId: id,
     sessionId: id,
     turn: 1,
     image: `registry/raditi@sha256:${'a'.repeat(64)}`,
-    driver: { id: 'codex', version: '0.157.1', nativeSessionId: id },
+    driver: { ...driver, nativeSessionId: id },
     git: {
       provider: 'gitea',
       branch: 'task/p1-verification',
@@ -95,11 +102,11 @@ try {
     sessionId: id,
     turn: 1,
     image: metadata.image,
-    driver: { id: 'codex', version: '0.157.1' },
+    driver,
     home,
   }
   const parts = {
-    home: await archive('sessions/test.jsonl', 'synthetic conversation'),
+    home: await archive(home.include[0], 'synthetic conversation'),
     untracked: await archive('draft.txt', 'synthetic draft'),
     patch: Buffer.from('synthetic patch\0'),
   }

@@ -313,8 +313,11 @@ export class TurnSupervisor {
     })
     if (!plan.success) throw badRequest('Invalid turn snapshot metadata')
     if (request.previous) {
-      const prior = snapshotReferenceSchema.parse(request.previous)
+      // A reference that fails its schema — one that names a driver the platform does not
+      // have, say — is refused like any other checkpoint this turn cannot continue.
+      const { data: prior } = snapshotReferenceSchema.safeParse(request.previous)
       if (
+        !prior ||
         prior.workspaceId !== labels.workspaceId ||
         prior.sessionId !== labels.sessionId ||
         (request.replacesTurn === undefined

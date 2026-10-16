@@ -283,9 +283,10 @@ describe('landing texts', () => {
     const data = questions.find((question) =>
       question.querySelector('summary')?.textContent.includes('Где будут храниться данные?'),
     )
-    // The lawyer has not approved a new answer: it stays word for word, non-breaking spaces aside.
+    // The answer names the one model provider since the move to OpenCode with GLM (G8); its exact
+    // words are pinned in landing-data-recipient.test.tsx.
     expect(plain(data?.querySelector('p')?.textContent)).toBe(
-      'Для хранилищ платформы предусмотрено размещение в России. Задания обрабатывают модели OpenAI и Moonshot за рубежом; переданные им копии могут храниться по условиям этих провайдеров. Условия обработки данных описаны в документах сервиса.',
+      'Для хранилищ платформы предусмотрено размещение в России. Задания обрабатывает модель GLM провайдера Z.ai за рубежом; переданные ему копии могут храниться по условиям этого провайдера. Условия обработки данных описаны в документах сервиса.',
     )
   })
 })

@@ -145,41 +145,18 @@ export interface AgentDriverSeed {
   enabled: boolean
 }
 
-/** Kimi Code, Qwen Code and OpenCode: no forced output schema, no image input. */
-const streamJsonCliCapabilities: AgentCapabilities = {
-  resume: true,
-  jsonEvents: true,
-  outputSchema: false,
-  mcp: true,
-  images: false,
-}
-
 const placeholderImage = (id: AgentDriverId): string => `raditi/agent-${id}`
 
+// The product runs one shell, OpenCode. The seeds create no row of an earlier shell: a database
+// seeded before the removal keeps those rows for the history that names them, switched off by
+// the migration 20261011090000_switch_to_opencode, and a seed run leaves them as they are.
 export const agentDriverSeeds: readonly AgentDriverSeed[] = [
-  {
-    id: 'codex',
-    image: placeholderImage('codex'),
-    capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: true, images: true },
-    enabled: true,
-  },
-  {
-    id: 'kimi',
-    image: placeholderImage('kimi'),
-    capabilities: streamJsonCliCapabilities,
-    enabled: true,
-  },
-  {
-    id: 'qwen',
-    image: placeholderImage('qwen'),
-    capabilities: streamJsonCliCapabilities,
-    enabled: false,
-  },
   {
     id: 'opencode',
     image: placeholderImage('opencode'),
-    capabilities: streamJsonCliCapabilities,
-    enabled: false,
+    // No forced output schema, no image input.
+    capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
+    enabled: true,
   },
 ]
 
@@ -194,8 +171,7 @@ export interface LlmProviderSeed {
 }
 
 export const llmProviderSeeds = [
-  { slug: 'openai-chatgpt', name: 'ChatGPT', kind: 'subscription', enabled: false },
-  { slug: 'kimi-code', name: 'Kimi Code', kind: 'subscription', enabled: false },
+  { slug: 'zai-coding', name: 'Z.ai GLM Coding Plan', kind: 'subscription', enabled: false },
 ] as const satisfies readonly LlmProviderSeed[]
 
 export interface LlmModelSeed {
@@ -209,47 +185,21 @@ export interface LlmModelSeed {
   enabled: false
 }
 
-// The design names GPT-6 profiles, but the local spike confirmed only gpt-6.1-sol.
-// Do not silently replace a profile or guess an upstream id: the operator confirms it before
-// enabling a model. Kimi's k3-256k is the explicit id in p3-design §3.6, still disabled here.
-export const llmModelSeeds: readonly LlmModelSeed[] = [
-  {
-    providerSlug: 'openai-chatgpt',
-    slug: 'gpt-6-luna-light',
-    name: 'GPT-6 Luna · light',
-    providerModelId: null,
-    modelClass: 'light',
+// One model of the GLM Coding Plan for every class: the classes differ by the level of
+// reasoning of the turn (low, high, max). The reserve is the output ceiling of the adapter's
+// request policy. Switched off: the operator enables the provider, the profiles and an
+// approved rate.
+export const llmModelSeeds: readonly LlmModelSeed[] = (['light', 'standard', 'heavy'] as const).map(
+  (modelClass): LlmModelSeed => ({
+    providerSlug: 'zai-coding',
+    slug: `glm-5.3-${modelClass}`,
+    name: `GLM-5.3 · ${modelClass}`,
+    providerModelId: 'glm-5.3',
+    modelClass,
     reserveOutputTokens: 32_000,
     enabled: false,
-  },
-  {
-    providerSlug: 'openai-chatgpt',
-    slug: 'gpt-6-sol-standard',
-    name: 'GPT-6 Sol · standard',
-    providerModelId: null,
-    modelClass: 'standard',
-    reserveOutputTokens: 32_000,
-    enabled: false,
-  },
-  {
-    providerSlug: 'openai-chatgpt',
-    slug: 'gpt-6-sol-heavy',
-    name: 'GPT-6 Sol · heavy',
-    providerModelId: null,
-    modelClass: 'heavy',
-    reserveOutputTokens: 32_000,
-    enabled: false,
-  },
-  {
-    providerSlug: 'kimi-code',
-    slug: 'k3-256k-standard',
-    name: 'Kimi K3 256K · standard',
-    providerModelId: 'k3-256k',
-    modelClass: 'standard',
-    reserveOutputTokens: 32_768,
-    enabled: false,
-  },
-]
+  }),
+)
 
 // Accounting rates need owner approval and are never seeded (not even placeholder zeros).
 

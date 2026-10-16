@@ -21,12 +21,7 @@ const probeIntervalMs = 5 * 60_000
 // brought no answer, is repeated for it this soon instead of after the whole interval.
 const unknownWindowsProbeMs = 20_000
 const transientDelays = [30_000, 60_000, 120_000] as const
-const unknownProbe = (): ProbeResult => ({
-  status: 'unknown',
-  windows: null,
-  plan: null,
-  creditsBalance: null,
-})
+const unknownProbe = (): ProbeResult => ({ status: 'unknown', windows: null, plan: null })
 
 /** Why a probe is asked for now: the caller read the account's windows as unknown. */
 export interface UnknownWindows {
@@ -36,10 +31,15 @@ export interface UnknownWindows {
   cleared?: true
 }
 
+/** A request signal waits for its confirmation, a snapshot has grown old, or windows are unknown. */
+type ProbeReason = 'signal' | 'refresh' | UnknownWindows
+
 interface ProbeMemo {
   at: number
   promise: Promise<ProbeResult | null>
   settled: boolean
+  /** Sent to confirm a request signal; any other probe was sent for the account's windows. */
+  confirming: boolean
   /** limits_seen_at as the applied probe left it; undefined while in flight or not applied. */
   limitsSeenAt?: number | null
 }
@@ -75,6 +75,8 @@ export class SubscriptionPoolHealth {
     }
   >()
   readonly #probes = new Map<string, ProbeMemo>()
+  /** The last confirming probe of an account: a later probe for its windows does not replace it. */
+  readonly #confirmed = new Map<string, ProbeMemo>()
   readonly #observed = new Map<string, number>()
   readonly #shutdown = new AbortController()
   #closing = false
@@ -130,10 +132,6 @@ export class SubscriptionPoolHealth {
         if (paused?.paymentAt === undefined || call.startedAt.getTime() > paused.paymentAt)
           this.#pauses.delete(call.accountId)
       }
-      if (finish.windows?.creditsBalance !== null && finish.windows?.creditsBalance !== undefined) {
-        if (await this.#store.credits(call.accountId, finish.windows.creditsBalance))
-          this.#alert('credits_balance')
-      }
       if (signal?.kind === 'window_exhausted') {
         if (signal.until !== null) await this.#store.cool(call.accountId, signal.until)
         else {
@@ -159,28 +157,54 @@ export class SubscriptionPoolHealth {
   }
 
   /**
-   * One probe per account in five minutes confirms request signals. A caller that read the
-   * windows as unknown is not answered by a probe its state postdates, and a probe that left
-   * them unknown is repeated for it after twenty seconds. A response that has just cleared
-   * the windows is answered only by a probe still in flight or a new one.
+   * One probe per account in five minutes confirms request signals: without `unknownWindows`
+   * the caller is such a signal. A probe sent for the account's windows was sent before the
+   * refusal it would have to confirm, so it answers no signal once it has settled; nor does it
+   * end the five minutes of the confirming probe sent before it. A caller that read the windows
+   * as unknown is not answered by a probe its state postdates, and a probe that left them
+   * unknown is repeated for it after twenty seconds. A response that has just cleared the
+   * windows is answered only by a probe still in flight or a new one.
    */
   probeAccount(accountId: string, unknownWindows?: UnknownWindows): Promise<ProbeResult | null> {
+    return this.#ask(accountId, unknownWindows ?? 'signal')
+  }
+
+  /**
+   * The window snapshot has only grown old (poolPolicy.windowsFreshMs): any probe of the last
+   * five minutes has refreshed it already, whatever it was sent for.
+   */
+  refreshAccount(accountId: string): Promise<ProbeResult | null> {
+    return this.#ask(accountId, 'refresh')
+  }
+
+  #ask(accountId: string, why: ProbeReason): Promise<ProbeResult | null> {
     if (this.#closing || !this.options.channelHealthy()) return Promise.resolve(null)
     const current = this.#probes.get(accountId)
-    if (current && this.#remembered(current, unknownWindows))
+    const remembered =
+      current && this.#remembered(current, why) ? current : this.#confirming(accountId, why)
+    if (remembered)
       // A remembered region answer still holds: a reopened egress closes again.
-      return current.promise.then((result) => {
+      return remembered.promise.then((result) => {
         if (result?.status === 'region' && !this.#closing) this.options.onRegion(accountId)
         return result
       })
-    return this.#start(accountId, this.options.http)
+    return this.#start(accountId, this.options.http, why === 'signal')
   }
 
-  #remembered(memo: ProbeMemo, unknownWindows: UnknownWindows | undefined): boolean {
+  /** The confirming probe of the last five minutes, when a probe for the windows came after it. */
+  #confirming(accountId: string, why: ProbeReason): ProbeMemo | undefined {
+    const memo = why === 'signal' ? this.#confirmed.get(accountId) : undefined
+    return memo && this.#now() - memo.at < probeIntervalMs ? memo : undefined
+  }
+
+  #remembered(memo: ProbeMemo, why: ProbeReason): boolean {
     const age = this.#now() - memo.at
     // A probe in flight is shared. Sent for unknown windows, it restores them; windows cleared
     // after it was sent stay unknown, and the floor below admits the next probe.
-    if (unknownWindows === undefined || !memo.settled) return age < probeIntervalMs
+    if (why === 'refresh' || !memo.settled) return age < probeIntervalMs
+    // Signals closing together share the probe the first of them started, for five minutes.
+    if (why === 'signal') return memo.confirming && age < probeIntervalMs
+    const unknownWindows = why
     if (unknownWindows.cleared) return false
     const seen = unknownWindows.limitsSeenAt?.getTime()
     // The windows were cleared after this probe was applied. A probe that was not applied
@@ -194,12 +218,23 @@ export class SubscriptionPoolHealth {
     return age < unknownWindowsProbeMs
   }
 
-  #start(accountId: string, egress: EgressHttp, unavailable?: () => void): ProbeMemo['promise'] {
-    const memo: ProbeMemo = { at: this.#now(), settled: false, promise: Promise.resolve(null) }
+  #start(
+    accountId: string,
+    egress: EgressHttp,
+    confirming: boolean,
+    unavailable?: () => void,
+  ): ProbeMemo['promise'] {
+    const memo: ProbeMemo = {
+      at: this.#now(),
+      settled: false,
+      confirming,
+      promise: Promise.resolve(null),
+    }
     memo.promise = this.#probe(accountId, egress, memo, unavailable).finally(() => {
       memo.settled = true
     })
     this.#probes.set(accountId, memo)
+    if (confirming) this.#confirmed.set(accountId, memo)
     return memo.promise
   }
 
@@ -211,7 +246,7 @@ export class SubscriptionPoolHealth {
    */
   async recheckRegion(accountId: string): Promise<boolean> {
     if (this.#closing || !this.options.regionHttp) return false
-    const result = await this.#start(accountId, this.options.regionHttp, () =>
+    const result = await this.#start(accountId, this.options.regionHttp, true, () =>
       this.#alert('region_recheck_unavailable'),
     )
     return result !== null && result.status !== 'region'
@@ -239,14 +274,10 @@ export class SubscriptionPoolHealth {
             signal: AbortSignal.any([signal, this.#shutdown.signal]),
           }),
       }
-      const parsed = probeResultSchema.safeParse(
-        await backend.probe(credential, account.clientIdentity, http),
-      )
+      const parsed = probeResultSchema.safeParse(await backend.probe(credential, http))
       const result = parsed.success ? parsed.data : unknownProbe()
       if (this.#closing) return null
-      const update = await this.#store.probe(account, result, {
-        authNeedsRelogin: backend.refresh === undefined,
-      })
+      const update = await this.#store.probe(account, result)
       if (update.alert) this.#alert(update.alert)
       if (update.applied) memo.limitsSeenAt = update.limitsSeenAt?.getTime() ?? null
       if (update.applied && result.status === 'region') this.options.onRegion(accountId)
@@ -261,8 +292,8 @@ export class SubscriptionPoolHealth {
     const now = this.#now()
     for (const [id, pause] of this.#pauses)
       if (pause.until <= now && now - pause.seenAt >= 10 * 60_000) this.#pauses.delete(id)
-    for (const [id, probe] of this.#probes)
-      if (now - probe.at >= probeIntervalMs) this.#probes.delete(id)
+    for (const probes of [this.#probes, this.#confirmed])
+      for (const [id, probe] of probes) if (now - probe.at >= probeIntervalMs) probes.delete(id)
     for (const [id, at] of this.#observed)
       if (now - at >= 24 * 60 * 60_000) this.#observed.delete(id)
     return Promise.resolve()
@@ -273,6 +304,7 @@ export class SubscriptionPoolHealth {
     this.#shutdown.abort()
     this.#pauses.clear()
     this.#probes.clear()
+    this.#confirmed.clear()
     this.#observed.clear()
     return Promise.resolve()
   }

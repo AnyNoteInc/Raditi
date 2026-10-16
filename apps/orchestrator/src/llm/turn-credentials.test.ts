@@ -4,6 +4,7 @@ import type { Prisma, PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialGrant, TurnCredentialRef } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleBackendId, sampleDriverId } from '../testing/ids.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 
 const decimal = (value: string) => ({ toFixed: (digits: number) => Number(value).toFixed(digits) })
@@ -19,8 +20,8 @@ function fixture() {
     epoch: 1,
   }
   const grant: TurnCredentialGrant = {
-    driverId: 'kimi',
-    backend: 'kimi-code',
+    driverId: sampleDriverId,
+    backend: sampleBackendId,
     modelSlug: 'synthetic',
     modelClass: 'standard',
     reasoningEffort: null,
@@ -44,7 +45,7 @@ function fixture() {
         return owned ? [{ id: ref.taskId, attempt: 1, dataClass: 'synthetic', now }] : []
       if (sql.includes('SELECT EXISTS')) return [{ owned }]
       if (sql.includes('FROM llm_models'))
-        return [{ modelId, providerId: randomUUID(), enabled: true, reserveOutputTokens: 32_768 }]
+        return [{ modelId, providerId: randomUUID(), enabled: true, reserveOutputTokens: 32_000 }]
       if (sql.includes('LEFT JOIN credit_holds'))
         return [{ payg: false, holdRub: null, feeRub: null, markup: null }]
       if (sql.includes('FROM subscription_accounts'))
@@ -246,6 +247,24 @@ describe('durable turn credentials', () => {
       expect(await f.credentials.recover(f.ref)).toBeNull()
     },
   )
+
+  it.each([
+    ['driverId', 'codex'],
+    ['driverId', 'kimi'],
+    ['driverId', 'qwen'],
+    ['backend', 'openai-chatgpt'],
+    ['backend', 'kimi-code'],
+  ])('recovers no key whose stored policy names the removed %s %s', async (field, id) => {
+    // What a turn of a removed shell left in Vault until the sweeper takes it: history, not a
+    // key any turn gets back.
+    const f = fixture()
+    await f.credentials.issue(f.ref, f.grant)
+    const stored = JSON.parse(f.vault()!.grant as string) as Record<string, unknown>
+    expect(stored[field]).toBe(f.grant[field as 'driverId' | 'backend'])
+    f.alterVault({ grant: JSON.stringify({ ...stored, [field]: id }) })
+    expect(await f.credentials.recover(f.ref)).toBeNull()
+    await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
 
   it('recovers a running key without consulting current pool eligibility', async () => {
     const f = fixture()

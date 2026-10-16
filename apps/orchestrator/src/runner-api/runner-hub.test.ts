@@ -10,6 +10,7 @@ import {
 } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { RunnerHub, type ClaimedRunner, type RunnerCommandBody } from './runner-hub.ts'
 
@@ -89,7 +90,7 @@ function prepareBody({ fence, sessionId }: TurnAssignment): RunnerCommandBody {
   return {
     type: 'prepare',
     sandbox: {
-      image: `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`,
+      image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
       labels: {
         workspaceId: 'ws1',
         siteId: fence.siteId,
@@ -113,9 +114,9 @@ function prepareBody({ fence, sessionId }: TurnAssignment): RunnerCommandBody {
       sha256: '0'.repeat(64),
       sizeBytes: 1,
     },
-    driverId: 'codex',
+    driverId: sampleDriverId,
     prepared: { files: [], env: {}, secrets: [] },
-    argv: ['codex', 'exec', '--json'],
+    argv: ['opencode', 'run', '--format', 'json'],
     credentials: ['synthetic-llm-secret'],
   }
 }

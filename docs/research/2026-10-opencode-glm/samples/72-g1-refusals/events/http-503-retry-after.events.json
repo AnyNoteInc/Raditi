@@ -1,0 +1,31 @@
+{
+  "events": [
+    {
+      "type": "error",
+      "timestamp": 1791185350170,
+      "sessionID": "ses_00000000000000000000000048",
+      "error": {
+        "name": "APIError",
+        "data": {
+          "message": "The gateway is busy.",
+          "statusCode": 503,
+          "isRetryable": true,
+          "responseHeaders": {
+            "content-type": "application/json; charset=UTF-8",
+            "retry-after": "3"
+          },
+          "removedHeaderNames": [
+            "connection",
+            "date",
+            "keep-alive",
+            "transfer-encoding"
+          ],
+          "responseBody": "{\"error\":{\"type\":\"api_error\",\"code\":\"raditi_busy\",\"message\":\"The gateway is busy.\"}}",
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-503-retry-after/zai/v4/chat/completions"
+          }
+        }
+      }
+    }
+  ]
+}

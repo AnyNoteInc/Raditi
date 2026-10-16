@@ -58,7 +58,8 @@ export class McpAuthGuard implements CanActivate {
         !SUPPORTED_PROTOCOL_VERSIONS.includes(protocolVersion))
     )
       // The SDK's own refusal shape, without echoing the header: a client that probes a newer
-      // protocol (Codex server/discover) recognises it and falls back to legacy initialize.
+      // protocol (`server/discover` of the rmcp library) recognises it and falls back to legacy
+      // initialize.
       throw new McpHttpError(400, null, unsupportedProtocolVersion)
     const authorization = req.headers.authorization ?? ''
     const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : ''

@@ -167,8 +167,10 @@ describe('prepared run credentials', () => {
   }
   const run = (overrides: Partial<PreparedRun> = {}): PreparedRun => ({
     context,
-    files: [{ path: '/agent-home/codex/config.toml', content: 'model = "m"' }],
-    env: { CODEX_HOME: '/agent-home/codex' },
+    files: [
+      { path: '/agent-home/opencode/.config/opencode/opencode.json', content: '{"model":"m"}' },
+    ],
+    env: { HOME: '/agent-home/opencode' },
     secrets: [{ path: `${SANDBOX_SECRETS_DIR}/extra`, content: 'extra-secret-value' }],
     ...overrides,
   })
@@ -199,7 +201,7 @@ describe('prepared run credentials', () => {
       'a config file with a secret file value',
       { files: [{ path: '/agent-home/c', content: 'x=extra-secret-value' }] },
     ],
-    ['an env value with the LLM key', { env: { OPENAI_BASE: 'llm-virtual-key' } }],
+    ['an env value with the LLM key', { env: { LLM_BASE: 'llm-virtual-key' } }],
     ['an env value with the MCP token', { env: { MCP_HEADERS: 'Authorization: mcp-turn-token' } }],
   ] satisfies Array<[string, Partial<PreparedRun>]>)('refuses %s', (_, overrides) => {
     const prepared = run(overrides)
@@ -208,7 +210,7 @@ describe('prepared run credentials', () => {
 
   it('refuses a command argument with a turn credential: argv is visible to process listings', () => {
     const prepared = run()
-    const argv = (value: string) => ['codex', 'exec', `--header=Authorization: ${value}`]
+    const argv = (value: string) => ['opencode', 'run', `--header=Authorization: ${value}`]
     expect(preparedRunExposesSecret(prepared, credentials(prepared), argv('file'))).toBe(false)
     for (const value of credentials(prepared))
       expect(preparedRunExposesSecret(prepared, credentials(prepared), argv(value))).toBe(true)
@@ -239,8 +241,10 @@ describe('prepared run credentials', () => {
 describe('preparedFilesSchema', () => {
   it('applies the prepared run rules without the run context', () => {
     const files = {
-      files: [{ path: '/agent-home/codex/config.toml', content: 'model = "m"' }],
-      env: { CODEX_HOME: '/agent-home/codex' },
+      files: [
+        { path: '/agent-home/opencode/.config/opencode/opencode.json', content: '{"model":"m"}' },
+      ],
+      env: { HOME: '/agent-home/opencode' },
       secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'key' }],
     }
     expect(preparedFilesSchema.parse(files)).toEqual(files)

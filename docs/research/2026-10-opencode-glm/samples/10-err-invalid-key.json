@@ -1,0 +1,59 @@
+{
+  "name": "10-err-invalid-key",
+  "request": {
+    "method": "POST",
+    "url": "https://api.z.ai/api/v1/responses",
+    "auth": "invalid",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "authorization"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ],
+    "body": {
+      "model": "glm-5.3",
+      "input": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "ping"
+            }
+          ]
+        }
+      ],
+      "max_output_tokens": 16
+    }
+  },
+  "response": {
+    "status": 200,
+    "statusText": "",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-length",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "strict-transport-security",
+      "vary",
+      "x-log-id"
+    ],
+    "elapsedMs": 980,
+    "body": {
+      "code": 401,
+      "msg": "token expired or incorrect",
+      "success": false
+    }
+  }
+}

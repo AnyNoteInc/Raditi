@@ -1,7 +1,7 @@
 // The CI contract: what the workflows of .github/workflows run against the scripts they reach, and
 // which changes start them. Text only: GitHub itself runs them after the branch is pushed.
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -227,6 +227,107 @@ const workflows = readdirSync(join(root, '.github/workflows'))
 const sets = (source, variable) =>
   new RegExp(`^ +${variable}: \\S|\\b${variable}=`, 'm').test(source)
 
+test('every path filter of a workflow names files the repository has', () => {
+  // A filter left behind by a removed stand starts nothing and hides that a moved file no
+  // longer starts its workflow.
+  let checked = 0
+  for (const { name, source } of workflows) {
+    const filter = pathFilter(source)
+    if (filter.includes(`.github/workflows/${name}`)) checked += 1
+    for (const pattern of filter) {
+      const found = pattern.endsWith('/**')
+        ? existsSync(join(root, pattern.slice(0, -3)))
+        : !pattern.includes('**') && globSync(pattern, { cwd: root }).length > 0
+      assert.ok(found, `${name}: the path filter ${pattern} matches no file`)
+    }
+  }
+  // Every filtered workflow starts on a change to itself, under the name it has now.
+  assert.equal(checked, workflows.filter(({ source }) => pathFilter(source).length > 0).length)
+  assert.ok(checked >= 6, 'the workflows with a path filter were read')
+})
+
+test('every package script a workflow runs exists', () => {
+  // `pnpm <script>` of the root and `pnpm --filter <package> <script>`; pnpm's own commands
+  // (install, exec, dlx) are not scripts. A script removed with its stand fails here, not on
+  // GitHub after the push.
+  const own = new Set(['install', 'exec', 'dlx'])
+  const names = new Map(
+    workspaces.map((workspace) => [JSON.parse(read(`${workspace}/package.json`)).name, workspace]),
+  )
+  const sources = [
+    ...workflows,
+    { name: 'actions/setup', source: read('.github/actions/setup/action.yml') },
+  ]
+  let checked = 0
+  for (const { name, source } of sources)
+    for (const [, command] of source.matchAll(
+      /^ +(?:run: )?(pnpm (?:--filter \S+ )*[a-z][\w:.-]*)/gm,
+    )) {
+      const words = command.split(' ').slice(1)
+      const script = words.at(-1)
+      if (own.has(script)) continue
+      const filters = words.filter((_, index) => words[index - 1] === '--filter')
+      for (const workspace of filters.length ? filters.map((filter) => names.get(filter)) : ['.']) {
+        assert.ok(workspace, `${name}: ${command} names an unknown package`)
+        assert.ok(
+          scripts(workspace)[script],
+          `${name}: ${command} — ${workspace}/package.json has no script ${script}`,
+        )
+        checked += 1
+      }
+    }
+  // A floor that only shows the loop read the workflows: a step removed is not a defect.
+  assert.ok(checked >= 20, `only ${checked} scripts of the workflows were checked`)
+})
+
+test('the live mode of the stands never runs in CI: no workflow names it or the plan key', () => {
+  // A live run sends requests to the real provider on a plan with windows (infra/dev/llm-verify/
+  // live.mjs). It is started by a person who holds the key; a workflow has neither the option
+  // nor the variable, and the stand refuses to start when CI is set.
+  for (const { name, source } of workflows) {
+    assert.equal(source.includes('--live'), false, `${name} names --live`)
+    assert.equal(/ZAI_API_KEY/i.test(source), false, `${name} names ZAI_API_KEY`)
+  }
+  assert.match(
+    read('infra/dev/llm-verify/live.mjs'),
+    /if \(set\('CI'\)\) return 'CI is set: the live mode never runs in CI'/,
+  )
+})
+
+test('the rehearsals of the live mode run in CI, each after the deterministic pass of its stand', () => {
+  // The code of a live run is executed by nobody but a person with the plan key; its rehearsal
+  // runs the same code on the synthetic Z.ai, without a key (infra/dev/llm-verify/README.md).
+  // In a workflow it follows the deterministic pass of the same job, which built the
+  // orchestrator and the images: a rehearsal builds neither (`--no-build`, assertImages).
+  const stands = (name) =>
+    [...workflow(name).matchAll(/^ {8}run: (pnpm verify:\S+(?: --\S+)*)$/gm)].map(
+      ([, command]) => command,
+    )
+  assert.deepEqual(stands('llm-gateway'), [
+    'pnpm verify:llm-gateway',
+    'pnpm verify:llm-gateway --rehearsal --no-build',
+    'pnpm verify:llm-gateway --rehearsal --measure --no-build',
+    'pnpm verify:llm-gateway --rehearsal --results --no-build',
+  ])
+  assert.deepEqual(stands('agent-content'), [
+    'pnpm verify:agent-content',
+    'pnpm verify:agent-content --rehearsal --no-build',
+  ])
+  // The options exist and mean what the steps take them for.
+  const live = read('infra/dev/llm-verify/live.mjs')
+  for (const option of ['--rehearsal', '--measure', '--results', '--no-build'])
+    assert.ok(live.includes(`name === '${option}'`), `${option} is an option of the stands`)
+  // GitHub sets CI in every job: that refuses a live run and must not refuse its rehearsal.
+  assert.match(
+    read('apps/orchestrator/scripts/verify-llm-live-run.mjs'),
+    /let refusal = rehearsal \? null : liveStartRefusal\(process\.env\)/,
+  )
+  // No other workflow runs a rehearsal: the images and the build are those of these two jobs.
+  for (const { name, source } of workflows)
+    if (!['llm-gateway.yml', 'agent-content.yml'].includes(name))
+      assert.equal(source.includes('--rehearsal'), false, `${name} runs a rehearsal`)
+})
+
 test('every test suite enabled by an environment variable is enabled by a workflow', () => {
   // Suites no workflow enables by their variable, each with the reason it is acceptable.
   const elsewhere = {
@@ -269,9 +370,9 @@ test('every test suite enabled by an environment variable is enabled by a workfl
 })
 
 test('CI runs the Docker isolation suites of the sandbox provider on a real daemon', () => {
-  const source = workflow('codex-driver')
+  const source = workflow('agent-driver')
   const isolation = /^ {2}sandbox-isolation:\n(?:(?: {4}.*)?\n)+/m.exec(`${source}\n`)?.[0] ?? ''
-  assert.ok(isolation, 'codex-driver.yml has the sandbox-isolation job')
+  assert.ok(isolation, 'agent-driver.yml has the sandbox-isolation job')
   // The provider takes images by digest only; the three it needs come from one Dockerfile.
   for (const target of ['runtime', 'gateway', 'network-guard'])
     assert.ok(copied('infra/sandbox/Dockerfile', target), target)
@@ -353,6 +454,46 @@ test('CI runs the Docker isolation suites of the sandbox provider on a real daem
     assert.ok(starts(filter, file), `${file} does not start the workflow`)
 })
 
+test('CI runs the real OpenCode CLI of the sandbox image, without a key or a network', () => {
+  const source = workflow('agent-driver')
+  // One shell, one job with a real CLI: the workflow is named after the driver port, not a shell.
+  assert.deepEqual(
+    [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):$/gm)].map(([, name]) => name),
+    ['verify-opencode', 'sandbox-isolation'],
+  )
+  const opencode = /^ {2}verify-opencode:\n(?:(?: {4}.*)?\n)+/m.exec(`${source}\n`)?.[0] ?? ''
+  assert.ok(opencode, 'agent-driver.yml has the verify-opencode job')
+  // The stand takes an image that exists already: the job builds the one it looks for.
+  const stand = read('packages/agent-drivers/scripts/verify-opencode.mjs')
+  const [, image] = /image: \{ type: 'string', default: '([^']+)' \}/.exec(stand) ?? []
+  assert.ok(image, 'the stand names its default image')
+  const runs = [...opencode.matchAll(/^ {8}run: (.+)$/gm)].map(([, command]) => command)
+  assert.deepEqual(runs, [
+    `docker build -f infra/sandbox/Dockerfile --target runtime -t ${image} .`,
+    'pnpm verify:opencode',
+  ])
+  assert.equal(
+    JSON.parse(read('package.json')).scripts['verify:opencode'],
+    'exec node packages/agent-drivers/scripts/verify-opencode.mjs',
+  )
+  // The CLI of the image comes from the lock file; on x64 it is the build that needs no AVX2.
+  const runtime = read('infra/sandbox/Dockerfile')
+  assert.match(runtime, /npm ls [^\n]*opencode-ai@\d+\.\d+\.\d+/)
+  assert.match(runtime, /opencode-linux-x64-baseline/)
+  // No key of a plan, no secret of the repository, no option of a live run.
+  assert.doesNotMatch(opencode, /secrets\.|ZAI_|--live/)
+  assert.ok(!sets(opencode, 'SANDBOX_RUNTIME'))
+  const filter = pathFilter(source)
+  for (const file of [
+    'packages/agent-drivers/scripts/verify-opencode.mjs',
+    'packages/agent-drivers/src/opencode-wrapper.ts',
+    'packages/agent-drivers/cli/package-lock.json',
+    'infra/sandbox/Dockerfile',
+    'package.json',
+  ])
+    assert.ok(starts(filter, file), `${file} does not start the workflow`)
+})
+
 // Images pinned by digest in the object literal that follows `declaration` in a script.
 const pinnedImages = (script, declaration) => {
   const source = read(script)
@@ -387,8 +528,9 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
   assert.ok(stand.length >= 9)
   for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
   // As for the gateway stand: the packages its scripts import, by name or by a path into their
-  // sources, and the orchestrator modules they load from the build. The journal tables, the
-  // snapshot storage and the turn undo are this path as much as the plugin is.
+  // sources, the orchestrator modules they load from the build and the orchestrator sources
+  // they load as they are. The journal tables, the snapshot storage and the turn undo are this
+  // path as much as the plugin is.
   const imported = new Set()
   for (const script of stand.filter((file) => file.endsWith('.mjs'))) {
     const text = read(script)
@@ -396,6 +538,8 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
       imported.add(`packages/${name}/src/index.ts`)
     for (const [, directory] of text.matchAll(/'\.\.\/dist\/([a-z-]+)\//g))
       imported.add(`apps/orchestrator/src/${directory}/index.ts`)
+    for (const [, file] of text.matchAll(/'\.\.\/src\/([^']+\.ts)'/g))
+      imported.add(`apps/orchestrator/src/${file}`)
   }
   for (const source of [
     'packages/db/src/index.ts',
@@ -404,6 +548,8 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     'packages/site-adapters/src/index.ts',
     'apps/orchestrator/src/mcp/index.ts',
     'apps/orchestrator/src/turns/index.ts',
+    // The sample ids of the turns the stand makes up.
+    'apps/orchestrator/src/testing/ids.ts',
   ])
     assert.ok(imported.has(source), `the stand loads ${source.replace('/index.ts', '')}`)
   for (const source of imported)

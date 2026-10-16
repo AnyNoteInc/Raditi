@@ -498,7 +498,7 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
             keyId: key.id,
             subscriptionAccountId: subscriptionAccount.id,
             modelId: p.modelId,
-            route: '/codex/responses',
+            route: '/zai/v4/chat/completions',
             state: 'completed',
             reservedRub: '1.00',
             requestBytes: 100,

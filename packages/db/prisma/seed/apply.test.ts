@@ -300,11 +300,15 @@ describe.skipIf(!databaseUrl)('subscription catalogue seeds on PostgreSQL', () =
   it('creates only disabled subscription defaults and no prices, then leaves them unchanged', async () => {
     const data = fixture()
     expect(await seedReferenceData(db, data)).toEqual({
-      created: { ...zero, llm_providers: 2, llm_models: 4 },
+      created: {
+        ...zero,
+        llm_providers: llmProviderSeeds.length,
+        llm_models: llmModelSeeds.length,
+      },
       updated: zero,
     })
     const stored = await snapshot(data)
-    expect(stored).toHaveLength(2)
+    expect(stored).toHaveLength(llmProviderSeeds.length)
     for (const provider of stored) {
       expect(provider).toMatchObject(
         data.llmProviders.find((seed) => seed.slug === provider.slug) ?? {},

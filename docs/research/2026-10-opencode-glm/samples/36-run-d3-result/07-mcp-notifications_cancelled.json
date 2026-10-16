@@ -1,0 +1,39 @@
+{
+  "at": "2026-10-04T20:00:29.272Z",
+  "request": {
+    "method": "POST",
+    "url": "/mcp",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "accept-encoding",
+      "authorization",
+      "connection",
+      "content-length",
+      "host",
+      "mcp-protocol-version",
+      "mcp-session-id",
+      "user-agent"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "scheme": "bearer",
+        "value": "<dummy mcp token>"
+      }
+    ],
+    "body": {
+      "jsonrpc": "2.0",
+      "method": "notifications/cancelled",
+      "params": {
+        "requestId": 2,
+        "reason": "AbortError: The operation was aborted."
+      }
+    }
+  },
+  "response": {
+    "status": 202
+  }
+}

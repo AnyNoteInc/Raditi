@@ -812,7 +812,7 @@ to{opacity:1;transform:none}
 <li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg><div><b>«Отменить» — 7 дней и бесплатно</b><span>Код откатывается, контент возвращается из снимка. Отмена не расходует правки.</span></div></li>
 <li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg><div><b>Проверка после выкладки</b><span>Не прошла — сайт сам возвращается к прежней версии.</span></div></li>
 <li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4"></path><path d="M12 17.5h.01"></path></svg><div><b>Опасное — только с вашего согласия</b><span>Удаление страниц, смена темы и плагинов — только после «Применить». Заказы и пользователей агент не видит.</span></div></li>
-<li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"></path><path d="M4 7.5l8 4.5 8-4.5"></path><path d="M12 12v9"></path></svg><div><b>Изоляция и хранилища Радити в России</b><span>Агент работает в закрытой песочнице, доступы — в зашифрованном хранилище. Хранилища Радити расположены в России. Задания обрабатывают ИИ-модели OpenAI и Moonshot за рубежом; переданные им копии могут храниться по условиям провайдеров.</span></div></li>
+<li class="rv"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"></path><path d="M4 7.5l8 4.5 8-4.5"></path><path d="M12 12v9"></path></svg><div><b>Изоляция и хранилища Радити в России</b><span>Агент работает в закрытой песочнице, доступы — в зашифрованном хранилище. Хранилища Радити расположены в России. Задания обрабатывает модель GLM провайдера Z.ai за рубежом; переданные ему копии могут храниться по условиям этого провайдера.</span></div></li>
 </ul>
 </div>
 <div class="proof rv">
@@ -921,7 +921,7 @@ to{opacity:1;transform:none}
 </details>
 <details>
 <summary>Где хранятся данные и кто их обрабатывает?<span class="pm" aria-hidden="true"></span></summary>
-<p>Хранилища Радити расположены в России. Задания обрабатывают ИИ-модели OpenAI и Moonshot за рубежом; провайдеры могут хранить переданные им копии по своим условиям. При работе с сайтом комментарии, заявки и заказы им не передаются. Доступы к сайту лежат в зашифрованном хранилище, а агент работает в изолированной среде и видит только ваш сайт.</p>
+<p>Хранилища Радити расположены в России. Задания обрабатывает модель GLM провайдера Z.ai за рубежом; провайдер может хранить переданные ему копии по своим условиям. При работе с сайтом комментарии, заявки и заказы ему не передаются. Доступы к сайту лежат в зашифрованном хранилище, а агент работает в изолированной среде и видит только ваш сайт.</p>
 </details>
 <details>
 <summary>Что, если агент не справится?<span class="pm" aria-hidden="true"></span></summary>
@@ -969,7 +969,7 @@ to{opacity:1;transform:none}
 </div>
 <label class="agree"><input type="checkbox" name="terms" required="required"><span>Принимаю <a href="#terms">пользовательское соглашение</a> и <a href="#offer">оферту</a>, ознакомлен(а) с <a href="#privacy">политикой обработки персональных данных</a></span></label>
 <label class="agree"><input type="checkbox" name="pii" required="required"><span>Даю <a href="#consent">согласие на обработку персональных данных</a></span></label>
-<label class="agree"><input type="checkbox" name="crossBorder"><span>Даю <a href="#cross-border">согласие на передачу данных ИИ-моделям OpenAI и Moonshot за рубежом</a> — без него агент не сможет выполнять ваши задания</span></label>
+<label class="agree"><input type="checkbox" name="crossBorder"><span>Даю <a href="#cross-border">согласие на передачу данных модели GLM провайдера Z.ai за рубежом</a> — без него агент не сможет выполнять ваши задания</span></label>
 <button class="btn btn-mark" type="submit">Перейти к оплате — {{planPriceText}} ₽/мес<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></button>
 <p class="fine">Оплата банковской картой через ЮKassa. Чек по 54-ФЗ придёт на почту.</p>
 </form>

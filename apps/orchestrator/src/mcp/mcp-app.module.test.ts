@@ -189,7 +189,7 @@ describe('McpAppModule', () => {
       .set('mcp-protocol-version', '2025-06-18')
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
     expect(list.status).toBe(200)
-    // A conforming client (Codex rmcp, Kimi's Python SDK) rejects the whole list otherwise.
+    // A client that checks the list against the MCP schema rejects the whole list otherwise.
     expect(ListToolsResultSchema.safeParse(list.body.result).success).toBe(true)
     const tools = list.body.result.tools as Array<{
       name: string
@@ -893,9 +893,10 @@ describe('McpAppModule', () => {
         .send({ jsonrpc: '2.0', id: 1, method: 'server/discover' })
       expect(res.status).toBe(400)
       expect(res.headers['content-type']).toMatch(/^application\/json/)
-      // Codex 0.158 (rmcp-client http_client_adapter.rs, has_legacy_fallback_evidence) retries
-      // with legacy initialize only on a null id, -32000 and this exact SDK-shaped text whose
-      // versions are all dates before 2026-07-28 and include one it knows.
+      // A client of the rmcp library (rmcp-client http_client_adapter.rs,
+      // has_legacy_fallback_evidence; measured in P6) retries with legacy initialize only on a
+      // null id, -32000 and this exact SDK-shaped text whose versions are all dates before
+      // 2026-07-28 and include one it knows.
       expect(res.body).toMatchObject({ jsonrpc: '2.0', id: null, error: { code: -32000 } })
       const listed =
         /^Bad Request: Unsupported protocol version \(supported versions: (.+)\)$/.exec(

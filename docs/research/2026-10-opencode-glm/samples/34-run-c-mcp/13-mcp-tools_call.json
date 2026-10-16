@@ -1,0 +1,60 @@
+{
+  "at": "2026-10-04T19:57:57.395Z",
+  "request": {
+    "method": "POST",
+    "url": "/mcp",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "accept-encoding",
+      "authorization",
+      "connection",
+      "content-length",
+      "host",
+      "mcp-protocol-version",
+      "mcp-session-id",
+      "user-agent"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "scheme": "bearer",
+        "value": "<dummy mcp token>"
+      }
+    ],
+    "body": {
+      "method": "tools/call",
+      "params": {
+        "name": "wp_rest",
+        "arguments": {
+          "method": "GET",
+          "path": "/wp/v2/pages/7"
+        },
+        "_meta": {
+          "progressToken": 3
+        }
+      },
+      "jsonrpc": "2.0",
+      "id": 3
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"id\":7,\"slug\":\"stand-page\",\"title\":{\"rendered\":\"Stand page 4417\"},\"status\":\"publish\"}"
+          }
+        ],
+        "isError": false
+      }
+    }
+  }
+}

@@ -13,6 +13,7 @@ import {
 } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { RemoteTurnExecutor } from './remote-turn-executor.ts'
 import { RunnerApiError } from './runner-api-error.ts'
@@ -22,7 +23,7 @@ const siteId = '00000000-0000-4000-8000-000000000002'
 const taskId = '00000000-0000-4000-8000-000000000003'
 const fence = { siteId, taskId, operation: 'turn' as const, epoch: 1 }
 const labels = { workspaceId: 'ws1', siteId, taskId, sessionId: 'session1', turn: 1 }
-const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 const baseSha = 'b'.repeat(40)
 const credentials = ['synthetic-llm-secret', 'synthetic-mcp-secret']
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
@@ -124,13 +125,18 @@ function fixture() {
         yield Buffer.from(bundleBytes)
       },
     },
-    driverId: 'codex',
+    driverId: sampleDriverId,
     prepared: {
-      files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true' }],
+      files: [
+        {
+          path: `/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
+          content: '{"synthetic":true}',
+        },
+      ],
       env: {},
       secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: credentials[0]! }],
     },
-    argv: ['codex', 'exec', '--json'],
+    argv: ['opencode', 'run', '--format', 'json'],
     credentials,
     created,
     dispatched,
@@ -416,7 +422,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
       type: 'prepare',
       assignmentId: assignment.id,
       fence,
-      driverId: 'codex',
+      driverId: sampleDriverId,
       credentials,
       bundle: { baseSha, sizeBytes: f.bundleBytes.byteLength },
       sandbox: { secrets: [], labels: { leaseEpoch: 1 } },
@@ -694,7 +700,11 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     const patch = Buffer.from('untrusted patch')
     const untracked = Buffer.from('untrusted archive')
     const capturing = execution.capture({
-      home: { root: '/agent-home/codex', include: ['sessions'], exclude: [] },
+      home: {
+        root: `/agent-home/${sampleDriverId}`,
+        include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+        exclude: [],
+      },
       baseSha,
     })
     const [capture] = await vm.poll()
@@ -726,8 +736,12 @@ describe('RemoteTurnExecutor over the runner hub', () => {
       sessionId: labels.sessionId,
       turn: 1,
       image,
-      driver: { id: 'codex' as const, version: '1.0.0' },
-      home: { root: '/agent-home/codex', include: ['sessions'], exclude: [] },
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home: {
+        root: `/agent-home/${sampleDriverId}`,
+        include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+        exclude: [],
+      },
       git: {
         provider: 'gitea' as const,
         branch: `agent/${taskId}`,
@@ -789,7 +803,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
         labels: { ...labels, leaseEpoch: 1 },
         purpose: 'work',
         remainingMs: 60_000,
-        driverId: 'codex',
+        driverId: sampleDriverId,
         credentials,
         holdsCredentials: true,
       },
@@ -800,7 +814,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
       type: 'adopt',
       fence: { epoch: 2 },
       purpose: 'work',
-      work: { driverId: 'codex' },
+      work: { driverId: sampleDriverId },
     })
     // What is left when the poll took it, not when it was queued.
     expect(adopt!.type === 'adopt' && adopt!.work!.remainingMs).toBeGreaterThan(59_000)
@@ -868,7 +882,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
         labels: { ...labels, leaseEpoch: 1 },
         purpose: 'work',
         remainingMs: 60_000,
-        driverId: 'codex',
+        driverId: sampleDriverId,
         credentials,
         holdsCredentials: true,
       },
@@ -1179,7 +1193,7 @@ describe('RemoteTurnExecutor: the turn deadline at delivery', () => {
         labels: { ...labels, leaseEpoch: 1 },
         purpose: 'work',
         remainingMs: 50_000,
-        driverId: 'codex',
+        driverId: sampleDriverId,
         credentials,
       },
       new AbortController().signal,

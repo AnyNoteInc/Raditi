@@ -35,7 +35,14 @@ export function poolControlOrigin(value: string): string {
   return url.origin
 }
 
-export type PoolProbeClient = (accountIds: readonly string[]) => Promise<void>
+/**
+ * `stale`: the snapshots have only grown old. The role then keeps to one probe per account in
+ * five minutes; without it the caller has read the windows as unknown.
+ */
+export type PoolProbeClient = (
+  accountIds: readonly string[],
+  options?: { stale?: boolean },
+) => Promise<void>
 
 /** Core asks llm for quota snapshots without access to provider tokens or client request bodies. */
 export function createPoolProbeClient(
@@ -52,7 +59,7 @@ export function createPoolProbeClient(
     .max(20_000)
     .parse(options.timeoutMs ?? 20_000)
   const transport = endpoint.protocol === 'https:' ? httpsRequest : httpRequest
-  return async (accountIds) => {
+  return async (accountIds, { stale = false } = {}) => {
     const parsed = z
       .array(z.uuid().transform((id) => id.toLowerCase()))
       .max(1_000)
@@ -65,7 +72,12 @@ export function createPoolProbeClient(
     try {
       for (let index = 0; index < ids.length; index += 10) {
         controller.signal.throwIfAborted()
-        const body = Buffer.from(JSON.stringify({ accountIds: ids.slice(index, index + 10) }))
+        const body = Buffer.from(
+          JSON.stringify({
+            accountIds: ids.slice(index, index + 10),
+            ...(stale ? { stale: true } : {}),
+          }),
+        )
         await new Promise<void>((resolve, reject) => {
           let settled = false
           const finish = (ok: boolean) => {

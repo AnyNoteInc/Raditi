@@ -1,0 +1,27 @@
+{
+  "exit": 0,
+  "steps": [
+    "tool-calls",
+    "stop"
+  ],
+  "requests": 2,
+  "seenByTheModel": {
+    "procNet": {
+      "tcp": [
+        "127.0.0.11:38845"
+      ],
+      "tcp6": []
+    },
+    "unixSockets": [],
+    "scanHits": {
+      "127.0.0.1": 2,
+      "::1": 0
+    },
+    "open": {
+      "127.0.0.1": [],
+      "::1": []
+    },
+    "answers": []
+  },
+  "hits": []
+}

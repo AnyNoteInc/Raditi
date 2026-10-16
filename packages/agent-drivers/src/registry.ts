@@ -1,14 +1,8 @@
 import type { AgentDriver, AgentDriverId } from '@repo/domain'
 import { badRequest, conflict, notFound } from '@repo/domain'
 import type { AgentDriverConfig } from './config.ts'
-import { parseCodexEvent } from './codex-events.ts'
-import { createCodexDriver } from './codex.ts'
-import { parseKimiEvent } from './kimi-events.ts'
-import { createKimiDriver } from './kimi.ts'
 import { parseOpencodeEvent } from './opencode-events.ts'
 import { createOpencodeDriver } from './opencode.ts'
-import { parseQwenEvent } from './qwen-events.ts'
-import { createQwenDriver } from './qwen.ts'
 
 export interface AgentDriverRegistry {
   /** Throws NOT_FOUND when the driver is unknown or not enabled. */
@@ -18,20 +12,12 @@ export interface AgentDriverRegistry {
   list(): AgentDriver[]
 }
 
-/** Every implemented driver; qwen and opencode remain disabled in the application. */
+/** Every driver of the package: the product runs one shell (spec §8). */
 export function createAgentDrivers(config: AgentDriverConfig): AgentDriver[] {
-  return [
-    createCodexDriver(config),
-    createKimiDriver(config),
-    createQwenDriver(config),
-    createOpencodeDriver(config),
-  ]
+  return [createOpencodeDriver(config)]
 }
 
 const eventParsers: Partial<Record<AgentDriverId, AgentDriver['parseEvent']>> = {
-  codex: parseCodexEvent,
-  kimi: parseKimiEvent,
-  qwen: parseQwenEvent,
   opencode: parseOpencodeEvent,
 }
 
@@ -46,7 +32,7 @@ export function agentEventParser(id: AgentDriverId): Pick<AgentDriver, 'parseEve
 }
 
 /**
- * `enabled` narrows the drivers the router may pick, e.g. codex and kimi in the MVP (spec §8);
+ * `enabled` narrows the drivers the router may pick — opencode alone in the product (spec §8);
  * without it every registered driver is enabled.
  */
 export function createAgentDriverRegistry(

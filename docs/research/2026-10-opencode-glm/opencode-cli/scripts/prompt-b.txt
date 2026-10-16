@@ -1,0 +1,1 @@
+Append the line "second line" to hello.txt (keep the first line), then reply with exactly: DONE-B

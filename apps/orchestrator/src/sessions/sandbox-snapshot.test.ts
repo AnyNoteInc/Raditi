@@ -13,11 +13,12 @@ import {
 import { pack } from 'tar-stream'
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import { SandboxSnapshotTransport, type SnapshotArchives } from './sandbox-snapshot.ts'
 
 const baseSha = 'a'.repeat(40)
 const state: SessionState = {
-  root: '/agent-home/codex',
+  root: `/agent-home/${sampleDriverId}`,
   include: ['sessions', 'optional'],
   exclude: ['sessions/private'],
 }
@@ -414,7 +415,7 @@ describe('SandboxSnapshotTransport', () => {
     const writes = fake.calls.filter(({ spec }) => spec.argv.includes('--extract'))
     expect(
       writes.map(({ spec }) => spec.argv.find((arg) => arg.startsWith('--directory='))),
-    ).toEqual(['--directory=/agent-home/codex', '--directory=/workspace/repo'])
+    ).toEqual([`--directory=/agent-home/${sampleDriverId}`, '--directory=/workspace/repo'])
     expect(writes[0]!.stdin).toEqual(Buffer.from(parts.home))
     expect(writes[1]!.stdin).toEqual(originalUntracked)
     expect(
@@ -466,7 +467,7 @@ describe('SandboxSnapshotTransport', () => {
     const fake = sandboxFixture(await fixture(), (spec) =>
       spec.argv[0] === 'test' &&
       spec.argv[1] === '-L' &&
-      spec.argv[2] === '/agent-home/codex/sessions'
+      spec.argv[2] === `/agent-home/${sampleDriverId}/sessions`
         ? { code: 0 }
         : undefined,
     )

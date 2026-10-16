@@ -1,0 +1,426 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185423939,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000070",
+        "messageID": "msg_00000000000000000000000071",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185423939,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000072",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000071",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185423976,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000073",
+        "messageID": "msg_00000000000000000000000074",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185423976,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000075",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000074",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424050,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000076",
+        "messageID": "msg_00000000000000000000000077",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424050,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000078",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000077",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424079,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000079",
+        "messageID": "msg_00000000000000000000000080",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424079,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000081",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000080",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424152,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000082",
+        "messageID": "msg_00000000000000000000000083",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424152,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000084",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000083",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424227,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000085",
+        "messageID": "msg_00000000000000000000000086",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424227,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000087",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000086",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424257,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000088",
+        "messageID": "msg_00000000000000000000000089",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424257,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000090",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000089",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424330,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000091",
+        "messageID": "msg_00000000000000000000000092",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424330,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000093",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000092",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424357,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000094",
+        "messageID": "msg_00000000000000000000000095",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424357,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000096",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000095",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424425,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000097",
+        "messageID": "msg_00000000000000000000000098",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424425,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000099",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000098",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424454,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000100",
+        "messageID": "msg_00000000000000000000000101",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424454,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000102",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000101",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185424483,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000103",
+        "messageID": "msg_00000000000000000000000104",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185424483,
+      "sessionID": "ses_00000000000000000000000069",
+      "part": {
+        "id": "prt_00000000000000000000000105",
+        "reason": "unknown",
+        "messageID": "msg_00000000000000000000000104",
+        "sessionID": "ses_00000000000000000000000069",
+        "type": "step-finish",
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185424556,
+      "sessionID": "ses_00000000000000000000000069",
+      "error": {
+        "name": "APIError",
+        "data": {
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "responseHeaders": {
+            "content-type": "application/json"
+          },
+          "removedHeaderNames": [
+            "connection",
+            "content-length",
+            "date",
+            "keep-alive"
+          ],
+          "responseBody": "{\"error\":{\"code\":\"401\",\"message\":\"spike cap reached\"}}",
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-done-only/zai/v4/chat/completions"
+          }
+        }
+      }
+    }
+  ]
+}

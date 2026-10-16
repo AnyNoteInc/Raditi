@@ -1,0 +1,28 @@
+        63  ./opencode/.config/opencode/.gitignore
+        86  ./opencode/.config/opencode/AGENTS.md
+      2933  ./opencode/.config/opencode/opencode.json
+     46211  ./opencode/.local/share/opencode/log/opencode.log
+    483328  ./opencode/.local/share/opencode/opencode.db
+     32768  ./opencode/.local/share/opencode/opencode.db-shm
+      4152  ./opencode/.local/share/opencode/opencode.db-wal
+         0  ./opencode/.local/state/opencode/locks/0000000000000000000000000000000000000001.lock/heartbeat
+       123  ./opencode/.local/state/opencode/locks/0000000000000000000000000000000000000001.lock/meta.json
+         0  ./opencode/.local/state/opencode/locks/0000000000000000000000000000000000000002.lock/heartbeat
+       122  ./opencode/.local/state/opencode/locks/0000000000000000000000000000000000000002.lock/meta.json
+         0  ./opencode/.local/state/opencode/locks/0000000000000000000000000000000000000003.lock/heartbeat
+       139  ./opencode/.local/state/opencode/locks/0000000000000000000000000000000000000003.lock/meta.json
+--- snapshot objects: 21 files, 148 KiB
+--- workspace
+     25735  ./export-d.json
+        63  ./repo/.opencode/.gitignore
+        75  ./repo/.opencode/agent/planted.md
+        53  ./repo/.opencode/command/planted.md
+       147  ./repo/.opencode/plugin/planted.js
+        63  ./repo/.opencode/skill/planted/SKILL.md
+        66  ./repo/AGENTS.md
+        65  ./repo/CLAUDE.md
+        70  ./repo/PLANTED.md
+        55  ./repo/README.md
+        16  ./repo/about.txt
+        33  ./repo/hello.txt
+       202  ./repo/opencode.json

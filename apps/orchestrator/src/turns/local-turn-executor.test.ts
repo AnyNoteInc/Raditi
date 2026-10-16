@@ -23,6 +23,7 @@ import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
 import type { SnapshotArchives } from '../sessions/sandbox-snapshot.ts'
 import { openSnapshotParts } from '../sessions/snapshot-parts.ts'
 import { SnapshotService } from '../sessions/snapshot.service.ts'
+import { sampleDriverId } from '../testing/ids.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { LocalTurnExecutor } from './local-turn-executor.ts'
 
@@ -35,8 +36,12 @@ const labels = {
   leaseEpoch: 1,
 }
 const fence = { siteId: labels.siteId, taskId: labels.taskId, operation: 'turn', epoch: 1 } as const
-const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
-const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
+const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
+const home = {
+  root: `/agent-home/${sampleDriverId}`,
+  include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+  exclude: [],
+}
 const baseSha = 'b'.repeat(40)
 const credentials = ['synthetic-llm-secret', 'synthetic-mcp-secret']
 
@@ -60,7 +65,7 @@ async function fixture() {
   const transit = memoryTransit()
   const snapshots = new SnapshotService(memory.storage, transit.secrets)
   const prior: SnapshotArchives = {
-    home: await tarZst({ 'sessions/prior.jsonl': 'prior conversation' }),
+    home: await tarZst({ [home.include[0]!]: 'prior conversation' }),
     untracked: emptyUntrackedArchive(),
     patch: Buffer.from('prior patch'),
   }
@@ -69,13 +74,13 @@ async function fixture() {
     sessionId: labels.sessionId,
     turn: 1,
     image,
-    driver: { id: 'codex', version: '1.0.0' },
+    driver: { id: sampleDriverId, version: '1.0.0' },
     home,
     git: { provider: 'gitea', branch: `agent/${labels.taskId}`, baseSha, headSha: baseSha },
   }
   await snapshots.save(priorMetadata, prior)
   const captured: SnapshotArchives = {
-    home: await tarZst({ 'sessions/turn.jsonl': 'this turn' }),
+    home: await tarZst({ [home.include[0]!]: 'this turn' }),
     untracked: emptyUntrackedArchive(),
     patch: Buffer.from('agent patch'),
   }
@@ -131,7 +136,7 @@ async function fixture() {
       sessionId: labels.sessionId,
       turn: 1,
       image,
-      driver: { id: 'codex', version: '1.0.0' },
+      driver: { id: sampleDriverId, version: '1.0.0' },
       home,
     },
     60_000,
@@ -159,16 +164,19 @@ async function fixture() {
       read: async function* () {},
     },
     restore: source,
-    driverId: 'codex',
+    driverId: sampleDriverId,
     prepared: {
       files: [
-        { path: '/agent-home/codex/config.toml', content: 'synthetic = true' },
-        { path: '/agent-home/codex/run.sh', content: 'exit 0', mode: 0o700 },
+        {
+          path: `/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
+          content: '{"synthetic":true}',
+        },
+        { path: `/agent-home/${sampleDriverId}/run.sh`, content: 'exit 0', mode: 0o700 },
       ],
-      env: { CODEX_HOME: '/agent-home/codex' },
+      env: { HOME: `/agent-home/${sampleDriverId}` },
       secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: credentials[0]! }],
     },
-    argv: ['codex', 'exec', '--json'],
+    argv: ['opencode', 'run', '--format', 'json'],
     credentials,
     created: vi.fn(async () => {
       order.push('created')
@@ -205,8 +213,8 @@ describe('LocalTurnExecutor', () => {
       'created',
       'import',
       'restore',
-      'write:/agent-home/codex/config.toml',
-      'write:/agent-home/codex/run.sh',
+      `write:/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
+      `write:/agent-home/${sampleDriverId}/run.sh`,
       `write:${SANDBOX_SECRETS_DIR}/llm`,
     ])
     expect(input.created).toHaveBeenCalledWith(execution)
@@ -226,8 +234,8 @@ describe('LocalTurnExecutor', () => {
     expect(
       vi.mocked(f.sandbox.fs.write).mock.calls.map(([path, , options]) => [path, options]),
     ).toEqual([
-      ['/agent-home/codex/config.toml', { mode: 0o600 }],
-      ['/agent-home/codex/run.sh', { mode: 0o700 }],
+      [`/agent-home/${sampleDriverId}/.config/opencode/opencode.json`, { mode: 0o600 }],
+      [`/agent-home/${sampleDriverId}/run.sh`, { mode: 0o700 }],
       // A secret nobody asked to rewrite is read-only even for the agent's own uid.
       [`${SANDBOX_SECRETS_DIR}/llm`, { mode: 0o400 }],
     ])
@@ -273,7 +281,7 @@ describe('LocalTurnExecutor', () => {
     [
       'a credential in the command',
       (input: TurnPrepareInput) => {
-        input.argv = ['codex', `--token=${credentials[1]}`]
+        input.argv = ['opencode', `--token=${credentials[1]}`]
       },
       'DRIVER_PREPARE_INVALID',
     ],
@@ -356,9 +364,9 @@ describe('LocalTurnExecutor', () => {
     const execution = await f.executor.prepare(f.input(), f.signal)
     const agent = await execution.launch(300_000)
     expect(f.sandbox.exec).toHaveBeenCalledWith({
-      argv: ['codex', 'exec', '--json'],
+      argv: ['opencode', 'run', '--format', 'json'],
       cwd: '/workspace/repo',
-      env: { CODEX_HOME: '/agent-home/codex' },
+      env: { HOME: `/agent-home/${sampleDriverId}` },
       timeoutMs: 300_000,
     })
     const batches: TurnOutputBatch[] = []
@@ -466,7 +474,7 @@ describe('LocalTurnExecutor', () => {
       sessionId: labels.sessionId,
       turn: 2,
       image,
-      driver: { id: 'codex', version: '1.0.0' },
+      driver: { id: sampleDriverId, version: '1.0.0' },
       home,
       git: {
         provider: 'gitea',
@@ -528,7 +536,7 @@ describe('LocalTurnExecutor', () => {
       labels,
       ...(purpose === 'removal'
         ? { purpose }
-        : { purpose, remainingMs: 60_000, driverId: 'codex' as const, credentials, ...extra }),
+        : { purpose, remainingMs: 60_000, driverId: sampleDriverId, credentials, ...extra }),
     })
 
     it('finds nothing to adopt when the container is gone', async () => {

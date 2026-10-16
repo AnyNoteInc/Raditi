@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
 import { RunnerHub } from '../runner-api/runner-hub.ts'
+import { sampleDriverId } from '../testing/ids.ts'
 import { MemorySiteLeases } from '../testing/site-leases.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { MemoryTurnCredentials } from '../testing/turn-credentials.ts'
@@ -36,7 +37,7 @@ const labels = {
 
 const request: TurnRequest = {
   sandbox: {
-    image: `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`,
+    image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
     labels,
     runtime: 'runc',
     resources: { cpu: 1, memoryMiB: 256, pids: 64 },
@@ -91,7 +92,7 @@ async function given() {
   const cancel = new AbortController()
   const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_TURN_MS, cancel.signal)
   guards.push(guard)
-  const plan = toTurnPlan(request, 'codex')
+  const plan = toTurnPlan(request, sampleDriverId)
   const attempt = new TurnAttempt(
     {
       leases,
@@ -495,7 +496,7 @@ async function onRunner() {
           yield Buffer.from(bundleBytes)
         },
       },
-      driverId: 'codex',
+      driverId: sampleDriverId,
       prepared: {
         files: [],
         env: {},

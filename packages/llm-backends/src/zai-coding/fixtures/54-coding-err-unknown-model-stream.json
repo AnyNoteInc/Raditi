@@ -1,0 +1,46 @@
+{
+  "name": "54-coding-err-unknown-model-stream",
+  "request": {
+    "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+    "auth": "real",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": ["accept", "authorization"],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ],
+    "body": {
+      "model": "glm-0-does-not-exist",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with the single word: ok"
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "max_tokens": 64
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {},
+    "removedHeaderNames": [
+      "alt-svc",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "vary",
+      "x-log-id",
+      "x-request-id"
+    ],
+    "elapsedMs": 274,
+    "body": "{\"error\":{\"code\":\"1211\",\"message\":\"Unknown Model, please check the model code.\"}}"
+  }
+}

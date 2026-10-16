@@ -1,0 +1,54 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185455503,
+      "sessionID": "ses_00000000000000000000000036",
+      "part": {
+        "id": "prt_00000000000000000000000037",
+        "messageID": "msg_00000000000000000000000038",
+        "sessionID": "ses_00000000000000000000000036",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185455503,
+      "sessionID": "ses_00000000000000000000000036",
+      "part": {
+        "id": "prt_00000000000000000000000039",
+        "messageID": "msg_00000000000000000000000038",
+        "sessionID": "ses_00000000000000000000000036",
+        "type": "text",
+        "text": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_changed\":[],\"questions\":[],\"needs_approval\":false,\"risk\":\"low\"}",
+        "time": {
+          "start": 1791185455487,
+          "end": 1791185455489
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185455504,
+      "sessionID": "ses_00000000000000000000000036",
+      "part": {
+        "id": "prt_00000000000000000000000040",
+        "reason": "stop",
+        "messageID": "msg_00000000000000000000000038",
+        "sessionID": "ses_00000000000000000000000036",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Create the file about.txt in the repository with the single line: About the stand

@@ -13,7 +13,7 @@ const databaseUrl = process.env.DATABASE_URL
 function plan(taskId: string, sessionId: string, siteId: string): TurnPlan {
   return {
     sandbox: {
-      image: `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`,
+      image: `registry.invalid/raditi/opencode@sha256:${'a'.repeat(64)}`,
       labels: { workspaceId: 'ws1', siteId, taskId, sessionId, turn: 1 },
       runtime: 'runc',
       resources: { cpu: 1, memoryMiB: 256, pids: 64 },
@@ -32,7 +32,7 @@ function plan(taskId: string, sessionId: string, siteId: string): TurnPlan {
       instructions: 'Synthetic verification',
     },
     input: { prompt: 'Synthetic turn', attachments: [] },
-    driverId: 'codex',
+    driverId: 'opencode',
     driverVersion: '1.0.0',
     workspace: {
       repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },

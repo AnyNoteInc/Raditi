@@ -1,0 +1,79 @@
+{
+  "at": "2026-10-04T19:57:45.458Z",
+  "request": {
+    "method": "POST",
+    "url": "/mcp",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "accept-encoding",
+      "authorization",
+      "connection",
+      "content-length",
+      "host",
+      "mcp-protocol-version",
+      "mcp-session-id",
+      "user-agent"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "scheme": "bearer",
+        "value": "<dummy mcp token>"
+      }
+    ],
+    "body": {
+      "method": "tools/list",
+      "jsonrpc": "2.0",
+      "id": 1
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "tools": [
+          {
+            "name": "site_info",
+            "description": "Returns the public address and the stack of the test stand site. Read-only and harmless.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          },
+          {
+            "name": "wp_rest",
+            "description": "Reads one object of the test stand site through its REST API. Read-only on this stand.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "GET"
+                  ],
+                  "description": "HTTP method"
+                },
+                "path": {
+                  "type": "string",
+                  "description": "REST path, for example /wp/v2/pages/7"
+                }
+              },
+              "required": [
+                "method",
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          }
+        ]
+      }
+    }
+  }
+}

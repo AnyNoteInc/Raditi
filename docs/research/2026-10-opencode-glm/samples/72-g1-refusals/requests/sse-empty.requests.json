@@ -1,0 +1,136 @@
+{
+  "source": "runsc/p4-sse-empty/records.json",
+  "requests": [
+    {
+      "n": 1,
+      "ms": 4004,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 2,
+      "ms": 4068,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 3,
+      "ms": 4105,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 4,
+      "ms": 4180,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 5,
+      "ms": 4243,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 6,
+      "ms": 4285,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 7,
+      "ms": 4358,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 8,
+      "ms": 4396,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 9,
+      "ms": 4463,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 10,
+      "ms": 4498,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 11,
+      "ms": 4556,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 12,
+      "ms": 4581,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 13,
+      "ms": 4654,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "cap of the stand, 401"
+    }
+  ],
+  "toolResults": []
+}

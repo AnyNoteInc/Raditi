@@ -40,7 +40,7 @@ import {
   type TurnResult,
   withoutTurnCredentials,
 } from '@repo/domain'
-import { createCodexDriver, createKimiDriver } from '@repo/agent-drivers'
+import { createOpencodeDriver } from '@repo/agent-drivers'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
@@ -55,6 +55,7 @@ import {
   type SealedElsewhere,
   type SnapshotParts,
 } from '../sessions/snapshot.service.ts'
+import { otherDriverId, sampleDriverId } from '../testing/ids.ts'
 import { loopbackTransport } from '../testing/runner-loopback.ts'
 import { memoryStorage, memoryTransit, tarZst } from '../testing/snapshots.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
@@ -97,8 +98,12 @@ const labels = {
 }
 const baseSha = 'b'.repeat(40)
 const headSha = 'c'.repeat(40)
-const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
-const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
+const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
+const home = {
+  root: `/agent-home/${sampleDriverId}`,
+  include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+  exclude: [],
+}
 const result: TurnResult = {
   summary: 'Готово',
   change_type: 'code',
@@ -199,7 +204,12 @@ function turnFixture(kind: string) {
   }
   const prepared: PreparedRun = {
     context: request.context,
-    files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true' }],
+    files: [
+      {
+        path: `/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
+        content: '{"synthetic":true}',
+      },
+    ],
     env: {},
     secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: request.context.llm.apiKey }],
   }
@@ -267,7 +277,7 @@ function turnFixture(kind: string) {
     free: vi.fn(async () => true),
   }
   const driver: AgentDriver = {
-    id: 'codex',
+    id: sampleDriverId,
     image,
     capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
     prepare: vi.fn(async (context) => {
@@ -341,7 +351,7 @@ function turnFixture(kind: string) {
           sessionId: labels.sessionId,
           turn: 1,
           image,
-          driver: { id: 'codex', version: '1.0.0', nativeSessionId: 'prior-native' },
+          driver: { id: sampleDriverId, version: '1.0.0', nativeSessionId: 'prior-native' },
           home,
           git: { provider: 'gitea', branch: request.workspace.branch, baseSha, headSha: baseSha },
         }),
@@ -609,6 +619,24 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect([...f.assignments.rows.values()][0]!.outcome).toBe('failed')
   })
 
+  it('refuses a replacement that names any turn but the one before it, with no lease and no undo', async () => {
+    // The undo before a replacement returns the content of the one turn the plan names: a plan
+    // of turn 3 that names turn 1 would leave what turn 2 changed on the site.
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 3 } }
+    f.request.context = { ...f.request.context, turn: 3 }
+    f.request.replacesTurn = 1
+    f.request.workspace = { ...f.request.workspace, expectedBranchSha: null }
+    const rollback = vi.fn(async () => {})
+    f.deps.contentRollback = { rollback }
+    await expect(f.run()).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Replacement must name the latest turn',
+    })
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(rollback).not.toHaveBeenCalled()
+  })
+
   it('rejects replacement without an undo dependency before taking a lease', async () => {
     const f = fixture()
     f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
@@ -672,7 +700,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     await expect(
       supervisor.run(withoutTurnCredentials(f.request), {
         ...testTurnCredentialPolicy,
-        driverId: 'kimi',
+        driverId: otherDriverId,
       }),
     ).rejects.toThrow()
     expect(f.leases.acquire).not.toHaveBeenCalled()
@@ -765,10 +793,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect({ llmApiKey: context.llm.apiKey, mcpToken: context.mcp.token }).toEqual(madeTurnKeys[0])
   })
 
-  it.each([
-    ['codex', createCodexDriver({ image }), 'openai-chatgpt', 'medium', 'turbo'],
-    ['kimi', createKimiDriver({ image }), 'kimi-code', 'high', 'medium'],
-  ] as const)(
+  it.each([['opencode', createOpencodeDriver({ image }), 'zai-coding', 'high', 'medium']] as const)(
     'refuses a reasoning profile the real %s driver cannot launch before the lease',
     async (driverId, driver, backend, known, unknown) => {
       const f = fixture()
@@ -779,7 +804,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
           ...policy,
           reasoningEffort,
         })
-      // The provider default (null) is a profile neither CLI is launched with.
+      // The provider default (null) is a profile no CLI is launched with.
       for (const effort of [null, unknown])
         await expect(run(effort)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
       expect(f.leases.acquire).not.toHaveBeenCalled()
@@ -801,7 +826,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       'prepare',
       'create',
       'checkout',
-      'write:/agent-home/codex/config.toml',
+      `write:/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
       `write:${SANDBOX_SECRETS_DIR}/llm`,
       'exec',
       'quiesce',
@@ -1032,7 +1057,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     const transit = memoryTransit()
     const service = new SnapshotService(memory.storage, transit.secrets)
     const prior = {
-      home: await tarZst({ 'sessions/prior.jsonl': 'prior conversation' }),
+      home: await tarZst({ [home.include[0]!]: 'prior conversation' }),
       untracked: emptyUntrackedArchive(),
       patch: Buffer.from('prior patch'),
     }
@@ -1042,7 +1067,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
         sessionId: labels.sessionId,
         turn: 1,
         image,
-        driver: { id: 'codex', version: '1.0.0', nativeSessionId: 'prior-native' },
+        driver: { id: sampleDriverId, version: '1.0.0', nativeSessionId: 'prior-native' },
         home,
         git: {
           provider: 'gitea',
@@ -1062,7 +1087,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       sessionId: labels.sessionId,
       turn: 1,
       image,
-      driver: { id: 'codex', version: '1.0.0' },
+      driver: { id: sampleDriverId, version: '1.0.0' },
       home,
     }
     return { prior, transit, reference }
@@ -1140,7 +1165,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       sessionId: labels.sessionId,
       turn: 1,
       image,
-      driver: { id: 'codex', version: '1.0.0' },
+      driver: { id: sampleDriverId, version: '1.0.0' },
       home,
     }
     await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })
@@ -1154,7 +1179,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     const transit = memoryTransit()
     const service = new SnapshotService(memory.storage, transit.secrets)
     const captured = {
-      home: await tarZst({ 'sessions/turn.jsonl': 'native session' }),
+      home: await tarZst({ [home.include[0]!]: 'native session' }),
       untracked: emptyUntrackedArchive(),
       patch: Buffer.from('tracked-patch'),
     }
@@ -1170,7 +1195,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       sessionId: labels.sessionId,
       turn: 1,
       image,
-      driver: { id: 'codex', version: '1.0.0' },
+      driver: { id: sampleDriverId, version: '1.0.0' },
       home,
     })
     expect(finished.manifest).toEqual(loaded.manifest)
@@ -1194,7 +1219,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     const transit = memoryTransit()
     const service = new SnapshotService(memory.storage, transit.secrets)
     f.transport.capture.mockResolvedValue({
-      home: await tarZst({ 'sessions/turn.jsonl': 'native session' }),
+      home: await tarZst({ [home.include[0]!]: 'native session' }),
       untracked: emptyUntrackedArchive(),
       patch: Buffer.from('tracked-patch'),
     })
@@ -1404,9 +1429,9 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     ['workspace', { workspaceId: '00000000-0000-4000-8000-000000000009' }],
     ['session', { sessionId: 'other-session' }],
     ['turn', { turn: 2 }],
-    ['image', { image: `registry.invalid/raditi/codex@sha256:${'e'.repeat(64)}` }],
-    ['driver', { driver: { id: 'kimi', version: '1.0.0' } }],
-    ['driver version', { driver: { id: 'codex', version: '2.0.0' } }],
+    ['image', { image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'e'.repeat(64)}` }],
+    ['driver', { driver: { id: otherDriverId, version: '1.0.0' } }],
+    ['driver version', { driver: { id: sampleDriverId, version: '2.0.0' } }],
   ])('rejects a foreign previous checkpoint (%s) before acquiring a lease', async (_, change) => {
     const f = fixture()
     f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
@@ -1416,7 +1441,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       sessionId: labels.sessionId,
       turn: 1,
       image,
-      driver: { id: 'codex', version: '1.0.0' },
+      driver: { id: sampleDriverId, version: '1.0.0' },
       home,
       ...change,
     }
@@ -1441,7 +1466,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
           sessionId: labels.sessionId,
           turn: 999_999,
           image,
-          driver: { id: 'codex', version: '1.0.0' },
+          driver: { id: sampleDriverId, version: '1.0.0' },
           home,
         }
       }
@@ -1464,6 +1489,23 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     const f = fixture()
     vi.mocked(f.handle.wait).mockResolvedValue({ code: 1, reason: 'exited' })
     await expect(f.run()).rejects.toMatchObject({ code: 'TURN_EXEC_FAILED' })
+    expect(f.sandbox.destroy).toHaveBeenCalledOnce()
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.publication.publish).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
+  it('does not accept a result after a failure the agent reported, whatever its exit code', async () => {
+    const f = fixture()
+    // A CLI may go on after an error row, print a complete answer and exit with code 0.
+    const [started, ...answer] = nativeEvents
+    f.stdout(
+      [started, { type: 'failed', reason: 'stream error' }, started, ...answer]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
+    )
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_EXEC_FAILED' })
+    expect(f.driver.extractResult).not.toHaveBeenCalled()
     expect(f.sandbox.destroy).toHaveBeenCalledOnce()
     expect(f.snapshots.save).not.toHaveBeenCalled()
     expect(f.publication.publish).not.toHaveBeenCalled()
@@ -1568,7 +1610,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     )
     expect(assignment).toMatchObject({
       outcome: 'completed',
-      plan: { committedAt: f.request.committedAt, driverId: 'codex' },
+      plan: { committedAt: f.request.committedAt, driverId: sampleDriverId },
     })
     expect(JSON.stringify(assignment!.plan)).not.toContain('synthetic-llm-secret')
     expect(JSON.stringify(assignment!.plan)).not.toContain('synthetic-mcp-secret')
@@ -1611,7 +1653,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       sessionId: labels.sessionId,
       turn: 1,
       executor: kind === 'local' ? 'local' : 'runner',
-      plan: toTurnPlan(f.request, 'codex'),
+      plan: toTurnPlan(f.request, sampleDriverId),
       remainingMs: 60_000,
     })
     await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })
@@ -1769,14 +1811,22 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     [
       'a driver file',
       {
-        files: [{ path: '/agent-home/codex/config.toml', content: 'key = "synthetic-llm-secret"' }],
+        files: [
+          {
+            path: `/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
+            content: '{"key":"synthetic-llm-secret"}',
+          },
+        ],
       },
     ],
     [
       'a driver file with the MCP token',
       {
         files: [
-          { path: '/agent-home/codex/mcp.json', content: '{"token":"synthetic-mcp-secret"}' },
+          {
+            path: `/agent-home/${sampleDriverId}/mcp.json`,
+            content: '{"token":"synthetic-mcp-secret"}',
+          },
         ],
       },
     ],
@@ -1784,10 +1834,10 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       'a driver file with a secret file value',
       {
         secrets: [{ path: `${SANDBOX_SECRETS_DIR}/extra`, content: 'synthetic-extra-secret' }],
-        files: [{ path: '/agent-home/codex/extra', content: 'synthetic-extra-secret' }],
+        files: [{ path: `/agent-home/${sampleDriverId}/extra`, content: 'synthetic-extra-secret' }],
       },
     ],
-    ['an env value', { env: { CODEX_API_KEY: 'synthetic-llm-secret' } }],
+    ['an env value', { env: { LLM_API_KEY: 'synthetic-llm-secret' } }],
   ] satisfies Array<[string, Partial<PreparedRun>]>)(
     'refuses a turn credential in %s before writing anything',
     async (_, overrides) => {
@@ -1982,7 +2032,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     '/workspace/repo',
     '/workspace/out/schema.json',
     '/agent-home/../workspace/repo/AGENTS.md',
-    '/agent-home/./codex/config.toml',
+    `/agent-home/./${sampleDriverId}/config.json`,
     `${SANDBOX_SECRETS_DIR}/config.toml`,
   ])('never writes a prepared platform file to %s, where it could be published', async (path) => {
     const f = fixture()
@@ -2009,7 +2059,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
       sessionId: labels.sessionId,
       turn: 1,
       executor: 'local',
-      plan: toTurnPlan(f.request, 'codex'),
+      plan: toTurnPlan(f.request, sampleDriverId),
       remainingMs: 60_000,
     }))!
     const input: PublicationRecoveryRequest = {
@@ -2021,7 +2071,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
         sessionId: labels.sessionId,
         turn: 1,
         image,
-        driver: { id: 'codex', version: '1.0.0' },
+        driver: { id: sampleDriverId, version: '1.0.0' },
         home,
       },
       // Its owner journaled the removal: only what the labels still find is removed.

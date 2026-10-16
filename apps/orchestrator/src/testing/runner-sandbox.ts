@@ -20,6 +20,7 @@ import { vi } from 'vitest'
 import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
 import type { PresignedTransfer } from '../sessions/presigned-transfer.ts'
 import { LocalTurnExecutor } from '../turns/local-turn-executor.ts'
+import { sampleDriverId } from './ids.ts'
 
 export const siteId = '00000000-0000-4000-8000-000000000002'
 export const taskId = '00000000-0000-4000-8000-000000000003'
@@ -31,10 +32,15 @@ export const labels = {
   sessionId: 'session1',
   turn: 1,
 }
-export const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+export const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 export const baseSha = 'b'.repeat(40)
 export const branch = `agent/${taskId}`
-export const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
+/** The session state the sample driver names: its session database and the journal of it. */
+export const home = {
+  root: `/agent-home/${sampleDriverId}`,
+  include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+  exclude: [],
+}
 export const credentials = ['synthetic-llm-secret', 'synthetic-mcp-secret']
 export const events: AgentEvent[] = [
   { type: 'started', nativeSessionId: 'native1' },
@@ -136,7 +142,7 @@ export const sandboxSpec = (leaseEpoch = 1) => ({
 })
 
 export const prepared = {
-  files: [{ path: '/agent-home/codex/config.toml', content: 'synthetic = true' }],
+  files: [{ path: `${home.root}/.config/opencode/opencode.json`, content: '{"synthetic":true}' }],
   env: {},
   secrets: [{ path: `${SANDBOX_SECRETS_DIR}/llm`, content: credentials[0]! }],
 }
@@ -155,7 +161,7 @@ export const prepareInput = (assignmentId: string): TurnPrepareInput => ({
       yield Buffer.from(bundleBytes)
     },
   },
-  driverId: 'codex',
+  driverId: sampleDriverId,
   prepared,
   argv: ['synthetic-agent'],
   credentials,

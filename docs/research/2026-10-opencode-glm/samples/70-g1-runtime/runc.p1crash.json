@@ -1,0 +1,150 @@
+{
+  "sinkSeesCurl": {
+    "curl": "403 curl-exit=0",
+    "sink": [
+      "dns sink-control.test",
+      "dns sink-control.test",
+      "http sink-control.test"
+    ]
+  },
+  "runs": [
+    {
+      "variant": "default",
+      "env": {},
+      "group": "kill",
+      "requestSeen": true,
+      "kill": "killed 40",
+      "exit": 133,
+      "signal": "SIGTRAP",
+      "panic": "panic(main thread): Segmentation fault at address 0x271100000044",
+      "advice": "To send a redacted crash report to Bun's team,\nplease file a GitHub issue using the link below:",
+      "sink": [],
+      "outputHits": []
+    },
+    {
+      "variant": "default-keep-group",
+      "env": {},
+      "group": "keep",
+      "requestSeen": true,
+      "kill": "killed 40",
+      "exit": 133,
+      "signal": "SIGTRAP",
+      "panic": "panic(main thread): Segmentation fault at address 0x271100000044",
+      "advice": "To send a redacted crash report to Bun's team,\nplease file a GitHub issue using the link below:",
+      "sink": [],
+      "outputHits": []
+    },
+    {
+      "variant": "enabled-keep-group",
+      "env": {
+        "BUN_ENABLE_CRASH_REPORTING": "1"
+      },
+      "group": "keep",
+      "requestSeen": true,
+      "kill": "killed 40",
+      "exit": 133,
+      "signal": "SIGTRAP",
+      "panic": "panic(main thread): Segmentation fault at address 0x271100000044",
+      "advice": "To send a redacted crash report to Bun's team,\nplease file a GitHub issue using the link below:",
+      "sink": [
+        "dns bun.report",
+        "dns bun.report",
+        "tls bun.report"
+      ],
+      "outputHits": []
+    },
+    {
+      "variant": "enabled-kill-group",
+      "env": {
+        "BUN_ENABLE_CRASH_REPORTING": "1"
+      },
+      "group": "kill",
+      "requestSeen": true,
+      "kill": "killed 40",
+      "exit": 133,
+      "signal": "SIGTRAP",
+      "panic": "panic(main thread): Segmentation fault at address 0x271100000044",
+      "advice": "To send a redacted crash report to Bun's team,\nplease file a GitHub issue using the link below:",
+      "sink": [
+        "dns bun.report",
+        "dns bun.report",
+        "tls bun.report"
+      ],
+      "outputHits": []
+    },
+    {
+      "variant": "enabled-do-not-track",
+      "env": {
+        "BUN_ENABLE_CRASH_REPORTING": "1",
+        "DO_NOT_TRACK": "1"
+      },
+      "group": "keep",
+      "requestSeen": true,
+      "kill": "killed 40",
+      "exit": 133,
+      "signal": "SIGTRAP",
+      "panic": "panic(main thread): Segmentation fault at address 0x271100000044",
+      "advice": "To send a redacted crash report to Bun's team,\nplease file a GitHub issue using the link below:",
+      "sink": [
+        "dns bun.report",
+        "dns bun.report",
+        "tls bun.report"
+      ],
+      "outputHits": []
+    },
+    {
+      "variant": "forced-url-keep-group",
+      "env": {
+        "BUN_CRASH_REPORT_URL": "http://crash-report-control.test"
+      },
+      "group": "keep",
+      "requestSeen": true,
+      "kill": "killed 39",
+      "exit": 133,
+      "signal": "SIGTRAP",
+      "panic": "panic(main thread): Segmentation fault at address 0x271100000043",
+      "advice": "To send a redacted crash report to Bun's team,\nplease file a GitHub issue using the link below:",
+      "sink": [
+        "dns crash-report-control.test",
+        "dns crash-report-control.test",
+        "http crash-report-control.test"
+      ],
+      "outputHits": []
+    },
+    {
+      "variant": "forced-url-disabled",
+      "env": {
+        "BUN_CRASH_REPORT_URL": "http://crash-report-control.test",
+        "BUN_ENABLE_CRASH_REPORTING": "0"
+      },
+      "group": "keep",
+      "requestSeen": true,
+      "kill": "killed 40",
+      "exit": 133,
+      "signal": "SIGTRAP",
+      "panic": "panic(main thread): Segmentation fault at address 0x271100000044",
+      "advice": "To send a redacted crash report to Bun's team,\nplease file a GitHub issue using the link below:",
+      "sink": [
+        "dns crash-report-control.test",
+        "dns crash-report-control.test",
+        "http crash-report-control.test"
+      ],
+      "outputHits": []
+    },
+    {
+      "variant": "disabled",
+      "env": {
+        "BUN_ENABLE_CRASH_REPORTING": "0"
+      },
+      "group": "keep",
+      "requestSeen": true,
+      "kill": "killed 41",
+      "exit": 133,
+      "signal": "SIGTRAP",
+      "panic": "panic(main thread): Segmentation fault at address 0x271100000045",
+      "advice": "To send a redacted crash report to Bun's team,\nplease file a GitHub issue using the link below:",
+      "sink": [],
+      "outputHits": []
+    }
+  ]
+}

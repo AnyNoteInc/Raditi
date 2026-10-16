@@ -577,7 +577,7 @@ export const CLEANUP_ORDER = Object.freeze([
 
 /**
  * Scenarios the plan's table does not name: reviews found defects there, and the last one is
- * what a real shop did on its first day (AnyNote; docs/plan/40-yookassa-shop-setup.md).
+ * what a real shop did on its first day (AnyNote; docs/plan/51-yookassa-shop-setup.md).
  */
 export const EXTRA_ROWS = Object.freeze([
   'Отвязка карты, когда списание уже в банке',

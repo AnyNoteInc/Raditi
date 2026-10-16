@@ -1,0 +1,66 @@
+{
+  "source": "runsc/p4-sse-finish-network_error/records.json",
+  "requests": [
+    {
+      "n": 1,
+      "ms": 4274,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 2,
+      "ms": 6444,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 3,
+      "ms": 11336,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 4,
+      "ms": 21205,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 5,
+      "ms": 37317,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 6,
+      "ms": 67194,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "sse 200"
+    }
+  ],
+  "toolResults": []
+}

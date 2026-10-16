@@ -1,0 +1,206 @@
+{
+  "version": {
+    "runtime": "runsc",
+    "output": [
+      "Linux version 4.19.0-gvisor #1 SMP Sun Jan 10 15:06:54 PST 2",
+      "1.18.34",
+      "exit=0 ms=934",
+      "1.18.34",
+      "exit=0 ms=625"
+    ],
+    "stderr": ""
+  },
+  "turns": {
+    "first": {
+      "exit": 0,
+      "wallMs": 4323,
+      "wrapper": {
+        "mode": "fifo",
+        "delivered": {
+          "llm": true,
+          "mcp": true
+        },
+        "deliveredMs": {
+          "llm": 1549,
+          "mcp": 1555
+        },
+        "attempts": {
+          "llm": 183,
+          "mcp": 183
+        },
+        "pid": 25,
+        "exit": 0,
+        "signal": null,
+        "elapsedMs": 4074
+      },
+      "steps": [
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "write:completed",
+        "bash:completed"
+      ],
+      "bashOutput": "hello-from-tool\n10001\nLinux version 4.19.0-gvisor #1 SMP Sun J",
+      "written": "written by the first turn\n",
+      "result": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"code\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_changed\":[\"hello.txt\"],\"questions\":[],\"needs_approval\":false,\"risk\":\"low\"}",
+      "errors": [],
+      "stderr": "",
+      "requests": {
+        "llmRequests": 2,
+        "firstRequestMs": 3933,
+        "gapsMs": [
+          466
+        ],
+        "credentialKinds": [
+          "turn-key"
+        ],
+        "models": [
+          "glm-5.3"
+        ],
+        "statuses": [
+          200,
+          200
+        ],
+        "capped": false,
+        "mcp": [
+          "POST initialize → 200",
+          "POST notifications/initialized → 202",
+          "GET → 405",
+          "POST tools/list → 200"
+        ],
+        "other": []
+      },
+      "sink": [],
+      "hits": [],
+      "files": [
+        "/agent-home/opencode/.config/opencode/AGENTS.md 71",
+        "/agent-home/opencode/.config/opencode/opencode.json 3165",
+        "/agent-home/opencode/.local/share/opencode/log/opencode.log 4023",
+        "/agent-home/opencode/.local/share/opencode/opencode.db 4096",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-shm 32768",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-wal 1359632",
+        "/tmp/.3cdfbbdfdf7dfbfb-00000000.so 4919152",
+        "/tmp/wrapper-first.json 172",
+        "/workspace/repo/hello.txt 26",
+        "/workspace/repo/README.md 55"
+      ]
+    },
+    "sessionTarBytes": 1372160,
+    "second": {
+      "exit": 0,
+      "wallMs": 3857,
+      "sameSession": true,
+      "steps": [
+        "tool-calls",
+        "stop"
+      ],
+      "errors": [],
+      "stderr": "",
+      "requests": {
+        "llmRequests": 2,
+        "firstRequestMs": 3773,
+        "gapsMs": [
+          404
+        ],
+        "credentialKinds": [
+          "turn-key"
+        ],
+        "models": [
+          "glm-5.3"
+        ],
+        "statuses": [
+          200,
+          200
+        ],
+        "capped": false,
+        "mcp": [
+          "POST initialize → 200",
+          "POST notifications/initialized → 202",
+          "GET → 405",
+          "POST tools/list → 200"
+        ],
+        "other": []
+      },
+      "historyInFirstRequest": [
+        "system(1760)",
+        "user(32)",
+        "assistant(0,tool_calls:bash|write)",
+        "tool(62)",
+        "tool(24)",
+        "assistant(190)",
+        "user(39)"
+      ],
+      "sink": [],
+      "hits": []
+    }
+  },
+  "withoutResolver": {
+    "exit": 0,
+    "wallMs": 3580,
+    "resolv": [
+      "",
+      "nameserver 127.0.0.11",
+      "options ndots:0",
+      ""
+    ],
+    "requests": {
+      "llmRequests": 1,
+      "firstRequestMs": 3684,
+      "gapsMs": [],
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "statuses": [
+        200
+      ],
+      "capped": false,
+      "mcp": [
+        "POST initialize → 200",
+        "POST notifications/initialized → 202",
+        "GET → 405",
+        "POST tools/list → 200"
+      ],
+      "other": []
+    },
+    "errors": [],
+    "stderr": ""
+  },
+  "noexecTmp": {
+    "exit": 0,
+    "requests": 1,
+    "events": {
+      "step_start": 1,
+      "text": 1,
+      "step_finish": 1
+    },
+    "errors": [],
+    "stderr": "",
+    "tmpFiles": [
+      "/tmp/.<hex>-00000000.so 4919152"
+    ]
+  },
+  "footprint": {
+    "requestSeen": true,
+    "stats": "456.4MiB / 1GiB | pids 43 | cpu 13.71%",
+    "processes": [
+      "tini threads=1 rssKb=2552 nproc=2",
+      "node-MainThread threads=7 rssKb=140796 nproc=2",
+      "sleep threads=1 rssKb=4372 nproc=2",
+      "opencode threads=8 rssKb=679580 nproc=2"
+    ],
+    "sigterm": "signalled 16",
+    "endedAfterMs": 366,
+    "exit": 143,
+    "wrapper": {
+      "exit": null,
+      "signal": "SIGTERM"
+    },
+    "events": {},
+    "errors": [],
+    "processesLeft": "      1 sleep;      1 tini;"
+  }
+}

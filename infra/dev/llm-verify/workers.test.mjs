@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { fork } from 'node:child_process'
+import { fork, spawnSync } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,7 +19,13 @@ process.on('message', (message) => {
     mode = message.config.mode;
     if (mode === 'exit-before-ready') return process.exit(1);
     if (mode === 'never-ready') return;
-    process.send({type: 'ready'});
+    if (mode === 'two-pipes') {
+      process.stdout.write('out-one ');
+      process.stderr.write('err-one ');
+      process.stdout.write('out-two');
+      process.stderr.write('err-two');
+    }
+    process.send({type: 'ready', execArgv: process.execArgv, held: process.env.SYNTHETIC_ENV_FILE_MARK ?? null});
   } else if (message.operation === 'crash') {
     process.exit(1);
   } else if (message.operation === 'close') {
@@ -138,3 +144,113 @@ for (const mode of ['ignore-close', 'ack-without-exit'])
     assert.equal(worker.child.signalCode, 'SIGKILL')
     clean(worker.child)
   })
+
+test('a worker loads the modules it is given before its script, and nothing else changes', async () => {
+  const seen = []
+  const start = (options) =>
+    startWorker(
+      'llm',
+      { mode: 'ready' },
+      {
+        startupTimeoutMs: 1000,
+        shutdownTimeoutMs: 100,
+        ...options,
+        forkChild: (_path, args, forkOptions) => {
+          seen.push(forkOptions)
+          return fork(fixture, args, { ...forkOptions, execArgv: [] })
+        },
+      },
+    )
+  const plain = await start({ execArgv: ['--max-old-space-size=256'] })
+  await plain.close()
+  // The arguments of the parent, named: never fork's own default, which copies all of them.
+  assert.deepEqual(seen[0].execArgv, ['--max-old-space-size=256'])
+  const guarded = await start({
+    execArgv: ['--max-old-space-size=256'],
+    imports: ['file:///stand/live-guard.mjs?cap=20'],
+  })
+  await guarded.close()
+  assert.deepEqual(seen[1].execArgv, [
+    '--max-old-space-size=256',
+    '--import',
+    'file:///stand/live-guard.mjs?cap=20',
+  ])
+  // The environment of a worker is the same two names either way: nothing of the stand's own.
+  for (const options of seen) assert.deepEqual(Object.keys(options.env), ['PATH', 'NODE_ENV'])
+})
+
+test('a worker never loads the env file its stand was started with', async () => {
+  // Real processes first: a stand started with `node --env-file=…` (the way spec names for
+  // handing it the plan key) and the worker it forks, with and without an import.
+  const envFile = join(directory, 'stand.env')
+  await writeFile(envFile, 'SYNTHETIC_ENV_FILE_MARK=synthetic-value-of-the-env-file\n')
+  const parent = join(directory, 'stand.mjs')
+  await writeFile(
+    parent,
+    `import { fork } from 'node:child_process'
+import { startWorker } from ${JSON.stringify(new URL('./workers.mjs', import.meta.url).href)}
+const held = [process.env.SYNTHETIC_ENV_FILE_MARK !== undefined]
+for (const imports of [[], [${JSON.stringify(new URL('./workers.mjs', import.meta.url).href)}]]) {
+  const worker = await startWorker('llm', { mode: 'ready' }, {
+    imports,
+    forkChild: (_path, args, options) => fork(${JSON.stringify(fixture)}, args, options),
+  })
+  held.push(worker.ready.held !== null, worker.ready.execArgv.some((arg) => arg.includes('env-file')))
+  await worker.close()
+}
+console.log(JSON.stringify(held))
+`,
+  )
+  const stand = spawnSync(process.execPath, [`--env-file=${envFile}`, parent], {
+    env: { PATH: process.env.PATH },
+    encoding: 'utf8',
+    timeout: 30_000,
+  })
+  assert.equal(stand.status, 0, stand.stderr)
+  // The stand itself holds the variable; neither worker holds it or was told of the file.
+  assert.deepEqual(JSON.parse(stand.stdout), [true, false, false, false, false])
+
+  const seen = []
+  const start = (options) =>
+    startWorker(
+      'core',
+      { mode: 'ready' },
+      {
+        startupTimeoutMs: 1000,
+        shutdownTimeoutMs: 100,
+        ...options,
+        forkChild: (_path, args, forkOptions) => {
+          seen.push(forkOptions.execArgv)
+          return fork(fixture, args, { ...forkOptions, execArgv: [] })
+        },
+      },
+    )
+  // Then both spellings of both options, among arguments that stay.
+  const execArgv = [
+    '--env-file=/checkout/.env',
+    '--max-old-space-size=256',
+    '--env-file',
+    '/checkout/.env.local',
+    '--env-file-if-exists=/checkout/.env',
+    '--env-file-if-exists',
+    '/checkout/.env.local',
+    '--import',
+    'file:///stand/kept.mjs',
+  ]
+  const kept = ['--max-old-space-size=256', '--import', 'file:///stand/kept.mjs']
+  await (await start({ execArgv })).close()
+  await (await start({ execArgv, imports: ['file:///stand/live-guard.mjs?cap=20'] })).close()
+  assert.deepEqual(seen, [kept, [...kept, '--import', 'file:///stand/live-guard.mjs?cap=20']])
+})
+
+test('the output of a worker is kept by pipe as well: a text is whole in the pipe it was written to', async () => {
+  const { result } = launch('two-pipes')
+  const worker = await result
+  await worker.close()
+  // `logs` is every chunk in the order it was read, the two pipes mixed; `streams` keeps the
+  // chunks of each pipe apart, so that a value cut by a read is whole again once they are joined.
+  assert.equal(worker.streams.length, 2)
+  assert.equal(worker.streams[0].join(''), 'out-one out-twoclose\n')
+  assert.equal(worker.streams[1].join(''), 'err-one err-two')
+  assert.equal(worker.logs.join('').length, 'out-one out-twoclose\nerr-one err-two'.length)
+})

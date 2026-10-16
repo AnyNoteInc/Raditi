@@ -20,7 +20,7 @@ type Transaction = Prisma.TransactionClient
 type Account = Prisma.SubscriptionAccountGetPayload<{
   include: { provider: true; credentialRef: true }
 }>
-type Backend = Pick<LlmBackend, 'id' | 'revoke'>
+type Backend = Pick<LlmBackend, 'id'>
 type PendingKey = Pick<
   Prisma.LlmKeyGetPayload<Record<string, never>>,
   'taskId' | 'sessionId' | 'turnNo' | 'firstEpoch'
@@ -31,7 +31,6 @@ type FinalizationPreparation = { result: SubscriptionRetirementResult } | { path
 export type SubscriptionRetirementStage =
   | 'draining'
   | 'turn_revocation_pending'
-  | 'provider_revocation_pending'
   | 'console_revocation_required'
   | 'ready_for_finalization'
   | 'retired'
@@ -75,7 +74,6 @@ const cancelSchema = z.strictObject({ accountId: z.uuid().transform((id) => id.t
 /** Fixed refusals the operator can act on; the command shows each of them in Russian. */
 export const retirementRefusals = {
   busy: 'Subscription account is being updated; retry retirement',
-  automaticRevocation: 'This subscription requires automatic provider revocation',
   notRequested: 'Subscription retirement was not requested',
   unconfirmed: 'Subscription provider revocation is not confirmed',
   changed: 'Subscription retirement state changed',
@@ -161,9 +159,6 @@ export class SubscriptionRetirement {
         const preparation = await this.#transaction<FinalizationPreparation>(async (tx) => {
           let account = await this.#lockedAccount(tx, accountId)
           this.#confirm(account, parsed.data.label)
-          const consoleAllowed = this.#consoleRevocationAllowed(account)
-          if (consoleRevoked && !consoleAllowed)
-            throw badRequest(retirementRefusals.automaticRevocation)
           if (account.status === 'retired') return { result: this.#value(account, 'retired') }
           if (!account.retireRequestedAt) throw conflict(retirementRefusals.notRequested)
           this.#path(account)
@@ -171,7 +166,9 @@ export class SubscriptionRetirement {
           if (result.stage === 'draining' || result.stage === 'turn_revocation_pending')
             return { result }
           if (!account.credentialsRevokedAt) {
-            if (!consoleAllowed || !consoleRevoked) return { result }
+            // The platform cannot revoke a key at its provider: the operator does it in the
+            // provider's console and says so here.
+            if (!consoleRevoked) return { result }
             // This is a durable acknowledgement, so a Vault outage needs no second console action.
             await tx.$executeRaw`UPDATE subscription_accounts
               SET credentials_revoked_at = clock_timestamp(), updated_at = clock_timestamp()
@@ -192,7 +189,7 @@ export class SubscriptionRetirement {
           ),
         )
         lease.signal?.throwIfAborted()
-        // No SQL locks span Vault I/O. The account lock also excludes relogin and rotation.
+        // No SQL locks span Vault I/O. The account lock also excludes a relogin.
         return this.#transaction(async (tx) => {
           const account = await this.#lockedAccount(tx, accountId)
           if (account.status === 'retired') return this.#value(account, 'retired')
@@ -220,10 +217,9 @@ export class SubscriptionRetirement {
   }
 
   /**
-   * Withdraws a request while the provider still holds valid tokens. Under the session lock no
-   * revocation of the llm role is in flight. The account keeps its enabled flag: if a drain or
-   * --compromised disabled it, the operator enables it after the usual checks. Once the tokens
-   * are revoked the way back is a new import.
+   * Withdraws a request while the key is still valid at the provider. The account keeps its
+   * enabled flag: if a drain or --compromised disabled it, the operator enables it after the
+   * usual checks. Once the revocation of the key is acknowledged the way back is a new import.
    */
   async cancel(input: z.input<typeof cancelSchema>): Promise<SubscriptionRetirementResult> {
     const parsed = cancelSchema.safeParse(input)
@@ -300,19 +296,6 @@ export class SubscriptionRetirement {
     return path
   }
 
-  #consoleRevocationAllowed(account: Account): boolean {
-    if (!this.#backend(account).revoke) return true
-    // A failed initial import may have no readable token, or its first CAS may
-    // have succeeded without acknowledgement. Neither proves provider revocation:
-    // require the operator to revoke the issued login before destroying its path.
-    return (
-      account.credentialVersion === 0 &&
-      account.credentialRef.keyVersion === 0 &&
-      account.health === 'needs_relogin' &&
-      (account.healthReason === 'import_pending' || account.healthReason === 'relogin_pending')
-    )
-  }
-
   async #admissionState(tx: Transaction, accountId: string): Promise<AdmissionState> {
     const rows = await tx.$queryRaw<AdmissionState[]>`
       SELECT
@@ -336,9 +319,7 @@ export class SubscriptionRetirement {
         ? 'draining'
         : account.credentialsRevokedAt
           ? 'ready_for_finalization'
-          : this.#consoleRevocationAllowed(account)
-            ? 'console_revocation_required'
-            : 'provider_revocation_pending'
+          : 'console_revocation_required'
     return this.#value(account, stage)
   }
 

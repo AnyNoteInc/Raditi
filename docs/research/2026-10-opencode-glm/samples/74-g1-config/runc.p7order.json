@@ -1,0 +1,546 @@
+{
+  "order": [
+    {
+      "run": "order-deny-then-allow",
+      "exit": 0,
+      "wallS": 4.8,
+      "requests": 8,
+      "capped": false,
+      "events": {
+        "step_start": 8,
+        "tool_use": 7,
+        "step_finish": 8,
+        "text": 1
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read({\"filePath\":\"/workspace/inbox/brief.txt\"}) completed: <path>/workspace/inbox/brief.txt</path> <type>file</type> <content> 1: INBOX-BRIEF-MARKER-3306 (End of file - total 1 lines) </content>",
+        "read({\"filePath\":\"/etc/hostname\"}) error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"",
+        "bash({\"command\":\"cat /workspace/inbox/brief.txt\",\"description\":\"stand step\") completed: INBOX-BRIEF-MARKER-3306 ",
+        "bash({\"command\":\"cat /etc/hostname\",\"description\":\"stand step\"}) error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"",
+        "glob({\"pattern\":\"*.txt\",\"path\":\"/workspace/inbox\"}) completed: /workspace/inbox/sub/deep.txt /workspace/inbox/brief.txt",
+        "read({\"filePath\":\"/workspace/inbox/sub/deep.txt\"}) completed: <path>/workspace/inbox/sub/deep.txt</path> <type>file</type> <content> 1: INBOX-DEEP-MARKER-7710 (End of file - total 1 lines) </content>",
+        "write({\"content\":\"changed by the agent\\n\",\"filePath\":\"/workspace/inbox/brief) completed: Wrote file successfully."
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"client_message\":\"Гото",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderr": "",
+      "llm": [
+        {
+          "n": 1,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 2,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(136)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 3,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(136)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 4,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(136)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(24)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 5,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(136)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(24)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 6,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(136)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(24)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:glob)",
+            "tool(56)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 7,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(136)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(24)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:glob)",
+            "tool(56)",
+            "assistant(0,tool_calls:read)",
+            "tool(138)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 8,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(136)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(24)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:glob)",
+            "tool(56)",
+            "assistant(0,tool_calls:read)",
+            "tool(138)",
+            "assistant(0,tool_calls:write)",
+            "tool(24)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        }
+      ],
+      "hits": []
+    },
+    {
+      "run": "order-allow-then-deny",
+      "exit": 0,
+      "wallS": 4.1,
+      "requests": 8,
+      "capped": false,
+      "events": {
+        "step_start": 8,
+        "tool_use": 7,
+        "step_finish": 8,
+        "text": 1
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read({\"filePath\":\"/workspace/inbox/brief.txt\"}) error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"",
+        "read({\"filePath\":\"/etc/hostname\"}) error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"",
+        "bash({\"command\":\"cat /workspace/inbox/brief.txt\",\"description\":\"stand step\") error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"",
+        "bash({\"command\":\"cat /etc/hostname\",\"description\":\"stand step\"}) error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"",
+        "glob({\"pattern\":\"*.txt\",\"path\":\"/workspace/inbox\"}) error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"",
+        "read({\"filePath\":\"/workspace/inbox/sub/deep.txt\"}) error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\"",
+        "write({\"content\":\"changed by the agent\\n\",\"filePath\":\"/workspace/inbox/brief) error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{\"permission\":\"*\",\"action\":\""
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"client_message\":\"Гото",
+      "errors": [],
+      "nonJsonStdout": [],
+      "stderr": "",
+      "llm": [
+        {
+          "n": 1,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 2,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 3,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 4,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 5,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 6,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:glob)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 7,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:glob)",
+            "tool(712)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        },
+        {
+          "n": 8,
+          "model": "glm-5.3",
+          "max_tokens": 32000,
+          "fields": [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+          ],
+          "tools": 9,
+          "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic test stand",
+          "systemChars": 1726,
+          "messages": [
+            "system(1726)",
+            "user(34)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:bash)",
+            "tool(712)",
+            "assistant(0,tool_calls:glob)",
+            "tool(712)",
+            "assistant(0,tool_calls:read)",
+            "tool(712)",
+            "assistant(0,tool_calls:write)",
+            "tool(712)"
+          ],
+          "lastUser": "Client request: do the stand steps"
+        }
+      ],
+      "hits": []
+    }
+  ]
+}

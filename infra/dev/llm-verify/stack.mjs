@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { bootstrapLocalVault, localVaultRequest } from '../../vault/bootstrap.mjs'
 import { createVerificationCertificates } from './certificates.mjs'
 import { CLI_IMAGE, removeMountedDirectory } from './cli.mjs'
+import { liveServices } from './live.mjs'
 
 export const repository = fileURLToPath(new URL('../../../', import.meta.url))
 const baseEnv = Object.fromEntries(
@@ -125,11 +126,12 @@ export function chooseCliSubnet(taken) {
 }
 
 /**
- * Where sandbox-gw sends /mcp. The synthetic server of fake-subscriptions by default; with a port,
- * the real role mcp, a process on the host like the role llm.
+ * Where sandbox-gw sends /mcp. The synthetic server of fake-subscriptions by default — in a live
+ * stack the service that runs its MCP side alone; with a port, the real role mcp, a process on
+ * the host like the role llm.
  */
-export function mcpUpstream(port) {
-  if (port === undefined) return 'http://fake-subscriptions:8788'
+export function mcpUpstream(port, { live = false } = {}) {
+  if (port === undefined) return `http://${live ? 'synthetic-mcp' : 'fake-subscriptions'}:8788`
   assert.ok(Number.isInteger(port) && port > 0 && port < 65536, 'Invalid MCP port')
   return `http://host.docker.internal:${port}`
 }
@@ -149,8 +151,14 @@ async function unusedPort() {
  * `content` is the agent-content stand: an S3 for content snapshots, a free host port for the
  * real role mcp behind sandbox-gw, the AppRole of the mcp service and the scoped tokens of the
  * site connection step. Without it the stack is what verify:llm-gateway always ran.
+ * `live` is a stack for the real provider (live.mjs): no synthetic provider, no egress proxy of
+ * the stand and no certificate of either — the role llm reaches the provider itself.
  */
-export async function startVerificationStack({ onStage = () => {}, content = false } = {}) {
+export async function startVerificationStack({
+  onStage = () => {},
+  content = false,
+  live = false,
+} = {}) {
   onStage('local Docker preflight')
   const docker = (args, options) => run('docker', args, options)
   const context = (
@@ -176,6 +184,7 @@ export async function startVerificationStack({ onStage = () => {}, content = fal
     '--file',
     join(repository, 'infra/dev/llm-verify/compose.yml'),
     ...(content ? ['--profile', 'content'] : []),
+    ...(live ? ['--profile', 'live'] : []),
   ]
   const compose = (args, options) => docker([...composeArgs, ...args], options)
   let started = false,
@@ -245,7 +254,8 @@ export async function startVerificationStack({ onStage = () => {}, content = fal
         }),
         { mode: 0o644 },
       )
-    const certificates = await createVerificationCertificates(repository, directory)
+    // A live stack holds no certificate at all: nothing here stands for a provider or a proxy.
+    const certificates = live ? null : await createVerificationCertificates(repository, directory)
     const values = {
       VERIFY_DIR: directory,
       VERIFY_ROOT: repository,
@@ -254,7 +264,7 @@ export async function startVerificationStack({ onStage = () => {}, content = fal
       VERIFY_CLI_IP: `${subnet}.10`,
       VERIFY_GATEWAY_IP: `${subnet}.2`,
       VERIFY_LLM_PORT: String(llmPort),
-      VERIFY_MCP_UPSTREAM: mcpUpstream(mcpPort),
+      VERIFY_MCP_UPSTREAM: mcpUpstream(mcpPort, { live }),
     }
     await writeFile(
       envFile,
@@ -265,7 +275,11 @@ export async function startVerificationStack({ onStage = () => {}, content = fal
     )
     started = true
     onStage('compose up')
-    await compose(['up', '-d'], { timeoutMs: 180_000, infrastructureDiagnostics: true })
+    // A live stack names its services: `up` of the whole file would start the fakes.
+    await compose(['up', '-d', ...(live ? liveServices({ content }) : [])], {
+      timeoutMs: 180_000,
+      infrastructureDiagnostics: true,
+    })
     const port = async (service, number) => {
       onStage(`published ${service} port`)
       const value = (await compose(['port', service, String(number)])).stdout.trim()
@@ -372,9 +386,14 @@ export async function startVerificationStack({ onStage = () => {}, content = fal
         })
       ).auth.client_token
     assert.ok((await request('sys/audit')).data['file/'], 'Declarative audit device is missing')
-    const control = `http://${await port('fake-subscriptions', 8787)}`
-    onStage('fake provider readiness')
-    await eventually(async () => (await fetch(`${control}/state`)).ok)
+    // The control port of the synthetic services: the providers and the MCP of a synthetic
+    // stack, the MCP side alone in a live one; the live content stand runs neither.
+    const synthetic = live ? (content ? null : 'synthetic-mcp') : 'fake-subscriptions'
+    const control = synthetic ? `http://${await port(synthetic, 8787)}` : null
+    if (control) {
+      onStage('synthetic services readiness')
+      await eventually(async () => (await fetch(`${control}/state`)).ok)
+    }
     let s3
     if (content) {
       const endpoint = `http://${await port('s3', 8333)}`
@@ -412,7 +431,15 @@ export async function startVerificationStack({ onStage = () => {}, content = fal
       tokens,
       certificates,
       control,
-      egressUrl: `https://${await port('llm-egress', 8443)}`,
+      ...(live
+        ? {}
+        : {
+            // The fake provider itself, for a role llm with no egress proxy: the certificate of
+            // the fake names localhost, so the origin is written with that name and the
+            // published port.
+            providerOrigin: `https://localhost:${(await port('fake-subscriptions', 443)).split(':')[1]}`,
+            egressUrl: `https://${await port('llm-egress', 8443)}`,
+          }),
       compose,
       close,
     }

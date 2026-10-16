@@ -1,0 +1,54 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185418838,
+      "sessionID": "ses_00000000000000000000000165",
+      "part": {
+        "id": "prt_00000000000000000000000166",
+        "messageID": "msg_00000000000000000000000167",
+        "sessionID": "ses_00000000000000000000000165",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185418839,
+      "sessionID": "ses_00000000000000000000000165",
+      "part": {
+        "id": "prt_00000000000000000000000168",
+        "messageID": "msg_00000000000000000000000167",
+        "sessionID": "ses_00000000000000000000000165",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185418818,
+          "end": 1791185418821
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185418839,
+      "sessionID": "ses_00000000000000000000000165",
+      "part": {
+        "id": "prt_00000000000000000000000169",
+        "reason": "length",
+        "messageID": "msg_00000000000000000000000167",
+        "sessionID": "ses_00000000000000000000000165",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ]
+}

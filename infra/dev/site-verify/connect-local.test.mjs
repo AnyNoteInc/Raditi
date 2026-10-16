@@ -824,7 +824,7 @@ test('Vault gets the access with check-and-set and the key by the provisioner, e
     return true
   })
   // Only a path of a site access and a workspace key may be named.
-  await assert.rejects(vault.writeAccess('subs/data/codex/1', data, 0), refuses('VAULT'))
+  await assert.rejects(vault.writeAccess('subs/data/zai-coding/1', data, 0), refuses('VAULT'))
   await assert.rejects(vault.ensureKey('exportable-key'), refuses('VAULT'))
   // Only the loopback OpenBao.
   assert.throws(

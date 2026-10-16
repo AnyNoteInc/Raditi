@@ -1,10 +1,10 @@
 name: Agent content
 
-# The glue below the queue: a turn key from the real issuer, the real pinned Codex and Kimi CLIs in
-# the sandbox image, sandbox-gw, the role llm on synthetic HTTPS providers, the real role mcp with
-# the local content profile and the WordPress plugin, on disposable PostgreSQL, OpenBao, S3,
-# WordPress and MariaDB. Synthetic content only: no repository secrets, client sites or provider
-# accounts.
+# The glue below the queue: a turn key from the real issuer, the real pinned OpenCode CLI in the
+# sandbox image, sandbox-gw, the role llm on the synthetic HTTPS provider (Z.ai, without the
+# stand's egress proxy), the real role mcp with the local content profile and the WordPress
+# plugin, on disposable PostgreSQL, OpenBao, S3, WordPress and MariaDB. Synthetic content only:
+# no repository secrets, client sites or provider accounts.
 on:
   pull_request:
     branches: [main]
@@ -49,6 +49,11 @@ permissions:
 jobs:
   verify-agent-content:
     runs-on: ubuntu-latest
+    # The job builds the agent runtime, the CLI harness, the network guard and the orchestrator,
+    # then runs one row of three turns and the rehearsal of the live flow (a stack of its own,
+    # three attempts): about a minute each on a desktop. The limit was set when the job ran
+    # three rows of three CLIs — five minutes on a hosted runner and once twenty-one — and
+    # stays until the job with one row has run there.
     timeout-minutes: 45
 
     steps:
@@ -56,7 +61,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Leave room for the workspace dependencies, two CLI distributions and disposable images.
+      # Leave room for the workspace dependencies, the CLI distribution and disposable images.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
@@ -85,3 +90,9 @@ jobs:
 
       - name: Verify the agent content path on a real WordPress
         run: pnpm verify:agent-content
+
+      # The live flow of the stand runs only by hand, with the plan key. Its rehearsal is the
+      # same code on the synthetic Z.ai, without a key, on the build and the images of the pass
+      # above: the request guard, the observer in front of the role llm, the search for the key.
+      - name: Rehearse the live content flow on the synthetic provider
+        run: pnpm verify:agent-content --rehearsal --no-build

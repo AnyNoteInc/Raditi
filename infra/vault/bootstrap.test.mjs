@@ -76,7 +76,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'turns/undelete/*': ['deny'],
       'turns/destroy/*': ['deny'],
     },
-    'llm-subscriptions': { 'subs/data/*': ['read', 'update'] },
+    'llm-subscriptions': { 'subs/data/*': ['read'] },
     'subscriptions-writer': {
       'subs/data/*': ['create', 'update'],
       'subs/metadata/*': ['read'],

@@ -16,7 +16,6 @@
     "verify:transport": "pnpm build && node scripts/verify-snapshot-transport.mjs",
     "verify:publication": "pnpm build && NODE_ENV=test node scripts/verify-publication.mjs",
     "verify:runner": "pnpm build && node --env-file=../../.env scripts/verify-runner.mjs",
-    "verify:codex-supervisor": "pnpm build && node scripts/verify-codex-supervisor.mjs",
     "runner-token": "node scripts/runner-token.mjs",
     "subscriptions:login": "node scripts/subscription-login.mjs",
     "subscriptions:retire": "node scripts/subscription-retire.mjs",
@@ -26,8 +25,8 @@
     "billing:refunds-needed": "node scripts/billing-refunds-needed.mjs",
     "billing:settle-payment": "node scripts/billing-settle-payment.mjs",
     "billing:rates": "node scripts/billing-rates.mjs",
-    "verify:llm-gateway": "node scripts/verify-llm-gateway.mjs",
-    "verify:kimi-supervisor": "pnpm build && node scripts/verify-kimi-supervisor.mjs"
+    "verify:llm-gateway": "exec node scripts/verify-llm-gateway.mjs",
+    "verify:opencode-supervisor": "pnpm build && exec node scripts/verify-opencode-supervisor.mjs"
   },
   "dependencies": {
     "@repo/agent-drivers": "workspace:*",

@@ -9,6 +9,7 @@ import { CoreConfigModule } from '../core/core-config.module.ts'
 import { InfraModule } from '../infra/infra.module.ts'
 import { METRICS_REGISTRY, PRISMA, TURN_CREDENTIALS } from '../infra/tokens.ts'
 import { fakeInfra, overrideCoreInfra, testCoreConfig } from '../testing/fakes.ts'
+import { sampleBackendId, sampleDriverId } from '../testing/ids.ts'
 import { CredentialSweeper } from './credential-sweeper.ts'
 import {
   CoreCredentialRuntime,
@@ -148,8 +149,8 @@ describe('LlmModule core wiring', () => {
     const { app, infra } = await application(testCoreConfig(), prisma)
     await expect(
       app.get<GatewayTurnCredentials>(TURN_CREDENTIALS).issue(ref, {
-        driverId: 'kimi',
-        backend: 'kimi-code',
+        driverId: sampleDriverId,
+        backend: sampleBackendId,
         modelSlug: 'synthetic',
         modelClass: 'standard',
         reasoningEffort: null,

@@ -114,6 +114,8 @@ const logJson = (entry) => console.log(JSON.stringify(entry))
  * proxy then requires the client CA as the issuer, so no certificate of the server CA ever
  * passes. With `clientPins`, the leaf's SHA-256 fingerprint must be listed too: that is how a
  * renewed or stolen certificate is revoked. `lookup` and `dial` are replaced only by tests.
+ * `closeGraceMs`: how long a client may keep a tunnel whose provider has closed, counted from
+ * the moment the provider's answer has left the proxy; the cut is logged `client_lingered`.
  */
 export function createEgressProxy({
   tls,
@@ -124,6 +126,7 @@ export function createEgressProxy({
   maxTunnels = 64,
   idleMs = 11 * 60 * 1000,
   connectTimeoutMs = 10_000,
+  closeGraceMs = 5_000,
   lookup = resolve4,
   dial = dialTcp,
   log = logJson,
@@ -237,7 +240,8 @@ export function createEgressProxy({
       done(result, upstream && { up: upstream.bytesWritten, down: upstream.bytesRead })
     }
     // The client's close ends the tunnel. The provider's end reaches the client through the pipe
-    // below, which ends the client socket once the last bytes are written.
+    // below, which ends the client socket once the last bytes are written; what the client still
+    // sends after that is read away (see the provider's close below), so its close is seen.
     socket.on('close', () => finish(open ? 'ok' : 'client_closed'))
     socket.on('error', () => finish('client_error'))
     const fail = (status, reason, result) => {
@@ -285,6 +289,27 @@ export function createEgressProxy({
       if (head.length > 0) upstream.write(head)
       socket.pipe(upstream)
       upstream.pipe(socket)
+      // The provider closed first, as it does for every request sent with `connection: close`.
+      // The pipe to it is gone and has paused the client socket, while the client still writes
+      // the close of its own TLS session with the provider: unread, those bytes would hide the
+      // client's close and keep the tunnel counted until the idle time. They have nowhere to go,
+      // so they are read away; a client that never closes is cut off after a short grace time.
+      // The time starts only when the whole answer has left the proxy: a cut made earlier would
+      // drop what a slow client has not taken yet. A client that takes nothing is ended by the
+      // idle time.
+      upstream.once('close', () => {
+        if (finished) return
+        socket.resume()
+        let grace
+        const arm = () => {
+          if (finished) return
+          grace = setTimeout(() => finish('client_lingered'), closeGraceMs)
+          grace.unref()
+        }
+        if (socket.writableFinished) arm()
+        else socket.once('finish', arm)
+        socket.once('close', () => clearTimeout(grace))
+      })
     })
   })
   server.on('upgrade', (_req, socket) => socket.destroy())

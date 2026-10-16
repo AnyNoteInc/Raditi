@@ -12,6 +12,13 @@ import { fileURLToPath } from 'node:url'
 
 import { run, testTimeoutMs } from './command.mjs'
 import { leftovers } from './leftovers.mjs'
+import {
+  catalogue,
+  newDatabaseCatalogue,
+  seedReport,
+  switchMigration,
+  verifySwitchToOpencode,
+} from './switch-to-opencode.mjs'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const { Client } = createRequire(join(root, 'packages/db/package.json'))('pg')
@@ -470,10 +477,14 @@ async function main() {
   assert.match(binding, /^127\.0\.0\.1:\d+$/)
   const databaseUrl = `postgresql://raditi:${passwords.raditi}@${binding}/raditi`
   const env = { DATABASE_URL: databaseUrl, NODE_ENV: 'test', CI: '1', RADITI_GATEWAY_DB_TESTS: '1' }
-  const prisma = async (args) =>
+  const prisma = async (args, options = {}) =>
     command('pnpm', ['--filter', '@repo/db', 'exec', 'prisma', ...args, '--config', config], {
       env,
+      ...options,
     })
+  const seed = async () =>
+    (await command('pnpm', ['--filter', '@repo/db', 'exec', 'node', 'prisma/seed.ts'], { env }))
+      .output
   stage = 'migrations'
   await prisma(['validate'])
   await prisma(['generate'])
@@ -492,7 +503,44 @@ async function main() {
   await verifyLegacyUpgrade(databaseUrl, bootstrap, 'app')
   await verifyLegacyUpgrade(databaseUrl, devBootstrap, 'dev')
   passed('bootstrap on the pre-B6 schema')
+  // The switch to OpenCode meets a database of the earlier shells: the same commands an
+  // operator runs, and after each stop the way out that needs none of the removed code.
+  stage = 'switch to OpenCode on a database of the earlier shells'
+  const beforeSwitch = join(directory, 'before-switch-migrations')
+  await mkdir(beforeSwitch)
+  for (const entry of await readdir(migrations)) {
+    if (entry === 'migration_lock.toml' || entry < switchMigration) {
+      await cp(join(migrations, entry), join(beforeSwitch, entry), { recursive: true })
+    }
+  }
+  await setMigrations(beforeSwitch)
+  await prisma(['migrate', 'deploy'])
   await setMigrations(migrations)
+  checks += await withDatabase(databaseUrl, (client) =>
+    verifySwitchToOpencode({
+      client,
+      // Maintenance of the database goes through the local socket as postgres.
+      psql: (script, variables) =>
+        docker(
+          [
+            'exec',
+            '-i',
+            name,
+            'psql',
+            '-U',
+            'postgres',
+            '-d',
+            'raditi',
+            ...Object.entries(variables).flatMap(([key, value]) => ['-v', `${key}=${value}`]),
+          ],
+          { input: script },
+        ),
+      deploy: () => prisma(['migrate', 'deploy'], { allowFailure: true }),
+      resolve: () => prisma(['migrate', 'resolve', '--rolled-back', switchMigration]),
+      seed,
+      passed,
+    }),
+  )
   await prisma(['migrate', 'deploy'])
   passed('all migrations applied on empty local PostgreSQL')
   stage = 'shared user after migration'
@@ -549,14 +597,14 @@ async function main() {
   passed('database tests left no row in public and no schema behind')
   stage = 'reference data seed'
   // The orchestrator's integration tests read the seeded catalogue, as in CI after db:seed.
-  const seed = async () =>
-    (await command('pnpm', ['--filter', '@repo/db', 'exec', 'node', 'prisma/seed.ts'], { env }))
-      .output
   assert.match(await seed(), /\[seed\] \w+: \+[1-9]\d* created, 0 updated/)
-  const reseeded = (await seed()).split('\n').filter((line) => /^\[seed\] \w+: /.test(line))
-  assert.ok(reseeded.length > 0, 'The seed must report its tables')
-  for (const line of reseeded) assert.match(line, /: \+0 created, 0 updated$/)
-  passed('reference data seeded; a rerun changes nothing')
+  // A new database: one shell and its catalogue, no row of an earlier shell or provider.
+  assert.deepEqual(await withDatabase(databaseUrl, catalogue), newDatabaseCatalogue)
+  const reseeded = seedReport(await seed())
+  assert.ok(Object.keys(reseeded).length >= 5, 'The seed must report its tables')
+  for (const [table, counts] of Object.entries(reseeded)) assert.deepEqual(counts, [0, 0], table)
+  assert.deepEqual(await withDatabase(databaseUrl, catalogue), newDatabaseCatalogue)
+  passed('reference data seeded: the catalogue of one shell; a rerun changes nothing')
   await suite('orchestrator', 'orchestrator')
   // Their PostgreSQL suites (billing accounts, the ledger and its read models; project and
   // profile writes; the avatar upload limit) skip themselves without DATABASE_URL, in
