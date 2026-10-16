@@ -1,0 +1,38 @@
+{
+  "name": "@repo/site-connections",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./databases": "./src/databases/index.ts",
+    "./services": "./src/services.ts",
+    "./testing": "./src/testing/index.ts",
+    "./testing/certificates": "./src/testing/certificates.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@repo/domain": "workspace:*",
+    "basic-ftp": "catalog:",
+    "mysql2": "catalog:",
+    "pg": "catalog:",
+    "ssh2": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "@types/ssh2": "catalog:",
+    "@typescript/native": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

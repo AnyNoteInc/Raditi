@@ -3,3 +3,8 @@
 export { gitProviderConfigSchema, type GitProviderConfig } from './config.ts'
 export { createGitProvider, type GitProviderOptions } from './create-git-provider.ts'
 export type { GitCredentialLifecycle, ManagedGitProvider } from './credential-lifecycle.ts'
+export {
+  createGiteaRepositoryProvisioner,
+  type GiteaRepositoryProvisionerConfig,
+  type GiteaRepositoryProvisionerOptions,
+} from './gitea-repository-provisioner.ts'

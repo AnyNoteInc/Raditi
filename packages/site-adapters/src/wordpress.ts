@@ -1,6 +1,13 @@
 import type { McpToolDescriptor, SiteAdapter } from '@repo/domain'
 import { notImplemented } from '@repo/domain'
-import { archivesAndDumps, phpServerConfigFiles, secretFiles } from './php-hosting.ts'
+import { phpConfigStrings, secretValues } from './php-config.ts'
+import {
+  archivesAndDumps,
+  dataFiles,
+  phpServerConfigFiles,
+  secretFiles,
+  serverLogs,
+} from './php-hosting.ts'
 
 // Pattern syntax (the domain port leaves it open, so it is fixed here):
 // - protectedPaths: path prefixes from the repository root, `*` within one segment,
@@ -41,6 +48,9 @@ const backupDirs = [
 /** Build output and logs at any depth; debug.log may hold personal data. */
 const buildOutput = ['node_modules/', '*.log']
 
+/** Uploads of a legacy multisite and the firewall logs of Wordfence: visitors' data, not code. */
+const dataDirs = ['wp-content/blogs.dir/', 'wp-content/wflogs/']
+
 const anchored = (paths: readonly string[]) => paths.map((p) => `/${p}`)
 
 const protectedPaths = [
@@ -57,8 +67,9 @@ const protectedPaths = [
 ]
 
 const snapshotExcludes = [
-  ...anchored(['wp-content/uploads/', ...generatedDirs, ...backupDirs]),
+  ...anchored(['wp-content/uploads/', ...dataDirs, ...generatedDirs, ...backupDirs]),
   ...buildOutput,
+  ...serverLogs,
   'vendor/',
   ...archivesAndDumps,
   ...secretFiles,
@@ -72,15 +83,33 @@ const importExcludes = [
     'wp-admin/',
     'wp-includes/',
     'wp-content/uploads/',
+    ...dataDirs,
     ...generatedDirs,
     ...backupDirs,
     ...dropIns,
     ...phpServerConfigFiles,
   ]),
+  // No slash: copies of the configuration at any depth — old/wp-config.php, wp-config.php.save.
+  // The price: a folder of that name is left out whole, a plugin called wp-config-… included.
+  'wp-config*',
   ...buildOutput,
+  ...serverLogs,
   ...archivesAndDumps,
+  ...dataFiles,
   ...secretFiles,
 ]
+
+/** In the root folder of every installation; wp-config.php is not: it may lie one folder above. */
+const rootMarkers = ['wp-content', 'wp-includes']
+
+// `define( 'NAME', ` in front of the database password and of the eight keys and salts. Letter
+// case is ignored: PHP reads `define` in any. Whitespace is all that may stand between the
+// tokens: a comment there, parentheses around the value or a `const` declaration give no value.
+const secretDefine =
+  /\bdefine[ \t\r\n]*\([ \t\r\n]*(['"])(?:DB_PASSWORD|(?:SECURE_AUTH|LOGGED_IN|AUTH|NONCE)_(?:KEY|SALT))\1[ \t\r\n]*,[ \t\r\n]*/i
+const defineEnd = /[ \t\r\n]*[),]/
+/** What wp-config-sample.php ships in place of a key: no secret, and present in every copy of it. */
+const samplePhrase = 'put your unique phrase here'
 
 /**
  * MCP tools of the gateway for WordPress (spec §8, §11). Everything that changes the site
@@ -208,5 +237,12 @@ export const wordpressAdapter: SiteAdapter = {
   },
   snapshotExcludes() {
     return [...snapshotExcludes]
+  },
+  rootMarkers() {
+    return [...rootMarkers]
+  },
+  async configSecrets(read) {
+    const values = await phpConfigStrings(read, 'wp-config.php', secretDefine, defineEnd)
+    return secretValues(values.filter((value) => value !== samplePhrase))
   },
 }

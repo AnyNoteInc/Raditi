@@ -47,4 +47,32 @@ export const secretFiles = [
   '.git-credentials',
   '.npmrc',
   'auth.json',
+  // Credential files of client tools; the editor folders keep deployment passwords.
+  '.my.cnf',
+  '.pgpass',
+  '.netrc',
+  'sftp-config.json',
+  '.ftpconfig',
+  '.vscode/',
+  '.idea/',
 ] as const
+
+/**
+ * Exports and file databases: orders, clients and form submissions saved next to the code.
+ * Never imported into git, at any depth.
+ */
+export const dataFiles = [
+  '*.csv',
+  '*.xls',
+  '*.xlsx',
+  '*.sqlite',
+  '*.sqlite3',
+  '*.db',
+  '*.mdb',
+] as const
+
+/**
+ * Web server logs under their usual names on cPanel hostings, which have no extension: they
+ * hold visitors' addresses and request data.
+ */
+export const serverLogs = ['error_log', 'access_log'] as const

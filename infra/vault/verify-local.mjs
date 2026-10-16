@@ -146,8 +146,16 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
       method: 'POST',
       body: { options: { cas }, data },
     })
+    // KV v2 takes PATCH as a JSON merge patch only: with another content type the server
+    // answers 415 before it looks at the policy.
+    const mergePatch = (input, init) =>
+      fetch(input, {
+        ...init,
+        headers: { ...init.headers, 'Content-Type': 'application/merge-patch+json' },
+      })
     const expect = async (token, path, status, options) => {
-      const result = await localVaultRequest({ address, token }, path, options)
+      const fetchImpl = options?.method === 'PATCH' ? mergePatch : fetch
+      const result = await localVaultRequest({ address, token, fetchImpl }, path, options)
       assert.equal(result.status, status, `Unexpected ACL result for ${path}`)
       checks += 1
       return result.body
@@ -363,13 +371,15 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
 }
 
 /**
- * Real rights of the content path: the trusted writers, then the `mcp` and `core` roles logged
- * in through AppRole. Every status below is an answer of the server, not of a policy parser.
+ * Real rights of the content path and of the site import: the trusted writers, then the `mcp`
+ * and `core` roles logged in through AppRole. Every status below is an answer of the server,
+ * not of a policy parser.
  */
 async function verifyContentAccess({ address, rootToken, scopedTokens, turn, expect }) {
   const root = { address, token: rootToken }
   const post = (body) => ({ method: 'POST', ...(body === undefined ? {} : { body }) })
   const write = (data, cas) => post({ options: { cas }, data })
+  const patch = (data, cas) => ({ method: 'PATCH', body: { options: { cas }, data } })
   const siteId = randomUUID()
   const taskId = randomUUID()
   const key = `ws-${randomUUID()}`
@@ -383,6 +393,15 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   })
   const wp = `sites/${siteId}/wp`
   const ssh = `sites/${siteId}/ssh`
+  // The kinds a site is imported with and the current version of each: the database access is
+  // replaced once below.
+  const importVersions = { ftp: 1, ssh: 1, git: 1, db: 2 }
+  const importAccess = (kind, version) => ({ v: '1', password: `synthetic-${kind}-${version}` })
+  // A read of each of them: refused to every policy but the import one.
+  const importReads = Object.keys(importVersions).map((kind) => [
+    `kv/data/sites/${siteId}/${kind}`,
+    {},
+  ])
   const mask = `content-masks/${siteId}/${taskId}`
   const sub = 'openai-chatgpt/synthetic-content'
 
@@ -432,6 +451,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     [`transit/datakey/plaintext/${key}`, post({ bits: 256 })],
     [`transit/encrypt/${key}`, post({ plaintext: 'c3ludGhldGlj' })],
     [`kv/data/${wp}`, {}],
+    ...importReads,
     [`kv/data/${wp}`, write(access('synthetic-provisioner'), 0)],
   ]) {
     await expect(provisioner, path, 403, options)
@@ -441,13 +461,18 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   // sites-writer: stores site access with CAS and cannot read it back.
   const sitesWriter = scopedTokens['sites-writer']
   await expect(sitesWriter, `kv/data/${wp}`, 200, write(access('synthetic-password-1'), 0))
-  await expect(sitesWriter, `kv/data/${ssh}`, 200, write({ v: '1', key: 'synthetic-ssh' }, 0))
+  for (const kind of Object.keys(importVersions)) {
+    const path = `kv/data/sites/${siteId}/${kind}`
+    await expect(sitesWriter, path, 200, write(importAccess(kind, 1), 0))
+  }
   await expect(sitesWriter, `kv/data/${wp}`, 403)
   const stored = await expect(sitesWriter, `kv/metadata/${wp}`, 200)
   assert.equal(stored?.data?.current_version, 1)
   await expect(sitesWriter, `kv/data/${wp}`, 400, write(access('synthetic-stale'), 0))
   await expect(sitesWriter, `kv/data/${wp}`, 200, write(access('synthetic-password-2'), 1))
+  await expect(sitesWriter, `kv/data/sites/${siteId}/db`, 200, write(importAccess('db', 2), 1))
   for (const [path, options] of [
+    ...importReads,
     [`kv/metadata/sites/${siteId}`, { method: 'LIST' }],
     [`kv/metadata/${wp}`, post({ max_versions: 1 })],
     [`kv/metadata/${wp}`, { method: 'DELETE' }],
@@ -474,6 +499,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     for (const [path, options] of [
       [`transit/datakey/plaintext/${key}`, post({ bits: 256 })],
       [`kv/data/${wp}`, {}],
+      ...importReads,
       [`kv/data/${wp}`, write(access('synthetic-foreign'), 2)],
       [`kv/data/${mask}`, {}],
     ]) {
@@ -484,7 +510,10 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   // AppRole logins of the two services. A SecretID works once.
   const roles = {
     mcp: { name: 'raditi-verify-mcp', policies: ['mcp-content'] },
-    core: { name: 'raditi-verify-core', policies: ['core-turns', 'core-transit'] },
+    core: {
+      name: 'raditi-verify-core',
+      policies: ['core-turns', 'core-transit', 'core-site-import'],
+    },
   }
   await expect(rootToken, 'sys/auth/approle', 204, post({ type: 'approle' }))
   const credentials = {}
@@ -574,6 +603,9 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   for (const [path, options] of [
     [`kv/data/${ssh}`, {}],
     [`kv/data/sites/${siteId}/ftp`, {}],
+    // The database access would open the users and orders of the site to the content role.
+    [`kv/data/sites/${siteId}/db`, {}],
+    [`kv/data/sites/${siteId}/git`, {}],
     [`kv/data/sites/${siteId}/browser`, {}],
     [`kv/data/sites/${siteId}/wp/extra`, {}],
     [`kv/data/sites/${siteId}`, {}],
@@ -630,7 +662,8 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   await expect(mcp, `transit/datakey/plaintext/${unprovisioned}`, 400, post(dataKey))
   await expect(rootToken, `transit/keys/${unprovisioned}`, 404)
 
-  // core: data keys of turn snapshots next to its turn keys; no site access and no maps.
+  // core: data keys of turn snapshots next to its turn keys and the access a site is imported
+  // with; no WordPress or browser access and no maps.
   const coreIssued = await expect(core, `transit/datakey/plaintext/${key}`, 200, post(dataKey))
   const coreWrapped = coreIssued?.data?.ciphertext
   assert.ok(typeof coreWrapped === 'string', 'Wrapped key differs')
@@ -644,7 +677,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   await expect(core, 'turns/data/t_synthetic_role_1_1', 200, write({ key: 'synthetic-turn' }, 0))
   for (const [path, options] of [
     [`kv/data/${wp}`, {}],
-    [`kv/data/${ssh}`, {}],
+    [`kv/data/sites/${siteId}/browser`, {}],
     [`kv/data/${wp}`, write(access('synthetic-core'), 2)],
     [`kv/data/${mask}`, {}],
     [`kv/data/${mask}`, write({ entries: '[]' }, 0)],
@@ -660,6 +693,67 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     ['ops/data/x', {}],
   ]) {
     await expect(core, path, 403, options)
+  }
+
+  // core-site-import: the four kinds are read, a replaced version included, and nothing else
+  // about a site is within reach. The role and a token of the policy alone answer alike.
+  const importer = scopedTokens['core-site-import']
+  for (const token of [core, importer]) {
+    for (const [kind, version] of Object.entries(importVersions)) {
+      const read = await expect(token, `kv/data/sites/${siteId}/${kind}`, 200)
+      assert.equal(read?.data?.metadata?.version, version)
+      assert.ok(
+        read?.data?.data?.password === `synthetic-${kind}-${version}`,
+        'Import access differs',
+      )
+    }
+    // kv/ keeps history: the database access that was replaced stays readable to the import.
+    const replaced = await expect(token, `kv/data/sites/${siteId}/db?version=1`, 200)
+    assert.ok(replaced?.data?.data?.password === 'synthetic-db-1', 'Replaced access differs')
+    for (const [path, options] of [
+      [`kv/data/${wp}`, {}],
+      [`kv/data/sites/${siteId}/browser`, {}],
+      [`kv/data/sites/${siteId}`, {}],
+      [`kv/data/sites/${siteId}/db/extra`, {}],
+      ...Object.entries(importVersions).flatMap(([kind, version]) => {
+        const path = `sites/${siteId}/${kind}`
+        return [
+          [`kv/data/${path}`, write(importAccess(kind, 3), version)],
+          [`kv/data/${path}`, patch(importAccess(kind, 3), version)],
+          [`kv/data/${path}`, { method: 'DELETE' }],
+          [`kv/subkeys/${path}`, {}],
+          [`kv/metadata/${path}`, {}],
+          [`kv/metadata/${path}`, post({ max_versions: 1 })],
+          [`kv/metadata/${path}`, { method: 'DELETE' }],
+          [`kv/metadata/${path}`, { method: 'LIST' }],
+          [`kv/delete/${path}`, post({ versions: [version] })],
+          [`kv/undelete/${path}`, post({ versions: [version] })],
+          [`kv/destroy/${path}`, post({ versions: [version] })],
+        ]
+      }),
+      [`kv/data/sites/${randomUUID()}/db`, write(importAccess('db', 1), 0)],
+      [`kv/metadata/sites/${siteId}`, { method: 'LIST' }],
+      ['kv/metadata/sites', { method: 'LIST' }],
+      ['kv/data/platform/app/core', {}],
+      ['kv/config', {}],
+    ]) {
+      await expect(token, path, 403, options)
+    }
+  }
+  for (const [path, options] of [
+    [`kv/data/${mask}`, {}],
+    [`turns/data/${turn}`, {}],
+    [`turns/data/${turn}`, write({ key: 'synthetic' }, 0)],
+    ['turns/metadata', { method: 'LIST' }],
+    [`subs/data/${sub}`, {}],
+    [`transit/datakey/plaintext/${key}`, post(dataKey)],
+    [`transit/decrypt/${key}`, post({ ciphertext: wrapped })],
+    [`transit/keys/${key}`, {}],
+    ['ops/data/x', {}],
+    ['sys/mounts', {}],
+    ['auth/token/create', post({ policies: ['core-site-import'] })],
+  ]) {
+    await expect(importer, path, 403, options)
   }
   // The workspace key is shared: either role unwraps what the other one wrapped. This is the
   // state of the code the owner still has to confirm (spec §15, §20).
@@ -706,6 +800,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     credentials,
     key,
     siteId,
+    importVersions,
     wrapped: { ciphertext: wrapped, plaintext: Buffer.from(issued.data.plaintext, 'base64') },
   }
 }
@@ -995,6 +1090,96 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     )
     assert.equal(logins.core, 1)
   })
+  const accessPath = (kind) => `kv/sites/${content.siteId}/${kind}`
+  await checked('core role reads the import access of a site with the same login', async () => {
+    for (const [kind, version] of Object.entries(content.importVersions)) {
+      const access = await role.kvRead(accessPath(kind))
+      assert.ok(access?.version === version)
+      assert.ok(access.data.password === `synthetic-${kind}-${version}`)
+      assert.deepEqual(Object.keys(access.data).sort(), ['password', 'v'])
+    }
+    assert.equal(logins.core, 1)
+  })
+  const importer = createVaultSecretStore({
+    addr: address,
+    token: scopedTokens['core-site-import'],
+  })
+  await checked('the import policy alone reads an access and health still sees kv/', async () => {
+    const access = await importer.kvRead(accessPath('db'))
+    assert.ok(access?.version === 2 && access.data.password === 'synthetic-db-2')
+    // Its paths are `+` paths only; the mount lookup of health accepts the token all the same.
+    assert.equal((await importer.health()).sealed, false)
+  })
+  await expectRejected(
+    'the import policy is refused the WordPress access, not told that it is missing',
+    () => importer.kvRead(accessPath('wp')),
+    403,
+  )
+  await expectRejected(
+    'the import policy cannot read the versions of an access',
+    () => importer.kvMetadata(accessPath('db')),
+    403,
+  )
+  await expectRejected(
+    'the import policy cannot replace an access',
+    () => importer.kvWrite(accessPath('db'), { v: '1', password: 'synthetic-import' }, { cas: 2 }),
+    403,
+  )
+  await expectRejected(
+    'the import policy cannot remove an access',
+    () => importer.kvDestroyAll(accessPath('db')),
+    403,
+  )
+  // A core role that was set up before the import policy: bootstrap writes policies, not roles.
+  await checked('a core role without the import policy degrades until a new login', async () => {
+    const earlierRole = 'auth/approle/role/raditi-verify-core-earlier'
+    const grant = async (...policies) => {
+      const written = await localVaultRequest(root, earlierRole, {
+        method: 'POST',
+        body: {
+          token_policies: ['core-turns', 'core-transit', ...policies],
+          token_no_default_policy: true,
+          token_ttl: '15m',
+          token_max_ttl: '15m',
+          secret_id_ttl: '15m',
+        },
+      })
+      assert.equal(written.status, 204)
+    }
+    await grant()
+    const roleId = (await localVaultRequest(root, `${earlierRole}/role-id`)).body?.data?.role_id
+    const secretId = (await localVaultRequest(root, `${earlierRole}/secret-id`, { method: 'POST' }))
+      .body?.data?.secret_id
+    let entered = 0
+    const earlier = createVaultSecretStore({
+      addr: address,
+      appRole: { roleId, secretId },
+      fetch: (input, options) => {
+        if (new URL(input).pathname === '/v1/auth/approle/login') entered += 1
+        return fetch(input, options)
+      },
+    })
+    const turnKey = 'turns/t_client_earlier_1_1'
+    const refused = (error) => error.status === 403
+    const degraded = (error) =>
+      error.message === 'Vault KV mount kv/ is not available' && error.status === 403
+    assert.equal(await earlier.kvCreateOnce(turnKey, { key: 'synthetic-earlier' }, {}), 'created')
+    assert.equal((await earlier.health()).sealed, false)
+    await assert.rejects(earlier.kvRead(accessPath('ftp')), refused)
+    // The refused read made kv/ a mount of this process, and its token has no path there:
+    // turn keys keep working and health does not.
+    await assert.rejects(earlier.health(), degraded)
+    assert.equal((await earlier.kvRead(turnKey))?.version, 1)
+    assert.equal(entered, 2)
+    // The role gets the policy; the token issued before does not, and a refused probe of health
+    // keeps that token. One more refused read drops it, and the login after it has the policy.
+    await grant('core-site-import')
+    await assert.rejects(earlier.health(), degraded)
+    await assert.rejects(earlier.kvRead(accessPath('ftp')), refused)
+    assert.equal((await earlier.kvRead(accessPath('ftp')))?.version, content.importVersions.ftp)
+    assert.equal((await earlier.health()).sealed, false)
+    assert.equal(entered, 3)
+  })
 
   const rootStore = createVaultSecretStore({ addr: address, token: rootToken })
   await rootStore.kvList('turns/')
@@ -1037,13 +1222,14 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     )
     assert.equal(logins.mcp, 1)
   })
-  const live = [core, writer, llm, admin, role, mcp, rootStore]
+  const live = [core, writer, llm, admin, role, mcp, importer, rootStore]
   await checked('health probes the mounts each store works with', async () => {
     for (const store of live) {
       const health = await store.health()
       assert.ok(health.initialized && !health.sealed)
     }
-    // kv/ and transit/ are visible to the mcp policy through its `+` and prefix paths.
+    // kv/ and transit/ are visible to the mcp policy through its `+` and prefix paths; kv/ is
+    // one more mount of the core role since it read a site access.
     assert.deepEqual(logins, { core: 1, mcp: 1 })
   })
   await checked('health reports a vanished KV mount and recovers after bootstrap', async () => {
@@ -1113,10 +1299,24 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     await assert.rejects(mcp.transitDataKey(content.key), (error) => error.status === 400)
     assert.deepEqual(logins, { core: 1, mcp: 1 })
   })
+  await checked('an access removed by the operator is gone with every version', async () => {
+    await rootStore.kvDestroyAll(accessPath('db'))
+    assert.equal(await importer.kvRead(accessPath('db')), null)
+    const replaced = await localVaultRequest(
+      { address, token: scopedTokens['core-site-import'] },
+      `kv/data/sites/${content.siteId}/db?version=1`,
+    )
+    assert.equal(replaced.status, 404)
+  })
   // Last: a refusal drops the cached AppRole token, and the SecretID is already spent.
   await expectRejected(
     'mcp role is refused the SSH access of the same site, not told that it is missing',
     () => mcp.kvRead(`kv/sites/${content.siteId}/ssh`),
+    403,
+  )
+  await expectRejected(
+    'core role is refused the WordPress access of the same site, not told that it is missing',
+    () => role.kvRead(accessPath('wp')),
     403,
   )
   return checks

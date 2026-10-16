@@ -191,3 +191,83 @@ describe('Gitea REST client on responses recorded from Gitea 1.27.3', () => {
     )
   })
 })
+
+describe('Gitea REST client: a new repository of an organization (recorded from Gitea 1.27.3)', () => {
+  const SITE = 'site-0b6f6d1e-5f0f-4c53-9d0a-7c2f4d3e2a10'
+  const created = giteaRecorded.organizationRepositoryCreated
+
+  it('asks for a private repository without a first commit and with the default branch main', async () => {
+    const { client: api, calls } = client(() => created)
+    await expect(api.createOrganizationRepository('sites', SITE)).resolves.toEqual({
+      owner: 'sites',
+      name: SITE,
+      defaultBranch: 'main',
+      private: true,
+    })
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        path: '/api/v1/orgs/sites/repos',
+        authorization: `token ${BOT_TOKEN}`,
+        body: { name: SITE, private: true, auto_init: false, default_branch: 'main' },
+        redirect: 'manual',
+        hasTimeout: true,
+      },
+    ])
+  })
+
+  it('reports a name the organization already has as null', async () => {
+    const { client: api, calls } = client(() => giteaRecorded.organizationRepositoryExists)
+    await expect(api.createOrganizationRepository('sites', SITE)).resolves.toBeNull()
+    expect(calls).toHaveLength(1)
+  })
+
+  // The third column: the reason of a refusal no retry cures. None — Gitea gave no usable answer.
+  it.each([
+    [
+      'an account that may not create there (403)',
+      giteaRecorded.organizationRepositoryForbidden,
+      { reason: 'forbidden' },
+    ],
+    [
+      'a token without the scope (403)',
+      giteaRecorded.organizationRepositoryScopeMissing,
+      { reason: 'forbidden' },
+    ],
+    [
+      'a missing or hidden organization (404)',
+      giteaRecorded.organizationMissing,
+      { reason: 'not_found' },
+    ],
+    ['a refused token (401)', giteaRecorded.repositoryBadToken, { reason: 'unauthorized' }],
+    ['a redirect', giteaRecorded.repositoryMoved, undefined],
+    ['a server error', { status: 500, body: '{"message":"boom"}' }, undefined],
+    ['a refusal of another kind (422)', { status: 422, body: '{"message":"boom"}' }, undefined],
+    ['a success without the creation status', { status: 200, body: created.body }, undefined],
+    ['a body that is not JSON', { status: 201, body: '<html>' }, undefined],
+    ['a body of another shape', { status: 201, body: '{"name":"demo"}' }, undefined],
+  ])('fails on %s without leaking the token or the body', async (_, response, details) => {
+    const { client: api, calls } = client(() => response)
+    const error = await api.createOrganizationRepository('sites', SITE).catch((e: unknown) => e)
+    expect(error).toMatchObject({ ...failed, details })
+    expect(String((error as Error).message)).not.toContain(BOT_TOKEN)
+    expect(String((error as Error).message)).not.toMatch(/boom|allowed|scope|not found|invalid/)
+    // One request: a refusal is neither repeated nor followed.
+    expect(calls).toHaveLength(1)
+  })
+
+  it.each([
+    ['sites/../admin', SITE],
+    ['', SITE],
+    ['sites', '..'],
+    ['sites', 'a/b'],
+    ['sites', ''],
+    ['sites', 's'.repeat(101)],
+  ])('refuses the organization %s with the name %s before any request', async (org, name) => {
+    const { client: api, calls } = client(() => created)
+    await expect(api.createOrganizationRepository(org, name)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+    expect(calls).toEqual([])
+  })
+})

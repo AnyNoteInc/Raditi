@@ -24,11 +24,20 @@ export interface GiteaToken {
   token: string
 }
 
-/** The two methods of P8 that a turn needs, plus the token calls behind short-lived grants. */
+/**
+ * The two methods of P8 that a turn needs, plus the token calls behind short-lived grants, and
+ * the one call of the account that creates site repositories (gitea-repository-provisioner.ts).
+ */
 export interface GiteaClient {
   /** The web root without a trailing slash: repositories are cloned from below it. */
   readonly root: string
   getRepository(owner: string, name: string): Promise<GiteaRepository | null>
+  /**
+   * Creates a private repository without a first commit, default branch `main`, as the account
+   * of the token. Null when the organization already has that name (409): nothing was created.
+   * A refusal by 401, 403 or 404 says which in its GiteaRefusal.
+   */
+  createOrganizationRepository(org: string, name: string): Promise<GiteaRepository | null>
   /** Login of the account the bot token belongs to. */
   tokenOwner(): Promise<string>
   createToken(login: string, name: string, scopes: readonly string[]): Promise<GiteaToken>
@@ -40,6 +49,14 @@ export interface GiteaClient {
 /** Messages never carry the token, the address or a response body. */
 export const giteaFailed = (message: string): DomainError =>
   new DomainError('GIT_PROVIDER_FAILED', message, 502)
+/**
+ * Why a refusal is final while the token, its account and the repository stay as they are: a
+ * word of ours in `details.reason`, fit for a log line, never Gitea's. A failure without one
+ * got no usable answer (network, timeout, redirect, 5xx) and may pass on a retry.
+ */
+export type GiteaRefusal = 'unauthorized' | 'forbidden' | 'not_found' | 'not_ours'
+export const giteaRefused = (reason: GiteaRefusal, message: string): DomainError =>
+  new DomainError('GIT_PROVIDER_FAILED', message, 502, { reason })
 const notConfigured = (): DomainError =>
   new DomainError(
     'GIT_PROVIDER_NOT_CONFIGURED',
@@ -52,6 +69,12 @@ export const GITEA_PAGE_SIZE = 50
 /** A repository answer is about 3 KiB, a page of 50 tokens about 12 KiB. */
 const RESPONSE_BYTES = 256 * 1024
 const DEFAULT_TIMEOUT_MS = 10_000
+/** A refused creation by its status: an unknown token; a missing scope or team right; no member. */
+const creationRefusals = new Map<number, GiteaRefusal>([
+  [401, 'unauthorized'],
+  [403, 'forbidden'],
+  [404, 'not_found'],
+])
 
 const slug = z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/)
 /** An owner, repository or login that is safe as one URL path segment. */
@@ -161,6 +184,26 @@ export function createGiteaClient(
           private: repository.private,
         }
       )
+    },
+    async createOrganizationRepository(org, name) {
+      if (!isGiteaName(org) || !isGiteaName(name)) throw badRequest('Invalid repository reference')
+      const response = await send(`/orgs/${org}/repos`, {
+        method: 'POST',
+        body: { name, private: true, auto_init: false, default_branch: 'main' },
+      })
+      const refusal = creationRefusals.get(response.status)
+      if (refusal || response.status === 409) {
+        await response.body?.cancel().catch(() => undefined)
+        if (!refusal) return null
+        throw giteaRefused(refusal, `Gitea repository creation returned HTTP ${response.status}`)
+      }
+      const repository = (await read('repository creation', response, 201, repositorySchema))!
+      return {
+        owner: repository.owner.login,
+        name: repository.name,
+        defaultBranch: repository.default_branch,
+        private: repository.private,
+      }
     },
     async tokenOwner() {
       const response = await send('/token', { method: 'GET' })

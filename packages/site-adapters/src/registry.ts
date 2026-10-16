@@ -26,6 +26,12 @@ export function getSiteAdapter(stack: SiteStack): SiteAdapter {
   throw badRequest(`Unknown site stack: ${String(stack)}`)
 }
 
+/**
+ * Stacks whose sites the connection wizard takes (spec §12). An adapter alone is not enough:
+ * the stack joins the list when the rest of its way into the product is there.
+ */
+export const connectableStacks: readonly SiteStack[] = ['wordpress']
+
 const contentAdapters = new Map<SiteStack, SiteContentAdapter>([
   ['wordpress', wordpressContentAdapter],
 ])
