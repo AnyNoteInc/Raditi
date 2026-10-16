@@ -360,11 +360,17 @@ interface CliRecord {
   again?: Record<string, string>
   /**
    * What a read that does not wait found first in each pipe and the text it got in the end;
-   * `offPathHeld`: once the value was there, the path was gone while a writer still held the pipe.
+   * `offPathHeld`: once the value was there, the path was gone while a writer still held the pipe;
+   * `closedOnPath`: the pipe had no writer left while its path was still there.
    */
   probed?: Record<
     string,
-    { first: 'waiting' | 'value' | 'end'; text: string; offPathHeld: boolean }
+    {
+      first: 'waiting' | 'value' | 'end'
+      text: string
+      offPathHeld: boolean
+      closedOnPath: boolean
+    }
   >
   imported?: string
 }
@@ -567,7 +573,7 @@ const probe = () => Object.fromEntries(refs.map((ref) => {
   const fd = fs.openSync(ref, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   const buffer = Buffer.alloc(8192);
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
-  let first, text = '', offPathHeld = false;
+  let first, text = '', offPathHeld = false, closedOnPath = false;
   for (const deadline = Date.now() + 10000; Date.now() < deadline; ) {
     // Once the value is there, without a pause: the path leaves a few milliseconds before the end.
     const offPath = text !== '' && !fs.existsSync(ref);
@@ -576,11 +582,12 @@ const probe = () => Object.fromEntries(refs.map((ref) => {
     catch (error) { if (error.code !== 'EAGAIN') throw error; found = 'waiting'; }
     first ??= found;
     if (offPath && found === 'waiting') offPathHeld = true;
+    if (found === 'end' && text !== '' && fs.existsSync(ref)) closedOnPath = true;
     if (found === 'end' && text !== '') break;
     if (found !== 'value' && text === '') Atomics.wait(sleeper, 0, 0, 1);
   }
   fs.closeSync(fd);
-  return [path.basename(ref), { first, text, offPathHeld }];
+  return [path.basename(ref), { first, text, offPathHeld, closedOnPath }];
 }));
 if (step.probe) record.probed = probe();
 else if (step.readSecrets !== false) record.delivered = read();
@@ -735,10 +742,6 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
 
   it('holds the write end of each pipe before the CLI starts: a reader never finds a pipe without a writer', async () => {
     mcpAnswer = accept
-    const result = await launch({}, { run: { probe: true } })
-    expect(result.stderr).toBe('')
-    expect(result.code).toBe(0)
-    const [cli] = result.records as [CliRecord]
     // A read that does not wait says in what state it found the pipe: `end` is a pipe nobody
     // holds for writing. A wrapper that opens the pipe only once it sees a reader has to try and
     // be refused until then, and under gVisor a refused open lets a reader's own open return
@@ -747,20 +750,36 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     //
     // The path leaves before the pipe closes: a reader that has its value and opens the path
     // once more finds nothing. A pipe still on its path after the close would keep that second
-    // open waiting for a writer for good (docs/plan/48-removal.md, «Что краснело само»).
-    expect(cli.probed).toEqual({
-      llm: {
-        first: expect.stringMatching(/^(waiting|value)$/),
-        text: context.llm.apiKey,
-        offPathHeld: true,
-      },
-      mcp: {
-        first: expect.stringMatching(/^(waiting|value)$/),
-        text: context.mcp.token,
-        offPathHeld: true,
-      },
-    })
-    expect(result.left.secrets).toEqual([])
+    // open waiting for a writer for good (docs/plan/48-removal.md, «Что краснело само»). No launch
+    // may find a closed pipe on its path. Seeing the path gone while the pipe is still held needs
+    // the reader to look within the wrapper's hold of a few milliseconds, which a busy machine can
+    // miss: each pipe has to be seen so at least once in up to five launches. With the close
+    // before the removal it is never seen.
+    const seenHeld = { llm: false, mcp: false }
+    for (let attempt = 0; attempt < 5 && !(seenHeld.llm && seenHeld.mcp); attempt += 1) {
+      const result = await launch({}, { run: { probe: true } })
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      const [cli] = result.records as [CliRecord]
+      expect(cli.probed).toEqual({
+        llm: {
+          first: expect.stringMatching(/^(waiting|value)$/),
+          text: context.llm.apiKey,
+          offPathHeld: expect.any(Boolean),
+          closedOnPath: false,
+        },
+        mcp: {
+          first: expect.stringMatching(/^(waiting|value)$/),
+          text: context.mcp.token,
+          offPathHeld: expect.any(Boolean),
+          closedOnPath: false,
+        },
+      })
+      seenHeld.llm ||= cli.probed!.llm!.offPathHeld
+      seenHeld.mcp ||= cli.probed!.mcp!.offPathHeld
+      expect(result.left.secrets).toEqual([])
+    }
+    expect(seenHeld).toEqual({ llm: true, mcp: true })
   })
 
   it('accepts an MCP answer framed as a server-sent event', async () => {
