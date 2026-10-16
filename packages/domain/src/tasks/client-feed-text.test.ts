@@ -153,7 +153,9 @@ describe('feedText', () => {
     const started = performance.now()
     for (const raw of long)
       expect(feedText(raw).includes('[[raditi:'), raw.slice(0, 30)).toBe(false)
-    expect(performance.now() - started).toBeLessThan(1000)
+    // Linear work takes about 0.2 s here and 3.4 s on a loaded CI runner; a parse quadratic in
+    // these hundreds of thousands of characters would take minutes, so ten seconds still catches it.
+    expect(performance.now() - started).toBeLessThan(10_000)
     expect(feedText(long[0] ?? '')).toBe('(скрыто)')
   })
 
