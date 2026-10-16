@@ -69,6 +69,12 @@ catalog:
   pg: ^8.23.0
   '@types/pg': ^8.23.1
 
+  # Client servers of a connected site: FTP, SFTP and MySQL (packages/site-connections)
+  basic-ftp: ^6.2.2
+  ssh2: ^1.17.0
+  '@types/ssh2': ^1.15.6
+  mysql2: ^3.24.5
+
   # Auth and API
   better-auth: 1.7.6
   '@trpc/server': ^11.19.0
@@ -132,9 +138,15 @@ catalog:
   remark-gfm: ^4.0.1
   server-only: ^0.0.1
   '@playwright/test': ^1.63.0
+  '@axe-core/playwright': ^4.13.0
   '@next/env': 16.3.6
   '@fontsource-variable/golos-text': ^5.3.0
   '@fontsource-variable/unbounded': ^5.3.0
   '@fontsource-variable/jetbrains-mono': ^5.3.0
 
-  '@axe-core/playwright': ^4.13.0
+# Releases younger than a day are held back (pnpm's built-in minimumReleaseAge); pnpm lists here
+# the ones it installed anyway.
+minimumReleaseAgeExclude:
+  # 6.2.2 (04.10.2026) is the only release with the fix of GHSA-5rfr-xx34-2xxv (quadratic MLSD
+  # detection and PASV parser): never fall back to 6.2.1.
+  - basic-ftp@6.2.2

@@ -30,6 +30,7 @@
     "verify:site-connect": "pnpm --filter orchestrator build && exec node infra/dev/site-verify/verify-site-connect.mjs",
     "verify:mcp-content": "pnpm --filter orchestrator build && exec node infra/dev/site-verify/verify-content.mjs",
     "verify:agent-content": "node apps/orchestrator/scripts/verify-agent-content.mjs",
+    "verify:billing": "exec node infra/dev/billing-verify/verify-billing.mjs",
     "verify:db": "node infra/dev/db-verify/verify-db.mjs",
     "verify:gitea": "pnpm --filter orchestrator build && exec node infra/dev/gitea-verify/verify-gitea.mjs",
     "verify:pipeline": "exec node infra/dev/pipeline-verify/verify-pipeline.mjs",

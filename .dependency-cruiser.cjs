@@ -7,8 +7,8 @@
 
 const TOOLING = '^packages/(eslint-config|typescript-config)/'
 const ADAPTERS =
-  'db|storage|vault|git-providers|sandbox-providers|agent-drivers|llm-backends|site-adapters|yookassa|mail|telegram'
-const SERVICES = 'auth|notifications'
+  'db|storage|vault|git-providers|sandbox-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram'
+const SERVICES = 'auth|notifications|billing'
 // Every package must belong to a layer; an unclassified one would bypass all rules.
 const KNOWN = `^packages/(domain|observability|${ADAPTERS}|${SERVICES}|trpc|ui|eslint-config|typescript-config)/`
 const npm = (names) => [`node_modules/\\.pnpm/(${names})@`, `node_modules/(${names})/`]
@@ -117,6 +117,28 @@ module.exports = {
       },
     },
     {
+      name: 'billing-tier',
+      comment:
+        'billing composes db, the payment shop and notifications; never auth, trpc, ui or agent infrastructure.',
+      severity: 'error',
+      from: { path: '^packages/billing/' },
+      to: {
+        path: '^packages/',
+        pathNot: ['^packages/(domain|db|yookassa|notifications|billing)/', TOOLING],
+      },
+    },
+    {
+      name: 'billing-testing-only-in-tests',
+      comment:
+        '@repo/billing/testing (fixtures that write rows directly, the scripted shop) is test support: only test files import it, in billing and in every other package. apps/e2e is test code as a whole: its fixtures write the model calls a charged task needs.',
+      severity: 'error',
+      from: {
+        path: '^(apps|packages)/',
+        pathNot: ['\\.test\\.tsx?$', '^apps/e2e/', '^packages/billing/src/testing\\.ts$'],
+      },
+      to: { path: '^packages/billing/src/testing\\.ts$' },
+    },
+    {
       name: 'trpc-no-ui',
       comment: 'Transport never imports UI.',
       severity: 'error',
@@ -162,7 +184,7 @@ module.exports = {
       },
       to: {
         path: [
-          '^packages/(db|vault|storage|llm-backends|yookassa)/',
+          '^packages/(db|vault|storage|llm-backends|yookassa|billing)/',
           '^apps/orchestrator/src/runner-api/',
           ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+'),
         ],

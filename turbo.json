@@ -7,8 +7,12 @@
     "APP_URL",
     "BETTER_AUTH_SECRET",
     "BETTER_AUTH_URL",
+    "BILLING_PAST_DUE_DAYS",
+    "BILLING_RENEWAL_NOTICE_DAYS",
+    "BILLING_TICK_SECONDS",
     "CI",
     "DATABASE_URL",
+    "GITEA_PROVISIONER_TOKEN",
     "GITEA_RUNNER_TOKEN",
     "GITEA_TOKEN",
     "GITEA_URL",
@@ -89,6 +93,7 @@
     "VAULT_ROLE_ID",
     "VAULT_SECRET_ID",
     "YOOKASSA_API_URL",
+    "YOOKASSA_AUTOPAYMENTS",
     "YOOKASSA_SECRET_KEY",
     "YOOKASSA_SHOP_ID",
     "YOOKASSA_WEBHOOK_ALLOWLIST"
@@ -113,7 +118,12 @@
       "dependsOn": ["transit"]
     },
     "test": {
-      "dependsOn": ["^db:generate", "db:generate", "transit"]
+      "dependsOn": ["^db:generate", "db:generate", "transit"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/.env.example",
+        "$TURBO_ROOT$/apps/web/content/legal/public-offer.md"
+      ]
     },
     "dev": {
       "dependsOn": ["^db:generate", "db:generate"],
