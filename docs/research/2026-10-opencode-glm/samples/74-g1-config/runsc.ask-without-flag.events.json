@@ -1,0 +1,63 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185246381,
+      "sessionID": "ses_00000000000000000000000422",
+      "part": {
+        "id": "prt_00000000000000000000000423",
+        "messageID": "msg_00000000000000000000000424",
+        "sessionID": "ses_00000000000000000000000422",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185246664,
+      "sessionID": "ses_00000000000000000000000422",
+      "part": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_000000000000000000000001",
+        "state": {
+          "status": "error",
+          "input": {
+            "command": "echo denied-marker",
+            "description": "stand step"
+          },
+          "error": "The user rejected permission to use this specific tool call.",
+          "time": {
+            "start": 1791185246374,
+            "end": 1791185246492
+          }
+        },
+        "id": "prt_00000000000000000000000425",
+        "sessionID": "ses_00000000000000000000000422",
+        "messageID": "msg_00000000000000000000000424"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185246666,
+      "sessionID": "ses_00000000000000000000000422",
+      "part": {
+        "id": "prt_00000000000000000000000426",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000424",
+        "sessionID": "ses_00000000000000000000000422",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ]
+}

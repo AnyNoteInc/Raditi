@@ -1,7 +1,10 @@
 import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { createServer } from 'node:https'
+import { connect, createServer as createTcpServer, type AddressInfo } from 'node:net'
+import { setTimeout as delay } from 'node:timers/promises'
 
+import { llmBackends } from '@repo/llm-backends'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
 import type { EgressConfig } from '../config/llm-config.ts'
@@ -81,7 +84,45 @@ describe('authenticated egress channel probe', () => {
     },
   )
 
-  it('rejects an untrusted client and never probes with disabled egress', async () => {
+  it('has nothing to probe without a proxy: the role then opens no connection of its own accord', async () => {
+    // Every origin the adapters declare points at this listener, so whatever a probe of the
+    // direct path opened of its own accord would be counted here, before any TLS, and could
+    // not reach a provider from a test run.
+    let connections = 0
+    const listener = createTcpServer((socket) => {
+      connections += 1
+      socket.destroy()
+    })
+    listener.listen(0, '127.0.0.1')
+    await once(listener, 'listening')
+    const { port } = listener.address() as AddressInfo
+    const direct: EgressConfig = {
+      proxyUrl: null,
+      upstreamCaFile: certificates.certFile,
+      backendOrigins: new Map(
+        llmBackends.flatMap((backend) =>
+          backend.egress.map((entry) => [entry.origin, `https://localhost:${port}`] as const),
+        ),
+      ),
+    }
+    try {
+      // Every origin an adapter declares points at the listener: none is left to its real address.
+      expect(direct.backendOrigins.size).toBeGreaterThan(0)
+      expect(await createEgressProbe(direct).check(AbortSignal.timeout(2000))).toBe(true)
+      // Long enough for a connection opened behind the answer to arrive.
+      await delay(150)
+      expect(connections).toBe(0)
+      // The count is no decoration: a connection to that very address is seen.
+      const socket = connect(port, 'localhost')
+      socket.on('error', () => {})
+      await vi.waitFor(() => expect(connections).toBe(1))
+      socket.destroy()
+    } finally {
+      await new Promise<void>((resolve) => listener.close(() => resolve()))
+    }
+  })
+
+  it('rejects an untrusted client', async () => {
     const f = await fixture()
     try {
       expect(
@@ -92,7 +133,6 @@ describe('authenticated egress channel probe', () => {
         }).check(AbortSignal.timeout(2000)),
       ).toBe(false)
       expect(f.requests).toHaveLength(0)
-      expect(await createEgressProbe(null).check(AbortSignal.timeout(2000))).toBe(false)
     } finally {
       await f.close()
     }
@@ -100,7 +140,7 @@ describe('authenticated egress channel probe', () => {
 })
 
 describe('egress readiness', () => {
-  it('coalesces probes and permits refresh only after a successful channel check', async () => {
+  it('coalesces probes and reports healthy only after a successful channel check', async () => {
     const answer = Promise.withResolvers<boolean>()
     const check = vi.fn(() => answer.promise)
     const health = new EgressHealth({ check })
@@ -212,6 +252,41 @@ describe('egress readiness', () => {
     expect(health.nextCheckMs()).toBe(5_000)
     await health.check()
     expect(health.healthy()).toBe(true)
+    await health.close()
+  })
+
+  it('reads three connections of its own in a row that never opened as a provider out of reach', async () => {
+    let now = 0
+    const logger = { warn: vi.fn() }
+    const health = new EgressHealth({ check: vi.fn().mockResolvedValue(true) }, logger, () => now)
+    await health.check()
+    expect(health.directReachable()).toBe(true)
+    health.observeDirect(false)
+    health.observeDirect(false)
+    expect(health.directReachable()).toBe(true)
+    // One that opened in between starts the count again.
+    health.observeDirect(true)
+    health.observeDirect(false)
+    health.observeDirect(false)
+    expect(health.directReachable()).toBe(true)
+    health.observeDirect(false)
+    expect(health.directReachable()).toBe(false)
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ event: 'llm_egress_direct_unreachable' }),
+    )
+    // A sign for the health answer alone: admission and provider traffic stay open, and the
+    // next request that gets through is what restores it.
+    expect(health.healthy()).toBe(true)
+    health.observeDirect(false)
+    expect(logger.warn).toHaveBeenCalledOnce()
+    health.observeDirect(true)
+    expect(health.directReachable()).toBe(true)
+    // With nothing tried for five minutes nothing is known any longer.
+    for (let failure = 0; failure < 3; failure++) health.observeDirect(false)
+    now += 5 * 60_000 - 1
+    expect(health.directReachable()).toBe(false)
+    now += 1
+    expect(health.directReachable()).toBe(true)
     await health.close()
   })
 

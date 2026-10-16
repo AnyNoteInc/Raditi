@@ -1,0 +1,52 @@
+{
+  "name": "54-coding-err-invalid-key-stream",
+  "request": {
+    "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+    "auth": "invalid",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "authorization"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ],
+    "body": {
+      "model": "glm-5.3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with the single word: ok"
+        }
+      ],
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "max_tokens": 64
+    }
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-length",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "vary",
+      "x-log-id",
+      "x-request-id"
+    ],
+    "elapsedMs": 681,
+    "body": "{\"error\":{\"code\":\"401\",\"message\":\"token expired or incorrect\"}}"
+  }
+}

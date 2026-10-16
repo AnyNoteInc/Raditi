@@ -29,17 +29,16 @@
     "verify:site": "node infra/dev/site-verify/verify-site.mjs",
     "verify:site-connect": "pnpm --filter orchestrator build && exec node infra/dev/site-verify/verify-site-connect.mjs",
     "verify:mcp-content": "pnpm --filter orchestrator build && exec node infra/dev/site-verify/verify-content.mjs",
-    "verify:agent-content": "node apps/orchestrator/scripts/verify-agent-content.mjs",
+    "verify:agent-content": "exec node apps/orchestrator/scripts/verify-agent-content.mjs",
     "verify:db": "node infra/dev/db-verify/verify-db.mjs",
     "verify:gitea": "pnpm --filter orchestrator build && exec node infra/dev/gitea-verify/verify-gitea.mjs",
     "verify:pipeline": "exec node infra/dev/pipeline-verify/verify-pipeline.mjs",
     "verify:llm-gateway": "pnpm --filter orchestrator verify:llm-gateway",
     "verify:llm-app": "node infra/app/verify-llm-app.mjs",
     "verify:llm-firewall": "node infra/app/verify-llm-firewall.mjs",
-    "verify:codex": "pnpm --filter @repo/agent-drivers verify:codex",
-    "verify:codex-supervisor": "pnpm --filter orchestrator verify:codex-supervisor",
-    "verify:edge": "node infra/app/verify-edge.mjs",
-    "verify:kimi-supervisor": "pnpm --filter orchestrator verify:kimi-supervisor"
+    "verify:opencode": "exec node packages/agent-drivers/scripts/verify-opencode.mjs",
+    "verify:opencode-supervisor": "pnpm --filter orchestrator build && exec node apps/orchestrator/scripts/verify-opencode-supervisor.mjs",
+    "verify:edge": "node infra/app/verify-edge.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",

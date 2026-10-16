@@ -1,5 +1,6 @@
 /* global AbortController, AbortSignal, clearTimeout, console, fetch, setTimeout, URL */
-// P4/P5: own disposable data services on Docker Desktop, the real runner on local Colima.
+// The supervisor stand of a driver: own disposable data services on Docker Desktop, the real
+// runner on local Colima.
 // Does not read .env, accept existing data-service credentials, pull images or use accounts.
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
@@ -404,16 +405,16 @@ export function scenarioEnvironment(environment, settings, fixture) {
 
 /** Dependencies are injectable only for tests; the CLI exposes no alternate service endpoints. */
 export async function verifyAgentSupervisor({
-  driverId = 'codex',
+  driverId = 'opencode',
   environment = process.env,
   command = runCommand,
   provision = provisionServices,
   signals = process,
   log = console.log,
 } = {}) {
-  assert(['codex', 'kimi'].includes(driverId), 'Unsupported verification driver')
-  const driverName = driverId === 'codex' ? 'Codex' : 'Kimi'
-  const milestone = driverId === 'codex' ? 'P4' : 'P5'
+  const drivers = { opencode: ['OpenCode', 'G3'] }
+  assert(Object.hasOwn(drivers, driverId), 'Unsupported verification driver')
+  const [driverName, milestone] = drivers[driverId]
   const settings = runnerSettings(environment)
   const controller = new AbortController()
   const connection = await localDesktop(environment, (binary, args, options) =>

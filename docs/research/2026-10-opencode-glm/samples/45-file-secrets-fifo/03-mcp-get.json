@@ -1,0 +1,28 @@
+{
+  "at": "2026-10-04T20:12:14.402Z",
+  "request": {
+    "method": "GET",
+    "url": "/mcp",
+    "headers": {},
+    "removedHeaderNames": [
+      "accept",
+      "accept-encoding",
+      "authorization",
+      "connection",
+      "host",
+      "mcp-protocol-version",
+      "mcp-session-id",
+      "user-agent"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "scheme": "bearer",
+        "value": "<dummy mcp token>"
+      }
+    ]
+  },
+  "response": {
+    "status": 405
+  }
+}

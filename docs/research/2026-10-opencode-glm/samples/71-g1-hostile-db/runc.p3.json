@@ -1,0 +1,1491 @@
+{
+  "first": {
+    "exit": 0,
+    "sessionId": "ses_…",
+    "sessionTarBytes": 1259520
+  },
+  "planted": "a key-shaped value the fake knows by hash",
+  "variants": [
+    {
+      "variant": "clean",
+      "prepared": "nothing",
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "row-permission-allow",
+      "prepared": {
+        "done": [
+          "session.permission"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"skill\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"external_directory\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"allow\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [
+          "question",
+          "skill",
+          "task",
+          "webfetch"
+        ],
+        "tools": 13,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read completed: <path>/etc/hostname</path> <type>file</type> <content> 1: 863cd7598bdf (End of file - total 1 lines) </content",
+        "webfetch error: StatusCode: non 2xx status code (404 GET http://sandbox-gw:8080/s/p3-row-permission-allow/webfetch-probe)",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [
+        "GET /s/p3-row-permission-allow/webfetch-probe"
+      ],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "row-permission-ask",
+      "prepared": {
+        "done": [
+          "session.permission"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"skill\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"external_directory\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"bash\",\"pattern\":\"*\",\"action\":\"ask\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [
+          "question",
+          "skill",
+          "task",
+          "webfetch"
+        ],
+        "tools": 13,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read completed: <path>/etc/hostname</path> <type>file</type> <content> 1: e21a2ab66155 (End of file - total 1 lines) </content",
+        "webfetch error: StatusCode: non 2xx status code (404 GET http://sandbox-gw:8080/s/p3-row-permission-ask/webfetch-probe)",
+        "bash error: The user rejected permission to use this specific tool call."
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "\u001b[93m\u001b[1m! \u001b[0mpermission requested: bash (echo bash-ran, pwd); auto-rejecting\n",
+      "webfetchReachedTheStand": [
+        "GET /s/p3-row-permission-ask/webfetch-probe"
+      ],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "row-agent",
+      "prepared": {
+        "done": [
+          "session.agent"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+          "agent": "build",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "row-model-unknown",
+      "prepared": {
+        "done": [
+          "session.model"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-planted\",\"providerID\":\"raditi\",\"variant\":\"max\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 1,
+      "sameSession": true,
+      "requests": 0,
+      "credentialKinds": [],
+      "models": [],
+      "firstRequest": null,
+      "stepReasons": [],
+      "tools": [],
+      "finalText": null,
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "Unexpected server error. Check server logs for details."
+        }
+      ],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-planted\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "row-model-other-provider",
+      "prepared": {
+        "done": [
+          "session.model"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-4.5\",\"providerID\":\"zai-coding-plan\",\"variant\":\"max\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 1,
+      "sameSession": true,
+      "requests": 0,
+      "credentialKinds": [],
+      "models": [],
+      "firstRequest": null,
+      "stepReasons": [],
+      "tools": [],
+      "finalText": null,
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "Unexpected server error. Check server logs for details."
+        }
+      ],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-4.5\",\"providerID\":\"zai-coding-plan\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "row-directory",
+      "prepared": {
+        "done": [
+          "session.directory",
+          "project.worktree"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/",
+          "share_url": null
+        }
+      },
+      "exit": 143,
+      "sameSession": false,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [],
+      "tools": [],
+      "finalText": null,
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "saved-permissions",
+      "prepared": {
+        "done": [
+          "permission webfetch *",
+          "permission task *",
+          "permission external_directory *",
+          "permission bash *",
+          "permission read *",
+          "permission websearch *"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 6,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "credentials",
+      "prepared": {
+        "done": [
+          "credential raditi",
+          "credential zai-coding-plan",
+          "credential opencode",
+          "credential openai",
+          "account",
+          "account_state",
+          "control_account",
+          "session_share"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": "http://account-control.test/share/stand"
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [
+        "dns account-control.test",
+        "http account-control.test",
+        "dns opencode.ai",
+        "tls opencode.ai"
+      ],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 4,
+        "account": 1,
+        "control_account": 1,
+        "session_share": 1
+      },
+      "hits": []
+    },
+    {
+      "variant": "trigger",
+      "prepared": {
+        "done": [
+          "session.permission",
+          "trigger planted_keep"
+        ],
+        "schemaExtras": [
+          "trigger planted_keep"
+        ],
+        "row": {
+          "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"skill\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"external_directory\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"allow\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [
+          "question",
+          "skill",
+          "task",
+          "webfetch"
+        ],
+        "tools": 13,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read completed: <path>/etc/hostname</path> <type>file</type> <content> 1: 8f07d53f861f (End of file - total 1 lines) </content",
+        "webfetch error: StatusCode: non 2xx status code (404 GET http://sandbox-gw:8080/s/p3-trigger/webfetch-probe)",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [
+        "GET /s/p3-trigger/webfetch-probe"
+      ],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "everything",
+      "prepared": {
+        "done": [
+          "session.permission",
+          "session.agent",
+          "session.model",
+          "session.directory",
+          "permission webfetch *",
+          "permission task *",
+          "permission external_directory *",
+          "permission bash *",
+          "permission read *",
+          "permission websearch *",
+          "credential raditi",
+          "credential zai-coding-plan",
+          "credential opencode",
+          "credential openai",
+          "account",
+          "account_state",
+          "control_account",
+          "session_share",
+          "project.worktree"
+        ],
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"skill\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"external_directory\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"allow\"}]",
+          "agent": "build",
+          "model": "{\"id\":\"glm-planted\",\"providerID\":\"raditi\",\"variant\":\"max\"}",
+          "directory": "/",
+          "share_url": "http://account-control.test/share/stand"
+        }
+      },
+      "exit": 1,
+      "sameSession": true,
+      "requests": 0,
+      "credentialKinds": [],
+      "models": [],
+      "firstRequest": null,
+      "stepReasons": [],
+      "tools": [],
+      "finalText": null,
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "Unexpected server error. Check server logs for details."
+        }
+      ],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [
+        "dns account-control.test",
+        "http account-control.test",
+        "http account-control.test"
+      ],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-planted\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":",
+        "directory": "/"
+      },
+      "tablesAfter": {
+        "permission": 6,
+        "credential": 4,
+        "account": 1,
+        "control_account": 1,
+        "session_share": 1
+      },
+      "hits": []
+    },
+    {
+      "variant": "everything-then-reset",
+      "prepared": {
+        "done": [
+          "normalised"
+        ],
+        "verified": true,
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "trigger-then-naive-reset",
+      "prepared": {
+        "done": [
+          "normalised (naive)"
+        ],
+        "verified": false,
+        "schemaExtras": [
+          "trigger planted_keep"
+        ],
+        "row": {
+          "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"skill\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"external_directory\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"allow\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [
+          "question",
+          "skill",
+          "task",
+          "webfetch"
+        ],
+        "tools": 13,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read completed: <path>/etc/hostname</path> <type>file</type> <content> 1: bdb3192a3504 (End of file - total 1 lines) </content",
+        "webfetch error: StatusCode: non 2xx status code (404 GET http://sandbox-gw:8080/s/p3-trigger-then-naive-reset/webfetch-probe)",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [
+        "GET /s/p3-trigger-then-naive-reset/webfetch-probe"
+      ],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "trigger-then-reset",
+      "prepared": {
+        "done": [
+          "dropped trigger planted_keep",
+          "normalised"
+        ],
+        "verified": true,
+        "schemaExtras": [],
+        "row": {
+          "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]",
+          "agent": "raditi",
+          "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+          "directory": "/workspace/repo",
+          "share_url": null
+        }
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "permission-then-export-import",
+      "prepared": {
+        "exportExit": 0,
+        "exportMs": 1160,
+        "exported": {
+          "bytes": 7205,
+          "infoKeys": [
+            "id",
+            "slug",
+            "projectID",
+            "directory",
+            "path",
+            "title",
+            "agent",
+            "model",
+            "version",
+            "summary",
+            "cost",
+            "tokens",
+            "permission",
+            "time"
+          ],
+          "agent": "raditi",
+          "model": {
+            "id": "glm-5.3",
+            "providerID": "raditi",
+            "variant": "default"
+          },
+          "permission": [
+            {
+              "permission": "webfetch",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "websearch",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "task",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "skill",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "external_directory",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "question",
+              "pattern": "*",
+              "action": "allow"
+            }
+          ],
+          "directory": "/workspace/repo",
+          "messages": 3,
+          "partTypes": [
+            "text",
+            "step-start",
+            "reasoning",
+            "tool",
+            "step-finish"
+          ]
+        },
+        "filtered": false,
+        "importExit": 0,
+        "importMs": 1241,
+        "importOut": "Imported session: ses_00000000000000000000000034"
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [
+          "question",
+          "skill",
+          "task",
+          "webfetch"
+        ],
+        "tools": 13,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read completed: <path>/etc/hostname</path> <type>file</type> <content> 1: bcdd7b75edc5 (End of file - total 1 lines) </content",
+        "webfetch error: StatusCode: non 2xx status code (404 GET http://sandbox-gw:8080/s/p3-permission-then-export-import/webfetch-pr",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [
+        "GET /s/p3-permission-then-export-import/webfetch-probe"
+      ],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "everything-then-export-import",
+      "prepared": {
+        "exportExit": 0,
+        "exportMs": 1188,
+        "exported": {
+          "bytes": 7267,
+          "infoKeys": [
+            "id",
+            "slug",
+            "projectID",
+            "directory",
+            "path",
+            "title",
+            "agent",
+            "model",
+            "version",
+            "summary",
+            "cost",
+            "tokens",
+            "share",
+            "permission",
+            "time"
+          ],
+          "agent": "build",
+          "model": {
+            "id": "glm-planted",
+            "providerID": "raditi",
+            "variant": "max"
+          },
+          "permission": [
+            {
+              "permission": "webfetch",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "websearch",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "task",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "skill",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "external_directory",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "question",
+              "pattern": "*",
+              "action": "allow"
+            }
+          ],
+          "directory": "/",
+          "messages": 3,
+          "partTypes": [
+            "text",
+            "step-start",
+            "reasoning",
+            "tool",
+            "step-finish"
+          ]
+        },
+        "filtered": false,
+        "importExit": 0,
+        "importMs": 1273,
+        "importOut": "Imported session: ses_00000000000000000000000034"
+      },
+      "exit": 1,
+      "sameSession": true,
+      "requests": 0,
+      "credentialKinds": [],
+      "models": [],
+      "firstRequest": null,
+      "stepReasons": [],
+      "tools": [],
+      "finalText": null,
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "Unexpected server error. Check server logs for details."
+        }
+      ],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [
+        "dns account-control.test",
+        "http account-control.test"
+      ],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-planted\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"webfetch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"websearch\",\"pattern\":\"*\",\"action\":\"allow\"},{\"permission\":\"task\",\"pattern\":\"*\",\"action\":",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "everything-then-export-filter-import",
+      "prepared": {
+        "exportExit": 0,
+        "exportMs": 1187,
+        "exported": {
+          "bytes": 7267,
+          "infoKeys": [
+            "id",
+            "slug",
+            "projectID",
+            "directory",
+            "path",
+            "title",
+            "agent",
+            "model",
+            "version",
+            "summary",
+            "cost",
+            "tokens",
+            "share",
+            "permission",
+            "time"
+          ],
+          "agent": "build",
+          "model": {
+            "id": "glm-planted",
+            "providerID": "raditi",
+            "variant": "max"
+          },
+          "permission": [
+            {
+              "permission": "webfetch",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "websearch",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "task",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "skill",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "external_directory",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "question",
+              "pattern": "*",
+              "action": "allow"
+            }
+          ],
+          "directory": "/",
+          "messages": 3,
+          "partTypes": [
+            "text",
+            "step-start",
+            "reasoning",
+            "tool",
+            "step-finish"
+          ]
+        },
+        "filtered": true,
+        "importExit": 0,
+        "importMs": 1213,
+        "importOut": "Imported session: ses_00000000000000000000000034"
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [
+        "dns account-control.test",
+        "http account-control.test"
+      ],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "trigger-then-export-filter-import",
+      "prepared": {
+        "exportExit": 0,
+        "exportMs": 1068,
+        "exported": {
+          "bytes": 7205,
+          "infoKeys": [
+            "id",
+            "slug",
+            "projectID",
+            "directory",
+            "path",
+            "title",
+            "agent",
+            "model",
+            "version",
+            "summary",
+            "cost",
+            "tokens",
+            "permission",
+            "time"
+          ],
+          "agent": "raditi",
+          "model": {
+            "id": "glm-5.3",
+            "providerID": "raditi",
+            "variant": "default"
+          },
+          "permission": [
+            {
+              "permission": "webfetch",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "websearch",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "task",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "skill",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "external_directory",
+              "pattern": "*",
+              "action": "allow"
+            },
+            {
+              "permission": "question",
+              "pattern": "*",
+              "action": "allow"
+            }
+          ],
+          "directory": "/workspace/repo",
+          "messages": 3,
+          "partTypes": [
+            "text",
+            "step-start",
+            "reasoning",
+            "tool",
+            "step-finish"
+          ]
+        },
+        "filtered": true,
+        "importExit": 0,
+        "importMs": 1120,
+        "importOut": "Imported session: ses_00000000000000000000000034"
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    },
+    {
+      "variant": "everything-then-export-filter-import-without-keys",
+      "prepared": {
+        "exportExit": 0,
+        "exportMs": 1109,
+        "exportStderr": "Exporting session: ses_00000000000000000000000034\n",
+        "importExit": 0,
+        "importMs": 1076,
+        "importOut": "Imported session: ses_00000000000000000000000034\n",
+        "secretsPresentDuringBoth": false
+      },
+      "exit": 0,
+      "sameSession": true,
+      "requests": 4,
+      "credentialKinds": [
+        "turn-key"
+      ],
+      "models": [
+        "glm-5.3"
+      ],
+      "firstRequest": {
+        "model": "glm-5.3",
+        "agentPromptIsThePlatforms": true,
+        "systemHead": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a ",
+        "workingDirectory": "/workspace/repo",
+        "instructionsPresent": true,
+        "forbiddenToolsDeclared": [],
+        "tools": 9,
+        "history": 6
+      },
+      "stepReasons": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "read error: The user has specified a rule which prevents you from using this specific tool call. Here are some of the rele",
+        "invalid completed: The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available too",
+        "bash completed: bash-ran /workspace/repo "
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\"",
+      "errors": [],
+      "stderr": "",
+      "webfetchReachedTheStand": [],
+      "sink": [
+        "dns account-control.test",
+        "http account-control.test"
+      ],
+      "sessionRowAfter": {
+        "agent": "raditi",
+        "model": "{\"id\":\"glm-5.3\",\"providerID\":\"raditi\",\"variant\":\"default\"}",
+        "permission": "[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"acti",
+        "directory": "/workspace/repo"
+      },
+      "tablesAfter": {
+        "permission": 0,
+        "credential": 0,
+        "account": 0,
+        "control_account": 0,
+        "session_share": 0
+      },
+      "hits": []
+    }
+  ]
+}

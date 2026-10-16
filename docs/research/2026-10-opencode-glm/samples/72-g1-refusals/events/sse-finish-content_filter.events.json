@@ -1,0 +1,65 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185401122,
+      "sessionID": "ses_00000000000000000000000160",
+      "part": {
+        "id": "prt_00000000000000000000000161",
+        "messageID": "msg_00000000000000000000000162",
+        "sessionID": "ses_00000000000000000000000160",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185401122,
+      "sessionID": "ses_00000000000000000000000160",
+      "part": {
+        "id": "prt_00000000000000000000000163",
+        "messageID": "msg_00000000000000000000000162",
+        "sessionID": "ses_00000000000000000000000160",
+        "type": "text",
+        "text": "Partial answer of the stand. ",
+        "time": {
+          "start": 1791185401100,
+          "end": 1791185401102
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185401122,
+      "sessionID": "ses_00000000000000000000000160",
+      "part": {
+        "id": "prt_00000000000000000000000164",
+        "reason": "content-filter",
+        "messageID": "msg_00000000000000000000000162",
+        "sessionID": "ses_00000000000000000000000160",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185401123,
+      "sessionID": "ses_00000000000000000000000160",
+      "error": {
+        "name": "ContentFilterError",
+        "data": {
+          "message": "The response was blocked by the provider's content filter"
+        }
+      }
+    }
+  ]
+}

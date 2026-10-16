@@ -13,18 +13,51 @@ const WORKERS = Object.freeze({
   llm: 'verify-llm-worker.mjs',
 })
 
-/** Private IPC carries test capabilities; neither command arguments nor logs contain them. */
+const ENV_FILE = /^--env-file(?:-if-exists)?(=|$)/
+
+/**
+ * The Node arguments of this process without its env files, in both spellings (`--env-file=x`
+ * and `--env-file x`). A worker gets its environment from the stand, by name: a stand started
+ * with `node --env-file=…` must not hand the whole file — the plan key of a live run with it —
+ * to every process it forks.
+ */
+function withoutEnvFiles(execArgv) {
+  const kept = []
+  for (let index = 0; index < execArgv.length; index++) {
+    const [, value] = ENV_FILE.exec(execArgv[index]) ?? []
+    if (value === undefined) kept.push(execArgv[index])
+    // The file of the two-argument spelling is the next argument.
+    else if (value === '') index += 1
+  }
+  return kept
+}
+
+/**
+ * Private IPC carries test capabilities; neither command arguments nor logs contain them.
+ * `imports` are modules the worker loads before its own script (`--import`): a live run names
+ * its request guard here (live.mjs, guardImport), whose address holds no secret. The Node
+ * arguments of the worker are always named here, never left to fork's default, which copies
+ * those of this process whole.
+ */
 export async function startWorker(
   role,
   config,
-  { forkChild = fork, startupTimeoutMs = 30_000, shutdownTimeoutMs = 15_000 } = {},
+  {
+    forkChild = fork,
+    startupTimeoutMs = 30_000,
+    shutdownTimeoutMs = 15_000,
+    imports = [],
+    execArgv = process.execArgv,
+  } = {},
 ) {
   if (!Object.hasOwn(WORKERS, role)) throw new Error('Invalid verification role')
   const child = forkChild(join(repository, 'apps/orchestrator/scripts', WORKERS[role]), [], {
     env: { PATH: process.env.PATH, NODE_ENV: 'test' },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    execArgv: [...withoutEnvFiles(execArgv), ...imports.flatMap((url) => ['--import', url])],
   })
   const logs = [],
+    streams = [],
     pending = new Map(),
     captures = []
   let size = 0,
@@ -61,10 +94,16 @@ export async function startWorker(
   child.once('exit', onExit)
   child.once('close', onClose)
   for (const stream of [child.stdout, child.stderr]) {
+    // Each pipe also by itself: a read ends anywhere, and a chunk of the other pipe may come
+    // between two chunks of one text. Whoever looks for a value joins the chunks of one pipe.
+    const own = []
+    streams.push(own)
     const capture = (chunk) => {
       size += chunk.length
-      if (size > 4 * 1024 * 1024) child.kill('SIGKILL')
-      else logs.push(chunk.toString())
+      if (size > 4 * 1024 * 1024) return child.kill('SIGKILL')
+      const text = chunk.toString()
+      logs.push(text)
+      own.push(text)
     }
     captures.push([stream, capture])
     stream.on('data', capture)
@@ -163,6 +202,7 @@ export async function startWorker(
       child,
       ready,
       logs,
+      streams,
       call,
       exited,
       close: () =>

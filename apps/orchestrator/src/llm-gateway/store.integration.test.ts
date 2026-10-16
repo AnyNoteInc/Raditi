@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
+import type { GatewayRefusal } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
+import { sampleBackendId, sampleProviderSlug, sampleRoutePath } from '../testing/ids.ts'
 import { PostgresGatewayStore } from './store.ts'
 import {
   GatewayRecordRejected,
@@ -41,14 +43,15 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
   beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
     store = new PostgresGatewayStore(db)
-    // The HTTP integration suite exclusively owns openai-chatgpt; use the other seeded backend.
-    const existing = await db.llmProvider.findUnique({ where: { slug: 'kimi-code' } })
+    // The seeded provider of the sample backend. Files with a database run one at a time
+    // (vitest.config.ts), and this suite puts the flags of the row back when it ends.
+    const existing = await db.llmProvider.findUnique({ where: { slug: sampleProviderSlug } })
     createdProvider = existing === null
     provider =
       existing ??
       (await db.llmProvider.create({
         data: {
-          slug: 'kimi-code',
+          slug: sampleProviderSlug,
           name: 'Synthetic store verification',
           kind: 'subscription',
           enabled: true,
@@ -130,7 +133,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     })
     tracked.driverId = driver.id
     const credential = await db.credentialRef.create({
-      data: { kind: 'subscription', vaultPath: `subs/kimi-code/${suffix}` },
+      data: { kind: 'subscription', vaultPath: `subs/${sampleBackendId}/${suffix}` },
     })
     tracked.credentialId = credential.id
     const account = await db.subscriptionAccount.create({
@@ -144,7 +147,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
         status: 'active',
         health: 'ok',
         credentialVersion: 1,
-        clientIdentity: {},
         maxConcurrentTurns: 2,
         maxConcurrentRequests: options.accountSlots ?? 8,
         limitWindows: [
@@ -209,8 +211,8 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       const input: GatewayAdmitInput = {
         keyHash: row.keyHash,
         source: '127.0.0.1',
-        backendId: 'kimi-code',
-        route: { method: 'POST', path: '/kimi/v1/chat/completions' },
+        backendId: sampleBackendId,
+        route: { method: 'POST', path: sampleRoutePath },
         profile,
         requestBytes: 600,
         estimatedInputTokens: 1_000,
@@ -440,6 +442,108 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     expect(await one.admit(other.input)).toMatchObject({ kind: 'refused', reason: 'transient' })
   })
 
+  it('refuses for good a key that asks faster than its pace or more often than its ceiling', async () => {
+    const f = await fixture({ budget: '100' })
+    const k = await f.key()
+    const paced = new PostgresGatewayStore(db, { maxCallsPerKey30s: 3 })
+    // Every call is closed at once and costs next to nothing: only the pace is left to refuse.
+    for (let call = 0; call < 3; call++)
+      await paced.finish((await admitted(k.input, paced)).id, actual())
+    expect(await paced.admit(k.input)).toEqual({
+      kind: 'refused',
+      keyId: k.row.id,
+      reason: 'budget',
+      limit: 'pace',
+    })
+    expect((await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })).lastRefusal).toBe(
+      'budget',
+    )
+    // The refusal reserved nothing and opened no call.
+    expect(await db.llmCall.count({ where: { keyId: k.row.id } })).toBe(3)
+    // Another key of the same account has a pace of its own.
+    const other = await f.key()
+    await paced.finish((await admitted(other.input, paced)).id, actual())
+    // Calls that started more than thirty seconds ago no longer count against the pace...
+    await db.llmCall.updateMany({
+      where: { keyId: k.row.id },
+      data: { startedAt: new Date(Date.now() - 31_000) },
+    })
+    await paced.finish((await admitted(k.input, paced)).id, actual())
+    // ...but every call of the key counts against its ceiling, whenever it was made.
+    const capped = new PostgresGatewayStore(db, { maxCallsPerKey: 4 })
+    expect(await capped.admit(k.input)).toMatchObject({
+      kind: 'refused',
+      reason: 'budget',
+      limit: 'calls',
+    })
+    await admitted(k.input, new PostgresGatewayStore(db, { maxCallsPerKey: 5 }))
+  })
+
+  it('tells the gateway when the first call of a key meets a window snapshot grown old', async () => {
+    const f = await fixture()
+    const seen = (minutesAgo: number | null) =>
+      db.subscriptionAccount.update({
+        where: { id: f.account.id },
+        data: {
+          limitsSeenAt: minutesAgo === null ? null : new Date(Date.now() - minutesAgo * 60_000),
+        },
+      })
+    const k = await f.key()
+    const stale = async () => (await store.lookup(k.row.keyHash, '127.0.0.1'))?.staleWindows
+    await seen(9)
+    expect(await stale()).toBe(false)
+    await seen(11)
+    expect(await stale()).toBe(true)
+    // Windows nobody has dated are the business of the rule for unknown windows.
+    await seen(null)
+    expect(await stale()).toBe(false)
+    // Once the key has started a call its turn runs on: only the first call asks.
+    await seen(11)
+    await store.finish((await admitted(k.input)).id, actual())
+    expect(await stale()).toBe(false)
+    // An old snapshot refuses nothing.
+    await seen(600)
+    await admitted((await f.key()).input)
+    // A provider, a model or an account that is switched off, and an account that is out of
+    // use, are refused for good by admission: no refresh is asked for a key that has only that
+    // ahead of it, so nothing is sent to a provider on its behalf.
+    const idle = await f.key()
+    const staleOf = async () => (await store.lookup(idle.row.keyHash, '127.0.0.1'))?.staleWindows
+    expect(await staleOf()).toBe(true)
+    const switched = async (
+      reason: GatewayRefusal,
+      off: () => Promise<unknown>,
+      on: () => Promise<unknown>,
+    ) => {
+      await off()
+      try {
+        expect(await staleOf(), reason).toBe(false)
+        expect(await store.admit(idle.input)).toMatchObject({ kind: 'refused', reason })
+      } finally {
+        await on()
+      }
+      expect(await staleOf(), reason).toBe(true)
+    }
+    const providerOf = (enabled: boolean) => () =>
+      db.llmProvider.update({ where: { id: provider.id }, data: { enabled } })
+    const modelOf = (enabled: boolean) => () =>
+      db.llmModel.update({ where: { id: f.model.id }, data: { enabled } })
+    const accountOf = (data: Prisma.SubscriptionAccountUncheckedUpdateInput) => () =>
+      db.subscriptionAccount.update({ where: { id: f.account.id }, data })
+    await switched('provider_off', providerOf(false), providerOf(true))
+    await switched('profile', modelOf(false), modelOf(true))
+    await switched('account', accountOf({ enabled: false }), accountOf({ enabled: true }))
+    for (const health of ['needs_relogin', 'suspended'] as const)
+      await switched('account', accountOf({ health }), accountOf({ health: 'ok' }))
+    await switched('account', accountOf({ status: 'banned' }), accountOf({ status: 'active' }))
+    await switched(
+      'account',
+      accountOf({ credentialsRevokedAt: new Date() }),
+      accountOf({ credentialsRevokedAt: null }),
+    )
+    await admitted(idle.input)
+  })
+
   it('enforces global account slots across different keys, releasing slots after finish', async () => {
     const f = await fixture({ accountSlots: 1 })
     const keys = await Promise.all([f.key(), f.key()])
@@ -459,7 +563,9 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     const k = await f.key()
     const results = await Promise.all([store.admit(k.input), store.admit(k.input)])
     const open = results.find((r) => r.kind === 'admitted')
-    expect(results).toContainEqual(expect.objectContaining({ kind: 'refused', reason: 'budget' }))
+    expect(results).toContainEqual(
+      expect.objectContaining({ kind: 'refused', reason: 'budget', limit: 'money' }),
+    )
     if (open?.kind !== 'admitted') throw new Error('Missing admitted call')
     expect(open.call.reservedRub).toBe('0.2024000000')
     expect(await store.finish(open.call.id, actual())).toBe(true)
@@ -526,9 +632,20 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     expect(await store.admit({ ...k.input, source: '127.0.0.2' })).toMatchObject({
       reason: 'unauthorized',
     })
-    expect(await store.admit({ ...k.input, backendId: 'openai-chatgpt' })).toMatchObject({
-      reason: 'backend',
-    })
+    // The key of a provider the platform has no backend for — a row of history, say — opens
+    // nothing: the store reads no key from it. (A request for another backend than the key's
+    // needs two backends; the role holds that rule on its routes, server.test.ts.)
+    await db.llmProvider.update({ where: { id: provider.id }, data: { slug: 'other-provider' } })
+    try {
+      expect(await store.lookup(k.row.keyHash, k.input.source)).toBeNull()
+      expect(await store.admit(k.input)).toMatchObject({ reason: 'profile' })
+    } finally {
+      await db.llmProvider.update({
+        where: { id: provider.id },
+        data: { slug: sampleProviderSlug },
+      })
+    }
+    expect(await store.lookup(k.row.keyHash, k.input.source)).not.toBeNull()
     await db.llmKey.update({ where: { id: k.row.id }, data: { reasoningEffort: 'high' } })
     expect(await store.admit(k.input)).toMatchObject({ reason: 'profile' })
     await db.llmKey.update({ where: { id: k.row.id }, data: { reasoningEffort: 'low' } })
@@ -552,12 +669,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     ['retired', { status: 'retired', enabled: false }, 'account'],
     ['needs login', { health: 'needs_relogin' }, 'account'],
     ['suspended', { health: 'suspended' }, 'account'],
-    ['ambiguous refresh without expiry', { healthReason: 'refresh_ambiguous' }, 'account'],
-    [
-      'ambiguous refresh with expired credential',
-      { healthReason: 'refresh_ambiguous', credentialExpiresAt: new Date(Date.now() - 60_000) },
-      'account',
-    ],
     ['unwritten credential', { credentialVersion: 0 }, 'account'],
     ['credential revoked', { credentialsRevokedAt: new Date() }, 'account'],
     ['cooling', { coolingUntil: new Date(Date.now() + 60_000) }, 'subscription_limit'],
@@ -659,22 +770,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     await db.subscriptionAccount.update({ where: { id: f.account.id }, data: { enabled: false } })
     expect(await store.admit(k.input)).toMatchObject({ reason: 'account' })
     expect(await db.llmCall.count({ where: { keyId: k.row.id } })).toBe(1)
-  })
-
-  it('lets existing keys use an ambiguous refresh credential before its known expiry', async () => {
-    const f = await fixture()
-    const k = await f.key()
-    await db.subscriptionAccount.update({
-      where: { id: f.account.id },
-      data: {
-        healthReason: 'refresh_ambiguous',
-        credentialExpiresAt: new Date(Date.now() + 60_000),
-      },
-    })
-    await admitted(k.input)
-    expect(
-      (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })).health,
-    ).toBe('ok')
   })
 
   it('fails closed when no historical price exists', async () => {
@@ -878,37 +973,19 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     ).toBeInstanceOf(Date)
   })
 
-  it('persists usage windows and normalized refusals without an unconfirmed account downgrade', async () => {
+  it('persists normalized refusals without an unconfirmed account downgrade, and leaves the windows to the probe', async () => {
     const f = await fixture()
     const k = await f.key()
+    const before = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
     const call = await admitted(k.input)
-    const reset = new Date(Date.now() + 2 * 86_400_000)
-    await store.finish(call.id, {
-      ...actual(),
-      state: 'failed',
-      signal: { kind: 'region' },
-      windows: {
-        windows: [
-          { name: 'week', usedPct: 23.5, resetsAt: reset },
-          { name: 'month', usedPct: 10, resetsAt: null },
-        ],
-        creditsBalance: '12.5',
-      },
-    })
+    await store.finish(call.id, { ...actual(), state: 'failed', signal: { kind: 'region' } })
     const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-    expect(account).toMatchObject({
-      health: 'ok',
-      status: 'active',
-      enabled: true,
-      creditsSeen: { balance: '12.5' },
-    })
-    expect(account.headroomPct?.toFixed(2)).toBe('76.50')
-    expect(account.limitsSeenAt).toBeInstanceOf(Date)
+    expect(account).toMatchObject({ health: 'ok', status: 'active', enabled: true })
     expect(account.lastUsedAt).toBeInstanceOf(Date)
-    expect(account.limitWindows).toEqual([
-      { name: 'week', usedPct: 23.5, resetsAt: reset.toISOString() },
-      { name: 'month', usedPct: 10, resetsAt: null },
-    ])
+    // A response names no window: what the last probe stored stands, dated as it was.
+    expect(account.limitWindows).toEqual(before.limitWindows)
+    expect(account.limitsSeenAt).toEqual(before.limitsSeenAt)
+    expect(account.headroomPct).toEqual(before.headroomPct)
     expect((await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })).lastRefusal).toBe(
       'egress',
     )
@@ -994,118 +1071,36 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     expect(await events()).toHaveLength(1)
   })
 
-  it('never refills windows when overlapping responses finish out of order', async () => {
-    const f = await fixture()
-    const k = await f.key()
-    const older = await admitted(k.input)
-    const newer = await admitted(k.input)
-    const reset = new Date(Date.now() + 2 * 86_400_000)
-    await store.finish(newer.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 100, resetsAt: reset }],
-        creditsBalance: null,
-      },
-    })
-    await store.finish(older.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 10, resetsAt: reset }],
-        creditsBalance: null,
-      },
-    })
-    expect(await store.admit(k.input)).toMatchObject({ reason: 'subscription_limit' })
-    expect(
-      (
-        await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-      ).headroomPct?.toFixed(2),
-    ).toBe('0.00')
-
-    // A genuinely later reset may advance the window; an older reset may never replace it.
-    await db.subscriptionAccount.update({
-      where: { id: f.account.id },
-      data: {
-        limitWindows: [
-          {
-            name: 'week',
-            usedPct: 20,
-            resetsAt: new Date(reset.getTime() + 86_400_000).toISOString(),
-          },
-        ],
-      },
-    })
-    const later = await admitted(k.input)
-    await store.finish(later.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 1, resetsAt: reset }],
-        creditsBalance: null,
-      },
-    })
-    expect(
-      (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } }))
-        .limitWindows,
-    ).toEqual([
-      { name: 'week', usedPct: 20, resetsAt: new Date(reset.getTime() + 86_400_000).toISOString() },
-    ])
-    const unknown = await admitted(k.input)
-    await store.finish(unknown.id, { ...actual(), windows: { windows: [], creditsBalance: null } })
-    expect(await store.admit(k.input)).toMatchObject({ reason: 'transient', probeAccount: true })
-  })
-
-  it('keeps known windows when a response reports credits only, and drops them for a report it cannot read', async () => {
-    const f = await fixture()
-    const k = await f.key()
-    const before = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-    const creditsOnly = await admitted(k.input)
-    await store.finish(creditsOnly.id, {
-      ...actual(),
-      windows: { windows: null, creditsBalance: '7.5' },
-    })
-    const kept = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-    expect(kept.limitWindows).toEqual(before.limitWindows)
-    expect(kept.limitsSeenAt).toEqual(before.limitsSeenAt)
-    expect(kept.creditsSeen).toEqual({ balance: '7.5' })
-    // The turn goes on: nothing about the windows changed.
-    const unreadable = await admitted(k.input)
-    await store.finish(unreadable.id, {
-      ...actual(),
-      windows: { windows: [], creditsBalance: null },
-    })
-    const dropped = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } })
-    expect(dropped.limitWindows).toEqual([])
-    expect(dropped.headroomPct).toBeNull()
-    expect(dropped.limitsSeenAt!.getTime()).toBeGreaterThan(before.limitsSeenAt!.getTime())
-    expect(await store.admit(k.input)).toMatchObject({
-      reason: 'transient',
-      probeAccount: true,
-      limitsSeenAt: dropped.limitsSeenAt,
-    })
-  })
-
   it.each([false, true])(
-    'keeps exhaustion closed with an unknown reset and reported windows=%s',
-    async (reported) => {
+    'keeps exhaustion closed with an unknown reset, whether the stored windows show it or not (%s)',
+    async (shown) => {
       const f = await fixture()
       const k = await f.key()
       const call = await admitted(k.input)
+      // What a probe stored while the call was open: a window already spent, or nothing new.
+      if (shown)
+        await db.subscriptionAccount.update({
+          where: { id: f.account.id },
+          data: {
+            limitWindows: [{ name: 'week', usedPct: 100, resetsAt: null }],
+            headroomPct: '0',
+          },
+        })
       await store.finish(call.id, {
         ...actual(),
         state: 'failed',
         signal: { kind: 'window_exhausted', until: null },
-        windows: reported
-          ? { windows: [{ name: 'week', usedPct: 100, resetsAt: null }], creditsBalance: null }
-          : null,
       })
       const account = await db.subscriptionAccount.findUniqueOrThrow({
         where: { id: f.account.id },
       })
       expect(account.health).toBe('ok')
       expect(account.status).toBe('active')
-      expect(account.headroomPct?.toFixed(2) ?? null).toBe(reported ? '0.00' : null)
+      // A stored spent window stays; spare capacity nobody can vouch for any more is dropped.
+      expect(account.headroomPct?.toFixed(2) ?? null).toBe(shown ? '0.00' : null)
       expect(account.limitsSeenAt).toBeInstanceOf(Date)
       expect(await store.admit(k.input)).toMatchObject(
-        reported ? { reason: 'subscription_limit' } : { reason: 'transient', probeAccount: true },
+        shown ? { reason: 'subscription_limit' } : { reason: 'transient', probeAccount: true },
       )
     },
   )
@@ -1120,13 +1115,8 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       state: 'failed',
       signal: { kind: 'window_exhausted', until: null },
     })
-    await store.finish(late.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 1, resetsAt: new Date(Date.now() + 2 * 86_400_000) }],
-        creditsBalance: null,
-      },
-    })
+    // A response that completes afterwards says nothing of the windows: only a probe does.
+    await store.finish(late.id, actual())
     expect(
       (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } }))
         .limitWindows,
@@ -1240,7 +1230,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     ).toEqual(longer)
   })
 
-  it('never writes a pause or a window from a reset further ahead than a window is long', async () => {
+  it('never writes a pause from a reset further ahead than a window is long', async () => {
     const f = await fixture()
     const k = await f.key()
     const day = 86_400_000
@@ -1267,18 +1257,5 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
         },
       })
     }
-    // A window with such a reset would outrank every later, correct snapshot.
-    const call = await admitted(k.input)
-    await store.finish(call.id, {
-      ...actual(),
-      windows: {
-        windows: [{ name: 'week', usedPct: 100, resetsAt: corrupted }],
-        creditsBalance: null,
-      },
-    })
-    expect(
-      (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } }))
-        .limitWindows,
-    ).toEqual([])
   })
 })

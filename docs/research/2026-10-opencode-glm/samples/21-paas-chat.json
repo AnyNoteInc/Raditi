@@ -1,0 +1,47 @@
+{
+  "name": "21-paas-chat",
+  "request": {
+    "url": "https://api.z.ai/api/paas/v4/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "authorization"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ],
+    "body": {
+      "model": "glm-5.3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with the single word: ok"
+        }
+      ],
+      "max_tokens": 256,
+      "stream": false
+    }
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "vary",
+      "x-log-id",
+      "x-request-id"
+    ],
+    "elapsedMs": 419,
+    "body": "{\"error\":{\"code\":\"1113\",\"message\":\"Insufficient balance or no resource package. Please recharge.\"}}"
+  }
+}

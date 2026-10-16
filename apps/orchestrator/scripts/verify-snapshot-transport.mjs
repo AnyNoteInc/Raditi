@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createDockerSandboxProvider } from '@repo/sandbox-providers'
 
 import { SandboxSnapshotTransport } from '../dist/sessions/sandbox-snapshot.js'
+import { sampleDriverId } from '../src/testing/ids.ts'
 
 assert.notEqual(process.env.APP_ENV, 'production')
 const image = process.env.P2_SANDBOX_IMAGE
@@ -85,7 +86,11 @@ async function run(sandbox, argv, { cwd, env, bytes, codes = [0] } = {}) {
   return { bytes: Buffer.concat(stdout), code: exit.code }
 }
 const repository = '/workspace/repo'
-const home = '/agent-home/codex'
+const home = `/agent-home/${sampleDriverId}`
+// The session state the sample driver names: its session database and the journal of it. The
+// CLI keeps its key store and its logs in the same directory, and its configuration beside it.
+const data = `${home}/.local/share/opencode`
+const sessionFiles = ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal']
 const git = (sandbox, ...args) => run(sandbox, ['git', ...args], { cwd: repository })
 async function write(sandbox, path, bytes) {
   await run(sandbox, ['mkdir', '-p', '--', path.slice(0, path.lastIndexOf('/'))])
@@ -166,15 +171,24 @@ try {
   ])
   for (const [name, bytes] of untracked) await write(a, `${repository}/${name}`, bytes)
   await write(a, `${repository}/ignored.tmp`, Buffer.from('ignored synthetic file'))
-  const sessionName = 'sessions/2026/09/26/rollout-synthetic.jsonl'
-  const sessionBytes = Buffer.from(
-    '{"type":"session_meta","id":"synthetic"}\n{"type":"message","text":"привет"}\n',
-  )
-  await write(a, `${home}/${sessionName}`, sessionBytes)
-  await write(a, `${home}/auth.json`, Buffer.from('{"synthetic":true}'))
-  await write(a, `${home}/config.toml`, Buffer.from('synthetic = true\n'))
+  // Binary, as a database is: a NUL, bytes that are no UTF-8, a line break inside.
+  const session = new Map([
+    [
+      sessionFiles[0],
+      Buffer.concat([
+        Buffer.from('SQLite format 3\0'),
+        Buffer.from([0, 1, 2, 255, 128, 10, 13, 0]),
+        Buffer.from('synthetic session: привет\n'),
+      ]),
+    ],
+    [sessionFiles[1], Buffer.from([0x37, 0x7f, 0x06, 0x82, 0, 0, 16, 0, 255, 10, 0])],
+  ])
+  for (const [name, bytes] of session) await write(a, `${home}/${name}`, bytes)
+  await write(a, `${data}/auth.json`, Buffer.from('{"synthetic":true}'))
+  await write(a, `${data}/log/synthetic.log`, Buffer.from('synthetic log\n'))
+  await write(a, `${home}/.config/opencode/opencode.json`, Buffer.from('{"synthetic":true}'))
 
-  const state = { root: home, include: ['sessions'], exclude: [] }
+  const state = { root: home, include: sessionFiles, exclude: [] }
   const transport = new SandboxSnapshotTransport()
   // As in a turn: agent processes are stopped before capture.
   await created[0].quiesce()
@@ -196,38 +210,39 @@ try {
   assert.deepEqual(Buffer.from(parts.patch), expectedPatch)
   assert.match(expectedPatch.toString(), /GIT binary patch/)
   // Existing directories are legitimate; only existing files must be rejected.
-  await run(b, ['mkdir', '-p', `${home}/sessions/2026/09/26`, `${repository}/new dir`])
+  await run(b, ['mkdir', '-p', data, `${repository}/new dir`])
   await transport.restore(b, state, parts)
 
   // P1 restore moves home/untracked only. The trusted P2 patch application remains
   // a distinct operation, explicitly exercised here using synthetic fixture bytes.
   assert.deepEqual(await read(b, `${repository}/tracked.txt`), baseText)
   assert.deepEqual(await read(b, `${repository}/tracked.bin`), baseBinary)
-  assert.deepEqual(await read(b, `${home}/${sessionName}`), sessionBytes)
+  for (const [name, bytes] of session) assert.deepEqual(await read(b, `${home}/${name}`), bytes)
   for (const [name, bytes] of untracked)
     assert.deepEqual(await read(b, `${repository}/${name}`), bytes)
-  await absent(b, `${home}/auth.json`)
-  await absent(b, `${home}/config.toml`)
+  await absent(b, `${data}/auth.json`)
+  await absent(b, `${data}/log`)
+  await absent(b, `${home}/.config`)
   await absent(b, `${repository}/ignored.tmp`)
 
   // Refuse overwriting existing files, even if a repeated archive has the same bytes.
   // A sentinel differing from archive contents makes non-overwrite observable.
   const sentinel = Buffer.from('existing session must remain intact\n')
-  await write(b, `${home}/${sessionName}`, sentinel)
+  await write(b, `${home}/${sessionFiles[0]}`, sentinel)
   await assert.rejects(transport.restore(b, state, parts), { code: 'SANDBOX_COMMAND_FAILED' })
-  assert.deepEqual(await read(b, `${home}/${sessionName}`), sentinel)
+  assert.deepEqual(await read(b, `${home}/${sessionFiles[0]}`), sentinel)
   for (const [name, bytes] of untracked)
     assert.deepEqual(await read(b, `${repository}/${name}`), bytes)
   assert.deepEqual(await read(b, `${repository}/tracked.txt`), baseText)
-  await write(b, `${home}/${sessionName}`, sessionBytes)
+  await write(b, `${home}/${sessionFiles[0]}`, session.get(sessionFiles[0]))
 
   // An absolute destination symlink must be refused before any tar extraction.
-  await run(b, ['ln', '-s', '/workspace/repo', `${home}/sessions/absolute-link`])
+  await run(b, ['ln', '-s', '/workspace/repo', `${data}/absolute-link`])
   const extractCount = metrics.tarExtractCommands
   await assert.rejects(transport.restore(b, state, parts), { code: 'SANDBOX_COMMAND_FAILED' })
   assert.equal(metrics.tarExtractCommands, extractCount)
-  assert.deepEqual(await read(b, `${home}/${sessionName}`), sessionBytes)
-  await run(b, ['rm', '--', `${home}/sessions/absolute-link`])
+  for (const [name, bytes] of session) assert.deepEqual(await read(b, `${home}/${name}`), bytes)
+  await run(b, ['rm', '--', `${data}/absolute-link`])
 
   await run(b, ['git', 'apply', '--binary', '-'], { cwd: repository, bytes: parts.patch })
   assert.deepEqual(await read(b, `${repository}/tracked.txt`), changedText)

@@ -15,6 +15,7 @@ import { getSiteContentAdapter } from '@repo/site-adapters'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 
+import { sampleBackendId } from '../testing/ids.ts'
 import type { McpAccess } from './mcp-access.ts'
 import { createSiteContentResolver } from './site-content-resolver.ts'
 
@@ -127,7 +128,7 @@ describe('createSiteContentResolver', () => {
     ['another kind of the same site', `kv/sites/${siteId}/ssh`],
     ['below the site prefix', `kv/sites/${siteId}/wp/extra`],
     ['a traversal out of the prefix', `kv/sites/${siteId}/../${otherSiteId}/wp`],
-    ['another mount', `subs/openai-chatgpt/${siteId}`],
+    ['another mount', `subs/${sampleBackendId}/${siteId}`],
     ['the contact maps', `kv/content-masks/${siteId}/wp`],
     ['a prefix without the mount', `sites/${siteId}/wp`],
   ])(

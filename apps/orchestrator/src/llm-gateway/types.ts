@@ -3,10 +3,8 @@ import {
   limitWindowsSchema,
   type CallSignal,
   type CallUsage,
-  type ClientIdentity,
   type GatewayRefusal,
   type LimitWindow,
-  type LimitWindowSnapshot,
   type LlmBackendId,
   type LlmModelPrices,
   type LlmRoute,
@@ -25,7 +23,6 @@ export interface GatewayProfile {
   modelId: string
   model: string
   reasoningEffort: string | null
-  cacheKey: string
 }
 
 /** Non-secret database metadata. Subscription credentials are read separately from Vault. */
@@ -41,8 +38,13 @@ export interface GatewayKey extends GatewayProfile {
   budgetRub: string
   credentialRef: string
   credentialVersion: number
-  clientIdentity: ClientIdentity
   maxConcurrentRequests: number
+  /**
+   * The key has started no call yet and the window snapshot of its account is older than the
+   * pool keeps one for (poolPolicy.windowsFreshMs): the gateway asks for one refresh before
+   * admission. Never a reason to refuse.
+   */
+  staleWindows: boolean
 }
 
 export interface GatewayCall extends GatewayKey {
@@ -79,7 +81,15 @@ export type GatewayAdmission =
       probeAccount?: boolean
       /** With probeAccount: limits_seen_at of the snapshot whose windows admission read as unknown. */
       limitsSeenAt?: Date | null
+      /**
+       * With `budget`: the limit of the key that refused — its money, its pace (calls within
+       * thirty seconds) or its ceiling of calls. The answer to the sandbox and
+       * llm_keys.last_refusal say `budget` for all three; only the log of the role names it.
+       */
+      limit?: GatewayKeyLimit
     }
+
+export type GatewayKeyLimit = 'money' | 'pace' | 'calls'
 
 export type GatewayEstimateReason =
   'aborted_client' | 'aborted_platform' | 'lost' | 'no_usage' | 'invalid_usage'
@@ -93,7 +103,6 @@ export interface GatewayFinish {
   responseBytes: number
   upstreamStatus?: number
   signal?: CallSignal
-  windows?: LimitWindowSnapshot | null
 }
 
 /**

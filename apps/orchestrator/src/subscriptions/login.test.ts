@@ -2,19 +2,15 @@ import { randomUUID } from 'node:crypto'
 
 import type { Prisma, PrismaClient } from '@repo/db'
 import type { LlmBackend } from '@repo/domain'
-import { kimiCodeBackend } from '@repo/llm-backends'
+import { zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
-import {
-  createSubscriptionClientIdentity,
-  SubscriptionLogin,
-  SubscriptionLoginError,
-  type SubscriptionImportInput,
-} from './login.ts'
+import { sampleDriverId } from '../testing/ids.ts'
+import { SubscriptionLogin, SubscriptionLoginError, type SubscriptionImportInput } from './login.ts'
 
-const secret = { v: '1', kind: 'kimi_api_key', apiKey: 'synthetic-key-never-log' }
+const secret = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-key-never-log' }
 const backend: LlmBackend = {
-  ...kimiCodeBackend,
+  ...zaiCodingBackend,
   credentialMetadata: () => ({
     externalAccountId: 'synthetic-account',
     plan: 'synthetic',
@@ -40,7 +36,7 @@ function fixture() {
     $queryRaw: vi.fn(async (_query: Prisma.Sql | TemplateStringsArray) => [{ now: new Date() }]),
     $executeRaw: vi.fn(async () => 1),
     llmProvider: { findUnique: vi.fn(async () => provider) },
-    agentDriver: { findUnique: vi.fn(async () => ({ id: 'kimi' })) },
+    agentDriver: { findUnique: vi.fn(async () => ({ id: sampleDriverId })) },
     credentialRef: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         ref = { id: randomUUID(), ...data }
@@ -59,8 +55,6 @@ function fixture() {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         account = {
           credentialVersion: 0,
-          refreshFinishedAt: null,
-          refreshFailures: 0,
           retireRequestedAt: null,
           credentialsRevokedAt: null,
           status: 'active',
@@ -121,10 +115,9 @@ function fixture() {
   })
   const input: SubscriptionImportInput = {
     backend: backend.id,
-    driverId: 'kimi',
+    driverId: sampleDriverId,
     credential: secret,
     label: 'synthetic',
-    clientIdentity: createSubscriptionClientIdentity(),
   }
   return {
     service,
@@ -143,19 +136,6 @@ function fixture() {
   }
 }
 
-describe('subscription client identity', () => {
-  it('names each new device on its own, never after the service', () => {
-    const names = new Set<string>()
-    for (let index = 0; index < 50; index += 1) {
-      const identity = createSubscriptionClientIdentity()
-      expect(identity.deviceName).toMatch(/^[0-9a-f]{12}$/)
-      expect(JSON.stringify(identity).toLowerCase()).not.toContain('raditi')
-      names.add(identity.deviceName!)
-    }
-    expect(names.size).toBe(50)
-  })
-})
-
 describe('checks before a provider issues credentials', () => {
   it('passes with a working writer token and a free label, without writing anything', async () => {
     const f = fixture()
@@ -172,7 +152,7 @@ describe('checks before a provider issues credentials', () => {
     expect(f.tx.subscriptionAccount.create).not.toHaveBeenCalled()
   })
 
-  it('refuses an expired or unauthorized writer token before the device flow', async () => {
+  it('refuses an expired or unauthorized writer token before the key is asked for', async () => {
     const f = fixture()
     f.writer.kvMetadata.mockRejectedValueOnce(new Error('403 permission denied private-token'))
     await expect(
@@ -213,10 +193,6 @@ describe('write-only subscription login', () => {
       credentialVersion: 1,
       health: 'ok',
       healthReason: null,
-      clientIdentity: f.input.clientIdentity,
-      refreshStartedAt: null,
-      refreshFinishedAt: null,
-      refreshFailures: 0,
     })
     expect(f.ref().keyVersion).toBe(1)
     expect(f.release).toHaveBeenCalledOnce()
@@ -244,7 +220,6 @@ describe('write-only subscription login', () => {
     { paidUntil: new Date(NaN) },
     { plan: 'free' },
     { credential: { ...secret, token: 'synthetic-private-extra' } },
-    { clientIdentity: { installationId: 'only-one' } },
   ])('rejects malformed import %j before SQL or Vault', refusedBeforeWrites)
 
   // Named, not printed with %j: JSON leaves C1 controls raw, and the reporter would write them
@@ -263,7 +238,7 @@ describe('write-only subscription login', () => {
       prisma: f.prisma as unknown as Pick<PrismaClient, '$transaction'>,
       writer: f.writer,
       locks: f.locks,
-      backends: [kimiCodeBackend],
+      backends: [zaiCodingBackend],
     })
     await expect(service.importAccount(f.input)).rejects.toMatchObject({ code: 'invalid_input' })
     const result = await service.importAccount({ ...f.input, plan: 'synthetic' })
@@ -302,7 +277,7 @@ describe('write-only subscription login', () => {
     expect(f.writer.kvWrite.mock.calls.map((call) => call[2]?.cas)).toEqual([0, 0])
   })
 
-  it('uses only current metadata CAS and preserves the operator status, enabled flag and client identity', async () => {
+  it('uses only current metadata CAS and preserves the operator status and the enabled flag', async () => {
     const f = fixture()
     await f.service.importAccount(f.input)
     Object.assign(f.account(), {
@@ -311,7 +286,6 @@ describe('write-only subscription login', () => {
       statusReason: 'operator_reason',
       health: 'suspended',
       healthReason: 'plan_changed',
-      refreshFailures: 7,
     })
     const result = await f.service.relogin(f.relogin())
     expect(result).toMatchObject({ enabled: true, credentialVersion: 2 })
@@ -321,10 +295,8 @@ describe('write-only subscription login', () => {
       status: 'banned',
       statusReason: 'operator_reason',
       enabled: true,
-      clientIdentity: f.input.clientIdentity,
       health: 'ok',
       healthReason: null,
-      refreshFailures: 0,
     })
     expect(f.ref().keyVersion).toBe(2)
   })
@@ -445,7 +417,7 @@ describe('write-only subscription login', () => {
     expect(f.release).toHaveBeenCalledOnce()
   })
 
-  it('does no persistence when the refresher already owns the account session lock', async () => {
+  it('does no persistence when another writer already owns the account session lock', async () => {
     const f = fixture()
     await f.service.importAccount(f.input)
     f.locks.tryAcquire.mockResolvedValueOnce(null as never)

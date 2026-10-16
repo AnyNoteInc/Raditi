@@ -46,7 +46,7 @@ services:
       # As on egress-1: the leaf of llm's client certificate is pinned, not only its CN.
       EGRESS_CLIENT_SHA256: ${VERIFY_EGRESS_CLIENT_SHA256:?Set by the verifier}
       EGRESS_LISTEN_PORT: '443'
-      LLM_EGRESS_ALLOW: chatgpt.com:443,auth.openai.com:443,api.kimi.ai:443
+      LLM_EGRESS_ALLOW: api.z.ai:443
     volumes:
       - ${VERIFY_ROOT}/infra/egress/llm-egress.mjs:/verify/llm-egress.mjs:ro
       - ${VERIFY_DIR}/egress-tls:/tls:ro

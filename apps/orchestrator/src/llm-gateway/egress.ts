@@ -33,9 +33,9 @@ export interface StreamingEgress {
 
 /**
  * The request provably never left this process for the provider: it was refused locally, or the
- * proxy tunnel or provider TLS failed before the HTTP request was written. A single-use refresh
- * token in such a request is still valid, so the outcome is not ambiguous, and a generation
- * request spent no quota (EgressNotDelivered).
+ * proxy tunnel, the role's own connection or provider TLS failed before the HTTP request was
+ * written. The outcome is not ambiguous: nothing of the request reached the provider, and a
+ * generation request spent no quota (EgressNotDelivered).
  */
 export class EgressNotSentError extends EgressNotDelivered {
   constructor() {
@@ -47,33 +47,59 @@ export class EgressNotSentError extends EgressNotDelivered {
 const failure = () => new Error('Subscription egress unavailable')
 const notSent = () => new EgressNotSentError()
 
+// What egress-1 gives a tunnel to open (infra/egress/llm-egress.mjs): the role's own connection
+// to a provider gets the same, so a host that does not answer fails as a request never sent.
+const connectTimeoutMs = 10_000
+
 /**
- * HTTPS CONNECT with mTLS to the proxy and separately authenticated provider TLS. It sends only
- * the exact requests the given adapters declare; any other is refused as never sent.
+ * The one way from the role to a provider, with separately authenticated provider TLS. It sends
+ * only the exact requests the given adapters declare; any other is refused as never sent.
+ *
+ * With a proxy configured: HTTPS CONNECT with mTLS to the egress node, for every origin. Without
+ * one: the role's own TCP connection, and only to an origin whose adapter declares that it
+ * needs no egress node; any other origin is refused as never sent, as when nothing was
+ * configured at all. The provider's certificate is verified the same way on both paths, under
+ * the declared host name, so no address a resolver made up can receive a byte of a request.
  */
 export function createEgressTransport(
-  config: EgressConfig | null,
+  config: EgressConfig,
   backends: readonly LlmBackend[] = llmBackends,
+  options: {
+    connectTimeoutMs?: number
+    /**
+     * Without a proxy: a connection of the role's own to a provider was opened (the TLS session
+     * stands), or could not be. Never called for a request refused before any connection or
+     * given up by its caller, and never on the proxy path, whose channel has a probe of its own.
+     */
+    onDirectConnection?: (established: boolean) => void
+  } = {},
 ): StreamingEgress {
-  if (!config)
-    return {
-      request: async () => {
-        throw notSent()
-      },
-    }
   const declared = backends.flatMap((backend) =>
     backend.egress.map((entry) => llmEgressOriginSchema.parse(entry)),
   )
   const origins = new Set(declared.map((entry) => entry.origin))
   const allowedRequests = new Set(declared.flatMap((entry) => entry.requests))
-  let proxyTls: { ca: Buffer; cert: Buffer; key: Buffer }
+  const directOrigins = new Set(
+    declared.filter((entry) => entry.direct === true).map((entry) => entry.origin),
+  )
+  // The rule below goes by origin, and a declaration must never read wider than written: one
+  // that says nothing of going without the node cannot share its origin with one that does.
+  for (const entry of declared)
+    if (entry.direct !== true && directOrigins.has(entry.origin))
+      throw new Error(`LLM backends disagree on the egress node for ${entry.origin}`)
+  const connectDeadlineMs = options.connectTimeoutMs ?? connectTimeoutMs
+  let proxy: { url: URL; tls: { ca: Buffer; cert: Buffer; key: Buffer } } | null = null
   let providerCa: Buffer | readonly string[]
   try {
-    proxyTls = {
-      ca: readFileSync(config.caFile),
-      cert: readFileSync(config.clientCertFile),
-      key: readFileSync(config.clientKeyFile),
-    }
+    if (config.proxyUrl !== null)
+      proxy = {
+        url: config.proxyUrl,
+        tls: {
+          ca: readFileSync(config.caFile),
+          cert: readFileSync(config.clientCertFile),
+          key: readFileSync(config.clientKeyFile),
+        },
+      }
     providerCa = config.upstreamCaFile ? readFileSync(config.upstreamCaFile) : rootCertificates
   } catch {
     throw failure()
@@ -92,6 +118,8 @@ export function createEgressTransport(
         !allowedRequests.has(`${input.method} ${original.href}`)
       )
         throw notSent()
+      // No egress node: only the adapter's own word lets the role connect itself.
+      if (proxy === null && !directOrigins.has(original.origin)) throw notSent()
       const mapped = config.backendOrigins.get(original.origin)
       const target = mapped ? new URL(original.pathname, mapped) : original
       if (target.protocol !== 'https:') throw notSent()
@@ -100,10 +128,12 @@ export function createEgressTransport(
       let tunnel: Socket | undefined
       let provider: TLSSocket | undefined
       let response: IncomingMessage | undefined
+      let connectDeadline: ReturnType<typeof setTimeout> | undefined
       // Set just before the HTTP request is written to the provider TLS session.
       let sent = false
       const lost = () => (sent ? failure() : notSent())
       const close = () => {
+        clearTimeout(connectDeadline)
         signal.removeEventListener('abort', onAbort)
         response?.destroy()
         inner?.destroy()
@@ -120,43 +150,41 @@ export function createEgressTransport(
       try {
         return await new Promise<StreamingEgressResponse>((resolve, reject) => {
           rejectPending = reject
+          let told = false
+          /** Without a proxy: said once, whether the role's own connection was opened. */
+          const tell = (established: boolean) => {
+            if (proxy !== null || told) return
+            told = true
+            options.onDirectConnection?.(established)
+          }
           const fail = () => {
+            if (!sent && !signal.aborted) tell(false)
             close()
             reject(lost())
           }
           const host = target.hostname.replace(/^\[(.*)\]$/, '$1')
-          const proxyHost = config.proxyUrl.hostname.replace(/^\[(.*)\]$/, '$1')
-          const authority = `${target.hostname}:${target.port || '443'}`
-          outer = httpsRequest(config.proxyUrl, {
-            method: 'CONNECT',
-            path: authority,
-            headers: { host: authority },
-            agent: false,
-            ...proxyTls,
-            rejectUnauthorized: true,
-            minVersion: 'TLSv1.3',
-            servername: isIP(proxyHost) ? 'egress-1.raditi.internal' : proxyHost,
-            signal,
-          })
-          outer.on('error', fail)
-          outer.on('response', fail)
-          outer.on('connect', (answer, socket, head) => {
-            tunnel = socket
-            if (answer.statusCode !== 200 || head.length) {
+          const port = Number(target.port || 443)
+          /** Provider TLS over the tunnel or over the role's own connection, then the request. */
+          const secure = (transport: { socket: Socket } | { host: string; port: number }) => {
+            try {
+              provider = tlsConnect({
+                ...transport,
+                servername: host,
+                ca: providerCa as string[] | Buffer,
+                rejectUnauthorized: true,
+                ALPNProtocols: ['http/1.1'],
+                minVersion: 'TLSv1.2',
+              })
+            } catch {
+              // Refused before any handshake, as a server name TLS does not take: nothing was
+              // written, and inside the tunnel's event nobody else would hear of it.
               fail()
               return
             }
-            provider = tlsConnect({
-              socket,
-              servername: host,
-              ca: providerCa as string[] | Buffer,
-              rejectUnauthorized: true,
-              ALPNProtocols: ['http/1.1'],
-              minVersion: 'TLSv1.2',
-            })
             provider.on('error', fail)
-            socket.on('error', fail)
             provider.once('secureConnect', () => {
+              clearTimeout(connectDeadline)
+              tell(true)
               const headers = Object.fromEntries(input.headers)
               const blockedHeaders = new Set([
                 'host',
@@ -219,6 +247,39 @@ export function createEgressTransport(
               sent = true
               inner.end(input.body)
             })
+          }
+          if (proxy === null) {
+            // One deadline for the name, the connection and the TLS session, as egress-1 gives
+            // a tunnel: past it nothing of the request has been written.
+            connectDeadline = setTimeout(fail, connectDeadlineMs)
+            connectDeadline.unref()
+            secure({ host, port })
+            if (signal.aborted) onAbort()
+            return
+          }
+          const proxyHost = proxy.url.hostname.replace(/^\[(.*)\]$/, '$1')
+          const authority = `${target.hostname}:${target.port || '443'}`
+          outer = httpsRequest(proxy.url, {
+            method: 'CONNECT',
+            path: authority,
+            headers: { host: authority },
+            agent: false,
+            ...proxy.tls,
+            rejectUnauthorized: true,
+            minVersion: 'TLSv1.3',
+            servername: isIP(proxyHost) ? 'egress-1.raditi.internal' : proxyHost,
+            signal,
+          })
+          outer.on('error', fail)
+          outer.on('response', fail)
+          outer.on('connect', (answer, socket, head) => {
+            tunnel = socket
+            if (answer.statusCode !== 200 || head.length) {
+              fail()
+              return
+            }
+            socket.on('error', fail)
+            secure({ socket })
           })
           outer.end()
           if (signal.aborted) onAbort()

@@ -1,0 +1,180 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185682299,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000002",
+        "messageID": "msg_00000000000000000000000003",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185682689,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_000000000000000000000005",
+        "state": {
+          "status": "completed",
+          "input": {
+            "command": "node /spike/in/toolcheck.mjs llm=c71ee05065e07cf5ab30f562f9bd2638758c531808edb1d042633962f62f5d70 mcp=327ce712838bd9577ce60cedd7917a261cf23c6869fa675886aacaaeb90a1b30 oldLlm=e7cfacae0b4cab0f179fc9b75e15b383f59aeea45b85810fc80def0c0ef97f54 oldMcp=4f5936b42c5c57691958c91654f32e4ca22d31a5c70820c6b06a6c6a4949c622",
+            "description": "look for credentials",
+            "timeout": 60000
+          },
+          "output": "{\"own\":{\"envNames\":[\"OPENCODE\",\"OPENCODE_DISABLE_AUTOUPDATE\",\"OPENCODE_DISABLE_CLAUDE_CODE\",\"OPENCODE_DISABLE_DEFAULT_PLUGINS\",\"OPENCODE_DISABLE_EXTERNAL_SKILLS\",\"OPENCODE_DISABLE_LSP_DOWNLOAD\",\"OPENCODE_DISABLE_MODELS_FETCH\",\"OPENCODE_DISABLE_PROJECT_CONFIG\",\"OPENCODE_DISABLE_SHARE\",\"OPENCODE_PID\",\"OPENCODE_PURE\"],\"envHolds\":[]},\"processes\":[{\"pid\":1,\"self\":false,\"comm\":\"tini\",\"ppid\":0,\"uid\":10001,\"threads\":1,\"rssKb\":3000,\"peakKb\":null,\"argv0\":\"tini -- sleep\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":18,\"self\":false,\"comm\":\"node-MainThread\",\"ppid\":0,\"uid\":10001,\"threads\":11,\"rssKb\":155020,\"peakKb\":null,\"argv0\":\"node /spike/wrapper.mjs --secrets\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":2,\"self\":false,\"comm\":\"sleep\",\"ppid\":1,\"uid\":10001,\"threads\":1,\"rssKb\":2852,\"peakKb\":null,\"argv0\":\"sleep infinity \",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":32,\"self\":false,\"comm\":\"opencode\",\"ppid\":18,\"uid\":10001,\"threads\":9,\"rssKb\":726592,\"peakKb\":null,\"argv0\":\"opencode run --format\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":62,\"self\":true,\"comm\":\"node-MainThread\",\"ppid\":32,\"uid\":10001,\"threads\":7,\"rssKb\":143972,\"peakKb\":null,\"argv0\":\"node /spike/in/toolcheck.mjs llm=c71ee05065e07cf5ab30f562f9bd2638758c531808edb1d042633962f62f5d70\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]}}],\"secretsDir\":[],\"budget\":{\"threadsTotal\":29,\"processes\":5,\"scannedMiB\":0},\"ptraceScope\":\"1\",\"kernel\":\"Linux version 4.19.0-gvisor #1 SMP Sun Jan 10 15:06:54 PST 2\"}\n",
+          "metadata": {
+            "output": "{\"own\":{\"envNames\":[\"OPENCODE\",\"OPENCODE_DISABLE_AUTOUPDATE\",\"OPENCODE_DISABLE_CLAUDE_CODE\",\"OPENCODE_DISABLE_DEFAULT_PLUGINS\",\"OPENCODE_DISABLE_EXTERNAL_SKILLS\",\"OPENCODE_DISABLE_LSP_DOWNLOAD\",\"OPENCODE_DISABLE_MODELS_FETCH\",\"OPENCODE_DISABLE_PROJECT_CONFIG\",\"OPENCODE_DISABLE_SHARE\",\"OPENCODE_PID\",\"OPENCODE_PURE\"],\"envHolds\":[]},\"processes\":[{\"pid\":1,\"self\":false,\"comm\":\"tini\",\"ppid\":0,\"uid\":10001,\"threads\":1,\"rssKb\":3000,\"peakKb\":null,\"argv0\":\"tini -- sleep\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":18,\"self\":false,\"comm\":\"node-MainThread\",\"ppid\":0,\"uid\":10001,\"threads\":11,\"rssKb\":155020,\"peakKb\":null,\"argv0\":\"node /spike/wrapper.mjs --secrets\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":2,\"self\":false,\"comm\":\"sleep\",\"ppid\":1,\"uid\":10001,\"threads\":1,\"rssKb\":2852,\"peakKb\":null,\"argv0\":\"sleep infinity \",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":32,\"self\":false,\"comm\":\"opencode\",\"ppid\":18,\"uid\":10001,\"threads\":9,\"rssKb\":726592,\"peakKb\":null,\"argv0\":\"opencode run --format\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":62,\"self\":true,\"comm\":\"node-MainThread\",\"ppid\":32,\"uid\":10001,\"threads\":7,\"rssKb\":143972,\"peakKb\":null,\"argv0\":\"node /spike/in/toolcheck.mjs llm=c71ee05065e07cf5ab30f562f9bd2638758c531808edb1d042633962f62f5d70\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]}}],\"secretsDir\":[],\"budget\":{\"threadsTotal\":29,\"processes\":5,\"scannedMiB\":0},\"ptraceScope\":\"1\",\"kernel\":\"Linux version 4.19.0-gvisor #1 SMP Sun Jan 10 15:06:54 PST 2\"}\n",
+            "exit": 0,
+            "truncated": false
+          },
+          "title": "node /spike/in/toolcheck.mjs llm=c71ee05065e07cf5ab30f562f9bd2638758c531808edb1d042633962f62f5d70 mcp=327ce712838bd9577ce60cedd7917a261cf23c6869fa675886aacaaeb90a1b30 oldLlm=e7cfacae0b4cab0f179fc9b75e15b383f59aeea45b85810fc80def0c0ef97f54 oldMcp=4f5936b42c5c57691958c91654f32e4ca22d31a5c70820c6b06a6c6a4949c622",
+          "time": {
+            "start": 1791185682292,
+            "end": 1791185682673
+          }
+        },
+        "id": "prt_00000000000000000000000004",
+        "sessionID": "ses_00000000000000000000000001",
+        "messageID": "msg_00000000000000000000000003"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185682689,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000005",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000003",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185682785,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000006",
+        "messageID": "msg_00000000000000000000000007",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185682785,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "type": "tool",
+        "tool": "raditi_site_info",
+        "callID": "call_000000000000000000000006",
+        "state": {
+          "status": "completed",
+          "input": {},
+          "output": "{\"url\":\"https://stand.example\",\"stack\":\"wordpress\",\"note\":\"STAND-NOTE-7391\"}",
+          "metadata": {
+            "truncated": false
+          },
+          "title": "",
+          "time": {
+            "start": 1791185682769,
+            "end": 1791185682773
+          }
+        },
+        "id": "prt_00000000000000000000000008",
+        "sessionID": "ses_00000000000000000000000001",
+        "messageID": "msg_00000000000000000000000007"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185682786,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000009",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000007",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185682870,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000010",
+        "messageID": "msg_00000000000000000000000011",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185682870,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000012",
+        "messageID": "msg_00000000000000000000000011",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "text",
+        "text": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_changed\":[],\"questions\":[],\"needs_approval\":false,\"risk\":\"low\"}",
+        "time": {
+          "start": 1791185682853,
+          "end": 1791185682858
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185682870,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000013",
+        "reason": "stop",
+        "messageID": "msg_00000000000000000000000011",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ]
+}

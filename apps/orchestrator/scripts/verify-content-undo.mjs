@@ -9,6 +9,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { PostgresSiteLeaseStore, PostgresTaskTurnAssignmentStore } from '@repo/db'
 import { PostgresMcpAccess } from '../dist/mcp/mcp-access.js'
 import { TaskEventTurnJournal } from '../dist/turns/turn-journal.js'
+import { sampleDriverId } from '../src/testing/ids.ts'
 
 const { fetch, AbortSignal } = globalThis
 const hash = (value) => createHash('sha256').update(value).digest('hex')
@@ -99,7 +100,7 @@ export async function verifyContentUndo({
         sessionId,
         turnNo: 1,
         firstEpoch: assignment.firstEpoch,
-        driverId: 'codex',
+        driverId: sampleDriverId,
         modelId,
         subscriptionAccountId: accountId,
         budgetRub: '100',

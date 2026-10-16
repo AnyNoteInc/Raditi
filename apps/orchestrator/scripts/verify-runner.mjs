@@ -2,7 +2,8 @@
 // P2 gates 2 and 3 (spec §8 «Раннер на песочной ВМ», «Восстановление незавершённого хода») on a
 // real runner VM: core runs on this host (verify-runner-core.mjs, over the local PostgreSQL, S3
 // and OpenBao), the runner role in a Linux VM under gVisor, next to the VM's Docker. No models:
-// the synthetic agent prints codex JSONL and may wait at a gate. Scenarios:
+// the synthetic agent prints the rows of the sample driver's CLI (OpenCode), writes its session
+// files and may wait at a gate. Scenarios:
 //   1. two full turns of one session: turn 2 restores turn 1's snapshot through presigned GETs;
 //      each home is sealed by the runner through a presigned PUT; core publishes;
 //   2. core killed -9 while the agent's output is journaled: a new core's recovery resumes it;
@@ -21,7 +22,7 @@
 // network and firewall rule it creates is removed.
 //
 //   pnpm --filter orchestrator verify:runner
-// P4/P5: the driver supervisor launcher creates disposable platform services and enters --codex.
+// G3: the driver supervisor launcher creates disposable platform services and enters --opencode.
 // That mode runs the two-turn scenario with the real CLI and local LLM/MCP fixtures, including
 // encrypted snapshot restore and trusted publication. Crash scenarios still use the P2 agent.
 //
@@ -50,26 +51,33 @@ import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 import { extract } from 'tar-stream'
 
 import { SnapshotService } from '../dist/sessions/snapshot.service.js'
-import { startCodexRunnerFixture } from './codex-runner-fixture.mjs'
-import { startKimiRunnerFixture } from './kimi-runner-fixture.mjs'
+import { sampleDriverId } from '../src/testing/ids.ts'
+import { startOpencodeRunnerFixture } from './opencode-runner-fixture.mjs'
 
 const {
-  values: { codex = false, kimi = false },
-} = parseArgs({ options: { codex: { type: 'boolean' }, kimi: { type: 'boolean' } } })
+  values: { opencode: realCli = false },
+} = parseArgs({ options: { opencode: { type: 'boolean' } } })
 
-assert(!(codex && kimi), 'Select one verification driver')
-const realCli = codex || kimi
-const driverId = kimi ? 'kimi' : 'codex'
-const driverName = kimi ? 'Kimi' : 'Codex'
-const firstEffort = kimi ? 'low' : 'medium'
+// Without a real CLI the turns are those of «a driver in general».
+const driverId = realCli ? 'opencode' : sampleDriverId
+const driverName = 'OpenCode'
+const firstEffort = 'low'
 
 const env = process.env
 const scripts = dirname(fileURLToPath(import.meta.url))
 const repository = resolve(scripts, '../../..')
 const DIGEST = /^[^\s@]+@sha256:[a-f0-9]{64}$/
 const GATE = '/tmp/raditi-verify-go'
-const home = { root: '/agent-home/codex', include: ['sessions'], exclude: [] }
-const driverVersion = kimi ? '2.1.1' : codex ? '0.158.0' : '0.0.0-verify'
+const driverVersion = realCli ? '1.18.34' : '0.0.0-verify'
+/**
+ * The session state of the OpenCode driver: the database and its WAL, nothing else. The
+ * synthetic agent writes the same two files.
+ */
+const opencodeHome = {
+  root: '/agent-home/opencode',
+  include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+  exclude: [],
+}
 // The real-CLI mode is entered only by the launcher with disposable platform services.
 if (realCli)
   assert.match(
@@ -474,7 +482,7 @@ function expectEvents(entries) {
     entries
       .flatMap((entry) => (entry.phase === 'output' ? (entry.events ?? []) : []))
       .map((event) => event.type),
-    ['started', 'message', 'completed'],
+    ['started', 'message', 'usage', 'completed'],
   )
 }
 
@@ -498,7 +506,8 @@ async function expectCompleted(taskId, turn, headSha) {
   return assignment
 }
 
-async function homeFiles(reference) {
+/** The files of a turn's home archive: their names, each with its bytes. */
+async function homeEntries(reference) {
   const loaded = await snapshots.load(reference)
   if (realCli) {
     // The persisted snapshot and journal may carry neither the old nor the new turn keys.
@@ -513,18 +522,20 @@ async function homeFiles(reference) {
           'Snapshot contains a turn credential',
         )
   }
-  const names = []
+  const entries = new Map()
   const reader = extract()
   const listed = (async () => {
     for await (const entry of reader) {
-      names.push(entry.header.name)
-      entry.resume()
+      const chunks = []
+      for await (const chunk of entry) chunks.push(chunk)
+      entries.set(entry.header.name, Buffer.concat(chunks))
     }
   })()
   reader.end(zstdDecompressSync(loaded.archives.home))
   await listed
-  return names
+  return entries
 }
+const homeFiles = async (reference) => [...(await homeEntries(reference)).keys()]
 
 // --- Turns ---------------------------------------------------------------------------------------
 async function createTask() {
@@ -540,7 +551,7 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
     llm: {
       baseUrl: 'http://sandbox-gw.invalid',
       apiKey: `verify-llm-${randomBytes(16).toString('hex')}`,
-      model: kimi ? 'k3-256k' : codex ? 'gpt-6-sol' : 'synthetic',
+      model: realCli ? 'glm-5.3' : 'synthetic',
       ...(realCli ? { reasoningEffort: turn === 1 ? firstEffort : 'high' } : {}),
     },
     mcp: {
@@ -549,15 +560,14 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
     },
     instructions: `Synthetic runner verification\nRADITI_PLATFORM_TURN_${turn}`,
   }
-  const prompt = kimi
+  // A lone dash, then nearly the longest prompt the turn plan accepts, starting with a slash.
+  const prompt = realCli
     ? turn === 1
       ? '-'
-      : `Synthetic Kimi continuation. ${'я'.repeat(99_900)}`
-    : codex
-      ? `Synthetic Codex supervisor turn ${turn}.`
-      : JSON.stringify({ gated })
+      : `/init ${'я'.repeat(99_900)}`
+    : JSON.stringify({ gated })
   if (realCli) {
-    context.llm.baseUrl = kimi ? 'http://sandbox-gw:8080/kimi/v1' : 'http://sandbox-gw:8080/codex'
+    context.llm.baseUrl = 'http://sandbox-gw:8080/zai/v4'
     context.mcp.url = 'http://sandbox-gw:8080/mcp'
     fixture.addTurn({
       turn,
@@ -604,7 +614,7 @@ const reference = ({ sessionId }, turn, manifest) => ({
   turn,
   image: images.sandbox,
   driver: { id: driverId, version: driverVersion },
-  home: manifest?.home ?? home,
+  home: manifest?.home ?? opencodeHome,
 })
 
 // --- Main -----------------------------------------------------------------------------------------
@@ -633,6 +643,34 @@ const firewall = async () =>
       'iptables -S INPUT; ip6tables -S INPUT',
     ),
   ).filter((rule) => rule.includes('rdx'))
+/**
+ * The provider's own sweep (host-firewall.mjs): drops the host rules of attempt bridges that no
+ * longer exist and never the rule of a live attempt. A run interrupted between an attempt's
+ * network and its container leaves such a rule; the next attempt anywhere on the VM sweeps it.
+ */
+const sweepFirewall = () =>
+  docker(
+    'run',
+    '--rm',
+    // As the provider runs it: in the host network namespace, which only runc gives.
+    '--runtime',
+    'runc',
+    '--network',
+    'host',
+    '--user',
+    '0:0',
+    '--cap-drop',
+    'ALL',
+    '--cap-add',
+    'NET_ADMIN',
+    '--security-opt',
+    'no-new-privileges:true',
+    '--entrypoint',
+    '/usr/local/bin/node',
+    images.guard,
+    '/usr/local/lib/raditi/host-firewall.mjs',
+    'sweep',
+  )
 /** Short-lived host firewall helpers of runsc attempts carry no scope labels. */
 const helpers = async () =>
   lines(await docker('ps', '--all', '--quiet', '--filter', 'label=io.raditi.gateway.role=firewall'))
@@ -660,10 +698,13 @@ try {
   assert('runsc' in JSON.parse(await docker('info', '--format', '{{json .Runtimes}}')))
   for (const image of Object.values(images))
     await docker('image', 'inspect', '--format', '{{.Id}}', image)
+  // Rules an interrupted run left behind would be swept by the first attempt of this one, and
+  // the comparison at the end would take that for a change.
+  await sweepFirewall()
   rulesBefore = await firewall()
   helpersBefore = await helpers()
   if (realCli) {
-    fixture = await (kimi ? startKimiRunnerFixture() : startCodexRunnerFixture())
+    fixture = await startOpencodeRunnerFixture()
     gatewayConfig.llmUpstream = `http://${hostAddress}:${fixture.port}`
     gatewayConfig.mcpUpstream = gatewayConfig.llmUpstream
     assert.equal((await command(gitleaks, ['version'])).stdout.trim(), '8.30.1')
@@ -678,26 +719,33 @@ try {
   await git('init', '--quiet', '--bare', '--initial-branch=main', remote)
   await git('init', '--quiet', '--initial-branch=main', seed)
   await writeFile(join(seed, 'index.php'), "<?php echo 'hello';\n")
-  if (kimi) {
-    // Print mode must refuse untrusted project MCP even when it shadows the platform server.
-    await mkdir(join(seed, '.kimi-code'))
-    const hostileMcp = JSON.stringify({
-      mcpServers: {
-        raditi: { transport: 'http', url: 'http://sandbox-gw:8080/mcp/disabled/project' },
-      },
-    })
-    await writeFile(join(seed, '.mcp.json'), hostileMcp)
-    await writeFile(join(seed, '.kimi-code/mcp.json'), hostileMcp)
-    await mkdir(join(seed, '.kimi-code/agents'))
-    for (const name of ['agent', 'raditi'])
-      await writeFile(
-        join(seed, `.kimi-code/agents/${name}.md`),
-        `---\nname: ${name}\ndescription: Synthetic hostile agent\noverride: true\ntools: [Bash]\n---\nHOSTILE_PROJECT_AGENT\n`,
-      )
+  if (realCli) {
+    // The site's own OpenCode files. None may reach a request (the fixture refuses the texts),
+    // and the plugin must not be imported into the CLI: it would leave a file that the
+    // publication of the turn carries to the site. The wrapper keeps these paths out of the
+    // working copy while the CLI runs and puts them back, so they stay in the published tree.
+    await mkdir(join(seed, '.opencode/plugin'), { recursive: true })
+    await mkdir(join(seed, '.opencode/agent'), { recursive: true })
     await writeFile(
-      join(seed, '.kimi-code/config.toml'),
-      'auto_session_title = true\n[models.hostile]\nmodel = "foreign-model"\nprovider = "hostile"\n',
+      join(seed, '.opencode/plugin/hostile.js'),
+      "import { writeFileSync } from 'node:fs'\nwriteFileSync('/workspace/repo/hostile-plugin-ran.txt', 'ran')\nexport const Hostile = async () => ({})\n",
     )
+    await writeFile(
+      join(seed, '.opencode/agent/raditi.md'),
+      '---\ndescription: Synthetic hostile agent\nmode: primary\n---\nHOSTILE_PROJECT_AGENT\n',
+    )
+    await writeFile(
+      join(seed, 'opencode.json'),
+      JSON.stringify({
+        model: 'hostile/hostile-model',
+        instructions: ['hostile-rule.md'],
+        permission: { webfetch: 'allow', bash: 'ask' },
+        mcp: { raditi: { type: 'remote', url: 'http://sandbox-gw:8080/mcp/disabled/project' } },
+        plugin: ['./.opencode/plugin/hostile.js'],
+      }),
+    )
+    await writeFile(join(seed, 'hostile-rule.md'), 'HOSTILE_PROJECT_RULE\n')
+    await writeFile(join(seed, 'AGENTS.md'), 'HOSTILE_PROJECT_AGENTS_MD\n')
   }
   await git('-C', seed, 'add', '.')
   await git(
@@ -789,45 +837,21 @@ try {
       assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
       fixture.assertComplete()
       const nativeId = first.manifest.driver.nativeSessionId
-      assert.match(nativeId, kimi ? /^session_[a-f0-9-]{36}$/ : /^[a-f0-9-]{36}$/)
+      assert.match(nativeId, /^ses_[A-Za-z0-9]{20,40}$/)
       assert.equal(
         second.manifest.driver.nativeSessionId,
         nativeId,
         'The same native session resumes',
       )
-      if (kimi) {
-        const workDirKey = `wd_repo_${createHash('sha256').update('/workspace/repo').digest('hex').slice(0, 12)}`
-        const sessionPath = `sessions/${workDirKey}/${nativeId}`
-        assert.deepEqual(second.manifest.home, {
-          root: '/agent-home/kimi',
-          include: ['session_index.jsonl', `${sessionPath}/state.json`, `${sessionPath}/agents`],
-          exclude: [],
-        })
-        assert(files.includes('session_index.jsonl'), 'Kimi session index was captured')
-        assert(
-          files.some((file) => file.endsWith(`/${nativeId}/state.json`)),
-          'Kimi native state was restored',
-        )
-        assert(
-          files.every((file) => file === 'session_index.jsonl' || file.startsWith('sessions/')),
-          'Only native Kimi session files are captured',
-        )
-        assert(
-          files
-            .filter((file) => file.startsWith('sessions/'))
-            .every((file) => file.includes(nativeId)),
-          'No unrelated Kimi session was captured',
-        )
-      } else {
-        assert(
-          files.some((file) => file.endsWith(`${nativeId}.jsonl`)),
-          'The Codex rollout is restored',
-        )
-        assert(
-          files.every((file) => file === 'sessions' || file.startsWith('sessions/')),
-          'Only the driver session allowlist is captured',
-        )
-      }
+      assert.deepEqual(second.manifest.home, opencodeHome)
+      assert(
+        files.includes(opencodeHome.include[1]) || files.includes(opencodeHome.include[0]),
+        'The OpenCode session database was captured',
+      )
+      assert(
+        files.every((file) => opencodeHome.include.includes(file)),
+        'Only the OpenCode session database and its WAL are captured',
+      )
       const firstAssignment = await assignmentOf(task.taskId, 1)
       const secondAssignment = await assignmentOf(task.taskId, 2)
       assert.notEqual(
@@ -852,9 +876,7 @@ try {
           assert(phaseNames.includes(phase), `Turn ${turn} has no ${phase} evidence`)
         assert(phaseNames.indexOf('destroyed') < phaseNames.indexOf('publishing'))
         const events = turnEntries.flatMap((entry) => entry.events ?? [])
-        for (const type of kimi
-          ? ['started', 'command', 'message']
-          : ['started', 'command', 'usage', 'completed'])
+        for (const type of ['started', 'command', 'tool_call', 'usage', 'message', 'completed'])
           assert(
             events.some((event) => event.type === type),
             `${driverName} ${type} was not journaled`,
@@ -866,11 +888,15 @@ try {
           assert(!persisted.includes(secret), 'Journal or assignment contains a turn credential')
       await homeFiles(reference(task, 1, first.manifest))
     } else {
-      for (const name of ['verify/turn-1.jsonl', 'verify/turn-2.jsonl'])
-        assert(
-          files.some((file) => file.endsWith(name)),
-          `turn 2 home keeps ${name}`,
-        )
+      // The home of a turn is the session state the driver names and nothing the agent wrote
+      // beside it: neither its log nor the configuration of the turn.
+      assert.deepEqual(second.manifest.home, opencodeHome)
+      assert.deepEqual([...files].sort(), [...opencodeHome.include].sort())
+      // Turn 1's line came back by restore in each of the two session files, and turn 2 added
+      // its own to both: a restore that brought back only one of them is not a restore.
+      const kept = await homeEntries(reference(task, 2, second.manifest))
+      for (const file of opencodeHome.include)
+        assert.equal(kept.get(file).toString(), 'turn 1\nturn 2\n', file)
     }
     const tree = await git(
       '--git-dir',
@@ -882,12 +908,35 @@ try {
     assert.deepEqual(
       lines(tree).sort(),
       [
-        ...(kimi ? ['.kimi-code', '.mcp.json'] : []),
+        // No hostile-plugin-ran.txt: the plugin of the repository was never imported.
+        ...(realCli ? ['.opencode', 'AGENTS.md', 'hostile-rule.md', 'opencode.json'] : []),
         'index.php',
         'turn-1.txt',
         'turn-2.txt',
       ].sort(),
     )
+    if (realCli) {
+      // The wrapper took the site's own OpenCode files out of the working copy for both turns
+      // and put them back: the published tree holds them as they were, and nothing of the CLI
+      // (its .gitignore, a package it installs) beside them.
+      const own = ['.opencode', 'opencode.json', 'AGENTS.md', 'hostile-rule.md']
+      const head = second.manifest.git.headSha
+      assert.deepEqual(
+        lines(await git('--git-dir', remote, 'ls-tree', '-r', '--name-only', head, '--', ...own)),
+        [
+          '.opencode/agent/raditi.md',
+          '.opencode/plugin/hostile.js',
+          'AGENTS.md',
+          'hostile-rule.md',
+          'opencode.json',
+        ],
+      )
+      assert.equal(
+        await git('--git-dir', remote, 'diff', '--name-only', mainSha, head, '--', ...own),
+        '',
+        "The turns changed the site's own OpenCode files",
+      )
+    }
     verified.push(
       `${realCli ? `real ${driverName} exec/resume, rotated keys and ${firstEffort} → high; ` : ''}full turns on runsc with restore of the previous snapshot, runner-sealed home through presigned PUT, core publication (${Math.round((Date.now() - started) / 1000)} s)`,
     )
@@ -1337,6 +1386,8 @@ try {
       )
       if (networks.length) await docker('network', 'rm', ...networks)
     })
+    // The rule of a bridge removed just above, when no sandbox was there to be destroyed with it.
+    await settle('orphaned firewall rules', () => sweepFirewall())
     await settle('database rows', async () => {
       // A failed run keeps the turns' journals next to the logs: phases, epochs and reasons.
       if (work && !succeeded) {

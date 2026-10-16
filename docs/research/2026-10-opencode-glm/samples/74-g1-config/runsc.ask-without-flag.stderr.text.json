@@ -1,0 +1,4 @@
+{
+  "source": "runsc/p7-ask-without-flag/turn.stderr.txt",
+  "text": "\u001b[93m\u001b[1m! \u001b[0mpermission requested: bash (echo denied-marker); auto-rejecting\n"
+}

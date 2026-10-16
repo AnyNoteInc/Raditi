@@ -22,6 +22,7 @@ import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
 import { RunnerHub } from '../runner-api/runner-hub.ts'
 import { SnapshotService } from '../sessions/snapshot.service.ts'
+import { sampleDriverId } from '../testing/ids.ts'
 import { loopbackTransport } from '../testing/runner-loopback.ts'
 import {
   baseSha,
@@ -198,7 +199,7 @@ const prepareCommand = (body: Record<string, unknown> = {}, epoch = 1) =>
       sandbox: sandboxSpec(epoch),
       remainingMs: 60_000,
       bundle: { baseSha, branch, sha256: sha256(bundleBytes), sizeBytes: bundleBytes.byteLength },
-      driverId: 'codex',
+      driverId: sampleDriverId,
       prepared,
       argv: ['synthetic-agent'],
       credentials,
@@ -236,7 +237,7 @@ describe('SandboxRunner with core', () => {
         labels: { ...labels, leaseEpoch: 1 },
         purpose: 'work',
         remainingMs: 60_000,
-        driverId: 'codex',
+        driverId: sampleDriverId,
         credentials,
         holdsCredentials: true,
       },
@@ -292,7 +293,7 @@ describe('SandboxRunner with core', () => {
           labels: { ...labels, leaseEpoch: 1 },
           purpose: 'work',
           remainingMs: 60_000,
-          driverId: 'codex',
+          driverId: sampleDriverId,
           credentials,
           ...(sent ? {} : { holdsCredentials: true }),
         },
@@ -723,7 +724,7 @@ describe('SandboxRunner commands', () => {
         labels: { ...labels, leaseEpoch: 1 },
         purpose,
         ...(purpose === 'work'
-          ? { work: { remainingMs: 60_000, driverId: 'codex', credentials } }
+          ? { work: { remainingMs: 60_000, driverId: sampleDriverId, credentials } }
           : {}),
       })
 
@@ -746,7 +747,7 @@ describe('SandboxRunner commands', () => {
     await core.send({
       ...adopt('work'),
       assignmentId: '00000000-0000-4000-8000-0000000000a3',
-      work: { remainingMs: 60_000, driverId: 'codex' },
+      work: { remainingMs: 60_000, driverId: sampleDriverId },
     })
     await vi.waitFor(() => expect(core.types()).toHaveLength(5))
     expect(core.reports.at(-1)).toMatchObject({ type: 'failed', code: 'CREDENTIALS_LOST' })
@@ -765,12 +766,12 @@ describe('SandboxRunner snapshot parts', () => {
         sessionId: labels.sessionId,
         turn: 1,
         image,
-        driver: { id: 'codex', version: '1.0.0', nativeSessionId: 'prior-native' },
+        driver: { id: sampleDriverId, version: '1.0.0', nativeSessionId: 'prior-native' },
         home,
         git: { provider: 'gitea', branch, baseSha: 'a'.repeat(40), headSha: baseSha },
       },
       {
-        home: await tarZst({ 'sessions/prior.jsonl': 'prior conversation' }),
+        home: await tarZst({ [home.include[0]!]: 'prior conversation' }),
         untracked: emptyUntrackedArchive(),
         patch: Buffer.from('prior patch'),
       },
@@ -781,7 +782,7 @@ describe('SandboxRunner snapshot parts', () => {
         sessionId: labels.sessionId,
         turn: 1,
         image,
-        driver: { id: 'codex', version: '1.0.0' },
+        driver: { id: sampleDriverId, version: '1.0.0' },
         home,
       },
       60_000,
@@ -920,7 +921,7 @@ describe('SandboxRunner snapshot parts', () => {
           sessionId: labels.sessionId,
           turn: Number(turn),
           image,
-          driver: { id: 'codex', version: '1.0.0' },
+          driver: { id: sampleDriverId, version: '1.0.0' },
           home,
           git: { provider: 'gitea', branch, baseSha, headSha: 'c'.repeat(40) },
           schemaVersion: 1,

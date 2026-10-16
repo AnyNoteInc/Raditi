@@ -1,0 +1,309 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185676738,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000014",
+        "messageID": "msg_00000000000000000000000015",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185677185,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_000000000000000000000001",
+        "state": {
+          "status": "completed",
+          "input": {
+            "command": "node /spike/in/toolcheck.mjs llm=e7cfacae0b4cab0f179fc9b75e15b383f59aeea45b85810fc80def0c0ef97f54 mcp=4f5936b42c5c57691958c91654f32e4ca22d31a5c70820c6b06a6c6a4949c622",
+            "description": "look for credentials",
+            "timeout": 60000
+          },
+          "output": "{\"own\":{\"envNames\":[\"OPENCODE\",\"OPENCODE_DISABLE_AUTOUPDATE\",\"OPENCODE_DISABLE_CLAUDE_CODE\",\"OPENCODE_DISABLE_DEFAULT_PLUGINS\",\"OPENCODE_DISABLE_EXTERNAL_SKILLS\",\"OPENCODE_DISABLE_LSP_DOWNLOAD\",\"OPENCODE_DISABLE_MODELS_FETCH\",\"OPENCODE_DISABLE_PROJECT_CONFIG\",\"OPENCODE_DISABLE_SHARE\",\"OPENCODE_PID\",\"OPENCODE_PURE\"],\"envHolds\":[]},\"processes\":[{\"pid\":1,\"self\":false,\"comm\":\"tini\",\"ppid\":0,\"uid\":10001,\"threads\":1,\"rssKb\":3100,\"peakKb\":null,\"argv0\":\"tini -- sleep\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":16,\"self\":false,\"comm\":\"node-MainThread\",\"ppid\":0,\"uid\":10001,\"threads\":7,\"rssKb\":139924,\"peakKb\":null,\"argv0\":\"node /spike/wrapper.mjs --secrets\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":2,\"self\":false,\"comm\":\"sleep\",\"ppid\":1,\"uid\":10001,\"threads\":1,\"rssKb\":3840,\"peakKb\":null,\"argv0\":\"sleep infinity \",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":25,\"self\":false,\"comm\":\"opencode\",\"ppid\":16,\"uid\":10001,\"threads\":9,\"rssKb\":724008,\"peakKb\":null,\"argv0\":\"opencode run --format\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":55,\"self\":true,\"comm\":\"node-MainThread\",\"ppid\":25,\"uid\":10001,\"threads\":7,\"rssKb\":136136,\"peakKb\":null,\"argv0\":\"node /spike/in/toolcheck.mjs llm=e7cfacae0b4cab0f179fc9b75e15b383f59aeea45b85810fc80def0c0ef97f54\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]}}],\"secretsDir\":[],\"budget\":{\"threadsTotal\":25,\"processes\":5,\"scannedMiB\":0},\"ptraceScope\":\"1\",\"kernel\":\"Linux version 4.19.0-gvisor #1 SMP Sun Jan 10 15:06:54 PST 2\"}\n",
+          "metadata": {
+            "output": "{\"own\":{\"envNames\":[\"OPENCODE\",\"OPENCODE_DISABLE_AUTOUPDATE\",\"OPENCODE_DISABLE_CLAUDE_CODE\",\"OPENCODE_DISABLE_DEFAULT_PLUGINS\",\"OPENCODE_DISABLE_EXTERNAL_SKILLS\",\"OPENCODE_DISABLE_LSP_DOWNLOAD\",\"OPENCODE_DISABLE_MODELS_FETCH\",\"OPENCODE_DISABLE_PROJECT_CONFIG\",\"OPENCODE_DISABLE_SHARE\",\"OPENCODE_PID\",\"OPENCODE_PURE\"],\"envHolds\":[]},\"processes\":[{\"pid\":1,\"self\":false,\"comm\":\"tini\",\"ppid\":0,\"uid\":10001,\"threads\":1,\"rssKb\":3100,\"peakKb\":null,\"argv0\":\"tini -- sleep\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":16,\"self\":false,\"comm\":\"node-MainThread\",\"ppid\":0,\"uid\":10001,\"threads\":7,\"rssKb\":139924,\"peakKb\":null,\"argv0\":\"node /spike/wrapper.mjs --secrets\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":2,\"self\":false,\"comm\":\"sleep\",\"ppid\":1,\"uid\":10001,\"threads\":1,\"rssKb\":3840,\"peakKb\":null,\"argv0\":\"sleep infinity \",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":25,\"self\":false,\"comm\":\"opencode\",\"ppid\":16,\"uid\":10001,\"threads\":9,\"rssKb\":724008,\"peakKb\":null,\"argv0\":\"opencode run --format\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]},\"memory\":{\"readable\":false,\"holds\":[],\"regions\":0,\"mib\":0,\"error\":\"open: EACCES\"}},{\"pid\":55,\"self\":true,\"comm\":\"node-MainThread\",\"ppid\":25,\"uid\":10001,\"threads\":7,\"rssKb\":136136,\"peakKb\":null,\"argv0\":\"node /spike/in/toolcheck.mjs llm=e7cfacae0b4cab0f179fc9b75e15b383f59aeea45b85810fc80def0c0ef97f54\",\"cmdlineHolds\":[],\"environ\":{\"readable\":true,\"names\":[],\"holds\":[]}}],\"secretsDir\":[],\"budget\":{\"threadsTotal\":25,\"processes\":5,\"scannedMiB\":0},\"ptraceScope\":\"1\",\"kernel\":\"Linux version 4.19.0-gvisor #1 SMP Sun Jan 10 15:06:54 PST 2\"}\n",
+            "exit": 0,
+            "truncated": false
+          },
+          "title": "node /spike/in/toolcheck.mjs llm=e7cfacae0b4cab0f179fc9b75e15b383f59aeea45b85810fc80def0c0ef97f54 mcp=4f5936b42c5c57691958c91654f32e4ca22d31a5c70820c6b06a6c6a4949c622",
+          "time": {
+            "start": 1791185676732,
+            "end": 1791185677123
+          }
+        },
+        "id": "prt_00000000000000000000000016",
+        "sessionID": "ses_00000000000000000000000001",
+        "messageID": "msg_00000000000000000000000015"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185677186,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000017",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000015",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185677285,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000018",
+        "messageID": "msg_00000000000000000000000019",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185677285,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "type": "tool",
+        "tool": "raditi_site_info",
+        "callID": "call_000000000000000000000002",
+        "state": {
+          "status": "completed",
+          "input": {},
+          "output": "{\"url\":\"https://stand.example\",\"stack\":\"wordpress\",\"note\":\"STAND-NOTE-7391\"}",
+          "metadata": {
+            "truncated": false
+          },
+          "title": "",
+          "time": {
+            "start": 1791185677274,
+            "end": 1791185677277
+          }
+        },
+        "id": "prt_00000000000000000000000020",
+        "sessionID": "ses_00000000000000000000000001",
+        "messageID": "msg_00000000000000000000000019"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185677285,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000021",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000019",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185677354,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000022",
+        "messageID": "msg_00000000000000000000000023",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185677354,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "type": "tool",
+        "tool": "raditi_wp_rest",
+        "callID": "call_000000000000000000000003",
+        "state": {
+          "status": "completed",
+          "input": {
+            "method": "GET",
+            "path": "/wp/v2/pages/7"
+          },
+          "output": "{\"id\":7,\"slug\":\"stand-page\",\"title\":{\"rendered\":\"Stand page 4417\"},\"status\":\"publish\"}",
+          "metadata": {
+            "truncated": false
+          },
+          "title": "",
+          "time": {
+            "start": 1791185677308,
+            "end": 1791185677311
+          }
+        },
+        "id": "prt_00000000000000000000000024",
+        "sessionID": "ses_00000000000000000000000001",
+        "messageID": "msg_00000000000000000000000023"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185677354,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000025",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000023",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185677379,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000026",
+        "messageID": "msg_00000000000000000000000027",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185677426,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "type": "tool",
+        "tool": "write",
+        "callID": "call_000000000000000000000004",
+        "state": {
+          "status": "completed",
+          "input": {
+            "content": "written by the turn\n",
+            "filePath": "/workspace/repo/hello.txt"
+          },
+          "output": "Wrote file successfully.",
+          "metadata": {
+            "diagnostics": {},
+            "filepath": "/workspace/repo/hello.txt",
+            "exists": false,
+            "truncated": false
+          },
+          "title": "hello.txt",
+          "time": {
+            "start": 1791185677377,
+            "end": 1791185677388
+          }
+        },
+        "id": "prt_00000000000000000000000028",
+        "sessionID": "ses_00000000000000000000000001",
+        "messageID": "msg_00000000000000000000000027"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185677426,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000029",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000027",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185677455,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000030",
+        "messageID": "msg_00000000000000000000000031",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185677456,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000032",
+        "messageID": "msg_00000000000000000000000031",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "text",
+        "text": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"code\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_changed\":[\"hello.txt\"],\"questions\":[],\"needs_approval\":false,\"risk\":\"low\"}",
+        "time": {
+          "start": 1791185677447,
+          "end": 1791185677448
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185677456,
+      "sessionID": "ses_00000000000000000000000001",
+      "part": {
+        "id": "prt_00000000000000000000000033",
+        "reason": "stop",
+        "messageID": "msg_00000000000000000000000031",
+        "sessionID": "ses_00000000000000000000000001",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ]
+}

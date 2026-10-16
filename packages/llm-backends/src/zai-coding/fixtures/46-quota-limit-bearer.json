@@ -1,0 +1,64 @@
+{
+  "name": "46-quota-limit-bearer",
+  "request": {
+    "url": "https://api.z.ai/api/monitor/usage/quota/limit",
+    "authorizationScheme": "bearer",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": ["accept", "accept-language", "authorization"],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json;charset=UTF-8"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-encoding",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "strict-transport-security",
+      "vary",
+      "x-log-id"
+    ],
+    "elapsedMs": 780,
+    "body": {
+      "code": 200,
+      "msg": "Operation successful",
+      "data": {
+        "limits": [
+          {
+            "type": "CREDIT_LIMIT",
+            "unit": 3,
+            "number": 5,
+            "usage": 2000,
+            "currentValue": 20,
+            "remaining": 1979,
+            "percentage": 1,
+            "nextResetTime": 1791154059203
+          },
+          {
+            "type": "CREDIT_LIMIT",
+            "unit": 6,
+            "number": 1,
+            "usage": 10000,
+            "currentValue": 20,
+            "remaining": 9979,
+            "percentage": 1,
+            "nextResetTime": 1791740593998
+          }
+        ],
+        "level": "lite"
+      },
+      "success": true
+    }
+  }
+}

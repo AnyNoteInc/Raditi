@@ -2,15 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   callSignalSchema,
   callUsageSchema,
-  clientIdentitySchema,
   credentialMetadataSchema,
   gatewayRefusalSchema,
   limitResetHorizonMs,
   limitResetPlausible,
   limitWindowSchema,
-  limitWindowSnapshotSchema,
   limitWindowsSchema,
   llmBackendIdSchema,
+  llmBackendIds,
   llmEgressOriginSchema,
   meterResultSchema,
   normalizedBodySchema,
@@ -139,6 +138,14 @@ describe('the outgoing requests an adapter declares', () => {
     expect(llmEgressOriginSchema.parse(declared)).toEqual(declared)
   })
 
+  it('lets an adapter say that its origin needs no egress node, by a flag alone', () => {
+    const direct = { ...declared, direct: true }
+    expect(llmEgressOriginSchema.parse(direct)).toEqual(direct)
+    expect(llmEgressOriginSchema.parse({ ...declared, direct: false }).direct).toBe(false)
+    for (const value of ['true', 1, null, 'https://provider.invalid'])
+      expect(llmEgressOriginSchema.safeParse({ ...declared, direct: value }).success).toBe(false)
+  })
+
   it.each([
     { origin: 'http://provider.invalid' },
     { origin: 'https://provider.invalid/' },
@@ -168,6 +175,7 @@ describe('the refusal a provider signal stands for', () => {
     [{ kind: 'auth' }, 'account'],
     [{ kind: 'account_risk', reason: 'usage_not_included' }, 'account'],
     [{ kind: 'unconfirmed_block' }, 'account'],
+    [{ kind: 'unconfirmed_block', code: 'zai_1234' }, 'account'],
     [{ kind: 'region' }, 'egress'],
     [{ kind: 'policy_flagged', code: 'cyber_policy' }, 'policy_flagged'],
     [{ kind: 'profile', code: 'model_access' }, 'profile'],
@@ -200,6 +208,8 @@ describe('backend signals', () => {
     { kind: 'account_risk', reason: 'risk_confirmed' },
     { kind: 'region' },
     { kind: 'unconfirmed_block' },
+    // The provider's own code of a block nobody has confirmed yet, for the log of the role.
+    { kind: 'unconfirmed_block', code: 'zai_1234' },
     { kind: 'policy_flagged', code: 'cyber_policy' },
     { kind: 'profile', code: 'model_unavailable' },
     { kind: 'request_rejected', code: 'context_length_exceeded' },
@@ -221,6 +231,9 @@ describe('backend signals', () => {
     { kind: 'account_risk', reason: 'a'.repeat(65) },
     { kind: 'policy_flagged', code: '' },
     { kind: 'policy_flagged', code: 'provider message with account details' },
+    { kind: 'unconfirmed_block', code: 'provider message with account details' },
+    { kind: 'unconfirmed_block', code: '' },
+    { kind: 'unconfirmed_block', reason: 'zai_1234' },
     { kind: 'profile', code: 'model\nunavailable' },
   ])('rejects invalid or unsanitized signal %j', (signal) => {
     expect(callSignalSchema.safeParse(signal).success).toBe(false)
@@ -245,22 +258,12 @@ describe('backend signals', () => {
 })
 
 describe('probe and metering boundaries', () => {
-  const probe = { status: 'ok', windows: [window], plan: 'provider-plan', creditsBalance: '0' }
+  const probe = { status: 'ok', windows: [window], plan: 'provider-plan' }
 
-  it('keeps missing probe data explicit without assuming a provider plan or credit precision', () => {
+  it('keeps missing probe data explicit without assuming a provider plan', () => {
     expect(probeResultSchema.parse(probe)).toEqual(probe)
-    expect(
-      probeResultSchema.parse({
-        status: 'unknown',
-        windows: null,
-        plan: null,
-        creditsBalance: null,
-      }),
-    ).toEqual({ status: 'unknown', windows: null, plan: null, creditsBalance: null })
-    expect(
-      probeResultSchema.parse({ ...probe, creditsBalance: '12345678901234567890.000000001' })
-        .creditsBalance,
-    ).toBe('12345678901234567890.000000001')
+    const unknown = { status: 'unknown', windows: null, plan: null }
+    expect(probeResultSchema.parse(unknown)).toEqual(unknown)
   })
 
   it.each([
@@ -268,24 +271,9 @@ describe('probe and metering boundaries', () => {
     { windows: [window, window] },
     { plan: '' },
     { plan: 2 },
-    { creditsBalance: 0 },
-    { creditsBalance: '-1' },
-    { creditsBalance: 'NaN' },
-    { creditsBalance: '1e3' },
     { providerPayload: 'untrusted' },
   ])('rejects malformed probe data %j', (patch) => {
     expect(probeResultSchema.safeParse({ ...probe, ...patch }).success).toBe(false)
-  })
-
-  it('uses the same rules for windows extracted from headers', () => {
-    const snapshot = { windows: [window], creditsBalance: '1.2345' }
-    expect(limitWindowSnapshotSchema.parse(snapshot)).toEqual(snapshot)
-    expect(
-      limitWindowSnapshotSchema.safeParse({ ...snapshot, windows: [window, window] }).success,
-    ).toBe(false)
-    expect(limitWindowSnapshotSchema.safeParse({ ...snapshot, creditsBalance: 1 }).success).toBe(
-      false,
-    )
   })
 
   it('bounds how far ahead a window reset may lie by the length of its window', () => {
@@ -306,15 +294,6 @@ describe('probe and metering boundaries', () => {
     expect(limitResetPlausible(new Date(0), now, '5h')).toBe(true)
     // Seconds mistaken for milliseconds land tens of thousands of years ahead.
     expect(limitResetPlausible(new Date(1_790_000_000_000_000), now, 'month')).toBe(false)
-  })
-
-  it('tells a response that names no window from a window report it cannot read', () => {
-    // Credits only: the known windows stand. An empty list: capacity unknown until a probe.
-    const creditsOnly = { windows: null, creditsBalance: '5' }
-    expect(limitWindowSnapshotSchema.parse(creditsOnly)).toEqual(creditsOnly)
-    const unreadable = { windows: [], creditsBalance: null }
-    expect(limitWindowSnapshotSchema.parse(unreadable)).toEqual(unreadable)
-    expect(limitWindowSnapshotSchema.safeParse({ creditsBalance: '5' }).success).toBe(false)
   })
 
   it('separates provider terminals, interrupted streams and unusable usage', () => {
@@ -392,44 +371,30 @@ describe('probe and metering boundaries', () => {
   })
 })
 
-describe('account identity boundary', () => {
-  it('supports both provider slugs without accepting retired API backends', () => {
-    expect(llmBackendIdSchema.parse('openai-chatgpt')).toBe('openai-chatgpt')
-    expect(llmBackendIdSchema.parse('kimi-code')).toBe('kimi-code')
-    for (const id of ['litellm', 'gigachat', 'codex', 'kimi'])
-      expect(llmBackendIdSchema.safeParse(id).success).toBe(false)
+describe('backend ids', () => {
+  it('knows one subscription backend', () => {
+    expect(llmBackendIds).toEqual(['zai-coding'])
+    expect(llmBackendIdSchema.parse('zai-coding')).toBe('zai-coding')
   })
-
-  it('lets adapters require their own non-secret identity fields', () => {
-    for (const identity of [
-      {},
-      { installationId: 'installation-id' },
-      { deviceId: 'device-id', deviceName: 'test-device' },
-    ])
-      expect(clientIdentitySchema.parse(identity)).toEqual(identity)
-  })
-
-  it.each([
-    { installationId: '' },
-    { deviceId: 1 },
-    { deviceName: '' },
-    { apiKey: 'fake-api-key' },
-    { accessToken: 'fake-access-token' },
-    { refreshToken: 'fake-refresh-token' },
-  ])('rejects invalid identity fields or mixed-in credentials %j', (identity) => {
-    expect(clientIdentitySchema.safeParse(identity).success).toBe(false)
-  })
+  // The slug is the backend, not its provider, shell or model.
+  it.each(['zai', 'opencode', 'glm-5.3', 'litellm', 'gigachat'])(
+    'refuses %s, which never was a backend id',
+    (id) => expect(llmBackendIdSchema.safeParse(id).success).toBe(false),
+  )
+  it.each(['openai-chatgpt', 'kimi-code'])('refuses the removed backend %s', (id) =>
+    expect(llmBackendIdSchema.safeParse(id).success).toBe(false),
+  )
 })
 
 describe('provider-neutral credential metadata', () => {
-  const oauthMetadata = {
+  const datedMetadata = {
     externalAccountId: 'synthetic-account',
     plan: 'synthetic-plan',
     accessIssuedAt: new Date('2026-09-29T12:00:00.000Z'),
     accessExpiresAt: new Date('2026-09-30T12:00:00.000Z'),
   }
 
-  it('represents a credential with no known expiry without inventing OAuth fields', () => {
+  it('represents a credential with no known expiry without inventing a lifetime', () => {
     const metadata = {
       externalAccountId: null,
       plan: null,
@@ -439,10 +404,10 @@ describe('provider-neutral credential metadata', () => {
     expect(credentialMetadataSchema.parse(metadata)).toEqual(metadata)
   })
 
-  it('preserves OAuth scheduling facts and permits a partially unknown lifetime', () => {
-    expect(credentialMetadataSchema.parse(oauthMetadata)).toEqual(oauthMetadata)
+  it('preserves the lifetime a credential names and permits a partially unknown one', () => {
+    expect(credentialMetadataSchema.parse(datedMetadata)).toEqual(datedMetadata)
     for (const field of ['accessIssuedAt', 'accessExpiresAt'])
-      expect(credentialMetadataSchema.safeParse({ ...oauthMetadata, [field]: null }).success).toBe(
+      expect(credentialMetadataSchema.safeParse({ ...datedMetadata, [field]: null }).success).toBe(
         true,
       )
   })
@@ -456,6 +421,6 @@ describe('provider-neutral credential metadata', () => {
     { accessIssuedAt: undefined },
     { accessToken: 'synthetic-secret' },
   ])('rejects an impossible lifetime or credential payload %j', (patch) => {
-    expect(credentialMetadataSchema.safeParse({ ...oauthMetadata, ...patch }).success).toBe(false)
+    expect(credentialMetadataSchema.safeParse({ ...datedMetadata, ...patch }).success).toBe(false)
   })
 })

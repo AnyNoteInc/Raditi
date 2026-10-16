@@ -3,20 +3,20 @@ import { randomUUID } from 'node:crypto'
 import { Prisma, type PrismaClient } from '@repo/db'
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleBackendId, sampleRoutePath } from '../testing/ids.ts'
 import { PostgresGatewayStore } from './store.ts'
 import { GatewayRecordRejected, type GatewayAdmitInput, type GatewayFinish } from './types.ts'
 
 const input = (): GatewayAdmitInput => ({
   keyHash: 'a'.repeat(64),
   source: '127.0.0.1',
-  backendId: 'openai-chatgpt',
-  route: { method: 'POST', path: '/codex/responses' },
+  backendId: sampleBackendId,
+  route: { method: 'POST', path: sampleRoutePath },
   profile: {
     keyId: randomUUID(),
     modelId: randomUUID(),
     model: 'synthetic-model',
     reasoningEffort: 'low',
-    cacheKey: `rdt_${'a'.repeat(32)}`,
   },
   requestBytes: 300,
   estimatedInputTokens: 100,
@@ -37,6 +37,22 @@ describe('gateway persistence boundaries', () => {
       expect(() => new PostgresGatewayStore(db, { lostAfterMs })).toThrow()
     }
     expect(() => new PostgresGatewayStore(db, { lostAfterMs: 30 * 60_000 })).not.toThrow()
+  })
+
+  it('takes only a positive pace and ceiling of the calls of one key', () => {
+    const db = {} as unknown as Pick<PrismaClient, '$transaction' | '$queryRaw'>
+    for (const options of [
+      { maxCallsPerKey30s: 0 },
+      { maxCallsPerKey30s: 1.5 },
+      { maxCallsPerKey30s: 1001 },
+      { maxCallsPerKey: 0 },
+      { maxCallsPerKey: Infinity },
+      { maxCallsPerKey: 100_001 },
+    ])
+      expect(() => new PostgresGatewayStore(db, options), JSON.stringify(options)).toThrow()
+    expect(
+      () => new PostgresGatewayStore(db, { maxCallsPerKey30s: 1, maxCallsPerKey: 1 }),
+    ).not.toThrow()
   })
 
   function fixture() {
@@ -67,7 +83,7 @@ describe('gateway persistence boundaries', () => {
     await expect(store.admit({ ...input(), estimatedInputTokens: 2_147_483_648 })).rejects.toThrow()
     const value = input()
     await expect(
-      store.admit({ ...value, profile: { ...value.profile, cacheKey: 'shared-cache' } }),
+      store.admit({ ...value, profile: { ...value.profile, modelId: 'shared-model' } }),
     ).rejects.toThrow()
     expect($transaction).not.toHaveBeenCalled()
   })

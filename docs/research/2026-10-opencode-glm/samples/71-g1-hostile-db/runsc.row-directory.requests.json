@@ -1,0 +1,51 @@
+{
+  "source": "runsc/p3-row-directory/records.json",
+  "requests": [
+    {
+      "n": 1,
+      "ms": 4039,
+      "bodyBytes": 18456,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1731) user(26) assistant(0,tool_calls:bash) tool(11) assistant(179) user(34)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 2,
+      "ms": 4776,
+      "bodyBytes": 18882,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1731) user(26) assistant(0,tool_calls:bash) tool(11) assistant(179) user(34) assistant(0,tool_calls:read) tool(112)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 3,
+      "ms": 4962,
+      "bodyBytes": 19559,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1731) user(26) assistant(0,tool_calls:bash) tool(11) assistant(179) user(34) assistant(0,tool_calls:read) tool(112) assistant(0,tool_calls:invalid) tool(204)",
+      "answer": "sse 200"
+    },
+    {
+      "n": 4,
+      "ms": 5655,
+      "bodyBytes": 19915,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1731) user(26) assistant(0,tool_calls:bash) tool(11) assistant(179) user(34) assistant(0,tool_calls:read) tool(112) assistant(0,tool_calls:invalid) tool(204) assistant(0,tool_calls:bash) tool(11)",
+      "answer": "sse 200"
+    }
+  ],
+  "toolResults": [
+    "first-turn\n",
+    "<path>/etc/hostname</path>\n<type>file</type>\n<content>\n1: 3c4b11b81e0b\n\n(End of file - total 1 lines)\n</content>",
+    "The arguments provided to the tool are invalid: Model tried to call unavailable tool 'webfetch'. Available tools: bash, edit, glob, grep, invalid, raditi_site_info, raditi_wp_rest, read, todowrite, wr",
+    "bash-ran\n/\n"
+  ]
+}

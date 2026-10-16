@@ -1,0 +1,32 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "zai-stand/glm-5.3",
+  "small_model": "zai-stand/glm-5.3",
+  "autoupdate": false,
+  "share": "disabled",
+  "snapshot": false,
+  "lsp": false,
+  "formatter": false,
+  "plugin": [],
+  "enabled_providers": ["zai-stand"],
+  "permission": { "webfetch": "deny", "websearch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny", "doom_loop": "deny", "question": "deny" },
+  "provider": {
+    "zai-stand": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Z.ai through the stand proxy",
+      "options": {
+        "baseURL": "http://172.30.250.2:8080/zai-coding",
+        "apiKey": "{env:RADITI_LLM_KEY}"
+      },
+      "models": {
+        "glm-5.3": {
+          "name": "GLM-5.3",
+          "reasoning": true,
+          "tool_call": true,
+          "interleaved": { "field": "reasoning_content" },
+          "limit": { "context": 1000000, "output": 131072 }
+        }
+      }
+    }
+  }
+}

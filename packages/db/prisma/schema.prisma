@@ -564,7 +564,7 @@ model TaskTurn {
   image           String     @db.VarChar(512)
   /// Model selected by the class profile for the turn.
   modelId         String?    @map("model_id") @db.Uuid
-  /// Native CLI session id (Codex thread id, Kimi session id).
+  /// Native session id of the CLI.
   nativeSessionId String?    @map("native_session_id") @db.VarChar(200)
   /// raditi-sessions prefix: sessions/<sessionId>/turns/<NNNN>/.
   snapshotPrefix  String?    @map("snapshot_prefix") @db.VarChar(512)
@@ -905,7 +905,6 @@ model LlmModel {
   providerModelId     String?    @map("provider_model_id") @db.VarChar(255)
   modelClass          ModelClass @map("model_class")
   /// Output tokens reserved before a call, not the provider's output cap (spec §17).
-  /// Codex defaults to 32000; Kimi profiles must explicitly use 32768.
   reserveOutputTokens Int        @default(32000) @map("reserve_output_tokens")
   enabled             Boolean    @default(true)
   createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -1001,7 +1000,7 @@ model TokenUsage {
 model SubscriptionAccount {
   id                    String                    @id @default(uuid(7)) @db.Uuid
   providerId            String                    @map("provider_id") @db.Uuid
-  /// Driver the subscription serves, e.g. codex or kimi.
+  /// Driver the subscription serves.
   driverId              String                    @map("driver_id") @db.VarChar(32)
   /// Unique among accounts that are not retired, as the provider account id below. Look an
   /// account up by either with findFirst and `status: { not: 'retired' }`: findUnique returns
@@ -1027,16 +1026,20 @@ model SubscriptionAccount {
   limitWindows          Json                      @default("[]") @map("limit_windows")
   headroomPct           Decimal?                  @map("headroom_pct") @db.Decimal(5, 2)
   limitsSeenAt          DateTime?                 @map("limits_seen_at") @db.Timestamptz(6)
+  /// No reader and no writer since the removal of OAuth; dropped by a contract migration.
   creditsSeen           Json?                     @map("credits_seen")
   credentialVersion     Int                       @default(0) @map("credential_version")
   credentialExpiresAt   DateTime?                 @map("credential_expires_at") @db.Timestamptz(6)
   credentialRefreshedAt DateTime?                 @map("credential_refreshed_at") @db.Timestamptz(6)
+  /// The three refresh columns: no reader and no writer since the removal of OAuth; dropped
+  /// by a contract migration.
   refreshStartedAt      DateTime?                 @map("refresh_started_at") @db.Timestamptz(6)
   refreshFinishedAt     DateTime?                 @map("refresh_finished_at") @db.Timestamptz(6)
   refreshFailures       Int                       @default(0) @map("refresh_failures")
   retireRequestedAt     DateTime?                 @map("retire_requested_at") @db.Timestamptz(6)
   credentialsRevokedAt  DateTime?                 @map("credentials_revoked_at") @db.Timestamptz(6)
-  /// Device and installation identifiers, not authentication secrets.
+  /// Device and installation identifiers, not authentication secrets. No reader and no writer
+  /// since the removal of OAuth; dropped by a contract migration.
   clientIdentity        Json                      @default("{}") @map("client_identity")
   lastUsedAt            DateTime?                 @map("last_used_at") @db.Timestamptz(6)
   enabled               Boolean                   @default(false)

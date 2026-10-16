@@ -73,8 +73,10 @@ scrape_configs:
           - http://s3:8333/healthz
       - targets: ['http://site:80/']
         labels: { compose_profile: site }
-      # Без прокси выхода и успешной пробы канала шлюз отвечает 503 (degraded): это штатное
-      # состояние dev, поэтому проба не входит в обязательные и в алерт EndpointDown.
+      # Роль `llm` в dev может быть убрана из ORCHESTRATOR_ROLES, а её health отвечает 503
+      # (degraded), когда задан прокси выхода без рабочего канала, когда провайдер недостижим
+      # на прямом пути или недоступны база и Vault. Без прокси шлюз с G4 отвечает 200. Поэтому
+      # проба помечена профилем и не входит в обязательные и в алерт EndpointDown.
       - targets: ['http://host.docker.internal:8084/health']
         labels: { compose_profile: llm }
     relabel_configs:

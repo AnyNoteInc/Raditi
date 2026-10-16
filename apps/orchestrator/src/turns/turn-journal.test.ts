@@ -2,6 +2,7 @@ import { createPrismaClient, PostgresSiteLeaseStore, type PrismaClient } from '@
 import type { SiteLeaseGrant, TurnEvidence } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import { replayedTurn, TaskEventTurnJournal, type JournaledEvidence } from './turn-journal.ts'
 
 const fence = {
@@ -245,12 +246,12 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
 
   it('projects session and checkpoint metadata together with fenced journal evidence', async () => {
     const f = await fixture()
-    const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+    const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
     await db.agentDriver.upsert({
-      where: { id: 'codex' },
+      where: { id: sampleDriverId },
       update: {},
       create: {
-        id: 'codex',
+        id: sampleDriverId,
         image,
         capabilities: {},
         enabled: true,
@@ -261,7 +262,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
         taskId: f.task.id,
         turnNo: 1,
         status: 'running',
-        driverId: 'codex',
+        driverId: sampleDriverId,
         image,
       },
     })

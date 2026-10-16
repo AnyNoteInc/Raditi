@@ -1,0 +1,4 @@
+Do exactly three things, in this order, and nothing else.
+1. Run this shell command: sh /probe/envcheck.sh
+2. Create the file hello.txt in the current directory with the single line: hello from the stand
+3. Reply with one short sentence that says you are done.

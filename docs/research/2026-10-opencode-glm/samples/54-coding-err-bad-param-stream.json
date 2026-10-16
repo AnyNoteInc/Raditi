@@ -1,0 +1,46 @@
+{
+  "name": "54-coding-err-bad-param-stream",
+  "request": {
+    "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+    "auth": "real",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "authorization"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "value": "<removed>"
+      }
+    ],
+    "body": {
+      "model": "glm-5.3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with the single word: ok"
+        }
+      ],
+      "stream": true,
+      "max_tokens": 99999999
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {},
+    "removedHeaderNames": [
+      "alt-svc",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "vary",
+      "x-log-id",
+      "x-request-id"
+    ],
+    "elapsedMs": 415,
+    "body": "{\"error\":{\"code\":\"1210\",\"message\":\"The max_tokens parameter is illegal.：限制数值范围[1,131072]\"}}"
+  }
+}

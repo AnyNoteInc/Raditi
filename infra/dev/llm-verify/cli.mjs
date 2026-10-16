@@ -2,127 +2,62 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { dirname, isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
-export const CLI_IMAGE = 'raditi-p3verify-cli:b13'
+/**
+ * The tag of the three images of the stands. A run without --no-build builds them under it;
+ * RADITI_VERIFY_IMAGE_TAG names another build, so that a run leaves the images of an earlier
+ * one as they are.
+ */
+export const imageTag = (env = process.env) => {
+  const tag = env.RADITI_VERIFY_IMAGE_TAG || 'b13'
+  assert.match(tag, /^[a-z0-9][a-z0-9._-]{0,31}$/, 'Invalid RADITI_VERIFY_IMAGE_TAG')
+  return tag
+}
+export const CLI_IMAGE = `raditi-p3verify-cli:${imageTag()}`
 // The production agent runtime (infra/sandbox/Dockerfile, target runtime) the CLI image builds on.
-export const RUNTIME_IMAGE = 'raditi-p3verify-runtime:b13'
-export const CLI_VERSIONS = Object.freeze({ codex: '0.158.0', kimi: '2.1.1' })
+export const RUNTIME_IMAGE = `raditi-p3verify-runtime:${imageTag()}`
+// The network guard of the sandbox VM (target network-guard of the same Dockerfile).
+export const GUARD_IMAGE = `raditi-p3verify-guard:${imageTag()}`
+export const CLI_VERSIONS = Object.freeze({ opencode: '1.18.34' })
 const GATEWAY = 'http://sandbox-gw:8080'
 const INSIDE = '/usr/local/lib/raditi/cli.mjs'
-// Hand-written configs live apart from what the drivers prepare under /agent-home/{codex,kimi}.
-const HANDWRITTEN = '/agent-home/b13'
 const SECRETS = '/run/raditi/secrets'
 const MAX_OUTPUT = 8 * 1024 * 1024
 const tokenPattern = /^[\x21-\x7e]{1,8192}$/
-const modelPattern = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/
 
-export function compileCodexConfig({ model = 'gpt-6-sol' } = {}) {
-  assert.match(model, modelPattern)
-  return `model = "${model}"
-model_provider = "raditi"
-model_reasoning_effort = "low"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-check_for_update_on_startup = false
-chatgpt_base_url = "${GATEWAY}/disabled/"
-cli_auth_credentials_store = "ephemeral"
-web_search = "disabled"
-[analytics]
-enabled = false
-[features]
-multi_agent = false
-[model_providers.raditi]
-name = "Raditi synthetic verification"
-base_url = "${GATEWAY}/codex"
-wire_api = "responses"
-env_key = "RADITI_LLM_TOKEN"
-requires_openai_auth = false
-supports_websockets = false
-request_max_retries = 2
-stream_max_retries = 2
-stream_idle_timeout_ms = 30000
-`
-}
-
-export function compileKimiConfig() {
-  return `auto_session_title = false
-telemetry = false
-[loop_control]
-max_steps_per_turn = 12
-`
+/**
+ * The search that lists the files under `roots` holding any of `needles`: the arguments of
+ * grep and what it reads on its input. A stand runs it inside the CLI container
+ * (`docker exec -i`) to show that a secret of the platform is in no file of the sandbox. The
+ * needles travel on the input alone: as arguments they would stand in the process list of the
+ * host and of the very container that is searched, and in Docker's record of the exec. Binary
+ * files are searched as text (`-a`): the session database of a CLI, the one thing a turn leaves
+ * to the next and to the session snapshots, is such a file.
+ */
+export function filesHoldingSearch(needles, roots) {
+  assert.ok(needles.length > 0 && roots.length > 0)
+  // One fixed string a line; an empty line would match every file.
+  for (const needle of needles) assert.match(needle, /^[^\r\n]+$/, 'Not one line to search for')
+  for (const root of roots) assert.match(root, /^\/[A-Za-z0-9_./-]*$/, 'Not an absolute path')
+  return { argv: ['grep', '-raFl', '-f', '-', '--', ...roots], input: `${needles.join('\n')}\n` }
 }
 
 /**
- * Hand-written configuration, kept only for protocol scenarios the drivers cannot express (fixed
- * retry counts, plain-text answers, --output-last-message). Production turns run what the drivers
- * prepare: see runPrepared. Secrets enter only the CLI exec environment, never Docker's
- * container configuration.
+ * The files the search has listed. grep answers 0 when it found a file and 1 when it found
+ * none; anything else — a root that is missing, a file or a directory it may not read, no grep
+ * at all — is a search that did not read everything, and no answer.
  */
-export function cliInvocation({ driver, key, prompt, resume, outputSchema, model }) {
-  assert.ok(driver === 'codex' || driver === 'kimi', 'Unsupported synthetic CLI')
-  assert.ok(typeof key === 'string' && tokenPattern.test(key), 'Invalid synthetic CLI key')
-  assert.ok(typeof prompt === 'string' && prompt.length > 0 && prompt.length <= 64 * 1024)
-  if (resume !== undefined) assert.match(resume, /^[a-zA-Z0-9_-]{1,128}$/)
-  const env = {
-    PATH: process.env.PATH,
-    HOME: '/agent-home',
-    LANG: 'C.UTF-8',
-    TERM: 'dumb',
-    NO_COLOR: '1',
-    CI: '1',
-  }
-  if (driver === 'codex') {
-    if (model !== undefined) assert.match(model, modelPattern)
-    return {
-      binary: 'codex',
-      args: [
-        'exec',
-        ...(resume ? ['resume'] : []),
-        '--strict-config',
-        '--skip-git-repo-check',
-        '--dangerously-bypass-approvals-and-sandbox',
-        '--json',
-        ...(model ? ['--model', model] : []),
-        '--output-last-message',
-        `${HANDWRITTEN}/codex/last-message.json`,
-        ...(outputSchema ? ['--output-schema', `${HANDWRITTEN}/codex/output-schema.json`] : []),
-        ...(resume ? [resume] : []),
-        prompt,
-      ],
-      env: { ...env, CODEX_HOME: `${HANDWRITTEN}/codex`, RADITI_LLM_TOKEN: key },
-    }
-  }
-  assert.equal(outputSchema, undefined, 'Kimi has no output-schema flag')
-  const kimiModel = model ?? 'k3-256k'
-  assert.match(kimiModel, modelPattern)
-  return {
-    binary: 'kimi',
-    args: [
-      '-p',
-      prompt,
-      '--output-format',
-      'stream-json',
-      ...(resume ? ['--session', resume] : []),
-    ],
-    env: {
-      ...env,
-      KIMI_CODE_HOME: `${HANDWRITTEN}/kimi`,
-      KIMI_MODEL_NAME: kimiModel,
-      KIMI_MODEL_PROVIDER_TYPE: 'kimi',
-      KIMI_MODEL_BASE_URL: `${GATEWAY}/kimi/v1`,
-      KIMI_MODEL_API_KEY: key,
-      KIMI_MODEL_MAX_OUTPUT_SIZE: '65536',
-      KIMI_MODEL_THINKING_EFFORT: 'low',
-      KIMI_DISABLE_TELEMETRY: '1',
-      KIMI_CODE_NO_AUTO_UPDATE: '1',
-      KIMI_CODE_BUILTIN_PRODUCT_SKILLS: '0',
-    },
-  }
+export function filesHoldingResult({ code, stdout, stderr = '' }) {
+  assert.ok(
+    code === 0 || code === 1,
+    `The files could not be searched: ${stderr.trim().split('\n')[0] || `exit ${code}`}`,
+  )
+  return stdout.split('\n').filter(Boolean)
 }
 
 export function dockerCommand(args, { input, timeoutMs = 30_000 } = {}) {
@@ -285,17 +220,13 @@ export async function createCliSession({
   try {
     // The outer 0700 directory protects host files. Inner mount roots must be writable by
     // container uid 10001 even when the desktop host has a different uid (e.g. macOS 501).
-    for (const path of [workspace, home, join(home, 'b13'), join(home, 'b13/codex')]) {
+    for (const path of [workspace, home]) {
       await mkdir(path)
       await chmod(path, 0o777)
     }
-    await mkdir(join(home, 'b13/kimi'))
-    await chmod(join(home, 'b13/kimi'), 0o777)
     // Client attachments (SANDBOX_INBOX): written by the host, read-only for the agent.
     await mkdir(inbox, { mode: 0o755 })
     await chmod(inbox, 0o755)
-    await writeFile(join(home, 'b13/codex/config.toml'), compileCodexConfig(), { mode: 0o644 })
-    await writeFile(join(home, 'b13/kimi/config.toml'), compileKimiConfig(), { mode: 0o644 })
     created = true
     successful(
       await docker([
@@ -320,6 +251,15 @@ export async function createCliSession({
         '--memory=4g',
         '--tmpfs',
         '/tmp:rw,nosuid,nodev,size=128m',
+        // As in a sandbox, the parent of the working copy belongs to the agent: the OpenCode
+        // driver keeps the site's own OpenCode files there while its CLI runs.
+        '--tmpfs',
+        '/workspace:rw,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0755',
+        // The home of the OpenCode driver, a tmpfs as /agent-home is in a sandbox: its wrapper
+        // closes the CLI's configuration directories by their mode, and the bind mount below
+        // does not hold the agent to that on a desktop host.
+        '--tmpfs',
+        '/agent-home/opencode:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
         // Per-turn secrets of the drivers, like the sandbox's tmpfs: never on a bind mount.
         '--tmpfs',
         `${SECRETS}:rw,nosuid,nodev,noexec,size=1m,uid=10001,gid=10001,mode=0700`,
@@ -373,35 +313,6 @@ export async function createCliSession({
           timeoutMs,
         )
         return { ...result, lines: lines(result.stdout) }
-      },
-      async run(options) {
-        cliInvocation(options)
-        assert.ok(!closed && !busy, 'The synthetic CLI session is closed or busy')
-        if (options.driver === 'codex') {
-          await rm(join(home, 'b13/codex/last-message.json'), { force: true })
-        }
-        if (options.outputSchema !== undefined) {
-          await writeFile(
-            join(home, 'b13/codex/output-schema.json'),
-            JSON.stringify(options.outputSchema),
-            {
-              mode: 0o644,
-            },
-          )
-        }
-        const result = await execute({ action: 'run', ...options }, options.timeoutMs)
-        const events = lines(result.stdout)
-        let lastMessage
-        if (options.driver === 'codex' && !closed)
-          lastMessage = await readFile(join(home, 'b13/codex/last-message.json'), 'utf8').catch(
-            () => undefined,
-          )
-        return {
-          ...result,
-          events,
-          threadId: events.find((event) => event.type === 'thread.started')?.thread_id,
-          lastMessage,
-        }
       },
       async request({ key, path, method = 'POST', headers = {}, body, timeoutMs = 10_000 }) {
         assert.ok(typeof key === 'string' && tokenPattern.test(key), 'Invalid synthetic CLI key')
@@ -461,10 +372,7 @@ async function inside() {
     )
     return
   }
-  if (!launch) {
-    assert.equal(options.action, 'run')
-    launch = cliInvocation(options)
-  }
+  assert.ok(launch, 'Unknown synthetic CLI action')
   const { binary, args, env } = launch
   const child = spawn(binary, args, {
     cwd: '/workspace/repo',

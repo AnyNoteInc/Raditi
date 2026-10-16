@@ -1,0 +1,16 @@
+{
+  "source": "runsc/p4-http-403-budget/records.json",
+  "requests": [
+    {
+      "n": 1,
+      "ms": 4123,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "http 403"
+    }
+  ],
+  "toolResults": []
+}

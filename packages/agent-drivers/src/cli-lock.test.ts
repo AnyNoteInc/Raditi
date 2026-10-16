@@ -9,9 +9,10 @@ interface LockedPackage {
   resolved?: string
   integrity?: string
   dependencies?: Record<string, string>
+  hasInstallScript?: boolean
 }
 
-/** The sandbox image installs the agent CLIs from this lockfile (infra/sandbox/Dockerfile). */
+/** The sandbox image installs the agent CLI from this lockfile (infra/sandbox/Dockerfile). */
 describe('agent CLI lockfile', () => {
   const manifest = JSON.parse(read('../cli/package.json')) as {
     dependencies: Record<string, string>
@@ -24,11 +25,8 @@ describe('agent CLI lockfile', () => {
     .split(/^FROM /m)
     .find((stage) => stage.startsWith('base AS runtime\n'))!
 
-  it('pins both CLIs to exact versions', () => {
-    expect(Object.keys(manifest.dependencies).sort()).toEqual([
-      '@moonshot-ai/kimi-code',
-      '@openai/codex',
-    ])
+  it('pins every CLI to an exact version', () => {
+    expect(Object.keys(manifest.dependencies)).toEqual(['opencode-ai'])
     for (const [name, version] of Object.entries(manifest.dependencies)) {
       expect(version).toMatch(/^\d+\.\d+\.\d+$/)
       expect(lock.packages[`node_modules/${name}`]?.version).toBe(version)
@@ -63,5 +61,24 @@ describe('agent CLI lockfile', () => {
       (match) => match[1],
     )
     expect(checked.sort()).toEqual(pinned)
+  })
+
+  it('links the OpenCode binary of the image architecture, never the launcher stub', () => {
+    const version = manifest.dependencies['opencode-ai']
+    // The launcher package only holds a stub that its postinstall would replace; no lifecycle
+    // script runs, so the image links the platform package's own binary.
+    expect(lock.packages['node_modules/opencode-ai']).toMatchObject({ hasInstallScript: true })
+    for (const platform of ['opencode-linux-arm64', 'opencode-linux-x64-baseline'])
+      expect(lock.packages[`node_modules/${platform}`]?.version).toBe(version)
+    expect(runtime).toMatch(/arm64\) opencode=opencode-linux-arm64 ;;/)
+    // The baseline build runs on an x64 CPU without AVX2; the other x64 package leaves the layer.
+    expect(runtime).toMatch(
+      /amd64\) opencode=opencode-linux-x64-baseline; rm -rf node_modules\/opencode-linux-x64 ;;/,
+    )
+    expect(runtime).toContain('test -x "node_modules/${opencode}/bin/opencode"')
+    expect(runtime).toContain(
+      'ln -s "/usr/local/lib/raditi/agent-clis/node_modules/${opencode}/bin/opencode" /usr/local/bin/opencode',
+    )
+    expect(runtime).not.toMatch(/opencode\.exe|node_modules\/opencode-ai\/bin/)
   })
 })

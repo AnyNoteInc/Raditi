@@ -360,8 +360,10 @@ async function main() {
     'S3_ENDPOINT',
     'S3_ACCESS_KEY_ID',
     'LLM_UPSTREAM_CA_FILE',
-    'LLM_BACKEND_URL_OPENAI_CHATGPT',
-    'LLM_BACKEND_URL_KIMI_CODE',
+    'LLM_BACKEND_URL_ZAI_CODING',
+    'NODE_USE_ENV_PROXY',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
   ])
     assert.equal(config.services.llm.environment[name], undefined, `${name} is absent`)
   check('production role, uid, private port, three networks and no Redis/S3/provider override')
@@ -516,6 +518,29 @@ async function main() {
   assert.ok(inspected.HostConfig.SecurityOpt.includes('no-new-privileges:true'))
   check('running container retains the production hardening')
 
+  setStage('production image with another extra CA')
+  // The profile gives the role one extra CA, the CA of Vault at its pinned path, and the role
+  // takes no other: with a real CA file of the same directory under that variable — the CA of
+  // the proxy — the same service does not start, and says which variable stopped it.
+  const otherCa = await compose(
+    [
+      'run',
+      '--rm',
+      '--no-deps',
+      '-T',
+      '-e',
+      'NODE_EXTRA_CA_CERTS=/run/raditi/egress-ca.pem',
+      'llm',
+    ],
+    { allowFailure: true },
+  )
+  assert.notEqual(otherCa.code, 0, 'The production role started with another extra CA')
+  assert.match(
+    `${otherCa.stdout}${otherCa.stderr}`,
+    /NODE_EXTRA_CA_CERTS: only the CA file of Vault is allowed in production/,
+  )
+  check('the production role refuses to start with any extra CA but the CA of Vault')
+
   setStage('production core service: Vault CA and pinned Vault name')
   // core issues the turn keys llm reads. The service as Compose resolves it, without starting
   // the role: its own secret directory, environment and hosts file under its own uid.
@@ -592,23 +617,27 @@ async function main() {
     const token=login.body?.auth?.client_token;
     if(login.status!==200||!token)throw Error('AppRole verification failed');
     const read=await call('subs/data/b14/canary','GET',undefined,token);
-    const cas=await call('subs/data/b14/canary','POST',{options:{cas:read.body?.data?.metadata?.version},data:read.body?.data?.data},token);
+    const write=await call('subs/data/b14/canary','POST',{options:{cas:read.body?.data?.metadata?.version},data:read.body?.data?.data},token);
     const denied=[];for(const [path,method] of [['subs/metadata/b14/canary','GET'],['subs/data/b14/canary','DELETE'],['subs/destroy/b14/canary','POST'],['turns/data/b14/canary','GET']])denied.push((await call(path,method,method==='POST'?{versions:[1]}:undefined,token)).status);
-    const previous=await call('subs/data/b14/canary?version=1','GET',undefined,token);
-    console.log(JSON.stringify({login:login.status,policies:login.body.auth.policies,read:read.status,cas:cas.status,denied,previous:previous.status}));
+    const after=await call('subs/data/b14/canary','GET',undefined,token);
+    const same=after.body?.data?.data?.value===read.body?.data?.data?.value;
+    console.log(JSON.stringify({login:login.status,policies:login.body.auth.policies,read:read.status,version:read.body?.data?.metadata?.version,write:write.status,denied,after:{status:after.status,version:after.body?.data?.metadata?.version,same}}));
   `)
   assert.equal(acl.login, 200)
   assert.deepEqual(acl.policies, ['llm-subscriptions'])
   assert.equal(acl.read, 200)
-  assert.equal(acl.cas, 200)
+  assert.equal(acl.version, 1)
+  // The role reads the key of an account and never writes it: a write with the right CAS is
+  // refused, and the value it would have replaced is the one the fixture wrote.
+  assert.equal(acl.write, 403)
   assert.deepEqual(acl.denied, [403, 403, 403, 403])
-  assert.equal(acl.previous, 404)
+  assert.deepEqual(acl.after, { status: 200, version: 1, same: true })
   check(
-    'own AppRole reads/CAS subscription KV; metadata, deletion, turn keys and old version are unavailable',
+    'own AppRole only reads subscription KV: a write with the right CAS is refused and changes nothing; metadata, deletion and turn keys are unavailable',
   )
 
   assert.equal(
-    (await http('/codex/responses', 'POST', { model: 'gpt-5.4', input: [] })).status,
+    (await http('/zai/v4/chat/completions', 'POST', { model: 'glm-5.3', messages: [] })).status,
     401,
   )
   assert.equal((await http('/v1/chat/completions', 'POST', {})).status, 403)
@@ -626,7 +655,7 @@ async function main() {
   // authenticated control endpoint answers from the admission gate itself, before any probe.
   const probe = { accountIds: [randomUUID()] }
   assert.equal(
-    (await http('/codex/responses', 'POST', { model: 'gpt-5.4', input: [] })).status,
+    (await http('/zai/v4/chat/completions', 'POST', { model: 'glm-5.3', messages: [] })).status,
     401,
   )
   const blocked = await http('/internal/subscriptions/probe', 'POST', probe, true)

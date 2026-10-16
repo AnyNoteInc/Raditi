@@ -1,10 +1,8 @@
-import { Prisma, type PrismaClient } from '@repo/db'
+import type { Prisma, PrismaClient } from '@repo/db'
 import {
-  clientIdentitySchema,
   limitResetPlausible,
   llmBackendIdSchema,
   probeResultSchema,
-  type ClientIdentity,
   type LimitWindow,
   type LlmBackendId,
   type ProbeResult,
@@ -20,7 +18,6 @@ export interface PoolHealthAccount {
   backendId: LlmBackendId
   credentialRef: string
   credentialVersion: number
-  clientIdentity: ClientIdentity
   limitsSeenAt: Date | null
   /** Whether the snapshot held readable, non-empty windows: what an overtaken probe may not restore. */
   windowsKnown: boolean
@@ -28,27 +25,15 @@ export interface PoolHealthAccount {
 
 export interface PoolHealthUpdate {
   applied: boolean
-  alert: 'auth_confirmed' | 'risk_confirmed' | 'plan_changed' | 'credits_balance' | null
+  alert: 'auth_confirmed' | 'risk_confirmed' | 'plan_changed' | null
   /** The account's limits_seen_at as an applied probe left it: a later one is a newer state. */
   limitsSeenAt?: Date | null
 }
 
-export interface PoolHealthProbePolicy {
-  /**
-   * False for a backend with token refresh: an expired access token is then the refresher's
-   * cue, and only its final outcome may require a new login (p3-design §2.4 signal table).
-   */
-  authNeedsRelogin: boolean
-}
-
-/** The snapshot fences a control response against credential rotation and newer usage. */
+/** The snapshot fences a control response against a replaced credential and newer usage. */
 export interface PoolHealthStore {
   account(accountId: string): Promise<PoolHealthAccount | null>
-  probe(
-    account: PoolHealthAccount,
-    result: ProbeResult,
-    policy: PoolHealthProbePolicy,
-  ): Promise<PoolHealthUpdate>
+  probe(account: PoolHealthAccount, result: ProbeResult): Promise<PoolHealthUpdate>
   /**
    * Pauses the account until the reset of an exhausted window, or for an hour when no usable
    * reset is known. `window` is the one the reset belongs to; a reset a signal names has none.
@@ -56,20 +41,16 @@ export interface PoolHealthStore {
   cool(accountId: string, until: Date | null, window?: LimitWindow['name']): Promise<void>
   /** `count` is the number of payment checks today; `at` is the database clock of this one. */
   payment(accountId: string): Promise<{ count: number; suspended: boolean; at: Date }>
-  credits(accountId: string, balance: string): Promise<boolean>
 }
 
 /** Pauses after the first, second and third payment check (p3-design §2.4 signal table). */
 export const paymentPauseMs = [5 * 60_000, 15 * 60_000, 45 * 60_000] as const
 
-const ownsWarning = (health: string, reason: string | null) =>
-  health === 'ok' && (reason === null || reason === 'credits_balance')
-
 /**
- * A probe overtaken by headers may increase consumption but cannot replenish capacity: windows
- * cleared after it was sent stay unknown until a later probe. Windows already unknown when it
- * was sent are the reason it was asked for; a late response in between restores nothing, so
- * the probe's windows apply.
+ * A probe overtaken by a newer snapshot may increase consumption but cannot replenish capacity:
+ * windows cleared after it was sent stay unknown until a later probe. Windows already unknown
+ * when it was sent are the reason it was asked for; a late response in between restores
+ * nothing, so the probe's windows apply.
  */
 function mergeConcurrentWindows(
   current: unknown,
@@ -86,7 +67,7 @@ function mergeConcurrentWindows(
       continue
     }
     if (previous.resetsAt && next.resetsAt && next.resetsAt < previous.resetsAt) continue
-    // A different period might have started since the probe was sent. Keep newer headers.
+    // A different period might have started since the probe was sent. Keep the newer snapshot.
     if (previous.resetsAt && next.resetsAt && next.resetsAt > previous.resetsAt) continue
     merged.set(next.name, {
       ...next,
@@ -120,25 +101,19 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
       })
       if (!account || account.credentialsRevokedAt !== null) return null
       const backend = llmBackendIdSchema.safeParse(account.provider.slug)
-      const identity = clientIdentitySchema.safeParse(account.clientIdentity)
-      if (!backend.success || !identity.success || account.credentialVersion < 1) return null
+      if (!backend.success || account.credentialVersion < 1) return null
       return {
         accountId,
         backendId: backend.data,
         credentialRef: account.credentialRef.vaultPath,
         credentialVersion: account.credentialVersion,
-        clientIdentity: identity.data,
         limitsSeenAt: account.limitsSeenAt,
         windowsKnown: (decodeLimitWindows(account.limitWindows)?.length ?? 0) > 0,
       }
     })
   }
 
-  probe(
-    snapshot: PoolHealthAccount,
-    value: ProbeResult,
-    policy: PoolHealthProbePolicy,
-  ): Promise<PoolHealthUpdate> {
+  probe(snapshot: PoolHealthAccount, value: ProbeResult): Promise<PoolHealthUpdate> {
     const result = probeResultSchema.parse(value)
     return this.#transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM subscription_accounts
@@ -187,29 +162,14 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
         }
       }
       if (result.status === 'ok') {
-        data.creditsSeen =
-          result.creditsBalance === null ? Prisma.JsonNull : { balance: result.creditsBalance }
         if (result.plan !== null && result.plan !== account.plan && account.health === 'ok') {
           data.health = 'suspended'
           data.healthReason = 'plan_changed'
           data.healthChangedAt = now
           alert = 'plan_changed'
-        } else if (
-          result.creditsBalance !== null &&
-          new Prisma.Decimal(result.creditsBalance).gt(0) &&
-          ownsWarning(account.health, account.healthReason)
-        ) {
-          data.healthReason = 'credits_balance'
-          alert = account.healthReason === 'credits_balance' ? null : 'credits_balance'
-        } else if (
-          result.creditsBalance !== null &&
-          new Prisma.Decimal(result.creditsBalance).isZero() &&
-          account.health === 'ok' &&
-          account.healthReason === 'credits_balance'
-        )
-          data.healthReason = null
+        }
       } else if (
-        ((result.status === 'auth' && policy.authNeedsRelogin) || result.status === 'suspended') &&
+        (result.status === 'auth' || result.status === 'suspended') &&
         account.health === 'ok'
       ) {
         data.health = result.status === 'auth' ? 'needs_relogin' : 'suspended'
@@ -277,21 +237,6 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
           data: { health: 'suspended', healthReason: 'payment_pending', healthChangedAt: now },
         })
       return { count, suspended, at: now }
-    })
-  }
-
-  credits(accountId: string, balance: string): Promise<boolean> {
-    if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(balance)) return Promise.resolve(false)
-    return this.#transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM subscription_accounts WHERE id = ${accountId}::uuid FOR UPDATE`
-      const account = await tx.subscriptionAccount.findUnique({ where: { id: accountId } })
-      if (!account || !ownsWarning(account.health, account.healthReason)) return false
-      const positive = new Prisma.Decimal(balance).gt(0)
-      await tx.subscriptionAccount.update({
-        where: { id: accountId },
-        data: { healthReason: positive ? 'credits_balance' : null },
-      })
-      return positive && account.healthReason !== 'credits_balance'
     })
   }
 }

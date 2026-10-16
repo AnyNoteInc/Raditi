@@ -21,6 +21,7 @@ import {
 } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import { memoryStorage, memoryTransit } from '../testing/snapshots.ts'
 import { ContentPrivacy } from './content-privacy.ts'
 import { ContentSnapshotStorage } from './content-snapshots.ts'
@@ -171,7 +172,7 @@ describe.skipIf(!enabled)('trusted host undo in the MCP content journal with Pos
         instructions: 'Synthetic',
       },
       input: { prompt: 'Synthetic', attachments: [] },
-      driverId: 'codex',
+      driverId: sampleDriverId,
       driverVersion: '1.0.0',
       workspace: {
         repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
@@ -527,6 +528,55 @@ describe.skipIf(!enabled)('trusted host undo in the MCP content journal with Pos
       restored: 0,
     })
     expect(await leases.release(undo.fence)).toBe(true)
+  })
+
+  it('undoes a done task whose turn a removed driver ran: its rows are history, not a plan', async () => {
+    const s = site()
+    const fence = await turnLease()
+    const turn = await openTurn(fence, 1)
+    await s.edit(turn.scope, 'turn-1')
+    await closeTurn(turn, 1, 'completed')
+    expect(await leases.release(fence)).toBe(true)
+    await db.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'done', finishedAt: new Date() },
+    })
+    // What the removal of a shell leaves of its task: the driver row switched off, and the
+    // turn, its key and its saved plan still naming an id no code knows.
+    const removed = `removed-${randomUUID().slice(0, 8)}`
+    await db.agentDriver.create({
+      data: { id: removed, image, capabilities: {}, enabled: false },
+    })
+    try {
+      await db.taskTurn.updateMany({
+        where: { taskId: fixture.taskId },
+        data: { driverId: removed },
+      })
+      await db.llmKey.updateMany({ where: { taskId: fixture.taskId }, data: { driverId: removed } })
+      await db.$executeRaw`UPDATE turn_assignments
+        SET plan = jsonb_set(plan, '{driverId}', to_jsonb(${removed}::text))
+        WHERE id = ${turn.assignmentId}::uuid`
+
+      const undo = await undoTaskLease()
+      expect(await s.service.undoTask({ fence: undo.fence, targetTaskId: fixture.taskId })).toEqual(
+        { restored: 1 },
+      )
+      expect(s.state()).toEqual(s.original('post:42'))
+      expect((await hostCalls()).map((call) => [call.result, call.turnId])).toEqual([
+        ['ok', turn.turnId],
+      ])
+      expect(await leases.release(undo.fence)).toBe(true)
+    } finally {
+      await db.taskTurn.updateMany({
+        where: { taskId: fixture.taskId },
+        data: { driverId: fixture.driverId },
+      })
+      await db.llmKey.updateMany({
+        where: { taskId: fixture.taskId },
+        data: { driverId: fixture.driverId },
+      })
+      await db.agentDriver.delete({ where: { id: removed } })
+    }
   })
 
   describe('refuses', () => {
@@ -1124,6 +1174,24 @@ describe.skipIf(!enabled)('trusted host undo in the MCP content journal with Pos
       await expect(
         rollback.rollback({ fence: { ...fence, epoch: fence.epoch + 1 }, turn: 2 }),
       ).rejects.toMatchObject({ code: 'LEASE_LOST' })
+      expect(s.state().title).toBe('turn-1')
+      expect(await hostCalls()).toHaveLength(0)
+    })
+
+    it('is refused, with nothing written, when the saved plan of the replaced turn names a removed driver', async () => {
+      const s = site()
+      const fence = await turnLease()
+      const first = await openTurn(fence, 1)
+      await s.edit(first.scope, 'turn-1')
+      await closeTurn(first, 1, 'failed')
+      await openTurn(fence, 2, 1)
+      // A turn the removed shell ran: the row stays as history, its plan is no longer a plan.
+      // The product store opens no replacement of such a turn; the journal does not trust that.
+      await db.$executeRaw`UPDATE turn_assignments
+        SET plan = jsonb_set(plan, '{driverId}', '"codex"') WHERE id = ${first.assignmentId}::uuid`
+      await expect(
+        new McpTurnContentRollback(s.journal, s.service).rollback({ fence, turn: 1 }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' })
       expect(s.state().title).toBe('turn-1')
       expect(await hostCalls()).toHaveLength(0)
     })

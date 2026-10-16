@@ -10,7 +10,10 @@ export interface SubscriptionLocks {
   close(): Promise<void>
 }
 
-/** A session lock survives the committed refresh marker and the OAuth request. */
+/**
+ * One writer an account: a login, a relogin and a retirement each hold the lock of the account
+ * in a PostgreSQL session of their own, across their SQL phases and their Vault write.
+ */
 export class SessionSubscriptionLock implements SubscriptionLocks {
   readonly #pool: Pool
   readonly #owned: boolean
@@ -23,8 +26,8 @@ export class SessionSubscriptionLock implements SubscriptionLocks {
       typeof databaseUrlOrPool === 'string'
         ? new Pool({
             connectionString: databaseUrlOrPool,
-            // One lease for the serial rotation queue and one for retirement revocation, so a
-            // rotation still writing Vault cannot block revoking another account.
+            // Two accounts at a time: a writer that still holds one account does not keep
+            // another account of the same process waiting.
             max: 2,
             connectionTimeoutMillis: 5_000,
             statement_timeout: 5_000,

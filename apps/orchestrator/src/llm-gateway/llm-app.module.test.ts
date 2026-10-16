@@ -14,23 +14,19 @@ const fakes = vi.hoisted(() => ({
   listen: vi.fn(),
   close: vi.fn(),
   createGateway: vi.fn(),
+  createTransport: vi.fn(),
   transportRequest: vi.fn(),
   createControlEgress: vi.fn(),
   createProbe: vi.fn(),
   probe: vi.fn(),
-  createRefresher: vi.fn(),
-  refreshTick: vi.fn(),
-  retire: vi.fn(),
-  refresh: vi.fn(),
-  refresherClose: vi.fn(),
   createPool: vi.fn(),
   poolPause: vi.fn(),
   poolObserve: vi.fn(),
   poolProbe: vi.fn(),
+  poolRefresh: vi.fn(),
   poolRecheck: vi.fn(),
   poolTick: vi.fn(),
   poolClose: vi.fn(),
-  createLocks: vi.fn(),
 }))
 vi.mock('./store.ts', () => ({
   PostgresGatewayStore: class {
@@ -43,23 +39,15 @@ vi.mock('./store.ts', () => ({
 vi.mock('./server.ts', () => ({ createLlmGateway: fakes.createGateway }))
 vi.mock('./egress.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof EgressModule>()),
-  createEgressTransport: () => ({ request: fakes.transportRequest }),
+  createEgressTransport: (...args: unknown[]) => {
+    fakes.createTransport(...args)
+    return { request: fakes.transportRequest }
+  },
   createControlEgress: fakes.createControlEgress,
 }))
 vi.mock('./egress-probe.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof EgressProbeModule>()),
   createEgressProbe: fakes.createProbe,
-}))
-vi.mock('./refresher.ts', () => ({
-  SubscriptionRefresher: class {
-    constructor(options: unknown) {
-      fakes.createRefresher(options)
-    }
-    tick = fakes.refreshTick
-    retire = fakes.retire
-    refresh = fakes.refresh
-    close = fakes.refresherClose
-  },
 }))
 vi.mock('./pool-health.ts', () => ({
   SubscriptionPoolHealth: class {
@@ -69,16 +57,10 @@ vi.mock('./pool-health.ts', () => ({
     pause = fakes.poolPause
     observe = fakes.poolObserve
     probeAccount = fakes.poolProbe
+    refreshAccount = fakes.poolRefresh
     recheckRegion = fakes.poolRecheck
     tick = fakes.poolTick
     close = fakes.poolClose
-  },
-}))
-vi.mock('./session-lock.ts', () => ({
-  SessionSubscriptionLock: class {
-    constructor(url: string) {
-      fakes.createLocks(url)
-    }
   },
 }))
 
@@ -119,23 +101,22 @@ describe('llm role lifecycle', () => {
     fakes.createControlEgress.mockImplementation((transport: { request: unknown }) => ({
       request: transport.request,
     }))
-    fakes.createProbe.mockImplementation((egress: unknown) => ({
-      check: (signal: AbortSignal) => (egress ? fakes.probe(signal) : Promise.resolve(false)),
+    // As the real probe: without a proxy there is no channel of the platform to measure.
+    fakes.createProbe.mockImplementation((egress: { proxyUrl: URL | null }) => ({
+      check: (signal: AbortSignal) =>
+        egress.proxyUrl ? fakes.probe(signal) : Promise.resolve(true),
     }))
     fakes.probe.mockResolvedValue(true)
-    fakes.refreshTick.mockResolvedValue(undefined)
-    fakes.retire.mockResolvedValue(undefined)
-    fakes.refresh.mockResolvedValue(null)
-    fakes.refresherClose.mockResolvedValue(undefined)
     fakes.poolPause.mockReturnValue(null)
     fakes.poolObserve.mockResolvedValue(undefined)
     fakes.poolProbe.mockResolvedValue(null)
+    fakes.poolRefresh.mockResolvedValue(null)
     fakes.poolRecheck.mockResolvedValue(false)
     fakes.poolTick.mockResolvedValue(undefined)
     fakes.poolClose.mockResolvedValue(undefined)
   })
 
-  it('collects lost reservations before listening and stays closed with no egress', async () => {
+  it('collects lost reservations before listening and serves without a proxy', async () => {
     const prisma = { $disconnect: vi.fn() } as unknown as PrismaClient
     const runtime = new LlmRuntime(config(), prisma, {} as SecretStore)
     await runtime.listen()
@@ -143,11 +124,61 @@ describe('llm role lifecycle', () => {
       fakes.listen.mock.invocationCallOrder[0]!,
     )
     const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
-    expect(options.ready?.()).toBe(false)
-    expect(options.backends.map((backend) => backend.id)).toEqual(['openai-chatgpt', 'kimi-code'])
+    // Nothing of the platform stands between the role and a provider, so nothing was measured;
+    // what the transport may reach without the proxy is the adapters' own word (egress.test.ts).
+    expect(options.ready?.()).toBe(true)
+    expect(fakes.probe).not.toHaveBeenCalled()
+    expect(fakes.createProbe).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ proxyUrl: null }),
+    )
+    expect(options.backends.map((backend) => backend.id)).toEqual(['zai-coding'])
     await runtime.onApplicationShutdown()
     expect(prisma.$disconnect).toHaveBeenCalledOnce()
   })
+
+  it('answers degraded, with admission left open, while its own connections to a provider fail', async () => {
+    const prisma = {
+      $disconnect: vi.fn(),
+      $queryRaw: vi.fn().mockResolvedValue([]),
+    } as unknown as PrismaClient
+    const secrets = {
+      health: vi.fn().mockResolvedValue({ initialized: true, sealed: false }),
+    } as unknown as SecretStore
+    const runtime = new LlmRuntime(config(), prisma, secrets)
+    await runtime.listen()
+    const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
+    const { onDirectConnection } = fakes.createTransport.mock.calls[0]![2] as {
+      onDirectConnection: (established: boolean) => void
+    }
+    expect(await options.health?.()).toBe(true)
+    // Without a proxy nothing probes a provider: the transport's own word is the one sign.
+    for (let failure = 0; failure < 3; failure++) onDirectConnection(false)
+    expect(await options.health?.()).toBe(false)
+    expect(options.ready?.()).toBe(true)
+    onDirectConnection(true)
+    expect(await options.health?.()).toBe(true)
+    await runtime.onApplicationShutdown()
+  })
+
+  it.each([
+    [false, 'direct'],
+    [true, 'proxy'],
+  ] as const)(
+    'says at start which way it goes to the providers (proxy configured: %s)',
+    async (withEgress, path) => {
+      const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {})
+      const runtime = new LlmRuntime(
+        config(withEgress),
+        { $disconnect: vi.fn() } as unknown as PrismaClient,
+        {} as SecretStore,
+      )
+      await runtime.listen()
+      // An operator who lost the proxy variables reads it here: the role serves either way.
+      expect(log).toHaveBeenCalledWith(JSON.stringify({ event: 'llm_egress_path', path }))
+      log.mockRestore()
+      await runtime.onApplicationShutdown()
+    },
+  )
 
   it('closes admission when the stale-call collector cannot read the database', async () => {
     fakes.collectLost.mockRejectedValue(new Error('private-database-error'))
@@ -257,7 +288,6 @@ describe('llm role lifecycle', () => {
     )
     // One for provider traffic, one for the region recheck over the channel alone.
     expect(fakes.createControlEgress).toHaveBeenCalledTimes(2)
-    expect(fakes.createLocks).toHaveBeenCalledExactlyOnceWith('postgresql://unused')
     await runtime.onApplicationShutdown()
   })
 
@@ -275,7 +305,7 @@ describe('llm role lifecycle', () => {
       options.egress.request(
         {
           method: 'GET',
-          url: 'https://chatgpt.com/backend-api/wham/usage',
+          url: 'https://api.z.ai/api/monitor/usage/quota/limit',
           headers: new Headers(),
         },
         { signal: new AbortController().signal },
@@ -300,7 +330,7 @@ describe('llm role lifecycle', () => {
     expect(options.ready?.()).toBe(false)
     const usage = {
       method: 'GET' as const,
-      url: 'https://chatgpt.com/backend-api/wham/usage',
+      url: 'https://api.z.ai/api/monitor/usage/quota/limit',
       headers: new Headers(),
     }
     const signal = new AbortController().signal
@@ -347,38 +377,21 @@ describe('llm role lifecycle', () => {
     await runtime.onApplicationShutdown()
   })
 
-  it('runs the token refresh tick only once the channel check has settled', async () => {
-    vi.useFakeTimers()
+  it('reports rows the gateway collector cannot close and keeps the per-key limits', async () => {
     const runtime = new LlmRuntime(
-      config(true),
-      { $disconnect: vi.fn() } as unknown as PrismaClient,
-      {} as SecretStore,
-    )
-    await runtime.listen()
-    await vi.advanceTimersByTimeAsync(0)
-    expect(fakes.refreshTick).toHaveBeenCalledOnce()
-    const probe = Promise.withResolvers<boolean>()
-    fakes.probe.mockReturnValueOnce(probe.promise)
-    await vi.advanceTimersByTimeAsync(5 * 60_000)
-    expect(fakes.probe).toHaveBeenCalledTimes(2)
-    expect(fakes.refreshTick).toHaveBeenCalledOnce()
-    probe.resolve(true)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(fakes.refreshTick).toHaveBeenCalledTimes(2)
-    await runtime.onApplicationShutdown()
-  })
-
-  it('reports rows the gateway collector cannot close and keeps the per-key limit', async () => {
-    const runtime = new LlmRuntime(
-      config(),
+      { ...config(), maxCallsPerKey30s: 7, maxCallsPerKey: 70 },
       { $disconnect: vi.fn() } as unknown as PrismaClient,
       {} as SecretStore,
     )
     const options = fakes.createStore.mock.calls[0]![0] as {
       maxRequestsPerKey: number
+      maxCallsPerKey30s: number
+      maxCallsPerKey: number
       logger?: { warn(message: string): void }
     }
     expect(options.maxRequestsPerKey).toBe(2)
+    // The pace and the ceiling of a key come from the configuration of the role.
+    expect(options).toMatchObject({ maxCallsPerKey30s: 7, maxCallsPerKey: 70 })
     const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
     options.logger!.warn('{"event":"llm_collector_row_failed","kind":"call"}')
     expect(warn).toHaveBeenCalledExactlyOnceWith(
@@ -388,38 +401,10 @@ describe('llm role lifecycle', () => {
     await runtime.onApplicationShutdown()
   })
 
-  it('gives a token rotation in flight its persistence window alongside the HTTP drain', async () => {
+  it('coalesces an unfinished maintenance job across timer ticks', async () => {
     vi.useFakeTimers()
-    const drained = Promise.withResolvers<void>()
-    const rotated = Promise.withResolvers<void>()
-    fakes.close.mockReturnValueOnce(drained.promise)
-    fakes.refresherClose.mockReturnValueOnce(rotated.promise)
-    const disconnect = vi.fn().mockResolvedValue(undefined)
-    const runtime = new LlmRuntime(
-      config(true),
-      { $disconnect: disconnect } as unknown as PrismaClient,
-      {} as SecretStore,
-    )
-    await runtime.listen()
-    const closing = runtime.onApplicationShutdown()
-    await vi.advanceTimersByTimeAsync(0)
-    // Started together: the drain (up to 30 s) and the rotation (up to 25 s) fit one grace period.
-    expect(fakes.refresherClose).toHaveBeenCalledOnce()
-    await vi.advanceTimersByTimeAsync(10_000)
-    drained.resolve()
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(disconnect).not.toHaveBeenCalled()
-    rotated.resolve()
-    await closing
-    expect(disconnect).toHaveBeenCalledOnce()
-  })
-
-  it('coalesces unfinished refresh and retirement jobs across timer ticks', async () => {
-    vi.useFakeTimers()
-    const refreshed = Promise.withResolvers<void>()
-    const retired = Promise.withResolvers<void>()
-    fakes.refreshTick.mockReturnValueOnce(refreshed.promise)
-    fakes.retire.mockReturnValueOnce(retired.promise)
+    const ticked = Promise.withResolvers<void>()
+    fakes.poolTick.mockReturnValueOnce(ticked.promise)
     const runtime = new LlmRuntime(
       config(true),
       { $disconnect: vi.fn() } as unknown as PrismaClient,
@@ -427,18 +412,16 @@ describe('llm role lifecycle', () => {
     )
     await runtime.listen()
     await vi.advanceTimersByTimeAsync(5 * 60_000)
-    expect(fakes.refreshTick).toHaveBeenCalledOnce()
-    expect(fakes.retire).toHaveBeenCalledOnce()
-    refreshed.resolve()
-    retired.resolve()
+    // Five ticks of the timer found the first pass still running and started no second one.
+    expect(fakes.poolTick).toHaveBeenCalledOnce()
+    ticked.resolve()
     await vi.advanceTimersByTimeAsync(0)
-    await vi.advanceTimersByTimeAsync(5 * 60_000)
-    expect(fakes.refreshTick).toHaveBeenCalledTimes(2)
-    expect(fakes.retire.mock.calls.length).toBeGreaterThan(1)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fakes.poolTick).toHaveBeenCalledTimes(2)
     await runtime.onApplicationShutdown()
   })
 
-  it('forwards lifecycle calls to the bound account and observed credential version', async () => {
+  it('forwards lifecycle calls to the bound account', async () => {
     const runtime = new LlmRuntime(
       config(true),
       { $disconnect: vi.fn() } as unknown as PrismaClient,
@@ -448,14 +431,10 @@ describe('llm role lifecycle', () => {
     const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
     const call = { accountId: 'synthetic-account', credentialVersion: 7 } as GatewayCall
     const finish = { state: 'completed' } as GatewayFinish
-    const credential = { synthetic: 'credential' }
-    fakes.refresh.mockResolvedValue(credential)
     fakes.poolPause.mockReturnValue({ reason: 'transient', retryAfterMs: 1000 })
     expect(options.lifecycle?.pause(call)).toEqual({ reason: 'transient', retryAfterMs: 1000 })
-    expect(await options.lifecycle?.refresh(call, options.backends[0]!, 7)).toBe(credential)
     await options.lifecycle?.observe(call, finish)
     expect(fakes.poolPause).toHaveBeenCalledExactlyOnceWith('synthetic-account')
-    expect(fakes.refresh).toHaveBeenCalledExactlyOnceWith('synthetic-account', 'auth', 7)
     expect(fakes.poolObserve).toHaveBeenCalledExactlyOnceWith(call, finish)
     await options.lifecycle?.probeAccounts?.(['synthetic-account', 'other-synthetic-account'])
     // Core's issue asks because the windows are unknown, without a snapshot of its own.
@@ -466,17 +445,18 @@ describe('llm role lifecycle', () => {
     const unknownWindows = { limitsSeenAt: new Date(0) }
     await options.lifecycle?.probeAccounts?.(['synthetic-account'], unknownWindows)
     expect(fakes.poolProbe).toHaveBeenLastCalledWith('synthetic-account', unknownWindows)
+    // A snapshot that has only grown old is the pool's own question: neither unknown windows
+    // nor a signal waiting for its confirmation.
+    await options.lifecycle?.refreshAccount?.('synthetic-account')
+    expect(fakes.poolRefresh).toHaveBeenCalledExactlyOnceWith('synthetic-account')
+    expect(fakes.poolProbe).toHaveBeenCalledTimes(3)
     await runtime.onApplicationShutdown()
   })
 
   it('closes maintenance and drains running jobs before disconnecting SQL', async () => {
     vi.useFakeTimers()
-    const refreshed = Promise.withResolvers<void>()
-    const retired = Promise.withResolvers<void>()
-    const closed = Promise.withResolvers<void>()
-    fakes.refreshTick.mockReturnValueOnce(refreshed.promise)
-    fakes.retire.mockReturnValueOnce(retired.promise)
-    fakes.refresherClose.mockReturnValueOnce(closed.promise)
+    const ticked = Promise.withResolvers<void>()
+    fakes.poolTick.mockReturnValueOnce(ticked.promise)
     const disconnect = vi.fn().mockResolvedValue(undefined)
     const runtime = new LlmRuntime(
       config(true),
@@ -484,27 +464,23 @@ describe('llm role lifecycle', () => {
       {} as SecretStore,
     )
     await runtime.listen()
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fakes.poolTick).toHaveBeenCalledOnce()
     const closing = runtime.onApplicationShutdown()
     await vi.advanceTimersByTimeAsync(0)
-    expect(fakes.refresherClose).toHaveBeenCalledOnce()
     expect(fakes.poolClose).toHaveBeenCalledOnce()
+    // The pass of the pool that was running at shutdown is waited for, within its bound.
     expect(disconnect).not.toHaveBeenCalled()
-    closed.resolve()
-    await vi.advanceTimersByTimeAsync(0)
-    expect(disconnect).not.toHaveBeenCalled()
-    refreshed.resolve()
-    retired.resolve()
+    ticked.resolve()
     await closing
     expect(fakes.close.mock.invocationCallOrder[0]).toBeLessThan(
-      fakes.refresherClose.mock.invocationCallOrder[0]!,
+      fakes.poolClose.mock.invocationCallOrder[0]!,
     )
-    expect(fakes.refresherClose.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(fakes.poolClose.mock.invocationCallOrder[0]).toBeLessThan(
       disconnect.mock.invocationCallOrder[0]!,
     )
     await vi.advanceTimersByTimeAsync(10 * 60_000)
-    expect(fakes.refreshTick).toHaveBeenCalledOnce()
-    expect(fakes.retire).toHaveBeenCalledOnce()
+    expect(fakes.poolTick).toHaveBeenCalledOnce()
     expect(disconnect).toHaveBeenCalledOnce()
   })
 })

@@ -7,7 +7,7 @@ import {
   type ExecChunk,
   type ExecHandle,
 } from '@repo/domain'
-import { createCodexDriver, createKimiDriver } from '@repo/agent-drivers'
+import { createOpencodeDriver } from '@repo/agent-drivers'
 import { describe, expect, it, vi } from 'vitest'
 
 import { readTurnOutput, SKIPPED_LINE_MESSAGE } from './turn-output.ts'
@@ -141,7 +141,7 @@ describe('bounded turn output', () => {
   const result = { type: 'message', text: '{"summary":"Готово"}' } as const
 
   it('skips a line longer than the parsers read and goes on with the turn', async () => {
-    // Codex prints the whole output of a command, up to 1 MiB, as one item.completed line.
+    // A CLI prints the whole output of a command as one line of its events: 1 MiB here.
     const before = line({ type: 'started', nativeSessionId: 'native1' })
     const long = Buffer.concat([Buffer.alloc(1024 * 1024, 'x'), Buffer.from('\n')])
     const after = line(result)
@@ -169,32 +169,25 @@ describe('bounded turn output', () => {
 
   it.each([
     [
-      'Codex: the output of a command in one item.completed line',
-      createCodexDriver({ image }),
-      (output: string) => [
-        { type: 'thread.started', thread_id: '01960000-0000-7000-8000-000000000001' },
-        {
-          type: 'item.completed',
-          item: {
-            id: 'c',
-            type: 'command_execution',
-            command: 'cat wp-content/themes/shop/style.css',
-            aggregated_output: output,
-            exit_code: 0,
-            status: 'completed',
-          },
-        },
-        { type: 'item.completed', item: { id: 'm', type: 'agent_message', text: finalResult } },
-        { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } },
-      ],
-    ],
-    [
-      'Kimi: the output of a tool in one row',
-      createKimiDriver({ image }),
-      (output: string) => [
-        { role: 'tool', tool_call_id: 'c1', content: output },
-        { role: 'assistant', content: finalResult },
-      ],
+      'OpenCode: the output of a tool in one tool_use row',
+      createOpencodeDriver({ image }),
+      (output: string) => {
+        const tokens = { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } }
+        const row = (type: string, part: object) => ({ type, sessionID: 'ses_test', part })
+        return [
+          row('step_start', { type: 'step-start' }),
+          row('tool_use', {
+            type: 'tool',
+            tool: 'bash',
+            callID: 'call_1',
+            state: { status: 'completed', input: { command: 'cat style.css' }, output },
+          }),
+          row('step_finish', { type: 'step-finish', reason: 'tool-calls', tokens }),
+          row('step_start', { type: 'step-start' }),
+          row('text', { type: 'text', text: finalResult }),
+          row('step_finish', { type: 'step-finish', reason: 'stop', tokens }),
+        ]
+      },
     ],
   ])(
     'keeps the result of a turn whose agent printed 1 MiB in one line (%s)',

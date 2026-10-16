@@ -7,24 +7,23 @@ import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 const sharedRequestHeaders = ['authorization', 'content-type', 'accept']
-const llmRequestHeaders = [
-  ...sharedRequestHeaders,
-  'user-agent',
-  'originator',
-  'session-id',
-  'thread-id',
-  'x-client-request-id',
-  'x-openai-subagent',
-  'x-codex-turn-state',
-  'x-openai-internal-codex-responses-lite',
-]
+/**
+ * The LLM surface of the sandbox as data: the exact path of the CLI's wire format, the request
+ * headers that go on to the role llm and the response headers that come back. Nothing else a
+ * CLI sends leaves the sandbox network — the session headers of OpenCode (x-session-id,
+ * x-session-affinity, x-opencode-session-id) and cookies stop here. The paths are the routes
+ * of the LLM backends of the role llm, the headers what the role and those backends read and
+ * answer with: a contract test of the role holds the three lists to them.
+ */
+export const llmPaths = Object.freeze(['/zai/v4/chat/completions'])
+export const llmRequestHeaders = Object.freeze([...sharedRequestHeaders, 'user-agent'])
+export const llmResponseHeaders = Object.freeze(['content-type', 'retry-after'])
 const mcpRequestHeaders = [
   ...sharedRequestHeaders,
   'mcp-session-id',
   'mcp-protocol-version',
   'last-event-id',
 ]
-const llmResponseHeaders = ['content-type', 'x-codex-turn-state', 'retry-after']
 const mcpResponseHeaders = ['content-type', 'mcp-session-id', 'mcp-protocol-version']
 
 export const gatewayLimits = Object.freeze({
@@ -65,7 +64,7 @@ export function createGateway({ listenHost, clientIp, routes, llmUpstream, mcpUp
     return new URL(path, url)
   }
   if (routes.includes('llm')) {
-    for (const path of ['/codex/responses', '/kimi/v1/chat/completions'])
+    for (const path of llmPaths)
       targets.set(path, { url: target(llmUpstream, path), methods: ['POST'], group: 'llm' })
   }
   if (routes.includes('mcp'))
@@ -84,8 +83,7 @@ export function createGateway({ listenHost, clientIp, routes, llmUpstream, mcpUp
       !route ||
       !route.methods.includes(req.method) ||
       active >= 8 ||
-      !uniqueHeaders(req, ['host', ...allowedRequestHeaders]) ||
-      (route.group === 'llm' && !validLlmHeaders(req))
+      !uniqueHeaders(req, ['host', ...allowedRequestHeaders])
     ) {
       res.writeHead(403, { 'content-type': 'text/plain', connection: 'close' })
       res.end('Request is not allowed\n')
@@ -109,9 +107,6 @@ export function createGateway({ listenHost, clientIp, routes, llmUpstream, mcpUp
     for (const name of allowedRequestHeaders)
       if (!requestConnectionHeaders.has(name) && typeof req.headers[name] === 'string')
         headers[name] = req.headers[name]
-    if (route.group === 'llm')
-      for (const [name, value] of Object.entries(req.headers))
-        if (name.startsWith('x-msh-') && !requestConnectionHeaders.has(name)) headers[name] = value
     const abort = () => controller.abort()
     req.on('aborted', abort)
     res.on('close', abort)
@@ -159,7 +154,7 @@ export function createGateway({ listenHost, clientIp, routes, llmUpstream, mcpUp
         // The upstream clock starts now, not when the sandbox sends its first body byte.
         upstream.flushHeaders()
         // pipeline() would destroy req and its socket with it; an oversized upload must
-        // leave the socket open for the 413 below.
+        // leave the socket open for the refusal below.
         const body = limit(gatewayLimits.requestBytes, () => {
           oversized = true
         })
@@ -218,29 +213,41 @@ function uniqueHeaders(message, names) {
   return true
 }
 
-function validLlmHeaders(req) {
-  const lite = req.headers['x-openai-internal-codex-responses-lite']
-  if (lite !== undefined && lite !== 'true') return false
-  const seen = new Set()
-  for (let index = 0; index < req.rawHeaders.length; index += 2) {
-    const name = req.rawHeaders[index].toLowerCase()
-    if (!name.startsWith('x-msh-')) continue
-    if (seen.has(name) || seen.size >= 8 || req.rawHeaders[index + 1].length > 256) return false
-    seen.add(name)
-  }
-  return true
-}
-
-// A final refusal: 502 would make the CLI upload the same oversized body again.
+// A final refusal: 502 would make the CLI upload the same oversized body again, and 413 the
+// pinned CLI reads as an overflow of its context: it would ask for a compaction instead of
+// ending the turn.
 function refuseTooLarge(req, res) {
-  res.writeHead(413, { 'content-type': 'application/json' })
-  res.end(tooLarge)
-  // A reset under a client that is still uploading can cost it the answer: discard the rest,
-  // but only briefly. Node stops timing a request once its response is finished.
-  req.resume()
-  const linger = setTimeout(() => req.destroy(), gatewayLimits.lingerMs)
+  // The refusal is decided, the answer waits until the rest of the upload has been read and
+  // dropped. An answer that came while the runtime of the pinned CLI was still uploading made
+  // it stop and keep the connection: its next request was then read here as the rest of this
+  // body. Ending the connection behind an early answer only raced that request, and a reset
+  // can cost a client the answer. After a body read to its end the connection is in order.
+  const { socket } = req
+  const answer = (headers) =>
+    res.writeHead(400, {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(tooLarge),
+      ...headers,
+    })
+  const late = () => {
+    // The upload did not end in time: the answer, the end of what this side sends behind it,
+    // and the socket itself after one more linger.
+    answer({ connection: 'close' }).write(tooLarge)
+    socket.end()
+    linger = setTimeout(() => socket.destroy(), gatewayLimits.lingerMs)
+    linger.unref()
+  }
+  let linger = setTimeout(late, gatewayLimits.lingerMs)
   linger.unref()
-  req.once('close', () => clearTimeout(linger))
+  req.once('end', () => {
+    if (res.headersSent) return socket.destroy()
+    clearTimeout(linger)
+    answer().end(tooLarge)
+  })
+  // On the response, not on the socket: the connection outlives this refusal, and a listener
+  // left on it by every refused upload would stay there as long as the connection does.
+  res.once('close', () => clearTimeout(linger))
+  req.resume()
 }
 
 function limit(max, exceeded) {

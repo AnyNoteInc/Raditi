@@ -1,0 +1,189 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185307208,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000428",
+        "messageID": "msg_00000000000000000000000429",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "tool_use",
+      "timestamp": 1791185307509,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "type": "tool",
+        "tool": "bash",
+        "callID": "call_00000000000000000000000b",
+        "state": {
+          "status": "completed",
+          "input": {
+            "command": "echo step-one",
+            "description": "stand step"
+          },
+          "output": "step-one\n",
+          "metadata": {
+            "output": "step-one\n",
+            "exit": 0,
+            "truncated": false
+          },
+          "title": "echo step-one",
+          "time": {
+            "start": 1791185307203,
+            "end": 1791185307366
+          }
+        },
+        "id": "prt_00000000000000000000000430",
+        "sessionID": "ses_00000000000000000000000427",
+        "messageID": "msg_00000000000000000000000429"
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185307509,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000431",
+        "reason": "tool-calls",
+        "messageID": "msg_00000000000000000000000429",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-finish",
+        "tokens": {
+          "total": 990000,
+          "input": 982216,
+          "output": 946,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185307568,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000432",
+        "messageID": "msg_00000000000000000000000433",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185307568,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000434",
+        "messageID": "msg_00000000000000000000000433",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "text",
+        "text": "SUMMARY-MARKER-9917: the stand conversation so far.",
+        "time": {
+          "start": 1791185307517,
+          "end": 1791185307518
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185307568,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000435",
+        "reason": "stop",
+        "messageID": "msg_00000000000000000000000433",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185307568,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000436",
+        "messageID": "msg_00000000000000000000000437",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "text",
+        "metadata": {
+          "compaction_continue": true
+        },
+        "synthetic": true,
+        "text": "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
+        "time": {
+          "start": 1791185307525,
+          "end": 1791185307525
+        }
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185307604,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000438",
+        "messageID": "msg_00000000000000000000000439",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "text",
+      "timestamp": 1791185307604,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000440",
+        "messageID": "msg_00000000000000000000000439",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "text",
+        "text": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_changed\":[],\"questions\":[],\"needs_approval\":false,\"risk\":\"low\"}",
+        "time": {
+          "start": 1791185307592,
+          "end": 1791185307594
+        }
+      }
+    },
+    {
+      "type": "step_finish",
+      "timestamp": 1791185307604,
+      "sessionID": "ses_00000000000000000000000427",
+      "part": {
+        "id": "prt_00000000000000000000000441",
+        "reason": "stop",
+        "messageID": "msg_00000000000000000000000439",
+        "sessionID": "ses_00000000000000000000000427",
+        "type": "step-finish",
+        "tokens": {
+          "total": 7199,
+          "input": 321,
+          "output": 40,
+          "reasoning": 54,
+          "cache": {
+            "write": 0,
+            "read": 6784
+          }
+        },
+        "cost": 0
+      }
+    }
+  ]
+}

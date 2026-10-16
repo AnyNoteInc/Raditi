@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { sampleBackendId } from '../testing/ids.ts'
 import {
   LLM_KEY_PATTERN,
   lockSubscriptionPool,
@@ -68,7 +69,9 @@ describe('turn key conventions', () => {
 
 describe('subscription pool conventions', () => {
   it('names the Vault path of an account by its backend and id', () => {
-    expect(subscriptionCredentialPath('kimi-code', taskId)).toBe(`subs/kimi-code/${taskId}`)
+    expect(subscriptionCredentialPath(sampleBackendId, taskId)).toBe(
+      `subs/${sampleBackendId}/${taskId}`,
+    )
   })
 
   it('takes the pool lock in one statement, with the whole key as its only value', async () => {
@@ -77,12 +80,12 @@ describe('subscription pool conventions', () => {
       statements.push({ sql: parts.join('?'), values })
       return []
     })
-    await lockSubscriptionPool({ $queryRaw } as never, 'kimi-code')
+    await lockSubscriptionPool({ $queryRaw } as never, sampleBackendId)
     // Every holder hashes the same text: a key assembled in SQL is a second spelling.
     expect(statements).toEqual([
       {
         sql: 'SELECT pg_advisory_xact_lock(hashtextextended(?, 0))::text',
-        values: ['pool:kimi-code'],
+        values: [`pool:${sampleBackendId}`],
       },
     ])
   })

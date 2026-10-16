@@ -1,0 +1,1148 @@
+{
+  "cap": 12,
+  "forms": [
+    {
+      "form": "http-400-policy",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 4,
+      "events": {
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "The request is not allowed by the policy of this turn.",
+          "statusCode": 400,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-400-policy/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 564472,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "http-400-field",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 3.9,
+      "events": {
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "The request is not allowed by the policy of this turn.",
+          "statusCode": 400,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-400-field/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 564472,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "http-400-field-index",
+      "requests": 6,
+      "ofTheForm": 6,
+      "capped": false,
+      "gapsS": [
+        2.2,
+        4.7,
+        8.8,
+        18.8,
+        36
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 74.7,
+      "events": {
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "The request is not allowed by the policy of this turn.",
+          "statusCode": 400,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-400-field-index/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 564472,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "http-402",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 3.8,
+      "events": {
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "The account of this turn cannot be used.",
+          "statusCode": 402,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-402/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 564472,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "http-403-budget",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 3.8,
+      "events": {
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "The budget of this turn is spent.",
+          "statusCode": 403,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-403-budget/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 564472,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "http-503-retry-after",
+      "requests": 6,
+      "ofTheForm": 6,
+      "capped": false,
+      "gapsS": [
+        2.9,
+        3.1,
+        3.1,
+        2.9,
+        3.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 18.9,
+      "events": {
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "The gateway is busy.",
+          "statusCode": 503,
+          "isRetryable": true,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-503-retry-after/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 564472,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "http-503-plain",
+      "requests": 6,
+      "ofTheForm": 6,
+      "capped": false,
+      "gapsS": [
+        2.4,
+        4.2,
+        8.9,
+        18.1,
+        34.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 71.6,
+      "events": {
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "The gateway is busy.",
+          "statusCode": 503,
+          "isRetryable": true,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-http-503-plain/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 564472,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "http-400-overflow-words",
+      "requests": 2,
+      "ofTheForm": 2,
+      "capped": false,
+      "gapsS": [
+        0.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 3.6,
+      "events": {
+        "error": 2
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "ContextOverflowError",
+          "message": "The request has too many tokens for this turn.",
+          "hasResponseBody": true
+        },
+        {
+          "name": "ContextOverflowError",
+          "message": "The request has too many tokens for this turn.",
+          "hasResponseBody": true
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 4,
+      "dbWalBytes": 716912,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-error-first",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 3.6,
+      "events": {
+        "step_start": 1,
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "{\"message\":\"The budget of this turn is spent.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\"}",
+          "hasResponseBody": false
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 601552,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-error-done",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 3.6,
+      "events": {
+        "step_start": 1,
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "{\"message\":\"The budget of this turn is spent.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\"}",
+          "hasResponseBody": false
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 601552,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-error-after-text",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 3.5,
+      "events": {
+        "step_start": 1,
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "{\"message\":\"The budget of this turn is spent.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\"}",
+          "hasResponseBody": false
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 663352,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-error-retry-words",
+      "requests": 6,
+      "ofTheForm": 6,
+      "capped": false,
+      "gapsS": [
+        2.3,
+        4.7,
+        9.1,
+        18.1,
+        30
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 67.8,
+      "events": {
+        "step_start": 6,
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "{\"message\":\"The service is overloaded, try again later.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_busy\"}",
+          "hasResponseBody": false
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 786952,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-finish-content_filter",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 3.8,
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1,
+        "error": 1
+      },
+      "stepReasons": [
+        "content-filter"
+      ],
+      "texts": [
+        "Partial answer of the stand. "
+      ],
+      "errors": [
+        {
+          "name": "ContentFilterError",
+          "message": "The response was blocked by the provider's content filter",
+          "hasResponseBody": false
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 861112,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-finish-sensitive",
+      "requests": 13,
+      "ofTheForm": 12,
+      "capped": true,
+      "gapsS": [
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 5.6,
+      "events": {
+        "step_start": 12,
+        "text": 12,
+        "step_finish": 12,
+        "error": 1
+      },
+      "stepReasons": [
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown"
+      ],
+      "texts": [
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. "
+      ],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-finish-sensitive/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 14,
+      "dbWalBytes": 4140632,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-finish-sensitive-empty",
+      "requests": 13,
+      "ofTheForm": 12,
+      "capped": true,
+      "gapsS": [
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 5,
+      "events": {
+        "step_start": 12,
+        "step_finish": 12,
+        "error": 1
+      },
+      "stepReasons": [
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown"
+      ],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-finish-sensitive-empty/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 14,
+      "dbWalBytes": 3073552,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-finish-network_error",
+      "requests": 6,
+      "ofTheForm": 6,
+      "capped": false,
+      "gapsS": [
+        2.2,
+        4.9,
+        9.9,
+        16.1,
+        29.9
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 67,
+      "events": {
+        "step_start": 6,
+        "text": 6,
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. "
+      ],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "Provider finish_reason: network_error",
+          "isRetryable": true,
+          "hasResponseBody": false,
+          "metadata": {
+            "code": "ProviderResponseStreamError"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 1553272,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-finish-model_context_window_exceeded",
+      "requests": 13,
+      "ofTheForm": 12,
+      "capped": true,
+      "gapsS": [
+        0.1,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 4.6,
+      "events": {
+        "step_start": 12,
+        "text": 12,
+        "step_finish": 12,
+        "error": 1
+      },
+      "stepReasons": [
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown"
+      ],
+      "texts": [
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. "
+      ],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-finish-model_context_window_exceeded/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 14,
+      "dbWalBytes": 4140632,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-finish-length",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 0,
+      "timedOut": false,
+      "wallS": 3.9,
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "length"
+      ],
+      "texts": [
+        "Partial answer of the stand. "
+      ],
+      "errors": [],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 836392,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-done-only",
+      "requests": 13,
+      "ofTheForm": 12,
+      "capped": true,
+      "gapsS": [
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 4.8,
+      "events": {
+        "step_start": 12,
+        "step_finish": 12,
+        "error": 1
+      },
+      "stepReasons": [
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown"
+      ],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-done-only/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 14,
+      "dbWalBytes": 3007632,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-no-finish",
+      "requests": 13,
+      "ofTheForm": 12,
+      "capped": true,
+      "gapsS": [
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 4.4,
+      "events": {
+        "step_start": 12,
+        "text": 12,
+        "step_finish": 12,
+        "error": 1
+      },
+      "stepReasons": [
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown"
+      ],
+      "texts": [
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. "
+      ],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-no-finish/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 14,
+      "dbWalBytes": 3765712,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-no-finish-no-done",
+      "requests": 13,
+      "ofTheForm": 12,
+      "capped": true,
+      "gapsS": [
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 4.9,
+      "events": {
+        "step_start": 12,
+        "text": 12,
+        "step_finish": 12,
+        "error": 1
+      },
+      "stepReasons": [
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown"
+      ],
+      "texts": [
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. ",
+        "Partial answer of the stand. "
+      ],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-no-finish-no-done/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 14,
+      "dbWalBytes": 3765712,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-empty",
+      "requests": 13,
+      "ofTheForm": 12,
+      "capped": true,
+      "gapsS": [
+        0.1,
+        0,
+        0.1,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1,
+        0,
+        0.1
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 4.5,
+      "events": {
+        "step_start": 12,
+        "step_finish": 12,
+        "error": 1
+      },
+      "stepReasons": [
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown"
+      ],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "spike cap reached",
+          "statusCode": 401,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-sse-empty/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 14,
+      "dbWalBytes": 3007632,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "sse-cut",
+      "requests": 6,
+      "ofTheForm": 6,
+      "capped": false,
+      "gapsS": [
+        2.5,
+        4.2,
+        9.4,
+        18,
+        30.3
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 68.2,
+      "events": {
+        "step_start": 6,
+        "error": 1
+      },
+      "stepReasons": [],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "Connection reset by server",
+          "isRetryable": true,
+          "hasResponseBody": false,
+          "metadata": {
+            "code": "ECONNRESET",
+            "syscall": "",
+            "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 1042392,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "mid-http-403",
+      "requests": 2,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [
+        0.4
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 4,
+      "events": {
+        "step_start": 1,
+        "tool_use": 1,
+        "step_finish": 1,
+        "error": 1
+      },
+      "stepReasons": [
+        "tool-calls"
+      ],
+      "texts": [],
+      "errors": [
+        {
+          "name": "APIError",
+          "message": "The budget of this turn is spent.",
+          "statusCode": 403,
+          "isRetryable": false,
+          "hasResponseBody": true,
+          "metadata": {
+            "url": "http://sandbox-gw:8080/s/p4-mid-http-403/zai/v4/chat/completions"
+          }
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 3,
+      "dbWalBytes": 976472,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "mid-sse-error",
+      "requests": 2,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [
+        0.5
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "wallS": 4.9,
+      "events": {
+        "step_start": 2,
+        "tool_use": 1,
+        "step_finish": 1,
+        "error": 1
+      },
+      "stepReasons": [
+        "tool-calls"
+      ],
+      "texts": [],
+      "errors": [
+        {
+          "name": "UnknownError",
+          "message": "{\"message\":\"The budget of this turn is spent.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\"}",
+          "hasResponseBody": false
+        }
+      ],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 3,
+      "dbWalBytes": 1013552,
+      "hits": [],
+      "model": "glm-5.3"
+    },
+    {
+      "form": "control-ok",
+      "requests": 1,
+      "ofTheForm": 1,
+      "capped": false,
+      "gapsS": [],
+      "exit": 0,
+      "timedOut": false,
+      "wallS": 4.1,
+      "events": {
+        "step_start": 1,
+        "text": 1,
+        "step_finish": 1
+      },
+      "stepReasons": [
+        "stop"
+      ],
+      "texts": [
+        "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"client_message\":\"Гото"
+      ],
+      "errors": [],
+      "stderr": "",
+      "logErrors": [],
+      "sessionMessages": 2,
+      "dbWalBytes": 836392,
+      "hits": [],
+      "model": "glm-5.3"
+    }
+  ]
+}

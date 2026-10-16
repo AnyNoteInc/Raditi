@@ -21,8 +21,10 @@ describe('DriversModule and SandboxModule', () => {
 
     const drivers = moduleRef.get<AgentDriverRegistry>(AGENT_DRIVERS)
     expect(drivers.list().map((driver) => driver.id)).toEqual([...ENABLED_AGENT_DRIVERS])
-    expect(drivers.get('codex').image).toBe(testCoreConfig().agentDrivers.image)
-    expect(() => drivers.get('opencode')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    // The product runs one shell.
+    expect(ENABLED_AGENT_DRIVERS).toEqual(['opencode'])
+    for (const id of ENABLED_AGENT_DRIVERS)
+      expect(drivers.get(id).image).toBe(testCoreConfig().agentDrivers.image)
 
     const sandbox = moduleRef.get<SandboxProvider>(SANDBOX_PROVIDER)
     expect(sandbox.kind).toBe('docker')

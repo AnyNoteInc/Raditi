@@ -1,0 +1,4 @@
+{
+  "source": "runsc/p2-missing-file/turn.stderr.txt",
+  "text": "\u001b[91m\u001b[1mError: \u001b[0mConfiguration is invalid at /agent-home/opencode/.config/opencode/opencode.json: bad file reference: \"{file:/run/raditi/secrets/absent}\" /run/raditi/secrets/absent does not exist\n"
+}

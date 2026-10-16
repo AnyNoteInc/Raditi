@@ -1,0 +1,934 @@
+{
+  "fifo": {
+    "first": {
+      "exit": 0,
+      "wallMs": 4421,
+      "wrapper": {
+        "mode": "fifo",
+        "delivered": {
+          "llm": true,
+          "mcp": true
+        },
+        "deliveredMs": {
+          "llm": 1519,
+          "mcp": 1525
+        },
+        "attempts": {
+          "llm": 170,
+          "mcp": 171
+        },
+        "pid": 25,
+        "exit": 0,
+        "signal": null,
+        "elapsedMs": 4284
+      },
+      "steps": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "bash:completed",
+        "raditi_site_info:completed",
+        "raditi_wp_rest:completed",
+        "write:completed"
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"code\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_chan",
+      "errors": [],
+      "stderr": "",
+      "requests": {
+        "llmRequests": 5,
+        "firstRequestMs": 3596,
+        "gapsMs": [
+          604,
+          91,
+          86,
+          90
+        ],
+        "credentialKinds": [
+          "turn-key"
+        ],
+        "models": [
+          "glm-5.3"
+        ],
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "capped": false,
+        "mcp": [
+          "POST initialize → 200",
+          "POST notifications/initialized → 202",
+          "GET → 405",
+          "POST tools/list → 200",
+          "POST tools/call site_info → 200",
+          "POST notifications/cancelled → 202",
+          "POST tools/call wp_rest → 200",
+          "POST notifications/cancelled → 202"
+        ],
+        "other": []
+      },
+      "seenByTheModel": {
+        "ownEnvNames": [
+          "OPENCODE",
+          "OPENCODE_DISABLE_AUTOUPDATE",
+          "OPENCODE_DISABLE_CLAUDE_CODE",
+          "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+          "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+          "OPENCODE_DISABLE_LSP_DOWNLOAD",
+          "OPENCODE_DISABLE_MODELS_FETCH",
+          "OPENCODE_DISABLE_PROJECT_CONFIG",
+          "OPENCODE_DISABLE_SHARE",
+          "OPENCODE_PID",
+          "OPENCODE_PURE"
+        ],
+        "ownEnvHolds": [],
+        "processes": [
+          {
+            "comm": "tini",
+            "threads": 1,
+            "rssMiB": 3,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "node-MainThread",
+            "threads": 7,
+            "rssMiB": 137,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "sleep",
+            "threads": 1,
+            "rssMiB": 4,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "opencode",
+            "threads": 9,
+            "rssMiB": 707,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "node-MainThread",
+            "self": true,
+            "threads": 7,
+            "rssMiB": 133,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            }
+          }
+        ],
+        "secretsDir": [],
+        "budget": {
+          "threadsTotal": 25,
+          "processes": 5,
+          "scannedMiB": 0
+        },
+        "ptraceScope": "1"
+      },
+      "outputHits": [],
+      "fileHits": [],
+      "sensitiveTables": {
+        "credential": 0,
+        "account": 0,
+        "account_state": 0,
+        "control_account": 0,
+        "permission": 0,
+        "session_share": 0
+      },
+      "files": [
+        "/agent-home/opencode/.config/opencode/AGENTS.md 71",
+        "/agent-home/opencode/.config/opencode/opencode.json 3165",
+        "/agent-home/opencode/.local/share/opencode/log/opencode.log 3294",
+        "/agent-home/opencode/.local/share/opencode/opencode.db 4096",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-shm 32768",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-wal 2348432",
+        "/tmp/.3cdfbbfdfdfff3db-00000000.so 4919152",
+        "/tmp/wrapper-first.json 172",
+        "/workspace/repo/hello.txt 20",
+        "/workspace/repo/README.md 55"
+      ]
+    },
+    "second": {
+      "sameSession": true,
+      "exit": 0,
+      "wallMs": 4583,
+      "wrapper": {
+        "mode": "fifo",
+        "delivered": {
+          "llm": true,
+          "mcp": true
+        },
+        "deliveredMs": {
+          "llm": 1616,
+          "mcp": 1619
+        },
+        "attempts": {
+          "llm": 182,
+          "mcp": 182
+        },
+        "mcpCheck": {
+          "status": 200,
+          "ok": true
+        },
+        "pid": 32,
+        "exit": 0,
+        "signal": null,
+        "elapsedMs": 4609
+      },
+      "steps": [
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "bash:completed",
+        "raditi_site_info:completed"
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"none\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_chan",
+      "errors": [],
+      "stderr": "",
+      "requests": {
+        "llmRequests": 3,
+        "firstRequestMs": 4323,
+        "gapsMs": [
+          498,
+          97
+        ],
+        "credentialKinds": [
+          "turn-key"
+        ],
+        "models": [
+          "glm-5.3"
+        ],
+        "statuses": [
+          200,
+          200,
+          200
+        ],
+        "capped": false,
+        "mcp": [
+          "POST initialize → 200",
+          "POST initialize → 200",
+          "POST notifications/initialized → 202",
+          "GET → 405",
+          "POST tools/list → 200",
+          "POST tools/call site_info → 200",
+          "POST notifications/cancelled → 202"
+        ],
+        "other": []
+      },
+      "seenByTheModel": {
+        "ownEnvNames": [
+          "OPENCODE",
+          "OPENCODE_DISABLE_AUTOUPDATE",
+          "OPENCODE_DISABLE_CLAUDE_CODE",
+          "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+          "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+          "OPENCODE_DISABLE_LSP_DOWNLOAD",
+          "OPENCODE_DISABLE_MODELS_FETCH",
+          "OPENCODE_DISABLE_PROJECT_CONFIG",
+          "OPENCODE_DISABLE_SHARE",
+          "OPENCODE_PID",
+          "OPENCODE_PURE"
+        ],
+        "ownEnvHolds": [],
+        "processes": [
+          {
+            "comm": "tini",
+            "threads": 1,
+            "rssMiB": 3,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "node-MainThread",
+            "threads": 11,
+            "rssMiB": 151,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "sleep",
+            "threads": 1,
+            "rssMiB": 3,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "opencode",
+            "threads": 9,
+            "rssMiB": 710,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "node-MainThread",
+            "self": true,
+            "threads": 7,
+            "rssMiB": 141,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            }
+          }
+        ],
+        "secretsDir": [],
+        "budget": {
+          "threadsTotal": 29,
+          "processes": 5,
+          "scannedMiB": 0
+        },
+        "ptraceScope": "1"
+      },
+      "outputHits": [],
+      "fileHits": [],
+      "sensitiveTables": {
+        "credential": 0,
+        "account": 0,
+        "account_state": 0,
+        "control_account": 0,
+        "permission": 0,
+        "session_share": 0
+      },
+      "files": [
+        "/agent-home/opencode/.config/opencode/AGENTS.md 71",
+        "/agent-home/opencode/.config/opencode/opencode.json 3175",
+        "/agent-home/opencode/.local/share/opencode/log/opencode.log 2085",
+        "/agent-home/opencode/.local/share/opencode/opencode.db 307200",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-shm 32768",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-wal 2348432",
+        "/tmp/.3cdfbbffbd76e5fb-00000000.so 4919152",
+        "/tmp/wrapper-second.json 208",
+        "/workspace/repo/README.md 55"
+      ]
+    }
+  },
+  "controlPlainFiles": {
+    "first": {
+      "exit": 0,
+      "wallMs": 4119,
+      "wrapper": {
+        "mode": "plain",
+        "delivered": {},
+        "deliveredMs": {},
+        "attempts": {},
+        "pid": 23,
+        "exit": 0,
+        "signal": null,
+        "elapsedMs": 3893
+      },
+      "steps": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "bash:completed",
+        "raditi_site_info:completed",
+        "raditi_wp_rest:completed",
+        "write:completed"
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"code\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_chan",
+      "errors": [],
+      "stderr": "",
+      "requests": {
+        "llmRequests": 5,
+        "firstRequestMs": 3420,
+        "gapsMs": [
+          490,
+          85,
+          84,
+          93
+        ],
+        "credentialKinds": [
+          "turn-key"
+        ],
+        "models": [
+          "glm-5.3"
+        ],
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "capped": false,
+        "mcp": [
+          "POST initialize → 200",
+          "POST notifications/initialized → 202",
+          "GET → 405",
+          "POST tools/list → 200",
+          "POST tools/call site_info → 200",
+          "POST notifications/cancelled → 202",
+          "POST tools/call wp_rest → 200",
+          "POST notifications/cancelled → 202"
+        ],
+        "other": []
+      },
+      "seenByTheModel": {
+        "ownEnvNames": [
+          "OPENCODE",
+          "OPENCODE_DISABLE_AUTOUPDATE",
+          "OPENCODE_DISABLE_CLAUDE_CODE",
+          "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+          "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+          "OPENCODE_DISABLE_LSP_DOWNLOAD",
+          "OPENCODE_DISABLE_MODELS_FETCH",
+          "OPENCODE_DISABLE_PROJECT_CONFIG",
+          "OPENCODE_DISABLE_SHARE",
+          "OPENCODE_PID",
+          "OPENCODE_PURE"
+        ],
+        "ownEnvHolds": [],
+        "processes": [
+          {
+            "comm": "tini",
+            "threads": 1,
+            "rssMiB": 2,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "node-MainThread",
+            "threads": 7,
+            "rssMiB": 136,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "sleep",
+            "threads": 1,
+            "rssMiB": 3,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "opencode",
+            "threads": 9,
+            "rssMiB": 718,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "node-MainThread",
+            "self": true,
+            "threads": 7,
+            "rssMiB": 140,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            }
+          }
+        ],
+        "secretsDir": [
+          {
+            "name": "llm",
+            "type": "file",
+            "mode": "600",
+            "bytes": 50,
+            "holds": [
+              "llm"
+            ]
+          },
+          {
+            "name": "mcp",
+            "type": "file",
+            "mode": "600",
+            "bytes": 68,
+            "holds": [
+              "mcp"
+            ]
+          }
+        ],
+        "budget": {
+          "threadsTotal": 25,
+          "processes": 5,
+          "scannedMiB": 0
+        },
+        "ptraceScope": "1"
+      },
+      "outputHits": [],
+      "fileHits": [
+        {
+          "label": "llm",
+          "form": "raw",
+          "path": "/run/raditi/secrets/llm"
+        },
+        {
+          "label": "mcp",
+          "form": "raw",
+          "path": "/run/raditi/secrets/mcp"
+        }
+      ],
+      "sensitiveTables": {
+        "credential": 0,
+        "account": 0,
+        "account_state": 0,
+        "control_account": 0,
+        "permission": 0,
+        "session_share": 0
+      },
+      "files": [
+        "/agent-home/opencode/.config/opencode/AGENTS.md 71",
+        "/agent-home/opencode/.config/opencode/opencode.json 3167",
+        "/agent-home/opencode/.local/share/opencode/log/opencode.log 3293",
+        "/agent-home/opencode/.local/share/opencode/opencode.db 4096",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-shm 32768",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-wal 2348432",
+        "/run/raditi/secrets/llm 50",
+        "/run/raditi/secrets/mcp 68",
+        "/tmp/.3cdfbbfcdf76f1ff-00000000.so 4919152",
+        "/tmp/wrapper-first.json 112",
+        "/workspace/repo/hello.txt 20",
+        "/workspace/repo/README.md 55"
+      ]
+    }
+  },
+  "controlEnvironment": {
+    "first": {
+      "exit": 0,
+      "wallMs": 4230,
+      "wrapper": {
+        "mode": "env",
+        "delivered": {},
+        "deliveredMs": {},
+        "attempts": {},
+        "pid": 23,
+        "exit": 0,
+        "signal": null,
+        "elapsedMs": 4253
+      },
+      "steps": [
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "tool-calls",
+        "stop"
+      ],
+      "tools": [
+        "bash:completed",
+        "raditi_site_info:completed",
+        "raditi_wp_rest:completed",
+        "write:completed"
+      ],
+      "finalText": "{\"summary\":\"Стендовый ход выполнен.\",\"change_type\":\"code\",\"client_message\":\"Готово. Изменений на сайте нет.\",\"files_chan",
+      "errors": [],
+      "stderr": "",
+      "requests": {
+        "llmRequests": 5,
+        "firstRequestMs": 3779,
+        "gapsMs": [
+          443,
+          85,
+          89,
+          86
+        ],
+        "credentialKinds": [
+          "turn-key"
+        ],
+        "models": [
+          "glm-5.3"
+        ],
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "capped": false,
+        "mcp": [
+          "POST initialize → 200",
+          "POST notifications/initialized → 202",
+          "GET → 405",
+          "POST tools/list → 200",
+          "POST tools/call site_info → 200",
+          "POST notifications/cancelled → 202",
+          "POST tools/call wp_rest → 200",
+          "POST notifications/cancelled → 202"
+        ],
+        "other": []
+      },
+      "seenByTheModel": {
+        "ownEnvNames": [
+          "OPENCODE",
+          "OPENCODE_DISABLE_AUTOUPDATE",
+          "OPENCODE_DISABLE_CLAUDE_CODE",
+          "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+          "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+          "OPENCODE_DISABLE_LSP_DOWNLOAD",
+          "OPENCODE_DISABLE_MODELS_FETCH",
+          "OPENCODE_DISABLE_PROJECT_CONFIG",
+          "OPENCODE_DISABLE_SHARE",
+          "OPENCODE_PID",
+          "OPENCODE_PURE",
+          "RADITI_LLM_KEY",
+          "RADITI_MCP_TOKEN"
+        ],
+        "ownEnvHolds": [
+          "llm",
+          "mcp"
+        ],
+        "processes": [
+          {
+            "comm": "tini",
+            "threads": 1,
+            "rssMiB": 3,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "node-MainThread",
+            "threads": 7,
+            "rssMiB": 132,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "sleep",
+            "threads": 1,
+            "rssMiB": 3,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [],
+              "holds": []
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "opencode",
+            "threads": 9,
+            "rssMiB": 711,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [
+                "RADITI_LLM_KEY",
+                "RADITI_MCP_TOKEN"
+              ],
+              "holds": [
+                "llm",
+                "mcp"
+              ]
+            },
+            "memory": {
+              "readable": false,
+              "holds": [],
+              "regions": 0,
+              "mib": 0,
+              "error": "open: EACCES"
+            }
+          },
+          {
+            "comm": "node-MainThread",
+            "self": true,
+            "threads": 7,
+            "rssMiB": 134,
+            "peakMiB": 0,
+            "cmdlineHolds": [],
+            "environ": {
+              "names": [
+                "RADITI_LLM_KEY",
+                "RADITI_MCP_TOKEN"
+              ],
+              "holds": [
+                "llm",
+                "mcp"
+              ]
+            }
+          }
+        ],
+        "secretsDir": [],
+        "budget": {
+          "threadsTotal": 25,
+          "processes": 5,
+          "scannedMiB": 0
+        },
+        "ptraceScope": "1"
+      },
+      "outputHits": [],
+      "fileHits": [],
+      "sensitiveTables": {
+        "credential": 0,
+        "account": 0,
+        "account_state": 0,
+        "control_account": 0,
+        "permission": 0,
+        "session_share": 0
+      },
+      "files": [
+        "/agent-home/opencode/.config/opencode/AGENTS.md 71",
+        "/agent-home/opencode/.config/opencode/opencode.json 3145",
+        "/agent-home/opencode/.local/share/opencode/log/opencode.log 3296",
+        "/agent-home/opencode/.local/share/opencode/opencode.db 4096",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-shm 32768",
+        "/agent-home/opencode/.local/share/opencode/opencode.db-wal 2348432",
+        "/tmp/.3cdfbbfdff7cfd5f-00000000.so 4919152",
+        "/tmp/wrapper-first.json 110",
+        "/workspace/repo/hello.txt 20",
+        "/workspace/repo/README.md 55"
+      ]
+    }
+  },
+  "unreadBrokenJson": {
+    "exit": 1,
+    "wrapper": {
+      "mode": "fifo",
+      "delivered": {
+        "llm": false,
+        "mcp": false
+      },
+      "deliveredMs": {},
+      "attempts": {
+        "llm": 170,
+        "mcp": 170
+      },
+      "pid": 25,
+      "exit": 1,
+      "signal": null,
+      "elapsedMs": 1538
+    },
+    "wallMs": 1588,
+    "stdoutEvents": {},
+    "nonJsonStdout": [],
+    "stderr": "\u001b[91m\u001b[1mError: \u001b[0mConfig file at /agent-home/opencode/.config/opencode/opencode.json is not valid JSON(C): \n--- JSONC Input ---\n{ \"model\": \"raditi/glm-5.3\", \n--- Errors ---\nPropertyNameExpected at line 1, column 30\n   Line 1: { \"model\": \"raditi/glm-5.3\", \n                                       ^\nValueExpected at line 1, column 30\n   Line 1: { \"model\": \"raditi/glm-5.3\", \n                                       ^\nCloseBraceExpected at line 1, column 30\n   Line 1: { \"model\": \"raditi/glm-5.3\", \n   ",
+    "requests": 0,
+    "secretsDirAfter": [],
+    "hits": []
+  },
+  "unreadMissingFile": {
+    "exit": 1,
+    "wrapper": {
+      "mode": "fifo",
+      "delivered": {
+        "llm": true,
+        "mcp": false
+      },
+      "deliveredMs": {
+        "llm": 1417
+      },
+      "attempts": {
+        "llm": 190,
+        "mcp": 191
+      },
+      "pid": 25,
+      "exit": 1,
+      "signal": null,
+      "elapsedMs": 1431
+    },
+    "wallMs": 1807,
+    "stdoutEvents": {},
+    "nonJsonStdout": [],
+    "stderr": "\u001b[91m\u001b[1mError: \u001b[0mConfiguration is invalid at /agent-home/opencode/.config/opencode/opencode.json: bad file reference: \"{file:/run/raditi/secrets/absent}\" /run/raditi/secrets/absent does not exist\n",
+    "requests": 0,
+    "secretsDirAfter": [],
+    "hits": []
+  },
+  "unreadNotACli": {
+    "exit": 3,
+    "wrapper": {
+      "mode": "fifo",
+      "delivered": {
+        "llm": false,
+        "mcp": false
+      },
+      "deliveredMs": {},
+      "attempts": {
+        "llm": 154,
+        "mcp": 154
+      },
+      "pid": 25,
+      "exit": 3,
+      "signal": null,
+      "elapsedMs": 1029
+    },
+    "wallMs": 1087,
+    "stdoutEvents": {},
+    "nonJsonStdout": [],
+    "stderr": "",
+    "requests": 0,
+    "secretsDirAfter": [],
+    "hits": []
+  }
+}

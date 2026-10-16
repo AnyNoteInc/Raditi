@@ -1,0 +1,35 @@
+{
+  "at": "2026-10-04T20:00:08.510Z",
+  "request": {
+    "method": "POST",
+    "url": "/mcp",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "accept-encoding",
+      "authorization",
+      "connection",
+      "content-length",
+      "host",
+      "mcp-protocol-version",
+      "mcp-session-id",
+      "user-agent"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "scheme": "bearer",
+        "value": "<dummy mcp token>"
+      }
+    ],
+    "body": {
+      "method": "notifications/initialized",
+      "jsonrpc": "2.0"
+    }
+  },
+  "response": {
+    "status": 202
+  }
+}

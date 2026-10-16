@@ -27,7 +27,7 @@ export function decodeControlJson(body: Uint8Array): JsonObject | null {
 /**
  * The injected egress transport bounds bytes while reading and never follows redirects.
  * Enforce its contract again here, with a deadline even if a transport ignores cancellation.
- * There is no retry: a failed control request may already have rotated a refresh token.
+ * There is no retry: what a control request without an answer means is its caller's to decide.
  */
 export async function controlRequest(
   http: EgressHttp,

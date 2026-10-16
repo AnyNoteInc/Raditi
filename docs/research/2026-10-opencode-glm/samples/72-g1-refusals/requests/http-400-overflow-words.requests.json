@@ -1,0 +1,26 @@
+{
+  "source": "runsc/p4-http-400-overflow-words/records.json",
+  "requests": [
+    {
+      "n": 1,
+      "ms": 3770,
+      "bodyBytes": 17716,
+      "fields": "model,max_tokens,messages,tools,tool_choice,stream,stream_options",
+      "tools": 9,
+      "system": "RADITI-AGENT-PROMPT-MARKER-5527\nYou are the Raditi website agent on a synthetic ",
+      "messages": "system(1726) user(22)",
+      "answer": "http 400"
+    },
+    {
+      "n": 2,
+      "ms": 3835,
+      "bodyBytes": 2197,
+      "fields": "model,max_tokens,messages,stream,stream_options",
+      "tools": 0,
+      "system": "You are a context summarization agent. You are given a conversation between a us",
+      "messages": "system(630) user(1345)",
+      "answer": "http 400"
+    }
+  ],
+  "toolResults": []
+}

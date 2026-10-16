@@ -11,11 +11,11 @@ import {
 
 const now = new Date('2026-09-29T00:00:00Z')
 const grant = (): TurnCredentialGrant => ({
-  driverId: 'codex',
-  backend: 'openai-chatgpt',
+  driverId: 'opencode',
+  backend: 'zai-coding',
   modelSlug: 'synthetic-model',
   modelClass: 'standard',
-  reasoningEffort: 'medium',
+  reasoningEffort: 'high',
   ttlMs: 20 * 60_000,
   deadlineAt: new Date(now.getTime() + 20 * 60_000),
   budgetRub: '285.00',
@@ -30,6 +30,27 @@ describe('turn credential grant', () => {
     expect(turnCredentialPolicySchema.safeParse({ ...policy, boundSource: null }).success).toBe(
       false,
     )
+  })
+  // A turn plan saved before the removal names them; no key is issued for it again.
+  it.each([
+    ['driverId', 'codex'],
+    ['driverId', 'kimi'],
+    ['driverId', 'qwen'],
+    ['backend', 'openai-chatgpt'],
+    ['backend', 'kimi-code'],
+  ])('refuses the removed id in %s: %s', (field, id) => {
+    const { deadlineAt: _deadline, boundSource: _source, ...policy } = grant()
+    for (const [schema, value] of [
+      [turnCredentialGrantSchema, { ...grant(), [field]: id }],
+      [turnCredentialPolicySchema, { ...policy, [field]: id }],
+    ] as const) {
+      const result = schema.safeParse(value)
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([[field]])
+    }
+    expect(() =>
+      turnCredentialExpiresAt({ ...grant(), [field]: id } as TurnCredentialGrant, now),
+    ).toThrow(DomainError)
   })
   it('reserves publication time and never extends a shorter TTL', () => {
     expect(turnCredentialExpiresAt(grant(), now).getTime()).toBe(

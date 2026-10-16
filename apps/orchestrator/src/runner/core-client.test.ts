@@ -10,6 +10,7 @@ import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
 import { RunnerApiServer } from '../runner-api/runner-api.server.ts'
 import { RunnerAuthenticator } from '../runner-api/runner-auth.ts'
 import { RunnerHub } from '../runner-api/runner-hub.ts'
+import { sampleDriverId } from '../testing/ids.ts'
 import {
   baseSha,
   bundleBytes,
@@ -102,7 +103,7 @@ describe('HttpRunnerTransport', () => {
         sessionId: labels.sessionId,
         turn: 1,
         image,
-        driver: { id: 'codex', version: '1.0.0' },
+        driver: { id: sampleDriverId, version: '1.0.0' },
         home,
         git: {
           provider: 'gitea',

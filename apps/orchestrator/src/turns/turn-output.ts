@@ -30,7 +30,7 @@ export interface TurnOutputStart {
 
 /**
  * Strict byte accounting precedes decoding. A line longer than the parsers read — the whole
- * output of a command in one Codex event, say — does not end the turn: it is skipped whole,
+ * output of a tool in one row of the CLI, say — does not end the turn: it is skipped whole,
  * neither kept nor decoded, and leaves SKIPPED_LINE_MESSAGE in its place, so an over-long final
  * line cannot revive an older result. Everything a turn prints stays bounded by MAX_BYTES.
  * Returns only the events read here.

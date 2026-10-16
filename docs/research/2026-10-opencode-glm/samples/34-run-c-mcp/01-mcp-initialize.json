@@ -1,0 +1,62 @@
+{
+  "at": "2026-10-04T19:57:43.913Z",
+  "request": {
+    "method": "POST",
+    "url": "/mcp",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "accept",
+      "accept-encoding",
+      "authorization",
+      "connection",
+      "content-length",
+      "host",
+      "user-agent"
+    ],
+    "credentials": [
+      {
+        "header": "authorization",
+        "scheme": "bearer",
+        "value": "<dummy mcp token>"
+      }
+    ],
+    "body": {
+      "method": "initialize",
+      "params": {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {
+          "roots": {}
+        },
+        "clientInfo": {
+          "name": "opencode",
+          "version": "1.18.34"
+        }
+      },
+      "jsonrpc": "2.0",
+      "id": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {},
+    "removedHeaderNames": [
+      "mcp-session-id"
+    ],
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 0,
+      "result": {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {
+          "tools": {}
+        },
+        "serverInfo": {
+          "name": "raditi-glm-stub",
+          "version": "1"
+        }
+      }
+    }
+  }
+}

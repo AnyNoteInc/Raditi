@@ -1,0 +1,26 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185358708,
+      "sessionID": "ses_00000000000000000000000149",
+      "part": {
+        "id": "prt_00000000000000000000000150",
+        "messageID": "msg_00000000000000000000000151",
+        "sessionID": "ses_00000000000000000000000149",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185358709,
+      "sessionID": "ses_00000000000000000000000149",
+      "error": {
+        "name": "UnknownError",
+        "data": {
+          "message": "{\"message\":\"The budget of this turn is spent.\",\"type\":\"invalid_request_error\",\"code\":\"raditi_budget\"}"
+        }
+      }
+    }
+  ]
+}

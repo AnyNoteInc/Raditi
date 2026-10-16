@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -6,21 +8,29 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { badRequest, conflict, llmGatewayUnavailable } from '@repo/domain'
+import { agentDriverIds, conflict, llmGatewayUnavailable } from '@repo/domain'
+import { llmBackends } from '@repo/llm-backends'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  loginNeedsEgressNode,
   operatorFailure,
   parseSubscriptionArguments,
   subscriptionHelp,
+  subscriptionImports,
   type SubscriptionCommand,
+  type SubscriptionImport,
 } from './cli.ts'
-import { UnsavedSubscriptionLogin } from './device-login.ts'
 import { SubscriptionLoginError } from './login.ts'
 import { retirementRefusals } from './retire.ts'
 
 const account = 'c96006db-9cfb-4d2c-819e-66802f97879f'
 const cwd = fileURLToPath(new URL('../../', import.meta.url))
+// A command is a process of its own, which the setup of the test run does not reach: the same
+// guard is loaded into it, so that no command of a test connects outside this machine. What
+// the guard refused there it writes to a file, and the command's test fails on it: a command
+// turns any failure into its own text and exit code.
+const networkGuard = new URL('../testing/network-guard.ts', import.meta.url).href
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close()
@@ -28,10 +38,19 @@ afterEach(async () => {
 function command(
   name: SubscriptionCommand,
   args: string[],
+  options: { env?: Record<string, string>; input?: string } = {},
+) {
+  return run([`scripts/subscription-${name}.mjs`, ...args], options)
+}
+/** A Node process under the network guard, with what it printed. */
+function run(
+  argv: string[],
   { env = {}, input = '' }: { env?: Record<string, string>; input?: string } = {},
 ) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, [`scripts/subscription-${name}.mjs`, ...args], {
+    const refusals = join(tmpdir(), `raditi-guard-${randomUUID()}`)
+    const guard = `${networkGuard}?report=${encodeURIComponent(refusals)}`
+    const child = spawn(process.execPath, ['--import', guard, ...argv], {
       cwd,
       env: { PATH: process.env.PATH, ...env },
       stdio: 'pipe',
@@ -45,6 +64,15 @@ function command(
     child.once('error', reject)
     child.once('close', (code) => {
       clearTimeout(timer)
+      // The file exists only when the guard refused something.
+      const refused = existsSync(refusals) ? readFileSync(refusals, 'utf8') : ''
+      rmSync(refusals, { force: true })
+      if (refused !== '')
+        return reject(
+          new Error(
+            `A command tried to connect or to resolve a name outside this machine: ${refused}`,
+          ),
+        )
       resolve({
         code,
         stdout: Buffer.concat(stdout).toString(),
@@ -75,6 +103,17 @@ async function fakeVault(auth: object) {
 }
 
 describe('operator subscription commands', () => {
+  it('fails a command that tried to leave this machine, whatever the command made of it', async () => {
+    // The process swallows the refusal of the guard and ends as if nothing had happened.
+    const script = `
+      const net = require('node:net')
+      if (net.Socket.prototype.connect.name !== 'guardedConnect') process.exit(3)
+      net.connect({ host: '0:0:0:0:0:0:0:1', port: 9 }).on('error', () => {})`
+    await expect(run(['-e', script])).rejects.toThrow(
+      'A command tried to connect or to resolve a name outside this machine',
+    )
+    expect(await run(['-e', 'process.exitCode = 4'])).toEqual({ code: 4, stdout: '', stderr: '' })
+  })
   it.each(['login', 'retire', 'token'] as const)(
     'native %s entrypoint supports help without env or service connections',
     async (name) => {
@@ -88,23 +127,97 @@ describe('operator subscription commands', () => {
       expect(result.stderr).toBe('')
     },
   )
+  it('imports a Z.ai plan key for the OpenCode driver: one turn and two requests at a time', () => {
+    expect(
+      parseSubscriptionArguments('login', [
+        '--backend',
+        'zai-coding',
+        '--label',
+        'glm-a',
+        '--plan',
+        'lite',
+        '--vault-token-file',
+        '/tmp/writer',
+      ]),
+    ).toMatchObject({ command: 'login', value: { backend: 'zai-coding', plan: 'lite' } })
+    const entry = subscriptionImports.get('zai-coding')!
+    expect(entry.backend.id).toBe('zai-coding')
+    expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
+    // A key from stdin.
+    expect(entry.backend.importCredential).toBeTypeOf('function')
+  })
+  it('has import settings for every backend the platform registers, each with a way in', () => {
+    expect([...subscriptionImports.keys()]).toEqual(llmBackends.map((backend) => backend.id))
+    for (const [id, entry] of subscriptionImports) {
+      expect(entry.backend.id).toBe(id)
+      expect(agentDriverIds).toContain(entry.driverId)
+      // The key of a subscription from stdin is the one way in.
+      expect(entry.backend.importCredential).toBeTypeOf('function')
+    }
+  })
+  it('accepts no backend without import settings, whatever the list of ids says', () => {
+    const login = (backend: string) => () =>
+      parseSubscriptionArguments('login', [
+        '--backend',
+        backend,
+        '--label',
+        'account-a',
+        '--plan',
+        'lite',
+        '--vault-token-file',
+        '/tmp/writer',
+      ])
+    expect(login('synthetic-backend')).toThrow('Неверные параметры команды подписок')
+    // The ids of the removed providers are refused like any id the platform never had.
+    for (const removed of ['openai-chatgpt', 'kimi-code'])
+      expect(login(removed)).toThrow('Неверные параметры команды подписок')
+    // An id of the port's list that has no settings would otherwise fail after parsing. Every
+    // id of the list has them, so the settings of one are taken away for the length of the check.
+    const settings = subscriptionImports as Map<string, SubscriptionImport>
+    const [id, entry] = [...settings][0]!
+    expect(login(id)).not.toThrow()
+    settings.delete(id)
+    try {
+      expect(login(id)).toThrow('Неверные параметры команды подписок')
+    } finally {
+      settings.set(id, entry)
+    }
+    expect(login(id)).not.toThrow()
+  })
+  it('builds the help of login from the import settings', () => {
+    const help = subscriptionHelp('login')
+    expect(help).toContain('--backend zai-coding ')
+    expect(help).toContain('Ключ подписки (zai-coding) поступает через stdin или скрытый ввод.')
+  })
+  it('asks for the egress node unless the adapter says of every origin that it needs none', () => {
+    const origin = {
+      origin: 'https://provider.invalid',
+      overrideEnv: 'LLM_BACKEND_URL_SYNTHETIC',
+      requests: ['POST https://provider.invalid/v1/generate'],
+    }
+    expect(loginNeedsEgressNode(subscriptionImports.get('zai-coding')!.backend)).toBe(false)
+    expect(loginNeedsEgressNode({ egress: [origin] })).toBe(true)
+    expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: false }] })).toBe(true)
+    expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: true }, origin] })).toBe(true)
+    expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: true }] })).toBe(false)
+  })
   it('accepts a fresh import and the separate relogin form', () => {
     expect(
       parseSubscriptionArguments('login', [
         '--backend',
-        'kimi-code',
+        'zai-coding',
         '--label',
-        'local-kimi',
+        'local-plan',
         '--plan',
-        'pro',
+        'lite',
         '--vault-token-file',
         '/tmp/writer',
       ]),
-    ).toMatchObject({ command: 'login', value: { backend: 'kimi-code', plan: 'pro' } })
+    ).toMatchObject({ command: 'login', value: { backend: 'zai-coding', plan: 'lite' } })
     expect(
       parseSubscriptionArguments('login', [
         '--backend',
-        'openai-chatgpt',
+        'zai-coding',
         '--relogin',
         account,
         '--vault-token-file',
@@ -113,12 +226,12 @@ describe('operator subscription commands', () => {
     ).toMatchObject({ command: 'login', value: { relogin: account } })
   })
   it.each([
-    ['login', ['--backend', 'openai-chatgpt', '--label', 'a', '--vault-token-file', 'relative']],
+    ['login', ['--backend', 'zai-coding', '--label', 'a', '--vault-token-file', 'relative']],
     [
       'login',
       [
         '--backend',
-        'openai-chatgpt',
+        'zai-coding',
         '--relogin',
         account,
         '--label',
@@ -162,7 +275,7 @@ describe('operator subscription commands', () => {
       expect(() =>
         parseSubscriptionArguments('login', [
           '--backend',
-          'kimi-code',
+          'zai-coding',
           '--label',
           label,
           '--plan',
@@ -200,11 +313,11 @@ describe('operator subscription commands', () => {
     ).toThrow(/^Неверные параметры команды подписок\. Используйте --help\.$/)
   })
   it('accepts a one-line label in Cyrillic', () => {
-    const label = 'Кодекс — основной №1'
+    const label = 'План — основной №1'
     expect(
       parseSubscriptionArguments('login', [
         '--backend',
-        'openai-chatgpt',
+        'zai-coding',
         '--label',
         label,
         '--vault-token-file',
@@ -217,19 +330,19 @@ describe('operator subscription commands', () => {
   })
   it('names the account to retire twice, and cancels by its id alone', () => {
     expect(
-      parseSubscriptionArguments('retire', ['--account', account, '--label', 'codex-a']),
-    ).toMatchObject({ value: { account, label: 'codex-a', cancel: false } })
+      parseSubscriptionArguments('retire', ['--account', account, '--label', 'plan-a']),
+    ).toMatchObject({ value: { account, label: 'plan-a', cancel: false } })
     expect(
       parseSubscriptionArguments('retire', [
         '--account',
         account,
         '--label',
-        'codex-a',
+        'plan-a',
         '--finalize',
         '--vault-token-file',
         '/tmp/admin',
       ]),
-    ).toMatchObject({ value: { label: 'codex-a', finalize: true } })
+    ).toMatchObject({ value: { label: 'plan-a', finalize: true } })
     expect(parseSubscriptionArguments('retire', ['--account', account, '--cancel'])).toMatchObject({
       value: { account, cancel: true },
     })
@@ -238,27 +351,19 @@ describe('operator subscription commands', () => {
     expect(operatorFailure(conflict(retirementRefusals.notRequested)).message).toBe(
       'Вывод аккаунта не запрошен. Сначала выполните subscriptions:retire без --finalize.',
     )
-    expect(operatorFailure(badRequest(retirementRefusals.automaticRevocation)).message).toContain(
-      '--console-revoked не подходит',
-    )
     for (const message of Object.values(retirementRefusals))
       expect(operatorFailure(conflict(message)).message).toMatch(/^[А-Я]/)
     for (const hidden of [
-      new Error('refresh_token=private-token'),
+      new Error('api_key=private-token'),
       conflict('private-unlisted refusal'),
       llmGatewayUnavailable(),
     ])
       expect(operatorFailure(hidden).message).toBe(
         'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.',
       )
-    expect(
-      operatorFailure(
-        new UnsavedSubscriptionLogin(new SubscriptionLoginError('account_conflict'), true),
-      ).message,
-    ).toMatch(/^Вход не завершён \(account_conflict\)\..* Выданный провайдером вход отозван\.$/)
-    expect(
-      operatorFailure(new UnsavedSubscriptionLogin(new Error('private-vault-body'), false)).message,
-    ).toMatch(/^Команда подписок не завершена\..*Отозвать выданный провайдером вход не удалось/)
+    expect(operatorFailure(new SubscriptionLoginError('account_conflict', account)).message).toBe(
+      `Вход не завершён (account_conflict). Аккаунт: ${account}. Для незавершённого импорта повторите вход с --relogin.`,
+    )
   })
   it('starts a production login with the documented environment and reports why it stopped', async () => {
     const env = {
@@ -272,11 +377,11 @@ describe('operator subscription commands', () => {
     }
     const args = [
       '--backend',
-      'kimi-code',
+      'zai-coding',
       '--label',
-      'kimi-a',
+      'plan-a',
       '--plan',
-      'pro',
+      'lite',
       '--vault-token-file',
       '/nonexistent/raditi/writer.token',
     ]
@@ -291,6 +396,40 @@ describe('operator subscription commands', () => {
     expect(invalid.stderr).toContain('Окружение задано неверно')
     expect(invalid.stderr).toContain('LLM_EGRESS_PROXY_URL')
     expect(invalid.stderr).not.toContain('private-')
+  })
+  it('logs in without the egress node to a backend whose adapter needs none', async () => {
+    const env = {
+      APP_ENV: 'production',
+      VAULT_ADDR: 'https://127.0.0.1:1',
+      DATABASE_URL: 'postgresql://raditi:private-password@127.0.0.1:1/raditi',
+    }
+    const args = (backend: string) => [
+      '--backend',
+      backend,
+      '--label',
+      'account-a',
+      '--plan',
+      'lite',
+      '--vault-token-file',
+      '/nonexistent/raditi/writer.token',
+    ]
+    // Z.ai needs none: the command goes on to its next step, the writer token it cannot read.
+    // That failure has no text of its own, and every refusal before it has one: the exact
+    // general text shows that neither the environment, nor the rule, nor the channel stopped
+    // the command. The case must stay unable to reach the transport: production takes no
+    // address override, so nothing here could point api.z.ai at this machine.
+    const direct = await command('login', args('zai-coding'), { env })
+    expect(direct.code).toBe(1)
+    expect(direct.stderr).toBe(
+      'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.\n',
+    )
+    // Half a proxy is a mistake of the environment, not a direct path.
+    const half = await command('login', args('zai-coding'), {
+      env: { ...env, LLM_EGRESS_PROXY_URL: 'https://127.0.0.1:1' },
+    })
+    expect(half.code).toBe(1)
+    expect(half.stderr).toContain('Окружение задано неверно')
+    expect(half.stderr).toContain('LLM_EGRESS_CA_FILE')
   })
   it('writes a minted token only to the new private file, never to output', async () => {
     const vault = await fakeVault({

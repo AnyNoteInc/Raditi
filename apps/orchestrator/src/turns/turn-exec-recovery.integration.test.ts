@@ -9,6 +9,7 @@ import {
 import type { TurnEvidence, TurnPlan } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
 import { LiveTurns } from './live-turns.ts'
 import { TurnExecRecovery } from './turn-exec-recovery.ts'
 import { TaskEventTurnJournal } from './turn-journal.ts'
@@ -16,7 +17,7 @@ import { TaskEventTurnJournal } from './turn-journal.ts'
 // Only verify:db's disposable PostgreSQL: a pass sweeps the held sites of the whole database.
 const databaseUrl = process.env.DATABASE_URL
 const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '1')
-const image = `registry.invalid/raditi/codex@sha256:${'a'.repeat(64)}`
+const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 
 describe.skipIf(!enabled)(
   'turn exec recovery of an ended turn behind an unresolved MCP write, with PostgreSQL',
@@ -27,9 +28,9 @@ describe.skipIf(!enabled)(
       db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
       // A product turn names its driver's row; the seeds have it, a bare database does not.
       await db.agentDriver.upsert({
-        where: { id: 'codex' },
+        where: { id: sampleDriverId },
         update: {},
-        create: { id: 'codex', image, capabilities: {}, enabled: true },
+        create: { id: sampleDriverId, image, capabilities: {}, enabled: true },
       })
     })
     afterEach(async () => {
@@ -100,7 +101,7 @@ describe.skipIf(!enabled)(
           instructions: 'Synthetic',
         },
         input: { prompt: 'Synthetic', attachments: [] },
-        driverId: 'codex',
+        driverId: sampleDriverId,
         driverVersion: '1.0.0',
         workspace: {
           repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },

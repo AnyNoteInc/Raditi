@@ -1,0 +1,87 @@
+{
+  "events": [
+    {
+      "type": "step_start",
+      "timestamp": 1791185440372,
+      "sessionID": "ses_00000000000000000000000061",
+      "part": {
+        "id": "prt_00000000000000000000000062",
+        "messageID": "msg_00000000000000000000000063",
+        "sessionID": "ses_00000000000000000000000061",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185442862,
+      "sessionID": "ses_00000000000000000000000061",
+      "part": {
+        "id": "prt_00000000000000000000000064",
+        "messageID": "msg_00000000000000000000000063",
+        "sessionID": "ses_00000000000000000000000061",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185447102,
+      "sessionID": "ses_00000000000000000000000061",
+      "part": {
+        "id": "prt_00000000000000000000000065",
+        "messageID": "msg_00000000000000000000000063",
+        "sessionID": "ses_00000000000000000000000061",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185456419,
+      "sessionID": "ses_00000000000000000000000061",
+      "part": {
+        "id": "prt_00000000000000000000000066",
+        "messageID": "msg_00000000000000000000000063",
+        "sessionID": "ses_00000000000000000000000061",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185474500,
+      "sessionID": "ses_00000000000000000000000061",
+      "part": {
+        "id": "prt_00000000000000000000000067",
+        "messageID": "msg_00000000000000000000000063",
+        "sessionID": "ses_00000000000000000000000061",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "step_start",
+      "timestamp": 1791185504772,
+      "sessionID": "ses_00000000000000000000000061",
+      "part": {
+        "id": "prt_00000000000000000000000068",
+        "messageID": "msg_00000000000000000000000063",
+        "sessionID": "ses_00000000000000000000000061",
+        "type": "step-start"
+      }
+    },
+    {
+      "type": "error",
+      "timestamp": 1791185504886,
+      "sessionID": "ses_00000000000000000000000061",
+      "error": {
+        "name": "APIError",
+        "data": {
+          "message": "Connection reset by server",
+          "isRetryable": true,
+          "metadata": {
+            "code": "ECONNRESET",
+            "syscall": "",
+            "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"
+          }
+        }
+      }
+    }
+  ]
+}

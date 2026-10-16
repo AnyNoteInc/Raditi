@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@repo/db'
 import type { EgressHttp, LlmBackend, ProbeResult } from '@repo/domain'
-import { kimiCodeBackend } from '@repo/llm-backends'
+import { zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
 import { SubscriptionPoolHealth } from './pool-health.ts'
@@ -9,10 +9,9 @@ import type { GatewayCall, GatewayFinish } from './types.ts'
 
 const account: PoolHealthAccount = {
   accountId: 'synthetic-account',
-  backendId: 'kimi-code',
-  credentialRef: 'subs/kimi-code/synthetic-account',
+  backendId: zaiCodingBackend.id,
+  credentialRef: `subs/${zaiCodingBackend.id}/synthetic-account`,
   credentialVersion: 1,
-  clientIdentity: {},
   limitsSeenAt: null,
   windowsKnown: false,
 }
@@ -20,7 +19,6 @@ const probe = (status: ProbeResult['status'] = 'ok'): ProbeResult => ({
   status,
   windows: status === 'ok' ? [{ name: 'week', usedPct: 10, resetsAt: null }] : null,
   plan: null,
-  creditsBalance: null,
 })
 const call = (id = 'call-1', startedAt = new Date(0)): GatewayCall =>
   ({
@@ -48,9 +46,8 @@ function harness(backend: Partial<LlmBackend> = {}) {
     payment: vi
       .fn<PoolHealthStore['payment']>()
       .mockResolvedValue({ count: 1, suspended: false, at: new Date(0) }),
-    credits: vi.fn<PoolHealthStore['credits']>().mockResolvedValue(false),
   }
-  const backendProbe = vi.fn<typeof kimiCodeBackend.probe>().mockResolvedValue(probe())
+  const backendProbe = vi.fn<typeof zaiCodingBackend.probe>().mockResolvedValue(probe())
   const http = { request: vi.fn<EgressHttp['request']>() }
   const regionHttp = { request: vi.fn<EgressHttp['request']>() }
   const credentials = { get: vi.fn().mockResolvedValue({ synthetic: 'credential' }) }
@@ -60,7 +57,7 @@ function harness(backend: Partial<LlmBackend> = {}) {
   const health = new SubscriptionPoolHealth({
     prisma: {} as PrismaClient,
     store,
-    backends: [{ ...kimiCodeBackend, probe: backendProbe, ...backend }],
+    backends: [{ ...zaiCodingBackend, probe: backendProbe, ...backend }],
     credentials,
     http,
     regionHttp,
@@ -146,23 +143,10 @@ describe('subscription pool health coordination', () => {
         h.health.observe(call('2'), finish(signal, 403)),
       ])
       expect(h.backendProbe).toHaveBeenCalledTimes(1)
-      expect(h.store.probe).toHaveBeenCalledExactlyOnceWith(account, probe(), {
-        authNeedsRelogin: true,
-      })
+      expect(h.store.probe).toHaveBeenCalledExactlyOnceWith(account, probe())
       expect(h.onRegion).not.toHaveBeenCalled()
     },
   )
-
-  it('a confirmed 401 demotes only accounts whose backend cannot refresh', async () => {
-    const h = harness()
-    await h.health.observe(call('1'), finish({ kind: 'auth' }, 401))
-    expect(h.store.probe).toHaveBeenLastCalledWith(account, probe(), { authNeedsRelogin: true })
-    const refreshable = harness({ refresh: vi.fn() })
-    await refreshable.health.observe(call('2'), finish({ kind: 'auth' }, 401))
-    expect(refreshable.store.probe).toHaveBeenLastCalledWith(account, probe(), {
-      authNeedsRelogin: false,
-    })
-  })
 
   it('coalesces the same account and observes the five-minute interval', async () => {
     const h = harness()
@@ -176,6 +160,103 @@ describe('subscription pool health coordination', () => {
     h.advance(1)
     await h.health.probeAccount(account.accountId)
     expect(h.backendProbe).toHaveBeenCalledTimes(2)
+  })
+
+  it('a refresh of an old snapshot is no confirmation of a signal that comes after it', async () => {
+    const h = harness()
+    // A key was issued on an old snapshot: one refresh, and the provider answers as before.
+    await h.health.refreshAccount(account.accountId)
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+    // Seconds later the provider refuses the plan key: the refresh says nothing about that.
+    h.advance(3_000)
+    h.backendProbe.mockResolvedValue(probe('auth'))
+    await h.health.observe(call('1'), finish({ kind: 'auth' }, 401))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    expect(h.store.probe).toHaveBeenLastCalledWith(account, probe('auth'))
+    // The confirming probe answers the signals of its five minutes and bounds the next refresh.
+    h.advance(60_000)
+    await h.health.observe(call('2'), finish({ kind: 'auth' }, 401))
+    await h.health.refreshAccount(account.accountId)
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    h.advance(240_000)
+    await h.health.refreshAccount(account.accountId)
+    expect(h.backendProbe).toHaveBeenCalledTimes(3)
+  })
+
+  it('a probe for unknown windows bounds a refresh and confirms no later signal', async () => {
+    const h = harness()
+    await h.health.probeAccount(account.accountId, {})
+    h.advance(3_000)
+    await h.health.refreshAccount(account.accountId)
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+    await h.health.observe(call('1'), finish({ kind: 'region' }, 403))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    // Signals closing together still share the one probe they started.
+    const h2 = harness()
+    await h2.health.refreshAccount(account.accountId)
+    await Promise.all([
+      h2.health.observe(call('1'), finish({ kind: 'auth' }, 401)),
+      h2.health.observe(call('2'), finish({ kind: 'auth' }, 401)),
+    ])
+    expect(h2.backendProbe).toHaveBeenCalledTimes(2)
+  })
+
+  it('a probe for the windows does not end the five minutes of the confirming probe before it', async () => {
+    const h = harness()
+    const signal = (id: string) => h.health.observe(call(id), finish({ kind: 'auth' }, 401))
+    await signal('1')
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+    // Twenty seconds later the windows are read as unknown: a probe of its own kind.
+    h.advance(20_000)
+    await h.health.probeAccount(account.accountId, {})
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    // The signal after it is still answered by the confirming probe of 21 seconds ago.
+    h.advance(1_000)
+    await signal('2')
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    h.advance(278_999)
+    await signal('3')
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    // Five minutes after the confirming probe the next signal is confirmed anew.
+    h.advance(1)
+    await signal('4')
+    expect(h.backendProbe).toHaveBeenCalledTimes(3)
+  })
+
+  it('a probe after cleared windows does not end those five minutes either', async () => {
+    const h = harness()
+    await h.health.observe(call('1'), finish({ kind: 'account_risk', reason: 'risk' }, 403))
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
+    h.advance(1_000)
+    await h.health.observe(call('2'), finish({ kind: 'window_exhausted', until: null }, 429))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    h.advance(1_000)
+    await h.health.observe(call('3'), finish({ kind: 'account_risk', reason: 'risk' }, 403))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+  })
+
+  it('a remembered region answer closes egress again after a probe for the windows', async () => {
+    const h = harness()
+    h.backendProbe.mockResolvedValueOnce(probe('region'))
+    await h.health.observe(call('1'), finish({ kind: 'region' }, 403))
+    h.advance(20_000)
+    await h.health.probeAccount(account.accountId, {})
+    h.advance(1_000)
+    await h.health.observe(call('2'), finish({ kind: 'region' }, 403))
+    expect(h.backendProbe).toHaveBeenCalledTimes(2)
+    expect(h.onRegion.mock.calls).toEqual([[account.accountId], [account.accountId]])
+  })
+
+  it('a refresh shares a probe in flight, whatever it was sent for', async () => {
+    const h = harness()
+    let answer: (result: ProbeResult) => void = () => {}
+    h.backendProbe.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+    const confirming = h.health.observe(call('1'), finish({ kind: 'auth' }, 401))
+    const refresh = h.health.refreshAccount(account.accountId)
+    await vi.waitFor(() => expect(h.backendProbe).toHaveBeenCalledTimes(1))
+    answer(probe())
+    await Promise.all([confirming, refresh])
+    expect(h.backendProbe).toHaveBeenCalledTimes(1)
   })
 
   describe('a probe asked for because the windows are unknown', () => {
@@ -229,10 +310,15 @@ describe('subscription pool health coordination', () => {
       advance(1)
       await h.health.probeAccount(account.accountId, { limitsSeenAt: state.limitsSeenAt })
       expect(h.backendProbe).toHaveBeenCalledTimes(2)
-      // A confirmation of a request signal keeps the five-minute interval.
+      // A request signal is confirmed by a probe of its own: both of these were sent for the
+      // windows, before whatever the provider refused afterwards.
       advance(60_000)
       await h.health.probeAccount(account.accountId)
-      expect(h.backendProbe).toHaveBeenCalledTimes(2)
+      expect(h.backendProbe).toHaveBeenCalledTimes(3)
+      // That confirmation keeps the five-minute interval.
+      advance(60_000)
+      await h.health.probeAccount(account.accountId)
+      expect(h.backendProbe).toHaveBeenCalledTimes(3)
     })
 
     it('shares a probe in flight and bounds repeats of one that failed', async () => {
@@ -329,9 +415,13 @@ describe('subscription pool health coordination', () => {
     async (status, lifted) => {
       const h = harness()
       h.channelHealthy.mockReturnValue(false)
-      h.backendProbe.mockImplementation(async (_credential, _identity, http) => {
+      h.backendProbe.mockImplementation(async (_credential, http) => {
         await http.request(
-          { method: 'GET', url: 'https://api.kimi.ai/coding/v1/usages', headers: new Headers() },
+          {
+            method: 'GET',
+            url: 'https://api.z.ai/api/monitor/usage/quota/limit',
+            headers: new Headers(),
+          },
           { signal: new AbortController().signal },
         )
         return probe(status)

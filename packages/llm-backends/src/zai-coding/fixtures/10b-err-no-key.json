@@ -1,0 +1,50 @@
+{
+  "name": "10b-err-no-key",
+  "request": {
+    "method": "POST",
+    "url": "https://api.z.ai/api/v1/responses",
+    "auth": "none",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": ["accept"],
+    "body": {
+      "model": "glm-5.3",
+      "input": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "ping"
+            }
+          ]
+        }
+      ],
+      "max_output_tokens": 16
+    }
+  },
+  "response": {
+    "status": 200,
+    "statusText": "",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "removedHeaderNames": [
+      "alt-svc",
+      "content-length",
+      "date",
+      "ga-traceid",
+      "set-cookie",
+      "strict-transport-security",
+      "vary",
+      "x-log-id"
+    ],
+    "elapsedMs": 298,
+    "body": {
+      "code": 1001,
+      "msg": "Authentication parameter not received in Header, unable to authenticate",
+      "success": false
+    }
+  }
+}
