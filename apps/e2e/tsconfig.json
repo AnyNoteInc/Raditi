@@ -3,5 +3,5 @@
   "compilerOptions": {
     "lib": ["ES2024", "DOM", "DOM.Iterable"]
   },
-  "include": ["tests", "*.config.ts"]
+  "include": ["tests", "fixtures", "*.config.ts"]
 }

@@ -27,7 +27,7 @@
   line-height: 1.5;
 }
 
-.editCount {
+.taskCount {
   display: flex;
   align-items: baseline;
   gap: 16px;
@@ -36,7 +36,7 @@
 
 /* The number of edits is the question of the calculator, the sum is its answer: at every width
    the count is a step smaller than the sum beside it. */
-.editCount output {
+.taskCount output {
   color: var(--raditi-accent-text);
   font-family: var(--font-unbounded), sans-serif;
   font-size: clamp(28px, 3.1vw, 48px);
@@ -46,7 +46,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.editCount span {
+.taskCount span {
   color: var(--raditi-graphite);
   font-size: 17px;
 }
@@ -130,7 +130,7 @@
 
 .resultLabel,
 .resultSum,
-.perEdit,
+.perTask,
 .sitesHint {
   color: var(--raditi-graphite);
   font-size: 14px;
@@ -196,7 +196,7 @@
   font-size: 15px;
 }
 
-.perEdit {
+.perTask {
   margin: 0;
 }
 
@@ -511,7 +511,7 @@
     margin-bottom: 26px;
   }
 
-  .editCount output {
+  .taskCount output {
     font-size: 34px;
   }
 

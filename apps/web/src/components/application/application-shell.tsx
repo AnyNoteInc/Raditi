@@ -10,6 +10,7 @@ import type { ReactNode } from 'react'
 import { AppIcon } from './app-icon'
 import { applicationSurface } from './application-surface'
 import { ApplicationToolbar } from './application-toolbar'
+import { SkipLink } from './skip-link'
 import type { ApplicationUser } from './user-avatar'
 import { UserMenu } from './user-menu'
 
@@ -29,22 +30,7 @@ export function ApplicationShell({
         bgcolor: 'background.paper',
       }}
     >
-      <Box
-        component="a"
-        href="#application-content"
-        sx={{
-          position: 'fixed',
-          top: -100,
-          left: 84,
-          zIndex: 1500,
-          p: 1.5,
-          bgcolor: 'background.paper',
-          color: 'text.primary',
-          '&:focus': { top: 8 },
-        }}
-      >
-        Перейти к содержимому
-      </Box>
+      <SkipLink target="application-content" left={84} />
       <Box
         component="aside"
         aria-label="Боковая панель"
@@ -109,7 +95,10 @@ export function ApplicationShell({
         </Box>
       </Box>
       <Box sx={{ ml: 'var(--app-rail-width)', minWidth: 0 }}>
-        <ApplicationToolbar />
+        <ApplicationToolbar
+          crumbs={[{ label: 'Проекты' }]}
+          sx={{ px: { xs: 2.5, sm: 4, lg: 6 }, bgcolor: 'background.paper' }}
+        />
         <Box
           component="main"
           id="application-content"

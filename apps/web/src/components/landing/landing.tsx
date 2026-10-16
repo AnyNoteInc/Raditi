@@ -1,4 +1,5 @@
 import { legalDocuments } from '@repo/domain'
+import { typicalTaskCredits } from '@repo/domain/billing/credit-numbers'
 import { BrandSymbol } from '@repo/ui/brand-symbol'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
@@ -12,6 +13,7 @@ import { LandingIcon } from './landing-icons'
 import { LandingMotion } from './landing-motion'
 import { cafe, story } from './landing-story'
 import { mainAction } from './main-action'
+import { typicalCreditsInWords } from './pricing-calculator'
 import { SafetyDemo } from './safety-demo'
 import { SiteDemo } from './site-demo'
 import styles from './landing.module.css'
@@ -78,9 +80,10 @@ const questions = [
       'Нет. Задачу нужно будет описать обычными словами: какую цену поменять, где заменить фото, что добавить на страницу. Радити уточнит детали и покажет результат. Как это выглядит, можно попробовать уже сейчас — на примере вверху страницы.',
   },
   {
-    question: 'Что считается правкой?',
-    answer:
-      'В основе тарифа — задача по изменению сайта: например, обновить цену или добавить баннер. Дополнительные пакеты увеличивают месячный лимит. Подробные условия списаний будут доступны перед подключением оплаты.',
+    // What the two commonest kinds of request cost: estimates of the credits model, so the answer
+    // says «обычно»; the numbers are constants of the domain, as under the calculator.
+    question: 'Что такое кредит?',
+    answer: `Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, добавить блок или страницу — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. Кредиты списываются только за выполненные задачи. Кредиты тарифа начисляются каждый месяц, а кредиты из пакета не сгорают.`,
   },
   {
     question: 'Что, если результат не понравится?',
@@ -99,15 +102,16 @@ const questions = [
   },
 ]
 
-// A hyphen or a slash lets the browser break the line inside a name.
-const UNBREAKABLE = /(1С-Битрикс|\/wp-admin)/
+// A hyphen or a slash lets the browser break the line inside a name, and so does a dash between
+// the figures of a range: «15–» would end a line and «25» start the next.
+const UNBREAKABLE = /(1С-Битрикс|\/wp-admin|\d+–\d+)/
 
-/** Readable text with non-breaking spaces and with the unbreakable names kept in one piece. */
+/** Readable text with non-breaking spaces and with the names and ranges kept in one piece. */
 function readable(text: string): ReactNode {
   return nbsp(text)
     .split(UNBREAKABLE)
     .map((part, index) =>
-      // The split puts the names at the odd places.
+      // The split puts the names and the ranges at the odd places.
       index % 2 === 1 ? (
         <span key={index} className={styles.nowrap}>
           {part}
@@ -400,7 +404,7 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
               <p>
                 Один сайт или несколько.
                 <br />
-                Подберите свой объём правок.
+                Подберите тариф под&nbsp;свои задачи.
               </p>
               <p className={styles.sectionNote}>
                 {nbsp('Оплату пока не принимаем: сервис готовится к запуску.')}

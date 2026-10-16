@@ -17,7 +17,7 @@ const beforeParticle = new RegExp(` (${PARTICLES})${NOT_IN_A_WORD_AFTER}`, 'giu'
 
 /**
  * Puts non-breaking spaces into a readable Russian text, so that no line starts with a dash, ends
- * with a preposition or parts a number from its unit: «290 ₽», «250 мл», «10 правок».
+ * with a preposition or parts a number from its unit: «290 ₽», «250 мл», «10 кредитов».
  *
  * For visible prose only. The labels of buttons, links and form controls, `aria-label` and
  * metadata keep their plain spaces: tests and assistive technology look them up by exact name.

@@ -5,6 +5,7 @@ import { createCaller } from '@repo/trpc'
 import { cache } from 'react'
 
 import { getRequestHeaders, getSession } from '@/lib/session'
+import { paymentShop } from '@/server/payment-shop'
 
 /**
  * tRPC caller for Server Components, once per request. It reuses the session the layout has
@@ -18,5 +19,6 @@ export const getServerCaller = cache(async () => {
     headers,
     session: current?.session ?? null,
     user: current?.user ?? null,
+    billing: paymentShop(),
   })
 })

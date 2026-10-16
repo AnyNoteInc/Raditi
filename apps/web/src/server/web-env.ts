@@ -9,6 +9,12 @@ export interface WebEnv {
   metricsToken: string
   /** undefined: Redis is not configured (the health check reports it). */
   redisUrl: string | undefined
+  /**
+   * BILLING_PAST_DUE_DAYS: how long an overdue tariff waits for a payment. The scheduler of the
+   * core role ends the tariff by it; web only tells the customer the day, so both must be given
+   * the same value. 7 unless set, as in core.
+   */
+  pastDueDays: number
 }
 
 const webEnvSchema = z
@@ -27,6 +33,8 @@ const webEnvSchema = z
         .optional(),
     ),
     REDIS_URL: envVar(z.url({ protocol: /^rediss?$/, error: 'must be a redis:// URL' }).optional()),
+    // The bounds and the default of the core role (apps/orchestrator/src/config/config.ts).
+    BILLING_PAST_DUE_DAYS: envVar(z.coerce.number().int().min(1).max(90).default(7)),
   })
   .superRefine((env, ctx) => {
     const tokenProblem = metricsTokenProblem(env.METRICS_TOKEN, env.APP_ENV)
@@ -45,5 +53,6 @@ export function webEnvFromEnv(env: Env): WebEnv {
     appUrl: e.APP_URL,
     metricsToken: e.METRICS_TOKEN ?? DEV_METRICS_TOKEN,
     redisUrl: e.REDIS_URL,
+    pastDueDays: e.BILLING_PAST_DUE_DAYS,
   }
 }

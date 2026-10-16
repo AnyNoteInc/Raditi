@@ -1705,7 +1705,7 @@ test.describe('outlines of controls', () => {
     const slider = page.getByRole('slider')
     await slider.scrollIntoViewIfNeeded()
     const middle = (rows: number[]) => ((rows[0] ?? NaN) + (rows.at(-1) ?? NaN) + 1) / 2
-    // The line beyond the thumb: 30 edits of 10 to 300 leave the thumb near the left end.
+    // The line beyond the thumb: 30 tasks of 10 to 300 leave the thumb near the left end.
     const line = await paintedRows(page, slider, (width) => width * 0.75)
     expect(line.rows.length).toBeGreaterThanOrEqual(1)
     expect(line.rows.length).toBeLessThanOrEqual(2)
@@ -2052,7 +2052,7 @@ test.describe('pricing', () => {
         soft(price.signBeside, price.text ?? '').toBe(true)
         soft(price.right, price.text ?? '').toBeLessThanOrEqual(price.columnRight + 0.5)
       }
-      // The sum of the calculator stays its main number: the count of edits is a step smaller.
+      // The sum of the calculator stays its main number: the count of tasks is a step smaller.
       soft(read.count).toBeLessThan(read.total.size)
     })
   })
@@ -2084,7 +2084,7 @@ test.describe('pricing', () => {
           heading: text(section.querySelector('h2')).left,
           plans: [...section.querySelectorAll('article h3')].map((name) => text(name).left),
           included: text(paragraph('В каждый тариф')).left,
-          packs: text(paragraph('Правок не хватит')).left,
+          packs: text(paragraph('Кредитов не хватит')).left,
           vat: text(paragraph('Цены в')).left,
           action: { left: action.left, right: action.right },
           lastPlanRight: lastRule.right,
@@ -2108,17 +2108,63 @@ test.describe('pricing', () => {
     })
   })
 
+  // The line by the registration tells what it gives before a tariff is chosen: the gift and
+  // the day without a tariff. It is several lines long, as wide as the action and under it.
+  test('tells of the gift of the registration by the action under the plans', async ({ page }) => {
+    await openAt(page, 320)
+    await atWidths(page, [320, 390, 768, 1024, 1440], async (width, soft) => {
+      await soft(page.locator('#pricing article')).toHaveCount(3)
+      const note = pricingAction(page).locator('xpath=following-sibling::p')
+      await soft(note).toHaveText(
+        'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Без тарифа — до 3 задач в день. Тариф выберете позже.',
+      )
+      const edges = await note.evaluate((paragraph) => {
+        const action = paragraph.previousElementSibling?.getBoundingClientRect()
+        if (!action) throw new Error('The note has no action above it')
+        const range = document.createRange()
+        range.selectNodeContents(paragraph)
+        const text = range.getBoundingClientRect()
+        return {
+          left: text.left,
+          right: text.right,
+          top: text.top,
+          action: { left: action.left, right: action.right, bottom: action.bottom },
+          page: document.documentElement.scrollWidth,
+        }
+      })
+      soft(edges.left).toBeGreaterThanOrEqual(edges.action.left - 0.5)
+      soft(edges.right).toBeLessThanOrEqual(edges.action.right + 0.5)
+      soft(edges.top).toBeGreaterThanOrEqual(edges.action.bottom)
+      soft(edges.page).toBeLessThanOrEqual(width)
+    })
+  })
+
+  // The slider counts tasks: the line under its question says what a task is and how many
+  // credits the calculator takes for one, and the slider is described by that line.
+  test('says under the slider how many credits a task is counted at', async ({ page }) => {
+    await page.goto('/')
+    const pricing = page.locator('#pricing')
+    await expect(pricing.getByText('Подберите тариф под свои задачи.')).toBeVisible()
+    const slider = pricing.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
+    const hint = pricing.locator(`[id="${await slider.getAttribute('aria-describedby')}"]`)
+    await expect(hint).toHaveText(
+      'Задача — одна ваша просьба. В расчёте берём 11 кредитов на задачу — это среднее: поменять цену или фото стоит обычно 5 кредитов, добавить блок или страницу — 15–25.',
+    )
+    await expect(hint).toBeVisible()
+  })
+
   // The longest result line: a plan, its packs in words and the sum below.
   for (const width of [320, 390]) {
     test(`keeps the result in words inside its column at ${width}px`, async ({ page }) => {
       await openAt(page, width)
-      const slider = page.getByRole('slider', { name: 'Сколько правок нужно в месяц?' })
+      const slider = page.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
       await hydrated(slider)
       await slider.fill('120')
       // The sentence of the result; the name of the plan is an element of its own inside it.
       const result = page.locator('#pricing p').filter({ hasText: /^Тариф «Бизнес»/ })
-      await expect(result).toContainText('и 4 дополнительных пакета по 10 правок')
-      await expect(page.locator('#pricing').getByText(/12.900.₽ \+ 4 × 1.990.₽/)).toBeVisible()
+      // 120 tasks at eleven credits each: the 800 of «Бизнес» and six packs of a hundred.
+      await expect(result).toContainText('и 6 дополнительных пакетов по 100 кредитов')
+      await expect(page.locator('#pricing').getByText(/12.900.₽ \+ 6 × 1.990.₽/)).toBeVisible()
       const edges = await result.evaluate((element) => {
         const range = document.createRange()
         range.selectNodeContents(element)
@@ -2137,11 +2183,11 @@ test.describe('pricing', () => {
 
   test('moves the slider from the keyboard and names the value', async ({ page }) => {
     await page.goto('/')
-    const slider = page.getByRole('slider', { name: 'Сколько правок нужно в месяц?' })
-    await expect(slider).toHaveAttribute('aria-valuetext', '30 правок в месяц')
+    const slider = page.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
+    await expect(slider).toHaveAttribute('aria-valuetext', '30 задач в месяц')
     await slider.focus()
     await page.keyboard.press('ArrowRight')
-    await expect(slider).toHaveAttribute('aria-valuetext', '35 правок в месяц')
+    await expect(slider).toHaveAttribute('aria-valuetext', '35 задач в месяц')
   })
 
   test('announces the result of the slider once it rests, from one live region', async ({
@@ -2162,7 +2208,7 @@ test.describe('pricing', () => {
     for (let step = 0; step < 3; step++) await page.keyboard.press('ArrowRight')
     await expect(pricing.locator('output')).toHaveText('45')
     await expect(announcement).toHaveText(
-      /^Тариф «Старт» и 2 дополнительных пакета по 10 правок, 8.880 ₽ в месяц, около 197 ₽ за правку$/,
+      /^Тариф «Старт» и 2 дополнительных пакета по 100 кредитов, 8.880 ₽ в месяц, в среднем около 197 ₽ за задачу$/,
     )
     // Heard, not seen: the region takes no room on the page.
     const box = await announcement.boundingBox()
@@ -2286,6 +2332,24 @@ test.describe('navigation and questions', () => {
     await question.locator('summary').click()
     await expect(question).toHaveAttribute('open', '')
     await expect(question.locator('p')).toBeVisible()
+  })
+
+  // The unit of the tariffs is explained among the questions, with what a request usually costs.
+  test('answers what a credit is', async ({ page }) => {
+    await page.goto('/')
+    const questions = page.locator('#faq details')
+    await expect(questions.locator('summary').filter({ hasText: /считается/ })).toHaveCount(0)
+    const question = questions.filter({
+      has: page.locator('summary', { hasText: 'Что такое кредит?' }),
+    })
+    await expect(question).toHaveCount(1)
+    await hydrated(question.locator('summary'))
+    await question.locator('summary').click()
+    await expect(question).toHaveAttribute('open', '')
+    await expect(question.locator('p')).toBeVisible()
+    await expect(question.locator('p')).toHaveText(
+      'Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Кредиты списываются только за выполненные задачи. Кредиты тарифа начисляются каждый месяц, а кредиты из пакета не сгорают.',
+    )
   })
 })
 
@@ -4171,9 +4235,11 @@ test.describe('pricing in motion', () => {
       )
     expect(await motionOf(name())).toEqual([])
 
-    // One pack more with the same plan: words change, nothing moves.
+    // One pack more with the same plan — thirty tasks take one, forty take two: words change,
+    // nothing moves. The page binds a number to its word with a non-breaking space.
+    await expect(pricing.getByText(/1.дополнительный пакет/)).toBeVisible()
     await slider.fill('40')
-    await expect(pricing.getByText(/дополнительный пакет/)).toBeVisible()
+    await expect(pricing.getByText(/2.дополнительных пакета/)).toBeVisible()
     await expect(name()).toHaveText(first ?? '')
     expect(await motionOf(name())).toEqual([])
     expect(await numbersInMotion()).toEqual([])
@@ -4192,7 +4258,7 @@ test.describe('pricing in motion', () => {
         from: { transform: 'translateY(6px)' },
       },
     ])
-    // The sums, the number of edits and the slider change at once.
+    // The sums, the number of tasks and the slider change at once.
     expect(await numbersInMotion()).toEqual([])
     await settled(page)
     await expect(name()).toHaveCSS('transform', 'none')

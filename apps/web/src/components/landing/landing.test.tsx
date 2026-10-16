@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { signupGiftCredits, typicalTaskCredits } from '@repo/domain/billing/credit-numbers'
 import { render } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -63,6 +64,18 @@ describe('landing texts', () => {
     for (const { parent } of names) expect(parent.className).toContain('nowrap')
   })
 
+  it('keeps the range of figures of an answer in one piece', () => {
+    const faq = renderLanding(guest).querySelector<HTMLElement>('#faq')
+    if (!faq) throw new Error('no questions on the page')
+    const { from, to } = typicalTaskCredits.block
+    // A dash between figures is a place to break the line, like a hyphen: the range stands in a
+    // piece of text of its own, so «15–» cannot end a line with «25» at the start of the next.
+    const ranges = textsOf(faq).filter(({ text }) => /\d–\d/.test(text))
+
+    expect(ranges.map(({ text }) => text)).toEqual([`${from}–${to}`])
+    for (const { parent } of ranges) expect(parent.className).toContain('nowrap')
+  })
+
   it('calls the registration by one name wherever a guest is led to it', () => {
     const container = renderLanding(guest)
     const labels = [...container.querySelectorAll('a[href="/sign-up"]')].map((link) =>
@@ -98,6 +111,11 @@ describe('landing texts', () => {
     expect(container.querySelectorAll('a[href="/sign-up"]')).toHaveLength(0)
     expect(container.textContent).not.toContain('Зарегистрируйтесь')
     expect(container.textContent).toContain('Подключение сайта откроется позже.')
+    // Nor is the gift of the registration offered again: by the action under the tariffs they
+    // read only when the tariff is chosen.
+    const tariffs = plain(container.querySelector('#pricing')?.textContent)
+    expect(tariffs).not.toMatch(/при регистрации|в подарок/i)
+    expect(tariffs).toContain('Тариф выберете позже.')
     // The first screen says what is open now without the registration. The whole page is not
     // searched for the word: an answer about the launch names the registration for everybody.
     const hero = plain(
@@ -117,6 +135,10 @@ describe('landing texts', () => {
 
     expect(hero).not.toMatch(/зарегистр/i)
     expect(hero).toContain('Сейчас можно попробовать пример; подключение сайта')
+    // And no gift is promised to a visitor who may have had it.
+    expect(plain(container.querySelector('#pricing')?.textContent)).not.toMatch(
+      /при регистрации|в подарок/i,
+    )
   })
 
   it('says what the service is and that it is not launched yet on the first screen', () => {
@@ -176,6 +198,80 @@ describe('landing texts', () => {
     ]) {
       expect(text).toContain(kept)
     }
+  })
+
+  it('counts credits in the tariffs and says «правка» only of a change on the site', () => {
+    const container = renderLanding(guest)
+    const text = plain(container.textContent)
+
+    for (const counted of [
+      'Подберите тариф под свои задачи.',
+      'Сколько задач в месяц вы планируете?',
+      'Задача — одна ваша просьба. В расчёте берём 11 кредитов на задачу — это среднее',
+      '300 кредитов в месяц — в среднем около 27 задач, не больше 5 задач в день',
+      'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Без тарифа — до 3 задач в день. Тариф выберете позже.',
+    ]) {
+      expect(text).toContain(counted)
+    }
+    const questions = [...container.querySelectorAll('#faq summary')].map((summary) =>
+      plain(summary.textContent),
+    )
+    expect(questions).toContain('Что такое кредит?')
+    // The unit is never «правка»: no count, no price and no volume of it.
+    expect(text).not.toMatch(
+      /\d правк|\d правок|за правку|числу правок|объём правок|считается правкой|правок не хватит/i,
+    )
+    // Nor is a tariff chosen by a volume of credits, or a credit something a task «counts as»:
+    // the visitor thinks in tasks, and the page translates.
+    expect(text).not.toMatch(/объём кредитов|считается кредитом|один кредит — одна/i)
+    // The word stays for the change itself.
+    expect(text).toContain('В каждый тариф войдут правки текстов')
+    expect(text).toContain('Маленькие правки.')
+    expect(text).toContain('хватит на несколько небольших правок')
+  })
+
+  it('answers what a credit is in the words of the credits model and promises no terms to come', () => {
+    const container = renderLanding(guest)
+    const question = [...container.querySelectorAll('#faq details')].find(
+      (details) => plain(details.querySelector('summary')?.textContent) === 'Что такое кредит?',
+    )
+    const answer = plain(question?.querySelector('p')?.textContent)
+
+    expect(answer).toBe(
+      'Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Кредиты списываются только за выполненные задачи. Кредиты тарифа начисляются каждый месяц, а кредиты из пакета не сгорают.',
+    )
+    // The examples are the first two rows of the orientation list, said as usual and not as a
+    // price; the same two stand under the calculator.
+    const { small, block } = typicalTaskCredits
+    expect(answer).toContain(`обычно ${small.to} кредитов`)
+    expect(answer).toContain(`— ${block.from}–${block.to}.`)
+    expect(plain(container.querySelector('#pricing')?.textContent)).toContain(
+      `обычно ${small.to} кредитов, добавить блок или страницу — ${block.from}–${block.to}.`,
+    )
+    // The service is «Радити», never an agent.
+    expect(answer).not.toMatch(/агент/i)
+    // The answer of before the credits model, and its promise of terms before the payment opens.
+    const text = plain(container.textContent)
+    for (const gone of [
+      'Что считается',
+      'В основе тарифа',
+      'увеличивают месячный лимит',
+      'Подробные условия списаний',
+      'перед подключением оплаты',
+    ]) {
+      expect(text).not.toContain(gone)
+    }
+  })
+
+  it('promises the gift of the registration once, by the action under the tariffs', () => {
+    const container = renderLanding(guest)
+    const text = plain(container.textContent)
+    const gift = `${signupGiftCredits} кредитов в подарок`
+
+    expect(text.split(gift)).toHaveLength(2)
+    expect(plain(container.querySelector('#pricing')?.textContent)).toContain(gift)
+    // In credits and in small edits: no count of tasks is made of the gift.
+    expect(text).not.toMatch(/в подарок[^.]*\d+ задач/)
   })
 
   it('answers no more than eight questions and keeps the answer about the data as it was', () => {

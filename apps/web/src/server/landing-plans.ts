@@ -57,10 +57,10 @@ async function readLandingPlans(): Promise<LandingPricingData> {
         name: true,
         kind: true,
         price: true,
-        editsPerMonth: true,
-        editsPerDay: true,
+        creditsPerMonth: true,
+        tasksPerDay: true,
         maxSites: true,
-        packEdits: true,
+        packCredits: true,
       },
     }))().finally(() => {
     querying = false
@@ -71,10 +71,10 @@ async function readLandingPlans(): Promise<LandingPricingData> {
   for (const row of rows) {
     if (
       row.kind !== 'quota' ||
-      row.editsPerMonth === null ||
-      row.editsPerMonth <= 0 ||
-      row.editsPerDay === null ||
-      row.editsPerDay <= 0 ||
+      row.creditsPerMonth === null ||
+      row.creditsPerMonth <= 0 ||
+      row.tasksPerDay === null ||
+      row.tasksPerDay <= 0 ||
       row.maxSites === null ||
       row.maxSites <= 0 ||
       row.price.isNegative()
@@ -85,17 +85,20 @@ async function readLandingPlans(): Promise<LandingPricingData> {
       slug: row.slug,
       name: row.name,
       price: row.price.toFixed(2),
-      editsPerMonth: row.editsPerMonth,
-      editsPerDay: row.editsPerDay,
+      creditsPerMonth: row.creditsPerMonth,
+      tasksPerDay: row.tasksPerDay,
       maxSites: row.maxSites,
     })
   }
   const pack = rows.find(
     (row) =>
-      row.kind === 'pack' && row.packEdits !== null && row.packEdits > 0 && !row.price.isNegative(),
+      row.kind === 'pack' &&
+      row.packCredits !== null &&
+      row.packCredits > 0 &&
+      !row.price.isNegative(),
   )
   return {
     plans,
-    pack: pack?.packEdits ? { price: pack.price.toFixed(2), edits: pack.packEdits } : null,
+    pack: pack?.packCredits ? { price: pack.price.toFixed(2), credits: pack.packCredits } : null,
   }
 }

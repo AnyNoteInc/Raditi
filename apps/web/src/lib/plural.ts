@@ -1,4 +1,4 @@
-/** The form of a Russian noun that goes with the number: 1 правка, 2 правки, 5 правок. */
+/** The form of a Russian noun that goes with the number: 1 кредит, 2 кредита, 5 кредитов. */
 export function plural(count: number, one: string, few: string, many: string): string {
   const lastTwo = count % 100
   if (lastTwo >= 11 && lastTwo <= 14) return many

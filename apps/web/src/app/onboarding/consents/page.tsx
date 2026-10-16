@@ -5,6 +5,7 @@ import { ServiceUnavailable } from '@/components/layout/service-unavailable'
 import { hasRequiredConsents, requireSession, UNAVAILABLE } from '@/lib/access'
 import { consentDocumentLinks } from '@/lib/legal'
 
+import { AutoRenewalNotice } from './auto-renewal-notice'
 import { ConsentsForm } from './consents-form'
 
 export const metadata: Metadata = { title: 'Согласие с документами' }
@@ -16,5 +17,11 @@ export default async function OnboardingConsentsPage() {
   const accepted = await hasRequiredConsents()
   if (accepted === UNAVAILABLE) return <ServiceUnavailable />
   if (accepted) redirect('/projects')
-  return <ConsentsForm documents={consentDocumentLinks()} />
+  return (
+    <>
+      <ConsentsForm documents={consentDocumentLinks()} />
+      {/* Below the form and out of its way: a charge that is coming whatever the user answers. */}
+      <AutoRenewalNotice />
+    </>
+  )
 }
