@@ -2,7 +2,7 @@
 // which changes start them. Text only: GitHub itself runs them after the branch is pushed.
 import assert from 'node:assert/strict'
 import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -102,15 +102,54 @@ test('CI runs every opt-in database test of the orchestrator on its own PostgreS
   const runs = [...database.matchAll(/^ {8}run: (.+)$/gm)].map(([, command]) => command)
   // Migrated and seeded: the suites look the seeded providers up. pnpm, unlike Turbo, hands a
   // `--` on to Vitest, which then reads the flag after it as a file filter.
-  assert.deepEqual(runs.slice(0, -1), [
+  assert.deepEqual(runs.slice(0, 4), [
     'pnpm db:generate',
     'pnpm db:deploy',
     schemaDiff,
     'pnpm db:seed',
   ])
-  assert.match(runs.at(-1), /^pnpm --filter orchestrator test:db --testTimeout=\d+$/)
+  assert.match(runs[4], /^pnpm --filter orchestrator test:db --testTimeout=\d+$/)
   // The shared job keeps them skipped: Turbo runs @repo/db, @repo/trpc and orchestrator at once.
   assert.doesNotMatch(job('gates'), /RADITI_GATEWAY_DB_TESTS/)
+})
+
+test('CI runs the opt-in database tests of every other workspace in the same job', () => {
+  // `test:db` of the orchestrator reaches only its own files, and the gates job keeps the flag
+  // unset: a suite gated by it in another workspace runs in CI only when a step names its file.
+  const gated = workspaces
+    .filter((workspace) => workspace !== 'apps/orchestrator')
+    .flatMap((workspace) =>
+      readdirSync(join(root, workspace), { recursive: true })
+        .filter((file) => /\.test\.tsx?$/.test(file))
+        .filter((file) => !/(^|\/)(node_modules|dist|\.next|\.turbo)\//.test(file))
+        .filter((file) => read(`${workspace}/${file}`).includes('RADITI_GATEWAY_DB_TESTS'))
+        .map((file) => ({ name: JSON.parse(read(`${workspace}/package.json`)).name, file })),
+    )
+  // The approval of the credit rate: it reads the whole catalogue and locks `credit_rates`.
+  assert.ok(
+    gated.some(
+      ({ name, file }) => name === '@repo/billing' && file === 'src/credit-rate-approval.test.ts',
+    ),
+    'the approval of the credit rate is an opt-in suite of @repo/billing',
+  )
+  const runs = [...job('gateway-db').matchAll(/^ {8}run: (.+)$/gm)].map(([, command]) => command)
+  // After the orchestrator's suites, one step per workspace: Vitest in the package, the files
+  // by name, and the timeout of CI without a `--` before it.
+  const named = runs.slice(5).flatMap((command) => {
+    const [, name, files] =
+      /^pnpm --filter (\S+) exec vitest run ((?:\S+\.test\.tsx? )+)--testTimeout=\d+$/.exec(
+        command,
+      ) ?? []
+    assert.ok(name, `${command} is not a run of named test files`)
+    return files
+      .trim()
+      .split(' ')
+      .map((file) => ({ name, file }))
+  })
+  assert.deepEqual(
+    named.map(({ name, file }) => `${name} ${file}`).sort(),
+    gated.map(({ name, file }) => `${name} ${file}`).sort(),
+  )
 })
 
 test('the subscription gateway workflow starts on every source its stand runs', () => {
@@ -656,6 +695,31 @@ test('a cached gate sees a source change in a package it depends on', () => {
   // A script of that name would run, and its outputs would be cached, in every package.
   for (const workspace of workspaces)
     assert.equal(scripts(workspace).transit, undefined, `${workspace} has a transit script`)
+})
+
+test('a cached test run sees a change of a file its tests read outside their package', () => {
+  // Turbo hashes `test` by the files of the package itself. These tests hold a file of another
+  // package or of the repository root to the code: without the file among the inputs of the task
+  // the local gates replay a green result after the file alone has changed — the offer's table of
+  // tariffs without the seed, a default of .env.example without the texts and configs it repeats.
+  const { inputs = [] } = JSON.parse(read('turbo.json')).tasks.test
+  // Naming inputs replaces the default: without it the package's own files would leave the hash.
+  assert.ok(inputs.includes('$TURBO_DEFAULT$'), 'test keeps the files of its package as inputs')
+  const outside = {
+    '.env.example': [
+      'apps/orchestrator/src/config/config.test.ts',
+      'apps/web/src/lib/legal-content.test.ts',
+    ],
+    'apps/web/content/legal/public-offer.md': ['packages/db/prisma/seed/data.test.ts'],
+  }
+  for (const [file, readers] of Object.entries(outside)) {
+    assert.ok(inputs.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of test`)
+    for (const reader of readers)
+      assert.ok(
+        read(reader).includes(`'${relative(dirname(reader), file)}'`),
+        `${reader} no longer reads ${file}`,
+      )
+  }
 })
 
 test('the llm profile of the app VM is verified on the engine of the VM, without the userland proxy', () => {

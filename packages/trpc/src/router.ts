@@ -1,3 +1,4 @@
+import { billingRouter } from './routers/billing.ts'
 import { consentRouter } from './routers/consent.ts'
 import { healthRouter } from './routers/health.ts'
 import { projectRouter } from './routers/project.ts'
@@ -9,6 +10,7 @@ export const appRouter = router({
   user: userRouter,
   consent: consentRouter,
   project: projectRouter,
+  billing: billingRouter,
 })
 
 export type AppRouter = typeof appRouter

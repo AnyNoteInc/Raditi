@@ -1,5 +1,5 @@
-// PostgreSQL adapter: Prisma client, generated types and enums, outbox, site leases and turn
-// assignments.
+// PostgreSQL adapter: Prisma client, generated types and enums, outbox, personal workspaces,
+// site leases and turn assignments.
 // Explicit re-exports keep the public surface visible and avoid leaking internals.
 export {
   createPrismaClient,
@@ -11,11 +11,20 @@ export {
 } from './client.ts'
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
 export {
+  ensurePersonalWorkspace,
+  findPersonalWorkspace,
+  lockUserRow,
+  PERSONAL_WORKSPACE_NAME,
+  personalWorkspaceDataClass,
+  type PersonalWorkspaceOwner,
+} from './personal-workspace.ts'
+export {
   activateSite,
   type SiteActivationInput,
   type SiteActivationResult,
 } from './site-activation.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
+export { enqueueSiteProvisioningStage } from './site-provisioning.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 
@@ -25,9 +34,11 @@ export {
   BillingUnit,
   ChangeType,
   Channel,
+  ConnectionTls,
   ConsentDocumentType,
   ConsentSource,
   CredentialKind,
+  DatabaseEngine,
   DeployMethod,
   DeploymentKind,
   DeploymentStatus,
@@ -45,7 +56,10 @@ export {
   OrderStatus,
   OutboxEventStatus,
   PlanKind,
+  ProvisioningStage,
+  ProvisioningStageStatus,
   ReceiptStatus,
+  SiteSourceKind,
   SiteStack,
   SiteStatus,
   SubscriptionStatus,
@@ -53,6 +67,7 @@ export {
   TurnAssignmentOutcome,
   TurnExecutorKind,
   TurnStatus,
+  WorkspaceDataClass,
 } from './generated/prisma/client.ts'
 export type {
   Account,
@@ -64,9 +79,11 @@ export type {
   ChatSession,
   CreditHold,
   CreditLedger,
+  CreditRate,
   CredentialRef,
   Deployment,
   Environment,
+  GiftSiteClaim,
   GitRepository,
   LlmModel,
   LlmModelPrice,
@@ -80,7 +97,11 @@ export type {
   RateLimit,
   Session,
   Site,
+  SiteCodeSource,
+  SiteDatabase,
+  SiteDatabaseSchema,
   SiteLease,
+  SiteProvisioningStage,
   Snapshot,
   Subscription,
   SubscriptionAccount,

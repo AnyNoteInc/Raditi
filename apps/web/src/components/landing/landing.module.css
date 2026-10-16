@@ -1,16 +1,47 @@
 .page {
-  --paper: var(--raditi-paper);
-  --paper-2: var(--raditi-paper-2);
-  --card: var(--raditi-card);
-  --ink: var(--raditi-ink);
-  --graphite: var(--raditi-graphite);
-  --rule: var(--raditi-rule);
-  --marker: var(--raditi-marker);
-  --accent: var(--raditi-accent);
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Motion. The curves and the short durations of controls are tokens of the theme; what this
+     page stages alone is named here. The entrance of the first screen: the lines of the heading
+     one after another, the marker under its word, the scene of the demo. */
+  --hero-type: 900ms;
+  --hero-line-2: 100ms;
+  --hero-line-3: 170ms;
+  --hero-marker: 850ms;
+  --hero-marker-delay: 250ms;
+  --hero-demo: 1000ms;
+  --hero-demo-delay: 160ms;
+  /* Beyond the first screen every time comes from one scale. The theme has its short steps:
+     press, fast, base. The two long ones are of this page: a content changes in place (a value,
+     the name of a plan, the height of an answer), an object moves (the heading of a section
+     rises into the window). */
+  --motion-swap: 360ms;
+  --motion-move: 560ms;
+  /* How far: a content that appears, a value that changes. */
+  --motion-rise: 24px;
+  --motion-shift: 6px;
+  /* A leaving, never longer than the fast step: the mobile menu closes. */
+  --ease-in: cubic-bezier(0.5, 0, 0.75, 0);
+  /* The page grid: the breakpoints below change only the gutter and the section rhythm. */
+  --container: 1360px;
+  --gutter: 48px;
+  --section-y: 112px;
+  /* The height of the sticky header, and what an anchor and a focused element keep above them:
+     the header and a step of 16px. */
+  --header-h: 88px;
+  --anchor-room: calc(var(--header-h) + 16px);
+  /* Full-bleed: the gutter plus half of the room beyond the container. */
+  --bleed: max(var(--gutter), calc((100% - var(--container)) / 2 + var(--gutter)));
+  /* The upper limits of the hero heading and of its third line, read in two columns only. A
+     window lower than 750px lowers them, so that the main action stays above the fold. */
+  --hero-title-cap: min(90px, 12vh);
+  --hero-last-cap: min(49px, 6.5vh);
+  /* The radius and the shadows of the objects of the page; the colours of the shadows are roles
+     of the theme, a pill takes its radius from the theme too. */
+  --radius-card: 12px;
+  --shadow-card: 0 28px 60px -25px var(--raditi-shadow-strong);
+  --shadow-menu: 0 20px 30px -24px var(--raditi-shadow-soft);
   color-scheme: light;
-  background: var(--paper);
-  color: var(--ink);
+  background: var(--raditi-paper);
+  color: var(--raditi-ink);
   font-family: var(--font-golos), sans-serif;
   font-size: 17px;
   line-height: 1.55;
@@ -25,33 +56,38 @@
 :where(.page) :where(h1, h2, h3, p) {
   margin: 0;
 }
-.page h1,
-.page h2 {
+/* Where the browser can, a paragraph does not end with a line of one short word. */
+:where(.page) p {
+  text-wrap: pretty;
+}
+/* The base of the page weighs as one element, so a single class of a component overrides it. */
+:where(.page) h1,
+:where(.page) h2 {
   font-family: var(--font-unbounded), sans-serif;
   font-weight: 500;
   letter-spacing: -0.04em;
 }
-.page h2 {
+:where(.page) h2 {
   font-size: clamp(29px, 3.6vw, 49px);
   line-height: 1.22;
   text-wrap: balance;
 }
-.page h3 {
+:where(.page) h3 {
   font-size: 22px;
   line-height: 1.3;
   font-weight: 550;
   letter-spacing: -0.02em;
 }
-.page a {
+:where(.page) a {
   color: inherit;
   text-decoration: none;
   text-underline-offset: 5px;
 }
-.page button,
-.page input {
+:where(.page) button,
+:where(.page) input {
   font-family: inherit;
 }
-.page button {
+:where(.page) button {
   cursor: pointer;
 }
 .page a,
@@ -64,13 +100,60 @@
   outline: 3px solid var(--raditi-accent-text);
   outline-offset: 5px;
 }
-.page ::selection {
-  color: var(--ink);
-  background: var(--marker);
+/* A name with a hyphen or a slash, which a line break would cut in two. */
+.nowrap {
+  white-space: nowrap;
 }
-.page section[id],
-.page main[id] {
-  scroll-margin-top: 100px;
+/* Heard, not seen: words for a screen reader, in the three modules of the landing. The demo
+   says so what the eye is told by a strikethrough, an arrow and a colour; the pricing, the result
+   of its slider. The heads of the columns of the capabilities are seen once, over the first row,
+   and in the other rows only heard: every row names its cells. */
+.page [data-sr-only],
+.capability:not(:first-child) .columnLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+/* A selection is ink with amber letters: seen on the paper, on the amber and on the accent
+   fields alike. On the dark surfaces the pair is turned over. */
+.page ::selection {
+  color: var(--raditi-marker);
+  background: var(--raditi-ink);
+}
+.statement ::selection,
+.footer ::selection,
+.frameMessage::selection,
+.requestBubble::selection {
+  color: var(--raditi-ink);
+  background: var(--raditi-marker);
+}
+/* The landing is light whatever the system or the theme cookie asks for, and so is the document
+   around it: the canvas beyond the page, the scrollbar of the window, the overscroll. These
+   rules outweigh the root rules of the application theme and hold only while the landing is on
+   the page, so the forms and the legal pages keep their theme. */
+:global(html):has(.page) {
+  color-scheme: light;
+  background: var(--raditi-paper);
+}
+/* The room for the sticky header: an anchor and an element that takes the focus stop 16px below
+   the header, not under it. The room is a margin of the targets and not a padding of the root:
+   with a padding the browser took a link of the header itself for one hidden under it, and every
+   Tab onto the header pulled a scrolled page up. The header needs no room, so its links have
+   none. The content itself is a target too, of the skip link: with the room its start stays
+   under the header where it stands, instead of sliding behind it. Everything in the content and
+   in the footer has the room, so a new target needs no rule. Without specificity: the demo adds
+   4px of its own to the same room. */
+:where(.page) :where(main, main *, .footer *) {
+  scroll-margin-top: var(--anchor-room);
+}
+:global(body):has(.page) {
+  background: var(--raditi-paper);
 }
 .skip {
   position: fixed;
@@ -78,9 +161,9 @@
   top: 8px;
   left: 12px;
   padding: 12px 18px;
-  background: var(--accent);
+  background: var(--raditi-accent);
   border: 1px solid var(--raditi-accent-text);
-  color: var(--raditi-on-accent) !important;
+  color: var(--raditi-on-accent);
   transform: translateY(-150%);
 }
 .skip:focus {
@@ -90,14 +173,14 @@
   position: sticky;
   top: 0;
   z-index: 40;
-  background: var(--paper);
-  border-bottom: 1px solid var(--rule);
+  background: var(--raditi-paper);
+  border-bottom: 1px solid var(--raditi-rule);
 }
 .headerInner {
-  max-width: 1360px;
+  max-width: var(--container);
   margin: auto;
-  height: 88px;
-  padding: 0 48px;
+  height: var(--header-h);
+  padding: 0 var(--gutter);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -132,6 +215,7 @@
 .desktopNav a {
   padding: 13px 0;
   position: relative;
+  white-space: nowrap;
 }
 .desktopNav a::after {
   content: '';
@@ -140,13 +224,10 @@
   bottom: 7px;
   width: 100%;
   height: 1px;
-  background: var(--ink);
+  background: var(--raditi-ink);
   transform: scaleX(0);
   transform-origin: left;
-  transition: transform 250ms var(--ease);
-}
-.desktopNav a:hover::after {
-  transform: scaleX(1);
+  transition: transform var(--raditi-motion-base) var(--raditi-ease-out);
 }
 .headerActions {
   display: flex;
@@ -159,7 +240,17 @@
   align-items: center;
 }
 .headerIdentity > button {
-  color: var(--ink);
+  color: var(--raditi-ink);
+}
+/* The button of the avatar is a component of the application theme, and that theme follows the
+   scheme of the system, while the landing is light in any. In the dark scheme the avatar came
+   in the light orange of the dark theme, 1.6:1 against the paper, and its hover was a light
+   veil on a light page. So the avatar is drawn here as the light theme draws it, from the
+   tokens of the page; the states of the button are with the other states below. The menu opens
+   outside the page and stays in the theme of the visitor. */
+.headerIdentity > button > div {
+  background: var(--raditi-accent-text);
+  color: var(--raditi-white);
 }
 .signIn {
   display: inline-flex;
@@ -167,43 +258,41 @@
   align-items: center;
   gap: 28px;
   padding: 0 20px;
-  border: 1px solid var(--ink);
-  border-radius: 30px;
+  border: 1px solid var(--raditi-ink);
+  border-radius: var(--raditi-radius-pill);
   font-size: 14px;
   transition:
-    background 200ms,
-    color 200ms;
+    background var(--raditi-motion-fast) var(--raditi-ease-out),
+    color var(--raditi-motion-fast) var(--raditi-ease-out),
+    transform var(--raditi-motion-fast) var(--raditi-ease-out);
 }
-.signIn:hover {
-  background: var(--ink);
-  color: var(--paper);
+/* The filled action, in the header and on the page: one look, each place sets its size. */
+.primaryButton,
+.signUp {
+  align-items: center;
+  border: 1px solid var(--raditi-accent-text);
+  border-radius: var(--raditi-radius-pill);
+  background: var(--raditi-accent);
+  color: var(--raditi-on-accent);
+  font-weight: 500;
+  transition:
+    background var(--raditi-motion-fast) var(--raditi-ease-out),
+    transform var(--raditi-motion-fast) var(--raditi-ease-out);
+}
+.signUp {
+  display: none;
+  min-height: 44px;
+  padding: 0 20px;
+  font-size: 14px;
 }
 .menuToggle,
 .mobileNav {
   display: none;
 }
 .hero {
-  max-width: 1360px;
+  max-width: var(--container);
   margin: auto;
-  padding: 28px 48px 0;
-}
-.heroIntro {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  font-size: 12px;
-  color: var(--graphite);
-}
-.accessStatus {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-.accessStatus i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--raditi-ok);
+  padding: 28px var(--gutter) 0;
 }
 .heroGrid {
   display: grid;
@@ -217,15 +306,18 @@
   padding-bottom: 24px;
 }
 .heroTitle {
-  font-size: clamp(52px, 6.6vw, 90px);
+  font-size: clamp(52px, 6.6vw, var(--hero-title-cap));
   line-height: 1.12;
+  /* With the letter spacing a visitor may set for reading, the longest word is wider than a
+     narrow phone: it breaks then instead of being cut off by the edge of the page. */
+  overflow-wrap: anywhere;
 }
 .heroTitle > span {
   display: block;
-  animation: typeEntrance 900ms var(--ease) both;
+  animation: typeEntrance var(--hero-type) var(--raditi-ease-out) backwards;
 }
 .heroTitle > span:nth-child(2) {
-  animation-delay: 100ms;
+  animation-delay: var(--hero-line-2);
 }
 .heroTitle em {
   position: relative;
@@ -241,24 +333,29 @@
   right: -0.065em;
   top: 8%;
   bottom: 1%;
-  background: var(--marker);
+  background: var(--raditi-marker);
   transform: rotate(-3deg);
-  animation: markerEntrance 850ms 250ms var(--ease) both;
+  animation: markerEntrance var(--hero-marker) var(--hero-marker-delay) var(--raditi-ease-out)
+    backwards;
 }
 .heroTitle .heroLast {
-  font-size: clamp(30px, 3.65vw, 49px);
+  font-size: clamp(30px, 3.65vw, var(--hero-last-cap));
   line-height: 1.3;
+  /* From its own size: the tracking inherited from the heading is computed in pixels of the
+     larger lines and would close up the letters of this one. */
+  letter-spacing: -0.04em;
   margin-top: 20px;
-  animation-delay: 170ms;
+  animation-delay: var(--hero-line-3);
   white-space: nowrap;
 }
 .heroLead {
-  max-width: 390px;
-  margin-top: 30px !important;
+  /* Three lines in the column of a desktop: a fourth pushes the state of the service under the
+     fold of a low window. */
+  max-width: 44ch;
+  margin-top: 30px;
   font-size: 18px;
   line-height: 1.65;
-  color: var(--graphite);
-  text-wrap: pretty;
+  color: var(--raditi-graphite);
 }
 .heroActions {
   display: flex;
@@ -269,32 +366,14 @@
 }
 .primaryButton {
   display: inline-flex;
-  align-items: center;
   justify-content: center;
   min-height: 56px;
   gap: 25px;
   padding: 0 23px;
-  border: 1px solid var(--raditi-accent-text);
-  border-radius: 32px;
-  background: var(--accent);
-  color: var(--raditi-on-accent) !important;
   font-size: 15px;
-  font-weight: 500;
-  transition:
-    background 220ms,
-    transform 220ms var(--ease);
 }
-.primaryButton:hover {
-  background: var(--raditi-accent-hover);
-  transform: translateY(-2px);
-}
-.primaryButton svg,
-.finalButton svg {
-  transition: transform 350ms var(--ease);
-}
-.primaryButton:hover svg,
-.finalButton:hover svg {
-  transform: translate(3px, -3px);
+.primaryButton svg {
+  transition: transform var(--raditi-motion-base) var(--raditi-ease-out);
 }
 .textLink {
   display: inline-flex;
@@ -303,41 +382,27 @@
   min-height: 44px;
   font-size: 14px;
 }
-.textLink:hover {
-  text-decoration: underline;
-}
+/* The state of the service: a sentence of its own under the actions, not a footnote to them. */
 .heroFootnote {
-  flex-wrap: wrap;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  max-width: 46ch;
   margin-top: 24px;
-  font-size: 11px;
-  color: var(--graphite);
-}
-.heroFootnote svg {
-  flex-shrink: 0;
-}
-.heroPromise {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 100%;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--raditi-ink);
+  text-wrap: balance;
 }
 .heroDemo {
   min-width: 0;
   position: relative;
-  animation: demoEntrance 1s 160ms var(--ease) both;
+  animation: demoEntrance var(--hero-demo) var(--hero-demo-delay) var(--raditi-ease-out) backwards;
 }
 .heroBottom {
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--raditi-rule);
   margin-top: 28px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 22px 0;
-  gap: 16px;
-  color: var(--graphite);
   font-size: 12px;
 }
 .heroBottom a {
@@ -345,32 +410,63 @@
   align-items: center;
   gap: 24px;
   min-height: 44px;
-  color: var(--ink);
-}
-.heroBottom a:hover {
-  text-decoration: underline;
+  color: var(--raditi-ink);
 }
 .statement {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--raditi-ink);
+  color: var(--raditi-paper);
 }
 .statementInner {
-  max-width: 1360px;
+  max-width: var(--container);
   margin: auto;
-  padding: 82px 48px;
+  padding: 82px var(--gutter);
   display: grid;
   grid-template-columns: 1fr 1.2fr;
   align-items: center;
   gap: 55px;
 }
-.statementInner > p {
-  font-size: clamp(19px, 2vw, 26px);
-  line-height: 1.8;
+/* The chores that one message replaces: four lines, each crossed out with an amber line. */
+.chores {
+  font-size: clamp(22px, 2.6vw, 36px);
+  line-height: 1.5;
   color: var(--raditi-on-ink);
-  text-decoration: line-through;
-  text-decoration-thickness: 2px;
-  text-decoration-color: var(--marker);
-  text-decoration-skip-ink: none;
+}
+/* A line of its own, as wide as its words: the strike is as long as they are. Each chore fits
+   one line at every width; it may still wrap when a visitor widens the spacing of the text. */
+.chores > span {
+  display: block;
+  position: relative;
+  width: fit-content;
+}
+/* The strike is a border and not a decoration of the text: it can be drawn from left to right,
+   and a forced palette keeps a border. It runs through the middle of the lowercase letters of
+   the first line: 55% of a line of 1.5em. */
+.chores > span::after {
+  content: '';
+  position: absolute;
+  top: 0.825em;
+  left: -0.12em;
+  right: -0.12em;
+  border-top: 2px solid var(--raditi-marker);
+  transform-origin: left;
+}
+/* The lines are drawn one after another, once, when the block comes into the window: the
+   observer of the page marks the scene. Without the mark every line is crossed out, and that
+   is the state without scripts, under reduced motion and after the scene. */
+.chores[data-scene='waiting'] > span::after {
+  transform: scaleX(0);
+}
+.chores[data-scene='playing'] > span::after {
+  animation: strikeDraw var(--motion-swap) var(--raditi-ease-out) backwards;
+}
+.chores[data-scene='playing'] > span:nth-child(2)::after {
+  animation-delay: var(--raditi-motion-base);
+}
+.chores[data-scene='playing'] > span:nth-child(3)::after {
+  animation-delay: calc(2 * var(--raditi-motion-base));
+}
+.chores[data-scene='playing'] > span:nth-child(4)::after {
+  animation-delay: calc(3 * var(--raditi-motion-base));
 }
 .statementAnswer {
   min-width: 0;
@@ -379,45 +475,46 @@
   gap: 36px;
 }
 .statementAnswer h2 {
-  font-size: clamp(27px, 3.2vw, 43px);
   line-height: 1.3;
 }
 .statementAnswer em {
   font-style: normal;
-  color: var(--marker);
+  color: var(--raditi-marker);
   white-space: normal;
 }
 .drawnArrow svg {
   width: 40px;
   height: 40px;
-  color: var(--marker);
+  color: var(--raditi-marker);
 }
 .requestStrip {
   display: flex;
   justify-content: space-between;
   gap: 28px;
   border-top: 1px solid var(--raditi-rule-ink);
-  max-width: 1264px;
+  max-width: calc(var(--container) - 2 * var(--gutter));
   padding: 24px 0;
   margin: auto;
+  list-style: none;
   font-size: 14px;
 }
-.requestStrip span {
+.requestStrip li {
   display: inline-flex;
   align-items: center;
   gap: 12px;
 }
-.requestStrip span::before {
+.requestStrip li::before {
   content: '';
   width: 5px;
   height: 5px;
-  background: var(--marker);
+  background: var(--raditi-marker);
   border-radius: 50%;
 }
 .section {
-  max-width: 1360px;
+  max-width: var(--container);
   margin: auto;
-  padding: 112px 48px;
+  padding-block: var(--section-y);
+  padding-inline: var(--gutter);
 }
 .sectionHeading {
   display: grid;
@@ -426,14 +523,37 @@
   align-items: end;
   margin-bottom: 58px;
 }
-.sectionHeading > p {
-  max-width: 330px;
-  color: var(--graphite);
-  font-size: 17px;
+.sectionLead {
   justify-self: end;
-  text-wrap: pretty;
+}
+.sectionLead > p {
+  max-width: 330px;
+  color: var(--raditi-graphite);
+  font-size: 17px;
+}
+/* What the visitor has to know before the content of the section, so it reads as a statement:
+   two even lines, the second of which starts after the colon. */
+.sectionLead > .sectionNote {
+  margin-top: 12px;
+  color: var(--raditi-ink);
+  font-size: 14px;
+  text-wrap: balance;
+}
+/* One mark for the whole section: the steps below describe the service after its launch. */
+.launchLabel {
+  display: inline-block;
+  margin-bottom: 12px;
+  padding: 5px 9px;
+  border-radius: 3px;
+  background: var(--raditi-marker);
+  color: var(--raditi-ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 .steps {
+  /* How long the third frame waits for the second one; see the scene of the frames below. */
+  --frame-delay: var(--raditi-motion-base);
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 36px;
@@ -441,7 +561,7 @@
 .step {
   min-width: 0;
   position: relative;
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--raditi-rule);
   padding-top: 20px;
   display: flex;
   flex-direction: column;
@@ -456,128 +576,252 @@
   margin-bottom: 12px;
 }
 .step > p {
-  color: var(--graphite);
+  color: var(--raditi-graphite);
   font-size: 15px;
   max-width: 30ch;
   margin-bottom: 28px;
 }
-.connectVisual {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+/* The three frames of the steps tell one change of the cafe of the first screen: its site as
+   it is, the message of the owner, the difference. Each is an example and carries the visible
+   mark of one. A frame is flat, without a turn or a shadow, and nothing in it looks like a
+   control: it is a picture at the foot of its step, on one line with the others. */
+.stepExample {
   margin-top: auto;
-  min-height: 112px;
-  padding: 20px;
-  background: var(--paper-2);
-  border-radius: 12px;
 }
-.connectVisual .wordmark {
-  font-size: 16px;
-  gap: 7px;
-}
-.connectVisual .logoSymbol {
-  width: 28px;
-  height: 28px;
-}
-.wpMark {
-  font-family: Georgia, serif;
-  font-size: 27px;
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border: 1.5px solid var(--ink);
-  border-radius: 50%;
-}
-.connectLine {
-  height: 1px;
-  background: var(--raditi-on-ink);
-  flex: 1;
-}
-.requestVisual {
-  position: relative;
-  margin: auto 0 0;
-  padding: 23px;
-  font-size: 14px;
-  background: var(--accent);
-  color: var(--raditi-on-accent);
-  border-radius: 12px 12px 3px 12px;
-  min-height: 112px;
-}
-.requestVisual > span {
-  display: block;
-  text-align: right;
-  color: var(--raditi-on-accent-muted);
-  font-size: 10px;
-  margin-top: 5px;
-}
-.resultVisual {
-  margin-top: auto;
-  min-height: 112px;
-  padding: 19px;
+.frame {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  background: var(--paper-2);
-  border-radius: 12px;
+  min-height: 136px;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--raditi-paper-2);
+  font-size: 14px;
+  line-height: 1.4;
 }
-.resultVisual > span:first-child {
+/* Frame 1: the window of the site, in the colours of the cafe. */
+.siteBar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: 12px;
+  min-height: 32px;
+  padding: 0 14px;
+  background: var(--raditi-card);
+  border-bottom: 1px solid var(--raditi-border-soft);
 }
-.resultVisual i {
-  width: 6px;
-  height: 6px;
-  background: var(--raditi-ok);
+.siteDots {
+  display: flex;
+  gap: 4px;
+}
+.siteDots i {
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
+  background: var(--raditi-rule);
 }
-.resultPill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  align-self: flex-start;
-  padding: 6px 16px;
-  border-radius: 30px;
-  background: var(--ink);
-  color: var(--paper);
+.siteAddress {
+  color: var(--raditi-graphite);
+  font-family: var(--font-jetbrains), monospace;
   font-size: 12px;
 }
-.resultPill svg {
-  width: 15px;
+.siteBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 18px 16px;
+  color: var(--raditi-accent-text);
+}
+.siteName {
+  font-family: var(--font-unbounded), sans-serif;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+}
+.siteRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--raditi-accent-border-soft);
+}
+.siteRow small {
+  margin-left: 4px;
+  font-size: 12px;
+}
+.siteRow strong {
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Frame 2: the message of the owner, at the right as in a chat. */
+.messageFrame {
+  align-items: flex-end;
+  justify-content: center;
+  gap: 5px;
+  padding: 16px 18px;
+}
+.messageAuthor {
+  color: var(--raditi-graphite);
+  font-size: 12px;
+}
+/* The message of the owner, in a frame of a step and in the row of a capability: the form it
+   has in the chat of the demo. On the paper the dark fill is what makes it a shape: a fill a step
+   darker than the paper would not be seen. */
+.frameMessage,
+.requestBubble {
+  border-radius: 10px 10px 2px 10px;
+  background: var(--raditi-rule-ink);
+  color: var(--raditi-paper);
+  line-height: 1.45;
+}
+.frameMessage {
+  padding: 10px 14px;
+  font-size: 15px;
+}
+/* Frame 3: the difference. On a light field the old value is crossed out with an ink line and
+   the new one is ink on an amber plate; the words «Было» and «Стало» say the same without colour. */
+.diffFrame {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+}
+.diffField {
+  color: var(--raditi-graphite);
+  font-size: 12px;
+}
+.diffPair {
+  display: flex;
+  gap: 32px;
+}
+.diffValue {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 22px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.diffValue small {
+  color: var(--raditi-graphite);
+  font-size: 12px;
+}
+.diffValue s {
+  color: var(--raditi-graphite);
+  text-decoration-color: var(--raditi-ink);
+  text-decoration-thickness: 1.5px;
+}
+.diffValue strong {
+  position: relative;
+  z-index: 0;
+  padding: 0 0.3em;
+  margin-inline: -0.3em;
+  font-weight: 600;
+}
+.diffValue strong::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: 3px;
+  background: var(--raditi-marker);
+}
+/* The scene of the frames plays once, when a frame comes into the window: the message, then
+   the difference, then its plate. In a row of three the frames come in together, so the third
+   one waits a beat; in a column each plays as the page is scrolled to it. Without the mark of
+   the scene the frames are complete, and that is the state without scripts and under reduced
+   motion. A frame is a picture: what moves here is decoration, the text of the step stays. */
+.stepExample[data-scene='waiting'] :is(.frameMessage, .diffValue strong) {
+  transform: translateY(var(--motion-shift));
+}
+.stepExample[data-scene='waiting'] .diffValue strong::before {
+  clip-path: inset(0 100% 0 0);
+}
+.stepExample[data-scene='playing'] .frameMessage {
+  animation: valueRise var(--motion-swap) var(--raditi-ease-out) backwards;
+}
+.stepExample[data-scene='playing'] .diffValue strong {
+  animation: valueRise var(--motion-swap) var(--raditi-ease-out) var(--frame-delay) backwards;
+}
+.stepExample[data-scene='playing'] .diffValue strong::before {
+  animation: markerEntrance var(--motion-move) var(--raditi-ease-out)
+    calc(var(--frame-delay) + var(--raditi-motion-base)) backwards;
+}
+.exampleLabel {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--raditi-graphite);
+  font-size: 12px;
 }
 .capabilitiesSection {
   padding-top: 0;
 }
+/* The highlight of a section heading on a light or an orange field: ink on a level amber plate,
+   one to a heading. On the chocolate field the highlight is an amber text instead, and the plate
+   is turned only in the first heading of the page. */
 .highlight {
-  background: linear-gradient(transparent 60%, var(--marker) 60% 95%, transparent 95%);
+  padding: 0 0.06em;
+  margin-inline: -0.06em;
+  font-style: normal;
+  color: var(--raditi-ink);
+  background: var(--raditi-marker);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
+/* Six rows of «a request, its result». A row is a grid of three columns: the category, the
+   message of the owner, what will change on the site. The names of the two columns stand in a
+   row of their own over the cells. */
 .capabilities {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  column-gap: 40px;
-  border-top: 1px solid var(--ink);
+  border-top: 1px solid var(--raditi-ink);
 }
 .capability {
-  padding: 29px 0;
-  border-bottom: 1px solid var(--rule);
+  display: grid;
+  /* The middle column holds the longest request in one line where the container is full. */
+  grid-template-columns: minmax(0, 0.45fr) minmax(0, 1.55fr) minmax(0, 0.95fr);
+  column-gap: 40px;
+  align-items: center;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--raditi-rule);
 }
+/* The category is still a heading, for the structure of the page; the request is the main
+   thing of a row, so the heading is set small. */
 .capability h3 {
-  font-size: 20px;
-}
-.capability .requestQuote {
+  grid-area: 2 / 1;
+  color: var(--raditi-graphite);
   font-size: 15px;
-  color: var(--raditi-accent-text);
-  margin: 24px 0 8px;
+  font-weight: 500;
+  letter-spacing: 0;
 }
-.capability > p:last-child {
-  max-width: 31ch;
-  color: var(--graphite);
-  font-size: 14px;
-  line-height: 1.65;
+.columnLabel {
+  grid-row: 1;
+  align-self: start;
+  margin-bottom: 14px;
+  color: var(--raditi-graphite);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.columnLabel:first-of-type {
+  grid-column: 2;
+}
+.columnLabel:last-of-type {
+  grid-column: 3;
+}
+.requestBubble {
+  grid-area: 2 / 2;
+  justify-self: start;
+  padding: 11px 16px;
+  font-size: 18px;
+}
+.capabilityResult {
+  grid-area: 2 / 3;
+  font-size: 17px;
+  line-height: 1.45;
+  text-wrap: balance;
 }
 .capabilitiesNote {
   display: flex;
@@ -588,32 +832,27 @@
   font-size: 13px;
 }
 .capabilitiesNote > span:last-child {
-  color: var(--graphite);
+  color: var(--raditi-graphite);
 }
 .safety {
-  background: var(--accent);
+  background: var(--raditi-accent);
   color: var(--raditi-on-accent);
 }
 .safetyInner {
-  max-width: 1360px;
+  max-width: var(--container);
   margin: auto;
-  padding: 100px 48px;
+  padding: 100px var(--gutter);
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 90px;
+  column-gap: 90px;
   align-items: center;
 }
-.safetyCopy h2 {
-  font-size: clamp(29px, 3.5vw, 47px);
-}
-.safetyCopy em {
-  padding: 0 0.06em;
-  margin-inline: -0.06em;
-  font-style: normal;
-  color: var(--ink);
-  background: var(--marker);
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
+/* The copy and the note under it share the left column, the card spans both rows. The rows
+   split the spare height evenly, so the pair stays centred against the card as one block. */
+.safetyCopy {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: end;
 }
 .safetyCopy > p {
   margin-top: 25px;
@@ -634,61 +873,99 @@
   font-size: 16px;
   font-weight: 500;
 }
+/* On the accent field a text below 16px is 14px at least and medium: the field stays as bright. */
 .safetyList p {
   margin-top: 4px;
   color: var(--raditi-on-accent-muted);
   font-size: 14px;
+  font-weight: 500;
 }
-.safetyCopy .safetyNote {
-  color: var(--raditi-on-accent-muted);
-  font-size: 12px;
+/* The note invites to press «Отменить правку». Once it is pressed the button says another
+   thing, so the invitation goes and the first sentence stays. The note is written twice, with
+   the invitation and without, in one cell of a grid: the longer one gives the height in both
+   states, so nothing around the note moves, and the shorter one is set by itself, in the middle
+   of its line where the note is centred. Only one of the two is shown, and read. */
+.safetyNote {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  display: grid;
+  max-width: 44ch;
   margin-top: 20px;
+  color: var(--raditi-on-accent-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+.safetyNote > span {
+  grid-area: 1 / 1;
+}
+.safetyNote[data-reverted='false'] > span:last-child,
+.safetyNote[data-reverted='true'] > span:first-child {
+  visibility: hidden;
 }
 .safetyDemo {
+  /* How far the saved version comes out when the change is undone; the scene keeps this room
+     over the card from the start, so nothing around it moves. */
+  --saved-out: 28px;
+  grid-column: 2;
+  grid-row: 1 / span 2;
   position: relative;
   min-width: 0;
-  padding-top: 72px;
+  padding-top: calc(72px + var(--saved-out));
 }
+/* The saved version lies under the card and shows over it what it keeps: its label and the
+   price before the change. They stand at the right end of the top, which the turn lifts clear
+   of the card in front. */
 .savedVersion {
   position: absolute;
-  top: 0;
+  top: var(--saved-out);
   left: 6%;
   width: 88%;
   min-height: 235px;
-  padding: 24px;
-  border-radius: 12px;
+  /* The turn lifts the right end of the top, and the narrower the card, the less of the text
+     it lifts. So on a narrower card the text stands closer to the top, and the price clears
+     the card in front by about as much at every width. The percentage is of the width of
+     the scene. */
+  padding: clamp(12px, 6% - 15px, 20px) 24px 20px;
+  border-radius: var(--radius-card);
   background: var(--raditi-accent-soft);
   color: var(--raditi-accent-ink);
   transform: rotate(-6deg);
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  align-items: flex-end;
+  gap: 2px;
   font-size: 12px;
+  /* An undo brings the saved version forward: it comes out from under the card and keeps its
+     turn. Only the transform moves; the button answers at any moment of the way. */
+  transition: transform var(--motion-move) var(--raditi-ease-out);
 }
 .savedVersion > span:last-child {
-  font-size: 25px;
+  font-size: 22px;
+  white-space: nowrap;
+}
+.safetyDemo[data-reverted='true'] .savedVersion {
+  transform: translateY(calc(-1 * var(--saved-out))) rotate(-6deg);
 }
 .versionCard {
   position: relative;
-  background: var(--paper);
-  color: var(--ink);
-  border-radius: 12px;
+  background: var(--raditi-paper);
+  color: var(--raditi-ink);
+  border-radius: var(--radius-card);
   padding: 26px;
-  box-shadow: 0 28px 60px -25px var(--raditi-shadow-strong);
+  box-shadow: var(--shadow-card);
+  /* Turned in both states. A level object means «the change is applied», and only in the demo
+     of the first screen: here the undo is told by the price, the status and the button. */
   transform: rotate(2deg);
-  transition: transform 700ms var(--ease);
-}
-.versionCard[data-reverted='true'] {
-  transform: rotate(0);
 }
 .versionTop {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
   letter-spacing: 0.06em;
-  color: var(--graphite);
+  color: var(--raditi-graphite);
   padding-bottom: 25px;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--raditi-rule);
 }
 .versionTop span:last-child {
   letter-spacing: 0;
@@ -706,10 +983,10 @@
 }
 .versionItem > span small {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   max-width: 23ch;
   line-height: 1.5;
-  color: var(--graphite);
+  color: var(--raditi-graphite);
   margin-top: 5px;
   letter-spacing: 0;
 }
@@ -720,7 +997,24 @@
   letter-spacing: -0.04em;
   color: var(--raditi-accent-text);
   white-space: nowrap;
-  animation: priceEntrance 500ms var(--ease);
+  /* The price changes in place: digits of one width keep the line as wide. */
+  font-variant-numeric: tabular-nums;
+  /* Room at the sides for the band of a changed price; the margin gives it back to the row. */
+  padding-inline: 0.1em;
+  margin-inline: -0.1em;
+  /* The price is drawn anew on an undo and on an apply, and its direction tells which, as in the
+     demo: a changed value rises from below, a returned one comes down from above. */
+  animation: valueRise var(--motion-swap) var(--raditi-ease-out) backwards;
+}
+.safetyDemo[data-reverted='true'] .versionItem > strong {
+  animation-name: valueReturn;
+}
+/* While the change is in force, the price is the changed value and is marked as one in the
+   demo: ink on an amber band. After the undo it is the saved price again, without the mark. */
+.safetyDemo[data-reverted='false'] .versionItem > strong {
+  color: var(--raditi-ink);
+  /* From the middle of the digits to just under their baseline, the ruble sign on it whole. */
+  background: linear-gradient(transparent 46%, var(--raditi-marker) 46% 82%, transparent 82%);
 }
 .versionItem strong small {
   font-family: var(--font-golos), sans-serif;
@@ -736,14 +1030,14 @@
 }
 .versionLine i {
   height: 1px;
-  background: var(--rule);
+  background: var(--raditi-rule);
   flex: 1;
 }
 .versionStatus {
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-top: 27px !important;
+  margin-top: 27px;
   font-size: 12px;
   color: var(--raditi-ok);
 }
@@ -757,24 +1051,23 @@
   margin-top: 19px;
   min-height: 44px;
   background: transparent;
-  border: 1px solid var(--graphite);
-  border-radius: 25px;
+  border: 1px solid var(--raditi-graphite);
+  border-radius: var(--raditi-radius-pill);
   padding: 0 17px;
-  color: var(--ink);
+  color: var(--raditi-ink);
   font-size: 14px;
   transition:
-    background 200ms,
-    border-color 200ms;
-}
-.undoButton:hover {
-  background: var(--paper-2);
-  border-color: var(--ink);
+    background var(--raditi-motion-fast) var(--raditi-ease-out),
+    border-color var(--raditi-motion-fast) var(--raditi-ease-out),
+    box-shadow var(--raditi-motion-fast) var(--raditi-ease-out),
+    transform var(--raditi-motion-fast) var(--raditi-ease-out);
 }
 .safetyCaption {
   display: block;
   text-align: center;
   margin-top: 32px;
-  font-size: 12px;
+  font-size: 14px;
+  font-weight: 500;
   color: var(--raditi-on-accent-muted);
 }
 .faqSection {
@@ -783,13 +1076,10 @@
   grid-template-columns: 0.8fr 1.2fr;
   gap: 80px;
 }
-.faqIntro h2 {
-  font-size: clamp(28px, 3.2vw, 42px);
-}
 .faqIntro > p {
   margin-top: 24px;
   font-size: 17px;
-  color: var(--graphite);
+  color: var(--raditi-graphite);
 }
 .faqSymbol {
   display: grid;
@@ -797,7 +1087,7 @@
   width: 125px;
   height: 125px;
   margin-top: 48px;
-  background: var(--marker);
+  background: var(--raditi-marker);
   border-radius: 50%;
   font-family: var(--font-unbounded), sans-serif;
   font-size: 74px;
@@ -805,10 +1095,10 @@
   transform: rotate(-12deg);
 }
 .question {
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--raditi-rule);
 }
 .question:last-child {
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--raditi-rule);
 }
 .question summary {
   display: flex;
@@ -817,7 +1107,12 @@
   gap: 22px;
   padding: 23px 0;
   cursor: pointer;
-  font-size: 16px;
+  /* A step above the answer in size and weight: an open question must not read as its answer. */
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.35;
+  /* On a phone a question takes two lines: even ones, not a line and a word. */
+  text-wrap: balance;
   list-style: none;
 }
 .question summary::-webkit-details-marker {
@@ -829,15 +1124,16 @@
   height: 17px;
   flex-shrink: 0;
 }
+/* The lines of the sign are borders, not backgrounds: a forced palette paints no author
+   background and would leave the question without its sign. */
 .question summary > span::before,
 .question summary > span::after {
   content: '';
   position: absolute;
   top: 8px;
   width: 16px;
-  height: 1px;
-  background: currentColor;
-  transition: transform 220ms;
+  border-top: 1px solid currentColor;
+  transition: transform var(--raditi-motion-base) var(--raditi-ease-out);
 }
 .question summary > span::after {
   transform: rotate(90deg);
@@ -849,16 +1145,20 @@
   color: var(--raditi-accent-text);
 }
 .question > p {
-  color: var(--graphite);
+  color: var(--raditi-graphite);
   font-size: 15px;
   line-height: 1.7;
   padding: 0 28px 24px 0;
   max-width: 65ch;
-  animation: priceEntrance 250ms var(--ease);
+}
+/* The answer comes up into its place when its question opens. It is not dimmed: the text is
+   read from the first frame. */
+.question[open] > p {
+  animation: contentEntrance var(--raditi-motion-base) var(--raditi-ease-out);
 }
 .finalCta {
-  background: var(--marker);
-  padding: 78px max(48px, calc((100vw - 1264px) / 2)) 24px;
+  background: var(--raditi-marker);
+  padding: 78px var(--bleed) 24px;
 }
 .finalInner {
   display: flex;
@@ -870,44 +1170,30 @@
   font-size: clamp(30px, 4.5vw, 61px);
   line-height: 1.25;
 }
-.finalInner h2 span {
-  color: var(--raditi-accent-text);
-}
 .finalInner p {
   margin-top: 26px;
   font-size: 17px;
 }
+/* The main action once more: it stands on the link together with .primaryButton and adds only
+   what differs, its size. */
 .finalButton {
-  display: inline-flex;
-  align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
   min-height: 64px;
   gap: 36px;
   padding: 0 26px;
-  border: 1px solid var(--raditi-accent-text);
-  background: var(--accent);
-  color: var(--raditi-on-accent) !important;
-  border-radius: 36px;
   font-size: 16px;
-  transition: background 250ms;
-}
-.finalButton:hover {
-  background: var(--raditi-accent-hover);
 }
 .finalMeta {
   border-top: 1px solid var(--raditi-marker-rule);
   margin-top: 68px;
   padding-top: 20px;
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
   font-size: 12px;
 }
 .footer {
-  padding: 54px max(48px, calc((100vw - 1264px) / 2)) 0;
-  background: var(--ink);
-  color: var(--paper);
+  padding: 54px var(--bleed) 0;
+  background: var(--raditi-ink);
+  color: var(--raditi-paper);
 }
 .footerTop {
   display: flex;
@@ -926,11 +1212,8 @@
   min-height: 44px;
   font-size: 13px;
 }
-.footer a:hover {
-  text-decoration: underline;
-}
 .footer :focus-visible {
-  outline-color: var(--marker);
+  outline-color: var(--raditi-marker);
 }
 .legalLinks {
   display: flex;
@@ -953,7 +1236,7 @@
   border-top: 1px solid var(--raditi-rule-ink);
   padding-top: 20px;
   gap: 20px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--raditi-on-ink);
 }
 .footerBottom a {
@@ -966,7 +1249,9 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin: 12px -5px -0.15em;
+  /* The word reaches out to the left by the side bearing of its first letter, so the letter
+     stands on the axis of the page. At the right the sign ends on the axis as it is. */
+  margin: 12px 0 -0.15em -5px;
   overflow: hidden;
   font-family: var(--font-unbounded), sans-serif;
   font-size: clamp(95px, 16.5vw, 240px);
@@ -974,11 +1259,122 @@
   line-height: 1.3;
   letter-spacing: -0.04em;
 }
+/* The sign of the brand closes the word. An arrow stood here, and an arrow on this page means
+   a way further, which the word is not. The sign is as tall as the lowercase letters and stands
+   on their middle, a little below the middle of the line; at this size the word, the gap and
+   the sign fit the row at every width, and the edge of the row does not cut the circle.
+   Its sides are rounded to a whole pixel where the browser can: 0.55em is a fraction of one at
+   most widths, and in such a box the circle is drawn cut by its last row of pixels. */
 .footerWord svg {
-  width: 0.65em;
-  height: 0.65em;
-  color: var(--marker);
+  position: relative;
+  top: 0.09em;
+  width: 0.55em;
+  width: round(0.55em, 1px);
+  height: 0.55em;
+  height: round(0.55em, 1px);
   margin-left: 20px;
+}
+/* States.
+   A link shows its line under the keyboard focus and under a finger, not only under a pointer. */
+/* The section being read keeps the line: where the visitor is on a long page. */
+.desktopNav a:is(:focus-visible, :active)::after,
+.desktopNav a[aria-current='true']::after {
+  transform: scaleX(1);
+}
+.textLink:is(:focus-visible, :active),
+.heroBottom a:is(:focus-visible, :active),
+.footer a:is(:focus-visible, :active),
+.mobileNav a:is(:focus-visible, :active) {
+  text-decoration: underline;
+}
+.question summary:active {
+  color: var(--raditi-accent-text);
+}
+/* Pressed. The tap highlight of the system is off, and on a touch screen nothing hovers: these
+   rules are the whole answer to a finger. A press looks as the hover does. */
+/* Not the final button: on the amber field the fill of the hover is 1.49:1 against the field
+   and would dissolve the button. There it keeps the accent and answers with its lift, its arrow
+   and the press. */
+.primaryButton:not(.finalButton):active,
+.signUp:active {
+  background: var(--raditi-accent-hover);
+}
+/* An outlined action that leads away from the page turns over. */
+.signIn:active {
+  background: var(--raditi-ink);
+  color: var(--raditi-paper);
+}
+/* An outlined action that stays on the page: the surface a step darker and an ink outline. The
+   shadow thickens the outline of the undo without moving its label. */
+.undoButton:active,
+.menuToggle:active,
+.headerIdentity > button:active {
+  background: var(--raditi-paper-2);
+  border-color: var(--raditi-ink);
+}
+/* The button of the avatar has no border of its own: the shadow is its whole outline. */
+.undoButton:active,
+.headerIdentity > button:active {
+  box-shadow: inset 0 0 0 1px var(--raditi-ink);
+}
+@media (hover: hover) {
+  .desktopNav a:hover::after {
+    transform: scaleX(1);
+  }
+  .textLink:hover,
+  .heroBottom a:hover,
+  .footer a:hover,
+  .mobileNav a:hover {
+    text-decoration: underline;
+  }
+  .primaryButton:not(.finalButton):hover,
+  .signUp:hover {
+    background: var(--raditi-accent-hover);
+  }
+  .signIn:hover {
+    background: var(--raditi-ink);
+    color: var(--raditi-paper);
+  }
+  .undoButton:hover,
+  .menuToggle:hover,
+  .headerIdentity > button:hover {
+    background: var(--raditi-paper-2);
+    border-color: var(--raditi-ink);
+  }
+  .undoButton:hover,
+  .headerIdentity > button:hover {
+    box-shadow: inset 0 0 0 1px var(--raditi-ink);
+  }
+}
+/* What moves is declared only here: the block of reduced motion at the end of the file takes
+   away transitions, not a transform, and a shift without its transition would be a jump. */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .primaryButton:hover {
+    transform: translateY(-2px);
+  }
+  .primaryButton:hover svg {
+    transform: translate(3px, -3px);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .primaryButton:active,
+  .signUp:active,
+  .signIn:active,
+  .undoButton:active,
+  .menuToggle:active {
+    transform: scale(0.98);
+    transition-duration: var(--raditi-motion-press);
+  }
+  /* The heading of a section rises into the window, once: the observer of the page marks it
+     as it does a scene. Below the window it waits put down; without the mark it stands in its
+     place, and that is the state without scripts, under reduced motion and after the rise.
+     Moved and never dimmed: the text keeps its contrast even if the observer never reports. */
+  .page [data-reveal]:not([data-reveal='scene'])[data-scene='waiting'] {
+    transform: translateY(var(--motion-rise));
+  }
+  .page [data-reveal]:not([data-reveal='scene'])[data-scene='playing'] {
+    animation: headingRise var(--motion-move) var(--raditi-ease-out) backwards;
+  }
 }
 @keyframes typeEntrance {
   from {
@@ -1003,21 +1399,58 @@
 @keyframes demoEntrance {
   from {
     opacity: 0.5;
-    transform: translateY(24px) rotate(1deg);
+    transform: translateY(var(--motion-rise)) rotate(1deg);
   }
   to {
     opacity: 1;
     transform: translateY(0) rotate(0);
   }
 }
-@keyframes priceEntrance {
+@keyframes headingRise {
   from {
-    opacity: 0.45;
+    transform: translateY(var(--motion-rise));
+  }
+}
+@keyframes valueRise {
+  from {
+    transform: translateY(var(--motion-shift));
+  }
+}
+@keyframes valueReturn {
+  from {
+    transform: translateY(calc(-1 * var(--motion-shift)));
+  }
+}
+@keyframes strikeDraw {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes contentEntrance {
+  from {
     transform: translateY(7px);
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+}
+/* Below this width the header has no room for a second button without wrapping its links. */
+@media (min-width: 1100px) {
+  .signUp {
+    display: inline-flex;
+  }
+}
+/* The headings that have a formula of their own for the narrow column of two. Below, in a
+   single column, they take the step of every section heading. */
+@media (min-width: 801px) {
+  /* The answer is the main thought of the page: not smaller than a heading of a section, and
+     larger than one where the container is full. The growth is the one of a section heading: a
+     faster one would break «просто написать.» in two in the narrow column of a small desktop. */
+  .statementAnswer h2 {
+    font-size: clamp(29px, 3.6vw, 56px);
+  }
+  .safetyCopy h2 {
+    font-size: clamp(29px, 3.5vw, 47px);
+  }
+  .faqIntro h2 {
+    font-size: clamp(28px, 3.2vw, 42px);
   }
 }
 @media (min-width: 1600px) {
@@ -1026,43 +1459,38 @@
   }
 }
 @media (max-width: 1100px) {
-  .headerInner,
-  .hero {
-    padding-left: 32px;
-    padding-right: 32px;
+  .page {
+    --gutter: 32px;
+    --section-y: 85px;
+  }
+  /* Four links, the logo and the sign-in fit one row down to 801px only with tighter gaps. */
+  .headerInner {
+    gap: 24px;
+  }
+  .desktopNav {
+    gap: 22px;
   }
   .heroActions {
     gap: 14px;
   }
-  .heroFootnote {
-    max-width: 280px;
-    align-items: flex-start;
-  }
   .heroTitle {
-    font-size: 7vw;
+    font-size: clamp(52px, 7vw, var(--hero-title-cap));
   }
   .heroTitle .heroLast {
-    font-size: 3.9vw;
+    font-size: clamp(30px, 3.9vw, var(--hero-last-cap));
   }
   .heroLead {
-    max-width: 31ch;
     font-size: 16px;
   }
-  .section {
-    padding: 85px 32px;
-  }
-  .capabilitiesSection {
-    padding-top: 0;
-  }
   .statementInner {
-    padding: 65px 32px;
+    padding-block: 65px;
     gap: 32px;
   }
   .statementAnswer {
     gap: 18px;
   }
   .requestStrip {
-    margin: 0 32px;
+    margin: 0 var(--gutter);
     font-size: 12px;
   }
   .steps {
@@ -1071,16 +1499,9 @@
   .step h3 {
     font-size: 19px;
   }
-  .connectVisual {
-    padding: 13px;
-    gap: 7px;
-  }
-  .connectVisual .wordmark {
-    font-size: 13px;
-  }
   .safetyInner {
-    padding: 80px 32px;
-    gap: 50px;
+    padding-block: 80px;
+    column-gap: 50px;
   }
   .versionCard {
     padding: 23px;
@@ -1092,22 +1513,28 @@
     padding-top: 0;
     gap: 40px;
   }
-  .finalCta {
-    padding-left: 32px;
-    padding-right: 32px;
-  }
   .finalInner {
     gap: 28px;
   }
-  .footer {
-    padding-left: 32px;
-    padding-right: 32px;
+}
+/* Two columns at their narrowest: the saved price is longer than half of its card, and its left
+   end stands where the turn lowers the top. A smaller price ends further to the right. */
+@media (min-width: 801px) and (max-width: 920px) {
+  .savedVersion > span:last-child {
+    font-size: 20px;
   }
 }
 @media (max-width: 800px) {
+  .page {
+    --header-h: 72px;
+    --gutter: 24px;
+    --section-y: 80px;
+  }
+  /* One step for the section headings in a single column. */
+  :where(.page) h2 {
+    font-size: clamp(32px, 5vw, 40px);
+  }
   .headerInner {
-    height: 72px;
-    padding: 0 24px;
     gap: 16px;
   }
   .desktopNav {
@@ -1122,36 +1549,60 @@
     height: 44px;
     padding: 11px;
     background: transparent;
-    border: 1px solid var(--rule);
+    border: 1px solid var(--raditi-rule-strong);
     border-radius: 50%;
+    transition:
+      background var(--raditi-motion-fast) var(--raditi-ease-out),
+      border-color var(--raditi-motion-fast) var(--raditi-ease-out),
+      transform var(--raditi-motion-fast) var(--raditi-ease-out);
   }
+  /* Borders for the same reason as the sign of a question: they survive a forced palette. */
   .menuToggle span {
-    height: 1px;
     width: 20px;
-    background: var(--ink);
-    transition: transform 200ms;
+    border-top: 1px solid var(--raditi-ink);
+    transition: transform var(--raditi-motion-base) var(--raditi-ease-out);
   }
-  .menuToggle span:first-child[data-open='true'] {
+  /* The cross is drawn from the state that the button tells a screen reader. */
+  .menuToggle[aria-expanded='true'] span:first-child {
     transform: translateY(3px) rotate(45deg);
   }
-  .menuToggle span:last-child[data-open='true'] {
+  .menuToggle[aria-expanded='true'] span:last-child {
     transform: translateY(-3px) rotate(-45deg);
   }
-  .mobileNav:not([hidden]) {
-    display: flex;
+  /* The place and the look of the panel are its own, open or closed: on its way out it is still
+     shown, and it must stay where it was instead of falling into the row of the header. */
+  .mobileNav {
     flex-direction: column;
     position: absolute;
     top: 100%;
     left: 0;
     right: 0;
     padding: 10px 24px 22px;
-    border-bottom: 1px solid var(--rule);
-    background: var(--paper);
-    box-shadow: 0 20px 30px -24px var(--raditi-shadow-medium);
+    border-bottom: 1px solid var(--raditi-rule);
+    background: var(--raditi-paper);
+    box-shadow: var(--shadow-menu);
+  }
+  .mobileNav:not([hidden]) {
+    display: flex;
   }
   .mobileNav a {
+    position: relative;
     padding: 14px 0;
     font-size: 16px;
+  }
+  /* The section being read: the colour of an accent text and a line at the left, so that the
+     colour is not the only sign. A border, as the other lines that a forced palette must keep. */
+  .mobileNav a[aria-current='true'] {
+    color: var(--raditi-accent-text);
+  }
+  .mobileNav a[aria-current='true']::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: -12px;
+    height: 20px;
+    border-left: 2px solid currentColor;
+    translate: 0 -50%;
   }
 
   .wordmark {
@@ -1162,7 +1613,7 @@
     padding: 0 15px;
   }
   .hero {
-    padding: 22px 24px 0;
+    padding-top: 22px;
   }
   .heroGrid {
     grid-template-columns: minmax(0, 1fr);
@@ -1176,25 +1627,13 @@
   .heroTitle {
     font-size: clamp(64px, 10vw, 80px);
   }
-  .heroTitle > span:nth-child(1),
-  .heroTitle > span:nth-child(2) {
-    display: inline;
-  }
-  .heroTitle > span:nth-child(2)::before {
-    content: ' ';
-  }
   .heroTitle .heroLast {
-    display: block;
     font-size: clamp(34px, 5.8vw, 46px);
-    margin-top: 20px;
   }
   .heroLead {
     max-width: 43ch;
     font-size: 18px;
-    margin-top: 27px !important;
-  }
-  .heroFootnote {
-    max-width: none;
+    margin-top: 27px;
   }
   .heroActions {
     gap: 25px;
@@ -1208,28 +1647,27 @@
   .heroBottom {
     margin-top: 34px;
   }
-  .section {
-    padding: 80px 24px;
-  }
   .sectionHeading {
     grid-template-columns: minmax(0, 1fr);
     gap: 22px;
     margin-bottom: 38px;
   }
-  .sectionHeading > p {
+  .sectionLead {
     justify-self: start;
+  }
+  /* Under its heading the lead has the width for a sentence a line. Even lines keep the first
+     word of the second sentence from ending the line of the first. */
+  .sectionLead > p {
     max-width: 42ch;
+    text-wrap: balance;
   }
   .statementInner {
-    padding: 56px 24px;
+    padding-block: 56px;
     grid-template-columns: minmax(0, 1fr);
     gap: 28px;
   }
-  .statementInner > p {
-    font-size: 19px;
-  }
-  .statementAnswer h2 {
-    font-size: clamp(30px, 5.2vw, 41px);
+  .chores {
+    font-size: 22px;
   }
   .statementAnswer {
     gap: 26px;
@@ -1238,15 +1676,18 @@
     flex-wrap: wrap;
     justify-content: flex-start;
     gap: 16px 28px;
-    margin: 0 24px;
   }
   .steps {
+    --frame-delay: 0ms;
     grid-template-columns: minmax(0, 1fr);
     gap: 35px;
   }
+  /* The frame at the right is taller than the heading and the text at the left: the spare
+     height goes under the text, not between it and its heading. */
   .step {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto 1fr;
     gap: 8px 30px;
   }
   .stepNumber {
@@ -1266,17 +1707,45 @@
     align-self: center;
     margin: 0;
   }
-  .capabilitiesSection {
-    padding-top: 0;
+  /* Two columns: the category goes over its request, and the heads of the columns stand right
+     over the cells they name, under the category. The steps between the rows of the grid are
+     margins and not a gap: in the rows whose heads are only heard the row of the heads is empty,
+     and a gap around it would make the top of such a row wider than its bottom. */
+  .capability {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    column-gap: 28px;
+    padding: 18px 0;
   }
-  .capabilities {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0 30px;
+  .capability h3 {
+    grid-area: 1 / 1 / auto / -1;
+    margin-bottom: 10px;
+  }
+  .columnLabel {
+    grid-row: 2;
+    margin-bottom: 6px;
+  }
+  .columnLabel:first-of-type {
+    grid-column: 1;
+  }
+  .columnLabel:last-of-type {
+    grid-column: 2;
+  }
+  .requestBubble {
+    grid-area: 3 / 1;
+  }
+  .capabilityResult {
+    grid-area: 3 / 2;
   }
   .safetyInner {
     grid-template-columns: minmax(0, 1fr);
-    padding: 70px 24px;
-    gap: 40px;
+    padding-block: 70px;
+  }
+  /* One column in the order of the markup: the copy, the card, the note. */
+  .safetyCopy,
+  .safetyDemo,
+  .safetyNote {
+    grid-column: auto;
+    grid-row: auto;
   }
   .safetyCopy > p {
     max-width: 48ch;
@@ -1285,17 +1754,21 @@
     width: 100%;
     max-width: 500px;
     justify-self: center;
-    margin-top: 10px;
+    margin-top: 50px;
   }
-  .safetyCopy h2 {
-    font-size: 39px;
+  /* Under the card the note reads on as the second sentence of its caption. */
+  .safetyNote {
+    justify-self: center;
+    max-width: 40ch;
+    margin-top: 6px;
+    text-align: center;
+    text-wrap: balance;
   }
   .safetyList {
     max-width: 520px;
   }
   .faqSection {
     grid-template-columns: minmax(0, 1fr);
-    padding-top: 0;
     gap: 35px;
   }
   .faqSymbol {
@@ -1305,7 +1778,7 @@
     display: none;
   }
   .finalCta {
-    padding: 62px 24px 22px;
+    padding-block: 62px 22px;
   }
   .finalInner {
     flex-direction: column;
@@ -1313,13 +1786,13 @@
     gap: 34px;
   }
   .finalInner h2 {
-    font-size: 43px;
+    font-size: clamp(32px, 5.6vw, 44px);
   }
   .finalMeta {
     margin-top: 44px;
   }
   .footer {
-    padding: 40px 24px 0;
+    padding-top: 40px;
   }
   .footerTop {
     flex-wrap: wrap;
@@ -1328,11 +1801,16 @@
   .footerTop p {
     display: none;
   }
+  /* Just above the phone the word is at its smallest size and the row at its tightest. */
+  .footerWord svg {
+    margin-left: 12px;
+  }
 }
 @media (max-width: 540px) {
-  .headerInner {
-    height: 68px;
-    padding: 0 20px;
+  .page {
+    --header-h: 68px;
+    --gutter: 20px;
+    --section-y: 64px;
   }
   .wordmark {
     font-size: 17px;
@@ -1341,9 +1819,6 @@
   .logoSymbol {
     width: 31px;
     height: 31px;
-  }
-  .desktopNav {
-    display: none;
   }
   .headerActions {
     gap: 12px;
@@ -1355,14 +1830,7 @@
     font-size: 13px;
   }
   .hero {
-    padding: 20px 20px 0;
-  }
-  .heroIntro {
-    font-size: 10px;
-    gap: 12px;
-  }
-  .heroIntro > span:first-child {
-    max-width: 160px;
+    padding-top: 20px;
   }
   .heroGrid {
     padding-top: 31px;
@@ -1371,27 +1839,22 @@
   .heroTitle {
     font-size: clamp(41px, 11.9vw, 64px);
   }
-  .heroTitle > span:nth-child(1),
-  .heroTitle > span:nth-child(2) {
-    display: block;
-  }
-  .heroTitle > span:nth-child(2)::before {
-    content: none;
-  }
   .heroTitle .heroLast {
     font-size: clamp(27px, 7vw, 37px);
     margin-top: 15px;
+    white-space: normal;
+    text-wrap: balance;
   }
   .heroLead {
-    margin-top: 23px !important;
+    margin-top: 23px;
     font-size: 16px;
     max-width: 35ch;
   }
   .heroActions {
     gap: 11px 22px;
-    margin-top: 26px;
   }
-  .primaryButton {
+  /* Tighter on a phone; the final button keeps its own measure. */
+  .primaryButton:not(.finalButton) {
     min-height: 52px;
     font-size: 14px;
     gap: 18px;
@@ -1401,54 +1864,43 @@
     font-size: 13px;
   }
   .heroFootnote {
-    font-size: 10px;
     margin-top: 18px;
-    gap: 6px;
   }
   .heroBottom {
-    font-size: 12px;
     margin-top: 26px;
     padding: 20px 0;
   }
-  .heroBottom > span {
-    max-width: 132px;
-  }
   .heroBottom a {
     gap: 9px;
-    font-size: 12px;
   }
   .heroBottom svg {
     width: 17px;
   }
   .statementInner {
-    padding: 46px 20px;
+    padding-block: 46px;
     gap: 27px;
   }
-  .statementInner > p {
-    font-size: 16px;
+  /* The longest line stays one line on the narrowest phone. */
+  .chores {
+    font-size: clamp(19px, 5.6vw, 22px);
   }
   .statementAnswer {
     gap: 17px;
-  }
-  .statementAnswer h2 {
-    font-size: 26px;
   }
   .drawnArrow svg {
     width: 28px;
     height: 28px;
   }
   .requestStrip {
-    margin: 0 20px;
     gap: 12px 20px;
-    font-size: 11px;
   }
-  .section {
-    padding: 64px 20px;
-  }
-  .page h2 {
+  :where(.page) h2 {
     font-size: 28px;
   }
-  .sectionHeading > p {
+  .statementAnswer h2 {
+    font-size: clamp(23px, 6.4vw, 28px);
+  }
+  .sectionLead > p {
     font-size: 15px;
   }
   .steps {
@@ -1473,50 +1925,51 @@
     width: 100%;
     margin-top: 22px;
   }
-  .connectVisual {
-    justify-content: center;
-    gap: 20px;
-    padding: 23px 30px;
-  }
-  .connectVisual .wordmark {
-    font-size: 18px;
-  }
-  .connectLine {
-    flex: initial;
-    width: 48px;
-  }
-  .capabilitiesSection {
-    padding-top: 0;
-  }
-  .capabilities {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  /* One column in the order of the markup: the category, the request, the result. The heads
+     of the columns stand in the first row over what they name. */
   .capability {
-    padding: 24px 0;
+    display: block;
+    padding: 20px 0;
   }
-  .capability .requestQuote {
-    margin-top: 15px;
+  .columnLabel {
+    display: block;
   }
-  .capability > p:last-child {
-    max-width: 40ch;
+  .requestBubble {
+    width: fit-content;
+    font-size: 16px;
+  }
+  .capabilityResult {
+    margin-top: 10px;
+    font-size: 16px;
+  }
+  .capability:first-child .requestBubble {
+    margin-bottom: 14px;
+  }
+  .capability:first-child .capabilityResult {
+    margin-top: 0;
   }
   .capabilitiesNote {
     gap: 5px;
     font-size: 12px;
   }
   .safetyInner {
-    padding: 58px 20px;
-    gap: 40px;
+    padding-block: 58px;
   }
   .safetyCopy > p {
     font-size: 15px;
+    font-weight: 500;
   }
+  /* On a narrow card the price reaches the middle, which the turn does not lift: the saved
+     version shows a little more of itself, and its text stands closer to its top. */
   .safetyDemo {
-    padding-top: 60px;
+    --saved-out: 20px;
+    padding-top: calc(66px + var(--saved-out));
   }
   .savedVersion {
-    padding: 20px;
-    font-size: 10px;
+    padding: 12px 20px;
+  }
+  .savedVersion > span:last-child {
+    font-size: 18px;
   }
   .versionCard {
     padding: 20px;
@@ -1531,32 +1984,19 @@
   .versionItem > strong {
     font-size: 34px;
   }
-  .versionItem > span small {
-    font-size: 10px;
-  }
-  .versionStatus {
-    font-size: 12px;
-  }
-  .safetyCaption {
-    font-size: 11px;
-  }
-  .faqSection {
-    padding-top: 0;
-  }
   .faqIntro > p {
     font-size: 15px;
     margin-top: 16px;
   }
   .question summary {
-    font-size: 15px;
+    font-size: 17px;
     padding: 21px 0;
   }
   .question > p {
-    font-size: 14px;
     padding-right: 8px;
   }
   .finalCta {
-    padding: 51px 20px 20px;
+    padding-block: 51px 20px;
   }
   .finalInner h2 {
     font-size: clamp(28px, 7.2vw, 38px);
@@ -1569,23 +2009,15 @@
     font-size: 14px;
     min-height: 54px;
   }
-  .finalMeta {
-    font-size: 12px;
-  }
   .footer {
-    padding: 36px 20px 0;
+    padding-top: 36px;
   }
   .footerTop > a:last-child {
-    font-size: 11px;
     gap: 10px;
   }
   .legalLinks {
     gap: 4px 20px;
-    font-size: 12px;
     padding: 25px 0 21px;
-  }
-  .footerBottom {
-    font-size: 10px;
   }
   .footerWord {
     font-size: 17vw;
@@ -1595,6 +2027,93 @@
     margin-left: 8px;
   }
 }
+/* A low window of a laptop. The first screen is drawn for a height of 900px; here its spacing
+   gives way, so that the main action stays above the fold. That is not enough at 1280x600: there
+   the limits of the heading follow the height too, by themselves. */
+@media (min-width: 801px) and (max-height: 760px) {
+  .hero,
+  .heroGrid {
+    padding-top: 16px;
+  }
+  .heroCopy {
+    padding-top: 12px;
+  }
+  .heroTitle .heroLast {
+    margin-top: 14px;
+  }
+  .heroLead {
+    margin-top: 20px;
+  }
+  .heroActions {
+    margin-top: 24px;
+  }
+}
+/* A window lower than the open menu: a phone on its side, a page zoomed to 400%. The header
+   goes with the page, so the menu under it can be scrolled as a whole; nothing is stuck to
+   the top, and the anchors need no room for it. */
+@media (max-height: 420px) {
+  .page {
+    --anchor-room: 0px;
+  }
+  .header {
+    position: relative;
+  }
+}
+/* The mobile menu comes down and fades in at the pace of its button, and leaves faster than it
+   came. The first frame of an opening is given by @starting-style, and `display` waits for the
+   end of a closing. A browser that can do neither drops the declaration of the transition and
+   shows and hides the panel at once, as before. */
+@media (max-width: 800px) and (prefers-reduced-motion: no-preference) {
+  .mobileNav {
+    opacity: 0;
+    transform: translateY(-8px);
+    transition:
+      opacity var(--raditi-motion-fast) var(--ease-in),
+      transform var(--raditi-motion-fast) var(--ease-in),
+      display var(--raditi-motion-fast) allow-discrete;
+  }
+  .mobileNav:not([hidden]) {
+    opacity: 1;
+    transform: none;
+    transition-duration: var(--raditi-motion-base);
+    transition-timing-function: var(--raditi-ease-out);
+  }
+  @starting-style {
+    .mobileNav:not([hidden]) {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+  }
+}
+/* Where the browser can animate to the height of a content, an answer opens and closes smoothly
+   and the questions below it do not jump; it closes faster than it opens. Elsewhere the answer
+   opens at once and comes up into its place, as above. The height of an answer is the only
+   layout property that the page animates. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (interpolate-size: allow-keywords) and selector(::details-content) {
+    .question {
+      interpolate-size: allow-keywords;
+    }
+    .question::details-content {
+      block-size: 0;
+      overflow: clip;
+      transition:
+        block-size var(--raditi-motion-base) var(--raditi-ease-out),
+        content-visibility var(--raditi-motion-base) allow-discrete;
+    }
+    .question[open]::details-content {
+      block-size: auto;
+      transition-duration: var(--motion-swap);
+    }
+    /* The height brings the answer in: the answer does not move on top of that. */
+    .question[open] > p {
+      animation: none;
+    }
+  }
+}
+/* The one block of reduced motion for the three modules of the landing: the demo and the
+   pricing stand inside the page. It takes away animations and transitions; what moves without
+   them (a lift, a shift, a press) is declared only where motion is welcome. */
 @media (prefers-reduced-motion: reduce) {
   .page *,
   .page *::before,
@@ -1603,31 +2122,24 @@
     transition: none !important;
     scroll-behavior: auto !important;
   }
+  /* The universal selector does not reach these parts. Each has a rule of its own: a browser
+     that does not know one of the pseudo-elements would drop a whole list of selectors. */
+  .page details::details-content {
+    transition: none !important;
+  }
+  .page input::-webkit-slider-thumb {
+    transition: none !important;
+  }
+  .page input::-moz-range-thumb {
+    transition: none !important;
+  }
 }
 
+/* The way to an anchor is smooth once the fonts are in (the mark is set by landing-motion.tsx).
+   Before that the browser jumps: it goes to the anchor of the address at once and keeps the
+   target in its place while the fonts rewrap the lines above it. */
 @media (prefers-reduced-motion: no-preference) {
-  :global(html):has(.page) {
+  :global(html[data-fonts='ready']):has(.page) {
     scroll-behavior: smooth;
-  }
-}
-@media (max-width: 540px) {
-  .connectVisual {
-    padding: 20px 16px;
-    gap: 12px;
-  }
-  .connectLine {
-    flex: 1;
-    width: auto;
-    min-width: 8px;
-  }
-  .statementAnswer h2 {
-    font-size: clamp(23px, 6.4vw, 28px);
-  }
-  .heroFootnote {
-    font-size: 11px;
-    row-gap: 8px;
-  }
-  .heroFootnote .accessStatus {
-    width: 100%;
   }
 }

@@ -1,7 +1,9 @@
+import { signupGiftCredits } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
 import { mailKinds, type MailData, type MailKind } from './schemas.ts'
 import { renderTemplate } from './index.ts'
+import { signupGiftLine } from './welcome.ts'
 
 const EXPIRES_AT = '2026-09-26T18:00:00.000Z' // 21:00 in Moscow
 
@@ -15,11 +17,42 @@ const samples: MailData = {
     expiresAt: EXPIRES_AT,
   },
   welcome: { name: 'Анна', appUrl: 'https://raditi.ru/app' },
+  'payment-succeeded': {
+    item: 'plan',
+    planName: 'Бизнес',
+    amount: '12900.00',
+    periodEnd: '2026-10-18T09:30:00.000Z',
+    credits: 800,
+    appUrl: 'https://raditi.ru',
+  },
+  'renewal-notice': {
+    planName: 'Бизнес',
+    amount: '12900.00',
+    chargeAt: '2026-10-18T09:30:00.000Z',
+    paymentMethod: 'Карта «Мир» ••\u00a04444',
+    appUrl: 'https://raditi.ru',
+  },
+  'payment-failed': {
+    planName: 'Бизнес',
+    amount: '12900.00',
+    paymentMethod: 'Карта «Мир» ••\u00a04444',
+    giftCreditsLeft: 35,
+    appUrl: 'https://raditi.ru',
+  },
+  'subscription-ended': {
+    planName: 'Бизнес',
+    endedAt: '2026-10-18T09:30:00.000Z',
+    packCreditsLeft: 7,
+    giftCreditsLeft: 35,
+    appUrl: 'https://raditi.ru',
+  },
 }
 
 function linkOf(kind: MailKind): string {
   const data = samples[kind]
-  return 'url' in data ? data.url : data.appUrl
+  if ('url' in data) return data.url
+  // The welcome letter opens the app itself, the billing letters its «Тарифы» page.
+  return kind === 'welcome' ? data.appUrl : `${data.appUrl}/settings/plans`
 }
 
 describe.each(mailKinds)('%s', (kind) => {
@@ -93,6 +126,61 @@ describe('welcome greeting', () => {
     ['only spaces', '   '],
   ])('greets without the name when it has %s', (_case, name) => {
     expect(greet(name)).toBe('Здравствуйте!')
+  })
+})
+
+describe('welcome letter', () => {
+  const out = renderTemplate('welcome', samples.welcome)
+  const gift =
+    'Мы дарим вам 35 кредитов, чтобы попробовать: их хватит на семь небольших правок или на две-три задачи побольше.'
+
+  it('says how the service works and tells of the gift of the registration, in this order', () => {
+    // The footer of every letter follows.
+    expect(out.text.split('\n\n').slice(0, 5)).toEqual([
+      'Здравствуйте, Анна!',
+      'Спасибо, что выбрали Радити.',
+      'Подключите свой сайт и напишите в чате, что на нём поменять. Мы внесём правку и покажем результат.',
+      gift,
+      'Личный кабинет: https://raditi.ru/app',
+    ])
+    expect(out.html).toContain(gift)
+    expect(out.html.indexOf('покажем результат')).toBeLessThan(out.html.indexOf(gift))
+  })
+
+  it('takes the number of the gift from the domain, and the promise from that number', () => {
+    expect(signupGiftCredits).toBe(35)
+    expect(signupGiftLine()).toBe(gift)
+    expect(signupGiftLine(signupGiftCredits)).toBe(gift)
+  })
+
+  it.each([
+    [
+      30,
+      'Мы дарим вам 30 кредитов, чтобы попробовать: их хватит на шесть небольших правок или на две-три задачи побольше.',
+    ],
+    [
+      21,
+      'Мы дарим вам 21 кредит, чтобы попробовать: его хватит на четыре небольшие правки или на одну-две задачи побольше.',
+    ],
+    [
+      22,
+      'Мы дарим вам 22 кредита, чтобы попробовать: их хватит на четыре небольшие правки или на одну-две задачи побольше.',
+    ],
+    [5, 'Мы дарим вам 5 кредитов, чтобы попробовать: их хватит на одну небольшую правку.'],
+    // Below the charge of a small edit nothing is promised about what it is enough for.
+    [3, 'Мы дарим вам 3 кредита, чтобы попробовать.'],
+    [
+      1200,
+      'Мы дарим вам 1\u00a0200 кредитов, чтобы попробовать: их хватит на 240 небольших правок или на 80-110 задач побольше.',
+    ],
+  ])('would say of a gift of %i credits: %s', (credits, line) => {
+    expect(signupGiftLine(credits)).toBe(line)
+  })
+
+  it('never counts «правки» as the unit and promises no price', () => {
+    // «Правка» here is the change on the site; the unit is «кредит».
+    expect(out.text).not.toMatch(/\d\s*правк/)
+    expect(out.text).not.toMatch(/₽|руб|бесплатн/i)
   })
 })
 

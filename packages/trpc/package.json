@@ -14,8 +14,10 @@
   },
   "dependencies": {
     "@repo/auth": "workspace:*",
+    "@repo/billing": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",
+    "@repo/yookassa": "workspace:*",
     "@trpc/server": "catalog:",
     "superjson": "catalog:",
     "zod": "catalog:"

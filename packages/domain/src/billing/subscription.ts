@@ -4,8 +4,9 @@ import { conflict } from '../errors.ts'
 /**
  * Statuses of a workspace's subscription to a quota plan — the database enum
  * SubscriptionStatus (table subscriptions), not a model subscription of the pool.
- * `cancelled`: the paid period ended by the customer's choice. `expired`: it ended because a
- * payment did not arrive. `trial` exists in the database and is not used yet.
+ * `cancelled`: the paid period ended by the customer's choice, or an operator ended the tariff
+ * when returning its payment. `expired`: it ended because a payment did not arrive. `trial`
+ * exists in the database and is not used yet.
  */
 export const subscriptionStatuses = ['trial', 'active', 'past_due', 'cancelled', 'expired'] as const
 export const subscriptionStatusSchema = z.enum(subscriptionStatuses)
@@ -28,13 +29,17 @@ export const subscriptionEvents = [
   'period_ended_without_renewal',
   'past_due_grace_ended',
   'past_due_payment_succeeded',
+  'refunded_by_operator',
 ] as const
 export type SubscriptionEvent = (typeof subscriptionEvents)[number]
 
-/** `from: null` — the workspace has no live subscription: the first payment creates one. */
+/**
+ * `from: null` — the workspace has no live subscription: the first payment creates one. A list
+ * — the event is taken in each of these statuses.
+ */
 const transitions: Record<
   SubscriptionEvent,
-  { from: SubscriptionStatus | null; to: SubscriptionStatus }
+  { from: SubscriptionStatus | null | readonly SubscriptionStatus[]; to: SubscriptionStatus }
 > = {
   first_payment_succeeded: { from: null, to: 'active' },
   // the saved payment method was charged for the next period
@@ -48,6 +53,9 @@ const transitions: Record<
   // the new period is billingPeriod(paidAt, 0) and paidAt must be stored as the new
   // period_anchor, otherwise nextBillingPeriod refuses the next renewal.
   past_due_payment_succeeded: { from: 'past_due', to: 'active' },
+  // An operator returned the payment of the tariff and ended it at once, without waiting for
+  // the end of the period: paid for or overdue, it takes no task from that moment.
+  refunded_by_operator: { from: ['active', 'past_due'], to: 'cancelled' },
 }
 
 /**
@@ -61,7 +69,10 @@ export function nextSubscriptionStatus(
   event: SubscriptionEvent,
 ): SubscriptionStatus {
   const transition = Object.hasOwn(transitions, event) ? transitions[event] : undefined
-  if (transition === undefined || transition.from !== current) {
+  const { from } = transition ?? { from: undefined }
+  // A list never holds null: only the first payment starts from «no subscription».
+  const taken = Array.isArray(from) ? current !== null && from.includes(current) : from === current
+  if (transition === undefined || !taken) {
     throw conflict(`Subscription in status ${current ?? 'none'} cannot handle ${event}`)
   }
   return transition.to

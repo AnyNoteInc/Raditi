@@ -12,6 +12,7 @@ import Skeleton from '@mui/material/Skeleton'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useQuery } from '@tanstack/react-query'
+import NextLink from 'next/link'
 import { useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
@@ -325,7 +326,15 @@ export function ProjectsView() {
                       lineHeight: 1.35,
                     }}
                   >
-                    {project.name}
+                    <Link
+                      component={NextLink}
+                      href={`/projects/${project.id}`}
+                      color="inherit"
+                      underline="hover"
+                      sx={{ display: 'inline-flex', alignItems: 'center', minHeight: 44 }}
+                    >
+                      {project.name}
+                    </Link>
                   </Typography>
                   <Link
                     href={project.url}

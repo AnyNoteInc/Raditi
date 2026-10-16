@@ -1,17 +1,41 @@
 import { getSessionFromHeaders, type Auth, type Session } from '@repo/auth'
 import { prisma as defaultPrisma, type PrismaClient } from '@repo/db'
-import { DomainError, isDomainError, missingRequiredConsents } from '@repo/domain'
+import { DomainError, isDomainError, missingRequiredConsents, type AppEnv } from '@repo/domain'
+import type { YookassaClient } from '@repo/yookassa'
 import { initTRPC, TRPCError } from '@trpc/server'
 import superjson from 'superjson'
 
 import { CONSENT_REQUIRED, formatError, toTRPCError } from './errors.ts'
 import { loadLatestConsents } from './services/consents.ts'
 
+/** What the billing procedures pay through. The app builds it once per process. */
+export interface BillingContext {
+  /** The ЮKassa shop. */
+  yookassa: YookassaClient
+  /** Public origin of the app (APP_URL), no trailing slash: the customer returns to it. */
+  appUrl: string
+  /** APP_ENV: it decides which workspace is the user's personal one, as in project.create. */
+  appEnv: AppEnv
+  /**
+   * YOOKASSA_AUTOPAYMENTS: the shop may save a payment method and charge it. false — one-time
+   * payments only: auto-renewal is neither offered on the pages nor switched on by a procedure.
+   */
+  autopayments: boolean
+  /**
+   * BILLING_PAST_DUE_DAYS: how long an overdue tariff waits for a payment before the scheduler
+   * of the core role ends it. Read here only to tell the customer the day; the two processes
+   * have to be given the same value.
+   */
+  pastDueDays: number
+}
+
 export interface Context {
   prisma: PrismaClient
   headers: Headers
   session: Session['session'] | null
   user: Session['user'] | null
+  /** null: payments are switched off (the shop is not set up); the tariff state is still read. */
+  billing: BillingContext | null
 }
 
 export interface CreateContextOptions {
@@ -21,15 +45,24 @@ export interface CreateContextOptions {
   prisma?: PrismaClient
   /** Defaults to the process-wide instance of @repo/auth. */
   auth?: Auth
+  /** Defaults to null: payments are switched off. */
+  billing?: BillingContext | null
 }
 
 export async function createContext({
   headers,
   prisma = defaultPrisma,
   auth,
+  billing = null,
 }: CreateContextOptions): Promise<Context> {
   const current = await getSessionFromHeaders(headers, auth)
-  return { prisma, headers, session: current?.session ?? null, user: current?.user ?? null }
+  return {
+    prisma,
+    headers,
+    session: current?.session ?? null,
+    user: current?.user ?? null,
+    billing,
+  }
 }
 
 // Stack traces and raw messages reach the browser only in `next dev`.
@@ -61,8 +94,12 @@ export const createCallerFactory = t.createCallerFactory
 export const publicProcedure = t.procedure.use(domainErrors)
 
 /**
- * A signed-in user. Only consent.* and user.me use it directly: the consent page needs them
- * before the documents are accepted. Everything that writes or reads more is consented.
+ * A signed-in user. Used directly by consent.* and user.me — the consent page needs them before
+ * the documents are accepted — and by what stops the charges of a tariff or shows them on that
+ * page: billing.unlinkPaymentMethod, billing.cancelAutoRenew and billing.autoRenewal (default «н»
+ * of docs/plan/37-billing-plan.md: a user who has not accepted a new edition is still charged, so
+ * they can stop it without accepting). Everything else that writes or reads is consented. The
+ * list of the exceptions is `openToEveryUser` in router.test.ts: a new one is added there.
  */
 export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   if (!ctx.user || !ctx.session) {

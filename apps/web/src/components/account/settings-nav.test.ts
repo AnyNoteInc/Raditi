@@ -24,6 +24,9 @@ describe('settings navigation', () => {
   it('shows only the sections whose pages exist', () => {
     expect(settingsNav.filter((entry) => entry.enabled).map((entry) => entry.label)).toEqual([
       'Общее',
+      'Тарифы',
+      'Оплата',
+      'Использование',
     ])
   })
 })

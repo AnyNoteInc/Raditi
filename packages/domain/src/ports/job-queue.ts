@@ -4,7 +4,15 @@
  * long waits (awaiting_user, awaiting_approval) are a status plus a delayed timer job.
  * Enqueueing together with a database write goes through outbox_events, never directly.
  */
-export const queueNames = ['agent-turns', 'deploys', 'timers', 'notifications'] as const
+export const queueNames = [
+  'agent-turns',
+  'deploys',
+  'timers',
+  'notifications',
+  'site-provisioning',
+  'site-import',
+  'billing',
+] as const
 export type QueueName = (typeof queueNames)[number]
 
 export interface EnqueueOptions {

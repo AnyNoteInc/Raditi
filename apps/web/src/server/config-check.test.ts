@@ -24,15 +24,19 @@ const production = {
   VAULT_ROLE_ID: 'web-role',
   // A developer's shell may export it; production refuses it.
   VAULT_DEV_ROOT_TOKEN: undefined,
-  // Payments are off until the shop is connected; the last two are never set in production.
+  // Payments are off until the shop is connected; the address of a fake and its senders are
+  // never set in production, the switch of autopayments only with a shop.
   YOOKASSA_SHOP_ID: undefined,
   YOOKASSA_SECRET_KEY: undefined,
   YOOKASSA_API_URL: undefined,
   YOOKASSA_WEBHOOK_ALLOWLIST: undefined,
+  YOOKASSA_AUTOPAYMENTS: undefined,
   ...secrets,
 }
 
-const shop = { YOOKASSA_SHOP_ID: '123456', YOOKASSA_SECRET_KEY: 'live_shop-secret-key' }
+const credentials = { YOOKASSA_SHOP_ID: '123456', YOOKASSA_SECRET_KEY: 'live_shop-secret-key' }
+// A shop in production says whether ЮKassa has approved its autopayments.
+const shop = { ...credentials, YOOKASSA_AUTOPAYMENTS: 'on' }
 
 /** A fresh module graph: env.ts remembers what it parsed. */
 async function withEnv(values: Record<string, string | undefined>) {
@@ -84,13 +88,34 @@ describe('brokenSections', { timeout: 30_000 }, () => {
     }
   })
 
+  it('wants a shop in production to say whether its autopayments are approved', async () => {
+    // Not guessed: ЮKassa answers 403 to a payment that saves its method until they are.
+    expect((await withEnv({ ...production, ...credentials })).brokenSections()).toEqual([
+      'yookassa',
+    ])
+    for (const YOOKASSA_AUTOPAYMENTS of ['on', 'off']) {
+      const { brokenSections } = await withEnv({
+        ...production,
+        ...credentials,
+        YOOKASSA_AUTOPAYMENTS,
+      })
+      expect(brokenSections()).toEqual([])
+      const { env } = await import('@/env')
+      expect(env.yookassa()).toMatchObject({ autopayments: YOOKASSA_AUTOPAYMENTS === 'on' })
+    }
+    // Outside production the switch is on unless set: a local fake saves payment methods.
+    const development = await withEnv({ ...production, ...credentials, APP_ENV: 'development' })
+    expect(development.brokenSections()).toEqual([])
+    expect((await import('@/env')).env.yookassa()).toMatchObject({ autopayments: true })
+  })
+
   it('refuses the settings of a local fake ЮKassa in production, with payments on or off', async () => {
     for (const fake of [
       { YOOKASSA_API_URL: 'http://127.0.0.1:4010/v3' },
       { YOOKASSA_WEBHOOK_ALLOWLIST: '127.0.0.1' },
     ]) {
-      for (const credentials of [shop, {}]) {
-        const { brokenSections } = await withEnv({ ...production, ...credentials, ...fake })
+      for (const configured of [shop, {}]) {
+        const { brokenSections } = await withEnv({ ...production, ...configured, ...fake })
         expect(brokenSections()).toEqual(['yookassa'])
       }
     }
@@ -111,6 +136,7 @@ describe('brokenSections', { timeout: 30_000 }, () => {
       secretKey: shop.YOOKASSA_SECRET_KEY,
       baseUrl: 'http://127.0.0.1:4010/v3',
       webhookAllowlist: ['127.0.0.1', '::1'],
+      autopayments: true,
     })
   })
 })

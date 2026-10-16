@@ -26,7 +26,8 @@ export const terminalTaskStatuses: readonly TaskStatus[] = [
 
 const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   queued: ['preparing', 'cancelled'],
-  preparing: ['running', 'failed', 'cancelled'],
+  // the site is busy with another operation (SITE_BUSY): back to the queue, not a failure
+  preparing: ['running', 'queued', 'failed', 'cancelled'],
   // content-only changes finish right away; code changes wait for "Применить"
   running: ['awaiting_user', 'awaiting_approval', 'done', 'failed', 'cancelled'],
   // the client's answer starts the next turn of the same task

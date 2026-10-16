@@ -3,6 +3,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { isIP } from 'node:net'
 import process from 'node:process'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 // A synthetic ЮKassa for local stands and tests: no money, no real shop. It listens on
@@ -16,6 +17,8 @@ const MAX_BODY_BYTES = 1024 * 1024
 const WEBHOOK_TIMEOUT_MS = 10_000
 // ЮKassa keeps commission 3.5% of a card payment made to a self-employed seller.
 const FEE_PER_MILLE = 35
+/** The longest a behaviour may hold a request back: a stand waits for it. */
+const MAX_DELAY_MS = 60_000
 
 /** What the next payment does; see README.md for the two targets. */
 export const BEHAVIOURS = Object.freeze([
@@ -58,6 +61,23 @@ class Refusal extends Error {
 const invalid = (parameter, description) =>
   new Refusal(400, 'invalid_request', description, parameter)
 const notFound = (what) => new Refusal(404, 'not_found', `${what} was not found`)
+/**
+ * What a real shop answered, with valid credentials, to a payment that asked to save its method
+ * while ЮKassa had not approved autopayments for it (AnyNote, 13.05.2026): 403 with this code.
+ * The description is the one AnyNote's client test quotes.
+ */
+const forbidden = () =>
+  new Refusal(403, 'forbidden', 'Магазин не имеет права на проведение операции')
+/**
+ * What a shop needs approved autopayments for. Seen on a real shop: a payment with
+ * `save_payment_method: true`. Assumed, tried nowhere: binding a method without a payment and
+ * charging a saved one need the same right. A payment that leaves the field out was accepted by
+ * that shop; that an explicit `false` is accepted as well is an assumption too.
+ */
+const needsAutopayments = (collection, body) =>
+  collection === 'payment_methods' ||
+  (collection === 'payments' &&
+    (body.save_payment_method === true || body.payment_method_id != null))
 /** A mistake in a control command: answered with 400 and never recorded as an API request. */
 class ControlError extends Error {
   constructor(message, status = 400) {
@@ -132,13 +152,23 @@ function loopbackUrl(value, name) {
 
 function behaviourOf(input) {
   if (!isRecord(input)) throw new ControlError('Expected {target, behaviour}')
-  const { target = 'saved', behaviour, reason, party, processed = true, times = 1 } = input
+  const {
+    target = 'saved',
+    behaviour,
+    reason,
+    party,
+    processed = true,
+    times = 1,
+    delayMs = 0,
+  } = input
   if (!TARGETS.includes(target)) throw new ControlError(`target is one of ${TARGETS.join(', ')}`)
   if (!BEHAVIOURS.includes(behaviour))
     throw new ControlError(`behaviour is one of ${BEHAVIOURS.join(', ')}`)
   if (!Number.isInteger(times) || times < 1 || times > 1000)
     throw new ControlError('times is an integer from 1 to 1000')
   if (typeof processed !== 'boolean') throw new ControlError('processed is a boolean')
+  if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > MAX_DELAY_MS)
+    throw new ControlError(`delayMs is an integer from 0 to ${MAX_DELAY_MS}`)
   const cancel = behaviour === 'cancel'
   for (const [name, value] of Object.entries({ reason, party }))
     if (value !== undefined && (!cancel || typeof value !== 'string' || !/^\w{1,64}$/.test(value)))
@@ -150,6 +180,7 @@ function behaviourOf(input) {
       behaviour,
       ...(cancel ? { party: party ?? 'payment_network', reason: reason ?? 'general_decline' } : {}),
       ...(behaviour === 'http-500-once' || behaviour === 'timeout' ? { processed } : {}),
+      ...(delayMs > 0 ? { delayMs } : {}),
     },
   }
 }
@@ -270,6 +301,8 @@ export async function startFakeYookassa({
       deliveries: [],
       webhooksEnabled: true,
       saveAnyway: false,
+      /** false: ЮKassa has not approved autopayments for the shop (`autopayments` command). */
+      autopayments: true,
       card: { ...DEFAULT_CARD },
     }
   }
@@ -548,11 +581,18 @@ export async function startFakeYookassa({
       body = undefined
     }
     entry.body = body
+    // A shop without approved autopayments is refused at the door, as with a wrong key: before
+    // the Idempotence-Key is looked up, with nothing stored under it and no behaviour spent.
+    // Once the approval is given, the same key makes the payment.
+    if (!state.autopayments && isRecord(body) && needsAutopayments(collection, body))
+      return send(res, 403, forbidden().body, entry)
     const fingerprint = `${path}\n${JSON.stringify(body)}`
-    const first = state.idempotence.get(key)
-    if (first !== undefined) {
-      // ЮKassa answers a repeated key with the result of the first request.
+    const known = state.idempotence.get(key)
+    if (known !== undefined) {
+      // ЮKassa answers a repeated key with the result of the first request; a repeat that
+      // comes while a slow first one is still being made waits for it.
       entry.replayed = true
+      const first = await known
       entry.sameRequest = first.fingerprint === fingerprint
       return send(res, first.status, first.body, entry)
     }
@@ -567,7 +607,23 @@ export async function startFakeYookassa({
     // method, on «Оплатить» of the page otherwise.
     const plan = queued && !transport ? queued : { behaviour: 'succeed' }
     if (queued) entry.behaviour = queued.behaviour
-    if (transport && !transport.processed) return fail(res, entry, transport.behaviour)
+    // A slow bank: nothing is made and nothing is answered until the delay has passed. The key
+    // is taken at once, so a repeat during the delay gets this request's answer, not a second
+    // payment.
+    let made
+    if (queued?.delayMs) {
+      state.idempotence.set(key, new Promise((resolve) => (made = resolve)))
+      await sleep(queued.delayMs, undefined, { signal: closing.signal })
+    }
+    if (transport && !transport.processed) {
+      // No payment and no stored answer: the key is free again for whoever repeats.
+      if (made) state.idempotence.delete(key)
+      made?.({
+        fingerprint,
+        ...new Refusal(500, 'internal_server_error', 'The outcome of the request is unknown'),
+      })
+      return fail(res, entry, transport.behaviour)
+    }
 
     let answer
     try {
@@ -584,6 +640,7 @@ export async function startFakeYookassa({
       answer = { status: error.status, body: error.body }
     }
     state.idempotence.set(key, { fingerprint, ...answer })
+    made?.({ fingerprint, ...answer })
     if (transport) return fail(res, entry, transport.behaviour)
     return send(res, answer.status, answer.body, entry)
   }
@@ -671,6 +728,7 @@ export async function startFakeYookassa({
     behaviours: state.queue,
     idempotenceKeys: [...state.idempotence.keys()],
     saveAnyway: state.saveAnyway,
+    autopayments: state.autopayments,
     card: state.card,
     webhooks: {
       enabled: state.webhooksEnabled,
@@ -769,6 +827,10 @@ export async function startFakeYookassa({
           if (typeof input.enabled !== 'boolean') throw new ControlError('enabled is a boolean')
           state.saveAnyway = input.enabled
           return reply({ saveAnyway: state.saveAnyway })
+        case 'autopayments':
+          if (typeof input.enabled !== 'boolean') throw new ControlError('enabled is a boolean')
+          state.autopayments = input.enabled
+          return reply({ autopayments: state.autopayments })
         case 'card':
           state.card = cardOf(input)
           return reply({ card: state.card })

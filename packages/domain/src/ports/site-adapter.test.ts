@@ -13,7 +13,7 @@ const siteId = '0196abcd-0000-7000-8000-00000000000f'
 
 describe('siteAccessPath', () => {
   it('names the one Vault path of a site access of each kind', () => {
-    expect(siteAccessKinds).toEqual(['ssh', 'ftp', 'wp', 'browser'])
+    expect(siteAccessKinds).toEqual(['ssh', 'ftp', 'wp', 'browser', 'git', 'db'])
     for (const kind of siteAccessKinds)
       expect(siteAccessPath(siteId, kind)).toBe(`kv/sites/${siteId}/${kind}`)
   })
@@ -28,7 +28,7 @@ describe('siteAccessPath', () => {
       siteId.toUpperCase(),
     ])
       expect(() => siteAccessPath(id, 'wp')).toThrow('Invalid site access reference')
-    for (const kind of ['', 'git', 'subscription', 'wp/../ssh', 'WP'])
+    for (const kind of ['', 'sftp', 'database', 'mysql', 'subscription', 'wp/../ssh', 'WP'])
       expect(() => siteAccessPath(siteId, kind as never)).toThrow('Invalid site access reference')
   })
 })

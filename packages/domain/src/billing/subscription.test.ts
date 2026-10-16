@@ -20,6 +20,8 @@ const allowed: readonly (readonly [Current, SubscriptionEvent, SubscriptionStatu
   ['active', 'period_ended_without_renewal', 'cancelled'],
   ['past_due', 'past_due_grace_ended', 'expired'],
   ['past_due', 'past_due_payment_succeeded', 'active'],
+  ['active', 'refunded_by_operator', 'cancelled'],
+  ['past_due', 'refunded_by_operator', 'cancelled'],
 ]
 
 const currents: readonly Current[] = [null, ...subscriptionStatuses]
@@ -41,7 +43,7 @@ describe('subscription statuses', () => {
     expect(subscriptionStatusSchema.safeParse(value).success).toBe(false)
   })
 
-  it('lists the six events of a subscription', () => {
+  it('lists the seven events of a subscription', () => {
     expect(subscriptionEvents).toEqual([
       'first_payment_succeeded',
       'renewal_succeeded',
@@ -49,6 +51,7 @@ describe('subscription statuses', () => {
       'period_ended_without_renewal',
       'past_due_grace_ended',
       'past_due_payment_succeeded',
+      'refunded_by_operator',
     ])
   })
 })
@@ -60,7 +63,7 @@ describe('nextSubscriptionStatus', () => {
 
   it('covers every pair of status and event with the two tables', () => {
     expect(allowed.length + forbidden.length).toBe(currents.length * subscriptionEvents.length)
-    expect(forbidden).toHaveLength(30)
+    expect(forbidden).toHaveLength(34)
   })
 
   it.each(forbidden)('refuses %s on %s', (current, event) => {
@@ -120,6 +123,25 @@ describe('nextSubscriptionStatus', () => {
   it('ends an unpaid subscription as expired, not cancelled', () => {
     const pastDue = nextSubscriptionStatus('active', 'renewal_declined')
     expect(nextSubscriptionStatus(pastDue, 'past_due_grace_ended')).toBe('expired')
+  })
+
+  it('lets an operator end a paid tariff and an overdue one with a refund, and nothing else', () => {
+    expect(nextSubscriptionStatus('active', 'refunded_by_operator')).toBe('cancelled')
+    const pastDue = nextSubscriptionStatus('active', 'renewal_declined')
+    expect(nextSubscriptionStatus(pastDue, 'refunded_by_operator')).toBe('cancelled')
+    // Nothing to end: no subscription, a trial without rules, a tariff that is already over.
+    for (const current of [null, 'trial', 'cancelled', 'expired'] as const) {
+      expect(() => nextSubscriptionStatus(current, 'refunded_by_operator')).toThrowError(
+        `Subscription in status ${current ?? 'none'} cannot handle refunded_by_operator`,
+      )
+    }
+  })
+
+  it('ends a tariff once: a second refund finds it cancelled and is refused', () => {
+    const ended = nextSubscriptionStatus('active', 'refunded_by_operator')
+    expect(() => nextSubscriptionStatus(ended, 'refunded_by_operator')).toThrow(
+      expect.objectContaining({ name: 'DomainError', code: 'CONFLICT' }),
+    )
   })
 })
 

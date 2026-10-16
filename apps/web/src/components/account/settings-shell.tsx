@@ -1,14 +1,11 @@
 'use client'
 
 import Box from '@mui/material/Box'
-import Breadcrumbs from '@mui/material/Breadcrumbs'
 import ButtonBase from '@mui/material/ButtonBase'
 import Divider from '@mui/material/Divider'
 import IconButton from '@mui/material/IconButton'
-import MuiLink from '@mui/material/Link'
 import { useTheme, type Theme } from '@mui/material/styles'
 import Tooltip from '@mui/material/Tooltip'
-import Typography from '@mui/material/Typography'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { BrandMark } from '@repo/ui/components'
 import Link from 'next/link'
@@ -17,6 +14,8 @@ import { useId, useSyncExternalStore, type ReactNode } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { applicationSurface } from '@/components/application/application-surface'
+import { ApplicationToolbar } from '@/components/application/application-toolbar'
+import { SkipLink } from '@/components/application/skip-link'
 import type { ApplicationUser } from '@/components/application/user-avatar'
 import { UserMenu } from '@/components/application/user-menu'
 import {
@@ -172,22 +171,7 @@ export function SettingsShell({
         bgcolor: 'background.paper',
       })}
     >
-      <Box
-        component="a"
-        href="#settings-content"
-        sx={{
-          position: 'fixed',
-          top: -100,
-          left: 'calc(var(--settings-sidebar-width) + 12px)',
-          zIndex: 1500,
-          p: 1.5,
-          bgcolor: 'background.paper',
-          color: 'text.primary',
-          '&:focus': { top: 8 },
-        }}
-      >
-        Перейти к содержимому
-      </Box>
+      <SkipLink target="settings-content" left="calc(var(--settings-sidebar-width) + 12px)" />
       <Box
         component="aside"
         id={sidebarId}
@@ -266,65 +250,39 @@ export function SettingsShell({
         </Box>
       </Box>
       <Box sx={{ flex: '1 1 0', minWidth: 0 }}>
-        <Box
-          component="header"
-          aria-label="Панель приложения"
+        <ApplicationToolbar
+          crumbs={[
+            ...(section ? [{ label: 'Настройки', href: '/settings' }] : []),
+            { label: section?.label ?? 'Настройки' },
+          ]}
+          linkUnderline="hover"
+          start={
+            <Tooltip title={toggleLabel}>
+              <IconButton
+                aria-label={toggleLabel}
+                aria-expanded={!collapsed}
+                aria-controls={sidebarId}
+                onClick={() => setState(collapsed ? 'expanded' : 'collapsed')}
+                sx={(theme) => ({
+                  width: ITEM_SIZE,
+                  height: ITEM_SIZE,
+                  borderRadius: '12px',
+                  color: 'text.secondary',
+                  '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+                  [narrowScreen(theme)]: { display: 'none' },
+                })}
+              >
+                <AppIcon name="panel" />
+              </IconButton>
+            </Tooltip>
+          }
           sx={{
-            minHeight: 64,
-            display: 'flex',
-            alignItems: 'center',
             gap: 1,
             // Without the toggle the breadcrumbs line up with the page below them.
             pl: { xs: 2.5, sm: 4, md: 1.5 },
             pr: { xs: 2.5, sm: 4 },
-            borderBottom: 1,
-            borderColor: 'divider',
           }}
-        >
-          <Tooltip title={toggleLabel}>
-            <IconButton
-              aria-label={toggleLabel}
-              aria-expanded={!collapsed}
-              aria-controls={sidebarId}
-              onClick={() => setState(collapsed ? 'expanded' : 'collapsed')}
-              sx={(theme) => ({
-                width: ITEM_SIZE,
-                height: ITEM_SIZE,
-                borderRadius: '12px',
-                color: 'text.secondary',
-                '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
-                [narrowScreen(theme)]: { display: 'none' },
-              })}
-            >
-              <AppIcon name="panel" />
-            </IconButton>
-          </Tooltip>
-          <Breadcrumbs aria-label="Хлебные крошки">
-            {section ? (
-              <MuiLink
-                href="/settings"
-                variant="body2"
-                color="text.secondary"
-                underline="hover"
-                sx={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  minHeight: ITEM_SIZE,
-                  '&:hover': { color: 'text.primary' },
-                }}
-              >
-                Настройки
-              </MuiLink>
-            ) : null}
-            <Typography
-              aria-current="page"
-              variant="body2"
-              sx={{ fontWeight: 500, color: 'text.primary' }}
-            >
-              {section?.label ?? 'Настройки'}
-            </Typography>
-          </Breadcrumbs>
-        </Box>
+        />
         <Box
           component="main"
           id="settings-content"

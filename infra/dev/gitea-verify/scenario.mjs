@@ -30,6 +30,7 @@ let stage = 'configuration'
 /** Core settings that open no connection here; only the git part is under test. */
 const coreEnv = (git) => ({
   APP_ENV: 'test',
+  APP_URL: 'http://127.0.0.1:1',
   ORCHESTRATOR_ROLES: 'core',
   DATABASE_URL: 'postgresql://raditi:synthetic@127.0.0.1:1/raditi',
   REDIS_URL: 'redis://127.0.0.1:1',

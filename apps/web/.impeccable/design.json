@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-30T07:08:46Z",
+  "generatedAt": "2026-10-05T08:20:00Z",
   "title": "Design System: Радити",
   "extensions": {
     "colorMeta": {
@@ -20,6 +20,10 @@
         "role": "neutral",
         "displayName": "Шоколадные чернила"
       },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Шоколадная поверхность второго плана"
+      },
       "graphite": {
         "role": "neutral",
         "displayName": "Тёплый графит"
@@ -27,6 +31,10 @@
       "rule": {
         "role": "neutral",
         "displayName": "Тёплый разделитель"
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "Контур элемента управления"
       },
       "marker": {
         "role": "secondary",
@@ -46,7 +54,7 @@
       },
       "accent-hover": {
         "role": "primary",
-        "displayName": "Оранжево-янтарное наведение"
+        "displayName": "Оранжево-янтарное наведение и нажатие"
       },
       "accent-soft": {
         "role": "neutral",
@@ -63,64 +71,161 @@
       "on-accent-muted": {
         "role": "neutral",
         "displayName": "Вторичный текст на ярком акценте"
+      },
+      "ok": {
+        "role": "neutral",
+        "displayName": "Тёплый статус «готово»"
+      },
+      "on-ink": {
+        "role": "neutral",
+        "displayName": "Второстепенный текст и контур на шоколадном"
+      },
+      "rule-ink": {
+        "role": "neutral",
+        "displayName": "Разделитель и поверхность на шоколадном"
+      },
+      "snow": {
+        "role": "neutral",
+        "displayName": "Светлый текст на шоколадной поверхности"
       }
     },
     "shadows": [
       {
         "name": "demo-browser",
         "value": "0 12px 36px -16px var(--raditi-shadow-soft)",
-        "purpose": "Окно демонстрационного сайта."
+        "purpose": "Окно демонстрационного сайта (.browser в site-demo.module.css)."
       },
       {
         "name": "demo-chat",
         "value": "0 23px 44px -23px var(--raditi-shadow-strong)",
-        "purpose": "Передний слой чата."
+        "purpose": "Передний слой чата (.chat в site-demo.module.css)."
       },
       {
         "name": "saved-version",
         "value": "0 28px 60px -25px var(--raditi-shadow-strong)",
-        "purpose": "Передний снимок в блоке отмены."
+        "purpose": "Передняя карточка блока отмены (--shadow-card на .page); сохранённая версия позади неё тени не имеет."
+      },
+      {
+        "name": "mobile-menu",
+        "value": "0 20px 30px -24px var(--raditi-shadow-soft)",
+        "purpose": "Раскрытое мобильное меню (--shadow-menu на .page)."
       }
     ],
     "motion": [
       {
-        "name": "ease",
+        "name": "ease-out",
         "value": "cubic-bezier(0.16, 1, 0.3, 1)",
-        "purpose": "Основная кривая входа и перемещения."
+        "purpose": "--raditi-ease-out: вход и ответ на действие."
       },
       {
-        "name": "section-reveal",
-        "value": "750ms",
-        "purpose": "Одноразовый reveal через IntersectionObserver; без скрытия исходного контента."
+        "name": "ease-in-out",
+        "value": "cubic-bezier(0.65, 0, 0.35, 1)",
+        "purpose": "--raditi-ease-in-out: движение между двумя видимыми состояниями — пульс точки статуса, точки передачи в демо."
+      },
+      {
+        "name": "ease-in",
+        "value": "cubic-bezier(0.5, 0, 0.75, 0)",
+        "purpose": "--ease-in на .page: уход — закрытие мобильного меню."
+      },
+      {
+        "name": "press",
+        "value": "90ms",
+        "purpose": "--raditi-motion-press: нажатие, сжатие до 0.98."
+      },
+      {
+        "name": "fast",
+        "value": "160ms",
+        "purpose": "--raditi-motion-fast: наведение, цвет, подъём и отпускание кнопки, закрытие мобильного меню."
+      },
+      {
+        "name": "base",
+        "value": "240ms",
+        "purpose": "--raditi-motion-base: состояние элемента управления — линия навигации, знак вопроса FAQ, кнопка и открытие меню, сдвиг стрелки, галочка сценария; закрытие ответа FAQ."
+      },
+      {
+        "name": "swap",
+        "value": "360ms",
+        "purpose": "--motion-swap на .page: подмена содержимого на месте — значение (сдвиг 6px: снизу «изменено», сверху «возвращено»), название тарифа, высота ответа FAQ; в сценах — линия зачёркивания строки дел, сообщение и новое значение в кадрах шагов."
+      },
+      {
+        "name": "move",
+        "value": "560ms",
+        "purpose": "--motion-move на .page: перемещение предмета — подъём заголовочной группы секции на 24px (IntersectionObserver по data-reveal только ставит метку data-scene: \"waiting\" ниже окна, \"playing\" при входе; подъём играет CSS, только transform, только для целей ниже окна), контур, который находит поле демо, янтарная плашка под новым значением в кадре шага и сохранённая версия в блоке безопасности: по «Отменить правку» она выдвигается из-под карточки на --saved-out (28px, до 540px — 20px) и сохраняет поворот −6°."
+      },
+      {
+        "name": "rise",
+        "value": "24px",
+        "purpose": "--motion-rise на .page: подъём заголовочной группы секции и сцены демо во входе первого экрана."
+      },
+      {
+        "name": "shift",
+        "value": "6px",
+        "purpose": "--motion-shift на .page: сдвиг значения — снизу «изменено», сверху «возвращено»; сообщение и новое значение в кадрах шагов."
+      },
+      {
+        "name": "scene",
+        "value": "1080ms",
+        "purpose": "Сцены: цель с data-reveal=\"scene\" наблюдатель помечает так же, как заголовочную группу, — data-scene=\"waiting\" ниже окна, \"playing\" при входе в окно; такты один раз играет CSS, без метки стоит итоговое состояние (так же без JS и при reduced motion). Тёмная полоса: четыре линии зачёркивания, scaleX 0→1 по 360 мс с шагом 240 мс — 1080 мс. Кадры «Как это работает»: сообщение 360 мс, новое значение 360 мс, плашка 560 мс через 240 мс после значения; в ряду из трёх кадров (от 801px) разница ждёт сообщение 240 мс — 1040 мс. Сцена не дольше входа первого экрана."
       },
       {
         "name": "hero-type",
         "value": "900ms",
-        "purpose": "Появление строк hero."
+        "purpose": "--hero-type на .page: строки заголовка открываются через clip-path со сдвигом 18px и прозрачностью от 0.2; задержки строк 0, 100 и 170 мс; заполнение backwards — после входа на строках нет ни clip-path, ни transform."
       },
       {
         "name": "hero-marker",
         "value": "850ms",
-        "purpose": "Проявление янтарного маркера."
+        "purpose": "--hero-marker на .page: янтарный маркер под «чат.» проявляется слева направо (clip-path), задержка 250 мс."
       },
       {
         "name": "hero-demo",
         "value": "1000ms",
-        "purpose": "Появление предметной сцены."
+        "purpose": "--hero-demo на .page: сцена демо поднимается на 24px с поворотом 1° и прозрачностью от 0.5, задержка 160 мс."
+      },
+      {
+        "name": "demo-applied",
+        "value": "650ms",
+        "purpose": "Сцена «применено» в демо (переменные .demo): окно выравнивается и разворачивается плашка акции за 650 мс (--demo-settle); панель окна — 400 мс (--demo-bar), выделение поля — 500 мс (--demo-field), значение — 600 мс (--demo-value)."
+      },
+      {
+        "name": "demo-phase",
+        "value": "700ms",
+        "purpose": "Паузы занятых фаз демо: подготовка 650 мс, применение 700 мс. Числа — в src/components/landing/motion.ts, CSS получает их переменной --demo-phase: за это время пульсирует точка статуса, а три точки передачи доходят к концу фазы; при reduced motion паузы сохраняются."
+      },
+      {
+        "name": "demo-message",
+        "value": "500ms",
+        "purpose": "--demo-message на .demo: сообщение владельца в чате демо — сдвиг 6px и clip-path слева; шаг между тремя точками передачи — 80 мс (--demo-dot-step)."
       },
       {
         "name": "reduced-motion",
         "value": "none",
-        "purpose": "prefers-reduced-motion отключает переходы, keyframes и JS reveal."
+        "purpose": "prefers-reduced-motion отключает переходы, keyframes и JS reveal одним блоком; сдвиги, подъём, сжатие и увеличение бегунка объявлены только при no-preference."
       }
     ],
     "breakpoints": [
+      {
+        "name": "wide-hero",
+        "value": "1600px"
+      },
       {
         "name": "compact-desktop",
         "value": "1100px"
       },
       {
+        "name": "narrow-two-columns",
+        "value": "920px"
+      },
+      {
+        "name": "compact-pricing",
+        "value": "900px"
+      },
+      {
         "name": "stacked-hero",
+        "value": "800px"
+      },
+      {
+        "name": "mobile-navigation",
         "value": "800px"
       },
       {
@@ -128,12 +233,20 @@
         "value": "680px"
       },
       {
-        "name": "mobile-navigation",
-        "value": "800px"
+        "name": "phone",
+        "value": "540px"
       },
       {
         "name": "compact-demo",
         "value": "480px"
+      },
+      {
+        "name": "low-window-height",
+        "value": "760px"
+      },
+      {
+        "name": "unpinned-header-height",
+        "value": "420px"
       }
     ]
   },
@@ -142,60 +255,81 @@
       "name": "Основное действие",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Основной CTA: гостю регистрация, авторизованному пользователю «Открыть проекты» с прямым переходом /projects. Превью показывает гостевой вариант.",
-      "html": "<a class=\"ds-primary\" href=\"/sign-up\">Начать с Радити <svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M6 18 18 6M6 6h12v12\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></a>",
-      "css": ".ds-primary{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:25px;min-height:56px;padding:0 23px;border-radius:32px;background:var(--raditi-accent);color:var(--raditi-on-accent);text-decoration:none;font-size:15px;font-weight:500;transition:background 220ms,transform 220ms cubic-bezier(.16,1,.3,1)}.ds-primary:hover{background:var(--raditi-accent-hover);transform:translateY(-2px)}.ds-primary:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}.ds-primary svg{transition:transform 350ms cubic-bezier(.16,1,.3,1)}.ds-primary:hover svg{transform:translate(3px,-3px)}@media(prefers-reduced-motion:reduce){.ds-primary,.ds-primary svg{transition:none;transform:none}}"
+      "description": "Основной CTA: гостю регистрация под одним названием «Зарегистрироваться» на всей странице, авторизованному пользователю «Открыть проекты» с прямым переходом /projects. Превью показывает гостевой вариант. Высота 56px, до 540px — 52px. Наведение — заливка accentHover, подъём на 2px и сдвиг стрелки; нажатие — та же заливка и сжатие до 0.98; при reduced motion меняется только заливка. Финальный CTA — та же роль, на янтарном поле его заливка при наведении и нажатии остаётся accent.",
+      "html": "<a class=\"ds-primary\" href=\"/sign-up\">Зарегистрироваться <svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M6 18 18 6M6 6h12v12\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></a>",
+      "css": ".ds-primary{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:25px;min-height:56px;padding:0 23px;border:1px solid var(--raditi-accent-text);border-radius:var(--raditi-radius-pill);background:var(--raditi-accent);color:var(--raditi-on-accent);text-decoration:none;font-size:15px;font-weight:500;transition:background 160ms cubic-bezier(.16,1,.3,1),transform 160ms cubic-bezier(.16,1,.3,1)}.ds-primary svg{transition:transform 240ms cubic-bezier(.16,1,.3,1)}.ds-primary:active{background:var(--raditi-accent-hover)}.ds-primary:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px}@media(hover:hover){.ds-primary:hover{background:var(--raditi-accent-hover)}}@media(hover:hover) and (prefers-reduced-motion:no-preference){.ds-primary:hover{transform:translateY(-2px)}.ds-primary:hover svg{transform:translate(3px,-3px)}}@media(prefers-reduced-motion:no-preference){.ds-primary:active{transform:scale(.98);transition-duration:90ms}}@media(prefers-reduced-motion:reduce){.ds-primary,.ds-primary svg{transition:none}}@media(max-width:540px){.ds-primary{min-height:52px;gap:18px;padding:0 20px;font-size:14px}}"
     },
     {
       "name": "Вход",
       "kind": "button",
       "refersTo": "button-outline",
-      "description": "Нейтральное действие гостя. Авторизованная шапка на всех ширинах показывает только кнопку аватара с UserMenu, без явного имени и отдельной ссылки «Проекты». Имя и адрес аккаунта видны в раскрытом меню; «Проекты» ведут на /projects и стоят над «Профиль», «Настройки» и «Выход».",
-      "html": "<a class=\"ds-outline\" href=\"/sign-in\">Войти <svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M6 18 18 6M6 6h12v12\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></a>",
-      "css": ".ds-outline{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;gap:28px;min-height:44px;padding:0 20px;border:1px solid var(--raditi-ink);border-radius:30px;color:var(--raditi-ink);background:transparent;font-size:14px;text-decoration:none;transition:background 200ms,color 200ms}.ds-outline:hover{background:var(--raditi-ink);color:var(--raditi-paper)}.ds-outline:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}@media(prefers-reduced-motion:reduce){.ds-outline{transition:none}}"
+      "description": "Нейтральное действие гостя; уводит со страницы, поэтому при наведении и нажатии инвертируется (ink / paper). Высота 44px; до 540px контур снят и остаётся текстовая ссылка той же высоты. При ошибке или таймауте проверки сессии та же кнопка называется «Проекты» и ведёт на /projects. Авторизованная шапка на всех ширинах показывает только кнопку аватара с UserMenu, без явного имени и отдельной ссылки «Проекты». Имя и адрес аккаунта видны в раскрытом меню; «Проекты» ведут на /projects и стоят над «Профиль», «Настройки» и «Выход».",
+      "html": "<a class=\"ds-outline\" href=\"/sign-in\">Войти <svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M6 18 18 6M6 6h12v12\" stroke=\"currentColor\" stroke-width=\"1.6\"/></svg></a>",
+      "css": ".ds-outline{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;gap:28px;min-height:44px;padding:0 20px;border:1px solid var(--raditi-ink);border-radius:var(--raditi-radius-pill);color:var(--raditi-ink);background:transparent;font-size:14px;text-decoration:none;transition:background 160ms cubic-bezier(.16,1,.3,1),color 160ms cubic-bezier(.16,1,.3,1),transform 160ms cubic-bezier(.16,1,.3,1)}.ds-outline:active{background:var(--raditi-ink);color:var(--raditi-paper)}.ds-outline:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px}@media(hover:hover){.ds-outline:hover{background:var(--raditi-ink);color:var(--raditi-paper)}}@media(prefers-reduced-motion:no-preference){.ds-outline:active{transform:scale(.98);transition-duration:90ms}}@media(prefers-reduced-motion:reduce){.ds-outline{transition:none}}@media(max-width:800px){.ds-outline{gap:14px;padding:0 15px}}@media(max-width:540px){.ds-outline{gap:8px;padding:0 5px;border:none;font-size:13px}}"
     },
     {
       "name": "Сценарии демо",
       "kind": "chip",
-      "description": "Выбор примера, активный вариант отмечен aria-pressed.",
-      "html": "<div class=\"ds-scenarios\" role=\"group\" aria-label=\"Примеры правок\"><button class=\"ds-scenario\" aria-pressed=\"true\">Цены</button><button class=\"ds-scenario\" aria-pressed=\"false\">Часы работы</button></div>",
-      "css": ".ds-scenarios{display:flex;gap:6px}.ds-scenario{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;min-height:44px;padding:8px 15px;border:1px solid var(--raditi-rule);border-radius:100px;background:transparent;color:var(--raditi-ink);font-size:11px;cursor:pointer;transition:color 220ms,background 220ms,border-color 220ms}.ds-scenario[aria-pressed=true]{background:var(--raditi-accent);border-color:var(--raditi-accent-text);color:var(--raditi-on-accent)}.ds-scenario:hover:not([aria-pressed=true]){border-color:var(--raditi-accent-text);color:var(--raditi-accent)}.ds-scenario:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}@media(prefers-reduced-motion:reduce){.ds-scenario{transition:none}}"
+      "description": "Выбор просьбы. Группу называет видимая подсказка «Выберите, что попросить:»; три кнопки держатся в одном ряду на любой ширине. Выбранный вариант отмечен aria-pressed, галочкой и светлой поверхностью accentSoft с контуром accentText; невыбранные — прозрачные с контуром ruleStrong. Галочка стоит в левом поле каждой кнопки, выбор не сдвигает ряд. Наведение и нажатие невыбранной — paper-2 и контур ink.",
+      "html": "<div class=\"ds-scenarios\" role=\"group\" aria-labelledby=\"ds-scenarios-hint\"><span class=\"ds-scenarios-hint\" id=\"ds-scenarios-hint\">Выберите, что попросить:</span><div class=\"ds-scenario-list\"><button class=\"ds-scenario\" type=\"button\" aria-pressed=\"true\"><svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>Цена</button><button class=\"ds-scenario\" type=\"button\" aria-pressed=\"false\"><svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>График</button><button class=\"ds-scenario\" type=\"button\" aria-pressed=\"false\"><svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>Акция</button></div></div>",
+      "css": ".ds-scenarios{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px}.ds-scenarios-hint{color:var(--raditi-graphite);font-size:12px}.ds-scenario-list{display:flex;gap:8px}.ds-scenario{font:inherit;position:relative;min-height:44px;padding:8px 22px;border:1px solid var(--raditi-rule-strong);border-radius:var(--raditi-radius-pill);background:transparent;color:var(--raditi-ink);font-size:13px;cursor:pointer;transition:color 160ms cubic-bezier(.16,1,.3,1),background 160ms cubic-bezier(.16,1,.3,1),border-color 160ms cubic-bezier(.16,1,.3,1),transform 160ms cubic-bezier(.16,1,.3,1)}.ds-scenario[aria-pressed=true]{background:var(--raditi-accent-soft);border-color:var(--raditi-accent-text)}.ds-scenario svg{position:absolute;top:50%;left:7px;width:11px;height:11px;translate:0 -50%;opacity:0;transition:opacity 240ms cubic-bezier(.16,1,.3,1)}.ds-scenario[aria-pressed=true] svg{opacity:1}.ds-scenario:active:not([aria-pressed=true]){background:var(--raditi-paper-2);border-color:var(--raditi-ink)}.ds-scenario:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:4px}@media(hover:hover){.ds-scenario:hover:not([aria-pressed=true]){background:var(--raditi-paper-2);border-color:var(--raditi-ink)}}@media(prefers-reduced-motion:no-preference){.ds-scenario:active:not([aria-pressed=true]){transform:scale(.98);transition-duration:90ms}}@media(prefers-reduced-motion:reduce){.ds-scenario,.ds-scenario svg{transition:none}}@media(max-width:480px){.ds-scenario-list{gap:5px}.ds-scenario{padding-inline:20px}.ds-scenario svg{left:6px}}"
     },
     {
       "name": "Навигация",
       "kind": "nav",
-      "description": "Текстовые якоря с линией при наведении.",
-      "html": "<nav class=\"ds-nav\" aria-label=\"Разделы\"><a href=\"#how\">Как это работает</a><a href=\"#pricing\">Тарифы</a></nav>",
-      "css": ".ds-nav{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:flex;align-items:center;gap:32px;font-size:14px}.ds-nav a{position:relative;padding:13px 0;color:var(--raditi-ink);text-decoration:none}.ds-nav a:after{content:\"\";position:absolute;left:0;bottom:7px;width:100%;height:1px;background:currentColor;transform:scaleX(0);transform-origin:left;transition:transform 250ms cubic-bezier(.16,1,.3,1)}.ds-nav a:hover:after{transform:scaleX(1)}.ds-nav a:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}@media(prefers-reduced-motion:reduce){.ds-nav a:after{transition:none}}"
+      "description": "Текстовые якоря с линией при наведении, фокусе с клавиатуры и нажатии; ту же линию держит пункт раздела, который сейчас читают (aria-current). Четыре пункта: «Как это работает», «Возможности», «Тарифы», «Вопросы»; до 1100px интервал между ними — 22px, до 800px они уходят в мобильное меню, где текущий пункт отмечен цветом accentText и линией слева.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Основная навигация\"><a href=\"#how\" aria-current=\"true\">Как это работает</a><a href=\"#possibilities\">Возможности</a><a href=\"#pricing\">Тарифы</a><a href=\"#faq\">Вопросы</a></nav>",
+      "css": ".ds-nav{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:flex;align-items:center;gap:32px;font-size:14px}.ds-nav a{position:relative;padding:13px 0;color:var(--raditi-ink);text-decoration:none;white-space:nowrap}.ds-nav a:after{content:\"\";position:absolute;left:0;bottom:7px;width:100%;height:1px;background:var(--raditi-ink);transform:scaleX(0);transform-origin:left;transition:transform 240ms cubic-bezier(.16,1,.3,1)}.ds-nav a:is(:focus-visible,:active):after,.ds-nav a[aria-current=true]:after{transform:scaleX(1)}.ds-nav a:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px}@media(hover:hover){.ds-nav a:hover:after{transform:scaleX(1)}}@media(prefers-reduced-motion:reduce){.ds-nav a:after{transition:none}}@media(max-width:1100px){.ds-nav{gap:22px}}"
     },
     {
       "name": "Количество правок",
       "kind": "input",
-      "description": "Нативный range калькулятора; snippet показывает оформление, расчёт выполняет React-компонент.",
+      "description": "Нативный range калькулятора; snippet показывает оформление, расчёт выполняет React-компонент. Дорожка — два слоя фона поля: заполненная часть 3px цветом accentText и линия 1px ruleStrong на всю ширину. Ту же линию повторяет прозрачная граница дорожки высотой 1px: режим forced-colors не рисует фон, а границу красит своим цветом; бегунок поднят на линию отступом −12.5px.",
       "html": "<label class=\"ds-range-label\">Сколько правок нужно в месяц?<input class=\"ds-range\" type=\"range\" min=\"10\" max=\"300\" step=\"5\" value=\"30\" aria-valuetext=\"30 правок в месяц\"/></label>",
-      "css": ".ds-range-label{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:block;font-size:17px;font-weight:500;color:var(--raditi-ink)}.ds-range{display:block;width:100%;height:36px;margin:14px 0 0;appearance:none;background:linear-gradient(to right,var(--raditi-accent) 0 6.9%,var(--raditi-rule) 6.9% 100%) center/100% 3px no-repeat;cursor:pointer;touch-action:pan-y}.ds-range::-webkit-slider-runnable-track{height:3px;background:transparent}.ds-range::-webkit-slider-thumb{width:24px;height:24px;margin-top:-10.5px;border:5px solid var(--raditi-accent);border-radius:50%;appearance:none;background:var(--raditi-paper);transition:transform 180ms ease}.ds-range::-moz-range-track{height:3px;background:transparent}.ds-range::-moz-range-thumb{width:14px;height:14px;border:5px solid var(--raditi-accent);border-radius:50%;background:var(--raditi-paper)}.ds-range:active::-webkit-slider-thumb{transform:scale(1.12)}.ds-range:focus-visible{outline:2px solid var(--raditi-accent-text);outline-offset:5px}@media(prefers-reduced-motion:reduce){.ds-range::-webkit-slider-thumb{transition:none}}"
+      "css": ".ds-range-label{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:block;font-size:17px;font-weight:500;color:var(--raditi-ink)}.ds-range{display:block;width:100%;height:44px;margin:14px 0 0;border-radius:0;appearance:none;background:linear-gradient(to right,var(--raditi-accent-text) 0 6.9%,transparent 6.9% 100%) center/100% 3px no-repeat,linear-gradient(var(--raditi-rule-strong),var(--raditi-rule-strong)) center/100% 1px no-repeat;cursor:pointer;touch-action:pan-y}.ds-range::-webkit-slider-runnable-track{box-sizing:content-box;height:0;border-top:1px solid transparent;background:transparent}.ds-range::-webkit-slider-thumb{width:24px;height:24px;margin-top:-12.5px;border:5px solid var(--raditi-accent-text);border-radius:50%;appearance:none;background:var(--raditi-accent);transition:transform 160ms cubic-bezier(.16,1,.3,1)}.ds-range::-moz-range-track{box-sizing:content-box;height:0;border-top:1px solid transparent;background:transparent}.ds-range::-moz-range-thumb{width:14px;height:14px;border:5px solid var(--raditi-accent-text);border-radius:50%;background:var(--raditi-accent);transition:transform 160ms cubic-bezier(.16,1,.3,1)}.ds-range:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px}@media(prefers-reduced-motion:no-preference){.ds-range:active::-webkit-slider-thumb{transform:scale(1.12)}.ds-range:active::-moz-range-thumb{transform:scale(1.12)}}@media(prefers-reduced-motion:reduce){.ds-range::-webkit-slider-thumb{transition:none}.ds-range::-moz-range-thumb{transition:none}}"
     },
     {
       "name": "Карточка сохранённой версии",
       "kind": "card",
       "refersTo": "version-card",
-      "description": "Передний слой демонстрации отмены; тень отличает его от сохранённой версии позади.",
-      "html": "<article class=\"ds-version\"><div class=\"ds-version-top\"><span>КРОШКА / МЕНЮ</span><span>Демо</span></div><p class=\"ds-version-title\">Сохранённая версия</p><button class=\"ds-undo\" type=\"button\">Отменить правку</button></article>",
-      "css": ".ds-version{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;max-width:400px;padding:26px;border-radius:12px;background:var(--raditi-paper);color:var(--raditi-ink);box-shadow:0 28px 60px -25px var(--raditi-shadow-strong);transform:rotate(2deg)}.ds-version-top{display:flex;justify-content:space-between;gap:16px;padding-bottom:25px;border-bottom:1px solid var(--raditi-rule);font-size:10px;letter-spacing:.06em;color:var(--raditi-graphite)}.ds-version-title{margin:32px 0;font-size:25px;letter-spacing:-.02em}.ds-undo{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;min-height:44px;padding:0 17px;border:1px solid var(--raditi-on-ink);border-radius:25px;background:transparent;color:var(--raditi-ink);font-size:12px;cursor:pointer;transition:background 200ms,border-color 200ms}.ds-undo:hover{background:var(--raditi-paper-2);border-color:var(--raditi-ink)}.ds-undo:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px;}@media(prefers-reduced-motion:reduce){.ds-undo{transition:none}}"
+      "description": "Передний слой демонстрации отмены; тень отличает его от сохранённой версии позади. Поворот карточки одинаков до и после отмены; отмену показывает цена: возвращённая приходит сверху, изменённая — снизу. Пока правка действует, цена набрана ink на янтарной полосе, после отмены — accentText без полосы. Сохранённая версия позади приоткрыта: над карточкой читаются «Копия сохранена» и прежняя цена, у правого края, который поворот приподнимает; её цена — 22px (801–920px — 20px, до 540px — 18px); по «Отменить правку» она выдвигается вверх на 28px (до 540px — на 20px) за 560 мс, сохраняет поворот −6° и не получает тени, по «Применить снова» возвращается. Превью показывает состояние до отмены: шкала «Копия — Правка — Проверка» и статус цветом ok с role=\"status\". Отмена — действие на месте: при наведении и нажатии фон paper-2 и контур ink, утолщённый внутрь тенью. Знак кнопки стоит перед подписью: возврат у «Отменить правку», стрелка вправо (M4 12h15m-6-6 6 6-6 6) у «Применить снова».",
+      "html": "<div class=\"ds-version-scene\" data-reverted=\"false\"><div class=\"ds-saved\" aria-hidden=\"true\"><span>Копия сохранена</span><span>Капучино&nbsp;· 250&nbsp;₽</span></div><div class=\"ds-version\"><div class=\"ds-version-top\"><span>КРОШКА / МЕНЮ</span><span>Демо</span></div><div class=\"ds-version-item\"><span>Капучино<small>Двойной эспрессо, нежная молочная пена</small></span><strong>290<small>₽</small></strong></div><div class=\"ds-version-line\"><span>Копия</span><i></i><span>Правка</span><i></i><span>Проверка</span></div><p class=\"ds-version-status\" role=\"status\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>Новая цена на&nbsp;сайте. Прежняя сохранена.</p><button class=\"ds-undo\" type=\"button\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"m8 3-5 5 5 5M3 8h10a6 6 0 0 1 0 12h-3\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>Отменить правку</button></div></div>",
+      "css": ".ds-version-scene{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;position:relative;max-width:400px;padding-top:100px}.ds-saved{position:absolute;top:28px;left:6%;width:88%;min-height:235px;padding:clamp(12px,6% - 15px,20px) 24px 20px;border-radius:12px;background:var(--raditi-accent-soft);color:var(--raditi-accent-ink);transform:rotate(-6deg);display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:12px;transition:transform 560ms cubic-bezier(.16,1,.3,1)}.ds-saved span:last-child{font-size:22px;white-space:nowrap}.ds-version-scene[data-reverted=true] .ds-saved{transform:translateY(-28px) rotate(-6deg)}.ds-version{position:relative;padding:26px;border-radius:12px;background:var(--raditi-paper);color:var(--raditi-ink);box-shadow:0 28px 60px -25px var(--raditi-shadow-strong);transform:rotate(2deg)}.ds-version-top{display:flex;justify-content:space-between;padding-bottom:25px;border-bottom:1px solid var(--raditi-rule);font-size:12px;letter-spacing:.06em;color:var(--raditi-graphite)}.ds-version-top span:last-child{letter-spacing:0}.ds-version-item{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:32px 0}.ds-version-item>span{font-size:25px;letter-spacing:-.02em}.ds-version-item>span small{display:block;max-width:23ch;margin-top:5px;color:var(--raditi-graphite);font-size:12px;line-height:1.5;letter-spacing:0}.ds-version-item>strong{padding-inline:.1em;margin-inline:-.1em;font-family:var(--font-unbounded,\"Unbounded Variable\"),sans-serif;font-size:43px;font-weight:500;letter-spacing:-.04em;color:var(--raditi-accent-text);white-space:nowrap;font-variant-numeric:tabular-nums}.ds-version-scene[data-reverted=false] .ds-version-item>strong{color:var(--raditi-ink);background:linear-gradient(transparent 46%,var(--raditi-marker) 46% 82%,transparent 82%)}.ds-version-item strong small{margin-left:5px;font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;font-size:20px;font-weight:400}.ds-version-line{display:flex;align-items:center;gap:9px;font-size:12px}.ds-version-line i{flex:1;height:1px;background:var(--raditi-rule)}.ds-version-status{display:flex;align-items:center;gap:7px;margin:27px 0 0;color:var(--raditi-ok);font-size:12px}.ds-version-status svg{flex-shrink:0}.ds-undo{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:inline-flex;align-items:center;gap:10px;min-height:44px;margin-top:19px;padding:0 17px;border:1px solid var(--raditi-graphite);border-radius:var(--raditi-radius-pill);background:transparent;color:var(--raditi-ink);font-size:14px;cursor:pointer;transition:background 160ms cubic-bezier(.16,1,.3,1),border-color 160ms cubic-bezier(.16,1,.3,1),box-shadow 160ms cubic-bezier(.16,1,.3,1),transform 160ms cubic-bezier(.16,1,.3,1)}.ds-undo:active{background:var(--raditi-paper-2);border-color:var(--raditi-ink);box-shadow:inset 0 0 0 1px var(--raditi-ink)}.ds-undo:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px}@media(hover:hover){.ds-undo:hover{background:var(--raditi-paper-2);border-color:var(--raditi-ink);box-shadow:inset 0 0 0 1px var(--raditi-ink)}}@media(prefers-reduced-motion:no-preference){.ds-undo:active{transform:scale(.98);transition-duration:90ms}}@media(prefers-reduced-motion:reduce){.ds-undo,.ds-saved{transition:none}}@media(max-width:1100px){.ds-version{padding:23px}.ds-version-item>strong{font-size:37px}}"
     },
     {
       "name": "Применение в демо",
       "kind": "button",
-      "description": "Яркое оранжевое основное действие с тёмным текстом на шоколадной панели чата; отмена остаётся вторичной.",
-      "html": "<div class=\"ds-demo-panel\"><button class=\"ds-demo-apply\" type=\"button\">Применить правку <svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M4 12h15m-6-6 6 6-6 6\" stroke=\"currentColor\" stroke-width=\"1.7\"/></svg></button></div>",
-      "css": ".ds-demo-panel{padding:19px;border-radius:14px;background:var(--raditi-ink)}.ds-demo-apply{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--raditi-accent-light);border-radius:6px;background:var(--raditi-accent);color:var(--raditi-on-accent);font-size:11px;font-weight:600;cursor:pointer;transition:background 220ms ease,color 220ms ease,border-color 220ms ease}.ds-demo-apply:hover:not(:disabled){background:var(--raditi-accent-hover)}.ds-demo-apply:focus-visible{outline:3px solid var(--raditi-paper);outline-offset:3px}.ds-demo-apply:disabled{cursor:wait;color:var(--raditi-snow);background:var(--raditi-rule-ink)}@media(prefers-reduced-motion:reduce){.ds-demo-apply{transition:none}}"
+      "description": "Яркое оранжевое основное действие с тёмным текстом на шоколадной панели чата; отмена остаётся вторичной — контур onInk, при наведении и нажатии контур paper и фон ruleInk. Наведение сдвигает стрелку (у значка возврата и в паузе сдвига нет), нажатие сжимает кнопку. Отмена — та же кнопка с data-undo. В паузе кнопка помечена aria-disabled, а не disabled: фокус клавиатуры остаётся на ней.",
+      "html": "<div class=\"ds-demo-panel\"><button class=\"ds-demo-apply\" type=\"button\" aria-disabled=\"false\"><span>Применить правку</span><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M4 12h15m-6-6 6 6-6 6\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button></div>",
+      "css": ".ds-demo-panel{padding:12px 16px;border-radius:14px;background:var(--raditi-ink)}.ds-demo-apply{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--raditi-accent-light);border-radius:6px;background:var(--raditi-accent);color:var(--raditi-on-accent);font-size:13px;font-weight:600;cursor:pointer;transition:background 160ms cubic-bezier(.16,1,.3,1),color 160ms cubic-bezier(.16,1,.3,1),border-color 160ms cubic-bezier(.16,1,.3,1),transform 160ms cubic-bezier(.16,1,.3,1)}.ds-demo-apply svg{transition:transform 240ms cubic-bezier(.16,1,.3,1)}.ds-demo-apply[data-undo='true']{background:transparent;border-color:var(--raditi-on-ink);color:var(--raditi-paper)}.ds-demo-apply[aria-disabled='true']{cursor:wait;color:var(--raditi-snow);background:var(--raditi-rule-ink)}.ds-demo-apply:active:not([aria-disabled='true']){background:var(--raditi-accent-hover)}.ds-demo-apply[data-undo='true']:active{background:var(--raditi-rule-ink);border-color:var(--raditi-paper)}.ds-demo-apply:focus-visible{outline:3px solid var(--raditi-paper);outline-offset:3px}@media(hover:hover){.ds-demo-apply:hover:not([aria-disabled='true']){background:var(--raditi-accent-hover)}.ds-demo-apply[data-undo='true']:hover{background:var(--raditi-rule-ink);border-color:var(--raditi-paper)}}@media(hover:hover) and (prefers-reduced-motion:no-preference){.ds-demo-apply:hover:not([aria-disabled='true'],[data-undo='true']) svg{transform:translateX(4px)}}@media(prefers-reduced-motion:no-preference){.ds-demo-apply:active:not([aria-disabled='true']){transform:scale(.98);transition-duration:90ms}}@media(prefers-reduced-motion:reduce){.ds-demo-apply,.ds-demo-apply svg{transition:none}}"
     },
     {
       "name": "Рекомендованный тариф",
       "kind": "card",
-      "description": "Светлая тёплая поверхность, тёмный текст и яркое оранжевое действие с тёмной подписью. Превью без цены: условия поступают из базы.",
-      "html": "<article class=\"ds-plan\"><div class=\"ds-plan-heading\"><h3>Тариф</h3><span class=\"ds-plan-badge\">Ваш вариант</span></div><p>По выбранному числу правок</p><a class=\"ds-plan-action\" href=\"/sign-up\">Создать аккаунт <svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M5 12h14m-6-6 6 6-6 6\" stroke=\"currentColor\" stroke-width=\"1.6\"/></svg></a></article>",
-      "css": ".ds-plan{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;padding:32px 28px 28px;background:var(--raditi-accent-soft);color:var(--raditi-ink)}.ds-plan-heading{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;min-height:32px}.ds-plan-heading h3{margin:0;font-size:24px;font-weight:600;letter-spacing:-.02em}.ds-plan-badge{padding:5px 9px;border-radius:3px;background:var(--raditi-marker);color:var(--raditi-ink);font-size:11px;font-weight:600}.ds-plan p{margin:10px 0 32px;color:var(--raditi-graphite);font-size:14px}.ds-plan-action{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:48px;padding:12px 18px;border:1px solid transparent;border-radius:6px;background:var(--raditi-accent);color:var(--raditi-on-accent);font-size:14px;font-weight:600;text-decoration:none;transition:background 180ms ease}.ds-plan-action:hover{background:var(--raditi-accent-hover)}.ds-plan-action svg{transition:transform 220ms cubic-bezier(.16,1,.3,1)}.ds-plan-action:hover svg{transform:translateX(4px)}.ds-plan-action:focus-visible{outline:2px solid var(--raditi-accent-text);outline-offset:5px}@media(prefers-reduced-motion:reduce){.ds-plan-action,.ds-plan-action svg{transition:none}}"
+      "description": "Светлая тёплая поверхность, тёмный текст и янтарная метка «Ваш вариант»; своей кнопки у карточки нет. На странице цена тарифа набрана как выразительное число: Unbounded 500, tabular-nums, без переноса, знак ₽ — малым Golos. До 900px поле карточки — 26px 18px, название и метка стоят столбцом. Превью без цены: условия поступают из базы.",
+      "html": "<article class=\"ds-plan\"><div class=\"ds-plan-heading\"><h3>Тариф</h3><span class=\"ds-plan-badge\">Ваш вариант</span></div><p>По выбранному числу правок</p></article>",
+      "css": ".ds-plan{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;padding:32px 28px;background:var(--raditi-accent-soft);color:var(--raditi-ink)}.ds-plan-heading{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;min-height:32px}.ds-plan-heading h3{margin:0;font-size:24px;font-weight:600;letter-spacing:-.02em}.ds-plan-badge{padding:5px 9px;border-radius:3px;background:var(--raditi-marker);color:var(--raditi-ink);font-size:12px;font-weight:600}.ds-plan p{margin:10px 0 32px;color:var(--raditi-graphite);font-size:14px}@media(max-width:900px){.ds-plan{padding:26px 18px}.ds-plan-heading{flex-direction:column;align-items:flex-start;min-height:70px}.ds-plan p{margin-top:8px}}"
+    },
+    {
+      "name": "Действие под тарифами",
+      "kind": "button",
+      "description": "Единственная кнопка тарифов стоит под сеткой: гостю «Зарегистрироваться», авторизованному пользователю «Открыть проекты». Подпись под ней говорит, что тариф выбирается позже; параметр тарифа в ссылку не передаётся.",
+      "html": "<div class=\"ds-plans-action\"><a class=\"ds-plan-action\" href=\"/sign-up\">Зарегистрироваться <svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M5 12h14m-6-6 6 6-6 6\" stroke=\"currentColor\" stroke-width=\"1.6\"/></svg></a><p>Тариф выберете позже, когда откроется оплата</p></div>",
+      "css": ".ds-plans-action{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;width:min(100%,320px)}.ds-plan-action{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:48px;padding:12px 18px;border:1px solid var(--raditi-accent-text);border-radius:6px;background:var(--raditi-accent);color:var(--raditi-on-accent);font-size:14px;font-weight:600;text-decoration:none;transition:color 160ms cubic-bezier(.16,1,.3,1),background-color 160ms cubic-bezier(.16,1,.3,1),transform 160ms cubic-bezier(.16,1,.3,1)}.ds-plan-action svg{flex-shrink:0;transition:transform 240ms cubic-bezier(.16,1,.3,1)}.ds-plan-action:active{background:var(--raditi-accent-hover)}.ds-plan-action:focus-visible{outline:3px solid var(--raditi-accent-text);outline-offset:5px}.ds-plans-action p{margin:8px 0 0;color:var(--raditi-graphite);font-size:12px;line-height:1.5;text-wrap:balance}@media(hover:hover){.ds-plan-action:hover{background:var(--raditi-accent-hover)}}@media(hover:hover) and (prefers-reduced-motion:no-preference){.ds-plan-action:hover svg{transform:translateX(4px)}}@media(prefers-reduced-motion:no-preference){.ds-plan-action:active{transform:scale(.98);transition-duration:90ms}}@media(prefers-reduced-motion:reduce){.ds-plan-action,.ds-plan-action svg{transition:none}}"
+    },
+    {
+      "name": "Просьба и результат",
+      "kind": "card",
+      "description": "Строка таблицы возможностей: категория (h3, набрана мелко), просьба владельца тёмным пузырём ruleInk с текстом paper — как сообщение в чате демо, без кавычек — и то, что изменится на сайте, в назывной или будущей форме. Названия столбцов есть в каждой строке; видимы они над первой, в остальных их слышит только скринридер. От 801px — три колонки, на 541–800px категория стоит над просьбой, до 540px — один столбец. Пузырь не поворачивается и не отвечает на наведение.",
+      "html": "<article class=\"ds-capability\"><h3>Цены и тексты</h3><span class=\"ds-capability-label\">Например, вы пишете</span><p class=\"ds-request\">Стрижка теперь 1&nbsp;800&nbsp;₽, поправь в&nbsp;прайсе</p><span class=\"ds-capability-label\">Что изменится на сайте</span><p class=\"ds-result\">Новая цена стрижки в&nbsp;прайсе</p></article>",
+      "css": ".ds-capability{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;display:grid;grid-template-columns:minmax(0,.45fr) minmax(0,1.55fr) minmax(0,.95fr);column-gap:40px;align-items:center;padding:20px 0;border-top:1px solid var(--raditi-ink);border-bottom:1px solid var(--raditi-rule);color:var(--raditi-ink)}.ds-capability h3{grid-area:2/1;margin:0;color:var(--raditi-graphite);font-size:15px;font-weight:500;line-height:1.3;letter-spacing:0}.ds-capability-label{grid-row:1;align-self:start;margin-bottom:14px;color:var(--raditi-graphite);font-size:13px;line-height:1.4}.ds-capability-label:first-of-type{grid-column:2}.ds-capability-label:last-of-type{grid-column:3}.ds-request{grid-area:2/2;justify-self:start;margin:0;padding:11px 16px;border-radius:10px 10px 2px 10px;background:var(--raditi-rule-ink);color:var(--raditi-paper);font-size:18px;line-height:1.45}.ds-result{grid-area:2/3;margin:0;font-size:17px;line-height:1.45;text-wrap:balance}"
+    },
+    {
+      "name": "Кадр шага",
+      "kind": "card",
+      "description": "Плоский кадр внизу шага «Как это работает»: paper-2, радиус 12px, без поворота и тени, с видимой меткой «Пример» и role=\"img\". Три кадра рассказывают одну правку кофейни — сайт как есть, сообщение владельца, разница. Превью показывает третий: «Было» — прежняя цена, зачёркнутая линией ink, «Стало» — новая, ink на янтарной плашке; подписи успеха и кнопки нет. На странице новое значение и плашка один раз входят при появлении кадра в окне, в превью они стоят в итоговом состоянии. Текст в кадре не мельче 12px.",
+      "html": "<div class=\"ds-step-example\" role=\"img\" aria-label=\"Пример: Капучино, 250 мл — было 250 ₽, стало 290 ₽\"><span class=\"ds-example-label\">Пример</span><div class=\"ds-frame\"><span class=\"ds-frame-field\">Капучино, 250&nbsp;мл</span><div class=\"ds-frame-pair\"><span class=\"ds-frame-value\"><small>Было</small><s>250&nbsp;₽</s></span><span class=\"ds-frame-value\"><small>Стало</small><strong>290&nbsp;₽</strong></span></div></div></div>",
+      "css": ".ds-step-example{font-family:var(--font-golos,\"Golos Text Variable\"),sans-serif;max-width:360px;color:var(--raditi-ink)}.ds-example-label{display:block;margin-bottom:8px;color:var(--raditi-graphite);font-size:12px}.ds-frame{display:flex;flex-direction:column;justify-content:space-between;gap:12px;min-height:136px;padding:16px 18px;border-radius:12px;background:var(--raditi-paper-2);font-size:14px;line-height:1.4}.ds-frame-field{color:var(--raditi-graphite);font-size:12px}.ds-frame-pair{display:flex;gap:32px}.ds-frame-value{display:flex;flex-direction:column;align-items:flex-start;gap:4px;font-size:22px;line-height:1.3;font-variant-numeric:tabular-nums;white-space:nowrap}.ds-frame-value small{color:var(--raditi-graphite);font-size:12px}.ds-frame-value s{color:var(--raditi-graphite);text-decoration-color:var(--raditi-ink);text-decoration-thickness:1.5px}.ds-frame-value strong{padding:0 .3em;margin-inline:-.3em;border-radius:3px;background:var(--raditi-marker);font-weight:600}"
     }
   ],
   "narrative": {
@@ -205,12 +339,14 @@
       "Широкий Unbounded для выразительных заголовков, Golos Text для чтения.",
       "Кремовые поля, шоколадные тёмные секции, яркие оранжевые действия и янтарные выделения.",
       "Наглядное состояние «до / после» и управляемая пользователем отмена.",
+      "Одна правка кофейни «Крошка» — цена капучино — проходит через демо, три кадра шагов и блок отмены; слова и цифры заданы в одном модуле.",
       "Видимый контент без анимации и отдельная поддержка reduced motion."
     ],
     "rules": [],
     "dos": [
       "**Do** брать все цвета из `packages/ui/src/theme/tokens.ts` через MUI-тему и `--raditi-*`, сохраняя согласованную оранжево-янтарную пару с кремовыми и шоколадными нейтралями.",
       "**Do** использовать яркий `accent` для заливок с тёмным текстом, `accentText` для мелкого акцентного текста на светлом фоне и `marker` для выделений; проверять контраст каждой пары и состояния.",
+      "**Do** выделять в заголовке не больше одного фрагмента: на светлом и оранжевом поле — `ink` на ровной янтарной плашке, на шоколадном — янтарный текст; повёрнутая плашка остаётся только в h1.",
       "**Do** связывать движение с появлением содержания или понятным изменением состояния.",
       "**Do** сохранять видимость содержания без анимации, клавиатурный фокус и reduced motion.",
       "**Do** брать цены из базы и оставлять подпись демонстрационных сценариев."

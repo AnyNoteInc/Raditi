@@ -12,6 +12,7 @@ export const TEST_METRICS_TOKEN = 'test-metrics-token'
 
 const testEnv = {
   APP_ENV: 'test',
+  APP_URL: 'http://localhost:3000',
   ORCHESTRATOR_ROLES: 'core,mcp',
   DATABASE_URL: 'postgresql://raditi:raditi@localhost:5432/raditi_test',
   REDIS_URL: 'redis://localhost:6379',

@@ -19,6 +19,11 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   'agent-turns': lifecycleJobs,
   deploys: lifecycleJobs,
   timers: lifecycleJobs,
+  'site-provisioning': lifecycleJobs,
+  'site-import': lifecycleJobs,
+  // The passes of the renewal schedulers (apps/orchestrator/src/billing). A failed pass is
+  // not retried: the next tick does the same work from the rows of the database.
+  billing: lifecycleJobs,
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

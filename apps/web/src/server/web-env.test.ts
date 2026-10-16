@@ -26,11 +26,24 @@ describe('webEnvFromEnv', () => {
       appUrl: 'http://localhost:3000',
       metricsToken: DEV_METRICS_TOKEN,
       redisUrl: 'redis://localhost:6379',
+      pastDueDays: 7,
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
       redisUrl: undefined,
     })
+  })
+
+  it('reads the grace of an overdue tariff as the core role does: a week unless set', () => {
+    expect(webEnvFromEnv({ ...devEnv, BILLING_PAST_DUE_DAYS: '14' }).pastDueDays).toBe(14)
+    for (const blank of ['', ' ', undefined]) {
+      expect(webEnvFromEnv({ ...devEnv, BILLING_PAST_DUE_DAYS: blank }).pastDueDays).toBe(7)
+    }
+    for (const broken of ['0', '91', '1.5', 'week']) {
+      expect(() => webEnvFromEnv({ ...devEnv, BILLING_PAST_DUE_DAYS: broken })).toThrow(
+        /^\[web\] invalid configuration: BILLING_PAST_DUE_DAYS: /,
+      )
+    }
   })
 
   it('requires APP_ENV: a missing or misspelt one never falls back to development', () => {

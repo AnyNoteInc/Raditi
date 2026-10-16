@@ -82,7 +82,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'subs/metadata/*': ['read'],
     },
     'subscriptions-admin': { 'subs/metadata/*': ['delete'], 'subs/destroy/*': ['update'] },
-    // Only the WordPress kind of site access: no ssh, ftp or browser, no write, no key management.
+    // Only the WordPress kind of site access: no ssh, ftp, git, db or browser, no write and no
+    // key management.
     'mcp-content': {
       'kv/data/sites/+/wp': ['read'],
       'kv/data/content-masks/*': ['create', 'read', 'update'],
@@ -96,6 +97,13 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     },
     'sites-writer': { 'kv/data/sites/*': ['create', 'update'], 'kv/metadata/sites/*': ['read'] },
     'workspace-provisioner': { 'transit/keys/ws-*': ['update'] },
+    // The kinds a site is imported with, read-only: no wp or browser, no write, no metadata.
+    'core-site-import': {
+      'kv/data/sites/+/ftp': ['read'],
+      'kv/data/sites/+/ssh': ['read'],
+      'kv/data/sites/+/git': ['read'],
+      'kv/data/sites/+/db': ['read'],
+    },
   }
   // A policy that names a mount outside its list fails here, whatever the path under it.
   const allowedMounts = {
@@ -107,6 +115,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     'core-transit': ['transit'],
     'sites-writer': ['kv'],
     'workspace-provisioner': ['transit'],
+    'core-site-import': ['kv'],
   }
   assert.deepEqual([...policyNames].sort(), Object.keys(expected).sort())
   assert.deepEqual(Object.keys(allowedMounts).sort(), Object.keys(expected).sort())
@@ -165,7 +174,7 @@ test('a new local bootstrap creates the four mounts and all the policies', async
     configWrites.map(({ path, body }) => [path, body]),
     Object.entries(mounts).map(([name, config]) => [`${name}/config`, config]),
   )
-  assert.equal(policyNames.length, 8)
+  assert.equal(policyNames.length, 9)
   assert.deepEqual(
     mock.calls.filter(({ path }) => path.startsWith('sys/policies/acl/')).map(({ path }) => path),
     policyNames.map((name) => `sys/policies/acl/${name}`),
@@ -335,7 +344,7 @@ test('a mount that failed to enable stops the run and is enabled by the next one
 test('the summary names the mounts, counts the policies and says what a new mount has lost', () => {
   const all = ['turns', 'subs', 'kv', 'transit']
   assert.deepEqual(bootstrapSummary({ mounts: all, policies: [...policyNames], created: [] }), [
-    'Local OpenBao ready: turns/, subs/, kv/, transit/; 8 policies',
+    'Local OpenBao ready: turns/, subs/, kv/, transit/; 9 policies',
   ])
   const [, fresh] = bootstrapSummary({ mounts: all, policies: [...policyNames], created: all })
   assert.match(fresh, /^Created now: turns\/, subs\/, kv\/, transit\/\. /)

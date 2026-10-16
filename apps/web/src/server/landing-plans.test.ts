@@ -16,10 +16,10 @@ const quota = (price: string) => ({
   name: 'Старт',
   kind: 'quota',
   price: new Decimal(price),
-  editsPerMonth: 20,
-  editsPerDay: 5,
+  creditsPerMonth: 20,
+  tasksPerDay: 5,
   maxSites: 1,
-  packEdits: null,
+  packCredits: null,
 })
 let getLandingPlans: typeof getLandingPlansType
 
@@ -43,20 +43,20 @@ describe('landing tariff data boundary', () => {
         name: 'Текущий тариф',
         kind: 'quota',
         price: new Decimal('5001.25'),
-        editsPerMonth: 35,
-        editsPerDay: 6,
+        creditsPerMonth: 35,
+        tasksPerDay: 6,
         maxSites: 2,
-        packEdits: null,
+        packCredits: null,
       },
       {
         slug: 'current-pack',
         name: 'Дополнительный пакет',
         kind: 'pack',
         price: new Decimal('2030.10'),
-        editsPerMonth: null,
-        editsPerDay: null,
+        creditsPerMonth: null,
+        tasksPerDay: null,
         maxSites: null,
-        packEdits: 12,
+        packCredits: 12,
       },
     ])
 
@@ -73,12 +73,12 @@ describe('landing tariff data boundary', () => {
           slug: 'current-start',
           name: 'Текущий тариф',
           price: '5001.25',
-          editsPerMonth: 35,
-          editsPerDay: 6,
+          creditsPerMonth: 35,
+          tasksPerDay: 6,
           maxSites: 2,
         },
       ],
-      pack: { price: '2030.10', edits: 12 },
+      pack: { price: '2030.10', credits: 12 },
     })
     expect(JSON.parse(JSON.stringify(data))).toEqual(data)
   })

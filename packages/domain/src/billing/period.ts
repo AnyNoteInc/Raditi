@@ -4,6 +4,7 @@ import { badRequest } from '../errors.ts'
 const MOSCOW_OFFSET_MS = 3 * 60 * 60 * 1000
 // A century of monthly periods; anything longer is a caller's bug, not a subscription.
 const MAX_BILLING_MONTHS = 1200
+const DAY_MS = 24 * 60 * 60 * 1000
 
 /** One paid month of a subscription: from `start` up to, but not including, `end`. */
 export interface BillingPeriod {
@@ -11,8 +12,27 @@ export interface BillingPeriod {
   end: Date
 }
 
+/** One calendar day of a plan's daily limit: from `start` up to, but not including, `end`. */
+export interface BillingDay {
+  start: Date
+  end: Date
+}
+
 function isInstant(value: Date): boolean {
   return value instanceof Date && Number.isFinite(value.getTime())
+}
+
+/**
+ * The day the daily limit of a plan is counted over: the Moscow calendar day the instant
+ * falls in, not the 24 hours before it. Midnight in Moscow is 21:00 UTC of the day before.
+ */
+export function billingDay(instant: Date): BillingDay {
+  if (!isInstant(instant)) throw badRequest('Invalid instant of a billing day')
+  const moscowDays = Math.floor((instant.getTime() + MOSCOW_OFFSET_MS) / DAY_MS)
+  const start = new Date(moscowDays * DAY_MS - MOSCOW_OFFSET_MS)
+  const end = new Date(start.getTime() + DAY_MS)
+  if (!isInstant(start) || !isInstant(end)) throw badRequest('Billing day is out of range')
+  return { start, end }
 }
 
 /** The Moscow wall clock of an instant, readable through the UTC getters. */

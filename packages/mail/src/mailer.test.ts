@@ -35,6 +35,40 @@ describe('createMailer', () => {
     expect(sent[0]?.html).toContain('href="https://raditi.ru/api/auth/verify-email?token=abc"')
   })
 
+  it('sends a billing letter with the link to the «Тарифы» page', async () => {
+    const { transport, sent } = fakeTransport()
+
+    await createMailer({ transport }).sendMail({
+      kind: 'payment-succeeded',
+      to: 'owner@example.ru',
+      data: { item: 'pack', packCredits: 100, amount: '1990.00', appUrl: 'https://raditi.ru' },
+    })
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ to: 'owner@example.ru', subject: 'Оплата прошла' })
+    expect(sent[0]?.text).toContain('пакет из 100 кредитов')
+    expect(sent[0]?.html).toContain('href="https://raditi.ru/settings/plans"')
+  })
+
+  it('rejects invalid billing data before sending', async () => {
+    const { transport, sent } = fakeTransport()
+
+    await expect(
+      createMailer({ transport }).sendMail({
+        kind: 'payment-failed',
+        to: 'owner@example.ru',
+        data: {
+          planName: 'Бизнес',
+          amount: '12900',
+          paymentMethod: 'СБП',
+          giftCreditsLeft: 0,
+          appUrl: 'https://raditi.ru',
+        },
+      }),
+    ).rejects.toThrow()
+    expect(sent).toHaveLength(0)
+  })
+
   it('rejects an invalid recipient before sending', async () => {
     const { transport, sent } = fakeTransport()
 

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
 import { agentDriverIds, llmBackendIds, type AgentCapabilities } from '@repo/domain'
@@ -24,9 +26,9 @@ describe('plans (docs/business.md §6)', () => {
         name: 'Старт',
         kind: 'quota',
         price: '4900.00',
-        editsPerMonth: 30,
-        editsPerDay: 5,
-        packEdits: null,
+        creditsPerMonth: 300,
+        tasksPerDay: 5,
+        packCredits: null,
         maxSites: 1,
       },
       {
@@ -34,9 +36,9 @@ describe('plans (docs/business.md §6)', () => {
         name: 'Бизнес',
         kind: 'quota',
         price: '12900.00',
-        editsPerMonth: 80,
-        editsPerDay: 10,
-        packEdits: null,
+        creditsPerMonth: 800,
+        tasksPerDay: 10,
+        packCredits: null,
         maxSites: 3,
       },
       {
@@ -44,19 +46,19 @@ describe('plans (docs/business.md §6)', () => {
         name: 'Агентство',
         kind: 'quota',
         price: '39900.00',
-        editsPerMonth: 250,
-        editsPerDay: 30,
-        packEdits: null,
+        creditsPerMonth: 2500,
+        tasksPerDay: 30,
+        packCredits: null,
         maxSites: 15,
       },
       {
-        slug: 'pack-10',
-        name: 'Пакет из 10 правок',
+        slug: 'pack',
+        name: 'Пакет из 100 кредитов',
         kind: 'pack',
         price: '1990.00',
-        editsPerMonth: null,
-        editsPerDay: null,
-        packEdits: 10,
+        creditsPerMonth: null,
+        tasksPerDay: null,
+        packCredits: 100,
         maxSites: null,
       },
       {
@@ -64,9 +66,9 @@ describe('plans (docs/business.md §6)', () => {
         name: 'Оплата за действие',
         kind: 'payg',
         price: '0.00',
-        editsPerMonth: null,
-        editsPerDay: null,
-        packEdits: null,
+        creditsPerMonth: null,
+        tasksPerDay: null,
+        packCredits: null,
         maxSites: 1,
       },
     ])
@@ -78,6 +80,75 @@ describe('plans (docs/business.md §6)', () => {
       expect(Object.values(PlanKind)).toContain(plan.kind)
       expect(plan.price).toMatch(money12x2)
     }
+  })
+})
+
+describe('Appendix 1 of the public offer', () => {
+  // The offer prints the plans a second time, by hand, as terms of the contract. A term that
+  // moves in `planSeeds` needs a new edition of the offer, and the reverse: neither moves alone.
+  const offer = readFileSync(
+    new URL('../../../../apps/web/content/legal/public-offer.md', import.meta.url),
+    'utf8',
+  )
+  // The table stands between the heading of the appendix and its first clause.
+  const rows = (/## Приложение № 1\.[\s\S]*?(?=\n\*\*1\.1\.\*\*)/.exec(offer)?.[0] ?? '')
+    .split('\n')
+    .filter((line) => line.startsWith('|'))
+    .slice(2)
+    .map((line) => line.split('|').slice(1, -1))
+
+  // Whole numbers in groups of three, as money is printed: «2 500», never «2500».
+  const whole = String.raw`(\d{1,3}(?: \d{3})*)`
+  const tariff = {
+    price: new RegExp(`^${whole} ₽ в месяц$`),
+    terms: new RegExp(
+      `^${whole} Кредит(?:|а|ов) в месяц, не более (\\d+) Задачи? в день; ` +
+        String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика$`,
+    ),
+  }
+  const pack = {
+    price: new RegExp(`^${whole} ₽$`),
+    terms: new RegExp(`^${whole} Кредит(?:|а|ов); не сгорают$`),
+  }
+  const count = (printed = '') => Number(printed.replaceAll(' ', ''))
+  const roubles = (printed = '') => `${printed.replaceAll(' ', '')}.00`
+
+  /** What a row of the table promises; a row that reads as neither kind is returned as it is. */
+  function promised(cells: string[]) {
+    const [name = '', price = '', terms = ''] = cells.map((cell) => cell.trim())
+    const month = tariff.price.exec(price)
+    const [, credits, tasksPerDay, maxSites] = tariff.terms.exec(terms) ?? []
+    if (month && credits !== undefined)
+      return {
+        name,
+        price: roubles(month[1]),
+        creditsPerMonth: count(credits),
+        tasksPerDay: count(tasksPerDay),
+        maxSites: count(maxSites),
+      }
+    const once = pack.price.exec(price)
+    const [, packCredits] = pack.terms.exec(terms) ?? []
+    if (once && packCredits !== undefined)
+      return { name, price: roubles(once[1]), packCredits: count(packCredits) }
+    return { unread: cells.join('|') }
+  }
+
+  it('prints every tariff and the pack with the price and the terms of the seed', () => {
+    // «Оплата за действие» is not sold and the offer does not name it.
+    const sold = planSeeds.filter((plan) => plan.kind !== 'payg')
+    expect(rows.map(promised)).toEqual(
+      sold.map((plan) =>
+        plan.kind === 'pack'
+          ? { name: plan.name, price: plan.price, packCredits: plan.packCredits }
+          : {
+              name: `«${plan.name}»`,
+              price: plan.price,
+              creditsPerMonth: plan.creditsPerMonth,
+              tasksPerDay: plan.tasksPerDay,
+              maxSites: plan.maxSites,
+            },
+      ),
+    )
   })
 })
 

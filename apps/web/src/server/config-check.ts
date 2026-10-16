@@ -12,8 +12,9 @@ const sections: Sections = {
   auth: env.auth,
   storage: env.storage,
   vault: env.vault,
-  // Payments switched off is valid; half of the shop credentials or a development-only
-  // variable (YOOKASSA_API_URL, YOOKASSA_WEBHOOK_ALLOWLIST) is not.
+  // Payments switched off is valid; half of the shop credentials, a development-only variable
+  // (YOOKASSA_API_URL, YOOKASSA_WEBHOOK_ALLOWLIST) or a shop in production that does not say
+  // whether its autopayments are approved (YOOKASSA_AUTOPAYMENTS) is not.
   yookassa: env.yookassa,
   db: () => dbConfigFromEnv(process.env),
 }

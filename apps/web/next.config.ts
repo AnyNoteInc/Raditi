@@ -61,6 +61,7 @@ const nextConfig: NextConfig = {
   // Workspace packages ship TypeScript sources (NodeNext imports with .ts extensions).
   transpilePackages: [
     '@repo/auth',
+    '@repo/billing',
     '@repo/db',
     '@repo/domain',
     '@repo/mail',

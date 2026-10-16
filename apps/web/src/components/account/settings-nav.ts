@@ -11,9 +11,9 @@ export type SettingsNavEntry = {
 /** The sections of `/settings` in sidebar order. */
 export const settingsNav: readonly SettingsNavEntry[] = [
   { href: '/settings', label: 'Общее', icon: 'settings', enabled: true },
-  { href: '/settings/plans', label: 'Тарифы', icon: 'plans', enabled: false },
-  { href: '/settings/billing', label: 'Оплата', icon: 'payment', enabled: false },
-  { href: '/settings/usage', label: 'Использование', icon: 'usage', enabled: false },
+  { href: '/settings/plans', label: 'Тарифы', icon: 'plans', enabled: true },
+  { href: '/settings/billing', label: 'Оплата', icon: 'payment', enabled: true },
+  { href: '/settings/usage', label: 'Использование', icon: 'usage', enabled: true },
 ]
 
 /**

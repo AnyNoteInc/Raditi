@@ -1,6 +1,13 @@
 import type { SiteAdapter } from '@repo/domain'
 import { notImplemented } from '@repo/domain'
-import { archivesAndDumps, phpServerConfigFiles, secretFiles } from './php-hosting.ts'
+import { phpConfigStrings, secretValues } from './php-config.ts'
+import {
+  archivesAndDumps,
+  dataFiles,
+  phpServerConfigFiles,
+  secretFiles,
+  serverLogs,
+} from './php-hosting.ts'
 
 // 1С-Битрикс — stage 3 (spec §13). Site code lives in /local/; the core /bitrix/ and the
 // media in /upload/ are never imported or touched. Pattern syntax as in wordpress.ts.
@@ -21,6 +28,7 @@ const snapshotExcludes = [
     'upload/',
   ]),
   ...buildOutput,
+  ...serverLogs,
   'vendor/',
   ...archivesAndDumps,
   ...secretFiles,
@@ -31,9 +39,27 @@ const snapshotExcludes = [
 const importExcludes = [
   ...anchored(protectedPaths),
   ...buildOutput,
+  ...serverLogs,
   ...archivesAndDumps,
+  ...dataFiles,
   ...secretFiles,
 ]
+
+/**
+ * The kernel folder: every installation has it in its root.
+ * TODO(stage 3): too weak for the import, which does not enter a folder below the root that has
+ * every marker — the `components` folder of a template and of /local/ holds a namespace folder
+ * `bitrix` too. Before Bitrix becomes connectable the list needs an entry such a folder lacks.
+ */
+const rootMarkers = ['bitrix']
+
+// The connection of the kernel is written twice: `$DBPassword = "…";` of dbconn.php and
+// `'password' => '…'` of .settings.php, which keeps the passwords of its other services
+// under the same key. Whitespace is all that may stand between the tokens, as in wordpress.ts.
+const dbconnPassword = /\$DBPassword[ \t\r\n]*=[ \t\r\n]*/
+const statementEnd = /[ \t\r\n]*;/
+const settingsPassword = /(['"])password\1[ \t\r\n]*=>[ \t\r\n]*/
+const elementEnd = /[ \t\r\n]*[,)\]]/
 
 const todo = (method: string) => notImplemented(`BitrixAdapter.${method} (stage 3)`)
 
@@ -71,5 +97,24 @@ export const bitrixAdapter: SiteAdapter = {
   },
   snapshotExcludes() {
     return [...snapshotExcludes]
+  },
+  rootMarkers() {
+    return [...rootMarkers]
+  },
+  async configSecrets(read) {
+    // One after the other: the reader may have a single connection to the site.
+    const dbconn = await phpConfigStrings(
+      read,
+      'bitrix/php_interface/dbconn.php',
+      dbconnPassword,
+      statementEnd,
+    )
+    const settings = await phpConfigStrings(
+      read,
+      'bitrix/.settings.php',
+      settingsPassword,
+      elementEnd,
+    )
+    return secretValues([...dbconn, ...settings])
   },
 }

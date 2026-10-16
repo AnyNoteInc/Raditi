@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Радити — палитра и движение, предпросмотр к ревью 04.10.2026</title>
+<style>
+/* Layout: one reading column, specimens in "before → after" pairs. Values are a snapshot of
+   packages/ui/src/theme/tokens.ts on 2026-10-04; the source of truth stays in tokens.ts. */
+@font-face { font-family: 'Unbounded Preview'; font-weight: 200 900; font-display: swap;
+  src: url('../../../apps/web/node_modules/@fontsource-variable/unbounded/files/unbounded-cyrillic-wght-normal.woff2') format('woff2'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: 'Unbounded Preview'; font-weight: 200 900; font-display: swap;
+  src: url('../../../apps/web/node_modules/@fontsource-variable/unbounded/files/unbounded-latin-wght-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Golos Preview'; font-weight: 400 900; font-display: swap;
+  src: url('../../../apps/web/node_modules/@fontsource-variable/golos-text/files/golos-text-cyrillic-wght-normal.woff2') format('woff2'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: 'Golos Preview'; font-weight: 400 900; font-display: swap;
+  src: url('../../../apps/web/node_modules/@fontsource-variable/golos-text/files/golos-text-latin-ext-wght-normal.woff2') format('woff2'); unicode-range: U+0100-02AF, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Golos Preview'; font-weight: 400 900; font-display: swap;
+  src: url('../../../apps/web/node_modules/@fontsource-variable/golos-text/files/golos-text-latin-wght-normal.woff2') format('woff2'); }
+:root {
+  --paper: #FFF8EC; --paper2: #F3E7D5; --card: #FFFCF5; --ink: #241710; --ink2: #352217;
+  --graphite: #695547; --rule: #E1CDB6; --marker: #FFC547; --accent: #FF6B24; --accent-text: #A63D12;
+  --accent-light: #FFB86B; --ok: #79573B; --on-ink: #C6AE95; --rule-ink: #5A3C28; --snow: #FFF1DE;
+  --accent-hover-now: #FF7929; --accent-hover-new: #FF8B30; --accent-soft: #FFE1CC; --rule-strong: #8D7968;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --press: 90ms; --fast: 160ms; --base: 240ms; --swap: 360ms; --move: 560ms;
+  --head: 'Unbounded Preview', 'Unbounded', Verdana, sans-serif;
+  --body: 'Golos Preview', 'Golos Text', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { background: var(--paper); }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.55 var(--body); }
+main { max-width: 1040px; margin: 0 auto; padding: 48px 24px 96px; }
+h1, h2, h3 { font-family: var(--head); font-weight: 500; letter-spacing: -0.03em; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(30px, 4.4vw, 46px); line-height: 1.12; }
+h2 { font-size: clamp(22px, 2.6vw, 30px); line-height: 1.2; margin-top: 72px; padding-top: 28px; border-top: 1px solid var(--rule); }
+h3 { font: 600 19px/1.3 var(--body); letter-spacing: -0.01em; margin-top: 36px; }
+p { margin: 12px 0 0; max-width: 68ch; }
+.lead { color: var(--graphite); }
+.note { color: var(--graphite); font-size: 14px; }
+a { color: var(--accent-text); }
+code { font: 13px/1.4 ui-monospace, Menlo, monospace; background: var(--paper2); padding: 1px 5px; border-radius: 4px; }
+button { font: inherit; cursor: pointer; }
+:focus-visible { outline: 3px solid var(--accent-text); outline-offset: 4px; }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); margin-top: 20px; }
+.sw { border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; background: var(--card); }
+.sw i { display: block; height: 64px; }
+.sw div { padding: 10px 12px 12px; font-size: 13px; line-height: 1.4; }
+.sw b { display: block; font-size: 15px; }
+.sw span { color: var(--graphite); display: block; font-variant-numeric: tabular-nums; }
+.new { box-shadow: inset 0 0 0 2px var(--ink); }
+.pairs { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); margin-top: 20px; }
+.pair { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 10px; font-size: 15px; }
+.pair small { font: 600 12px/1.2 var(--body); padding: 4px 7px; border-radius: 4px; background: var(--paper); color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+.box { border: 1px solid var(--rule); border-radius: 12px; padding: 16px 18px 20px; background: var(--paper); min-width: 0; }
+.box.dark { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.box.amber { background: var(--marker); border-color: var(--marker); }
+.tag { font: 600 12px/1 var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--graphite); margin-bottom: 14px; display: block; }
+.dark .tag { color: var(--on-ink); }
+.amber .tag { color: var(--ink); }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill { min-height: 44px; padding: 8px 15px; border-radius: 100px; border: 1px solid var(--rule); background: transparent; color: var(--ink); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.pill.strong { border-color: var(--rule-strong); }
+.pill.on-now { background: var(--accent); border-color: var(--accent-text); }
+.pill.on-new { background: var(--accent-soft); border-color: var(--accent-text); }
+.pill svg { width: 14px; height: 14px; }
+.track { height: 24px; position: relative; margin: 6px 0; }
+.track::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; translate: 0 -50%; height: 3px; background: linear-gradient(to right, var(--accent-text) 0 22%, var(--rule) 22% 100%); }
+.track.after::before { background: linear-gradient(to right, var(--accent-text) 0 22%, transparent 22% 100%) center / 100% 3px no-repeat, linear-gradient(var(--rule-strong), var(--rule-strong)) center / 100% 1px no-repeat; }
+.track::after { content: ''; position: absolute; left: 22%; top: 50%; translate: -50% -50%; width: 24px; height: 24px; border-radius: 50%; border: 5px solid var(--accent); background: var(--paper); }
+.cta { display: inline-flex; align-items: center; gap: 22px; min-height: 56px; padding: 0 23px; border-radius: 999px; border: 1px solid var(--accent-text); background: var(--accent); color: var(--ink); font-weight: 500; font-size: 15px; }
+.cta svg { width: 20px; height: 20px; }
+.cta.now { transition: background 220ms, transform 220ms var(--ease-out); }
+.cta.now:hover { background: var(--accent-hover-now); transform: translateY(-2px); }
+.cta.next { transition: background var(--fast) var(--ease-out), transform var(--fast) var(--ease-out); }
+.cta.next svg { transition: transform var(--base) var(--ease-out); }
+@media (hover: hover) { .cta.next:hover { background: var(--accent-hover-new); transform: translateY(-2px); } .cta.next:hover svg { transform: translate(3px, -3px); } }
+.cta.next:active { background: var(--accent-hover-new); transform: scale(0.98); transition-duration: var(--press); }
+.cta.ink2px { border: 2px solid var(--ink); }
+.cta.dark { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.undo { min-height: 44px; padding: 0 17px; border-radius: 25px; background: transparent; color: var(--paper); font-size: 13px; border: 1px solid var(--graphite); }
+.undo.after { border-color: var(--on-ink); }
+.addr { display: inline-block; padding: 6px 10px; border-radius: 6px; background: var(--marker); font: 10px/1.2 ui-monospace, Menlo, monospace; color: var(--graphite); }
+.addr.after { color: var(--ink); }
+.status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ok); }
+.status svg { width: 18px; height: 18px; flex: none; }
+.status.a { color: var(--ink); font-weight: 500; } .status.a svg { color: var(--accent-text); }
+.status.b { color: #3F704B; }
+.scale { margin-top: 20px; display: grid; gap: 10px; }
+.row { display: grid; grid-template-columns: 150px 70px 1fr; gap: 12px; align-items: center; font-size: 14px; }
+.row span { color: var(--graphite); font-variant-numeric: tabular-nums; }
+.lane { height: 14px; border-radius: 7px; background: var(--paper2); position: relative; overflow: hidden; }
+.lane i { position: absolute; inset: 0; background: var(--accent); transform-origin: left; }
+.play .lane i { animation: grow var(--d) var(--e, var(--ease-out)) backwards; }
+@keyframes grow { from { transform: scaleX(0); } }
+.btn { min-height: 44px; padding: 0 18px; border-radius: 999px; border: 1px solid var(--ink); background: transparent; color: var(--ink); font-size: 14px; margin-top: 16px; }
+@media (hover: hover) { .btn:hover { background: var(--ink); color: var(--paper); } }
+.btn:active { transform: scale(0.98); }
+.menu-row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 12px 10px; position: relative; isolation: isolate; border-top: 1px solid var(--rule); font-size: 15px; }
+.menu-row strong { font: 500 20px/1 var(--head); color: var(--accent-text); font-variant-numeric: tabular-nums; display: inline-block; }
+.menu-row::before { content: ''; position: absolute; inset: 4px 0; z-index: -1; border-radius: 6px; background: var(--marker); opacity: 0; transition: opacity var(--swap) var(--ease-out); }
+[data-state='applied'] .menu-row::before { opacity: 1; }
+[data-state='applied'] .menu-row strong { color: var(--ink); animation: up var(--swap) var(--ease-out) backwards; }
+[data-state='undone'] .menu-row strong { animation: down var(--swap) var(--ease-out) backwards; }
+@keyframes up { from { transform: translateY(6px); } }
+@keyframes down { from { transform: translateY(-6px); } }
+.stateLabel { font-size: 13px; color: var(--graphite); margin-top: 10px; min-height: 20px; }
+.reveal { padding: 18px; border-radius: 10px; background: var(--accent); color: var(--ink); }
+.reveal h4 { font: 500 20px/1.2 var(--head); letter-spacing: -0.03em; margin: 0 0 8px; }
+.reveal p { margin: 0; font-size: 14px; font-weight: 500; }
+.play .reveal.now { animation: revealNow 750ms var(--ease-out); }
+.play .reveal.next h4 { animation: revealNext var(--move) var(--ease-out) backwards; }
+@keyframes revealNow { from { opacity: .55; transform: translateY(24px); } }
+@keyframes revealNext { from { transform: translateY(24px); } }
+.strike { font: 400 20px/1.5 var(--body); color: var(--on-ink); margin: 0; }
+.strike span { position: relative; display: table; }
+.strike span::after { content: ''; position: absolute; left: 0; right: 0; top: 54%; height: 2px; background: var(--marker); transform-origin: left; }
+.play .strike span::after { animation: draw var(--swap) var(--ease-out) backwards; animation-delay: calc(var(--i) * 240ms); }
+@keyframes draw { from { transform: scaleX(0); } }
+.answer { font: 500 26px/1.2 var(--head); letter-spacing: -0.03em; color: var(--marker); margin: 16px 0 0; }
+details.faq { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+details.faq summary { list-style: none; cursor: pointer; padding: 16px 0; font-size: 18px; font-weight: 500; display: flex; justify-content: space-between; gap: 16px; }
+details.faq summary::-webkit-details-marker { display: none; }
+details.faq summary i { width: 16px; height: 16px; flex: none; position: relative; margin-top: 6px; transition: transform var(--base) var(--ease-out); }
+details.faq summary i::before, details.faq summary i::after { content: ''; position: absolute; inset: 7px 0 auto; border-top: 2px solid currentColor; }
+details.faq summary i::after { transform: rotate(90deg); }
+details.faq[open] summary i { transform: rotate(45deg); }
+details.faq p { margin: 0; padding: 0 0 18px; font-size: 15px; color: var(--graphite); }
+@supports (interpolate-size: allow-keywords) {
+  @media (prefers-reduced-motion: no-preference) {
+    details.faq { interpolate-size: allow-keywords; }
+    details.faq::details-content { block-size: 0; overflow: clip; transition: block-size var(--swap) var(--ease-out), content-visibility var(--swap) allow-discrete; }
+    details.faq[open]::details-content { block-size: auto; }
+  }
+}
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+figure { margin: 0; } figure img { max-width: 100%; height: auto; display: block; border: 1px solid var(--rule); border-radius: 10px; }
+figcaption { font-size: 14px; color: var(--graphite); margin-top: 8px; }
+@media (max-width: 560px) { main { padding: 32px 16px 72px; } .row { grid-template-columns: 110px 56px 1fr; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <p class="note"><a href="README.md">← Ревью главной страницы, 4 октября 2026</a></p>
+  <h1>Палитра и движение: что есть и что предлагается</h1>
+  <p class="lead">Страница показывает то, что в ревью описано таблицами: токены, пары контраста, правки состояний «до → после» и образцы движения. Значения — снимок <code>packages/ui/src/theme/tokens.ts</code> на 04.10.2026; источник правды остаётся там. Код лендинга этой страницей не меняется.</p>
+
+  <h2>1. Палитра сохраняется</h2>
+  <p>Базовые значения не меняются. Добавляется одна производная роль для контуров управления, <code>ruleStrong</code>, и становится различимым наведение <code>accentHover</code>. Подробно — <a href="03-color.md">раздел 3</a>.</p>
+  <div class="grid" id="swatches"></div>
+
+  <h2>2. Пары контраста</h2>
+  <p>Порог для обычного текста 4.5:1, для крупного текста и нетекстовых элементов 3:1. Справа — расчёт по WCAG 2.x.</p>
+  <div class="pairs" id="pairs"></div>
+
+  <h2>3. Что меняем в состояниях</h2>
+
+  <h3>Сценарии демо: контур и выбранное состояние</h3>
+  <div class="duo">
+    <div class="box"><span class="tag">Сейчас</span>
+      <div class="pills"><span class="pill on-now">Цена</span><span class="pill">График</span><span class="pill">Акция</span></div>
+      <p class="note">Контур <code>rule</code> — 1.46:1. Выбранная пилюля залита так же, как основная кнопка.</p></div>
+    <div class="box"><span class="tag">Станет</span>
+      <div class="pills"><span class="pill on-new"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2.4"/></svg>Цена</span><span class="pill strong">График</span><span class="pill strong">Акция</span></div>
+      <p class="note">Контур <code>ruleStrong</code> — 3.93:1. Выбор виден заливкой <code>accentSoft</code> и галочкой, оранжевый остаётся за действиями.</p></div>
+  </div>
+
+  <h3>Ползунок калькулятора</h3>
+  <div class="duo">
+    <div class="box"><span class="tag">Сейчас</span><div class="track"></div><p class="note">Незаполненная часть дорожки — 1.46:1 к бумаге.</p></div>
+    <div class="box"><span class="tag">Станет</span><div class="track after"></div><p class="note">Под заполнением 3px лежит линия 1px <code>ruleStrong</code>: пустая часть видна и не сливается с заполненной.</p></div>
+  </div>
+
+  <h3>Основная кнопка: наведение и нажатие</h3>
+  <div class="duo">
+    <div class="box"><span class="tag">Сейчас</span><button class="cta now" type="button">Начать с Радити <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 18 18 6M6 6h12v12" stroke="currentColor" stroke-width="1.7"/></svg></button>
+      <p class="note">Наведение меняет заливку на #FF7929: разница с #FF6B24 почти не видна. На нажатие отклика нет.</p></div>
+    <div class="box"><span class="tag">Станет</span><button class="cta next" type="button">Зарегистрироваться <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 18 18 6M6 6h12v12" stroke="currentColor" stroke-width="1.7"/></svg></button>
+      <p class="note">Наведение — #FF8B30 и сдвиг стрелки за 160 и 240 мс. Нажатие — сжатие до 0.98 за 90 мс. Тёмный текст на новой заливке — 7.43:1.</p></div>
+  </div>
+
+  <h3>«Отменить правку» в чате и адрес после применения</h3>
+  <div class="duo">
+    <div class="box dark"><span class="tag">Сейчас → станет</span>
+      <div style="display:flex;gap:12px;flex-wrap:wrap"><button class="undo" type="button">Отменить правку</button><button class="undo after" type="button">Отменить правку</button></div>
+      <p class="note" style="color:var(--on-ink)">Контур <code style="background:var(--rule-ink);color:var(--paper)">graphite</code> на тёмном — 2.48:1; контур <code style="background:var(--rule-ink);color:var(--paper)">onInk</code> — 8.21:1.</p></div>
+    <div class="box"><span class="tag">Сейчас → станет</span>
+      <div style="display:flex;gap:12px;flex-wrap:wrap"><span class="addr">kroshka.example</span><span class="addr after">kroshka.example</span></div>
+      <p class="note">Единственная текстовая пара ниже порога: 4.46:1. С цветом <code>ink</code> — 11.06:1.</p></div>
+  </div>
+
+  <h3>Вопрос 12: финальная кнопка на янтарном поле</h3>
+  <div class="duo">
+    <div class="box amber"><span class="tag">Сейчас: заливка 1.81:1, контур 1px</span><span class="cta">Познакомиться</span></div>
+    <div class="box amber"><span class="tag">Вариант (а): контур 2px ink</span><span class="cta ink2px">Зарегистрироваться</span></div>
+    <div class="box amber"><span class="tag">Вариант (б): тёмная кнопка</span><span class="cta dark">Зарегистрироваться</span></div>
+  </div>
+
+  <h3>Вопрос 13: статус успеха</h3>
+  <div class="duo">
+    <div class="box"><span class="tag">Сейчас</span><p class="status"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2"/></svg>Новая цена на сайте. Копия сохранена.</p><p class="note">Цвет <code>ok</code> почти совпадает с цветом пояснений.</p></div>
+    <div class="box"><span class="tag">Вариант (а): тёплый, усилен формой</span><p class="status a"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2.4"/></svg>Новая цена на сайте. Копия сохранена.</p></div>
+    <div class="box"><span class="tag">Вариант (б): зелёный #3F704B</span><p class="status b"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2"/></svg>Новая цена на сайте. Копия сохранена.</p><p class="note">Противоречит действующему правилу «статусы остаются тёплыми».</p></div>
+  </div>
+
+  <h2>4. Движение</h2>
+  <p>Библиотека не нужна: всё ниже сделано на CSS. При системной настройке «уменьшить движение» образцы на этой странице статичны, как и на лендинге. Подробно — <a href="04-motion.md">раздел 4</a>.</p>
+
+  <h3>Шкала длительностей</h3>
+  <div class="scale" id="scale">
+    <div class="row" style="--d:90ms"><b>press</b><span>90 мс</span><div class="lane"><i></i></div></div>
+    <div class="row" style="--d:160ms"><b>fast</b><span>160 мс</span><div class="lane"><i></i></div></div>
+    <div class="row" style="--d:240ms"><b>base</b><span>240 мс</span><div class="lane"><i></i></div></div>
+    <div class="row" style="--d:360ms"><b>swap</b><span>360 мс</span><div class="lane"><i></i></div></div>
+    <div class="row" style="--d:560ms"><b>move</b><span>560 мс</span><div class="lane"><i></i></div></div>
+    <div class="row" style="--d:900ms"><b>вход hero</b><span>900 мс</span><div class="lane"><i></i></div></div>
+    <div class="row" style="--d:560ms;--e:var(--ease-in-out)"><b>move, ease-in-out</b><span>560 мс</span><div class="lane"><i></i></div></div>
+  </div>
+  <p class="note">press — нажатие; fast — наведение и цвет; base — состояние элемента управления; swap — подмена значения на месте; move — перемещение предмета. Сейчас на странице 15 разных длительностей.</p>
+  <button class="btn" type="button" data-replay="scale">Проиграть шкалу</button>
+
+  <h3>Применить и отменить: направление различает «изменили» и «вернули»</h3>
+  <div class="duo">
+    <div class="box" id="demo" data-state="idle">
+      <span class="tag">Станет</span>
+      <div class="menu-row"><span>Капучино, 250 мл</span><strong id="price">250 ₽</strong></div>
+      <p class="stateLabel" id="demoLabel" aria-live="polite">До правки</p>
+      <button class="btn" type="button" id="demoBtn">Применить правку</button>
+    </div>
+    <div class="box"><span class="tag">Что изменилось</span>
+      <p class="note">Сейчас при отмене значение возвращается без движения. В плане новое значение приходит снизу, прежнее возвращается сверху, за 360 мс. Выделение строки лежит на подложке, текст не сдвигается. Сумма подменяется сразу и счётчиком не анимируется.</p></div>
+  </div>
+
+  <h3>Появление секций</h3>
+  <div class="duo" id="reveal">
+    <div class="box"><span class="tag">Сейчас</span><div class="reveal now"><h4>Смело меняйте.</h4><p>Вся секция тускнеет до 55 % и съезжает на 24px, хотя текст уже виден.</p></div></div>
+    <div class="box"><span class="tag">Станет</span><div class="reveal next"><h4>Смело меняйте.</h4><p>Поле неподвижно, прозрачность не трогаем. Поднимается только заголовок, и только если он был ниже окна.</p></div></div>
+  </div>
+  <button class="btn" type="button" data-replay="reveal">Проиграть появление</button>
+
+  <h3>Вопрос 27: зачёркивание в тёмной полосе</h3>
+  <div class="duo" id="strike">
+    <div class="box dark"><span class="tag">Вариант (б): линии по очереди, один раз</span>
+      <p class="strike"><span style="--i:0">Надо найти разработчика.</span><span style="--i:1">Объяснить.</span><span style="--i:2">Напомнить.</span><span style="--i:3">Подождать.</span></p>
+      <p class="answer">А можно просто написать.</p></div>
+    <div class="box"><span class="tag">Как устроено</span>
+      <p class="note">Исходное состояние в CSS — строки уже зачёркнуты. Без движения и без скриптов блок выглядит как вариант (а). Линия — 360 мс, шаг между строками 240 мс.</p></div>
+  </div>
+  <button class="btn" type="button" data-replay="strike">Проиграть зачёркивание</button>
+
+  <h3>Ответ в «Вопросах»</h3>
+  <div class="duo">
+    <div class="box"><span class="tag">Станет</span>
+      <details class="faq"><summary>Нужно разбираться в коде?<i aria-hidden="true"></i></summary><p>Нет. Задачу описывают обычными словами: какую цену поменять, где заменить фото, что добавить на страницу.</p></details>
+      <p class="note">Высота раскрывается плавно там, где браузер это умеет. В остальных ответ появляется сразу, как сейчас.</p></div>
+  </div>
+
+  <h2>5. Дефект заголовка на ширинах 541–800px</h2>
+  <p>Первым пунктом плана идёт заголовок: на планшетной ширине слово «чат.» с маркером не видно. Правка — 14 строк CSS.</p>
+  <div class="shots">
+    <figure><img src="shots/hero-768-chat-clipped.png" alt="Первый экран на ширине 768px: в заголовке читается «Напишите в», слова «чат.» нет, ниже «Сайт поправим.»"><figcaption>Сейчас, 768px</figcaption></figure>
+    <figure><img src="shots/hero-768-chat-expected.png" alt="Тот же экран без обрезки: «Напишите в чат.» с янтарным маркером под словом «чат.»"><figcaption>Слово на месте, если убрать обрезку. После правки заголовок встанет в три строки</figcaption></figure>
+  </div>
+</main>
+<script>
+const tokens = [
+  ['paper', '#FFF8EC', '98.1 / 0.018 / 81', 'фон страницы'], ['paper2', '#F3E7D5', '93.3 / 0.027 / 78', 'плашки, макет кофейни'],
+  ['card', '#FFFCF5', '99.1 / 0.010 / 87', 'поверхности макета'], ['rule', '#E1CDB6', '85.9 / 0.038 / 71', 'разделители'],
+  ['ruleStrong', '#8D7968', '59.0 / 0.035 / 62', 'новая роль: контур управления', 1], ['graphite', '#695547', '46.6 / 0.034 / 57', 'пояснения'],
+  ['ink', '#241710', '21.9 / 0.025 / 49', 'текст, тёмные поля'], ['ink2', '#352217', '27.3 / 0.035 / 51', 'подвал чата'],
+  ['ruleInk', '#5A3C28', '38.6 / 0.053 / 54', 'линии на тёмном'], ['onInk', '#C6AE95', '76.5 / 0.044 / 68', 'вторичный текст на тёмном'],
+  ['accent', '#FF6B24', '70.3 / 0.196 / 42', 'действия, цветовые поля'], ['accentHover', '#FF8B30', '75.1 / 0.171 / 54', 'было #FF7929', 1],
+  ['accentSoft', '#FFE1CC', '92.9 / 0.043 / 57', 'выбранное, рекомендованный тариф'], ['accentText', '#A63D12', '50.2 / 0.148 / 40', 'ссылки, мелкий акцент'],
+  ['accentLight', '#FFB86B', '83.4 / 0.125 / 67', 'контуры на тёмном'], ['marker', '#FFC547', '85.4 / 0.152 / 83', 'выделение, «изменено»'],
+  ['ok', '#79573B', '48.6 / 0.061 / 60', 'статус успеха'], ['snow', '#FFF1DE', '96.4 / 0.029 / 76', 'текст тёмной темы'],
+]
+document.getElementById('swatches').innerHTML = tokens.map(([n, h, o, r, isNew]) =>
+  `<div class="sw${isNew ? ' new' : ''}"><i style="background:${h}"></i><div><b>${n}</b><span>${h}</span><span>OKLCH ${o}</span><span>${r}</span></div></div>`).join('')
+const lin = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }
+const lum = (h) => { const [r, g, b] = [1, 3, 5].map((i) => lin(parseInt(h.slice(i, i + 2), 16))); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
+const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05) }
+const pairs = [
+  ['ink на paper', '#241710', '#FFF8EC', 4.5], ['graphite на paper', '#695547', '#FFF8EC', 4.5], ['accentText на paper', '#A63D12', '#FFF8EC', 4.5],
+  ['ink на accent', '#241710', '#FF6B24', 4.5], ['ink на marker', '#241710', '#FFC547', 4.5], ['onInk на ink', '#C6AE95', '#241710', 4.5],
+  ['accentText на marker, только крупный', '#A63D12', '#FFC547', 3], ['graphite на marker, адрес 10px', '#695547', '#FFC547', 4.5],
+  ['белый на accent — запрещён', '#FFFFFF', '#FF6B24', 4.5], ['контур rule на paper', '#E1CDB6', '#FFF8EC', 3, 1],
+  ['контур ruleStrong на paper', '#8D7968', '#FFF8EC', 3, 1], ['контур graphite на ink', '#695547', '#241710', 3, 1],
+  ['заливка accent на marker', '#FF6B24', '#FFC547', 3, 1], ['accent к accentHover: было', '#FF7929', '#FF6B24', 0, 1], ['accent к accentHover: станет', '#FF8B30', '#FF6B24', 0, 1],
+]
+document.getElementById('pairs').innerHTML = pairs.map(([label, fg, bg, min, nonText]) => {
+  const r = ratio(fg, bg); const verdict = min === 0 ? 'различие' : r >= min ? 'проходит' : 'не проходит'
+  const style = nonText ? `background:${bg};color:${lum(bg) > 0.4 ? '#241710' : '#FFF8EC'};box-shadow:inset 0 0 0 3px ${fg}` : `background:${bg};color:${fg}`
+  return `<div class="pair" style="${style}"><span>${label}</span><small>${r.toFixed(2)}:1 · ${verdict}</small></div>`
+}).join('')
+for (const b of document.querySelectorAll('[data-replay]')) b.addEventListener('click', () => {
+  const el = document.getElementById(b.dataset.replay); el.classList.remove('play'); void el.offsetWidth; el.classList.add('play')
+})
+let price = document.getElementById('price')
+const demo = document.getElementById('demo'), label = document.getElementById('demoLabel'), btn = document.getElementById('demoBtn')
+btn.addEventListener('click', () => {
+  const applied = demo.dataset.state === 'applied'
+  demo.dataset.state = applied ? 'undone' : 'applied'
+  const next = price.cloneNode(false); next.textContent = applied ? '250 ₽' : '290 ₽'; price.replaceWith(next); next.id = 'price'
+  price = next
+  label.textContent = applied ? 'Возвращено' : 'Изменено'
+  btn.textContent = applied ? 'Применить снова' : 'Отменить правку'
+})
+</script>
+</body>
+</html>

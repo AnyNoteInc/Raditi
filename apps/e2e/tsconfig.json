@@ -1,4 +1,7 @@
 {
   "extends": "@repo/typescript-config/base.json",
-  "include": ["tests", "*.config.ts"]
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM", "DOM.Iterable"]
+  },
+  "include": ["tests", "fixtures", "*.config.ts"]
 }

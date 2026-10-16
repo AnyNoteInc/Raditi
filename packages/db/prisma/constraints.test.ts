@@ -61,6 +61,7 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
 
   const CHECK_VIOLATION = '23514'
   const FOREIGN_KEY_VIOLATION = '23503'
+  const UNIQUE_VIOLATION = '23505'
 
   async function expectRejected(
     constraint: string,
@@ -134,8 +135,20 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
         account(tx, 'rub', '10.00', '10.01'),
       ))
 
-    it('rejects fractional edits', () =>
-      expectRejected('billing_accounts_edit_whole_check', (tx) => account(tx, 'edit', '1.50')))
+    it('rejects fractional credits', () =>
+      expectRejected('billing_accounts_credit_whole_check', (tx) =>
+        account(tx, 'credit_tariff', '1.50'),
+      ))
+
+    it('keeps the gift account in whole credits as well', async () => {
+      await expectAccepted((tx) => account(tx, 'credit_gift', '35.00', '35.00'))
+      await expectRejected('billing_accounts_credit_whole_check', (tx) =>
+        account(tx, 'credit_gift', '34.50'),
+      )
+      await expectRejected('billing_accounts_credit_whole_check', (tx) =>
+        account(tx, 'credit_gift', '35.00', '0.50'),
+      )
+    })
   })
 
   describe('credit_ledger', () => {
@@ -148,27 +161,44 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
       idempotencyKey: `test:${randomUUID()}`,
     })
 
-    it('accepts kopecks in roubles and whole edits', () =>
+    it('accepts kopecks in roubles and whole credits', () =>
       expectAccepted(async (tx) => {
         const rub = await account(tx, 'rub')
-        const edit = await account(tx, 'edit')
+        const tariff = await account(tx, 'credit_tariff')
         await tx.creditLedger.create({ data: entry(rub.id, 'rub', '0.50') })
-        await tx.creditLedger.create({ data: entry(edit.id, 'edit', '30.00') })
+        await tx.creditLedger.create({ data: entry(tariff.id, 'credit_tariff', '30.00') })
       }))
 
-    it('rejects a fractional edit amount', () =>
-      expectRejected('credit_ledger_edit_whole_check', async (tx) => {
-        const edit = await account(tx, 'edit')
-        await tx.creditLedger.create({ data: entry(edit.id, 'edit', '0.50') })
+    it('rejects a fractional credit amount', () =>
+      expectRejected('credit_ledger_credit_whole_check', async (tx) => {
+        const tariff = await account(tx, 'credit_tariff')
+        await tx.creditLedger.create({ data: entry(tariff.id, 'credit_tariff', '0.50') })
       }))
 
-    it('rejects a fractional edit running balance', () =>
-      expectRejected('credit_ledger_edit_whole_check', async (tx) => {
-        const edit = await account(tx, 'edit')
+    it('rejects a fractional credit running balance', () =>
+      expectRejected('credit_ledger_credit_whole_check', async (tx) => {
+        const tariff = await account(tx, 'credit_tariff')
         await tx.creditLedger.create({
-          data: { ...entry(edit.id, 'edit', '1.00'), balanceAfter: '30.50' },
+          data: { ...entry(tariff.id, 'credit_tariff', '1.00'), balanceAfter: '30.50' },
         })
       }))
+
+    it('rejects a fractional amount or running balance of gift credits', async () => {
+      await expectAccepted(async (tx) => {
+        const gift = await account(tx, 'credit_gift')
+        await tx.creditLedger.create({ data: entry(gift.id, 'credit_gift', '35.00') })
+      })
+      await expectRejected('credit_ledger_credit_whole_check', async (tx) => {
+        const gift = await account(tx, 'credit_gift')
+        await tx.creditLedger.create({ data: entry(gift.id, 'credit_gift', '0.50') })
+      })
+      await expectRejected('credit_ledger_credit_whole_check', async (tx) => {
+        const gift = await account(tx, 'credit_gift')
+        await tx.creditLedger.create({
+          data: { ...entry(gift.id, 'credit_gift', '1.00'), balanceAfter: '30.50' },
+        })
+      })
+    })
 
     it('accepts kopecks in a rouble running balance', () =>
       expectAccepted(async (tx) => {
@@ -183,7 +213,7 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
         'credit_ledger_account_id_unit_fkey',
         async (tx) => {
           const rub = await account(tx, 'rub')
-          await tx.creditLedger.create({ data: entry(rub.id, 'edit', '1.00') })
+          await tx.creditLedger.create({ data: entry(rub.id, 'credit_tariff', '1.00') })
         },
         FOREIGN_KEY_VIOLATION,
       ))
@@ -203,10 +233,10 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
         data: { accountId, unit, taskId: (await task(tx)).id, amount, expiresAt: new Date() },
       })
 
-    it('accepts kopecks in roubles and whole edits', () =>
+    it('accepts kopecks in roubles and whole credits', () =>
       expectAccepted(async (tx) => {
         await hold(tx, (await account(tx, 'rub', '100.00')).id, 'rub', '0.50')
-        await hold(tx, (await account(tx, 'edit', '30')).id, 'edit', '1')
+        await hold(tx, (await account(tx, 'credit_tariff', '30')).id, 'credit_tariff', '1')
       }))
 
     it('rejects a zero hold', () =>
@@ -214,15 +244,98 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
         hold(tx, (await account(tx, 'rub', '100.00')).id, 'rub', '0.00'),
       ))
 
-    it('rejects a fractional edit hold', () =>
-      expectRejected('credit_holds_edit_whole_check', async (tx) =>
-        hold(tx, (await account(tx, 'edit', '30')).id, 'edit', '0.50'),
+    it('rejects a fractional credit hold', () =>
+      expectRejected('credit_holds_credit_whole_check', async (tx) =>
+        hold(tx, (await account(tx, 'credit_tariff', '30')).id, 'credit_tariff', '0.50'),
       ))
+
+    it('rejects a fractional hold of gift credits', async () => {
+      await expectAccepted(async (tx) =>
+        hold(tx, (await account(tx, 'credit_gift', '35')).id, 'credit_gift', '35'),
+      )
+      await expectRejected('credit_holds_credit_whole_check', async (tx) =>
+        hold(tx, (await account(tx, 'credit_gift', '35')).id, 'credit_gift', '0.50'),
+      )
+    })
 
     it('rejects a unit that differs from the account unit', () =>
       expectRejected(
         'credit_holds_account_id_unit_fkey',
-        async (tx) => hold(tx, (await account(tx, 'rub', '100.00')).id, 'edit', '1'),
+        async (tx) => hold(tx, (await account(tx, 'rub', '100.00')).id, 'credit_tariff', '1'),
+        FOREIGN_KEY_VIOLATION,
+      ))
+
+    // A reserve of an attempt stands on several accounts, one row on each.
+    it('takes the rows of one attempt on different accounts and rejects two on one', async () => {
+      const reserve = async (tx: Tx, second: 'another account' | 'the same account') => {
+        const taskId = (await task(tx)).id
+        const tariff = await account(tx, 'credit_tariff', '30')
+        const other =
+          second === 'the same account' ? tariff : await account(tx, 'credit_gift', '35')
+        for (const { id: accountId, unit } of [tariff, other]) {
+          await tx.creditHold.create({
+            data: { accountId, unit, taskId, amount: '5', expiresAt: new Date() },
+          })
+        }
+      }
+      await expectAccepted((tx) => reserve(tx, 'another account'))
+      await expectRejected(
+        'credit_holds_task_id_attempt_account_id_key',
+        (tx) => reserve(tx, 'the same account'),
+        UNIQUE_VIOLATION,
+      )
+    })
+
+    it('stamps a row with the moment of placing: the moment it is written unless given', () =>
+      expectAccepted(async (tx) => {
+        const accountId = (await account(tx, 'credit_tariff', '30')).id
+        const written = await hold(tx, accountId, 'credit_tariff', '5')
+        expect(written.placedAt).toEqual(written.createdAt)
+        const createdAt = new Date('2026-10-18T08:59:59.999Z')
+        const placedAt = new Date('2026-10-18T09:02:00.000Z')
+        const given = await tx.creditHold.create({
+          data: {
+            accountId,
+            unit: 'credit_tariff',
+            taskId: (await task(tx)).id,
+            amount: '5',
+            expiresAt: new Date(),
+            createdAt,
+            placedAt,
+          },
+        })
+        expect(given).toMatchObject({ createdAt, placedAt })
+      }))
+  })
+
+  describe('gift_site_claims', () => {
+    const claim = async (tx: Tx, hostKey: string) =>
+      tx.giftSiteClaim.create({ data: { hostKey, workspaceId: (await workspace(tx)).id } })
+
+    it('accepts the claims of different sites', () =>
+      expectAccepted(async (tx) => {
+        await claim(tx, `${unique()}.example.ru`)
+        await claim(tx, `${unique()}.example.ru:8080`)
+      }))
+
+    it('rejects a second claim of a site, by whichever workspace', () =>
+      expectRejected(
+        'gift_site_claims_pkey',
+        async (tx) => {
+          const hostKey = `${unique()}.example.ru`
+          await claim(tx, hostKey)
+          await claim(tx, hostKey)
+        },
+        UNIQUE_VIOLATION,
+      ))
+
+    it('rejects a claim of a workspace that does not exist', () =>
+      expectRejected(
+        'gift_site_claims_workspace_id_fkey',
+        (tx) =>
+          tx.giftSiteClaim.create({
+            data: { hostKey: `${unique()}.example.ru`, workspaceId: randomUUID() },
+          }),
         FOREIGN_KEY_VIOLATION,
       ))
   })
@@ -273,6 +386,62 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
 
     it('rejects a VAT rate of 100%', () =>
       expectRejected('llm_model_prices_vat_rate_check', (tx) => price(tx, { vatRate: '1.0000' })))
+  })
+
+  describe('credit_rates', () => {
+    // Long before any real rate, so a row of this suite never stands next to one.
+    const START = new Date('1999-01-01T00:00:00.000Z')
+    const rate = (tx: Tx, data: Partial<Prisma.CreditRateUncheckedCreateInput> = {}) =>
+      tx.creditRate.create({
+        data: {
+          effectiveFrom: START,
+          rubPerCredit: '6.000000',
+          basis: 'Проверка ограничений',
+          ...data,
+        },
+      })
+
+    it('accepts a rate above zero that starts on a whole millisecond', () =>
+      expectAccepted(async (tx) => {
+        const stored = await rate(tx, { effectiveFrom: new Date('1999-01-01T00:00:00.001Z') })
+        expect(stored.rubPerCredit.toFixed(6)).toBe('6.000000')
+      }))
+
+    it('keeps six decimals of the rate', () =>
+      expectAccepted(async (tx) => {
+        const stored = await rate(tx, { rubPerCredit: '5.983217' })
+        expect(stored.rubPerCredit.toFixed(6)).toBe('5.983217')
+      }))
+
+    it('rejects a rate of zero', () =>
+      expectRejected('credit_rates_rub_per_credit_check', (tx) => rate(tx, { rubPerCredit: '0' })))
+
+    it('rejects a negative rate', () =>
+      expectRejected('credit_rates_rub_per_credit_check', (tx) =>
+        rate(tx, { rubPerCredit: '-6.000000' }),
+      ))
+
+    // What now() of PostgreSQL gives: JavaScript would read the instant a fraction earlier.
+    it('rejects a start that carries microseconds', async () => {
+      const error = await attempt(
+        (tx) => tx.$executeRaw`
+          INSERT INTO credit_rates (id, effective_from, rub_per_credit, basis)
+          VALUES (gen_random_uuid(), '1999-01-01 00:00:00.000001+00', 6, 'Проверка ограничений')`,
+      )
+      expect(String((error as Error | undefined)?.message)).toContain(
+        'credit_rates_effective_from_check',
+      )
+    })
+
+    it('rejects a second rate with the same start', () =>
+      expectRejected(
+        'credit_rates_effective_from_key',
+        async (tx) => {
+          await rate(tx)
+          await rate(tx, { rubPerCredit: '7.500000' })
+        },
+        UNIQUE_VIOLATION,
+      ))
   })
 
   describe('token_usage', () => {
