@@ -299,6 +299,178 @@ test('save-anyway: the method comes back saved though the payment said false', a
   assert.equal((await control(fake, 'save-anyway', { enabled: 'yes' })).status, 400)
 })
 
+// A shop whose autopayments ЮKassa has not approved yet. What a real shop is known to do
+// (AnyNote, 13.05.2026): answer 403 `forbidden` to `save_payment_method: true` and take a payment
+// without the field. The rest is the fake's assumption: README.md says which part is which.
+const NO_RIGHT = {
+  type: 'error',
+  code: 'forbidden',
+  description: 'Магазин не имеет права на проведение операции',
+}
+/** A 403 of the API as the client of the platform reports it. */
+const refusedAsForbidden = (error) => {
+  assert.ok(error instanceof YookassaApiError)
+  assert.equal(error.status, 403)
+  assert.equal(error.code, 'forbidden')
+  // Not a failure to repeat blindly: the client itself never retries it.
+  assert.equal(error.retryable, false)
+  assert.equal(error.message, 'forbidden: Магазин не имеет права на проведение операции')
+  const { id, ...body } = error.body
+  assert.match(id, /^[0-9a-f-]{36}$/)
+  assert.deepEqual(body, NO_RIGHT)
+  return true
+}
+
+test('autopayments off: a payment that asks to save its method is refused with 403 forbidden', async (t) => {
+  const hook = await receiver(t)
+  const fake = await start(t, { webhookUrl: hook.url })
+  const client = clientOf(fake)
+  assert.equal((await stateOf(fake)).autopayments, true)
+  assert.deepEqual((await control(fake, 'autopayments', { enabled: false })).body, {
+    autopayments: false,
+  })
+
+  await assert.rejects(
+    client.createPayment(redirectPayment({ save_payment_method: true }), 'with-consent'),
+    refusedAsForbidden,
+  )
+  // The body AnyNote's client test expects, as it goes over the wire.
+  const raw = await fetch(`${fake.apiUrl}/payments`, {
+    method: 'POST',
+    headers: {
+      authorization: `Basic ${BASIC}`,
+      'content-type': 'application/json',
+      'idempotence-key': 'raw-with-consent',
+    },
+    body: JSON.stringify(redirectPayment({ save_payment_method: true })),
+  })
+  assert.equal(raw.status, 403)
+  const { id: _id, ...answered } = await raw.json()
+  assert.deepEqual(answered, NO_RIGHT)
+
+  // Nothing was made, nothing is notified of, and no key is spent.
+  await fake.settle()
+  const state = await stateOf(fake)
+  assert.deepEqual(state.payments, [])
+  assert.deepEqual(state.idempotenceKeys, [])
+  assert.deepEqual(state.webhooks.deliveries, [])
+  assert.deepEqual(hook.received, [])
+  // The request is in the log with its status, as every request the API took.
+  const [first] = (await control(fake, 'requests')).body
+  assert.deepEqual(
+    { path: first.path, status: first.status, save: first.body.save_payment_method },
+    { path: '/v3/payments', status: 403, save: true },
+  )
+})
+
+test('autopayments off: a payment without the field passes, and so does an explicit false', async (t) => {
+  const hook = await receiver(t)
+  const fake = await start(t, { webhookUrl: hook.url })
+  const client = clientOf(fake)
+  await control(fake, 'autopayments', { enabled: false })
+
+  // Without the field: what a real shop without the approval accepted. With `false`: assumed.
+  for (const [key, overrides] of [
+    ['no-field', {}],
+    ['explicit-false', { save_payment_method: false }],
+  ]) {
+    const payment = await client.createPayment(redirectPayment(overrides), key)
+    assert.equal(payment.status, 'pending')
+    assert.equal(
+      (await press(payment.confirmation.confirmation_url, 'pay')).headers.get('location'),
+      RETURN_URL,
+    )
+    const paid = await client.getPayment(payment.id)
+    assert.equal(paid.status, 'succeeded')
+    // Nothing is saved at such a shop, so nothing can be charged later.
+    assert.equal(paid.payment_method.saved, false)
+  }
+  await fake.settle()
+  assert.deepEqual(
+    hook.received.map(({ body }) => body.event),
+    ['payment.succeeded', 'payment.succeeded'],
+  )
+  assert.deepEqual((await stateOf(fake)).savedMethodIds, [])
+  const sent = (await control(fake, 'requests')).body.filter(({ method }) => method === 'POST')
+  assert.deepEqual(
+    sent.map(({ status, body }) => [status, 'save_payment_method' in body]),
+    [
+      [200, false],
+      [200, true],
+    ],
+  )
+})
+
+test('autopayments off: no method is bound and no saved method is charged', async (t) => {
+  const fake = await start(t)
+  const client = clientOf(fake)
+  // Saved while the shop still had the right.
+  const methodId = await savedMethod(fake, client)
+  await control(fake, 'behaviour', { behaviour: 'cancel' })
+  await control(fake, 'autopayments', { enabled: false })
+
+  await assert.rejects(
+    client.createPaymentMethod(
+      { type: 'bank_card', confirmation: { type: 'redirect', return_url: RETURN_URL } },
+      'bind',
+    ),
+    refusedAsForbidden,
+  )
+  await assert.rejects(
+    client.chargeWithSavedMethod(charge(methodId), 'renew.1'),
+    refusedAsForbidden,
+  )
+  let state = await stateOf(fake)
+  assert.deepEqual(state.paymentMethods, [])
+  assert.equal(state.payments.length, 1)
+  // Refused at the door: the key is free, and the queued behaviour waits for a charge that is made.
+  assert.deepEqual(state.idempotenceKeys, ['first-payment'])
+  assert.equal(state.behaviours.saved.length, 1)
+  // Reading is not an operation that needs the right.
+  assert.equal((await client.getPayment(methodId)).status, 'succeeded')
+
+  // ЮKassa gives the right back: the same key makes the charge, and the behaviour is spent on it.
+  assert.deepEqual((await control(fake, 'autopayments', { enabled: true })).body, {
+    autopayments: true,
+  })
+  const charged = await client.chargeWithSavedMethod(charge(methodId), 'renew.1')
+  assert.equal(charged.status, 'canceled')
+  state = await stateOf(fake)
+  assert.equal(state.payments.length, 2)
+  assert.deepEqual(state.behaviours.saved, [])
+  assert.equal(
+    (
+      await client.createPaymentMethod(
+        { type: 'bank_card', confirmation: { type: 'redirect', return_url: RETURN_URL } },
+        'bind',
+      )
+    ).status,
+    'pending',
+  )
+})
+
+test('autopayments off: refunds and a wrong key are answered as at any shop', async (t) => {
+  const fake = await start(t)
+  const client = clientOf(fake)
+  const payment = await client.createPayment(redirectPayment(), 'one-time')
+  await press(payment.confirmation.confirmation_url, 'pay')
+  await control(fake, 'autopayments', { enabled: false })
+
+  // Returning money needs no autopayments.
+  const refund = await client.createRefund({ payment_id: payment.id, amount: amount() }, 'refund')
+  assert.equal(refund.status, 'succeeded')
+  // Who has no key is told so, not what the shop may do.
+  await assert.rejects(
+    clientOf(fake, { secretKey: 'another-key' }).createPayment(
+      redirectPayment({ save_payment_method: true }),
+      'stranger',
+    ),
+    (error) => error.status === 401,
+  )
+  assert.equal((await control(fake, 'autopayments', { enabled: 'no' })).status, 400)
+  assert.equal((await control(fake, 'autopayments', {})).status, 400)
+})
+
 test('«Отказаться» cancels the payment and still returns the buyer to the shop', async (t) => {
   const hook = await receiver(t)
   const fake = await start(t, { webhookUrl: hook.url })
@@ -592,7 +764,7 @@ test('behaviour timeout: no answer ever comes, the same key finds the payment', 
     impatient.chargeWithSavedMethod(charge(methodId), 'renew.sub_1.1'),
     (error) => error.message === 'YooKassa request timed out' && error.retryable === true,
   )
-  const found = await impatient.chargeWithSavedMethod(charge(methodId), 'renew.sub_1.1')
+  const found = await clientOf(fake).chargeWithSavedMethod(charge(methodId), 'renew.sub_1.1')
   assert.equal(found.status, 'succeeded')
   assert.equal((await stateOf(fake)).payments.length, 2)
 
@@ -606,6 +778,52 @@ test('behaviour timeout: no answer ever comes, the same key finds the payment', 
     timedOut.map((entry) => entry.status),
     [null, null],
   )
+})
+
+test('delayMs: a slow bank answers late, and a repeat of the key meanwhile gets the same payment', async (t) => {
+  const fake = await start(t)
+  const client = clientOf(fake)
+  const methodId = await savedMethod(fake, client)
+  const before = (await stateOf(fake)).payments.length
+
+  const queued = await control(fake, 'behaviour', { behaviour: 'succeed', delayMs: 300 })
+  assert.deepEqual(queued.body.behaviours.saved, [{ behaviour: 'succeed', delayMs: 300 }])
+  const started = Date.now()
+  const slow = client.chargeWithSavedMethod(charge(methodId), 'renew.sub_1.1')
+  // Nothing is made while the bank thinks: no payment yet, and the request has no answer.
+  await delay(100)
+  assert.equal((await stateOf(fake)).payments.length, before)
+  const repeat = client.chargeWithSavedMethod(charge(methodId), 'renew.sub_1.1')
+  const [first, second] = await Promise.all([slow, repeat])
+  assert.ok(Date.now() - started >= 300, 'the answer came before the delay had passed')
+  assert.equal(first.status, 'succeeded')
+  assert.equal(second.id, first.id)
+  assert.equal((await stateOf(fake)).payments.length, before + 1)
+  const requests = (await control(fake, 'requests')).body.filter(
+    (entry) => entry.idempotenceKey === 'renew.sub_1.1',
+  )
+  assert.deepEqual(
+    requests.map(({ status, replayed, sameRequest }) => ({ status, replayed, sameRequest })),
+    [
+      { status: 200, replayed: undefined, sameRequest: undefined },
+      { status: 200, replayed: true, sameRequest: true },
+    ],
+  )
+
+  // The delay goes with any behaviour; a request that is not served leaves its key free.
+  await control(fake, 'behaviour', { behaviour: 'http-500-once', processed: false, delayMs: 50 })
+  await assert.rejects(client.chargeWithSavedMethod(charge(methodId), 'renew.sub_1.2'))
+  assert.equal((await stateOf(fake)).payments.length, before + 1)
+  assert.equal(
+    (await client.chargeWithSavedMethod(charge(methodId), 'renew.sub_1.2')).status,
+    'succeeded',
+  )
+
+  for (const delayMs of [-1, 1.5, 60_001, '300']) {
+    const refused = await control(fake, 'behaviour', { behaviour: 'succeed', delayMs })
+    assert.equal(refused.status, 400, String(delayMs))
+  }
+  assert.deepEqual((await stateOf(fake)).behaviours, { payment: [], saved: [] })
 })
 
 test('behaviours of a payment by redirect apply when the buyer presses «Оплатить»', async (t) => {
@@ -907,6 +1125,9 @@ test('refunds: once per key, never beyond the payment, with refund.succeeded', a
   assert.equal(part.status, 'succeeded')
   assert.equal(part.payment_id, payment.id)
   assert.deepEqual(part.amount, amount('1900.00'))
+  // The platform tells its own refunds by the description: it comes back with the refund,
+  // from the request, from a read and in the notification.
+  assert.equal(part.description, 'Возврат')
   assert.deepEqual(await client.getRefund(part.id), part)
   // The command repeated with its key: the same refund, no second one.
   assert.deepEqual(
@@ -933,6 +1154,9 @@ test('refunds: once per key, never beyond the payment, with refund.succeeded', a
     { payment_id: payment.id, amount: amount('3000.00') },
     'refund.rest',
   )
+  // A refund «made in the cabinet»: no description and no metadata.
+  assert.equal('description' in rest, false)
+  assert.equal('metadata' in rest, false)
   refunded = await client.getPayment(payment.id)
   assert.deepEqual(refunded.refunded_amount, amount())
   assert.equal(refunded.refundable, false)
@@ -1008,6 +1232,7 @@ test('reset forgets payments, keys, behaviours and the log, and keeps the shop',
   await control(fake, 'behaviour', { behaviour: 'stay-pending' })
   await control(fake, 'webhooks', { enabled: false })
   await control(fake, 'save-anyway', { enabled: true })
+  await control(fake, 'autopayments', { enabled: false })
   await control(fake, 'card', { last4: '0000' })
 
   const cleared = await control(fake, 'reset', {})
@@ -1019,6 +1244,7 @@ test('reset forgets payments, keys, behaviours and the log, and keeps the shop',
     behaviours: { payment: [], saved: [] },
     idempotenceKeys: [],
     saveAnyway: false,
+    autopayments: true,
     card: DEFAULT_CARD,
     webhooks: { enabled: true, url: hook.url, forwardedFor: '127.0.0.1', deliveries: [] },
   })

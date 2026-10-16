@@ -558,12 +558,15 @@ async function main() {
   for (const line of reseeded) assert.match(line, /: \+0 created, 0 updated$/)
   passed('reference data seeded; a rerun changes nothing')
   await suite('orchestrator', 'orchestrator')
-  // Their PostgreSQL suites (project and profile writes, the avatar upload limit) skip themselves
-  // without DATABASE_URL, in `pnpm gates` too: this is their only local run. They create and
-  // remove their own rows.
+  // Their PostgreSQL suites (billing accounts, the ledger and its read models; project and
+  // profile writes; the avatar upload limit) skip themselves without DATABASE_URL, in
+  // `pnpm gates` too: this is their only local run. They create and remove their own rows.
+  await suite('@repo/billing', 'billing')
   await suite('@repo/trpc', 'trpc')
   await suite('web', 'web')
-  passed(`${checks} shared-user and upgrade checks; database, orchestrator, tRPC and web suites`)
+  passed(
+    `${checks} shared-user and upgrade checks; database, orchestrator, billing, tRPC and web suites`,
+  )
 }
 
 try {

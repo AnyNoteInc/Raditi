@@ -1,8 +1,15 @@
 // What subscriptions through ЮKassa need from the database (docs/plan/37-billing-plan.md,
-// «Модель данных»; spec §16, §17): a second edit account in whole numbers, one live
+// «Модель данных»; spec §16, §17): a second credit account in whole numbers, one live
 // subscription per workspace with the anchor of its periods, the period and the refund of an
 // order. Runs the real migrations in a disposable schema over billing rows written before the
 // change, then accepted and rejected cases for every new constraint.
+//
+// The rows are written under the names the database had then — the units 'edit' and
+// 'edit_pack', the plan columns edits_per_month, edits_per_day and pack_edits — and the suite
+// ends at the migration that renames them to credits (billing_credit_units): it proves that a
+// database of the old names comes out with the new ones and nothing else changed. It applies no
+// later migration: those of the credits model that change billing data refuse a database with
+// billing rows, and each has a test of its own.
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
@@ -16,10 +23,15 @@ const databaseUrl = process.env.DATABASE_URL
 const before = '20261004100000_mcp_host_undo'
 const unit = '20261004110000_billing_edit_pack_unit'
 const change = '20261004120000_billing_subscriptions'
+/** The rename of the units, of three plan columns and of the three whole-number checks. */
+const credits = '20261010130000_billing_credit_units'
 const at = new Date('2026-10-04T12:00:00Z')
 const start = new Date('2026-09-10T06:30:00Z')
 const end = new Date('2026-10-10T06:30:00Z')
 const CHECK_VIOLATION = '23514'
+const INVALID_TEXT_REPRESENTATION = '22P02'
+const UNDEFINED_COLUMN = '42703'
+const DUPLICATE_COLUMN = '42701'
 const FOREIGN_KEY_VIOLATION = '23503'
 const UNIQUE_VIOLATION = '23505'
 const NOT_NULL_VIOLATION = '23502'
@@ -29,11 +41,30 @@ type Values = Record<string, unknown>
 const migrationSql = (name: string) =>
   readFile(new URL(`./migrations/${name}/migration.sql`, import.meta.url), 'utf8')
 
+/** The whole-number checks as they were named before the rename of the units. */
 const wholeChecks = [
   'billing_accounts_edit_whole_check',
   'credit_holds_edit_whole_check',
   'credit_ledger_edit_whole_check',
 ]
+const creditChecks = [
+  'billing_accounts_credit_whole_check',
+  'credit_holds_credit_whole_check',
+  'credit_ledger_credit_whole_check',
+]
+/** The checks of "plans" that name the renamed columns; their own names stay. */
+const planChecks = ['plans_kind_fields_check', 'plans_limits_check']
+const unitRenames = { edit: 'credit_tariff', edit_pack: 'credit_pack' } as const
+const columnRenames = {
+  edits_per_month: 'credits_per_month',
+  edits_per_day: 'tasks_per_day',
+  pack_edits: 'pack_credits',
+} as const
+/** A unit as the rename leaves it; `rub` and every other value stay. */
+const renamedUnit = (value: unknown) =>
+  typeof value === 'string' && value in unitRenames
+    ? unitRenames[value as keyof typeof unitRenames]
+    : value
 const subscriptionColumns = {
   period_anchor: 'timestamp(6) with time zone',
   next_plan_id: 'uuid',
@@ -60,11 +91,11 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
     otherPlan: randomUUID(),
     pack: randomUUID(),
     site: randomUUID(),
-    editTask: randomUUID(),
+    tariffTask: randomUUID(),
     rubTask: randomUUID(),
     active: randomUUID(),
     cancelled: randomUUID(),
-    editAccount: randomUUID(),
+    tariffAccount: randomUUID(),
     rubAccount: randomUUID(),
   }
   const sources = {
@@ -78,6 +109,8 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
   let legacy: Tables
   let migrated: Tables
   let anchored: Values[]
+  /** The catalogue as the last migration before the rename left it, and the plans it held. */
+  let named: { units: unknown[]; checks: Values[]; plans: Values[] }
 
   async function insertInto(target: MigratedSchema, table: string, values: Values) {
     const columns = Object.keys(values)
@@ -126,7 +159,8 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
     return id
   }
 
-  const planRow = (id: string, values: Values = {}) => ({
+  /** A plan under the column names of the database before the rename of the units. */
+  const legacyPlanRow = (id: string, values: Values = {}) => ({
     id,
     slug: `test-${id}`,
     name: 'Synthetic plan',
@@ -137,6 +171,12 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
     updated_at: at,
     ...values,
   })
+
+  /** The same plan as it is written after the rename. */
+  const planRow = (id: string) => {
+    const { edits_per_month: creditsPerMonth, ...row } = legacyPlanRow(id)
+    return { ...row, credits_per_month: creditsPerMonth }
+  }
 
   /** A subscription as it is written after the change; `workspace_id` is always given. */
   async function subscription(values: Values) {
@@ -237,15 +277,37 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
     return { checks: checks.rows as Values[], columns: columns.rows as Values[] }
   }
 
+  /** The labels of the unit type of a schema, in the order of the type. */
+  const unitLabels = async (target: MigratedSchema = schema): Promise<unknown[]> =>
+    (
+      await target.db.query(
+        `SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+         WHERE t.typnamespace = $1::regnamespace AND t.typname = 'BillingUnit'
+         ORDER BY e.enumsortorder`,
+        [target.name],
+      )
+    ).rows.map((row: Values) => row.enumlabel)
+
+  /** The stored definitions of the checks that name a unit or a renamed plan column. */
+  const storedChecks = async () =>
+    (
+      await schema.db.query(
+        `SELECT conname, conrelid::regclass::text AS "table", pg_get_constraintdef(oid) AS definition
+         FROM pg_constraint
+         WHERE connamespace = $1::regnamespace AND conname = ANY($2::text[]) ORDER BY conname`,
+        [schema.name, [...wholeChecks, ...creditChecks, ...planChecks]],
+      )
+    ).rows as Values[]
+
   beforeAll(async () => {
     schema = await createMigratedSchema(databaseUrl ?? '', 'billing_subscriptions')
     await schema.migrate(before)
     await insert('workspaces', { id: ids.workspace, name: 'Synthetic workspace', updated_at: at })
-    await insert('plans', planRow(ids.plan))
-    await insert('plans', planRow(ids.otherPlan, { price: '12900.00', edits_per_month: 80 }))
+    await insert('plans', legacyPlanRow(ids.plan))
+    await insert('plans', legacyPlanRow(ids.otherPlan, { price: '12900.00', edits_per_month: 80 }))
     await insert(
       'plans',
-      planRow(ids.pack, {
+      legacyPlanRow(ids.pack, {
         kind: 'pack',
         price: '1990.00',
         edits_per_month: null,
@@ -261,7 +323,7 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
       stack: 'wordpress',
       updated_at: at,
     })
-    for (const id of [ids.editTask, ids.rubTask])
+    for (const id of [ids.tariffTask, ids.rubTask])
       await insert('tasks', {
         id,
         workspace_id: ids.workspace,
@@ -290,7 +352,7 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
       updated_at: at,
     })
     await insert('billing_accounts', {
-      id: ids.editAccount,
+      id: ids.tariffAccount,
       workspace_id: ids.workspace,
       unit: 'edit',
       balance: '30.00',
@@ -307,9 +369,9 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
     })
     await insert('credit_holds', {
       id: randomUUID(),
-      account_id: ids.editAccount,
+      account_id: ids.tariffAccount,
       unit: 'edit',
-      task_id: ids.editTask,
+      task_id: ids.tariffTask,
       amount: '1.00',
       expires_at: end,
     })
@@ -359,7 +421,7 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
     })
     await insert('credit_ledger', {
       id: randomUUID(),
-      account_id: ids.editAccount,
+      account_id: ids.tariffAccount,
       unit: 'edit',
       kind: 'grant',
       amount: '30.00',
@@ -386,7 +448,12 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
          FROM subscriptions ORDER BY status`,
       )
     ).rows as Values[]
-    await schema.migrate()
+    named = {
+      units: await unitLabels(),
+      checks: await storedChecks(),
+      plans: (await schema.db.query('SELECT * FROM plans ORDER BY id')).rows as Values[],
+    }
+    await schema.migrate(credits)
   }, 30_000)
 
   beforeEach(async () => {
@@ -425,16 +492,28 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
         expect(migrated[table]).toEqual(legacy[table])
     })
 
-    it('keep their columns through every later migration', async () => {
+    it('keep their columns through every later migration up to the rename of the units', async () => {
       // A later migration may add columns of its own: only the ones of these rows are compared.
+      // The rename changes one thing in them: the unit of an account, a hold and an entry reads
+      // by its new label.
       for (const [table, rows] of Object.entries(migrated) as [keyof Tables, Values[]][]) {
         const columns = Object.keys(rows[0]!)
         expect(
           (await select(sources[table])).map((row) =>
             Object.fromEntries(columns.map((column) => [column, row[column]])),
           ),
-        ).toEqual(rows)
+        ).toEqual(
+          rows.map((row) => ('unit' in row ? { ...row, unit: renamedUnit(row.unit) } : row)),
+        )
       }
+      // These rows were written before 'edit_pack' existed: they hold the one renamed unit of
+      // that time, which was there to be renamed, and the wallet's, which stayed. Rows of both
+      // renamed units cross the rename in a case of their own below.
+      expect(migrated.accounts.map((row) => row.unit).sort()).toEqual(['edit', 'rub'])
+      expect((await select(sources.accounts)).map((row) => row.unit).sort()).toEqual([
+        'credit_tariff',
+        'rub',
+      ])
     })
 
     it('still pass their checks when they are written again', async () => {
@@ -459,14 +538,9 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
       ])
     })
 
-    it('add edit_pack after the existing units of the database type', async () => {
-      const { rows } = await schema.db.query(
-        `SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
-         WHERE t.typnamespace = $1::regnamespace AND t.typname = 'BillingUnit'
-         ORDER BY e.enumsortorder`,
-        [schema.name],
-      )
-      expect(rows.map((row: Values) => row.enumlabel)).toEqual(['edit', 'rub', 'edit_pack'])
+    it('add edit_pack after the existing units of the database type, and the rename keeps the order', async () => {
+      expect(named.units).toEqual(['edit', 'rub', 'edit_pack'])
+      expect(await unitLabels()).toEqual(['credit_tariff', 'rub', 'credit_pack'])
     })
 
     it('keep the two partial unique indexes as they were written', async () => {
@@ -527,7 +601,7 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
           name: 'Synthetic workspace',
           updated_at: at,
         })
-        await insertInto(scratch, 'plans', planRow(ids.plan))
+        await insertInto(scratch, 'plans', legacyPlanRow(ids.plan))
         for (const status of ['active', 'past_due'])
           await insertInto(scratch, 'subscriptions', {
             id: randomUUID(),
@@ -561,50 +635,288 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
     }, 30_000)
   })
 
-  describe('edit accounts', () => {
-    it('accepts purchased edits next to the tariff edits and the wallet of one workspace', async () => {
+  describe('the rename of the units to credits', () => {
+    const mapped = (definition: unknown) =>
+      Object.entries({ ...unitRenames, ...columnRenames }).reduce(
+        (text, [from, to]) => text.replaceAll(new RegExp(`\\b${from}\\b`, 'g'), to),
+        String(definition),
+      )
+
+    it('renames the three whole-number checks and their stored expressions follow the labels', async () => {
+      const before = named.checks.filter((row) => wholeChecks.includes(String(row.conname)))
+      expect(before.map((row) => row.conname)).toEqual(wholeChecks)
+      for (const row of before) expect(row.definition).toMatch(/'edit'.*'edit_pack'/)
+      const after = (await storedChecks()).filter(
+        (row) => !planChecks.includes(String(row.conname)),
+      )
+      // No check is left under an old name, and none was dropped and created anew: each is the
+      // expression it was, on its table, with the labels read by their new names.
+      expect(after).toEqual(
+        before.map((row, index) => ({
+          conname: creditChecks[index],
+          table: row.table,
+          definition: mapped(row.definition),
+        })),
+      )
+      for (const row of after) {
+        expect(row.definition).toMatch(/'credit_tariff'.*'credit_pack'/)
+        expect(row.definition).not.toMatch(/'edit/)
+      }
+    })
+
+    it('renames the three plan columns, and the two checks of plans follow them', async () => {
+      const { rows: columns } = await schema.db.query(
+        `SELECT a.attname AS "column", format_type(a.atttypid, a.atttypmod) AS type,
+           a.attnotnull AS required
+         FROM pg_attribute a
+         WHERE a.attrelid = 'plans'::regclass AND NOT a.attisdropped
+           AND a.attname = ANY($1::text[])
+         ORDER BY a.attnum`,
+        [[...Object.keys(columnRenames), ...Object.values(columnRenames)]],
+      )
+      expect(columns).toEqual(
+        Object.values(columnRenames).map((column) => ({
+          column,
+          type: 'integer',
+          required: false,
+        })),
+      )
+      const before = named.checks.filter((row) => planChecks.includes(String(row.conname)))
+      expect(before.map((row) => row.conname)).toEqual(planChecks)
+      for (const row of before) expect(row.definition).toMatch(/edits_per_month/)
+      const after = (await storedChecks()).filter((row) => planChecks.includes(String(row.conname)))
+      expect(after).toEqual(before.map((row) => ({ ...row, definition: mapped(row.definition) })))
+      for (const row of after)
+        expect(row.definition).not.toMatch(/\b(edits_per_month|edits_per_day|pack_edits)\b/)
+    })
+
+    it('keeps every plan with its numbers under the new column names', async () => {
+      expect(
+        named.plans.map((row) => [row.edits_per_month, row.edits_per_day, row.pack_edits]),
+      ).toEqual(
+        expect.arrayContaining([
+          [30, null, null],
+          [80, null, null],
+          [null, null, 10],
+        ]),
+      )
+      expect((await schema.db.query('SELECT * FROM plans ORDER BY id')).rows).toEqual(
+        named.plans.map(
+          ({ edits_per_month: month, edits_per_day: day, pack_edits: pack, ...row }) => ({
+            ...row,
+            credits_per_month: month,
+            tasks_per_day: day,
+            pack_credits: pack,
+          }),
+        ),
+      )
+    })
+
+    it('leaves no way to write an old label or an old column', async () => {
       const workspaceId = await workspace()
-      await account(workspaceId, 'edit', { balance: '30.00', held: '1.00' })
-      await account(workspaceId, 'edit_pack', { balance: '10.00', held: '2.00' })
+      for (const old of Object.keys(unitRenames))
+        await refused(() => account(workspaceId, old), INVALID_TEXT_REPRESENTATION)
+      for (const old of Object.keys(columnRenames))
+        await refused(
+          () => schema.db.query(`UPDATE plans SET "${old}" = 1 WHERE id = $1`, [ids.plan]),
+          UNDEFINED_COLUMN,
+        )
+    })
+
+    it('still holds the plans to their checks under the new column names', async () => {
+      const id = randomUUID()
+      await refused(
+        () => insert('plans', { ...planRow(id), credits_per_month: null }),
+        CHECK_VIOLATION,
+        'plans_kind_fields_check',
+      )
+      await refused(
+        () => insert('plans', { ...planRow(id), kind: 'pack', pack_credits: null }),
+        CHECK_VIOLATION,
+        'plans_kind_fields_check',
+      )
+      for (const column of Object.values(columnRenames))
+        await refused(
+          () => insert('plans', { ...planRow(id), [column]: 0 }),
+          CHECK_VIOLATION,
+          'plans_limits_check',
+        )
+      await insert('plans', { ...planRow(id), tasks_per_day: 5 })
+    })
+
+    it('carries an account, a hold and an entry of every unit across, their label alone renamed', async () => {
+      // The legacy rows of the suite were written before 'edit_pack' existed. Here rows of all
+      // three units stand in the database the moment the rename is applied — the purchased
+      // unit among them, under its old label.
+      const scratch = await createMigratedSchema(databaseUrl ?? '', 'billing_credit_units_rows')
+      try {
+        await scratch.migrate(change)
+        const workspaceId = randomUUID()
+        const siteId = randomUUID()
+        await insertInto(scratch, 'workspaces', {
+          id: workspaceId,
+          name: 'Synthetic workspace',
+          updated_at: at,
+        })
+        await insertInto(scratch, 'sites', {
+          id: siteId,
+          workspace_id: workspaceId,
+          name: 'Synthetic site',
+          url: `https://${siteId}.invalid`,
+          stack: 'wordpress',
+          updated_at: at,
+        })
+        for (const [old, balance, held] of [
+          ['edit', '30.00', '1.00'],
+          ['edit_pack', '10.00', '2.00'],
+          ['rub', '1000.50', '300.25'],
+        ] as const) {
+          const accountId = randomUUID()
+          const taskId = randomUUID()
+          await insertInto(scratch, 'billing_accounts', {
+            id: accountId,
+            workspace_id: workspaceId,
+            unit: old,
+            balance,
+            held,
+            updated_at: at,
+          })
+          await insertInto(scratch, 'tasks', {
+            id: taskId,
+            workspace_id: workspaceId,
+            site_id: siteId,
+            updated_at: at,
+          })
+          await insertInto(scratch, 'credit_holds', {
+            id: randomUUID(),
+            account_id: accountId,
+            unit: old,
+            task_id: taskId,
+            amount: held,
+            expires_at: end,
+          })
+          await insertInto(scratch, 'credit_ledger', {
+            id: randomUUID(),
+            account_id: accountId,
+            unit: old,
+            kind: 'grant',
+            amount: balance,
+            balance_after: balance,
+            idempotency_key: `test:${randomUUID()}`,
+          })
+        }
+        const billingRows = async () => {
+          const rows: Record<string, Values[]> = {}
+          for (const table of [sources.accounts, sources.holds, sources.ledger])
+            rows[table] = (await scratch.db.query(`SELECT * FROM "${table}" ORDER BY id`))
+              .rows as Values[]
+          return rows
+        }
+        const units = (rows: Values[]) => rows.map((row) => row.unit).sort()
+        const written = await billingRows()
+        for (const rows of Object.values(written))
+          expect(units(rows)).toEqual(['edit', 'edit_pack', 'rub'])
+
+        await scratch.migrate(credits)
+
+        const renamed = await billingRows()
+        for (const rows of Object.values(renamed))
+          expect(units(rows)).toEqual(['credit_pack', 'credit_tariff', 'rub'])
+        // Every column of every row is what it was, the unit read by its new label.
+        expect(renamed).toEqual(
+          Object.fromEntries(
+            Object.entries(written).map(([table, rows]) => [
+              table,
+              rows.map((row) => ({ ...row, unit: renamedUnit(row.unit) })),
+            ]),
+          ),
+        )
+      } finally {
+        await scratch.drop()
+      }
+    }, 30_000)
+
+    it('applies as one transaction: a statement that fails leaves every old name in place', async () => {
+      // `prisma migrate deploy` sends the file statement by statement. A column that already
+      // has the new name stops the third rename — after both labels were renamed.
+      const scratch = await createMigratedSchema(databaseUrl ?? '', 'billing_credit_units_atomic')
+      try {
+        await scratch.migrate(change)
+        await scratch.db.query('ALTER TABLE plans ADD COLUMN credits_per_month integer')
+        const catalogue = async () => ({
+          units: await unitLabels(scratch),
+          checks: (await shape(scratch)).checks,
+        })
+        const previous = await catalogue()
+        expect(previous.units).toEqual(['edit', 'rub', 'edit_pack'])
+        const statements = (await migrationSql(credits))
+          .split(/;[ \t]*$/m)
+          .map((statement) => statement.trim())
+          .filter(Boolean)
+        const run = async () => {
+          for (const statement of statements) await scratch.db.query(statement)
+        }
+        await expect(run()).rejects.toMatchObject({ code: DUPLICATE_COLUMN })
+        // What the end of the connection does to a transaction that is still open.
+        await scratch.db.query('ROLLBACK')
+        expect(await catalogue()).toEqual(previous)
+      } finally {
+        await scratch.drop()
+      }
+    }, 30_000)
+  })
+
+  describe('credit accounts', () => {
+    it('accepts purchased credits next to the tariff credits and the wallet of one workspace', async () => {
+      const workspaceId = await workspace()
+      await account(workspaceId, 'credit_tariff', { balance: '30.00', held: '1.00' })
+      await account(workspaceId, 'credit_pack', { balance: '10.00', held: '2.00' })
       await account(workspaceId, 'rub', { balance: '1000.50', held: '300.25' })
       // Still one account per unit.
       await refused(
-        () => account(workspaceId, 'edit_pack'),
+        () => account(workspaceId, 'credit_pack'),
         UNIQUE_VIOLATION,
         'billing_accounts_workspace_id_unit_key',
       )
     })
 
-    it.each(['edit', 'edit_pack'])('rejects a fractional balance or hold of %s', async (name) => {
-      const workspaceId = await workspace()
-      for (const values of [{ balance: '1.50' }, { balance: '2.00', held: '0.50' }])
+    it.each(['credit_tariff', 'credit_pack'])(
+      'rejects a fractional balance or hold of %s',
+      async (name) => {
+        const workspaceId = await workspace()
+        for (const values of [{ balance: '1.50' }, { balance: '2.00', held: '0.50' }])
+          await refused(
+            () => account(workspaceId, name, values),
+            CHECK_VIOLATION,
+            'billing_accounts_credit_whole_check',
+          )
+        const id = await account(workspaceId, name, { balance: '2.00' })
         await refused(
-          () => account(workspaceId, name, values),
+          () => update('billing_accounts', id, { balance: '1.99' }),
           CHECK_VIOLATION,
-          'billing_accounts_edit_whole_check',
+          'billing_accounts_credit_whole_check',
         )
-      const id = await account(workspaceId, name, { balance: '2.00' })
+      },
+    )
+
+    it.each(['credit_tariff', 'credit_pack'])('reserves %s in whole credits only', async (name) => {
+      const id = await account(await workspace(), name, { balance: '10.00' })
+      await hold(id, name, '1.00')
       await refused(
-        () => update('billing_accounts', id, { balance: '1.99' }),
+        () => hold(id, name, '0.50'),
         CHECK_VIOLATION,
-        'billing_accounts_edit_whole_check',
+        'credit_holds_credit_whole_check',
       )
     })
 
-    it.each(['edit', 'edit_pack'])('reserves %s in whole edits only', async (name) => {
-      const id = await account(await workspace(), name, { balance: '10.00' })
-      await hold(id, name, '1.00')
-      await refused(() => hold(id, name, '0.50'), CHECK_VIOLATION, 'credit_holds_edit_whole_check')
-    })
-
-    it.each(['edit', 'edit_pack'])('moves %s in whole edits only', async (name) => {
+    it.each(['credit_tariff', 'credit_pack'])('moves %s in whole credits only', async (name) => {
       const id = await account(await workspace(), name)
       await entry(id, name)
       for (const values of [{ amount: '0.50' }, { amount: '1.00', balance_after: '10.50' }])
         await refused(
           () => entry(id, name, values),
           CHECK_VIOLATION,
-          'credit_ledger_edit_whole_check',
+          'credit_ledger_credit_whole_check',
         )
     })
 
@@ -614,17 +926,17 @@ describe.skipIf(!databaseUrl)('billing subscriptions migrations', () => {
       await entry(id, 'rub', { amount: '0.50', balance_after: '100.50' })
     })
 
-    it('rejects a hold or an entry that names the other edit account', async () => {
+    it('rejects a hold or an entry that names the other credit account', async () => {
       const workspaceId = await workspace()
-      const tariff = await account(workspaceId, 'edit', { balance: '10.00' })
-      const pack = await account(workspaceId, 'edit_pack', { balance: '10.00' })
+      const tariff = await account(workspaceId, 'credit_tariff', { balance: '10.00' })
+      const pack = await account(workspaceId, 'credit_pack', { balance: '10.00' })
       await refused(
-        () => hold(tariff, 'edit_pack', '1.00'),
+        () => hold(tariff, 'credit_pack', '1.00'),
         FOREIGN_KEY_VIOLATION,
         'credit_holds_account_id_unit_fkey',
       )
       await refused(
-        () => entry(pack, 'edit'),
+        () => entry(pack, 'credit_tariff'),
         FOREIGN_KEY_VIOLATION,
         'credit_ledger_account_id_unit_fkey',
       )

@@ -1,0 +1,553 @@
+import { z } from 'zod'
+
+import { agentOutputLimits } from '../ports/agent-driver.ts'
+import { FEED_FAILURE_FALLBACK, feedFailureCodes } from './client-feed-failures.ts'
+import {
+  FEED_REQUEST_TEXT_LIMIT,
+  feedText,
+  hasVisibleText,
+  isFeedText,
+  looksLikeSecret,
+} from './client-feed-text.ts'
+import { taskStatuses } from './task-status.ts'
+
+/**
+ * The customer-facing feed of a task — docs/research/2026-10-client-feed/feed-design.md
+ * (confirmed by the owner on 11.10.2026). Rows of `task_events` with a `feed.*` type are the
+ * only ones a customer ever reads. Schemas and pure helpers only: who writes a row and when is
+ * the business of the writers (web, the turn journal, the turn handler).
+ *
+ * Two schemas per type. Writing is strict: closed enums, no extra keys, free text in exactly
+ * four fields (`request.text`, `question.intro`, `question.questions[].text` with its
+ * `options[]`, `result.message`) — everything else is a number, an enum or an id, so nothing
+ * raw (a failure reason, a path, a command) can reach the customer. Reading is tolerant: rows
+ * are immutable and outlive the code that wrote them.
+ *
+ * The vocabulary names no agent shell, CMS or provider (CLAUDE.md, rule 8).
+ */
+export const feedEventTypes = [
+  'feed.request',
+  'feed.step',
+  'feed.question',
+  'feed.result',
+  'feed.failure',
+  'feed.cancelled',
+] as const
+export type FeedEventType = (typeof feedEventTypes)[number]
+
+/** Every customer-visible type carries this prefix; the database CHECK relies on it. */
+export const FEED_TYPE_PREFIX = 'feed.'
+/** The only payload version so far. A removed field or a changed meaning takes a new one. */
+export const FEED_VERSION = 1
+
+export const feedLimits = Object.freeze({
+  /** A payload as UTF-8 JSON. */
+  payloadBytes: 32 * 1024,
+  requestText: FEED_REQUEST_TEXT_LIMIT,
+  attachments: 10,
+  turn: 999_999,
+  intro: agentOutputLimits.clientMessage,
+  message: agentOutputLimits.clientMessage,
+  questions: agentOutputLimits.questions,
+  question: agentOutputLimits.question,
+  questionOptions: agentOutputLimits.questionOptions,
+  questionOption: agentOutputLimits.questionOption,
+  filesChanged: 10_000,
+  /** Rows of one `task.feed` answer. */
+  page: 200,
+  title: 120,
+})
+const limits = feedLimits
+
+// Kinds a row may be written with today. `revision` and `continue` are reserved by the design
+// for later slices; their fields are not defined yet, so they join the schema with them.
+export const feedRequestKinds = ['first', 'answer', 'retry'] as const
+export type FeedRequestKind = (typeof feedRequestKinds)[number]
+
+/** A stage of work the customer understands; `site` and `files` wait for trusted sources. */
+export const feedSteps = ['work', 'save', 'site', 'files'] as const
+export const feedStepSchema = z.enum(feedSteps)
+export type FeedStep = z.infer<typeof feedStepSchema>
+
+export const feedQuestionKinds = ['agent', 'ceiling'] as const
+export type FeedQuestionKind = (typeof feedQuestionKinds)[number]
+export const feedCeilingReasons = ['step', 'credits', 'gift', 'attempts'] as const
+export type FeedCeilingReason = (typeof feedCeilingReasons)[number]
+
+/**
+ * What the platform knows about the site. Trusted: written from the platform's own records,
+ * never from the agent's words. A result never says `restored`, a failure never `changed`.
+ */
+export const feedSiteStates = ['unchanged', 'changed', 'restored', 'check'] as const
+export type FeedSiteState = (typeof feedSiteStates)[number]
+const resultSites = ['unchanged', 'changed', 'check'] as const
+const endedSites = ['unchanged', 'restored', 'check'] as const
+
+/** What became of the held credits; null — not known or not applicable. Trusted. */
+export const feedCreditsStates = ['returned', 'expired'] as const
+export type FeedCreditsState = (typeof feedCreditsStates)[number]
+
+export const feedResultNexts = ['done', 'awaiting_approval'] as const
+export type FeedResultNext = (typeof feedResultNexts)[number]
+const changeTypes = ['code', 'content', 'mixed', 'none'] as const
+const risks = ['low', 'medium', 'high'] as const
+
+export const feedCancelledBys = [
+  'not_available',
+  'queue_timeout',
+  'customer',
+  'declined',
+  'stopped',
+  'no_answer',
+] as const
+export type FeedCancelledBy = (typeof feedCancelledBys)[number]
+
+// Nineteen digits reach past a bigint, and PostgreSQL answers that with an error of its own.
+// Digits without leading zeros of the same length compare as text. No BigInt(): a refinement
+// also runs on a string the pattern has already refused.
+const MAX_BIGINT = '9223372036854775807'
+const fitsBigint = (digits: string) =>
+  digits.length < MAX_BIGINT.length || (digits.length === MAX_BIGINT.length && digits <= MAX_BIGINT)
+
+/** `task_events.id` of a feed row: a bigint as a string of digits. */
+export const feedEventIdSchema = z
+  .string()
+  .regex(/^[1-9]\d{0,18}$/)
+  .refine(fitsBigint, 'out of bigint range')
+/** The cursor of a reader: the id of the last row seen, `0` before the first. */
+export const feedCursorSchema = z
+  .string()
+  .regex(/^(?:0|[1-9]\d{0,18})$/)
+  .refine(fitsBigint, 'out of bigint range')
+
+const version = z.literal(FEED_VERSION)
+const turnNo = z.number().int().min(1).max(limits.turn)
+const count = z.number().int().nonnegative()
+
+// The customer's own words: stored as written, so what cannot be stored is refused, not removed.
+const forbiddenInRequest = /[^\P{Cc}\n\t]/u
+const requestText = z
+  .string()
+  .trim()
+  .min(1)
+  // Aborts: the checks below are not run on a text of any length.
+  .max(limits.requestText, { abort: true })
+  .refine((text) => !forbiddenInRequest.test(text), 'control characters are not allowed')
+  // Half of a surrogate pair: jsonb would refuse the row.
+  .refine((text) => text.isWellFormed(), 'ill-formed text is not allowed')
+  .refine(hasVisibleText, 'the request has no visible characters')
+  // A backstop for a writer that forgot the check: the procedures call looksLikeSecret()
+  // themselves to answer in the customer's words. The message never repeats the text.
+  .refine((text) => !looksLikeSecret(text), 'looks like a password or a key')
+
+/** The agent's words: a row stores only what feedText() leaves unchanged, with something to read. */
+const agentText = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine(isFeedText, 'expected text passed through feedText()')
+    .refine(hasVisibleText, 'the text has no visible characters')
+
+const requestBase = {
+  v: version,
+  /** The name and the address are not stored: the name is looked up when the row is shown. */
+  authorId: z.uuid(),
+  /** Invented by the browser: a repeated request is recognised by it. */
+  requestId: z.uuid(),
+}
+// Files come with words. Design reading: a retry is a press, so it carries none.
+const attachments = z.array(z.uuid()).max(limits.attachments).optional()
+
+/** `feed.request` v1 — what the customer wrote or pressed. */
+export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ ...requestBase, kind: z.literal('first'), text: requestText, attachments }),
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('answer'),
+    text: requestText,
+    attachments,
+    /** The `feed.question` row this answers. */
+    answersEventId: feedEventIdSchema,
+  }),
+  // «Попробовать ещё» is a press, not a message.
+  z.strictObject({ ...requestBase, kind: z.literal('retry') }),
+])
+export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
+
+/** `feed.step` v1 — the work reached a stage. No text, no path, no counter. */
+export const feedStepPayloadSchema = z.strictObject({
+  v: version,
+  turn: turnNo,
+  /** `tasks.attempt` when written; informational. */
+  attempt: z.number().int().min(1),
+  step: feedStepSchema,
+})
+export type FeedStepPayload = z.infer<typeof feedStepPayloadSchema>
+
+/**
+ * `feed.question` v1 — the customer's answer is needed. The agent asks in words; the platform
+ * asks about credits with a reason and three numbers, its text comes from the catalogue.
+ */
+export const feedQuestionPayloadSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    v: version,
+    kind: z.literal('agent'),
+    turn: turnNo,
+    intro: agentText(limits.intro),
+    questions: z
+      .array(
+        z.strictObject({
+          text: agentText(limits.question),
+          // The design bounds only the length; an empty option could not be a button.
+          options: z.array(agentText(limits.questionOption)).max(limits.questionOptions),
+        }),
+      )
+      .min(1)
+      .max(limits.questions),
+  }),
+  z.strictObject({
+    v: version,
+    kind: z.literal('ceiling'),
+    turn: turnNo,
+    reason: z.enum(feedCeilingReasons),
+    /** Credits: spent on the task, held for it, left of the hold. */
+    spent: count,
+    held: count,
+    left: count,
+  }),
+])
+export type FeedQuestionPayload = z.infer<typeof feedQuestionPayloadSchema>
+
+/** `feed.result` v1 — what this turn came to. No paths and no summary. */
+export const feedResultPayloadSchema = z.strictObject({
+  v: version,
+  turn: turnNo,
+  message: agentText(limits.message),
+  site: z.enum(resultSites),
+  /** The status this result moved the task to: stored, not derived again. */
+  next: z.enum(feedResultNexts),
+  /** Trusted count of files in the published candidate, or null when it is not known. */
+  filesChanged: z.number().int().min(0).max(limits.filesChanged).nullable(),
+  // The agent's own claims, informational: nothing about the site is said on their word.
+  changeType: z.enum(changeTypes),
+  needsApproval: z.boolean(),
+  risk: z.enum(risks),
+})
+export type FeedResultPayload = z.infer<typeof feedResultPayloadSchema>
+
+/** `feed.failure` v1 — a code and two trusted facts; the reason text never gets here. */
+export const feedFailurePayloadSchema = z.strictObject({
+  v: version,
+  /** null — the failure came before a turn was opened. */
+  turn: turnNo.nullable(),
+  code: z.enum(feedFailureCodes),
+  site: z.enum(endedSites),
+  credits: z.enum(feedCreditsStates).nullable(),
+})
+export type FeedFailurePayload = z.infer<typeof feedFailurePayloadSchema>
+
+/** `feed.cancelled` v1 — the task was stopped. */
+export const feedCancelledPayloadSchema = z.strictObject({
+  v: version,
+  turn: turnNo.nullable(),
+  by: z.enum(feedCancelledBys),
+  /** Who cancelled, when a person did. */
+  authorId: z.uuid().optional(),
+  site: z.enum(endedSites),
+  credits: z.enum(feedCreditsStates).nullable(),
+})
+export type FeedCancelledPayload = z.infer<typeof feedCancelledPayloadSchema>
+
+/** The writing schema of each type. */
+export const feedPayloadSchemas = Object.freeze({
+  'feed.request': feedRequestPayloadSchema,
+  'feed.step': feedStepPayloadSchema,
+  'feed.question': feedQuestionPayloadSchema,
+  'feed.result': feedResultPayloadSchema,
+  'feed.failure': feedFailurePayloadSchema,
+  'feed.cancelled': feedCancelledPayloadSchema,
+}) satisfies Record<FeedEventType, z.ZodType>
+
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
+/** Size of a payload as it is stored: UTF-8 JSON. */
+export const feedPayloadBytes = (payload: unknown): number => utf8Bytes(JSON.stringify(payload))
+
+const row = <T extends FeedEventType, P extends z.ZodType>(type: T, payload: P) =>
+  z.strictObject({ type: z.literal(type), payload })
+
+/**
+ * The row schema with a given size limit. With well-formed text the field limits already keep
+ * a payload under 32 KiB, so the limit is a second line of defence; it is a parameter so that
+ * a test can reach it.
+ */
+export const feedRowSchemaWithin = (maxBytes: number) =>
+  z
+    .discriminatedUnion('type', [
+      row('feed.request', feedRequestPayloadSchema),
+      row('feed.step', feedStepPayloadSchema),
+      row('feed.question', feedQuestionPayloadSchema),
+      row('feed.result', feedResultPayloadSchema),
+      row('feed.failure', feedFailurePayloadSchema),
+      row('feed.cancelled', feedCancelledPayloadSchema),
+    ])
+    .superRefine((value, ctx) => {
+      if (feedPayloadBytes(value.payload) > maxBytes)
+        ctx.addIssue({ code: 'custom', message: 'feed payload is too large' })
+    })
+
+/** A row on its way into `task_events`: the type, its strict payload and the size limit. */
+export const feedRowSchema = feedRowSchemaWithin(limits.payloadBytes)
+export type FeedRow = z.infer<typeof feedRowSchema>
+
+// ---------------------------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------------------------
+
+/** A string enum read tolerantly: a value this code does not know becomes `fallback`. */
+const known = <T extends string, F>(values: readonly T[], fallback: F) =>
+  z.string().transform((value): T | F => values.find((item) => item === value) ?? fallback)
+
+// The agent's words pass feedText() again on the way out: a marker never reaches the screen,
+// whoever wrote the row. A text with nothing to read makes the row unreadable, not an empty card.
+const shownText = (max: number) =>
+  z.string().max(max).transform(feedText).pipe(z.string().refine(hasVisibleText))
+
+const readCredits = z.union([z.null(), known(feedCreditsStates, null)])
+const readEndedSite = known(endedSites, 'check' as const)
+
+const readRequest = {
+  first: z.object({
+    kind: z.literal('first'),
+    text: z.string().min(1).max(limits.requestText),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    attachments,
+  }),
+  answer: z.object({
+    kind: z.literal('answer'),
+    text: z.string().min(1).max(limits.requestText),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    answersEventId: feedEventIdSchema,
+    attachments,
+  }),
+  retry: z.object({ kind: z.literal('retry'), authorId: z.uuid(), requestId: z.uuid() }),
+} satisfies Record<FeedRequestKind, z.ZodType>
+// A kind added later: the text is shown when there is one.
+const readOtherRequest = z.object({
+  text: z.string().min(1).max(limits.requestText).optional().catch(undefined),
+  authorId: z.uuid().optional().catch(undefined),
+})
+
+const readStep = z.object({
+  turn: turnNo,
+  attempt: z.number().int().min(1),
+  step: known(feedSteps, null),
+})
+
+const readAgentQuestion = z.object({
+  kind: z.literal('agent'),
+  turn: turnNo,
+  intro: shownText(limits.intro),
+  questions: z
+    .array(
+      z.object({
+        text: shownText(limits.question),
+        options: z.array(shownText(limits.questionOption)).max(limits.questionOptions),
+      }),
+    )
+    .min(1)
+    .max(limits.questions),
+})
+const readCeilingQuestion = z.object({
+  kind: z.literal('ceiling'),
+  turn: turnNo,
+  // No fallback: a question needs an action, an unknown reason is shown as a newer row.
+  reason: z.enum(feedCeilingReasons),
+  spent: count,
+  held: count,
+  left: count,
+})
+
+const readResult = z.object({
+  turn: turnNo,
+  message: shownText(limits.message),
+  site: known(resultSites, 'check' as const),
+  /** null — the screen is drawn by the status of the task. */
+  next: known(feedResultNexts, null),
+  filesChanged: z.number().int().min(0).max(limits.filesChanged).nullable(),
+  changeType: known(changeTypes, null),
+  needsApproval: z.boolean(),
+  risk: known(risks, null),
+})
+
+const readFailure = z.object({
+  turn: turnNo.nullable(),
+  code: known(feedFailureCodes, FEED_FAILURE_FALLBACK),
+  site: readEndedSite,
+  credits: readCredits,
+})
+
+const readCancelled = z.object({
+  turn: turnNo.nullable(),
+  /** null — a way of cancelling added later: the plate is shown without a reason. */
+  by: known(feedCancelledBys, null),
+  authorId: z.uuid().optional(),
+  site: readEndedSite,
+  credits: readCredits,
+})
+
+/**
+ * A row as the customer's screen gets it: the fields of its schema without `v`.
+ *
+ * - `newer` — a `feed.*` type, a version, a question kind or a ceiling reason this code does
+ *   not know yet: «Здесь появилось новое сообщение. Обновите страницу, чтобы его увидеть.»
+ * - `unreadable` — a row of a known version that does not match its schema: «Не удалось
+ *   показать это сообщение. Напишите нам, если оно важно.»
+ * - `skipped` — a stage this code does not know. The only row a reader may leave out.
+ */
+export type FeedEvent =
+  | ({ type: 'feed.request' } & (
+      | z.infer<typeof readRequest.first>
+      | z.infer<typeof readRequest.answer>
+      | z.infer<typeof readRequest.retry>
+      | ({ kind: 'other' } & z.infer<typeof readOtherRequest>)
+    ))
+  | { type: 'feed.step'; turn: number; attempt: number; step: FeedStep }
+  | ({ type: 'feed.question' } & (
+      z.infer<typeof readAgentQuestion> | z.infer<typeof readCeilingQuestion>
+    ))
+  | ({ type: 'feed.result' } & z.infer<typeof readResult>)
+  | ({ type: 'feed.failure' } & z.infer<typeof readFailure>)
+  | ({ type: 'feed.cancelled' } & z.infer<typeof readCancelled>)
+  | { type: 'newer' }
+  | { type: 'unreadable' }
+  | { type: 'skipped' }
+export type FeedEventKind = FeedEvent['type']
+
+/** A row of a `task.feed` answer: ids are strings (bigint), `at` is an ISO time. */
+export type FeedItem = FeedEvent & { id: string; at: string }
+
+const NEWER: FeedEvent = Object.freeze({ type: 'newer' })
+const UNREADABLE: FeedEvent = Object.freeze({ type: 'unreadable' })
+const SKIPPED: FeedEvent = Object.freeze({ type: 'skipped' })
+
+type Payload = Record<string, unknown>
+type Reader = (payload: Payload) => FeedEvent
+
+const includes = <T extends string>(values: readonly T[], value: unknown): value is T =>
+  typeof value === 'string' && (values as readonly string[]).includes(value)
+
+function readWith<T extends object>(
+  schema: z.ZodType<T>,
+  payload: Payload,
+  build: (data: T) => FeedEvent,
+): FeedEvent {
+  const parsed = schema.safeParse(payload)
+  return parsed.success ? build(parsed.data) : UNREADABLE
+}
+
+/** Readers by type and version; a version stays here while its rows live. */
+const readers: Record<FeedEventType, Record<number, Reader>> = {
+  'feed.request': {
+    1: (payload) => {
+      if (typeof payload.kind !== 'string') return UNREADABLE
+      if (!includes(feedRequestKinds, payload.kind))
+        return readWith(readOtherRequest, payload, (data) => ({
+          type: 'feed.request',
+          kind: 'other',
+          ...data,
+        }))
+      const schema: z.ZodType<z.infer<(typeof readRequest)[FeedRequestKind]>> =
+        readRequest[payload.kind]
+      return readWith(schema, payload, (data) => ({ type: 'feed.request', ...data }))
+    },
+  },
+  'feed.step': {
+    1: (payload) =>
+      readWith(readStep, payload, ({ step, ...data }) =>
+        step === null ? SKIPPED : { type: 'feed.step', ...data, step },
+      ),
+  },
+  'feed.question': {
+    1: (payload) => {
+      if (typeof payload.kind !== 'string') return UNREADABLE
+      if (!includes(feedQuestionKinds, payload.kind)) return NEWER
+      if (payload.kind === 'agent')
+        return readWith(readAgentQuestion, payload, (data) => ({ type: 'feed.question', ...data }))
+      if (typeof payload.reason === 'string' && !includes(feedCeilingReasons, payload.reason))
+        return NEWER
+      return readWith(readCeilingQuestion, payload, (data) => ({ type: 'feed.question', ...data }))
+    },
+  },
+  'feed.result': {
+    1: (payload) => readWith(readResult, payload, (data) => ({ type: 'feed.result', ...data })),
+  },
+  'feed.failure': {
+    1: (payload) => readWith(readFailure, payload, (data) => ({ type: 'feed.failure', ...data })),
+  },
+  'feed.cancelled': {
+    1: (payload) =>
+      readWith(readCancelled, payload, (data) => ({ type: 'feed.cancelled', ...data })),
+  },
+}
+
+export const isFeedEventType = (type: string): type is FeedEventType =>
+  includes(feedEventTypes, type)
+
+/**
+ * The one way to read a stored row. Never throws and leaves out nothing silently except an
+ * unknown stage (`skipped`): a hidden row could be a failure, a question or a consent card.
+ */
+export function readFeedRow(type: string, payload: unknown): FeedEvent {
+  try {
+    if (!isFeedEventType(type)) {
+      // Design reading: only `feed.*` rows are visible to a customer, so any other type here
+      // is a broken row, not a newer one.
+      return type.startsWith(FEED_TYPE_PREFIX) ? NEWER : UNREADABLE
+    }
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return UNREADABLE
+    const fields = payload as Payload
+    const v = fields.v
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) return UNREADABLE
+    const reader = Object.hasOwn(readers[type], v) ? readers[type][v] : undefined
+    return reader ? reader(fields) : NEWER
+  } catch {
+    return UNREADABLE
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The head of a task, returned with its feed
+// ---------------------------------------------------------------------------------------------
+
+export const taskWaitingReasons = ['agents', 'site'] as const
+export type TaskWaitingReason = (typeof taskWaitingReasons)[number]
+export const taskModes = ['work', 'chat'] as const
+export type TaskMode = (typeof taskModes)[number]
+
+/**
+ * The state of the task read in the same snapshot as its rows. A status change is not a feed
+ * row: the truth is `tasks.status`, the transient screens are drawn from this head.
+ */
+export const feedTaskHeadSchema = z.strictObject({
+  id: z.uuid(),
+  // Design reading: `tasks.title` is a nullable column, set once from the first request.
+  title: z.string().max(limits.title).nullable(),
+  mode: z.enum(taskModes),
+  status: z.enum(taskStatuses),
+  attempt: z.number().int().min(1),
+  turnNo: z.number().int().min(0).max(limits.turn),
+  /** Why the task waits in the queue; meaningful only in `queued`. */
+  waiting: z.enum(taskWaitingReasons).nullable(),
+  /** The site is held for the operator by this task. */
+  held: z.boolean(),
+  /** Whether «Попробовать ещё» is shown — the server decides. */
+  canRetry: z.boolean(),
+  /** When the last `feed.request` was written. */
+  workingSince: z.iso.datetime().nullable(),
+  /** When the `work` stage of the current turn was written. */
+  runningSince: z.iso.datetime().nullable(),
+})
+export type FeedTaskHead = z.infer<typeof feedTaskHeadSchema>

@@ -117,8 +117,12 @@ describe.skipIf(!databaseUrl)('seedReferenceData on PostgreSQL', () => {
         db.llmProvider.count(),
         db.llmModel.count(),
         db.llmModelPrice.count(),
+        db.creditRate.count(),
       ])
     const before = await counts()
+    // The accounting rates of the models and the credit rate are approved by the owner and
+    // written by `billing:rates`: the seed writes neither, not even a placeholder.
+    expect(before.slice(-2)).toEqual([0, 0])
 
     const rerun = await seedReferenceData(db)
 
@@ -150,22 +154,27 @@ describe.skipIf(!databaseUrl)('seedReferenceData on PostgreSQL', () => {
     }
   })
 
-  it('renames the pack stored under its earlier name and leaves its terms alone', async () => {
+  it.each([
+    'Пакет 10 правок',
+    // What a database seeded before the unit became the credit holds.
+    'Пакет из 10 правок',
+    // And before the pack held a hundred.
+    'Пакет из 10 кредитов',
+  ])('renames the pack stored as «%s» and leaves its terms alone', async (earlier) => {
     await seedReferenceData(db)
-    // What a database seeded before the pack took the name of the public offer holds.
     const stored = await db.plan.update({
-      where: { slug: 'pack-10' },
-      data: { name: 'Пакет 10 правок' },
+      where: { slug: 'pack' },
+      data: { name: earlier },
     })
 
     const report = await seedReferenceData(db)
 
     const zero = Object.fromEntries(seededTables.map((table) => [table, 0]))
     expect(report).toEqual({ created: zero, updated: { ...zero, plans: 1 } })
-    const renamed = await db.plan.findUniqueOrThrow({ where: { slug: 'pack-10' } })
+    const renamed = await db.plan.findUniqueOrThrow({ where: { slug: 'pack' } })
     expect(renamed).toEqual({
       ...stored,
-      name: 'Пакет из 10 правок',
+      name: 'Пакет из 100 кредитов',
       updatedAt: renamed.updatedAt,
     })
     expect(await seedReferenceData(db)).toEqual({ created: zero, updated: zero })
@@ -400,9 +409,9 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
       name: 'Тест',
       kind: 'quota',
       price: '4900.00',
-      editsPerMonth: 30,
-      editsPerDay: 5,
-      packEdits: null,
+      creditsPerMonth: 30,
+      tasksPerDay: 5,
+      packCredits: null,
       maxSites: 1,
       sortOrder: 990,
     }
@@ -444,10 +453,10 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
 
   it.each([
     ['price', { price: '5900.00' }, /price: stored 4900, seed 5900\.00/],
-    ['monthly quota', { editsPerMonth: 40 }, /editsPerMonth: stored 30, seed 40/],
-    ['daily quota', { editsPerDay: null }, /editsPerDay: stored 5, seed null/],
+    ['monthly quota', { creditsPerMonth: 40 }, /creditsPerMonth: stored 30, seed 40/],
+    ['daily quota', { tasksPerDay: null }, /tasksPerDay: stored 5, seed null/],
     ['site limit', { maxSites: 3 }, /maxSites: stored 1, seed 3/],
-    ['kind', { kind: 'pack', packEdits: 10 }, /kind: stored quota, seed pack/],
+    ['kind', { kind: 'pack', packCredits: 10 }, /kind: stored quota, seed pack/],
   ] satisfies [string, Partial<PlanSeed>, RegExp][])(
     'fails and rolls back everything when the stored %s differs',
     async (_, change, message) => {
@@ -462,7 +471,7 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
 
       const stored = await db.plan.findUniqueOrThrow({ where: { slug: plan.slug } })
       expect(stored.price.toFixed(2)).toBe('4900.00')
-      expect([stored.name, stored.kind, stored.editsPerMonth, stored.editsPerDay]).toEqual([
+      expect([stored.name, stored.kind, stored.creditsPerMonth, stored.tasksPerDay]).toEqual([
         'Тест',
         'quota',
         30,

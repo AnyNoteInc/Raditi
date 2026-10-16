@@ -175,6 +175,13 @@ jobs:
       - name: Gateway, turn key, pool, login and MCP tests with PostgreSQL
         run: pnpm --filter orchestrator test:db --testTimeout=30000
 
+      # The approval of the credit rate reads the whole catalogue — every enabled model, every
+      # tariff on sale — and locks `credit_rates`, so its PostgreSQL cases are opt-in as well and
+      # the gates job keeps them skipped. They stand on a database without a rate and without an
+      # enabled model, which the suites above leave it as, and leave no row behind themselves.
+      - name: Credit rate approval with PostgreSQL
+        run: pnpm --filter @repo/billing exec vitest run src/credit-rate-approval.test.ts --testTimeout=30000
+
   # Presigned URLs of the storage adapter on a real S3 API: the pull runner's only way to the
   # session snapshots. A link writes once, only the signed size, and expires. The suite runs
   # only against a loopback S3; the gates job has none and keeps it skipped.

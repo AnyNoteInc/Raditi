@@ -1,12 +1,20 @@
-import type { ConsentRow } from '@repo/auth'
+import type { Auth, ConsentRow } from '@repo/auth'
 import type { PrismaClient } from '@repo/db'
 import { legalDocuments } from '@repo/domain'
+import type { YookassaClient } from '@repo/yookassa'
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 import { describe, expect, it, vi } from 'vitest'
 
 import { CONSENT_REQUIRED, CONSENT_REQUIRED_MESSAGE } from './errors.ts'
 import { appRouter, createCaller } from './router.ts'
-import { consentedProcedure, createCallerFactory, router, type Context } from './trpc.ts'
+import {
+  consentedProcedure,
+  createCallerFactory,
+  createContext,
+  router,
+  type BillingContext,
+  type Context,
+} from './trpc.ts'
 
 type StoredRow = ConsentRow & { seq: number }
 
@@ -55,11 +63,11 @@ const headers = () =>
   new Headers({ 'x-forwarded-for': '203.0.113.7', 'user-agent': 'Mozilla/5.0 Firefox/150.0' })
 
 function signedIn(prisma: PrismaClient): Context {
-  return { prisma, headers: headers(), session, user }
+  return { prisma, headers: headers(), session, user, billing: null }
 }
 
 function anonymous(prisma: PrismaClient): Context {
-  return { prisma, headers: headers(), session: null, user: null }
+  return { prisma, headers: headers(), session: null, user: null, billing: null }
 }
 
 const consentDocs = legalDocuments.filter((d) => d.consentType !== null)
@@ -77,6 +85,68 @@ const granted = (
   source: 'sign_up',
   ipAddress: null,
   userAgent: null,
+})
+
+describe('createContext', () => {
+  // What the web app builds once per process (paymentShop): the context carries that object.
+  const shop: BillingContext = {
+    yookassa: { name: 'the shop of the process' } as unknown as YookassaClient,
+    appUrl: 'https://raditi.example',
+    appEnv: 'test',
+    autopayments: true,
+    pastDueDays: 7,
+  }
+  /** better-auth with the session lookup alone: all the context asks it for. */
+  function authStub(current: { session: typeof session; user: typeof user } | null) {
+    const getSession = vi.fn(async (_request: { headers: Headers }) => current)
+    return { auth: { api: { getSession } } as unknown as Auth, getSession }
+  }
+
+  it('carries the payment shop it is given, the very object', async () => {
+    const { prisma } = fakePrisma()
+    const { auth } = authStub(null)
+
+    const ctx = await createContext({ headers: headers(), prisma, auth, billing: shop })
+
+    expect(ctx.billing).toBe(shop)
+  })
+
+  it('has no shop unless one is given: payments are switched off', async () => {
+    const { prisma } = fakePrisma()
+    const { auth } = authStub(null)
+
+    await expect(createContext({ headers: headers(), prisma, auth })).resolves.toMatchObject({
+      billing: null,
+    })
+    await expect(
+      createContext({ headers: headers(), prisma, auth, billing: null }),
+    ).resolves.toMatchObject({ billing: null })
+  })
+
+  it('reads the session behind the request headers and keeps the database client', async () => {
+    const { prisma } = fakePrisma()
+    const { auth, getSession } = authStub({ session, user })
+    const requestHeaders = headers()
+
+    const ctx = await createContext({ headers: requestHeaders, prisma, auth, billing: shop })
+
+    expect(getSession).toHaveBeenCalledExactlyOnceWith({ headers: requestHeaders })
+    expect(ctx.session).toBe(session)
+    expect(ctx.user).toBe(user)
+    expect(ctx.prisma).toBe(prisma)
+    expect(ctx.headers).toBe(requestHeaders)
+  })
+
+  it('is anonymous without a session, and the router takes it as its context', async () => {
+    const { prisma } = fakePrisma()
+    const { auth } = authStub(null)
+
+    const ctx = await createContext({ headers: headers(), prisma, auth, billing: shop })
+
+    expect(ctx).toMatchObject({ session: null, user: null })
+    await expect(createCaller(ctx).health.ping()).resolves.toEqual({ ok: true })
+    await expect(createCaller(ctx).user.me()).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+  })
 })
 
 describe('health.ping', () => {
@@ -315,11 +385,49 @@ describe('consentedProcedure', () => {
     await expect(createBusinessCaller(ctx).sites()).resolves.toEqual(['site-1'])
   })
 
-  it('guards every procedure of the app router except consent.*, user.me and health', async () => {
-    const open = (path: string) => path === 'user.me' || /^(?:consent|health)\./.test(path)
-    const guarded = Object.keys(appRouter._def.procedures).filter((path) => !open(path))
+  // Stopping the charges does not wait for a consent: a user who has not accepted a new
+  // edition of the documents may still unlink the payment method and switch auto-renewal off
+  // (default «н» of docs/plan/37-billing-plan.md). Such a user is sent to the page that asks
+  // for the consent, so that page has to show the coming charge and the way to stop it:
+  // `billing.autoRenewal` reads only what its block shows. Every other billing procedure is
+  // guarded.
+  const openToEveryUser = [
+    'billing.unlinkPaymentMethod',
+    'billing.cancelAutoRenew',
+    'billing.autoRenewal',
+  ]
+
+  it('guards every procedure of the app router except consent.*, user.me, health and what stops the charges', async () => {
+    const open = (path: string) =>
+      path === 'user.me' || /^(?:consent|health)\./.test(path) || openToEveryUser.includes(path)
+    const paths = Object.keys(appRouter._def.procedures)
+    // The exception is a procedure that exists: a renamed one must not leave the list behind.
+    expect(paths).toEqual(expect.arrayContaining(openToEveryUser))
+    const guarded = paths.filter((path) => !open(path))
     expect(guarded).toEqual(
-      expect.arrayContaining(['user.updateProfile', 'project.list', 'project.create']),
+      expect.arrayContaining([
+        'user.updateProfile',
+        'project.list',
+        'project.create',
+        'billing.overview',
+        'billing.plans',
+        'billing.usage',
+        'billing.usageHistory',
+        'billing.payments',
+        'billing.startCheckout',
+        'billing.startPackCheckout',
+        'billing.syncOrder',
+        'billing.startPaymentMethodChange',
+        'billing.syncPaymentMethod',
+        'billing.startPastDuePayment',
+        'billing.resumeAutoRenew',
+        'billing.schedulePlanChange',
+        'billing.cancelPlanChange',
+      ]),
+    )
+    // Nothing else of billing is open: three procedures, and none that pays or switches on.
+    expect(paths.filter((path) => path.startsWith('billing.') && open(path)).sort()).toEqual(
+      [...openToEveryUser].sort(),
     )
 
     for (const path of guarded) {
@@ -334,6 +442,30 @@ describe('consentedProcedure', () => {
       await expect(procedure(), path).rejects.toMatchObject({
         code: 'PRECONDITION_REQUIRED',
         cause: { code: CONSENT_REQUIRED },
+      })
+    }
+  })
+
+  it('asks a signed-in user for no consent before the charges are stopped or shown', async () => {
+    for (const path of openToEveryUser) {
+      const call = (ctx: Context) =>
+        path
+          .split('.')
+          .reduce<unknown>(
+            (node, key) => (node as Record<string, unknown>)[key],
+            createCaller(ctx),
+          ) as (input?: unknown) => Promise<unknown>
+      const { prisma, userConsent } = fakePrisma()
+
+      // Past the guard the procedure reads tables this fake does not have: whatever it fails
+      // with, it is not the demand to accept the documents.
+      const error = await call(signedIn(prisma))({}).catch((thrown: unknown) => thrown)
+
+      expect(error, path).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' })
+      expect(userConsent.findMany, path).not.toHaveBeenCalled()
+      // A session it does need.
+      await expect(call(anonymous(prisma))({}), path).rejects.toMatchObject({
+        code: 'UNAUTHORIZED',
       })
     }
   })

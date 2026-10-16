@@ -1,0 +1,74 @@
+name: Billing
+
+# The whole money path (docs/plan/37-billing-plan.md, «Проверочный стенд») on built web and
+# core: tariffs, packs, renewals, payment methods, refunds and the operator's commands against
+# the fake ЮKassa of infra/dev/billing-verify, on disposable PostgreSQL and Redis. Synthetic
+# data only: no repository secrets, no real shop, no customer data.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/billing.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      # The stand, its scenarios and the fake ЮKassa.
+      - infra/dev/billing-verify/**
+      # Bounded child processes of the stand.
+      - infra/dev/db-verify/command.mjs
+      # What the stand builds and runs: web (next build), the core role and the operator's
+      # commands of the orchestrator, and every workspace package they are built from,
+      # migrations and seeds included.
+      - apps/web/**
+      - apps/orchestrator/**
+      - packages/**
+  workflow_dispatch:
+
+concurrency:
+  group: billing-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-billing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Node and pnpm for the stand, and a warm pnpm store: the stand installs and builds in a
+      # private copy of the tree, outside the checkout.
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      # The stand never pulls. Its images are pinned by digest in infra/dev/billing-verify/stand.mjs;
+      # stand.test.mjs keeps this list equal to them.
+      - name: Pull the pinned images
+        run: |
+          for image in \
+            postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24 \
+            redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+          do
+            docker pull --quiet "$image"
+          done
+      - name: Verify billing on built web and core
+        env:
+          # Where the stand leaves the logs of web and core when it fails, before it removes
+          # its run directory.
+          BILLING_VERIFY_LOG_DIR: ${{ runner.temp }}/billing-logs
+        run: pnpm verify:billing
+      # A failed run prints the lines of the scenario that failed; the whole logs are here.
+      # They name synthetic customers and one-time links of a database that is gone, and the
+      # stand blanks the random secrets of the run in them.
+      - name: Upload the logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: billing-logs
+          path: ${{ runner.temp }}/billing-logs
+          if-no-files-found: ignore
+          retention-days: 7

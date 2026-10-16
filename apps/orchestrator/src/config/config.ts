@@ -78,10 +78,30 @@ export interface CoreConfig {
    */
   git: GitConfig | null
   /**
+   * The token of the account that may create repositories in the `sites` organization, and
+   * nothing more (docs/plan/39-site-connection-wizard.md). null — unset, or git is not
+   * configured: the import of a connected site refuses, and the bot's token never stands in
+   * for it. Never log it.
+   */
+  siteRepositoryProvisionerToken: string | null
+  /**
    * The ЮKassa shop for renewal charges. null — payments are off (both credentials empty):
    * nothing is charged, the rest of core runs. Holds the shop key: never log it.
    */
   yookassa: YookassaConfig | null
+  billing: BillingConfig
+}
+
+/** Renewal of tariffs by the scheduler of core (docs/plan/37-billing-plan.md, M5.11). */
+export interface BillingConfig {
+  /** Public origin of the web app (APP_URL), no trailing slash: billing letters link to it. */
+  appUrl: string
+  /** How many days before the end of a period the notice of the charge goes out. */
+  renewalNoticeDays: number
+  /** How many days an overdue tariff waits for a payment before it ends. */
+  pastDueDays: number
+  /** How often each renewal pass runs. */
+  tickSeconds: number
 }
 
 /** Our Gitea over HTTPS. Holds the bot token: never log it. */
@@ -156,6 +176,18 @@ const port = (fallback: number) =>
 const ownEnvSchema = z.object({
   // Required, never defaulted: a missing APP_ENV must not switch the production checks off.
   APP_ENV: envVar(appEnvSchema),
+  // The origin billing letters link to; web reads the same variable.
+  APP_URL: envVar(
+    z
+      .url({ protocol: /^https?$/, error: 'must be an http(s) URL' })
+      .transform((url) => url.replace(/\/+$/, ''))
+      .optional(),
+  ),
+  // A notice goes out before every automatic charge; with a month of 28 days as the shortest
+  // period, more days than that would announce the next charge right after the last one.
+  BILLING_RENEWAL_NOTICE_DAYS: envVar(z.coerce.number().int().min(1).max(27).default(3)),
+  BILLING_PAST_DUE_DAYS: envVar(z.coerce.number().int().min(1).max(90).default(7)),
+  BILLING_TICK_SECONDS: envVar(z.coerce.number().int().min(1).max(3_600).default(300)),
   ORCHESTRATOR_ROLES: envVar(z.string().optional()),
   ORCHESTRATOR_PORT: port(DEFAULT_CORE_PORT),
   MCP_PORT: port(DEFAULT_MCP_PORT),
@@ -198,6 +230,13 @@ const ownEnvSchema = z.object({
   GITEA_URL: envVar(z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional()),
   // Sent in an Authorization header, as a token and as a Basic password.
   GITEA_TOKEN: envVar(
+    z
+      .string()
+      .regex(/^[\x21-\x7e]+$/, 'must be printable ASCII without whitespace')
+      .optional(),
+  ),
+  // The same header, another account: the one that creates site repositories.
+  GITEA_PROVISIONER_TOKEN: envVar(
     z
       .string()
       .regex(/^[\x21-\x7e]+$/, 'must be printable ASCII without whitespace')
@@ -303,7 +342,12 @@ export function loadConfig(env: Env): OrchestratorConfig {
         'LLM_POOL_MIN_TURN_HEADROOM_PCT',
         'GITEA_URL',
         'GITEA_TOKEN',
+        'GITEA_PROVISIONER_TOKEN',
         'GIT_CA_FILE',
+        'APP_URL',
+        'BILLING_RENEWAL_NOTICE_DAYS',
+        'BILLING_PAST_DUE_DAYS',
+        'BILLING_TICK_SECONDS',
       ],
     ],
     // core serves /metrics and calls the pool probe of llm with it; llm checks it.
@@ -339,6 +383,11 @@ export function loadConfig(env: Env): OrchestratorConfig {
   let runnerApi: RunnerApiConfig | null = null
   if (hasCore) {
     if (own.REDIS_URL === undefined) problems.push('REDIS_URL: required for the core role')
+    // Every billing letter carries a link to the app: a guessed origin would not open.
+    if (own.APP_URL === undefined)
+      problems.push('APP_URL: required for the core role (billing letters link to the app)')
+    else if (production && !own.APP_URL.startsWith('https://'))
+      problems.push('APP_URL: must use https in production')
     if (production && turnExecutor !== 'runner')
       problems.push('TURN_EXECUTOR: production runs turns only on runner VMs (runner)')
     if (turnExecutor === 'runner') {
@@ -522,6 +571,9 @@ export function loadConfig(env: Env): OrchestratorConfig {
         }
     }
   }
+  // Repositories are created in the Gitea that git is configured for: without git the token
+  // has nowhere to go.
+  const siteRepositoryProvisionerToken = git === null ? null : (own.GITEA_PROVISIONER_TOKEN ?? null)
   if (problems.length > 0) throw new ConfigError(problems)
 
   return {
@@ -544,7 +596,14 @@ export function loadConfig(env: Env): OrchestratorConfig {
           turnExecutor,
           runnerApi,
           git,
+          siteRepositoryProvisionerToken,
           yookassa: present(yookassa),
+          billing: {
+            appUrl: present(own.APP_URL),
+            renewalNoticeDays: own.BILLING_RENEWAL_NOTICE_DAYS,
+            pastDueDays: own.BILLING_PAST_DUE_DAYS,
+            tickSeconds: own.BILLING_TICK_SECONDS,
+          },
         }
       : null,
     mcp: hasMcp

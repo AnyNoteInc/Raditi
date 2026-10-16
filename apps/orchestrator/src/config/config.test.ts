@@ -17,6 +17,7 @@ const exampleEnv: Env = parseEnv(
 /** The local setup of .env.example. */
 const devEnv: Env = {
   APP_ENV: 'development',
+  APP_URL: 'http://localhost:3000',
   ORCHESTRATOR_PORT: '8081',
   ORCHESTRATOR_ROLES: 'core,mcp,llm',
   MCP_PORT: '8082',
@@ -42,6 +43,7 @@ const RUNNER_HASH = 'a'.repeat(64)
 
 const prodEnv = (overrides: Env = {}): Env => ({
   APP_ENV: 'production',
+  APP_URL: 'https://raditi.ru',
   ORCHESTRATOR_ROLES: 'core',
   DATABASE_URL: 'postgresql://core:secret@db.internal:5432/raditi',
   REDIS_URL: 'rediss://redis.internal:6380',
@@ -675,6 +677,85 @@ describe('loadConfig — development', () => {
       })
       expect(config.core).toBeNull()
     })
+
+    const creatorToken = 'synthetic-provisioner-token'
+
+    it('leaves the token that creates site repositories null until it is set', () => {
+      expect(exampleEnv.GITEA_PROVISIONER_TOKEN).toBe('')
+      expect(loadConfig(exampleEnv).core?.siteRepositoryProvisionerToken).toBeNull()
+      expect(loadConfig(devEnv).core?.siteRepositoryProvisionerToken).toBeNull()
+      // The bot's token never stands in for it.
+      expect(loadConfig(gitEnv()).core?.siteRepositoryProvisionerToken).toBeNull()
+      expect(
+        loadConfig(gitEnv({ GITEA_PROVISIONER_TOKEN: ' ' })).core?.siteRepositoryProvisionerToken,
+      ).toBeNull()
+    })
+
+    it('takes the creator token beside git with an https Gitea, and git stays as it was', () => {
+      const core = loadConfig(gitEnv({ GITEA_PROVISIONER_TOKEN: creatorToken })).core
+      expect(core?.siteRepositoryProvisionerToken).toBe(creatorToken)
+      expect(core?.git).toEqual({
+        kind: 'gitea',
+        baseUrl: 'https://gitea.raditi.test:3443',
+        token: 'synthetic-bot-token',
+        caFile: null,
+      })
+      expect(
+        loadConfig(
+          prodEnv({
+            GITEA_URL: 'https://gitea.raditi.internal',
+            GITEA_TOKEN: 'synthetic-token',
+            GITEA_PROVISIONER_TOKEN: creatorToken,
+          }),
+        ).core?.siteRepositoryProvisionerToken,
+      ).toBe(creatorToken)
+    })
+
+    it('has no creator token where git is not configured: there is no Gitea to create in', () => {
+      for (const env of [
+        gitEnv({ GITEA_URL: 'http://localhost:3300', GITEA_PROVISIONER_TOKEN: creatorToken }),
+        { ...devEnv, GITEA_PROVISIONER_TOKEN: creatorToken },
+        prodEnv({ GITEA_PROVISIONER_TOKEN: creatorToken }),
+      ]) {
+        const core = loadConfig(env).core
+        expect(core?.git).toBeNull()
+        expect(core?.siteRepositoryProvisionerToken).toBeNull()
+      }
+    })
+
+    it('refuses a creator token no Authorization header carries, never printing it', () => {
+      const refused = ['GITEA_PROVISIONER_TOKEN: must be printable ASCII without whitespace']
+      for (const token of ['two words', `${creatorToken}\n`, `\t${creatorToken}`, 'токен'])
+        expect(problemsOf(gitEnv({ GITEA_PROVISIONER_TOKEN: token }))).toEqual(refused)
+      // Reported with the plain-http Gitea as well, where the token is not used yet.
+      expect(problemsOf({ ...devEnv, GITEA_PROVISIONER_TOKEN: 'two words' })).toEqual(refused)
+      // A missing bot token is not replaced by the creator's.
+      expect(
+        problemsOf(gitEnv({ GITEA_TOKEN: '', GITEA_PROVISIONER_TOKEN: creatorToken })),
+      ).toEqual(['GITEA_TOKEN: required with an https GITEA_URL'])
+    })
+
+    it('reads the creator token only for the core role, and never on a runner VM', () => {
+      const config = loadConfig({
+        ...gitEnv({ GITEA_PROVISIONER_TOKEN: 'two words' }),
+        ORCHESTRATOR_ROLES: 'mcp',
+      })
+      expect(config.core).toBeNull()
+      expect(config.mcp).not.toBeNull()
+      const problems = problemsOf({
+        APP_ENV: 'production',
+        ORCHESTRATOR_ROLES: 'runner',
+        RUNNER_CORE_URL: 'https://core.internal:8083',
+        RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
+        RUNNER_S3_ORIGIN: 'https://raditi-sessions.storage.yandexcloud.net',
+        SANDBOX_RUNTIME: 'runsc',
+        GITEA_PROVISIONER_TOKEN: creatorToken,
+      })
+      expect(problems).toEqual([
+        'GITEA_PROVISIONER_TOKEN: must not be set for the runner role in production',
+      ])
+      expect(problems.join('\n')).not.toContain(creatorToken)
+    })
   })
 
   describe('the ЮKassa shop for renewal charges', () => {
@@ -685,6 +766,7 @@ describe('loadConfig — development', () => {
       expect(exampleEnv.YOOKASSA_SECRET_KEY).toBe('')
       expect(exampleEnv.YOOKASSA_API_URL).toBe('')
       expect(exampleEnv.YOOKASSA_WEBHOOK_ALLOWLIST).toBe('')
+      expect(exampleEnv.YOOKASSA_AUTOPAYMENTS).toBe('')
       expect(loadConfig(exampleEnv).core?.yookassa).toBeNull()
       expect(loadConfig(devEnv).core?.yookassa).toBeNull()
     })
@@ -693,6 +775,8 @@ describe('loadConfig — development', () => {
       expect(loadConfig({ ...devEnv, ...shop }).core?.yookassa).toEqual({
         shopId: '123456',
         secretKey: 'test_shop-secret-key',
+        // Unset outside production: a local fake saves payment methods.
+        autopayments: true,
       })
       expect(
         loadConfig({
@@ -706,7 +790,24 @@ describe('loadConfig — development', () => {
         secretKey: 'test_shop-secret-key',
         baseUrl: 'http://127.0.0.1:4010/v3',
         webhookAllowlist: ['127.0.0.1', '::1'],
+        autopayments: true,
       })
+    })
+
+    it('reads the switch of autopayments with the shop', () => {
+      // The renewal passes do not act on it: a method saved before is charged all the same.
+      // core reads it with the rest of the shop, so that web and core are given one setting.
+      for (const [YOOKASSA_AUTOPAYMENTS, autopayments] of [
+        ['on', true],
+        ['off', false],
+      ] as const) {
+        expect(
+          loadConfig({ ...devEnv, ...shop, YOOKASSA_AUTOPAYMENTS }).core?.yookassa,
+        ).toMatchObject({ autopayments })
+      }
+      expect(problemsOf({ ...devEnv, ...shop, YOOKASSA_AUTOPAYMENTS: 'yes' })).toEqual([
+        '[yookassa] invalid configuration: YOOKASSA_AUTOPAYMENTS: must be on or off',
+      ])
     })
 
     it('names what is wrong with a half-configured shop, never the values', () => {
@@ -756,6 +857,100 @@ describe('loadConfig — development', () => {
       )
     })
   })
+
+  describe('renewal of tariffs', () => {
+    it('reads .env.example as it is: a notice three days before, seven days of grace, a pass every five minutes', () => {
+      expect(exampleEnv.BILLING_RENEWAL_NOTICE_DAYS).toBe('3')
+      expect(exampleEnv.BILLING_PAST_DUE_DAYS).toBe('7')
+      expect(exampleEnv.BILLING_TICK_SECONDS).toBe('300')
+      const billing = {
+        appUrl: 'http://localhost:3000',
+        renewalNoticeDays: 3,
+        pastDueDays: 7,
+        tickSeconds: 300,
+      }
+      expect(loadConfig(exampleEnv).core?.billing).toEqual(billing)
+      // The same without the three variables, and with blank ones.
+      expect(loadConfig(devEnv).core?.billing).toEqual(billing)
+      expect(
+        loadConfig({
+          ...devEnv,
+          BILLING_RENEWAL_NOTICE_DAYS: '',
+          BILLING_PAST_DUE_DAYS: ' ',
+          BILLING_TICK_SECONDS: '',
+        }).core?.billing,
+      ).toEqual(billing)
+    })
+
+    it('takes its own values, as the verification stand sets them', () => {
+      expect(
+        loadConfig({
+          ...devEnv,
+          APP_URL: 'http://127.0.0.1:3110/',
+          BILLING_RENEWAL_NOTICE_DAYS: '5',
+          BILLING_PAST_DUE_DAYS: '14',
+          BILLING_TICK_SECONDS: '2',
+        }).core?.billing,
+      ).toEqual({
+        // No trailing slash: links are built by appending a path.
+        appUrl: 'http://127.0.0.1:3110',
+        renewalNoticeDays: 5,
+        pastDueDays: 14,
+        tickSeconds: 2,
+      })
+    })
+
+    it.each([
+      ['BILLING_RENEWAL_NOTICE_DAYS', ['0', '28', '2.5', 'three', '-1']],
+      ['BILLING_PAST_DUE_DAYS', ['0', '91', '1.5', 'week']],
+      ['BILLING_TICK_SECONDS', ['0', '3601', '0.5', '5m']],
+    ])('refuses %s out of its range, naming the variable and not the value', (name, values) => {
+      for (const value of values) {
+        const problems = problemsOf({ ...devEnv, [name]: value })
+        expect(problems).toHaveLength(1)
+        expect(problems[0]).toMatch(new RegExp(`^${name}: `))
+        expect(problems[0]).not.toContain(`: ${value}`)
+      }
+    })
+
+    it('needs APP_URL for the letters of core, and an address that opens in a browser', () => {
+      const { APP_URL: _appUrl, ...withoutAppUrl } = devEnv
+      expect(problemsOf(withoutAppUrl)).toEqual([
+        'APP_URL: required for the core role (billing letters link to the app)',
+      ])
+      expect(problemsOf({ ...devEnv, APP_URL: '' })).toEqual([
+        'APP_URL: required for the core role (billing letters link to the app)',
+      ])
+      for (const address of ['raditi.ru', 'ftp://raditi.ru', 'javascript:alert(1)']) {
+        expect(problemsOf({ ...devEnv, APP_URL: address })).toEqual([
+          'APP_URL: must be an http(s) URL',
+        ])
+      }
+    })
+
+    it('is nothing the other roles read or require', () => {
+      const unused = {
+        APP_URL: 'not a url',
+        BILLING_RENEWAL_NOTICE_DAYS: 'unused',
+        BILLING_PAST_DUE_DAYS: 'unused',
+        BILLING_TICK_SECONDS: 'unused',
+      }
+      const { APP_URL: _appUrl, ...withoutAppUrl } = devEnv
+      for (const roles of ['mcp', 'llm', 'mcp,llm']) {
+        expect(loadConfig({ ...withoutAppUrl, ORCHESTRATOR_ROLES: roles }).core).toBeNull()
+        expect(loadConfig({ ...devEnv, ...unused, ORCHESTRATOR_ROLES: roles }).core).toBeNull()
+      }
+      expect(
+        loadConfig({
+          APP_ENV: 'development',
+          ORCHESTRATOR_ROLES: 'runner',
+          RUNNER_CORE_URL: 'http://127.0.0.1:8083',
+          RUNNER_TOKEN_FILE: '/tmp/runner-token',
+          ...unused,
+        }).runner,
+      ).not.toBeNull()
+    })
+  })
 })
 
 describe('loadConfig — production', () => {
@@ -799,18 +994,30 @@ describe('loadConfig — production', () => {
   })
 
   it('takes a ЮKassa shop or none, and never the settings of a local fake', () => {
-    const shop = { YOOKASSA_SHOP_ID: '123456', YOOKASSA_SECRET_KEY: 'live_shop-secret-key' }
+    const credentials = { YOOKASSA_SHOP_ID: '123456', YOOKASSA_SECRET_KEY: 'live_shop-secret-key' }
+    const shop = { ...credentials, YOOKASSA_AUTOPAYMENTS: 'on' }
     expect(loadConfig(prodEnv()).core?.yookassa).toBeNull()
     expect(loadConfig(prodEnv(shop)).core?.yookassa).toEqual({
       shopId: '123456',
       secretKey: 'live_shop-secret-key',
+      autopayments: true,
     })
+    expect(
+      loadConfig(prodEnv({ ...credentials, YOOKASSA_AUTOPAYMENTS: 'off' })).core?.yookassa,
+    ).toMatchObject({ autopayments: false })
+    // A shop in production says whether ЮKassa has approved its autopayments: never guessed.
+    const unsaid = problemsOf(prodEnv(credentials))
+    expect(unsaid).toEqual([
+      '[yookassa] invalid configuration: YOOKASSA_AUTOPAYMENTS: must be set to on or off in production ' +
+        '(YooKassa answers 403 to save_payment_method until its manager approves autopayments for the shop)',
+    ])
+    expect(unsaid.join('\n')).not.toContain('live_shop-secret-key')
     const fake = {
       YOOKASSA_API_URL: 'https://fake.internal/v3',
       YOOKASSA_WEBHOOK_ALLOWLIST: '10.20.0.5',
     }
-    for (const credentials of [shop, {}]) {
-      const problems = problemsOf(prodEnv({ ...credentials, ...fake }))
+    for (const configured of [shop, {}]) {
+      const problems = problemsOf(prodEnv({ ...configured, ...fake }))
       expect(problems).toEqual([
         '[yookassa] invalid configuration: ' +
           'YOOKASSA_API_URL: not allowed in production (the real API address is built in); ' +
@@ -825,6 +1032,26 @@ describe('loadConfig — production', () => {
     expect(loadConfig(llmEnv(fake)).llm).not.toBeNull()
     expect(
       loadConfig(prodEnv({ ...fake, ORCHESTRATOR_ROLES: 'mcp', MCP_ALLOWED_HOSTS: 'mcp' })).mcp,
+    ).not.toBeNull()
+  })
+
+  it('links billing letters to the https address of the app only', () => {
+    expect(loadConfig(prodEnv()).core?.billing).toEqual({
+      appUrl: 'https://raditi.ru',
+      renewalNoticeDays: 3,
+      pastDueDays: 7,
+      tickSeconds: 300,
+    })
+    expect(problemsOf(prodEnv({ APP_URL: 'http://raditi.ru' }))).toEqual([
+      'APP_URL: must use https in production',
+    ])
+    expect(problemsOf(prodEnv({ APP_URL: '' }))).toEqual([
+      'APP_URL: required for the core role (billing letters link to the app)',
+    ])
+    // The gateways open no letter and need no address of the app.
+    expect(loadConfig(llmEnv()).llm).not.toBeNull()
+    expect(
+      loadConfig(prodEnv({ APP_URL: '', ORCHESTRATOR_ROLES: 'mcp', MCP_ALLOWED_HOSTS: 'mcp' })).mcp,
     ).not.toBeNull()
   })
 

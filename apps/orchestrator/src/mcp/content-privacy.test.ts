@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { conflict, type KvSecret } from '@repo/domain'
+import { conflict, contactMarkerPattern, type KvSecret } from '@repo/domain'
 import { createVaultSecretStore } from '@repo/vault'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -108,6 +108,10 @@ describe('published content privacy', () => {
     expect(JSON.stringify(masked)).not.toMatch(/test@example|test&#64;|123-45-67/)
     expect(masked.content).toMatch(/\[\[raditi:email:[a-f0-9-]{36}\]\]/)
     expect(masked.content).toMatch(/\[\[raditi:phone:[a-f0-9-]{36}\]\]/)
+    // One contract with the customer feed, which hides these markers by the same pattern.
+    const kinds = [...JSON.stringify(masked).matchAll(contactMarkerPattern())].map((m) => m[1])
+    expect(new Set(kinds)).toEqual(new Set(['email', 'phone']))
+    expect(JSON.stringify(masked).replace(contactMarkerPattern(), '')).not.toContain('[[raditi:')
     expect(await privacy.rehydrate(scope, masked)).toEqual(original)
     expect(await privacy.mask(scope, original)).toEqual(masked)
     expect(secrets.kvWrite).toHaveBeenCalledOnce()

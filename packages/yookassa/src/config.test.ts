@@ -4,6 +4,8 @@ import { yookassaConfigFromEnv } from './config.ts'
 
 const dev = { APP_ENV: 'development' }
 const shop = { YOOKASSA_SHOP_ID: '123456', YOOKASSA_SECRET_KEY: 'test_abcdefgh' }
+// A shop in production says whether its autopayments are approved.
+const live = { ...shop, YOOKASSA_AUTOPAYMENTS: 'on' }
 const problemsOf = (env: Record<string, string | undefined>) => {
   try {
     yookassaConfigFromEnv(env)
@@ -26,15 +28,17 @@ describe('yookassaConfigFromEnv', () => {
     expect(yookassaConfigFromEnv({ ...dev, ...shop })).toEqual({
       shopId: '123456',
       secretKey: 'test_abcdefgh',
+      autopayments: true,
     })
-    expect(yookassaConfigFromEnv({ APP_ENV: 'production', ...shop })).toEqual({
+    expect(yookassaConfigFromEnv({ APP_ENV: 'production', ...live })).toEqual({
       shopId: '123456',
       secretKey: 'test_abcdefgh',
+      autopayments: true,
     })
     // Blank development-only variables are unset, as in a copied .env.example.
     const blank = { YOOKASSA_API_URL: '', YOOKASSA_WEBHOOK_ALLOWLIST: ' ' }
     for (const APP_ENV of ['development', 'production']) {
-      const config = yookassaConfigFromEnv({ APP_ENV, ...shop, ...blank })
+      const config = yookassaConfigFromEnv({ APP_ENV, ...live, ...blank })
       expect(config).not.toHaveProperty('baseUrl')
       expect(config).not.toHaveProperty('webhookAllowlist')
     }
@@ -66,6 +70,71 @@ describe('yookassaConfigFromEnv', () => {
     }
   })
 
+  describe('the switch of autopayments', () => {
+    const REQUIRED =
+      '[yookassa] invalid configuration: YOOKASSA_AUTOPAYMENTS: must be set to on or off in production ' +
+      '(YooKassa answers 403 to save_payment_method until its manager approves autopayments for the shop)'
+
+    it.each([
+      ['on', true],
+      ['off', false],
+    ])('reads %s', (YOOKASSA_AUTOPAYMENTS, autopayments) => {
+      for (const APP_ENV of ['development', 'test', 'production']) {
+        expect(yookassaConfigFromEnv({ APP_ENV, ...shop, YOOKASSA_AUTOPAYMENTS })).toEqual({
+          shopId: '123456',
+          secretKey: 'test_abcdefgh',
+          autopayments,
+        })
+      }
+    })
+
+    it('is on unless set outside production: a local fake saves payment methods', () => {
+      for (const APP_ENV of ['development', 'test']) {
+        for (const YOOKASSA_AUTOPAYMENTS of [undefined, '', ' ']) {
+          expect(yookassaConfigFromEnv({ APP_ENV, ...shop, YOOKASSA_AUTOPAYMENTS })).toMatchObject({
+            autopayments: true,
+          })
+        }
+      }
+    })
+
+    it('has no default for a shop in production, and says why', () => {
+      // A blank value is no value, as everywhere in the environment.
+      for (const YOOKASSA_AUTOPAYMENTS of [undefined, '', ' ']) {
+        expect(problemsOf({ APP_ENV: 'production', ...shop, YOOKASSA_AUTOPAYMENTS })).toBe(REQUIRED)
+      }
+    })
+
+    it('is not asked for while payments are off, in production as well', () => {
+      expect(yookassaConfigFromEnv({ APP_ENV: 'production' })).toBeNull()
+      // Half a shop is the mistake to name, not the switch of a shop that is not there.
+      expect(problemsOf({ APP_ENV: 'production', YOOKASSA_SHOP_ID: '123456' })).toBe(
+        '[yookassa] invalid configuration: YOOKASSA_SECRET_KEY: YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be set together',
+      )
+    })
+
+    it('is checked but not used while payments are off', () => {
+      for (const APP_ENV of ['development', 'production']) {
+        expect(yookassaConfigFromEnv({ APP_ENV, YOOKASSA_AUTOPAYMENTS: 'off' })).toBeNull()
+        expect(problemsOf({ APP_ENV, YOOKASSA_AUTOPAYMENTS: 'maybe' })).toBe(
+          '[yookassa] invalid configuration: YOOKASSA_AUTOPAYMENTS: must be on or off',
+        )
+      }
+    })
+
+    it.each([['true'], ['false'], ['1'], ['ON'], ['Off'], ['on,off']])(
+      'refuses %s: the value is on or off, as written',
+      (YOOKASSA_AUTOPAYMENTS) => {
+        for (const APP_ENV of ['development', 'production']) {
+          // One problem: a wrong value is not also a missing one.
+          expect(problemsOf({ APP_ENV, ...shop, YOOKASSA_AUTOPAYMENTS })).toBe(
+            '[yookassa] invalid configuration: YOOKASSA_AUTOPAYMENTS: must be on or off',
+          )
+        }
+      },
+    )
+  })
+
   describe('the address of a local fake and its notification senders', () => {
     it('reads both outside production', () => {
       for (const APP_ENV of ['development', 'test']) {
@@ -81,6 +150,7 @@ describe('yookassaConfigFromEnv', () => {
           secretKey: 'test_abcdefgh',
           baseUrl: 'http://127.0.0.1:4010/v3',
           webhookAllowlist: ['127.0.0.1', '::1', '10.20.0.0/24'],
+          autopayments: true,
         })
       }
     })
@@ -103,7 +173,7 @@ describe('yookassaConfigFromEnv', () => {
         YOOKASSA_API_URL: 'http://fake.internal:4010/v3',
         YOOKASSA_WEBHOOK_ALLOWLIST: '203.0.113.7',
       }
-      for (const credentials of [shop, {}]) {
+      for (const credentials of [live, {}]) {
         const message = problemsOf({ APP_ENV: 'production', ...credentials, ...fake })
         expect(message).toBe(
           '[yookassa] invalid configuration: ' +
@@ -115,7 +185,7 @@ describe('yookassaConfigFromEnv', () => {
       expect(
         problemsOf({
           APP_ENV: 'production',
-          ...shop,
+          ...live,
           YOOKASSA_API_URL: 'https://api.yookassa.ru/v3',
         }),
       ).toContain('YOOKASSA_API_URL: not allowed in production')

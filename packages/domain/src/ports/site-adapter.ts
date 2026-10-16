@@ -58,7 +58,7 @@ export interface McpToolDescriptor {
  * Kinds of access to a site kept in Vault (spec §15); each is one secret of the site and one
  * `credential_refs` row of the same kind.
  */
-export const siteAccessKinds = ['ssh', 'ftp', 'wp', 'browser'] as const
+export const siteAccessKinds = ['ssh', 'ftp', 'wp', 'browser', 'git', 'db'] as const
 export type SiteAccessKind = (typeof siteAccessKinds)[number]
 
 const SITE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -139,4 +139,18 @@ export interface SiteAdapter {
   protectedPaths(site: SiteFacts): string[]
   /** Heavy or generated paths excluded from turn snapshots. */
   snapshotExcludes(site: SiteFacts): string[]
+  /**
+   * Entries that the root folder of a site of this stack always has. The wizard refuses a folder
+   * without them and the import does not enter a nested folder that has them all.
+   */
+  rootMarkers(): string[]
+  /**
+   * Secrets the site keeps in its own configuration files, e.g. `DB_PASSWORD` and the keys and
+   * salts of wp-config.php — the passwords and keys most likely to be copied into forgotten
+   * files next to the code. `read` returns a file of the site root by its relative path (ASCII,
+   * `/` separators), or null when it is absent or larger than `siteImportLimits.configFileBytes`.
+   * The values join the exact values of the import scan; they are never stored, logged or
+   * returned to anyone.
+   */
+  configSecrets(read: (path: string) => Promise<Uint8Array | null>): Promise<string[]>
 }

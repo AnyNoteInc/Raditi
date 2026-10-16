@@ -70,6 +70,7 @@ describe('InfraModule: the ЮKassa client', () => {
         secretKey: 'test_shop-secret-key',
         baseUrl: `http://127.0.0.1:${port}/v3`,
         webhookAllowlist: ['127.0.0.1'],
+        autopayments: true,
       },
     })
     const client = moduleRef.get<YookassaClient>(YOOKASSA)

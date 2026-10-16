@@ -107,7 +107,8 @@ export const paymentMethodSchema = z.object({
   id: z.string(),
   type: z.string(),
   saved: z.boolean().default(false),
-  status: z.enum(paymentMethodStatuses).optional(),
+  // A status ЮKassa adds later must not fail the read of a payment; only `saved` is acted on.
+  status: z.string().optional(),
   title: z.string().optional(),
   card: cardSchema.optional(),
 })

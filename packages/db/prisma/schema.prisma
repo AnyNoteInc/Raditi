@@ -169,6 +169,7 @@ model Workspace {
   subscriptions   Subscription[]
   billingAccounts BillingAccount[]
   orders          Order[]
+  giftSiteClaims  GiftSiteClaim[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -241,19 +242,28 @@ model Site {
   driftPolicy    DriftPolicy @default(sync) @map("drift_policy")
   /// First tasks go through an operator before the client sees them (spec §12, step 8).
   operatorReview Boolean     @default(true) @map("operator_review")
+  /// What the site is about, in the owner's words (wizard, step 1). Not given to an agent.
+  description    String?     @db.VarChar(2000)
+  /// A page on the site's own origin that shows the site works. Stored, never requested; whoever
+  /// requests it later must resolve and check the address again (spec §12).
+  healthcheckUrl String?     @map("healthcheck_url") @db.VarChar(1024)
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  lease           SiteLease?
-  gitRepositories GitRepository[]
-  environments    Environment[]
-  credentialRefs  CredentialRef[]
-  chatSessions    ChatSession[]
-  tasks           Task[]
-  snapshots       Snapshot[]
-  deployments     Deployment[]
-  turnAssignments TurnAssignment[]
+  workspace          Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  lease              SiteLease?
+  gitRepositories    GitRepository[]
+  environments       Environment[]
+  credentialRefs     CredentialRef[]
+  chatSessions       ChatSession[]
+  tasks              Task[]
+  snapshots          Snapshot[]
+  deployments        Deployment[]
+  turnAssignments    TurnAssignment[]
+  codeSource         SiteCodeSource?
+  database           SiteDatabase?
+  databaseSchema     SiteDatabaseSchema?
+  provisioningStages SiteProvisioningStage[]
 
   @@unique([workspaceId, url])
   @@map("sites")
@@ -379,9 +389,10 @@ enum DeployMethod {
 }
 
 /// A pointer to a secret in Vault, never the secret itself (CLAUDE.md, rule 2; spec §15).
-/// Site access: kv/sites/<siteId>/{ssh,ftp,wp,browser}; provider keys: kv/llm/<provider>;
+/// Site access: kv/sites/<siteId>/{ssh,ftp,wp,browser,git,db}; provider keys: kv/llm/<provider>;
 /// subscriptions: kv/subscriptions/<accountId>. Platform-wide refs (llm_provider, subscription)
-/// have no workspace; site access always has a site (CHECK in the init migration).
+/// have no workspace; site access always has a site (CHECK, last replaced by
+/// 20261004200100_site_connection).
 model CredentialRef {
   id          String         @id @default(uuid(7)) @db.Uuid
   workspaceId String?        @map("workspace_id") @db.Uuid
@@ -398,6 +409,8 @@ model CredentialRef {
   gitRepositories     GitRepository[]
   llmProviders        LlmProvider[]
   subscriptionAccount SubscriptionAccount?
+  codeSources         SiteCodeSource[]
+  databases           SiteDatabase[]
 
   @@index([workspaceId])
   @@index([siteId, kind])
@@ -412,6 +425,7 @@ enum CredentialKind {
   git
   llm_provider
   subscription
+  db
 }
 
 // ─── Chat and tasks (spec §7, §8, §11) ────────────────────────────────────────
@@ -1198,22 +1212,23 @@ model CrossBorderClearance {
 
 /// Tariffs (docs/business.md §6). Prices in RUB without VAT: the seller is self-employed.
 model Plan {
-  id            String   @id @default(uuid(7)) @db.Uuid
-  slug          String   @unique @db.VarChar(50)
-  name          String   @db.VarChar(100)
-  kind          PlanKind
+  id              String   @id @default(uuid(7)) @db.Uuid
+  slug            String   @unique @db.VarChar(50)
+  name            String   @db.VarChar(100)
+  kind            PlanKind
   /// Monthly price (quota), one-off price (pack), 0 for pay-per-action.
-  price         Decimal  @db.Decimal(12, 2)
-  editsPerMonth Int?     @map("edits_per_month")
-  editsPerDay   Int?     @map("edits_per_day")
-  /// Edits a pack adds to the account of purchased edits (unit = edit_pack).
-  packEdits     Int?     @map("pack_edits")
-  /// NULL for packs: they add edits, not sites.
-  maxSites      Int?     @map("max_sites")
-  isActive      Boolean  @default(true) @map("is_active")
-  sortOrder     Int      @default(0) @map("sort_order")
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  price           Decimal  @db.Decimal(12, 2)
+  creditsPerMonth Int?     @map("credits_per_month")
+  /// The daily limit of a quota plan; NULL: none.
+  tasksPerDay     Int?     @map("tasks_per_day")
+  /// Credits a pack adds to the account of purchased credits (unit = credit_pack).
+  packCredits     Int?     @map("pack_credits")
+  /// NULL for packs: they add credits, not sites.
+  maxSites        Int?     @map("max_sites")
+  isActive        Boolean  @default(true) @map("is_active")
+  sortOrder       Int      @default(0) @map("sort_order")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   pricingRules         PricingRule[]
   subscriptions        Subscription[]
@@ -1250,6 +1265,23 @@ model PricingRule {
 
   @@unique([planId, modelClass, effectiveFrom])
   @@map("pricing_rules")
+}
+
+/// The credit rate K (spec §17): RUB of accounting cost in one credit. Append-only and never
+/// seeded: a new rate is a new row, written by the operator command `billing:rates` together
+/// with the price rows of the models and with the same effective_from. A model call is turned
+/// into credits at the rate in force when it started (token_usage.occurred_at); nothing is
+/// pinned on a task or on a hold. effective_from holds whole milliseconds and rub_per_credit is
+/// above zero (CHECKs in the credit_rates migration).
+model CreditRate {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  effectiveFrom DateTime @unique @map("effective_from") @db.Timestamptz(6)
+  rubPerCredit  Decimal  @map("rub_per_credit") @db.Decimal(14, 6)
+  /// How the row was derived: basket, model, rates, date, who approved.
+  basis         String   @db.VarChar(1024)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("credit_rates")
 }
 
 /// A workspace's subscription to a quota plan; renewed by cron with the saved payment method.
@@ -1302,8 +1334,10 @@ model Subscription {
   orders    Order[]
 
   // One live subscription per workspace. The client offers workspaceId as a unique key, but the
-  // index covers live rows only: findUnique, update and upsert add the status filter, or they
-  // take any subscription of the workspace, an ended one included.
+  // index covers live rows only: every findUnique, update and upsert by workspaceId must add
+  // status: { in: liveSubscriptionStatuses }. Without it findUnique returns an arbitrary row, an
+  // ended one included; update writes every subscription of the workspace and then throws, and
+  // outside a transaction those writes stay; upsert fails with 42P10.
   // The predicate is spelled as PostgreSQL stores status IN ('trial', 'active', 'past_due'):
   // any other spelling makes migrate diff report the index as changed.
   @@unique([workspaceId], map: "subscriptions_workspace_live_key", where: raw("status = ANY (ARRAY['trial'::\"SubscriptionStatus\", 'active'::\"SubscriptionStatus\", 'past_due'::\"SubscriptionStatus\"])"))
@@ -1323,11 +1357,12 @@ enum SubscriptionStatus {
   expired
 }
 
-/// An account of a workspace (spec §17), one per unit: the edits of the tariff (unit = edit),
-/// purchased edits (unit = edit_pack) or the RUB wallet (unit = rub).
+/// An account of a workspace (spec §17), one per unit: the credits of the tariff
+/// (unit = credit_tariff), the credits given at registration (unit = credit_gift), purchased
+/// credits (unit = credit_pack) or the RUB wallet (unit = rub).
 /// balance and held change only in SQL, in the transaction that writes credit_ledger or
-/// credit_holds. held = Σ active holds; available = balance − held. Both edit accounts hold
-/// whole numbers (CHECK in the billing_subscriptions migration).
+/// credit_holds. held = Σ active holds; available = balance − held. The three credit accounts
+/// hold whole numbers (CHECK re-created by the billing_credit_gift_checks migration).
 model BillingAccount {
   id          String      @id @default(uuid(7)) @db.Uuid
   workspaceId String      @map("workspace_id") @db.Uuid
@@ -1348,22 +1383,30 @@ model BillingAccount {
   @@map("billing_accounts")
 }
 
-/// A workspace has two edit accounts; their units must equal editAccountUnits in @repo/domain
-/// (checked by a test). The values keep the order of the database type.
+/// A workspace has three credit accounts; their units must equal creditAccountUnits in
+/// @repo/domain (checked by a test). The values keep the order of the database type, which is
+/// the order the labels were added in, not the order credits are spent in; the first two credit
+/// labels were 'edit' and 'edit_pack' before the billing_credit_units migration renamed them.
 enum BillingUnit {
-  /// Edits of the tariff: the quota is granted anew every period and what is left of the
+  /// Credits of the tariff: the quota is granted anew every period and what is left of the
   /// previous one expires.
-  edit
+  credit_tariff
   /// Roubles of the pay-per-action wallet.
   rub
-  /// Purchased edits (a pack): they never expire and outlive the tariff.
-  edit_pack
+  /// Purchased credits (a pack): they never expire and outlive the tariff.
+  credit_pack
+  /// Gift credits: granted once per user at registration, they never expire and are spent
+  /// after the credits of the tariff and before purchased ones.
+  credit_gift
 }
 
-/// A task's reserve (spec §17): one edit, or the class hold amount in RUB. «Попробовать ещё» is a
-/// new attempt with a new hold; topping up an existing budget raises amount.
+/// A task's reserve (spec §17). In credits: what an attempt sets aside when it is queued, one row
+/// per credit account it touches — the tariff, the gift, the pack —, the amount written once.
+/// «Продолжить» and «Попробовать ещё» are new attempts with rows of their own; the active rows of
+/// a task are one pool, charged, returned and expired together. In RUB: the class hold amount of
+/// the pay-per-action wallet.
 /// unit copies the account's unit (composite foreign key, as in credit_ledger) so a CHECK keeps
-/// edit holds whole; it also tells on which of the two edit accounts the edit is reserved.
+/// credit holds whole; it also tells on which of the credit accounts the credits are reserved.
 model CreditHold {
   id        String      @id @default(uuid(7)) @db.Uuid
   accountId String      @map("account_id") @db.Uuid
@@ -1372,18 +1415,42 @@ model CreditHold {
   attempt   Int         @default(1)
   amount    Decimal     @db.Decimal(14, 2)
   status    HoldStatus  @default(active)
-  /// Cron expires holds of tasks stuck past this moment (e.g. in awaiting_user).
+  /// Cron expires the reserve of a task stuck past this moment (e.g. in awaiting_user): one
+  /// value on all active rows of a task.
   expiresAt DateTime    @map("expires_at") @db.Timestamptz(6)
+  /// On a tariff row the stamp of the period its credits are of: a reserve placed after a period
+  /// ended and before its renewal is settled is stamped with the last millisecond of that
+  /// period. On a gift or a pack row the moment of placing.
   createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// The moment the reserve was placed, the same on every row of a placement: what the daily
+  /// limit counts launches by.
+  placedAt  DateTime    @default(now()) @map("placed_at") @db.Timestamptz(6)
   settledAt DateTime?   @map("settled_at") @db.Timestamptz(6)
 
   account BillingAccount @relation(fields: [accountId, unit], references: [id, unit], onDelete: Restrict, onUpdate: Restrict)
   task    Task           @relation(fields: [taskId], references: [id], onDelete: Restrict)
 
-  @@unique([taskId, attempt])
+  @@unique([taskId, attempt, accountId])
   @@index([accountId, status])
+  @@index([accountId, placedAt])
   @@index([status, expiresAt])
   @@map("credit_holds")
+}
+
+/// One site spends gift credits in one workspace only (spec §17). The first reserve that takes
+/// gift credits without a paid tariff claims the site for its workspace; a reserve of another
+/// workspace for the same site is refused. host_key is siteHostKey of @repo/domain: the host of
+/// the site as the platform normalises it, without one leading www., with the port when the
+/// stored address has one; the scheme is not part of it.
+model GiftSiteClaim {
+  hostKey     String   @id @map("host_key") @db.VarChar(512)
+  workspaceId String   @map("workspace_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId])
+  @@map("gift_site_claims")
 }
 
 enum HoldStatus {
@@ -1393,11 +1460,11 @@ enum HoldStatus {
   expired
 }
 
-/// The single journal of edits and roubles (spec §17). Every balance change is one row, written
+/// The single journal of credits and roubles (spec §17). Every balance change is one row, written
 /// in the transaction that updates the balance; idempotency_key turns retries into no-ops
-/// (e.g. "task:<id>:<attempt>:charge"). amount is signed: grants and top-ups are positive,
+/// (e.g. "task:<taskId>:charge:<accountId>"). amount is signed: grants and top-ups are positive,
 /// charges and expiries negative. unit copies the account's unit (composite foreign key) so a
-/// CHECK keeps the amounts of both edit accounts whole.
+/// CHECK keeps the amounts of the three credit accounts whole.
 model CreditLedger {
   id             String      @id @default(uuid(7)) @db.Uuid
   accountId      String      @map("account_id") @db.Uuid
@@ -1431,7 +1498,7 @@ enum LedgerKind {
   adjust
 }
 
-/// A ЮKassa payment: a subscription period, an edit pack or a wallet top-up (spec §17). The
+/// A ЮKassa payment: a subscription period, a credit pack or a wallet top-up (spec §17). The
 /// seller is self-employed: the amount carries no VAT and no 54-FZ receipt goes with the
 /// payment. A workspace has at most one pending subscription order.
 model Order {
@@ -1451,7 +1518,9 @@ model Order {
   /// No longer used: nothing reads or writes it, a new row keeps the default. There are no
   /// 54-FZ receipts; a later contract migration drops the column and the ReceiptStatus type.
   receiptStatus     ReceiptStatus @default(pending) @map("receipt_status")
-  /// The first payment of a subscription saves the method for renewals.
+  /// The customer's consent to auto-renewal, given at checkout (off by default). The payment
+  /// asks ЮKassa to save the method only when it is true, and only then is the saved method
+  /// written to the subscription.
   savePaymentMethod Boolean       @default(false) @map("save_payment_method")
   /// The subscription period the order pays for. Both are set or both are NULL, and the end is
   /// after the start (CHECK in the billing_subscriptions migration).
@@ -1575,4 +1644,138 @@ enum AuditActorType {
   agent
   system
   operator
+}
+
+// ─── Site connection wizard (spec §12) ────────────────────────────────────────
+
+/// Must equal siteSourceKinds in @repo/domain (checked by a test).
+enum SiteSourceKind {
+  ftp
+  sftp
+  git
+}
+
+/// Must equal databaseEngines in @repo/domain (checked by a test).
+enum DatabaseEngine {
+  mysql
+  postgres
+}
+
+/// Must equal connectionTlsModes in @repo/domain (checked by a test).
+enum ConnectionTls {
+  verified
+  unverified
+  plain
+}
+
+/// Must equal provisioningStages in @repo/domain (checked by a test).
+enum ProvisioningStage {
+  code_import
+  database_schema
+}
+
+/// Must equal provisioningStageStatuses in @repo/domain (checked by a test).
+enum ProvisioningStageStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
+/// Where the site's existing files are taken from (spec §12). The password, key or token is in
+/// Vault under credential_ref; that secret repeats the server it is valid for and must match.
+model SiteCodeSource {
+  siteId          String         @id @map("site_id") @db.Uuid
+  kind            SiteSourceKind
+  host            String         @db.VarChar(255)
+  port            Int
+  /// Folder of the site on the server (ftp, sftp).
+  rootPath        String?        @map("root_path") @db.VarChar(1024)
+  /// Canonical https address of the client's repository (git). A source only: nothing is pushed there.
+  repositoryUrl   String?        @map("repository_url") @db.VarChar(1024)
+  /// Branch to import (git); NULL is the remote default.
+  branch          String?        @db.VarChar(255)
+  /// ftp only: how the connection is protected.
+  tls             ConnectionTls?
+  /// sftp only: "<key type> SHA256:<base64>" of the host key the user saw.
+  hostKey         String?        @map("host_key") @db.VarChar(128)
+  credentialRefId String         @map("credential_ref_id") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site          Site          @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  credentialRef CredentialRef @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+
+  @@index([credentialRefId])
+  @@map("site_code_sources")
+}
+
+/// Connection to the site's own database. Only its structure is ever read (rule 1).
+model SiteDatabase {
+  siteId          String         @id @map("site_id") @db.Uuid
+  engine          DatabaseEngine
+  host            String         @db.VarChar(255)
+  port            Int
+  databaseName    String         @map("database_name") @db.VarChar(128)
+  tls             ConnectionTls
+  credentialRefId String         @map("credential_ref_id") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site          Site          @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  credentialRef CredentialRef @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+
+  @@index([credentialRefId])
+  @@map("site_databases")
+}
+
+/// One stage that follows «Добавить сайт». A retry by the user is the next attempt of the same
+/// row; a resume after a restart of core is the same attempt with enqueues + 1.
+model SiteProvisioningStage {
+  siteId      String                  @map("site_id") @db.Uuid
+  stage       ProvisioningStage
+  status      ProvisioningStageStatus @default(queued)
+  attempt     Int                     @default(1)
+  /// Outbox events written for this attempt; part of the dedupe key.
+  enqueues    Int                     @default(1)
+  /// Fencing token of the worker that holds the stage.
+  leaseEpoch  Int                     @default(0) @map("lease_epoch")
+  heartbeatAt DateTime?               @map("heartbeat_at") @db.Timestamptz(6)
+  /// One of provisioningErrorCodes in @repo/domain; never a message.
+  errorCode   String?                 @map("error_code") @db.VarChar(64)
+  /// Counts and the `recheck` flag only (provisioningStageSummarySchema); progress while running,
+  /// the result after. Kept when the stage is queued again.
+  summary     Json?
+  startedAt   DateTime?               @map("started_at") @db.Timestamptz(6)
+  finishedAt  DateTime?               @map("finished_at") @db.Timestamptz(6)
+  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@id([siteId, stage])
+  @@index([updatedAt], map: "site_provisioning_stages_unfinished_idx", where: raw("finished_at IS NULL"))
+  @@map("site_provisioning_stages")
+}
+
+/// Structure of the site's database as last read: names of tables, columns, indexes and foreign
+/// keys. No rows, no comments, no default expressions, no view or index definitions.
+/// The row is `SiteDatabaseSchema` (@repo/db); the JSON document in `schema` is `DatabaseStructure`
+/// (@repo/domain) — two names on purpose, one file of core imports both.
+model SiteDatabaseSchema {
+  siteId        String         @id @map("site_id") @db.Uuid
+  engine        DatabaseEngine
+  /// What `DatabaseInspector.readSchema` returned as `serverVersion` (at most 64 characters).
+  serverVersion String?        @map("server_version") @db.VarChar(64)
+  tablesCount   Int            @map("tables_count")
+  columnsCount  Int            @map("columns_count")
+  truncated     Boolean        @default(false)
+  /// databaseStructureSchema in @repo/domain; at most 2 MiB serialized (CHECK).
+  schema        Json
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@map("site_database_schemas")
 }

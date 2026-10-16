@@ -14,7 +14,17 @@ export interface YookassaConfig {
    * fake sends from loopback. Never empty; never set in production.
    */
   webhookAllowlist?: readonly string[]
+  /**
+   * YOOKASSA_AUTOPAYMENTS: whether the shop may save a payment method and charge it without the
+   * buyer. ЮKassa switches that on for a shop on request, and until then answers 403 to a
+   * payment that asks to save its method. false — one-time payments only: no payment asks to
+   * save a method, none is bound, and auto-renewal is not offered.
+   */
+  autopayments: boolean
 }
+
+/** YOOKASSA_AUTOPAYMENTS: `on` — the shop saves payment methods and charges them, `off` — not. */
+const autopaymentsValues = ['on', 'off'] as const
 
 const envSchema = z
   .object({
@@ -39,6 +49,9 @@ const envSchema = z
         )
         .optional(),
     ),
+    YOOKASSA_AUTOPAYMENTS: envVar(
+      z.enum(autopaymentsValues, { error: 'must be on or off' }).optional(),
+    ),
   })
   .superRefine((env, ctx) => {
     const issue = (name: string, message: string) =>
@@ -57,9 +70,9 @@ const envSchema = z
         issue('YOOKASSA_API_URL', 'expected an address without credentials, query or fragment')
       }
     }
-    // Both exist for the local fake only: production calls the real API and trusts nothing but
-    // the published ranges, whether or not payments are switched on.
     if (isProduction(env.APP_ENV)) {
+      // Both exist for the local fake only: production calls the real API and trusts nothing but
+      // the published ranges, whether or not payments are switched on.
       if (env.YOOKASSA_API_URL !== undefined) {
         issue('YOOKASSA_API_URL', 'not allowed in production (the real API address is built in)')
       }
@@ -69,13 +82,27 @@ const envSchema = z
           'not allowed in production (notifications come from the published ranges only)',
         )
       }
+      // Never guessed for a real shop: `on` at a shop without the approval refuses every
+      // customer who ticks auto-renewal, `off` at a shop that has it sells no renewal at all.
+      if (
+        env.YOOKASSA_SHOP_ID !== undefined &&
+        env.YOOKASSA_SECRET_KEY !== undefined &&
+        env.YOOKASSA_AUTOPAYMENTS === undefined
+      ) {
+        issue(
+          'YOOKASSA_AUTOPAYMENTS',
+          'must be set to on or off in production (YooKassa answers 403 to save_payment_method ' +
+            'until its manager approves autopayments for the shop)',
+        )
+      }
     }
   })
 
 /**
  * Reads the shop settings. null when both credentials are empty: payments are off (local dev,
- * e2e), and the two development-only variables are then checked but not used.
- * The error names variables only, never values.
+ * e2e), and the two development-only variables and the switch of autopayments are then checked
+ * but not used. The switch is `on` unless set outside production — a local fake saves methods —
+ * and has no default for a shop in production. The error names variables only, never values.
  */
 export function yookassaConfigFromEnv(env: Env): YookassaConfig | null {
   const e = parseEnv('yookassa', envSchema, env)
@@ -87,5 +114,6 @@ export function yookassaConfigFromEnv(env: Env): YookassaConfig | null {
     ...(e.YOOKASSA_WEBHOOK_ALLOWLIST === undefined
       ? {}
       : { webhookAllowlist: e.YOOKASSA_WEBHOOK_ALLOWLIST }),
+    autopayments: (e.YOOKASSA_AUTOPAYMENTS ?? 'on') === 'on',
   }
 }

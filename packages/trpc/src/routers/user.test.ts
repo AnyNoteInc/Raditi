@@ -39,6 +39,7 @@ function context(prisma: PrismaClient, currentUser: User | null = user): Context
           updatedAt: now,
         }
       : null,
+    billing: null,
   }
 }
 

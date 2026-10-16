@@ -13,6 +13,10 @@ export function moscowMidnight(isoDate: string): Date {
 }
 
 // ─── Plans (docs/business.md §6) ──────────────────────────────────────────────
+//
+// The credits of the tariffs and of the pack are the numbers of the credits model (spec §17): a
+// database seeded with the terms of before gets them by the migration billing_credit_amounts,
+// which runs before this seed.
 
 /** Everything except name and sortOrder is a plan term: the seed creates it but never changes it. */
 export interface PlanSeed {
@@ -21,9 +25,9 @@ export interface PlanSeed {
   kind: PlanKind
   /** RUB without VAT (the seller is self-employed), Decimal(12,2). */
   price: DecimalString
-  editsPerMonth: number | null
-  editsPerDay: number | null
-  packEdits: number | null
+  creditsPerMonth: number | null
+  tasksPerDay: number | null
+  packCredits: number | null
   maxSites: number | null
   sortOrder: number
 }
@@ -34,9 +38,9 @@ export const planSeeds = [
     name: 'Старт',
     kind: 'quota',
     price: '4900.00',
-    editsPerMonth: 30,
-    editsPerDay: 5,
-    packEdits: null,
+    creditsPerMonth: 300,
+    tasksPerDay: 5,
+    packCredits: null,
     maxSites: 1,
     sortOrder: 10,
   },
@@ -45,9 +49,9 @@ export const planSeeds = [
     name: 'Бизнес',
     kind: 'quota',
     price: '12900.00',
-    editsPerMonth: 80,
-    editsPerDay: 10,
-    packEdits: null,
+    creditsPerMonth: 800,
+    tasksPerDay: 10,
+    packCredits: null,
     maxSites: 3,
     sortOrder: 20,
   },
@@ -56,22 +60,23 @@ export const planSeeds = [
     name: 'Агентство',
     kind: 'quota',
     price: '39900.00',
-    editsPerMonth: 250,
-    editsPerDay: 30,
-    packEdits: null,
+    creditsPerMonth: 2500,
+    tasksPerDay: 30,
+    packCredits: null,
     maxSites: 15,
     sortOrder: 30,
   },
-  // The name of the public offer. A stored «Пакет 10 правок» is renamed by the next seed run:
-  // names follow the seed, the terms below do not change.
+  // The name says what the pack holds, in credits, and the slug carries no number; Appendix 1 of
+  // the public offer names the pack by the same words. A pack stored under an earlier name is
+  // renamed by the next seed run: names follow the seed, the terms below do not change.
   {
-    slug: 'pack-10',
-    name: 'Пакет из 10 правок',
+    slug: 'pack',
+    name: 'Пакет из 100 кредитов',
     kind: 'pack',
     price: '1990.00',
-    editsPerMonth: null,
-    editsPerDay: null,
-    packEdits: 10,
+    creditsPerMonth: null,
+    tasksPerDay: null,
+    packCredits: 100,
     maxSites: null,
     sortOrder: 40,
   },
@@ -82,9 +87,9 @@ export const planSeeds = [
     name: 'Оплата за действие',
     kind: 'payg',
     price: '0.00',
-    editsPerMonth: null,
-    editsPerDay: null,
-    packEdits: null,
+    creditsPerMonth: null,
+    tasksPerDay: null,
+    packCredits: null,
     maxSites: 1,
     sortOrder: 50,
   },

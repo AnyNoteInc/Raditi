@@ -1,10 +1,32 @@
 import {
   badRequest,
+  billingAlreadyOnPlan,
+  billingAutoRenewalUnavailable,
+  billingCreditRateMissing,
+  billingCreditsHeld,
+  billingDailyLimitReached,
+  billingNoLiveSubscription,
+  billingNotEnoughCredits,
+  billingNothingToChange,
+  billingOrderNotFound,
+  billingPackNeedsSubscription,
+  billingPaymentDeclined,
+  billingPaymentInProgress,
+  billingPaymentsNotConfigured,
+  billingPlanNotFound,
+  billingPlanSiteLimit,
+  billingSubscriptionExists,
+  billingSubscriptionPastDue,
+  billingTaskNeedsSubscription,
+  billingUnpaidWorkLimit,
   conflict,
   DomainError,
   forbidden,
   notFound,
   notImplemented,
+  taskRefusal,
+  taskRefusalReasons,
+  type TaskRefusalReason,
 } from '@repo/domain'
 import { TRPCError } from '@trpc/server'
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
@@ -77,6 +99,142 @@ describe('toTRPCError', () => {
       expect(error.message).toContain(text)
       expect(error.message).not.toMatch(/[A-Za-z]/)
       expect(clientMessage(error)).toBe(error.message)
+    },
+  )
+
+  it.each([
+    [
+      'BILLING_PAYMENTS_NOT_CONFIGURED',
+      billingPaymentsNotConfigured,
+      'SERVICE_UNAVAILABLE',
+      'Оплата сейчас недоступна. Попробуйте ещё раз немного позже',
+    ],
+    [
+      'BILLING_PLAN_NOT_FOUND',
+      billingPlanNotFound,
+      'NOT_FOUND',
+      'Этот тариф сейчас не продаётся. Обновите страницу и выберите другой',
+    ],
+    [
+      'BILLING_SUBSCRIPTION_EXISTS',
+      billingSubscriptionExists,
+      'CONFLICT',
+      'Тариф уже оформлен. Обновите страницу, чтобы увидеть его',
+    ],
+    [
+      'BILLING_PLAN_SITE_LIMIT',
+      billingPlanSiteLimit,
+      'CONFLICT',
+      'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
+    ],
+    [
+      'BILLING_PAYMENT_DECLINED',
+      billingPaymentDeclined,
+      'PAYMENT_REQUIRED',
+      'Платёж не прошёл. Попробуйте ещё раз или выберите другой способ оплаты',
+    ],
+    [
+      'BILLING_ORDER_NOT_FOUND',
+      billingOrderNotFound,
+      'NOT_FOUND',
+      'Не нашли такой заказ. Проверьте ссылку или откройте «Тарифы» в настройках',
+    ],
+    [
+      'BILLING_PAYMENT_IN_PROGRESS',
+      billingPaymentInProgress,
+      'CONFLICT',
+      'Предыдущий платёж ещё обрабатывается. Подождите пару минут и обновите страницу',
+    ],
+    [
+      'BILLING_PACK_NEEDS_SUBSCRIPTION',
+      billingPackNeedsSubscription,
+      'CONFLICT',
+      'Пакет кредитов можно купить только при действующем тарифе. Сначала оформите или оплатите тариф',
+    ],
+    [
+      'BILLING_NOT_ENOUGH_CREDITS',
+      billingNotEnoughCredits,
+      'PAYMENT_REQUIRED',
+      'Лимиты закончились: кредитов не хватает, чтобы начать задачу. Купите пакет кредитов или дождитесь начисления по тарифу — подробности в разделе «Использование»',
+    ],
+    [
+      'BILLING_DAILY_LIMIT_REACHED',
+      billingDailyLimitReached,
+      'CONFLICT',
+      'Лимит задач на сегодня исчерпан. Новую задачу можно будет поставить завтра',
+    ],
+    [
+      'BILLING_TASK_NEEDS_SUBSCRIPTION',
+      billingTaskNeedsSubscription,
+      'PAYMENT_REQUIRED',
+      'Чтобы ставить задачи, нужен действующий тариф. Выберите или оплатите его в разделе «Тарифы»',
+    ],
+    [
+      'BILLING_CREDITS_HELD',
+      billingCreditsHeld,
+      'CONFLICT',
+      'Все кредиты отложены под задачи в работе. Дождитесь, пока они закончатся, или купите пакет кредитов',
+    ],
+    [
+      'BILLING_UNPAID_WORK_LIMIT',
+      billingUnpaidWorkLimit,
+      'CONFLICT',
+      'Новые задачи временно не принимаются: слишком много задач остановилось без результата. Напишите нам — разберёмся, в чём дело',
+    ],
+    [
+      'BILLING_CREDIT_RATE_MISSING',
+      billingCreditRateMissing,
+      'SERVICE_UNAVAILABLE',
+      'Задачи сейчас не принимаются: мы обновляем расчёт кредитов. Попробуйте ещё раз немного позже',
+    ],
+    [
+      'BILLING_NO_LIVE_SUBSCRIPTION',
+      billingNoLiveSubscription,
+      'CONFLICT',
+      'У вас нет действующего тарифа. Обновите страницу, чтобы увидеть, что изменилось',
+    ],
+    [
+      'BILLING_NOTHING_TO_CHANGE',
+      billingNothingToChange,
+      'CONFLICT',
+      'Это уже сделано. Обновите страницу, чтобы увидеть изменения',
+    ],
+    [
+      'BILLING_ALREADY_ON_PLAN',
+      billingAlreadyOnPlan,
+      'CONFLICT',
+      'Этот тариф у вас уже есть или уже выбран на следующий период. Обновите страницу, чтобы увидеть изменения',
+    ],
+    [
+      'BILLING_SUBSCRIPTION_PAST_DUE',
+      billingSubscriptionPastDue,
+      'CONFLICT',
+      'Сначала оплатите тариф: последнее списание не прошло. Откройте «Тарифы» и нажмите «Оплатить сейчас»',
+    ],
+    [
+      'BILLING_AUTO_RENEWAL_UNAVAILABLE',
+      billingAutoRenewalUnavailable,
+      'CONFLICT',
+      'Автопродление пока недоступно. Оформите тариф без него: он будет действовать месяц',
+    ],
+  ] as const)(
+    'gives the billing refusal %s its own Russian text that says what to do next',
+    (domainCode, refusal, code, text) => {
+      const domainError = refusal()
+      expect(domainError.code).toBe(domainCode)
+
+      const error = toTRPCError(domainError)
+
+      expect(error).toMatchObject({ code, message: text, cause: domainError })
+      expect(clientMessage(error)).toBe(text)
+      // Its own: not what any other refusal with this status says.
+      const generic = toTRPCError(new DomainError('UNLISTED', 'Unlisted', domainError.httpStatus))
+      expect(text).not.toBe(generic.message)
+      // No English and no codes; the seller issues neither VAT prices nor receipts.
+      expect(text).not.toMatch(/[A-Za-z]|НДС|чек/i)
+      // Formal «вы» or an impersonal sentence, and a next step after the first one.
+      expect(text).not.toMatch(/(?:^|[^а-яё])(?:ты|тебя|тебе|твой|твоя|твоё|твои)(?:[^а-яё]|$)/i)
+      expect(text.split('. ').length).toBeGreaterThanOrEqual(2)
     },
   )
 
@@ -232,5 +390,283 @@ describe('errors over HTTP', () => {
     const body = await errorOf(response)
     expect(body.message).toBe(message)
     expect(JSON.stringify(body)).not.toContain(raw)
+  })
+})
+
+describe('a text that names a number of the refusal', () => {
+  const planLimit = (details?: unknown) =>
+    new DomainError(
+      'PROJECT_PLAN_LIMIT_REACHED',
+      'The plan of the workspace allows no more sites',
+      403,
+      details,
+    )
+  const another = 'Чтобы добавить ещё один, выберите другой тариф в настройках'
+
+  it.each([
+    [1, `В ваш тариф входит один сайт. ${another}`],
+    [2, `В ваш тариф входит до 2 сайтов. ${another}`],
+    [3, `В ваш тариф входит до 3 сайтов. ${another}`],
+    [11, `В ваш тариф входит до 11 сайтов. ${another}`],
+    [15, `В ваш тариф входит до 15 сайтов. ${another}`],
+    [21, `В ваш тариф входит до 21 сайта. ${another}`],
+    [111, `В ваш тариф входит до 111 сайтов. ${another}`],
+  ])('names the site limit of the tariff: %i', (maxSites, message) => {
+    const error = toTRPCError(planLimit({ maxSites }))
+
+    expect(error).toMatchObject({ code: 'FORBIDDEN', message })
+    // The same text on the way to the browser, with the code and without the details.
+    expect(clientMessage(error)).toBe(message)
+    const shape = {
+      message: error.message,
+      code: -32003,
+      data: { code: 'FORBIDDEN', httpStatus: 403 },
+    }
+    expect(formatError(shape, error, false)).toEqual({
+      ...shape,
+      data: { ...shape.data, domainCode: 'PROJECT_PLAN_LIMIT_REACHED' },
+    })
+  })
+
+  it.each([
+    undefined,
+    null,
+    'three',
+    {},
+    { maxSites: '3' },
+    { maxSites: 0 },
+    { maxSites: -1 },
+    { maxSites: 2.5 },
+    { maxSites: Number.NaN },
+    { maxSites: Number.POSITIVE_INFINITY },
+  ])('says the same without the number when the details do not carry it: %o', (details) => {
+    expect(toTRPCError(planLimit(details)).message).toBe(
+      `На вашем тарифе больше нельзя добавить сайт. ${another}`,
+    )
+  })
+
+  it.each([
+    [1, `В тариф, который вы оплачиваете, входит один сайт. ${another}`],
+    [3, `В тариф, который вы оплачиваете, входит до 3 сайтов. ${another}`],
+    [21, `В тариф, который вы оплачиваете, входит до 21 сайта. ${another}`],
+  ])('names the limit of a tariff that is being paid for as such: %i', (maxSites, message) => {
+    const error = toTRPCError(planLimit({ maxSites, unpaid: true }))
+
+    expect(error).toMatchObject({ code: 'FORBIDDEN', message })
+    expect(clientMessage(error)).toBe(message)
+  })
+
+  it.each([false, 'true', 1, null, undefined])(
+    'speaks of the tariff the customer has unless the details say «unpaid»: %o',
+    (unpaid) => {
+      expect(toTRPCError(planLimit({ maxSites: 3, unpaid })).message).toBe(
+        `В ваш тариф входит до 3 сайтов. ${another}`,
+      )
+    },
+  )
+
+  describe('the limit of the tariff chosen for the next period', () => {
+    // The customer may be on a tariff that holds more: «в ваш тариф входит…» would not be true.
+    const takeBack =
+      'Чтобы добавить ещё один, отмените переход или выберите другой тариф в настройках'
+
+    it.each([
+      [1, `В тариф, который вы выбрали на следующий период, входит один сайт. ${takeBack}`],
+      [3, `В тариф, который вы выбрали на следующий период, входит до 3 сайтов. ${takeBack}`],
+      [21, `В тариф, который вы выбрали на следующий период, входит до 21 сайта. ${takeBack}`],
+    ])('is named as such, with the way to take the choice back: %i', (maxSites, message) => {
+      const error = toTRPCError(planLimit({ maxSites, scheduled: true }))
+
+      expect(error).toMatchObject({ code: 'FORBIDDEN', message })
+      expect(clientMessage(error)).toBe(message)
+      expect(message).not.toContain('В ваш тариф')
+    })
+
+    it.each([false, 'true', 1, null, undefined])(
+      'is not spoken of unless the details say «scheduled»: %o',
+      (scheduled) => {
+        expect(toTRPCError(planLimit({ maxSites: 3, scheduled })).message).toBe(
+          `В ваш тариф входит до 3 сайтов. ${another}`,
+        )
+      },
+    )
+
+    it('gives way to a tariff that is being paid for: its charge cannot be taken back', () => {
+      expect(toTRPCError(planLimit({ maxSites: 1, unpaid: true, scheduled: true })).message).toBe(
+        `В тариф, который вы оплачиваете, входит один сайт. ${another}`,
+      )
+    })
+
+    it('says the same without the number as any other limit', () => {
+      expect(toTRPCError(planLimit({ scheduled: true })).message).toBe(
+        `На вашем тарифе больше нельзя добавить сайт. ${another}`,
+      )
+    })
+  })
+
+  it('reads the details of that code only', () => {
+    expect(
+      toTRPCError(new DomainError('FORBIDDEN', 'Not the owner', 403, { maxSites: 3 })).message,
+    ).toBe('Недостаточно прав')
+    expect(
+      toTRPCError(new DomainError('PROJECT_LIMIT_REACHED', 'Ceiling', 403, { maxSites: 3 }))
+        .message,
+    ).toBe('Вы добавили максимальное число сайтов. Напишите нам, если нужно больше')
+  })
+})
+
+describe('the text of a refused task, built from the details of its refusal', () => {
+  const NBSP = String.fromCharCode(0xa0)
+  /** The refusal of the queue as it is thrown: the code of the reason, and the numbers. */
+  const refused = (reason: TaskRefusalReason, spendable = 0, held = 0, needed = 5) =>
+    taskRefusal({ reason, spendable, held, needed })
+  const GENERAL = {
+    notEnough:
+      'Лимиты закончились: кредитов не хватает, чтобы начать задачу. Купите пакет кредитов или дождитесь начисления по тарифу — подробности в разделе «Использование»',
+    held: 'Все кредиты отложены под задачи в работе. Дождитесь, пока они закончатся, или купите пакет кредитов',
+    needsTariff:
+      'Чтобы ставить задачи, нужен действующий тариф. Выберите или оплатите его в разделе «Тарифы»',
+    dailyLimit: 'Лимит задач на сегодня исчерпан. Новую задачу можно будет поставить завтра',
+    unpaidLimit:
+      'Новые задачи временно не принимаются: слишком много задач остановилось без результата. Напишите нам — разберёмся, в чём дело',
+    rateMissing:
+      'Задачи сейчас не принимаются: мы обновляем расчёт кредитов. Попробуйте ещё раз немного позже',
+  }
+  const choosePlan = 'Выберите тариф в разделе «Тарифы»'
+
+  it.each([
+    [1, 'Лимиты закончились: остался 1 кредит, а на новую задачу нужно не меньше 5.'],
+    [2, 'Лимиты закончились: осталось 2 кредита, а на новую задачу нужно не меньше 5.'],
+    [3, 'Лимиты закончились: осталось 3 кредита, а на новую задачу нужно не меньше 5.'],
+    [4, 'Лимиты закончились: осталось 4 кредита, а на новую задачу нужно не меньше 5.'],
+  ])('names the few credits that are left: %i', (spendable, first) => {
+    const error = toTRPCError(refused('below_start', spendable))
+
+    expect(error).toMatchObject({
+      code: 'PAYMENT_REQUIRED',
+      message: `${first} Купите пакет кредитов или дождитесь начисления по тарифу`,
+    })
+    expect(clientMessage(error)).toBe(error.message)
+  })
+
+  it('says «limits ran out» in general words when no credit is left, or when the numbers do not say «a few»', () => {
+    expect(toTRPCError(refused('empty', 0)).message).toBe(GENERAL.notEnough)
+    // The numbers of another refusal under this code: nothing is made up from them.
+    expect(toTRPCError(billingNotEnoughCredits()).message).toBe(GENERAL.notEnough)
+    expect(
+      toTRPCError(
+        billingNotEnoughCredits({ reason: 'below_start', spendable: 7, held: 0, needed: 5 }),
+      ).message,
+    ).toBe(GENERAL.notEnough)
+  })
+
+  it.each([
+    [1, '1'],
+    [45, '45'],
+    [90, '90'],
+    [2500, `2${NBSP}500`],
+    [12345, `12${NBSP}345`],
+  ])('names how many credits tasks in work have set aside: %i', (held, printed) => {
+    expect(toTRPCError(refused('held', 2, held))).toMatchObject({
+      code: 'CONFLICT',
+      message: `Кредиты заняты задачами в работе: под них отложено ${printed}. Дождитесь, пока задачи закончатся, или купите пакет кредитов`,
+    })
+  })
+
+  it('says «credits are set aside» in general words without the number', () => {
+    expect(toTRPCError(billingCreditsHeld()).message).toBe(GENERAL.held)
+    expect(
+      toTRPCError(billingCreditsHeld({ reason: 'held', spendable: 0, held: 0, needed: 5 })).message,
+    ).toBe(GENERAL.held)
+  })
+
+  it.each([
+    ['gift_spent', 0, 'Подарочные кредиты закончились.'],
+    ['gift_below_start', 1, 'Остался 1 подарочный кредит, а на новую задачу нужно не меньше 5.'],
+    ['gift_below_start', 3, 'Осталось 3 подарочных кредита, а на новую задачу нужно не меньше 5.'],
+    [
+      'trial_unpaid_limit',
+      15,
+      'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать.',
+    ],
+    [
+      'gift_site_used',
+      35,
+      'На этом сайте подарочные кредиты уже использовались в другом аккаунте.',
+    ],
+  ] as const)(
+    'tells why a task needs a tariff, and then the way to one: %s, %i left',
+    (reason, spendable, first) => {
+      expect(toTRPCError(refused(reason, spendable))).toMatchObject({
+        code: 'PAYMENT_REQUIRED',
+        message: `${first} ${choosePlan}`,
+      })
+    },
+  )
+
+  it.each(['past_due', 'ended'] as const)(
+    'says «a tariff is needed» in general words for a tariff that is %s',
+    (reason) => {
+      expect(toTRPCError(refused(reason)).message).toBe(GENERAL.needsTariff)
+    },
+  )
+
+  it('says the general words of the code when the details are not those of a refused task', () => {
+    for (const details of [
+      undefined,
+      null,
+      'gift_spent',
+      {},
+      { reason: 'gift_spent' },
+      { reason: 'no_such_reason', spendable: 0, held: 0, needed: 5 },
+      { reason: 'gift_below_start', spendable: '3', held: 0, needed: 5 },
+      { reason: 'gift_below_start', spendable: 2.5, held: 0, needed: 5 },
+      { reason: 'gift_below_start', spendable: -1, held: 0, needed: 5 },
+      // Anything beside the four fields: the details are not what the queue throws.
+      { reason: 'gift_spent', spendable: 0, held: 0, needed: 5, userId: 'u' },
+    ]) {
+      const error = new DomainError('BILLING_TASK_NEEDS_SUBSCRIPTION', 'Refused', 402, details)
+      expect(toTRPCError(error).message).toBe(GENERAL.needsTariff)
+    }
+  })
+
+  it('keeps the general words of the codes whose refusal names no number', () => {
+    expect(toTRPCError(refused('daily_limit', 290)).message).toBe(GENERAL.dailyLimit)
+    expect(toTRPCError(refused('trial_daily_limit', 20)).message).toBe(GENERAL.dailyLimit)
+    expect(toTRPCError(refused('unpaid_limit', 300)).message).toBe(GENERAL.unpaidLimit)
+    expect(toTRPCError(refused('rate_missing', 300)).message).toBe(GENERAL.rateMissing)
+  })
+
+  it('gives every reason of a refusal a text that passes the rules of a client text', () => {
+    for (const reason of taskRefusalReasons) {
+      for (const [spendable, held] of [
+        [0, 0],
+        [3, 0],
+        [2, 45],
+        [300, 0],
+      ] as const) {
+        const error = toTRPCError(refused(reason, spendable, held))
+        const text = clientMessage(error)
+        // No English and no codes; the seller issues neither VAT prices nor receipts.
+        expect(text).not.toMatch(/[A-Za-z]|НДС|чек/i)
+        expect(text).not.toMatch(/(?:^|[^а-яё])(?:ты|тебя|тебе|твой|твоя|твоё|твои)(?:[^а-яё]|$)/i)
+        // A next step after the first sentence, and no full stop at the end, like the others.
+        expect(text.split('. ').length).toBeGreaterThanOrEqual(2)
+        expect(text.endsWith('.')).toBe(false)
+        // The numbers of the refusal never leave as they are: the browser gets a sentence.
+        const shape = {
+          message: text,
+          code: -32000,
+          data: { code: error.code, httpStatus: 402 },
+        }
+        const formatted = formatError(shape, error, false)
+        expect(formatted.message).toBe(text)
+        expect(formatted.data).toEqual({
+          ...shape.data,
+          domainCode: error.cause && (error.cause as DomainError).code,
+        })
+        expect(JSON.stringify(formatted)).not.toContain('spendable')
+      }
+    }
   })
 })

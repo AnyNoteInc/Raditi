@@ -224,6 +224,22 @@ describe('createYookassaClient', () => {
     expect((await client.getPayment('pmt_1')).payment_method?.status).toBeUndefined()
   })
 
+  it('reads a payment whose method has a status it has never heard of', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        ...payment,
+        status: 'succeeded',
+        paid: true,
+        payment_method: { id: 'pm_1', type: 'bank_card', saved: true, status: 'expired' },
+      }),
+    )
+
+    expect((await clientWith(fetchMock).getPayment('pmt_1')).payment_method).toMatchObject({
+      saved: true,
+      status: 'expired',
+    })
+  })
+
   it('keeps a cancellation reason it has never heard of', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({
@@ -254,6 +270,34 @@ describe('createYookassaClient', () => {
     expect(url).toBe('https://api.yookassa.ru/v3/refunds')
     expect(init?.method).toBe('POST')
     expect(new Headers(init?.headers).get('Idempotence-Key')).toBe('rf-key')
+  })
+
+  // The platform tells its own refunds by this field (`refundDescription` of @repo/billing):
+  // what the request described the refund with has to be sent and read back as it is.
+  it('sends the description of a refund and reads it back with the refund', async () => {
+    const description = 'Возврат по заказу 0199a000-0000-7000-8000-0000000000b2'
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(jsonResponse({ ...refund, description })))
+    const client = clientWith(fetchMock)
+
+    const created = await client.createRefund(
+      { payment_id: 'pmt_1', amount: { value: '1990.00', currency: 'RUB' }, description },
+      'refund.0199a000-0000-7000-8000-0000000000b2.1',
+    )
+
+    expect(created.description).toBe(description)
+    const [, init] = fetchMock.mock.calls[0]!
+    // Nothing beside what was asked for: no metadata of a refund is sent unless given.
+    expect(JSON.parse(String(init?.body))).toEqual({
+      payment_id: 'pmt_1',
+      amount: { value: '1990.00', currency: 'RUB' },
+      description,
+    })
+    expect((await client.getRefund('rf_1')).description).toBe(description)
+    // A refund made in the ЮKassa cabinet may carry none.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(refund)))
+    expect((await client.getRefund('rf_1')).description).toBeUndefined()
   })
 
   it('gets a refund by id and encodes it (AnyNote did not)', async () => {
@@ -391,6 +435,18 @@ describe('input validation (money as two-decimal strings)', () => {
       client.createPaymentMethod(input as unknown as CreatePaymentMethodInput, 'idem'),
     ).rejects.toThrow(/^Invalid payment method input: /)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a refund description longer than ЮKassa takes', async () => {
+    const refundOf = (description: string) =>
+      client.createRefund(
+        { payment_id: 'pmt_1', amount: { value: '1.00', currency: 'RUB' }, description },
+        'k',
+      )
+    await expect(refundOf('в'.repeat(251))).rejects.toThrow(/^Invalid refund input: description/)
+    expect(fetchMock).not.toHaveBeenCalled()
+    fetchMock.mockResolvedValue(jsonResponse(refund))
+    await expect(refundOf('в'.repeat(250))).resolves.toMatchObject({ id: 'rf_1' })
   })
 
   it('rejects an empty refund amount', async () => {

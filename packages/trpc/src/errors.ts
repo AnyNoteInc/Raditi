@@ -1,4 +1,9 @@
-import { isDomainError, type DomainError } from '@repo/domain'
+import {
+  isDomainError,
+  taskRefusalDetailsSchema,
+  type DomainError,
+  type TaskRefusalDetails,
+} from '@repo/domain'
 import { TRPCError, type TRPC_ERROR_CODE_KEY } from '@trpc/server'
 
 /** Shown instead of the real message of an unexpected failure: it may name tables or hosts. */
@@ -41,8 +46,8 @@ const SAVE_FAILED = 'Не удалось сохранить работу аге�
 
 /**
  * Client text per DomainError code. Domain messages are English and meant for the logs;
- * a code the user may meet gets its Russian text here, any other shows the text of its
- * tRPC code.
+ * a code the user may meet gets its Russian text here or in MESSAGE_FROM_DETAILS below, any
+ * other shows the text of its tRPC code.
  */
 const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   BAD_REQUEST: INVALID_INPUT_MESSAGE,
@@ -54,6 +59,48 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   SITE_ADDRESS_NOT_PUBLIC: 'Укажите адрес сайта, который открывается из интернета',
   NOT_IMPLEMENTED: 'Эта возможность ещё в разработке',
   [CONSENT_REQUIRED]: CONSENT_REQUIRED_MESSAGE,
+  // Tariffs and their payment: what the customer can do next. Why a bank declined a payment
+  // is told by the order itself (paymentFailureText of @repo/billing), not by these.
+  BILLING_PAYMENTS_NOT_CONFIGURED: 'Оплата сейчас недоступна. Попробуйте ещё раз немного позже',
+  BILLING_PLAN_NOT_FOUND: 'Этот тариф сейчас не продаётся. Обновите страницу и выберите другой',
+  BILLING_SUBSCRIPTION_EXISTS: 'Тариф уже оформлен. Обновите страницу, чтобы увидеть его',
+  BILLING_PLAN_SITE_LIMIT:
+    'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
+  BILLING_PAYMENT_DECLINED:
+    'Платёж не прошёл. Попробуйте ещё раз или выберите другой способ оплаты',
+  BILLING_PAYMENT_IN_PROGRESS:
+    'Предыдущий платёж ещё обрабатывается. Подождите пару минут и обновите страницу',
+  BILLING_PACK_NEEDS_SUBSCRIPTION:
+    'Пакет кредитов можно купить только при действующем тарифе. Сначала оформите или оплатите тариф',
+  BILLING_ORDER_NOT_FOUND:
+    'Не нашли такой заказ. Проверьте ссылку или откройте «Тарифы» в настройках',
+  // The saved payment method and auto-renewal: the page behind the refusal is out of date.
+  BILLING_NO_LIVE_SUBSCRIPTION:
+    'У вас нет действующего тарифа. Обновите страницу, чтобы увидеть, что изменилось',
+  BILLING_NOTHING_TO_CHANGE: 'Это уже сделано. Обновите страницу, чтобы увидеть изменения',
+  // The shop takes one-time payments only (YOOKASSA_AUTOPAYMENTS=off).
+  BILLING_AUTO_RENEWAL_UNAVAILABLE:
+    'Автопродление пока недоступно. Оформите тариф без него: он будет действовать месяц',
+  // The tariff of the next period.
+  BILLING_ALREADY_ON_PLAN:
+    'Этот тариф у вас уже есть или уже выбран на следующий период. Обновите страницу, чтобы увидеть изменения',
+  BILLING_SUBSCRIPTION_PAST_DUE:
+    'Сначала оплатите тариф: последнее списание не прошло. Откройте «Тарифы» и нажмите «Оплатить сейчас»',
+  // A task that is not queued: no credits to reserve, or all of them set aside for tasks in
+  // work, the limit of the day, no paid tariff, too much work that ended without a charge.
+  BILLING_NOT_ENOUGH_CREDITS:
+    'Лимиты закончились: кредитов не хватает, чтобы начать задачу. Купите пакет кредитов или дождитесь начисления по тарифу — подробности в разделе «Использование»',
+  BILLING_CREDITS_HELD:
+    'Все кредиты отложены под задачи в работе. Дождитесь, пока они закончатся, или купите пакет кредитов',
+  BILLING_DAILY_LIMIT_REACHED:
+    'Лимит задач на сегодня исчерпан. Новую задачу можно будет поставить завтра',
+  BILLING_TASK_NEEDS_SUBSCRIPTION:
+    'Чтобы ставить задачи, нужен действующий тариф. Выберите или оплатите его в разделе «Тарифы»',
+  BILLING_UNPAID_WORK_LIMIT:
+    'Новые задачи временно не принимаются: слишком много задач остановилось без результата. Напишите нам — разберёмся, в чём дело',
+  // No usable credit rate: the platform's own state, nothing the customer can pay or change.
+  BILLING_CREDIT_RATE_MISSING:
+    'Задачи сейчас не принимаются: мы обновляем расчёт кредитов. Попробуйте ещё раз немного позже',
   // Size and count limits of a turn (spec §8): what the client can do about them.
   PUBLICATION_TOO_LARGE: `Изменения получились слишком большими, и мы не можем их сохранить. ${SPLIT_TASK}`,
   SNAPSHOT_TOO_LARGE: `Работа агента заняла слишком много места, и мы не можем её сохранить. ${SPLIT_TASK}`,
@@ -117,9 +164,130 @@ export function trpcCodeForStatus(httpStatus: number): TRPC_ERROR_CODE_KEY {
   )
 }
 
-function textFor(code: TRPC_ERROR_CODE_KEY, domainCode: string | null): string {
-  if (domainCode !== null && Object.hasOwn(MESSAGE_BY_DOMAIN_CODE, domainCode)) {
-    return MESSAGE_BY_DOMAIN_CODE[domainCode]!
+const ANOTHER_PLAN = 'Чтобы добавить ещё один, выберите другой тариф в настройках'
+// The tariff of the next period can be taken back as well as replaced.
+const ANOTHER_NEXT_PLAN =
+  'Чтобы добавить ещё один, отмените переход или выберите другой тариф в настройках'
+
+/** «до 3 сайтов», «до 21 сайта»: the number with the form of the noun that follows it. */
+const sitesUpTo = (count: number) =>
+  `${count} ${count % 10 === 1 && count % 100 !== 11 ? 'сайта' : 'сайтов'}`
+
+/** One of three forms of a word by the number before it: 1 кредит, 2 кредита, 5 кредитов. */
+function plural(count: number, one: string, few: string, many: string): string {
+  const tens = count % 100
+  const units = count % 10
+  if (tens >= 11 && tens <= 14) return many
+  if (units === 1) return one
+  return units >= 2 && units <= 4 ? few : many
+}
+
+/** «2 500»: a count of credits, its thousands held together like those of a sum of money. */
+const counted = (count: number) =>
+  String(count).replace(/\B(?=(\d{3})+$)/g, String.fromCharCode(0xa0))
+
+/**
+ * The details of a refused task (`taskRefusal` of @repo/domain), when the error carries them
+ * whole: the reason and the three numbers. They never leave the server; a sentence is built
+ * from them here.
+ */
+function refusalOf(details: unknown): TaskRefusalDetails | null {
+  const parsed = taskRefusalDetailsSchema.safeParse(details)
+  return parsed.success ? parsed.data : null
+}
+
+const CHOOSE_PLAN = 'Выберите тариф в разделе «Тарифы»'
+
+/**
+ * Why a task is refused without a paid tariff, by the reason of the refusal: what is told
+ * first, before the way out. A reason that is not here is told in the general words of its
+ * code.
+ */
+function withoutTariff({ reason, spendable, needed }: TaskRefusalDetails): string | null {
+  switch (reason) {
+    case 'gift_spent':
+      return 'Подарочные кредиты закончились.'
+    case 'gift_below_start': {
+      const left = plural(spendable, 'Остался', 'Осталось', 'Осталось')
+      const gift = plural(
+        spendable,
+        'подарочный кредит',
+        'подарочных кредита',
+        'подарочных кредитов',
+      )
+      return `${left} ${counted(spendable)} ${gift}, а на новую задачу нужно не меньше ${counted(needed)}.`
+    }
+    case 'trial_unpaid_limit':
+      return 'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать.'
+    case 'gift_site_used':
+      return 'На этом сайте подарочные кредиты уже использовались в другом аккаунте.'
+    default:
+      return null
+  }
+}
+
+/**
+ * Client texts that name a number from the details of their DomainError. The text never
+ * depends on the details being there: without the number it says the same in general words.
+ */
+const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string>> = {
+  // A task that was refused although the page offered it: the page was out of date. The page
+  // itself tells these cases from its read model; here the sentence is built from the details
+  // of the refusal, with the numbers the customer can check.
+  BILLING_NOT_ENOUGH_CREDITS: (details) => {
+    const refusal = refusalOf(details)
+    // A few credits are left, fewer than a new task needs.
+    if (refusal === null || refusal.spendable < 1 || refusal.spendable >= refusal.needed) {
+      return MESSAGE_BY_DOMAIN_CODE.BILLING_NOT_ENOUGH_CREDITS!
+    }
+    const { spendable, needed } = refusal
+    const left = plural(spendable, 'остался', 'осталось', 'осталось')
+    const credits = plural(spendable, 'кредит', 'кредита', 'кредитов')
+    return `Лимиты закончились: ${left} ${counted(spendable)} ${credits}, а на новую задачу нужно не меньше ${counted(needed)}. Купите пакет кредитов или дождитесь начисления по тарифу`
+  },
+  BILLING_CREDITS_HELD: (details) => {
+    const refusal = refusalOf(details)
+    if (refusal === null || refusal.held < 1) return MESSAGE_BY_DOMAIN_CODE.BILLING_CREDITS_HELD!
+    return `Кредиты заняты задачами в работе: под них отложено ${counted(refusal.held)}. Дождитесь, пока задачи закончатся, или купите пакет кредитов`
+  },
+  BILLING_TASK_NEEDS_SUBSCRIPTION: (details) => {
+    const refusal = refusalOf(details)
+    const why = refusal === null ? null : withoutTariff(refusal)
+    return why === null
+      ? MESSAGE_BY_DOMAIN_CODE.BILLING_TASK_NEEDS_SUBSCRIPTION!
+      : `${why} ${CHOOSE_PLAN}`
+  },
+  // The site limit of the tariff (project.create): `details.maxSites`. `details.unpaid` is
+  // true when the limit is of a tariff the customer has started to pay for and does not have yet,
+  // `details.scheduled` — when it is of the tariff they chose for the next period: the tariff
+  // they have may hold more sites, and «в ваш тариф входит…» would not be true of it.
+  PROJECT_PLAN_LIMIT_REACHED: (details) => {
+    const {
+      maxSites,
+      unpaid,
+      scheduled,
+    }: { maxSites?: unknown; unpaid?: unknown; scheduled?: unknown } =
+      typeof details === 'object' && details !== null ? details : {}
+    if (typeof maxSites !== 'number' || !Number.isSafeInteger(maxSites) || maxSites < 1) {
+      return `На вашем тарифе больше нельзя добавить сайт. ${ANOTHER_PLAN}`
+    }
+    const included = maxSites === 1 ? 'входит один сайт' : `входит до ${sitesUpTo(maxSites)}`
+    if (unpaid === true) return `В тариф, который вы оплачиваете, ${included}. ${ANOTHER_PLAN}`
+    if (scheduled === true) {
+      return `В тариф, который вы выбрали на следующий период, ${included}. ${ANOTHER_NEXT_PLAN}`
+    }
+    return `В ваш тариф ${included}. ${ANOTHER_PLAN}`
+  },
+}
+
+function textFor(code: TRPC_ERROR_CODE_KEY, domainError: DomainError | null): string {
+  if (domainError !== null) {
+    if (Object.hasOwn(MESSAGE_FROM_DETAILS, domainError.code)) {
+      return MESSAGE_FROM_DETAILS[domainError.code]!(domainError.details)
+    }
+    if (Object.hasOwn(MESSAGE_BY_DOMAIN_CODE, domainError.code)) {
+      return MESSAGE_BY_DOMAIN_CODE[domainError.code]!
+    }
   }
   return MESSAGE_BY_TRPC_CODE[code]
 }
@@ -131,7 +299,7 @@ function textFor(code: TRPC_ERROR_CODE_KEY, domainCode: string | null): string {
  */
 export function toTRPCError(error: DomainError): TRPCError {
   const code = trpcCodeForStatus(error.httpStatus)
-  return new TRPCError({ code, message: textFor(code, error.code), cause: error })
+  return new TRPCError({ code, message: textFor(code, error), cause: error })
 }
 
 /**
@@ -140,7 +308,7 @@ export function toTRPCError(error: DomainError): TRPCError {
  * server outside development.
  */
 export function clientMessage(error: TRPCError): string {
-  return textFor(error.code, isDomainError(error.cause) ? error.cause.code : null)
+  return textFor(error.code, isDomainError(error.cause) ? error.cause : null)
 }
 
 /** Issues of a failed zod (or Standard Schema) validation, if that is what failed. */

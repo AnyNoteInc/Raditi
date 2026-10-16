@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   badRequest,
+  contactMarkerPattern,
   DomainError,
   type PublishedContentFields,
   type PublishedContentPatch,
@@ -11,7 +12,6 @@ import { z } from 'zod'
 
 import { findContacts } from './content-contacts.ts'
 
-const marker = /\[\[raditi:(email|phone):([a-f0-9-]{36})\]\]/g
 const entrySchema = z.strictObject({
   id: z.uuid(),
   kind: z.enum(['email', 'phone']),
@@ -141,7 +141,7 @@ export class ContentPrivacy {
         const placed: Array<{ start: number; end: number }> = []
         let restored = ''
         let copied = 0
-        for (const token of value.matchAll(marker)) {
+        for (const token of value.matchAll(contactMarkerPattern())) {
           const entry = byMarker.get(`${token[1]}:${token[2]}`)
           if (!entry) throw badRequest('Unknown content privacy marker')
           restored += value.slice(copied, token.index)

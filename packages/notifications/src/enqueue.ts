@@ -28,7 +28,7 @@ export async function enqueueNotification<T extends NotificationType>(
 ): Promise<boolean> {
   const definition: NotificationDefinition<unknown> = notificationCatalog[type]
   // Fail in the request that caused the notification, not later in the worker.
-  // Every payload schema is a flat object of strings, so the result is JSON.
+  // Every payload schema is a flat object of strings and whole numbers, so the result is JSON.
   const valid = definition.payload.parse(payload) as Prisma.InputJsonObject
   return enqueueOutbox(options.db ?? prisma, {
     topic: NOTIFICATIONS_QUEUE,

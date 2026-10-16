@@ -1,5 +1,6 @@
 import { Module, type DynamicModule } from '@nestjs/common'
 
+import { BillingModule } from '../billing/billing.module.ts'
 import type { CoreConfig } from '../config/config.ts'
 import { DriversModule } from '../drivers/drivers.module.ts'
 import { StaleClonesSweep } from '../git-workspace/stale-clones.ts'
@@ -34,6 +35,7 @@ export class CoreModule {
         LlmModule,
         OutboxModule,
         NotificationsModule,
+        BillingModule,
         DriversModule,
         SessionsModule,
         TurnsModule.forRoot(options.config.turnExecutor),

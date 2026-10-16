@@ -42,6 +42,11 @@ describe('task status machine', () => {
     expect(canTransition('running', 'done')).toBe(true)
   })
 
+  it('returns a task to the queue when the site is busy', () => {
+    expect(canTransition('preparing', 'queued')).toBe(true)
+    expect(canTransition('running', 'queued')).toBe(false)
+  })
+
   it('cannot cancel once the deploy started', () => {
     expect(canTransition('deploying', 'cancelled')).toBe(false)
     expect(canTransition('verifying', 'cancelled')).toBe(false)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addBillingMonths, billingPeriod, nextBillingPeriod } from './period.ts'
+import { addBillingMonths, billingDay, billingPeriod, nextBillingPeriod } from './period.ts'
 
 /** An instant given as Moscow wall-clock time, "2026-01-31T12:00:00". */
 const msk = (wallClock: string): Date => new Date(`${wallClock}+03:00`)
@@ -282,5 +282,56 @@ describe('nextBillingPeriod', () => {
     expect(nextBillingPeriod(anchor, msk('2125-12-31T12:00:00')).end).toEqual(
       msk('2126-01-31T12:00:00'),
     )
+  })
+})
+
+describe('billingDay', () => {
+  it.each([
+    // midnight in Moscow is 21:00 UTC of the day before
+    ['2026-10-04T21:00:00.000Z', '2026-10-05T00:00:00', '2026-10-04T21:00:00.000Z'],
+    ['2026-10-04T21:00:00.001Z', '2026-10-05T00:00:00', '2026-10-04T21:00:00.000Z'],
+    ['2026-10-05T09:15:42.123Z', '2026-10-05T12:15:42', '2026-10-04T21:00:00.000Z'],
+    // the last millisecond of the Moscow day, and the UTC date that started three hours into it
+    ['2026-10-05T20:59:59.999Z', '2026-10-05T23:59:59', '2026-10-04T21:00:00.000Z'],
+    ['2026-10-05T00:00:00.000Z', '2026-10-05T03:00:00', '2026-10-04T21:00:00.000Z'],
+    // 20:59 UTC is still the same Moscow day, 21:00 UTC is already the next one
+    ['2026-10-04T20:59:59.999Z', '2026-10-04T23:59:59', '2026-10-03T21:00:00.000Z'],
+    ['2026-10-05T21:00:00.000Z', '2026-10-06T00:00:00', '2026-10-05T21:00:00.000Z'],
+    // the turn of a month, of a year, and 29 February
+    ['2026-10-31T22:30:00.000Z', '2026-11-01T01:30:00', '2026-10-31T21:00:00.000Z'],
+    ['2026-12-31T21:00:00.000Z', '2027-01-01T00:00:00', '2026-12-31T21:00:00.000Z'],
+    ['2028-02-28T23:00:00.000Z', '2028-02-29T02:00:00', '2028-02-28T21:00:00.000Z'],
+    // before 1970 the day is still counted down to its own midnight
+    ['1969-12-31T20:00:00.000Z', '1969-12-31T23:00:00', '1969-12-30T21:00:00.000Z'],
+  ])('%s (%s in Moscow) falls in the day that starts at %s', (utc, moscow, start) => {
+    const instant = new Date(utc)
+    expect(inMoscow(instant)).toBe(moscow)
+    const day = billingDay(instant)
+    expect(day.start.toISOString()).toBe(start)
+    expect(inMoscow(day.start).slice(11)).toBe('00:00:00')
+    expect(day.end.getTime() - day.start.getTime()).toBe(24 * 60 * 60 * 1000)
+    expect(day.start.getTime()).toBeLessThanOrEqual(instant.getTime())
+    expect(instant.getTime()).toBeLessThan(day.end.getTime())
+  })
+
+  it('ends a day where the next one starts', () => {
+    const today = billingDay(msk('2026-10-05T12:00:00'))
+    expect(billingDay(today.end)).toEqual({ start: today.end, end: msk('2026-10-07T00:00:00') })
+    expect(billingDay(new Date(today.end.getTime() - 1))).toEqual(today)
+  })
+
+  it('does not depend on how the caller wrote the instant, and does not change it', () => {
+    const instant = new Date('2026-10-04T22:30:00Z')
+    const day = billingDay(instant)
+    expect(billingDay(msk('2026-10-05T01:30:00'))).toEqual(day)
+    expect(billingDay(new Date('2026-10-05T08:30:00+10:00'))).toEqual(day)
+    expect(instant).toEqual(new Date('2026-10-04T22:30:00Z'))
+  })
+
+  it('rejects an invalid instant and a day outside the range of Date', () => {
+    expect(() => billingDay(new Date('invalid'))).toThrow(badRequest)
+    expect(() => billingDay('2026-10-05' as unknown as Date)).toThrow(badRequest)
+    expect(() => billingDay(new Date(8.64e15))).toThrow(badRequest)
+    expect(() => billingDay(new Date(-8.64e15))).toThrow(badRequest)
   })
 })

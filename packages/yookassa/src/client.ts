@@ -51,8 +51,9 @@ const DEFAULT_BASE_URL = 'https://api.yookassa.ru/v3'
 const DEFAULT_TIMEOUT_MS = 30_000
 /**
  * Narrower than what ЮKassa accepts, on purpose: letters, digits, dot, hyphen and underscore.
- * Our keys are UUIDs, `renew.<subscriptionId>.<ms>` and `refund.<orderId>`; a colon from a
- * credit_ledger key must fail here, before the request, not at the API.
+ * Our keys are UUIDs, `renew.<subscriptionId>.<ms>` and `refund.<orderId>` (`refund.<orderId>.<n>`
+ * after n cancelled refunds); a colon from a credit_ledger key must fail here, before the
+ * request, not at the API.
  */
 const IDEMPOTENCE_KEY = /^[A-Za-z0-9._-]{1,64}$/
 

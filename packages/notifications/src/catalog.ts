@@ -37,6 +37,30 @@ export const notificationCatalog = {
     payload: mailDataSchemas.welcome.extend(recipient),
     deliver: ({ to, ...data }, { mailer }) => mailer.sendMail({ kind: 'welcome', to, data }),
   }),
+  // A tariff or a pack of credits is paid; `item` tells which, and each has its own fields.
+  'billing.payment_succeeded': defineNotification({
+    channel: 'email',
+    payload: mailDataSchemas['payment-succeeded'].and(z.object(recipient)),
+    deliver: ({ to, ...data }, { mailer }) =>
+      mailer.sendMail({ kind: 'payment-succeeded', to, data }),
+  }),
+  // The notice the offer promises before every automatic charge.
+  'billing.renewal_notice': defineNotification({
+    channel: 'email',
+    payload: mailDataSchemas['renewal-notice'].extend(recipient),
+    deliver: ({ to, ...data }, { mailer }) => mailer.sendMail({ kind: 'renewal-notice', to, data }),
+  }),
+  'billing.payment_failed': defineNotification({
+    channel: 'email',
+    payload: mailDataSchemas['payment-failed'].extend(recipient),
+    deliver: ({ to, ...data }, { mailer }) => mailer.sendMail({ kind: 'payment-failed', to, data }),
+  }),
+  'billing.subscription_ended': defineNotification({
+    channel: 'email',
+    payload: mailDataSchemas['subscription-ended'].extend(recipient),
+    deliver: ({ to, ...data }, { mailer }) =>
+      mailer.sendMail({ kind: 'subscription-ended', to, data }),
+  }),
 }
 
 export type NotificationType = keyof typeof notificationCatalog
