@@ -2,7 +2,6 @@
 import {
   averageTaskCredits,
   signupGiftCredits,
-  tasksPerDayWithoutTariff,
   typicalTaskCredits,
 } from '@repo/domain/billing/credit-numbers'
 import { fireEvent, render, screen, within } from '@testing-library/react'
@@ -17,7 +16,7 @@ const { plans, pack } = pricing
 const TASK_HINT =
   'Задача — одна ваша просьба. В расчёте берём 11 кредитов на задачу — это среднее: поменять цену или фото стоит обычно 5 кредитов, добавить блок или страницу — 15–25.'
 const GIFT_NOTE =
-  'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Без тарифа — до 3 задач в день. Тариф выберете позже.'
+  'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.'
 
 function planCard(name: string): HTMLElement {
   const card = screen.getByRole('heading', { name }).closest('article')
@@ -219,7 +218,7 @@ describe('landing pricing', () => {
     const { unmount } = render(<Pricing plans={plans} pack={pack} />)
     expect(
       screen.getByText(
-        'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 990 ₽. Кредиты из пакета не сгорают.',
+        'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 990 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.',
       ),
     ).toBeInTheDocument()
     expect(screen.getByText('Цены в рублях.')).toBeInTheDocument()
@@ -238,7 +237,7 @@ describe('landing pricing', () => {
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
-      '300 кредитов в месяц — в среднем около 27 задач, не больше 5 задач в день',
+      '300 кредитов в месяц — в среднем около 27 задач, до 50 кредитов в день',
       'Один сайт',
     ])
     expect(
@@ -246,7 +245,7 @@ describe('landing pricing', () => {
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
-      '800 кредитов в месяц — в среднем около 73 задач, не больше 10 задач в день',
+      '800 кредитов в месяц — в среднем около 73 задач, до 100 кредитов в день',
       'До 3 сайтов',
     ])
     expect(
@@ -254,7 +253,7 @@ describe('landing pricing', () => {
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
-      '2 500 кредитов в месяц — в среднем около 230 задач, не больше 30 задач в день',
+      '2 500 кредитов в месяц — в среднем около 230 задач, до 300 кредитов в день',
       'До 15 сайтов',
     ])
 
@@ -280,7 +279,7 @@ describe('landing pricing', () => {
     }
   })
 
-  it('tells a guest by the registration of the gift and of the day without a tariff', () => {
+  it('tells a guest by the registration of the gift, and of no day without a tariff', () => {
     render(<Pricing plans={plans} pack={pack} />)
 
     const note = screen.getByText(GIFT_NOTE)
@@ -289,18 +288,17 @@ describe('landing pricing', () => {
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name).contains(note)).toBe(false)
     }
-    // The gift and the limit of a day without a tariff are numbers of the credits model.
+    // The gift is a number of the credits model; without a tariff there is no daily limit.
     expect(GIFT_NOTE).toContain(`— ${signupGiftCredits} кредитов в подарок`)
-    expect(GIFT_NOTE).toContain(`до ${tasksPerDayWithoutTariff} задач в день`)
+    expect(GIFT_NOTE).not.toMatch(/в день/)
     // The gift is promised in credits and in small edits, never as a count of tasks.
-    expect(GIFT_NOTE).not.toMatch(/30 задач|10 задач/)
+    expect(GIFT_NOTE).not.toMatch(/\d+ задач/)
     // The line of before the gift is gone.
     expect(screen.queryByText(/когда откроется оплата/)).toBeNull()
     // A number stays with its word and a dash with the word before it.
     expect(note.textContent).toContain(
       'При\u00a0регистрации\u00a0— 35\u00a0кредитов в\u00a0подарок:',
     )
-    expect(note.textContent).toContain('Без\u00a0тарифа\u00a0— до\u00a03\u00a0задач в\u00a0день.')
   })
 
   it('leads a signed-in visitor to the projects with the same single action', () => {

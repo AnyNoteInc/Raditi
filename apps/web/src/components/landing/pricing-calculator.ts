@@ -13,7 +13,8 @@ export interface LandingPlan {
   name: string
   price: string
   creditsPerMonth: number
-  tasksPerDay: number
+  /** The tariff credits the plan gives a Moscow day: the daily limit. */
+  creditsPerDay: number
   maxSites: number
 }
 
@@ -87,7 +88,12 @@ export function pluralTasks(count: number): string {
   return plural(count, 'задача', 'задачи', 'задач')
 }
 
-/** «задачи», «задач» after «около», «не больше» and a number: «около 27 задач». */
+/** «кредита», «кредитов» after «до» and a number: «до 50 кредитов», «до 21 кредита». */
+export function creditsOf(count: number): string {
+  return plural(count, 'кредита', 'кредитов', 'кредитов')
+}
+
+/** «задачи», «задач» after «около» and a number: «около 27 задач». */
 export function tasksOf(count: number): string {
   return plural(count, 'задачи', 'задач', 'задач')
 }
@@ -109,12 +115,13 @@ export function typicalCreditsInWords({ from, to }: TypicalCredits, withWord = t
 
 /**
  * What a tariff gives, after the count of its credits: «кредитов в месяц — в среднем около 27
- * задач, не больше 5 задач в день». The average tasks are left out where the credits hold none.
+ * задач, до 50 кредитов в день». The average tasks are left out where the credits hold none; the
+ * day caps only the tariff credits, the month stays their quota.
  */
-export function planInWords(creditsPerMonth: number, tasksPerDay: number): string {
+export function planInWords(creditsPerMonth: number, creditsPerDay: number): string {
   const tasks = averageTaskCount(creditsPerMonth)
   const average = tasks === 0 ? '' : ` — в среднем около ${formatCount(tasks)} ${tasksOf(tasks)}`
-  return `${pluralCredits(creditsPerMonth)} в месяц${average}, не больше ${tasksPerDay} ${tasksOf(tasksPerDay)} в день`
+  return `${pluralCredits(creditsPerMonth)} в месяц${average}, до ${formatCount(creditsPerDay)} ${creditsOf(creditsPerDay)} в день`
 }
 
 /** The extra packs of a recommendation in words: «4 дополнительных пакета по 100 кредитов». */
