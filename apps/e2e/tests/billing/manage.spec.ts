@@ -278,7 +278,7 @@ test('a customer schedules another tariff for the next period and takes the choi
     )
     await expect(dialog).toContainText('До этого дня действует «Старт».')
     await expect(dialog).toContainText(
-      '800 кредитов в месяц, до 10 задач в день · до 3 сайтов на WordPress',
+      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
     )
     await expect(dialog).toContainText('12 900 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444')
     await dialog.getByRole('button', { name: 'Не менять' }).click()
@@ -532,7 +532,7 @@ test('a customer whose tariff is over sees when it ended and chooses a tariff ag
     await expect(block).not.toContainText('Выберите тариф')
     await expect(
       page.getByText(
-        'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.',
+        'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.',
       ),
     ).toBeVisible()
     await expect(page.getByRole('main')).not.toContainText('не принимаются')

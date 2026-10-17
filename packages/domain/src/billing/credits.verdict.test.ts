@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { Money } from '../money.ts'
 import {
-  dailyTaskLimit,
   minContinueCredits,
   minStartCredits,
   newTaskVerdict,
   taskPlacements,
-  tasksPerDayWithoutTariff,
   trialUnpaidWorkCredits,
   unpaidWork,
   toCredits,
@@ -15,6 +13,7 @@ import {
   type CreditAccountSnapshot,
   type Credits,
   type NewTaskInput,
+  type TariffCreditsToday,
   type TaskPlacement,
 } from './credits.ts'
 import { taskRefusal, taskRefusalCodes, taskRefusalReasons } from './errors.ts'
@@ -22,7 +21,7 @@ import { subscriptionStatuses, type SubscriptionStatus } from './subscription.ts
 
 // Whether a task is taken, and why not. The cases are those of the texts the customer reads
 // before a task starts; the numbers are the defaults of the model — 5 credits to start, 1 to
-// continue, 3 launches a day and 70 credits of unpaid work without a tariff.
+// continue, 50 tariff credits a day on «Старт» and 70 credits of unpaid work without a tariff.
 
 const badRequest = expect.objectContaining({ name: 'DomainError', code: 'BAD_REQUEST' })
 
@@ -35,13 +34,15 @@ const three = (
 ): CreditAccounts => ({ tariff, gift, pack })
 const empty = account(0)
 
-/** «Старт»: 300 credits a month, 5 tasks a day. */
-const start = { creditsPerMonth: 300, tasksPerDay: 5 }
+/** «Старт»: 300 credits a month, of them at most 50 a day. */
+const start = { creditsPerMonth: 300, creditsPerDay: 50 }
 const tariff = (
   status: SubscriptionStatus = 'active',
-  plan: { creditsPerMonth: number; tasksPerDay: number | null } = start,
+  plan: { creditsPerMonth: number; creditsPerDay: number | null } = start,
 ) => ({ status, ...plan })
 const credits = (value: string) => new Money(value)
+/** What the tariff gave the Moscow day so far: charged and still set aside. */
+const day = (charged = 0, held = 0) => ({ charged, held }) as TariffCreditsToday
 
 /** A paid «Старт» with everything in place; a case changes what it is about. */
 const ask = (change: Partial<NewTaskInput> = {}) =>
@@ -49,7 +50,7 @@ const ask = (change: Partial<NewTaskInput> = {}) =>
     placement: 'new',
     accounts: three(account(300), account(35), account(100)),
     subscription: tariff(),
-    launchesToday: 0,
+    tariffCreditsToday: day(),
     unpaidWork: credits('0'),
     rateUsable: true,
     ...change,
@@ -80,40 +81,32 @@ const askToContinueWithoutTariff = (change: Partial<NewTaskInput> = {}) =>
     ...change,
   })
 
-const allowed = (spendable: number, held = 0, needed = 5) => ({
-  allowed: true,
-  reason: null,
-  spendable,
-  held,
-  needed,
-})
-const refused = (reason: string, spendable: number, held = 0, needed = 5) => ({
-  allowed: false,
-  reason,
-  spendable,
-  held,
-  needed,
-})
-
-describe('dailyTaskLimit', () => {
-  it('is the limit of the plan while the tariff is paid, and none when the plan has none', () => {
-    expect(dailyTaskLimit({ status: 'active', tasksPerDay: 5 })).toBe(5)
-    expect(dailyTaskLimit({ status: 'active', tasksPerDay: null })).toBeNull()
-  })
-
-  it('is the limit of a day without a tariff for every workspace whose tariff is not paid', () => {
-    expect(dailyTaskLimit(null)).toBe(tasksPerDayWithoutTariff)
-    for (const status of subscriptionStatuses) {
-      if (status === 'active') continue
-      // Whatever the plan allows: an unpaid tariff takes tasks on gift credits alone.
-      expect([status, dailyTaskLimit({ status, tasksPerDay: 30 })]).toEqual([
-        status,
-        tasksPerDayWithoutTariff,
-      ])
-      expect(dailyTaskLimit({ status, tasksPerDay: null })).toBe(tasksPerDayWithoutTariff)
-    }
-  })
-})
+// The answer by its numbers of the accounts: `spendableNow` when a case gives it, the day of a
+// tariff in the block that counts it.
+type Numbers = { spendable: number; held: number; needed: number; spendableNow?: number }
+const answer = (
+  verdict: { allowed: boolean; reason: string | null },
+  { spendable, held, needed, spendableNow }: Numbers,
+) =>
+  expect.objectContaining({
+    ...verdict,
+    spendable,
+    held,
+    needed,
+    ...(spendableNow === undefined ? {} : { spendableNow }),
+  }) as Record<string, unknown>
+const allowed = (spendable: number, held = 0, needed = 5, spendableNow?: number) =>
+  answer({ allowed: true, reason: null }, { spendable, held, needed, spendableNow })
+const refused = (reason: string, spendable: number, held = 0, needed = 5, spendableNow?: number) =>
+  answer({ allowed: false, reason }, { spendable, held, needed, spendableNow })
+/** The day of a paid tariff as the answer tells it. */
+const today = (
+  limit: number | null,
+  charged: number,
+  held: number,
+  room: number | null,
+  left: number,
+) => ({ limit, charged, held, used: charged + held, room, left })
 
 describe('newTaskVerdict', () => {
   describe('takes a task', () => {
@@ -135,14 +128,23 @@ describe('newTaskVerdict', () => {
         { accounts: three(account(300, 45), account(35, 35), account(100, 90)) },
         allowed(265, 170),
       ],
-      ['on the fifth launch of the day of five', { launchesToday: 4 }, allowed(435)],
       [
-        'on a plan without a daily limit, whatever the day was',
+        'on the last five tariff credits of the day',
+        { accounts: three(account(300), empty, empty), tariffCreditsToday: day(45) },
+        allowed(300, 0, 5, 5),
+      ],
+      [
+        'on gift and pack credits when the day took every tariff credit',
+        { tariffCreditsToday: day(50) },
+        allowed(435, 0, 5, 135),
+      ],
+      [
+        'on a plan without a daily limit, whatever the day took',
         {
-          subscription: tariff('active', { creditsPerMonth: 300, tasksPerDay: null }),
-          launchesToday: 500,
+          subscription: tariff('active', { creditsPerMonth: 300, creditsPerDay: null }),
+          tariffCreditsToday: day(500),
         },
-        allowed(435),
+        allowed(435, 0, 5, 435),
       ],
       ['a credit under the bound on unpaid work', { unpaidWork: credits('299.99') }, allowed(435)],
       [
@@ -156,9 +158,13 @@ describe('newTaskVerdict', () => {
         allowed(5),
       ],
       [
-        'on the third launch of the day without a tariff',
-        { accounts: three(empty, account(35), empty), subscription: null, launchesToday: 2 },
-        allowed(35),
+        'on the gift without a tariff, whatever the day took: there is no day then',
+        {
+          accounts: three(empty, account(35), empty),
+          subscription: null,
+          tariffCreditsToday: day(500, 500),
+        },
+        allowed(35, 0, 5, 35),
       ],
       [
         'a credit under the bound of the trial',
@@ -216,11 +222,6 @@ describe('newTaskVerdict', () => {
         refused('trial_unpaid_limit', 15),
       ],
       [
-        'no tariff and three launches today',
-        { accounts: three(empty, account(35), empty), subscription: null, launchesToday: 3 },
-        refused('trial_daily_limit', 35),
-      ],
-      [
         'no tariff and the site spent a gift in another workspace',
         {
           accounts: three(empty, account(35), empty),
@@ -249,7 +250,11 @@ describe('newTaskVerdict', () => {
         { accounts: three(empty, account(35, 35), empty), subscription: null },
         refused('held', 0, 35),
       ],
-      ['the daily limit of the tariff', { launchesToday: 5 }, refused('daily_limit', 435)],
+      [
+        'a paid tariff whose credits of the day are taken, no gift and no pack',
+        { accounts: three(account(250), empty, empty), tariffCreditsToday: day(50) },
+        refused('daily_limit', 250, 0, 5, 0),
+      ],
       [
         'an overdue tariff and a gift that cannot carry the task',
         {
@@ -282,7 +287,6 @@ describe('newTaskVerdict', () => {
           subscription: null,
           unpaidWork: credits('70'),
         },
-        { accounts: three(empty, account(35), empty), subscription: null, launchesToday: 3 },
         {
           accounts: three(empty, account(35), empty),
           subscription: null,
@@ -291,7 +295,7 @@ describe('newTaskVerdict', () => {
         { accounts: three(empty, empty, empty) },
         { accounts: three(account(1), account(1), account(1)) },
         { accounts: three(account(45, 45), empty, account(45, 45)) },
-        { launchesToday: 5 },
+        { accounts: three(account(250), empty, empty), tariffCreditsToday: day(50) },
         { unpaidWork: credits('300') },
         {
           accounts: three(account(300), account(3), account(100)),
@@ -311,7 +315,9 @@ describe('newTaskVerdict', () => {
     const noCredits = { accounts: three(empty, empty, empty) }
     const fewCredits = { accounts: three(account(3), empty, empty) }
     const allHeld = { accounts: three(account(45, 45), empty, empty) }
-    const dayUsed = { launchesToday: 5 }
+    // The day took its 50 tariff credits, and no gift or pack is there; a case that is about
+    // the accounts as well names them after it.
+    const dayUsed = { accounts: three(account(250), empty, empty), tariffCreditsToday: day(50) }
     const unpaidReached = { unpaidWork: credits('300') }
     const siteClaimed = { giftSiteClaimedElsewhere: true }
 
@@ -319,19 +325,24 @@ describe('newTaskVerdict', () => {
       ['the rate before credits', { ...noRate, ...noCredits }, 'rate_missing'],
       [
         'the rate before everything',
-        { ...noRate, ...noCredits, ...dayUsed, ...unpaidReached },
+        { ...noRate, ...dayUsed, ...noCredits, ...unpaidReached },
         'rate_missing',
       ],
-      ['credits before the day', { ...noCredits, ...dayUsed }, 'empty'],
-      ['a few credits before the day', { ...fewCredits, ...dayUsed }, 'below_start'],
-      ['held credits before the day', { ...allHeld, ...dayUsed }, 'held'],
+      ['credits before the day', { ...dayUsed, ...noCredits }, 'empty'],
+      ['a few credits before the day', { ...dayUsed, ...fewCredits }, 'below_start'],
+      ['held credits before the day', { ...dayUsed, ...allHeld }, 'held'],
       ['credits before unpaid work', { ...noCredits, ...unpaidReached }, 'empty'],
       [
         'credits before the day and unpaid work',
-        { ...noCredits, ...dayUsed, ...unpaidReached },
+        { ...dayUsed, ...noCredits, ...unpaidReached },
         'empty',
       ],
       ['the day before unpaid work', { ...dayUsed, ...unpaidReached }, 'daily_limit'],
+      [
+        'the day before everything after it',
+        { ...dayUsed, ...unpaidReached, ...siteClaimed },
+        'daily_limit',
+      ],
       ['unpaid work alone', { ...unpaidReached, ...siteClaimed }, 'unpaid_limit'],
     ])('with a paid tariff: %s', (_name, change, reason) => {
       expect(ask(change).reason).toBe(reason)
@@ -340,24 +351,16 @@ describe('newTaskVerdict', () => {
     const giftSpent = { accounts: three(empty, empty, empty) }
     const giftShort = { accounts: three(empty, account(4), empty) }
     const giftHeld = { accounts: three(empty, account(35, 35), empty) }
-    const trialDayUsed = { launchesToday: 3 }
     const trialUnpaid = { unpaidWork: credits('70') }
 
     it.each<[string, Partial<NewTaskInput>, string]>([
       ['the rate before the gift', { ...noRate, ...giftSpent }, 'rate_missing'],
-      ['a spent gift before the day', { ...giftSpent, ...trialDayUsed }, 'gift_spent'],
-      ['a short gift before the day', { ...giftShort, ...trialDayUsed }, 'gift_below_start'],
-      ['a held gift before the day', { ...giftHeld, ...trialDayUsed }, 'held'],
+      ['a short gift first', { ...giftShort, ...trialUnpaid, ...siteClaimed }, 'gift_below_start'],
+      ['a held gift first', { ...giftHeld, ...trialUnpaid, ...siteClaimed }, 'held'],
       [
         'a spent gift before everything',
-        { ...giftSpent, ...trialDayUsed, ...trialUnpaid, ...siteClaimed },
+        { ...giftSpent, ...trialUnpaid, ...siteClaimed },
         'gift_spent',
-      ],
-      ['the day before unpaid work', { ...trialDayUsed, ...trialUnpaid }, 'trial_daily_limit'],
-      [
-        'the day before the gift of the site',
-        { ...trialDayUsed, ...siteClaimed },
-        'trial_daily_limit',
       ],
       [
         'unpaid work before the gift of the site',
@@ -399,11 +402,12 @@ describe('newTaskVerdict', () => {
       expect(ask({ accounts: three(empty, account(3), empty), subscription: null }).reason).toBe(
         'gift_below_start',
       )
-      // an overdue tariff and a gift that carries the task: the bounds of the trial apply
+      // an overdue tariff and a gift that carries the task: the bounds of the trial apply, and
+      // the day of its plan does not — tariff credits are not spent then
       const carried = three(account(300), account(35), account(100))
       expect(
-        ask({ accounts: carried, subscription: tariff('past_due'), launchesToday: 3 }).reason,
-      ).toBe('trial_daily_limit')
+        ask({ accounts: carried, subscription: tariff('past_due'), tariffCreditsToday: day(50) }),
+      ).toEqual(allowed(35, 0, 5, 35))
       expect(
         ask({ accounts: carried, subscription: tariff('past_due'), unpaidWork: credits('70') })
           .reason,
@@ -500,42 +504,248 @@ describe('newTaskVerdict', () => {
     })
   })
 
-  describe('counts the day', () => {
-    it.each([
-      [0, true],
-      [4, true],
-      [5, false],
-      [6, false],
-      [500, false],
-    ])('%i launches of a day of five → taken: %s', (launchesToday, taken) => {
-      expect(ask({ launchesToday }).allowed).toBe(taken)
-      if (!taken) expect(ask({ launchesToday }).reason).toBe('daily_limit')
+  // The day caps tariff credits only (decision of 17.10.2026; docs/plan/37-billing-plan.md,
+  // «Дневной лимит в кредитах»): what the day has left of them, with the gift and the pack,
+  // is what a task may take now.
+  describe('counts the tariff credits of the day', () => {
+    it('tells the day of a paid tariff beside the accounts', () => {
+      expect(ask()).toEqual({
+        allowed: true,
+        reason: null,
+        spendable: 435,
+        spendableNow: 185,
+        held: 0,
+        needed: 5,
+        today: today(50, 0, 0, 50, 50),
+      })
+    })
+
+    // The walk of «Старт» in the decision: 09:00 a standard task set 45 aside, at 09:05 the
+    // second one asks while the first is in work.
+    it('lets a second task of the day take what the day has left, and the pack', () => {
+      const second = ask({
+        accounts: three(account(300, 45), empty, account(100)),
+        tariffCreditsToday: day(0, 45),
+      })
+      expect(second).toEqual({
+        allowed: true,
+        reason: null,
+        spendable: 355,
+        spendableNow: 105,
+        held: 45,
+        needed: 5,
+        today: today(50, 0, 45, 5, 5),
+      })
+    })
+
+    it('tells what the tariff can give today: the room, or less when the account has less', () => {
+      const fewOnTariff = ask({ accounts: three(account(20), empty, empty) })
+      expect(fewOnTariff.today).toEqual(today(50, 0, 0, 50, 20))
+      expect(fewOnTariff.spendableNow).toBe(20)
+      // credits set aside by a task of an earlier day are not free, and the room is not theirs
+      const heldEarlier = ask({
+        accounts: three(account(60, 45), empty, empty),
+        tariffCreditsToday: day(30),
+      })
+      expect(heldEarlier.today).toEqual(today(50, 30, 0, 20, 15))
+      expect(heldEarlier.spendableNow).toBe(15)
+    })
+
+    it.each<[string, Partial<NewTaskInput>, Record<string, unknown>]>([
+      // nothing left of the day, 250 tariff credits in the month: wait for tomorrow or buy a pack
+      [
+        'the day spent, no gift and no pack',
+        { accounts: three(account(250), empty, empty), tariffCreditsToday: day(50) },
+        refused('daily_limit', 250, 0, 5, 0),
+      ],
+      [
+        'the day spent, a pack bought today',
+        { accounts: three(account(250), empty, account(100)), tariffCreditsToday: day(50) },
+        allowed(350, 0, 5, 100),
+      ],
+      [
+        'the day spent, the gift left',
+        { accounts: three(account(250), account(35), empty), tariffCreditsToday: day(50) },
+        allowed(285, 0, 5, 35),
+      ],
+      // the day need not be used up: three credits of it and one of a pack are four
+      [
+        'three credits left of the day and one of a pack',
+        {
+          accounts: three(account(300, 45), empty, account(1)),
+          tariffCreditsToday: day(2, 45),
+        },
+        refused('daily_limit', 256, 45, 5, 4),
+      ],
+      [
+        'four credits left of the day and one of a pack',
+        {
+          accounts: three(account(300, 45), empty, account(1)),
+          tariffCreditsToday: day(1, 45),
+        },
+        allowed(256, 45, 5, 5),
+      ],
+      // a renewal onto a smaller plan in the middle of a day: nothing is left of it
+      [
+        'a day that took more than the plan of now gives',
+        { accounts: three(account(800), empty, empty), tariffCreditsToday: day(120) },
+        refused('daily_limit', 800, 0, 5, 0),
+      ],
+    ])('with %s', (_name, change, expected) => {
+      expect(ask(change)).toEqual(expected)
+    })
+
+    it('counts a day that took more than its limit as one with nothing left', () => {
+      const verdict = ask({
+        accounts: three(account(800), empty, empty),
+        tariffCreditsToday: day(120),
+      })
+      expect(verdict.today).toEqual(today(50, 120, 0, 0, 0))
     })
 
     it('reads the limit of the plan the tariff is on', () => {
-      const business = tariff('active', { creditsPerMonth: 800, tasksPerDay: 10 })
-      expect(ask({ subscription: business, launchesToday: 9 }).allowed).toBe(true)
-      expect(ask({ subscription: business, launchesToday: 10 }).reason).toBe('daily_limit')
-    })
-
-    it.each([
-      [0, true],
-      [2, true],
-      [3, false],
-      [4, false],
-    ])('%i launches without a tariff → taken: %s', (launchesToday, taken) => {
-      expect(tasksPerDayWithoutTariff).toBe(3)
-      expect(askWithoutTariff({ launchesToday }).allowed).toBe(taken)
-      if (!taken) expect(askWithoutTariff({ launchesToday }).reason).toBe('trial_daily_limit')
-    })
-
-    it('gives an unpaid tariff the day of the trial, not the day of its plan', () => {
-      const accounts = three(account(300), account(35), account(100))
-      const overdue = tariff('past_due')
-      expect(ask({ accounts, subscription: overdue, launchesToday: 2 }).allowed).toBe(true)
-      expect(ask({ accounts, subscription: overdue, launchesToday: 3 }).reason).toBe(
-        'trial_daily_limit',
+      const business = tariff('active', { creditsPerMonth: 800, creditsPerDay: 100 })
+      const accounts = three(account(800), empty, empty)
+      expect(ask({ subscription: business, accounts, tariffCreditsToday: day(95) })).toEqual(
+        allowed(800, 0, 5, 5),
       )
+      expect(ask({ subscription: business, accounts, tariffCreditsToday: day(96) })).toEqual(
+        refused('daily_limit', 800, 0, 5, 4),
+      )
+    })
+
+    it('has no day on a plan without a daily limit', () => {
+      const unlimited = ask({
+        subscription: tariff('active', { creditsPerMonth: 300, creditsPerDay: null }),
+        accounts: three(account(300, 45), empty, empty),
+        tariffCreditsToday: day(400, 45),
+      })
+      expect(unlimited).toEqual({
+        allowed: true,
+        reason: null,
+        spendable: 255,
+        spendableNow: 255,
+        held: 45,
+        needed: 5,
+        today: today(null, 400, 45, null, 255),
+      })
+    })
+
+    // Tariff credits are not spent without a paid tariff, and gift and pack credits are outside
+    // the day: the gift is the bound then.
+    it.each(subscriptionStatuses.filter((status) => status !== 'active'))(
+      'has no day while the tariff is %s',
+      (status) => {
+        const verdict = ask({
+          accounts: three(account(300), account(35), account(100)),
+          subscription: tariff(status),
+          tariffCreditsToday: day(500, 500),
+        })
+        expect(verdict).toEqual({
+          allowed: true,
+          reason: null,
+          spendable: 35,
+          spendableNow: 35,
+          held: 0,
+          needed: 5,
+          today: null,
+        })
+      },
+    )
+
+    it('has no day without a subscription, and never refuses by one', () => {
+      const verdict = askWithoutTariff({ tariffCreditsToday: day(500, 500) })
+      expect(verdict.today).toBeNull()
+      expect(verdict.spendableNow).toBe(verdict.spendable)
+      // the gift spent in one day: the gift answers, not the day
+      expect(
+        askWithoutTariff({
+          accounts: three(empty, account(35, 35), empty),
+          tariffCreditsToday: day(0, 0),
+        }).reason,
+      ).toBe('held')
+      expect(askWithoutTariff({ accounts: three(empty, empty, empty) }).reason).toBe('gift_spent')
+    })
+
+    it('says what the accounts lack before it says what the day lacks', () => {
+      const dayTaken = { tariffCreditsToday: day(50) }
+      // three credits on the tariff: the accounts cannot start a task, whatever the day
+      expect(ask({ accounts: three(account(3), empty, empty), ...dayTaken })).toEqual(
+        refused('below_start', 3, 0, 5, 0),
+      )
+      // the tariff credits of the month are set aside: wait for the tasks in work
+      expect(ask({ accounts: three(account(45, 45), empty, empty), ...dayTaken })).toEqual(
+        refused('held', 0, 45, 5, 0),
+      )
+      expect(ask({ accounts: three(empty, empty, empty), ...dayTaken }).reason).toBe('empty')
+    })
+
+    // «Продолжить» takes tariff credits of the day like a new task: it waits for the next day
+    // or a pack at the question it stopped at, never in the middle of a turn.
+    it('caps a continuation by the day: it needs one credit of it, or of the gift or a pack', () => {
+      const continuation = (
+        accounts: CreditAccounts,
+        taken: TariffCreditsToday,
+      ): ReturnType<typeof askToContinue> =>
+        askToContinue({ accounts, heldByTask: own(45), tariffCreditsToday: taken })
+      expect(continuation(three(account(300, 45), empty, empty), day(5, 45))).toEqual(
+        refused('daily_limit', 255, 0, 1, 0),
+      )
+      expect(continuation(three(account(300, 45), empty, empty), day(4, 45))).toEqual(
+        allowed(255, 0, 1, 1),
+      )
+      expect(continuation(three(account(300, 45), empty, account(1)), day(5, 45))).toEqual(
+        allowed(256, 0, 1, 1),
+      )
+      // without a tariff a continuation has no day either
+      expect(askToContinueWithoutTariff({ tariffCreditsToday: day(500) })).toEqual(
+        allowed(15, 0, 1, 15),
+      )
+    })
+
+    it('caps a retry by the day like a new task', () => {
+      const dayTaken = { accounts: three(account(250), empty, empty), tariffCreditsToday: day(50) }
+      expect(ask({ placement: 'retry', ...dayTaken })).toEqual(refused('daily_limit', 250, 0, 5, 0))
+      expect(ask({ placement: 'new', ...dayTaken })).toEqual(
+        ask({ placement: 'retry', ...dayTaken }),
+      )
+    })
+
+    it('refuses by the day only a paid tariff whose plan has a daily limit', () => {
+      const taken = day(5000, 5000)
+      for (const status of subscriptionStatuses) {
+        for (const creditsPerDay of [50, null]) {
+          const verdict = ask({
+            accounts: three(account(5000), account(3), account(1)),
+            subscription: tariff(status, { creditsPerMonth: 300, creditsPerDay }),
+            tariffCreditsToday: taken,
+          })
+          const dayRefuses = status === 'active' && creditsPerDay !== null
+          expect([status, creditsPerDay, verdict.reason === 'daily_limit']).toEqual([
+            status,
+            creditsPerDay,
+            dayRefuses,
+          ])
+        }
+      }
+    })
+
+    it('gives a refusal by the day the numbers of the day', () => {
+      const verdict = ask({
+        accounts: three(account(300, 45), empty, account(1)),
+        tariffCreditsToday: day(2, 45),
+      })
+      if (verdict.allowed) throw new Error('The task was taken')
+      const error = taskRefusal(verdict)
+      expect(error).toMatchObject({ code: 'BILLING_DAILY_LIMIT_REACHED', httpStatus: 409 })
+      expect(error.details).toEqual({
+        reason: 'daily_limit',
+        spendable: 256,
+        held: 45,
+        needed: 5,
+        spendableNow: 4,
+        day: { limit: 50, used: 47 },
+      })
     })
   })
 
@@ -552,7 +762,7 @@ describe('newTaskVerdict', () => {
     })
 
     it('reads the bound from the monthly credits of the plan', () => {
-      const business = tariff('active', { creditsPerMonth: 800, tasksPerDay: 10 })
+      const business = tariff('active', { creditsPerMonth: 800, creditsPerDay: 100 })
       expect(ask({ subscription: business, unpaidWork: credits('799.5') }).allowed).toBe(true)
       expect(ask({ subscription: business, unpaidWork: credits('800') }).reason).toBe(
         'unpaid_limit',
@@ -797,21 +1007,17 @@ describe('newTaskVerdict', () => {
     })
 
     // The work is in progress and will be charged if it is done.
-    it('never refuses a continuation by the day or by unpaid work', () => {
-      const busy = { launchesToday: 500, unpaidWork: credits('5000') }
-      expect(askToContinue(busy)).toEqual(allowed(390, 0, 1))
+    it('never refuses a continuation by unpaid work', () => {
+      const busy = { unpaidWork: credits('5000') }
+      expect(askToContinue(busy)).toEqual(allowed(390, 0, 1, 185))
       expect(askToContinueWithoutTariff(busy)).toEqual(allowed(15, 0, 1))
-      expect(ask({ placement: 'new', ...busy }).reason).toBe('daily_limit')
-      expect(ask({ placement: 'retry', ...busy }).reason).toBe('daily_limit')
-      expect(askWithoutTariff({ placement: 'retry', ...busy }).reason).toBe('trial_daily_limit')
+      expect(ask({ placement: 'new', ...busy }).reason).toBe('unpaid_limit')
+      expect(ask({ placement: 'retry', ...busy }).reason).toBe('unpaid_limit')
+      expect(askWithoutTariff({ placement: 'retry', ...busy }).reason).toBe('trial_unpaid_limit')
     })
 
-    it('refuses a retry by the day and by unpaid work, like a new task', () => {
-      expect(ask({ placement: 'retry', launchesToday: 5 }).reason).toBe('daily_limit')
+    it('refuses a retry by unpaid work, like a new task', () => {
       expect(ask({ placement: 'retry', unpaidWork: credits('300') }).reason).toBe('unpaid_limit')
-      expect(askWithoutTariff({ placement: 'retry', launchesToday: 3 }).reason).toBe(
-        'trial_daily_limit',
-      )
       expect(askWithoutTariff({ placement: 'retry', unpaidWork: credits('70') }).reason).toBe(
         'trial_unpaid_limit',
       )
@@ -915,7 +1121,7 @@ describe('newTaskVerdict', () => {
       placement: 'new',
       accounts: three(account(7, 4), account(0), account(0)),
       subscription: tariff(),
-      launchesToday: 5,
+      tariffCreditsToday: day(20, 4),
       unpaidWork: credits('300'),
       rateUsable: true,
     }
@@ -923,8 +1129,8 @@ describe('newTaskVerdict', () => {
     expect(input).toEqual({
       placement: 'new',
       accounts: three(account(7, 4), account(0), account(0)),
-      subscription: { status: 'active', creditsPerMonth: 300, tasksPerDay: 5 },
-      launchesToday: 5,
+      subscription: { status: 'active', creditsPerMonth: 300, creditsPerDay: 50 },
+      tariffCreditsToday: { charged: 20, held: 4 },
       unpaidWork: credits('300'),
       rateUsable: true,
     })
@@ -940,13 +1146,22 @@ describe('newTaskVerdict', () => {
     ['a subscription without the terms of its plan', { subscription: { status: 'active' } }],
     ['a plan without monthly credits', { subscription: { ...tariff(), creditsPerMonth: null } }],
     ['a plan of no credits', { subscription: { ...tariff(), creditsPerMonth: 0 } }],
-    ['a daily limit of nothing', { subscription: { ...tariff(), tasksPerDay: 0 } }],
+    ['a daily limit of nothing', { subscription: { ...tariff(), creditsPerDay: 0 } }],
+    ['a daily limit of a fraction', { subscription: { ...tariff(), creditsPerDay: 2.5 } }],
     ['a daily limit left out', { subscription: { status: 'active', creditsPerMonth: 300 } }],
+    [
+      'a daily limit of tasks',
+      { subscription: { status: 'active', creditsPerMonth: 300, tasksPerDay: 5 } },
+    ],
     ['a subscription with a field of its own', { subscription: { ...tariff(), planId: 'start' } }],
     ['no word on the subscription', { subscription: undefined }],
-    ['a negative count of launches', { launchesToday: -1 }],
-    ['a fraction of a launch', { launchesToday: 2.5 }],
-    ['no count of launches', { launchesToday: undefined }],
+    ['a negative charge of the day', { tariffCreditsToday: { charged: -1, held: 0 } }],
+    ['a fraction set aside in the day', { tariffCreditsToday: { charged: 0, held: 2.5 } }],
+    ['a day without what is set aside', { tariffCreditsToday: { charged: 0 } }],
+    ['a day as a count', { tariffCreditsToday: 5 }],
+    ['a day of a field of its own', { tariffCreditsToday: { charged: 0, held: 0, room: 50 } }],
+    ['no word on the day', { tariffCreditsToday: undefined }],
+    ['launches in place of the day', { tariffCreditsToday: undefined, launchesToday: 0 }],
     ['unpaid work as a number', { unpaidWork: 12.5 }],
     ['unpaid work as a string', { unpaidWork: '12.5' }],
     ['negative unpaid work', { unpaidWork: credits('-1') }],
@@ -990,7 +1205,7 @@ describe('newTaskVerdict', () => {
       placement: 'new',
       accounts: three(account(300), account(35), account(100)),
       subscription: tariff(),
-      launchesToday: 0,
+      tariffCreditsToday: day(),
       unpaidWork: credits('0'),
       rateUsable: true,
       ...change,

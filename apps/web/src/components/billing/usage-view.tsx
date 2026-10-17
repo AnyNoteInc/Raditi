@@ -16,10 +16,11 @@ import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
 import { pageHeading, sectionHeading, sectionPadding, surface } from './billing-surface'
-import type { BillingUsage, PackOffer, Subscription, TariffUsage } from './billing-types'
+import type { BillingUsage, PackOffer, Subscription, TariffDay, TariffUsage } from './billing-types'
 import { canBuyPack, PackDialog } from './pack-dialog'
 import { creditsWord } from './plan-format'
 import {
+  dayLimitTomorrow,
   giftCarriesTasks,
   noticeText,
   PLAN_CHANGE_STARTS_LATER,
@@ -32,7 +33,6 @@ import {
   giftNote,
   heldEarlierNote,
   heldNote,
-  launchesWord,
   ofDailyLimit,
   ofSiteLimit,
   packCredits,
@@ -44,6 +44,7 @@ import {
   tariffRestEntry,
   todayMeterLabel,
   todayNote,
+  todaySpent,
   unpaidWhileTasksTaken,
   usagePeriod,
   usageWithoutTariff,
@@ -365,19 +366,24 @@ function Credits({
   )
 }
 
-/** One limit of the tariff: how much of it is taken, a small meter and a line about the rest. */
+/**
+ * One limit of the tariff: how much of it is taken, a small meter, what the taken part is made
+ * of and a line about the rest.
+ */
 function Tile({
   title,
-  value,
-  unit,
+  figure,
   meter,
+  detail = null,
   note,
 }: {
   title: string
-  value: number
-  unit: string
+  /** null: nothing is counted against this limit now. */
+  figure: { value: number; unit: string } | null
   /** null: the tariff sets no such limit, there is nothing to measure against. */
-  meter: { label: string; parts: readonly MeterPart[] } | null
+  meter: { label: string; parts: readonly MeterPart[]; total?: number } | null
+  /** What the taken part is made of; null when there is nothing to tell. */
+  detail?: string | null
   note: string
 }) {
   return (
@@ -385,21 +391,34 @@ function Tile({
       <Typography component="h2" variant="body2" color="textSecondary">
         {title}
       </Typography>
-      <Typography
-        sx={{ mt: 0.75, fontSize: 28, fontWeight: 600, lineHeight: 1.2, letterSpacing: '-0.02em' }}
-      >
-        {value}{' '}
-        <Box
-          component="span"
-          sx={{ color: 'text.secondary', fontSize: 16, fontWeight: 400, letterSpacing: 0 }}
+      {figure ? (
+        <Typography
+          sx={{
+            mt: 0.75,
+            fontSize: 28,
+            fontWeight: 600,
+            lineHeight: 1.2,
+            letterSpacing: '-0.02em',
+          }}
         >
-          {nbsp(unit)}
-        </Box>
-      </Typography>
+          {nbsp(formatCount(figure.value))}{' '}
+          <Box
+            component="span"
+            sx={{ color: 'text.secondary', fontSize: 16, fontWeight: 400, letterSpacing: 0 }}
+          >
+            {nbsp(figure.unit)}
+          </Box>
+        </Typography>
+      ) : null}
       {meter ? (
         <Box sx={{ mt: 1.75 }}>
-          <Meter label={meter.label} height={8} parts={meter.parts} />
+          <Meter label={meter.label} height={8} parts={meter.parts} total={meter.total} />
         </Box>
+      ) : null}
+      {detail ? (
+        <Typography variant="body2" color="textSecondary" sx={{ mt: 1.25 }}>
+          {nbsp(detail)}
+        </Typography>
       ) : null}
       <Typography variant="body2" color="textSecondary" sx={{ mt: 1.25 }}>
         {nbsp(note)}
@@ -412,6 +431,18 @@ function Tile({
 const taken = (count: number, limit: number): MeterPart[] => [
   { tone: 'spent', value: Math.min(count, limit) },
   { tone: 'left', value: Math.max(limit - count, 0) },
+]
+
+/**
+ * The meter of the day, like that of the tariff: charged, set aside, left — what the tariff can
+ * still give today (`left`), less than the room of the day when the month has less; the rest of
+ * the track stays empty. A day that took more than the limit of now — after a renewal onto a
+ * smaller plan — fills the track.
+ */
+const dayParts = ({ charged, held, left }: TariffDay): MeterPart[] => [
+  { tone: 'spent', value: charged },
+  { tone: 'held', value: held },
+  { tone: 'left', value: left },
 ]
 
 function Limits({
@@ -435,27 +466,41 @@ function Limits({
       >
         <Tile
           title="Сегодня"
-          value={today.used}
-          unit={today.limit === null ? launchesWord(today.used) : ofDailyLimit(today.limit)}
-          meter={
-            today.limit === null
+          figure={
+            today === null
               ? null
               : {
-                  label: todayMeterLabel(today.used, today.limit),
-                  parts: taken(today.used, today.limit),
+                  value: today.used,
+                  unit: today.limit === null ? creditsWord(today.used) : ofDailyLimit(today.limit),
                 }
           }
+          meter={
+            today === null || today.limit === null
+              ? null
+              : {
+                  label: todayMeterLabel({ ...today, limit: today.limit }),
+                  parts: dayParts(today),
+                  total: today.limit,
+                }
+          }
+          detail={today === null ? null : todaySpent(today)}
           note={todayNote({
-            used: today.used,
-            limit: today.limit,
+            today,
             paid: subscription.status === 'active',
             tasksTaken: giftCarriesTasks(usage),
+            tomorrow:
+              today?.limit == null
+                ? null
+                : dayLimitTomorrow(
+                    tariffState(subscription),
+                    today.limit,
+                    tariff.credits.left === 0,
+                  ),
           })}
         />
         <Tile
           title="Сайты"
-          value={sites.count}
-          unit={ofSiteLimit(sites.max)}
+          figure={{ value: sites.count, unit: ofSiteLimit(sites.max) }}
           meter={{
             label: sitesMeterLabel(sites.count, sites.max),
             parts: taken(sites.count, sites.max),

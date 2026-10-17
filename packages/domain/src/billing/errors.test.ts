@@ -103,7 +103,6 @@ describe('the refusal of a task', () => {
       'gift_spent',
       'gift_below_start',
       'trial_unpaid_limit',
-      'trial_daily_limit',
       'gift_site_used',
       'empty',
       'below_start',
@@ -114,7 +113,9 @@ describe('the refusal of a task', () => {
       'ended',
       'rate_missing',
     ])
-    expect(new Set(taskRefusalReasons).size).toBe(13)
+    expect(new Set(taskRefusalReasons).size).toBe(12)
+    // 17.10.2026: the day counts tariff credits; without a tariff there is no day to refuse by.
+    expect(taskRefusalReasons).not.toContain('trial_daily_limit')
   })
 
   // The codes are what a browser gets; the reason stays on the server and in the read model.
@@ -122,7 +123,6 @@ describe('the refusal of a task', () => {
     ['gift_spent', 'BILLING_TASK_NEEDS_SUBSCRIPTION', 402],
     ['gift_below_start', 'BILLING_TASK_NEEDS_SUBSCRIPTION', 402],
     ['trial_unpaid_limit', 'BILLING_TASK_NEEDS_SUBSCRIPTION', 402],
-    ['trial_daily_limit', 'BILLING_DAILY_LIMIT_REACHED', 409],
     ['gift_site_used', 'BILLING_TASK_NEEDS_SUBSCRIPTION', 402],
     ['empty', 'BILLING_NOT_ENOUGH_CREDITS', 402],
     ['below_start', 'BILLING_NOT_ENOUGH_CREDITS', 402],
@@ -166,6 +166,43 @@ describe('the refusal of a task', () => {
     expect(taskRefusalDetailsSchema.safeParse(verdict).success).toBe(false)
   })
 
+  it('carries the numbers of the day with a refusal by the day, read from its verdict', () => {
+    const verdict = {
+      allowed: false,
+      ...details('daily_limit', 255, 45, 5),
+      spendableNow: 3,
+      today: { limit: 50, charged: 2, held: 45, used: 47, room: 3, left: 3 },
+    }
+    const error = taskRefusal(verdict)
+    expect(error.code).toBe('BILLING_DAILY_LIMIT_REACHED')
+    expect(error.details).toEqual({
+      ...details('daily_limit', 255, 45, 5),
+      spendableNow: 3,
+      day: { limit: 50, used: 47 },
+    })
+    expect(taskRefusalDetailsSchema.safeParse(error.details).success).toBe(true)
+    // details given as they are keep their day
+    expect(taskRefusal(error.details as TaskRefusalDetails).details).toEqual(error.details)
+  })
+
+  it('gives the numbers of the day to a refusal by the day only', () => {
+    const today = { limit: 50, used: 50 }
+    expect(
+      taskRefusal({ ...details('below_start', 3, 0, 5), spendableNow: 3, today }).details,
+    ).toEqual(details('below_start', 3, 0, 5))
+    // a day without a limit is no number to tell
+    expect(
+      taskRefusal({ ...details('daily_limit', 9, 0, 5), today: { limit: null, used: 0 } }).details,
+    ).toEqual(details('daily_limit', 9, 0, 5))
+    expect(
+      taskRefusalDetailsSchema.safeParse({ ...details('held'), day: { limit: 50, used: 50 } })
+        .success,
+    ).toBe(false)
+    expect(
+      taskRefusalDetailsSchema.safeParse({ ...details('held'), spendableNow: 1 }).success,
+    ).toBe(false)
+  })
+
   it('returns a new error on every call and does not change what it is given', () => {
     const given = details('empty', 0, 0, 5)
     expect(taskRefusal(given)).not.toBe(taskRefusal(given))
@@ -182,6 +219,9 @@ describe('the refusal of a task', () => {
     ['a negative number', details('held', 0, -1)],
     ['a number as a string', { ...details('empty'), needed: '5' }],
     ['NaN', details('empty', Number.NaN)],
+    ['a day of no credits', { ...details('daily_limit'), day: { limit: 0, used: 0 } }],
+    ['a day with a fraction', { ...details('daily_limit'), day: { limit: 50, used: 2.5 } }],
+    ['a negative spendable now', { ...details('daily_limit'), spendableNow: -1 }],
     ['null', null],
     ['nothing', undefined],
   ])('answers BAD_REQUEST to %s', (_name, given) => {
@@ -190,7 +230,7 @@ describe('the refusal of a task', () => {
     expect(error.details).toBeUndefined()
   })
 
-  it('describes the details strictly: four fields, whole numbers that are not negative', () => {
+  it('describes the details strictly: their fields, whole numbers that are not negative', () => {
     expect(taskRefusalDetailsSchema.parse(details('ended', 0, 0, 5))).toEqual(
       details('ended', 0, 0, 5),
     )
@@ -199,6 +239,8 @@ describe('the refusal of a task', () => {
       'spendable',
       'held',
       'needed',
+      'spendableNow',
+      'day',
     ])
     for (const bad of [
       { ...details('ended'), allowed: false },
@@ -206,6 +248,7 @@ describe('the refusal of a task', () => {
       { ...details('ended'), held: -1 },
       { ...details('ended'), needed: '5' },
       { ...details('ended'), reason: 'unknown' },
+      { ...details('daily_limit'), day: { limit: 50, used: 50, room: 0 } },
     ]) {
       expect(taskRefusalDetailsSchema.safeParse(bad).success).toBe(false)
     }

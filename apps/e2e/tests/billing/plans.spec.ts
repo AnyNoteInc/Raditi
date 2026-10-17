@@ -96,7 +96,7 @@ const DATE = String.raw`${DAY}\s\d{4}`
  * of the registration — promised before the first site or checkout, on the account after it.
  */
 const GIFT_LEAD =
-  'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.'
+  'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
 
 test('a customer picks a tariff, pays for it and sees it active', async ({
   page,
@@ -133,9 +133,12 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
       'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Кредиты списываются только за выполненную задачу.',
     )
     for (const [name, lines] of [
-      ['Старт', ['300 кредитов в месяц', 'В среднем около 27 задач', 'До 5 задач в день']],
-      ['Бизнес', ['800 кредитов в месяц', 'В среднем около 73 задач', 'До 10 задач в день']],
-      ['Агентство', ['2 500 кредитов в месяц', 'В среднем около 230 задач', 'До 30 задач в день']],
+      ['Старт', ['300 кредитов в месяц', 'В среднем около 27 задач', 'До 50 кредитов в день']],
+      ['Бизнес', ['800 кредитов в месяц', 'В среднем около 73 задач', 'До 100 кредитов в день']],
+      [
+        'Агентство',
+        ['2 500 кредитов в месяц', 'В среднем около 230 задач', 'До 300 кредитов в день'],
+      ],
     ] as const) {
       for (const line of lines) await expect(planCard(page, name)).toContainText(line)
     }
@@ -151,7 +154,7 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
     await opener.click()
     const dialog = page.getByRole('dialog', { name: 'Тариф «Старт»' })
     await expect(dialog).toContainText(
-      '300 кредитов в месяц, до 5 задач в день · один сайт на WordPress',
+      '300 кредитов в месяц, до 50 кредитов в день · один сайт на WordPress',
     )
     await expect(dialog).toContainText('К оплате сегодня')
     await expect(dialog).toContainText('4 900 ₽')
@@ -349,7 +352,7 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
       page.getByRole('heading', { level: 3, name: /^Пакет\sиз\s100\sкредитов\s—\s1\s990\s₽$/ }),
     ).toBeVisible()
     await expect(page.getByRole('main')).toContainText(
-      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+      'Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 9 задач. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
     await expect(buyPack).toBeVisible()
   })

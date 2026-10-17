@@ -9,6 +9,7 @@ import {
   distributeCharge,
   spendableCredits,
   splitReserve,
+  tariffDayRoom,
   taskCharge,
   toCredits,
   type ChargeDistribution,
@@ -20,6 +21,7 @@ import {
   type CreditReserveRow,
   type Credits,
 } from './credits.ts'
+import { billingDay } from './period.ts'
 import { subscriptionStatuses, type SubscriptionStatus } from './subscription.ts'
 
 // The reserve of a task and the charge that settles it. A reserve says that the task is funded;
@@ -47,13 +49,18 @@ const subscriptionIn = (status: SubscriptionStatus): Subscription => ({
   currentPeriodStart: periodStart,
 })
 const paid = subscriptionIn('active')
+/** 23:50 Moscow on 19.10 and 00:10 Moscow on 20.10: the two sides of a Moscow midnight. */
+const moscowEvening = new Date('2026-10-19T20:50:00.000Z')
+const moscowNight = new Date('2026-10-19T21:10:00.000Z')
 
+/** A reserve row; placed at the moment of its stamp unless told otherwise. */
 const row = (
   id: string,
   kind: CreditAccountKind,
   amount: number,
   createdAt = day(1),
-): CreditReserveRow => ({ id, account: kind, amount: toCredits(amount), createdAt })
+  placedAt = createdAt,
+): CreditReserveRow => ({ id, account: kind, amount: toCredits(amount), createdAt, placedAt })
 
 const takesTasks = (subscription: Subscription) => subscription?.status === 'active'
 const isEnded = (reserved: CreditReserveRow, subscription: Subscription) =>
@@ -68,8 +75,9 @@ function placed(
   amount: Credits,
   tariffTakesTasks = true,
   createdAt = day(1),
+  tariffRoom: Credits | null = null,
 ) {
-  const parts = splitReserve({ accounts, amount, tariffTakesTasks })
+  const parts = splitReserve({ accounts, amount, tariffTakesTasks, tariffRoom })
   const rows = parts.map((part) =>
     row(`${task}-${part.account}`, part.account, part.amount, createdAt),
   )
@@ -151,8 +159,18 @@ describe('attemptReserveCredits', () => {
 })
 
 describe('splitReserve', () => {
-  const split = (accounts: CreditAccounts, amount: number, tariffTakesTasks = true) =>
-    splitReserve({ accounts, amount: toCredits(amount), tariffTakesTasks })
+  const split = (
+    accounts: CreditAccounts,
+    amount: number,
+    tariffTakesTasks = true,
+    tariffRoom: number | null = null,
+  ) =>
+    splitReserve({
+      accounts,
+      amount: toCredits(amount),
+      tariffTakesTasks,
+      tariffRoom: tariffRoom === null ? null : toCredits(tariffRoom),
+    })
 
   it.each([
     [
@@ -261,13 +279,24 @@ describe('splitReserve', () => {
     for (const tariff of [0, 1, 7, 45, 300]) {
       for (const gift of [0, 3, 35]) {
         for (const pack of [0, 2, 100]) {
-          for (const tariffTakesTasks of [true, false]) {
+          for (const [tariffTakesTasks, room] of [
+            [true, null],
+            [true, 0],
+            [true, 5],
+            [true, 50],
+            [false, null],
+            [false, 5],
+          ] as const) {
             const accounts = three(account(tariff + 4, 4), account(gift), account(pack + 9, 9))
-            const spendable = spendableCredits(accounts, tariffTakesTasks)
+            const roomCredits = room === null ? null : toCredits(room)
+            const spendable = spendableCredits(accounts, tariffTakesTasks, roomCredits)
             for (const amount of new Set([1, 5, 45, 120, spendable.total])) {
               if (amount < 1 || amount > spendable.total) continue
-              const parts = split(accounts, amount, tariffTakesTasks)
+              const parts = split(accounts, amount, tariffTakesTasks, room)
               expect(sumOf(parts.map((part) => part.amount))).toBe(amount)
+              // the tariff part never takes more than is left of the day
+              const tariffPart = parts.find((part) => part.account === 'tariff')?.amount ?? 0
+              expect(tariffPart).toBeLessThanOrEqual(room ?? Number.POSITIVE_INFINITY)
               expect(parts.every((part) => part.amount > 0)).toBe(true)
               const kinds = parts.map((part) => part.account)
               expect(kinds).toEqual(creditAccountKinds.filter((kind) => kinds.includes(kind)))
@@ -291,17 +320,138 @@ describe('splitReserve', () => {
     }
   })
 
+  describe('within the tariff day', () => {
+    it.each([
+      [
+        'the tariff is cut to the day, the gift and then the pack take the rest',
+        three(account(300), account(10), account(100)),
+        5,
+        [
+          ['tariff', 5],
+          ['gift', 10],
+          ['pack', 30],
+        ],
+      ],
+      [
+        'nothing is left of the day: the gift, then the pack',
+        three(account(300), account(35), account(100)),
+        0,
+        [
+          ['gift', 35],
+          ['pack', 10],
+        ],
+      ],
+      [
+        'more is left of the day than is free on the tariff: what is free binds',
+        three(account(43, 40), account(0), account(100)),
+        50,
+        [
+          ['tariff', 3],
+          ['pack', 42],
+        ],
+      ],
+      [
+        'the day leaves exactly the reserve',
+        three(account(300), account(0), account(0)),
+        45,
+        [['tariff', 45]],
+      ],
+    ] as const)('%s', (_name, accounts, room, parts) => {
+      expect(split(accounts, 45, true, room)).toEqual(
+        parts.map(([kind, credits]) => ({ account: kind, amount: credits })),
+      )
+    })
+
+    it('refuses a reserve the day and the other accounts cannot cover', () => {
+      // 250 tariff credits left in the month, nothing left of the day, no gift, no pack
+      const accounts = three(account(250), account(0), account(0))
+      expect(() => split(accounts, 1, true, 0)).toThrow(badRequest)
+      expect(() => split(accounts, 6, true, 5)).toThrow(badRequest)
+      expect(split(accounts, 5, true, 5)).toEqual([{ account: 'tariff', amount: 5 }])
+    })
+
+    it('asks nothing of the day without a paid tariff: only the gift is reserved', () => {
+      const accounts = three(account(300), account(35), account(100))
+      for (const room of [0, 5, 50]) {
+        expect(split(accounts, 35, false, room)).toEqual([{ account: 'gift', amount: 35 }])
+      }
+    })
+
+    it('reserves as before when the day sets no limit, the room null or left out', () => {
+      for (const accounts of [
+        three(account(300), account(35), account(100)),
+        three(account(5), account(0), account(100)),
+        three(account(40, 38), account(35, 30), account(100, 60)),
+      ]) {
+        for (const tariffTakesTasks of [true, false]) {
+          const amount = toCredits(Math.min(45, spendableCredits(accounts, tariffTakesTasks).total))
+          if (amount === 0) continue
+          const withoutRoom = splitReserve({ accounts, amount, tariffTakesTasks })
+          expect(splitReserve({ accounts, amount, tariffTakesTasks, tariffRoom: null })).toEqual(
+            withoutRoom,
+          )
+          const roomOfAll = toCredits(accounts.tariff.balance)
+          expect(
+            splitReserve({ accounts, amount, tariffTakesTasks, tariffRoom: roomOfAll }),
+          ).toEqual(withoutRoom)
+        }
+      }
+    })
+
+    // «Старт»: 50 tariff credits a day, 300 in the month; a pack of 100.
+    it('walks the reserves of one «Старт» day', () => {
+      const reserveOn = (accounts: CreditAccounts, used: number) => {
+        const tariffRoom = tariffDayRoom({ limit: toCredits(50), used: toCredits(used) })
+        const spendableNow = spendableCredits(accounts, true, tariffRoom)
+        const amount = attemptReserveCredits('standard', spendableNow.total)
+        return {
+          spendableNow: spendableNow.total,
+          parts: splitReserve({ accounts, amount, tariffTakesTasks: true, tariffRoom }),
+        }
+      }
+      // 09:00, task 1: the day is whole
+      expect(reserveOn(three(account(300), account(0), account(100)), 0)).toEqual({
+        spendableNow: 150,
+        parts: [{ account: 'tariff', amount: 45 }],
+      })
+      // 09:05, task 2 while task 1 runs: 5 are left of the day, the pack covers the rest
+      expect(reserveOn(three(account(300, 45), account(0), account(100)), 45)).toEqual({
+        spendableNow: 105,
+        parts: [
+          { account: 'tariff', amount: 5 },
+          { account: 'pack', amount: 40 },
+        ],
+      })
+      // 09:40, task 3: tasks 1 and 2 are charged (17 and 30, both from the tariff), the day has
+      // taken 47 and the pack is whole
+      expect(reserveOn(three(account(253), account(0), account(100)), 47)).toEqual({
+        spendableNow: 103,
+        parts: [
+          { account: 'tariff', amount: 3 },
+          { account: 'pack', amount: 42 },
+        ],
+      })
+      // task 2 without a pack or a gift: a small reserve, the task stops early at «Продолжить?»
+      expect(reserveOn(three(account(300, 45), account(0), account(0)), 45)).toEqual({
+        spendableNow: 5,
+        parts: [{ account: 'tariff', amount: 5 }],
+      })
+    })
+  })
+
   it('does not change its input', () => {
     const input = {
       accounts: three(account(5), account(0), account(100)),
       amount: toCredits(45),
       tariffTakesTasks: true,
+      tariffRoom: toCredits(3),
     }
     splitReserve(input)
     expect(input).toEqual({
       accounts: three(account(5), account(0), account(100)),
       amount: 45,
       tariffTakesTasks: true,
+      tariffRoom: 3,
     })
   })
 
@@ -320,6 +470,10 @@ describe('splitReserve', () => {
       { accounts: three(account(5, 6), account(0), account(100)) },
     ],
     ['an unknown field', { modelClass: 'standard' }],
+    ['a room of the day below zero', { tariffRoom: -1 }],
+    ['a fraction of a room', { tariffRoom: 4.5 }],
+    ['a room as a string', { tariffRoom: '5' }],
+    ['a room above the column', { tariffRoom: 1_000_000_000_000 }],
   ])('refuses %s', (_name, change) => {
     const input = {
       accounts: three(account(50), account(0), account(100)),
@@ -342,7 +496,17 @@ describe('distributeCharge', () => {
     rows: CreditReserveRow[],
     accounts: CreditAccounts,
     subscription: Subscription = paid,
-  ) => distributeCharge({ charge: toCredits(charge), rows, accounts, subscription })
+    tariffRoom: number | null = null,
+  ) =>
+    distributeCharge({
+      charge: toCredits(charge),
+      rows,
+      accounts,
+      subscription,
+      tariffRoom: tariffRoom === null ? null : toCredits(tariffRoom),
+    })
+  /** What is left of a «Старт» day, 50 tariff credits, when the day has taken `used`. */
+  const startDay = (used: number) => tariffDayRoom({ limit: toCredits(50), used: toCredits(used) })
 
   // A customer on «Старт» with 5 tariff credits and 100 pack credits asks for a new block.
   it('walks one task through two accounts', () => {
@@ -385,6 +549,10 @@ describe('distributeCharge', () => {
       },
       from: { tariff: 5, gift: 0, pack: 12 },
       expired: 0,
+      rows: [
+        { id: 'block-tariff', charged: 5 },
+        { id: 'block-pack', charged: 12 },
+      ],
     })
     // left: 0 on the tariff, 88 in the pack
     expect(settled(reserve.accounts, reserve.rows, distribution)).toEqual(
@@ -436,6 +604,8 @@ describe('distributeCharge', () => {
         },
         from: { tariff: 17, gift: 0, pack: 0 },
         expired: 0,
+        // the pack row of B paid nothing: the tariff paid for it from free credits
+        rows: [{ id: 'b-pack', charged: 0 }],
       })
       expect(settled(afterA, b.rows, forB)).toEqual(three(account(18), account(0), account(100)))
     })
@@ -471,6 +641,7 @@ describe('distributeCharge', () => {
       accounts: { tariff: nothing, gift: nothing, pack: nothing },
       from: { tariff: 17, gift: 0, pack: 0 },
       expired: 28,
+      rows: [{ id: 'old', charged: 17 }],
     })
     // the new period is exactly its quota
     expect(settled(accounts, rows, distribution)).toEqual(
@@ -487,6 +658,7 @@ describe('distributeCharge', () => {
       accounts: { tariff: { paid: 17, reserved: 45 }, gift: nothing, pack: nothing },
       from: { tariff: 17, gift: 0, pack: 0 },
       expired: 0,
+      rows: [{ id: 'own', charged: 17 }],
     })
     expect(settled(accounts, rows, distribution)).toEqual(
       three(account(83), account(0), account(0)),
@@ -512,6 +684,10 @@ describe('distributeCharge', () => {
       accounts: { tariff: { paid: 15, reserved: 45 }, gift: nothing, pack: nothing },
       from: { tariff: 60, gift: 0, pack: 0 },
       expired: 0,
+      rows: [
+        { id: 'second', charged: 15 },
+        { id: 'first', charged: 45 },
+      ],
     })
     expect(settled(accounts, rows, distribution)).toEqual(
       three(account(285), account(0), account(0)),
@@ -568,6 +744,10 @@ describe('distributeCharge', () => {
         accounts: { tariff: nothing, gift: nothing, pack: { paid: 0, reserved: 15 } },
         from: { tariff: 17, gift: 0, pack: 0 },
         expired: 13,
+        rows: [
+          { id: 't', charged: 17 },
+          { id: 'p', charged: 0 },
+        ],
       })
       // the 70 tariff credits that were free are not this charge's to take or to expire
       expect(settled(accounts, rows, distribution)).toEqual(
@@ -612,6 +792,11 @@ describe('distributeCharge', () => {
       },
       from: { tariff: 10, gift: 18, pack: 0 },
       expired: 0,
+      rows: [
+        { id: 't', charged: 10 },
+        { id: 'g', charged: 18 },
+        { id: 'p', charged: 0 },
+      ],
     })
     expect(charged(45, rows, accounts).from).toEqual({ tariff: 10, gift: 20, pack: 15 })
     expect(charged(31, rows, accounts).from).toEqual({ tariff: 10, gift: 20, pack: 1 })
@@ -669,6 +854,12 @@ describe('distributeCharge', () => {
       },
       from: { tariff: 0, gift: 0, pack: 0 },
       expired: 45,
+      rows: [
+        { id: 'old', charged: 0 },
+        { id: 'new', charged: 0 },
+        { id: 'g', charged: 0 },
+        { id: 'p', charged: 0 },
+      ],
     })
     expect(settled(accounts, rows, distribution)).toEqual(
       three(account(300), account(35), account(100)),
@@ -682,6 +873,7 @@ describe('distributeCharge', () => {
       accounts: { tariff: nothing, gift: nothing, pack: nothing },
       from: { tariff: 0, gift: 0, pack: 0 },
       expired: 0,
+      rows: [],
     })
     expect(() => charged(1, [], accounts)).toThrow(badRequest)
   })
@@ -726,6 +918,231 @@ describe('distributeCharge', () => {
     expect(charged(17, [row('p', 'pack', 45), row('q', 'pack', 45)], accounts).from.pack).toBe(17)
   })
 
+  // The day caps what free tariff credits pay above the task's own rows; the rows themselves
+  // always pay. «Старт»: 50 tariff credits a day.
+  describe('within the tariff day', () => {
+    it('lets the own rows of the task pay when nothing is left of the day', () => {
+      const rows = [row('t', 'tariff', 45)]
+      const accounts = three(account(300, 45), account(0), account(0))
+      for (const charge of [5, 17, 45]) {
+        const distribution = charged(charge, rows, accounts, paid, 0)
+        expect(distribution.accounts.tariff).toEqual({ paid: charge, reserved: 45 })
+        expect(distribution.rows).toEqual([{ id: 't', charged: charge }])
+      }
+    })
+
+    // 09:30: task 2 of the day reserved 5 tariff credits and 40 of the pack; task 1 was charged
+    // 17, so the day has taken 22 and 28 are left of it.
+    it('moves the charge onto free tariff credits no further than is left of the day', () => {
+      const rows = [row('t2-tariff', 'tariff', 5), row('t2-pack', 'pack', 40)]
+      const accounts = three(account(283, 5), account(0), account(100, 40))
+      const at = (room: number | null) => charged(30, rows, accounts, paid, room)
+
+      // 28 left: the tariff pays all 30 — 5 from the row of the task and 25 free credits
+      expect(at(startDay(22))).toEqual({
+        endedRows: [],
+        accounts: {
+          tariff: { paid: 30, reserved: 5 },
+          gift: nothing,
+          pack: { paid: 0, reserved: 40 },
+        },
+        from: { tariff: 30, gift: 0, pack: 0 },
+        expired: 0,
+        rows: [
+          { id: 't2-tariff', charged: 5 },
+          { id: 't2-pack', charged: 0 },
+        ],
+      })
+      // 10 left: 5 from the row and 10 free; the pack row pays the other 15
+      expect(at(10).from).toEqual({ tariff: 15, gift: 0, pack: 15 })
+      expect(at(10).rows).toEqual([
+        { id: 't2-tariff', charged: 5 },
+        { id: 't2-pack', charged: 15 },
+      ])
+      // nothing left: the rows pay as they were reserved
+      expect(at(0).from).toEqual({ tariff: 5, gift: 0, pack: 25 })
+      // no limit: as before the day
+      expect(at(null)).toEqual(charged(30, rows, accounts))
+      expect(at(null).from).toEqual({ tariff: 30, gift: 0, pack: 0 })
+      for (const room of [0, 10, 28, null]) {
+        expect(settled(accounts, rows, at(room)).tariff.held).toBe(0)
+      }
+    })
+
+    it('leaves the gift and the pack outside the day', () => {
+      // the reserve stood on the pack; 12 gift credits came free since, the tariff day is spent
+      const rows = [row('p', 'pack', 45)]
+      const accounts = three(account(300), account(12), account(100, 45))
+      expect(charged(17, rows, accounts, paid, 0).from).toEqual({ tariff: 0, gift: 12, pack: 5 })
+      expect(charged(17, rows, accounts, paid, 3).from).toEqual({ tariff: 3, gift: 12, pack: 2 })
+    })
+
+    it('lets a row of an ended period pay whatever is left of the day', () => {
+      const rows = [row('second', 'tariff', 45, day(1)), row('first', 'tariff', 45, day(-1))]
+      const accounts = three(account(345, 90), account(0), account(0))
+      const distribution = charged(60, rows, accounts, paid, 0)
+      expect(distribution.endedRows).toEqual([{ id: 'first', paid: 45, expired: 0 }])
+      expect(distribution.accounts.tariff).toEqual({ paid: 15, reserved: 45 })
+      expect(distribution.rows).toEqual([
+        { id: 'second', charged: 15 },
+        { id: 'first', charged: 45 },
+      ])
+    })
+
+    // A continuation: the first attempt was placed at 23:50 Moscow, the second at 00:10 the next day.
+    it('lets the rows of an account pay oldest first, whatever order they are given in', () => {
+      const evening = moscowEvening
+      const night = moscowNight
+      const older = row('first', 'tariff', 45, day(1), evening)
+      const newer = row('second', 'tariff', 45, day(1), night)
+      const accounts = three(account(300, 90), account(0), account(0))
+      for (const rows of [
+        [older, newer],
+        [newer, older],
+      ]) {
+        const distribution = charged(60, rows, accounts, paid, 0)
+        const byId = Object.fromEntries(distribution.rows.map((one) => [one.id, one.charged]))
+        expect(byId).toEqual({ first: 45, second: 15 })
+        // the rows come back in the order they were given
+        expect(distribution.rows.map(({ id }) => id)).toEqual(rows.map(({ id }) => id))
+      }
+      // a charge the older row covers alone: the newer one pays nothing, its day gets it back
+      expect(charged(17, [newer, older], accounts, paid, 0).rows).toEqual([
+        { id: 'second', charged: 0 },
+        { id: 'first', charged: 17 },
+      ])
+    })
+
+    // §1.6 example 8: a reserve of 45 placed at 23:50 Moscow is charged 17 at 00:10 the next day.
+    // Its row pays all 17 and nothing moves onto the free tariff, whatever is left of the new day:
+    // the 17 belong to the day the row was placed, the new day gets 0. Which day a row counts on
+    // is read by the day reader of the next slice; here only the charge is settled.
+    it('pays from the row of a reserve placed yesterday, whatever is left of today', () => {
+      expect(billingDay(moscowEvening).end).toEqual(billingDay(moscowNight).start)
+      const rows = [row('t', 'tariff', 45, moscowEvening)]
+      const accounts = three(account(300, 45), account(0), account(0))
+      for (const room of [0, 50, null]) {
+        const distribution = charged(17, rows, accounts, paid, room)
+        expect(distribution.rows).toEqual([{ id: 't', charged: 17 }])
+        expect(distribution.from).toEqual({ tariff: 17, gift: 0, pack: 0 })
+        expect(distribution.accounts.tariff).toEqual({ paid: 17, reserved: 45 })
+      }
+    })
+
+    it('lets rows of one moment pay in the order they are given', () => {
+      const rows = [row('a', 'pack', 20), row('b', 'pack', 25)]
+      const accounts = three(account(0), account(0), account(100, 45))
+      expect(charged(22, rows, accounts).rows).toEqual([
+        { id: 'a', charged: 20 },
+        { id: 'b', charged: 2 },
+      ])
+      expect(charged(22, [...rows].reverse(), accounts).rows).toEqual([
+        { id: 'b', charged: 22 },
+        { id: 'a', charged: 0 },
+      ])
+    })
+
+    it('moves nothing when a task ends without a charge', () => {
+      const rows = [row('t', 'tariff', 5), row('p', 'pack', 40)]
+      const accounts = three(account(300, 5), account(0), account(100, 40))
+      for (const room of [null, 0, 50]) {
+        const distribution = charged(0, rows, accounts, paid, room)
+        expect(distribution.from).toEqual({ tariff: 0, gift: 0, pack: 0 })
+        expect(distribution.rows).toEqual([
+          { id: 't', charged: 0 },
+          { id: 'p', charged: 0 },
+        ])
+      }
+    })
+
+    // Design §3.7 with a «Старт» day. A customer with 5 tariff credits and 100 of a pack asks
+    // for a new block; four tasks earlier that day took 45 tariff credits.
+    it('walks one task through two accounts on the last 5 credits of the day', () => {
+      const before = three(account(5), account(0), account(100))
+      const room = startDay(45)
+      const spendableNow = spendableCredits(before, true, room)
+      expect(spendableNow.total).toBe(105)
+      const reserve = placed(
+        before,
+        'block',
+        attemptReserveCredits('standard', spendableNow.total),
+        true,
+        day(1),
+        room,
+      )
+      expect(reserve.parts).toEqual([
+        { account: 'tariff', amount: 5 },
+        { account: 'pack', amount: 40 },
+      ])
+      // the reserve took the rest of the day: 45 + 5
+      const distribution = charged(17, reserve.rows, reserve.accounts, paid, startDay(50))
+      expect(distribution.from).toEqual({ tariff: 5, gift: 0, pack: 12 })
+      expect(distribution.rows).toEqual([
+        { id: 'block-tariff', charged: 5 },
+        { id: 'block-pack', charged: 12 },
+      ])
+      expect(settled(reserve.accounts, reserve.rows, distribution)).toEqual(
+        three(account(0), account(0), account(88)),
+      )
+    })
+
+    // Tariff 40, pack 100. A, a small edit, is queued first; B, a block, after it.
+    describe('two tasks at once', () => {
+      it('keeps the order of the owner while the day has room: the tariff pays for B', () => {
+        const before = three(account(40), account(0), account(100))
+        const a = placed(before, 'a', toCredits(45), true, day(1), startDay(0))
+        expect(a.parts).toEqual([
+          { account: 'tariff', amount: 40 },
+          { account: 'pack', amount: 5 },
+        ])
+        // the day has taken A's 40: 10 left, none of it free on the tariff
+        const b = placed(a.accounts, 'b', toCredits(45), true, day(1), startDay(40))
+        expect(b.parts).toEqual([{ account: 'pack', amount: 45 }])
+
+        // A done for 5, while the day still counts A's 40
+        const forA = charged(5, a.rows, b.accounts, paid, startDay(40))
+        expect(forA.rows).toEqual([
+          { id: 'a-tariff', charged: 5 },
+          { id: 'a-pack', charged: 0 },
+        ])
+        const afterA = settled(b.accounts, a.rows, forA)
+        expect(afterA).toEqual(three(account(35), account(0), account(100, 45)))
+
+        // B done for 17: the day has taken 5, so 45 are left — the tariff pays all 17
+        const forB = charged(17, b.rows, afterA, paid, startDay(5))
+        expect(forB.from).toEqual({ tariff: 17, gift: 0, pack: 0 })
+        expect(forB.rows).toEqual([{ id: 'b-pack', charged: 0 }])
+        // the day has taken 22: 5 that A's row paid and 17 moved onto free tariff credits
+        expect(settled(afterA, b.rows, forB)).toEqual(three(account(18), account(0), account(100)))
+      })
+
+      it('keeps B on the pack beyond what is left of the day', () => {
+        // an earlier task of the day was charged 30: 20 are left
+        const before = three(account(40), account(0), account(100))
+        const a = placed(before, 'a', toCredits(45), true, day(1), startDay(30))
+        expect(a.parts).toEqual([
+          { account: 'tariff', amount: 20 },
+          { account: 'pack', amount: 25 },
+        ])
+        // the day is spent: B goes on the pack
+        const b = placed(a.accounts, 'b', toCredits(45), true, day(1), startDay(50))
+        expect(b.parts).toEqual([{ account: 'pack', amount: 45 }])
+
+        // A done for 5 from its own tariff row, though nothing is left of the day
+        const forA = charged(5, a.rows, b.accounts, paid, startDay(50))
+        expect(forA.from).toEqual({ tariff: 5, gift: 0, pack: 0 })
+        const afterA = settled(b.accounts, a.rows, forA)
+        expect(afterA).toEqual(three(account(35), account(0), account(100, 45)))
+
+        // B done for 17: the day has taken 30 + 5, so 15 are left: the tariff pays 15, the pack 2
+        const forB = charged(17, b.rows, afterA, paid, startDay(35))
+        expect(forB.from).toEqual({ tariff: 15, gift: 0, pack: 2 })
+        expect(forB.rows).toEqual([{ id: 'b-pack', charged: 2 }])
+        expect(settled(afterA, b.rows, forB)).toEqual(three(account(20), account(0), account(98)))
+      })
+    })
+  })
+
   it('does not change its input', () => {
     const rows = [row('newer', 'tariff', 25, day(-2)), row('older', 'tariff', 20, day(-40))]
     const input = {
@@ -733,6 +1150,7 @@ describe('distributeCharge', () => {
       rows,
       accounts: three(account(345, 45), account(0), account(0)),
       subscription: { status: 'active' as const, currentPeriodStart: new Date(periodStart) },
+      tariffRoom: toCredits(0),
     }
     distributeCharge(input)
     expect(input.rows.map(({ id }) => id)).toEqual(['newer', 'older'])
@@ -741,6 +1159,7 @@ describe('distributeCharge', () => {
       rows: [row('newer', 'tariff', 25, day(-2)), row('older', 'tariff', 20, day(-40))],
       accounts: three(account(345, 45), account(0), account(0)),
       subscription: paid,
+      tariffRoom: 0,
     })
   })
 
@@ -759,7 +1178,18 @@ describe('distributeCharge', () => {
       { rows: [{ ...row('p', 'pack', 45), account: 'credit_pack' }] },
     ],
     ['a row without a name', { rows: [{ ...row('p', 'pack', 45), id: '' }] }],
-    ['a row without a stamp', { rows: [{ id: 'p', account: 'pack', amount: 45 }] }],
+    [
+      'a row without a stamp',
+      { rows: [{ id: 'p', account: 'pack', amount: 45, placedAt: day(1) }] },
+    ],
+    [
+      'a row without the moment it was placed',
+      { rows: [{ id: 'p', account: 'pack', amount: 45, createdAt: day(1) }] },
+    ],
+    [
+      'a row placed at what is not a moment',
+      { rows: [row('p', 'pack', 45, day(1), new Date(Number.NaN))] },
+    ],
     [
       'a row with a stamp that is not a moment',
       { rows: [row('p', 'pack', 45, new Date(Number.NaN))] },
@@ -782,6 +1212,9 @@ describe('distributeCharge', () => {
     ['no word on the subscription', { subscription: undefined }],
     ['a word in place of the subscription', { subscription: true }],
     ['an unknown field', { tariffTakesTasks: true }],
+    ['a room of the day below zero', { tariffRoom: -1 }],
+    ['a fraction of a room', { tariffRoom: 0.5 }],
+    ['a room as a string', { tariffRoom: '5' }],
   ])('refuses %s', (_name, change) => {
     const input = {
       charge: 17,
@@ -818,6 +1251,8 @@ describe('distributeCharge', () => {
     const oneOf = <Item>(items: readonly Item[]): Item => items[upTo(items.length - 1)] as Item
 
     const stamps = [day(-40), day(-1), day(0, -1), day(0), day(0, 1), day(3)]
+    // two rows often share a moment: a reserve placed at once on two accounts
+    const placements = [day(-1), day(0), day(1), day(1, 1), day(2)]
     const subscriptions: Subscription[] = [
       paid,
       paid,
@@ -833,7 +1268,13 @@ describe('distributeCharge', () => {
 
     const generate = (_unused: unknown, index: number): Generated => {
       const rows = Array.from({ length: upTo(5) }, (_row, position) =>
-        row(`h${position}`, oneOf(creditAccountKinds), 1 + upTo(59), oneOf(stamps)),
+        row(
+          `h${position}`,
+          oneOf(creditAccountKinds),
+          1 + upTo(59),
+          oneOf(stamps),
+          oneOf(placements),
+        ),
       )
       const own = (kind: CreditAccountKind) =>
         sumOf(rows.filter((reserved) => reserved.account === kind).map(({ amount }) => amount))
@@ -848,6 +1289,7 @@ describe('distributeCharge', () => {
         rows,
         accounts: three(snapshot('tariff'), snapshot('gift'), snapshot('pack')),
         subscription: oneOf(subscriptions),
+        tariffRoom: random() < 0.4 ? null : toCredits(upTo(60)),
       }
       return { input, distribution: distributeCharge(input) }
     }
@@ -867,8 +1309,13 @@ describe('distributeCharge', () => {
       )
       const free = input.accounts[kind].balance - input.accounts[kind].held
       const freeCounts = kind === 'gift' || takesTasks(input.subscription)
-      return sumOf(current.map(({ amount }) => amount)) + (freeCounts ? free : 0)
+      const room = kind === 'tariff' ? (input.tariffRoom ?? free) : free
+      return sumOf(current.map(({ amount }) => amount)) + (freeCounts ? Math.min(free, room) : 0)
     }
+    /** What an account paid above the task's rows on it: credits that were free. */
+    const transferOf = (distribution: ChargeDistribution, kind: CreditAccountKind) =>
+      distribution.accounts[kind].paid -
+      Math.min(distribution.accounts[kind].paid, distribution.accounts[kind].reserved)
 
     it('covers every kind of case', () => {
       const count = (wanted: (one: Generated) => boolean) => generated().filter(wanted).length
@@ -882,6 +1329,24 @@ describe('distributeCharge', () => {
       expect(count(({ input }) => !takesTasks(input.subscription))).toBeGreaterThan(500)
       expect(count(({ input }) => input.charge === 0)).toBeGreaterThan(200)
       expect(count(({ input }) => input.rows.length === 0)).toBeGreaterThan(100)
+      // the day bound the transfer onto free tariff credits
+      expect(
+        count(
+          ({ input, distribution }) =>
+            input.tariffRoom != null &&
+            transferOf(distribution, 'tariff') === input.tariffRoom &&
+            input.accounts.tariff.balance - input.accounts.tariff.held > input.tariffRoom &&
+            distribution.from.pack + distribution.from.gift > 0,
+        ),
+      ).toBeGreaterThan(50)
+      // a row paid part of its amount
+      expect(
+        count(({ input, distribution }) =>
+          distribution.rows.some(
+            (one, position) => one.charged > 0 && one.charged < (input.rows[position]?.amount ?? 0),
+          ),
+        ),
+      ).toBeGreaterThan(200)
       // free credits paid above what the task's own rows on the account held
       expect(
         count(({ distribution }) =>
@@ -981,6 +1446,50 @@ describe('distributeCharge', () => {
           const gone = distribution.accounts[kind].paid + (kind === 'tariff' ? ended : 0)
           expect(after[kind].balance).toBe(input.accounts[kind].balance - gone)
         }
+      }
+    })
+
+    it('moves the charge onto free tariff credits no further than is left of the day', () => {
+      for (const { input, distribution } of generated()) {
+        if (input.tariffRoom != null) {
+          expect(transferOf(distribution, 'tariff')).toBeLessThanOrEqual(input.tariffRoom)
+        }
+      }
+    })
+
+    it('says what each row paid: the share of its account, oldest rows first', () => {
+      for (const { input, distribution } of generated()) {
+        expect(distribution.rows.map(({ id }) => id)).toEqual(input.rows.map(({ id }) => id))
+        const chargedOf = (id: string) =>
+          distribution.rows.find((one) => one.id === id)?.charged ?? Number.NaN
+        for (const [position, one] of distribution.rows.entries()) {
+          expect(one.charged).toBeGreaterThanOrEqual(0)
+          expect(one.charged).toBeLessThanOrEqual(input.rows[position]?.amount ?? 0)
+        }
+        for (const ended of distribution.endedRows) expect(chargedOf(ended.id)).toBe(ended.paid)
+        for (const kind of creditAccountKinds) {
+          const current = ownRows(input, kind).filter(
+            (reserved) => !isEnded(reserved, input.subscription),
+          )
+          const share = distribution.accounts[kind]
+          // Σ charged of the account's rows is what it paid less what its free credits paid
+          expect(sumOf(current.map(({ id }) => chargedOf(id)))).toBe(
+            share.paid - transferOf(distribution, kind),
+          )
+          // a row pays only after every row placed before it paid its whole amount
+          for (const reserved of current) {
+            if (chargedOf(reserved.id) === 0) continue
+            for (const earlier of current) {
+              if (earlier.placedAt.getTime() < reserved.placedAt.getTime()) {
+                expect(chargedOf(earlier.id)).toBe(earlier.amount)
+              }
+            }
+          }
+        }
+        // a charge settles exactly: what the rows paid and what was free add up to it
+        const fromRows = sumOf(distribution.rows.map(({ charged: paidByRow }) => paidByRow))
+        const transfers = sumOf(creditAccountKinds.map((kind) => transferOf(distribution, kind)))
+        expect(fromRows + transfers).toBe(input.charge)
       }
     })
 

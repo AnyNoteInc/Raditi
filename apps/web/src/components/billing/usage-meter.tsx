@@ -37,17 +37,21 @@ export interface MeterPart {
 
 /**
  * A track divided in proportion to its parts; a part of zero is not drawn. One image for
- * assistive technology: `label` says in words everything the fills show.
+ * assistive technology: `label` says in words everything the fills show. `total`: what the
+ * whole track stands for, when the parts may come to less — the rest of it stays empty.
  */
 export function Meter({
   label,
   parts,
   height,
+  total,
 }: {
   label: string
   parts: readonly MeterPart[]
   height: number
+  total?: number
 }) {
+  const rest = total === undefined ? 0 : total - parts.reduce((sum, { value }) => sum + value, 0)
   return (
     <Box
       role="img"
@@ -73,6 +77,7 @@ export function Meter({
             sx={(theme) => ({ flex: `${value} 1 0`, minWidth: 6, bgcolor: fillOf(theme, tone) })}
           />
         ))}
+      {rest > 0 ? <Box component="span" data-rest="" sx={{ flex: `${rest} 1 0` }} /> : null}
     </Box>
   )
 }

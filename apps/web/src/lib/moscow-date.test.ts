@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { formatMoscowDate, formatMoscowDay } from './moscow-date'
+import { formatMoscowDate, formatMoscowDay, nextMoscowMidnight } from './moscow-date'
 
 const NBSP = String.fromCharCode(0xa0)
 
@@ -30,6 +30,15 @@ describe('Moscow dates', () => {
     expect(formatMoscowDate(new Date('2026-12-31T20:59:59Z'))).toBe(`31${NBSP}декабря 2026`)
     expect(formatMoscowDate(new Date('2026-12-31T21:00:00Z'))).toBe(`1${NBSP}января 2027`)
     expect(formatMoscowDay(new Date('2026-03-01T00:30:00+03:00'))).toBe(`1${NBSP}марта`)
+  })
+
+  it('finds the midnight in Moscow that starts the next day', () => {
+    const midnight = new Date('2026-10-04T21:00:00Z')
+    expect(nextMoscowMidnight(new Date('2026-10-04T09:00:00Z'))).toEqual(midnight)
+    expect(nextMoscowMidnight(new Date('2026-10-03T21:00:00Z'))).toEqual(midnight)
+    expect(nextMoscowMidnight(new Date('2026-10-04T20:59:59.999Z'))).toEqual(midnight)
+    // midnight itself starts a day: the next one is a day later
+    expect(nextMoscowMidnight(midnight)).toEqual(new Date('2026-10-05T21:00:00Z'))
   })
 
   it.each(['America/Los_Angeles', 'Asia/Vladivostok', 'UTC'])(

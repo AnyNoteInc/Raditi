@@ -174,7 +174,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL refund', () => {
   }: { autoRenew?: boolean; plan?: Partial<Prisma.PlanUncheckedCreateInput> } = {}) {
     const { userId, email } = await fixtures.user()
     emails.push(email)
-    const plan = await fixtures.plan({ isActive: true, tasksPerDay: null, ...planData })
+    const plan = await fixtures.plan({ isActive: true, creditsPerDay: null, ...planData })
     const { shop, deps } = refundTestDeps(db)
     const { orderId } = await startCheckout(deps, { userId, planSlug: plan.slug, autoRenew })
     const paymentId = shop.only().id

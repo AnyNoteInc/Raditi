@@ -20,7 +20,10 @@ import { expect, test, type Credits } from '../../fixtures/credits.ts'
 // real browser: a new user reads the gift as promised, gets it with the first site and spends
 // it on tasks without a tariff; a gift that is used up leaves one way, a tariff; the credits of
 // a tariff run out — «Лимиты закончились» — and «Купить пакет» is the way out; a task takes the
-// gift before the pack, and a pack waits for a tariff that has ended.
+// gift before the pack, and a pack waits for a tariff that has ended. A tariff gives only so many
+// of its credits a Moscow day — «Старт» 50 —, so the tasks that use up a tariff are queued on
+// earlier days of its period (`periodBegan`, `task({ at })` of fixtures/credits.ts); gift and
+// pack credits are outside the day.
 //
 // Every number a page is expected to show is read from the database first: the sentences are
 // written here, in the words of the credits design, and filled with what the accounts hold.
@@ -64,7 +67,9 @@ const day = (instant: Date) => MOSCOW_DAY.format(instant)
 
 /** «Использование» without a tariff, while a task would be taken on gift credits. */
 const usageOnGift = (gift: number) =>
-  `У вас ${giftCredits(gift)}. Без тарифа можно поставить до 3 задач в день. Здесь видно, сколько кредитов осталось и на что они ушли.`
+  `У вас ${giftCredits(gift)}. ${plural(gift, 'Он не сгорает', 'Они не сгорают', 'Они не сгорают')}, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.`
+/** Said beside the day of every tariff that has a daily limit. */
+const OUTSIDE_THE_DAY = 'Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены.'
 /** The gift is set aside for the task in work (A10б of the design). */
 const giftSetAside = (held: number) =>
   `Подарочные кредиты заняты задачей в работе: под неё отложено ${held}. Когда она закончится, спишем только то, что ушло на работу, остальное вернётся — и можно будет поставить следующую.`
@@ -143,9 +148,26 @@ async function payForPack(page: Page, dialog: Locator) {
   await expect(page.getByRole('main').getByRole('status')).toContainText('Добавили 100 кредитов.')
 }
 
-/** A large task in the strong mode, whose work comes to the whole step: 120 credits. */
-const large = async (queue: Credits, title: string) =>
-  (await queue.task({ title, modelClass: 'heavy' })).done('720.00')
+const DAY_MS = 24 * 60 * 60_000
+
+/** The moment `days` Moscow days before now, at the same time of day. */
+const daysAgo = (days: number) => new Date(Date.now() - days * DAY_MS)
+
+/**
+ * The current period of the customer's tariff began `days` days and an hour ago: the tasks of
+ * the scenario can be queued on each of those days.
+ */
+const periodOf = (queue: Credits, days: number) =>
+  queue.periodBegan(new Date(Date.now() - days * DAY_MS - 60 * 60_000))
+
+/**
+ * A large task in the strong mode, queued `days` days ago; `costRub` is what its work came to,
+ * 6.00 RUB a credit.
+ */
+const largeOnDay = async (queue: Credits, title: string, days: number, costRub: string) => {
+  const task = await queue.task({ title, modelClass: 'heavy', at: daysAgo(days) })
+  return { reserved: task.reserved, charged: await task.done(costRub), id: task.id }
+}
 
 test('a new user gets the gift with the first site and spends it on tasks without a tariff', async ({
   page,
@@ -273,8 +295,12 @@ test('a new user gets the gift with the first site and spends it on tasks withou
     await expect(leftHeadlineOf(creditsSection)).toHaveText(leftHeadline(totalLeft(stored)), SLOW)
     // A task would be taken: nothing stands in its way, and nothing is said.
     await expect(creditsSection.getByRole('status')).toHaveCount(0)
-    // The day counts tasks taken into work, whatever paid for them: the three of today.
-    await expect(section(page, 'Лимиты тарифа')).toContainText(/Сегодня\s*3\s+из\s5\sзадач/)
+    // The day counts tariff credits only: the work of today was paid by the gift.
+    const limits = section(page, 'Лимиты тарифа')
+    await expect(limits).toContainText(/Сегодня\s*0\s+из\s50\sкредитов/)
+    await expect(limits).toContainText(
+      said(`Сегодня можно потратить ещё 50 кредитов. ${OUTSIDE_THE_DAY}`),
+    )
   })
 })
 
@@ -339,24 +365,30 @@ test('the credits of a tariff run out: «Лимиты закончились», 
     await queue.site('Кофейня')
     const stored = await queue.stored()
     expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([300, 35, 0])
+    // Its period began six days ago: a large task a day uses up the 300 of the tariff.
+    await periodOf(queue, 6)
   })
 
-  await test.step('three large tasks use up the tariff and then the gift', async () => {
-    expect((await large(queue, 'Собрать страницу «О нас»')).from).toEqual({
-      tariff: 120,
-      gift: 0,
-      pack: 0,
-    })
-    expect((await large(queue, 'Добавить форму заявки')).from).toEqual({
-      tariff: 120,
-      gift: 0,
-      pack: 0,
-    })
-    // The third one has 95 credits to set aside, and its work comes to more: it is charged
-    // what was set aside, the tariff first.
-    const last = await queue.task({ title: 'Переделать каталог', modelClass: 'heavy' })
-    expect(last.reserved).toEqual({ tariff: 60, gift: 35, pack: 0 })
-    expect((await last.done('720.00')).from).toEqual({ tariff: 60, gift: 35, pack: 0 })
+  // The walk of the design (C8): «Старт» gives 50 of its 300 credits a day, the gift is outside
+  // the day. The first large task sets aside the 50 of its day and the 35 of the gift, and its
+  // work comes to all of it; each of the next five days a large task takes the 50 of that day.
+  await test.step('six large tasks on six days use up the gift and the tariff', async () => {
+    const first = await largeOnDay(queue, 'Собрать страницу «О нас»', 6, '510.00')
+    expect(first.reserved).toEqual({ tariff: 50, gift: 35, pack: 0 })
+    expect(first.charged.from).toEqual({ tariff: 50, gift: 35, pack: 0 })
+    const titles = [
+      'Добавить форму заявки',
+      'Переделать каталог',
+      'Обновить раздел услуг',
+      'Добавить галерею работ',
+      'Собрать страницу акций',
+    ]
+    for (const [index, title] of titles.entries()) {
+      const next = await largeOnDay(queue, title, 5 - index, '300.00')
+      // Only what is left of its day: the step of 120 is cut to 50.
+      expect(next.reserved).toEqual({ tariff: 50, gift: 0, pack: 0 })
+      expect(next.charged.from).toEqual({ tariff: 50, gift: 0, pack: 0 })
+    }
     expect(await queue.stored()).toEqual({
       tariff: { balance: 0, held: 0, left: 0 },
       gift: { balance: 0, held: 0, left: 0 },
@@ -390,18 +422,28 @@ test('the credits of a tariff run out: «Лимиты закончились», 
       /^По тарифу\s—\s0\sиз\s300$/,
       /^Из пакета\s—\s0$/,
     ])
-    // The day is another limit, and it is not reached: three of five.
+    // The day is another limit: today took nothing of it, and the tariff has nothing to give.
     const limits = section(page, 'Лимиты тарифа')
-    await expect(limits).toContainText(/Сегодня\s*3\s+из\s5\sзадач/)
-    await expect(limits).toContainText(said('Сегодня можно поставить ещё 2 задачи.'))
+    await expect(limits).toContainText(/Сегодня\s*0\s+из\s50\sкредитов/)
+    await expect(limits).toContainText(said(OUTSIDE_THE_DAY))
+    await expect(limits).not.toContainText('Сегодня можно потратить')
+    // The meter of the day says what the tariff can still give today: nothing.
+    await expect(
+      limits.getByRole('img', {
+        name: 'Сегодня из 50 кредитов: 0 списано, 0 отложено под задачи в работе, 0 осталось',
+      }),
+    ).toBeVisible()
     // All 335 credits went to the one site; the last task took them from two accounts.
     await expect(section(page, 'По сайтам').getByRole('listitem')).toHaveText([
       said(`Кофейня335 кредитов`),
     ])
     await expect(historyLines(page)).toHaveText([
-      said(`Переделать каталогКофейня${credits(95)}60 по тарифу и 35 подарочных`),
-      said(`Добавить форму заявкиКофейня${credits(120)}`),
-      said(`Собрать страницу «О нас»Кофейня${credits(120)}`),
+      said(`Собрать страницу акцийКофейня${credits(50)}`),
+      said(`Добавить галерею работКофейня${credits(50)}`),
+      said(`Обновить раздел услугКофейня${credits(50)}`),
+      said(`Переделать каталогКофейня${credits(50)}`),
+      said(`Добавить форму заявкиКофейня${credits(50)}`),
+      said(`Собрать страницу «О нас»Кофейня${credits(85)}50 по тарифу и 35 подарочных`),
     ])
   })
 
@@ -457,7 +499,8 @@ test('the credits of a tariff run out: «Лимиты закончились», 
     await expect(historyLines(page).first()).toHaveText(
       said(`Добавить баннер акцииКофейня${credits(17)}`),
     )
-    await expect(section(page, 'Лимиты тарифа')).toContainText(/Сегодня\s*4\s+из\s5\sзадач/)
+    // Work paid by the pack is outside the day.
+    await expect(section(page, 'Лимиты тарифа')).toContainText(/Сегодня\s*0\s+из\s50\sкредитов/)
   })
 })
 
@@ -483,21 +526,38 @@ test('a task takes the gift before the pack, and a pack waits for a tariff that 
     expect((await queue.subscription()).status).toBe('active')
   })
 
+  await test.step('a large task a day takes the 50 of the day, and its gift and pack rows come back', async () => {
+    await periodOf(queue, 6)
+    // Each sets aside the 50 of its day, the gift and some of the pack; its work comes to 50,
+    // and the tariff pays it first, from its own row.
+    for (const [index, title] of [
+      'Собрать страницу «О нас»',
+      'Добавить форму заявки',
+      'Обновить раздел услуг',
+      'Добавить галерею работ',
+      'Собрать страницу акций',
+    ].entries()) {
+      const task = await largeOnDay(queue, title, 5 - index, '300.00')
+      expect(task.reserved).toEqual({ tariff: 50, gift: 35, pack: 35 })
+      expect(task.charged.from).toEqual({ tariff: 50, gift: 0, pack: 0 })
+    }
+    const stored = await queue.stored()
+    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([50, 35, 100])
+  })
+
   await test.step('a task that reaches past the tariff is paid by the gift, not by the pack', async () => {
-    await large(queue, 'Собрать страницу «О нас»')
-    await large(queue, 'Добавить форму заявки')
-    // 60 credits of the tariff are left. The reserve of the next task stands on all three
-    // accounts; its work comes to 80 credits, and the pack pays none of them.
+    // The last 50 credits of the tariff are those of today. The reserve of the next task stands
+    // on all three accounts; its work comes to 80 credits, and the pack pays none of them.
     const catalogue = await queue.task({ title: 'Переделать каталог', modelClass: 'heavy' })
-    expect(catalogue.reserved).toEqual({ tariff: 60, gift: 35, pack: 25 })
+    expect(catalogue.reserved).toEqual({ tariff: 50, gift: 35, pack: 35 })
     const charged = await catalogue.done('480.00')
     expect(charged.credits).toBe(80)
-    expect(charged.from).toEqual({ tariff: 60, gift: 20, pack: 0 })
+    expect(charged.from).toEqual({ tariff: 50, gift: 30, pack: 0 })
 
     const stored = await queue.stored()
     expect(stored).toEqual({
       tariff: { balance: 0, held: 0, left: 0 },
-      gift: { balance: 15, held: 0, left: 15 },
+      gift: { balance: 5, held: 0, left: 5 },
       pack: { balance: 100, held: 0, left: 100 },
     })
     expect(
@@ -505,8 +565,8 @@ test('a task takes the gift before the pack, and a pack waits for a tariff that 
         .filter(({ taskId }) => taskId === catalogue.id)
         .map(({ account, kind, amount }) => [account, kind, amount]),
     ).toEqual([
-      ['tariff', 'charge', -60],
-      ['gift', 'charge', -20],
+      ['tariff', 'charge', -50],
+      ['gift', 'charge', -30],
     ])
 
     await page.goto('/settings/plans')
@@ -516,21 +576,29 @@ test('a task takes the gift before the pack, and a pack waits for a tariff that 
     // The accounts stand in the order their credits are spent in.
     await expect(creditsSection.getByRole('heading', { level: 3 })).toHaveText([
       /^По тарифу\s—\s0\sиз\s300$/,
-      /^Подарочные\s—\s15$/,
+      /^Подарочные\s—\s5$/,
       /^Из пакета\s—\s100$/,
     ])
     await expect(creditsSection).toContainText(
       said('Кредиты из пакета не сгорают. Начнут тратиться, когда закончатся подарочные кредиты.'),
     )
     await expect(historyLines(page).first()).toHaveText(
-      said(`Переделать каталогКофейня${credits(80)}60 по тарифу и 20 подарочных`),
+      said(`Переделать каталогКофейня${credits(80)}50 по тарифу и 30 подарочных`),
     )
+    // The day of today is spent: what was charged of the tariff today is its 50. The month is
+    // spent too, weeks before the period ends: tomorrow is promised nothing.
+    const limits = section(page, 'Лимиты тарифа')
+    await expect(limits).toContainText(/Сегодня\s*50\s+из\s50\sкредитов/)
+    await expect(limits).toContainText(
+      said(`Кредиты по тарифу на сегодня закончились. ${OUTSIDE_THE_DAY}`),
+    )
+    await expect(limits).not.toContainText('завтра')
   })
 
   await test.step('the next task takes what is left of the gift first', async () => {
     const banner = await queue.task({ title: 'Добавить баннер акции' })
-    expect(banner.reserved).toEqual({ tariff: 0, gift: 15, pack: 30 })
-    expect((await banner.done('90.00')).from).toEqual({ tariff: 0, gift: 15, pack: 0 })
+    expect(banner.reserved).toEqual({ tariff: 0, gift: 5, pack: 40 })
+    expect((await banner.done('30.00')).from).toEqual({ tariff: 0, gift: 5, pack: 0 })
     const stored = await queue.stored()
     expect([stored.gift.left, stored.pack.left]).toEqual([0, 100])
   })
@@ -548,7 +616,7 @@ test('a task takes the gift before the pack, and a pack waits for a tariff that 
     )
     // Nothing is measured without a tariff, and the history is whole.
     await expect(page.getByRole('main').getByRole('img')).toHaveCount(0)
-    await expect(historyLines(page)).toHaveCount(4)
+    await expect(historyLines(page)).toHaveCount(7)
 
     await page.goto('/settings/plans')
     const block = tariffBlock(page, 'Старт')

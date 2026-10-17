@@ -182,7 +182,7 @@ const planRow = (data: Record<string, unknown> = {}) => ({
   kind: 'quota',
   price: new Money('4900'),
   creditsPerMonth: 30,
-  tasksPerDay: 5,
+  creditsPerDay: 10,
   maxSites: 1,
   packCredits: null,
   ...data,
@@ -193,7 +193,7 @@ const business = () =>
     name: 'Бизнес',
     price: new Money('12900'),
     creditsPerMonth: 80,
-    tasksPerDay: 10,
+    creditsPerDay: 20,
     maxSites: 3,
   })
 const planDto = ({
@@ -235,12 +235,22 @@ const noCredits = {
   pack: { balance: 0, held: 0, available: 0 },
   totalAvailable: 0,
   spendable: 0,
+  spendableNow: 0,
   setAside: 0,
   minToStart: 5,
-  // Nothing was launched today; without a paid tariff a day takes three tasks.
-  today: { used: 0, limit: 3 },
+  // Without a paid tariff there is no day: the gift is the bound.
+  today: null,
   newTask: { allowed: false, reason: 'gift_spent' },
 }
+/** The tariff credits of a day that took nothing yet: its limit, and what the tariff has free. */
+const freshDay = (limit: number, free: number) => ({
+  limit,
+  charged: 0,
+  held: 0,
+  used: 0,
+  room: limit,
+  left: Math.min(limit, free),
+})
 /** The gift of the registration on the account of a workspace the product made. */
 const giftGranted = { balance: 35, held: 0, available: 35, granted: true }
 /**
@@ -252,6 +262,7 @@ const promisedCredits = {
   gift: { balance: 35, held: 0, available: 35, granted: false },
   totalAvailable: 35,
   spendable: 35,
+  spendableNow: 35,
   newTask: TAKEN,
 }
 /**
@@ -264,6 +275,19 @@ const noWaits = {
   pastDueEndsAt: null,
   ended: null,
 }
+
+/**
+ * What the database answers to a raw query: the tariff credits of the day — `charged` and
+ * `held` of it, nothing unless a test says so — and nothing else (no work without a charge).
+ */
+const rawAnswers =
+  ({ charged = 0, held = 0 } = {}) =>
+  (query: TemplateStringsArray): Promise<unknown[]> =>
+    Promise.resolve(
+      query.join('').includes(' AS transfer')
+        ? [{ held: String(held), placed: String(charged), transfer: '0' }]
+        : [],
+    )
 
 /** The tables the billing procedures read, answering from the test. */
 function fakeDb() {
@@ -290,7 +314,7 @@ function fakeDb() {
       // The terms a new task of the subscribed tariff is checked by: those of «Бизнес».
       findUniqueOrThrow: vi
         .fn<() => Promise<unknown>>()
-        .mockResolvedValue({ creditsPerMonth: 80, tasksPerDay: 10 }),
+        .mockResolvedValue({ creditsPerMonth: 80, creditsPerDay: 20 }),
     },
     site: { count: vi.fn<() => Promise<number>>().mockResolvedValue(0) },
     // A credit rate is in force and no enabled model has a price: a task is refused by nothing
@@ -305,8 +329,8 @@ function fakeDb() {
     },
     llmModelPrice: { findFirst: vi.fn<() => Promise<unknown>>().mockResolvedValue(null) },
     llmModel: { findMany: vi.fn<() => Promise<unknown[]>>().mockResolvedValue([]) },
-    // No launch today and no work without a charge.
-    $queryRaw: vi.fn<() => Promise<unknown[]>>().mockResolvedValue([]),
+    // Nothing taken of the day and no work without a charge.
+    $queryRaw: vi.fn(rawAnswers()),
     $transaction: vi.fn(),
   }
   return { db, prisma: db as unknown as PrismaClient }
@@ -380,11 +404,13 @@ describe('billing.overview', () => {
         gift: noGift,
         pack: { balance: 10, held: 0, available: 10 },
         totalAvailable: 55,
-        // The tariff is paid: a new task may take what is free on every account.
+        // The tariff is paid: a new task may take what is free on every account, the tariff
+        // no more than the twenty of the day.
         spendable: 55,
+        spendableNow: 30,
         setAside: 35,
         minToStart: 5,
-        today: { used: 0, limit: 10 },
+        today: freshDay(20, 45),
         newTask: TAKEN,
       },
       ...noWaits,
@@ -429,14 +455,15 @@ describe('billing.overview', () => {
       newTask: { allowed: false, reason: 'held' },
     })
 
-    // Ten launches today on a tariff of ten tasks a day.
+    // The twenty tariff credits of the day are taken, and nothing else could start a task.
     db.billingAccount.findMany.mockResolvedValue([
       { unit: 'credit_tariff', balance: new Money(80), held: new Money(0) },
     ])
-    db.$queryRaw.mockResolvedValueOnce([{ launches: 10 }])
+    db.$queryRaw.mockImplementation(rawAnswers({ charged: 20 }))
     expect(await credits()).toMatchObject({
       spendable: 80,
-      today: { used: 10, limit: 10 },
+      spendableNow: 0,
+      today: { limit: 20, charged: 20, held: 0, used: 20, room: 0, left: 0 },
       newTask: { allowed: false, reason: 'daily_limit' },
     })
 
@@ -469,11 +496,12 @@ describe('billing.overview', () => {
       gift: { balance: 35, held: 5, available: 30, granted: true },
       pack: { balance: 0, held: 0, available: 0 },
       totalAvailable: 30,
-      // Without a tariff a task is taken on the gift.
+      // Without a tariff a task is taken on the gift, and there is no day.
       spendable: 30,
+      spendableNow: 30,
       setAside: 5,
       minToStart: 5,
-      today: { used: 0, limit: 3 },
+      today: null,
       newTask: TAKEN,
     })
     expect(db.billingAccount.findMany).toHaveBeenCalledWith({
@@ -587,9 +615,10 @@ describe('billing.overview', () => {
       pack: { balance: 0, held: 0, available: 0 },
       totalAvailable: 115,
       spendable: 115,
+      spendableNow: 55,
       setAside: 0,
       minToStart: 5,
-      today: { used: 0, limit: 10 },
+      today: freshDay(20, 80),
       newTask: TAKEN,
     })
     expect(overview.subscription).toMatchObject({ id: subscription.id, status: 'active' })
@@ -656,7 +685,7 @@ describe('billing.overview', () => {
       // A paid tariff with nothing on its accounts: the credits ran out.
       credits: {
         ...noCredits,
-        today: { used: 0, limit: 10 },
+        today: freshDay(20, 0),
         newTask: { allowed: false, reason: 'empty' },
       },
     })
@@ -748,7 +777,7 @@ const pack = () =>
     kind: 'pack',
     price: new Money('1990'),
     creditsPerMonth: null,
-    tasksPerDay: null,
+    creditsPerDay: null,
     maxSites: null,
     packCredits: 100,
   })
@@ -760,7 +789,7 @@ describe('billing.plans', () => {
       name: 'Агентство',
       price: new Money('39900'),
       creditsPerMonth: 250,
-      tasksPerDay: 30,
+      creditsPerDay: 30,
       maxSites: 15,
     })
 
@@ -1385,7 +1414,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
       name: plan.name,
       price: plan.price.toFixed(2),
       creditsPerMonth,
-      tasksPerDay: plan.tasksPerDay,
+      creditsPerDay: plan.creditsPerDay,
       maxSites,
     }
     return { ...plan, maxSites, creditsPerMonth, dto }
@@ -1568,9 +1597,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         pack: { balance: 0, held: 0, available: 0 },
         totalAvailable: quota + 35,
         spendable: quota + 35,
+        // Of the tariff, no more than the day gives; the gift is outside it.
+        spendableNow: Math.min(plan.creditsPerDay!, quota) + 35,
         setAside: 0,
         minToStart: 5,
-        today: { used: 0, limit: plan.tasksPerDay },
+        today: freshDay(plan.creditsPerDay!, quota),
         newTask: NO_RATE,
       },
       ...noWaits,
@@ -1697,9 +1728,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         pack: { balance: pack.credits, held: 0, available: pack.credits },
         totalAvailable: quota + 35 + pack.credits,
         spendable: quota + 35 + pack.credits,
+        spendableNow: Math.min(plan.creditsPerDay!, quota) + 35 + pack.credits,
         setAside: 0,
         minToStart: 5,
-        today: { used: 0, limit: plan.tasksPerDay },
+        today: freshDay(plan.creditsPerDay!, quota),
         newTask: NO_RATE,
       },
       ...noWaits,

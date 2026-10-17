@@ -86,10 +86,10 @@ describe('the checkout dialog', () => {
     showDialog()
 
     expect(screen.getByRole('dialog', { name: 'Тариф «Бизнес»' })).toHaveAccessibleDescription(
-      plainPattern('800 кредитов в месяц, до 10 задач в день · до 3 сайтов на WordPress'),
+      plainPattern('800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress'),
     )
     expect(dialogText()).toContain(
-      '800 кредитов в месяц, до 10 задач в день · до 3 сайтов на WordPress',
+      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
     )
     expect(plain(screen.getByText('Период').nextElementSibling?.textContent)).toBe(
       'С сегодняшнего дня на месяц',

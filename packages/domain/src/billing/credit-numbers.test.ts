@@ -11,7 +11,6 @@ import {
   minStartCredits,
   minTaskChargeCredits,
   signupGiftCredits,
-  tasksPerDayWithoutTariff,
   typicalTaskCredits,
 } from './credit-numbers.ts'
 
@@ -29,7 +28,12 @@ describe('the numbers of the credits model', () => {
     expect(attemptStepCredits).toEqual({ light: 20, standard: 45, heavy: 120 })
     expect(signupGiftCredits).toBe(35)
     expect(minStartCredits).toBe(5)
-    expect(tasksPerDayWithoutTariff).toBe(3)
+  })
+
+  // 17.10.2026 the daily limit became one of tariff credits: without a tariff there is no day,
+  // and the gift is the bound.
+  it('have no count of tasks a day, with or without a tariff', () => {
+    expect(Object.keys(numbers).filter((name) => /PerDay|Day/i.test(name))).toEqual([])
   })
 
   it('cannot be changed by a page that prints them', () => {
@@ -75,11 +79,8 @@ describe('the numbers of the credits model', () => {
     expect(signupGiftCredits).toBeLessThan(attemptStepCredits.standard)
     // A task starts on what a done task is charged at least: it can always be charged.
     expect(minStartCredits).toBe(minTaskChargeCredits)
-    // The gift starts a task, and more than the tasks of one day without a tariff.
+    // The gift starts a task.
     expect(signupGiftCredits).toBeGreaterThanOrEqual(minStartCredits)
-    expect(Number.isSafeInteger(tasksPerDayWithoutTariff)).toBe(true)
-    expect(tasksPerDayWithoutTariff).toBeGreaterThan(0)
-    expect(signupGiftCredits).toBeGreaterThan(tasksPerDayWithoutTariff * minTaskChargeCredits)
   })
 
   // 6.00 RUB of accounting cost in a credit is the provisional rate of the design; the table of

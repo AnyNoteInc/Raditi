@@ -35,3 +35,14 @@ export function formatMoscowMoment(instant: Date): string {
 export function formatMoscowDate(instant: Date): string {
   return `${formatMoscowDay(instant)} ${partsOf(instant).get('year') ?? ''}`
 }
+
+// Moscow keeps a fixed UTC+3 offset with no daylight saving, as the billing day of the server
+// counts it (`billingDay` of @repo/domain).
+const MOSCOW_OFFSET_MS = 3 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The midnight in Moscow that starts the next calendar day after `instant`: 21:00 UTC. */
+export function nextMoscowMidnight(instant: Date): Date {
+  const moscowDays = Math.floor((instant.getTime() + MOSCOW_OFFSET_MS) / DAY_MS)
+  return new Date((moscowDays + 1) * DAY_MS - MOSCOW_OFFSET_MS)
+}

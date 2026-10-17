@@ -3,15 +3,14 @@ import type { ModelClass } from '../llm/model-class.ts'
 
 // The customer's side of the credits model in numbers (docs/plan/37-billing-plan.md, «Числа»):
 // what a task costs at least, on average and typically, how much one attempt may set aside, how
-// many credits a new task needs to start, the gift of the registration and how many tasks a day
-// it may start without a tariff.
+// many credits a new task needs to start and the gift of the registration.
 // They are defaults of the design, in force until the owner says otherwise, and estimates until
 // the reference basket is measured on the model that runs (the gate before live payments) — so
 // each number is written here once and every page, letter and rule takes it from here.
 //
 // The numbers do not move with the rates of a model: the credit rate follows the basket, and
-// what the customer is promised stays. The credits of the tariffs and of the pack are not here:
-// they are plan terms, rows of `plans`.
+// what the customer is promised stays. The credits of the tariffs, of their days and of the pack
+// are not here: they are plan terms, rows of `plans`.
 //
 // The module imports nothing that runs but the error of the domain: the pages of the browser
 // take it by its own path, `@repo/domain/billing/credit-numbers`, without the rest of the
@@ -73,12 +72,6 @@ export const attemptStepCredits = Object.freeze({
  * granted: each stands in the ledger with the amount of its day.
  */
 export const signupGiftCredits = 35
-
-/**
- * How many tasks a day a workspace may start without a paid tariff, on its gift credits. A
- * tariff carries its own daily limit, `plans.tasks_per_day`.
- */
-export const tasksPerDayWithoutTariff = 3
 
 function assertCredits(credits: number): void {
   if (!Number.isSafeInteger(credits) || credits < 0) throw badRequest('Invalid count of credits')

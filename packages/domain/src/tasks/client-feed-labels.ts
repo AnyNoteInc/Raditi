@@ -382,8 +382,9 @@ export const feedRetryText = Object.freeze({
   hint: 'Повторная попытка может стоить больше кредитов.',
   /** The code allowed a retry, but the counted attempts are spent. */
   noAttempts: 'Больше попыток для этой задачи нет. Начните новый диалог или напишите нам.',
-  /** The daily limit refused the press. */
-  dailyLimit: 'Лимит на сегодня исчерпан. Попробовать ещё раз можно будет завтра.',
+  /** The daily limit refused the press: the tariff credits of the day are taken. */
+  dailyLimit:
+    'Кредиты по тарифу на сегодня закончились. Попробовать ещё раз можно завтра или сейчас — с пакетом кредитов.',
   /** The site is not connected. */
   siteNotConnected: 'Сайт ещё не подключён. Задачи можно будет ставить после подключения',
 })

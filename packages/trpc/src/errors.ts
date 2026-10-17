@@ -87,13 +87,14 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   BILLING_SUBSCRIPTION_PAST_DUE:
     'Сначала оплатите тариф: последнее списание не прошло. Откройте «Тарифы» и нажмите «Оплатить сейчас»',
   // A task that is not queued: no credits to reserve, or all of them set aside for tasks in
-  // work, the limit of the day, no paid tariff, too much work that ended without a charge.
+  // work, the tariff credits of the day taken, no paid tariff, too much work that ended
+  // without a charge.
   BILLING_NOT_ENOUGH_CREDITS:
     'Лимиты закончились: кредитов не хватает, чтобы начать задачу. Купите пакет кредитов или дождитесь начисления по тарифу — подробности в разделе «Использование»',
   BILLING_CREDITS_HELD:
     'Все кредиты отложены под задачи в работе. Дождитесь, пока они закончатся, или купите пакет кредитов',
   BILLING_DAILY_LIMIT_REACHED:
-    'Лимит задач на сегодня исчерпан. Новую задачу можно будет поставить завтра',
+    'Кредиты по тарифу на сегодня закончились. Завтра их снова можно будет тратить, а продолжить сегодня можно с пакетом кредитов — подробности в разделе «Использование»',
   BILLING_TASK_NEEDS_SUBSCRIPTION:
     'Чтобы ставить задачи, нужен действующий тариф. Выберите или оплатите его в разделе «Тарифы»',
   BILLING_UNPAID_WORK_LIMIT:
@@ -188,8 +189,8 @@ const counted = (count: number) =>
 
 /**
  * The details of a refused task (`taskRefusal` of @repo/domain), when the error carries them
- * whole: the reason and the three numbers. They never leave the server; a sentence is built
- * from them here.
+ * whole: the reason, the three numbers and, with a refusal by the day, the day. They never
+ * leave the server; a sentence is built from them here.
  */
 function refusalOf(details: unknown): TaskRefusalDetails | null {
   const parsed = taskRefusalDetailsSchema.safeParse(details)
@@ -244,6 +245,27 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
     const left = plural(spendable, 'остался', 'осталось', 'осталось')
     const credits = plural(spendable, 'кредит', 'кредита', 'кредитов')
     return `Лимиты закончились: ${left} ${counted(spendable)} ${credits}, а на новую задачу нужно не меньше ${counted(needed)}. Купите пакет кредитов или дождитесь начисления по тарифу`
+  },
+  // The tariff credits of the day: what is left of it and the gift and the pack cannot start
+  // the task, or nothing is left of it. The next day lifts it, and so does a pack.
+  BILLING_DAILY_LIMIT_REACHED: (details) => {
+    const refusal = refusalOf(details)
+    const day = refusal?.reason === 'daily_limit' ? refusal.day : undefined
+    if (refusal === null || day === undefined) {
+      return MESSAGE_BY_DOMAIN_CODE.BILLING_DAILY_LIMIT_REACHED!
+    }
+    const { spendableNow, needed } = refusal
+    if (day.used < day.limit && spendableNow !== undefined && spendableNow >= 1) {
+      const credits = plural(spendableNow, 'кредит', 'кредита', 'кредитов')
+      return `Сегодня можно потратить ещё ${counted(spendableNow)} ${credits}, а на новую задачу нужно не меньше ${counted(needed)}. Купите пакет кредитов — он дневным лимитом не ограничен — или поставьте задачу завтра`
+    }
+    // After a renewal onto a smaller plan the day can have taken more than the limit of now.
+    const spent =
+      day.used <= day.limit
+        ? `потрачено ${counted(day.used)} из ${counted(day.limit)}`
+        : `дневной лимит — ${counted(day.limit)}`
+    const upTo = plural(day.limit, 'кредита', 'кредитов', 'кредитов')
+    return `Кредиты по тарифу на сегодня закончились: ${spent}. Завтра снова можно будет потратить до ${counted(day.limit)} ${upTo}, а продолжить сегодня можно с пакетом кредитов`
   },
   BILLING_CREDITS_HELD: (details) => {
     const refusal = refusalOf(details)

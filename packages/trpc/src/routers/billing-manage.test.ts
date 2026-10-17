@@ -235,7 +235,7 @@ const planRow = (data: Record<string, unknown> = {}) => ({
   kind: 'quota',
   price: new Money('12900'),
   creditsPerMonth: 80,
-  tasksPerDay: 10,
+  creditsPerDay: 20,
   maxSites: 3,
   packCredits: null,
   ...data,
@@ -246,7 +246,7 @@ const agencyRow = () =>
     name: 'Агентство',
     price: new Money('39900'),
     creditsPerMonth: 250,
-    tasksPerDay: 30,
+    creditsPerDay: 30,
     maxSites: 15,
   })
 
@@ -289,12 +289,17 @@ function fakeDb() {
     plan: {
       findUniqueOrThrow: vi
         .fn<() => Promise<unknown>>()
-        .mockResolvedValue({ creditsPerMonth: 80, tasksPerDay: 10 }),
+        .mockResolvedValue({ creditsPerMonth: 80, creditsPerDay: 20 }),
     },
     creditLedger: {
       aggregate: vi.fn<() => Promise<unknown>>().mockResolvedValue({ _sum: { amount: null } }),
     },
-    $queryRaw: vi.fn<() => Promise<unknown[]>>().mockResolvedValue([]),
+    // The tariff credits of the day: nothing taken; no work without a charge.
+    $queryRaw: vi.fn((query: TemplateStringsArray) =>
+      Promise.resolve(
+        query.join('').includes(' AS transfer') ? [{ held: '0', placed: '0', transfer: '0' }] : [],
+      ),
+    ),
   }
   db.subscription.findFirst.mockResolvedValue(null)
   return { db, prisma: db as unknown as PrismaClient }
@@ -309,7 +314,7 @@ const overviewDto = (patch: Partial<SubscriptionOverviewDto> = {}): Subscription
     name: 'Бизнес',
     price: '12900.00',
     creditsPerMonth: 80,
-    tasksPerDay: 10,
+    creditsPerDay: 20,
     maxSites: 3,
   },
   period: { start: new Date('2026-09-18T09:00:00Z'), end: PERIOD_END },

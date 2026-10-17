@@ -176,13 +176,15 @@ describe.skipIf(!databaseUrl)('the migration of the numbers of credits', () => {
         expect([report.created.plans, report.updated.plans]).toEqual([0, 0])
         const plans = await db.plan.findMany({ orderBy: { sortOrder: 'asc' } })
         expect(
-          plans.map(({ slug, name, kind, price, creditsPerMonth, tasksPerDay, ...plan }) => ({
+          // The seed no longer names `tasks_per_day` (unused since 17.10.2026, dropped in M5.18).
+          plans.map(({ slug, name, kind, price, creditsPerMonth, ...plan }) => ({
             slug,
             name,
             kind,
             price: price.toFixed(2),
             creditsPerMonth,
-            tasksPerDay,
+            // The migrations after this one give the day its credits (billing_daily_credits).
+            creditsPerDay: plan.creditsPerDay,
             packCredits: plan.packCredits,
             maxSites: plan.maxSites,
             sortOrder: plan.sortOrder,
