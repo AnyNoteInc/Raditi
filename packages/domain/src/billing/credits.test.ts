@@ -10,6 +10,7 @@ import {
   creditAccountsSchema,
   creditAccountUnits,
   creditsSchema,
+  dailyTariffCredits,
   emptyCreditAccount,
   expiringTariffCredits,
   maxTaskAttempts,
@@ -20,6 +21,7 @@ import {
   signupGiftCredits,
   spendableCredits,
   splitReserve,
+  tariffDayRoom,
   tariffHoldCreatedAt,
   toCredits,
   trialUnpaidWorkCredits,
@@ -274,8 +276,55 @@ describe('spendableCredits', () => {
     expect(spendableCredits(all, false).total).toBe(unpaid)
   })
 
+  describe('within the tariff day', () => {
+    const room = (credits: number) => toCredits(credits)
+
+    it('takes tariff credits no further than is left of the day', () => {
+      expect(spendableCredits(accounts, true, room(5))).toEqual({
+        tariff: 5,
+        gift: 30,
+        pack: 80,
+        total: 115,
+      })
+      expect(spendableCredits(accounts, true, room(0))).toEqual({
+        tariff: 0,
+        gift: 30,
+        pack: 80,
+        total: 110,
+      })
+    })
+
+    it('takes what is free on the tariff when the day leaves more', () => {
+      expect(spendableCredits(accounts, true, room(255))).toEqual(availableCredits(accounts))
+      expect(spendableCredits(accounts, true, room(1000))).toEqual(availableCredits(accounts))
+    })
+
+    it('counts as before when the day sets no limit', () => {
+      expect(spendableCredits(accounts, true, null)).toEqual(spendableCredits(accounts, true))
+      expect(spendableCredits(accounts, false, null)).toEqual(spendableCredits(accounts, false))
+    })
+
+    it('asks nothing of the day while the tariff is not paid: gift and pack are outside it', () => {
+      for (const credits of [0, 5, 1000]) {
+        expect(spendableCredits(accounts, false, room(credits))).toEqual({
+          tariff: 0,
+          gift: 30,
+          pack: 0,
+          total: 30,
+        })
+      }
+    })
+
+    it('refuses a room that is not a count of credits', () => {
+      for (const bad of [-1, 4.5, '5', Number.NaN, 1_000_000_000_000]) {
+        expect(() => spendableCredits(accounts, true, bad as Credits)).toThrow(badRequest)
+      }
+    })
+  })
+
   it('does not change its input', () => {
     spendableCredits(accounts, false)
+    spendableCredits(accounts, true, toCredits(3))
     expect(accounts).toEqual(allAccounts(account(300, 45), account(100, 20), account(35, 5)))
   })
 
@@ -286,6 +335,77 @@ describe('spendableCredits', () => {
     for (const state of ['active', 1, null, undefined]) {
       expect(() => spendableCredits(accounts, state as unknown as boolean)).toThrow(badRequest)
     }
+  })
+})
+
+describe('tariffDayRoom', () => {
+  const room = (limit: number | null, used: number) =>
+    tariffDayRoom({ limit: limit === null ? null : toCredits(limit), used: toCredits(used) })
+
+  it.each([
+    ['a whole day', 50, 0, 50],
+    ['a reserve of 45 placed', 50, 45, 5],
+    ['the day taken to the credit', 50, 50, 0],
+    ['after a renewal onto a smaller plan: more taken than the new limit', 50, 100, 0],
+    ['«Бизнес»', 100, 47, 53],
+    ['«Агентство»', 300, 0, 300],
+  ] as const)('%s: %i a day, %i taken → %i', (_name, limit, used, expected) => {
+    expect(room(limit, used)).toBe(expected)
+  })
+
+  it('is null when the day sets no limit, however much it has taken', () => {
+    for (const used of [0, 45, 5000]) expect(room(null, used)).toBeNull()
+  })
+
+  it.each<[string, unknown]>([
+    ['a limit of nothing', { limit: 0, used: 0 }],
+    ['a negative limit', { limit: -5, used: 0 }],
+    ['a fraction of a limit', { limit: 50.5, used: 0 }],
+    ['a limit as a string', { limit: '50', used: 0 }],
+    ['taken below zero', { limit: 50, used: -1 }],
+    ['a fraction taken', { limit: 50, used: 4.5 }],
+    ['nothing said of what was taken', { limit: 50 }],
+    ['nothing said of the limit', { used: 0 }],
+    ['an unknown field', { limit: 50, used: 0, held: 0 }],
+    ['not a day at all', null],
+  ])('refuses %s', (_name, day) => {
+    expect(() => tariffDayRoom(day as Parameters<typeof tariffDayRoom>[0])).toThrow(badRequest)
+  })
+})
+
+describe('dailyTariffCredits', () => {
+  it('is the daily limit of the plan while the tariff is paid', () => {
+    expect(dailyTariffCredits({ status: 'active', creditsPerDay: 50 })).toBe(50)
+    expect(dailyTariffCredits({ status: 'active', creditsPerDay: null })).toBeNull()
+  })
+
+  it('is null without a live subscription and while the tariff is not paid', () => {
+    expect(dailyTariffCredits(null)).toBeNull()
+    for (const status of subscriptionStatuses) {
+      expect([status, dailyTariffCredits({ status, creditsPerDay: 100 })]).toEqual([
+        status,
+        subscriptionAllowsTasks(status) ? 100 : null,
+      ])
+    }
+  })
+
+  it('reads the terms of a subscription that carries more than them', () => {
+    const subscription = { status: 'active' as const, creditsPerDay: 300, creditsPerMonth: 2500 }
+    expect(dailyTariffCredits(subscription)).toBe(300)
+  })
+
+  it.each<[string, unknown]>([
+    ['a limit of nothing', { status: 'active', creditsPerDay: 0 }],
+    ['a fraction of a limit', { status: 'active', creditsPerDay: 49.5 }],
+    ['a limit as a string', { status: 'active', creditsPerDay: '50' }],
+    ['no word on the limit', { status: 'active' }],
+    ['a status that is not one', { status: 'paid', creditsPerDay: 50 }],
+    ['an overdue tariff with a broken limit', { status: 'past_due', creditsPerDay: -1 }],
+    ['no subscription said at all', undefined],
+  ])('refuses %s', (_name, subscription) => {
+    expect(() =>
+      dailyTariffCredits(subscription as Parameters<typeof dailyTariffCredits>[0]),
+    ).toThrow(badRequest)
   })
 })
 

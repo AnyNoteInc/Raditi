@@ -5,12 +5,7 @@ import type { ModelClass } from '../llm/model-class.ts'
 import { decimalStringSchema, Money } from '../money.ts'
 import { normalizeSiteHost } from '../policies/site-address.ts'
 import type { TaskStatus } from '../tasks/task-status.ts'
-import {
-  attemptStepCredits,
-  minStartCredits,
-  minTaskChargeCredits,
-  tasksPerDayWithoutTariff,
-} from './credit-numbers.ts'
+import { attemptStepCredits, minStartCredits, minTaskChargeCredits } from './credit-numbers.ts'
 import { rubPerCreditSchema } from './credit-rate.ts'
 import type { TaskRefusalReason } from './errors.ts'
 import {
@@ -55,6 +50,10 @@ export const trialUnpaidWorkCredits = 70
  * The array is the order credits are spent in — the tariff, then the gift, then the pack: what
  * expires soonest goes first, and what was given goes before what was paid for. It is also the
  * order the accounts are locked in by a transaction that needs more than one.
+ *
+ * Tariff credits are also spent within a day: a paid plan says how many of them a Moscow day
+ * may take (`dailyTariffCredits`), and a reserve or a charge takes no more of them than is left
+ * of that day (`tariffDayRoom`). Gift and pack credits are outside the day.
  */
 export const creditAccountKinds = ['tariff', 'gift', 'pack'] as const
 export type CreditAccountKind = (typeof creditAccountKinds)[number]
@@ -197,19 +196,47 @@ export function availableCredits(accounts: CreditAccounts): AvailableCredits {
   }
 }
 
+const tariffRoomSchema = accountCreditsSchema.nullable()
+
+const tariffDaySchema = z.strictObject({
+  limit: columnCountSchema.positive().nullable(),
+  used: accountCreditsSchema,
+})
+
+/**
+ * How many tariff credits a Moscow day still gives: max(0, limit − used); null when the day has
+ * no limit. `limit` is `dailyTariffCredits` of the plan live now, `used` what the day has taken
+ * of the tariff — reserves placed that day and what charges moved onto free tariff credits that
+ * day. A renewal onto a smaller plan can leave `used` above the limit: nothing is left then.
+ */
+export function tariffDayRoom(day: { limit: Credits | null; used: Credits }): Credits | null {
+  const result = tariffDaySchema.safeParse(day)
+  if (!result.success) throw badRequest('Invalid tariff day')
+  const { limit, used } = result.data
+  return limit === null ? null : toCredits(Math.max(0, limit - used))
+}
+
 /**
  * What a task may take from each account now, and the sum: gift credits always, tariff and pack
  * credits only while the tariff is paid (`subscriptionAllowsTasks`). On each account it is what
- * is free there, balance minus held.
+ * is free there, balance minus held; on the tariff no more than `tariffRoom`, what is left of the
+ * day (`tariffDayRoom`) — null, the default, when the day sets no limit.
  */
 export function spendableCredits(
   accounts: CreditAccounts,
   tariffTakesTasks: boolean,
+  tariffRoom: Credits | null = null,
 ): AvailableCredits {
   if (typeof tariffTakesTasks !== 'boolean') throw badRequest('Invalid state of the tariff')
+  const room = tariffRoomSchema.safeParse(tariffRoom)
+  if (!room.success) throw badRequest('Invalid room of the tariff day')
   const free = availableCredits(accounts)
-  if (tariffTakesTasks) return free
-  return { tariff: toCredits(0), gift: free.gift, pack: toCredits(0), total: free.gift }
+  if (!tariffTakesTasks) {
+    return { tariff: toCredits(0), gift: free.gift, pack: toCredits(0), total: free.gift }
+  }
+  if (room.data === null || room.data >= free.tariff) return free
+  const tariff = room.data
+  return { ...free, tariff, total: toCredits(tariff + free.gift + free.pack) }
 }
 
 /**
@@ -291,6 +318,7 @@ const reserveSchema = z.strictObject({
   accounts: creditAccountsSchema,
   amount: positiveCreditsSchema,
   tariffTakesTasks: z.boolean(),
+  tariffRoom: tariffRoomSchema.default(null),
 })
 
 export interface CreditReserveInput {
@@ -300,6 +328,11 @@ export interface CreditReserveInput {
   amount: Credits
   /** Whether the tariff is paid: without it only gift credits are reserved. */
   tariffTakesTasks: boolean
+  /**
+   * What is left of the day's tariff credits (`tariffDayRoom`): the tariff part of the reserve
+   * is no larger. Null or left out — the day sets no limit.
+   */
+  tariffRoom?: Credits | null
 }
 
 /** The part of a reserve that stands on one account: one row of `credit_holds`. */
@@ -310,9 +343,10 @@ export interface CreditReservePart {
 
 /**
  * The parts of a reserve by account, in the order credits are spent — the tariff, then the
- * gift, then the pack. Each account gives what a task may take from it (`spendableCredits`)
- * until the amount is covered; an account that gives nothing has no part. The amount must be
- * spendable in full: a reserve is never larger than what the accounts have free.
+ * gift, then the pack. Each account gives what a task may take from it (`spendableCredits`:
+ * the tariff no more than is left of the day) until the amount is covered; an account that
+ * gives nothing has no part. The amount must be spendable in full: a reserve is never larger
+ * than what the accounts have free and the day leaves of the tariff.
  *
  * A reserve only says that the task can be paid for. Which credits pay is decided again when
  * the task is charged (`distributeCharge`).
@@ -320,8 +354,8 @@ export interface CreditReservePart {
 export function splitReserve(input: CreditReserveInput): CreditReservePart[] {
   const result = reserveSchema.safeParse(input)
   if (!result.success) throw badRequest('Invalid reserve')
-  const { accounts, amount, tariffTakesTasks } = result.data
-  const spendable = spendableCredits(accounts, tariffTakesTasks)
+  const { accounts, amount, tariffTakesTasks, tariffRoom } = result.data
+  const spendable = spendableCredits(accounts, tariffTakesTasks, tariffRoom)
   if (amount > spendable.total) throw badRequest('The reserve exceeds the spendable credits')
   const parts: CreditReservePart[] = []
   let rest = amount
@@ -469,6 +503,7 @@ const reserveRowSchema = z.strictObject({
   account: z.enum(creditAccountKinds),
   amount: positiveCreditsSchema,
   createdAt: instantSchema,
+  placedAt: instantSchema,
 })
 
 const chargeDistributionSchema = z.strictObject({
@@ -478,6 +513,7 @@ const chargeDistributionSchema = z.strictObject({
   subscription: z
     .strictObject({ status: subscriptionStatusSchema, currentPeriodStart: instantSchema })
     .nullable(),
+  tariffRoom: tariffRoomSchema.default(null),
 })
 
 /** An active reserve row of the task that is charged. */
@@ -488,17 +524,31 @@ export interface CreditReserveRow {
   amount: Credits
   /** `credit_holds.created_at`: on a tariff row, the stamp of the period its credits are of. */
   createdAt: Date
+  /**
+   * `credit_holds.placed_at`: the moment the reserve was placed — on a tariff row, the day whose
+   * tariff credits it takes. The rows of an account are paid from oldest first.
+   */
+  placedAt: Date
 }
 
 export interface ChargeDistributionInput {
   /** What the task costs, `taskCharge`; zero when it ends without a charge. */
   charge: Credits
-  /** Every active reserve row of the task, of all its attempts. */
+  /**
+   * Every active reserve row of the task, of all its attempts, by attempt: rows placed at one
+   * moment are paid from in the order they are given.
+   */
   rows: readonly CreditReserveRow[]
   /** The three accounts as they are under their locks, the task's rows still held on them. */
   accounts: CreditAccounts
   /** The live subscription of the workspace under its lock, null when none is live. */
   subscription: { status: SubscriptionStatus; currentPeriodStart: Date } | null
+  /**
+   * What is left of the tariff credits of the day of the charge (`tariffDayRoom`), read under
+   * the locks: free tariff credits pay above the task's own rows no more than that. Null or left
+   * out — the day sets no limit; a charge of zero moves nothing and needs none.
+   */
+  tariffRoom?: Credits | null
 }
 
 /** What a tariff row of an ended period pays; the rest of it expires, nothing returns. */
@@ -519,6 +569,13 @@ export interface AccountCharge {
   reserved: Credits
 }
 
+/** What one reserve row of the task paid of the charge. */
+export interface RowCharge {
+  id: string
+  /** Never above the row's amount; `credit_holds.charged` when the row is captured. */
+  charged: Credits
+}
+
 export interface ChargeDistribution {
   /** Tariff rows of an ended period in the order they pay, oldest first. */
   endedRows: EndedRowCharge[]
@@ -527,6 +584,13 @@ export interface ChargeDistribution {
   from: Record<CreditAccountKind, Credits>
   /** Tariff credits of an ended period that the charge did not take. */
   expired: Credits
+  /**
+   * What each row of the task paid, in the order the rows are given. On an account,
+   * min(paid, reserved) is spread over its rows oldest first, each up to its amount; what the
+   * account paid above its rows came from its free credits and is no row's. An ended row pays
+   * what `endedRows` says.
+   */
+  rows: RowCharge[]
 }
 
 /**
@@ -540,8 +604,10 @@ export interface ChargeDistribution {
  * 2. Then the accounts in the order credits are spent — the tariff, the gift, the pack — each
  *    paying as much of the rest as it has for the task: its other rows of the task and what is
  *    free on it now (`spendableCredits`: free tariff and pack credits only while the tariff is
- *    paid). So credits that came free since the reserve move the charge towards the front of
- *    the order; credits another task still holds are never taken.
+ *    paid, free tariff credits no more than `tariffRoom`). So credits that came free since the
+ *    reserve move the charge towards the front of the order, within what is left of the day;
+ *    credits another task still holds are never taken. The task's own rows always pay, whatever
+ *    the day: the work was started on them.
  *
  * The charge never exceeds the rows, so it is always covered. On each account
  * `paid <= reserved + free`, which keeps `held <= balance` when both leave the account in one
@@ -551,7 +617,7 @@ export interface ChargeDistribution {
 export function distributeCharge(input: ChargeDistributionInput): ChargeDistribution {
   const result = chargeDistributionSchema.safeParse(input)
   if (!result.success) throw badRequest('Invalid charge of a task')
-  const { charge, rows, accounts, subscription } = result.data
+  const { charge, rows, accounts, subscription, tariffRoom } = result.data
   if (new Set(rows.map((row) => row.id)).size !== rows.length) {
     throw badRequest('A reserve row is given twice')
   }
@@ -585,11 +651,28 @@ export function distributeCharge(input: ChargeDistributionInput): ChargeDistribu
     })
 
   const tariffTakesTasks = subscription !== null && subscriptionAllowsTasks(subscription.status)
-  const free = spendableCredits(accounts, tariffTakesTasks)
+  const free = spendableCredits(accounts, tariffTakesTasks, tariffRoom)
   const paidNow: Record<CreditAccountKind, number> = { tariff: 0, gift: 0, pack: 0 }
   for (const kind of creditAccountKinds) {
     paidNow[kind] = Math.min(rest, reserved[kind] + free[kind])
     rest -= paidNow[kind]
+  }
+
+  // What each row paid: the ended rows by `endedRows`; on an account, what it paid from the
+  // task's rows — up to their sum — is spread over them oldest first, each up to its amount.
+  // An older row pays first, so a charge frees the room of a later day before an earlier one.
+  const rowCharged = new Map<string, number>(endedRows.map((ended) => [ended.id, ended.paid]))
+  const endedIds = new Set(rowCharged.keys())
+  for (const kind of creditAccountKinds) {
+    let own = Math.min(paidNow[kind], reserved[kind])
+    const current = rows
+      .filter((row) => row.account === kind && !endedIds.has(row.id))
+      .sort((a, b) => a.placedAt.getTime() - b.placedAt.getTime())
+    for (const row of current) {
+      const paid = Math.min(own, row.amount)
+      rowCharged.set(row.id, paid)
+      own -= paid
+    }
   }
 
   const fromEnded = endedRows.reduce((sum, row) => sum + row.paid, 0)
@@ -606,6 +689,7 @@ export function distributeCharge(input: ChargeDistributionInput): ChargeDistribu
       pack: toCredits(paidNow.pack),
     },
     expired: toCredits(endedRows.reduce((sum, row) => sum + row.expired, 0)),
+    rows: rows.map((row) => ({ id: row.id, charged: toCredits(rowCharged.get(row.id) ?? 0) })),
   }
 }
 
@@ -678,6 +762,10 @@ export function unpaidWork(input: UnpaidWorkInput): Decimal {
  * What asks for a reserve. `new`: the first attempt of a task. `continuation`: «Продолжить» —
  * the next attempt of a task whose earlier reserves are active. `retry`: «Попробовать ещё» —
  * a later attempt after a failure released every reserve.
+ *
+ * Each places reserve rows stamped with the moment they are placed (`credit_holds.placed_at`):
+ * the tariff part of a continuation and of a retry takes credits of the day it is placed on,
+ * like that of a new task (`tariffDayRoom`).
  */
 export const taskPlacements = ['new', 'continuation', 'retry'] as const
 export type TaskPlacement = (typeof taskPlacements)[number]
@@ -694,6 +782,11 @@ const noTaskReserve: Readonly<Record<CreditAccountKind, number>> = Object.freeze
   pack: 0,
 })
 
+const tariffCreditsTodaySchema = z.strictObject({
+  charged: accountCreditsSchema,
+  held: accountCreditsSchema,
+})
+
 const newTaskSchema = z.strictObject({
   placement: z.enum(taskPlacements),
   accounts: creditAccountsSchema,
@@ -702,14 +795,25 @@ const newTaskSchema = z.strictObject({
     .strictObject({
       status: subscriptionStatusSchema,
       creditsPerMonth: positiveCreditsSchema,
-      tasksPerDay: z.number().int().positive().nullable(),
+      creditsPerDay: positiveCreditsSchema.nullable(),
     })
     .nullable(),
-  launchesToday: wholeCountSchema,
+  tariffCreditsToday: tariffCreditsTodaySchema,
   unpaidWork: unroundedCreditsSchema,
   rateUsable: z.boolean(),
   giftSiteClaimedElsewhere: z.boolean().default(false),
 })
+
+/** What the tariff of a workspace gave the Moscow day so far, in whole credits. */
+export interface TariffCreditsToday {
+  /**
+   * Paid: what the charged reserve rows placed in the day paid, and what the charges settled in
+   * the day took from free tariff credits above the task's own tariff rows.
+   */
+  charged: Credits
+  /** Set aside: the tariff rows placed in the day that are still active, in full. */
+  held: Credits
+}
 
 export interface NewTaskInput {
   placement: TaskPlacement
@@ -726,11 +830,15 @@ export interface NewTaskInput {
     status: SubscriptionStatus
     /** `plans.credits_per_month`: the bound on unpaid work of a period. */
     creditsPerMonth: number
-    /** `plans.tasks_per_day`; null — the plan has no daily limit. */
-    tasksPerDay: number | null
+    /** `plans.credits_per_day`: the tariff credits a Moscow day may take; null — no limit. */
+    creditsPerDay: number | null
   } | null
-  /** Launches of the workspace in the Moscow calendar day: attempts on which work started. */
-  launchesToday: number
+  /**
+   * The tariff credits the Moscow day of the placement has taken so far (`tariffCreditsOfDay`
+   * of @repo/billing), for every placement: a continuation and a retry take credits of the day
+   * like a new task.
+   */
+  tariffCreditsToday: TariffCreditsToday
   /** `unpaidWork` of the workspace. */
   unpaidWork: Decimal
   /** Whether a usable credit rate is in force (`creditRateVerdict`). */
@@ -743,23 +851,60 @@ export interface NewTaskInput {
   giftSiteClaimedElsewhere?: boolean
 }
 
+// The subscription of the workspace with the terms of its plan; other fields are not asked about.
+const dailyTariffSchema = z
+  .object({
+    status: subscriptionStatusSchema,
+    creditsPerDay: columnCountSchema.positive().nullable(),
+  })
+  .nullable()
+
 /**
- * How many launches a day a workspace may have: the daily limit of its plan while the tariff is
- * paid — null when the plan has none —, `tasksPerDayWithoutTariff` otherwise: an overdue tariff
- * takes tasks on gift credits alone, under the bounds of the gift.
+ * How many tariff credits a Moscow day may take (`plans.credits_per_day`) while the tariff is
+ * paid; null when the plan sets no daily limit, and without a paid tariff — tariff credits are
+ * not spent then, and gift and pack credits are outside the day.
  */
-export function dailyTaskLimit(
-  subscription: { status: SubscriptionStatus; tasksPerDay: number | null } | null,
-): number | null {
-  return subscription !== null && subscriptionAllowsTasks(subscription.status)
-    ? subscription.tasksPerDay
-    : tasksPerDayWithoutTariff
+export function dailyTariffCredits(
+  subscription: { status: SubscriptionStatus; creditsPerDay: number | null } | null,
+): Credits | null {
+  const result = dailyTariffSchema.safeParse(subscription)
+  if (!result.success) throw badRequest('Invalid daily limit of a plan')
+  const live = result.data
+  if (live === null || !subscriptionAllowsTasks(live.status) || live.creditsPerDay === null) {
+    return null
+  }
+  return toCredits(live.creditsPerDay)
+}
+
+/**
+ * The tariff credits of the Moscow day of a paid tariff, as the pages and the refusals tell
+ * them. `used` = `charged` + `held` can stand above `limit` after a renewal onto a smaller plan;
+ * `room` = max(0, `limit` − `used`) is then nothing. `left` = min(`room`, free tariff credits) is
+ * what the tariff can still give today: the room, or less when the account itself has less.
+ */
+export interface TariffDay {
+  /** `plans.credits_per_day`; null — the plan sets no daily limit. */
+  limit: Credits | null
+  charged: Credits
+  held: Credits
+  used: Credits
+  /** null exactly when `limit` is. */
+  room: Credits | null
+  left: Credits
 }
 
 /** Whether a task is taken; the numbers stand in both answers. */
 export type NewTaskVerdict = {
-  /** The credits a task may take now, `spendableCredits`. */
+  /**
+   * The credits a task may spend by the accounts, `spendableCredits` without the day: what
+   * «осталось» and «отложено» say. A refusal for credits (step 2 below) is told by it.
+   */
   spendable: Credits
+  /**
+   * What a task may take now: `spendable` with the tariff part no larger than what is left of
+   * the day. The reserve of an attempt is the step or this, whichever is less.
+   */
+  spendableNow: Credits
   /**
    * What other tasks in work hold on the accounts a task may spend: the reserve of the task
    * that asks (`heldByTask`) is not in it.
@@ -767,6 +912,8 @@ export type NewTaskVerdict = {
   held: Credits
   /** How many spendable credits this placement needs. */
   needed: Credits
+  /** The tariff credits of the day; null without a paid tariff — there is no day then. */
+  today: TariffDay | null
 } & ({ allowed: true; reason: null } | { allowed: false; reason: TaskRefusalReason })
 
 /**
@@ -775,20 +922,24 @@ export type NewTaskVerdict = {
  *
  * The checks come in one order, and the first that fails is the reason:
  * 1. a usable credit rate — `rate_missing`;
- * 2. credits, the limit a payment lifts. A new task and a retry need `minStartCredits` that can
- *    be spent, a continuation `minContinueCredits`. Below that: `held` when the accounts hold
- *    that much and other tasks in work have it set aside; with a paid tariff `empty` or, with a
- *    few credits left, `below_start`; without one `past_due` for an overdue tariff, `ended` when
- *    credits of a pack wait for a tariff, otherwise `gift_spent` or `gift_below_start`;
- * 3. the day, for a new task and a retry: the launches of the day against the limit of the plan
- *    — `daily_limit` — or `tasksPerDayWithoutTariff` — `trial_daily_limit`;
+ * 2. credits on the accounts, the limit a payment lifts. A new task and a retry need
+ *    `minStartCredits` that can be spent, a continuation `minContinueCredits`. Below that:
+ *    `held` when the accounts hold that much and other tasks in work have it set aside; with a
+ *    paid tariff `empty` or, with a few credits left, `below_start`; without one `past_due` for
+ *    an overdue tariff, `ended` when credits of a pack wait for a tariff, otherwise `gift_spent`
+ *    or `gift_below_start`;
+ * 3. the day, for every placement: the tariff credits free within what is left of the day,
+ *    with the gift and pack credits, cannot cover what the placement needs although the
+ *    accounts can — `daily_limit`. Only a paid tariff whose plan has a daily limit gets here; a
+ *    pack bought today lifts it;
  * 4. unpaid work, for a new task and a retry: against the monthly credits of the plan —
  *    `unpaid_limit` — or `trialUnpaidWorkCredits` — `trial_unpaid_limit`;
  * 5. without a paid tariff, the gift of the site: `gift_site_used` when another workspace has
  *    spent gift credits on it.
  *
- * A continuation is never refused by the day or by unpaid work: the work is in progress and
- * will be charged if it is done.
+ * A continuation is never refused by unpaid work: the work is in progress and will be charged
+ * if it is done. It is refused by the day like a new task — it would take tariff credits of
+ * the day otherwise — and waits for the next day or a pack.
  *
  * The reserve of the task that asks is not «tasks in work» to wait for: it stays held whatever
  * the answer is. So a continuation — the one placement of a task that has a reserve — says what
@@ -800,7 +951,7 @@ export type NewTaskVerdict = {
 export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   const result = newTaskSchema.safeParse(input)
   if (!result.success) throw badRequest('Invalid check of a new task')
-  const { placement, accounts, subscription, launchesToday, rateUsable } = result.data
+  const { placement, accounts, subscription, tariffCreditsToday, rateUsable } = result.data
   const own = result.data.heldByTask ?? noTaskReserve
   if (creditAccountKinds.some((kind) => own[kind] > accounts[kind].held)) {
     throw badRequest('The reserve of the task exceeds what its account holds')
@@ -811,13 +962,16 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   }
   const paid = subscription !== null && subscriptionAllowsTasks(subscription.status)
   const free = spendableCredits(accounts, paid)
+  const today = paid ? tariffDay(subscription.creditsPerDay, tariffCreditsToday, free.tariff) : null
   const heldByOthers = (kind: CreditAccountKind): number => accounts[kind].held - own[kind]
   const numbers = {
     spendable: free.total,
+    spendableNow: spendableCredits(accounts, paid, today?.room ?? null).total,
     held: toCredits(
       heldByOthers('gift') + (paid ? heldByOthers('tariff') + heldByOthers('pack') : 0),
     ),
     needed: toCredits(placement === 'continuation' ? minContinueCredits : minStartCredits),
+    today,
   }
   const refused = (reason: TaskRefusalReason): NewTaskVerdict => ({
     ...numbers,
@@ -836,11 +990,9 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
     return refused(nothing ? 'gift_spent' : 'gift_below_start')
   }
 
+  if (numbers.spendableNow < numbers.needed) return refused('daily_limit')
+
   if (placement !== 'continuation') {
-    const perDay = dailyTaskLimit(subscription)
-    if (perDay !== null && launchesToday >= perDay) {
-      return refused(paid ? 'daily_limit' : 'trial_daily_limit')
-    }
     const unpaidLimit = paid ? subscription.creditsPerMonth : trialUnpaidWorkCredits
     if (new Money(result.data.unpaidWork).gte(unpaidLimit)) {
       return refused(paid ? 'unpaid_limit' : 'trial_unpaid_limit')
@@ -849,6 +1001,25 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
 
   if (!paid && result.data.giftSiteClaimedElsewhere) return refused('gift_site_used')
   return { ...numbers, allowed: true, reason: null }
+}
+
+/** The day of a paid tariff: its limit, what the day took, and what is left of it. */
+function tariffDay(
+  creditsPerDay: number | null,
+  taken: TariffCreditsToday,
+  freeTariff: Credits,
+): TariffDay {
+  const limit = creditsPerDay === null ? null : toCredits(creditsPerDay)
+  const used = toCredits(taken.charged + taken.held)
+  const room = tariffDayRoom({ limit, used })
+  return {
+    limit,
+    charged: taken.charged,
+    held: taken.held,
+    used,
+    room,
+    left: toCredits(room === null ? freeTariff : Math.min(room, freeTariff)),
+  }
 }
 
 /**

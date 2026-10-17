@@ -34,13 +34,13 @@ export type BillingErrorCode = (typeof billingErrorCodes)[number]
  * `gift_*` and `trial_*` are of a workspace without a paid tariff, on its gift credits;
  * `past_due` and `ended` are of a tariff that is not paid when the gift cannot carry the task;
  * `empty`, `below_start`, `daily_limit` and `unpaid_limit` are of a paid tariff; `held` and
- * `rate_missing` are of both.
+ * `rate_missing` are of both. `daily_limit`: the accounts could cover the task, but the tariff
+ * credits free within what is left of the Moscow day, with the gift and pack credits, cannot.
  */
 export const taskRefusalReasons = [
   'gift_spent',
   'gift_below_start',
   'trial_unpaid_limit',
-  'trial_daily_limit',
   'gift_site_used',
   'empty',
   'below_start',
@@ -58,7 +58,6 @@ export const taskRefusalCodes = Object.freeze({
   gift_spent: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
   gift_below_start: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
   trial_unpaid_limit: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
-  trial_daily_limit: 'BILLING_DAILY_LIMIT_REACHED',
   gift_site_used: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
   empty: 'BILLING_NOT_ENOUGH_CREDITS',
   below_start: 'BILLING_NOT_ENOUGH_CREDITS',
@@ -78,15 +77,33 @@ const refusalCreditsSchema = z.number().int().nonnegative()
  * the error and nothing else, so the sentence with the numbers is built before the answer
  * leaves.
  */
-export const taskRefusalDetailsSchema = z.strictObject({
-  reason: z.enum(taskRefusalReasons),
-  /** What a task could take now: the credits free on the accounts it may spend. */
-  spendable: refusalCreditsSchema,
-  /** What is set aside for other tasks in work on those accounts. */
-  held: refusalCreditsSchema,
-  /** How many spendable credits the task needed to be taken. */
-  needed: refusalCreditsSchema,
-})
+export const taskRefusalDetailsSchema = z
+  .strictObject({
+    reason: z.enum(taskRefusalReasons),
+    /** What a task could take by the accounts: the credits free on the accounts it may spend. */
+    spendable: refusalCreditsSchema,
+    /** What is set aside for other tasks in work on those accounts. */
+    held: refusalCreditsSchema,
+    /** How many spendable credits the task needed to be taken. */
+    needed: refusalCreditsSchema,
+    /**
+     * Only with `daily_limit`: what the task could take now, the tariff part no larger than what
+     * is left of the day.
+     */
+    spendableNow: refusalCreditsSchema.optional(),
+    /**
+     * Only with `daily_limit`: the tariff credits of the Moscow day — the limit of the plan and
+     * what the day has taken, charged and set aside.
+     */
+    day: z
+      .strictObject({ limit: refusalCreditsSchema.positive(), used: refusalCreditsSchema })
+      .optional(),
+  })
+  .refine(
+    ({ reason, spendableNow, day }) =>
+      reason === 'daily_limit' || (spendableNow === undefined && day === undefined),
+    { message: 'Only a refusal by the day carries the numbers of the day' },
+  )
 export type TaskRefusalDetails = z.infer<typeof taskRefusalDetailsSchema>
 
 const billingError = (
@@ -165,13 +182,13 @@ export const billingTaskNeedsSubscription = (details?: TaskRefusalDetails): Doma
 export const billingNotEnoughCredits = (details?: TaskRefusalDetails): DomainError =>
   billingError('BILLING_NOT_ENOUGH_CREDITS', 'The workspace has not enough credits', 402, details)
 /**
- * The tasks for this Moscow calendar day are used up — those of the plan, or those a workspace
- * may start without a paid tariff; buying credits does not lift it today.
+ * The tariff credits of the Moscow day are taken, and no gift or pack credits can cover the
+ * start: the accounts could. The next day lifts it, and so does a pack bought today.
  */
 export const billingDailyLimitReached = (details?: TaskRefusalDetails): DomainError =>
   billingError(
     'BILLING_DAILY_LIMIT_REACHED',
-    'The daily task limit of the plan is reached',
+    'The tariff credits of the Moscow day are taken, and no gift or pack credits can cover the start',
     409,
     details,
   )
@@ -213,15 +230,38 @@ const refusalByCode = {
   BILLING_CREDIT_RATE_MISSING: billingCreditRateMissing,
 } satisfies Record<(typeof taskRefusalCodes)[TaskRefusalReason], unknown>
 
-// What else a verdict carries is dropped: the details hold these four fields and nothing more.
-const givenRefusalSchema = z.object(taskRefusalDetailsSchema.shape)
+// What else a verdict carries is dropped: the details hold the fields of their schema and
+// nothing more. The day of a verdict (`today` of `newTaskVerdict`) is read for `day`.
+const givenRefusalSchema = z.object({
+  ...taskRefusalDetailsSchema.shape,
+  today: z
+    .object({ limit: refusalCreditsSchema.positive().nullable(), used: refusalCreditsSchema })
+    .nullable()
+    .optional(),
+})
+
+/** A refusal as `taskRefusal` takes it: its details, or a refused verdict as it is. */
+export type GivenTaskRefusal = TaskRefusalDetails & {
+  today?: { limit: number | null; used: number } | null
+}
 
 /**
  * The error a refused task is answered with: the code of its reason, and the reason with its
- * three numbers as the details. A verdict is passed as it is.
+ * numbers as the details. A verdict is passed as it is. With `daily_limit` the details carry
+ * what the task could take now and the day — its limit and what it has taken — when they are
+ * known; with any other reason they carry neither.
  */
-export function taskRefusal(refusal: TaskRefusalDetails): DomainError {
+export function taskRefusal(refusal: GivenTaskRefusal): DomainError {
   const result = givenRefusalSchema.safeParse(refusal)
   if (!result.success) return badRequest('Invalid task refusal')
-  return refusalByCode[taskRefusalCodes[result.data.reason]](result.data)
+  const { reason, spendable, held, needed, spendableNow, today } = result.data
+  const details: TaskRefusalDetails = { reason, spendable, held, needed }
+  if (reason === 'daily_limit') {
+    if (spendableNow !== undefined) details.spendableNow = spendableNow
+    const day =
+      result.data.day ??
+      (today?.limit == null ? undefined : { limit: today.limit, used: today.used })
+    if (day !== undefined) details.day = day
+  }
+  return refusalByCode[taskRefusalCodes[reason]](details)
 }

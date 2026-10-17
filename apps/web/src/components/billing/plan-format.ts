@@ -3,7 +3,6 @@ import {
   giftTaskCounts,
   minStartCredits,
   minTaskChargeCredits,
-  tasksPerDayWithoutTariff,
   typicalTaskCredits,
   type TypicalCredits,
 } from '@repo/domain/billing/credit-numbers'
@@ -22,8 +21,8 @@ import { chargeNotStopped, chargeSent, type ChargeUnderWay } from './payment-for
 /** The limits of a tariff, as the billing router sends them. */
 export interface PlanLimits {
   creditsPerMonth: number
-  /** null: the tariff has no daily limit. */
-  tasksPerDay: number | null
+  /** Tariff credits a Moscow day may take; null: the tariff has no daily limit. */
+  creditsPerDay: number | null
   maxSites: number
 }
 
@@ -113,17 +112,23 @@ export function planSites(maxSites: number): string {
   return `До ${maxSites} ${plural(maxSites, 'сайта', 'сайтов', 'сайтов')} на WordPress`
 }
 
-/** «До 5 задач в день»; null for a tariff without a daily limit. */
-export function planDailyLimit(tasksPerDay: number | null): string | null {
-  if (tasksPerDay === null) return null
-  return `До ${tasksPerDay} ${tasksOf(tasksPerDay)} в день`
+/** «до 50 кредитов в день», «до 21 кредита в день»: the daily limit of a tariff. */
+const upToADay = (creditsPerDay: number) =>
+  `до ${formatCount(creditsPerDay)} ${creditsOf(creditsPerDay)} в день`
+
+/** «До 50 кредитов в день»; null for a tariff without a daily limit. */
+export function planDailyLimit(creditsPerDay: number | null): string | null {
+  if (creditsPerDay === null) return null
+  const line = upToADay(creditsPerDay)
+  return `${line.charAt(0).toLocaleUpperCase('ru')}${line.slice(1)}`
 }
 
 /**
- * A tariff in one line: «800 кредитов в месяц, до 10 задач в день · до 3 сайтов на WordPress».
+ * A tariff in one line: «800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на
+ * WordPress».
  */
-export function planLimits({ creditsPerMonth, tasksPerDay, maxSites }: PlanLimits): string {
-  const perDay = tasksPerDay === null ? '' : `, до ${tasksPerDay} ${tasksOf(tasksPerDay)} в день`
+export function planLimits({ creditsPerMonth, creditsPerDay, maxSites }: PlanLimits): string {
+  const perDay = creditsPerDay === null ? '' : `, ${upToADay(creditsPerDay)}`
   const sites = planSites(maxSites)
   return `${creditsCount(creditsPerMonth)} в месяц${perDay} · ${sites.charAt(0).toLocaleLowerCase('ru')}${sites.slice(1)}`
 }
@@ -249,11 +254,6 @@ export function giftOnHand(available: number): string {
   return `У вас ${giftCreditsCount(available)}`
 }
 
-/** «Без тарифа можно поставить до 3 задач в день.» */
-export function tasksPerDayOnGift(): string {
-  return `Без тарифа можно поставить до ${tasksPerDayWithoutTariff} ${tasksOf(tasksPerDayWithoutTariff)} в день.`
-}
-
 /** The gift is left, and it is less than the `needed` credits a new task takes to start. */
 export function giftBelowStart(available: number, needed: number = minStartCredits): string {
   return `${plural(available, 'Остался', 'Осталось', 'Осталось')} ${giftCreditsCount(available)}, а на новую задачу нужно не меньше ${needed}.`
@@ -319,7 +319,7 @@ export function packPromise(credits: number): string {
 export function packOffer(credits: number): string {
   const about = aboutTasks(credits)
   const holds = about === null ? '' : `: это в среднем ${about}`
-  return `Пригодится, если кредиты по тарифу закончатся до конца периода${holds}. ${packPromise(credits)}`
+  return `Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода${holds}. ${packPromise(credits)}`
 }
 
 /** A paid pack on the page of its order. `credits`: the size of the pack, null when unknown. */

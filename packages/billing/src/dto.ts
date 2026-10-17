@@ -23,8 +23,8 @@ export const planSchema = z.object({
   /** RUB per month. */
   price: amountRubSchema,
   creditsPerMonth: positiveCount,
-  /** null: the plan has no daily limit. */
-  tasksPerDay: positiveCount.nullable(),
+  /** Tariff credits a Moscow day may take; null: the plan has no daily limit. */
+  creditsPerDay: positiveCount.nullable(),
   maxSites: positiveCount,
 })
 export type PlanDto = z.infer<typeof planSchema>
@@ -150,23 +150,53 @@ export const newTaskSchema = z
   .refine(({ allowed, reason }) => allowed === (reason === null))
 export type NewTaskDto = z.infer<typeof newTaskSchema>
 
+/**
+ * The tariff credits of the Moscow day of a paid tariff: the limit of its plan, what the day
+ * took — charged and set aside —, what is left of it and what the tariff can still give today.
+ * `used` can stand above `limit` after a renewal onto a smaller plan; nothing is left then.
+ */
+export const tariffDaySchema = z
+  .object({
+    /** `plans.credits_per_day`; null: the plan has no daily limit. */
+    limit: positiveCount.nullable(),
+    /**
+     * Charged: what the reserves placed in the day paid, and what charges of the day took from
+     * free tariff credits in place of a gift or pack reserve.
+     */
+    charged: wholeCredits,
+    /** Set aside: the tariff reserves placed in the day for tasks that are not finished yet. */
+    held: wholeCredits,
+    /** `charged` + `held`. */
+    used: wholeCredits,
+    /** max(0, `limit` − `used`); null exactly when `limit` is. */
+    room: wholeCredits.nullable(),
+    /** What the tariff can still give today: the room, or the free tariff credits when fewer. */
+    left: wholeCredits,
+  })
+  .refine(({ charged, held, used }) => used === charged + held)
+  .refine(({ limit, room }) => (limit === null) === (room === null))
+  .refine(({ limit, used, room }) => limit === null || room === Math.max(0, limit - used))
+  .refine(({ room, left }) => room === null || left <= room)
+export type TariffDayDto = z.infer<typeof tariffDaySchema>
+
 /** The numbers of that answer, beside the answer itself. */
 const taskCreditsShape = {
   /**
-   * What a task may take now: gift credits always, credits of the tariff and of a pack only
-   * while the tariff is paid.
+   * What a task may take by the accounts: gift credits always, credits of the tariff and of a
+   * pack only while the tariff is paid.
    */
   spendable: wholeCredits,
+  /**
+   * What a task may take now: `spendable` with the tariff credits no more than what is left of
+   * the Moscow day.
+   */
+  spendableNow: wholeCredits,
   /** What tasks in work have set aside on the accounts a task may spend. */
   setAside: wholeCredits,
   /** How many spendable credits a new task needs to be taken. */
   minToStart: positiveCount,
-  /**
-   * The day a new task is checked by: the launches of the Moscow calendar day against the limit
-   * that applies now — that of the plan while the tariff is paid (null: the plan has none), the
-   * tasks a day of a workspace without a paid tariff otherwise.
-   */
-  today: z.object({ used: wholeCredits, limit: positiveCount.nullable() }),
+  /** The tariff credits of the Moscow day; null without a paid tariff — there is no day then. */
+  today: tariffDaySchema.nullable(),
   newTask: newTaskSchema,
 }
 
@@ -179,7 +209,10 @@ export const creditsOverviewSchema = z
   .refine(totalIsAvailable)
 export type CreditsOverviewDto = z.infer<typeof creditsOverviewSchema>
 
-/** `spendable`, `setAside`, `minToStart`, `today` and `newTask` of a credits overview. */
+/**
+ * `spendable`, `spendableNow`, `setAside`, `minToStart`, `today` and `newTask` of a credits
+ * overview.
+ */
 export type TaskCreditsDto = Pick<CreditsOverviewDto, keyof typeof taskCreditsShape>
 
 // A count of credits per million tokens, two decimals: "38.75".
@@ -354,26 +387,17 @@ export const tariffUsageSchema = z.object({
       ({ granted, charged, held, expired, left }) => granted === charged + held + expired + left,
       { message: 'The parts of the period do not add up to what it was granted' },
     ),
-  /** Launches of the Moscow calendar day against the daily limit of the plan. */
-  today: z.object({
-    used: wholeCredits,
-    /** null: the plan has no daily limit. */
-    limit: positiveCount.nullable(),
-  }),
+  /**
+   * The tariff credits of the Moscow day, as the answer about a new task tells them (`today`
+   * beside it); null while the tariff is not paid — there is no day then.
+   */
+  today: tariffDaySchema.nullable(),
   /** Sites of the workspace, whatever their status, against the site limit of the plan. */
   sites: z.object({ count: wholeCredits, max: positiveCount }),
   /** Credits charged in the period per site, the largest first; a site without any is absent. */
   bySite: z.array(z.object({ siteId: z.uuid(), name: z.string(), credits: positiveCount })),
 })
 export type TariffUsageDto = z.infer<typeof tariffUsageSchema>
-
-/** The day of a workspace without a live tariff, on its gift credits. */
-const trialUsageSchema = z.object({
-  /** Launches of the Moscow calendar day. */
-  today: wholeCredits,
-  /** How many tasks a day may be started without a paid tariff. */
-  perDay: positiveCount,
-})
 
 /** What an account that belongs to no period has: gift credits, purchased credits. */
 const accountLeftSchema = z.object({
@@ -383,6 +407,16 @@ const accountLeftSchema = z.object({
   held: wholeCredits,
 })
 
+const sameDay = (a: TariffDayDto | null, b: TariffDayDto | null): boolean =>
+  a === null || b === null
+    ? a === b
+    : a.limit === b.limit &&
+      a.charged === b.charged &&
+      a.held === b.held &&
+      a.used === b.used &&
+      a.room === b.room &&
+      a.left === b.left
+
 /** «Настройки → Использование»: the credits left and what they went to. */
 export const usageSummarySchema = z
   .object({
@@ -390,8 +424,6 @@ export const usageSummarySchema = z
     subscription: subscriptionOverviewSchema.nullable(),
     /** null exactly when there is no live subscription. */
     tariff: tariffUsageSchema.nullable(),
-    /** null exactly when there is a live subscription. */
-    trial: trialUsageSchema.nullable(),
     /**
      * Gift credits: they stay when a period or the tariff itself ends. `granted` as in the
      * overview (`creditBalancesSchema`): false with credits left is the gift a user without a
@@ -410,7 +442,8 @@ export const usageSummarySchema = z
     ...taskCreditsShape,
   })
   .refine(({ subscription, tariff }) => (subscription === null) === (tariff === null))
-  .refine(({ subscription, trial }) => (subscription === null) === (trial !== null))
+  // The meter of the tariff tells the day the answer about a new task is given by.
+  .refine(({ tariff, today }) => tariff === null || sameDay(tariff.today, today))
   .refine(
     ({ tariff, gift, pack, totalLeft }) =>
       totalLeft === (tariff?.credits.left ?? 0) + gift.left + pack.left,

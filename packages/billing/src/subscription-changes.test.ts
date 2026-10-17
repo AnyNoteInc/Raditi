@@ -1119,7 +1119,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
         name: 'Больше',
         price: '12900.00',
         creditsPerMonth: 80,
-        tasksPerDay: 10,
+        creditsPerDay: 10,
         maxSites: 3,
         ...data,
       })
@@ -1230,7 +1230,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
               // refusal is by the kind, which is read before anything else.
               kind: 'pack',
               creditsPerMonth: null,
-              tasksPerDay: null,
+              creditsPerDay: null,
               maxSites: null,
               packCredits: 10,
               isActive: false,

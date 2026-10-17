@@ -202,7 +202,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     ).toEqual([
       '800 кредитов в месяц',
       'В среднем около 73 задач',
-      'До 10 задач в день',
+      'До 100 кредитов в день',
       'До 3 сайтов на WordPress',
     ])
     expect(
@@ -212,7 +212,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     ).toEqual([
       '300 кредитов в месяц',
       'В среднем около 27 задач',
-      'До 5 задач в день',
+      'До 50 кредитов в день',
       'Один сайт на WordPress',
     ])
     // A count of four digits is grouped, and a line never parts its groups.
@@ -220,7 +220,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     expect(largest.map((item) => plain(item.textContent))).toEqual([
       '2 500 кредитов в месяц',
       'В среднем около 230 задач',
-      'До 30 задач в день',
+      'До 300 кредитов в день',
       'До 15 сайтов на WordPress',
     ])
     expect(largest[0]?.textContent).toBe('2\u00a0500\u00a0кредитов в\u00a0месяц')
@@ -357,7 +357,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
     ).closest('section')
     if (!block) throw new Error('the tariff has no section')
     expect(plain(block.textContent)).toContain(
-      '800 кредитов в месяц, до 10 задач в день · до 3 сайтов на WordPress',
+      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
     )
     expect(plain(block.textContent)).toContain('12 900 ₽ в месяц')
     // The status is words and an icon, never a colour alone.
@@ -673,7 +673,7 @@ describe('buying a pack of credits', () => {
       'Пакет из 100 кредитов — 1 990 ₽',
     )
     expect(plain(row.textContent)).toContain(
-      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+      'Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 9 задач. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
     expect(within(row).getByRole('button', { name: 'Купить пакет' })).toBeEnabled()
     // In the section of the tariffs, under their grid.
@@ -1188,7 +1188,7 @@ describe('choosing another tariff for the next period', () => {
       'Тариф изменится 18 октября 2026 — с началом нового периода. До этого дня действует «Бизнес». Кредиты по тарифу можно использовать до 18 октября, на новый период они не переносятся. Кредиты из пакета остаются.',
     )
     expect(dialogText()).toContain(
-      'С 18 октября2 500 кредитов в месяц, до 30 задач в день · до 15 сайтов на WordPress',
+      'С 18 октября2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress',
     )
     expect(dialogText()).toContain(
       'Спишем 18 октября39 900 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444',
@@ -1225,7 +1225,7 @@ describe('choosing another tariff for the next period', () => {
     await waitFor(() => expect(said).toHaveFocus())
     const coming = screen.getByRole('group', { name: /^С.18.октября.— тариф «Агентство»$/ })
     expect(plain(coming.textContent)).toContain(
-      '2 500 кредитов в месяц, до 30 задач в день · до 15 сайтов на WordPress. 18 октября спишем 39 900 ₽ сохранённым способом оплаты.',
+      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress. 18 октября спишем 39 900 ₽ сохранённым способом оплаты.',
     )
     expect(within(coming).getByRole('button', { name: 'Отменить переход' })).toBeEnabled()
     // The card of the chosen tariff has its note instead of the button.
@@ -1503,7 +1503,7 @@ describe('a tariff whose renewal charge failed', () => {
 
     await screen.findByRole('dialog', { name: 'Тариф «Агентство»' })
     expect(dialogText()).toContain(
-      '2 500 кредитов в месяц, до 30 задач в день · до 15 сайтов на WordPress',
+      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress',
     )
     expect(dialogText()).toContain('К оплате сегодня39 900 ₽')
   })
@@ -1679,7 +1679,7 @@ describe('a tariff whose renewal charge failed', () => {
     // The same dialog, now with what the payment will be started for.
     await waitFor(() => expect(dialog).toHaveAccessibleName('Тариф «Бизнес»'))
     expect(dialogText()).toContain(
-      '800 кредитов в месяц, до 10 задач в день · до 3 сайтов на WordPress',
+      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
     )
     expect(dialogText()).toContain('К оплате сегодня12 900 ₽')
     expect(dialogText()).toContain('каждый месяц будем списывать 12 900 ₽ тем же способом')
@@ -2189,7 +2189,7 @@ describe('two kinds of dialogs opened on one page', () => {
 
 describe('the gift of the registration on «Тарифы»', () => {
   const A1 =
-    'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.'
+    'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
   const offTariff = 'новые задачи принимаются, только пока есть подарочные кредиты'
   const noTariff = (gift: number, granted = gift > 0, patch: Partial<BillingOverview> = {}) =>
     getOverview.mockResolvedValue(
@@ -2231,7 +2231,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     [
       'a gift that was partly spent',
       20,
-      'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
     [
       'a gift that starts no task',
@@ -2515,11 +2515,11 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
     expect(screen.getByRole('button', { name: 'Включить автопродление' })).toBeVisible()
   })
 
-  it('tells of the daily limit and of work that ended without a charge', async () => {
-    onTariff(creditBalances(765, 0), {}, { launchesToday: 10 })
+  it('tells of the tariff credits of the day and of work that ended without a charge', async () => {
+    onTariff(creditBalances(765, 0), {}, { today: { charged: 100 } })
     const first = showPlansOnce()
     expect(await noticeOf()).toBe(
-      'Лимит на сегодня исчерпан: в работу взято 10 из 10. Новую задачу можно будет поставить завтра. Задачи, которые уже в работе, можно продолжать.',
+      'Кредиты по тарифу на сегодня закончились: потрачено 100 из 100. Завтра снова можно будет потратить до 100 кредитов. Чтобы продолжить сегодня, купите пакет — 100 кредитов за 1 990 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.',
     )
     first.unmount()
 
@@ -2567,13 +2567,11 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
   it('does not say of an unpaid tariff that no task is taken beside a refusal of the moment', async () => {
     const onGift =
       'Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты.'
-    // The gift could carry a task, and the three of a day without a tariff are used.
-    onTariff(creditBalances(765, 100, 20), { status: 'past_due' }, { launchesToday: 3 })
+    // The gift carries a task whatever the day took: an unpaid tariff has no day.
+    onTariff(creditBalances(765, 100, 20), { status: 'past_due' }, { today: { charged: 500 } })
     const first = showPlansOnce()
-    expect(await noticeOf()).toBe(
-      'На сегодня пробные задачи закончились: без тарифа — до 3 задач в день. Следующую можно поставить завтра, а после оплаты тарифа — сразу.',
-    )
-    // The block of the failed charge agrees with the notice under it: the next one is tomorrow.
+    expect(await noticeOf()).toBeNull()
+    // The block of the failed charge says that tasks are taken on the gift.
     expect(pageText()).toContain(onGift)
     expect(pageText()).not.toContain('новые задачи не принимаются')
     expect(row('Кредиты')).toBe(
@@ -2632,13 +2630,13 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
       )
     }
 
-    it('tells of the three tasks of a day and of the trial that is over', async () => {
+    it('tells of no day without a tariff, and of the trial that is over', async () => {
       getOverview.mockResolvedValue(
-        overviewOf({ credits: creditBalances(0, 0, 20) }, { launchesToday: 3 }),
+        overviewOf({ credits: creditBalances(0, 0, 20) }, { today: { charged: 500 } }),
       )
       const first = showPlansOnce()
       expect(await lead()).toBe(
-        'На сегодня пробные задачи закончились: без тарифа — до 3 задач в день. Следующую можно поставить завтра, а с тарифом — сразу.',
+        'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
       )
       first.unmount()
 
@@ -2693,7 +2691,7 @@ describe('«Как считаются кредиты» on «Тарифы»', () 
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
     expect(plain(block.textContent)).toContain(
-      'Продолжение большой задачи и повторная попытка считаются в дневном лимите как ещё одна задача.',
+      'В дневной лимит входят кредиты по тарифу, отложенные под задачи за день, — в том числе на продолжение задачи и повторную попытку. Когда задача закончится, в лимите дня останется только то, что за неё списано, а остальное вернётся. Если при списании задачу оплатят кредиты по тарифу вместо отложенных под неё подарочных кредитов или кредитов из пакета, эти кредиты по тарифу войдут в лимит дня списания. Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены. День считается по московскому времени.',
     )
   })
 

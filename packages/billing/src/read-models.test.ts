@@ -76,7 +76,7 @@ const planRow = (data: Record<string, unknown>) => ({
   kind: 'quota',
   price: new Money('4900'),
   creditsPerMonth: 30,
-  tasksPerDay: 5,
+  creditsPerDay: 10,
   maxSites: 1,
   packCredits: null,
   ...data,
@@ -126,7 +126,7 @@ describe('read models without a database', () => {
         kind: 'pack',
         price: new Money('1990'),
         creditsPerMonth: null,
-        tasksPerDay: null,
+        creditsPerDay: null,
         maxSites: null,
         packCredits: 100,
       }),
@@ -135,7 +135,7 @@ describe('read models without a database', () => {
         name: 'Бизнес',
         price: new Money('12900'),
         creditsPerMonth: 80,
-        tasksPerDay: null,
+        creditsPerDay: null,
         maxSites: 3,
       }),
       planRow({ slug: 'pack-50', kind: 'pack', packCredits: 50 }),
@@ -149,7 +149,7 @@ describe('read models without a database', () => {
           name: 'Старт',
           price: '4900.00',
           creditsPerMonth: 30,
-          tasksPerDay: 5,
+          creditsPerDay: 10,
           maxSites: 1,
         },
         {
@@ -158,7 +158,7 @@ describe('read models without a database', () => {
           name: 'Бизнес',
           price: '12900.00',
           creditsPerMonth: 80,
-          tasksPerDay: null,
+          creditsPerDay: null,
           maxSites: 3,
         },
       ],
@@ -206,7 +206,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
       name: 'Бизнес',
       price: '12900.00',
       creditsPerMonth: 80,
-      tasksPerDay: 10,
+      creditsPerDay: 10,
       maxSites: 3,
     })
 
@@ -238,7 +238,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             name: 'Бизнес',
             price: '12900.00',
             creditsPerMonth: 80,
-            tasksPerDay: 10,
+            creditsPerDay: 10,
             maxSites: 3,
           },
           period: {
@@ -285,7 +285,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         name: 'Агентство',
         price: '39900.00',
         creditsPerMonth: 250,
-        tasksPerDay: 30,
+        creditsPerDay: 30,
         maxSites: 15,
       })
       await fixtures.subscription({
@@ -303,7 +303,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
           name: 'Агентство',
           price: '39900.00',
           creditsPerMonth: 250,
-          tasksPerDay: 30,
+          creditsPerDay: 30,
           maxSites: 15,
         },
         autoRenewal: true,
@@ -444,7 +444,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         kind: 'quota' as const,
         price: '4900.00',
         creditsPerMonth: 30,
-        tasksPerDay: 5,
+        creditsPerDay: 10,
         maxSites: 1,
         sortOrder,
         ...data,
@@ -463,7 +463,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         db.$transaction(async (tx) => {
           await tx.plan.createMany({
             data: [
-              quota('second', lowest + 2, { price: '12900.00', tasksPerDay: null }),
+              quota('second', lowest + 2, { price: '12900.00', creditsPerDay: null }),
               quota('first', lowest + 1),
               quota('withdrawn', lowest, { isActive: false }),
               { ...quota('payg', lowest), kind: 'payg', price: '0.00' },
@@ -483,7 +483,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             name: 'second',
             price: '12900.00',
             creditsPerMonth: 30,
-            tasksPerDay: null,
+            creditsPerDay: null,
             maxSites: 1,
           })
           expect(pack).toEqual({
@@ -532,7 +532,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         kind: 'pack',
         price: '1990.00',
         creditsPerMonth: null,
-        tasksPerDay: null,
+        creditsPerDay: null,
         maxSites: null,
         packCredits: 10,
       })
@@ -644,7 +644,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         kind: 'pack',
         price: '1990.00',
         creditsPerMonth: null,
-        tasksPerDay: null,
+        creditsPerDay: null,
         maxSites: null,
         packCredits: 10,
       })
@@ -731,7 +731,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         kind: 'pack',
         price: '1990.00',
         creditsPerMonth: null,
-        tasksPerDay: null,
+        creditsPerDay: null,
         maxSites: null,
         packCredits: 100,
       })

@@ -686,6 +686,8 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
               taskId,
               amount: '45',
               status: 'captured',
+              // What the row paid: the charge of the task, all from this row.
+              charged: amount.replace('-', ''),
               expiresAt: T3,
               createdAt: stamp,
               placedAt: stamp,

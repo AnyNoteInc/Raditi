@@ -1,4 +1,4 @@
-import { dailyTaskLimit, Money, newTaskVerdict } from '@repo/domain'
+import { Money, newTaskVerdict, toCredits } from '@repo/domain'
 
 import type {
   BillingOverview,
@@ -33,7 +33,7 @@ export const start = offer({
   name: 'Старт',
   price: '4900.00',
   creditsPerMonth: 300,
-  tasksPerDay: 5,
+  creditsPerDay: 50,
   maxSites: 1,
 })
 
@@ -43,7 +43,7 @@ export const business = offer({
   name: 'Бизнес',
   price: '12900.00',
   creditsPerMonth: 800,
-  tasksPerDay: 10,
+  creditsPerDay: 100,
   maxSites: 3,
 })
 
@@ -53,17 +53,25 @@ export const agency = offer({
   name: 'Агентство',
   price: '39900.00',
   creditsPerMonth: 2500,
-  tasksPerDay: 30,
+  creditsPerDay: 300,
   maxSites: 15,
 })
 
-const planOf = ({ id, slug, name, price, creditsPerMonth, tasksPerDay, maxSites }: PlanOffer) => ({
+const planOf = ({
   id,
   slug,
   name,
   price,
   creditsPerMonth,
-  tasksPerDay,
+  creditsPerDay,
+  maxSites,
+}: PlanOffer) => ({
+  id,
+  slug,
+  name,
+  price,
+  creditsPerMonth,
+  creditsPerDay,
   maxSites,
 })
 
@@ -97,8 +105,8 @@ export function offers({
 
 /** What the day and the platform add to the answer about a new task, beside the accounts. */
 export interface TaskFacts {
-  /** Launches of today; none unless told. */
-  launchesToday?: number
+  /** The tariff credits of today, charged and set aside; nothing unless told. */
+  today?: { charged?: number; held?: number }
   /** Credits of work that ended without a charge; none unless told. */
   unpaidWork?: number
   /** A credit rate is in force; true unless told. */
@@ -115,7 +123,7 @@ type Account = { balance: number; held: number }
 export function taskCreditsFor(
   accounts: { tariff: Account; gift: Account; pack: Account },
   subscription: Pick<Subscription, 'status' | 'plan'> | null,
-  { launchesToday = 0, unpaidWork = 0, rateUsable = true }: TaskFacts = {},
+  { today = {}, unpaidWork = 0, rateUsable = true }: TaskFacts = {},
 ): TaskCredits {
   const terms =
     subscription === null
@@ -123,7 +131,7 @@ export function taskCreditsFor(
       : {
           status: subscription.status,
           creditsPerMonth: subscription.plan.creditsPerMonth,
-          tasksPerDay: subscription.plan.tasksPerDay,
+          creditsPerDay: subscription.plan.creditsPerDay,
         }
   const account = ({ balance, held }: Account) => ({ balance, held })
   const verdict = newTaskVerdict({
@@ -134,15 +142,19 @@ export function taskCreditsFor(
       pack: account(accounts.pack),
     } as Parameters<typeof newTaskVerdict>[0]['accounts'],
     subscription: terms,
-    launchesToday,
+    tariffCreditsToday: {
+      charged: toCredits(today.charged ?? 0),
+      held: toCredits(today.held ?? 0),
+    },
     unpaidWork: new Money(unpaidWork),
     rateUsable,
   })
   return {
     spendable: verdict.spendable,
+    spendableNow: verdict.spendableNow,
     setAside: verdict.held,
     minToStart: verdict.needed,
-    today: { used: launchesToday, limit: dailyTaskLimit(terms) },
+    today: verdict.today,
     newTask: { allowed: verdict.allowed, reason: verdict.reason },
   }
 }
@@ -200,7 +212,8 @@ type OverviewPatch = Partial<Omit<BillingOverview, 'credits'>> & {
  * otherwise: `ONE_TIME_ONLY` is a shop that does not.
  *
  * Whether a new task would be taken is counted for the accounts and the tariff of the overview,
- * as the server counts it; `facts` add the day, the unpaid work and the credit rate.
+ * as the server counts it; `facts` add the tariff credits of the day, the unpaid work and the
+ * credit rate.
  */
 export function overviewOf(patch: OverviewPatch = {}, facts: TaskFacts = {}): BillingOverview {
   const overview = {

@@ -7,7 +7,6 @@ import {
   giftNote,
   heldEarlierNote,
   heldNote,
-  launchesWord,
   ofDailyLimit,
   ofSiteLimit,
   outcomeText,
@@ -19,8 +18,10 @@ import {
   tariffNote,
   tariffRestEntry,
   taskNote,
+  OUTSIDE_THE_DAY,
   todayMeterLabel,
   todayNote,
+  todaySpent,
   unpaidWhileTasksTaken,
   usagePeriod,
   usageWithoutTariff,
@@ -32,7 +33,7 @@ import {
 const plain = (text: string) => text.replaceAll(String.fromCharCode(0xa0), ' ')
 
 const periodEnd = new Date('2026-10-18T09:00:00Z')
-const business = { name: 'Бизнес', creditsPerMonth: 800 }
+const business = { name: 'Бизнес', creditsPerMonth: 800, creditsPerDay: 100 }
 
 /** «Бизнес», active and renewing on 18 October, unless told otherwise. */
 const tariff = (patch: Partial<TariffState> = {}): TariffState => ({
@@ -175,14 +176,23 @@ describe('the credits of a tariff', () => {
       '18 октября начислим новые 800. Остаток по тарифу на новый период не переносится.',
     )
     expect(
-      plain(tariffNote(tariff({ nextPlan: { name: 'Агентство', creditsPerMonth: 2500 } }))),
+      plain(
+        tariffNote(
+          tariff({ nextPlan: { name: 'Агентство', creditsPerMonth: 2500, creditsPerDay: 300 } }),
+        ),
+      ),
     ).toBe('18 октября начислим новые 2 500. Остаток по тарифу на новый период не переносится.')
   })
 
   it('names the tariff of the next period when a change is scheduled', () => {
     expect(
       plain(
-        tariffNote(tariff({ nextPlan: { name: 'Старт', creditsPerMonth: 300 }, changes: true })),
+        tariffNote(
+          tariff({
+            nextPlan: { name: 'Старт', creditsPerMonth: 300, creditsPerDay: 50 },
+            changes: true,
+          }),
+        ),
       ),
     ).toBe(
       '18 октября начислим 300 кредитов по тарифу «Старт». Остаток по тарифу на новый период не переносится.',
@@ -190,16 +200,31 @@ describe('the credits of a tariff', () => {
     expect(
       plain(
         tariffNote(
-          tariff({ nextPlan: { name: 'Агентство', creditsPerMonth: 2500 }, changes: true }),
+          tariff({
+            nextPlan: { name: 'Агентство', creditsPerMonth: 2500, creditsPerDay: 300 },
+            changes: true,
+          }),
         ),
       ),
     ).toContain('начислим 2 500 кредитов по тарифу «Агентство».')
     expect(
-      plain(tariffNote(tariff({ nextPlan: { name: 'Проба', creditsPerMonth: 1 }, changes: true }))),
+      plain(
+        tariffNote(
+          tariff({
+            nextPlan: { name: 'Проба', creditsPerMonth: 1, creditsPerDay: 1 },
+            changes: true,
+          }),
+        ),
+      ),
     ).toContain('начислим 1 кредит по тарифу «Проба».')
     expect(
       plain(
-        tariffNote(tariff({ nextPlan: { name: 'Проба', creditsPerMonth: 22 }, changes: true })),
+        tariffNote(
+          tariff({
+            nextPlan: { name: 'Проба', creditsPerMonth: 22, creditsPerDay: 2 },
+            changes: true,
+          }),
+        ),
       ),
     ).toContain('начислим 22 кредита по тарифу «Проба».')
   })
@@ -307,71 +332,128 @@ describe('the credits of a pack', () => {
 })
 
 describe('the limit of the day', () => {
-  // The day counts launches — a new task, a continuation, a retry —, not credits.
+  // The day counts tariff credits (decision of 17.10.2026): «Старт» gives 50 of them a day.
+  /** The tariff credits of the day as the server tells them. */
+  const dayOf = (limit: number | null, charged: number, held: number, free = 1000) => {
+    const used = charged + held
+    const room = limit === null ? null : Math.max(0, limit - used)
+    return { limit, charged, held, used, room, left: room === null ? free : Math.min(room, free) }
+  }
+
   it.each([
-    [1, 'из 1 задачи'],
-    [2, 'из 2 задач'],
-    [5, 'из 5 задач'],
-    [10, 'из 10 задач'],
-    [11, 'из 11 задач'],
-    [21, 'из 21 задачи'],
-    [30, 'из 30 задач'],
-    [101, 'из 101 задачи'],
+    [1, 'из 1 кредита'],
+    [2, 'из 2 кредитов'],
+    [21, 'из 21 кредита'],
+    [50, 'из 50 кредитов'],
+    [100, 'из 100 кредитов'],
+    [101, 'из 101 кредита'],
+    [300, 'из 300 кредитов'],
+    [2500, 'из 2 500 кредитов'],
   ])('puts the limit %i after the number of the day', (limit, text) => {
     expect(ofDailyLimit(limit)).toBe(text)
   })
 
   it.each([
-    [0, 'задач'],
-    [1, 'задача'],
-    [2, 'задачи'],
-    [5, 'задач'],
-    [21, 'задача'],
-  ])('names the launches of a day without a limit: %i', (used, word) => {
-    expect(launchesWord(used)).toBe(word)
+    [
+      dayOf(100, 5, 45),
+      'Сегодня из 100 кредитов: 5 списано, 45 отложено под задачи в работе, 50 осталось',
+    ],
+    [
+      dayOf(50, 0, 0),
+      'Сегодня из 50 кредитов: 0 списано, 0 отложено под задачи в работе, 50 осталось',
+    ],
+    [
+      dayOf(21, 21, 0),
+      'Сегодня из 21 кредита: 21 списано, 0 отложено под задачи в работе, 0 осталось',
+    ],
+    // A renewal onto a smaller plan: the day took more than the limit of now.
+    [
+      dayOf(50, 120, 0),
+      'Сегодня из 50 кредитов: 120 списано, 0 отложено под задачи в работе, 0 осталось',
+    ],
+    // Review of M5.33d: what is left is what the tariff can still give — the month may have less.
+    [
+      dayOf(50, 0, 0, 0),
+      'Сегодня из 50 кредитов: 0 списано, 0 отложено под задачи в работе, 0 осталось',
+    ],
+    [
+      dayOf(100, 5, 45, 15),
+      'Сегодня из 100 кредитов: 5 списано, 45 отложено под задачи в работе, 15 осталось',
+    ],
+  ])('names the meter of the day: %o', (today, label) => {
+    expect(todayMeterLabel({ ...today, limit: today.limit ?? 0 })).toBe(label)
   })
 
   it.each([
-    [0, 'Сегодня в работу взято 0 из 5'],
-    [1, 'Сегодня в работу взято 1 из 5'],
-    [3, 'Сегодня в работу взято 3 из 5'],
-    [5, 'Сегодня в работу взято 5 из 5'],
-    // A continuation is counted and never refused: the day may hold more than its limit.
-    [7, 'Сегодня в работу взято 7 из 5'],
-  ])('names the meter of a day with %i launches', (used, label) => {
-    expect(todayMeterLabel(used, 5)).toBe(label)
+    [
+      dayOf(100, 5, 45),
+      'Сегодня потрачено 50 кредитов из 100: 5 списано и 45 отложено под задачи в работе.',
+    ],
+    [dayOf(100, 5, 0), 'Сегодня потрачено 5 кредитов из 100.'],
+    [dayOf(100, 21, 0), 'Сегодня потрачен 21 кредит из 100.'],
+    [dayOf(100, 2, 0), 'Сегодня потрачено 2 кредита из 100.'],
+    [dayOf(50, 0, 45), 'Сегодня потрачено 45 кредитов из 50: 45 отложено под задачи в работе.'],
+  ])('says what the day took: %o', (today, text) => {
+    expect(todaySpent(today)).toBe(text)
   })
 
-  const day = (patch: Partial<Parameters<typeof todayNote>[0]> = {}) =>
-    todayNote({ used: 1, limit: 10, paid: true, tasksTaken: true, ...patch })
-
-  it('says how many tasks the day still takes', () => {
-    expect(day()).toBe('Сегодня можно поставить ещё 9 задач.')
-    expect(day({ used: 9 })).toBe('Сегодня можно поставить ещё одну задачу.')
-    expect(day({ used: 7 })).toBe('Сегодня можно поставить ещё 3 задачи.')
-    // The example of the design: three of five are taken.
-    expect(day({ used: 3, limit: 5 })).toBe('Сегодня можно поставить ещё 2 задачи.')
+  it('says nothing of a day that took nothing, or of a tariff without a daily limit', () => {
+    expect(todaySpent(dayOf(100, 0, 0))).toBeNull()
+    expect(todaySpent(dayOf(null, 5, 45))).toBeNull()
   })
 
-  it('counts the day alone, whatever the credits are: the notice of the page says when they are short', () => {
-    expect(day({ tasksTaken: false })).toBe('Сегодня можно поставить ещё 9 задач.')
+  const note = (patch: Partial<Parameters<typeof todayNote>[0]> = {}) =>
+    todayNote({ today: dayOf(100, 5, 45), paid: true, tasksTaken: true, tomorrow: 100, ...patch })
+  const outside = 'Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены.'
+
+  it('says how many tariff credits the day still gives, and that the gift and the pack are outside it', () => {
+    expect(note()).toBe(`Сегодня можно потратить ещё 50 кредитов. ${outside}`)
+    expect(note({ today: dayOf(100, 99, 0) })).toBe(
+      `Сегодня можно потратить ещё 1 кредит. ${outside}`,
+    )
+    expect(note({ today: dayOf(50, 0, 48) })).toBe(
+      `Сегодня можно потратить ещё 2 кредита. ${outside}`,
+    )
+    expect(OUTSIDE_THE_DAY).toBe(outside)
   })
 
-  it('sends the customer to tomorrow once the limit is reached', () => {
-    for (const used of [10, 12]) {
-      expect(day({ used })).toBe(
-        'Лимит на сегодня исчерпан. Новые задачи можно будет поставить завтра.',
+  // C5: tasks in work hold tariff credits that come back — what is free is not «осталось».
+  it('says «свободно» when the account has less free than the day leaves', () => {
+    expect(note({ today: dayOf(50, 0, 0, 15) })).toBe(
+      `Сегодня можно потратить ещё 15 кредитов по тарифу — столько их сейчас свободно. ${outside}`,
+    )
+  })
+
+  it('says nothing of the day when the tariff has nothing free: the credits say so', () => {
+    expect(note({ today: dayOf(50, 0, 0, 0) })).toBe(outside)
+  })
+
+  it('sends the customer to tomorrow once the day is spent, while the tariff takes tasks then', () => {
+    for (const today of [dayOf(100, 100, 0), dayOf(100, 55, 45), dayOf(50, 120, 0)]) {
+      expect(note({ today, tomorrow: today.limit })).toBe(
+        `Кредиты по тарифу на сегодня закончились — завтра снова можно будет потратить до ${today.limit}. ${outside}`,
       )
     }
+    // C7: a tariff that ends tonight promises no tomorrow.
+    expect(note({ today: dayOf(100, 100, 0), tomorrow: null })).toBe(
+      `Кредиты по тарифу на сегодня закончились. ${outside}`,
+    )
+    // Review of M5.33d: the limit of tomorrow is the one the page is told — after a renewal
+    // tonight onto another plan, that plan's.
+    expect(note({ today: dayOf(300, 300, 0), tomorrow: 50 })).toBe(
+      `Кредиты по тарифу на сегодня закончились — завтра снова можно будет потратить до 50. ${outside}`,
+    )
   })
 
   it('says that a tariff without a daily limit has none', () => {
-    expect(day({ limit: null })).toBe('Дневного лимита на вашем тарифе нет.')
-    expect(day({ limit: null, tasksTaken: false })).toBe('Дневного лимита на вашем тарифе нет.')
+    expect(note({ today: dayOf(null, 5, 45) })).toBe('Дневного лимита на вашем тарифе нет.')
+    expect(note({ today: dayOf(null, 0, 0), tasksTaken: false })).toBe(
+      'Дневного лимита на вашем тарифе нет.',
+    )
   })
 
   it('puts the unpaid tariff before everything else', () => {
-    expect(day({ paid: false, tasksTaken: false, used: 10 })).toBe(
+    expect(note({ paid: false, tasksTaken: false, today: null })).toBe(
       'Новые задачи не принимаются, пока не оплачен тариф.',
     )
   })
@@ -379,9 +461,8 @@ describe('the limit of the day', () => {
   it('says of an unpaid tariff that tasks are taken on gift credits while the server takes one', () => {
     const onGift =
       'Пока тариф не оплачен, новые задачи принимаются, только пока есть подарочные кредиты.'
-    expect(day({ paid: false })).toBe(onGift)
-    expect(day({ paid: false, used: 10 })).toBe(onGift)
-    expect(day({ paid: false, tasksTaken: false })).toBe(
+    expect(note({ paid: false, today: null })).toBe(onGift)
+    expect(note({ paid: false, tasksTaken: false, today: null })).toBe(
       'Новые задачи не принимаются, пока не оплачен тариф.',
     )
   })
@@ -455,14 +536,14 @@ describe('the gift credits', () => {
       packLeft,
     )
 
-  it('tells a customer without a tariff of the gift credits and of the tasks of a day', () => {
+  it('tells a customer without a tariff of the gift credits: they are the bound, there is no day', () => {
     const text =
-      'У вас 35 подарочных кредитов. Без тарифа можно поставить до 3 задач в день. Здесь видно, сколько кредитов осталось и на что они ушли.'
+      'У вас 35 подарочных кредитов. Они не сгорают, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.'
     expect(block(gift(35))).toBe(text)
     // The same to a user who has no workspace yet: the gift is granted with it.
     expect(block(gift(35, { granted: false }))).toBe(text)
     expect(block(gift(21))).toBe(
-      'У вас 21 подарочный кредит. Без тарифа можно поставить до 3 задач в день. Здесь видно, сколько кредитов осталось и на что они ушли.',
+      'У вас 21 подарочный кредит. Он не сгорает, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
     )
     expect(block(gift(5))).toMatch(/^У вас 5 подарочных кредитов\. /)
   })
@@ -489,10 +570,8 @@ describe('the gift credits', () => {
     )
   })
 
-  it('tells of the day and of the trial that is over, by the answer of the server', () => {
-    expect(block(gift(20), { launchesToday: 3 })).toBe(
-      'На сегодня пробные задачи закончились: без тарифа — до 3 задач в день. Следующую можно поставить завтра, а с тарифом — сразу.',
-    )
+  it('tells of the trial that is over, by the answer of the server — never of a day', () => {
+    expect(block(gift(20), { today: { charged: 500 } })).toMatch(/^У вас 20 подарочных кредитов\. /)
     expect(block(gift(15), { unpaidWork: 70 })).toBe(
       'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать. Выберите тариф, чтобы продолжить; оставшиеся 15 подарочных кредитов сохранятся.',
     )

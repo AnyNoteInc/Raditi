@@ -286,6 +286,77 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
       )
     })
 
+    // What a row paid (credit_holds.charged): there exactly when it is captured, a whole number
+    // of credits from 0 to what it held. The rouble wallet is not asked.
+    describe('charged', () => {
+      const settled = async (
+        tx: Tx,
+        status: 'active' | 'captured' | 'released' | 'expired',
+        charged: string | null,
+        unit: BillingUnit = 'credit_tariff',
+      ) =>
+        tx.creditHold.create({
+          data: {
+            accountId: (await account(tx, unit, '300')).id,
+            unit,
+            taskId: (await task(tx)).id,
+            amount: '45',
+            status,
+            charged,
+            expiresAt: new Date(),
+            ...(status === 'active' ? {} : { settledAt: new Date() }),
+          },
+        })
+
+      it('accepts a captured row of every credit unit that paid from nothing to all it held', () =>
+        expectAccepted(async (tx) => {
+          for (const unit of ['credit_tariff', 'credit_gift', 'credit_pack'] as const) {
+            await settled(tx, 'captured', '0', unit)
+            await settled(tx, 'captured', '17', unit)
+            await settled(tx, 'captured', '45', unit)
+          }
+        }))
+
+      it('accepts a row that is not captured without it', () =>
+        expectAccepted(async (tx) => {
+          for (const status of ['active', 'released', 'expired'] as const)
+            await settled(tx, status, null)
+        }))
+
+      it('rejects a captured row of credits without it', () =>
+        expectRejected('credit_holds_charged_check', (tx) => settled(tx, 'captured', null)))
+
+      it.each(['active', 'released', 'expired'] as const)(
+        'rejects it on a row that is %s',
+        (status) => expectRejected('credit_holds_charged_check', (tx) => settled(tx, status, '0')),
+      )
+
+      it('rejects more than the row held, less than nothing and a part of a credit', async () => {
+        for (const charged of ['46', '-1', '16.50'])
+          await expectRejected('credit_holds_charged_check', (tx) =>
+            settled(tx, 'captured', charged),
+          )
+      })
+
+      it('asks nothing of a hold of the rouble wallet', () =>
+        expectAccepted(async (tx) => {
+          await settled(tx, 'captured', null, 'rub')
+          await settled(tx, 'active', '12.50', 'rub')
+        }))
+
+      it('is written with the move to captured, in the same statement', async () => {
+        const capture = async (tx: Tx, charged?: string) =>
+          tx.creditHold.update({
+            where: { id: (await settled(tx, 'active', null)).id },
+            data: { status: 'captured', settledAt: new Date(), charged },
+          })
+        await expectAccepted(async (tx) =>
+          expect((await capture(tx, '17')).charged?.toFixed(0)).toBe('17'),
+        )
+        await expectRejected('credit_holds_charged_check', (tx) => capture(tx))
+      })
+    })
+
     it('stamps a row with the moment of placing: the moment it is written unless given', () =>
       expectAccepted(async (tx) => {
         const accountId = (await account(tx, 'credit_tariff', '30')).id
@@ -346,6 +417,25 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
 
     it('rejects a quota plan without a monthly quota', () =>
       expectRejected('plans_kind_fields_check', (tx) => plan(tx, { kind: 'quota', maxSites: 1 })))
+
+    // The daily limit in credits (17.10.2026): some of the month, never more; NULL is no cap.
+    const tariff = (tx: Tx, creditsPerDay: number | null) =>
+      plan(tx, { kind: 'quota', maxSites: 1, creditsPerMonth: 300, creditsPerDay })
+
+    it('accepts a tariff day up to its whole month, and a tariff without a day', () =>
+      expectAccepted(async (tx) => {
+        await tariff(tx, 50)
+        await tariff(tx, 300)
+        await tariff(tx, null)
+      }))
+
+    it('rejects a day of no credits', async () => {
+      await expectRejected('plans_credits_per_day_check', (tx) => tariff(tx, 0))
+      await expectRejected('plans_credits_per_day_check', (tx) => tariff(tx, -50))
+    })
+
+    it('rejects a day that gives more than the month', () =>
+      expectRejected('plans_day_within_month_check', (tx) => tariff(tx, 301)))
 
     const rule = async (tx: Tx, data: Partial<Prisma.PricingRuleUncheckedCreateInput>) =>
       tx.pricingRule.create({

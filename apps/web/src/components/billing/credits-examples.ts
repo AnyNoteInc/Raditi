@@ -58,9 +58,12 @@ export function creditPromises(): string[] {
   ]
 }
 
-/** What the daily limit counts. */
+/**
+ * What the daily limit counts: tariff credits only, by the day they were set aside on, and what
+ * a charge took of them in place of gift or pack credits on the day of the charge.
+ */
 export const DAY_RULE =
-  'Продолжение большой задачи и повторная попытка считаются в дневном лимите как ещё одна задача.'
+  'В дневной лимит входят кредиты по тарифу, отложенные под задачи за день, — в том числе на продолжение задачи и повторную попытку. Когда задача закончится, в лимите дня останется только то, что за неё списано, а остальное вернётся. Если при списании задачу оплатят кредиты по тарифу вместо отложенных под неё подарочных кредитов или кредитов из пакета, эти кредиты по тарифу войдут в лимит дня списания. Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены. День считается по московскому времени.'
 
 /** How often the calculation may be revised, and what a revision does not touch. */
 export const REVISION_RULE =

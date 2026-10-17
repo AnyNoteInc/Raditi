@@ -82,7 +82,7 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await expect(state).toBeVisible(SLOW)
     // A new user has no workspace yet: the gift of the registration is shown as promised.
     await expect(state).toContainText(
-      'У вас 35 подарочных кредитов. Без тарифа можно поставить до 3 задач в день. Здесь видно, сколько кредитов осталось и на что они ушли.',
+      'У вас 35 подарочных кредитов. Они не сгорают, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
     )
     await expect(state).not.toContainText('Кредиты входят в тариф')
     await expect(state.getByRole('link', { name: 'Выбрать тариф' })).toHaveAttribute(
@@ -171,10 +171,17 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
 
   await test.step('the limits of the tariff are untouched', async () => {
     const limits = section(page, 'Лимиты тарифа')
-    // The day counts tasks taken into work, not credits.
-    await expect(limits).toContainText(/Сегодня\s*0\s+из\s10\sзадач/)
-    await expect(limits.getByRole('img', { name: 'Сегодня в работу взято 0 из 10' })).toBeVisible()
-    await expect(limits).toContainText(/Сегодня можно поставить ещё\s10\sзадач\./)
+    // The day counts tariff credits: «Бизнес» gives 100 of its 800 a day.
+    await expect(limits).toContainText(/Сегодня\s*0\s+из\s100\sкредитов/)
+    await expect(
+      limits.getByRole('img', {
+        name: 'Сегодня из 100 кредитов: 0 списано, 0 отложено под задачи в работе, 100 осталось',
+      }),
+    ).toBeVisible()
+    await expect(limits).toContainText(/Сегодня можно потратить ещё\s100\sкредитов\./)
+    await expect(limits).toContainText(
+      /Подарочные кредиты и\sкредиты из\sпакета дневным лимитом не\sограничены\./,
+    )
     await expect(limits).toContainText(/Сайты\s*0\s+из\s3\sсайтов/)
     await expect(limits.getByRole('img', { name: 'Добавлено 0 сайтов из 3' })).toBeVisible()
     await expect(limits).toContainText(/Можно добавить ещё\s3\sсайта\./)

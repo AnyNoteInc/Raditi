@@ -2116,7 +2116,7 @@ test.describe('pricing', () => {
       await soft(page.locator('#pricing article')).toHaveCount(3)
       const note = pricingAction(page).locator('xpath=following-sibling::p')
       await soft(note).toHaveText(
-        'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Без тарифа — до 3 задач в день. Тариф выберете позже.',
+        'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
       )
       const edges = await note.evaluate((paragraph) => {
         const action = paragraph.previousElementSibling?.getBoundingClientRect()

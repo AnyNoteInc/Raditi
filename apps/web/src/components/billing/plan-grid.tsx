@@ -89,7 +89,7 @@ export function PlanGrid({
         const overdue = subscription?.status === 'past_due'
         const marked = current || plan === suggested
         const averageTasks = planAverageTasks(plan.creditsPerMonth)
-        const dailyLimit = planDailyLimit(plan.tasksPerDay)
+        const dailyLimit = planDailyLimit(plan.creditsPerDay)
         const note = current
           ? overdue
             ? null

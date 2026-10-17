@@ -15,7 +15,7 @@ export const pricing: LandingPricingData = {
       name: 'Старт',
       price: '4900.00',
       creditsPerMonth: 300,
-      tasksPerDay: 5,
+      creditsPerDay: 50,
       maxSites: 1,
     },
     {
@@ -23,7 +23,7 @@ export const pricing: LandingPricingData = {
       name: 'Бизнес',
       price: '12900.00',
       creditsPerMonth: 800,
-      tasksPerDay: 10,
+      creditsPerDay: 100,
       maxSites: 3,
     },
     {
@@ -31,7 +31,7 @@ export const pricing: LandingPricingData = {
       name: 'Агентство',
       price: '39900.00',
       creditsPerMonth: 2500,
-      tasksPerDay: 30,
+      creditsPerDay: 300,
       maxSites: 15,
     },
   ],

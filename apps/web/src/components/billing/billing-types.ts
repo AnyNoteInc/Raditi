@@ -11,14 +11,16 @@ export type Subscription = NonNullable<BillingOverview['subscription']>
 export type CreditBalances = BillingOverview['credits']
 /**
  * Whether a new task would be taken now — the answer the queue itself would give —, and the
- * numbers it is explained by: what a task could spend, what tasks in work have set aside, how
- * many credits a new task needs and the launches of the day against their limit. «Тарифы» and
- * «Использование» read it alike.
+ * numbers it is explained by: what a task could spend by the accounts and now, what tasks in
+ * work have set aside, how many credits a new task needs and the tariff credits of the Moscow
+ * day. «Тарифы» and «Использование» read it alike.
  */
 export type TaskCredits = Pick<
   CreditBalances,
-  'spendable' | 'setAside' | 'minToStart' | 'today' | 'newTask'
+  'spendable' | 'spendableNow' | 'setAside' | 'minToStart' | 'today' | 'newTask'
 >
+/** The tariff credits of the Moscow day of a paid tariff: its limit, what it took, what is left. */
+export type TariffDay = NonNullable<TaskCredits['today']>
 /** Why a new task would not be taken. */
 export type TaskRefusalReason = NonNullable<TaskCredits['newTask']['reason']>
 /**

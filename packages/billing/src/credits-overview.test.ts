@@ -27,15 +27,29 @@ const overview = {
   pack: ACCOUNT,
   totalAvailable: 290,
   spendable: 290,
+  spendableNow: 40,
   setAside: 45,
   minToStart: 5,
-  today: { used: 1, limit: 5 },
+  today: { limit: 50, charged: 0, held: 45, used: 45, room: 5, left: 5 },
   newTask: { allowed: true, reason: null },
 }
+const DAY = overview.today
 
 describe('credits overview DTO', () => {
   it('accepts the three accounts with the answer about a new task', () => {
     expect(creditsOverviewSchema.parse(overview)).toEqual(overview)
+  })
+
+  it('accepts a day without a limit, a day past its limit and no day at all', () => {
+    for (const today of [
+      { limit: null, charged: 400, held: 45, used: 445, room: null, left: 255 },
+      { limit: 50, charged: 120, held: 0, used: 120, room: 0, left: 0 },
+      // the month has less than the day: the tariff gives what it has
+      { limit: 50, charged: 0, held: 0, used: 0, room: 50, left: 20 },
+      null,
+    ]) {
+      expect(creditsOverviewSchema.parse({ ...overview, today }).today).toEqual(today)
+    }
   })
 
   it.each([
@@ -47,8 +61,16 @@ describe('credits overview DTO', () => {
     ['an overview that does not say what a task could spend', { spendable: undefined }],
     ['an overview that does not say what is set aside', { setAside: undefined }],
     ['a new task that needs no credits', { minToStart: 0 }],
+    ['an overview that does not say what a task could take now', { spendableNow: undefined }],
     ['an overview without the day a task is checked by', { today: undefined }],
-    ['a daily limit of no task', { today: { used: 0, limit: 0 } }],
+    ['a day of tasks', { today: { used: 0, limit: 5 } }],
+    ['a daily limit of no credits', { today: { ...DAY, limit: 0, room: 0, left: 0 } }],
+    ['a day whose parts do not add up', { today: { ...DAY, used: 44 } }],
+    ['a room that is not what is left of the day', { today: { ...DAY, room: 6 } }],
+    ['a limit without a room', { today: { ...DAY, room: null } }],
+    ['a room without a limit', { today: { ...DAY, limit: null } }],
+    ['more left for today than the day has', { today: { ...DAY, left: 6 } }],
+    ['a day of fractions', { today: { ...DAY, held: 44.5, used: 44.5 } }],
     ['an overview without the answer about a new task', { newTask: undefined }],
     ['a task that is taken for a reason', { newTask: { allowed: true, reason: 'held' } }],
     ['a task that is refused without a reason', { newTask: { allowed: false, reason: null } }],
@@ -97,9 +119,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
   })
 
   /**
-   * A workspace on a tariff of 300 credits a month and 5 tasks a day, active for September 2026
-   * unless told otherwise — `subscription: null` for none —, with `tariff`, `gift` and `pack`
-   * credits on its accounts.
+   * A workspace on a tariff of 300 credits a month without a daily limit unless told otherwise
+   * (`plan: { creditsPerDay }`), active for September 2026 unless told otherwise —
+   * `subscription: null` for none —, with `tariff`, `gift` and `pack` credits on its accounts.
    */
   async function funded(
     options: {
@@ -129,7 +151,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         kind: 'pack',
         price: '1990.00',
         creditsPerMonth: null,
-        tasksPerDay: null,
         maxSites: null,
         packCredits: pack,
       })
@@ -207,24 +228,33 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
     return 'taken' as const
   }
 
-  /** The page and the queue say the same of a new task: both take it, or refuse by one reason. */
+  /**
+   * The page and the queue say the same of a new task: both take it, or refuse by one reason.
+   * `spendableNow` is what a task could take now — `spendable` unless the day of the tariff
+   * holds it back —, and `day` what a refusal by the day tells of it.
+   */
   async function expectAgreement(
     workspaceId: string,
     expected: {
       reason: TaskRefusalReason | null
       spendable: number
       setAside: number
+      spendableNow?: number
+      day?: { limit: number; used: number }
     },
     now = minutesAfter(30),
   ) {
+    const { day, ...numbers } = expected
+    const spendableNow = expected.spendableNow ?? expected.spendable
     const read = await overviewAt(workspaceId, now)
     expect({
       reason: read.newTask.reason,
       allowed: read.newTask.allowed,
       spendable: read.spendable,
+      spendableNow: read.spendableNow,
       setAside: read.setAside,
       minToStart: read.minToStart,
-    }).toEqual({ ...expected, allowed: expected.reason === null, minToStart: 5 })
+    }).toEqual({ ...numbers, spendableNow, allowed: expected.reason === null, minToStart: 5 })
     const answered = await queueAt(workspaceId, now)
     if (expected.reason === null) {
       expect(answered).toBe('taken')
@@ -234,6 +264,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         spendable: expected.spendable,
         held: expected.setAside,
         needed: 5,
+        ...(expected.reason === 'daily_limit' ? { spendableNow, day } : {}),
       })
     }
     return read
@@ -251,9 +282,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         pack: { balance: 100, held: 0, available: 100 },
         totalAvailable: 435,
         spendable: 435,
+        spendableNow: 435,
         setAside: 0,
         minToStart: 5,
-        today: { used: 0, limit: 5 },
+        // a plan without a daily limit: the day is counted, and nothing caps it
+        today: { limit: null, charged: 0, held: 0, used: 0, room: null, left: 300 },
         newTask: { allowed: true, reason: null },
       })
     })
@@ -278,8 +311,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
       await expectAgreement(workspaceId, { reason: 'held', spendable: 2, setAside: 45 })
     })
 
-    it('tells that the daily limit of the tariff is reached', async () => {
-      const { workspaceId } = await funded({ plan: { tasksPerDay: 2 } })
+    it('tells that the tariff credits of the day are taken', async () => {
+      const { workspaceId } = await funded({ plan: { creditsPerDay: 10 } })
+      // The first sets the ten of the day aside and is charged five; the second takes the five
+      // left.
       await done(workspaceId, 5, minutesAfter(0))
       await done(workspaceId, 5, minutesAfter(10))
 
@@ -287,22 +322,37 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         reason: 'daily_limit',
         spendable: 290,
         setAside: 0,
+        spendableNow: 0,
+        day: { limit: 10, used: 10 },
       })
-      expect(read.today).toEqual({ used: 2, limit: 2 })
+      expect(read.today).toEqual({ limit: 10, charged: 10, held: 0, used: 10, room: 0, left: 0 })
 
       // Tomorrow, by the Moscow calendar, a task is taken again.
       const tomorrow = new Date('2026-10-04T21:00:00.000Z')
       const next = await expectAgreement(
         workspaceId,
-        { reason: null, spendable: 290, setAside: 0 },
+        { reason: null, spendable: 290, setAside: 0, spendableNow: 10 },
         tomorrow,
       )
-      expect(next.today).toEqual({ used: 0, limit: 2 })
+      expect(next.today).toEqual({ limit: 10, charged: 0, held: 0, used: 0, room: 10, left: 10 })
+    })
+
+    it('takes a task on a pack when the tariff credits of the day are taken', async () => {
+      const { workspaceId } = await funded({ pack: 100, plan: { creditsPerDay: 10 } })
+      await done(workspaceId, 10, minutesAfter(0))
+
+      const read = await expectAgreement(workspaceId, {
+        reason: null,
+        spendable: 390,
+        setAside: 0,
+        spendableNow: 100,
+      })
+      expect(read.today).toEqual({ limit: 10, charged: 10, held: 0, used: 10, room: 0, left: 0 })
     })
 
     it('tells that too much work of the period ended without a charge', async () => {
       // A tariff of 50 credits a month: 300 RUB of work at 6 RUB a credit.
-      const { workspaceId } = await funded({ plan: { creditsPerMonth: 50, tasksPerDay: null } })
+      const { workspaceId } = await funded({ plan: { creditsPerMonth: 50 } })
       await failedAfter(workspaceId, '300')
 
       const read = await expectAgreement(workspaceId, {
@@ -310,36 +360,60 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         spendable: 300,
         setAside: 0,
       })
-      // The failed attempt is a launch of the day; this tariff has no daily limit.
-      expect(read.today).toEqual({ used: 1, limit: null })
+      // The failed attempt gave its reserve back, and the day with it.
+      expect(read.today).toEqual({
+        limit: null,
+        charged: 0,
+        held: 0,
+        used: 0,
+        room: null,
+        left: 300,
+      })
     })
 
     it('says the credits first, then the day, then the unpaid work', async () => {
       const { workspaceId } = await funded({
         tariff: 9,
-        plan: { creditsPerMonth: 50, tasksPerDay: 1 },
+        plan: { creditsPerMonth: 50, creditsPerDay: 5 },
       })
-      // The one launch of the day failed after 300 RUB of work — 50 credits, the bound of this
-      // tariff — and gave its 9 credits back: the day is said before the unpaid work.
+      // A task of the day failed after 300 RUB of work — 50 credits, the bound of this tariff —
+      // and gave its reserve back; another, queued earlier today, holds one credit of the day:
+      // four are left of it. The day is said before the unpaid work.
       await failedAfter(workspaceId, '300')
-      await expectAgreement(workspaceId, { reason: 'daily_limit', spendable: 9, setAside: 0 })
+      const inWork = await fixtures.hold(workspaceId, 'tariff', 1)
+      await db.creditHold.update({
+        where: { id: inWork.id },
+        data: { createdAt: NOW, placedAt: NOW },
+      })
+      await expectAgreement(workspaceId, {
+        reason: 'daily_limit',
+        spendable: 8,
+        setAside: 1,
+        spendableNow: 4,
+        day: { limit: 5, used: 1 },
+      })
       // Tomorrow the day is free, and the unpaid work is what refuses.
       const tomorrow = new Date('2026-10-04T21:00:00.000Z')
       await expectAgreement(
         workspaceId,
-        { reason: 'unpaid_limit', spendable: 9, setAside: 0 },
+        { reason: 'unpaid_limit', spendable: 8, setAside: 1, spendableNow: 5 },
         tomorrow,
       )
 
-      // With four credits on the account, the credits are said before either.
+      // With three credits free on the account, the credits are said before either.
       await db.billingAccount.updateMany({
         where: { workspaceId, unit: 'credit_tariff' },
         data: { balance: 4 },
       })
-      await expectAgreement(workspaceId, { reason: 'below_start', spendable: 4, setAside: 0 })
+      await expectAgreement(workspaceId, {
+        reason: 'below_start',
+        spendable: 3,
+        setAside: 1,
+        spendableNow: 3,
+      })
       await expectAgreement(
         workspaceId,
-        { reason: 'below_start', spendable: 4, setAside: 0 },
+        { reason: 'below_start', spendable: 3, setAside: 1, spendableNow: 3 },
         tomorrow,
       )
     })
@@ -391,16 +465,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
       await expectAgreement(workspaceId, { reason: 'held', spendable: 0, setAside: 35 })
     })
 
-    it('tells that the three tasks of a day without a tariff are used', async () => {
+    it('has no day: tasks are taken while the gift lasts', async () => {
       const { workspaceId } = await funded({ tariff: 0, gift: true, subscription: null })
-      for (const minute of [0, 10, 20]) await done(workspaceId, 5, minutesAfter(minute))
+      for (const minute of [0, 10, 20, 30]) await done(workspaceId, 5, minutesAfter(minute))
 
-      const read = await expectAgreement(workspaceId, {
-        reason: 'trial_daily_limit',
-        spendable: 20,
-        setAside: 0,
-      })
-      expect(read.today).toEqual({ used: 3, limit: 3 })
+      const read = await expectAgreement(workspaceId, { reason: null, spendable: 15, setAside: 0 })
+      expect(read.today).toBeNull()
     })
 
     it('tells that the trial is over: 70 credits of work ended without a charge', async () => {
@@ -429,8 +499,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         setAside: 0,
       })
       expect(read.totalAvailable).toBe(400)
-      // An overdue tariff takes tasks as a workspace without one does: three a day.
-      expect(read.today).toEqual({ used: 0, limit: 3 })
+      // An overdue tariff takes tasks as a workspace without one does: no day, the gift.
+      expect(read.today).toBeNull()
     })
 
     it('takes a task on the gift while the tariff is not paid', async () => {
@@ -465,11 +535,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
       })
       expect(await newTaskCheck(db, { workspaceId, now: NOW })).toEqual({
         spendable: 335,
+        spendableNow: 335,
         held: 0,
         needed: 5,
         allowed: false,
         reason: 'rate_missing',
-        day: { launches: 0, limit: 5 },
+        today: { limit: null, charged: 0, held: 0, used: 0, room: null, left: 300 },
       })
     })
 
@@ -499,9 +570,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         pack: ACCOUNT,
         totalAvailable: 35,
         spendable: 35,
+        spendableNow: 35,
         setAside: 0,
         minToStart: 5,
-        today: { used: 0, limit: 3 },
+        today: null,
         newTask: { allowed: true, reason: null },
       })
     })

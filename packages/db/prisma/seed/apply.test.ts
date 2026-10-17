@@ -414,7 +414,7 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
       kind: 'quota',
       price: '4900.00',
       creditsPerMonth: 30,
-      tasksPerDay: 5,
+      creditsPerDay: 10,
       packCredits: null,
       maxSites: 1,
       sortOrder: 990,
@@ -441,6 +441,18 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
     expect(await seedReferenceData(db, onlyPlans(plan))).toEqual({ created: zero, updated: zero })
   })
 
+  // A database seeded before 17.10.2026 keeps the old daily limit in tasks until M5.18 drops the
+  // column; the seed no longer carries it and must neither refuse nor clear it.
+  it('leaves the unused tasks_per_day of a stored plan alone', async () => {
+    const plan = testPlan()
+    await seedReferenceData(db, onlyPlans(plan))
+    await db.plan.update({ where: { slug: plan.slug }, data: { tasksPerDay: 5 } })
+
+    expect(await seedReferenceData(db, onlyPlans(plan))).toEqual({ created: zero, updated: zero })
+    const stored = await db.plan.findUniqueOrThrow({ where: { slug: plan.slug } })
+    expect([stored.tasksPerDay, stored.creditsPerDay]).toEqual([5, 10])
+  })
+
   it('follows the seed for the name and order', async () => {
     const plan = testPlan()
     await seedReferenceData(db, onlyPlans(plan))
@@ -458,7 +470,8 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
   it.each([
     ['price', { price: '5900.00' }, /price: stored 4900, seed 5900\.00/],
     ['monthly quota', { creditsPerMonth: 40 }, /creditsPerMonth: stored 30, seed 40/],
-    ['daily quota', { tasksPerDay: null }, /tasksPerDay: stored 5, seed null/],
+    ['daily credits', { creditsPerDay: 20 }, /creditsPerDay: stored 10, seed 20/],
+    ['daily cap', { creditsPerDay: null }, /creditsPerDay: stored 10, seed null/],
     ['site limit', { maxSites: 3 }, /maxSites: stored 1, seed 3/],
     ['kind', { kind: 'pack', packCredits: 10 }, /kind: stored quota, seed pack/],
   ] satisfies [string, Partial<PlanSeed>, RegExp][])(
@@ -475,11 +488,11 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
 
       const stored = await db.plan.findUniqueOrThrow({ where: { slug: plan.slug } })
       expect(stored.price.toFixed(2)).toBe('4900.00')
-      expect([stored.name, stored.kind, stored.creditsPerMonth, stored.tasksPerDay]).toEqual([
+      expect([stored.name, stored.kind, stored.creditsPerMonth, stored.creditsPerDay]).toEqual([
         'Тест',
         'quota',
         30,
-        5,
+        10,
       ])
       expect(await db.plan.findUnique({ where: { slug: created.slug } })).toBeNull()
     },

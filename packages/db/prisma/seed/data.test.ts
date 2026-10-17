@@ -27,7 +27,7 @@ describe('plans (docs/business.md §6)', () => {
         kind: 'quota',
         price: '4900.00',
         creditsPerMonth: 300,
-        tasksPerDay: 5,
+        creditsPerDay: 50,
         packCredits: null,
         maxSites: 1,
       },
@@ -37,7 +37,7 @@ describe('plans (docs/business.md §6)', () => {
         kind: 'quota',
         price: '12900.00',
         creditsPerMonth: 800,
-        tasksPerDay: 10,
+        creditsPerDay: 100,
         packCredits: null,
         maxSites: 3,
       },
@@ -47,7 +47,7 @@ describe('plans (docs/business.md §6)', () => {
         kind: 'quota',
         price: '39900.00',
         creditsPerMonth: 2500,
-        tasksPerDay: 30,
+        creditsPerDay: 300,
         packCredits: null,
         maxSites: 15,
       },
@@ -57,7 +57,7 @@ describe('plans (docs/business.md §6)', () => {
         kind: 'pack',
         price: '1990.00',
         creditsPerMonth: null,
-        tasksPerDay: null,
+        creditsPerDay: null,
         packCredits: 100,
         maxSites: null,
       },
@@ -67,11 +67,24 @@ describe('plans (docs/business.md §6)', () => {
         kind: 'payg',
         price: '0.00',
         creditsPerMonth: null,
-        tasksPerDay: null,
+        creditsPerDay: null,
         packCredits: null,
         maxSites: 1,
       },
     ])
+  })
+
+  // CHECK plans_credits_per_day_check and plans_day_within_month_check: a day of a tariff gives
+  // some of its month, never more; a pack and pay-per-action have no day.
+  it('give a day only to a tariff, and never more than its month', () => {
+    for (const plan of planSeeds) {
+      if (plan.kind !== 'quota') {
+        expect(plan.creditsPerDay).toBeNull()
+        continue
+      }
+      expect(plan.creditsPerDay).toBeGreaterThan(0)
+      expect(plan.creditsPerDay).toBeLessThanOrEqual(plan.creditsPerMonth)
+    }
   })
 
   it('have unique slugs, valid kinds and prices as Decimal(12,2) strings', () => {
@@ -85,7 +98,8 @@ describe('plans (docs/business.md §6)', () => {
 
 describe('Appendix 1 of the public offer', () => {
   // The offer prints the plans a second time, by hand, as terms of the contract. A term that
-  // moves in `planSeeds` needs a new edition of the offer, and the reverse: neither moves alone.
+  // moves in `planSeeds` moves in the offer too, and the reverse: neither moves alone (once the
+  // offer is published, as a new edition of it).
   const offer = readFileSync(
     new URL('../../../../apps/web/content/legal/public-offer.md', import.meta.url),
     'utf8',
@@ -102,13 +116,13 @@ describe('Appendix 1 of the public offer', () => {
   const tariff = {
     price: new RegExp(`^${whole} ₽ в месяц$`),
     terms: new RegExp(
-      `^${whole} Кредит(?:|а|ов) в месяц, не более (\\d+) Задачи? в день; ` +
+      `^${whole} Кредит(?:|а|ов) в месяц, из них не более ${whole} Кредит(?:|а|ов) в день; ` +
         String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика$`,
     ),
   }
   const pack = {
     price: new RegExp(`^${whole} ₽$`),
-    terms: new RegExp(`^${whole} Кредит(?:|а|ов); не сгорают$`),
+    terms: new RegExp(`^${whole} Кредит(?:|а|ов); не сгорают, дневным лимитом не ограничены$`),
   }
   const count = (printed = '') => Number(printed.replaceAll(' ', ''))
   const roubles = (printed = '') => `${printed.replaceAll(' ', '')}.00`
@@ -117,13 +131,13 @@ describe('Appendix 1 of the public offer', () => {
   function promised(cells: string[]) {
     const [name = '', price = '', terms = ''] = cells.map((cell) => cell.trim())
     const month = tariff.price.exec(price)
-    const [, credits, tasksPerDay, maxSites] = tariff.terms.exec(terms) ?? []
+    const [, credits, creditsPerDay, maxSites] = tariff.terms.exec(terms) ?? []
     if (month && credits !== undefined)
       return {
         name,
         price: roubles(month[1]),
         creditsPerMonth: count(credits),
-        tasksPerDay: count(tasksPerDay),
+        creditsPerDay: count(creditsPerDay),
         maxSites: count(maxSites),
       }
     const once = pack.price.exec(price)
@@ -144,7 +158,7 @@ describe('Appendix 1 of the public offer', () => {
               name: `«${plan.name}»`,
               price: plan.price,
               creditsPerMonth: plan.creditsPerMonth,
-              tasksPerDay: plan.tasksPerDay,
+              creditsPerDay: plan.creditsPerDay,
               maxSites: plan.maxSites,
             },
       ),

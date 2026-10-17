@@ -3,7 +3,6 @@ import {
   creditAccountKinds,
   creditAccountUnits,
   liveSubscriptionStatuses,
-  tasksPerDayWithoutTariff,
   toCredits,
   type CreditAccountKind,
 } from '@repo/domain'
@@ -19,7 +18,6 @@ import {
   type UsageHistoryQuery,
   type UsageSummaryDto,
 } from './dto.ts'
-import { countLaunchesToday } from './holds.ts'
 import { getCreditsOverview, getPlanOverview } from './read-models.ts'
 
 // The read model of «Настройки → Использование»: how many credits are left and what they went
@@ -321,6 +319,7 @@ export async function listUsageHistory(
 /** What a credits overview tells of a new task, beside the accounts. */
 const taskCreditsOf = (overview: CreditsOverviewDto) => ({
   spendable: overview.spendable,
+  spendableNow: overview.spendableNow,
   setAside: overview.setAside,
   minToStart: overview.minToStart,
   today: overview.today,
@@ -329,12 +328,12 @@ const taskCreditsOf = (overview: CreditsOverviewDto) => ({
 
 /**
  * «Настройки → Использование» of a workspace at `now`: the live subscription, the meter of its
- * current period (`tariffMeter`), the launches of today against the daily limit of the plan,
- * the sites against its site limit, the credits charged per site, the gift credits and the
- * purchased ones, the first page of the history, and whether a new task would be taken
- * (`getCreditsOverview`). A workspace without a live subscription has «no tariff»: its gift
- * and purchased credits, the launches of today against what a day takes without a tariff, and
- * its whole history.
+ * current period (`tariffMeter`), the tariff credits of the Moscow day against the daily limit
+ * of the plan — as the answer about a new task tells them —, the sites against its site limit,
+ * the credits charged per site, the gift credits and the purchased ones, the first page of the
+ * history, and whether a new task would be taken (`getCreditsOverview`). A workspace without a
+ * live subscription has «no tariff»: its gift and purchased credits — no day: the gift is the
+ * bound then — and its whole history.
  *
  * The meter is one statement and adds up by itself. The other parts are read one after another
  * under READ COMMITTED and may be a moment apart; pass a snapshot transaction to read them as
@@ -345,10 +344,9 @@ export async function getUsageSummary(
   input: UsageSummaryInput,
 ): Promise<UsageSummaryDto> {
   const { workspaceId, now } = summaryInputSchema.parse(input)
-  const [{ subscription }, overview, usedToday] = await Promise.all([
+  const [{ subscription }, overview] = await Promise.all([
     getPlanOverview(db, workspaceId),
     getCreditsOverview(db, { workspaceId, now }),
-    countLaunchesToday(db, { workspaceId, now }),
   ])
   const gift = {
     left: overview.gift.available,
@@ -362,7 +360,6 @@ export async function getUsageSummary(
     return usageSummarySchema.parse({
       subscription: null,
       tariff: null,
-      trial: { today: usedToday, perDay: tasksPerDayWithoutTariff },
       gift,
       pack,
       totalLeft: gift.left + pack.left,
@@ -383,11 +380,10 @@ export async function getUsageSummary(
     subscription,
     tariff: {
       credits,
-      today: { used: usedToday, limit: subscription.plan.tasksPerDay },
+      today: overview.today,
       sites: { count: siteCount, max: subscription.plan.maxSites },
       bySite,
     },
-    trial: null,
     gift,
     pack,
     totalLeft: credits.left + gift.left + pack.left,
@@ -407,7 +403,6 @@ export function promisedUsage(promised: CreditsOverviewDto): UsageSummaryDto {
   return usageSummarySchema.parse({
     subscription: null,
     tariff: null,
-    trial: { today: 0, perDay: tasksPerDayWithoutTariff },
     gift: { left: gift.available, held: gift.held, granted: gift.granted },
     pack: { left: pack.available, held: pack.held },
     totalLeft: totalAvailable,
