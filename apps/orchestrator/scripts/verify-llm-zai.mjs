@@ -503,29 +503,7 @@ export async function verifyZai(ctx) {
 
   setStage('short-lived refusal, repeated by the CLI')
   await direct()
-  const retried = await issued()
-  const retriedResult = resultFor('B13 OpenCode after a short-lived refusal')
-  await zai({
-    scenario: {
-      scenario: 'error',
-      code: 1302,
-      retryAfter: '1',
-      failures: 1,
-      text: JSON.stringify(retriedResult),
-    },
-  })
-  const repeat = await runTurn({ turn: retried, prompt: 'Synthetic turn with one busy answer.' })
-  assert.equal(repeat.code, 0, `The repeated turn failed with exit ${repeat.code}`)
-  assert.deepEqual(repeat.result, retriedResult)
-  // The provider was asked twice: the account's pause held the CLI's earlier retries back.
-  assert.equal(repeat.provider.length, 2)
-  assert.ok(repeat.ms >= 25_000 && repeat.ms < 90_000, `The repeat took ${repeat.ms} ms`)
-  // One call was refused and one answered; the journal of the key keeps the refusal after
-  // the later success.
-  const repeatRows = await settled(retried, 2)
-  assert.equal(repeatRows.filter((row) => row.state === 'completed').length, 1)
-  assert.equal((await keyRow(retried)).lastRefusal, 'transient')
-  await revoke(retried)
+  await harness.repeatedAfterShortRefusal('B13 OpenCode after a short-lived refusal')
   passed(
     'a short-lived provider refusal is repeated by OpenCode after the pause and the turn finishes',
   )

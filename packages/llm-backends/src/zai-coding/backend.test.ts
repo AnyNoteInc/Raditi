@@ -43,6 +43,22 @@ function answering(status: number, payload: unknown, headers = new Headers()) {
   })
   return { request }
 }
+/** The one request of a probe: a GET of the quota address with the key, naming the pinned CLI. */
+function askedQuotaOnce(http: ReturnType<typeof answering>) {
+  expect(http.request).toHaveBeenCalledOnce()
+  const [request, options] = http.request.mock.calls[0]!
+  expect(request.url).toBe(quotaUrl)
+  expect(request.method).toBe('GET')
+  expect(request.body).toBeUndefined()
+  expect(Object.fromEntries(request.headers)).toEqual({
+    authorization: 'Bearer synthetic-zai-plan-key',
+    accept: 'application/json',
+    'accept-encoding': 'identity',
+    'user-agent': opencodeUserAgent,
+  })
+  expect(options.signal).toBeInstanceOf(AbortSignal)
+  return request
+}
 const probe = (status: number, payload: unknown) =>
   backend.probe(credential, answering(status, payload))
 const unknown = { status: 'unknown', windows: null, plan: null }
@@ -410,18 +426,7 @@ describe('the quota of the plan as the windows of the pool', () => {
   it('asks the one quota address with the key and names nobody but the pinned CLI', async () => {
     const http = answering(200, quota([limit(), week()]))
     await backend.probe(credential, http)
-    expect(http.request).toHaveBeenCalledOnce()
-    const [request, options] = http.request.mock.calls[0]!
-    expect(request.url).toBe(quotaUrl)
-    expect(request.method).toBe('GET')
-    expect(request.body).toBeUndefined()
-    expect(Object.fromEntries(request.headers)).toEqual({
-      authorization: 'Bearer synthetic-zai-plan-key',
-      accept: 'application/json',
-      'accept-encoding': 'identity',
-      'user-agent': opencodeUserAgent,
-    })
-    expect(options.signal).toBeInstanceOf(AbortSignal)
+    askedQuotaOnce(http)
   })
 
   it('does not retry a failed request, quote its error or outlive its deadline', async () => {
@@ -681,18 +686,7 @@ describe('the pay-per-token API of Z.ai', () => {
   it('asks the monitor path once, with the key and the pinned CLI, and sends no content', async () => {
     const http = answering(200, quota([]))
     await api.probe(credential, http)
-    expect(http.request).toHaveBeenCalledOnce()
-    const [request, options] = http.request.mock.calls[0]!
-    expect(request.url).toBe(quotaUrl)
-    expect(request.method).toBe('GET')
-    expect(request.body).toBeUndefined()
-    expect(Object.fromEntries(request.headers)).toEqual({
-      authorization: 'Bearer synthetic-zai-plan-key',
-      accept: 'application/json',
-      'accept-encoding': 'identity',
-      'user-agent': opencodeUserAgent,
-    })
-    expect(options.signal).toBeInstanceOf(AbortSignal)
+    const request = askedQuotaOnce(http)
     // The request of the probe is one the offer declares itself.
     expect(api.egress[0]!.requests).toContain(`GET ${request.url}`)
   })

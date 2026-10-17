@@ -6,6 +6,8 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import process from 'node:process'
 
+import { preparedFilesSchema, preparedRunExposesSecret, turnCredentials } from '@repo/domain'
+
 import { dockerCommand } from '../../../infra/dev/llm-verify/cli.mjs'
 import {
   SYNTHETIC_ZAI_API_KEY,
@@ -23,7 +25,7 @@ import {
 import { llmGatewayBaseUrl } from '../src/llm/backends.ts'
 
 /** The address of sandbox-gw in the network of the CLI container. */
-export const SANDBOX_GATEWAY = 'http://sandbox-gw:8080'
+export const SANDBOX_GATEWAY = 'http://sandbox-gw:8080' // NOSONAR: sandbox-gw is reached over plain HTTP inside the isolated network of the sandbox (spec §8)
 export const ZAI_MODEL = 'glm-5.3'
 export const ZAI_PROFILE = 'glm-5.3-standard'
 
@@ -198,6 +200,42 @@ export async function resetOpencodeHome(containerName, { keepSession = false } =
     keepSession ? 'keep' : 'new',
   ])
   assert.equal(reset.code, 0, 'The home of the CLI could not be prepared')
+}
+
+/**
+ * The driver's prepare and command for one turn in the CLI container, with the executor's
+ * checks: a home that holds nothing but the session state, the MCP route given the turn's token
+ * and the tools, and no turn credential in a prepared file, an env value or an argument. `llm`
+ * is what the CLI is told of its provider.
+ */
+export async function prepareOpencodeTurn(
+  { cli, control, driver, tools, instructions },
+  { turn, prompt, nativeSessionId, llm },
+) {
+  await resetOpencodeHome(cli.containerName, { keepSession: Boolean(nativeSessionId) })
+  await control('mcp', { token: turn.values.mcpToken, tools })
+  const context = {
+    taskId: turn.ref.taskId,
+    sessionId: turn.ref.sessionId,
+    turn: turn.ref.turn,
+    llm: { ...llm, apiKey: turn.values.llmApiKey },
+    mcp: { url: `${SANDBOX_GATEWAY}/mcp`, token: turn.values.mcpToken },
+    instructions,
+    ...(nativeSessionId ? { nativeSessionId } : {}),
+  }
+  const prepared = await driver.prepare(context)
+  const argv = driver.command(prepared, { prompt, attachments: [] })
+  const files = preparedFilesSchema.parse({
+    files: prepared.files,
+    env: prepared.env,
+    secrets: prepared.secrets,
+  })
+  assert.equal(
+    preparedRunExposesSecret(files, turnCredentials(context, files.secrets), argv),
+    false,
+    'A prepared file, env value or argument carries a turn credential',
+  )
+  return { files, argv }
 }
 
 /**

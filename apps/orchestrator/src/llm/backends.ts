@@ -43,5 +43,12 @@ export function llmGatewayBaseUrl(gateway: string, backend: Pick<LlmBackend, 'ro
     !prefix
   )
     throw new Error('The LLM backend serves no single chat completions route')
-  return `${url.origin}${url.pathname.replace(/\/+$/, '')}${prefix}`
+  return `${url.origin}${withoutTrailingSlashes(url.pathname)}${prefix}`
+}
+
+/** The path without the slashes it ends with: a scan from the end, never a backtracking match. */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path[end - 1] === '/') end--
+  return path.slice(0, end)
 }

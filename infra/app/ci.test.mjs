@@ -320,7 +320,7 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
   // The options exist and mean what the steps take them for.
   const live = read('infra/dev/llm-verify/live.mjs')
   for (const option of ['--rehearsal', '--measure', '--results', '--api', '--no-build'])
-    assert.ok(live.includes(`name === '${option}'`), `${option} is an option of the stands`)
+    assert.ok(live.includes(`['${option}', '`), `${option} is an option of the stands`)
   // GitHub sets CI in every job: that refuses a live run and must not refuse its rehearsal.
   assert.match(
     read('apps/orchestrator/scripts/verify-llm-live-run.mjs'),

@@ -162,7 +162,7 @@ export async function verifyZaiApi(ctx) {
   await zai({
     scenario: {
       scenario: 'tools',
-      rounds: [[bash("printf 'synthetic-api\\n' > zai-api.txt")]],
+      rounds: [[bash(String.raw`printf 'synthetic-api\n' > zai-api.txt`)]],
       text: JSON.stringify(writtenResult),
       usage: API_USAGE,
     },
@@ -370,27 +370,7 @@ export async function verifyZaiApi(ctx) {
 
   setStage('short-lived refusals of the API')
   await direct()
-  const retried = await issued()
-  const retriedResult = resultFor('B13 OpenCode on the API after a short-lived refusal')
-  await zai({
-    scenario: {
-      scenario: 'error',
-      code: 1302,
-      retryAfter: '1',
-      failures: 1,
-      text: JSON.stringify(retriedResult),
-    },
-  })
-  const repeat = await runTurn({ turn: retried, prompt: 'Synthetic turn with one busy answer.' })
-  assert.equal(repeat.code, 0, `The repeated turn failed with exit ${repeat.code}`)
-  assert.deepEqual(repeat.result, retriedResult)
-  // The provider was asked twice: the account's pause held the CLI's earlier retries back.
-  assert.equal(repeat.provider.length, 2)
-  assert.ok(repeat.ms >= 25_000 && repeat.ms < 90_000, `The repeat took ${repeat.ms} ms`)
-  const repeatRows = await settled(retried, 2)
-  assert.equal(repeatRows.filter((row) => row.state === 'completed').length, 1)
-  assert.equal((await keyRow(retried)).lastRefusal, 'transient')
-  await revoke(retried)
+  await harness.repeatedAfterShortRefusal('B13 OpenCode on the API after a short-lived refusal')
   // A 429 that names no code: the API's own throttle is short-lived, not a block to confirm.
   await direct()
   const throttled = await issued()

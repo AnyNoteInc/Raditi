@@ -8,8 +8,6 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 
 import { createOpencodeDriver } from '@repo/agent-drivers'
-import { preparedFilesSchema, preparedRunExposesSecret, turnCredentials } from '@repo/domain'
-
 import {
   CLI_IMAGE,
   dockerCommand,
@@ -28,8 +26,7 @@ import { productionMcpTools } from './verify-llm-mcp-tools.mjs'
 import { zaiForms } from './verify-llm-zai-forms.mjs'
 import {
   OPENCODE_HOME as HOME,
-  resetOpencodeHome,
-  SANDBOX_GATEWAY as GATEWAY,
+  prepareOpencodeTurn,
   ZAI_MODEL as MODEL,
   ZAI_PROFILE as PROFILE,
 } from './verify-llm-zai-setup.mjs'
@@ -83,7 +80,7 @@ export async function createZaiHarness(ctx, { offer, workspaceId, name }) {
   const outputs = []
 
   /** A new task with its site lease; `continued` continues a task under the same lease. */
-  const task = async (overrides = {}, continued) => {
+  const task = async (overrides, continued) => {
     let taskId = continued?.ref.taskId
     if (!taskId) {
       const site = await db.site.create({
@@ -196,7 +193,7 @@ export async function createZaiHarness(ctx, { offer, workspaceId, name }) {
     })
     assert.equal(response.status, 200)
     // The registry of a role may label every sample with the role.
-    const value = new RegExp(`^${metricName}(?:\\{[^}]*\\})? (\\d+)$`, 'm').exec(
+    const value = new RegExp(String.raw`^${metricName}(?:\{[^}]*\})? (\d+)$`, 'm').exec(
       await response.text(),
     )
     assert.ok(value, `The role does not report ${metricName}`)
@@ -228,9 +225,9 @@ export async function createZaiHarness(ctx, { offer, workspaceId, name }) {
       cli.containerName,
       'node',
       '-e',
-      `const fs=require('node:fs'),path=require('node:path');
+      String.raw`const fs=require('node:fs'),path=require('node:path');
 fs.mkdirSync(path.dirname(process.argv[1]),{recursive:true,mode:0o700});
-fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\\0\\u0001'),
+fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\0\0\u0001'),
   Buffer.from(process.argv[2]),Buffer.from([0,255,0])]),{mode:0o600})`,
       binaryFile,
       binaryMarker,
@@ -261,35 +258,16 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     timeoutMs = 120_000,
     reasoningEffort = 'high',
   }) {
-    await resetOpencodeHome(cli.containerName, { keepSession: Boolean(nativeSessionId) })
-    await control('mcp', { token: turn.values.mcpToken, tools })
-    const context = {
-      taskId: turn.ref.taskId,
-      sessionId: turn.ref.sessionId,
-      turn: turn.ref.turn,
-      llm: {
-        baseUrl: offer.gatewayBaseUrl,
-        model,
-        apiKey: turn.values.llmApiKey,
+    const { files, argv } = await prepareOpencodeTurn(
+      { cli, control, driver, tools, instructions },
+      {
+        turn,
+        prompt,
+        nativeSessionId,
         // The level is the gateway's to set, from the profile of the key; the driver only
         // refuses to launch without one.
-        reasoningEffort,
+        llm: { baseUrl: offer.gatewayBaseUrl, model, reasoningEffort },
       },
-      mcp: { url: `${GATEWAY}/mcp`, token: turn.values.mcpToken },
-      instructions,
-      ...(nativeSessionId ? { nativeSessionId } : {}),
-    }
-    const prepared = await driver.prepare(context)
-    const argv = driver.command(prepared, { prompt, attachments: [] })
-    const files = preparedFilesSchema.parse({
-      files: prepared.files,
-      env: prepared.env,
-      secrets: prepared.secrets,
-    })
-    assert.equal(
-      preparedRunExposesSecret(files, turnCredentials(context, files.secrets), argv),
-      false,
-      'A prepared file, env value or argument carries a turn credential',
     )
     const before = await zai()
     const mcpBefore = (await control('state')).mcp.requests.length
@@ -344,6 +322,36 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     return outcome
   }
 
+  /**
+   * A turn whose first request gets a short-lived refusal (1302): OpenCode repeats it after the
+   * pause and the turn finishes with `summary`. The key is given back at the end.
+   */
+  const repeatedAfterShortRefusal = async (summary) => {
+    const retried = await issued()
+    const retriedResult = resultFor(summary)
+    await zai({
+      scenario: {
+        scenario: 'error',
+        code: 1302,
+        retryAfter: '1',
+        failures: 1,
+        text: JSON.stringify(retriedResult),
+      },
+    })
+    const repeat = await runTurn({ turn: retried, prompt: 'Synthetic turn with one busy answer.' })
+    assert.equal(repeat.code, 0, `The repeated turn failed with exit ${repeat.code}`)
+    assert.deepEqual(repeat.result, retriedResult)
+    // The provider was asked twice: the account's pause held the CLI's earlier retries back.
+    assert.equal(repeat.provider.length, 2)
+    assert.ok(repeat.ms >= 25_000 && repeat.ms < 90_000, `The repeat took ${repeat.ms} ms`)
+    // One call was refused and one answered; the journal of the key keeps the refusal after
+    // the later success.
+    const repeatRows = await settled(retried, 2)
+    assert.equal(repeatRows.filter((row) => row.state === 'completed').length, 1)
+    assert.equal((await keyRow(retried)).lastRefusal, 'transient')
+    await revoke(retried)
+  }
+
   return {
     offer,
     driver,
@@ -368,5 +376,6 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     filesHolding,
     runTurn,
     refused,
+    repeatedAfterShortRefusal,
   }
 }

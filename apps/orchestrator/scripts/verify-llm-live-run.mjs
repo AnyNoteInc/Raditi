@@ -613,8 +613,11 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
       try {
         const { found, unread, searched, kept } = await live.searchAfterFailure(input)
         if (found.length) console.error(`The ${keyWord} is in: ${found.join('; ')}`)
+        const read = searched.filter((name) => !unread.includes(name)).join(', ')
+        const where = found.length ? `found in ${found.length} place(s)` : 'in none'
+        const unreadNote = unread.length ? `; could not be read: ${unread.join(', ')}` : ''
         live.report(
-          `after the failure the ${keyWord} was searched for in what the run still held (${searched.filter((name) => !unread.includes(name)).join(', ')}): ${found.length ? `found in ${found.length} place(s)` : 'in none'}${unread.length ? `; could not be read: ${unread.join(', ')}` : ''}`,
+          `after the failure the ${keyWord} was searched for in what the run still held (${read}): ${where}${unreadNote}`,
         )
         if (kept)
           live.report(

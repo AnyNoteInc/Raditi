@@ -39,6 +39,13 @@ describe('the base URL of a backend in the sandbox', () => {
     expect(llmGatewayBaseUrl(`${gateway}/`, zaiApiBackend)).toBe(
       'http://sandbox-gw:8080/zai/paas/v4',
     )
+    // A path of its own keeps everything but the slashes it ends with.
+    expect(llmGatewayBaseUrl(`${gateway}/base//`, zaiCodingBackend)).toBe(
+      'http://sandbox-gw:8080/base/zai/v4',
+    )
+    expect(llmGatewayBaseUrl(`${gateway}/a//b///`, zaiCodingBackend)).toBe(
+      'http://sandbox-gw:8080/a//b/zai/v4',
+    )
   })
 
   it.each(llmBackends.map((backend) => [backend.id, backend] as const))(

@@ -136,54 +136,63 @@ const invalid = (what) => new Error(`Invalid ${what}`)
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const whole = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max
 
+const SCENARIO_OPTIONS = new Set([
+  'scenario',
+  'text',
+  'reasoning',
+  'calls',
+  'rounds',
+  'beside',
+  'filler',
+  'finish',
+  'code',
+  'status',
+  'retryAfter',
+  'failures',
+  'usage',
+  'delayMs',
+  'route',
+  'idempotencyKey',
+  'body',
+])
+const longText = (value) => typeof value !== 'string' || value.length > 16_384
+const callList = (calls) =>
+  Array.isArray(calls) &&
+  calls.length >= 1 &&
+  calls.length <= 8 &&
+  calls.every(
+    (call) =>
+      isRecord(call) &&
+      typeof call.name === 'string' &&
+      /^[A-Za-z0-9_.-]{1,64}$/.test(call.name) &&
+      isRecord(call.arguments),
+  )
+
 function scenarioOptions(value = {}) {
   if (!isRecord(value)) throw invalid('scenario')
-  const known = new Set([
-    'scenario',
-    'text',
-    'reasoning',
-    'calls',
-    'rounds',
-    'beside',
-    'filler',
-    'finish',
-    'code',
-    'status',
-    'retryAfter',
-    'failures',
-    'usage',
-    'delayMs',
-    'route',
-    'idempotencyKey',
-    'body',
-  ])
-  for (const name of Object.keys(value)) if (!known.has(name)) throw invalid('scenario')
+  for (const name of Object.keys(value)) if (!SCENARIO_OPTIONS.has(name)) throw invalid('scenario')
   const scenario = value.scenario ?? 'text'
   if (!SCENARIOS.has(scenario)) throw invalid('scenario')
   contentOptions(scenario, value)
-  if (value.text !== undefined && (typeof value.text !== 'string' || value.text.length > 16_384))
-    throw invalid('text')
-  if (
-    value.reasoning !== undefined &&
-    (typeof value.reasoning !== 'string' || value.reasoning.length > 16_384)
-  )
-    throw invalid('reasoning')
-  const callList = (calls) =>
-    Array.isArray(calls) &&
-    calls.length >= 1 &&
-    calls.length <= 8 &&
-    calls.every(
-      (call) =>
-        isRecord(call) &&
-        typeof call.name === 'string' &&
-        /^[A-Za-z0-9_.-]{1,64}$/.test(call.name) &&
-        isRecord(call.arguments),
-    )
-  if (value.calls !== undefined && (scenario !== 'tools' || !callList(value.calls)))
-    throw invalid('calls')
+  if (value.text !== undefined && longText(value.text)) throw invalid('text')
+  if (value.reasoning !== undefined && longText(value.reasoning)) throw invalid('reasoning')
+  toolOptions(scenario, value)
+  finishOption(scenario, value)
+  codeOption(scenario, value)
+  refusalOptions(scenario, value)
+  // How long a stream is held after its first frame: a call the role keeps open meanwhile.
+  if (value.delayMs !== undefined && !whole(value.delayMs, 120_000)) throw invalid('delay')
+  usageOption(value)
+  return { ...value, scenario }
+}
+
+/** The calls of the model, one list or a list per answer, the text beside them and a filler. */
+function toolOptions(scenario, value) {
+  const tools = scenario === 'tools'
+  if (value.calls !== undefined && (!tools || !callList(value.calls))) throw invalid('calls')
   if (
     value.rounds !== undefined &&
-    (scenario !== 'tools' ||
+    (!tools ||
       value.calls !== undefined ||
       !Array.isArray(value.rounds) ||
       value.rounds.length < 1 ||
@@ -193,34 +202,45 @@ function scenarioOptions(value = {}) {
     throw invalid('rounds')
   if (
     value.beside !== undefined &&
-    (scenario !== 'tools' ||
+    (!tools ||
       typeof value.beside !== 'string' ||
       value.beside.length < 1 ||
-      value.beside.length > 16_384)
+      longText(value.beside))
   )
     throw invalid('text beside the calls')
   if (
     value.filler !== undefined &&
-    (scenario !== 'tools' || !whole(value.filler, MAX_FILLER_BYTES) || value.filler < 1)
+    (!tools || !whole(value.filler, MAX_FILLER_BYTES) || value.filler < 1)
   )
     throw invalid('filler')
-  if (value.finish !== undefined) {
-    // Any value: the gateway must also cope with one nobody has documented.
-    if (
-      scenario !== 'finish' ||
-      typeof value.finish !== 'string' ||
-      !/^[A-Za-z_]{1,64}$/.test(value.finish)
-    )
-      throw invalid('finish')
-  } else if (scenario === 'finish') throw invalid('finish')
+}
+
+function finishOption(scenario, value) {
+  if (value.finish === undefined) {
+    if (scenario === 'finish') throw invalid('finish')
+    return
+  }
+  // Any value: the gateway must also cope with one nobody has documented.
+  if (
+    scenario !== 'finish' ||
+    typeof value.finish !== 'string' ||
+    !/^[A-Za-z_]{1,64}$/.test(value.finish)
+  )
+    throw invalid('finish')
+}
+
+function codeOption(scenario, value) {
   const failing = ['error', 'stream_error', 'envelope200'].includes(scenario)
   // An error that names no code needs the status it comes with.
   const codeless = scenario === 'error' && value.code === undefined && value.status !== undefined
-  if ((value.code !== undefined || failing) && !codeless) {
-    if (!failing || !whole(value.code, 999_999)) throw invalid('code')
-    if (scenario === 'error' && value.status === undefined && !ZAI_ERROR_STATUS[value.code])
-      throw invalid('status')
-  }
+  if ((value.code === undefined && !failing) || codeless) return
+  if (!failing || !whole(value.code, 999_999)) throw invalid('code')
+  if (scenario === 'error' && value.status === undefined && !ZAI_ERROR_STATUS[value.code])
+    throw invalid('status')
+}
+
+/** The status of an error, its retry-after and how many requests it refuses. */
+function refusalOptions(scenario, value) {
   if (
     value.status !== undefined &&
     (scenario !== 'error' ||
@@ -236,17 +256,15 @@ function scenarioOptions(value = {}) {
     throw invalid('retry-after')
   if (value.failures !== undefined && (!whole(value.failures, 100) || value.failures < 1))
     throw invalid('failure count')
-  // How long a stream is held after its first frame: a call the role keeps open meanwhile.
-  if (value.delayMs !== undefined && !whole(value.delayMs, 120_000)) throw invalid('delay')
-  if (value.usage !== undefined) {
-    if (!isRecord(value.usage)) throw invalid('usage')
-    for (const [name, count] of Object.entries(value.usage))
-      if (!Object.hasOwn(DEFAULT_USAGE, name) || !whole(count, 1_000_000_000))
-        throw invalid('usage')
-    const usage = { ...DEFAULT_USAGE, ...value.usage }
-    if (usage.cached > usage.prompt || usage.reasoning > usage.completion) throw invalid('usage')
-  }
-  return { ...value, scenario }
+}
+
+function usageOption(value) {
+  if (value.usage === undefined) return
+  if (!isRecord(value.usage)) throw invalid('usage')
+  for (const [name, count] of Object.entries(value.usage))
+    if (!Object.hasOwn(DEFAULT_USAGE, name) || !whole(count, 1_000_000_000)) throw invalid('usage')
+  const usage = { ...DEFAULT_USAGE, ...value.usage }
+  if (usage.cached > usage.prompt || usage.reasoning > usage.completion) throw invalid('usage')
 }
 
 function quotaOptions(value = {}) {
@@ -356,15 +374,7 @@ export function createFakeZaiState(initial = {}) {
      * port.
      */
     configure(options = {}) {
-      if (!isRecord(options)) throw invalid('configuration')
-      for (const name of Object.keys(options))
-        if (!['reset', 'scenario', 'quota', 'key', 'apiKey', 'balance'].includes(name))
-          throw invalid('configuration')
-      if (options.key !== undefined && !Object.hasOwn(PLAN_KEYS, options.key)) throw invalid('key')
-      if (options.apiKey !== undefined && !Object.hasOwn(API_KEYS, options.apiKey))
-        throw invalid('key')
-      if (options.balance !== undefined && !['funded', 'empty'].includes(options.balance))
-        throw invalid('balance')
+      configurationOptions(options)
       if (options.reset) state.reset({})
       if (options.scenario !== undefined) state.setScenario(options.scenario)
       if (options.quota !== undefined) state.setQuota(options.quota)
@@ -387,6 +397,18 @@ export function createFakeZaiState(initial = {}) {
   }
   state.reset(initial)
   return state
+}
+
+/** The control message as `configure` takes it: known fields and keys, a known balance. */
+function configurationOptions(options) {
+  if (!isRecord(options)) throw invalid('configuration')
+  for (const name of Object.keys(options))
+    if (!['reset', 'scenario', 'quota', 'key', 'apiKey', 'balance'].includes(name))
+      throw invalid('configuration')
+  if (options.key !== undefined && !Object.hasOwn(PLAN_KEYS, options.key)) throw invalid('key')
+  if (options.apiKey !== undefined && !Object.hasOwn(API_KEYS, options.apiKey)) throw invalid('key')
+  if (options.balance !== undefined && !['funded', 'empty'].includes(options.balance))
+    throw invalid('balance')
 }
 
 /** A generation was counted by the provider: the windows move as the records show. */
@@ -589,29 +611,7 @@ export async function handleZai(req, res, state) {
   const quotaPath = path === ZAI_PATHS.quota
   // The pay-per-token API: no windows, a balance instead.
   const apiPath = path === ZAI_PATHS.apiChat
-  const record = {
-    method: req.method,
-    path,
-    credential: credentialOf(req, quotaPath, state),
-    headerNames: Object.keys(req.headers).sort(),
-    // Values that are no secret and that the gateway's checks compare.
-    userAgent: req.headers['user-agent'] ?? null,
-    accept: req.headers.accept ?? null,
-    acceptEncoding: req.headers['accept-encoding'] ?? null,
-    contentType: req.headers['content-type'] ?? null,
-    body: null,
-    status: null,
-    completed: false,
-    aborted: false,
-  }
-  if (state.requests.length < 1000) state.requests.push(record)
-  res.on('finish', () => {
-    record.completed = true
-    record.status = res.statusCode
-  })
-  res.on('close', () => {
-    if (!res.writableFinished) record.aborted = true
-  })
+  const record = recorded(req, res, state, path, quotaPath)
   if (quotaPath) return answerQuota(req, res, state, record)
   if (req.method !== 'POST') {
     req.resume()
@@ -620,25 +620,9 @@ export async function handleZai(req, res, state) {
   const body = await readJson(req)
   record.body = body
   const sequence = ++state.counters.chat
-  if (record.credential === 'none' || record.credential === 'other')
-    return chatError(res, sequence, record.credential === 'none' ? 1001 : 401, 401)
-  // A key the provider knows, on the path of the other offer: it has no resource there. Sample
-  // 21 is the plan key on the API path; the API key on the plan path is answered the same way
-  // by assumption (not recorded). Before the body is read, as the recorded valid body was.
-  const owned = apiPath ? 'api-key' : 'plan-key'
-  if (record.credential !== owned || (apiPath && state.balance === 'empty'))
-    return noBalance(res, sequence)
-  if (!isRecord(body) || !Array.isArray(body.messages) || body.messages.length === 0)
-    return chatError(res, sequence, 1210, 400)
-  if (!ZAI_MODELS.includes(body.model)) return chatError(res, sequence, 1211, 400)
-  if (
-    body.max_tokens !== undefined &&
-    (!Number.isInteger(body.max_tokens) || body.max_tokens < 1 || body.max_tokens > 131_072)
-  )
-    return chatError(res, sequence, 1210, 400)
+  if (refusedChat(res, sequence, { state, record, body, apiPath })) return
   const config = state.config
-  const failing = ++state.attempts <= (config.failures ?? Infinity)
-  const scenario = failing || config.failures === undefined ? config.scenario : 'text'
+  const scenario = attemptScenario(state)
   if (scenario === 'error')
     return chatError(
       res,
@@ -663,34 +647,110 @@ export async function handleZai(req, res, state) {
   const effective =
     scenario === config.scenario ? config : { ...config, scenario, usage: undefined }
   const frames = zaiFrames(body, effective, sequence)
-  if (scenario === 'plain200' || body.stream !== true) {
-    // The whole answer as one object: what a request without `stream` gets (sample 61).
-    return json(
-      res,
-      200,
-      {
-        choices: [
-          {
-            finish_reason: 'stop',
-            index: 0,
-            message: {
-              content: effective.text ?? 'Synthetic Z.ai answer.',
-              reasoning_content: effective.reasoning ?? 'Synthetic reasoning.',
-              role: 'assistant',
-            },
-          },
-        ],
-        created: Math.floor(Date.now() / 1000),
-        id: `2026010100000000000000${String(sequence).padStart(8, '0')}`,
-        model: body.model,
-        object: 'chat.completion',
-        request_id: `2026010100000000000000${String(sequence).padStart(8, '0')}`,
-        usage: usageOf(effective),
-      },
-      providerHeaders(sequence),
-      'application/json; charset=UTF-8',
-    )
+  // The whole answer as one object: what a request without `stream` gets (sample 61).
+  if (scenario === 'plain200' || body.stream !== true)
+    return answerWhole(res, { body, effective, sequence })
+  return streamAnswer(res, { scenario, config, frames, sequence })
+}
+
+/** The record of a request in the state, without a secret; it learns its status at the end. */
+function recorded(req, res, state, path, quotaPath) {
+  const header = (name) => req.headers[name] ?? null
+  const record = {
+    method: req.method,
+    path,
+    credential: credentialOf(req, quotaPath, state),
+    headerNames: Object.keys(req.headers).sort(),
+    // Values that are no secret and that the gateway's checks compare.
+    userAgent: header('user-agent'),
+    accept: header('accept'),
+    acceptEncoding: header('accept-encoding'),
+    contentType: header('content-type'),
+    body: null,
+    status: null,
+    completed: false,
+    aborted: false,
   }
+  if (state.requests.length < 1000) state.requests.push(record)
+  res.on('finish', () => {
+    record.completed = true
+    record.status = res.statusCode
+  })
+  res.on('close', () => {
+    if (!res.writableFinished) record.aborted = true
+  })
+  return record
+}
+
+/** Refuses a generation the provider would not start: true when a refusal has been sent. */
+function refusedChat(res, sequence, { state, record, body, apiPath }) {
+  if (record.credential === 'none' || record.credential === 'other') {
+    chatError(res, sequence, record.credential === 'none' ? 1001 : 401, 401)
+    return true
+  }
+  // A key the provider knows, on the path of the other offer: it has no resource there. Sample
+  // 21 is the plan key on the API path; the API key on the plan path is answered the same way
+  // by assumption (not recorded). Before the body is read, as the recorded valid body was.
+  const owned = apiPath ? 'api-key' : 'plan-key'
+  if (record.credential !== owned || (apiPath && state.balance === 'empty')) {
+    noBalance(res, sequence)
+    return true
+  }
+  const code = chatBodyRefusal(body)
+  if (code === null) return false
+  chatError(res, sequence, code, 400)
+  return true
+}
+
+/** The code of the provider's refusal of a request body, or null for a body it takes. */
+function chatBodyRefusal(body) {
+  if (!isRecord(body) || !Array.isArray(body.messages) || body.messages.length === 0) return 1210
+  if (!ZAI_MODELS.includes(body.model)) return 1211
+  if (
+    body.max_tokens !== undefined &&
+    (!Number.isInteger(body.max_tokens) || body.max_tokens < 1 || body.max_tokens > 131_072)
+  )
+    return 1210
+  return null
+}
+
+/** The scenario of this attempt: past its `failures` a scenario answers plain text. */
+function attemptScenario(state) {
+  const config = state.config
+  const failing = ++state.attempts <= (config.failures ?? Infinity)
+  return failing || config.failures === undefined ? config.scenario : 'text'
+}
+
+function answerWhole(res, { body, effective, sequence }) {
+  const id = `2026010100000000000000${String(sequence).padStart(8, '0')}`
+  return json(
+    res,
+    200,
+    {
+      choices: [
+        {
+          finish_reason: 'stop',
+          index: 0,
+          message: {
+            content: effective.text ?? 'Synthetic Z.ai answer.',
+            reasoning_content: effective.reasoning ?? 'Synthetic reasoning.',
+            role: 'assistant',
+          },
+        },
+      ],
+      created: Math.floor(Date.now() / 1000),
+      id,
+      model: body.model,
+      object: 'chat.completion',
+      request_id: id,
+      usage: usageOf(effective),
+    },
+    providerHeaders(sequence),
+    'application/json; charset=UTF-8',
+  )
+}
+
+async function streamAnswer(res, { scenario, config, frames, sequence }) {
   res.writeHead(200, {
     'content-type': 'text/event-stream;charset=UTF-8',
     ...providerHeaders(sequence),
@@ -705,17 +765,28 @@ export async function handleZai(req, res, state) {
       res.write(frames.body[0])
       text = frames.body.slice(1).join('')
     }
-    const cancelled = new AbortController()
-    const onClose = () => cancelled.abort()
-    res.once('close', onClose)
-    try {
-      await delay(config.delayMs, undefined, { signal: cancelled.signal })
-    } catch {
-      return
-    } finally {
-      res.off('close', onClose)
-    }
+    if (!(await held(res, config.delayMs))) return
   }
+  return endStream(res, { scenario, config, frames, text })
+}
+
+/** Holds a started answer for `ms`: false when the client went away meanwhile. */
+async function held(res, ms) {
+  const cancelled = new AbortController()
+  const onClose = () => cancelled.abort()
+  res.once('close', onClose)
+  try {
+    await delay(ms, undefined, { signal: cancelled.signal })
+    return true
+  } catch {
+    return false
+  } finally {
+    res.off('close', onClose)
+  }
+}
+
+/** The rest of a stream as its scenario shapes it: whole, or broken in its own way. */
+async function endStream(res, { scenario, config, frames, text }) {
   if (scenario === 'stream_error')
     return res.end(
       (config.delayMs ? '' : frames.body[0]) +

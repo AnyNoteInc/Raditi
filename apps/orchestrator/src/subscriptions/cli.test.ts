@@ -82,6 +82,20 @@ function run(
     child.stdin.end(input)
   })
 }
+// A writer token minted by the command from a root token on stdin, into the file `out`.
+function writerToken(vaultAddress: string, out: string) {
+  return command('token', ['--policy', 'writer', '--out', out], {
+    env: { APP_ENV: 'test', VAULT_ADDR: vaultAddress },
+    input: 'private-root-token\n',
+  })
+}
+
+async function privateDirectory() {
+  const directory = await mkdtemp(join(tmpdir(), 'raditi-subscription-cli-'))
+  cleanup.push(() => rm(directory, { recursive: true, force: true }))
+  return directory
+}
+
 async function fakeVault(auth: object) {
   const requests: { path: string; token: string | undefined; body: unknown }[] = []
   const server: Server = createServer((req, res) => {
@@ -127,43 +141,32 @@ describe('operator subscription commands', () => {
       expect(result.stderr).toBe('')
     },
   )
-  it('imports a Z.ai plan key for the OpenCode driver: one turn and two requests at a time', () => {
-    expect(
-      parseSubscriptionArguments('login', [
-        '--backend',
-        'zai-coding',
-        '--label',
-        'glm-a',
-        '--plan',
-        'lite',
-        '--vault-token-file',
-        '/tmp/writer',
-      ]),
-    ).toMatchObject({ command: 'login', value: { backend: 'zai-coding', plan: 'lite' } })
-    const entry = subscriptionImports.get('zai-coding')!
-    expect(entry.backend.id).toBe('zai-coding')
-    expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
-    // A key from stdin.
-    expect(entry.backend.importCredential).toBeTypeOf('function')
-  })
-  it('imports a Z.ai API key for the OpenCode driver with the same limits as the plan', () => {
-    expect(
-      parseSubscriptionArguments('login', [
-        '--backend',
-        'zai-api',
-        '--label',
-        'glm-api-a',
-        '--plan',
-        'payg',
-        '--vault-token-file',
-        '/tmp/writer',
-      ]),
-    ).toMatchObject({ command: 'login', value: { backend: 'zai-api', plan: 'payg' } })
-    const entry = subscriptionImports.get('zai-api')!
-    expect(entry.backend.id).toBe('zai-api')
-    expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
-    expect(entry.backend.importCredential).toBeTypeOf('function')
-    // A relogin of an API account takes the same form as any other.
+  it.each([
+    ['plan key', 'zai-coding', 'glm-a', 'lite'],
+    ['API key', 'zai-api', 'glm-api-a', 'payg'],
+  ])(
+    'imports a Z.ai %s for the OpenCode driver: one turn and two requests at a time',
+    (_, backend, label, plan) => {
+      expect(
+        parseSubscriptionArguments('login', [
+          '--backend',
+          backend,
+          '--label',
+          label,
+          '--plan',
+          plan,
+          '--vault-token-file',
+          '/tmp/writer',
+        ]),
+      ).toMatchObject({ command: 'login', value: { backend, plan } })
+      const entry = subscriptionImports.get(backend)!
+      expect(entry.backend.id).toBe(backend)
+      expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
+      // A key from stdin.
+      expect(entry.backend.importCredential).toBeTypeOf('function')
+    },
+  )
+  it('takes a relogin of an API account in the same form as any other', () => {
     expect(
       parseSubscriptionArguments('login', [
         '--backend',
@@ -486,13 +489,8 @@ describe('operator subscription commands', () => {
       lease_duration: 900,
       renewable: false,
     })
-    const directory = await mkdtemp(join(tmpdir(), 'raditi-subscription-cli-'))
-    cleanup.push(() => rm(directory, { recursive: true, force: true }))
-    const out = join(directory, 'operator-token')
-    const result = await command('token', ['--policy', 'writer', '--out', out], {
-      env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
-      input: 'private-root-token\n',
-    })
+    const out = join(await privateDirectory(), 'operator-token')
+    const result = await writerToken(vault.address, out)
     expect(result.code).toBe(0)
     expect(result.stdout + result.stderr).not.toContain('private-')
     expect(await readFile(out, 'utf8')).toBe('private-minted-token')
@@ -510,10 +508,7 @@ describe('operator subscription commands', () => {
         },
       },
     ])
-    const second = await command('token', ['--policy', 'writer', '--out', out], {
-      env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
-      input: 'private-root-token\n',
-    })
+    const second = await writerToken(vault.address, out)
     expect(second.code).toBe(1)
     expect(vault.requests).toHaveLength(1)
     expect(await readFile(out, 'utf8')).toBe('private-minted-token')
@@ -536,13 +531,8 @@ describe('operator subscription commands', () => {
       lease_duration: 900,
       renewable: false,
     })
-    const directory = await mkdtemp(join(tmpdir(), 'raditi-subscription-cli-'))
-    cleanup.push(() => rm(directory, { recursive: true, force: true }))
-    const out = join(directory, 'uncreated')
-    const result = await command('token', ['--policy', 'writer', '--out', out], {
-      env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
-      input: 'private-root-token\n',
-    })
+    const out = join(await privateDirectory(), 'uncreated')
+    const result = await writerToken(vault.address, out)
     expect(result.code).toBe(1)
     expect(result.stdout + result.stderr).not.toContain('private-')
     await expect(stat(out)).rejects.toMatchObject({ code: 'ENOENT' })

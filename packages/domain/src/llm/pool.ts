@@ -109,6 +109,32 @@ interface Readiness {
   retryAt: number | null
 }
 
+/** The later of a retry time already known, if any, and another blocking time. */
+function later(retryAt: number | null, at: number): number {
+  return Math.max(retryAt ?? at, at)
+}
+
+/** The end of a running pause of the account, the later one of its cooldown and its breaker. */
+function pausedUntil(account: PoolAccountSnapshot, now: number): number | null {
+  let retryAt: number | null = null
+  // The usage breaker is a pause with a known end like a cooldown, not an unusable account.
+  for (const until of [account.coolingUntil, account.breakerOpenUntil]) {
+    if (until !== null && until.getTime() > now) retryAt = later(retryAt, until.getTime())
+  }
+  return retryAt
+}
+
+/** The headroom a window must leave for this turn: a new task asks more of the five hours. */
+function headroomThreshold(
+  window: NonNullable<PoolAccountSnapshot['limitWindows']>[number],
+  input: ParsedInput,
+  newTask: boolean,
+): number {
+  return newTask && window.name === '5h'
+    ? Math.max(input.minTurnHeadroomPct, poolPolicy.newTaskFiveHourHeadroomPct)
+    : input.minTurnHeadroomPct
+}
+
 function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: boolean): Readiness {
   const now = input.now.getTime()
   // A backend without windows has no usage to know: whatever the columns hold is no report.
@@ -118,12 +144,7 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
   // snapshot is still unknown usage, never unlimited capacity.
   let unknown = !windowless && windows.length === 0
   let headroom = 100
-  let retryAt: number | null = null
-  // The usage breaker is a pause with a known end like a cooldown, not an unusable account.
-  for (const pausedUntil of [account.coolingUntil, account.breakerOpenUntil]) {
-    if (pausedUntil !== null && pausedUntil.getTime() > now)
-      retryAt = Math.max(retryAt ?? pausedUntil.getTime(), pausedUntil.getTime())
-  }
+  let retryAt = pausedUntil(account, now)
 
   for (const window of windows) {
     headroom = Math.min(headroom, 100 - window.usedPct)
@@ -132,17 +153,13 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
       unknown = true
       continue
     }
-    const threshold =
-      newTask && window.name === '5h'
-        ? Math.max(input.minTurnHeadroomPct, poolPolicy.newTaskFiveHourHeadroomPct)
-        : input.minTurnHeadroomPct
-    if (window.usedPct <= 100 - threshold) continue
+    if (window.usedPct <= 100 - headroomThreshold(window, input, newTask)) continue
     if (window.resetsAt === null) {
       // Known ample headroom needs no reset time; a blocking window does, to schedule a retry.
       unknown = true
       continue
     }
-    retryAt = Math.max(retryAt ?? window.resetsAt.getTime(), window.resetsAt.getTime())
+    retryAt = later(retryAt, window.resetsAt.getTime())
   }
 
   return { ready: !unknown && retryAt === null, headroom, retryAt, needsProbe: unknown }
