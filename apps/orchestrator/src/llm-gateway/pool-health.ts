@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@repo/db'
 import {
   probeResultSchema,
+  type CallSignal,
   type EgressHttp,
   type GatewayRefusal,
   type LimitWindow,
@@ -22,6 +23,17 @@ const probeIntervalMs = 5 * 60_000
 const unknownWindowsProbeMs = 20_000
 const transientDelays = [30_000, 60_000, 120_000] as const
 const unknownProbe = (): ProbeResult => ({ status: 'unknown', windows: null, plan: null })
+
+/** The exhausted window that resets last, when one has a known reset. */
+function lastExhausted(
+  windows: readonly LimitWindow[],
+): { name: LimitWindow['name']; resetsAt: Date } | undefined {
+  let binding: { name: LimitWindow['name']; resetsAt: Date } | undefined
+  for (const { name, usedPct, resetsAt } of windows)
+    if (usedPct >= 100 && resetsAt !== null && !(binding && binding.resetsAt >= resetsAt))
+      binding = { name, resetsAt }
+  return binding
+}
 
 /** Why a probe is asked for now: the caller read the account's windows as unknown. */
 export interface UnknownWindows {
@@ -94,9 +106,9 @@ export class SubscriptionPoolHealth {
     return { reason: 'transient', retryAfterMs: Math.min(30_000, paused.until - now) }
   }
 
-  #alert(reason: string): void {
+  #alert(reason: string, details: Record<string, number> = {}): void {
     // Account details live in SQL; neither IDs nor provider bodies enter process logs.
-    this.options.logger?.warn(JSON.stringify({ event: 'llm_pool_health', reason }))
+    this.options.logger?.warn(JSON.stringify({ event: 'llm_pool_health', reason, ...details }))
   }
 
   async observe(call: GatewayCall, finish: GatewayFinish): Promise<void> {
@@ -105,55 +117,68 @@ export class SubscriptionPoolHealth {
     while (this.#observed.size > 10_000) this.#observed.delete(this.#observed.keys().next().value!)
     try {
       const signal = finish.signal
-      if (signal?.kind === 'transient') {
-        const current = this.#pauses.get(call.accountId)
-        if (finish.upstreamStatus === 402) {
-          const payment = await this.#store.payment(call.accountId)
-          const delay = paymentPauseMs[Math.min(Math.max(payment.count, 1), 3) - 1]!
-          this.#pauses.set(call.accountId, {
-            until: Math.max(current?.until ?? 0, this.#now() + delay),
-            transientStreak: current?.transientStreak ?? 0,
-            seenAt: this.#now(),
-            paymentAt: Math.max(current?.paymentAt ?? 0, payment.at.getTime()),
-          })
-          if (payment.suspended) this.#alert('payment_pending')
-        } else {
-          const streak = Math.min((current?.transientStreak ?? 0) + 1, 3)
-          this.#pauses.set(call.accountId, {
-            ...current,
-            until: Math.max(current?.until ?? 0, this.#now() + transientDelays[streak - 1]!),
-            transientStreak: streak,
-            seenAt: this.#now(),
-          })
-        }
-      } else if (finish.state === 'completed' && !finish.estimated) {
-        const paused = this.#pauses.get(call.accountId)
-        // A stream admitted before the 402 says nothing about the membership check since.
-        if (paused?.paymentAt === undefined || call.startedAt.getTime() > paused.paymentAt)
-          this.#pauses.delete(call.accountId)
-      }
-      if (signal?.kind === 'window_exhausted') {
-        if (signal.until !== null) await this.#store.cool(call.accountId, signal.until)
-        else {
-          // The store has just dropped the windows it knew: an earlier probe says nothing.
-          // Only one still in flight is shared, so responses closing together probe once.
-          const result = await this.probeAccount(call.accountId, { cleared: true })
-          // The exhausted window that resets last; the store bounds its reset by that window.
-          let binding: { name: LimitWindow['name']; resetsAt: Date } | undefined
-          for (const { name, usedPct, resetsAt } of result?.windows ?? [])
-            if (usedPct >= 100 && resetsAt !== null && !(binding && binding.resetsAt >= resetsAt))
-              binding = { name, resetsAt }
-          if (binding) await this.#store.cool(call.accountId, binding.resetsAt, binding.name)
-          else await this.#store.cool(call.accountId, null)
-        }
-      } else if (
-        signal &&
-        ['auth', 'account_risk', 'region', 'unconfirmed_block'].includes(signal.kind)
-      )
-        await this.probeAccount(call.accountId)
+      if (signal?.kind === 'transient') await this.#pauseTransient(call.accountId, finish)
+      else if (finish.state === 'completed' && !finish.estimated) this.#liftPause(call)
+      if (signal) await this.#confirmSignal(call.accountId, signal)
     } catch {
       this.#alert('health_update_failed')
     }
+  }
+
+  async #pauseTransient(accountId: string, finish: GatewayFinish): Promise<void> {
+    const current = this.#pauses.get(accountId)
+    if (finish.upstreamStatus === 402) {
+      const payment = await this.#store.payment(accountId)
+      const delay = paymentPauseMs[Math.min(Math.max(payment.count, 1), 3) - 1]!
+      this.#pauses.set(accountId, {
+        until: Math.max(current?.until ?? 0, this.#now() + delay),
+        transientStreak: current?.transientStreak ?? 0,
+        seenAt: this.#now(),
+        paymentAt: Math.max(current?.paymentAt ?? 0, payment.at.getTime()),
+      })
+      if (payment.suspended) this.#alert('payment_pending')
+      return
+    }
+    const streak = Math.min((current?.transientStreak ?? 0) + 1, 3)
+    this.#pauses.set(accountId, {
+      ...current,
+      until: Math.max(current?.until ?? 0, this.#now() + transientDelays[streak - 1]!),
+      transientStreak: streak,
+      seenAt: this.#now(),
+    })
+  }
+
+  #liftPause(call: GatewayCall): void {
+    const paused = this.#pauses.get(call.accountId)
+    // A stream admitted before the 402 says nothing about the membership check since.
+    if (paused?.paymentAt === undefined || call.startedAt.getTime() > paused.paymentAt)
+      this.#pauses.delete(call.accountId)
+  }
+
+  async #confirmSignal(accountId: string, signal: CallSignal): Promise<void> {
+    if (signal.kind === 'window_exhausted') await this.#coolExhausted(accountId, signal.until)
+    else if (signal.kind === 'balance_exhausted') {
+      // The provider's own word on money, not a downgrade to confirm: no probe sees a balance.
+      // The account waits, durably, and comes back by itself after a top-up; the operator is
+      // told once per pause how many such checks the day has seen.
+      const balance = await this.#store.balance(accountId)
+      if (balance.pausedUntil !== null) this.#alert('balance_exhausted', { checks: balance.count })
+    } else if (['auth', 'account_risk', 'region', 'unconfirmed_block'].includes(signal.kind))
+      await this.probeAccount(accountId)
+  }
+
+  async #coolExhausted(accountId: string, until: Date | null): Promise<void> {
+    if (until !== null) {
+      await this.#store.cool(accountId, until)
+      return
+    }
+    // The store has just dropped the windows it knew: an earlier probe says nothing.
+    // Only one still in flight is shared, so responses closing together probe once.
+    const result = await this.probeAccount(accountId, { cleared: true })
+    // The exhausted window that resets last; the store bounds its reset by that window.
+    const binding = lastExhausted(result?.windows ?? [])
+    if (binding) await this.#store.cool(accountId, binding.resetsAt, binding.name)
+    else await this.#store.cool(accountId, null)
   }
 
   /**

@@ -3,9 +3,11 @@
 // PostgreSQL/OpenBao. Subscription values are inaccessible to this role's AppRole.
 import { createPrismaClient, dbConfigFromEnv } from '@repo/db'
 import { isDomainError, turnCredentialGrantSchema } from '@repo/domain'
+import { llmBackends } from '@repo/llm-backends'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 import { z } from 'zod'
 
+import { backendCapacities } from '../dist/llm/backends.js'
 import { CredentialSweeper } from '../dist/llm/credential-sweeper.js'
 import { createPoolProbeClient } from '../dist/llm/pool-probe-client.js'
 import { GatewayTurnCredentials } from '../dist/llm/turn-credentials.js'
@@ -162,6 +164,8 @@ async function main() {
     prisma: db,
     secrets,
     minTurnHeadroomPct: config.minTurnHeadroomPct,
+    // As LlmModule composes it: the pool reads an account by the capacity of its backend.
+    capacityOf: backendCapacities(llmBackends),
     ...(config.llmControlUrl === undefined
       ? {}
       : { probeAccounts: createPoolProbeClient(config.llmControlUrl, env.METRICS_TOKEN) }),

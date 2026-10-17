@@ -10,7 +10,7 @@ const shortPauseMs = 30_000
  * `{"code":401,…,"success":false}` with HTTP 200 on the monitor paths. Only that number is
  * read, never the text next to it.
  */
-function providerCode(errorJson: unknown): string | null {
+export function zaiProviderCode(errorJson: unknown): string | null {
   const body = object(errorJson)
   const raw = object(body?.error)?.code ?? body?.code
   if (typeof raw === 'string') return /^\d{1,6}$/.test(raw) ? raw : null
@@ -20,9 +20,10 @@ function providerCode(errorJson: unknown): string | null {
 }
 
 /**
- * Decision 9 of the plan. Measured: 401 (a refused key), 1113, 1210, 1211. The other codes
- * are those of the provider's documentation as read on 05.10.2026; no answer with them has
- * been observed, so the code decides whatever status carries it.
+ * Decision 9 of the plan: the table every offer shares, unless its ZaiAnswers say otherwise.
+ * Measured: 401 (a refused key), 1113, 1210, 1211. The other codes are those of the provider's
+ * documentation as read on 05.10.2026; no answer with them has been observed, so the code
+ * decides whatever status carries it.
  */
 function signalOfCode(code: string, headers: Headers): CallSignal | null {
   switch (code) {
@@ -37,6 +38,7 @@ function signalOfCode(code: string, headers: Headers): CallSignal | null {
     case '1316':
     case '1317':
       return { kind: 'window_exhausted', until: null }
+    // 1113 «insufficient balance or no resource package»: to a plan key, a plan it lacks.
     case '1113':
     case '1309':
     case '1313':
@@ -64,26 +66,52 @@ function pauseOf(headers: Headers): number {
 const unconfirmed = (code: string | null): CallSignal =>
   code === null ? { kind: 'unconfirmed_block' } : { kind: 'unconfirmed_block', code: `zai_${code}` }
 
-export function classifyZai(status: number, headers: Headers, errorJson: unknown): CallSignal {
-  if (status >= 200 && status < 300) return { kind: 'ok' }
-  const code = providerCode(errorJson)
-  const known = code === null ? null : signalOfCode(code, headers)
-  if (known) return known
-  if (status === 401) return { kind: 'auth' }
-  if (status === 408 || status === 409 || status >= 500)
-    return { kind: 'transient', retryAfterMs: pauseOf(headers) }
-  // An unrecognized rejection of this one request: final for the turn, and no evidence about
-  // the model profile, the account or the limits.
-  if (status === 400)
-    return { kind: 'request_rejected', code: code === null ? 'zai_http_400' : `zai_${code}` }
-  // Anything else ends the turn and makes the role read the quota.
-  return unconfirmed(code)
+/**
+ * Where one offer of Z.ai reads an answer otherwise than the table every offer shares: the same
+ * provider code means another thing on another path. Data of the offer, never a branch on it.
+ */
+export interface ZaiAnswers {
+  /** Codes whose meaning on this offer replaces the shared one. */
+  readonly codes: Readonly<Record<string, 'balance_exhausted'>>
+  /** A 429 that names no code: an unconfirmed block the role probes, or a short-lived throttle. */
+  readonly codeless429: 'unconfirmed_block' | 'transient'
 }
 
-/** An error object of a started stream has no status: the code table, else an unconfirmed block. */
-export function classifyZaiStreamError(errorJson: unknown): CallSignal {
-  const code = providerCode(errorJson)
-  return (code === null ? null : signalOfCode(code, new Headers())) ?? unconfirmed(code)
+/** The readers of one offer: of an answer with a status, and of an error inside a started stream. */
+export interface ZaiClassifier {
+  classify(status: number, headers: Headers, errorJson: unknown): CallSignal
+  classifyStreamError(errorJson: unknown): CallSignal
+}
+
+export function zaiClassifier(answers: ZaiAnswers): ZaiClassifier {
+  const ofCode = (code: string, headers: Headers): CallSignal | null =>
+    Object.hasOwn(answers.codes, code)
+      ? { kind: answers.codes[code]! }
+      : signalOfCode(code, headers)
+  return {
+    classify(status, headers, errorJson) {
+      if (status >= 200 && status < 300) return { kind: 'ok' }
+      const code = zaiProviderCode(errorJson)
+      const known = code === null ? null : ofCode(code, headers)
+      if (known) return known
+      if (status === 401) return { kind: 'auth' }
+      if (status === 408 || status === 409 || status >= 500)
+        return { kind: 'transient', retryAfterMs: pauseOf(headers) }
+      // An unrecognized rejection of this one request: final for the turn, and no evidence
+      // about the model profile, the account or the limits.
+      if (status === 400)
+        return { kind: 'request_rejected', code: code === null ? 'zai_http_400' : `zai_${code}` }
+      if (status === 429 && code === null && answers.codeless429 === 'transient')
+        return { kind: 'transient', retryAfterMs: pauseOf(headers) }
+      // Anything else ends the turn and makes the role read the quota.
+      return unconfirmed(code)
+    },
+    // An error object of a started stream has no status: the code table, else an unconfirmed block.
+    classifyStreamError(errorJson) {
+      const code = zaiProviderCode(errorJson)
+      return (code === null ? null : ofCode(code, new Headers())) ?? unconfirmed(code)
+    },
+  }
 }
 
 // The pinned CLI repeats a request whose refusal holds a word or a number of its retry list

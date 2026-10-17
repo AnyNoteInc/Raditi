@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { llmBackendIds, type LimitWindow } from '../ports/llm-backend.ts'
+import {
+  llmBackendIds,
+  type LimitWindow,
+  type LlmBackendId,
+  type LlmCapacity,
+} from '../ports/llm-backend.ts'
 import { pickAccount, type PickAccountInput, type PoolAccountSnapshot } from './pool.ts'
 
 const NOW = new Date('2026-09-29T12:00:00.000Z')
@@ -33,6 +38,7 @@ function account(id = 'a', overrides: Partial<PoolAccountSnapshot> = {}): PoolAc
 function input(overrides: Partial<PickAccountInput> = {}): PickAccountInput {
   return {
     backend: 'zai-coding',
+    capacity: 'windows',
     providerEnabled: true,
     now: NOW,
     boundAccountId: null,
@@ -55,11 +61,17 @@ const selected = (accountId = 'a', binding: 'initial' | 'keep' | 'rebind' = 'ini
   rebinds: binding === 'rebind' ? 1 : 0,
 })
 
+// What each adapter declares (LlmBackend.capacity); the domain does not import adapters. A new
+// id does not compile here until it says which policy its accounts follow.
+const capacityOf: Record<LlmBackendId, LlmCapacity> = { 'zai-coding': 'windows', 'zai-api': 'none' }
+
 describe('pickAccount: new tasks', () => {
   it.each(llmBackendIds)('uses the same policy for %s', (backend) => {
-    expect(pickAccount(input({ backend, accounts: [account('a', { backend })] }))).toEqual(
-      selected(),
-    )
+    expect(
+      pickAccount(
+        input({ backend, capacity: capacityOf[backend], accounts: [account('a', { backend })] }),
+      ),
+    ).toEqual(selected())
   })
 
   it('ranks by the minimum headroom across all reported windows', () => {
@@ -758,6 +770,98 @@ describe('pickAccount: unknown usage and exhausted pools', () => {
   })
 })
 
+describe('pickAccount: a backend without windows', () => {
+  // The pay-per-token API: an account is limited by its pauses and slots, never by windows.
+  const windowless = (overrides: Partial<PickAccountInput> = {}) =>
+    input({ backend: 'zai-api', capacity: 'none', ...overrides })
+  const apiAccount = (id = 'a', overrides: Partial<PoolAccountSnapshot> = {}) =>
+    account(id, { backend: 'zai-api', limitWindows: [], ...overrides })
+
+  it.each([
+    null,
+    [],
+    // Whatever a column holds, it is no report of this backend.
+    [window('5h', 100)],
+    [{ ...window('week', 100), resetsAt: null }],
+    [window('5h', 0, -1)],
+  ])('selects an account with windows %j and asks for no probe', (limitWindows) => {
+    expect(pickAccount(windowless({ accounts: [apiAccount('a', { limitWindows })] }))).toEqual(
+      selected(),
+    )
+    expect(
+      pickAccount(
+        windowless({ boundAccountId: 'a', accounts: [apiAccount('a', { limitWindows })] }),
+      ),
+    ).toEqual(selected('a', 'keep'))
+  })
+
+  it('reads the same empty windows as unknown usage on a backend that has them', () => {
+    expect(pickAccount(input({ accounts: [account('a', { limitWindows: [] })] }))).toMatchObject({
+      kind: 'wait',
+      reason: 'limits_unknown',
+      probeAccountIds: ['a'],
+    })
+  })
+
+  it('waits out a pause of the account, without a probe', () => {
+    for (const pause of [{ coolingUntil: at(30) }, { breakerOpenUntil: at(15) }]) {
+      const until = pause.coolingUntil ?? pause.breakerOpenUntil
+      expect(pickAccount(windowless({ accounts: [apiAccount('a', pause)] }))).toEqual({
+        kind: 'wait',
+        reason: 'pool_empty',
+        retryAt: until,
+        probeAccountIds: [],
+      })
+      expect(
+        pickAccount(windowless({ boundAccountId: 'a', accounts: [apiAccount('a', pause)] })),
+      ).toEqual({ kind: 'wait', reason: 'cooling', retryAt: until, probeAccountIds: [] })
+    }
+    // A pause that has passed blocks nothing: there are no windows to refresh first.
+    expect(
+      pickAccount(windowless({ accounts: [apiAccount('a', { coolingUntil: at(-1) })] })),
+    ).toEqual(selected())
+  })
+
+  it('rebinds a task whose account is paused longer than a bound task waits', () => {
+    expect(
+      pickAccount(
+        windowless({
+          boundAccountId: 'a',
+          accounts: [apiAccount('a', { coolingUntil: at(60) }), apiAccount('b')],
+        }),
+      ),
+    ).toEqual(selected('b', 'rebind'))
+  })
+
+  it('takes the least recently used free account and keeps slots and health as they are', () => {
+    expect(
+      pickAccount(
+        windowless({
+          accounts: [
+            apiAccount('busy', { activeTurns: 1 }),
+            apiAccount('relogin', { health: 'needs_relogin' }),
+            apiAccount('newer', { lastUsedAt: at(-1) }),
+            apiAccount('older', { lastUsedAt: at(-60) }),
+          ],
+        }),
+      ),
+    ).toEqual(selected('older'))
+    expect(pickAccount(windowless({ accounts: [apiAccount('a', { activeTurns: 1 })] }))).toEqual({
+      kind: 'busy',
+      retryAt: at(1),
+    })
+  })
+
+  it('never takes an account of another backend', () => {
+    expect(pickAccount(windowless({ accounts: [account('a')] }))).toEqual({
+      kind: 'wait',
+      reason: 'pool_empty',
+      retryAt: at(15),
+      probeAccountIds: [],
+    })
+  })
+})
+
 describe('pickAccount: boundary validation', () => {
   it.each([
     { now: new Date('invalid') },
@@ -777,6 +881,10 @@ describe('pickAccount: boundary validation', () => {
     { minTurnHeadroomPct: 101 },
     { minTurnHeadroomPct: null },
     { backend: 'unknown' },
+    // Never defaulted: every caller states what its backend declares.
+    { capacity: undefined },
+    { capacity: 'balance' },
+    { capacity: null },
   ])('rejects malformed task snapshots: %j', (overrides) => {
     expect(() => pickAccount({ ...input(), ...overrides } as never)).toThrow(
       expect.objectContaining({ code: 'BAD_REQUEST' }),

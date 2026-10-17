@@ -282,7 +282,8 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     }
   })
 
-  it('reconstructs the daily payment failure count from the persisted call journal', async () => {
+  /** A key of a task that finished calls are journaled under, as the gateway writes them. */
+  async function callJournal() {
     const workspace = await db.workspace.create({ data: { name: 'Synthetic health journal' } })
     workspaceId = workspace.id
     const site = await db.site.create({
@@ -319,7 +320,7 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
         validUntil: new Date(Date.now() + 120_000),
       },
     })
-    const failed = (finishedAt: Date) =>
+    return (finishedAt: Date, data: { upstreamStatus?: number; signal?: string }) =>
       db.llmCall.create({
         data: {
           keyId: key.id,
@@ -329,11 +330,16 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
           state: 'failed',
           reservedRub: '0',
           requestBytes: 0,
-          upstreamStatus: 402,
           startedAt: new Date(finishedAt.getTime() - 1),
           finishedAt,
+          ...data,
         },
       })
+  }
+
+  it('reconstructs the daily payment failure count from the persisted call journal', async () => {
+    const journal = await callJournal()
+    const failed = (finishedAt: Date) => journal(finishedAt, { upstreamStatus: 402 })
     const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000)
     // Three concurrent 402 responses form one check; a day-old failure is outside the window.
     for (const finishedAt of [
@@ -354,5 +360,54 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     expect(
       await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } }),
     ).toMatchObject({ health: 'suspended', healthReason: 'payment_pending', enabled: false })
+  })
+  it('pauses an account whose balance is spent durably, longer with each check of the day', async () => {
+    const journal = await callJournal()
+    const spent = (finishedAt: Date) => journal(finishedAt, { signal: 'balance_exhausted' })
+    const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000)
+    const cooling = async () =>
+      (await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })).coolingUntil
+    const pausedFor = (until: Date | null, minutes: number) => {
+      // The database clock begins the pause; the test's clock is a little behind it.
+      const ahead = until!.getTime() - Date.now()
+      expect(ahead).toBeGreaterThan((minutes - 1) * 60_000)
+      expect(ahead).toBeLessThanOrEqual(minutes * 60_000 + 5_000)
+    }
+    // Two answered together form one check; a day-old one and another signal count for nothing.
+    await spent(minutesAgo(0))
+    await spent(new Date(Date.now() - 500))
+    await spent(minutesAgo(2 * 24 * 60))
+    await journal(minutesAgo(1), { upstreamStatus: 402, signal: 'transient' })
+    const first = await store.balance(accountId)
+    expect(first.count).toBe(1)
+    pausedFor(first.pausedUntil, 5)
+    expect(await cooling()).toEqual(first.pausedUntil)
+    // A call answered within that pause begins none of its own.
+    expect(await store.balance(accountId)).toEqual({ count: 1, pausedUntil: null })
+    expect(await cooling()).toEqual(first.pausedUntil)
+    // Once a pause is over, the next spent check pauses longer: 15, 45, then 60 minutes.
+    for (const [earlier, count, minutes] of [
+      [[6], 2, 15],
+      [[30, 20], 3, 45],
+      [[200, 190, 170, 120], 5, 60],
+    ] as const) {
+      await db.llmCall.deleteMany({
+        where: { subscriptionAccountId: accountId, signal: 'balance_exhausted' },
+      })
+      await db.subscriptionAccount.update({
+        where: { id: accountId },
+        data: { coolingUntil: minutesAgo(1) },
+      })
+      for (const minutes of earlier) await spent(minutesAgo(minutes))
+      await spent(minutesAgo(0))
+      const next = await store.balance(accountId)
+      expect(next.count).toBe(count)
+      pausedFor(next.pausedUntil, minutes)
+      expect(await cooling()).toEqual(next.pausedUntil)
+    }
+    // The account itself stays as it was: no health, no windows, no operator switch.
+    expect(
+      await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } }),
+    ).toMatchObject({ health: 'ok', healthReason: null, enabled: false })
   })
 })

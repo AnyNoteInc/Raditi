@@ -12,6 +12,8 @@ import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import {
+  zaiApiBackend,
+  zaiApiOffer,
   zaiCodingBackend,
   zaiCodingPlan,
 } from '../../../packages/llm-backends/src/zai-coding/backend.ts'
@@ -22,8 +24,10 @@ import {
   handleZai,
   isZaiRequest,
   startFakeZai,
+  SYNTHETIC_ZAI_API_KEY,
   SYNTHETIC_ZAI_KEY,
   SYNTHETIC_ZAI_MARKER,
+  SYNTHETIC_ZAI_ROTATED_API_KEY,
   SYNTHETIC_ZAI_ROTATED_KEY,
   ZAI_ERROR_STATUS,
   ZAI_PATHS,
@@ -130,9 +134,9 @@ const chunks = (text) =>
     .filter((data) => data !== '[DONE]')
     .map((data) => JSON.parse(data))
 /** The role's view of a stream: the production inspector and meter of the adapter. */
-function inspect(text) {
-  const inspector = zaiCodingBackend.streamInspector()
-  const meter = zaiCodingBackend.usageMeter()
+function inspect(text, backend = zaiCodingBackend) {
+  const inspector = backend.streamInspector()
+  const meter = backend.usageMeter()
   meter.push(Buffer.from(text))
   const seen = []
   let stopped = false
@@ -150,9 +154,9 @@ function inspect(text) {
   }
   return { seen, meter: meter.end(), failure: seen.find((item) => item.kind === 'failure') }
 }
-/** The adapter's own probe against the fake's quota path. */
-const probe = (target, key = SYNTHETIC_ZAI_KEY) =>
-  zaiCodingBackend.probe(
+/** The adapter's own probe against the fake's quota path; the plan's unless another is named. */
+const probe = (target, key = SYNTHETIC_ZAI_KEY, backend = zaiCodingBackend) =>
+  backend.probe(
     { ...credential, apiKey: key },
     {
       async request(asked) {
@@ -194,13 +198,25 @@ const recordedShapes = new Set(
   ].flatMap((name) => chunks(fixture(name).response.sse).map(shapeOf)),
 )
 
-test('the fake serves the addresses the adapter declares and nothing else', () => {
+test('the fake serves the addresses the adapters declare and nothing else', () => {
   assert.deepEqual(zaiCodingBackend.egress[0].requests, [
     `POST https://api.z.ai${ZAI_PATHS.chat}`,
     `GET https://api.z.ai${ZAI_PATHS.quota}`,
   ])
-  assert.equal(isZaiRequest({ url: `${ZAI_PATHS.chat}?x=1` }), true)
-  for (const url of ['/api/paas/v4/chat/completions', '/coding/v1/chat/completions', '/'])
+  // The API asks the monitor path of the plan as its probe of the key.
+  assert.deepEqual(zaiApiBackend.egress[0].requests, [
+    `POST https://api.z.ai${ZAI_PATHS.apiChat}`,
+    `GET https://api.z.ai${ZAI_PATHS.quota}`,
+  ])
+  assert.equal(zaiApiOffer.origin, zaiCodingPlan.origin)
+  for (const path of Object.values(ZAI_PATHS))
+    assert.equal(isZaiRequest({ url: `${path}?x=1` }), true)
+  for (const url of [
+    '/api/paas/v4/models',
+    '/api/paas/v4/chat/completions/',
+    '/coding/v1/chat/completions',
+    '/',
+  ])
     assert.equal(isZaiRequest({ url }), false)
 })
 
@@ -1111,6 +1127,194 @@ test('a request record names the credential and the headers and holds neither', 
   target.state.reset()
   assert.deepEqual(target.state.requests, [])
   assert.deepEqual(target.state.counters, { chat: 0, quota: 0, generated: 0 })
+})
+
+const apiChat = (target, body = chatBody(), options = {}) =>
+  send(target, ZAI_PATHS.apiChat, { body, key: SYNTHETIC_ZAI_API_KEY, ...options })
+
+test('the API path answers its funded key with a stream and the usage of the plan path, and moves no window', async (t) => {
+  // The API account has money from the start: only the scenarios of 1113 empty it.
+  assert.equal(createFakeZaiState().balance, 'funded')
+  const target = await plain(t)
+  assert.equal(target.state.balance, 'funded')
+  const windows = JSON.stringify(target.state.quota)
+  target.state.setScenario({
+    scenario: 'text',
+    usage: { prompt: 5084, cached: 4928, completion: 436, reasoning: 266 },
+  })
+  const answer = await apiChat(target)
+  assert.equal(answer.status, 200)
+  assert.equal(answer.headers['content-type'], 'text/event-stream;charset=UTF-8')
+  // The usage comes in the chunk that names the finish reason, as on the plan path.
+  const last = chunks(answer.text).at(-1)
+  assert.equal(last.choices[0].finish_reason, 'stop')
+  assert.deepEqual(last.usage, {
+    prompt_tokens: 5084,
+    completion_tokens: 436,
+    total_tokens: 5520,
+    prompt_tokens_details: { cached_tokens: 4928 },
+    completion_tokens_details: { reasoning_tokens: 266 },
+  })
+  const { meter, failure } = inspect(answer.text, zaiApiBackend)
+  assert.equal(failure, undefined)
+  assert.deepEqual(meter.usage, {
+    input: 5084,
+    cacheRead: 4928,
+    cacheWrite: 0,
+    output: 436,
+    reasoning: 266,
+  })
+  assert.equal(streamSummary(answer.text).usage.reasoning, 266)
+  // Tool rounds and every other scenario answer on the API path as on the plan path.
+  target.state.setScenario({ scenario: 'tools', calls: [{ name: 'bash', arguments: {} }] })
+  const called = await apiChat(target, withTools())
+  assert.equal(chunks(called.text).at(-1).choices[0].finish_reason, 'tool_calls')
+  // A generation of the API spends no credit of a plan window.
+  assert.equal(JSON.stringify(target.state.quota), windows)
+  assert.deepEqual(target.state.counters, { chat: 2, quota: 0, generated: 2 })
+  assert.deepEqual(
+    target.state.requests.map((request) => [request.path, request.credential, request.status]),
+    [
+      [ZAI_PATHS.apiChat, 'api-key', 200],
+      [ZAI_PATHS.apiChat, 'api-key', 200],
+    ],
+  )
+  // Not even a spent window of the plan stops the API.
+  target.state.setQuota({ fiveHour: { exhausted: true } })
+  target.state.setScenario({ scenario: 'text' })
+  assert.equal((await apiChat(target)).status, 200)
+  assert.equal((await chat(target)).status, 429)
+})
+
+test('an empty balance answers the API key with 1113 under HTTP 429, as sample 21 shows', async (t) => {
+  const target = await plain(t)
+  const recorded = fixture('21-paas-chat.json').response
+  assert.equal(target.state.configure({ balance: 'empty' }).balance, 'empty')
+  const refused = await apiChat(target)
+  assert.equal(refused.status, recorded.status)
+  assert.equal(refused.headers['content-type'], recorded.headers['content-type'])
+  const body = JSON.parse(refused.text)
+  assert.deepEqual(Object.keys(body.error), Object.keys(JSON.parse(recorded.body).error))
+  assert.equal(body.error.code, JSON.parse(recorded.body).error.code)
+  assert.ok(body.error.message.includes(SYNTHETIC_ZAI_MARKER))
+  // The same answer is the API's empty balance and, to a plan key, a plan it lacks.
+  assert.deepEqual(zaiApiBackend.classify(429, new Headers(refused.headers), body), {
+    kind: 'balance_exhausted',
+  })
+  assert.deepEqual(zaiCodingBackend.classify(429, new Headers(refused.headers), body), {
+    kind: 'account_risk',
+    reason: 'zai_1113',
+  })
+  // The plan path does not look at the balance of the API account.
+  assert.equal((await chat(target)).status, 200)
+  // Before the body is read, as the recorded valid body was refused.
+  assert.equal((await apiChat(target, { model: 'glm-0-does-not-exist' })).status, 429)
+  assert.equal(target.state.counters.generated, 1)
+  // A top-up: the next request is answered.
+  target.state.configure({ balance: 'funded' })
+  assert.equal((await apiChat(target)).status, 200)
+  assert.equal(target.state.reset().balance, 'funded')
+  assert.throws(() => target.state.configure({ balance: 'low' }))
+})
+
+test('a key of one offer on the path of the other gets 1113, a refused key 401, none 1001', async (t) => {
+  const target = await plain(t)
+  // Sample 21: the plan key on the API path.
+  const planOnApi = await apiChat(target, chatBody(), { key: SYNTHETIC_ZAI_KEY })
+  assert.deepEqual([planOnApi.status, JSON.parse(planOnApi.text).error.code], [429, '1113'])
+  const apiOnPlan = await chat(target, chatBody(), { key: SYNTHETIC_ZAI_API_KEY })
+  assert.deepEqual([apiOnPlan.status, JSON.parse(apiOnPlan.text).error.code], [429, '1113'])
+  for (const [key, code] of [
+    [SYNTHETIC_ZAI_ROTATED_API_KEY, '401'],
+    ['another-key', '401'],
+    [null, '1001'],
+  ]) {
+    const answer = await apiChat(target, chatBody(), { key })
+    assert.equal(answer.status, 401)
+    assert.equal(JSON.parse(answer.text).error.code, code)
+    assert.deepEqual(
+      zaiApiBackend.classify(401, new Headers(answer.headers), JSON.parse(answer.text)),
+      { kind: 'auth' },
+    )
+  }
+  // The operator's new key: the old one is refused from now on, the plan key is not touched.
+  assert.equal(target.state.configure({ apiKey: 'rotated' }).apiKey, 'rotated')
+  assert.equal((await apiChat(target)).status, 401)
+  assert.equal(
+    (await apiChat(target, chatBody(), { key: SYNTHETIC_ZAI_ROTATED_API_KEY })).status,
+    200,
+  )
+  assert.equal((await chat(target)).status, 200)
+  assert.deepEqual(
+    target.state.requests.map((request) => request.credential),
+    ['plan-key', 'api-key', 'other', 'other', 'none', 'other', 'api-key', 'plan-key'],
+  )
+  assert.equal(target.state.counters.generated, 2)
+  const written = JSON.stringify(target.state.snapshot())
+  for (const key of [SYNTHETIC_ZAI_API_KEY, SYNTHETIC_ZAI_ROTATED_API_KEY])
+    assert.equal(written.includes(key), false)
+  assert.equal(target.state.reset().apiKey, 'first')
+  assert.throws(() => target.state.configure({ apiKey: 'another' }))
+})
+
+test('the API reads 1302 and 1305 as short-lived and a 429 without a code as a throttle', async (t) => {
+  const target = await plain(t)
+  for (const code of [1302, 1305]) {
+    target.state.setScenario({ scenario: 'error', code, retryAfter: '2' })
+    const answer = await apiChat(target)
+    assert.equal(answer.status, 429)
+    assert.deepEqual(
+      zaiApiBackend.classify(429, new Headers(answer.headers), JSON.parse(answer.text)),
+      { kind: 'transient', retryAfterMs: 2000 },
+    )
+  }
+  // An error object that names no code: the API's own throttle; to the plan, an unconfirmed block.
+  target.state.setScenario({ scenario: 'error', status: 429, retryAfter: '1', failures: 1 })
+  const codeless = await apiChat(target)
+  assert.equal(codeless.status, 429)
+  const body = JSON.parse(codeless.text)
+  assert.deepEqual(Object.keys(body.error), ['message'])
+  assert.ok(body.error.message.includes(SYNTHETIC_ZAI_MARKER))
+  assert.deepEqual(zaiApiBackend.classify(429, new Headers(codeless.headers), body), {
+    kind: 'transient',
+    retryAfterMs: 1000,
+  })
+  assert.deepEqual(zaiCodingBackend.classify(429, new Headers(codeless.headers), body), {
+    kind: 'unconfirmed_block',
+  })
+  // Past its one failure the scenario answers.
+  assert.equal((await apiChat(target)).status, 200)
+  // A status is what such an error needs: without one it is no scenario.
+  assert.throws(() => target.state.setScenario({ scenario: 'error' }))
+  assert.throws(() => target.state.setScenario({ scenario: 'error', status: 200 }))
+})
+
+test('the monitor path answers the API key with an envelope that names no refused key: the API probe reads it as a key the provider takes', async (t) => {
+  const target = await plain(t)
+  const answer = await send(target, ZAI_PATHS.quota, { method: 'GET', key: SYNTHETIC_ZAI_API_KEY })
+  assert.equal(answer.status, 200)
+  const body = JSON.parse(answer.text)
+  // The envelope of samples 10, 10b and 14 with the code of sample 21.
+  assert.deepEqual(Object.keys(body), Object.keys(fixture('10-err-invalid-key.json').response.body))
+  assert.deepEqual([body.code, body.success], [1113, false])
+  assert.deepEqual(await probe(target, SYNTHETIC_ZAI_API_KEY, zaiApiBackend), {
+    status: 'ok',
+    windows: null,
+    plan: null,
+  })
+  // An empty balance changes nothing there: the probe cannot see it.
+  target.state.configure({ balance: 'empty' })
+  assert.equal((await probe(target, SYNTHETIC_ZAI_API_KEY, zaiApiBackend)).status, 'ok')
+  // A refused key and no key: the recorded auth envelopes.
+  assert.equal((await probe(target, SYNTHETIC_ZAI_ROTATED_API_KEY, zaiApiBackend)).status, 'auth')
+  assert.equal((await probe(target, 'another-key', zaiApiBackend)).status, 'auth')
+  // The plan key passes the API's probe as well (one account may hold both): nothing tells the
+  // import that a key was given to the wrong offer.
+  assert.equal((await probe(target, SYNTHETIC_ZAI_KEY, zaiApiBackend)).status, 'ok')
+  // The API probe spends nothing: no generation, no window moved.
+  assert.deepEqual(target.state.counters, { chat: 0, quota: 6, generated: 0 })
+  // The plan's probe does not take an API key for a plan.
+  assert.equal((await probe(target, SYNTHETIC_ZAI_API_KEY)).status, 'suspended')
 })
 
 test('scenario options are closed', () => {

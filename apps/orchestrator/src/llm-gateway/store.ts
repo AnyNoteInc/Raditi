@@ -11,10 +11,12 @@ import {
   limitResetPlausible,
   llmBackendIdSchema,
   llmCallCostRub,
+  llmCapacitySchema,
   poolPolicy,
   refusalForSignal,
   type CallUsage,
   type GatewayRefusal,
+  type LlmCapacity,
   type LlmModelPrices,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -55,6 +57,7 @@ const admitSchema = z.strictObject({
   keyHash: hashSchema,
   source: sourceSchema,
   backendId: llmBackendIdSchema,
+  capacity: llmCapacitySchema,
   route: z.strictObject({ method: z.enum(['POST', 'GET']), path: z.string().min(1).max(64) }),
   profile: profileSchema,
   requestBytes: int.max(16 * 1024 * 1024),
@@ -270,7 +273,7 @@ export class PostgresGatewayStore implements GatewayStore {
         })
       )
         return { ...(await this.#refused(tx, row.keyId, 'budget')), limit: 'money' }
-      const blocked = accountRefusal(row)
+      const blocked = accountRefusal(row, value.capacity)
       if (blocked === 'windows_unknown') {
         const refused = await this.#refused(tx, row.keyId, 'transient', unknownWindowsRetryMs)
         return { ...refused, probeAccount: true, limitsSeenAt: row.limitsSeenAt }
@@ -731,12 +734,17 @@ function usageFromRow(value: {
  * A window past its reset has rolled over, so its old usage no longer applies; the next
  * probe reports the new period. Unknown windows hold the turn as short-lived until
  * a fresh probe, because an authoritative exhaustion or a malformed report clears them.
+ * A backend without windows is held by the account's own pauses alone.
  */
-function accountRefusal(row: KeyRow): GatewayRefusal | 'windows_unknown' | null {
+function accountRefusal(
+  row: KeyRow,
+  capacity: LlmCapacity,
+): GatewayRefusal | 'windows_unknown' | null {
   if (accountOff(row)) return 'account'
   // Existing keys drain normally during retirement; a new issue rejects it in pickAccount.
   if (row.breakerOpenUntil !== null && row.breakerOpenUntil > row.serverNow) return 'account'
   if (row.coolingUntil !== null && row.coolingUntil > row.serverNow) return 'subscription_limit'
+  if (capacity === 'none') return null
   const windows = decodeLimitWindows(row.limitWindows)
   if (windows === null || windows.length === 0) return 'windows_unknown'
   const now = row.serverNow.getTime()

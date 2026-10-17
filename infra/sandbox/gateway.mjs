@@ -15,7 +15,7 @@ const sharedRequestHeaders = ['authorization', 'content-type', 'accept']
  * of the LLM backends of the role llm, the headers what the role and those backends read and
  * answer with: a contract test of the role holds the three lists to them.
  */
-export const llmPaths = Object.freeze(['/zai/v4/chat/completions'])
+export const llmPaths = Object.freeze(['/zai/v4/chat/completions', '/zai/paas/v4/chat/completions'])
 export const llmRequestHeaders = Object.freeze([...sharedRequestHeaders, 'user-agent'])
 export const llmResponseHeaders = Object.freeze(['content-type', 'retry-after'])
 const mcpRequestHeaders = [

@@ -25,8 +25,10 @@ import {
   startVerificationStack,
 } from '../../../infra/dev/llm-verify/stack.mjs'
 import {
+  SYNTHETIC_ZAI_API_KEY,
   SYNTHETIC_ZAI_KEY,
   SYNTHETIC_ZAI_MARKER,
+  SYNTHETIC_ZAI_ROTATED_API_KEY,
   SYNTHETIC_ZAI_ROTATED_KEY,
 } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import { standMode } from '../../../infra/dev/llm-verify/live.mjs'
@@ -34,12 +36,14 @@ import { startWorker } from '../../../infra/dev/llm-verify/workers.mjs'
 import { SessionSubscriptionLock } from '../src/llm-gateway/session-lock.ts'
 import { runLiveGateway } from './verify-llm-live.mjs'
 import { verifyZai } from './verify-llm-zai.mjs'
+import { verifyZaiApi } from './verify-llm-zai-api.mjs'
 
 if (process.argv.includes('--help')) {
   console.log(
     'verify:llm-gateway [--no-build]: disposable PostgreSQL/OpenBao, synthetic TLS providers and real pinned CLI containers. No real subscriptions or .env files.\n' +
       'verify:llm-gateway --live [--measure | --results] [--no-build] [--keep=<directory>]: the same path to the real provider, with ZAI_API_KEY in the environment; never in CI.\n' +
-      'verify:llm-gateway --rehearsal [--measure | --results] [--no-build]: the live flow on the synthetic provider.\n' +
+      'verify:llm-gateway --live --api [--no-build] [--keep=<directory>]: the same on the pay-per-token API, with the same ZAI_API_KEY in the environment; never in CI.\n' +
+      'verify:llm-gateway --rehearsal [--api | --measure | --results] [--no-build]: the live flow on the synthetic provider.\n' +
       'infra/dev/llm-verify/README.md',
   )
   process.exit(0)
@@ -62,16 +66,18 @@ let stage = 'build',
 const workers = []
 const extraLogs = []
 const secretMarkers = new Set([
-  // Both plan keys of the synthetic Z.ai and the text its refusals carry.
+  // Both plan keys and both API keys of the synthetic Z.ai, and the text its refusals carry.
   SYNTHETIC_ZAI_KEY,
   SYNTHETIC_ZAI_ROTATED_KEY,
+  SYNTHETIC_ZAI_API_KEY,
+  SYNTHETIC_ZAI_ROTATED_API_KEY,
   SYNTHETIC_ZAI_MARKER,
 ])
 const promptMarker = `synthetic-prompt-${randomBytes(12).toString('hex')}`
-// A floor under the count of completed calls the usage check looks at: the stand completes 37
-// (the count is in its REPORT line), and a stand that lost a group of its turns must not pass
-// that check on what is left.
-const MIN_COMPLETED_CALLS = 30
+// A floor under the count of completed calls the usage check looks at: the stand completes 42,
+// 37 of the plan group and 5 of the API group (the count is in its REPORT line), and a stand
+// that lost a group of its turns must not pass that check on what is left.
+const MIN_COMPLETED_CALLS = 38
 const passed = (name) => {
   checks++
   console.log(`PASS ${name}`)
@@ -268,10 +274,9 @@ try {
     )
     return llm
   }
-  // Every scenario of the stand runs in this one group, on a key of its backend: the turns of
-  // the pinned CLI through its driver and the scenarios of the platform alike.
-  stage = 'Z.ai through the OpenCode driver'
-  await verifyZai({
+  // The plan group holds the turns of the pinned CLI through its driver and every scenario of
+  // the platform; the API group after it, what differs on the pay-per-token offer.
+  const groupContext = {
     db,
     core,
     stack,
@@ -291,8 +296,19 @@ try {
     secretMarkers,
     metricsToken,
     writerFile,
+  }
+  stage = 'Z.ai through the OpenCode driver'
+  await verifyZai({
+    ...groupContext,
     setStage: (name) => {
       stage = `Z.ai: ${name}`
+    },
+  })
+  stage = 'Z.ai API through the OpenCode driver'
+  await verifyZaiApi({
+    ...groupContext,
+    setStage: (name) => {
+      stage = `Z.ai API: ${name}`
     },
   })
   stage = 'usage of every completed call'

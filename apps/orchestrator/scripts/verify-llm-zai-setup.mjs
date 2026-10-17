@@ -1,19 +1,66 @@
 // What a stand does before the real OpenCode CLI can take a turn on the synthetic Z.ai, shared
-// by verify:llm-gateway (verify-llm-zai.mjs) and verify:agent-content: the role llm without an
-// egress proxy, the plan key imported by the operator command, the rows an operator switches on
-// and a home of the CLI that holds nothing but the session state.
+// by verify:llm-gateway (verify-llm-zai.mjs, verify-llm-zai-api.mjs) and verify:agent-content:
+// the role llm without an egress proxy, the provider key imported by the operator command, the
+// rows an operator switches on and a home of the CLI that holds nothing but the session state.
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import process from 'node:process'
 
-import { dockerCommand } from '../../../infra/dev/llm-verify/cli.mjs'
-import { repository, run } from '../../../infra/dev/llm-verify/stack.mjs'
+import { preparedFilesSchema, preparedRunExposesSecret, turnCredentials } from '@repo/domain'
 
-export const ZAI_BACKEND = 'zai-coding'
+import { dockerCommand } from '../../../infra/dev/llm-verify/cli.mjs'
+import {
+  SYNTHETIC_ZAI_API_KEY,
+  SYNTHETIC_ZAI_KEY,
+  SYNTHETIC_ZAI_ROTATED_API_KEY,
+  SYNTHETIC_ZAI_ROTATED_KEY,
+  ZAI_PATHS,
+} from '../../../infra/dev/llm-verify/fake-zai.mjs'
+import { repository, run } from '../../../infra/dev/llm-verify/stack.mjs'
+import {
+  llmBackends,
+  zaiApiBackend,
+  zaiCodingBackend,
+} from '../../../packages/llm-backends/src/index.ts'
+import { llmGatewayBaseUrl } from '../src/llm/backends.ts'
+
+/** The address of sandbox-gw in the network of the CLI container. */
+export const SANDBOX_GATEWAY = 'http://sandbox-gw:8080' // NOSONAR: sandbox-gw is reached over plain HTTP inside the isolated network of the sandbox (spec §8)
 export const ZAI_MODEL = 'glm-5.3'
 export const ZAI_PROFILE = 'glm-5.3-standard'
+
+/**
+ * The two offers of Z.ai as a stand drives them: the backend and the provider row of its slug,
+ * the plan an operator names at import, the route of sandbox-gw and the base URL the CLI is
+ * given for it (core's own helper), the path of the synthetic provider it ends on, the label
+ * the fake gives its key, and the synthetic keys — the first one and the operator's next.
+ */
+export const ZAI_OFFERS = Object.freeze({
+  plan: Object.freeze({
+    backend: zaiCodingBackend.id,
+    plan: 'lite',
+    route: zaiCodingBackend.routes[0].path,
+    gatewayBaseUrl: llmGatewayBaseUrl(SANDBOX_GATEWAY, zaiCodingBackend),
+    providerPath: ZAI_PATHS.chat,
+    credential: 'plan-key',
+    key: SYNTHETIC_ZAI_KEY,
+    rotatedKey: SYNTHETIC_ZAI_ROTATED_KEY,
+  }),
+  // The pay-per-token API (П15): an account with a balance and no windows.
+  api: Object.freeze({
+    backend: zaiApiBackend.id,
+    plan: 'payg',
+    route: zaiApiBackend.routes[0].path,
+    gatewayBaseUrl: llmGatewayBaseUrl(SANDBOX_GATEWAY, zaiApiBackend),
+    providerPath: ZAI_PATHS.apiChat,
+    credential: 'api-key',
+    key: SYNTHETIC_ZAI_API_KEY,
+    rotatedKey: SYNTHETIC_ZAI_ROTATED_API_KEY,
+  }),
+})
+export const ZAI_BACKEND = ZAI_OFFERS.plan.backend
 /** What the CLI is given as the address of its provider: the route of sandbox-gw. */
-export const ZAI_GATEWAY_BASE_URL = 'http://sandbox-gw:8080/zai/v4'
+export const ZAI_GATEWAY_BASE_URL = ZAI_OFFERS.plan.gatewayBaseUrl
 export const OPENCODE_HOME = '/agent-home/opencode'
 const PROXY_VARIABLES = [
   'LLM_EGRESS_PROXY_URL',
@@ -23,6 +70,18 @@ const PROXY_VARIABLES = [
 ]
 
 /**
+ * The stand variable of every origin a backend declares, each pointed at the stand's fake: the
+ * offers of Z.ai share one origin and so one variable, which a stand sets once.
+ */
+export function zaiOriginOverrides(stack) {
+  return Object.fromEntries(
+    llmBackends
+      .flatMap((backend) => backend.egress)
+      .map((origin) => [origin.overrideEnv, stack.providerOrigin]),
+  )
+}
+
+/**
  * The environment of a role llm that reaches Z.ai on a connection of its own, as it reaches
  * api.z.ai in the product: no egress proxy, and the provider's origin pointed at the stand's
  * fake under the name its certificate carries.
@@ -30,7 +89,7 @@ const PROXY_VARIABLES = [
 export function zaiDirectEnvironment(env, stack) {
   return {
     ...Object.fromEntries(Object.entries(env).filter(([name]) => !PROXY_VARIABLES.includes(name))),
-    LLM_BACKEND_URL_ZAI_CODING: stack.providerOrigin,
+    ...zaiOriginOverrides(stack),
   }
 }
 
@@ -41,7 +100,7 @@ export function zaiOperator(stack, upstreamCaFile) {
     DATABASE_URL: stack.databaseUrl,
     VAULT_ADDR: stack.vaultAddress,
     LLM_UPSTREAM_CA_FILE: upstreamCaFile,
-    LLM_BACKEND_URL_ZAI_CODING: stack.providerOrigin,
+    ...zaiOriginOverrides(stack),
   }
   return (command, args, input) =>
     run(
@@ -51,17 +110,20 @@ export function zaiOperator(stack, upstreamCaFile) {
     )
 }
 
-/** `subscriptions:login` with the plan key on stdin: the account is created switched off. */
-export const zaiLogin = (operator, { label, writerFile, key }) =>
+/**
+ * `subscriptions:login` with the provider key on stdin, for the plan unless another offer is
+ * named: the account is created switched off.
+ */
+export const zaiLogin = (operator, { label, writerFile, key, offer = ZAI_OFFERS.plan }) =>
   operator(
     'login',
     [
       '--backend',
-      ZAI_BACKEND,
+      offer.backend,
       '--label',
       label,
       '--plan',
-      'lite',
+      offer.plan,
       '--vault-token-file',
       writerFile,
     ],
@@ -83,9 +145,9 @@ export const ZAI_STAND_RATES = Object.freeze({
  * its row is on as the migrations and the seeds leave it, and the stand stands on that. The
  * windows of the account are nobody's to write but a probe's.
  */
-export async function switchOnZai(db, { accountId, ratesUrl }) {
+export async function switchOnZai(db, { accountId, ratesUrl, backend = ZAI_BACKEND }) {
   const provider = await db.llmProvider.update({
-    where: { slug: ZAI_BACKEND },
+    where: { slug: backend },
     data: { enabled: true },
   })
   const profile = await db.llmModel.findFirstOrThrow({
@@ -138,4 +200,60 @@ export async function resetOpencodeHome(containerName, { keepSession = false } =
     keepSession ? 'keep' : 'new',
   ])
   assert.equal(reset.code, 0, 'The home of the CLI could not be prepared')
+}
+
+/**
+ * The driver's prepare and command for one turn in the CLI container, with the executor's
+ * checks: a home that holds nothing but the session state, the MCP route given the turn's token
+ * and the tools, and no turn credential in a prepared file, an env value or an argument. `llm`
+ * is what the CLI is told of its provider.
+ */
+export async function prepareOpencodeTurn(
+  { cli, control, driver, tools, instructions },
+  { turn, prompt, nativeSessionId, llm },
+) {
+  await resetOpencodeHome(cli.containerName, { keepSession: Boolean(nativeSessionId) })
+  await control('mcp', { token: turn.values.mcpToken, tools })
+  const context = {
+    taskId: turn.ref.taskId,
+    sessionId: turn.ref.sessionId,
+    turn: turn.ref.turn,
+    llm: { ...llm, apiKey: turn.values.llmApiKey },
+    mcp: { url: `${SANDBOX_GATEWAY}/mcp`, token: turn.values.mcpToken },
+    instructions,
+    ...(nativeSessionId ? { nativeSessionId } : {}),
+  }
+  const prepared = await driver.prepare(context)
+  const argv = driver.command(prepared, { prompt, attachments: [] })
+  const files = preparedFilesSchema.parse({
+    files: prepared.files,
+    env: prepared.env,
+    secrets: prepared.secrets,
+  })
+  assert.equal(
+    preparedRunExposesSecret(files, turnCredentials(context, files.secrets), argv),
+    false,
+    'A prepared file, env value or argument carries a turn credential',
+  )
+  return { files, argv }
+}
+
+/**
+ * One more profile of the backend's provider switched on at the stand rate: the levels a run
+ * asks besides the standard one. Found by the provider as well as the slug, since both offers
+ * name their profiles alike.
+ */
+export async function switchOnProfile(db, { backend = ZAI_BACKEND, slug, ratesUrl }) {
+  const profile = await db.llmModel.findFirstOrThrow({
+    where: { slug, provider: { slug: backend } },
+  })
+  await db.llmModelPrice.create({
+    data: {
+      modelId: profile.id,
+      effectiveFrom: new Date(Date.now() - 60_000),
+      ...ZAI_STAND_RATES,
+      sourceUrl: ratesUrl,
+    },
+  })
+  return db.llmModel.update({ where: { id: profile.id }, data: { enabled: true } })
 }

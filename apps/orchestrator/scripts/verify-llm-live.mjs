@@ -2,7 +2,10 @@
 // verify:llm-gateway --live: the real pinned OpenCode CLI through its driver, sandbox-gw and the
 // role llm to the real GLM on api.z.ai, which the role reaches itself, as in the product. With
 // --measure the same run measures instead of accepting, and with --results it measures one
-// thing under the cap of the acceptance: how often a turn ends with a valid result. With
+// thing under the cap of the acceptance: how often a turn ends with a valid result. With --api
+// the acceptance runs on the pay-per-token API instead of the plan (П15): no windows to start
+// on or to grow, and what no record shows yet is asserted — the probe of the key and two levels
+// of reasoning that count differently; where the usage comes is reported. With
 // --rehearsal the same code runs on the synthetic Z.ai with a scripted model and proves the
 // request cap, the start refusals and the search for the key before anything is sent to the
 // real provider. Only synthetic prompts go to the model. Commands, limits and rules:
@@ -15,13 +18,7 @@ import process from 'node:process'
 
 import { createOpencodeDriver } from '@repo/agent-drivers'
 import { createPrismaClient } from '@repo/db'
-import {
-  llmJsonLimits,
-  preparedFilesSchema,
-  preparedRunExposesSecret,
-  SANDBOX_WORKDIR,
-  turnCredentials,
-} from '@repo/domain'
+import { llmJsonLimits, SANDBOX_WORKDIR } from '@repo/domain'
 
 import { CLI_IMAGE, createCliSession, dockerCommand } from '../../../infra/dev/llm-verify/cli.mjs'
 import { SYNTHETIC_MCP_MARKER } from '../../../infra/dev/llm-verify/fake-subscriptions.mjs'
@@ -57,14 +54,14 @@ import {
 } from './verify-llm-live-results.mjs'
 import { assertImages, openLiveRun, REFUSED } from './verify-llm-live-run.mjs'
 import {
-  resetOpencodeHome,
+  prepareOpencodeTurn,
+  SANDBOX_GATEWAY as GATEWAY,
+  switchOnProfile,
   switchOnZai,
-  ZAI_BACKEND,
   ZAI_GATEWAY_BASE_URL,
   ZAI_MODEL,
 } from './verify-llm-zai-setup.mjs'
 
-const GATEWAY = 'http://sandbox-gw:8080'
 /** Calls one turn key of the acceptance may start: the role's own ceiling, LLM_MAX_CALLS_PER_KEY. */
 const TURN_CALLS = 5
 /** Attempts an outcome that depends on the model gets. */
@@ -149,7 +146,7 @@ const resultFor = (summary, files = []) => ({
 })
 
 export async function runLiveGateway(mode) {
-  const kind = mode.measure ? 'measure' : mode.results ? 'results' : 'gateway'
+  const kind = runKind(mode)
   let stage = 'build'
   let stack, db, llm, core, cli
   // The ceiling of a turn key the role llm runs with: LLM_MAX_CALLS_PER_KEY of its process.
@@ -172,7 +169,7 @@ export async function runLiveGateway(mode) {
   // The time limit of the run ends it the way a signal does.
   const live = await openLiveRun({ mode, kind, onExpire: interrupt })
   if (live === REFUSED) return REFUSED
-  const { rehearsal, budget, passed, report } = live
+  const { rehearsal, budget, passed, report, offer } = live
   // Kept until the end of the run, not `once`: a repeated signal must not end the cleanup, and
   // the cleanup is what removes the OpenBao container that holds the plan key.
   process.on('SIGINT', interrupt)
@@ -214,28 +211,22 @@ export async function runLiveGateway(mode) {
     const script = (scenario) => (rehearsal ? control('zai', { scenario }) : null)
     const fakeChat = async () => (rehearsal ? (await control('zai')).counters.chat : null)
 
-    stage = 'import of the plan key'
+    stage = `import of the ${live.keyWord}`
     const accountId = await live.importKey({ stack, db })
-    await switchOnZai(db, { accountId, ratesUrl: 'https://synthetic.invalid/live-rates' })
-    // Both measurements ask the three classes: the same model at the three levels.
-    if (mode.measure || mode.results)
-      for (const { slug } of [CLASSES.light, CLASSES.heavy]) {
-        const profile = await db.llmModel.findFirstOrThrow({ where: { slug } })
-        await db.llmModelPrice.create({
-          data: {
-            modelId: profile.id,
-            effectiveFrom: new Date(Date.now() - 60_000),
-            inputPer1m: '10',
-            cacheReadPer1m: '1',
-            outputPer1m: '30',
-            vatRate: '0.22',
-            sourceUrl: 'https://synthetic.invalid/live-rates',
-          },
-        })
-        await db.llmModel.update({ where: { id: profile.id }, data: { enabled: true } })
-      }
+    const ratesUrl = 'https://synthetic.invalid/live-rates'
+    await switchOnZai(db, { accountId, ratesUrl, backend: offer.backend })
+    // Both measurements ask the three classes: the same model at the three levels; the API run
+    // asks two of them. The profiles of the run's own provider: both offers name theirs alike.
+    if (mode.measure || mode.results || mode.api)
+      await Promise.all(
+        [CLASSES.light, CLASSES.heavy].map(({ slug }) =>
+          switchOnProfile(db, { backend: offer.backend, slug, ratesUrl }),
+        ),
+      )
     passed(
-      'the plan key went from the environment of the stand to the operator command on its input; the import passed on the quota answer of the provider',
+      mode.api
+        ? 'the API key went from the environment of the stand to the operator command on its input; the import passed on the probe of the key: the monitor path answered it as a key the provider takes (П66)'
+        : 'the plan key went from the environment of the stand to the operator command on its input; the import passed on the quota answer of the provider',
     )
 
     stage = 'role llm, core and the observer'
@@ -297,7 +288,7 @@ export async function runLiveGateway(mode) {
         },
         grant: {
           driverId: 'opencode',
-          backend: ZAI_BACKEND,
+          backend: offer.backend,
           modelSlug: profile.slug,
           modelClass: 'standard',
           reasoningEffort: profile.effort,
@@ -328,8 +319,20 @@ export async function runLiveGateway(mode) {
         const rows = await calls(turn)
         return rows.every((row) => row.state !== 'open') ? rows : null
       }, 30_000)
-    /** The first key of the run: nobody wrote the windows, so the role's probe does. */
+    /**
+     * The first key of the run: nobody wrote the windows, so the role's probe does. An account
+     * of the API has none: it is admitted without a request, and nothing is written.
+     */
     const admitted = async () => {
+      if (mode.api) {
+        const used = budget.state().used
+        const first = await issued()
+        const account = await db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
+        assert.equal(budget.state().used, used, 'The first key of the API asked the provider')
+        assert.equal(account.limitWindows?.length ?? 0, 0)
+        assert.equal(account.limitsSeenAt, null)
+        return { first, windows: null }
+      }
       budget.afford(1, 'the first quota probe of the role')
       const first = await issued()
       try {
@@ -341,7 +344,7 @@ export async function runLiveGateway(mode) {
     }
 
     stage = 'windows of the account'
-    if (rehearsal) {
+    if (rehearsal && !mode.api) {
       // The start refusals of the windows on the quota of the synthetic provider: above 50 % of
       // five hours, above 80 % of the week. The snapshot is the role's own: a role afresh reads
       // the quota anew when a key is issued.
@@ -376,7 +379,9 @@ export async function runLiveGateway(mode) {
     }
     const { first, windows: before } = await admitted()
     passed(
-      'the windows of the account were written by the quota probe of the role; the run may start',
+      mode.api
+        ? 'the API account was admitted without windows: no request at issue, no window written'
+        : 'the windows of the account were written by the quota probe of the role; the run may start',
     )
 
     stage = 'isolated CLI container'
@@ -407,33 +412,14 @@ export async function runLiveGateway(mode) {
      * ends the turn at once.
      */
     async function runTurn({ label, turn, prompt, nativeSessionId, effort = 'high' }) {
-      await resetOpencodeHome(cli.containerName, { keepSession: Boolean(nativeSessionId) })
-      await control('mcp', { token: turn.values.mcpToken, tools })
-      const context = {
-        taskId: turn.ref.taskId,
-        sessionId: turn.ref.sessionId,
-        turn: turn.ref.turn,
-        llm: {
-          baseUrl: ZAI_GATEWAY_BASE_URL,
-          model: ZAI_MODEL,
-          apiKey: turn.values.llmApiKey,
-          reasoningEffort: effort,
+      const { files, argv } = await prepareOpencodeTurn(
+        { cli, control, driver, tools, instructions },
+        {
+          turn,
+          prompt,
+          nativeSessionId,
+          llm: { baseUrl: offer.gatewayBaseUrl, model: ZAI_MODEL, reasoningEffort: effort },
         },
-        mcp: { url: `${GATEWAY}/mcp`, token: turn.values.mcpToken },
-        instructions,
-        ...(nativeSessionId ? { nativeSessionId } : {}),
-      }
-      const prepared = await driver.prepare(context)
-      const argv = driver.command(prepared, { prompt, attachments: [] })
-      const files = preparedFilesSchema.parse({
-        files: prepared.files,
-        env: prepared.env,
-        secrets: prepared.secrets,
-      })
-      assert.equal(
-        preparedRunExposesSecret(files, turnCredentials(context, files.secrets), argv),
-        false,
-        'A prepared file, env value or argument carries a turn credential',
       )
       const from = {
         exchanges: observer.exchanges().length,
@@ -452,11 +438,11 @@ export async function runLiveGateway(mode) {
       budget.assertHeld()
       assert.equal(result.timedOut, false, `${label}: the turn outlived ${TURN_MS / 1000} s`)
       assert.equal(result.exceeded, false, `${label}: the turn printed more than the stand reads`)
-      // Before the next turn wipes this home: nothing the CLI stored holds the plan key.
+      // Before the next turn wipes this home: nothing the CLI stored holds the provider key.
       assert.equal(
         await live.sandboxHoldsKey(cli.containerName),
         false,
-        `${label}: the plan key is in a file of the sandbox`,
+        `${label}: the ${live.keyWord} is in a file of the sandbox`,
       )
       const events = result.stdout.split('\n').flatMap((line) => driver.parseEvent(line))
       const exchanges = observer.exchanges().slice(from.exchanges)
@@ -542,8 +528,15 @@ export async function runLiveGateway(mode) {
       )
       const failed = rows.filter((row) => row.state !== 'completed')
       const streams = chats.filter(streamed).map((exchange) => streamSummary(exchange.responseText))
+      // Where the usage comes: in the chunk of the finish reason or in a chunk of its own after
+      // it. The meter reads both forms, so this is a share for the report, never a failure.
+      const metered = streams.filter((stream) => stream.usage !== null)
+      const atFinish = metered.filter((stream) => stream.usageAtFinish).length
+      const answers = chats.map((exchange) => `${exchange.status}/${exchange.ms}ms`).join(' ')
+      const forms = streams.flatMap((stream) => stream.forms)
+      const formsNote = forms.length ? `; forms ${forms.join(' ')}` : ''
       report(
-        `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s, provider requests ${outcome.requests}, calls ${rows.length} (failed ${failed.length}), tokens in ${fromRole.inputUncached} cached ${fromRole.cacheRead} out ${fromRole.output} reasoning ${fromRole.reasoning}; answers ${chats.map((exchange) => `${exchange.status}/${exchange.ms}ms`).join(' ')}; finish ${streams.map((stream) => stream.finishReasons.at(-1) ?? '-').join(' ')}${streams.some((stream) => stream.forms.length) ? `; forms ${streams.flatMap((stream) => stream.forms).join(' ')}` : ''}`,
+        `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s, provider requests ${outcome.requests}, calls ${rows.length} (failed ${failed.length}), tokens in ${fromRole.inputUncached} cached ${fromRole.cacheRead} out ${fromRole.output} reasoning ${fromRole.reasoning}; answers ${answers}; finish ${streams.map((stream) => stream.finishReasons.at(-1) ?? '-').join(' ')}; usage in the finish chunk ${atFinish} of ${metered.length}${formsNote}`,
       )
       return { rows, completed, failed, usage: fromRole }
     }
@@ -565,8 +558,9 @@ export async function runLiveGateway(mode) {
           const made = await once(attempt)
           const { verdict, strict, taken } = made.outcome.reading
           readings.push(made.outcome.reading)
+          const missedNote = made.missed?.length ? `; missed: ${made.missed.join(', ')}` : ''
           report(
-            `${label}, attempt ${attempt}: ${made.ok ? 'outcome reached' : 'outcome missed'}; result: ${taken ? 'taken' : 'refused'} by the reading of the product; by the strict reading of the driver: ${verdict}${made.missed?.length ? `; missed: ${made.missed.join(', ')}` : ''}`,
+            `${label}, attempt ${attempt}: ${made.ok ? 'outcome reached' : 'outcome missed'}; result: ${taken ? 'taken' : 'refused'} by the reading of the product; by the strict reading of the driver: ${verdict}${missedNote}`,
           )
           return { ...made, verdict, strict, taken }
         },
@@ -574,9 +568,7 @@ export async function runLiveGateway(mode) {
     // «The result is valid» is what the product would do with it (spec §20, П38).
     const valid = (outcome) => outcome.reading.taken
 
-    if (mode.measure) await measure()
-    else if (mode.results) await results()
-    else await acceptance()
+    await { measure, results, gateway: acceptance }[kind]()
 
     /**
      * The acceptance: a turn of each kind — tool, MCP, text and the continuation of the text
@@ -736,6 +728,14 @@ export async function runLiveGateway(mode) {
         }
       })
 
+      // The levels of the API come first: they are what the run owes, not a share, so the
+      // budget must cover them; and a turn between the text turn and its continuation would
+      // take the session the continuation resumes. Each has a key of its own class.
+      if (mode.api) {
+        await revoke(spare)
+        spare = null
+        await levels()
+      }
       for (const kind of [tool, mcp, text, continuation]) await kind.first()
       for (const kind of [continuation, text, tool, mcp]) await kind.retries()
 
@@ -757,6 +757,26 @@ export async function runLiveGateway(mode) {
       passed(
         `continuation: ${held(shares[3])}; each ran in the session of the first text turn, from its two files, with its history sent again`,
       )
+
+      if (mode.api) {
+        // Every request the guards counted is the import's probe or a call of a key: the role
+        // asked the provider for no window and no probe of the account.
+        const asked = await db.llmCall.count()
+        assert.equal(budget.state().used, asked + 1, 'The role asked the API for more than calls')
+        if (rehearsal) {
+          const synthetic = await control('zai')
+          assert.equal(synthetic.counters.quota, 1, 'The monitor path was asked after the import')
+          assert.ok(
+            synthetic.requests.every((request) =>
+              [ZAI_PATHS.apiChat, ZAI_PATHS.quota].includes(request.path),
+            ),
+            'A request of the API run went to the path of the plan',
+          )
+        }
+        passed(
+          `every provider request of the run was the probe of the import or a call of a key (${asked}): no window read, no probe of the account`,
+        )
+      }
 
       if (rehearsal) {
         // The scripted model is certain: the shares are exactly those of REHEARSED_MISSES.
@@ -785,6 +805,59 @@ export async function runLiveGateway(mode) {
         })
         await ceilingAndCap()
       }
+    }
+
+    /**
+     * The API run: one turn without tools at each of two levels of the same model, low and max.
+     * The provider counts the reasoning of each in its usage; the two counts must differ, or
+     * the level the profile sets does not reach the API. The answers are not judged.
+     */
+    async function levels() {
+      const counted = {}
+      for (const modelClass of ['light', 'heavy'])
+        counted[CLASSES[modelClass].effort] = await levelTurn(modelClass) // NOSONAR: one turn after the other: one CLI container, one account and a cap on provider requests
+      report(`reasoning tokens of the API by level: low ${counted.low}, max ${counted.max}`)
+      assert.notEqual(
+        counted.low,
+        counted.max,
+        'The two levels of reasoning counted the same reasoning tokens',
+      )
+      passed(
+        'two levels of the same model on the API, low and max: the usage of each counted its own reasoning tokens',
+      )
+    }
+
+    /** One turn without tools at the level of `modelClass`: the reasoning tokens it was counted. */
+    async function levelTurn(modelClass) {
+      const { effort } = CLASSES[modelClass]
+      const label = `level ${effort}`
+      stage = label
+      budget.afford(TURN_CALLS, label)
+      const turn = await issued({ modelClass })
+      // The scripted model of a rehearsal thinks as much as its level lets it.
+      await script({
+        scenario: 'text',
+        text: JSON.stringify(resultFor(`Synthetic level ${effort}`)),
+        usage: {
+          reasoning: effort === 'low' ? 21 : 340,
+          completion: effort === 'low' ? 60 : 380,
+        },
+      })
+      const asked = rehearsal ? (await control('zai')).requests.length : 0
+      const outcome = await runTurn({
+        label,
+        turn,
+        effort,
+        prompt:
+          'Synthetic check. Do not call any tool. Which of the numbers 91, 97 and 99 is prime? Reply with the final result only; put the number into its summary.',
+      })
+      const { completed, usage } = await invariants(turn, outcome)
+      await revoke(turn)
+      assert.ok(completed.length > 0, `${label}: no call of the key completed`)
+      if (rehearsal)
+        for (const request of (await control('zai')).requests.slice(asked))
+          assert.equal(request.body.reasoning_effort, effort, `${label}: the level of the body`)
+      return usage.reasoning
     }
 
     /** The scripted model of a rehearsal that never stops calling tools. */
@@ -828,8 +901,10 @@ export async function runLiveGateway(mode) {
     async function capOfTheRun() {
       stage = 'rehearsal: the cap of the run'
       // The reading of the quota the run ends on comes first here: the rest goes to the loop.
-      const after = await live.quota({ llm, accountId, what: 'at the end' })
-      live.growth(before, after)
+      if (!mode.api) {
+        const after = await live.quota({ llm, accountId, what: 'at the end' })
+        live.growth(before, after)
+      }
       await startLlm(600, { LLM_MAX_CALLS_PER_KEY_30S: '1000' })
       const unbounded = await issued()
       await script(looping())
@@ -1404,125 +1479,91 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
     }
 
     stage = 'the end of the run'
-    // Every row of llm_calls of the run, by state, and what the role's log says of the provider.
-    const states = await live.reportCalls(db)
-    const forms = new Set(
-      observer
-        .exchanges()
-        .filter(streamed)
-        .flatMap((exchange) => streamSummary(exchange.responseText).forms),
-    )
-    report(
-      `stream forms no scenario of the synthetic provider makes (of the ${STREAM_FORMS.length} the stand looks for): ${[...forms].join(' ') || 'none'}; the pinned user-agent was ${Object.keys(states).length ? 'accepted' : 'never sent'}`,
-    )
-    if (!rehearsal || !live.tripped()) {
-      for (const turn of refs) await revoke(turn).catch(() => {})
-      if (!mode.measure && !rehearsal) {
-        const after = await live.quota({ llm, accountId, what: 'at the end' })
-        live.growth(before, after)
-      }
-    }
-    await live.keepExchanges()
+    await closeTheRun()
+    stage = `the search for the ${live.keyWord}`
+    await searchForTheKey()
+    announcePassed({ live, mode, rehearsal })
 
-    stage = 'the search for the plan key'
-    const projectContainers = (
-      await run('docker', [
-        'ps',
-        '-aq',
-        '--filter',
-        `label=com.docker.compose.project=${stack.project}`,
-      ])
-    ).stdout
-      .split('\n')
-      .filter(Boolean)
-    const inspected = await run('docker', [
-      'inspect',
-      ...projectContainers,
-      ...(live.tripped() ? [] : [cli.containerName, `${stack.project}-guard`]),
-    ])
-    const places = await live.assertKeyNowhere({
-      stack,
-      places: [
-        {
-          name: 'logs of the services',
-          text: (await stack.compose(['logs', '--no-color'])).stdout,
-        },
-        {
-          name: 'audit log of OpenBao',
-          text: (await stack.compose(['exec', '-T', 'vault', 'cat', '/audit/audit.jsonl'])).stdout,
-        },
-        {
-          name: 'database dump',
-          text: (
-            await stack.compose([
-              'exec',
-              '-T',
-              'postgres',
-              'pg_dump',
-              '-U',
-              'postgres',
-              '-d',
-              'raditi',
-              '--data-only',
-            ])
-          ).stdout,
-        },
-        { name: 'events and output of the CLI', texts: outputs },
-        {
-          name: 'control port of the synthetic services',
-          text: JSON.stringify(rehearsal ? await control('zai') : await control('state')),
-        },
-        { name: 'docker inspect of the containers', text: inspected.stdout },
-      ],
-    })
-    passed(
-      `the plan key is in none of ${places} places: logs, audit, database, CLI events, exchanges, control port, docker inspect, the files of the sandbox and of the stand`,
-    )
-    const what = mode.measure
-      ? 'measurement'
-      : mode.results
-        ? 'measurement of results'
-        : 'verification'
-    if (rehearsal && !mode.measure) {
-      // The cap was reached on purpose: the count of the run says so itself.
-      assert.throws(() => live.settle(), /reached its cap of \d+ provider requests/)
-      assert.equal(live.tripped(), true)
-      console.log(
-        `Rehearsal of the live gateway ${what} passed: ${live.checks()} checks; the cap of ${live.limits.requests} provider requests was reached on purpose and held.`,
+    /** Every row of llm_calls of the run, by state, and what the role's log says of the provider. */
+    async function closeTheRun() {
+      const states = await live.reportCalls(db)
+      const forms = new Set(
+        observer
+          .exchanges()
+          .filter(streamed)
+          .flatMap((exchange) => streamSummary(exchange.responseText).forms),
       )
-    } else {
-      const state = live.settle()
-      // The exit code is of what the platform owes: the last line says where the model's part is.
-      console.log(
-        `${rehearsal ? 'Rehearsal of the live' : 'Live'} gateway ${what} passed: ${live.checks()} checks; ${state.used} of ${state.cap} provider requests; OpenCode 1.18.34 on the ${rehearsal ? 'synthetic' : 'real'} provider.${mode.measure ? '' : " The checks are of what the platform owes; the model's outcomes are shares in the REPORT lines."}`,
+      report(
+        `stream forms no scenario of the synthetic provider makes (of the ${STREAM_FORMS.length} the stand looks for): ${[...forms].join(' ') || 'none'}; the pinned user-agent was ${Object.keys(states).length ? 'accepted' : 'never sent'}`,
+      )
+      if (!rehearsal || !live.tripped()) {
+        for (const turn of refs) await revoke(turn).catch(() => {}) // NOSONAR: one key at a time, as each frees a slot of the same account row
+        if (!mode.measure && !rehearsal && !mode.api) {
+          const after = await live.quota({ llm, accountId, what: 'at the end' })
+          live.growth(before, after)
+        }
+      }
+      await live.keepExchanges()
+    }
+
+    async function searchForTheKey() {
+      const projectContainers = (
+        await run('docker', [
+          'ps',
+          '-aq',
+          '--filter',
+          `label=com.docker.compose.project=${stack.project}`,
+        ])
+      ).stdout
+        .split('\n')
+        .filter(Boolean)
+      const inspected = await run('docker', [
+        'inspect',
+        ...projectContainers,
+        ...(live.tripped() ? [] : [cli.containerName, `${stack.project}-guard`]),
+      ])
+      const places = await live.assertKeyNowhere({
+        stack,
+        places: [
+          {
+            name: 'logs of the services',
+            text: (await stack.compose(['logs', '--no-color'])).stdout,
+          },
+          {
+            name: 'audit log of OpenBao',
+            text: (await stack.compose(['exec', '-T', 'vault', 'cat', '/audit/audit.jsonl']))
+              .stdout,
+          },
+          {
+            name: 'database dump',
+            text: (
+              await stack.compose([
+                'exec',
+                '-T',
+                'postgres',
+                'pg_dump',
+                '-U',
+                'postgres',
+                '-d',
+                'raditi',
+                '--data-only',
+              ])
+            ).stdout,
+          },
+          { name: 'events and output of the CLI', texts: outputs },
+          {
+            name: 'control port of the synthetic services',
+            text: JSON.stringify(rehearsal ? await control('zai') : await control('state')),
+          },
+          { name: 'docker inspect of the containers', text: inspected.stdout },
+        ],
+      })
+      passed(
+        `the ${live.keyWord} is in none of ${places} places: logs, audit, database, CLI events, exchanges, control port, docker inspect, the files of the sandbox and of the stand`,
       )
     }
   } catch (error) {
-    code = 1
-    if (error instanceof LiveRefusal) {
-      console.error(`Live verification refused to start: ${error.message}`)
-      code = REFUSED
-    } else {
-      if (error.infrastructureDiagnostic) console.error(error.infrastructureDiagnostic)
-      // The first line of the failure: the stand's own words, names and numbers. Never when
-      // the failure, read whole, holds the key.
-      const line = failureLine(error, live.key)
-      if (line) console.error(line)
-      const reason = live.expired()
-        ? ' (the time limit of the run)'
-        : interrupted
-          ? ' (interrupted)'
-          : ''
-      console.error(`Live gateway verification failed at: ${stage}${reason}.`)
-      try {
-        const state = budget.state()
-        report(
-          `provider requests at the failure: ${state.used} of ${state.cap} (refused ${state.refused})`,
-        )
-      } catch {
-        /* The ledger is gone with the run directory. */
-      }
-    }
+    code = failureCode(error, { live, budget, report, stage, interrupted })
     // Before the cleanup removes it: the search for the key over what the run still holds,
     // and with --keep the exchanges, for the diagnosis of the failure.
     await live.afterFailure({
@@ -1532,7 +1573,7 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
   } finally {
     // The OpenBao container holds the plan key until the stack is removed: the stack last, and
     // every step tried whatever the others did.
-    const cleanup = [
+    const cleaned = await cleanUp([
       () => cli?.close(),
       ...workers
         .slice()
@@ -1543,17 +1584,88 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
         if (!(await live.close())) throw new Error('cleanup')
       },
       () => stack?.close(),
-    ]
-    for (const close of cleanup) {
-      try {
-        await close()
-      } catch {
-        console.error('An owned verification resource could not be cleaned up')
-        code ||= 1
-      }
-    }
+    ])
+    if (!cleaned) code ||= 1
     process.removeListener('SIGINT', interrupt)
     process.removeListener('SIGTERM', interrupt)
   }
   return code
+}
+
+/** What a run of the gateway stand is: a measurement, a measurement of results, or a verification. */
+function runKind(mode) {
+  if (mode.measure) return 'measure'
+  return mode.results ? 'results' : 'gateway'
+}
+
+const RUN_WORDS = {
+  measure: 'measurement',
+  results: 'measurement of results',
+  gateway: 'verification',
+}
+
+/** The last line of a run that passed, after the count of its provider requests is settled. */
+function announcePassed({ live, mode, rehearsal }) {
+  const what = RUN_WORDS[runKind(mode)]
+  if (rehearsal && !mode.measure) {
+    // The cap was reached on purpose: the count of the run says so itself.
+    assert.throws(() => live.settle(), /reached its cap of \d+ provider requests/)
+    assert.equal(live.tripped(), true)
+    console.log(
+      `Rehearsal of the live gateway ${what} passed: ${live.checks()} checks; the cap of ${live.limits.requests} provider requests was reached on purpose and held.`,
+    )
+    return
+  }
+  const state = live.settle()
+  const run = rehearsal ? 'Rehearsal of the live' : 'Live'
+  const provider = rehearsal ? 'synthetic' : 'real'
+  const shares = mode.measure
+    ? ''
+    : " The checks are of what the platform owes; the model's outcomes are shares in the REPORT lines."
+  // The exit code is of what the platform owes: the last line says where the model's part is.
+  console.log(
+    `${run} gateway ${what} passed: ${live.checks()} checks; ${state.used} of ${state.cap} provider requests; OpenCode 1.18.34 on the ${provider} provider.${shares}`,
+  )
+}
+
+/** The exit code of a run that threw, after the lines that say why: names and numbers only. */
+function failureCode(error, { live, budget, report, stage, interrupted }) {
+  if (error instanceof LiveRefusal) {
+    console.error(`Live verification refused to start: ${error.message}`)
+    return REFUSED
+  }
+  if (error.infrastructureDiagnostic) console.error(error.infrastructureDiagnostic)
+  // The first line of the failure: the stand's own words, names and numbers. Never when
+  // the failure, read whole, holds the key.
+  const line = failureLine(error, live.key)
+  if (line) console.error(line)
+  console.error(`Live gateway verification failed at: ${stage}${stopReason(live, interrupted)}.`)
+  try {
+    const state = budget.state()
+    report(
+      `provider requests at the failure: ${state.used} of ${state.cap} (refused ${state.refused})`,
+    )
+  } catch {
+    /* The ledger is gone with the run directory. */
+  }
+  return 1
+}
+
+function stopReason(live, interrupted) {
+  if (live.expired()) return ' (the time limit of the run)'
+  return interrupted ? ' (interrupted)' : ''
+}
+
+/** Runs every step of a cleanup in order, whatever the others did: false when one failed. */
+async function cleanUp(steps) {
+  let cleaned = true
+  for (const close of steps) {
+    try {
+      await close() // NOSONAR: in order, the stack last: it holds the OpenBao container with the key
+    } catch {
+      console.error('An owned verification resource could not be cleaned up')
+      cleaned = false
+    }
+  }
+  return cleaned
 }

@@ -18,6 +18,8 @@ import {
   TURN_FINALIZE_RESERVE_MS,
   TURN_PUBLICATION_GRACE_MS,
   type AttemptBudgetInput,
+  type LlmBackendId,
+  type LlmCapacity,
   type PoolAccountSnapshot,
   type PoolDecision,
   type SecretStore,
@@ -99,7 +101,10 @@ interface Selection {
   decision: PoolDecision
   /** Admission only: the decision over the whole pool, free of the account pinned in Vault. */
   unpinned?: PoolDecision
-  /** The selected account, when its window snapshot is older than the pool keeps one for. */
+  /**
+   * The selected account, when its window snapshot is older than the pool keeps one for. Never
+   * for a backend without windows: there is nothing to refresh.
+   */
   staleAccountId: string | null
 }
 type Preparation =
@@ -109,6 +114,12 @@ export interface GatewayTurnCredentialsOptions {
   prisma: Database
   secrets: SecretStore
   minTurnHeadroomPct?: number
+  /**
+   * What each backend declares of its accounts' capacity (LlmBackend.capacity): every
+   * composition names it (`backendCapacities` over the registry of adapters), so no backend is
+   * read by windows it does not have, nor one with windows without them.
+   */
+  capacityOf: (backend: LlmBackendId) => LlmCapacity
   /**
    * Calls the content-free gateway control probe after all SQL locks were released. `stale`:
    * the snapshot has only grown old, and the gateway probes at most once in five minutes.
@@ -127,6 +138,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
   readonly #prisma: Database
   readonly #secrets: SecretStore
   readonly #minHeadroom: number
+  readonly #capacityOf: (backend: LlmBackendId) => LlmCapacity
   readonly #probeAccounts: GatewayTurnCredentialsOptions['probeAccounts']
   readonly #requireAssignment: boolean
 
@@ -140,6 +152,11 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       .max(100)
       .parse(options.minTurnHeadroomPct ?? 5)
     this.#probeAccounts = options.probeAccounts
+    // A plain-JS composition (a stand) gets no type check: a missing reader stops it here,
+    // not as an unavailable gateway at the first issue.
+    if (typeof options.capacityOf !== 'function')
+      throw new TypeError('GatewayTurnCredentials needs the capacity of each backend')
+    this.#capacityOf = options.capacityOf
   }
 
   async issue(
@@ -471,11 +488,13 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       where: { taskId: ref.taskId, type: policyFlaggedEvent },
       select: { id: true },
     })
+    const capacity = this.#capacityOf(grant.backend)
     // A durable Vault record fixes the selected account. A racing issue cannot select another
     // secret or bind a task without the matching key. Keep the pure selector's new-task gates.
     const pick = (accounts: typeof snapshots) =>
       pickAccount({
         backend: grant.backend,
+        capacity,
         providerEnabled: profile.enabled,
         now: task.now,
         boundAccountId: binding?.subscriptionAccountId ?? null,
@@ -503,6 +522,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       decision,
       staleAccountId:
         decision.kind === 'selected' &&
+        capacity === 'windows' &&
         seenAt != null &&
         task.now.getTime() - seenAt.getTime() > poolPolicy.windowsFreshMs
           ? decision.accountId

@@ -4,12 +4,17 @@ import type { Prisma, PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialGrant, TurnCredentialRef } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
-import { sampleBackendId, sampleDriverId } from '../testing/ids.ts'
-import { GatewayTurnCredentials } from './turn-credentials.ts'
+import { sampleBackendCapacity, sampleBackendId, sampleDriverId } from '../testing/ids.ts'
+import { GatewayTurnCredentials, type GatewayTurnCredentialsOptions } from './turn-credentials.ts'
 
 const decimal = (value: string) => ({ toFixed: (digits: number) => Number(value).toFixed(digits) })
 
-function fixture() {
+function fixture(
+  options: Partial<Pick<GatewayTurnCredentialsOptions, 'capacityOf' | 'probeAccounts'>> & {
+    /** The stored state of the pool's one account, over the default. */
+    account?: Record<string, unknown>
+  } = {},
+) {
   const now = new Date('2026-09-30T12:00:00Z')
   const accountId = randomUUID()
   const modelId = randomUUID()
@@ -61,9 +66,11 @@ function fixture() {
             coolingUntil: null,
             breakerOpenUntil: null,
             limitWindows: [{ name: 'week', usedPct: 10, resetsAt: null }],
+            limitsSeenAt: null,
             activeTurns: 0n,
             maxConcurrentTurns: 1,
             lastUsedAt: null,
+            ...options.account,
           },
         ]
       return [{ now }]
@@ -155,6 +162,8 @@ function fixture() {
   const credentials = new GatewayTurnCredentials({
     prisma: db as unknown as PrismaClient,
     secrets: secrets as unknown as SecretStore,
+    capacityOf: options.capacityOf ?? (() => sampleBackendCapacity),
+    ...(options.probeAccounts ? { probeAccounts: options.probeAccounts } : {}),
   })
   return {
     credentials,
@@ -264,6 +273,65 @@ describe('durable turn credentials', () => {
     f.alterVault({ grant: JSON.stringify({ ...stored, [field]: id }) })
     expect(await f.credentials.recover(f.ref)).toBeNull()
     await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
+  // A synthetic declaration: the sample backend read as one without windows (LlmBackend.capacity).
+  const windowless = () => 'none' as const
+  const oldSnapshot = (now: Date) => new Date(now.getTime() - 60 * 60_000)
+
+  it('issues a key on an account of a backend without windows, with no probe at all', async () => {
+    const probeAccounts = vi.fn(async () => {})
+    const now = new Date('2026-09-30T12:00:00Z')
+    for (const account of [
+      { limitWindows: [], limitsSeenAt: null },
+      // A probe of such a backend leaves an empty snapshot behind it: no reason to refresh.
+      { limitWindows: [], limitsSeenAt: oldSnapshot(now) },
+      { limitWindows: [{ name: '5h', usedPct: 100, resetsAt: null }], limitsSeenAt: null },
+    ]) {
+      const f = fixture({ capacityOf: windowless, probeAccounts, account })
+      await f.credentials.issue(f.ref, f.grant)
+      expect(f.key()?.subscriptionAccountId).toBe(f.accountId)
+    }
+    expect(probeAccounts).not.toHaveBeenCalled()
+  })
+
+  it('waits on the pauses of an account without windows, and probes nothing for them', async () => {
+    const probeAccounts = vi.fn(async () => {})
+    const f = fixture({
+      capacityOf: windowless,
+      probeAccounts,
+      account: { limitWindows: [], coolingUntil: new Date('2026-09-30T12:15:00Z') },
+    })
+    await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_WAIT',
+    })
+    expect(probeAccounts).not.toHaveBeenCalled()
+    expect(f.tx.llmKey.create).not.toHaveBeenCalled()
+  })
+
+  it('reads the same snapshots by their windows for a backend that has them', async () => {
+    const probeAccounts = vi.fn(async () => {})
+    const now = new Date('2026-09-30T12:00:00Z')
+    const unknown = fixture({ probeAccounts, account: { limitWindows: [] } })
+    await expect(unknown.credentials.issue(unknown.ref, unknown.grant)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_WAIT',
+    })
+    expect(probeAccounts).toHaveBeenLastCalledWith([unknown.accountId])
+    const old = fixture({
+      capacityOf: () => 'windows',
+      probeAccounts,
+      account: { limitsSeenAt: oldSnapshot(now) },
+    })
+    await old.credentials.issue(old.ref, old.grant)
+    expect(probeAccounts).toHaveBeenLastCalledWith([old.accountId], { stale: true })
+  })
+
+  it('is not composed without the capacity of each backend', () => {
+    // A stand composes it in plain JS, unchecked: it stops at once, not at its first issue.
+    const options = { prisma: {}, secrets: {} } as unknown as GatewayTurnCredentialsOptions
+    expect(() => new GatewayTurnCredentials(options)).toThrow(
+      'GatewayTurnCredentials needs the capacity of each backend',
+    )
   })
 
   it('recovers a running key without consulting current pool eligibility', async () => {

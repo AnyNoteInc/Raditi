@@ -1116,6 +1116,28 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     expect(lifecycle.refreshAccount).toHaveBeenCalledTimes(2)
   })
 
+  it('asks no refresh for a backend without windows, and tells admission what the backend is', async () => {
+    const lifecycle = controlLifecycle()
+    // The sample backend as one without windows would declare itself (LlmBackend.capacity).
+    const windowless: LlmBackend = { ...zaiCodingBackend, capacity: 'none' }
+    const { gateway, store } = await setup(
+      success,
+      {},
+      { lifecycle, backends: [windowless, otherBackend] },
+    )
+    store.lookup.mockResolvedValue({ ...key, staleWindows: true })
+    expect((await call(gateway)).status).toBe(200)
+    expect(lifecycle.refreshAccount).not.toHaveBeenCalled()
+    expect(store.admit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ backendId: key.backendId, capacity: 'none' }),
+    )
+    const windowed = await setup(success, {}, { lifecycle: controlLifecycle() })
+    expect((await call(windowed.gateway)).status).toBe(200)
+    expect(windowed.store.admit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ capacity: 'windows' }),
+    )
+  })
+
   it('probes an account with unknown windows once, then admits the running turn afresh', async () => {
     const lifecycle = controlLifecycle()
     const { gateway, store, egress } = await setup(success, {}, { lifecycle })

@@ -135,7 +135,7 @@ const expectPreserved = (actual, expected) => {
 
 test('the LLM path and its headers are exported as data, the exact path of the CLI wire format', () => {
   // The contract test of the role llm compares the three lists with what its backends declare.
-  assert.deepEqual(llmPaths, ['/zai/v4/chat/completions'])
+  assert.deepEqual(llmPaths, ['/zai/v4/chat/completions', '/zai/paas/v4/chat/completions'])
   assert.deepEqual(llmRequestHeaders, ['authorization', 'content-type', 'accept', 'user-agent'])
   assert.deepEqual(llmResponseHeaders, ['content-type', 'retry-after'])
   for (const list of [llmPaths, llmRequestHeaders, llmResponseHeaders]) {
@@ -313,6 +313,10 @@ test('only literal allowlisted paths and methods reach upstream', async (t) => {
     '/zai/v4/embeddings',
     '/zai/chat/completions',
     '/api/coding/paas/v4/chat/completions',
+    '/zai/paas/v4/chat/completions/',
+    '/zai/paas/v4/models',
+    '/zai/paas/chat/completions',
+    '/api/paas/v4/chat/completions',
     '/api/monitor/usage/quota/limit',
     '/mcp?x=1',
     'http://example.test/zai/v4/chat/completions',

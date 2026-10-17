@@ -1,0 +1,36 @@
+{
+  "rubPerCredit": "6.00",
+  "basis": "Ставки трёх профилей zai-api модели glm-5.3: опубликованная цена Z.ai 1.40, 0.26 и 4.40 USD за 1 млн токенов входа, кэша и выхода (https://docs.z.ai/guides/overview/pricing, прочитано 16.10.2026) × официальный курс ЦБ РФ 83.6177 ₽ за 1 USD, установленный на 17.10.2026 (https://www.cbr.ru/scripts/XML_daily.asp?date_req=17/10/2026) × 1.30 (маржа 30%), HALF_UP до 6 знаков: 152.184214, 28.262783 и 478.293244 ₽; курс доллара ЦБ и маржа 30% — указание владельца от 17.10.2026; НДС 0 подтверждён владельцем 17.10.2026; курс кредита 6.00 ₽ — значение по умолчанию, владелец его не подтверждал (spec §20, П85).",
+  "prices": [
+    {
+      "provider": "zai-api",
+      "model": "glm-5.3-light",
+      "inputPer1m": "152.184214",
+      "cacheReadPer1m": "28.262783",
+      "cacheWritePer1m": null,
+      "outputPer1m": "478.293244",
+      "vatRate": "0.0000",
+      "sourceUrl": "https://docs.z.ai/guides/overview/pricing"
+    },
+    {
+      "provider": "zai-api",
+      "model": "glm-5.3-standard",
+      "inputPer1m": "152.184214",
+      "cacheReadPer1m": "28.262783",
+      "cacheWritePer1m": null,
+      "outputPer1m": "478.293244",
+      "vatRate": "0.0000",
+      "sourceUrl": "https://docs.z.ai/guides/overview/pricing"
+    },
+    {
+      "provider": "zai-api",
+      "model": "glm-5.3-heavy",
+      "inputPer1m": "152.184214",
+      "cacheReadPer1m": "28.262783",
+      "cacheWritePer1m": null,
+      "outputPer1m": "478.293244",
+      "vatRate": "0.0000",
+      "sourceUrl": "https://docs.z.ai/guides/overview/pricing"
+    }
+  ]
+}

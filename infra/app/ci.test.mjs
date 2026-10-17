@@ -280,14 +280,17 @@ test('every package script a workflow runs exists', () => {
   assert.ok(checked >= 20, `only ${checked} scripts of the workflows were checked`)
 })
 
-test('the live mode of the stands never runs in CI: no workflow names it or the plan key', () => {
-  // A live run sends requests to the real provider on a plan with windows (infra/dev/llm-verify/
-  // live.mjs). It is started by a person who holds the key; a workflow has neither the option
-  // nor the variable, and the stand refuses to start when CI is set.
+test('the live mode of the stands never runs in CI: no workflow names it or the provider key', () => {
+  // A live run sends requests to the real provider, on a plan with windows or on the paid API
+  // (infra/dev/llm-verify/live.mjs), with the one key ZAI_API_KEY. It is started by a person who
+  // holds the key; a workflow has neither the option nor the variable, and the stand refuses to
+  // start when CI is set.
   for (const { name, source } of workflows) {
     assert.equal(source.includes('--live'), false, `${name} names --live`)
     assert.equal(/ZAI_API_KEY/i.test(source), false, `${name} names ZAI_API_KEY`)
   }
+  // The key variable of a live run is the one the rule above catches.
+  assert.match(read('infra/dev/llm-verify/live.mjs'), /export const LIVE_KEY_NAME = 'ZAI_API_KEY'/)
   assert.match(
     read('infra/dev/llm-verify/live.mjs'),
     /if \(set\('CI'\)\) return 'CI is set: the live mode never runs in CI'/,
@@ -308,6 +311,7 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     'pnpm verify:llm-gateway --rehearsal --no-build',
     'pnpm verify:llm-gateway --rehearsal --measure --no-build',
     'pnpm verify:llm-gateway --rehearsal --results --no-build',
+    'pnpm verify:llm-gateway --rehearsal --api --no-build',
   ])
   assert.deepEqual(stands('agent-content'), [
     'pnpm verify:agent-content',
@@ -315,8 +319,8 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
   ])
   // The options exist and mean what the steps take them for.
   const live = read('infra/dev/llm-verify/live.mjs')
-  for (const option of ['--rehearsal', '--measure', '--results', '--no-build'])
-    assert.ok(live.includes(`name === '${option}'`), `${option} is an option of the stands`)
+  for (const option of ['--rehearsal', '--measure', '--results', '--api', '--no-build'])
+    assert.ok(live.includes(`['${option}', '`), `${option} is an option of the stands`)
   // GitHub sets CI in every job: that refuses a live run and must not refuse its rehearsal.
   assert.match(
     read('apps/orchestrator/scripts/verify-llm-live-run.mjs'),
@@ -711,6 +715,11 @@ test('a cached test run sees a change of a file its tests read outside their pac
       'apps/web/src/lib/legal-content.test.ts',
     ],
     'apps/web/content/legal/public-offer.md': ['packages/db/prisma/seed/data.test.ts'],
+    // The LLM paths of sandbox-gw against the routes of the registry and the base URL of each.
+    'infra/sandbox/gateway.mjs': [
+      'apps/orchestrator/src/llm-gateway/sandbox-routes.contract.test.ts',
+      'apps/orchestrator/src/llm/backends.test.ts',
+    ],
   }
   for (const [file, readers] of Object.entries(outside)) {
     assert.ok(inputs.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of test`)

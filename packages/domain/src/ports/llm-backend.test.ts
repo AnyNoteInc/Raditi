@@ -10,6 +10,7 @@ import {
   limitWindowsSchema,
   llmBackendIdSchema,
   llmBackendIds,
+  llmCapacitySchema,
   llmEgressOriginSchema,
   meterResultSchema,
   normalizedBodySchema,
@@ -172,6 +173,8 @@ describe('the refusal a provider signal stands for', () => {
     [{ kind: 'ok' }, 'transient'],
     [{ kind: 'transient', retryAfterMs: 1_000 }, 'transient'],
     [{ kind: 'window_exhausted', until: null }, 'subscription_limit'],
+    // No capacity until a top-up: final for the turn, the account itself is fine.
+    [{ kind: 'balance_exhausted' }, 'subscription_limit'],
     [{ kind: 'auth' }, 'account'],
     [{ kind: 'account_risk', reason: 'usage_not_included' }, 'account'],
     [{ kind: 'unconfirmed_block' }, 'account'],
@@ -204,6 +207,7 @@ describe('backend signals', () => {
     { kind: 'transient', retryAfterMs: 45 * 60_000 },
     { kind: 'window_exhausted', until: window.resetsAt },
     { kind: 'window_exhausted', until: null },
+    { kind: 'balance_exhausted' },
     { kind: 'auth' },
     { kind: 'account_risk', reason: 'risk_confirmed' },
     { kind: 'region' },
@@ -227,6 +231,9 @@ describe('backend signals', () => {
     { kind: 'window_exhausted' },
     { kind: 'window_exhausted', until: new Date(NaN) },
     { kind: 'window_exhausted', until: '2026-09-29T15:00:00.000Z' },
+    // The provider's text or a sum of money never travels with it.
+    { kind: 'balance_exhausted', code: 'zai_1113' },
+    { kind: 'balance_exhausted', balance: '0.00' },
     { kind: 'account_risk', reason: '<html>blocked</html>' },
     { kind: 'account_risk', reason: 'a'.repeat(65) },
     { kind: 'policy_flagged', code: '' },
@@ -252,7 +259,14 @@ describe('backend signals', () => {
       'profile',
     ])
       expect(gatewayRefusalSchema.parse(kind)).toBe(kind)
-    for (const kind of ['auth', 'account_risk', 'unconfirmed_block', 'region', 'ok'])
+    for (const kind of [
+      'auth',
+      'account_risk',
+      'unconfirmed_block',
+      'region',
+      'ok',
+      'balance_exhausted',
+    ])
       expect(gatewayRefusalSchema.safeParse(kind).success).toBe(false)
   })
 })
@@ -372,9 +386,10 @@ describe('probe and metering boundaries', () => {
 })
 
 describe('backend ids', () => {
-  it('knows one subscription backend', () => {
-    expect(llmBackendIds).toEqual(['zai-coding'])
+  it('knows the plan and the pay-per-token API of Z.ai, in this order', () => {
+    expect(llmBackendIds).toEqual(['zai-coding', 'zai-api'])
     expect(llmBackendIdSchema.parse('zai-coding')).toBe('zai-coding')
+    expect(llmBackendIdSchema.parse('zai-api')).toBe('zai-api')
   })
   // The slug is the backend, not its provider, shell or model.
   it.each(['zai', 'opencode', 'glm-5.3', 'litellm', 'gigachat'])(
@@ -384,6 +399,12 @@ describe('backend ids', () => {
   it.each(['openai-chatgpt', 'kimi-code'])('refuses the removed backend %s', (id) =>
     expect(llmBackendIdSchema.safeParse(id).success).toBe(false),
   )
+
+  it('describes the capacity of an account in two words only', () => {
+    expect(llmCapacitySchema.options).toEqual(['windows', 'none'])
+    for (const value of ['balance', 'unknown', '', null])
+      expect(llmCapacitySchema.safeParse(value).success).toBe(false)
+  })
 })
 
 describe('provider-neutral credential metadata', () => {

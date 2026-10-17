@@ -5,7 +5,11 @@ import { createChatCompletionsUsageMeter } from '../chat-completions-usage.ts'
 import { createSseDecoder, type SseEvent } from '../sse.ts'
 import { cliReadsOverflow, cliRetriesStreamError } from './fixtures/opencode-cli.ts'
 import { chatSamples, liveSamples, sample } from './fixtures/samples.ts'
-import { createZaiStreamInspector } from './stream.ts'
+import { zaiCodingPlan } from './backend.ts'
+import { createZaiStreamInspector as inspectorOf } from './stream.ts'
+
+// The inspector of the plan; what the pay-per-token API reads otherwise is in backend.test.ts.
+const createZaiStreamInspector = () => inspectorOf(zaiCodingPlan.answers)
 
 const bytes = (text: string) => new TextEncoder().encode(text)
 const frame = (value: unknown) =>

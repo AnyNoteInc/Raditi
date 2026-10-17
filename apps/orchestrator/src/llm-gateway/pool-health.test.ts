@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@repo/db'
 import type { EgressHttp, LlmBackend, ProbeResult } from '@repo/domain'
-import { zaiCodingBackend } from '@repo/llm-backends'
+import { zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
 import { SubscriptionPoolHealth } from './pool-health.ts'
@@ -46,6 +46,9 @@ function harness(backend: Partial<LlmBackend> = {}) {
     payment: vi
       .fn<PoolHealthStore['payment']>()
       .mockResolvedValue({ count: 1, suspended: false, at: new Date(0) }),
+    balance: vi
+      .fn<PoolHealthStore['balance']>()
+      .mockResolvedValue({ count: 1, pausedUntil: new Date(300_000) }),
   }
   const backendProbe = vi.fn<typeof zaiCodingBackend.probe>().mockResolvedValue(probe())
   const http = { request: vi.fn<EgressHttp['request']>() }
@@ -461,6 +464,62 @@ describe('subscription pool health coordination', () => {
     expect(h.logger.warn).not.toHaveBeenCalled()
     await h.health.close()
     expect(await h.health.recheckRegion(account.accountId)).toBe(false)
+  })
+
+  it('pauses an account whose balance is spent through the store, alerts once a pause, probes nothing', async () => {
+    const h = harness()
+    const spent = finish({ kind: 'balance_exhausted' }, 429)
+    h.store.balance.mockResolvedValueOnce({ count: 3, pausedUntil: new Date(2_700_000) })
+    await h.health.observe(call('1'), spent)
+    expect(h.store.balance).toHaveBeenCalledExactlyOnceWith(account.accountId)
+    expect(h.logger.warn).toHaveBeenCalledExactlyOnceWith(
+      '{"event":"llm_pool_health","reason":"balance_exhausted","checks":3}',
+    )
+    // A call answered within the pause another one began is the same check: no second alert.
+    h.store.balance.mockResolvedValueOnce({ count: 3, pausedUntil: null })
+    await h.health.observe(call('2'), spent)
+    expect(h.store.balance).toHaveBeenCalledTimes(2)
+    expect(h.logger.warn).toHaveBeenCalledOnce()
+    // The pause is durable, never one of the role's memory; nothing confirms or cools it.
+    expect(h.health.pause(account.accountId)).toBeNull()
+    expect(h.backendProbe).not.toHaveBeenCalled()
+    expect(h.store.probe).not.toHaveBeenCalled()
+    expect(h.store.cool).not.toHaveBeenCalled()
+    expect(h.store.payment).not.toHaveBeenCalled()
+  })
+
+  it('reads a window code on the API as an exhausted window: a confirming probe, then an hour (П71)', async () => {
+    // The API has no windows, yet the shared table reads these codes as a spent window. For an
+    // account without windows the confirming probe finds none, so the account cools for the
+    // store's hour (cool with no reset), and no balance pause is counted.
+    expect(zaiApiBackend.capacity).toBe('none')
+    for (const code of ['1308', '1310', '1316', '1317']) {
+      const signal = zaiApiBackend.classify(429, new Headers(), {
+        error: { code, message: 'synthetic' },
+      })
+      expect(signal, code).toEqual({ kind: 'window_exhausted', until: null })
+      const h = harness({ id: zaiApiBackend.id, capacity: zaiApiBackend.capacity })
+      h.store.account.mockResolvedValue({
+        ...account,
+        backendId: zaiApiBackend.id,
+        credentialRef: `subs/${zaiApiBackend.id}/synthetic-account`,
+      })
+      h.backendProbe.mockResolvedValue({ status: 'ok', windows: null, plan: null })
+      await h.health.observe(call(), finish(signal, 429))
+      expect(h.backendProbe, code).toHaveBeenCalledOnce()
+      expect(h.store.cool, code).toHaveBeenCalledExactlyOnceWith(account.accountId, null)
+      expect(h.store.balance, code).not.toHaveBeenCalled()
+      expect(h.store.payment, code).not.toHaveBeenCalled()
+    }
+  })
+
+  it('reports a failed balance pause as a failed health update', async () => {
+    const h = harness()
+    h.store.balance.mockRejectedValueOnce(new Error('private synthetic database error'))
+    await h.health.observe(call(), finish({ kind: 'balance_exhausted' }, 429))
+    expect(h.logger.warn).toHaveBeenCalledExactlyOnceWith(
+      '{"event":"llm_pool_health","reason":"health_update_failed"}',
+    )
   })
 
   it('does not probe content/profile failures or an unhealthy channel', async () => {

@@ -2,7 +2,7 @@ import { type CallSignal, type LlmBackend, type LlmStreamFailure } from '@repo/d
 
 import { safeStreamError } from '../stream-errors.ts'
 import { object, parseEvent } from '../usage.ts'
-import { classifyZaiStreamError, zaiRefusal } from './errors.ts'
+import { zaiClassifier, zaiRefusal, type ZaiAnswers } from './errors.ts'
 
 /**
  * The values the pinned CLI ends a step on. After any other one, after a stream that names
@@ -39,7 +39,11 @@ function failure(signal: CallSignal): LlmStreamFailure {
   }
 }
 
-export function createZaiStreamInspector(): ReturnType<LlmBackend['streamInspector']> {
+/** The inspector of one offer: an error inside a stream is read by that offer's table. */
+export function createZaiStreamInspector(
+  answers: ZaiAnswers,
+): ReturnType<LlmBackend['streamInspector']> {
+  const { classifyStreamError } = zaiClassifier(answers)
   // A finish_reason of the allowed list has been forwarded.
   let finished = false
   // Nothing more is forwarded: DONE, a failure or the end has been answered.
@@ -63,7 +67,7 @@ export function createZaiStreamInspector(): ReturnType<LlmBackend['streamInspect
       if (value.error != null || event.event === 'error' || value.success === false) {
         if (finished) return { kind: 'skip' }
         closed = true
-        return failure(classifyZaiStreamError(value))
+        return failure(classifyStreamError(value))
       }
       // Neither a completion chunk nor an error: nothing the CLI could read.
       if (!Array.isArray(value.choices)) return { kind: 'skip' }

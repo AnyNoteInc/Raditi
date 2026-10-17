@@ -170,8 +170,11 @@ export interface LlmProviderSeed {
   enabled: false
 }
 
+// In the order of the domain's backend ids. `subscription` is the kind of a provider the
+// gateway's pool serves, a pay-per-token one included (owner's decision of 16.10.2026, П15).
 export const llmProviderSeeds = [
   { slug: 'zai-coding', name: 'Z.ai GLM Coding Plan', kind: 'subscription', enabled: false },
+  { slug: 'zai-api', name: 'Z.ai API', kind: 'subscription', enabled: false },
 ] as const satisfies readonly LlmProviderSeed[]
 
 export interface LlmModelSeed {
@@ -185,20 +188,22 @@ export interface LlmModelSeed {
   enabled: false
 }
 
-// One model of the GLM Coding Plan for every class: the classes differ by the level of
-// reasoning of the turn (low, high, max). The reserve is the output ceiling of the adapter's
-// request policy. Switched off: the operator enables the provider, the profiles and an
-// approved rate.
-export const llmModelSeeds: readonly LlmModelSeed[] = (['light', 'standard', 'heavy'] as const).map(
-  (modelClass): LlmModelSeed => ({
-    providerSlug: 'zai-coding',
-    slug: `glm-5.3-${modelClass}`,
-    name: `GLM-5.3 · ${modelClass}`,
-    providerModelId: 'glm-5.3',
-    modelClass,
-    reserveOutputTokens: 32_000,
-    enabled: false,
-  }),
+// One GLM model for every class, on the plan and on the pay-per-token API alike: the classes
+// differ by the level of reasoning of the turn (low, high, max). The profiles of both providers
+// share slugs: a profile is named by its provider and its slug. The reserve is the output
+// ceiling of the adapter's request policy, one for both offers. Switched off: the operator
+// enables one provider, its profiles and an approved rate.
+export const llmModelSeeds: readonly LlmModelSeed[] = (['zai-coding', 'zai-api'] as const).flatMap(
+  (providerSlug) =>
+    (['light', 'standard', 'heavy'] as const).map((modelClass): LlmModelSeed => ({
+      providerSlug,
+      slug: `glm-5.3-${modelClass}`,
+      name: `GLM-5.3 · ${modelClass}`,
+      providerModelId: 'glm-5.3',
+      modelClass,
+      reserveOutputTokens: 32_000,
+      enabled: false,
+    })),
 )
 
 // Accounting rates need owner approval and are never seeded (not even placeholder zeros).

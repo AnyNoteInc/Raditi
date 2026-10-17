@@ -693,7 +693,8 @@ export class LlmGateway {
       }
       const waitUntil = Date.now() + limits.accountWaitMs
       let probed = false
-      let refreshed = !key.staleWindows
+      // A backend without windows has no snapshot to refresh: only its account's pauses hold.
+      let refreshed = !key.staleWindows || selected.backend.capacity === 'none'
       while (true) {
         const pause = this.options.lifecycle?.pause(key)
         if (pause) {
@@ -724,6 +725,7 @@ export class LlmGateway {
           keyHash,
           source,
           backendId: selected.backend.id,
+          capacity: selected.backend.capacity,
           route: selected.route,
           profile: key,
           requestBytes: body.byteLength,

@@ -43,40 +43,69 @@ export class LiveRefusal extends Error {
 /**
  * The options of a stand. `--live` is the real provider, `--rehearsal` the same flow on the
  * synthetic one; with either, `--measure` is the measurement of the gateway stand and
- * `--results` its narrow one, of the turn result alone; `--keep=<directory>` writes the
- * exchanges the stand observed, for sanitize-samples.mjs.
+ * `--results` its narrow one, of the turn result alone, and `--api` the acceptance of the
+ * gateway stand on the pay-per-token API instead of the plan (П15); `--keep=<directory>` writes
+ * the exchanges the stand observed, for sanitize-samples.mjs.
  */
 export function standMode(argv, { stand }) {
   const mode = {
     live: false,
     measure: false,
     results: false,
+    api: false,
     rehearsal: false,
     noBuild: false,
     keep: null,
   }
-  const refuse = (option) => new Error(`Unsupported option: ${option}`)
   const seen = new Set()
   for (const arg of argv) {
     // pnpm passes the separator on.
     if (arg === '--') continue
     const [name, value] = arg.startsWith('--keep=') ? ['--keep', arg.slice(7)] : [arg]
-    if (seen.has(name)) throw refuse(name)
+    if (seen.has(name)) throw unsupported(name)
     seen.add(name)
-    if (name === '--no-build') mode.noBuild = true
-    else if (name === '--live') mode.live = true
-    else if (name === '--rehearsal') mode.rehearsal = true
-    else if (name === '--measure' && stand === 'gateway') mode.measure = true
-    else if (name === '--results' && stand === 'gateway') mode.results = true
-    else if (name === '--keep' && isAbsolute(value) && outsideRepository(value)) mode.keep = value
-    else throw refuse(name)
+    takeOption(mode, { name, value, stand })
   }
-  if (mode.live && mode.rehearsal) throw refuse('--live with --rehearsal')
-  if (mode.measure && !mode.live && !mode.rehearsal) throw refuse('--measure without --live')
-  if (mode.results && !mode.live && !mode.rehearsal) throw refuse('--results without --live')
-  if (mode.measure && mode.results) throw refuse('--measure with --results')
-  if (mode.keep && !mode.live && !mode.rehearsal) throw refuse('--keep without --live')
+  const refused = refusedCombination(mode)
+  if (refused) throw unsupported(refused)
   return mode
+}
+
+const unsupported = (option) => new Error(`Unsupported option: ${option}`)
+/** The switches every stand takes, and those the gateway stand alone takes. */
+const SWITCHES_OF_EVERY_STAND = new Map([
+  ['--no-build', 'noBuild'],
+  ['--live', 'live'],
+  ['--rehearsal', 'rehearsal'],
+])
+const SWITCHES_OF_THE_GATEWAY = new Map([
+  ['--measure', 'measure'],
+  ['--results', 'results'],
+  ['--api', 'api'],
+])
+
+function takeOption(mode, { name, value, stand }) {
+  const field =
+    SWITCHES_OF_EVERY_STAND.get(name) ??
+    (stand === 'gateway' ? SWITCHES_OF_THE_GATEWAY.get(name) : undefined)
+  if (field) mode[field] = true
+  else if (name === '--keep' && isAbsolute(value) && outsideRepository(value)) mode.keep = value
+  else throw unsupported(name)
+}
+
+/** The first combination of options a stand does not take, or undefined. */
+function refusedCombination(mode) {
+  const run = mode.live || mode.rehearsal
+  return [
+    [mode.live && mode.rehearsal, '--live with --rehearsal'],
+    [mode.measure && !run, '--measure without --live'],
+    [mode.results && !run, '--results without --live'],
+    [mode.measure && mode.results, '--measure with --results'],
+    [mode.api && !run, '--api without --live'],
+    // The measurements count the credits of the plan's windows: the API has none.
+    [mode.api && (mode.measure || mode.results), '--api with a measurement'],
+    [mode.keep && !run, '--keep without --live'],
+  ].find(([refused]) => refused)?.[1]
 }
 
 function outsideRepository(path) {
@@ -113,35 +142,44 @@ export function liveStartRefusal(env) {
   return null
 }
 
-const KEY_NAME = 'ZAI_API_KEY'
+/**
+ * The variable a live run takes its provider key from: ZAI_API_KEY (П9), on the plan and, with
+ * `--api`, on the pay-per-token API alike — one key works on both paths, and the owner named this
+ * one for the live check of the API (decision of 17.10.2026, П77).
+ */
+export const LIVE_KEY_NAME = 'ZAI_API_KEY'
 const KEY_SHAPE = /^[\x21-\x7e]{16,8192}$/
 
 /**
- * Takes the plan key out of the environment: read once, deleted at once, so that no process
+ * Takes the provider key out of the environment: read once, deleted at once, so that no process
  * the stand starts later can inherit it. The holder gives the value in one form only — the line
  * `subscriptions:login` reads on its input — and answers whether given bytes hold it. Nothing
- * that prints the holder prints the value.
+ * that prints the holder prints the value; `word` names the key in what it prints.
  */
-export function takePlanKey(env) {
-  const raw = env[KEY_NAME]
-  delete env[KEY_NAME]
+export function takeProviderKey(env, { word = 'plan key' } = {}) {
+  const raw = env[LIVE_KEY_NAME]
+  delete env[LIVE_KEY_NAME]
   if (typeof raw !== 'string' || raw.trim() === '')
-    throw new LiveRefusal(`${KEY_NAME} is not set in the environment of the stand`)
+    throw new LiveRefusal(`${LIVE_KEY_NAME} is not set in the environment of the stand`)
   const value = raw.trim()
   if (!KEY_SHAPE.test(value))
-    throw new LiveRefusal(`${KEY_NAME} is not one line of 16 or more printable characters`)
+    throw new LiveRefusal(`${LIVE_KEY_NAME} is not one line of 16 or more printable characters`)
   const needles = secretNeedles(value)
+  const label = `[${word}]`
   const holder = {}
   Object.defineProperties(holder, {
     input: { value: () => `${value}\n` },
     foundIn: { value: (bytes) => holdsAny(bytes, needles) },
     needles: { value: () => needles },
-    toString: { value: () => '[plan key]' },
-    toJSON: { value: () => '[plan key]' },
-    [inspect.custom]: { value: () => '[plan key]' },
+    toString: { value: () => label },
+    toJSON: { value: () => label },
+    [inspect.custom]: { value: () => label },
   })
   return Object.freeze(holder)
 }
+
+/** The key as the plan's: takeProviderKey with the plan's word. */
+export const takePlanKey = (env) => takeProviderKey(env)
 
 /** The value as bytes, and as a log or a header dump would encode it. */
 function secretNeedles(value) {
@@ -818,50 +856,79 @@ export function streamSummary(responseText) {
     contentChars: 0,
     reasoningChars: 0,
     usage: null,
+    // Whether the frame with the usage names the finish reason too: null without a usage.
+    usageAtFinish: null,
     error: null,
     forms: [],
   }
   let said = false
   for (const line of String(responseText).split('\n')) {
-    if (!line.startsWith('data:')) continue
-    const data = line.slice(5).trim()
-    if (data === '[DONE]') {
-      summary.done = true
-      continue
-    }
-    let frame
-    try {
-      frame = JSON.parse(data)
-    } catch {
-      continue
-    }
-    summary.frames += 1
-    if (frame?.error) summary.error = String(frame.error.code ?? frame.error.type ?? 'error')
-    if (frame?.usage) summary.usage = usageOf(frame.usage)
-    for (const choice of Array.isArray(frame?.choices) ? frame.choices : []) {
-      if (typeof choice.finish_reason === 'string') summary.finishReasons.push(choice.finish_reason)
-      const delta = choice.delta ?? {}
-      if (typeof delta.content === 'string') {
-        summary.contentChars += delta.content.length
-        said ||= delta.content.trim() !== ''
-      }
-      if (typeof delta.reasoning_content === 'string')
-        summary.reasoningChars += delta.reasoning_content.length
-      for (const call of Array.isArray(delta.tool_calls) ? delta.tool_calls : [])
-        if (typeof call?.function?.name === 'string') summary.toolCalls.push(call.function.name)
-    }
+    const data = streamData(line)
+    if (data === STREAM_DONE) summary.done = true
+    else if (data) said = readFrame(summary, data.frame) || said
   }
-  const finish = summary.finishReasons.at(-1)
-  if (summary.error === null) {
-    if (finish === 'tool_calls' && summary.toolCalls.length === 0)
-      summary.forms.push('tool_calls_without_calls')
-    if (finish === 'stop' && summary.contentChars === 0 && summary.toolCalls.length === 0)
-      summary.forms.push('stop_with_empty_answer')
-    if (finish === undefined) summary.forms.push('no_finish_reason')
-    if (!summary.done) summary.forms.push('no_done')
-    if (said && summary.toolCalls.length > 0) summary.forms.push('text_beside_tool_call')
-  }
+  summary.forms.push(...streamForms(summary, said))
   return summary
+}
+
+const STREAM_DONE = Symbol('done')
+
+/** What one line of a stream holds: DONE, `{frame}` of a JSON frame, or undefined for others. */
+function streamData(line) {
+  if (!line.startsWith('data:')) return undefined
+  const data = line.slice(5).trim()
+  if (data === '[DONE]') return STREAM_DONE
+  try {
+    return { frame: JSON.parse(data) }
+  } catch {
+    return undefined
+  }
+}
+
+/** Adds one frame to the summary: true when it said some text. */
+function readFrame(summary, frame) {
+  summary.frames += 1
+  if (frame?.error) summary.error = String(frame.error.code ?? frame.error.type ?? 'error')
+  const choices = Array.isArray(frame?.choices) ? frame.choices : []
+  if (frame?.usage) {
+    summary.usage = usageOf(frame.usage)
+    summary.usageAtFinish = choices.some((choice) => typeof choice?.finish_reason === 'string')
+  }
+  let said = false
+  for (const choice of choices) said = readChoice(summary, choice) || said
+  return said
+}
+
+/** Adds one choice of a frame to the summary: true when its delta said some text. */
+function readChoice(summary, choice) {
+  if (typeof choice.finish_reason === 'string') summary.finishReasons.push(choice.finish_reason)
+  const delta = choice.delta ?? {}
+  let said = false
+  if (typeof delta.content === 'string') {
+    summary.contentChars += delta.content.length
+    said = delta.content.trim() !== ''
+  }
+  if (typeof delta.reasoning_content === 'string')
+    summary.reasoningChars += delta.reasoning_content.length
+  for (const call of Array.isArray(delta.tool_calls) ? delta.tool_calls : [])
+    if (typeof call?.function?.name === 'string') summary.toolCalls.push(call.function.name)
+  return said
+}
+
+/** Which of STREAM_FORMS a stream shows; a stream with an error object shows none. */
+function streamForms(summary, said) {
+  if (summary.error !== null) return []
+  const finish = summary.finishReasons.at(-1)
+  const calls = summary.toolCalls.length
+  return [
+    [finish === 'tool_calls' && calls === 0, 'tool_calls_without_calls'],
+    [finish === 'stop' && summary.contentChars === 0 && calls === 0, 'stop_with_empty_answer'],
+    [finish === undefined, 'no_finish_reason'],
+    [!summary.done, 'no_done'],
+    [said && calls > 0, 'text_beside_tool_call'],
+  ]
+    .filter(([shown]) => shown)
+    .map(([, form]) => form)
 }
 
 /**

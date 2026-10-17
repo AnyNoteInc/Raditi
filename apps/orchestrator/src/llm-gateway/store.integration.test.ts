@@ -4,7 +4,12 @@ import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
 import type { GatewayRefusal } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
-import { sampleBackendId, sampleProviderSlug, sampleRoutePath } from '../testing/ids.ts'
+import {
+  sampleBackendCapacity,
+  sampleBackendId,
+  sampleProviderSlug,
+  sampleRoutePath,
+} from '../testing/ids.ts'
 import { PostgresGatewayStore } from './store.ts'
 import {
   GatewayRecordRejected,
@@ -212,6 +217,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
         keyHash: row.keyHash,
         source: '127.0.0.1',
         backendId: sampleBackendId,
+        capacity: sampleBackendCapacity,
         route: { method: 'POST', path: sampleRoutePath },
         profile,
         requestBytes: 600,
@@ -1122,6 +1128,68 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
         .limitWindows,
     ).toEqual([])
     expect(await store.admit(k.input)).toMatchObject({ reason: 'transient', probeAccount: true })
+  })
+
+  it('admits a backend without windows on the account pauses alone', async () => {
+    const f = await fixture()
+    const k = await f.key()
+    // The sample backend, as one without windows would declare itself (LlmBackend.capacity).
+    const windowless = { ...k.input, capacity: 'none' as const }
+    for (const limitWindows of [
+      [],
+      [{ name: 'week', usedPct: 100, resetsAt: null }],
+      [{ name: '5h', usedPct: 100, resetsAt: new Date(Date.now() + 3_600_000).toISOString() }],
+    ]) {
+      await db.subscriptionAccount.update({ where: { id: f.account.id }, data: { limitWindows } })
+      await store.finish((await admitted(windowless)).id, actual())
+    }
+    // The same snapshot holds a turn of a backend that reports windows, as it always did.
+    await db.subscriptionAccount.update({ where: { id: f.account.id }, data: { limitWindows: [] } })
+    expect(await store.admit(k.input)).toMatchObject({ reason: 'transient', probeAccount: true })
+    expect(await store.admit({ ...k.input, capacity: 'windows' })).toMatchObject({
+      reason: 'transient',
+      probeAccount: true,
+    })
+    // A durable pause of the account holds either way, and so does the usage breaker.
+    await db.subscriptionAccount.update({
+      where: { id: f.account.id },
+      data: { coolingUntil: new Date(Date.now() + 5 * 60_000) },
+    })
+    expect(await store.admit(windowless)).toMatchObject({
+      kind: 'refused',
+      reason: 'subscription_limit',
+    })
+    expect((await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })).lastRefusal).toBe(
+      'subscription_limit',
+    )
+    await db.subscriptionAccount.update({
+      where: { id: f.account.id },
+      data: { coolingUntil: null, breakerOpenUntil: new Date(Date.now() + 60_000) },
+    })
+    expect(await store.admit(windowless)).toMatchObject({ kind: 'refused', reason: 'account' })
+  })
+
+  it('records an empty balance as the call signal, a final refusal of no capacity', async () => {
+    const f = await fixture()
+    const k = await f.key()
+    const call = await admitted(k.input)
+    await store.finish(call.id, {
+      ...actual(),
+      state: 'failed',
+      upstreamStatus: 429,
+      signal: { kind: 'balance_exhausted' },
+    })
+    expect(await db.llmCall.findUniqueOrThrow({ where: { id: call.id } })).toMatchObject({
+      signal: 'balance_exhausted',
+      upstreamStatus: 429,
+    })
+    expect(await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })).toMatchObject({
+      lastRefusal: 'subscription_limit',
+    })
+    // The store itself pauses nothing for it and drops no windows: that is the pool's to do.
+    expect(
+      await db.subscriptionAccount.findUniqueOrThrow({ where: { id: f.account.id } }),
+    ).toMatchObject({ coolingUntil: null, limitWindows: f.account.limitWindows })
   })
 
   it('counts only completed missing-usage terminals and resets the streak on real completed usage', async () => {

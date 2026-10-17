@@ -131,7 +131,7 @@ describe('llm role lifecycle', () => {
     expect(fakes.createProbe).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ proxyUrl: null }),
     )
-    expect(options.backends.map((backend) => backend.id)).toEqual(['zai-coding'])
+    expect(options.backends.map((backend) => backend.id)).toEqual(['zai-coding', 'zai-api'])
     await runtime.onApplicationShutdown()
     expect(prisma.$disconnect).toHaveBeenCalledOnce()
   })

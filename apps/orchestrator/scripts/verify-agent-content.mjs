@@ -511,6 +511,8 @@ async function stand(site) {
   stage = 'trusted turn-key issuer'
   // The trusted side of the stand is this process: the product's issuer under the core AppRole.
   const { GatewayTurnCredentials } = await import('../dist/llm/turn-credentials.js')
+  const { backendCapacities } = await import('../dist/llm/backends.js')
+  const { llmBackends } = await import('@repo/llm-backends')
   const { createPoolProbeClient } = await import('../dist/llm/pool-probe-client.js')
   const { ContentSnapshotStorage, contentSnapshotKey } =
     await import('../dist/mcp/content-snapshots.js')
@@ -518,6 +520,8 @@ async function stand(site) {
     prisma: db,
     secrets: createVaultSecretStore({ addr: stack.vaultAddress, appRole: stack.roles.core }),
     requireAssignment: true,
+    // As LlmModule composes it: the pool reads an account by the capacity of its backend.
+    capacityOf: backendCapacities(llmBackends),
     // As core does: windows nobody has written are the role llm's to probe before a selection.
     probeAccounts: createPoolProbeClient(`http://127.0.0.1:${llmPort}`, metricsToken),
   })

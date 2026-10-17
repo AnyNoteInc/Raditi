@@ -671,19 +671,23 @@ describe.skipIf(!databaseUrl)('switch to OpenCode: a database of the earlier she
     const after = await flags(earlier.schema.db)
     expect(
       Object.entries(after).filter(([row]) =>
-        /^llm_(providers|models)\/zai-coding(\/|$)/.test(row),
+        /^llm_(providers|models)\/zai-(coding|api)(\/|$)/.test(row),
       ),
     ).toEqual([
+      ['llm_models/zai-api/glm-5.3-heavy', false],
+      ['llm_models/zai-api/glm-5.3-light', false],
+      ['llm_models/zai-api/glm-5.3-standard', false],
       ['llm_models/zai-coding/glm-5.3-heavy', false],
       ['llm_models/zai-coding/glm-5.3-light', false],
       ['llm_models/zai-coding/glm-5.3-standard', false],
       ['llm_models/zai-coding/history-off', false],
       ['llm_models/zai-coding/history-on', false],
+      ['llm_providers/zai-api', false],
       ['llm_providers/zai-coding', false],
     ])
     expect(
       await earlier.db.llmModelPrice.count({
-        where: { model: { provider: { slug: 'zai-coding' } } },
+        where: { model: { provider: { slug: { in: ['zai-coding', 'zai-api'] } } } },
       }),
     ).toBe(0)
   })
@@ -770,7 +774,7 @@ describe.skipIf(!databaseUrl)(
       const zero = Object.fromEntries(seededTables.map((table) => [table, 0]))
       const report = await seedReferenceData(db)
       expect(report.updated).toEqual(zero)
-      expect(report.created).toMatchObject({ agent_drivers: 1, llm_providers: 1, llm_models: 3 })
+      expect(report.created).toMatchObject({ agent_drivers: 1, llm_providers: 2, llm_models: 6 })
       // The rows of a new database and the three history rows, which no seed run recreates,
       // completes or switches back on.
       const seeded = await flags(schema.db)
@@ -778,8 +782,12 @@ describe.skipIf(!databaseUrl)(
         'agent_drivers/codex': false,
         'agent_drivers/opencode': true,
         'llm_providers/openai-chatgpt': false,
+        'llm_providers/zai-api': false,
         'llm_providers/zai-coding': false,
         'llm_models/openai-chatgpt/gpt-6-sol-standard': false,
+        'llm_models/zai-api/glm-5.3-heavy': false,
+        'llm_models/zai-api/glm-5.3-light': false,
+        'llm_models/zai-api/glm-5.3-standard': false,
         'llm_models/zai-coding/glm-5.3-heavy': false,
         'llm_models/zai-coding/glm-5.3-light': false,
         'llm_models/zai-coding/glm-5.3-standard': false,
@@ -804,7 +812,7 @@ describe.skipIf(!databaseUrl)('switch to OpenCode: a new database', () => {
     await schema?.drop()
   })
 
-  it('gets one shell switched on by the seeds and no provider, profile or rate', async () => {
+  it('gets one shell switched on by the seeds and no provider, profile or rate of its backends', async () => {
     // The migration found no row to switch; the same flags come from the seeds.
     expect(await flags(schema.db)).toEqual({})
     await seedReferenceData(db)
@@ -813,7 +821,11 @@ describe.skipIf(!databaseUrl)('switch to OpenCode: a new database', () => {
     // shell or of its provider, and the catalogue of the new one waits for the operator.
     expect(seeded).toEqual({
       'agent_drivers/opencode': true,
+      'llm_providers/zai-api': false,
       'llm_providers/zai-coding': false,
+      'llm_models/zai-api/glm-5.3-heavy': false,
+      'llm_models/zai-api/glm-5.3-light': false,
+      'llm_models/zai-api/glm-5.3-standard': false,
       'llm_models/zai-coding/glm-5.3-heavy': false,
       'llm_models/zai-coding/glm-5.3-light': false,
       'llm_models/zai-coding/glm-5.3-standard': false,

@@ -241,6 +241,72 @@ describe('bounded pool health SQL mutations', () => {
     expect(h.update).not.toHaveBeenCalled()
   })
 
+  // Finished calls that found the balance spent, each after the pause the one before began.
+  const spentChecks = (minutesAgo: readonly number[]) =>
+    minutesAgo.map((minutes) => ({ finishedAt: new Date(now.getTime() - minutes * 60_000) }))
+
+  it.each([
+    [[0], 1, 5],
+    [[6, 0], 2, 15],
+    [[30, 20, 0], 3, 45],
+    [[200, 190, 170, 120, 0], 5, 60],
+    [[600, 590, 570, 520, 450, 380, 0], 7, 60],
+  ] as const)(
+    'pauses the account durably after the checks %j: check %s, %s minutes',
+    async (minutesAgo, count, minutes) => {
+      const h = harness()
+      h.failures.mockResolvedValue(spentChecks(minutesAgo))
+      const pausedUntil = new Date(now.getTime() + minutes * 60_000)
+      expect(await h.store.balance(snapshot.accountId)).toEqual({ count, pausedUntil })
+      expect(h.failures).toHaveBeenCalledWith({
+        where: {
+          subscriptionAccountId: snapshot.accountId,
+          signal: 'balance_exhausted',
+          state: { not: 'open' },
+          finishedAt: { gte: new Date(now.getTime() - 86_400_000) },
+        },
+        select: { finishedAt: true },
+        orderBy: { finishedAt: 'asc' },
+        take: 1_000,
+      })
+      // Neither health nor windows: the account is fine and comes back after the pause.
+      expect(h.update).toHaveBeenCalledExactlyOnceWith({
+        where: { id: snapshot.accountId },
+        data: { coolingUntil: pausedUntil },
+      })
+    },
+  )
+
+  it('counts answers within one pause as one check, and begins no second pause in it', async () => {
+    const h = harness({ coolingUntil: new Date(now.getTime() + 60_000) })
+    // Three requests answered together, then one inside the 15-minute second pause.
+    h.failures.mockResolvedValue(spentChecks([25, 25, 24, 20, 10]))
+    expect(await h.store.balance(snapshot.accountId)).toEqual({ count: 2, pausedUntil: null })
+    expect(h.update).not.toHaveBeenCalled()
+  })
+
+  it('begins a pause even when no row of the call is readable yet', async () => {
+    const h = harness()
+    h.failures.mockResolvedValue([])
+    expect(await h.store.balance(snapshot.accountId)).toEqual({
+      count: 0,
+      pausedUntil: new Date(now.getTime() + 5 * 60_000),
+    })
+  })
+
+  it('pauses no account that is gone', async () => {
+    const h = harness()
+    h.transaction.mockImplementation(async (fn: (value: unknown) => unknown) =>
+      fn({
+        $queryRaw: h.queryRaw,
+        subscriptionAccount: { findUnique: vi.fn().mockResolvedValue(null), update: h.update },
+        llmCall: { findMany: h.failures },
+      }),
+    )
+    expect(await h.store.balance(snapshot.accountId)).toEqual({ count: 0, pausedUntil: null })
+    expect(h.update).not.toHaveBeenCalled()
+  })
+
   it('treats a reset no window can have as unknown: an hour, never years', async () => {
     const day = 86_400_000
     const hour = new Date(now.getTime() + 3_600_000)

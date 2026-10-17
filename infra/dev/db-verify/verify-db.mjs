@@ -598,13 +598,16 @@ async function main() {
   stage = 'reference data seed'
   // The orchestrator's integration tests read the seeded catalogue, as in CI after db:seed.
   assert.match(await seed(), /\[seed\] \w+: \+[1-9]\d* created, 0 updated/)
-  // A new database: one shell and its catalogue, no row of an earlier shell or provider.
+  // A new database: one shell and the catalogue of its backends, no row of an earlier shell or
+  // provider.
   assert.deepEqual(await withDatabase(databaseUrl, catalogue), newDatabaseCatalogue)
   const reseeded = seedReport(await seed())
   assert.ok(Object.keys(reseeded).length >= 5, 'The seed must report its tables')
   for (const [table, counts] of Object.entries(reseeded)) assert.deepEqual(counts, [0, 0], table)
   assert.deepEqual(await withDatabase(databaseUrl, catalogue), newDatabaseCatalogue)
-  passed('reference data seeded: the catalogue of one shell; a rerun changes nothing')
+  passed(
+    'reference data seeded: the catalogue of one shell and its two backends; a rerun changes nothing',
+  )
   await suite('orchestrator', 'orchestrator')
   // Their PostgreSQL suites (billing accounts, the ledger and its read models; project and
   // profile writes; the avatar upload limit) skip themselves without DATABASE_URL, in

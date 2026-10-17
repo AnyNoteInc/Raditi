@@ -82,6 +82,20 @@ function run(
     child.stdin.end(input)
   })
 }
+// A writer token minted by the command from a root token on stdin, into the file `out`.
+function writerToken(vaultAddress: string, out: string) {
+  return command('token', ['--policy', 'writer', '--out', out], {
+    env: { APP_ENV: 'test', VAULT_ADDR: vaultAddress },
+    input: 'private-root-token\n',
+  })
+}
+
+async function privateDirectory() {
+  const directory = await mkdtemp(join(tmpdir(), 'raditi-subscription-cli-'))
+  cleanup.push(() => rm(directory, { recursive: true, force: true }))
+  return directory
+}
+
 async function fakeVault(auth: object) {
   const requests: { path: string; token: string | undefined; body: unknown }[] = []
   const server: Server = createServer((req, res) => {
@@ -127,24 +141,42 @@ describe('operator subscription commands', () => {
       expect(result.stderr).toBe('')
     },
   )
-  it('imports a Z.ai plan key for the OpenCode driver: one turn and two requests at a time', () => {
+  it.each([
+    ['plan key', 'zai-coding', 'glm-a', 'lite'],
+    ['API key', 'zai-api', 'glm-api-a', 'payg'],
+  ])(
+    'imports a Z.ai %s for the OpenCode driver: one turn and two requests at a time',
+    (_, backend, label, plan) => {
+      expect(
+        parseSubscriptionArguments('login', [
+          '--backend',
+          backend,
+          '--label',
+          label,
+          '--plan',
+          plan,
+          '--vault-token-file',
+          '/tmp/writer',
+        ]),
+      ).toMatchObject({ command: 'login', value: { backend, plan } })
+      const entry = subscriptionImports.get(backend)!
+      expect(entry.backend.id).toBe(backend)
+      expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
+      // A key from stdin.
+      expect(entry.backend.importCredential).toBeTypeOf('function')
+    },
+  )
+  it('takes a relogin of an API account in the same form as any other', () => {
     expect(
       parseSubscriptionArguments('login', [
         '--backend',
-        'zai-coding',
-        '--label',
-        'glm-a',
-        '--plan',
-        'lite',
+        'zai-api',
+        '--relogin',
+        account,
         '--vault-token-file',
         '/tmp/writer',
       ]),
-    ).toMatchObject({ command: 'login', value: { backend: 'zai-coding', plan: 'lite' } })
-    const entry = subscriptionImports.get('zai-coding')!
-    expect(entry.backend.id).toBe('zai-coding')
-    expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
-    // A key from stdin.
-    expect(entry.backend.importCredential).toBeTypeOf('function')
+    ).toMatchObject({ value: { backend: 'zai-api', relogin: account } })
   })
   it('has import settings for every backend the platform registers, each with a way in', () => {
     expect([...subscriptionImports.keys()]).toEqual(llmBackends.map((backend) => backend.id))
@@ -153,6 +185,13 @@ describe('operator subscription commands', () => {
       expect(agentDriverIds).toContain(entry.driverId)
       // The key of a subscription from stdin is the one way in.
       expect(entry.backend.importCredential).toBeTypeOf('function')
+      // The help names a --plan label for each; the column it goes to holds at most 32 of them.
+      expect(entry.planExample).toMatch(/^[a-z0-9_-]{1,32}$/)
+      // Within the bounds of the account's row (CHECK) and of the import.
+      expect(entry.turns).toBeGreaterThanOrEqual(1)
+      expect(entry.turns).toBeLessThanOrEqual(8)
+      expect(entry.requests).toBeGreaterThanOrEqual(1)
+      expect(entry.requests).toBeLessThanOrEqual(16)
     }
   })
   it('accepts no backend without import settings, whatever the list of ids says', () => {
@@ -174,20 +213,29 @@ describe('operator subscription commands', () => {
     // An id of the port's list that has no settings would otherwise fail after parsing. Every
     // id of the list has them, so the settings of one are taken away for the length of the check.
     const settings = subscriptionImports as Map<string, SubscriptionImport>
-    const [id, entry] = [...settings][0]!
+    const saved = [...settings]
+    const [id] = saved[0]!
     expect(login(id)).not.toThrow()
     settings.delete(id)
     try {
       expect(login(id)).toThrow('Неверные параметры команды подписок')
     } finally {
-      settings.set(id, entry)
+      // Back in the order of the registry, which the help and other checks read.
+      settings.clear()
+      for (const [key, entry] of saved) settings.set(key, entry)
     }
     expect(login(id)).not.toThrow()
   })
   it('builds the help of login from the import settings', () => {
     const help = subscriptionHelp('login')
-    expect(help).toContain('--backend zai-coding ')
-    expect(help).toContain('Ключ подписки (zai-coding) поступает через stdin или скрытый ввод.')
+    expect(help).toContain('--backend zai-coding|zai-api ')
+    expect(help).toContain(
+      'Ключ подписки (zai-coding, zai-api) поступает через stdin или скрытый ввод.',
+    )
+    expect(help).toContain(
+      '--plan — метка тарифа нового аккаунта, например: zai-coding — lite, zai-api — payg.',
+    )
+    expect(help).toContain('если провайдеру нужен узел выхода (zai-coding и zai-api он не нужен).')
   })
   it('asks for the egress node unless the adapter says of every origin that it needs none', () => {
     const origin = {
@@ -196,6 +244,7 @@ describe('operator subscription commands', () => {
       requests: ['POST https://provider.invalid/v1/generate'],
     }
     expect(loginNeedsEgressNode(subscriptionImports.get('zai-coding')!.backend)).toBe(false)
+    expect(loginNeedsEgressNode(subscriptionImports.get('zai-api')!.backend)).toBe(false)
     expect(loginNeedsEgressNode({ egress: [origin] })).toBe(true)
     expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: false }] })).toBe(true)
     expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: true }, origin] })).toBe(true)
@@ -418,11 +467,13 @@ describe('operator subscription commands', () => {
     // general text shows that neither the environment, nor the rule, nor the channel stopped
     // the command. The case must stay unable to reach the transport: production takes no
     // address override, so nothing here could point api.z.ai at this machine.
-    const direct = await command('login', args('zai-coding'), { env })
-    expect(direct.code).toBe(1)
-    expect(direct.stderr).toBe(
-      'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.\n',
-    )
+    for (const backend of ['zai-coding', 'zai-api']) {
+      const direct = await command('login', args(backend), { env })
+      expect(direct.code).toBe(1)
+      expect(direct.stderr).toBe(
+        'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.\n',
+      )
+    }
     // Half a proxy is a mistake of the environment, not a direct path.
     const half = await command('login', args('zai-coding'), {
       env: { ...env, LLM_EGRESS_PROXY_URL: 'https://127.0.0.1:1' },
@@ -438,13 +489,8 @@ describe('operator subscription commands', () => {
       lease_duration: 900,
       renewable: false,
     })
-    const directory = await mkdtemp(join(tmpdir(), 'raditi-subscription-cli-'))
-    cleanup.push(() => rm(directory, { recursive: true, force: true }))
-    const out = join(directory, 'operator-token')
-    const result = await command('token', ['--policy', 'writer', '--out', out], {
-      env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
-      input: 'private-root-token\n',
-    })
+    const out = join(await privateDirectory(), 'operator-token')
+    const result = await writerToken(vault.address, out)
     expect(result.code).toBe(0)
     expect(result.stdout + result.stderr).not.toContain('private-')
     expect(await readFile(out, 'utf8')).toBe('private-minted-token')
@@ -462,10 +508,7 @@ describe('operator subscription commands', () => {
         },
       },
     ])
-    const second = await command('token', ['--policy', 'writer', '--out', out], {
-      env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
-      input: 'private-root-token\n',
-    })
+    const second = await writerToken(vault.address, out)
     expect(second.code).toBe(1)
     expect(vault.requests).toHaveLength(1)
     expect(await readFile(out, 'utf8')).toBe('private-minted-token')
@@ -488,13 +531,8 @@ describe('operator subscription commands', () => {
       lease_duration: 900,
       renewable: false,
     })
-    const directory = await mkdtemp(join(tmpdir(), 'raditi-subscription-cli-'))
-    cleanup.push(() => rm(directory, { recursive: true, force: true }))
-    const out = join(directory, 'uncreated')
-    const result = await command('token', ['--policy', 'writer', '--out', out], {
-      env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
-      input: 'private-root-token\n',
-    })
+    const out = join(await privateDirectory(), 'uncreated')
+    const result = await writerToken(vault.address, out)
     expect(result.code).toBe(1)
     expect(result.stdout + result.stderr).not.toContain('private-')
     await expect(stat(out)).rejects.toMatchObject({ code: 'ENOENT' })

@@ -142,10 +142,15 @@ async function main() {
   const problems = roleProfileProblems({
     profile,
     egress,
-    directOrigins: llmBackends
-      .flatMap((backend) => backend.egress)
-      .filter((origin) => origin.direct)
-      .map((origin) => origin.origin),
+    // One origin may serve several backends (both offers of Z.ai): each is named once.
+    directOrigins: [
+      ...new Set(
+        llmBackends
+          .flatMap((backend) => backend.egress)
+          .filter((origin) => origin.direct)
+          .map((origin) => origin.origin),
+      ),
+    ],
     env,
     processEnv: process.env,
     execArgv: process.execArgv,

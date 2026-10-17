@@ -1,5 +1,5 @@
 import type { EgressResponse, LlmBackend } from '@repo/domain'
-import { zaiCodingBackend } from '@repo/llm-backends'
+import { zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
 import { authenticateSubscription } from './key-import.ts'
@@ -68,6 +68,42 @@ describe('operator subscription authentication', () => {
   it.each([401, 403, 500, 200])('rejects an unconfirmed key probe (%i)', async (status) => {
     const { options, request } = setup()
     request.mockReset().mockResolvedValue(response({ private: 'secret' }, status))
+    await expect(authenticateSubscription(options)).rejects.toThrow(/^Subscription login failed$/)
+  })
+  it('imports a key of the pay-per-token API on the auth answer of the monitor path', async () => {
+    // A key with a plan, one without any (the envelope of the path), one with an empty balance:
+    // the probe reads none of them, so each is taken and the balance shows on the first call.
+    for (const answer of [
+      quota(),
+      response({ code: 500, msg: '404 NOT_FOUND', success: false }),
+      response({ code: 1113, msg: 'Insufficient balance', success: false }),
+    ]) {
+      const { options, request } = setup(zaiApiBackend)
+      request.mockReset().mockResolvedValue(answer)
+      expect(await authenticateSubscription(options)).toEqual({
+        v: '1',
+        kind: 'zai_api_key',
+        apiKey: 'synthetic-api-key',
+      })
+      expect(request).toHaveBeenCalledOnce()
+      expect(request.mock.calls[0]![0]).toMatchObject({
+        method: 'GET',
+        url: 'https://api.z.ai/api/monitor/usage/quota/limit',
+      })
+    }
+  })
+  it.each([
+    [
+      'the auth envelope',
+      response({ code: 401, msg: 'token expired or incorrect', success: false }),
+    ],
+    ['HTTP 401', response({ private: 'secret' }, 401)],
+    ['a region block', response({ private: 'secret' }, 403)],
+    ['no envelope', response({ private: 'secret' })],
+    ['a server error', response({ private: 'secret' }, 500)],
+  ])('rejects a pay-per-token API key on %s', async (_name, answer) => {
+    const { options, request } = setup(zaiApiBackend)
+    request.mockReset().mockResolvedValue(answer)
     await expect(authenticateSubscription(options)).rejects.toThrow(/^Subscription login failed$/)
   })
   it('a transport failure that quotes the key produces only safe text', async () => {

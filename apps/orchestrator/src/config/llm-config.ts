@@ -25,8 +25,20 @@ export const DEFAULT_LLM_GATEWAY_PORT = 8084
 export const PRODUCTION_VAULT_CA_FILE = '/run/raditi/vault-ca.pem'
 
 /** What the adapters declare, checked: a malformed declaration stops the configuration. */
-const declaredOrigins = (backends: readonly LlmBackend[]) =>
-  backends.flatMap((backend) => backend.egress.map((entry) => llmEgressOriginSchema.parse(entry)))
+function declaredOrigins(backends: readonly LlmBackend[]) {
+  const declared = backends.flatMap((backend) =>
+    backend.egress.map((entry) => llmEgressOriginSchema.parse(entry)),
+  )
+  // A stand points an origin, not a backend, at its fake: two names for one origin would let
+  // either redirect both, and the one read last silently win.
+  const names = new Map<string, string>()
+  for (const { origin, overrideEnv } of declared) {
+    if ((names.get(origin) ?? overrideEnv) !== overrideEnv)
+      throw new Error(`LLM backends name two stand variables for ${origin}`)
+    names.set(origin, overrideEnv)
+  }
+  return declared
+}
 
 /** The fixed provider origins of the platform's adapters; the role connects to nothing else. */
 export const providerOrigins: readonly string[] = [

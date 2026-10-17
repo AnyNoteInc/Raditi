@@ -17,13 +17,17 @@ import { join } from 'node:path'
 import process from 'node:process'
 
 import { CLI_IMAGE, dockerCommand, GUARD_IMAGE } from '../../../infra/dev/llm-verify/cli.mjs'
-import { SYNTHETIC_ZAI_KEY } from '../../../infra/dev/llm-verify/fake-zai.mjs'
+import {
+  SYNTHETIC_ZAI_API_KEY,
+  SYNTHETIC_ZAI_KEY,
+} from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import {
   commandAnswer,
   createBudget,
   createStreamSearch,
   guardImport,
   keepExchanges,
+  LIVE_KEY_NAME,
   LIVE_LIMITS,
   LiveRefusal,
   liveStartRefusal,
@@ -33,6 +37,7 @@ import {
   searchWhatIsLeft,
   startLlmObserver,
   takePlanKey,
+  takeProviderKey,
   watchLedger,
   WINDOW_GROWTH_LIMIT,
   windowGrowth,
@@ -46,28 +51,38 @@ import {
 } from '../../../infra/dev/llm-verify/stack.mjs'
 import { startWorker } from '../../../infra/dev/llm-verify/workers.mjs'
 import { bridgeGatewayAddress, freePort } from './verify-agent-content-role.mjs'
-import { OPENCODE_HOME, ZAI_BACKEND } from './verify-llm-zai-setup.mjs'
+import { OPENCODE_HOME, ZAI_OFFERS, zaiOriginOverrides } from './verify-llm-zai-setup.mjs'
 
 /** The exit code of a run that refused to start: nothing was started and nothing was sent. */
 export const REFUSED = 2
 const LABEL = 'live-zai'
+const API_LABEL = 'live-zai-api'
 // Everything the agent can write to in the CLI container, the session database included.
 const SANDBOX_ROOTS = ['/agent-home', '/workspace', '/tmp', '/run/raditi']
 
 /**
  * Opens a run, or returns REFUSED after saying why. `kind` names the limits: gateway, content,
- * measure or results. The plan key leaves the environment here, before any other process exists.
+ * measure or results. The provider key (ZAI_API_KEY, on the plan and with `--api` on the
+ * pay-per-token API alike) leaves the environment here, before any other process exists.
  * `onExpire` is called when the run outlives its minutes.
  */
 export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
   const rehearsal = mode.rehearsal
   const limits = LIVE_LIMITS[kind]
+  // The offer the run imports a key of: the plan, or the API (П15).
+  const offer = mode.api ? ZAI_OFFERS.api : ZAI_OFFERS.plan
+  const keyWord = mode.api ? 'API key' : 'plan key'
   let key
   let refusal = rehearsal ? null : liveStartRefusal(process.env)
   try {
     // A rehearsal never touches a real key: whatever the environment holds is dropped unread.
-    if (rehearsal) delete process.env.ZAI_API_KEY
-    key = takePlanKey(rehearsal ? { ZAI_API_KEY: SYNTHETIC_ZAI_KEY } : process.env)
+    if (rehearsal) delete process.env[LIVE_KEY_NAME]
+    key = takeProviderKey(
+      rehearsal
+        ? { [LIVE_KEY_NAME]: mode.api ? SYNTHETIC_ZAI_API_KEY : SYNTHETIC_ZAI_KEY }
+        : process.env,
+      { word: keyWord },
+    )
   } catch (error) {
     if (!(error instanceof LiveRefusal)) throw error
     refusal ??= error.message
@@ -79,8 +94,8 @@ export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
 
   const directory = await mkdtemp(join(tmpdir(), 'raditi-live-'))
   const ledger = join(directory, 'ledger')
-  // One request is kept for the reading of the quota the run ends on.
-  const budget = createBudget({ cap: limits.requests, ledger, reserve: 1 })
+  // One request is kept for the reading of the quota the run ends on; the API has no quota.
+  const budget = createBudget({ cap: limits.requests, ledger, reserve: mode.api ? 0 : 1 })
   let provider = rehearsal ? null : PROVIDER
   const guard = (cap) => guardImport({ ledger, cap, provider })
   // The stand's own process reaches no provider at all, whatever its code does.
@@ -106,9 +121,12 @@ export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
     kind,
     limits,
     key,
+    /** `plan key` or `API key`: what the run's lines call the key it holds. */
+    keyWord,
+    offer,
     budget,
     guard,
-    label: LABEL,
+    label: mode.api ? API_LABEL : LABEL,
     /** A line of the report: numbers and names the stand measured, never content. */
     report: (line) => console.log(`REPORT ${line}`),
     passed(name) {
@@ -151,7 +169,7 @@ export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
         ...(rehearsal
           ? {
               LLM_UPSTREAM_CA_FILE: join(stack.certificates.authority, 'root.pem'),
-              LLM_BACKEND_URL_ZAI_CODING: stack.providerOrigin,
+              ...zaiOriginOverrides(stack),
             }
           : {}),
         ...overrides,
@@ -228,12 +246,12 @@ export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
     },
 
     /**
-     * `subscriptions:login --backend zai-coding` with the key on its input: the one place the
-     * value goes. The command runs under the guard, so its quota request is counted with the
-     * rest. Returns the id of the account, created switched off.
+     * `subscriptions:login --backend <the offer's>` with the key on its input: the one place the
+     * value goes. The command runs under the guard, so the request of its probe is counted with
+     * the rest. Returns the id of the account, created switched off.
      */
     async importKey({ stack, db }) {
-      budget.afford(1, 'the import of the plan key')
+      budget.afford(1, `the import of the ${keyWord}`)
       const writerFile = join(stack.directory, 'writer.token')
       await writeFile(writerFile, stack.tokens['subscriptions-writer'], { mode: 0o400 })
       const imported = await run(
@@ -243,11 +261,11 @@ export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
           guard(limits.requests),
           join(repository, 'apps/orchestrator/scripts/subscription-login.mjs'),
           '--backend',
-          ZAI_BACKEND,
+          offer.backend,
           '--label',
-          LABEL,
+          live.label,
           '--plan',
-          'lite',
+          offer.plan,
           '--vault-token-file',
           writerFile,
         ],
@@ -260,7 +278,7 @@ export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
             ...(rehearsal
               ? {
                   LLM_UPSTREAM_CA_FILE: join(stack.certificates.authority, 'root.pem'),
-                  LLM_BACKEND_URL_ZAI_CODING: stack.providerOrigin,
+                  ...zaiOriginOverrides(stack),
                 }
               : {}),
           },
@@ -269,20 +287,33 @@ export async function openLiveRun({ mode, kind, onExpire = () => {} }) {
       )
       logs.push([imported.stdout], [imported.stderr])
       // The command was handed the key: what it printed is kept for the search, never quoted.
-      const answer = commandAnswer(imported, 'The import of the plan key')
+      // For the API its one request is the probe of the key on the monitor path, which no record
+      // shows for a key without a plan (П66): a failure here is that assumption failing first.
+      const answer = commandAnswer(
+        imported,
+        mode.api
+          ? 'The import of the API key (the probe of the key on the monitor path)'
+          : 'The import of the plan key',
+      )
       assert.deepEqual(answer, {
         accountId: answer.accountId,
-        backend: ZAI_BACKEND,
+        backend: offer.backend,
         credentialVersion: 1,
         enabled: false,
       })
-      // The import asked the quota once, and an account exists only because the provider
+      // The import asked the provider once, and an account exists only because the provider
       // answered it: nobody has written its windows yet.
       assert.equal(budget.state().used, 1, 'The import did not ask the provider exactly once')
       const account = await db.subscriptionAccount.findUniqueOrThrow({
         where: { id: answer.accountId },
       })
-      assert.partialDeepStrictEqual(account, { driverId: 'opencode', health: 'ok', enabled: false })
+      assert.partialDeepStrictEqual(account, {
+        driverId: 'opencode',
+        health: 'ok',
+        enabled: false,
+        plan: offer.plan,
+        limitsSeenAt: null,
+      })
       assert.equal(account.limitWindows?.length ?? 0, 0)
       return answer.accountId
     },
@@ -508,7 +539,7 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
         'The search does not read the stand directory',
       )
       const found = await searchPlaces(key, all)
-      assert.deepEqual(found, [], `The plan key is in: ${found.join('; ')}`)
+      assert.deepEqual(found, [], `The ${keyWord} is in: ${found.join('; ')}`)
       // A rehearsal plants its synthetic key in each of these very places in turn, among
       // binary bytes: the search must name that place and no other. In the output of a
       // process it is planted as a read of the pipe may leave it: cut in two chunks.
@@ -548,7 +579,7 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     async keepExchanges() {
       if (!mode.keep || !observer) return
       const kept = await keepExchanges(key, mode.keep, observer.exchanges())
-      assert.equal(kept.held, false, 'The plan key is in the observed exchanges: none was kept')
+      assert.equal(kept.held, false, `The ${keyWord} is in the observed exchanges: none was kept`)
     },
 
     /**
@@ -581,18 +612,21 @@ fs.writeFileSync(process.argv[1],Buffer.concat([Buffer.from('SQLite format 3\\0\
     async afterFailure(input) {
       try {
         const { found, unread, searched, kept } = await live.searchAfterFailure(input)
-        if (found.length) console.error(`The plan key is in: ${found.join('; ')}`)
+        if (found.length) console.error(`The ${keyWord} is in: ${found.join('; ')}`)
+        const read = searched.filter((name) => !unread.includes(name)).join(', ')
+        const where = found.length ? `found in ${found.length} place(s)` : 'in none'
+        const unreadNote = unread.length ? `; could not be read: ${unread.join(', ')}` : ''
         live.report(
-          `after the failure the plan key was searched for in what the run still held (${searched.filter((name) => !unread.includes(name)).join(', ')}): ${found.length ? `found in ${found.length} place(s)` : 'in none'}${unread.length ? `; could not be read: ${unread.join(', ')}` : ''}`,
+          `after the failure the ${keyWord} was searched for in what the run still held (${read}): ${where}${unreadNote}`,
         )
         if (kept)
           live.report(
             kept.held
-              ? 'the observed exchanges hold the plan key: none was kept'
+              ? `the observed exchanges hold the ${keyWord}: none was kept`
               : `${kept.written} observed exchange(s) kept for the diagnosis of the failure`,
           )
       } catch {
-        console.error('The search for the plan key after the failure could not be made')
+        console.error(`The search for the ${keyWord} after the failure could not be made`)
       }
     },
 

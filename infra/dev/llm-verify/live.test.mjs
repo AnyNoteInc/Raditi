@@ -61,6 +61,7 @@ test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --
     live: false,
     measure: false,
     results: false,
+    api: false,
     rehearsal: false,
     noBuild: false,
     keep: null,
@@ -98,6 +99,19 @@ test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --
     }),
     { ...plain, rehearsal: true, results: true, noBuild: true, keep: '/private/x' },
   )
+  // The acceptance on the pay-per-token API, live and rehearsed (П15).
+  assert.deepEqual(standMode(['--live', '--api', '--keep=/private/x'], { stand: 'gateway' }), {
+    ...plain,
+    live: true,
+    api: true,
+    keep: '/private/x',
+  })
+  assert.deepEqual(standMode(['--api', '--rehearsal', '--no-build'], { stand: 'gateway' }), {
+    ...plain,
+    rehearsal: true,
+    api: true,
+    noBuild: true,
+  })
   for (const [args, stand] of [
     // Never implemented, and gone from the documents.
     [['--real'], 'gateway'],
@@ -118,6 +132,14 @@ test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --
     [['--rehearsal', '--measure'], 'content'],
     [['--live', '--rehearsal'], 'gateway'],
     [['--live', '--live'], 'gateway'],
+    // The API is a modifier of a run of the gateway stand, and no measurement takes it.
+    [['--api'], 'gateway'],
+    [['--api', '--no-build'], 'gateway'],
+    [['--live', '--api', '--api'], 'gateway'],
+    [['--live', '--api', '--measure'], 'gateway'],
+    [['--rehearsal', '--api', '--results'], 'gateway'],
+    [['--live', '--api'], 'content'],
+    [['--rehearsal', '--api'], 'content'],
     [['--keep=/private/x'], 'gateway'],
     [['--live', '--keep=relative'], 'gateway'],
     [['--live', `--keep=${join(repository, 'docs/x')}`], 'gateway'],
@@ -181,6 +203,21 @@ test('the plan key is read once, leaves the environment and cannot be printed', 
   assert.throws(() => takePlanKey(env), /ZAI_API_KEY is not set/)
 })
 
+test('the API run takes the same variable, held the same way under its own word', () => {
+  assert.equal(liveModule.LIVE_KEY_NAME, 'ZAI_API_KEY')
+  const env = { ZAI_API_KEY: SYNTHETIC_KEY }
+  const key = liveModule.takeProviderKey(env, { word: 'API key' })
+  assert.equal(Object.hasOwn(env, 'ZAI_API_KEY'), false)
+  assert.equal(key.input(), `${SYNTHETIC_KEY}\n`)
+  for (const text of [String(key), JSON.stringify({ key }), inspect(key)])
+    assert.equal(text.includes(SYNTHETIC_KEY), false, text)
+  assert.equal(String(key), '[API key]')
+  assert.throws(
+    () => liveModule.takeProviderKey(env, { word: 'API key' }),
+    /ZAI_API_KEY is not set/,
+  )
+})
+
 test('without a usable key in the environment the live mode refuses to start', () => {
   for (const env of [
     {},
@@ -236,10 +273,15 @@ test('the growth of the five-hour window is read across a reset as well', () => 
   assert.throws(() => windowGrowth(at(1, reset), at(Number.NaN, reset)), /not known/)
 })
 
-const zaiOrigin = llmBackends
-  .flatMap((backend) => backend.egress)
-  .filter((entry) => entry.direct)
-  .map((entry) => entry.origin)
+// Both offers of Z.ai declare the one origin: the role reaches it, and a stand points it, once.
+const zaiOrigin = [
+  ...new Set(
+    llmBackends
+      .flatMap((backend) => backend.egress)
+      .filter((entry) => entry.direct)
+      .map((entry) => entry.origin),
+  ),
+]
 const production = (env) => egressConfigFromEnv(env, 'production')
 const profile = (overrides) =>
   roleProfileProblems({
@@ -966,9 +1008,19 @@ test('the forms of a stream are read from its frames', () => {
     contentChars: 6,
     reasoningChars: 5,
     usage: { inputUncached: 321, cacheRead: 6784, cacheWrite: 0, output: 94, reasoning: 54 },
+    usageAtFinish: true,
     error: null,
     forms: [],
   })
+  // A usage in a frame of its own after the finish: the live run on the API looks for this.
+  assert.partialDeepStrictEqual(
+    streamSummary(
+      frame(delta({ role: 'assistant', content: 'answer' }, 'stop')) +
+        frame({ id: 'x', choices: [], usage }) +
+        'data: [DONE]\n\n',
+    ),
+    { finishReasons: ['stop'], usageAtFinish: false, forms: [] },
+  )
   const calls =
     frame(
       delta({
@@ -1441,34 +1493,60 @@ const started = (script, args, env) =>
     timeout: 60_000,
   })
 
+// The refusals every live run shares: no key, CI and an override of the provider's address.
+const sharedRefusals = [
+  ['no key', {}, /ZAI_API_KEY is not set/],
+  ['CI', { CI: 'true', ZAI_API_KEY: SYNTHETIC_KEY }, /CI/],
+  [
+    'an address override',
+    { ZAI_API_KEY: SYNTHETIC_KEY, LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:9' },
+    /LLM_BACKEND_URL_ZAI_CODING/,
+  ],
+]
+
+const refusesToStart = (script, args, refusals) => {
+  for (const [name, env, expected] of refusals) {
+    const result = started(script, args, env)
+    const output = `${result.stdout}${result.stderr}`
+    assert.equal(result.status, 2, `${name}: exit ${result.status}: ${output.slice(0, 400)}`)
+    assert.match(output, /Live verification refused to start/, name)
+    assert.match(output, expected, name)
+    assert.equal(output.includes(SYNTHETIC_KEY), false, `${name}: the key was printed`)
+  }
+}
+
+// A rehearsal with no Docker at all fails at the first command: the run directories it left.
+const leftWithoutDocker = async (script, args, prefix) => {
+  const temporary = await mkdtemp(join(directory, prefix))
+  const result = started(script, args, {
+    TMPDIR: temporary,
+    DOCKER_HOST: `unix://${join(temporary, 'no-engine.sock')}`,
+  })
+  const output = `${result.stdout}${result.stderr}`
+  assert.equal(result.status, 1, `exit ${result.status}: ${output.slice(0, 400)}`)
+  assert.match(output, /verification failed at: build/)
+  return (await readdir(temporary)).filter((name) => name.startsWith('raditi-live-'))
+}
+
 for (const [stand, script] of Object.entries(stands))
   test(`${stand} stand: the live mode refuses before it starts anything`, () => {
-    for (const [name, env, expected] of [
-      ['no key', {}, /ZAI_API_KEY is not set/],
-      ['CI', { CI: 'true', ZAI_API_KEY: SYNTHETIC_KEY }, /CI/],
+    refusesToStart(
+      script,
+      ['--live', '--no-build'],
       [
-        'an address override',
-        { ZAI_API_KEY: SYNTHETIC_KEY, LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:9' },
-        /LLM_BACKEND_URL_ZAI_CODING/,
+        ...sharedRefusals,
+        [
+          'a CA switch',
+          { ZAI_API_KEY: SYNTHETIC_KEY, LLM_UPSTREAM_CA_FILE: join(directory, 'root.pem') },
+          /LLM_UPSTREAM_CA_FILE/,
+        ],
+        [
+          'a CA flag',
+          { ZAI_API_KEY: SYNTHETIC_KEY, NODE_EXTRA_CA_CERTS: '/x' },
+          /NODE_EXTRA_CA_CERTS/,
+        ],
       ],
-      [
-        'a CA switch',
-        { ZAI_API_KEY: SYNTHETIC_KEY, LLM_UPSTREAM_CA_FILE: join(directory, 'root.pem') },
-        /LLM_UPSTREAM_CA_FILE/,
-      ],
-      [
-        'a CA flag',
-        { ZAI_API_KEY: SYNTHETIC_KEY, NODE_EXTRA_CA_CERTS: '/x' },
-        /NODE_EXTRA_CA_CERTS/,
-      ],
-    ]) {
-      const result = started(script, ['--live', '--no-build'], env)
-      const output = `${result.stdout}${result.stderr}`
-      assert.equal(result.status, 2, `${name}: exit ${result.status}: ${output.slice(0, 400)}`)
-      assert.match(output, /Live verification refused to start/, name)
-      assert.match(output, expected, name)
-      assert.equal(output.includes(SYNTHETIC_KEY), false, `${name}: the key was printed`)
-    }
+    )
     // The flags that never existed are not options of the stand.
     for (const flag of ['--real', '--record']) {
       const result = started(script, [flag], {})
@@ -1482,61 +1560,50 @@ for (const [stand, script] of Object.entries(stands))
     // A rehearsal with no Docker at all — no command on PATH, and no engine behind the address
     // should one be found: the first command of the stand fails. The synthetic key alone is
     // involved, and nothing is started.
-    const temporary = await mkdtemp(join(directory, `no-docker-${stand}-`))
-    const result = started(script, ['--rehearsal', '--no-build'], {
-      TMPDIR: temporary,
-      DOCKER_HOST: `unix://${join(temporary, 'no-engine.sock')}`,
-    })
-    const output = `${result.stdout}${result.stderr}`
-    assert.equal(result.status, 1, `exit ${result.status}: ${output.slice(0, 400)}`)
-    assert.match(output, /verification failed at: build/)
     assert.deepEqual(
-      (await readdir(temporary)).filter((name) => name.startsWith('raditi-live-')),
+      await leftWithoutDocker(script, ['--rehearsal', '--no-build'], `no-docker-${stand}-`),
       [],
     )
   })
 
-test('gateway stand: the measurement of results refuses and cleans up like the acceptance', async () => {
-  for (const [name, env, expected] of [
-    ['no key', {}, /ZAI_API_KEY is not set/],
-    ['CI', { CI: 'true', ZAI_API_KEY: SYNTHETIC_KEY }, /CI/],
+// The measurement of results and the run on the API refuse and clean up like the acceptance; each
+// is no option without --live or --rehearsal, nor where the stand does not take it.
+for (const [flag, title, noOption] of [
+  [
+    '--results',
+    'the measurement of results refuses and cleans up like the acceptance',
+    // Without --live or --rehearsal it is no option of the stand, and never one of the content stand.
     [
-      'an address override',
-      { ZAI_API_KEY: SYNTHETIC_KEY, LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:9' },
-      /LLM_BACKEND_URL_ZAI_CODING/,
+      [stands.gateway, ['--results']],
+      [stands.content, ['--live', '--results']],
     ],
-  ]) {
-    const result = started(stands.gateway, ['--live', '--results', '--no-build'], env)
-    const output = `${result.stdout}${result.stderr}`
-    assert.equal(result.status, 2, `${name}: exit ${result.status}: ${output.slice(0, 400)}`)
-    assert.match(output, /Live verification refused to start/, name)
-    assert.match(output, expected, name)
-    assert.equal(output.includes(SYNTHETIC_KEY), false, `${name}: the key was printed`)
-  }
-  // Without --live or --rehearsal it is no option of the stand, and never one of the content stand.
-  for (const [script, args] of [
-    [stands.gateway, ['--results']],
-    [stands.content, ['--live', '--results']],
-  ]) {
-    const result = started(script, args, { ZAI_API_KEY: SYNTHETIC_KEY })
-    assert.notEqual(result.status, 0)
-    assert.notEqual(result.status, 2)
-    assert.match(`${result.stdout}${result.stderr}`, /option/i)
-  }
-  // Its rehearsal with no Docker at all fails at the first command and leaves no run directory.
-  const temporary = await mkdtemp(join(directory, 'no-docker-results-'))
-  const result = started(stands.gateway, ['--rehearsal', '--results', '--no-build'], {
-    TMPDIR: temporary,
-    DOCKER_HOST: `unix://${join(temporary, 'no-engine.sock')}`,
+  ],
+  [
+    '--api',
+    'the run on the API takes ZAI_API_KEY and refuses like the acceptance',
+    // Without --live or --rehearsal, with a measurement, or on the content stand it is no option.
+    [
+      [stands.gateway, ['--api']],
+      [stands.gateway, ['--live', '--api', '--measure']],
+      [stands.content, ['--live', '--api']],
+    ],
+  ],
+])
+  test(`gateway stand: ${title}`, async () => {
+    refusesToStart(stands.gateway, ['--live', flag, '--no-build'], sharedRefusals)
+    for (const [script, args] of noOption) {
+      const result = started(script, args, { ZAI_API_KEY: SYNTHETIC_KEY })
+      assert.notEqual(result.status, 0)
+      assert.notEqual(result.status, 2)
+      assert.match(`${result.stdout}${result.stderr}`, /option/i)
+    }
+    // Its rehearsal with no Docker at all leaves no run directory.
+    const prefix = `no-docker-${flag.slice(2)}-`
+    assert.deepEqual(
+      await leftWithoutDocker(stands.gateway, ['--rehearsal', flag, '--no-build'], prefix),
+      [],
+    )
   })
-  const output = `${result.stdout}${result.stderr}`
-  assert.equal(result.status, 1, `exit ${result.status}: ${output.slice(0, 400)}`)
-  assert.match(output, /verification failed at: build/)
-  assert.deepEqual(
-    (await readdir(temporary)).filter((name) => name.startsWith('raditi-live-')),
-    [],
-  )
-})
 
 test('a signal sent to the command of a stand reaches the stand: its package line ends with exec', async () => {
   // The stand removes its stacks on SIGINT and SIGTERM; in a live run that is what removes the

@@ -1,6 +1,8 @@
 import {
   DomainError,
+  llmBackendIds,
   llmEgressOriginSchema,
+  meterResultSchema,
   probeResultSchema,
   type EgressHttp,
   type LlmBackend,
@@ -12,11 +14,20 @@ import { encodeJson } from '../shared.ts'
 import {
   createZaiBackend,
   opencodeUserAgent,
+  zaiApiBackend,
+  zaiApiOffer,
   zaiCodingBackend as backend,
   zaiCodingPlan,
   zaiCredentialSchema,
 } from './backend.ts'
-import { envelopeSamples, errorSamples, quotaSamples, sample } from './fixtures/samples.ts'
+import {
+  chatSamples,
+  envelopeSamples,
+  errorBody,
+  errorSamples,
+  quotaSamples,
+  sample,
+} from './fixtures/samples.ts'
 
 const route = { method: 'POST', path: '/zai/v4/chat/completions' } as const
 const credential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-zai-plan-key' }
@@ -31,6 +42,22 @@ function answering(status: number, payload: unknown, headers = new Headers()) {
     body: typeof payload === 'string' ? new TextEncoder().encode(payload) : encodeJson(payload),
   })
   return { request }
+}
+/** The one request of a probe: a GET of the quota address with the key, naming the pinned CLI. */
+function askedQuotaOnce(http: ReturnType<typeof answering>) {
+  expect(http.request).toHaveBeenCalledOnce()
+  const [request, options] = http.request.mock.calls[0]!
+  expect(request.url).toBe(quotaUrl)
+  expect(request.method).toBe('GET')
+  expect(request.body).toBeUndefined()
+  expect(Object.fromEntries(request.headers)).toEqual({
+    authorization: 'Bearer synthetic-zai-plan-key',
+    accept: 'application/json',
+    'accept-encoding': 'identity',
+    'user-agent': opencodeUserAgent,
+  })
+  expect(options.signal).toBeInstanceOf(AbortSignal)
+  return request
 }
 const probe = (status: number, payload: unknown) =>
   backend.probe(credential, answering(status, payload))
@@ -64,12 +91,14 @@ const quota = (limits: unknown) => ({
 const windowsOf = async (limits: unknown) => (await probe(200, quota(limits))).windows
 
 describe('the zai-coding backend as the platform sees it', () => {
-  it('is the one backend the platform registers', () => {
-    expect(llmBackends).toEqual([backend])
+  it('is registered first, before the pay-per-token API, in the order of the ids', () => {
+    expect(llmBackends).toEqual([backend, zaiApiBackend])
+    expect(llmBackends.map((registered) => registered.id)).toEqual([...llmBackendIds])
   })
 
   it('serves one gateway route and declares every request it sends', () => {
     expect(backend.id).toBe('zai-coding')
+    expect(backend.capacity).toBe('windows')
     expect(backend.routes).toEqual([route])
     expect(backend.egress).toEqual([
       {
@@ -397,18 +426,7 @@ describe('the quota of the plan as the windows of the pool', () => {
   it('asks the one quota address with the key and names nobody but the pinned CLI', async () => {
     const http = answering(200, quota([limit(), week()]))
     await backend.probe(credential, http)
-    expect(http.request).toHaveBeenCalledOnce()
-    const [request, options] = http.request.mock.calls[0]!
-    expect(request.url).toBe(quotaUrl)
-    expect(request.method).toBe('GET')
-    expect(request.body).toBeUndefined()
-    expect(Object.fromEntries(request.headers)).toEqual({
-      authorization: 'Bearer synthetic-zai-plan-key',
-      accept: 'application/json',
-      'accept-encoding': 'identity',
-      'user-agent': opencodeUserAgent,
-    })
-    expect(options.signal).toBeInstanceOf(AbortSignal)
+    askedQuotaOnce(http)
   })
 
   it('does not retry a failed request, quote its error or outlive its deadline', async () => {
@@ -429,17 +447,18 @@ describe('the quota of the plan as the windows of the pool', () => {
 })
 
 describe('a Z.ai offer is data', () => {
-  // The pay-per-token API of the same provider speaks the same protocol on another path and has
-  // no plan windows (owner's question П15). It is not offered; the shape must allow it.
+  // Another offer with windows on other addresses: the shape takes any of them.
   const offer = {
     ...zaiCodingPlan,
-    route: { method: 'POST', path: '/zai-paygo/v4/chat/completions' },
-    chatPath: '/api/paas/v4/chat/completions',
-    quota: {
+    id: 'zai-api',
+    route: { method: 'POST', path: '/zaiother/v4/chat/completions' },
+    chatPath: '/api/other/v4/chat/completions',
+    capacity: {
+      kind: 'windows',
       path: '/api/monitor/usage/quota/other',
       windows: [{ unit: 9, number: 2, name: 'month' }],
     },
-    overrideEnv: 'LLM_BACKEND_URL_ZAI_PAYGO',
+    overrideEnv: 'LLM_BACKEND_URL_ZAI_OTHER',
     direct: false,
   } as const
   const other: LlmBackend = createZaiBackend(offer)
@@ -450,13 +469,15 @@ describe('a Z.ai offer is data', () => {
       route,
       origin: 'https://api.z.ai',
       chatPath: '/api/coding/paas/v4/chat/completions',
-      quota: {
+      capacity: {
+        kind: 'windows',
         path: '/api/monitor/usage/quota/limit',
         windows: [
           { unit: 3, number: 5, name: '5h' },
           { unit: 6, number: 1, name: 'week' },
         ],
       },
+      answers: { codes: {}, codeless429: 'unconfirmed_block' },
       overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
       direct: true,
     })
@@ -469,16 +490,16 @@ describe('a Z.ai offer is data', () => {
     expect(other.egress).toEqual([
       {
         origin: 'https://api.z.ai',
-        overrideEnv: 'LLM_BACKEND_URL_ZAI_PAYGO',
+        overrideEnv: 'LLM_BACKEND_URL_ZAI_OTHER',
         requests: [
-          'POST https://api.z.ai/api/paas/v4/chat/completions',
+          'POST https://api.z.ai/api/other/v4/chat/completions',
           'GET https://api.z.ai/api/monitor/usage/quota/other',
         ],
       },
     ])
     expect(llmEgressOriginSchema.safeParse(other.egress[0]).success).toBe(true)
     expect(other.upstream(offer.route, body, cliHeaders(), credential).url).toBe(
-      'https://api.z.ai/api/paas/v4/chat/completions',
+      'https://api.z.ai/api/other/v4/chat/completions',
     )
     expect(() => other.upstream(route, body, cliHeaders(), credential)).toThrow(DomainError)
     const http = answering(
@@ -501,5 +522,172 @@ describe('a Z.ai offer is data', () => {
     expect(() => other.normalizeBody(offer.route, request, profile)).not.toThrow()
     expect(() => other.normalizeBody(route, request, profile)).toThrow(DomainError)
     expect(() => backend.normalizeBody(offer.route, request, profile)).toThrow(DomainError)
+  })
+})
+
+describe('the pay-per-token API of Z.ai', () => {
+  const api = zaiApiBackend
+  const apiRoute = { method: 'POST', path: '/zai/paas/v4/chat/completions' } as const
+  const apiChatUrl = 'https://api.z.ai/api/paas/v4/chat/completions'
+  const apiProbe = (status: number, payload: unknown) =>
+    api.probe(credential, answering(status, payload))
+  const accepted = { status: 'ok', windows: null, plan: null }
+
+  it('describes the API offer', () => {
+    expect(zaiApiOffer).toEqual({
+      id: 'zai-api',
+      route: apiRoute,
+      origin: 'https://api.z.ai',
+      chatPath: '/api/paas/v4/chat/completions',
+      capacity: { kind: 'none', authPath: '/api/monitor/usage/quota/limit' },
+      answers: { codes: { '1113': 'balance_exhausted' }, codeless429: 'transient' },
+      // One origin with the plan, so one stand variable for both (llm-config refuses two).
+      overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
+      direct: true,
+    })
+    expect(Object.isFrozen(zaiApiOffer)).toBe(true)
+  })
+
+  it('has no windows, serves its own route and declares its own two requests', () => {
+    expect(api.id).toBe('zai-api')
+    expect(api.capacity).toBe('none')
+    expect(api.routes).toEqual([apiRoute])
+    // No hyphen: the routes are exact paths sandbox-gw compares (sandbox-routes contract).
+    expect(apiRoute.path).toMatch(/^(?:\/[a-z0-9]+)+$/)
+    expect(api.egress).toEqual([
+      {
+        origin: 'https://api.z.ai',
+        overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
+        requests: [`POST ${apiChatUrl}`, `GET ${quotaUrl}`],
+        direct: true,
+      },
+    ])
+    expect(llmEgressOriginSchema.safeParse(api.egress[0]).success).toBe(true)
+    expect(api.clientHeaders).toEqual(backend.clientHeaders)
+    expect(api.responseHeaders).toEqual([])
+  })
+
+  it('takes the same key shape and sends it to its own chat address only', () => {
+    expect(api.importCredential!('synthetic-zai-api-key')).toEqual({
+      ...credential,
+      apiKey: 'synthetic-zai-api-key',
+    })
+    const target = api.upstream(apiRoute, body, cliHeaders(), credential)
+    expect(target.url).toBe(apiChatUrl)
+    expect(target.headers.get('authorization')).toBe('Bearer synthetic-zai-plan-key')
+    expect(() => api.upstream(route, body, cliHeaders(), credential)).toThrow(DomainError)
+    expect(() => backend.upstream(apiRoute, body, cliHeaders(), credential)).toThrow(DomainError)
+    const request = encodeJson({ model: 'glm-5.3', messages: [{ role: 'user', content: 'x' }] })
+    const profile = { model: 'glm-5.3', reasoningEffort: 'max' }
+    expect(() => api.normalizeBody(apiRoute, request, profile)).not.toThrow()
+    expect(() => api.normalizeBody(route, request, profile)).toThrow(DomainError)
+  })
+
+  it('reads the recorded 1113 of the API path as an empty balance, the plan as a missing plan', () => {
+    const record = sample(errorSamples.noResourcePackage)
+    expect(record.request.url).toBe(apiChatUrl)
+    expect(record.response.status).toBe(429)
+    const answer = errorBody(errorSamples.noResourcePackage)
+    expect(api.classify(429, new Headers(), answer)).toEqual({ kind: 'balance_exhausted' })
+    expect(backend.classify(429, new Headers(), answer)).toEqual({
+      kind: 'account_risk',
+      reason: 'zai_1113',
+    })
+  })
+
+  it('ends a started stream on an empty balance with the refusal of no capacity', () => {
+    const inspector = api.streamInspector()
+    const inspected = inspector.inspect({
+      event: 'message',
+      data: JSON.stringify({ error: { code: '1113', message: 'Synthetic provider text.' } }),
+    })
+    expect(inspected).toMatchObject({ kind: 'failure', signal: { kind: 'balance_exhausted' } })
+    if (inspected.kind !== 'failure') throw new Error('Expected a failure')
+    expect(JSON.parse(inspected.event.data)).toMatchObject({
+      error: { code: 'raditi_subscription_limit' },
+    })
+    expect(JSON.stringify(inspected.event)).not.toContain('Synthetic provider text')
+    // The plan's inspector keeps its own reading of the same event.
+    expect(
+      backend
+        .streamInspector()
+        .inspect({ event: 'message', data: JSON.stringify({ error: { code: '1113' } }) }),
+    ).toMatchObject({ kind: 'failure', signal: { kind: 'account_risk', reason: 'zai_1113' } })
+    const meter = api.usageMeter()
+    meter.push(new TextEncoder().encode(`data: ${JSON.stringify({ error: { code: '1113' } })}\n\n`))
+    const result = meter.end()
+    expect(result).toMatchObject({ outcome: 'failed', signal: { kind: 'balance_exhausted' } })
+    expect(meterResultSchema.safeParse(result).success).toBe(true)
+  })
+
+  it('meters a stream the way the plan does', () => {
+    const recorded = sample(chatSamples.plainText).response.sse!
+    const read = (target: LlmBackend) => {
+      const meter = target.usageMeter()
+      meter.push(new TextEncoder().encode(recorded))
+      return meter.end()
+    }
+    expect(read(api)).toEqual(read(backend))
+    expect(read(api).outcome).toBe('completed')
+  })
+
+  it.each([
+    ['the quota of a plan', 200, quota([limit(), week()])],
+    ['a quota with no limits', 200, quota([])],
+    // A key without a plan: whatever the path says of a plan, the key was taken.
+    ['an error of the path itself', 200, sample(envelopeSamples.unknownPath).response.body],
+    ['an empty balance', 200, { code: 1113, msg: 'x', success: false }],
+    ['a busy provider', 200, { code: 1305, msg: 'x', success: false }],
+  ])('reads %s as an accepted key, without windows', async (_name, status, payload) => {
+    const result = await apiProbe(status, payload)
+    expect(result).toEqual(accepted)
+    expect(probeResultSchema.safeParse(result).success).toBe(true)
+  })
+
+  it('reads a refused key, by status or by any of its codes', async () => {
+    const refused = { ...accepted, status: 'auth' }
+    // Samples 10 and 10d: the auth envelope of the edge, on any path.
+    expect(await apiProbe(200, sample(envelopeSamples.invalidKey).response.body)).toEqual(refused)
+    expect(await apiProbe(200, sample(envelopeSamples.noKey).response.body)).toEqual(refused)
+    for (const code of [401, 1000, 1001, 1003]) {
+      expect(await apiProbe(200, { code, msg: 'x', success: false })).toEqual(refused)
+      expect(await apiProbe(400, { error: { code: String(code), message: 'x' } })).toEqual(refused)
+    }
+    expect(await apiProbe(401, '')).toEqual(refused)
+    expect(await apiProbe(401, sample(errorSamples.invalidKey).response.body)).toEqual(refused)
+  })
+
+  it('reads a 403 that is no provider error as the channel, never as the balance', async () => {
+    expect(await apiProbe(403, '<html>blocked</html>')).toEqual({ ...accepted, status: 'region' })
+    await expect(apiProbe(403, { error: { code: '1113', message: 'x' } })).rejects.toBeInstanceOf(
+      DomainError,
+    )
+    await expect(apiProbe(403, { code: 1113, msg: 'x', success: false })).rejects.toBeInstanceOf(
+      DomainError,
+    )
+  })
+
+  it.each([
+    [200, '<html>'],
+    [200, ''],
+    [200, { code: 200, msg: 'no success flag' }],
+    [200, [1]],
+    [429, { error: { code: '1113', message: 'x' } }],
+    [429, { error: { code: '1302', message: 'x' } }],
+    [429, ''],
+    [500, { error: { code: '500', message: 'x' } }],
+    [502, ''],
+    [404, ''],
+    [302, ''],
+  ])('rejects when %s %j says nothing about the key', async (status, payload) => {
+    await expect(apiProbe(status, payload)).rejects.toBeInstanceOf(DomainError)
+  })
+
+  it('asks the monitor path once, with the key and the pinned CLI, and sends no content', async () => {
+    const http = answering(200, quota([]))
+    await api.probe(credential, http)
+    const request = askedQuotaOnce(http)
+    // The request of the probe is one the offer declares itself.
+    expect(api.egress[0]!.requests).toContain(`GET ${request.url}`)
   })
 })

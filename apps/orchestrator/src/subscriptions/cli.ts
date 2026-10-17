@@ -9,7 +9,7 @@ import {
   type Env,
   type LlmBackend,
 } from '@repo/domain'
-import { llmBackends, zaiCodingBackend } from '@repo/llm-backends'
+import { llmBackends, zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { createDevSubscriptionToken, createVaultSecretStore } from '@repo/vault'
 import { z } from 'zod'
 
@@ -17,6 +17,7 @@ import { egressConfigFromEnv, type EgressConfig } from '../config/llm-config.ts'
 import { createEgressProbe } from '../llm-gateway/egress-probe.ts'
 import { createControlEgress, createEgressTransport } from '../llm-gateway/egress.ts'
 import { SessionSubscriptionLock } from '../llm-gateway/session-lock.ts'
+import { backendCapacities } from '../llm/backends.ts'
 import { GatewayTurnCredentials } from '../llm/turn-credentials.ts'
 import { authenticateSubscription } from './key-import.ts'
 import { subscriptionLabelSchema, SubscriptionLogin, SubscriptionLoginError } from './login.ts'
@@ -144,10 +145,21 @@ export interface SubscriptionImport {
   driverId: string
   turns: number
   requests: number
+  /** What the operator writes in --plan for a new account of the backend, named by the help. */
+  planExample: string
 }
 const imports = new Map<string, SubscriptionImport>([
   // One turn at a time until the plan's real concurrency is measured (owner's question П4).
-  [zaiCodingBackend.id, { backend: zaiCodingBackend, driverId: 'opencode', turns: 1, requests: 2 }],
+  [
+    zaiCodingBackend.id,
+    { backend: zaiCodingBackend, driverId: 'opencode', turns: 1, requests: 2, planExample: 'lite' },
+  ],
+  // The pay-per-token API has no plan cap, only rate limits nobody has measured yet: the same
+  // values until then, raised by the operator in the account's row within its bounds.
+  [
+    zaiApiBackend.id,
+    { backend: zaiApiBackend, driverId: 'opencode', turns: 1, requests: 2, planExample: 'payg' },
+  ],
 ])
 /** `--backend` accepts exactly these ids: a login never meets an id without settings. */
 export const subscriptionImports: ReadonlyMap<string, SubscriptionImport> = imports
@@ -166,14 +178,21 @@ export function subscriptionHelp(command: SubscriptionCommand): string {
     .filter((entry) => entry.backend.importCredential)
     .map((entry) => entry.backend.id)
   const input = `Ключ подписки (${keyed.join(', ')}) поступает через stdin или скрытый ввод.`
+  const plans = [...imports.values()]
+    .map((entry) => `${entry.backend.id} — ${entry.planExample}`)
+    .join(', ')
+  const direct = [...imports.values()]
+    .filter((entry) => !loginNeedsEgressNode(entry.backend))
+    .map((entry) => entry.backend.id)
+  const egressNote = direct.length > 0 ? ` (${direct.join(' и ')} он не нужен)` : ''
   const usage = {
-    login: `subscriptions:login -- --backend ${[...imports.keys()].join('|')} --label <имя> [--plan <план>] [--paid-until YYYY-MM-DD] --vault-token-file <абсолютный путь>\nПовторный вход: --backend <оболочка> --relogin <UUID> --vault-token-file <путь>.\n${input}`,
+    login: `subscriptions:login -- --backend ${[...imports.keys()].join('|')} --label <имя> [--plan <план>] [--paid-until YYYY-MM-DD] --vault-token-file <абсолютный путь>\nПовторный вход: --backend <оболочка> --relogin <UUID> --vault-token-file <путь>.\n${input}\n--plan — метка тарифа нового аккаунта, например: ${plans}.`,
     retire:
       'subscriptions:retire -- --account <UUID> --label <метка> [--compromised --turns-token-file <путь>]\nОкончательное удаление: --account <UUID> --label <метка> --finalize --vault-token-file <путь> [--console-revoked].\n--console-revoked подтверждает ручной отзыв ключа в консоли провайдера.\nОтмена запроса, пока ключ не отозван: --account <UUID> --cancel.',
     token:
       'subscriptions:token -- --policy writer|admin --out <абсолютный путь>\nТокен dev-root поступает через stdin или скрытый ввод. Новый файл создаётся с правами 0400.\nТолько development/test и числовой loopback VAULT_ADDR; срок — 15 минут.',
   }
-  return `${usage[command]}\nОкружение задаётся явно; команда не загружает .env автоматически. APP_ENV и VAULT_ADDR обязательны; login/retire также требуют DATABASE_URL, login — ещё LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE и LLM_EGRESS_CLIENT_KEY_FILE, если провайдеру нужен узел выхода (zai-coding он не нужен).\n`
+  return `${usage[command]}\nОкружение задаётся явно; команда не загружает .env автоматически. APP_ENV и VAULT_ADDR обязательны; login/retire также требуют DATABASE_URL, login — ещё LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE и LLM_EGRESS_CLIENT_KEY_FILE, если провайдеру нужен узел выхода${egressNote}.\n`
 }
 
 const stages: Record<SubscriptionRetirementStage, string> = {
@@ -373,6 +392,8 @@ export async function runSubscriptionCommand(
                 addr: address,
                 token: await readSecretFile(value.turnsTokenFile),
               }),
+              // Only revoke is called here; the composition names the capacity all the same.
+              capacityOf: backendCapacities(backends),
             })
           : {
               revoke: async () => {
