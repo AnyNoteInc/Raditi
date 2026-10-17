@@ -8,21 +8,38 @@ import { fileURLToPath } from 'node:url'
 
 import { contentCall, contentOptions } from './content-scenario.mjs'
 
-// Synthetic Z.ai, the GLM Coding Plan only: the chat path and the quota path, in the shapes of
-// the recorded exchanges (docs/research/2026-10-opencode-glm/samples; the adapter's fixtures are
-// copies of them) and with the error codes of the provider's documentation. It makes no outbound
-// request and keeps what it received in memory only. A request record never holds a credential:
-// it says whether the plan key came, and the names of the headers.
+// Synthetic Z.ai: the GLM Coding Plan — its chat path and the quota path — and the pay-per-token
+// API on its own chat path, in the shapes of the recorded exchanges (docs/research/
+// 2026-10-opencode-glm/samples; the adapter's fixtures are copies of them) and with the error
+// codes of the provider's documentation. It makes no outbound request and keeps what it received
+// in memory only. A request record never holds a credential: it says which of the keys came, and
+// the names of the headers.
 export const SYNTHETIC_ZAI_KEY = 'zai-synthetic-plan-key-for-stands-only'
 /** The key an operator issues instead of the first one; the fake takes one of the two at a time. */
 export const SYNTHETIC_ZAI_ROTATED_KEY = 'zai-synthetic-rotated-plan-key-for-stands-only'
 const PLAN_KEYS = Object.freeze({ first: SYNTHETIC_ZAI_KEY, rotated: SYNTHETIC_ZAI_ROTATED_KEY })
+/**
+ * A key of the pay-per-token API, and the one issued instead of it: one of the two is taken at a
+ * time. The synthetic world keeps the keys of the two offers apart, so that a key on the path of
+ * the other offer is answered as sample 21 shows (a key without money there); a real key of Z.ai
+ * works on both paths, and the owner's one has a balance (decision of 17.10.2026, П83).
+ */
+export const SYNTHETIC_ZAI_API_KEY = 'zai-synthetic-api-key-for-stands-only'
+export const SYNTHETIC_ZAI_ROTATED_API_KEY = 'zai-synthetic-rotated-api-key-for-stands-only'
+const API_KEYS = Object.freeze({
+  first: SYNTHETIC_ZAI_API_KEY,
+  rotated: SYNTHETIC_ZAI_ROTATED_API_KEY,
+})
 /** Stands in every text a real provider would write: it must never reach a sandbox or a log. */
 export const SYNTHETIC_ZAI_MARKER = 'synthetic-zai-provider-text-canary'
 export const ZAI_PATHS = Object.freeze({
   chat: '/api/coding/paas/v4/chat/completions',
+  apiChat: '/api/paas/v4/chat/completions',
   quota: '/api/monitor/usage/quota/limit',
 })
+const CHAT_PATHS = new Set([ZAI_PATHS.chat, ZAI_PATHS.apiChat])
+/** The text of sample 21: the answer of the API path to an account without money. */
+const NO_BALANCE = 'Insufficient balance or no resource package. Please recharge.'
 /** What the coding path listed for the probe's key (sample 24). */
 export const ZAI_MODELS = Object.freeze([
   'glm-4.5',
@@ -88,7 +105,8 @@ const SCENARIOS = new Set([
   'content_forbidden',
   // A stream that ends with the given finish_reason.
   'finish',
-  // An error with a status: `code` of ZAI_ERROR_STATUS, or any `code` with a `status`.
+  // An error with a status: `code` of ZAI_ERROR_STATUS, or any `code` with a `status`, or a
+  // `status` alone — an error object that names no code.
   'error',
   // An error object inside a started stream.
   'stream_error',
@@ -196,7 +214,9 @@ function scenarioOptions(value = {}) {
       throw invalid('finish')
   } else if (scenario === 'finish') throw invalid('finish')
   const failing = ['error', 'stream_error', 'envelope200'].includes(scenario)
-  if (value.code !== undefined || failing) {
+  // An error that names no code needs the status it comes with.
+  const codeless = scenario === 'error' && value.code === undefined && value.status !== undefined
+  if ((value.code !== undefined || failing) && !codeless) {
     if (!failing || !whole(value.code, 999_999)) throw invalid('code')
     if (scenario === 'error' && value.status === undefined && !ZAI_ERROR_STATUS[value.code])
       throw invalid('status')
@@ -259,7 +279,11 @@ function quotaOptions(value = {}) {
   return value
 }
 
-/** The state of one synthetic plan key: its scenario, its windows and what it was asked. */
+/**
+ * The state of the synthetic accounts: the plan key with its windows, the API key with its
+ * balance, the scenario both chat paths answer by and what they were asked. `counters.chat`
+ * counts the requests of both chat paths; a record names its path.
+ */
 export function createFakeZaiState(initial = {}) {
   const state = {
     requests: [],
@@ -269,6 +293,10 @@ export function createFakeZaiState(initial = {}) {
     quota: {},
     // Which of the two synthetic plan keys the provider takes; the other one is refused.
     key: 'first',
+    // The same for the two API keys, and whether the API account has money: `empty` answers
+    // every request of the API path with 1113, as sample 21 shows.
+    apiKey: 'first',
+    balance: 'funded',
     setScenario(options = {}) {
       state.config = scenarioOptions(options)
       state.attempts = 0
@@ -308,6 +336,8 @@ export function createFakeZaiState(initial = {}) {
       state.requests.length = 0
       state.counters = { chat: 0, quota: 0, generated: 0 }
       state.key = 'first'
+      state.apiKey = 'first'
+      state.balance = 'funded'
       // After a night without requests: the five-hour window is not started, the week runs.
       state.quota = {
         mode: 'live',
@@ -321,16 +351,26 @@ export function createFakeZaiState(initial = {}) {
       if (options.quota !== undefined) state.setQuota(options.quota)
       return state.snapshot()
     },
-    /** `{reset?, scenario?, quota?, key?}`: the one message of the control port. */
+    /**
+     * `{reset?, scenario?, quota?, key?, apiKey?, balance?}`: the one message of the control
+     * port.
+     */
     configure(options = {}) {
       if (!isRecord(options)) throw invalid('configuration')
       for (const name of Object.keys(options))
-        if (!['reset', 'scenario', 'quota', 'key'].includes(name)) throw invalid('configuration')
+        if (!['reset', 'scenario', 'quota', 'key', 'apiKey', 'balance'].includes(name))
+          throw invalid('configuration')
       if (options.key !== undefined && !Object.hasOwn(PLAN_KEYS, options.key)) throw invalid('key')
+      if (options.apiKey !== undefined && !Object.hasOwn(API_KEYS, options.apiKey))
+        throw invalid('key')
+      if (options.balance !== undefined && !['funded', 'empty'].includes(options.balance))
+        throw invalid('balance')
       if (options.reset) state.reset({})
       if (options.scenario !== undefined) state.setScenario(options.scenario)
       if (options.quota !== undefined) state.setQuota(options.quota)
       if (options.key !== undefined) state.key = options.key
+      if (options.apiKey !== undefined) state.apiKey = options.apiKey
+      if (options.balance !== undefined) state.balance = options.balance
       return state.snapshot()
     },
     snapshot() {
@@ -340,6 +380,8 @@ export function createFakeZaiState(initial = {}) {
         config: state.config,
         quota: state.quota,
         key: state.key,
+        apiKey: state.apiKey,
+        balance: state.balance,
       }
     },
   }
@@ -381,14 +423,31 @@ function json(res, status, body, headers = {}, contentType = 'application/json')
   res.end(JSON.stringify(body))
 }
 const providerText = (text) => `${text} ${SYNTHETIC_ZAI_MARKER}`
-function chatError(res, sequence, code, status, retryAfter) {
-  // The recorded 400 answers carry no content-type; 401 and 429 name application/json.
+function chatError(res, sequence, code, status, retryAfter, text = 'Synthetic provider refusal.') {
+  // The recorded 400 answers carry no content-type; 401 and 429 name application/json. Without
+  // a code the error object holds the message alone (not recorded: a throttle of the provider
+  // that names no code, as a third party reported it).
   json(
     res,
     status,
-    { error: { code: String(code), message: providerText('Synthetic provider refusal.') } },
+    {
+      error: {
+        ...(code === undefined ? {} : { code: String(code) }),
+        message: providerText(text),
+      },
+    },
     { ...providerHeaders(sequence), ...(retryAfter ? { 'retry-after': retryAfter } : {}) },
     status === 400 ? null : 'application/json',
+  )
+}
+/** Sample 21: 1113 under HTTP 429, with the content type the provider gave it. */
+function noBalance(res, sequence) {
+  json(
+    res,
+    429,
+    { error: { code: '1113', message: providerText(NO_BALANCE) } },
+    providerHeaders(sequence),
+    'application/json; charset=UTF-8',
   )
 }
 
@@ -508,25 +567,32 @@ async function readJson(req, limit = 16 * 1024 * 1024) {
   return text ? JSON.parse(text) : null
 }
 
-/** Which credential a request carried, without its value. The quota path takes a bare key too. */
-function credentialOf(req, bare, key) {
+/**
+ * Which credential a request carried, without its value: the plan key the provider takes now,
+ * the API key it takes now, another one or none. The quota path takes a bare key too.
+ */
+function credentialOf(req, bare, state) {
   const value = req.headers.authorization
   if (value === undefined) return 'none'
-  if (value === `Bearer ${key}` || (bare && value === key)) return 'plan-key'
+  const is = (key) => value === `Bearer ${key}` || (bare && value === key)
+  if (is(PLAN_KEYS[state.key])) return 'plan-key'
+  if (is(API_KEYS[state.apiKey])) return 'api-key'
   return 'other'
 }
 
 export const isZaiRequest = (req) =>
   Object.values(ZAI_PATHS).includes(new URL(req.url, 'https://synthetic.invalid').pathname)
 
-/** Answers a request to one of the two Z.ai paths; the caller has checked `isZaiRequest`. */
+/** Answers a request to one of the Z.ai paths; the caller has checked `isZaiRequest`. */
 export async function handleZai(req, res, state) {
   const path = new URL(req.url, 'https://synthetic.invalid').pathname
   const quotaPath = path === ZAI_PATHS.quota
+  // The pay-per-token API: no windows, a balance instead.
+  const apiPath = path === ZAI_PATHS.apiChat
   const record = {
     method: req.method,
     path,
-    credential: credentialOf(req, quotaPath, PLAN_KEYS[state.key]),
+    credential: credentialOf(req, quotaPath, state),
     headerNames: Object.keys(req.headers).sort(),
     // Values that are no secret and that the gateway's checks compare.
     userAgent: req.headers['user-agent'] ?? null,
@@ -554,8 +620,14 @@ export async function handleZai(req, res, state) {
   const body = await readJson(req)
   record.body = body
   const sequence = ++state.counters.chat
-  if (record.credential !== 'plan-key')
+  if (record.credential === 'none' || record.credential === 'other')
     return chatError(res, sequence, record.credential === 'none' ? 1001 : 401, 401)
+  // A key the provider knows, on the path of the other offer: it has no resource there. Sample
+  // 21 is the plan key on the API path; the API key on the plan path is answered the same way
+  // by assumption (not recorded). Before the body is read, as the recorded valid body was.
+  const owned = apiPath ? 'api-key' : 'plan-key'
+  if (record.credential !== owned || (apiPath && state.balance === 'empty'))
+    return noBalance(res, sequence)
   if (!isRecord(body) || !Array.isArray(body.messages) || body.messages.length === 0)
     return chatError(res, sequence, 1210, 400)
   if (!ZAI_MODELS.includes(body.model)) return chatError(res, sequence, 1211, 400)
@@ -575,8 +647,9 @@ export async function handleZai(req, res, state) {
       config.status ?? ZAI_ERROR_STATUS[config.code],
       config.retryAfter,
     )
-  // A spent window refuses before any generation, with the code of the documentation.
-  if (exhausted(state)) return chatError(res, sequence, 1308, 429)
+  // A spent window refuses before any generation, with the code of the documentation. The API
+  // has none.
+  if (!apiPath && exhausted(state)) return chatError(res, sequence, 1308, 429)
   if (scenario === 'envelope200')
     return json(
       res,
@@ -585,7 +658,7 @@ export async function handleZai(req, res, state) {
       providerHeaders(sequence),
     )
   state.counters.generated++
-  spend(state)
+  if (!apiPath) spend(state)
   // Past its `failures` a scenario leaves plain answers with its text and the usual numbers.
   const effective =
     scenario === config.scenario ? config : { ...config, scenario, usage: undefined }
@@ -694,11 +767,24 @@ function answerQuota(req, res, state, record) {
       headers,
       type,
     )
-  if (record.credential !== 'plan-key')
+  if (record.credential === 'other')
     return json(
       res,
       200,
       { code: 401, msg: 'token expired or incorrect', success: false },
+      headers,
+      type,
+    )
+  // A key of an account without a plan, on the plan's quota: an envelope of the monitor path
+  // (samples 10, 10b, 14) with the code and the text of sample 21. Not recorded, and an
+  // assumption the API offer's probe needs only in its weakest form: an envelope that names no
+  // refused key reads as a key the provider takes. The live run with --api asserts what Z.ai
+  // really answers.
+  if (record.credential === 'api-key')
+    return json(
+      res,
+      200,
+      { code: 1113, msg: providerText(NO_BALANCE), success: false },
       headers,
       type,
     )

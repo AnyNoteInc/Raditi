@@ -4,7 +4,13 @@
 // provider, no CLI and no code of either; the Z.ai group names them here, once.
 import { SYNTHETIC_ZAI_MARKER } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import { opencodeUserAgent } from '../../../packages/llm-backends/src/zai-coding/backend.ts'
-import { ZAI_BACKEND, ZAI_MODEL, ZAI_PROFILE, ZAI_STAND_RATES } from './verify-llm-zai-setup.mjs'
+import {
+  ZAI_BACKEND,
+  ZAI_MODEL,
+  ZAI_OFFERS,
+  ZAI_PROFILE,
+  ZAI_STAND_RATES,
+} from './verify-llm-zai-setup.mjs'
 
 const body = (text = 'Synthetic request.') => ({
   model: ZAI_MODEL,
@@ -33,7 +39,7 @@ export const zaiForms = Object.freeze({
     profile: ZAI_PROFILE,
   }),
   /** The one route of the backend, at sandbox-gw and at the role llm alike. */
-  route: '/zai/v4/chat/completions',
+  route: ZAI_OFFERS.plan.route,
   userAgent: opencodeUserAgent,
   body,
   /** Stands in every text of the provider: it must reach neither a sandbox nor a log. */

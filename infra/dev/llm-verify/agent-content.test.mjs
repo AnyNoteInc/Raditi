@@ -85,7 +85,13 @@ test('every CLI of the stand is a row of one table and runs only what its driver
   assert.match(main, /await zaiLogin\(zaiOperator\(stack, env\.LLM_UPSTREAM_CA_FILE\), \{/)
   assert.match(main, /probeAccounts: createPoolProbeClient\(/)
   const setup = read('apps/orchestrator/scripts/verify-llm-zai-setup.mjs')
-  assert.match(setup, /'--plan',\s+'lite',/)
+  // The plan the operator names at import is data of the offer: `lite` for the plan, `payg`
+  // for the API.
+  assert.match(setup, /'--plan',\s+offer\.plan,/)
+  assert.match(
+    setup,
+    /plan: Object\.freeze\(\{\n\s+backend: zaiCodingBackend\.id,\n\s+plan: 'lite',/,
+  )
   assert.doesNotMatch(setup, /limitWindows|limitsSeenAt/)
   // What both stands of OpenCode need is one module, not a copy in each.
   assert.match(

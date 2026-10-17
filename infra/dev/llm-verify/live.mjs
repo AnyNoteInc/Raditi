@@ -43,14 +43,16 @@ export class LiveRefusal extends Error {
 /**
  * The options of a stand. `--live` is the real provider, `--rehearsal` the same flow on the
  * synthetic one; with either, `--measure` is the measurement of the gateway stand and
- * `--results` its narrow one, of the turn result alone; `--keep=<directory>` writes the
- * exchanges the stand observed, for sanitize-samples.mjs.
+ * `--results` its narrow one, of the turn result alone, and `--api` the acceptance of the
+ * gateway stand on the pay-per-token API instead of the plan (П15); `--keep=<directory>` writes
+ * the exchanges the stand observed, for sanitize-samples.mjs.
  */
 export function standMode(argv, { stand }) {
   const mode = {
     live: false,
     measure: false,
     results: false,
+    api: false,
     rehearsal: false,
     noBuild: false,
     keep: null,
@@ -68,6 +70,7 @@ export function standMode(argv, { stand }) {
     else if (name === '--rehearsal') mode.rehearsal = true
     else if (name === '--measure' && stand === 'gateway') mode.measure = true
     else if (name === '--results' && stand === 'gateway') mode.results = true
+    else if (name === '--api' && stand === 'gateway') mode.api = true
     else if (name === '--keep' && isAbsolute(value) && outsideRepository(value)) mode.keep = value
     else throw refuse(name)
   }
@@ -75,6 +78,9 @@ export function standMode(argv, { stand }) {
   if (mode.measure && !mode.live && !mode.rehearsal) throw refuse('--measure without --live')
   if (mode.results && !mode.live && !mode.rehearsal) throw refuse('--results without --live')
   if (mode.measure && mode.results) throw refuse('--measure with --results')
+  if (mode.api && !mode.live && !mode.rehearsal) throw refuse('--api without --live')
+  // The measurements count the credits of the plan's windows: the API has none.
+  if (mode.api && (mode.measure || mode.results)) throw refuse('--api with a measurement')
   if (mode.keep && !mode.live && !mode.rehearsal) throw refuse('--keep without --live')
   return mode
 }
@@ -113,35 +119,44 @@ export function liveStartRefusal(env) {
   return null
 }
 
-const KEY_NAME = 'ZAI_API_KEY'
+/**
+ * The variable a live run takes its provider key from: ZAI_API_KEY (П9), on the plan and, with
+ * `--api`, on the pay-per-token API alike — one key works on both paths, and the owner named this
+ * one for the live check of the API (decision of 17.10.2026, П77).
+ */
+export const LIVE_KEY_NAME = 'ZAI_API_KEY'
 const KEY_SHAPE = /^[\x21-\x7e]{16,8192}$/
 
 /**
- * Takes the plan key out of the environment: read once, deleted at once, so that no process
+ * Takes the provider key out of the environment: read once, deleted at once, so that no process
  * the stand starts later can inherit it. The holder gives the value in one form only — the line
  * `subscriptions:login` reads on its input — and answers whether given bytes hold it. Nothing
- * that prints the holder prints the value.
+ * that prints the holder prints the value; `word` names the key in what it prints.
  */
-export function takePlanKey(env) {
-  const raw = env[KEY_NAME]
-  delete env[KEY_NAME]
+export function takeProviderKey(env, { word = 'plan key' } = {}) {
+  const raw = env[LIVE_KEY_NAME]
+  delete env[LIVE_KEY_NAME]
   if (typeof raw !== 'string' || raw.trim() === '')
-    throw new LiveRefusal(`${KEY_NAME} is not set in the environment of the stand`)
+    throw new LiveRefusal(`${LIVE_KEY_NAME} is not set in the environment of the stand`)
   const value = raw.trim()
   if (!KEY_SHAPE.test(value))
-    throw new LiveRefusal(`${KEY_NAME} is not one line of 16 or more printable characters`)
+    throw new LiveRefusal(`${LIVE_KEY_NAME} is not one line of 16 or more printable characters`)
   const needles = secretNeedles(value)
+  const label = `[${word}]`
   const holder = {}
   Object.defineProperties(holder, {
     input: { value: () => `${value}\n` },
     foundIn: { value: (bytes) => holdsAny(bytes, needles) },
     needles: { value: () => needles },
-    toString: { value: () => '[plan key]' },
-    toJSON: { value: () => '[plan key]' },
-    [inspect.custom]: { value: () => '[plan key]' },
+    toString: { value: () => label },
+    toJSON: { value: () => label },
+    [inspect.custom]: { value: () => label },
   })
   return Object.freeze(holder)
 }
+
+/** The key as the plan's: takeProviderKey with the plan's word. */
+export const takePlanKey = (env) => takeProviderKey(env)
 
 /** The value as bytes, and as a log or a header dump would encode it. */
 function secretNeedles(value) {
@@ -818,6 +833,8 @@ export function streamSummary(responseText) {
     contentChars: 0,
     reasoningChars: 0,
     usage: null,
+    // Whether the frame with the usage names the finish reason too: null without a usage.
+    usageAtFinish: null,
     error: null,
     forms: [],
   }
@@ -837,8 +854,12 @@ export function streamSummary(responseText) {
     }
     summary.frames += 1
     if (frame?.error) summary.error = String(frame.error.code ?? frame.error.type ?? 'error')
-    if (frame?.usage) summary.usage = usageOf(frame.usage)
-    for (const choice of Array.isArray(frame?.choices) ? frame.choices : []) {
+    const choices = Array.isArray(frame?.choices) ? frame.choices : []
+    if (frame?.usage) {
+      summary.usage = usageOf(frame.usage)
+      summary.usageAtFinish = choices.some((choice) => typeof choice?.finish_reason === 'string')
+    }
+    for (const choice of choices) {
       if (typeof choice.finish_reason === 'string') summary.finishReasons.push(choice.finish_reason)
       const delta = choice.delta ?? {}
       if (typeof delta.content === 'string') {
