@@ -4,6 +4,7 @@ import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
 import { creditAccountUnits } from '@repo/domain'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { getCreditConversion } from './credit-conversion.ts'
 import { creditRateAt, creditRateStatus, taskRawCredits } from './credit-rate.ts'
 import {
   approveCreditRateIn,
@@ -1003,6 +1004,65 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
         expect(approval.preview?.models.map(({ model }) => model).sort()).toEqual(
           [standard.model, twin.model, heavy.model].sort(),
         )
+      })
+    })
+  })
+
+  describe('the seeded catalogue of two Z.ai offers', () => {
+    // The plan and the pay-per-token API have profiles of the same slugs and names: a price is
+    // the profile's of the provider it names, and a switched-off profile counts for nothing.
+    const profile = (tx: Tx, provider: string) =>
+      tx.llmModel.findFirstOrThrow({
+        where: { provider: { slug: provider }, slug: 'glm-5.3-standard' },
+      })
+    const glm = (provider: string, patch: Record<string, unknown> = {}) => ({
+      provider,
+      model: 'glm-5.3-standard',
+      ...SOL,
+      ...SOURCE,
+      ...patch,
+    })
+
+    it('prices each offer by its provider and reads only the profiles switched on', async () => {
+      await rolledBack(async (tx) => {
+        const plan = await profile(tx, 'zai-coding')
+        const api = await profile(tx, 'zai-api')
+        expect(api).toMatchObject({ name: plan.name, enabled: false })
+        await tx.llmModel.update({ where: { id: plan.id }, data: { enabled: true } })
+
+        // The API's price differs; its profile is off, so nothing asks for a confirmation.
+        const approval = await approveCreditRateIn(
+          tx,
+          request({
+            prices: [glm('zai-coding'), glm('zai-api', { outputPer1m: '1500.000000' })],
+          }),
+        )
+        if (!approval.approved) throw new Error('The rate must be approved')
+        expect(approval).toMatchObject({ prices: 2, preview: { mixedClasses: [] } })
+        expect(approval.preview.models.map(({ provider, model }) => [provider, model])).toEqual([
+          ['zai-coding', 'glm-5.3-standard'],
+        ])
+        const outputs = await tx.llmModelPrice.findMany({
+          where: { modelId: { in: [plan.id, api.id] } },
+          select: { modelId: true, outputPer1m: true },
+        })
+        expect(
+          Object.fromEntries(outputs.map((row) => [row.modelId, row.outputPer1m.toFixed(6)])),
+        ).toEqual({ [plan.id]: '1162.500000', [api.id]: '1500.000000' })
+
+        // «Точный расчёт»: one table, the plan's; the API's profile of the same name is not in it.
+        const conversion = await getCreditConversion(tx, approval.effectiveFrom)
+        expect(conversion?.rows).toEqual([expect.objectContaining({ model: null })])
+        expect(conversion?.rows[0]?.output).toBe('193.75')
+
+        // Both switched on at different prices: the operator is asked, as for any two models.
+        await tx.llmModel.update({ where: { id: api.id }, data: { enabled: true } })
+        expect(
+          await approveCreditRateIn(tx, request({}, { effectiveFrom: fromNow(HOUR) })),
+        ).toMatchObject({
+          approved: false,
+          refusals: [{ reason: 'mixed_models_unconfirmed', classes: ['standard'] }],
+        })
       })
     })
   })

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { createPrismaClient, type PrismaClient } from '@repo/db'
 import type { LlmBackend, LlmBackendId, SecretStore } from '@repo/domain'
-import { zaiCodingBackend } from '@repo/llm-backends'
+import { llmBackends, zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
@@ -540,6 +540,113 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
     await expect(
       f.service.importAccount({ ...f.input, label: `${f.input.label}-other` }),
     ).rejects.toMatchObject({ code: 'account_conflict', accountId: second.accountId })
+  })
+
+  it('imports, logs in again and retires an account of the seeded pay-per-token API provider', async () => {
+    // The provider row of the seeds and the adapter of the registry, as the operator's command
+    // takes them: nothing of the plan's windows is asked or written for this backend.
+    const provider = await db.llmProvider.findUniqueOrThrow({ where: { slug: zaiApiBackend.id } })
+    expect(provider.kind).toBe('subscription')
+    const pool = new Pool({ connectionString: databaseUrl, max: 3, connectionTimeoutMillis: 3_000 })
+    const locks = new SessionSubscriptionLock(pool)
+    cleanup.push(async () => {
+      await locks.close()
+      await pool.end()
+    })
+    const versions = new Map<string, number>()
+    const writer = {
+      kvMetadata: vi.fn<SecretStore['kvMetadata']>(async (path) => {
+        const version = versions.get(path)
+        return version === undefined
+          ? null
+          : {
+              currentVersion: version,
+              deleted: false,
+              destroyed: false,
+              createdTime: new Date(),
+              custom: {},
+            }
+      }),
+      kvWrite: vi.fn<SecretStore['kvWrite']>(async (path, _data, options) => {
+        const current = versions.get(path) ?? 0
+        if (options?.cas !== current) throw new Error('Synthetic CAS mismatch')
+        versions.set(path, current + 1)
+        return { version: current + 1 }
+      }),
+    }
+    const login = new SubscriptionLogin({ prisma: db, writer, locks, backends: llmBackends })
+    const imported = await login.importAccount({
+      backend: zaiApiBackend.id,
+      driverId: 'opencode',
+      credential: planKey(),
+      label: `api-${randomUUID()}`,
+      plan: 'payg',
+      maxConcurrentTurns: 1,
+      maxConcurrentRequests: 2,
+    })
+    cleanup.push(async () => {
+      const row = await db.subscriptionAccount.findUniqueOrThrow({
+        where: { id: imported.accountId },
+      })
+      await db.subscriptionAccount.delete({ where: { id: row.id } })
+      await db.credentialRef.delete({ where: { id: row.credentialRefId } })
+    })
+    expect(imported).toMatchObject({ backend: 'zai-api', credentialVersion: 1, enabled: false })
+    const path = `subs/zai-api/${imported.accountId}`
+    expect(writer.kvWrite).toHaveBeenCalledExactlyOnceWith(path, expect.any(Object), { cas: 0 })
+    expect(
+      await db.subscriptionAccount.findUniqueOrThrow({
+        where: { id: imported.accountId },
+        include: { credentialRef: true },
+      }),
+    ).toMatchObject({
+      providerId: provider.id,
+      driverId: 'opencode',
+      plan: 'payg',
+      health: 'ok',
+      externalAccountId: null,
+      limitWindows: [],
+      limitsSeenAt: null,
+      credentialRef: { kind: 'subscription', vaultPath: path },
+    })
+    // The account of one backend is not the other's to log in again.
+    await expect(
+      login.relogin({
+        backend: zaiCodingBackend.id,
+        accountId: imported.accountId,
+        credential: planKey(),
+      }),
+    ).rejects.toMatchObject({ code: 'account_unavailable' })
+    expect(
+      await login.relogin({
+        backend: zaiApiBackend.id,
+        accountId: imported.accountId,
+        credential: planKey(),
+      }),
+    ).toMatchObject({ backend: 'zai-api', credentialVersion: 2 })
+
+    const kvDestroyAll = vi.fn(async (_path: string) => {})
+    const retirement = new SubscriptionRetirement({
+      prisma: db,
+      secrets: { kvDestroyAll },
+      credentials: { revoke: vi.fn(async () => {}) },
+      locks,
+      backends: llmBackends,
+    })
+    const label = (
+      await db.subscriptionAccount.findUniqueOrThrow({ where: { id: imported.accountId } })
+    ).label
+    // No key was ever issued: only the console revocation stands between the request and removal.
+    expect(await retirement.request({ accountId: imported.accountId, label })).toMatchObject({
+      stage: 'console_revocation_required',
+    })
+    expect(
+      await retirement.finalize({ accountId: imported.accountId, label, consoleRevoked: true }),
+    ).toMatchObject({ stage: 'retired' })
+    expect(kvDestroyAll).toHaveBeenCalledExactlyOnceWith(path)
+    expect(
+      await db.subscriptionAccount.findUniqueOrThrow({ where: { id: imported.accountId } }),
+    ).toMatchObject({ status: 'retired', enabled: false, credentialsRevokedAt: expect.any(Date) })
   })
 
   it('rejects a retirement request occurring between the two SQL phases', async () => {

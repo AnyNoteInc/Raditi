@@ -90,15 +90,22 @@ END $$;
 COMMIT;
 `
 
-/** What the seeds give a new database: one shell switched on, its catalogue for the operator. */
+/**
+ * What the seeds give a new database: one shell switched on, the catalogue of its two backends
+ * (the Z.ai plan and the pay-per-token API, three profiles each) for the operator. In the order
+ * `catalogue` reads it: by slug.
+ */
+const newBackends = ['zai-api', 'zai-coding']
 export const newDatabaseCatalogue = {
   drivers: [{ id: 'opencode', enabled: true }],
-  providers: [{ slug: 'zai-coding', enabled: false }],
-  models: ['glm-5.3-heavy', 'glm-5.3-light', 'glm-5.3-standard'].map((slug) => ({
-    provider: 'zai-coding',
-    slug,
-    enabled: false,
-  })),
+  providers: newBackends.map((slug) => ({ slug, enabled: false })),
+  models: newBackends.flatMap((provider) =>
+    ['glm-5.3-heavy', 'glm-5.3-light', 'glm-5.3-standard'].map((slug) => ({
+      provider,
+      slug,
+      enabled: false,
+    })),
+  ),
 }
 
 /** Every driver, provider and profile of the database with its switch. */
@@ -328,7 +335,7 @@ export async function verifySwitchToOpencode({ client, psql, deploy, resolve, se
   const report = seedReport(await seed())
   assert.deepEqual(
     { drivers: report.agent_drivers, providers: report.llm_providers, models: report.llm_models },
-    { drivers: [0, 0], providers: [1, 0], models: [3, 0] },
+    { drivers: [0, 0], providers: [2, 0], models: [6, 0] },
   )
   const seeded = await catalogue(client)
   assert.deepEqual(seeded, {

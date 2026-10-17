@@ -266,7 +266,13 @@ describe('subscription catalogue defaults', () => {
   it('uses separate disabled profiles with the explicit backend output reserves', () => {
     // Every profile belongs to a backend of the domain: none is seeded for a removed provider.
     expect([...new Set(llmModelSeeds.map((model) => model.providerSlug))]).toEqual(llmBackendIds)
-    expect(llmModelSeeds.map((model) => model.modelClass)).toEqual(['light', 'standard', 'heavy'])
+    // Each backend offers every class once.
+    for (const backend of llmBackendIds)
+      expect(
+        llmModelSeeds
+          .filter((model) => model.providerSlug === backend)
+          .map((model) => model.modelClass),
+      ).toEqual(['light', 'standard', 'heavy'])
     const naturalKeys = llmModelSeeds.map((model) => `${model.providerSlug}/${model.slug}`)
     expect(new Set(naturalKeys).size).toBe(llmModelSeeds.length)
     for (const model of llmModelSeeds) {
@@ -284,8 +290,11 @@ describe('subscription catalogue defaults', () => {
     }
   })
 
-  it('offers one GLM model in three profiles of the Z.ai plan, all switched off', () => {
-    const profiles = llmModelSeeds.filter((model) => model.providerSlug === 'zai-coding')
+  it.each([
+    ['the Z.ai plan', 'zai-coding', 'Z.ai GLM Coding Plan'],
+    ['the Z.ai pay-per-token API', 'zai-api', 'Z.ai API'],
+  ])('offers one GLM model in three profiles of %s, all switched off', (_name, slug, name) => {
+    const profiles = llmModelSeeds.filter((model) => model.providerSlug === slug)
     expect(profiles.map((model) => model.slug)).toEqual([
       'glm-5.3-light',
       'glm-5.3-standard',
@@ -296,12 +305,22 @@ describe('subscription catalogue defaults', () => {
       expect(model.providerModelId).toBe('glm-5.3')
       expect(model.enabled).toBe(false)
     }
-    expect(llmProviderSeeds.find((provider) => provider.slug === 'zai-coding')).toEqual({
-      slug: 'zai-coding',
-      name: 'Z.ai GLM Coding Plan',
+    expect(llmProviderSeeds.find((provider) => provider.slug === slug)).toEqual({
+      slug,
+      name,
       kind: 'subscription',
       enabled: false,
     })
+  })
+
+  it('names the profiles of both Z.ai offers alike, so only their provider tells them apart', () => {
+    // The billing readers name a priced model by its display name (credit-conversion): two
+    // profiles of one name are told apart only while one provider's profiles are switched on.
+    const profiles = (slug: string) =>
+      llmModelSeeds
+        .filter((model) => model.providerSlug === slug)
+        .map(({ providerSlug: _provider, ...profile }) => profile)
+    expect(profiles('zai-api')).toEqual(profiles('zai-coding'))
   })
 
   it('reserves for a Z.ai profile no less output than its request policy may ask for', () => {
@@ -309,9 +328,12 @@ describe('subscription catalogue defaults', () => {
     // (`zaiMaxOutputTokens`, packages/llm-backends/src/zai-coding/body.ts; its own test pins
     // it). The seeds may not import an adapter, so the number is written here once more: a
     // reserve below it would let one call outgrow what the gateway held for it.
+    // Both offers of the adapter share it (createZaiBodyPolicy).
     const policyMaxOutputTokens = 32_000
-    const profiles = llmModelSeeds.filter((model) => model.providerSlug === 'zai-coding')
-    expect(profiles).toHaveLength(3)
+    const profiles = llmModelSeeds.filter((model) =>
+      ['zai-coding', 'zai-api'].includes(model.providerSlug),
+    )
+    expect(profiles).toHaveLength(6)
     for (const model of profiles)
       expect(model.reserveOutputTokens).toBeGreaterThanOrEqual(policyMaxOutputTokens)
   })

@@ -146,6 +146,35 @@ describe('operator subscription commands', () => {
     // A key from stdin.
     expect(entry.backend.importCredential).toBeTypeOf('function')
   })
+  it('imports a Z.ai API key for the OpenCode driver with the same limits as the plan', () => {
+    expect(
+      parseSubscriptionArguments('login', [
+        '--backend',
+        'zai-api',
+        '--label',
+        'glm-api-a',
+        '--plan',
+        'payg',
+        '--vault-token-file',
+        '/tmp/writer',
+      ]),
+    ).toMatchObject({ command: 'login', value: { backend: 'zai-api', plan: 'payg' } })
+    const entry = subscriptionImports.get('zai-api')!
+    expect(entry.backend.id).toBe('zai-api')
+    expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
+    expect(entry.backend.importCredential).toBeTypeOf('function')
+    // A relogin of an API account takes the same form as any other.
+    expect(
+      parseSubscriptionArguments('login', [
+        '--backend',
+        'zai-api',
+        '--relogin',
+        account,
+        '--vault-token-file',
+        '/tmp/writer',
+      ]),
+    ).toMatchObject({ value: { backend: 'zai-api', relogin: account } })
+  })
   it('has import settings for every backend the platform registers, each with a way in', () => {
     expect([...subscriptionImports.keys()]).toEqual(llmBackends.map((backend) => backend.id))
     for (const [id, entry] of subscriptionImports) {
@@ -153,6 +182,13 @@ describe('operator subscription commands', () => {
       expect(agentDriverIds).toContain(entry.driverId)
       // The key of a subscription from stdin is the one way in.
       expect(entry.backend.importCredential).toBeTypeOf('function')
+      // The help names a --plan label for each; the column it goes to holds at most 32 of them.
+      expect(entry.planExample).toMatch(/^[a-z0-9_-]{1,32}$/)
+      // Within the bounds of the account's row (CHECK) and of the import.
+      expect(entry.turns).toBeGreaterThanOrEqual(1)
+      expect(entry.turns).toBeLessThanOrEqual(8)
+      expect(entry.requests).toBeGreaterThanOrEqual(1)
+      expect(entry.requests).toBeLessThanOrEqual(16)
     }
   })
   it('accepts no backend without import settings, whatever the list of ids says', () => {
@@ -174,20 +210,29 @@ describe('operator subscription commands', () => {
     // An id of the port's list that has no settings would otherwise fail after parsing. Every
     // id of the list has them, so the settings of one are taken away for the length of the check.
     const settings = subscriptionImports as Map<string, SubscriptionImport>
-    const [id, entry] = [...settings][0]!
+    const saved = [...settings]
+    const [id] = saved[0]!
     expect(login(id)).not.toThrow()
     settings.delete(id)
     try {
       expect(login(id)).toThrow('Неверные параметры команды подписок')
     } finally {
-      settings.set(id, entry)
+      // Back in the order of the registry, which the help and other checks read.
+      settings.clear()
+      for (const [key, entry] of saved) settings.set(key, entry)
     }
     expect(login(id)).not.toThrow()
   })
   it('builds the help of login from the import settings', () => {
     const help = subscriptionHelp('login')
-    expect(help).toContain('--backend zai-coding ')
-    expect(help).toContain('Ключ подписки (zai-coding) поступает через stdin или скрытый ввод.')
+    expect(help).toContain('--backend zai-coding|zai-api ')
+    expect(help).toContain(
+      'Ключ подписки (zai-coding, zai-api) поступает через stdin или скрытый ввод.',
+    )
+    expect(help).toContain(
+      '--plan — метка тарифа нового аккаунта, например: zai-coding — lite, zai-api — payg.',
+    )
+    expect(help).toContain('если провайдеру нужен узел выхода (zai-coding и zai-api он не нужен).')
   })
   it('asks for the egress node unless the adapter says of every origin that it needs none', () => {
     const origin = {
@@ -196,6 +241,7 @@ describe('operator subscription commands', () => {
       requests: ['POST https://provider.invalid/v1/generate'],
     }
     expect(loginNeedsEgressNode(subscriptionImports.get('zai-coding')!.backend)).toBe(false)
+    expect(loginNeedsEgressNode(subscriptionImports.get('zai-api')!.backend)).toBe(false)
     expect(loginNeedsEgressNode({ egress: [origin] })).toBe(true)
     expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: false }] })).toBe(true)
     expect(loginNeedsEgressNode({ egress: [{ ...origin, direct: true }, origin] })).toBe(true)
@@ -418,11 +464,13 @@ describe('operator subscription commands', () => {
     // general text shows that neither the environment, nor the rule, nor the channel stopped
     // the command. The case must stay unable to reach the transport: production takes no
     // address override, so nothing here could point api.z.ai at this machine.
-    const direct = await command('login', args('zai-coding'), { env })
-    expect(direct.code).toBe(1)
-    expect(direct.stderr).toBe(
-      'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.\n',
-    )
+    for (const backend of ['zai-coding', 'zai-api']) {
+      const direct = await command('login', args(backend), { env })
+      expect(direct.code).toBe(1)
+      expect(direct.stderr).toBe(
+        'Команда подписок не завершена. Проверьте настройки, доступность сервисов и права токена.\n',
+      )
+    }
     // Half a proxy is a mistake of the environment, not a direct path.
     const half = await command('login', args('zai-coding'), {
       env: { ...env, LLM_EGRESS_PROXY_URL: 'https://127.0.0.1:1' },
