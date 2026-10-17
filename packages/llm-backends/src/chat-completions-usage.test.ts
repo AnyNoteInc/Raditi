@@ -2,13 +2,13 @@ import { readFileSync } from 'node:fs'
 import { meterResultSchema } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 import { createChatCompletionsUsageMeter } from './chat-completions-usage.ts'
-import { createZaiStreamInspector } from './zai-coding/stream.ts'
+import { zaiCodingBackend } from './zai-coding/backend.ts'
 
 const bytes = (value: string) => new TextEncoder().encode(value)
 const frame = (value: unknown) => bytes(`data: ${JSON.stringify(value)}\n\n`)
 const usage = { prompt_tokens: 100, cached_tokens: 60, completion_tokens: 40 }
-// The meter takes the inspector of its adapter: here the one adapter of the package.
-const createMeter = () => createChatCompletionsUsageMeter(createZaiStreamInspector)
+// The meter takes the inspector of its adapter: here the one of the plan.
+const createMeter = () => createChatCompletionsUsageMeter(zaiCodingBackend.streamInspector)
 const fixture = readFileSync(new URL('./fixtures/chat-completions-completed.sse', import.meta.url))
 
 describe('chat completions usage meter', () => {

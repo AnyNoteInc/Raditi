@@ -94,9 +94,9 @@ export class SubscriptionPoolHealth {
     return { reason: 'transient', retryAfterMs: Math.min(30_000, paused.until - now) }
   }
 
-  #alert(reason: string): void {
+  #alert(reason: string, details: Record<string, number> = {}): void {
     // Account details live in SQL; neither IDs nor provider bodies enter process logs.
-    this.options.logger?.warn(JSON.stringify({ event: 'llm_pool_health', reason }))
+    this.options.logger?.warn(JSON.stringify({ event: 'llm_pool_health', reason, ...details }))
   }
 
   async observe(call: GatewayCall, finish: GatewayFinish): Promise<void> {
@@ -146,6 +146,13 @@ export class SubscriptionPoolHealth {
           if (binding) await this.#store.cool(call.accountId, binding.resetsAt, binding.name)
           else await this.#store.cool(call.accountId, null)
         }
+      } else if (signal?.kind === 'balance_exhausted') {
+        // The provider's own word on money, not a downgrade to confirm: no probe sees a balance.
+        // The account waits, durably, and comes back by itself after a top-up; the operator is
+        // told once per pause how many such checks the day has seen.
+        const balance = await this.#store.balance(call.accountId)
+        if (balance.pausedUntil !== null)
+          this.#alert('balance_exhausted', { checks: balance.count })
       } else if (
         signal &&
         ['auth', 'account_risk', 'region', 'unconfirmed_block'].includes(signal.kind)

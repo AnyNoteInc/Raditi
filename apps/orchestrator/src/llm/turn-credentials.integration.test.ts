@@ -3,6 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 import { createPrismaClient, type PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialGrant, TurnCredentialRef } from '@repo/domain'
+import { llmBackends } from '@repo/llm-backends'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -13,6 +14,7 @@ import {
   sampleProviderSlug,
   sampleRoutePath,
 } from '../testing/ids.ts'
+import { backendCapacities } from './backends.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 import { turnCredentialPath } from './turn-key.ts'
 import { PostgresGatewayStore } from '../llm-gateway/store.ts'
@@ -20,6 +22,8 @@ import { PostgresGatewayStore } from '../llm-gateway/store.ts'
 const databaseUrl = process.env.DATABASE_URL
 const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '1')
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
+// As core composes it: what each adapter of the registry declares.
+const capacityOf = backendCapacities(llmBackends)
 
 function memoryVault() {
   const entries = new Map<
@@ -171,7 +175,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     }
     tracked.push(row)
     const vault = memoryVault()
-    const credentials = new GatewayTurnCredentials({ prisma: db, secrets: vault.port })
+    const credentials = new GatewayTurnCredentials({ prisma: db, secrets: vault.port, capacityOf })
     const price =
       options.price === false
         ? null
@@ -546,7 +550,11 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
           options,
         ),
     } as unknown as PrismaClient
-    const credentials = new GatewayTurnCredentials({ prisma: moving, secrets: f.vault.port })
+    const credentials = new GatewayTurnCredentials({
+      prisma: moving,
+      secrets: f.vault.port,
+      capacityOf,
+    })
     try {
       await expect(credentials.issue(f.ref, f.grant)).rejects.toMatchObject({ code: 'LEASE_LOST' })
       expect(moves).toBe(1)
@@ -782,6 +790,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       prisma: db,
       secrets: f.vault.port,
       probeAccounts,
+      capacityOf,
     })
     await credentials.issue(f.ref, f.grant)
     expect(probeAccounts).toHaveBeenCalledTimes(1)
@@ -805,6 +814,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       prisma: db,
       secrets: f.vault.port,
       probeAccounts,
+      capacityOf,
     })
     await seen(9)
     await credentials.issue(f.ref, f.grant)
@@ -859,6 +869,39 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await db.llmKey.findFirstOrThrow({ where: { taskId: fifth.task.id } })).toMatchObject({
       subscriptionAccountId: spare.id,
     })
+  })
+
+  it('selects an account of a backend without windows on what is stored, and probes nothing', async () => {
+    const f = await fixture({ windows: false })
+    // The sample backend, read as one without windows: the composition's word, not the data's.
+    const probeAccounts = vi.fn(async () => {})
+    const credentials = new GatewayTurnCredentials({
+      prisma: db,
+      secrets: f.vault.port,
+      probeAccounts,
+      capacityOf: () => 'none',
+    })
+    // An empty snapshot a probe of such a backend left long ago is no reason to refresh.
+    await db.subscriptionAccount.update({
+      where: { id: f.mainAccount.id },
+      data: { limitsSeenAt: new Date(Date.now() - 60 * 60_000) },
+    })
+    await credentials.issue(f.ref, f.grant)
+    expect(probeAccounts).not.toHaveBeenCalled()
+    expect(await db.llmKey.findFirstOrThrow({ where: { taskId: f.task.id } })).toMatchObject({
+      subscriptionAccountId: f.mainAccount.id,
+    })
+    await credentials.revoke(f.ref)
+    // Its durable pause still holds, and still asks for no probe.
+    await db.subscriptionAccount.update({
+      where: { id: f.mainAccount.id },
+      data: { coolingUntil: new Date(Date.now() + 15 * 60_000) },
+    })
+    const second = await f.taskFixture()
+    await expect(credentials.issue(second.ref, f.grant)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_WAIT',
+    })
+    expect(probeAccounts).not.toHaveBeenCalled()
   })
 
   it('keeps the original Vault policy when the process crashed before SQL admission', async () => {
@@ -1189,6 +1232,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       prisma: db,
       secrets: f.vault.port,
       requireAssignment: true,
+      capacityOf,
     })
     await expect(credentials.issue(f.ref, f.grant)).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(f.vault.entries.size).toBe(0)

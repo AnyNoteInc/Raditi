@@ -1,8 +1,9 @@
 import { callSignalSchema, gatewayRefusalSchema, type GatewayRefusal } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
+import { zaiApiOffer, zaiCodingPlan } from './backend.ts'
 import { zaiPolicyFields } from './body.ts'
-import { classifyZai, classifyZaiStreamError, zaiRefusal } from './errors.ts'
+import { zaiClassifier, zaiRefusal } from './errors.ts'
 import { cliReadsOverflow, cliRetriesHttp, cliRetriesStreamError } from './fixtures/opencode-cli.ts'
 import { envelopeSamples, errorBody, errorSamples, sample } from './fixtures/samples.ts'
 
@@ -15,6 +16,10 @@ const decode = (body: Uint8Array) =>
     error: { type: string; code: string; message: string }
   }
 const finals = gatewayRefusalSchema.options.filter((kind) => kind !== 'transient')
+// The plan reads every code by the shared table.
+const { classify: classifyZai, classifyStreamError: classifyZaiStreamError } = zaiClassifier(
+  zaiCodingPlan.answers,
+)
 
 describe('Z.ai answers with a status', () => {
   it.each([
@@ -158,6 +163,82 @@ describe('a Z.ai error inside a started stream', () => {
 
   it('reads the envelope of the monitor paths too', () => {
     expect(classifyZaiStreamError(errorBody(envelopeSamples.invalidKey))).toEqual({ kind: 'auth' })
+  })
+})
+
+describe('what the pay-per-token API reads otherwise', () => {
+  const api = zaiClassifier(zaiApiOffer.answers)
+  const shared = [
+    '401',
+    '1302',
+    '1305',
+    '1308',
+    '1309',
+    '1310',
+    '1311',
+    '1313',
+    '1316',
+    '1317',
+    '1211',
+    '1301',
+    '1261',
+    '1304',
+    '1999',
+  ]
+
+  it('reads 1113 as an empty balance whatever the status and the form', () => {
+    for (const status of [400, 402, 403, 429, 500]) {
+      expect(api.classify(status, none, error('1113'))).toEqual({ kind: 'balance_exhausted' })
+      expect(api.classify(status, none, error(1113))).toEqual({ kind: 'balance_exhausted' })
+      expect(api.classify(status, none, { code: 1113, msg: 'x', success: false })).toEqual({
+        kind: 'balance_exhausted',
+      })
+    }
+    expect(api.classifyStreamError(error('1113'))).toEqual({ kind: 'balance_exhausted' })
+    expect(classifyZai(429, none, error('1113'))).toEqual({
+      kind: 'account_risk',
+      reason: 'zai_1113',
+    })
+  })
+
+  it('reads a 429 that names no code as the provider throttling, with its pause', () => {
+    expect(api.classify(429, none, null)).toEqual({ kind: 'transient', retryAfterMs: 30_000 })
+    expect(api.classify(429, none, { error: 'Too much concurrency' })).toEqual({
+      kind: 'transient',
+      retryAfterMs: 30_000,
+    })
+    expect(api.classify(429, new Headers({ 'retry-after': '3' }), null)).toEqual({
+      kind: 'transient',
+      retryAfterMs: 3_000,
+    })
+    // Unnamed elsewhere it is no throttle, and a code nobody has seen stays unconfirmed.
+    for (const status of [402, 403, 404, 413, 451])
+      expect(api.classify(status, none, null)).toEqual({ kind: 'unconfirmed_block' })
+    expect(classifyZai(429, none, null)).toEqual({ kind: 'unconfirmed_block' })
+  })
+
+  it.each(shared)('reads the code %s as the plan does', (code) => {
+    for (const status of [400, 403, 429, 500])
+      expect(api.classify(status, none, error(code))).toEqual(
+        classifyZai(status, none, error(code)),
+      )
+    expect(api.classifyStreamError(error(code))).toEqual(classifyZaiStreamError(error(code)))
+  })
+
+  it('reads every status without a code as the plan does, but a 429', () => {
+    for (const status of [200, 204, 400, 401, 402, 403, 404, 408, 409, 500, 502, 503])
+      expect(api.classify(status, none, null)).toEqual(classifyZai(status, none, null))
+  })
+
+  it('takes no code from the text', () => {
+    expect(api.classify(429, none, error(undefined, 'error 1113: recharge'))).toEqual({
+      kind: 'transient',
+      retryAfterMs: 30_000,
+    })
+    expect(api.classifyStreamError({ error: { message: '1113' } })).toEqual({
+      kind: 'unconfirmed_block',
+    })
+    expect(callSignalSchema.safeParse(api.classify(429, none, error('1113'))).success).toBe(true)
   })
 })
 

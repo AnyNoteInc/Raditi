@@ -2,6 +2,7 @@ import { Logger, Module, type OnApplicationBootstrap, type OnModuleDestroy } fro
 import { Counter, type Registry } from '@prometheus-io/client'
 import type { PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialSource } from '@repo/domain'
+import { llmBackends } from '@repo/llm-backends'
 
 import type { CoreConfig } from '../config/config.ts'
 import {
@@ -13,6 +14,7 @@ import {
   TURN_CREDENTIALS,
 } from '../infra/tokens.ts'
 import { MetricsModule } from '../metrics/metrics.module.ts'
+import { backendCapacities } from './backends.ts'
 import { CredentialSweeper, type CredentialSweepKind } from './credential-sweeper.ts'
 import { createPoolProbeClient } from './pool-probe-client.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
@@ -83,6 +85,8 @@ export class CoreCredentialRuntime implements OnApplicationBootstrap, OnModuleDe
           secrets,
           requireAssignment: true,
           minTurnHeadroomPct: config.minTurnHeadroomPct ?? 5,
+          // The adapters' own word; core never sends a request with them.
+          capacityOf: backendCapacities(llmBackends),
           ...(config.llmControlUrl === undefined
             ? {}
             : {

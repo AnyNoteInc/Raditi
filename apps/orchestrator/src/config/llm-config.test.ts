@@ -1,5 +1,5 @@
 import type { LlmBackend } from '@repo/domain'
-import { llmBackends, zaiCodingBackend } from '@repo/llm-backends'
+import { llmBackends, zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -38,11 +38,14 @@ describe('subscription gateway configuration', () => {
   it('goes without the egress node only to the origins whose adapters say they need none', () => {
     // Rule 1 of the platform: every other provider is reached through the node alone. The list
     // is the adapters' own; the role and its configuration name no provider.
+    // Both offers of Z.ai declare the one origin they share.
     expect(
-      llmBackends.flatMap((backend) =>
-        backend.egress.filter((entry) => entry.direct === true).map((entry) => entry.origin),
+      new Set(
+        llmBackends.flatMap((backend) =>
+          backend.egress.filter((entry) => entry.direct === true).map((entry) => entry.origin),
+        ),
       ),
-    ).toEqual(['https://api.z.ai'])
+    ).toEqual(new Set(['https://api.z.ai']))
   })
 
   it('serves in production without a proxy, and never with half of one', () => {
@@ -167,10 +170,11 @@ describe('subscription gateway configuration', () => {
   })
 
   it('takes the provider origins and their stand overrides from what the adapters declare', () => {
-    expect(llmBackends).toEqual([zaiCodingBackend])
-    expect(providerOrigins).toEqual(
-      llmBackends.flatMap((backend) => backend.egress.map((entry) => entry.origin)),
-    )
+    expect(llmBackends).toEqual([zaiCodingBackend, zaiApiBackend])
+    // The plan and the API share one origin: it is listed once.
+    expect(providerOrigins).toEqual([
+      ...new Set(llmBackends.flatMap((backend) => backend.egress.map((entry) => entry.origin))),
+    ])
     expect(providerOrigins).toEqual(['https://api.z.ai'])
     // Every declared origin can be pointed at a loopback fake on a stand: each by the variable
     // its adapter names, in the order of the adapters. The second adapter is a synthetic one.
@@ -196,6 +200,30 @@ describe('subscription gateway configuration', () => {
     ]).toEqual([
       ['https://provider.invalid', 'https://localhost:9443'],
       ['https://api.z.ai', 'https://localhost:9444'],
+    ])
+  })
+
+  it('refuses to start when two adapters name two stand variables for one origin', () => {
+    const renamed: LlmBackend = {
+      ...zaiApiBackend,
+      egress: zaiApiBackend.egress.map((entry) => ({
+        ...entry,
+        overrideEnv: 'LLM_BACKEND_URL_ZAI_API',
+      })),
+    }
+    for (const backends of [
+      [zaiCodingBackend, renamed],
+      [renamed, zaiCodingBackend],
+    ]) {
+      expect(() => llmConfigFromEnv(complete, 'test', backends)).toThrow(
+        /^LLM backends name two stand variables for https:\/\/api\.z\.ai$/,
+      )
+      expect(() => egressConfigFromEnv(complete, 'test', backends)).toThrow(/two stand variables/)
+    }
+    // One name for one origin, whichever backends declare it: one variable points both.
+    const fake = { ...complete, LLM_BACKEND_URL_ZAI_CODING: 'https://localhost:9443' }
+    expect([...llmConfigFromEnv(fake, 'test').egress!.backendOrigins]).toEqual([
+      ['https://api.z.ai', 'https://localhost:9443'],
     ])
   })
 

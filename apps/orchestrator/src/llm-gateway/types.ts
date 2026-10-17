@@ -6,6 +6,7 @@ import {
   type GatewayRefusal,
   type LimitWindow,
   type LlmBackendId,
+  type LlmCapacity,
   type LlmModelPrices,
   type LlmRoute,
 } from '@repo/domain'
@@ -42,7 +43,7 @@ export interface GatewayKey extends GatewayProfile {
   /**
    * The key has started no call yet and the window snapshot of its account is older than the
    * pool keeps one for (poolPolicy.windowsFreshMs): the gateway asks for one refresh before
-   * admission. Never a reason to refuse.
+   * admission, unless the backend of the route has no windows. Never a reason to refuse.
    */
   staleWindows: boolean
 }
@@ -62,6 +63,11 @@ export interface GatewayAdmitInput {
   keyHash: string
   source: string
   backendId: LlmBackendId
+  /**
+   * What the backend of the route declares (LlmBackend.capacity): `windows` reads the account's
+   * windows and pauses, `none` only its pauses.
+   */
+  capacity: LlmCapacity
   route: LlmRoute
   profile: GatewayProfile
   requestBytes: number

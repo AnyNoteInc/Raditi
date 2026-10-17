@@ -1,9 +1,18 @@
 import { z } from 'zod'
 
 /** Stable provider slugs, shared with llm_providers; provider details belong in adapters. */
-export const llmBackendIds = ['zai-coding'] as const
+export const llmBackendIds = ['zai-coding', 'zai-api'] as const
 export const llmBackendIdSchema = z.enum(llmBackendIds)
 export type LlmBackendId = z.infer<typeof llmBackendIdSchema>
+
+/**
+ * How the capacity of a backend's account is known. `windows`: the provider reports usage
+ * windows (a plan's periods), and an account without a readable report is unknown capacity.
+ * `none`: the provider has no windows (pay per token); an account is limited by its pauses
+ * alone, and its stored windows mean nothing.
+ */
+export const llmCapacitySchema = z.enum(['windows', 'none'])
+export type LlmCapacity = z.infer<typeof llmCapacitySchema>
 
 export interface LlmRoute {
   method: 'POST' | 'GET'
@@ -105,6 +114,9 @@ export const callSignalSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ok') }).strict(),
   z.object({ kind: z.literal('transient'), retryAfterMs: count }).strict(),
   z.object({ kind: z.literal('window_exhausted'), until: nullableDate }).strict(),
+  // The account has no money left with the provider (a pay-per-token key): it waits for a
+  // top-up, which no probe and no relogin can see. Not a risk to the account.
+  z.object({ kind: z.literal('balance_exhausted') }).strict(),
   z.object({ kind: z.literal('auth') }).strict(),
   z.object({ kind: z.literal('account_risk'), reason: signalCode }).strict(),
   z.object({ kind: z.literal('region') }).strict(),
@@ -185,6 +197,7 @@ export function refusalForSignal(signal: CallSignal): GatewayRefusal {
     case 'transient':
       return 'transient'
     case 'window_exhausted':
+    case 'balance_exhausted':
       return 'subscription_limit'
     case 'auth':
     case 'account_risk':
@@ -296,6 +309,8 @@ export interface EgressHttp {
 /** Subscription backend port (spec §9; p3-design §11). No provider branches in the core. */
 export interface LlmBackend {
   readonly id: LlmBackendId
+  /** Whether the pool reads this backend's accounts by their windows (llmCapacitySchema). */
+  readonly capacity: LlmCapacity
   readonly routes: readonly LlmRoute[]
   readonly credentialSchema: z.ZodType<SubscriptionCredential>
   /**
@@ -345,6 +360,7 @@ export interface LlmBackend {
    * A content-free check of the account through the egress. Rejects when there is no answer
    * to judge the account by (transport failure, 5xx, an unknown status): the caller changes
    * nothing. `unknown` is an answer that drops the account's known capacity until a later probe.
+   * A backend of capacity `none` answers `ok` with no windows for a key the provider accepts.
    */
   probe(credential: SubscriptionCredential, http: EgressHttp): Promise<ProbeResult>
   /** Import-only secret input; the adapter builds its versioned credential before a probe. */

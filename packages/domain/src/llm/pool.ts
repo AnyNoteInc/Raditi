@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
-import { limitWindowsSchema, llmBackendIdSchema } from '../ports/llm-backend.ts'
+import { limitWindowsSchema, llmBackendIdSchema, llmCapacitySchema } from '../ports/llm-backend.ts'
 
 export const poolPolicy = Object.freeze({
   minTurnHeadroomPct: 5,
@@ -40,6 +40,8 @@ export type PoolAccountSnapshot = z.infer<typeof poolAccountSnapshotSchema>
 export const pickAccountInputSchema = z
   .object({
     backend: llmBackendIdSchema,
+    /** The backend's own word (LlmBackend.capacity), never a guess from the stored windows. */
+    capacity: llmCapacitySchema,
     providerEnabled: z.boolean(),
     now: z.date().refine((date) => date.getTime() <= 8.64e15 - poolPolicy.unknownRetryMs),
     boundAccountId: z.string().min(1).nullable(),
@@ -109,10 +111,12 @@ interface Readiness {
 
 function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: boolean): Readiness {
   const now = input.now.getTime()
-  const windows = account.limitWindows ?? []
+  // A backend without windows has no usage to know: whatever the columns hold is no report.
+  const windowless = input.capacity === 'none'
+  const windows = windowless ? [] : (account.limitWindows ?? [])
   // Plans expose different windows; only reported windows constrain capacity. An empty
   // snapshot is still unknown usage, never unlimited capacity.
-  let unknown = windows.length === 0
+  let unknown = !windowless && windows.length === 0
   let headroom = 100
   let retryAt: number | null = null
   // The usage breaker is a pause with a known end like a cooldown, not an unusable account.

@@ -41,10 +41,23 @@ export interface PoolHealthStore {
   cool(accountId: string, until: Date | null, window?: LimitWindow['name']): Promise<void>
   /** `count` is the number of payment checks today; `at` is the database clock of this one. */
   payment(accountId: string): Promise<{ count: number; suspended: boolean; at: Date }>
+  /**
+   * The provider said the account's balance is spent: a durable pause, longer with each such
+   * check of the last day. `count` is that number of checks; `pausedUntil` is the end of the
+   * pause this call began, null when one was already holding the account.
+   */
+  balance(accountId: string): Promise<{ count: number; pausedUntil: Date | null }>
 }
 
 /** Pauses after the first, second and third payment check (p3-design §2.4 signal table). */
 export const paymentPauseMs = [5 * 60_000, 15 * 60_000, 45 * 60_000] as const
+/**
+ * Pauses after the first, second, third and every later check that found the balance spent.
+ * Durable (cooling_until), so core's selection sees them too; a top-up is visible to nobody
+ * but the next call after the pause, which then simply succeeds.
+ */
+export const balancePauseMs = [5 * 60_000, 15 * 60_000, 45 * 60_000, 60 * 60_000] as const
+const dayMs = 24 * 60 * 60_000
 
 /**
  * A probe overtaken by a newer snapshot may increase consumption but cannot replenish capacity:
@@ -216,20 +229,13 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
           subscriptionAccountId: accountId,
           upstreamStatus: 402,
           state: { not: 'open' },
-          finishedAt: { gte: new Date(now.getTime() - 24 * 60 * 60_000) },
+          finishedAt: { gte: new Date(now.getTime() - dayMs) },
         },
         select: { finishedAt: true },
         orderBy: { finishedAt: 'asc' },
         take: 1_000,
       })
-      // Concurrent requests answered during one pause are one failed check, not several.
-      let count = 0
-      let nextCheck = -Infinity
-      for (const { finishedAt } of failures) {
-        if (!finishedAt || finishedAt.getTime() < nextCheck) continue
-        count += 1
-        nextCheck = finishedAt.getTime() + paymentPauseMs[Math.min(count, 3) - 1]!
-      }
+      const count = checks(failures, paymentPauseMs)
       const suspended = count >= 3 && account.health === 'ok'
       if (suspended)
         await tx.subscriptionAccount.update({
@@ -239,4 +245,53 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
       return { count, suspended, at: now }
     })
   }
+
+  balance(accountId: string): Promise<{ count: number; pausedUntil: Date | null }> {
+    return this.#transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM subscription_accounts WHERE id = ${accountId}::uuid FOR UPDATE`
+      const [clock] = await tx.$queryRaw<{ instant: Date }[]>`SELECT clock_timestamp() AS instant`
+      const now = clock!.instant
+      const account = await tx.subscriptionAccount.findUnique({ where: { id: accountId } })
+      if (!account) return { count: 0, pausedUntil: null }
+      // llm_calls.signal keeps the kind of every closed call: no table of its own is needed.
+      const failures = await tx.llmCall.findMany({
+        where: {
+          subscriptionAccountId: accountId,
+          signal: 'balance_exhausted',
+          state: { not: 'open' },
+          finishedAt: { gte: new Date(now.getTime() - dayMs) },
+        },
+        select: { finishedAt: true },
+        orderBy: { finishedAt: 'asc' },
+        take: 1_000,
+      })
+      const count = checks(failures, balancePauseMs)
+      // A call admitted before the pause began and answered within it is the same check.
+      if (account.coolingUntil !== null && account.coolingUntil > now)
+        return { count, pausedUntil: null }
+      const pausedUntil = new Date(
+        now.getTime() + balancePauseMs[Math.min(Math.max(count, 1), balancePauseMs.length) - 1]!,
+      )
+      await tx.subscriptionAccount.update({
+        where: { id: accountId },
+        data: { coolingUntil: pausedUntil },
+      })
+      return { count, pausedUntil }
+    })
+  }
+}
+
+/**
+ * Failed checks among the refusals of one kind, oldest first: requests answered together, or
+ * within the pause the first of them began, are one check, not several.
+ */
+function checks(failures: { finishedAt: Date | null }[], pauses: readonly number[]): number {
+  let count = 0
+  let nextCheck = -Infinity
+  for (const { finishedAt } of failures) {
+    if (!finishedAt || finishedAt.getTime() < nextCheck) continue
+    count += 1
+    nextCheck = finishedAt.getTime() + pauses[Math.min(count, pauses.length) - 1]!
+  }
+  return count
 }
