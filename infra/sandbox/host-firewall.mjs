@@ -6,8 +6,9 @@ import { existsSync } from 'node:fs'
 // the netfilter hooks of the sandbox's own namespace, so the host drops everything an attempt
 // bridge sends to the host itself. Runs briefly in the host network namespace with NET_ADMIN
 // only and never sees the Docker socket. Bridged sandbox → gateway traffic does not pass INPUT.
-export const BRIDGE = /^rdx[0-9a-f]{12}$/
-const RULE = /^-A INPUT -i (rdx[0-9a-f]{12}) -j DROP$/
+// The same rule guards the bridges of previews (rpv…) and of their browsers (rpb…), Р18.
+export const BRIDGE = /^r(?:dx|pv|pb)[0-9a-f]{12}$/
+const RULE = /^-A INPUT -i (r(?:dx|pv|pb)[0-9a-f]{12}) -j DROP$/
 
 export function hostFirewall({ run, bridgeExists, ipv6 }) {
   const binaries = ['/usr/sbin/iptables', ...(ipv6 ? ['/usr/sbin/ip6tables'] : [])]

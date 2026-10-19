@@ -1,10 +1,19 @@
 import { posix } from 'node:path'
 
 import type { AgentDriver, AgentEvent, RunContext } from '@repo/domain'
-import { badRequest, SANDBOX_AGENT_HOME, SANDBOX_INBOX, SANDBOX_WORKDIR } from '@repo/domain'
+import {
+  badRequest,
+  ENV_VALUE_MASK,
+  SANDBOX_AGENT_HOME,
+  SANDBOX_INBOX,
+  SANDBOX_SECRETS_DIR,
+  SANDBOX_WORKDIR,
+} from '@repo/domain'
 import { z } from 'zod'
 import {
   assertAttachments,
+  envFiles,
+  envKey,
   llmKey,
   mcpKey,
   runContextSchema,
@@ -17,6 +26,9 @@ import { parseOpencodeEvent } from './opencode-events.ts'
 import { mcpServer, mcpToolPrefix } from './opencode-mcp.ts'
 import { opencodeWrapper } from './opencode-wrapper.ts'
 import { RESULT_CONTRACT } from './output-schema.ts'
+
+/** The pinned CLI of the sandbox image (cli/package-lock.json; cli-lock.test.ts holds them equal). */
+export const OPENCODE_CLI_VERSION = '1.18.34'
 
 // OpenCode CLI (opencode-ai 1.18.34), verified by the G1 spike (docs/plan/40-opencode-spike.md)
 // and by `pnpm verify:opencode` / `pnpm verify:opencode-supervisor`.
@@ -59,6 +71,11 @@ const contextSchema = runContextSchema(effort)
  * home.tar.zst. The CLI must be stopped before the two files are taken.
  */
 const sessionFiles = [`${dataDirectory}/opencode.db`, `${dataDirectory}/opencode.db-wal`]
+/**
+ * The script the shell tool's bash sources (BASH_ENV): the client's variables and the egress
+ * proxy of the turn (plan 53, Р13), in the tmpfs of the secrets — never in the snapshot.
+ */
+const shellEnv = `${SANDBOX_SECRETS_DIR}/shell-env.sh`
 
 /**
  * What the CLI loads from the directory it runs in and from every directory up to the root of
@@ -213,9 +230,12 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
   return {
     id: 'opencode',
     image,
+    cliVersion: OPENCODE_CLI_VERSION,
     capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
     async prepare(context) {
-      const { llm, mcp, nativeSessionId } = validated(context)
+      const { llm, mcp, nativeSessionId, envValues, egressProxy } = validated(context)
+      const variables = Object.keys(envValues ?? {}).sort()
+      const variableFiles = envFiles(envValues).map((_, index) => envKey(index))
       return {
         context,
         files: [
@@ -278,6 +298,21 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
               },
               mcpUrl: mcp.url,
               mcpServer,
+              variables: variables.length ? { paths: variableFiles, names: variables } : null,
+              shellEnv,
+              egressProxy: egressProxy ?? null,
+              // The gateway of the sandbox stays direct for whatever the agent's commands call.
+              noProxy: [
+                ...new Set([
+                  new URL(llm.baseUrl).hostname,
+                  new URL(mcp.url).hostname,
+                  'localhost',
+                  '127.0.0.1',
+                ]),
+              ],
+              sessionDatabase: `${home}/${sessionFiles[0]}`,
+              sessionFiles: sessionFiles.map((path) => `${home}/${path}`),
+              mask: ENV_VALUE_MASK,
             }),
             mode: 0o600,
           },

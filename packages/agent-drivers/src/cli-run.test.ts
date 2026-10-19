@@ -1,6 +1,11 @@
 import {
+  envVarLimits,
+  envVarValueSchema,
+  preparedFilesSchema,
   SANDBOX_AGENT_HOME,
   SANDBOX_INBOX,
+  SANDBOX_SECRET_CHARS,
+  SANDBOX_SECRET_FILES,
   SANDBOX_SECRETS_DIR,
   turnInputSchema,
   turnPlanLimits,
@@ -10,7 +15,7 @@ import {
 } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
-import { stageFiles, turnSecrets } from './cli-run.ts'
+import { envFiles, stageFiles, turnSecrets } from './cli-run.ts'
 import { createAgentDrivers } from './registry.ts'
 
 const image = `raditi/sbx-wordpress@sha256:${'a'.repeat(64)}`
@@ -121,6 +126,60 @@ describe('per-turn files of a CLI run', () => {
       { path: `${SANDBOX_SECRETS_DIR}/llm`, content: 'synthetic-llm-token', mode: 0o400 },
       { path: `${SANDBOX_SECRETS_DIR}/mcp`, content: 'synthetic-mcp-token', mode: 0o400 },
     ])
+  })
+
+  it("carries the client's variables as NUL-separated pairs, names in order", () => {
+    const envValues = { PAYMENT_KEY: 'pay-secret-0001', HOOK_TOKEN: 'line one\nline "two"' }
+    expect(turnSecrets({ ...context, envValues }).slice(2)).toEqual([
+      {
+        path: `${SANDBOX_SECRETS_DIR}/env.0`,
+        content: 'HOOK_TOKEN\0line one\nline "two"\0PAYMENT_KEY\0pay-secret-0001\0',
+        mode: 0o400,
+      },
+    ])
+    expect(envFiles({})).toEqual([])
+  })
+
+  it('fits every set of variables a site may have into the secrets of one sandbox', () => {
+    // As much of what JSON or a shell script would escape as 8 KiB of text holds.
+    const value = (index: number) => {
+      let text = `${index}:`
+      for (const unit of ["'", '\\', '\n', '\u0001', '$', '"', 'ж', '😀']) {
+        while (Buffer.byteLength(text + unit) <= envVarLimits.valueMaxBytes) text += unit
+      }
+      return text
+    }
+    const envValues = Object.fromEntries(
+      Array.from({ length: envVarLimits.perSite }, (_, index) => [`VAR_${index}`, value(index)]),
+    )
+    for (const text of Object.values(envValues))
+      expect(envVarValueSchema.safeParse(text).success).toBe(true)
+    const secrets = turnSecrets({ ...context, envValues })
+    expect(secrets.length).toBeLessThanOrEqual(SANDBOX_SECRET_FILES)
+    for (const secret of secrets)
+      expect(secret.content.length).toBeLessThanOrEqual(SANDBOX_SECRET_CHARS)
+    // Within the tmpfs, as the runner and the local executor check it.
+    expect(preparedFilesSchema.safeParse({ files: [], env: {}, secrets }).success).toBe(true)
+    // Read back as the launch wrapper does: every pair, in order.
+    const pairs = secrets
+      .slice(2)
+      .flatMap((secret) => secret.content.split('\0').slice(0, -1))
+      .reduce<[string, string][]>(
+        (all, part, index, parts) => (index % 2 ? all : [...all, [part, parts[index + 1]!]]),
+        [],
+      )
+    expect(Object.fromEntries(pairs)).toEqual(envValues)
+    expect(pairs.map(([name]) => name)).toEqual(Object.keys(envValues).sort())
+  })
+
+  it('refuses more variables than the secrets of a sandbox hold, and a value it cannot carry', () => {
+    const many = Object.fromEntries(
+      Array.from({ length: 300 }, (_, index) => [`VAR_${index}`, 'x'.repeat(8000)]),
+    )
+    expect(() => envFiles(many)).toThrow(expect.objectContaining({ code: 'BAD_REQUEST' }))
+    expect(() => envFiles({ SHORT_ONE: 'short' })).toThrow(
+      expect.objectContaining({ code: 'BAD_REQUEST' }),
+    )
   })
 
   it('replaces a staged file in place and appends a new one', () => {

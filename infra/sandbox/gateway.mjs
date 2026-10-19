@@ -6,6 +6,8 @@ import { writeFileSync } from 'node:fs'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
+import { clientEgressConfig, listenClientEgress } from './client-egress.mjs'
+
 const sharedRequestHeaders = ['authorization', 'content-type', 'accept']
 /**
  * The LLM surface of the sandbox as data: the exact path of the CLI's wire format, the request
@@ -261,6 +263,37 @@ function limit(max, exceeded) {
   })
 }
 
+/**
+ * The client egress proxy of the turn (docs/plan/53-chat-preview-release.md, Р13) as the
+ * gateway's environment names it: a listener of its own (client-egress.mjs) on EGRESS_PORT of
+ * the gateway's address, for the sandbox's address only. null — the policy lists no host.
+ */
+export function gatewayEgressConfig(env) {
+  if (!env.EGRESS_ALLOWED_HOSTS) return null
+  if (env.EGRESS_PORT === '8080') throw new Error('The egress proxy needs a port of its own')
+  return clientEgressConfig({
+    LISTEN_HOST: env.LISTEN_HOST,
+    LISTEN_PORT: env.EGRESS_PORT,
+    ALLOWED_HOSTS: env.EGRESS_ALLOWED_HOSTS,
+    REFUSED_SUBNETS: env.EGRESS_REFUSED_SUBNETS,
+    CLIENT_IPV4: env.CLIENT_IPV4,
+  })
+}
+
+/**
+ * Starts the egress listener of the turn apart from the gateway's own: a failure of it after it
+ * listens — an accept that fails for want of descriptors, say — is logged and closes it alone,
+ * so the routes of the model and of MCP stay up.
+ */
+export async function listenGatewayEgress(config, log = (line) => console.error(line)) {
+  const server = await listenClientEgress(config)
+  server.on('error', () => {
+    log('Client egress listener failed')
+    server.close()
+  })
+  return server
+}
+
 if (process.argv[1]?.endsWith('/gateway.mjs')) {
   try {
     const server = createGateway({
@@ -270,8 +303,21 @@ if (process.argv[1]?.endsWith('/gateway.mjs')) {
       llmUpstream: process.env.LLM_UPSTREAM,
       mcpUpstream: process.env.MCP_UPSTREAM,
     })
-    server.listen(8080, process.env.LISTEN_HOST, () =>
-      writeFileSync('/run/raditi-gateway/ready', 'ready\n', { mode: 0o600 }),
+    const egress = gatewayEgressConfig(process.env)
+    // Ready once every listener of the turn listens.
+    const listening = [
+      new Promise((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(8080, process.env.LISTEN_HOST, resolve)
+      }),
+      ...(egress ? [listenGatewayEgress(egress)] : []),
+    ]
+    Promise.all(listening).then(
+      () => writeFileSync('/run/raditi-gateway/ready', 'ready\n', { mode: 0o600 }),
+      () => {
+        console.error('Gateway listener failed')
+        process.exitCode = 1
+      },
     )
     server.on('error', () => {
       console.error('Gateway listener failed')

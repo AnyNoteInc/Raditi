@@ -23,6 +23,8 @@ test('the runner opens no port and gets no platform credentials, only its read-o
   // Presigned URLs only to the platform's S3.
   assert.match(runner, /RUNNER_S3_ORIGIN: \$\{RUNNER_S3_ORIGIN:-\}/)
   assert.match(runner, /SANDBOX_RUNTIME: runsc/)
+  // The platform's own addresses reach the gateway's client egress proxy (plan 53, Р13).
+  assert.match(runner, /SANDBOX_EGRESS_REFUSED_SUBNETS: \$\{SANDBOX_EGRESS_REFUSED_SUBNETS:-\}/)
   assert.match(runner, /read_only: true/)
   assert.match(runner, /cap_drop: \[ALL\]/)
   // Only on request, so that the watchdog alone still starts without a runner image.
@@ -58,6 +60,40 @@ test('only the agent runtime receives the pinned CLI verified by the stand harne
   assert.match(runtime, /USER 10001:10001/)
   for (const stage of stages.filter((stage) => stage !== runtime)) {
     assert.doesNotMatch(stage, /^runtime AS /)
+  }
+})
+
+/** The modules of this directory a module imports, itself among them, by relative name. */
+async function localModules(name, seen = new Set()) {
+  if (seen.has(name)) return seen
+  seen.add(name)
+  const source = await readFile(new URL(`./${name}`, import.meta.url), 'utf8')
+  for (const [, imported] of source.matchAll(/^import [^;]*? from '\.\/([a-z-]+\.mjs)'$/gm))
+    await localModules(imported, seen)
+  return seen
+}
+
+test('each trusted image copies its entry module with every module it imports', async () => {
+  const dockerfile = await readFile(new URL('./Dockerfile', import.meta.url), 'utf8')
+  const stages = dockerfile.split(/^FROM /m).slice(1)
+  // node stops at an import whose file the image lacks: the gateway would never listen.
+  for (const [target, entry] of [
+    ['gateway', 'gateway.mjs'],
+    ['client-egress', 'client-egress.mjs'],
+    ['network-guard', 'network-guard.mjs'],
+    ['watchdog', 'watchdog.mjs'],
+  ]) {
+    const stage = stages.find((item) => item.startsWith(`base AS ${target}\n`))
+    assert.ok(stage, `the Dockerfile has the ${target} target`)
+    const copied = [
+      ...stage.matchAll(
+        /^COPY ((?:infra\/sandbox\/[a-z-]+\.mjs )+)\/usr\/local\/lib\/raditi\/\S*$/gm,
+      ),
+    ]
+      .flatMap(([, files]) => files.trim().split(' '))
+      .map((file) => file.slice('infra/sandbox/'.length))
+    for (const module of await localModules(entry))
+      assert.ok(copied.includes(module), `the ${target} image lacks ${module}`)
   }
 })
 

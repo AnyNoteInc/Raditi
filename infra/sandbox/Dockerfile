@@ -38,10 +38,19 @@ USER 10001:10001
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sleep", "infinity"]
 
-# The gateway manager sets entrypoint and user; a bare run still does not start as root.
+# The gateway manager sets entrypoint and user; a bare run still does not start as root. The
+# client egress proxy of a turn (Р13) is a listener of its own next to the gateway's.
 FROM base AS gateway
-COPY infra/sandbox/gateway.mjs /usr/local/lib/raditi/gateway.mjs
+COPY infra/sandbox/gateway.mjs infra/sandbox/client-egress.mjs /usr/local/lib/raditi/
 USER 10001:10001
+
+# The client egress proxy of a preview (docs/plan/53-chat-preview-release.md, Р13):
+# PREVIEW_EGRESS_IMAGE, pinned by digest. The preview runtime starts it with LISTEN_HOST,
+# LISTEN_PORT, ALLOWED_HOSTS and REFUSED_SUBNETS, as the user below.
+FROM base AS client-egress
+COPY infra/sandbox/client-egress.mjs /usr/local/lib/raditi/client-egress.mjs
+USER 10001:10001
+ENTRYPOINT ["/usr/bin/tini", "--", "node", "/usr/local/lib/raditi/client-egress.mjs"]
 
 # This is trusted network infrastructure. Agent containers never get NET_ADMIN or root.
 # network-guard.mjs filters the shared netns under runc; host-firewall.mjs guards the host

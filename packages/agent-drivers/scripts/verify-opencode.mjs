@@ -9,7 +9,12 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import process from 'node:process'
 import { parseArgs } from 'node:util'
 
-import { preparedRunExposesSecret, preparedRunSchema, turnResultSchema } from '@repo/domain'
+import {
+  containsEnvValue,
+  preparedRunExposesSecret,
+  preparedRunSchema,
+  turnResultSchema,
+} from '@repo/domain'
 import { createOpencodeDriver } from '../src/opencode.ts'
 
 const { values: options } = parseArgs({
@@ -846,6 +851,8 @@ async function turn({
   inspect = [],
   returnSnapshot = false,
   timeoutMs = 150_000,
+  envValues,
+  egressProxy,
 }) {
   const keys = newKeys()
   const context = {
@@ -863,6 +870,8 @@ async function turn({
     // substitutes such references in its configuration; in the instructions they are plain text.
     instructions: `Complete only the local synthetic verification. ${platformMarker(turnNo)} ${LITERAL}`,
     ...(nativeSessionId ? { nativeSessionId } : {}),
+    ...(envValues ? { envValues } : {}),
+    ...(egressProxy ? { egressProxy } : {}),
   }
   const prepared = preparedRunSchema.parse(await driver.prepare(context))
   const argv = driver.command(prepared, { prompt, attachments })
@@ -975,9 +984,10 @@ async function turn({
   if (output.during) {
     assert.deepEqual(output.during.processes.hits, [], `${label}: a process environment or argv`)
     assert.deepEqual(output.during.files.hits, [], `${label}: a file during the turn`)
+    // With the client's variables the script of the shell tool stays for the CLI's life (Р13).
     assert.deepEqual(
       output.during.secretFiles,
-      [],
+      envValues || egressProxy ? ['shell-env.sh'] : [],
       `${label}: the secrets directory during the turn`,
     )
   }
@@ -1754,6 +1764,53 @@ try {
     )
     pass(
       `code in the CLI's own home — the wrapper starts no CLI process and uses no credential over a file the driver did not write; left alone, the pinned CLI imports all ${Object.keys(places).length} planted places into the process of the turn (${Object.values(places).join('; ')})`,
+    )
+  }
+  // 13. The client's variables (docs/plan/53-chat-preview-release.md, Р13): the commands of the
+  // shell tool get them and the egress proxy through BASH_ENV, the CLI only the path of the
+  // script; a value a command printed is masked in the session the snapshot takes.
+  {
+    const envValues = { HOOK_TOKEN: "hook-to'ken-g3-0002", PAYMENT_KEY: 'pay-secret-g3-0001' }
+    const egressProxy = 'http://sandbox-gw:3128'
+    // $PPID of the command's shell is the CLI: its environment, by names only.
+    const envCheck = `node -e 'const fs=require("node:fs");const cli=fs.readFileSync("/proc/"+process.argv[1]+"/environ","utf8").split("\\0").filter(Boolean).map((entry)=>entry.split("=")[0]);fs.writeFileSync(${JSON.stringify(TOOL_DUMP)},JSON.stringify({env:process.env,cli}))' "$PPID"; printf "%s" "$PAYMENT_KEY"`
+    const variables = await turn({
+      label: 'client variables',
+      returnSnapshot: true,
+      envValues,
+      egressProxy,
+      steps: [{ calls: [bash(envCheck)] }, { text: JSON.stringify(result('Переменные')) }],
+    })
+    expectRequests(variables, 2)
+    expectSuccess(variables, result('Переменные'))
+    const { output, describe } = variables
+    const tool = output.after.tool
+    assert.ok(tool, `The command left no record: ${describe()}`)
+    assert.equal(tool.env.PAYMENT_KEY, envValues.PAYMENT_KEY, describe())
+    assert.equal(tool.env.HOOK_TOKEN, envValues.HOOK_TOKEN, describe())
+    assert.equal(tool.env.HTTPS_PROXY, egressProxy, describe())
+    assert.equal(tool.env.NO_PROXY, 'sandbox-gw,localhost,127.0.0.1', describe())
+    assert.ok(tool.cli.includes('BASH_ENV'), `The CLI has no BASH_ENV: ${describe()}`)
+    assert.deepEqual(
+      tool.cli.filter((name) => name in envValues || /proxy/i.test(name)),
+      [],
+      `The CLI holds a variable or a proxy: ${describe()}`,
+    )
+    // The model got what the command printed: the agent may see it, the platform keeps none.
+    assert.ok(
+      output.llm[1].toolOutputs.some((text) => text.includes(envValues.PAYMENT_KEY)),
+      describe(),
+    )
+    for (const file of output.snapshot)
+      assert.equal(
+        containsEnvValue(Buffer.from(file.base64, 'base64').toString('latin1'), [
+          envValues.PAYMENT_KEY,
+        ]),
+        false,
+        `${file.path} holds a value: ${describe()}`,
+      )
+    pass(
+      `client variables — the shell tool's command got ${Object.keys(envValues).length} values and HTTPS_PROXY ${egressProxy} through BASH_ENV, the CLI neither; the session the snapshot takes (${output.snapshot.map((file) => `${file.path.split('/').at(-1)} ${file.bytes} B`).join(', ')}) holds no value the command printed`,
     )
   }
   process.stdout.write(
