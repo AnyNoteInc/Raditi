@@ -1,16 +1,9 @@
 import 'server-only'
 
-import {
-  envVar,
-  parseEnv,
-  previewDefaults,
-  type Env,
-  type ObjectStorage,
-  type SecretStore,
-} from '@repo/domain'
+import { envVar, parseEnv, previewDefaults, type Env, type ObjectStorage } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 import { createS3ObjectStorage } from '@repo/storage'
-import { releaseConfirmKey, type ChatContext } from '@repo/trpc'
+import { releaseConfirmKey, type ChatContext, type SiteSecretWriter } from '@repo/trpc'
 import { createVaultSecretStore } from '@repo/vault'
 import { z } from 'zod'
 
@@ -29,9 +22,21 @@ export function previewTtlHours(source: Env): number {
   return parseEnv('web', ttlSchema, source).PREVIEW_TTL_HOURS
 }
 
+/**
+ * Two methods of the store, not the store (spec §15, as `siteConnections` does): web shares its
+ * AppRole with `core` at MVP (П9), and in dev it holds the root token, so nothing a procedure
+ * holds can call `kvRead`.
+ */
+function writerOf(store: ReturnType<typeof createVaultSecretStore>): SiteSecretWriter {
+  return {
+    kvWrite: (path, data, options) => store.kvWrite(path, data, options),
+    kvMetadata: (path) => store.kvMetadata(path),
+  }
+}
+
 let built: ChatContext | undefined
 let storage: ObjectStorage | undefined
-let secrets: SecretStore | undefined
+let secrets: SiteSecretWriter | undefined
 // A broken section is told to the log once per minute, not once per request.
 const report = throttledLogger((line) => console.error(`[chat] ${line}`))
 
@@ -55,7 +60,7 @@ export function chatServices(): ChatContext | null {
           : { address: web.preview, ttlHours: previewTtlHours(process.env) },
       releaseConfirmKey: releaseConfirmKey(env.auth().secret),
       storage: () => (storage ??= createS3ObjectStorage(env.storage())),
-      secrets: () => (secrets ??= createVaultSecretStore(env.vault())),
+      secrets: () => (secrets ??= writerOf(createVaultSecretStore(env.vault()))),
     }
     return built
   } catch (error) {

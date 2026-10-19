@@ -28,10 +28,15 @@ export interface ChatContext {
   storage: () => ObjectStorage
   /**
    * Vault under the policy `sites-writer`: the values of the client's variables are written and
-   * never read back (`siteEnv.*`).
+   * never read back (`siteEnv.*`). Two methods, not the store, as the wizard's (spec §15): web
+   * shares its AppRole with `core` at MVP (П9), so nothing that holds this object can call
+   * `kvRead`.
    */
-  secrets: () => SecretStore
+  secrets: () => SiteSecretWriter
 }
+
+/** What a procedure may do with Vault: write a value by CAS and read a key's versions. */
+export type SiteSecretWriter = Pick<SecretStore, 'kvWrite' | 'kvMetadata'>
 
 /** The `info` of HKDF: a key of its own, never the secret of the sessions itself. */
 export const RELEASE_CONFIRM_KEY_INFO = 'raditi-release-confirm-v1'

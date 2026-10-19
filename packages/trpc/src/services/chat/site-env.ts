@@ -12,11 +12,11 @@ import {
   siteEnvVarPath,
   siteEnvVarSecret,
   siteEnvVarTombstone,
-  type SecretStore,
 } from '@repo/domain'
 
 import { accessibleSite, siteNotFound } from '../site-basics.ts'
 import { isManagerRole, memberRole } from './access.ts'
+import type { SiteSecretWriter } from './context.ts'
 import {
   siteEnvAgentClosed,
   siteEnvChanged,
@@ -122,7 +122,7 @@ export interface SiteEnvVarSetInput {
  * removes, so nobody — `core` included — reads a changed or removed value back.
  */
 async function writeValue(
-  secrets: SecretStore,
+  secrets: SiteSecretWriter,
   path: string,
   data: Record<string, string>,
 ): Promise<number> {
@@ -146,7 +146,7 @@ async function writeValue(
  */
 export async function setSiteEnv(
   db: PrismaClient,
-  secrets: () => SecretStore,
+  secrets: () => SiteSecretWriter,
   input: SiteEnvVarSetInput,
 ): Promise<SiteEnvVarView> {
   const problem = envVarNameProblem(input.name)
@@ -246,7 +246,7 @@ async function takeBackDescriptions(
  */
 export async function removeSiteEnv(
   db: PrismaClient,
-  secrets: () => SecretStore,
+  secrets: () => SiteSecretWriter,
   input: { userId: string; siteId: string; name: string; now: Date },
 ): Promise<{ removed: boolean }> {
   const site = await managedSite(db, input.userId, input.siteId)

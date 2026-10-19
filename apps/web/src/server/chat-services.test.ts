@@ -12,7 +12,7 @@ const stand = vi.hoisted(() => ({
   createS3ObjectStorage: vi.fn(),
   createVaultSecretStore: vi.fn(),
   storage: { name: 'artifacts' },
-  secrets: { name: 'vault' },
+  secrets: { kvRead: vi.fn(), kvWrite: vi.fn(), kvMetadata: vi.fn() },
 }))
 
 vi.mock('@/env', () => ({
@@ -47,6 +47,7 @@ describe('the dialog services of the process', () => {
     stand.vaultEnv.mockReset().mockReturnValue({ name: 'vault settings' })
     stand.createS3ObjectStorage.mockReset().mockReturnValue(stand.storage)
     stand.createVaultSecretStore.mockReset().mockReturnValue(stand.secrets)
+    for (const method of Object.values(stand.secrets)) method.mockReset()
   })
 
   it('reads nothing when the module is imported', async () => {
@@ -88,11 +89,30 @@ describe('the dialog services of the process', () => {
 
     expect(chat.storage()).toBe(stand.storage)
     expect(chat.storage()).toBe(stand.storage)
-    expect(chat.secrets()).toBe(stand.secrets)
+    const secrets = chat.secrets()
+    expect(chat.secrets()).toBe(secrets)
     expect(stand.createS3ObjectStorage).toHaveBeenCalledExactlyOnceWith({
       name: 'storage settings',
     })
     expect(stand.createVaultSecretStore).toHaveBeenCalledExactlyOnceWith({ name: 'vault settings' })
+  })
+
+  it('hands the procedures two methods of Vault, never the store that reads', async () => {
+    const { chatServices } = await import('./chat-services')
+    const secrets = chatServices()!.secrets()
+
+    // The values of the client's variables are written and never read back (spec §15, П9).
+    expect(Object.keys(secrets).sort()).toEqual(['kvMetadata', 'kvWrite'])
+    expect(secrets).not.toBe(stand.secrets)
+    await secrets.kvWrite('kv/sites/s/env/NAME', { value: 'x' }, { cas: 0, maxVersions: 1 })
+    expect(stand.secrets.kvWrite).toHaveBeenCalledExactlyOnceWith(
+      'kv/sites/s/env/NAME',
+      { value: 'x' },
+      { cas: 0, maxVersions: 1 },
+    )
+    await secrets.kvMetadata('kv/sites/s/env/NAME')
+    expect(stand.secrets.kvMetadata).toHaveBeenCalledExactlyOnceWith('kv/sites/s/env/NAME')
+    expect(stand.secrets.kvRead).not.toHaveBeenCalled()
   })
 
   it('is null while a section does not parse, logs it, and is read again on the next request', async () => {
