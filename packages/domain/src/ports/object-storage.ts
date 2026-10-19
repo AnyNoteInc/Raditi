@@ -20,9 +20,11 @@ export interface PutOptions {
 
 /**
  * Turn snapshots are reachable by a presigned URL (P2): a runner restores turn n−1 and writes
- * home.tar.zst of turn n. So is the encrypted backup of a release (plan 53, Р30): its deploy job
- * uploads it and reads the values of its database plan, with no S3 credential of its own.
- * Browser uploads (M2) and runner logs (P12) come later.
+ * home.tar.zst of turn n. So is the encrypted backup of a release (plan 53, Р30, Р31), with no
+ * S3 credential of the deploy job's own: the job uploads it by a presigned PUT, and an attempt
+ * «только возврат» reads the backup of the attempt that wrote by a presigned GET. The values of
+ * a database plan never come from S3: the job reads them from the release API. Browser uploads
+ * (M2) and runner logs (P12) come later.
  */
 export const presignableBuckets = ['sessions', 'backups'] as const
 export type PresignableBucket = (typeof presignableBuckets)[number]
