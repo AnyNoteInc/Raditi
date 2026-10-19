@@ -541,7 +541,8 @@ describe('sftpSource.open', () => {
       users: [{ username: 'site', password: 'p@ss word' }],
     })
     try {
-      const quick = createSftpSource({ idleMs: 200 })
+      // A short idle bound for the stalled read only: a busy runner may take longer to log in.
+      const quick = createSftpSource({ idleMs: 200, readyTimeoutMs: 20_000 })
       const stalledAccess = access({ port: String(stalled.port), hostKey: stalled.hostKey })
       const session = await quick.open(stalledAccess, {
         address,

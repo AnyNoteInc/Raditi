@@ -73,6 +73,8 @@ const ENTRY_OVERHEAD = 32
 export interface SftpSourceOptions {
   /** A request without an answer for this long fails `transfer_failed` (siteImportLimits.idleMs). */
   idleMs?: number
+  /** The bound of the handshake and the SFTP subsystem of a session (default `idleMs`). */
+  readyTimeoutMs?: number
   /** The byte cap of one session listing (siteImportLimits.listingBytes). */
   listingBytes?: number
 }
@@ -505,6 +507,7 @@ function keyScanValues(privateKey: string): string[] {
 
 export function createSftpSource(options: SftpSourceOptions = {}): FileSourceAdapter<SshAccess> {
   const idleMs = options.idleMs ?? siteImportLimits.idleMs
+  const readyTimeoutMs = options.readyTimeoutMs ?? idleMs
   const listingBytes = options.listingBytes ?? siteImportLimits.listingBytes
 
   return {
@@ -667,7 +670,7 @@ export function createSftpSource(options: SftpSourceOptions = {}): FileSourceAda
           username: access.username,
           auth,
           signal: context.signal,
-          readyTimeoutMs: idleMs,
+          readyTimeoutMs,
           // The worker accepts the pinned key and nothing else: there is no user here to ask.
           acceptHostKey(fingerprint) {
             refusedKey = fingerprint !== access.hostKey
