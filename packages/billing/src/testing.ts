@@ -211,6 +211,11 @@ export interface TestModelCallData {
    */
   turnStatus?: TurnStatus
   /**
+   * The pass of the turn ended in a `feed.failure` (`task_turns.rejected_at`): with `turnStatus`
+   * only, the turn row is written or moved with the mark.
+   */
+  turnRejected?: boolean
+  /**
    * The accounting of the key is closed (`llm_keys.usage_closed_at`), as after a turn that
    * ended; true unless given. It is set by the call that creates the key of its turn: a later
    * call of the turn that names the other state is refused, one that names none takes the key
@@ -272,6 +277,7 @@ export async function writeModelCall(
     )
   }
   if (data.turnStatus !== undefined) {
+    const rejectedAt = data.turnRejected ? occurredAt : null
     await db.taskTurn.upsert({
       where: { taskId_turnNo: { taskId, turnNo } },
       create: {
@@ -281,9 +287,12 @@ export async function writeModelCall(
         driverId: pool.driverId,
         image: 'registry.invalid/billing-verification@sha256:0',
         modelId: pool.modelId,
+        rejectedAt,
       },
-      update: { status: data.turnStatus },
+      update: { status: data.turnStatus, rejectedAt },
     })
+  } else if (data.turnRejected) {
+    throw new Error('turnRejected marks the turn row that turnStatus writes')
   }
   const key =
     found ??

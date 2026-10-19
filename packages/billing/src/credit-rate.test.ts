@@ -379,6 +379,36 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
       })
     })
 
+    // docs/plan/53, «Попробовать ещё (18.10)»: the pass ended in a `feed.failure`.
+    it('leaves out the rows of a key whose turn was rejected, whatever its status', async () => {
+      await rolledBack(async (tx) => {
+        const { taskId } = await taskIn(tx)
+        const { pool, priceId } = await pricedPool(tx, T1)
+        await writeCreditRate(tx, { effectiveFrom: T1 })
+        const call = { taskId, pool, priceId, occurredAt: after(T1) }
+        await writeModelCall(tx, { ...call, turnNo: 1, costRub: '60', turnStatus: 'completed' })
+        await writeModelCall(tx, {
+          ...call,
+          turnNo: 2,
+          costRub: '90',
+          turnStatus: 'completed',
+          turnRejected: true,
+        })
+        await writeModelCall(tx, {
+          ...call,
+          turnNo: 3,
+          costRub: '30',
+          turnStatus: 'failed',
+          turnRejected: true,
+        })
+
+        const raw = await taskRawCredits(tx, { taskId, attempts: [1] })
+        // 60 ÷ 6: the turns the platform refused are out.
+        expect(raw).toMatchObject({ convertible: true, costRub: '60.0000000000' })
+        expect(raw.convertible && raw.credits.toFixed(2)).toBe('10.00')
+      })
+    })
+
     it('sums the attempts it is asked for, each apart and all together', async () => {
       await rolledBack(async (tx) => {
         const { taskId } = await taskIn(tx)
@@ -578,11 +608,21 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
           attempt: 2,
           turnNo: 3,
         })
+        // A turn whose pass ended in a failure: not the client's to pay, still work.
+        await writeModelCall(tx, {
+          ...call,
+          taskId: failed.taskId,
+          costRub: '18',
+          occurredAt: after(T1),
+          turnNo: 4,
+          turnStatus: 'completed',
+          turnRejected: true,
+        })
 
         const work = await workspaceWorkCredits(tx, { workspaceId: home.workspaceId, since: T1 })
 
-        // (60 + 30 + 12) ÷ 6 + 60 ÷ 5.
-        expect(work.work.toFixed(2)).toBe('29.00')
+        // (60 + 30 + 12 + 18) ÷ 6 + 60 ÷ 5.
+        expect(work.work.toFixed(2)).toBe('32.00')
         expect(work.charged).toBe(0)
         expect(work.unrated).toEqual({ calls: 0, costRub: '0.0000000000' })
       })

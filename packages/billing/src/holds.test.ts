@@ -18,6 +18,7 @@ import {
   placeCreditHold,
   releaseTask,
   settleTaskCharge,
+  taskChainAttempts,
   type CreditHoldPlacement,
 } from './holds.ts'
 import { expireTariffRemainder, grantTariffCredits, ledgerKeys, post } from './ledger.ts'
@@ -1433,7 +1434,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await accounts(workspaceId)).toEqual(reserved)
     })
 
-    it('takes three attempts of a task and refuses the fourth', async () => {
+    it('takes three attempts of a chain and refuses a fourth continuation', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
       for (const attempt of [1, 2, 3]) {
@@ -1442,14 +1443,24 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
           reserved: 45,
         })
       }
+      expect(await taskChainAttempts(db, taskId)).toEqual([1, 2, 3])
 
       expect(await refused(workspaceId, taskId, { attempt: 4 })).toMatchObject(conflict)
       expect(await reserve(taskId)).toHaveLength(3)
       expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300, 135) })
 
-      // Nor after a failure: three attempts are all a task has.
+      // «Попробовать ещё» after a failure gives the chain back and starts a new one: the
+      // attempt in which the agent failed is not counted (spec §20, decision 4 of 11.10.2026).
       await release(taskId)
-      expect(await refused(workspaceId, taskId, { attempt: 4 })).toMatchObject(conflict)
+      expect(await taskChainAttempts(db, taskId)).toEqual([])
+      expect(await place(workspaceId, taskId, { attempt: 4 })).toMatchObject({
+        applied: true,
+        reserved: 45,
+      })
+      expect(await taskChainAttempts(db, taskId)).toEqual([4])
+      // And a continuation of it is the second attempt of its chain.
+      expect(await place(workspaceId, taskId, { attempt: 5 })).toMatchObject({ applied: true })
+      expect(await taskChainAttempts(db, taskId)).toEqual([4, 5])
     })
 
     it('takes no reserve for a charged task, nor for an attempt below one that holds a reserve', async () => {
@@ -1505,11 +1516,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // Work started and failed: the launch stays in the day.
       await place(workspaceId, failed!)
       await worked(model, failed!, '6')
-      await release(failed!)
+      await release(failed!, { now: minutesAfter(5) })
       expect(await launches(workspaceId)).toBe(1)
-      // «Попробовать ещё», cancelled in the queue: the work of the first attempt is not its own.
+      // «Попробовать ещё»: the failed attempt and its retry are one launch…
       await place(workspaceId, failed!, { attempt: 2, now: minutesAfter(6) })
-      expect(await launches(workspaceId)).toBe(2)
+      expect(await launches(workspaceId)).toBe(1)
+      // …and a retry cancelled in the queue cost nothing: the failed attempt counts again, the
+      // work of the first attempt is not the retry's own.
       await release(failed!, { now: minutesAfter(7) })
       expect(await launches(workspaceId)).toBe(1)
 
@@ -1532,21 +1545,24 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       )
     })
 
-    it('counts a continuation and never refuses it; refuses a retry at the limit', async () => {
+    it('counts a continuation and a retry and refuses neither at the limit', async () => {
       const { workspaceId } = await funded({ plan: { tasksPerDay: 2 } })
       const model = await modelPool()
       const [failed, working, fresh] = await tasks(workspaceId, 3)
       await place(workspaceId, failed!)
-      await worked(model, failed!, '6')
-      await release(failed!)
+      await worked(model, failed!, '6', { occurredAt: minutesAfter(1) })
+      await release(failed!, { now: minutesAfter(2) })
       await place(workspaceId, working!, { now: minutesAfter(1) })
       expect(await launches(workspaceId)).toBe(2)
 
-      // The day is used up for a new task and for «Попробовать ещё»…
+      // The day is used up for a new task…
       expect(await refused(workspaceId, fresh!)).toMatchObject(dailyLimit('daily_limit', 255, 45))
-      expect(
-        await refused(workspaceId, failed!, { attempt: 2, now: minutesAfter(5) }),
-      ).toMatchObject(dailyLimit('daily_limit', 255, 45))
+      // …but not for «Попробовать ещё», and an attempt in which the agent failed is not counted
+      // against the client (spec §20, decision 4 of 11.10.2026): it and its retry are one launch.
+      expect(await place(workspaceId, failed!, { attempt: 2, now: minutesAfter(5) })).toMatchObject(
+        { applied: true, reserved: 45 },
+      )
+      expect(await launches(workspaceId)).toBe(2)
       // …and «Продолжить» goes through, as one more launch of the day.
       expect(
         await place(workspaceId, working!, { attempt: 2, now: minutesAfter(10) }),
@@ -1556,6 +1572,35 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         await place(workspaceId, working!, { attempt: 3, now: minutesAfter(20) }),
       ).toMatchObject({ applied: true })
       expect(await launches(workspaceId)).toBe(4)
+    })
+
+    it('counts a chain a retry gave back but its last attempt, which the retry stands for', async () => {
+      const { workspaceId } = await funded({ plan: { tasksPerDay: null } })
+      const model = await modelPool()
+      const taskId = await task(workspaceId)
+      // A new task and «Продолжить»: two launches that both did work.
+      await place(workspaceId, taskId)
+      await worked(model, taskId, '6', { occurredAt: minutesAfter(1) })
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(2) })
+      await worked(model, taskId, '6', { attempt: 2, occurredAt: minutesAfter(3) })
+      // The pass of attempt 2 failed and its dialog kept its candidate: «Попробовать ещё» gives
+      // the chain back and places attempt 3 in the same moment.
+      await release(taskId, { now: minutesAfter(4) })
+      expect(await launches(workspaceId)).toBe(2)
+      await place(workspaceId, taskId, { attempt: 3, now: minutesAfter(4) })
+      // The continuation was placed while attempt 1 still held its reserve: it is not a retry of
+      // it, and attempt 1 counts. Attempt 2 failed and is retried: attempt 3 stands for it.
+      expect(await launches(workspaceId)).toBe(2)
+
+      // The retry fails before any model call and is retried again: the last retry stands for
+      // the attempt that failed with work.
+      await release(taskId, { now: minutesAfter(5) })
+      expect(await launches(workspaceId)).toBe(2)
+      await place(workspaceId, taskId, { attempt: 4, now: minutesAfter(6) })
+      expect(await launches(workspaceId)).toBe(2)
+      // A charge or a model call of the last retry keeps it so.
+      await worked(model, taskId, '6', { attempt: 4, occurredAt: minutesAfter(7) })
+      expect(await launches(workspaceId)).toBe(2)
     })
 
     it('counts an attempt once, on however many accounts its reserve stands', async () => {

@@ -126,7 +126,8 @@ export interface TaskWorkQuery {
   taskId: string
   /**
    * The attempts whose calls are summed: for a charge, the attempts of the chain — those that
-   * have an active reserve row. The caller knows them; a failed attempt is simply not named.
+   * have an active reserve row — and those of the chains «Попробовать ещё» gave back before it
+   * (`workAttemptsOf` in holds.ts). The calls of a pass that failed are left out by its turn.
    */
   attempts: readonly number[]
 }
@@ -177,9 +178,12 @@ const sumCostRub = (rows: readonly { costRub: string }[]): string =>
 /**
  * What the model calls of a task come to in credits (design §1.2): the `token_usage` rows of
  * the named attempts that are billable, except the rows of a key whose turn (`task_turns` by
- * task and `llm_keys.turn_no`) ended `lost`; each call divided by the credit rate in force at
- * its own start (`occurred_at`), so an attempt that crosses a change of the rate needs no
- * special case. A key without a turn row counts: the queue writes turn rows from P12 on.
+ * task and `llm_keys.turn_no`) ended `lost` or was rejected — its pass ended in a `feed.failure`
+ * (`task_turns.rejected_at`; docs/plan/53, «Попробовать ещё (18.10)»): a failure the client did
+ * not cause is not the client's to pay, even when the dialog kept its candidate and is released
+ * later. Each call divided by the credit rate in force at its own start (`occurred_at`), so an
+ * attempt that crosses a change of the rate needs no special case. A key without a turn row
+ * counts: the queue writes turn rows from P12 on.
  *
  * A call is convertible only when a rate was in force at its start and that rate is not older
  * than the price row the call was costed with (`creditRateCoversPrice`). While one counted call
@@ -214,6 +218,7 @@ export async function taskRawCredits(
       AND u.task_attempt = ANY(${attempts}::int[])
       AND u.billable
       AND t.status IS DISTINCT FROM 'lost'::"TurnStatus"
+      AND t.rejected_at IS NULL
     GROUP BY u.task_attempt, r.rub_per_credit, r.effective_from, p.effective_from
     ORDER BY u.task_attempt, r.effective_from, p.effective_from
   `
