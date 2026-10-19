@@ -66,6 +66,37 @@ export interface TurnExecutor {
    * holds it is away: it may come back before the turn's deadline.
    */
   takeover(assignment: { runner: TurnAssignmentRunner | null }): TurnTakeover | null
+  /**
+   * The working tree of a running turn against the commit its sandbox was given
+   * (docs/plan/53-chat-preview-release.md, Р23): what a preview overlays before an action of the
+   * agent's browser. The agent goes on; nothing is stopped or captured. Untrusted like a capture:
+   * core validates the archive as `untracked.tar.zst` and every path as a candidate's. An
+   * executor without it refuses the sync (NOT_SUPPORTED).
+   */
+  exportWorkingTree?(input: TurnWorkingTreeInput, signal: AbortSignal): Promise<TurnWorkingTree>
+}
+
+export interface TurnWorkingTreeInput {
+  /** The open assignment of the turn and its container, as the journal holds them. */
+  assignmentId: string
+  containerId: string
+  labels: SandboxLabels
+  /** The commit the sandbox was checked out at: `sandboxBaseSha`, else `expectedBaseSha`. */
+  baseSha: string
+  /** New files below them are taken even when an ignore file of the site hides them (Р12). */
+  addOnlyPaths?: readonly string[]
+  /**
+   * Paths an earlier export of the same turn wrote: taken as they are now — the agent may have
+   * put them back as they were — or listed as deleted when they are gone.
+   */
+  alsoPaths?: readonly string[]
+}
+
+export interface TurnWorkingTree {
+  /** A ustar tar in zstd of the changed and new regular files, as `untracked.tar.zst`. */
+  archive: Uint8Array
+  /** Files of the base the working tree no longer has, and `alsoPaths` that are gone. */
+  deletes: string[]
 }
 
 /** The runner session an assignment is bound to (TurnAssignment.runner). */
@@ -102,6 +133,12 @@ export interface TurnPrepareInput {
   argv: string[]
   /** turnCredentials(): agent output and captured parts containing one are refused. */
   credentials: readonly string[]
+  /**
+   * The values of the client's variables the run's commands get (runEnvValues; plan 53, Р13):
+   * the executor masks them in the agent's output before it is parsed, and refuses a home
+   * archive that still holds one. Absent — none.
+   */
+  envValues?: readonly string[]
   /**
    * Called once the container exists, before the bundle import. From then on the caller owns
    * its removal through this execution, even when prepare fails later; a rejection stops prepare.
@@ -142,6 +179,8 @@ export type TurnAdoptInput = {
        * against them itself and does not send them again.
        */
       holdsCredentials?: boolean
+      /** As TurnPrepareInput.envValues; sent again only with the credentials. */
+      envValues?: readonly string[]
     }
 )
 
@@ -153,8 +192,17 @@ export interface TurnExecution {
   attach(from: TurnAttachState): Promise<TurnAgentExec | null>
   /** Stop the agent's processes; idempotent. */
   quiesce(): Promise<void>
-  /** Idempotent; the home archive stays with the executor until seal(). */
-  capture(input: { home: SessionState; baseSha: string }): Promise<CapturedTurn>
+  /**
+   * Idempotent; the home archive stays with the executor until seal(). The patch is taken
+   * against `sandboxBaseSha` when the sandbox got a working set (plan 53, Р11), else `baseSha`.
+   * New files below `addOnlyPaths` (Р12) are taken even when an ignore file hides them.
+   */
+  capture(input: {
+    home: SessionState
+    baseSha: string
+    sandboxBaseSha?: string
+    addOnlyPaths?: readonly string[]
+  }): Promise<CapturedTurn>
   /** Encrypt the captured home archive and store it with a create-only presigned PUT. */
   seal(input: TurnSealInput): Promise<SealedTurnPart>
   destroy(reason: DestroyReason): Promise<void>
@@ -219,6 +267,13 @@ export interface TurnCredentialRef {
 export interface TurnCredentialValues {
   llmApiKey: string
   mcpToken: string
+  /**
+   * The client's variables the agent's commands may use (docs/plan/53-chat-preview-release.md,
+   * Р13), by name: only those with `to_agent`. The driver writes them to a file in tmpfs that
+   * the shell of its command tool reads through BASH_ENV; the agent process never gets them.
+   * Absent — none.
+   */
+  envValues?: Readonly<Record<string, string>>
 }
 
 /**
@@ -231,6 +286,12 @@ export interface TurnCredentialSource {
   recover(turn: TurnCredentialRef): Promise<TurnCredentialValues | null>
   /** Idempotent; after the turn ends or is given up. */
   revoke(turn: TurnCredentialRef): Promise<void>
+  /**
+   * The current values of every variable of the turn's site, whatever their recipients and the
+   * version the turn got (plan 53, Р13): a value the client changed since — one the preview may
+   * show the agent — is refused in the candidate as well. Absent — the source keeps none.
+   */
+  siteValues?(turn: TurnCredentialRef): Promise<string[]>
 }
 
 // --- Turn request and its persisted plan ------------------------------------------------------
@@ -246,11 +307,20 @@ export interface TurnRequest {
   previous?: SnapshotReference
   /** Trusted user action: replace the latest run, restoring its input checkpoint after undo. */
   replacesTurn?: number
+  /**
+   * The first turn after «Обновить» moved the dialog onto a new `main`
+   * (docs/plan/53-chat-preview-release.md, Р27): a new session of the agent, no previous
+   * snapshot is restored; the feed keeps its history.
+   */
+  rebased?: boolean
 }
 
-/** The supervisor installs issued values after opening the assignment; callers carry no key. */
+/**
+ * The supervisor installs issued values after opening the assignment; callers carry no key and
+ * no value of a client's variable.
+ */
 export type UnkeyedTurnRequest = Omit<TurnRequest, 'context'> & {
-  context: Omit<RunContext, 'llm' | 'mcp'> & {
+  context: Omit<RunContext, 'llm' | 'mcp' | 'envValues'> & {
     llm: Omit<RunContext['llm'], 'apiKey'>
     mcp: Omit<RunContext['mcp'], 'token'>
   }
@@ -259,7 +329,8 @@ export type UnkeyedTurnRequest = Omit<TurnRequest, 'context'> & {
 export function withoutTurnCredentials(request: TurnRequest): UnkeyedTurnRequest {
   const { apiKey: _key, ...llm } = request.context.llm
   const { token: _token, ...mcp } = request.context.mcp
-  return { ...request, context: { ...request.context, llm, mcp } }
+  const { envValues: _values, ...context } = request.context
+  return { ...request, context: { ...context, llm, mcp } }
 }
 
 export const turnPlanLimits = Object.freeze({
@@ -324,6 +395,8 @@ export const turnPlanSchema = z
         mcp: z.object({ url: httpUrl }).strict(),
         instructions: z.string().max(turnPlanLimits.instructions),
         nativeSessionId: nativeSessionIdSchema.optional(),
+        /** The address only (plan 53, Р13); the values of the variables are never kept here. */
+        egressProxy: httpUrl.optional(),
       })
       .strict(),
     input: turnInputSchema,
@@ -334,6 +407,7 @@ export const turnPlanSchema = z
     committedAt: z.iso.datetime(),
     previous: snapshotReferenceSchema.optional(),
     replacesTurn: z.number().int().positive().max(999_999).optional(),
+    rebased: z.boolean().optional(),
   })
   .strict()
 export type TurnPlan = z.infer<typeof turnPlanSchema>
@@ -367,12 +441,14 @@ export function withTurnCredentials(
   credentials: TurnCredentialValues,
 ): TurnRequest {
   const { driverId: _driverId, ...request } = plan
+  const envValues = credentials.envValues ?? {}
   return {
     ...request,
     context: {
       ...plan.context,
       llm: { ...plan.context.llm, apiKey: credentials.llmApiKey },
       mcp: { ...plan.context.mcp, token: credentials.mcpToken },
+      ...(Object.keys(envValues).length ? { envValues: { ...envValues } } : {}),
     },
   }
 }

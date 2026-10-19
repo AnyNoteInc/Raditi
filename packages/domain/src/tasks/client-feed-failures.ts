@@ -48,8 +48,9 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
 })
 
 /**
- * Whether the code alone allows «Попробовать ещё». The button also needs the site not left in
- * doubt and a counted attempt to spare — the server decides that (`canRetry` of the task head).
+ * Whether the code alone allows «Попробовать ещё», as the feed design has it. Today a retry is
+ * offered only to a dialog that kept its candidate, after a narrower set of codes and with the
+ * site not left in doubt — the server decides that (`retryVerdict`, `canRetry` of the task head).
  */
 export const feedFailureRetry: Readonly<Record<FeedFailureCode, boolean>> = Object.freeze({
   technical: true,

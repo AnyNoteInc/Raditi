@@ -43,15 +43,20 @@ const escapeRegExp = (s: string) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
 /**
  * A pattern matches as a path prefix; `*` matches within one path segment. A trailing `/`
  * marks a directory: `wp-admin/` matches `wp-admin` and everything below it, but not
- * `wp-admin-custom.php`. Matching ignores case, because some hostings (FTP on Windows,
- * macOS volumes) treat `WP-CONFIG.PHP` as `wp-config.php`.
+ * `wp-admin-custom.php`. A leading `**` part lets the rest start at any depth: `**` + `/.htaccess`
+ * matches `.htaccess` and `wp-content/themes/shop/.htaccess` (docs/plan/53, Р12); `**` anywhere
+ * else is refused, never read as `*`. Matching ignores case, because some hostings (FTP on
+ * Windows, macOS volumes) treat `WP-CONFIG.PHP` as `wp-config.php`.
  */
 function compilePattern(pattern: string): RegExp {
   const normalized = normalizeRepoPath(pattern)
-  if (normalized === null) throw badRequest(`Invalid protected path pattern: "${pattern}"`)
+  const anyDepth = normalized?.startsWith('**/') === true
+  const rest = anyDepth ? normalized!.slice(3) : normalized
+  if (rest === null || rest === '' || rest.includes('**'))
+    throw badRequest(`Invalid protected path pattern: "${pattern}"`)
   const isDirectory = /[/\\]$/.test(pattern)
-  const body = normalized.split('*').map(escapeRegExp).join('[^/]*')
-  return new RegExp(`^${body}${isDirectory ? '(?:/|$)' : ''}`, 'i')
+  const body = rest.split('*').map(escapeRegExp).join('[^/]*')
+  return new RegExp(`^${anyDepth ? '(?:[^/]+/)*' : ''}${body}${isDirectory ? '(?:/|$)' : ''}`, 'i')
 }
 
 const ciMatchers = forbiddenCiPaths.map(compilePattern)

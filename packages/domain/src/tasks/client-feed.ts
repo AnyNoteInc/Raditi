@@ -1,6 +1,9 @@
 import { z } from 'zod'
 
 import { agentOutputLimits } from '../ports/agent-driver.ts'
+import { chatCommandIds } from '../release/chat-commands.ts'
+import { releaseOutcomes } from '../release/release-state.ts'
+import { versionBumps, versionTagSchema } from '../release/semver.ts'
 import { FEED_FAILURE_FALLBACK, feedFailureCodes } from './client-feed-failures.ts'
 import {
   FEED_REQUEST_TEXT_LIMIT,
@@ -32,6 +35,14 @@ export const feedEventTypes = [
   'feed.result',
   'feed.failure',
   'feed.cancelled',
+  // docs/plan/53-chat-preview-release.md: a candidate shown, the client's decision, the release.
+  'feed.candidate',
+  'feed.decision',
+  'feed.release',
+  // «Обновить» (`/update`) that left no new revision: what came of it (Р27).
+  'feed.update',
+  // «Отменить выпуск» (docs/plan/53, «Отмена выпуска»): the confirmation and the outcome.
+  'feed.undo',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -59,9 +70,18 @@ export const feedLimits = Object.freeze({
 })
 const limits = feedLimits
 
-// Kinds a row may be written with today. `revision` and `continue` are reserved by the design
-// for later slices; their fields are not defined yet, so they join the schema with them.
-export const feedRequestKinds = ['first', 'answer', 'retry'] as const
+// Kinds a row may be written with today. `revision` — words to a dialog that waits with a
+// candidate; `command` — a command of the chat (docs/plan/53-chat-preview-release.md, Р6, Р34);
+// `continue` — «Продолжить» after a question of the platform about credits (Р8), the kind the
+// design reserved for it.
+export const feedRequestKinds = [
+  'first',
+  'answer',
+  'retry',
+  'revision',
+  'command',
+  'continue',
+] as const
 export type FeedRequestKind = (typeof feedRequestKinds)[number]
 
 /** A stage of work the customer understands; `site` and `files` wait for trusted sources. */
@@ -89,6 +109,12 @@ export type FeedCreditsState = (typeof feedCreditsStates)[number]
 
 export const feedResultNexts = ['done', 'awaiting_approval'] as const
 export type FeedResultNext = (typeof feedResultNexts)[number]
+/**
+ * The status a failure moved the task to: `awaiting_approval` — the dialog kept its candidate
+ * and its preview, and waits (docs/plan/53, «Попробовать ещё (18.10)»).
+ */
+export const feedFailureNexts = ['failed', 'awaiting_approval'] as const
+export type FeedFailureNext = (typeof feedFailureNexts)[number]
 const changeTypes = ['code', 'content', 'mixed', 'none'] as const
 const risks = ['low', 'medium', 'high'] as const
 
@@ -149,6 +175,14 @@ const agentText = (max: number) =>
     .refine(isFeedText, 'expected text passed through feedText()')
     .refine(hasVisibleText, 'the text has no visible characters')
 
+/**
+ * The commands a `feed.request` of the kind `command` is written with: every command of the chat
+ * but «Попробовать ещё», whose press is a row of its own kind (`retry`).
+ */
+export const feedCommandIds = chatCommandIds.filter(
+  (id): id is Exclude<(typeof chatCommandIds)[number], 'retry'> => id !== 'retry',
+)
+
 const requestBase = {
   v: version,
   /** The name and the address are not stored: the name is looked up when the row is shown. */
@@ -171,7 +205,34 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     answersEventId: feedEventIdSchema,
   }),
   // «Попробовать ещё» is a press, not a message.
-  z.strictObject({ ...requestBase, kind: z.literal('retry') }),
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('retry'),
+    /**
+     * The `feed.failure` row this answers: one attempt may fail twice, a row only once.
+     * `task.retry` always writes it; optional only for the frozen sample of the design, written
+     * before the procedure existed.
+     */
+    failureEventId: feedEventIdSchema.optional(),
+  }),
+  // Words to a dialog that waits with a candidate: a new pass on top of it.
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('revision'),
+    text: requestText,
+    attachments,
+    /** The candidate revision the words are about. */
+    candidateRevision: z.number().int().min(1).max(limits.turn),
+  }),
+  // A command of the chat: a press, never words for the agent.
+  z.strictObject({ ...requestBase, kind: z.literal('command'), command: z.enum(feedCommandIds) }),
+  // «Продолжить» is a press: the next attempt with a reserve of its own (Р8).
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('continue'),
+    /** The `feed.question` of the kind `ceiling` this answers. */
+    questionEventId: feedEventIdSchema,
+  }),
 ])
 export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
 
@@ -244,6 +305,8 @@ export const feedFailurePayloadSchema = z.strictObject({
   code: z.enum(feedFailureCodes),
   site: z.enum(endedSites),
   credits: z.enum(feedCreditsStates).nullable(),
+  /** The status the failure moved the task to; absent in rows of before 18.10.2026 — `failed`. */
+  next: z.enum(feedFailureNexts).optional(),
 })
 export type FeedFailurePayload = z.infer<typeof feedFailurePayloadSchema>
 
@@ -259,6 +322,139 @@ export const feedCancelledPayloadSchema = z.strictObject({
 })
 export type FeedCancelledPayload = z.infer<typeof feedCancelledPayloadSchema>
 
+const count999 = z.number().int().min(0).max(limits.filesChanged)
+const revisionNo = z.number().int().min(1).max(limits.turn)
+
+/**
+ * `feed.candidate` v1 — a pass left changes to look at and release (Р5, Р6). Trusted counts
+ * and the proposed number; the files themselves are in the panel, never in the feed.
+ */
+export const feedCandidatePayloadSchema = z.strictObject({
+  v: version,
+  turn: turnNo,
+  revision: revisionNo,
+  /** The proposed version, `vX.Y.Z`; shown without the letter. */
+  version: versionTagSchema,
+  bump: z.enum(versionBumps),
+  files: z.strictObject({ added: count999, modified: count999, deleted: count999 }),
+  media: count999,
+  /** Records of the site the release will change. */
+  records: count999,
+})
+export type FeedCandidatePayload = z.infer<typeof feedCandidatePayloadSchema>
+
+export const feedDecisionKinds = ['release'] as const
+export type FeedDecisionKind = (typeof feedDecisionKinds)[number]
+
+/** `feed.decision` v1 — the client confirmed a release of a revision under a version (Р25). */
+export const feedDecisionPayloadSchema = z.strictObject({
+  v: version,
+  kind: z.enum(feedDecisionKinds),
+  authorId: z.uuid(),
+  revision: revisionNo,
+  version: versionTagSchema,
+})
+export type FeedDecisionPayload = z.infer<typeof feedDecisionPayloadSchema>
+
+export const feedReleaseOutcomes = releaseOutcomes
+export type FeedReleaseOutcome = (typeof feedReleaseOutcomes)[number]
+/** Why a release did not end `installed`, in the client's terms. */
+export const feedReleaseReasons = [
+  'conflict',
+  'outdated',
+  'not_started',
+  'site_check',
+  'technical',
+  // R8b (17.10): refusals before `main` moved that the client can act on.
+  'not_allowed',
+  'checks_failed',
+  'site_inactive',
+  'client_variable',
+  // R8c (17.10): the site failed its check before the deploy wrote anything.
+  'site_broken_before',
+  // «Операции БД и миграции» (18.10): refusals before anything was written.
+  'plugin_outdated',
+  'slug_taken',
+  'values_unavailable',
+  'created_id_in_code',
+  'site_unreachable',
+] as const
+export type FeedReleaseReason = (typeof feedReleaseReasons)[number]
+
+/** `feed.release` v1 — how a release ended, or that it was refused before it began. */
+export const feedReleasePayloadSchema = z.strictObject({
+  v: version,
+  releaseId: z.uuid(),
+  version: versionTagSchema,
+  outcome: z.enum(feedReleaseOutcomes),
+  /** null for `installed` and when there is nothing to add. */
+  reason: z.enum(feedReleaseReasons).nullable(),
+  credits: z.enum(feedCreditsStates).nullable(),
+  /**
+   * After a rollback (docs/plan/53, «Операции БД и миграции»): new records it left because
+   * someone changed them after the release, and new tables or columns, which stay. Absent — none.
+   */
+  kept: z.strictObject({ records: count999, tables: count999 }).optional(),
+})
+export type FeedReleasePayload = z.infer<typeof feedReleasePayloadSchema>
+
+/**
+ * What came of an «Обновить» that left no new revision (a new one is a `feed.candidate`):
+ * - `emptied` — the site has every change of the dialog already: nothing is left to release;
+ * - `conflict` — the change does not carry onto the site as it is now: the same places changed;
+ * - `current` — the dialog already stands on the site as it is now;
+ * - `withdrawn` — the client wrote to the dialog before the update was made: it was not made;
+ * - `failed` — the update could not be made.
+ */
+export const feedUpdateOutcomes = ['emptied', 'conflict', 'current', 'withdrawn', 'failed'] as const
+export type FeedUpdateOutcome = (typeof feedUpdateOutcomes)[number]
+
+/** `feed.update` v1 — the answer to an «Обновить» that did not record a new revision. */
+export const feedUpdatePayloadSchema = z.strictObject({
+  v: version,
+  outcome: z.enum(feedUpdateOutcomes),
+  /** Files of the dialog's change that `main` changed too (`conflict`); 0 otherwise. */
+  conflicts: count999,
+})
+export type FeedUpdatePayload = z.infer<typeof feedUpdatePayloadSchema>
+
+/** Why an undo did not end `installed`: a release's reasons, and the version it undoes is gone. */
+export const feedUndoReasons = [...feedReleaseReasons, 'undo_outdated'] as const
+export type FeedUndoReason = (typeof feedUndoReasons)[number]
+/** The moments of an undo the dialog shows: the client's confirmation, then its outcome. */
+export const feedUndoStages = ['confirmed', ...feedReleaseOutcomes] as const
+export type FeedUndoStage = (typeof feedUndoStages)[number]
+
+const undoNames = {
+  v: version,
+  /** The row of the undo (`site_releases`, kind `undo`). */
+  undoId: z.uuid(),
+  /** The release it undoes: a release of this dialog. */
+  releaseId: z.uuid(),
+  undoneVersion: versionTagSchema,
+  /** The new version the undo comes out as. */
+  version: versionTagSchema,
+}
+/** Objects the undo returns, and those it leaves because the site changed them since. */
+const undoRecords = z.strictObject({ returned: count999, kept: count999 })
+
+/**
+ * `feed.undo` v1 — «Отменить выпуск»: the client confirmed it (`confirmed`), or how it ended.
+ * `returnsTo` — the version the site goes back to; `records` — from the plan the client confirmed.
+ */
+export const feedUndoPayloadSchema = z.discriminatedUnion('stage', [
+  z.strictObject({ ...undoNames, stage: z.literal('confirmed'), authorId: z.uuid() }),
+  z.strictObject({
+    ...undoNames,
+    stage: z.enum(feedReleaseOutcomes),
+    returnsTo: versionTagSchema,
+    /** null for `installed` and `unknown`. */
+    reason: z.enum(feedUndoReasons).nullable(),
+    records: undoRecords,
+  }),
+])
+export type FeedUndoPayload = z.infer<typeof feedUndoPayloadSchema>
+
 /** The writing schema of each type. */
 export const feedPayloadSchemas = Object.freeze({
   'feed.request': feedRequestPayloadSchema,
@@ -267,6 +463,11 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.result': feedResultPayloadSchema,
   'feed.failure': feedFailurePayloadSchema,
   'feed.cancelled': feedCancelledPayloadSchema,
+  'feed.candidate': feedCandidatePayloadSchema,
+  'feed.decision': feedDecisionPayloadSchema,
+  'feed.release': feedReleasePayloadSchema,
+  'feed.update': feedUpdatePayloadSchema,
+  'feed.undo': feedUndoPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -290,6 +491,11 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.result', feedResultPayloadSchema),
       row('feed.failure', feedFailurePayloadSchema),
       row('feed.cancelled', feedCancelledPayloadSchema),
+      row('feed.candidate', feedCandidatePayloadSchema),
+      row('feed.decision', feedDecisionPayloadSchema),
+      row('feed.release', feedReleasePayloadSchema),
+      row('feed.update', feedUpdatePayloadSchema),
+      row('feed.undo', feedUndoPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -332,7 +538,33 @@ const readRequest = {
     answersEventId: feedEventIdSchema,
     attachments,
   }),
-  retry: z.object({ kind: z.literal('retry'), authorId: z.uuid(), requestId: z.uuid() }),
+  retry: z.object({
+    kind: z.literal('retry'),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    failureEventId: feedEventIdSchema.optional(),
+  }),
+  revision: z.object({
+    kind: z.literal('revision'),
+    text: z.string().min(1).max(limits.requestText),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    candidateRevision: revisionNo,
+    attachments,
+  }),
+  // A command added later reads as a press without a name: the row is kept, the text is general.
+  command: z.object({
+    kind: z.literal('command'),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    command: known(chatCommandIds, null),
+  }),
+  continue: z.object({
+    kind: z.literal('continue'),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    questionEventId: feedEventIdSchema,
+  }),
 } satisfies Record<FeedRequestKind, z.ZodType>
 // A kind added later: the text is shown when there is one.
 const readOtherRequest = z.object({
@@ -387,6 +619,63 @@ const readFailure = z.object({
   code: known(feedFailureCodes, FEED_FAILURE_FALLBACK),
   site: readEndedSite,
   credits: readCredits,
+  // Absent, or a value this code does not know: read as `failed` — nothing is promised about
+  // the candidate.
+  next: z.enum(feedFailureNexts).optional().catch(undefined),
+})
+
+const readCandidate = z.object({
+  turn: turnNo,
+  revision: revisionNo,
+  version: versionTagSchema,
+  /** null — a kind of number this code does not know: the text names the version alone. */
+  bump: known(versionBumps, null),
+  files: z.object({ added: count999, modified: count999, deleted: count999 }),
+  media: count999,
+  records: count999,
+})
+
+const readDecision = z.object({
+  kind: z.enum(feedDecisionKinds),
+  authorId: z.uuid(),
+  revision: revisionNo,
+  version: versionTagSchema,
+})
+
+const readRelease = z.object({
+  releaseId: z.uuid(),
+  version: versionTagSchema,
+  // No fallback: an outcome decides what the client is told about the site.
+  outcome: z.enum(feedReleaseOutcomes),
+  reason: z.union([z.null(), known(feedReleaseReasons, null)]),
+  credits: readCredits,
+  kept: z.object({ records: count999, tables: count999 }).optional().catch(undefined),
+})
+
+const readUpdate = z.object({
+  // No fallback: an outcome decides what the client is told about the dialog.
+  outcome: z.enum(feedUpdateOutcomes),
+  conflicts: count999,
+})
+
+const readUndoNames = {
+  undoId: z.uuid(),
+  releaseId: z.uuid(),
+  undoneVersion: versionTagSchema,
+  version: versionTagSchema,
+}
+const readUndoConfirmed = z.object({
+  ...readUndoNames,
+  stage: z.literal('confirmed'),
+  authorId: z.uuid(),
+})
+const readUndoOutcome = z.object({
+  ...readUndoNames,
+  // No fallback: an outcome decides what the client is told about the site.
+  stage: z.enum(feedReleaseOutcomes),
+  returnsTo: versionTagSchema,
+  reason: z.union([z.null(), known(feedUndoReasons, null)]),
+  records: z.object({ returned: count999, kept: count999 }),
 })
 
 const readCancelled = z.object({
@@ -412,6 +701,9 @@ export type FeedEvent =
       | z.infer<typeof readRequest.first>
       | z.infer<typeof readRequest.answer>
       | z.infer<typeof readRequest.retry>
+      | z.infer<typeof readRequest.revision>
+      | z.infer<typeof readRequest.command>
+      | z.infer<typeof readRequest.continue>
       | ({ kind: 'other' } & z.infer<typeof readOtherRequest>)
     ))
   | { type: 'feed.step'; turn: number; attempt: number; step: FeedStep }
@@ -421,6 +713,11 @@ export type FeedEvent =
   | ({ type: 'feed.result' } & z.infer<typeof readResult>)
   | ({ type: 'feed.failure' } & z.infer<typeof readFailure>)
   | ({ type: 'feed.cancelled' } & z.infer<typeof readCancelled>)
+  | ({ type: 'feed.candidate' } & z.infer<typeof readCandidate>)
+  | ({ type: 'feed.decision' } & z.infer<typeof readDecision>)
+  | ({ type: 'feed.release' } & z.infer<typeof readRelease>)
+  | ({ type: 'feed.update' } & z.infer<typeof readUpdate>)
+  | ({ type: 'feed.undo' } & (z.infer<typeof readUndoConfirmed> | z.infer<typeof readUndoOutcome>))
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -490,6 +787,41 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   'feed.cancelled': {
     1: (payload) =>
       readWith(readCancelled, payload, (data) => ({ type: 'feed.cancelled', ...data })),
+  },
+  'feed.candidate': {
+    1: (payload) =>
+      readWith(readCandidate, payload, (data) => ({ type: 'feed.candidate', ...data })),
+  },
+  'feed.decision': {
+    1: (payload) => {
+      // A decision this code does not know may be a consent: shown as a newer row.
+      if (typeof payload.kind === 'string' && !includes(feedDecisionKinds, payload.kind))
+        return NEWER
+      return readWith(readDecision, payload, (data) => ({ type: 'feed.decision', ...data }))
+    },
+  },
+  'feed.release': {
+    1: (payload) => {
+      if (typeof payload.outcome === 'string' && !includes(feedReleaseOutcomes, payload.outcome))
+        return NEWER
+      return readWith(readRelease, payload, (data) => ({ type: 'feed.release', ...data }))
+    },
+  },
+  'feed.update': {
+    1: (payload) => {
+      if (typeof payload.outcome === 'string' && !includes(feedUpdateOutcomes, payload.outcome))
+        return NEWER
+      return readWith(readUpdate, payload, (data) => ({ type: 'feed.update', ...data }))
+    },
+  },
+  'feed.undo': {
+    1: (payload) => {
+      if (payload.stage === 'confirmed')
+        return readWith(readUndoConfirmed, payload, (data) => ({ type: 'feed.undo', ...data }))
+      if (typeof payload.stage === 'string' && !includes(feedReleaseOutcomes, payload.stage))
+        return NEWER
+      return readWith(readUndoOutcome, payload, (data) => ({ type: 'feed.undo', ...data }))
+    },
   },
 }
 

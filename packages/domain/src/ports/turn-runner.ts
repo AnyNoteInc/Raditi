@@ -93,10 +93,20 @@ export interface SiteLeaseAuthority {
   expiresAt: Date | null
   serverNow: Date
   heldForOperator: boolean
+  /**
+   * The release barrier (docs/plan/53-chat-preview-release.md, Р9): a release whose deploy may
+   * still write. While it stands no one acquires the site, expired or not, and the lease is
+   * neither released nor freed — the release clears it first, under its own fence.
+   */
+  inflightReleaseId: string | null
 }
 
 /** Every mutation is conditional on the entire fence, never merely the task id. */
 export interface SiteLeaseStore {
+  /**
+   * null while another owner holds the site, an operator holds it, a content write is in flight
+   * or a release barrier stands (even under an expired lease).
+   */
   acquire(input: Omit<SiteLeaseFence, 'epoch'> & { ttlMs: number }): Promise<SiteLeaseGrant | null>
   /**
    * Turns never renew: one grant covers the hard limit plus TURN_PUBLICATION_GRACE_MS. Kept for
@@ -127,6 +137,11 @@ export interface TurnPublication {
   patch: Uint8Array
   /** An empty, valid compressed archive: newly created files belong to headSha now. */
   untracked: Uint8Array
+  /**
+   * The working-set commit of `baseSha` (plan 53, Р11), derived again by publication: the turn
+   * and its recovery compare it with the one the sandbox got. Absent without a working set.
+   */
+  sandboxBaseSha?: string
   /** After the last fence assertion, native publication must be bounded to 60 seconds. */
   publish(assertFence: () => Promise<void>): Promise<void>
   dispose(): Promise<void>
@@ -139,6 +154,11 @@ export interface TurnPublication {
  */
 export interface TurnBundleSource {
   baseSha: string
+  /**
+   * With a working set (plan 53, Р11) the single ref points at this root commit instead, and
+   * `baseSha` stays the full tree publication starts from. Absent — the bundle is the full tree.
+   */
+  sandboxBaseSha?: string
   branch: string
   sha256: string
   sizeBytes: number
@@ -146,18 +166,31 @@ export interface TurnBundleSource {
 }
 
 export interface TurnWorkspace {
-  /** Clones the site on the host and bundles `expectedBaseSha` for the turn's executor. */
-  buildBaseBundle(source: TurnWorkspaceSource): Promise<TurnBundleSource>
+  /**
+   * Bundles `expectedBaseSha` for the turn's executor, or with a working set its root commit
+   * made at `committedAt` (required then, plan 53, Р11).
+   */
+  buildBaseBundle(source: TurnWorkspaceSource, committedAt?: string): Promise<TurnBundleSource>
+  /**
+   * The working-set commit of the source at `committedAt`, the same `buildBaseBundle` puts in the
+   * bundle; null without a working set. Recovery of a turn derives it here instead of storing it;
+   * a workspace without it cannot recover a turn that has a working set.
+   */
+  sandboxBase?(source: TurnWorkspaceSource, committedAt: string): Promise<string | null>
   /**
    * `credentials` are the turn's own (turnCredentials): a changed file of the candidate that
    * contains one verbatim, binary ones included, is refused as snapshotHasCredential().
-   * Required like protectedPaths, so a caller cannot silently skip the check.
+   * Required like protectedPaths, so a caller cannot silently skip the check. `refusedValues`
+   * are the values of the client's variables the turn's commands got (docs/plan/53-chat-preview-
+   * release.md, Р13): a changed file or path that holds one, in any spelling `envValueForms`
+   * knows, is refused as envValueInChange().
    */
   preparePublication(
     input: PublicationMetadata & {
       patch: Uint8Array
       untracked: Uint8Array
       credentials: readonly string[]
+      refusedValues?: readonly string[]
     },
   ): Promise<TurnPublication>
 }
@@ -222,6 +255,11 @@ export const turnEvidenceSchema = z
       .optional(),
     candidateHeadSha: publicationShaSchema.optional(),
     baseSha: publicationShaSchema.optional(),
+    /**
+     * The working-set commit the sandbox was checked out at (plan 53, Р11). The candidate's patch
+     * is against `baseSha`, the full tree, with the same paths.
+     */
+    sandboxBaseSha: publicationShaSchema.optional(),
     committedAt: z.iso.datetime().optional(),
     /** The driver session the turn resumed (turn n−1): recovery derives the session state from it. */
     nativeSessionId: nativeSessionIdSchema.optional(),

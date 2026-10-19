@@ -35,11 +35,37 @@ export interface KvMetadata {
 export interface KvWriteOptions {
   /** 0 creates a new key; a positive value must match the current version. */
   cas?: number
+  /**
+   * The most versions Vault keeps of this key (1–100), set on its metadata before the data: the
+   * versions beyond it — a replaced or removed value — are gone for everybody after this write.
+   * The writer's policy must allow it on the metadata path (`sites-writer`: 1 on `env/*`).
+   */
+  maxVersions?: number
 }
 
 export interface KvListPage {
   after?: string
   limit: number
+}
+
+/**
+ * Data behind a single-use response-wrapping token (sys/wrapping/wrap, spec §15; plan 53, Р29).
+ * The token is the secret: whoever holds it unwraps once, and then nobody can. The accessor
+ * names it without opening it, so it may be kept in the database for a revocation.
+ */
+export interface WrappedSecret {
+  token: string
+  accessor: string
+  /** Counted from before the request: the wrapping lives at least this long. */
+  expiresAt: Date
+}
+
+/** What a live wrapping token says about itself; its data stays wrapped. */
+export interface WrappingInfo {
+  /** The endpoint that wrapped it: `sys/wrapping/wrap` for data of SecretStore.wrap. */
+  creationPath: string
+  createdAt: Date
+  expiresAt: Date
 }
 
 export interface SecretStore {
@@ -73,11 +99,17 @@ export interface SecretStore {
   /** SSH CA: short-lived certificates for client servers (ssh/sign/deploy). */
   sshSign(role: string, publicKey: string, ttlSeconds: number): Promise<string>
 
-  /** Deploy secret flow: token with a site-<id>-deploy policy, wrapped once, revoked after deploy. */
+  /** A token with the given policies; the release flow of plan 53 creates none (Р29). */
   createToken(policies: string[], ttlSeconds: number): Promise<IssuedToken>
-  wrap(
-    data: Record<string, string>,
-    ttlSeconds: number,
-  ): Promise<{ wrappingToken: string; expiresAt: Date }>
+  /** Wraps `data` for one unwrap within `ttlSeconds`; nothing of it is stored in KV. */
+  wrap(data: Record<string, string>, ttlSeconds: number): Promise<WrappedSecret>
+  /**
+   * Opens a wrapping with the wrapping token itself, needing no credential of its own. Null
+   * when the token is spent, revoked or expired: the data is gone for everybody.
+   */
+  unwrap(token: string): Promise<Record<string, string> | null>
+  /** Whether a wrapping is still unopened, without opening it; null when it is not. */
+  lookupWrapping(token: string): Promise<WrappingInfo | null>
+  /** Revokes the token this accessor names; one that is already gone counts as revoked. */
   revokeAccessor(accessor: string): Promise<void>
 }

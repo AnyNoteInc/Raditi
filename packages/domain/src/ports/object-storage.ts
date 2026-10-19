@@ -19,10 +19,12 @@ export interface PutOptions {
 }
 
 /**
- * Only turn snapshots are reachable by a presigned URL (P2): a runner restores turn n−1 and
- * writes home.tar.zst of turn n. Browser uploads (M2) and runner logs (P12) come later.
+ * Turn snapshots are reachable by a presigned URL (P2): a runner restores turn n−1 and writes
+ * home.tar.zst of turn n. So is the encrypted backup of a release (plan 53, Р30): its deploy job
+ * uploads it and reads the values of its database plan, with no S3 credential of its own.
+ * Browser uploads (M2) and runner logs (P12) come later.
  */
-export const presignableBuckets = ['sessions'] as const
+export const presignableBuckets = ['sessions', 'backups'] as const
 export type PresignableBucket = (typeof presignableBuckets)[number]
 /** A presigned URL lives at most 5 minutes; callers also bound it by the lease (spec §14). */
 export const MAX_PRESIGN_TTL_MS = 5 * 60_000

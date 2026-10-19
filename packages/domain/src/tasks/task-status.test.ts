@@ -47,6 +47,22 @@ describe('task status machine', () => {
     expect(canTransition('running', 'queued')).toBe(false)
   })
 
+  it('asks «Продолжить?» before a turn whose key cannot cover a first call', () => {
+    expect(canTransition('preparing', 'awaiting_user')).toBe(true)
+    expect(canTransition('preparing', 'awaiting_approval')).toBe(true)
+    expect(canTransition('preparing', 'done')).toBe(false)
+  })
+
+  it('ends a dialog whose candidate «Обновить» found on main already', () => {
+    expect(canTransition('awaiting_approval', 'done')).toBe(true)
+    expect(canTransition('awaiting_user', 'done')).toBe(false)
+  })
+
+  it('returns a release refused without a write to its candidate', () => {
+    expect(canTransition('deploying', 'awaiting_approval')).toBe(true)
+    expect(canTransition('verifying', 'awaiting_approval')).toBe(false)
+  })
+
   it('cannot cancel once the deploy started', () => {
     expect(canTransition('deploying', 'cancelled')).toBe(false)
     expect(canTransition('verifying', 'cancelled')).toBe(false)

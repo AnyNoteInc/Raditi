@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { badRequest, DomainError, isDomainError } from '../errors.ts'
+import { egressHostLimits, formatEgressHost, parseEgressHost } from '../preview/egress-hosts.ts'
 
 /**
  * Sandbox port — spec §8. One task is a logical session; a container lives for one turn.
@@ -35,8 +36,24 @@ export interface SandboxResources {
   pids: number
 }
 
-/** No internet and no DNS: the only way out is sandbox-gw with a path allowlist. */
-export type NetworkPolicy = { mode: 'none' } | { mode: 'gateway'; routes: Array<'llm' | 'mcp'> }
+/**
+ * No internet and no DNS: the only way out is sandbox-gw with a path allowlist. `egress` — the
+ * `host:port` the client's variables lead to (docs/plan/53-chat-preview-release.md, Р13): then
+ * sandbox-gw also runs the client egress proxy on SANDBOX_EGRESS_PORT, which tunnels HTTPS
+ * (CONNECT) to exactly these and to no address that is not public. Only the commands of the
+ * agent's shell tool are pointed at it.
+ */
+export type NetworkPolicy =
+  { mode: 'none' } | { mode: 'gateway'; routes: Array<'llm' | 'mcp'>; egress?: string[] }
+
+/** The port of the client egress proxy on sandbox-gw (Р13). */
+export const SANDBOX_EGRESS_PORT = 3128
+/**
+ * `host:port` of one sandbox's egress, as many as the variables of one site may name: they
+ * travel in a label and in one environment variable of the gateway (below the 128 KiB of one
+ * variable on Linux), so the form takes no more and a turn with more is refused before its lease.
+ */
+export const MAX_SANDBOX_EGRESS_HOSTS = egressHostLimits.perSite
 
 export interface SandboxSecretFile {
   /** Absolute path on tmpfs inside the sandbox. */
@@ -358,6 +375,19 @@ export const networkPolicySchema = z.discriminatedUnion('mode', [
         .min(1)
         .max(2)
         .refine((routes) => new Set(routes).size === routes.length, 'duplicate route'),
+      // In their stored spelling (`formatEgressHost`): the label of a container is compared
+      // byte for byte with the policy it was created from.
+      egress: z
+        .array(
+          z.string().refine((text) => {
+            const host = parseEgressHost(text)
+            return host !== null && formatEgressHost(host) === text
+          }, 'expected a public domain name as host:port'),
+        )
+        .min(1)
+        .max(MAX_SANDBOX_EGRESS_HOSTS)
+        .refine((hosts) => new Set(hosts).size === hosts.length, 'duplicate egress host')
+        .optional(),
     })
     .strict(),
 ]) satisfies z.ZodType<NetworkPolicy>

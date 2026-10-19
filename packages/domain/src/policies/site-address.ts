@@ -120,6 +120,17 @@ export function isSiteAddressAllowed(cls: SiteAddressClass | null, appEnv: AppEn
   return cls === 'public' || (cls === 'local' && !isProduction(appEnv))
 }
 
+/**
+ * The bytes of an IPv4 dotted quad (4) or an IPv6 literal without brackets or zone (16); null
+ * for anything else. For prefix matching (the egress proxy's platform subnets).
+ */
+export function ipLiteralBytes(address: string): number[] | null {
+  const octets = parseIpv4(address)
+  if (octets) return [...octets]
+  const groups = parseIpv6(address)
+  return groups ? groups.flatMap((group) => [group >> 8, group & 0xff]) : null
+}
+
 /** 4 or 6 for a canonical IP literal, 0 for anything else. */
 export function siteAddressFamily(host: string): 0 | 4 | 6 {
   if (parseIpv4(host)) return 4

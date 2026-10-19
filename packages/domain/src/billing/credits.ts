@@ -35,8 +35,11 @@ export * from './credit-numbers.ts'
 export const minContinueCredits = 1
 
 /**
- * The most attempts one task may have. A new task is the first; «Продолжить» and «Попробовать
- * ещё» each start the next one; after the third the task is handed to a specialist or stopped.
+ * The most attempts one chain of a task may have: the attempts that hold an active reserve
+ * together. A new task is the first; «Продолжить» starts the next one of the chain, and after the
+ * third the task is handed to a specialist or stopped. «Попробовать ещё» after a failure gives
+ * the chain back and starts a new one: an attempt in which the agent failed is not counted (spec
+ * §20, decision 4 of 11.10.2026), so `tasks.attempt` itself may pass this number.
  */
 export const maxTaskAttempts = 3
 
@@ -780,15 +783,17 @@ export type NewTaskVerdict = {
  *    that much and other tasks in work have it set aside; with a paid tariff `empty` or, with a
  *    few credits left, `below_start`; without one `past_due` for an overdue tariff, `ended` when
  *    credits of a pack wait for a tariff, otherwise `gift_spent` or `gift_below_start`;
- * 3. the day, for a new task and a retry: the launches of the day against the limit of the plan
- *    — `daily_limit` — or `tasksPerDayWithoutTariff` — `trial_daily_limit`;
+ * 3. the day, for a new task: the launches of the day against the limit of the plan —
+ *    `daily_limit` — or `tasksPerDayWithoutTariff` — `trial_daily_limit`. A retry after a
+ *    failure is not asked about the day: an attempt in which the agent failed is not counted
+ *    against the client (spec §20, decision 4 of 11.10.2026);
  * 4. unpaid work, for a new task and a retry: against the monthly credits of the plan —
  *    `unpaid_limit` — or `trialUnpaidWorkCredits` — `trial_unpaid_limit`;
  * 5. without a paid tariff, the gift of the site: `gift_site_used` when another workspace has
  *    spent gift credits on it.
  *
  * A continuation is never refused by the day or by unpaid work: the work is in progress and
- * will be charged if it is done.
+ * will be charged if it is done. What bounds retries in a row is the credits and unpaid work.
  *
  * The reserve of the task that asks is not «tasks in work» to wait for: it stays held whatever
  * the answer is. So a continuation — the one placement of a task that has a reserve — says what
@@ -837,7 +842,7 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   }
 
   if (placement !== 'continuation') {
-    const perDay = dailyTaskLimit(subscription)
+    const perDay = placement === 'new' ? dailyTaskLimit(subscription) : null
     if (perDay !== null && launchesToday >= perDay) {
       return refused(paid ? 'daily_limit' : 'trial_daily_limit')
     }

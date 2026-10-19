@@ -5,8 +5,10 @@ import {
   assertSandboxSpec,
   createLeftNothing,
   leftNothing,
+  MAX_SANDBOX_EGRESS_HOSTS,
   MAX_SANDBOX_RESOURCES,
   MAX_SANDBOX_TURN_MS,
+  SANDBOX_EGRESS_PORT,
   sandboxSpecSchema,
 } from './sandbox-provider.ts'
 
@@ -87,6 +89,45 @@ describe('sandboxSpecSchema', () => {
     rejects({ network: { mode: 'gateway', routes: ['s3'] } as never })
     rejects({ network: { mode: 'bridge' } as never })
     rejects({ network: { mode: 'none', routes: ['llm'] } as never })
+  })
+
+  it('takes the egress of client variables only as public names in their stored spelling', () => {
+    const egress = ['api.example.ru:443', 'hooks.example.com:8443']
+    const spec = {
+      ...valid(),
+      network: { mode: 'gateway' as const, routes: ['llm' as const], egress },
+    }
+    expect(sandboxSpecSchema.parse(spec).network).toEqual({
+      mode: 'gateway',
+      routes: ['llm'],
+      egress,
+    })
+    for (const host of [
+      'api.example.ru',
+      'API.example.ru:443',
+      '127.0.0.1:443',
+      'localhost:443',
+      'host.docker.internal:443',
+      'metadata.internal:80',
+      'site.localhost:443',
+      '[::1]:443',
+      'api.example.ru:0',
+    ])
+      rejects({ network: { mode: 'gateway', routes: ['llm'], egress: [host] } })
+    rejects({ network: { mode: 'gateway', routes: ['llm'], egress: [] } })
+    rejects({ network: { mode: 'gateway', routes: ['llm'], egress: [egress[0]!, egress[0]!] } })
+    rejects({
+      network: {
+        mode: 'gateway',
+        routes: ['llm'],
+        egress: Array.from(
+          { length: MAX_SANDBOX_EGRESS_HOSTS + 1 },
+          (_, i) => `h${i}.example.ru:443`,
+        ),
+      },
+    })
+    rejects({ network: { mode: 'none', egress } as never })
+    expect(SANDBOX_EGRESS_PORT).toBe(3128)
   })
 
   it.each([

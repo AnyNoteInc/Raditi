@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { agentDriverIds, agentOutputLimits } from '../ports/agent-driver.ts'
 import {
+  feedCandidatePayloadSchema,
   feedCancelledBys,
   feedCeilingReasons,
   feedCreditsStates,
   feedCursorSchema,
+  feedDecisionKinds,
   feedEventIdSchema,
   feedEventTypes,
   feedLimits,
@@ -13,6 +15,8 @@ import {
   feedPayloadSchemas,
   feedQuestionKinds,
   feedQuestionPayloadSchema,
+  feedReleaseOutcomes,
+  feedReleaseReasons,
   feedRequestKinds,
   feedRequestPayloadSchema,
   feedResultNexts,
@@ -75,6 +79,64 @@ const result = {
 }
 const failure = { v: 1, turn: 1, code: 'timeout', site: 'unchanged', credits: 'returned' }
 const cancelled = { v: 1, turn: null, by: 'queue_timeout', site: 'unchanged', credits: null }
+const revision = {
+  v: 1,
+  kind: 'revision',
+  text: 'Сделайте кнопку зелёной',
+  authorId: author,
+  requestId: request,
+  candidateRevision: 2,
+}
+const command = { v: 1, kind: 'command', command: 'release', authorId: author, requestId: request }
+const continued = {
+  v: 1,
+  kind: 'continue',
+  authorId: author,
+  requestId: request,
+  questionEventId: '21',
+}
+const candidate = {
+  v: 1,
+  turn: 2,
+  revision: 1,
+  version: 'v1.4.0',
+  bump: 'minor',
+  files: { added: 2, modified: 3, deleted: 0 },
+  media: 1,
+  records: 2,
+}
+const releaseId = '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d90'
+const decision = { v: 1, kind: 'release', authorId: author, revision: 1, version: 'v1.4.0' }
+const release = {
+  v: 1,
+  releaseId,
+  version: 'v1.4.0',
+  outcome: 'installed',
+  reason: null,
+  credits: null,
+}
+
+const undoId = '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d91'
+const undoConfirmed = {
+  v: 1,
+  stage: 'confirmed',
+  undoId,
+  releaseId,
+  undoneVersion: 'v1.4.0',
+  version: 'v1.4.1',
+  authorId: author,
+}
+const undoInstalled = {
+  v: 1,
+  stage: 'installed',
+  undoId,
+  releaseId,
+  undoneVersion: 'v1.4.0',
+  version: 'v1.4.1',
+  returnsTo: 'v1.3.0',
+  reason: null,
+  records: { returned: 2, kept: 1 },
+}
 
 const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.request': [
@@ -83,12 +145,37 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     retry,
     { ...first, attachments: [author] },
     { ...answer, attachments: [author, request] },
+    revision,
+    { ...revision, attachments: [author] },
+    command,
+    { ...command, command: 'cancel' },
+    continued,
   ],
   'feed.step': [step],
   'feed.question': [agentQuestion, ceiling],
   'feed.result': [result],
   'feed.failure': [failure],
   'feed.cancelled': [cancelled],
+  'feed.candidate': [
+    candidate,
+    { ...candidate, bump: 'patch', files: { added: 0, modified: 0, deleted: 0 } },
+  ],
+  'feed.decision': [decision],
+  'feed.update': [
+    { v: 1, outcome: 'conflict', conflicts: 3 },
+    { v: 1, outcome: 'emptied', conflicts: 0 },
+  ],
+  'feed.release': [
+    release,
+    { ...release, outcome: 'rolled_back', reason: 'site_check', credits: 'returned' },
+    { ...release, outcome: 'refused', reason: 'outdated' },
+  ],
+  'feed.undo': [
+    undoConfirmed,
+    undoInstalled,
+    { ...undoInstalled, stage: 'rolled_back', reason: 'site_check' },
+    { ...undoInstalled, stage: 'refused', reason: 'undo_outdated' },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -100,7 +187,7 @@ const shown = (type: FeedEventType, { v: _v, ...fields }: Record<string, unknown
 })
 
 describe('feed vocabulary', () => {
-  it('lists exactly the six types of the design, all under the feed prefix', () => {
+  it('lists the six types of the design and the four of a release, all under the feed prefix', () => {
     expect(feedEventTypes).toEqual([
       'feed.request',
       'feed.step',
@@ -108,6 +195,11 @@ describe('feed vocabulary', () => {
       'feed.result',
       'feed.failure',
       'feed.cancelled',
+      'feed.candidate',
+      'feed.decision',
+      'feed.release',
+      'feed.update',
+      'feed.undo',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -263,6 +355,23 @@ describe('nothing raw reaches the customer', () => {
   )('%s refuses the extra key «%s»', (type, key, payload) => {
     expect(accepts(type, { ...payload, [key]: raw[key] })).toBe(false)
     expect(feedPayloadSchemas[type].safeParse({ ...payload, [key]: raw[key] }).success).toBe(false)
+  })
+
+  // docs/plan/53, «Попробовать ещё (18.10)».
+  it('writes the end a failure moved the dialog to, and reads an unknown one as the old end', () => {
+    expect(accepts('feed.failure', { ...failure, next: 'awaiting_approval' })).toBe(true)
+    expect(accepts('feed.failure', { ...failure, next: 'failed' })).toBe(true)
+    expect(accepts('feed.failure', { ...failure, next: 'done' })).toBe(false)
+    expect(readFeedRow('feed.failure', { ...failure, next: 'later' })).toEqual(
+      shown('feed.failure', failure),
+    )
+  })
+
+  it('writes a retry with the failure it answers, never as a command', () => {
+    expect(accepts('feed.request', { ...retry, failureEventId: '17' })).toBe(true)
+    expect(accepts('feed.request', { ...retry, failureEventId: '017' })).toBe(false)
+    expect(accepts('feed.request', { ...retry, kind: 'command', command: 'retry' })).toBe(false)
+    expect(accepts('feed.request', { ...retry, kind: 'command', command: 'update' })).toBe(true)
   })
 
   it('refuses a failure carrying a reason, also in place of the code', () => {
@@ -544,13 +653,45 @@ describe('feed.request', () => {
     expect(accepts('feed.request', { ...retry, attachments: [] })).toBe(false)
   })
 
-  it('lists the three kinds written today', () => {
-    expect(feedRequestKinds).toEqual(['first', 'answer', 'retry'])
+  it('lists the six kinds written today', () => {
+    expect(feedRequestKinds).toEqual([
+      'first',
+      'answer',
+      'retry',
+      'revision',
+      'command',
+      'continue',
+    ])
   })
 
-  it('refuses the kinds reserved for later slices', () => {
-    for (const kind of ['revision', 'continue', 'message'])
+  it('refuses a kind it does not know', () => {
+    for (const kind of ['message', 'rewrite'])
       expect(accepts('feed.request', { ...first, kind })).toBe(false)
+  })
+
+  it('takes «Продолжить» as a press with the question of the platform it answers', () => {
+    expect(accepts('feed.request', continued)).toBe(true)
+    const { questionEventId: _question, ...noQuestion } = continued
+    expect(accepts('feed.request', noQuestion)).toBe(false)
+    expect(accepts('feed.request', { ...continued, questionEventId: '0' })).toBe(false)
+    expect(accepts('feed.request', { ...continued, text: 'Продолжайте' })).toBe(false)
+    expect(accepts('feed.request', { ...continued, attachments: [author] })).toBe(false)
+  })
+
+  it('takes words for a candidate with the revision they are about', () => {
+    expect(accepts('feed.request', revision)).toBe(true)
+    const { candidateRevision: _revision, ...noRevision } = revision
+    expect(accepts('feed.request', noRevision)).toBe(false)
+    expect(accepts('feed.request', { ...revision, candidateRevision: 0 })).toBe(false)
+    expect(accepts('feed.request', { ...revision, text: 'пароль: Qwerty123456' })).toBe(false)
+  })
+
+  it('takes a command as a press: its id, never words for the agent', () => {
+    for (const id of ['release', 'preview', 'reset', 'update', 'cancel'])
+      expect(accepts('feed.request', { ...command, command: id })).toBe(true)
+    expect(accepts('feed.request', { ...command, command: 'deploy' })).toBe(false)
+    expect(accepts('feed.request', { ...command, text: '/release' })).toBe(false)
+    expect(accepts('feed.request', { ...command, attachments: [author] })).toBe(false)
   })
 })
 
@@ -726,11 +867,13 @@ describe('versions', () => {
 
 describe('reading stored rows', () => {
   it('reads an unknown feed type as «newer»: the row may be a consent card', () => {
+    // `feed.decision` was one of these until the release rows came (plan 53); `feed.consent`
+    // stands in for it.
     for (const type of [
       'feed.approval',
-      'feed.decision',
+      'feed.consent',
       'feed.deploy',
-      'feed.undo',
+      'feed.revert',
       'feed.x',
       'feed.',
     ])
@@ -826,6 +969,36 @@ describe('reading stored rows', () => {
         { ...cancelled, site: null },
         { ...cancelled, credits: undefined },
       ],
+      'feed.candidate': [
+        { ...candidate, version: '1.4.0' },
+        { ...candidate, revision: 0 },
+        { ...candidate, files: undefined },
+        { ...candidate, records: -1 },
+      ],
+      'feed.decision': [
+        { ...decision, authorId: 'Иван' },
+        { ...decision, version: 'v01.0.0' },
+        { ...decision, revision: undefined },
+      ],
+      'feed.release': [
+        { ...release, outcome: undefined },
+        { ...release, outcome: 7 },
+        { ...release, releaseId: 'r1' },
+        { ...release, version: 'latest' },
+      ],
+      'feed.update': [
+        { v: 1, outcome: 'conflict', conflicts: -1 },
+        { v: 1, outcome: 'conflict' },
+        { v: 1, outcome: 7, conflicts: 0 },
+        { v: 1, outcome: undefined, conflicts: 0 },
+      ],
+      'feed.undo': [
+        { ...undoConfirmed, authorId: 'Иван' },
+        { ...undoInstalled, stage: undefined },
+        { ...undoInstalled, stage: 7 },
+        { ...undoInstalled, returnsTo: undefined },
+        { ...undoInstalled, records: { returned: -1, kept: 0 } },
+      ],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])
@@ -884,21 +1057,43 @@ describe('reading stored rows', () => {
     })
 
     it('request.kind → the text when there is one', () => {
-      expect(read('feed.request', { ...first, kind: 'revision' })).toEqual({
+      expect(read('feed.request', { ...first, kind: 'rewrite' })).toEqual({
         type: 'feed.request',
         kind: 'other',
         text: first.text,
         authorId: author,
       })
-      expect(read('feed.request', { v: 1, kind: 'continue', authorId: author })).toEqual({
+      expect(read('feed.request', { v: 1, kind: 'resume', authorId: author })).toEqual({
         type: 'feed.request',
         kind: 'other',
         authorId: author,
       })
-      expect(read('feed.request', { v: 1, kind: 'continue', text: 7, authorId: 'x' })).toEqual({
+      expect(read('feed.request', { v: 1, kind: 'resume', text: 7, authorId: 'x' })).toEqual({
         type: 'feed.request',
         kind: 'other',
       })
+    })
+
+    it('request.command → a press without a name', () => {
+      expect(read('feed.request', { ...command, command: 'deploy' })).toEqual({
+        ...shown('feed.request', command),
+        command: null,
+      })
+    })
+
+    it('candidate.bump → null, release.reason → null', () => {
+      expect(read('feed.candidate', { ...candidate, bump: 'hotfix' })).toEqual({
+        ...shown('feed.candidate', candidate),
+        bump: null,
+      })
+      expect(read('feed.release', { ...release, outcome: 'failed', reason: 'moon_phase' })).toEqual(
+        { ...shown('feed.release', release), outcome: 'failed', reason: null },
+      )
+    })
+
+    it('release.outcome and decision.kind → «newer»: what became of the site cannot be guessed', () => {
+      expect(read('feed.release', { ...release, outcome: 'partly' })).toEqual({ type: 'newer' })
+      expect(read('feed.decision', { ...decision, kind: 'consent' })).toEqual({ type: 'newer' })
     })
 
     it('result.next → null: the screen is drawn by the task status', () => {
@@ -1133,5 +1328,70 @@ describe('failure catalogue', () => {
       expect(text.endsWith('.')).toBe(true)
       for (const name of feedFailureCodes) expect(text).not.toContain(name)
     }
+  })
+})
+
+describe('rows of a candidate and a release', () => {
+  it('closes their enums', () => {
+    expect(feedDecisionKinds).toEqual(['release'])
+    expect(feedReleaseOutcomes).toEqual([
+      'installed',
+      'rolled_back',
+      'failed',
+      'unknown',
+      'refused',
+    ])
+    expect(feedReleaseReasons).toEqual([
+      'conflict',
+      'outdated',
+      'not_started',
+      'site_check',
+      'technical',
+      'not_allowed',
+      'checks_failed',
+      'site_inactive',
+      'client_variable',
+      'site_broken_before',
+      'plugin_outdated',
+      'slug_taken',
+      'values_unavailable',
+      'created_id_in_code',
+      'site_unreachable',
+    ])
+  })
+
+  it('reads what a rollback left, and a release row without it', () => {
+    const release = {
+      v: 1,
+      releaseId: '0199f0a0-0000-7000-8000-000000000001',
+      version: 'v1.2.0',
+      outcome: 'rolled_back',
+      reason: 'site_check',
+      credits: 'returned',
+    }
+    expect(accepts('feed.release', release)).toBe(true)
+    expect(accepts('feed.release', { ...release, kept: { records: 1, tables: 2 } })).toBe(true)
+    expect(accepts('feed.release', { ...release, kept: { records: -1, tables: 0 } })).toBe(false)
+    expect(accepts('feed.release', { ...release, kept: { records: 1 } })).toBe(false)
+  })
+
+  it('takes a version only as vX.Y.Z without leading zeros', () => {
+    for (const version of ['v0.0.1', 'v1.4.0', 'v999999999.0.0'])
+      expect(accepts('feed.candidate', { ...candidate, version })).toBe(true)
+    for (const version of ['1.4.0', 'v1.4', 'v01.4.0', 'v1.4.0-rc.1', 'V1.4.0', ''])
+      expect(accepts('feed.candidate', { ...candidate, version })).toBe(false)
+  })
+
+  it('counts files, media and records, never names them', () => {
+    expect(feedCandidatePayloadSchema.shape.files.shape).toHaveProperty('added')
+    expect(accepts('feed.candidate', { ...candidate, paths: ['a.php'] })).toBe(false)
+    expect(accepts('feed.candidate', { ...candidate, media: 1.5 })).toBe(false)
+  })
+
+  it('names the release by its id and says nothing raw about why it ended', () => {
+    expect(accepts('feed.release', { ...release, reason: 'conflict in wp-config.php' })).toBe(false)
+    expect(accepts('feed.release', { ...release, step: 'files' })).toBe(false)
+    for (const outcome of feedReleaseOutcomes)
+      expect(accepts('feed.release', { ...release, outcome })).toBe(true)
   })
 })

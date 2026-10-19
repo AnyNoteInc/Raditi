@@ -1,9 +1,17 @@
+import { pluralRu } from '../plural.ts'
+import type { PreviewUnavailableReason } from '../preview/preview-state.ts'
+import type { ChatCommandId } from '../release/chat-commands.ts'
+import type { VersionBump } from '../release/semver.ts'
 import type {
   FeedCancelledBy,
   FeedCeilingReason,
   FeedCreditsState,
   FeedFailurePayload,
+  FeedReleaseOutcome,
+  FeedReleaseReason,
   FeedResultPayload,
+  FeedUpdateOutcome,
+  FeedUndoReason,
   FeedStep,
   TaskMode,
   TaskWaitingReason,
@@ -19,20 +27,11 @@ import type { TaskStatus } from './task-status.ts'
  *
  * A feed row stores a code; the Russian text is chosen here when the row is shown, so a
  * corrected wording also reaches old rows. The texts are for the web cabinet and, later, for
- * Telegram: no markup, nothing but words. Types only are imported, so the module carries no
- * runtime dependency.
+ * Telegram: no markup, nothing but words. Besides the plural of a noun (`plural.ts`, which
+ * imports nothing), types only are imported, so the module carries no other runtime dependency.
  */
 
-/** The form of a Russian noun that goes with the number: 1 кредит, 2 кредита, 5 кредитов. */
-export function pluralRu(count: number, one: string, few: string, many: string): string {
-  const whole = Math.abs(Math.trunc(count))
-  const lastTwo = whole % 100
-  if (lastTwo >= 11 && lastTwo <= 14) return many
-  const last = whole % 10
-  if (last === 1) return one
-  if (last >= 2 && last <= 4) return few
-  return many
-}
+export { pluralRu }
 
 // Thousands are set apart with a no-break space, so a number never wraps: «2 500».
 const groupDigits = (count: number): string =>
@@ -350,6 +349,8 @@ export const feedRowText = Object.freeze({
   unreadable: 'Не удалось показать это сообщение. Напишите нам, если оно важно.',
   /** `feed.request` of the kind `retry`. */
   retry: 'Вы попросили попробовать ещё раз',
+  /** `feed.request` of the kind `continue`: «Продолжить» after a question about credits. */
+  continue: 'Вы попросили продолжить работу',
   /** `feed.request` of a kind added later, when it carries no text. */
   otherRequest: 'Вы продолжили задачу.',
 })
@@ -375,6 +376,12 @@ export const feedQuestionText = Object.freeze({
   /** An answer to a question that already has one. */
   answered: 'На этот вопрос уже ответили.',
 })
+
+/**
+ * The last sentence of a failure card when the dialog kept its candidate (`feed.failure` with
+ * `next: 'awaiting_approval'`). What can be done with the changes is the candidate card's to say.
+ */
+export const feedFailureKeptText = 'Изменения, готовые до этого, мы сохранили.'
 
 /** The lines next to «Попробовать ещё» on the failure card. */
 export const feedRetryText = Object.freeze({
@@ -419,3 +426,255 @@ export const feedStateText = Object.freeze({
   toProjects: 'К проектам',
   openSite: 'Открыть сайт',
 })
+
+// ---------------------------------------------------------------------------------------------
+// A candidate, the preview and the release (docs/plan/53-chat-preview-release.md)
+// ---------------------------------------------------------------------------------------------
+
+/** «1.4.0»: a version as the client reads it, without the letter of the tag. */
+export const feedVersionText = (tag: string): string => tag.replace(/^v/, '')
+
+/** Why this number is proposed. */
+export const feedVersionBumpLabel: Readonly<Record<VersionBump, string>> = Object.freeze({
+  patch: 'Исправления',
+  minor: 'Новые возможности',
+  major: 'Крупные изменения',
+})
+
+/** The card of a pass that left changes (`feed.candidate`). */
+export const feedCandidateText = Object.freeze({
+  title: 'Изменения готовы',
+  hint: 'Посмотрите их в предпросмотре справа. Если всё в порядке, выпустите новую версию сайта.',
+  /** Under the card while the dialog waits: words start a new pass on top of these changes. */
+  revise: 'Если нужно что-то поправить, напишите — агент продолжит с этого места.',
+  release: 'Выпустить новую версию',
+})
+
+/** «Предлагаем выпустить как версию 1.4.0». */
+export const feedCandidateVersionText = (tag: string): string =>
+  `Предлагаем выпустить как версию ${feedVersionText(tag)}`
+
+/** Shown when a candidate changes records of the site. */
+export const feedRecordsChangedText = (count: number): string =>
+  `Изменится записей на сайте: ${groupDigits(count)}`
+
+/** Shown when a candidate adds media files. */
+export const feedMediaAddedText = (count: number): string =>
+  `Добавится медиафайлов: ${groupDigits(count)}`
+
+/** The customer's own command, as the feed shows it (`feed.request` of the kind `command`). */
+export const feedCommandText: Readonly<Record<ChatCommandId, string>> = Object.freeze({
+  release: 'Вы попросили выпустить новую версию',
+  preview: 'Вы открыли предпросмотр',
+  reset: 'Вы сбросили данные предпросмотра',
+  update: 'Вы попросили обновить рабочую копию',
+  // Never a row of the kind `command`: the press is written as `retry` (`feedRowText.retry`).
+  retry: 'Вы попросили попробовать ещё раз',
+  cancel: 'Вы отменили диалог',
+  undo: 'Вы попросили отменить выпуск',
+})
+
+/** `feed.decision` of the kind `release`. */
+export const feedDecisionText = (tag: string): string =>
+  `Вы решили выпустить версию ${feedVersionText(tag)}.`
+
+/** The title of the plate of a release by its outcome. */
+export const feedReleaseTitle: Readonly<Record<FeedReleaseOutcome, string>> = Object.freeze({
+  installed: 'Версия установлена',
+  rolled_back: taskStatusLabel.rolled_back,
+  failed: 'Версию не установили',
+  unknown: 'Проверяем сайт',
+  refused: 'Выпуск не начат',
+})
+
+/** The first sentence of the plate. */
+export function feedReleaseText(outcome: FeedReleaseOutcome, tag: string): string {
+  const version = feedVersionText(tag)
+  switch (outcome) {
+    case 'installed':
+      return `Версия ${version} установлена на сайт.`
+    case 'rolled_back':
+      return `Версию ${version} установить не удалось, и мы вернули сайт к прежнему состоянию.`
+    case 'failed':
+      return `Версию ${version} установить не удалось. На сайте ничего не изменилось.`
+    case 'unknown':
+      return `Не удалось подтвердить, что версия ${version} установлена. Мы разбираемся; пока не закончим, новые версии на сайт не выкладываются.`
+    case 'refused':
+      return `Выпуск версии ${version} не начат. На сайте ничего не изменилось.`
+  }
+}
+
+/** The second sentence: why it ended so; null in `reason` — none. */
+export const feedReleaseReasonText: Readonly<Record<FeedReleaseReason, string>> = Object.freeze({
+  conflict:
+    'На сайте за это время изменились те же файлы или записи. Обновите рабочую копию и проверьте изменения ещё раз.',
+  outdated: 'Сайт изменился после начала диалога. Обновите рабочую копию и выпустите версию снова.',
+  not_started: 'Установка не началась вовремя. Попробуйте выпустить версию ещё раз.',
+  site_check: 'После установки сайт не прошёл проверку.',
+  technical: 'Произошёл технический сбой.',
+  not_allowed: 'Выпускать версии могут только владелец и администраторы рабочего пространства.',
+  checks_failed:
+    'Проверки изменений не прошли. Откройте вкладку «Проверки», попросите исправить ошибки и выпустите версию снова.',
+  site_inactive:
+    'Сайт сейчас не подключён к Радити. Возобновите подключение и выпустите версию снова.',
+  client_variable:
+    'В изменениях записей есть значение переменной окружения сайта. Попросите убрать его и выпустите версию снова.',
+  site_broken_before:
+    'Сайт не отвечал как обычно ещё до установки, поэтому мы ничего на нём не меняли. Проверьте, что сайт открывается, и выпустите версию снова.',
+  plugin_outdated:
+    'Модуль «Радити» на сайте устарел и не умеет переносить такие изменения базы данных. Напишите нам — поможем обновить модуль.',
+  slug_taken:
+    'На сайте уже есть страница с адресом, который выбрал агент. Попросите агента выбрать другой адрес и выпустите версию снова.',
+  values_unavailable:
+    'Не удалось показать изменения базы данных перед выпуском. Напишите в диалог, чтобы агент собрал изменения заново, и выпустите версию снова.',
+  created_id_in_code:
+    'В коде изменений указан номер новой страницы из предпросмотра, а на сайте у неё будет другой номер. Попросите агента ссылаться на новую страницу по её адресу и выпустите версию снова.',
+  site_unreachable:
+    'Модуль «Радити» на сайте не ответил, поэтому мы не смогли сверить изменения базы данных. Проверьте, что сайт открывается, и выпустите версию снова.',
+})
+
+/**
+ * What a rollback left on the site (`feed.release.kept`): new tables and columns stay — the
+ * version before does not use them, and removing them would take what the site wrote into them;
+ * a new page or post of the release stays too when someone changed it after the release or
+ * something of the site already stands on it (comments, a menu item). The count is all the row
+ * keeps — not which kind of record, nor why —, so the words name both. Empty — nothing.
+ */
+export function feedReleaseKeptText(
+  kept: { records: number; tables: number } | undefined,
+): string[] {
+  if (!kept) return []
+  return [
+    kept.tables > 0
+      ? 'Новые таблицы и поля базы данных остались на сайте: прежняя версия их не использует, а удаление стёрло бы то, что сайт успел в них записать.'
+      : null,
+    kept.records === 1
+      ? 'Страница или запись, которую добавил выпуск, осталась на сайте: после выпуска её изменили или к ней уже что-то добавили, поэтому мы её не убрали. Если она не нужна, удалите её в админке сайта.'
+      : kept.records > 1
+        ? `Страницы и записи, которые добавил выпуск, остались на сайте (${groupDigits(kept.records)}): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке сайта.`
+        : null,
+  ].filter((line): line is string => line !== null)
+}
+
+// ---------------------------------------------------------------------------------------------
+// «Отменить выпуск» (docs/plan/53, «Отмена выпуска»)
+// ---------------------------------------------------------------------------------------------
+
+/** The press of the client (`feed.undo`, stage `confirmed`). */
+export const feedUndoConfirmedText = (undone: string): string =>
+  `Вы решили отменить выпуск ${feedVersionText(undone)}.`
+
+/** The title of the plate of an undo by its outcome. */
+export const feedUndoTitle: Readonly<Record<FeedReleaseOutcome, string>> = Object.freeze({
+  installed: 'Выпуск отменён',
+  rolled_back: 'Выпуск не отменили',
+  failed: 'Выпуск не отменили',
+  unknown: 'Проверяем сайт',
+  refused: 'Отмена не начата',
+})
+
+/** The first sentence of the plate: `undone` — the version undone, `version` — the undo's own. */
+export function feedUndoText(
+  outcome: FeedReleaseOutcome,
+  versions: { undone: string; version: string; returnsTo: string },
+): string {
+  const undone = feedVersionText(versions.undone)
+  switch (outcome) {
+    case 'installed':
+      return `Сайт вернулся к версии ${feedVersionText(versions.returnsTo)}; теперь на нём версия ${feedVersionText(versions.version)}.`
+    case 'rolled_back':
+      return `Вернуть версию ${feedVersionText(versions.returnsTo)} не удалось, и сайт остался на версии ${undone}.`
+    case 'failed':
+      return `Отменить выпуск ${undone} не удалось. На сайте ничего не изменилось.`
+    case 'unknown':
+      return `Не удалось подтвердить, что выпуск ${undone} отменён. Мы разбираемся; пока не закончим, новые версии на сайт не выкладываются.`
+    case 'refused':
+      return `Отмена выпуска ${undone} не начата. На сайте ничего не изменилось.`
+  }
+}
+
+/** The second sentence of an undo that did not end `installed`. */
+export function feedUndoReasonText(reason: FeedUndoReason): string {
+  switch (reason) {
+    case 'conflict':
+      return 'Пока мы готовили возврат, на сайте изменились файлы или записи, которые менял выпуск. Откройте «Отменить выпуск» ещё раз — мы проверим заново.'
+    case 'undo_outdated':
+    case 'outdated':
+      return 'После этого выпуска на сайт установили другую версию.'
+    case 'site_check':
+      return 'После возврата сайт не прошёл проверку.'
+    case 'site_broken_before':
+      return 'Сайт не отвечал как обычно ещё до возврата, поэтому мы ничего на нём не меняли. Проверьте, что сайт открывается, и отмените выпуск снова.'
+    case 'not_allowed':
+      return 'Отменять выпуски могут только владелец и администраторы рабочего пространства.'
+    case 'site_inactive':
+      return 'Сайт сейчас не подключён к Радити. Возобновите подключение и отмените выпуск снова.'
+    case 'site_unreachable':
+      return 'Модуль «Радити» на сайте не ответил, поэтому мы не смогли сверить записи. Проверьте, что сайт открывается, и отмените выпуск снова.'
+    case 'plugin_outdated':
+      return feedReleaseReasonText.plugin_outdated
+    case 'not_started':
+      return 'Возврат не начался вовремя. Попробуйте отменить выпуск ещё раз.'
+    default:
+      return feedReleaseReasonText.technical
+  }
+}
+
+/**
+ * What an installed undo left as the site holds it: records someone changed or removed after the
+ * release, new pages the site built on since. null — none.
+ */
+export function feedUndoKeptText(kept: number): string | null {
+  return kept > 0
+    ? `Не вернули записей: ${groupDigits(kept)} — после выпуска их изменили на сайте или к ним уже что-то добавили.`
+    : null
+}
+
+/** The title of the plate of an «Обновить» that left no new revision (`feed.update`). */
+export const feedUpdateTitle: Readonly<Record<FeedUpdateOutcome, string>> = Object.freeze({
+  emptied: 'Изменения уже на сайте',
+  conflict: 'Рабочую копию не обновили',
+  current: 'Рабочая копия уже обновлена',
+  withdrawn: 'Рабочую копию не обновили',
+  failed: 'Рабочую копию не обновили',
+})
+
+/** What came of the «Обновить»; `conflicts` — files of the dialog the site changed too. */
+export function feedUpdateText(outcome: FeedUpdateOutcome, conflicts: number): string {
+  switch (outcome) {
+    case 'emptied':
+      return 'Все изменения этого диалога уже есть на сайте, выпускать их не нужно.'
+    case 'conflict':
+      return `На сайте за это время изменились те же места, что и в этом диалоге${conflicts > 0 ? ` (файлов: ${groupDigits(conflicts)})` : ''}, поэтому изменения не переносятся на новую версию сайта сами. Отмените этот диалог и опишите задачу в новом — агент сделает её на новой версии сайта.`
+    case 'current':
+      return 'Изменения этого диалога уже собраны на последней версии сайта.'
+    case 'withdrawn':
+      return 'Вы написали в диалог, пока мы обновляли рабочую копию, поэтому её не обновили. Когда агент закончит, попросите обновить её снова.'
+    case 'failed':
+      return 'Произошёл технический сбой. Попробуйте обновить рабочую копию ещё раз позже.'
+  }
+}
+
+/** The panel to the right of a dialog. */
+export const previewPanelText = Object.freeze({
+  preview: 'Предпросмотр',
+  files: 'Файлы',
+  database: 'База данных',
+  checks: 'Проверки',
+  openInNewTab: 'Открыть в новой вкладке',
+  /** While the preview is built or rebuilt. */
+  building: 'Готовим предпросмотр…',
+  /** The preview stopped after days without a look; opening it builds it again. */
+  expired:
+    'Предпросмотр остановлен, потому что его давно не открывали. Откройте его снова — мы его подготовим.',
+  failed: 'Не удалось подготовить предпросмотр. Попробуйте сбросить его данные или напишите нам.',
+})
+
+/** Why there is no preview, by `unavailable_reason` (Р4, Р16): said plainly, never drawn. */
+export const previewUnavailableText: Readonly<Record<PreviewUnavailableReason, string>> =
+  Object.freeze({
+    no_database:
+      'Предпросмотр недоступен: у нас нет доступа к базе данных сайта. Изменения в файлах можно посмотреть на вкладке «Файлы».',
+    no_core: 'Предпросмотр недоступен: в копии сайта нет файлов, без которых он не запускается.',
+    not_supported: 'Для сайтов этого типа предпросмотр пока не работает.',
+  })

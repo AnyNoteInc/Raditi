@@ -529,6 +529,17 @@ describe('newTaskVerdict', () => {
       if (!taken) expect(askWithoutTariff({ launchesToday }).reason).toBe('trial_daily_limit')
     })
 
+    // «Попробовать ещё» after a failure: the attempt in which the agent failed is not counted
+    // against the client (spec §20, decision 4 of 11.10.2026); unpaid work still bounds it.
+    it('does not ask a retry about the day, but about unpaid work', () => {
+      expect(ask({ placement: 'retry', launchesToday: 500 }).allowed).toBe(true)
+      expect(askWithoutTariff({ placement: 'retry', launchesToday: 3 }).allowed).toBe(true)
+      expect(ask({ placement: 'new', launchesToday: 5 }).reason).toBe('daily_limit')
+      expect(
+        ask({ placement: 'retry', launchesToday: 500, unpaidWork: credits('300') }).reason,
+      ).toBe('unpaid_limit')
+    })
+
     it('gives an unpaid tariff the day of the trial, not the day of its plan', () => {
       const accounts = three(account(300), account(35), account(100))
       const overdue = tariff('past_due')
@@ -802,16 +813,14 @@ describe('newTaskVerdict', () => {
       expect(askToContinue(busy)).toEqual(allowed(390, 0, 1))
       expect(askToContinueWithoutTariff(busy)).toEqual(allowed(15, 0, 1))
       expect(ask({ placement: 'new', ...busy }).reason).toBe('daily_limit')
-      expect(ask({ placement: 'retry', ...busy }).reason).toBe('daily_limit')
-      expect(askWithoutTariff({ placement: 'retry', ...busy }).reason).toBe('trial_daily_limit')
+      expect(ask({ placement: 'retry', ...busy }).reason).toBe('unpaid_limit')
+      expect(askWithoutTariff({ placement: 'retry', ...busy }).reason).toBe('trial_unpaid_limit')
     })
 
-    it('refuses a retry by the day and by unpaid work, like a new task', () => {
-      expect(ask({ placement: 'retry', launchesToday: 5 }).reason).toBe('daily_limit')
+    it('refuses a retry by unpaid work like a new task, never by the day', () => {
+      expect(ask({ placement: 'retry', launchesToday: 5 }).allowed).toBe(true)
       expect(ask({ placement: 'retry', unpaidWork: credits('300') }).reason).toBe('unpaid_limit')
-      expect(askWithoutTariff({ placement: 'retry', launchesToday: 3 }).reason).toBe(
-        'trial_daily_limit',
-      )
+      expect(askWithoutTariff({ placement: 'retry', launchesToday: 3 }).allowed).toBe(true)
       expect(askWithoutTariff({ placement: 'retry', unpaidWork: credits('70') }).reason).toBe(
         'trial_unpaid_limit',
       )
