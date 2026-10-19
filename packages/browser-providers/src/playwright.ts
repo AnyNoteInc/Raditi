@@ -85,6 +85,12 @@ function denied(connection: PageBrowserConnection, request: Request, url: URL): 
   }
 }
 
+/** A navigation Chromium's own error page took over (`chrome-error://`), not one of the page. */
+function interruptedByErrorPage(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : ''
+  return /is interrupted by another navigation to "chrome-error:\/\//.test(message)
+}
+
 /** What Playwright raised, as one of the port's reasons; a page's message never goes on. */
 function failure(error: unknown, connected: boolean): Error {
   if (error instanceof PageBrowserError) return error
@@ -377,7 +383,14 @@ class PlaywrightPageBrowser implements PageBrowser {
     const { path, waitUntil } = pageNavigateInputSchema.parse(input)
     return this.#act(async () => {
       const before = this.#document.count
-      await this.#page.goto(`${this.#origin.origin}${path}`, { waitUntil: waitUntil ?? 'load' })
+      const target = `${this.#origin.origin}${path}`
+      const options = { waitUntil: waitUntil ?? 'load' }
+      // The error page of an earlier refusal may commit only now, over this navigation: it is
+      // asked once more, the page being settled by then.
+      await this.#page.goto(target, options).catch(async (error: unknown) => {
+        if (!interruptedByErrorPage(error)) throw error
+        await this.#page.goto(target, options)
+      })
       if (URL.parse(this.#page.url())?.origin !== this.#origin.origin)
         throw new PageBrowserError('denied')
       return this.#location(before)

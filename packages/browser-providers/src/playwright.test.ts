@@ -103,6 +103,62 @@ describe('the Playwright page browser', () => {
     expect(browser.close).not.toHaveBeenCalled()
   })
 
+  it('asks a navigation again once when the error page of a refusal took it over', async () => {
+    let url = 'about:blank'
+    const response = {
+      status: () => 200,
+      request: () => ({ redirectedFrom: () => ({}) }),
+    }
+    const interrupted = (to: string) =>
+      new Error(
+        `page.goto: Navigation to "${ORIGIN}/about/" is interrupted by another navigation to "${to}"`,
+      )
+    const goto = vi
+      .fn<(target: string) => Promise<typeof response>>()
+      // The entry through the gateway.
+      .mockImplementationOnce(async () => {
+        url = `${ORIGIN}/`
+        return response
+      })
+      .mockImplementationOnce(async () => {
+        throw interrupted('chrome-error://chromewebdata/')
+      })
+      .mockImplementationOnce(async (target) => {
+        url = target
+        return response
+      })
+      // A page of the site that navigates on its own is not asked again.
+      .mockImplementationOnce(async () => {
+        throw interrupted(`${ORIGIN}/elsewhere/`)
+      })
+    const page = {
+      on: vi.fn(),
+      url: () => url,
+      title: async () => 'О нас',
+      isClosed: () => false,
+      mainFrame: () => ({}),
+      waitForLoadState: vi.fn(async () => undefined),
+      goto,
+    }
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      setDefaultNavigationTimeout: vi.fn(),
+      route: vi.fn(async () => undefined),
+      on: vi.fn(),
+      newPage: vi.fn(async () => page),
+      close: vi.fn(async () => undefined),
+    }
+    const browser = { newContext: vi.fn(async () => context), isConnected: () => true }
+    const opened = await createPlaywrightBrowserFactory({
+      connect: vi.fn(async () => browser as never),
+    }).connect(connection)
+
+    expect(await opened.navigate({ path: '/about/' })).toMatchObject({ path: '/about/' })
+    expect(goto).toHaveBeenCalledTimes(3)
+    await expect(opened.navigate({ path: '/about/' })).rejects.toThrow()
+    expect(goto).toHaveBeenCalledTimes(4)
+  })
+
   it('does not connect for a call already given up', async () => {
     const connect = vi.fn()
     const signal = AbortSignal.abort()
