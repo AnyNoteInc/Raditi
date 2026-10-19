@@ -283,14 +283,25 @@ function ownedPart(name: SnapshotPartName, bytes: unknown): Buffer {
  * `credentials` (capture), a part that contains one verbatim — a file name or content in an
  * archive, or the patch text — is refused as snapshotHasCredential(). Binary changes to tracked
  * files are compressed inside the patch: the trusted candidate repeats this exact match over
- * every changed file in full (GitWorkspaceService.preparePublication).
+ * every changed file in full (GitWorkspaceService.preparePublication). `homeRefused` — the
+ * spellings of the values of the client's variables (envValueForms; plan 53, Р13) — refuses the
+ * home archive alone the same way: the driver masked them in the session it keeps, and one left
+ * there would reach the agent of every later turn. A change of the site that holds one is the
+ * publication's to refuse (envValueInChange).
  */
 export async function validateSnapshotArchives(
   state: SessionState,
   parts: SnapshotArchives,
   credentials: readonly string[] = [],
+  homeRefused: readonly string[] = [],
 ): Promise<SnapshotArchives> {
-  return validateParts(state, parts, snapshotPartNames, credentials) as Promise<SnapshotArchives>
+  return validateParts(
+    state,
+    parts,
+    snapshotPartNames,
+    credentials,
+    homeRefused,
+  ) as Promise<SnapshotArchives>
 }
 
 /** The same checks for only the given parts, such as the home part a sandbox sealed. */
@@ -308,16 +319,23 @@ async function validateParts(
   parts: Partial<SnapshotArchives>,
   names: readonly SnapshotPartName[],
   credentials: readonly string[],
+  homeRefused: readonly string[] = [],
 ): Promise<Partial<SnapshotArchives>> {
   const parsed = sessionStateSchema.safeParse(state)
   if (!parsed.success) throw badRequest('Invalid snapshot session state')
   const owned: Partial<SnapshotArchives> = {}
   for (const name of names) owned[name] = ownedPart(name, parts?.[name])
-  const known = credentials
-    .filter((value) => value.length > 0)
-    .map((value) => Buffer.from(value, 'utf8'))
+  const bytes = (values: readonly string[]) =>
+    values.filter((value) => value.length > 0).map((value) => Buffer.from(value, 'utf8'))
+  const known = bytes(credentials)
   // Sequential decoding bounds memory: compressed parts are staged, expanded tar data is not.
-  if (owned.home) await validateArchive(owned.home, tooLargeFor('home'), known, parsed.data)
+  if (owned.home)
+    await validateArchive(
+      owned.home,
+      tooLargeFor('home'),
+      [...known, ...bytes(homeRefused)],
+      parsed.data,
+    )
   if (owned.untracked) await validateArchive(owned.untracked, tooLargeFor('untracked'), known)
   if (owned.patch && credentialScan(known)(owned.patch)) throw snapshotHasCredential()
   return owned

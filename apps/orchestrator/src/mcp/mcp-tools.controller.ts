@@ -1,15 +1,45 @@
+import { Inject } from '@nestjs/common'
 import { Ctx } from '@nestjs/microservices'
 import { McpController, Tool, type McpContext } from '@rekog/mcp-nest'
+import { isPreviewServing, previewOrigin, type PreviewAddress } from '@repo/domain'
 import { z } from 'zod'
 
-import { MCP_REQUEST_ACCESS } from './mcp-access.ts'
+import { MCP_REQUEST_ACCESS, type McpAccess } from './mcp-access.ts'
 import type { McpRequest } from './mcp-auth.guard.ts'
+
+/** Where previews answer (PREVIEW_BASE_DOMAIN and the rest); null — they are not configured. */
+export const MCP_PREVIEW_ADDRESS = Symbol('MCP_PREVIEW_ADDRESS')
+
+/**
+ * What the agent is told of its site. A dialog with a preview (docs/plan/53-chat-preview-
+ * release.md, Р3, Р21): `url` is the preview's own address while it serves — where the browser
+ * tools go — and null otherwise; `siteUrl` is the site's address, the one links inside content
+ * keep (the preview's database is a copy of the site's, Р15), never a place to write. A dialog
+ * without one (previews are not configured): the site, as before.
+ */
+export function siteInfoOf(access: McpAccess, address: PreviewAddress | null) {
+  const preview = access.preview
+  if (!preview) return { url: access.url, stack: access.stack }
+  return {
+    url:
+      address && isPreviewServing(preview.status) ? previewOrigin(preview.hostname, address) : null,
+    siteUrl: access.url,
+    stack: access.stack,
+    preview: preview.status,
+    // What a release carries of the database of this site (docs/plan/53, «Операции БД и
+    // миграции»): the kinds the preview's last build found writable.
+    database: { operations: preview.dbKinds ?? ['content_update'] },
+  }
+}
 
 @McpController()
 export class McpToolsController {
+  constructor(@Inject(MCP_PREVIEW_ADDRESS) private readonly previews: PreviewAddress | null) {}
+
   @Tool({
     name: 'site_info',
-    description: 'Read the registered public URL and stack of the site assigned to this turn.',
+    description:
+      "Read the stack of the site of this turn and its addresses: url — where this dialog's preview answers (null while it is not ready; the site itself where there are no previews), siteUrl — the site's own address, which links inside content keep; database.operations — what of the database a release carries here.",
     parameters: z.strictObject({}),
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   })
@@ -18,7 +48,6 @@ export class McpToolsController {
     if (!access)
       return { isError: true, content: [{ type: 'text', text: 'MCP authorization is required' }] }
     // No credentials, internal ids, site owner or third-party content go to the agent.
-    const data = { url: access.url, stack: access.stack }
-    return { content: [{ type: 'text', text: JSON.stringify(data) }] }
+    return { content: [{ type: 'text', text: JSON.stringify(siteInfoOf(access, this.previews)) }] }
   }
 }

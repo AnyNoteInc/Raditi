@@ -513,6 +513,7 @@ export class SandboxRunner {
           prepared: command.prepared,
           argv: command.argv,
           credentials: command.credentials,
+          ...(command.envValues ? { envValues: command.envValues } : {}),
           // Core takes the container over before anything is imported into it.
           created: async (execution) => {
             held.execution = execution
@@ -645,6 +646,7 @@ export class SandboxRunner {
               remainingMs: command.work.remainingMs,
               driverId: command.work.driverId,
               credentials: command.work.credentials ?? [],
+              ...(command.work.envValues ? { envValues: command.work.envValues } : {}),
             }
           : { ...base, purpose: 'removal' },
         this.#stop.signal,
@@ -744,6 +746,8 @@ export class SandboxRunner {
       const captured = await held.execution.capture({
         home: command.home,
         baseSha: command.baseSha,
+        ...(command.sandboxBaseSha ? { sandboxBaseSha: command.sandboxBaseSha } : {}),
+        ...(command.addOnlyPaths ? { addOnlyPaths: command.addOnlyPaths } : {}),
       })
       for (const part of ['patch', 'untracked'] as const) {
         const uploaded = await this.#call(held, () =>

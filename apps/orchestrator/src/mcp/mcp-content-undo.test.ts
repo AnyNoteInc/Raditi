@@ -168,6 +168,7 @@ describe('the trusted content undo of the role', () => {
       },
       f.snapshotId,
       true,
+      undefined,
     )
     f.journal.reserve.mockResolvedValue({
       kind: 'replay',

@@ -22,19 +22,46 @@ const DESTINATION = '/tmp/raditi-base.bundle'
 const failed = () =>
   new DomainError('GIT_OPERATION_FAILED', 'Trusted repository operation failed', 502)
 
+/** The commit the sandbox starts from: the working-set commit when there is one (plan 53, Р11). */
+export const bundleBase = (bundle: Pick<TurnBundleSource, 'baseSha' | 'sandboxBaseSha'>): string =>
+  bundle.sandboxBaseSha ?? bundle.baseSha
+
+const BUNDLE_HEADER_BYTES = 4096
+
+/**
+ * The commit the single ref of a base bundle points at, read from the bundle's own header (v2 or
+ * v3: signature, capabilities, no prerequisites, exactly `refs/heads/raditi-base`); null for
+ * anything else.
+ */
+export function bundleHead(bytes: Uint8Array): string | null {
+  const head = Buffer.from(bytes.subarray(0, BUNDLE_HEADER_BYTES)).toString('latin1')
+  const end = head.indexOf('\n\n')
+  if (end < 0) return null
+  const [signature, ...lines] = head.slice(0, end).split('\n')
+  if (signature !== '# v2 git bundle' && signature !== '# v3 git bundle') return null
+  const refs = lines.filter((line) => !line.startsWith('@'))
+  const match = refs.length === 1 ? /^([a-f0-9]{40}) (.+)$/.exec(refs[0]!) : null
+  return match?.[2] === `refs/heads/${BASE_BUNDLE_REF}` ? match[1]! : null
+}
+
 /**
  * Imports the base bundle into /workspace/repo through exec stdin only, wherever the sandbox
  * runs (core's local executor or a runner). The whole bundle is read and checked against its
- * size and SHA-256 first; the clone runs without hooks, submodules or an origin.
+ * size and SHA-256 first; the clone runs without hooks, submodules or an origin. The bundle's ref
+ * must be the commit the turn starts from: `sandboxBaseSha` with a working set, else `baseSha`.
  */
 export async function importBaseBundle(sandbox: Sandbox, bundle: TurnBundleSource): Promise<void> {
   // The branch and SHA become git arguments: only the task branch and a full SHA-1 pass.
   if (
     !publicationShaSchema.safeParse(bundle.baseSha).success ||
+    (bundle.sandboxBaseSha !== undefined &&
+      !publicationShaSchema.safeParse(bundle.sandboxBaseSha).success) ||
     !publicationSourceSchema.shape.branch.safeParse(bundle.branch).success
   )
     throw badRequest('Invalid base bundle')
+  const start = bundleBase(bundle)
   const bytes = await readBundle(bundle)
+  if (bundleHead(bytes) !== start) throw failed()
   await sandboxExec(sandbox, ['test', '!', '-L', '/workspace'])
   // The runtime may already have made an empty work directory. Git clone itself rejects
   // existing nonempty directories; explicitly reject links before it touches the path.
@@ -69,7 +96,7 @@ export async function importBaseBundle(sandbox: Sandbox, bundle: TurnBundleSourc
       'checkout',
       '-b',
       bundle.branch,
-      bundle.baseSha,
+      start,
     ])
   } finally {
     await sandboxExec(sandbox, ['rm', '-f', '--', DESTINATION])

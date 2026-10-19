@@ -10,7 +10,20 @@ import {
 } from '@modelcontextprotocol/core'
 import { z } from 'zod'
 
-import { restoreArgumentsSchema, wpRestArgumentsSchema } from './mcp-content.ts'
+import type { McpAccess } from './mcp-access.ts'
+import {
+  browserClickArgumentsSchema,
+  browserExpectArgumentsSchema,
+  browserFillArgumentsSchema,
+  browserNavigateArgumentsSchema,
+  browserNoArgumentsSchema,
+  browserRunChecksArgumentsSchema,
+} from './mcp-browser-tools.ts'
+import {
+  dbSchemaArgumentsSchema,
+  restoreArgumentsSchema,
+  wpRestArgumentsSchema,
+} from './mcp-content.ts'
 
 export const MCP_SECURITY = Symbol('MCP_SECURITY')
 export const MCP_BODY_LIMIT = 100 * 1024
@@ -32,6 +45,28 @@ const contentCall = z.discriminatedUnion('name', [
     arguments: restoreArgumentsSchema,
     _meta: z.record(z.string(), z.unknown()).optional(),
   }),
+])
+const schemaCall = z.strictObject({
+  name: z.literal('db_schema'),
+  arguments: dbSchemaArgumentsSchema,
+  _meta: z.record(z.string(), z.unknown()).optional(),
+})
+const call = <Name extends string, Arguments extends z.ZodType>(name: Name, args: Arguments) =>
+  z.strictObject({
+    name: z.literal(name),
+    arguments: args,
+    _meta: z.record(z.string(), z.unknown()).optional(),
+  })
+const browserCall = z.discriminatedUnion('name', [
+  call('browser_navigate', browserNavigateArgumentsSchema),
+  call('browser_click', browserClickArgumentsSchema),
+  call('browser_fill', browserFillArgumentsSchema),
+  call('browser_expect', browserExpectArgumentsSchema),
+  call('browser_snapshot', browserNoArgumentsSchema.optional()),
+  call('browser_screenshot', browserNoArgumentsSchema.optional()),
+  call('browser_console', browserNoArgumentsSchema.optional()),
+  call('browser_network', browserNoArgumentsSchema.optional()),
+  call('browser_run_checks', browserRunChecksArgumentsSchema),
 ])
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),
@@ -58,7 +93,49 @@ const methodSchemas = {
 export interface McpSecurity {
   allowedHosts: readonly string[]
   allowLocalOrigin: boolean
+  /** The content profile is on: wp_rest and restore, into the preview of the dialog. */
   contentTools?: boolean
+  /**
+   * The P6 path: content of a dialog without a preview row goes to the site itself. Only where
+   * previews are not configured (the local stands); a dialog with a preview never writes there.
+   */
+  siteContent?: boolean
+  /** The browser profile is on: browser_* on the preview of the dialog. */
+  browserTools?: boolean
+}
+
+/**
+ * Tool families beside site_info; a request sees and calls only those of its scope. `schema` —
+ * `db_schema`, where the preview's last build found tables of the platform writable, or where
+ * no build has said yet: the CLI asks for its tools once, when its turn starts, and the first
+ * turn of a dialog starts while its preview is still being built. Each call checks the kinds of
+ * the preview as built then (`DB_OPERATION_NOT_ALLOWED`).
+ */
+export const mcpToolFamilies = ['content', 'browser', 'schema'] as const
+export type McpToolFamily = (typeof mcpToolFamilies)[number]
+
+/** A preview that is gone for the dialog, or never was there to work on (Р4, Р16). */
+const closedPreview = new Set(['unavailable', 'destroyed'])
+
+/**
+ * What a request of this scope is offered (Р3, Р4, Р21): content tools only for a preview with
+ * its own database — or, where previews are not configured, the P6 path of a dialog without
+ * one; the browser only on a preview. Each call checks the preview again under its own lock.
+ */
+export function mcpToolFamiliesOf(access: McpAccess, security: McpSecurity): McpToolFamily[] {
+  const preview = access.preview
+  const open = preview !== null && !closedPreview.has(preview.status)
+  const families: McpToolFamily[] = []
+  if (security.contentTools && (preview === null ? security.siteContent : open && preview.database))
+    families.push('content')
+  if (
+    families.includes('content') &&
+    preview !== null &&
+    (preview.dbKinds === undefined || preview.dbKinds.includes('schema_migration'))
+  )
+    families.push('schema')
+  if (security.browserTools && open) families.push('browser')
+  return families
 }
 
 /** Hostnames only: sandbox-gw rewrites Host to the configured upstream's host. */
@@ -117,7 +194,7 @@ export function mcpHeadersAllowed(
 }
 
 /** Bound the parsed request before the SDK recurses; no source values enter error messages. */
-export function mcpBodyAllowed(body: unknown, contentTools = false): boolean {
+export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[] = []): boolean {
   const pending = [{ value: body, depth: 1 }]
   let nodes = 0
   while (pending.length) {
@@ -141,7 +218,9 @@ export function mcpBodyAllowed(body: unknown, contentTools = false): boolean {
   if (request.method === 'tools/call')
     return (
       siteInfoCall.safeParse(request.params).success ||
-      (contentTools && contentCall.safeParse(request.params).success)
+      (families.includes('content') && contentCall.safeParse(request.params).success) ||
+      (families.includes('schema') && schemaCall.safeParse(request.params).success) ||
+      (families.includes('browser') && browserCall.safeParse(request.params).success)
     )
   return true
 }

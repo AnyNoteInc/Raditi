@@ -13,8 +13,9 @@ import { LocalTurnExecutor } from './local-turn-executor.ts'
 
 /**
  * TURN_EXECUTOR by configuration: runner VMs over the runner API, or core's own Docker (PoC,
- * never in production). The supervisor that uses it, its recovery and, for the local executor,
- * TurnReconciler are wired with the task queue in P12.
+ * never in production). Global: the supervisor that uses it, its recovery and, for the local
+ * executor, TurnReconciler over the same SANDBOX_PROVIDER are wired with the task queue in
+ * TasksModule (docs/plan/53-chat-preview-release.md, R3).
  */
 @Module({})
 export class TurnsModule {
@@ -22,12 +23,14 @@ export class TurnsModule {
     if (executor === 'runner')
       return {
         module: TurnsModule,
+        global: true,
         imports: [RunnerApiModule],
         providers: [{ provide: TURN_EXECUTOR, useExisting: RemoteTurnExecutor }],
         exports: [TURN_EXECUTOR, RunnerApiModule],
       }
     return {
       module: TurnsModule,
+      global: true,
       imports: [SandboxModule, DriversModule],
       providers: [
         {
@@ -42,7 +45,7 @@ export class TurnsModule {
           inject: [SANDBOX_PROVIDER, AGENT_DRIVERS],
         },
       ],
-      exports: [TURN_EXECUTOR],
+      exports: [TURN_EXECUTOR, SandboxModule],
     }
   }
 }

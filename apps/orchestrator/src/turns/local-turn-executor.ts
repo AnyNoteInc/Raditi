@@ -34,13 +34,16 @@ import {
   type TurnRestoreSource,
   type TurnSealInput,
   type TurnTakeover,
+  type TurnWorkingTree,
+  type TurnWorkingTreeInput,
 } from '@repo/domain'
 
-import { importBaseBundle } from '../git-workspace/base-bundle.ts'
+import { bundleBase, importBaseBundle } from '../git-workspace/base-bundle.ts'
 import type { PresignedTransfer } from '../sessions/presigned-transfer.ts'
 import type { SandboxSnapshotTransport, SnapshotArchives } from '../sessions/sandbox-snapshot.ts'
 import { openSnapshotParts, sealSnapshotPart } from '../sessions/snapshot-parts.ts'
 import { readTurnOutput, type TurnOutputStart } from './turn-output.ts'
+import { exportSandboxWorkingTree } from './working-tree-export.ts'
 
 export interface LocalTurnExecutorDependencies {
   sandboxes: SandboxProvider
@@ -100,6 +103,7 @@ export class LocalTurnExecutor implements TurnExecutor {
       'turn',
       parser,
       input.credentials,
+      input.envValues ?? [],
       {
         argv: input.argv,
         env,
@@ -108,6 +112,7 @@ export class LocalTurnExecutor implements TurnExecutor {
     await input.created(execution)
     signal.throwIfAborted()
     await (this.deps.importBundle ?? importBaseBundle)(sandbox, input.bundle)
+    execution.importedBase = bundleBase(input.bundle)
     if (input.restore) {
       signal.throwIfAborted()
       const { home, archives } = await this.#restoreSource(input.restore)
@@ -155,6 +160,7 @@ export class LocalTurnExecutor implements TurnExecutor {
       'work',
       this.deps.parser(input.driverId),
       input.credentials,
+      input.envValues ?? [],
     )
   }
 
@@ -165,6 +171,31 @@ export class LocalTurnExecutor implements TurnExecutor {
   /** Always reachable; the turn credentials lived in the memory of the core that died. */
   takeover(): TurnTakeover {
     return { holdsCredentials: false }
+  }
+
+  /**
+   * The working tree of a running turn for its preview (plan 53, Р23): the container is found by
+   * its exact id and labels, the agent goes on.
+   */
+  async exportWorkingTree(
+    input: TurnWorkingTreeInput,
+    signal: AbortSignal,
+  ): Promise<TurnWorkingTree> {
+    signal.throwIfAborted()
+    const sandbox = await this.deps.sandboxes.get(input.containerId)
+    if (!sandbox) throw conflict('The turn container is gone')
+    if (
+      sandbox.id !== input.containerId ||
+      (Object.entries(input.labels) as [keyof SandboxLabels, unknown][]).some(
+        ([key, value]) => sandbox.labels[key] !== value,
+      )
+    )
+      throw conflict('The turn container has other labels')
+    return exportSandboxWorkingTree(sandbox, {
+      baseSha: input.baseSha,
+      ...(input.addOnlyPaths ? { addOnlyPaths: input.addOnlyPaths } : {}),
+      ...(input.alsoPaths ? { alsoPaths: input.alsoPaths } : {}),
+    })
   }
 
   /** Every part is fetched and checked, and the data key zeroed, before anything is written. */
@@ -238,6 +269,11 @@ class RemovalExecution implements TurnExecution {
 
 class LocalTurnExecution implements TurnExecution {
   #home: Uint8Array | undefined
+  /**
+   * The commit the sandbox was checked out at, when this execution imported it: capture diffs
+   * against it and nothing else (plan 53, Р11). Unknown for an adopted container.
+   */
+  importedBase: string | undefined
 
   constructor(
     private readonly sandbox: Sandbox,
@@ -245,6 +281,8 @@ class LocalTurnExecution implements TurnExecution {
     private readonly purpose: Purpose,
     private readonly parser: Pick<AgentDriver, 'parseEvent'>,
     private readonly credentials: readonly string[],
+    /** The values of the client's variables of the turn: masked in output, refused in home. */
+    private readonly envValues: readonly string[],
     /** Only a freshly prepared turn launches its agent; an adopted one re-attaches. */
     private readonly command?: { argv: string[]; env: Record<string, string> },
   ) {}
@@ -263,7 +301,7 @@ class LocalTurnExecution implements TurnExecution {
       // The turn limit includes publication: the agent's exec ends before the container does.
       timeoutMs,
     })
-    return new LocalAgentExec(handle, this.parser, this.credentials, {
+    return new LocalAgentExec(handle, this.parser, this.credentials, this.envValues, {
       cursor: { stdout: 0, stderr: 0 },
       eventCount: 0,
     })
@@ -279,7 +317,7 @@ class LocalTurnExecution implements TurnExecution {
       if (isDomainError(error) && ['BAD_REQUEST', 'NOT_FOUND'].includes(error.code)) return null
       throw error
     }
-    return new LocalAgentExec(handle, this.parser, this.credentials, from)
+    return new LocalAgentExec(handle, this.parser, this.credentials, this.envValues, from)
   }
 
   async quiesce(): Promise<void> {
@@ -287,14 +325,25 @@ class LocalTurnExecution implements TurnExecution {
     await this.sandbox.quiesce()
   }
 
-  async capture(input: { home: SessionState; baseSha: string }): Promise<CapturedTurn> {
+  async capture(input: {
+    home: SessionState
+    baseSha: string
+    sandboxBaseSha?: string
+    addOnlyPaths?: readonly string[]
+  }): Promise<CapturedTurn> {
     this.#allow('turn', 'work')
-    // The agent may have copied a turn credential into its home or the site: never save it.
+    const base = input.sandboxBaseSha ?? input.baseSha
+    if (this.importedBase !== undefined && this.importedBase !== base)
+      throw conflict('Capture names another base than the sandbox was given')
+    // The agent may have copied a turn credential into its home or the site, or a value of the
+    // client's variables into its home: never save it.
     const archives = await this.deps.transport.capture(
       this.sandbox,
       input.home,
-      input.baseSha,
+      base,
       this.credentials,
+      input.addOnlyPaths ?? [],
+      this.envValues,
     )
     this.#home = archives.home
     return {
@@ -333,6 +382,7 @@ class LocalAgentExec implements TurnAgentExec {
     private readonly handle: ExecHandle,
     private readonly parser: Pick<AgentDriver, 'parseEvent'>,
     private readonly credentials: readonly string[],
+    private readonly envValues: readonly string[],
     private readonly start: TurnOutputStart,
   ) {}
 
@@ -353,6 +403,7 @@ class LocalAgentExec implements TurnAgentExec {
       () => {},
       this.credentials,
       this.start,
+      this.envValues,
     )
   }
 

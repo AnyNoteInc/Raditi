@@ -10,6 +10,11 @@ import {
   type McpHostScope,
   type McpSiteScope,
 } from './mcp-access.ts'
+import {
+  BROWSER_SCREENSHOT_EVENT,
+  browserScreenshotKey,
+  screenshotIdOf,
+} from './mcp-browser-store.ts'
 import { recoverContentWrite, type ContentGatewayResolver } from './mcp-content.ts'
 import { PostgresMcpJournal } from './mcp-journal.ts'
 
@@ -68,6 +73,8 @@ export class McpContentMaintenance {
   /**
    * Reconciles admitted writes past their deadline, when a site can prove absence. Nothing is
    * dispatched again; a proof clears the writer marker, the operator hold stays for recovery.
+   * Only writes to the site: they alone hold its barrier. A write of unknown outcome into a
+   * preview is closed by the preview's reset (docs/plan/53-chat-preview-release.md, Р24).
    */
   async recoverWrites(input: Page = {}) {
     const page = this.#page(input)
@@ -105,6 +112,32 @@ export class McpContentMaintenance {
     }
   }
 
+  /**
+   * Writes into previews left open by an unknown outcome (Р24), once the database they wrote
+   * into is gone: the preview was rebuilt under a later write epoch, or destroyed with its
+   * dialog. Nothing is dispatched or reconciled — the reset that replaced that database waited
+   * for their deadline — so they close as reset; a preview that keeps its epoch keeps them open.
+   */
+  async closePreviewWrites(input: Pick<Page, 'siteId' | 'limit'> = {}) {
+    const page = this.#page(input)
+    // Closed rows leave the condition: a full batch means the caller runs it again.
+    const rows = await this.db.$transaction(
+      (tx) => tx.$queryRaw<Array<{ id: string }>>`
+      WITH stale AS (
+        SELECT c.id FROM mcp_calls c JOIN preview_environments p ON p.id = c.preview_id
+        WHERE c.result IS NULL
+          AND (c.write_started_at IS NULL OR c.write_deadline_at <= clock_timestamp())
+          AND (p.write_epoch > c.preview_write_epoch OR p.status = 'destroyed')
+          AND (${page.siteId ?? null}::uuid IS NULL OR p.site_id = ${page.siteId ?? null}::uuid)
+        ORDER BY c.id LIMIT ${page.limit} FOR UPDATE OF c SKIP LOCKED)
+      UPDATE mcp_calls c SET result = 'error',
+        response = '{"code":"CONTENT_PREVIEW_RESET"}'::jsonb, finished_at = clock_timestamp()
+      FROM stale WHERE c.id = stale.id
+      RETURNING c.id`,
+    )
+    return { closed: rows.length, more: rows.length === page.limit }
+  }
+
   async sweepSnapshots(input: Page = {}) {
     const page = this.#page(input)
     const rows = await this.db.$transaction(
@@ -133,7 +166,9 @@ export class McpContentMaintenance {
         }
         for (const call of snapshot.mcpCalls) {
           if (call.receiptPurgedAt) continue
-          if (call.writeStartedAt) {
+          // The receipt of a write into a preview lives in the preview's database, which goes
+          // with the preview: only the site is asked to forget one.
+          if (call.writeStartedAt && call.previewId === null) {
             const task = snapshot.task!
             await (
               await this.resolve(this.#site(task))
@@ -167,6 +202,13 @@ export class McpContentMaintenance {
     }
   }
 
+  /**
+   * The content of a task with third parties' data, once its undo window is over: the pixels of
+   * the agent's screenshots and the sealed values of its database plan in `raditi-artifacts`
+   * (docs/plan/53-chat-preview-release.md, N22, Р22), then the contact map in Vault. A task
+   * still holding its site — a turn, a release, a write — is left for a later sweep; a removal
+   * that fails is repeated, deleting an object twice changes nothing.
+   */
   async sweepMasks(input: Page = {}) {
     const page = this.#page(input)
     const rows = await this.db.$transaction(
@@ -186,10 +228,20 @@ export class McpContentMaintenance {
       try {
         const task = await this.#claimMasks(row.id)
         if (!task) continue
+        for (const key of await this.#taskArtifacts(task.id))
+          await this.storage.delete('artifacts', key)
         await this.secrets.kvDestroyAll(contentMaskPath({ siteId: task.siteId, taskId: task.id }))
-        await this.db.$transaction((tx) =>
-          tx.task.update({ where: { id: task.id }, data: { contentMasksPurgedAt: new Date() } }),
-        )
+        await this.db.$transaction(async (tx) => {
+          // The description of a plan holds its values in clear (docs/plan/53, «Операции БД и
+          // миграции»): it goes with them.
+          await tx.$executeRaw`
+            UPDATE task_candidates SET db_view = NULL, db_view_sha256 = NULL
+            WHERE task_id = ${task.id}::uuid AND db_view IS NOT NULL`
+          await tx.task.update({
+            where: { id: task.id },
+            data: { contentMasksPurgedAt: new Date() },
+          })
+        })
         purged++
       } catch {
         failed++
@@ -257,6 +309,29 @@ export class McpContentMaintenance {
     })
   }
 
+  /** The objects of the task's own prefix its events and its plan name. */
+  async #taskArtifacts(taskId: string): Promise<string[]> {
+    const { screenshots, operations } = await this.db.$transaction(async (tx) => ({
+      screenshots: await tx.taskEvent.findMany({
+        where: { taskId, type: BROWSER_SCREENSHOT_EVENT },
+        select: { payload: true },
+      }),
+      operations: await tx.previewDbOperation.findMany({
+        where: { taskId },
+        select: { beforeObjectKey: true, afterObjectKey: true },
+      }),
+    }))
+    const keys = [
+      ...screenshots.flatMap((event) => {
+        const id = screenshotIdOf(event.payload)
+        return id ? [browserScreenshotKey(taskId, id)] : []
+      }),
+      ...operations.flatMap((operation) => [operation.beforeObjectKey, operation.afterObjectKey]),
+    ]
+    const prefix = `tasks/${taskId.toLowerCase()}/`
+    return [...new Set(keys)].filter((key) => key.startsWith(prefix))
+  }
+
   async #claimMasks(id: string) {
     return this.db.$transaction(async (tx) => {
       const initial = await tx.task.findUniqueOrThrow({ where: { id } })
@@ -278,6 +353,11 @@ export class McpContentMaintenance {
           // must not keep third parties' contacts in Vault.
           (await tx.mcpCall.count({ where: { turn: { taskId: id }, result: null } })) ||
           (await tx.snapshot.count({ where: { taskId: id, purgedAt: null } })) ||
+          // An undo of its release confirmed, its values not yet sealed for the deploy job
+          // (docs/plan/53, «Отмена выпуска»): they are read from here until it is armed.
+          (await tx.siteRelease.count({
+            where: { taskId: id, kind: 'undo', status: { in: ['approved', 'publishing'] } },
+          })) ||
           (
             await tx.$queryRaw<
               Array<{ id: string }>

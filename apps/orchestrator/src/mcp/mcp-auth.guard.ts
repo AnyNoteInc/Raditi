@@ -7,6 +7,7 @@ import { MCP_TOKEN_PATTERN } from '../llm/turn-key.ts'
 import {
   MCP_ACCESS,
   MCP_REQUEST_ACCESS,
+  MCP_REQUEST_TOOLS,
   type McpAccess,
   type McpAccessStore,
 } from './mcp-access.ts'
@@ -15,11 +16,17 @@ import {
   mcpBodyAllowed,
   mcpErrorId,
   mcpHeadersAllowed,
+  mcpToolFamiliesOf,
   type McpSecurity,
+  type McpToolFamily,
 } from './mcp-policy.ts'
 import { McpHttpError, mcpErrorSummary } from './mcp-http-error.ts'
 
-export type McpRequest = Request & { [MCP_REQUEST_ACCESS]?: McpAccess }
+export type McpRequest = Request & {
+  [MCP_REQUEST_ACCESS]?: McpAccess
+  /** The tool families of this request's scope: what tools/list shows and tools/call admits. */
+  [MCP_REQUEST_TOOLS]?: readonly McpToolFamily[]
+}
 
 const unsupportedProtocolVersion = `Bad Request: Unsupported protocol version (supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(', ')})`
 
@@ -73,12 +80,14 @@ export class McpAuthGuard implements CanActivate {
       return fail(503, 'MCP authorization is unavailable')
     }
     if (!authorized) return fail(401, 'MCP token is invalid or expired')
-    if (req.method === 'POST' && !mcpBodyAllowed(req.body, this.security.contentTools))
+    const families = mcpToolFamiliesOf(authorized, this.security)
+    if (req.method === 'POST' && !mcpBodyAllowed(req.body, families))
       fail(400, 'Invalid MCP request')
     // The SDK's Node/Web adapter rejects noncanonical IPv6 spellings when constructing a
     // Request URL. Only after exact-host validation, forward the same canonical authority.
     req.headers.host = new URL(`http://${req.headers.host}`).host
     req[MCP_REQUEST_ACCESS] = authorized
+    req[MCP_REQUEST_TOOLS] = families
     return true
   }
 }

@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks'
 import {
   badRequest,
   conflict,
+  DomainError,
   isDomainError,
   leaseLost,
   presignedGetSchema,
@@ -31,6 +32,7 @@ import {
   type TurnPrepareInput,
   type TurnSealInput,
   type TurnTakeover,
+  type TurnWorkingTree,
 } from '@repo/domain'
 
 import type { ExecStream } from './exec-stream.ts'
@@ -157,6 +159,7 @@ export class RemoteTurnExecutor implements TurnExecutor {
         remainingMs: Math.max(1, remainingMs),
         bundle: {
           baseSha: input.bundle.baseSha,
+          ...(input.bundle.sandboxBaseSha ? { sandboxBaseSha: input.bundle.sandboxBaseSha } : {}),
           branch: input.bundle.branch,
           sha256: input.bundle.sha256,
           sizeBytes: input.bundle.sizeBytes,
@@ -177,6 +180,7 @@ export class RemoteTurnExecutor implements TurnExecutor {
         prepared: input.prepared,
         argv: input.argv,
         credentials: [...input.credentials],
+        ...(input.envValues?.length ? { envValues: [...input.envValues] } : {}),
       },
       {
         answers: ['prepared'],
@@ -232,7 +236,10 @@ export class RemoteTurnExecutor implements TurnExecutor {
                 driverId: input.driverId,
                 // The session that launched the agent still has them: they do not travel again.
                 ...(!input.holdsCredentials && input.credentials.length
-                  ? { credentials: [...input.credentials] }
+                  ? {
+                      credentials: [...input.credentials],
+                      ...(input.envValues?.length ? { envValues: [...input.envValues] } : {}),
+                    }
                   : {}),
               },
             }
@@ -267,6 +274,20 @@ export class RemoteTurnExecutor implements TurnExecutor {
     const session = this.hub.session(assignment.runner.id, runnerTimings.pollHoldMs + 15_000)
     if (!session) return null
     return { runnerSession: session, holdsCredentials: session === assignment.runner.session }
+  }
+
+  /**
+   * Previews run on core's own Docker until M10 (plan 53, «Что не входит»): the runner protocol
+   * has no step for a working tree yet.
+   */
+  exportWorkingTree(): Promise<TurnWorkingTree> {
+    return Promise.reject(
+      new DomainError(
+        'NOT_SUPPORTED',
+        'A working tree of a turn on a runner VM is not exported yet',
+        501,
+      ),
+    )
   }
 }
 
@@ -331,7 +352,12 @@ class RemoteTurnExecution implements TurnExecution {
     )
   }
 
-  async capture(input: { home: SessionState; baseSha: string }): Promise<CapturedTurn> {
+  async capture(input: {
+    home: SessionState
+    baseSha: string
+    sandboxBaseSha?: string
+    addOnlyPaths?: readonly string[]
+  }): Promise<CapturedTurn> {
     this.#allow('turn', 'work')
     // Refused here as the local capture refuses it, before the runner is asked.
     const home = sessionStateSchema.safeParse(input.home)
@@ -339,7 +365,13 @@ class RemoteTurnExecution implements TurnExecution {
     const candidates: CandidateParts = {}
     const captured = await this.hub.send(
       this.live,
-      { type: 'capture', home: home.data, baseSha: input.baseSha },
+      {
+        type: 'capture',
+        home: home.data,
+        baseSha: input.baseSha,
+        ...(input.sandboxBaseSha ? { sandboxBaseSha: input.sandboxBaseSha } : {}),
+        ...(input.addOnlyPaths?.length ? { addOnlyPaths: [...input.addOnlyPaths] } : {}),
+      },
       { answers: ['captured'], replyMs: runnerReplyMs.capture, candidates, epoch: this.#epoch },
     )
     // The hub checked both uploads against the report.

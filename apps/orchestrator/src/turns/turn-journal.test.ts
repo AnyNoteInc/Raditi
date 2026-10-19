@@ -1,9 +1,14 @@
 import { createPrismaClient, PostgresSiteLeaseStore, type PrismaClient } from '@repo/db'
-import type { SiteLeaseGrant, TurnEvidence } from '@repo/domain'
+import { feedRowSchema, type SiteLeaseGrant, type TurnEvidence } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { sampleDriverId } from '../testing/ids.ts'
-import { replayedTurn, TaskEventTurnJournal, type JournaledEvidence } from './turn-journal.ts'
+import {
+  feedStepsOf,
+  replayedTurn,
+  TaskEventTurnJournal,
+  type JournaledEvidence,
+} from './turn-journal.ts'
 
 const fence = {
   siteId: '00000000-0000-4000-8000-000000000002',
@@ -43,6 +48,16 @@ describe('turn journal boundary', () => {
     await expect(new TaskEventTurnJournal({ $queryRaw }).record(evidence)).rejects.toMatchObject({
       code: 'LEASE_LOST',
     })
+  })
+})
+
+describe('feedStepsOf', () => {
+  it('tells the client of the work and of saving it, by the phase alone', () => {
+    expect(feedStepsOf('running')).toEqual(['work'])
+    expect(feedStepsOf('resumed')).toEqual(['work'])
+    expect(feedStepsOf('quiesced')).toEqual(['save'])
+    for (const phase of ['leased', 'output', 'checkpointed', 'completed', 'failed'] as const)
+      expect(feedStepsOf(phase)).toEqual([])
   })
 })
 
@@ -302,6 +317,52 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       nativeSessionId: 'synthetic-native-session',
       headSha: 'c'.repeat(40),
     })
+    await f.leases.free(next)
+  })
+
+  it('moves the task to running and tells the client its stages, once each, under the fence', async () => {
+    const f = await fixture()
+    const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
+    await db.agentDriver.upsert({
+      where: { id: sampleDriverId },
+      update: {},
+      create: { id: sampleDriverId, image, capabilities: {}, enabled: true },
+    })
+    await db.task.update({ where: { id: f.task.id }, data: { status: 'preparing' } })
+    const turn = await db.taskTurn.create({
+      data: { taskId: f.task.id, turnNo: 1, status: 'running', driverId: sampleDriverId, image },
+    })
+    const status = async () =>
+      (await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).status
+
+    await f.journal.record(f.evidence)
+    expect(await status()).toBe('preparing')
+    await f.journal.record({ ...f.evidence, sequence: 2, phase: 'running' })
+    expect(await status()).toBe('running')
+    // A recovered owner says `resumed` again: no second stage, no second move.
+    await f.journal.record({ ...f.evidence, sequence: 3, phase: 'resumed' })
+    await f.journal.record({ ...f.evidence, sequence: 4, phase: 'quiesced' })
+    await f.journal.record({ ...f.evidence, sequence: 5, phase: 'quiesced' })
+
+    const stages = await db.taskEvent.findMany({
+      where: { taskId: f.task.id, type: 'feed.step' },
+      orderBy: { id: 'asc' },
+    })
+    expect(stages.map((row) => [row.clientVisible, row.turnId, row.payload])).toEqual([
+      [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'work' }],
+      [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'save' }],
+    ])
+    // Every row the journal assembles passes the strict write schema of the feed.
+    for (const row of stages)
+      expect(feedRowSchema.safeParse({ type: row.type, payload: row.payload }).success).toBe(true)
+
+    // An owner that lost the site tells the client nothing and moves nothing.
+    await db.task.update({ where: { id: f.task.id }, data: { status: 'preparing' } })
+    const next = await f.nextEpoch()
+    await expect(
+      f.journal.record({ ...f.evidence, sequence: 6, phase: 'running' }),
+    ).rejects.toMatchObject({ code: 'LEASE_LOST' })
+    expect(await status()).toBe('preparing')
     await f.leases.free(next)
   })
 

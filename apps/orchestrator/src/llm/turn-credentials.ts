@@ -4,6 +4,10 @@ import {
   conflict,
   crossBorderNotCleared,
   DomainError,
+  envVarLimits,
+  envVarNameProblem,
+  envVarReachesAgent,
+  envVarValueSchema,
   isDomainError,
   leaseLost,
   llmGatewayUnavailable,
@@ -31,6 +35,11 @@ import {
 import { z } from 'zod'
 
 import { decodeLimitWindows, policyFlaggedEvent } from '../llm-gateway/types.ts'
+import {
+  readSiteEnvValues,
+  readSiteEnvValuesToRefuse,
+  type SiteEnvVarVersion,
+} from './site-env-values.ts'
 import {
   LLM_KEY_PATTERN,
   lockSubscriptionPool,
@@ -61,12 +70,43 @@ const storedGrantSchema = turnCredentialGrantSchema
       validUntil <= deadline + TURN_PUBLICATION_GRACE_MS
     )
   })
+/**
+ * The client's variables a turn's agent commands get (docs/plan/53-chat-preview-release.md, Р13),
+ * by name; the driver spreads them over as many secret files as they take (`envFiles`).
+ */
+const envValuesSchema = z
+  .record(
+    z.string().refine((name) => envVarNameProblem(name) === null),
+    envVarValueSchema,
+  )
+  .refine((values) => Object.keys(values).length > 0)
+/**
+ * Every value a site may have, as one JSON object in the record of the turn: 64 values of 8 KiB,
+ * each escaped up to sixfold (a control character is `\u0001`), with their names.
+ */
+const ENV_JSON_CHARS = envVarLimits.perSite * (6 * envVarLimits.valueMaxBytes + 80)
+const envJson = z
+  .string()
+  .max(ENV_JSON_CHARS)
+  .refine((text) => {
+    try {
+      return envValuesSchema.safeParse(JSON.parse(text)).success
+    } catch {
+      return false
+    }
+  }, 'Invalid client variables')
 const secretSchema = z.strictObject({
   v: z.literal('1'),
   llmApiKey: z.string().regex(LLM_KEY_PATTERN),
   mcpToken: z.string().regex(MCP_TOKEN_PATTERN),
   sessionId: z.string().min(1).max(64),
   accountId: z.uuid(),
+  /**
+   * The variables as the turn got them, read once when its key was made: recovery and every
+   * retry return the same values the sandbox has, so masking never misses one the client has
+   * changed since. Absent — none reached the agent.
+   */
+  env: envJson.optional(),
   grant: z
     .string()
     .max(2_048)
@@ -84,6 +124,7 @@ type KeyRow = Prisma.LlmKeyGetPayload<Record<string, never>>
 interface OwnedTask {
   id: string
   attempt: number
+  siteId: string
   dataClass: 'synthetic' | 'client'
   now: Date
   modelClass?: string | null
@@ -108,7 +149,9 @@ interface Selection {
   staleAccountId: string | null
 }
 type Preparation =
-  { kind: 'existing'; key: KeyRow; now: Date } | ({ kind: 'selection' } & Selection)
+  | { kind: 'existing'; key: KeyRow; now: Date }
+  /** `variables`: those of the site the agent's commands get, at the versions their rows name. */
+  | ({ kind: 'selection'; variables: SiteEnvVarVersion[] } & Selection)
 
 export interface GatewayTurnCredentialsOptions {
   prisma: Database
@@ -229,11 +272,13 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
           prepared.task.now.getTime() + 25 * 60_000,
         ),
       )
+      const env = await this.#agentValues(prepared.task.siteId, prepared.variables)
       const data = {
         v: '1',
         ...newTurnKeys(),
         sessionId: ref.sessionId,
         accountId: prepared.decision.accountId,
+        ...(env === null ? {} : { env }),
         grant: JSON.stringify({
           ...grant,
           deadlineAt: grant.deadlineAt.toISOString(),
@@ -330,7 +375,55 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         return { kind: 'existing', key, now: task.now }
       }
       turnCredentialExpiresAt(grant, task.now)
-      return { kind: 'selection', ...(await this.#select(tx, ref, grant, task)) }
+      return {
+        kind: 'selection',
+        variables: await agentVariables(tx, task),
+        ...(await this.#select(tx, ref, grant, task)),
+      }
+    })
+  }
+
+  /**
+   * The values of the variables the agent's commands get (Р13), read from Vault at the version
+   * each row names: one written after the row was read waits for the next turn, and one removed
+   * meanwhile is left out. A JSON object for the turn's record, or null when nothing is left.
+   */
+  async #agentValues(
+    siteId: string,
+    variables: readonly SiteEnvVarVersion[],
+  ): Promise<string | null> {
+    const values = await readSiteEnvValues(this.#secrets, siteId, variables)
+    if (Object.keys(values).length === 0) return null
+    const json = JSON.stringify(values)
+    // More than a site may have: only rows two writers added at once give that.
+    if (json.length > ENV_JSON_CHARS)
+      throw badRequest('The client variables for the agent do not fit one turn', {
+        reason: 'client_variables_too_large',
+      })
+    return json
+  }
+
+  /**
+   * The current values of every variable of the turn's site, whatever their recipients and the
+   * version the turn got (Р13): what the turn's candidate is refused for besides its own.
+   */
+  async siteValues(input: TurnCredentialRef): Promise<string[]> {
+    const ref = turnCredentialRefSchema.parse(input)
+    return this.#safe(async () => {
+      const rows = await this.#transaction(
+        (tx) =>
+          tx.$queryRaw<{ siteId: string; name: string }[]>`
+          SELECT v.site_id AS "siteId", v.name FROM tasks t
+          JOIN site_env_vars v ON v.site_id = t.site_id
+          WHERE t.id = ${ref.taskId}::uuid ORDER BY v.name`,
+      )
+      const siteId = rows[0]?.siteId
+      if (siteId === undefined) return []
+      return readSiteEnvValuesToRefuse(
+        this.#secrets,
+        siteId,
+        rows.map((row) => row.name),
+      )
     })
   }
 
@@ -584,6 +677,9 @@ const compound = (ref: TurnCredentialRef) => ({
 const values = (stored: StoredSecret): TurnCredentialValues => ({
   llmApiKey: stored.llmApiKey,
   mcpToken: stored.mcpToken,
+  ...(stored.env === undefined
+    ? {}
+    : { envValues: envValuesSchema.parse(JSON.parse(stored.env) as unknown) }),
 })
 function matches(key: KeyRow, stored: StoredSecret, now: Date, active = true): boolean {
   return (
@@ -616,7 +712,7 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
   // The turn sends the code and content of the site, so the 152-FZ gate reads the data class of
   // the site's workspace. A task row that names another workspace owns nothing, as in MCP access.
   const rows = await tx.$queryRaw<OwnedTask[]>`
-    SELECT t.id, t.attempt, t.model_class::text AS "modelClass",
+    SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
       w.data_class::text AS "dataClass", clock_timestamp() AS now
     FROM tasks t
     JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
@@ -630,6 +726,23 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
   // Recheck after taking that lock, including retries that bypass account selection entirely.
   await assertCurrentFence(tx, ref)
   return { ...rows[0], now: await clock(tx) }
+}
+/**
+ * The variables of the task's site whose values the agent's commands get (Р13): the client
+ * turned `to_agent` on with consent, and the workspace holds no real client data
+ * (`envVarReachesAgent`; until the gate of 152-FZ, rule 1).
+ */
+async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnvVarVersion[]> {
+  const rows = await tx.siteEnvVar.findMany({
+    where: { siteId: task.siteId, toAgent: true, agentConsentAt: { not: null } },
+    orderBy: { name: 'asc' },
+    select: { name: true, keyVersion: true, toAgent: true, toPreview: true, agentConsentAt: true },
+  })
+  return rows
+    .filter(
+      (row) => envVarReachesAgent(row, task.dataClass) && envVarNameProblem(row.name) === null,
+    )
+    .map((row) => ({ name: row.name, keyVersion: row.keyVersion }))
 }
 async function assertCurrentFence(tx: Transaction, ref: TurnCredentialRef): Promise<void> {
   const rows = await tx.$queryRaw<{ owned: boolean }[]>`

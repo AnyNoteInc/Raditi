@@ -90,6 +90,7 @@ const request = (hardTimeoutMs: number): TurnRequest => ({
 const driver: AgentDriver = {
   id: sampleDriverId,
   image,
+  cliVersion: '1.0.0',
   capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
   prepare: async (context) => ({
     context: { ...context },

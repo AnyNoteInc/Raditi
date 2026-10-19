@@ -64,12 +64,13 @@ export class ContentPrivacy {
   /**
    * Hides what the text shows to be a contact and every repeat of a contact the task already
    * knows, those of this read included: one value is never a marker in one place and plain
-   * text in another.
+   * text in another. Any texts of one read go together: the fields of an object, or what the
+   * agent's browser shows of a page (its text, its links, its console).
    */
-  async mask(
+  async mask<Fields extends Readonly<Record<string, string>> = PublishedContentFields>(
     scope: { siteId: string; taskId: string },
-    fields: PublishedContentFields,
-  ): Promise<PublishedContentFields> {
+    fields: Fields,
+  ): Promise<Fields> {
     if (Object.values(fields).some((value) => value.includes('[[raditi:')))
       throw badRequest('Published content contains a reserved privacy marker')
     const path = contentMaskPath(scope)
@@ -78,7 +79,7 @@ export class ContentPrivacy {
     for (let attempt = 0; attempt < 4; attempt++) {
       const entries = [...current.entries]
       const known = new Map(entries.map((entry) => [`${entry.kind}:${entry.value}`, entry]))
-      let masked: PublishedContentFields | undefined
+      let masked: Fields | undefined
       for (let pass = 0; !masked; pass++) {
         const searched = [...entries]
         const view = Object.fromEntries(
@@ -98,7 +99,7 @@ export class ContentPrivacy {
             }
             return [key, result + text.slice(copied)]
           }),
-        ) as PublishedContentFields
+        ) as Fields
         if (entries.length === searched.length) masked = view
         // Closed by default: a page that keeps yielding new values is not shown in part.
         else if (!fits(entries) || pass + 1 === MASK_PASSES) throw full()
@@ -128,10 +129,10 @@ export class ContentPrivacy {
    * number reads as a phone depends on what stands around it: every restored contact must be
    * one the next read hides again, by the same search and the same map, or nothing is written.
    */
-  async rehydrate(
+  async rehydrate<Patch extends Readonly<Record<string, string>> = PublishedContentPatch>(
     scope: { siteId: string; taskId: string },
-    patch: PublishedContentPatch,
-  ): Promise<PublishedContentPatch> {
+    patch: Patch,
+  ): Promise<Patch> {
     const values = Object.values(patch)
     if (!values.some((value) => value.includes('[[raditi:'))) return { ...patch }
     const { entries } = await this.#read(contentMaskPath(scope))
@@ -159,7 +160,7 @@ export class ContentPrivacy {
         }
         return [field, restored]
       }),
-    ) as PublishedContentPatch
+    ) as Patch
   }
 
   async #read(path: string) {

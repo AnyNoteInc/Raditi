@@ -14,7 +14,8 @@ export const MCP_TOKEN_PATTERN = new RegExp(`^${MCP_TOKEN_FORMAT}$`)
 export const TURN_KEY_IN_TEXT = new RegExp(`${LLM_KEY_FORMAT}|${MCP_TOKEN_FORMAT}`)
 
 /** A new pair for one turn. The values live in Vault `turns/`; SQL keeps only their hashes. */
-export function newTurnKeys(): TurnCredentialValues {
+/** The two secrets of a turn; the client's variables (`envValues`) are not generated here. */
+export function newTurnKeys(): Pick<TurnCredentialValues, 'llmApiKey' | 'mcpToken'> {
   return {
     llmApiKey: `sk-rdt-${randomBytes(32).toString('base64url')}`,
     mcpToken: `mcp_${randomBytes(32).toString('hex')}`,

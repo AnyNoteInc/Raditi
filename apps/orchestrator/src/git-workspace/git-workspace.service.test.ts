@@ -8,6 +8,7 @@ import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 
 import {
   DomainError,
+  isEnvValueRefusal,
   isSnapshotCredential,
   type GitProvider,
   type PublicationMetadata,
@@ -16,7 +17,7 @@ import {
   publicationLimits,
 } from '@repo/domain'
 import { pack } from 'tar-stream'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyUntrackedArchive } from './archive.ts'
 import { importBaseBundle } from './base-bundle.ts'
@@ -134,6 +135,7 @@ process.exit(data.includes('synthetic-secret-marker') ? finding : data.includes(
   const service = new GitWorkspaceService(provider, {
     transport: { kind: 'local-test', root },
     gitleaksBinary: scanner,
+    mirrorDir: join(root, 'mirrors'),
   })
   const metadata: PublicationMetadata = {
     repo,
@@ -156,7 +158,10 @@ process.exit(data.includes('synthetic-secret-marker') ? finding : data.includes(
   const prepare = async (
     diff = Buffer.alloc(0),
     untracked: Uint8Array = emptyUntrackedArchive(),
-    overrides: Partial<PublicationMetadata> & { credentials?: string[] } = {},
+    overrides: Partial<PublicationMetadata> & {
+      credentials?: string[]
+      refusedValues?: string[]
+    } = {},
   ) => {
     const candidate = await service.preparePublication({
       ...metadata,
@@ -312,6 +317,56 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
     await expect(readFile(f.scannerLog, 'utf8')).rejects.toThrow()
     // Recovery replays a checked checkpoint without the turn's credentials.
     await expect(f.prepare(patch)).resolves.toBeDefined()
+  })
+
+  it('refuses the value of a client variable in any changed file or path, in any spelling it knows (Р13)', async () => {
+    const value = 'pay-se"cret-0001'
+    const plain = 'hook-token-0002'
+    const refusal = async (
+      diff: Buffer<ArrayBuffer>,
+      untracked: Uint8Array | undefined,
+      f: Awaited<ReturnType<typeof fixture>>,
+    ) => {
+      const error: unknown = await f
+        .prepare(diff, untracked, { refusedValues: [value, plain] })
+        .then(
+          () => null,
+          (rejection: unknown) => rejection,
+        )
+      expect(isEnvValueRefusal(error)).toBe(true)
+      expect((error as DomainError).code).toBe('PUBLICATION_SECRET')
+      expect(JSON.stringify(error) + String(error)).not.toMatch(/cret-0001|token-0002/)
+    }
+    // Compressed in a binary patch: only the whole blob shows it.
+    const binary = await fixture()
+    await writeFile(
+      join(binary.work, 'binary.dat'),
+      Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(value.repeat(64))]),
+    )
+    const patch = await binary.patch()
+    expect(patch.includes(value)).toBe(false)
+    await refusal(patch, undefined, binary)
+    await expect(binary.prepare(patch)).resolves.toBeDefined()
+    // As a JSON string holds it, in a new file of the change.
+    const json = await fixture()
+    await refusal(
+      Buffer.alloc(0),
+      await archive([{ name: 'config.json', content: JSON.stringify({ key: value }) }]),
+      json,
+    )
+    // In the name of a new file.
+    const named = await fixture()
+    await refusal(
+      Buffer.alloc(0),
+      await archive([{ name: `notes-${plain}.txt`, content: 'x' }]),
+      named,
+    )
+    // Without values nothing is refused, and nothing else is looked for.
+    const other = await fixture()
+    await writeFile(join(other.work, 'index.php'), 'pay-secret but not the value\n')
+    await expect(
+      other.prepare(await other.patch(), undefined, { refusedValues: [value] }),
+    ).resolves.toBeDefined()
   })
 
   it('accepts a real compact Git binary delta and reproduces it on retry', async () => {
@@ -1019,6 +1074,13 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
 })
 
 describe('production boundaries', { timeout: 30_000 }, () => {
+  // Mirrors of these remotes are made for real before any network call: never in the shared tmp.
+  let mirrorDir = ''
+  beforeEach(async () => {
+    mirrorDir = await mkdtemp(join(tmpdir(), 'raditi-mirror-test-'))
+    roots.push(mirrorDir)
+  })
+  const https = { kind: 'https' as const, allowedOrigins: ['https://git.example.test'] }
   const ref = { provider: 'gitea' as const, owner: 'owner', name: 'repo' }
   const source = {
     repo: ref,
@@ -1045,9 +1107,7 @@ describe('production boundaries', { timeout: 30_000 }, () => {
     'file:///tmp/repo',
   ])('refuses an unapproved clone URL: %s', async (url) => {
     const p = provider(url, new Date(Date.now() + 60_000))
-    const service = new GitWorkspaceService(p, {
-      transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
-    })
+    const service = new GitWorkspaceService(p, { transport: https, mirrorDir })
     await expect(service.buildBaseBundle(source)).rejects.toThrow('HTTPS origins')
     expect(p.issueCredentials).not.toHaveBeenCalled()
   })
@@ -1057,7 +1117,7 @@ describe('production boundaries', { timeout: 30_000 }, () => {
     async (expiresAt) => {
       const service = new GitWorkspaceService(
         provider('https://git.example.test/repo', expiresAt),
-        { transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] } },
+        { transport: https, mirrorDir },
       )
       await expect(service.buildBaseBundle(source)).rejects.toThrow('short-lived grant')
     },
@@ -1074,9 +1134,7 @@ describe('production boundaries', { timeout: 30_000 }, () => {
           called.resolve()
           return new Promise<never>(() => {})
         })
-        const service = new GitWorkspaceService(p, {
-          transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
-        })
+        const service = new GitWorkspaceService(p, { transport: https, mirrorDir })
         const rejected = expect(service.buildBaseBundle(source)).rejects.toMatchObject({
           code: 'GIT_OPERATION_FAILED',
         })
@@ -1095,23 +1153,22 @@ describe('production boundaries', { timeout: 30_000 }, () => {
     const caFile = join(root, 'ca.pem')
     await writeFile(caFile, 'synthetic CA placeholder\n')
     const seen: { argv: string[]; env: NodeJS.ProcessEnv }[] = []
-    vi.mocked(runProcess).mockImplementation(async (_binary, argv, options) => {
+    // The mirror is made for real; the network is not there: its fetch fails.
+    vi.mocked(runProcess).mockImplementation(async (binary, argv, options) => {
+      if (argv.includes('init')) return realRunProcess(binary, argv, options)
+      if (argv.includes('cat-file')) return { code: 0, stdout: Buffer.from('x missing\n') }
       seen.push({ argv, env: options.env })
       return { code: 1, stdout: Buffer.alloc(0) }
     })
-    const origin = { allowedOrigins: ['https://git.example.test'] }
-    for (const transport of [
-      { kind: 'https' as const, ...origin, caFile },
-      { kind: 'https' as const, ...origin },
-    ]) {
+    for (const transport of [{ ...https, caFile }, https]) {
       const p = provider('https://git.example.test/repo', new Date(Date.now() + 60_000))
-      const service = new GitWorkspaceService(p, { transport })
+      const service = new GitWorkspaceService(p, { transport, mirrorDir })
       await expect(service.buildBaseBundle(source)).rejects.toMatchObject({
         code: 'GIT_OPERATION_FAILED',
       })
     }
     expect(seen).toHaveLength(2)
-    expect(seen[0]!.argv).toContain('clone')
+    expect(seen[0]!.argv).toContain('fetch')
     expect(seen[0]!.env.GIT_SSL_CAINFO).toBe(caFile)
     expect('GIT_SSL_CAINFO' in seen[1]!.env).toBe(false)
     for (const { argv, env } of seen) {
@@ -1142,9 +1199,7 @@ describe('production boundaries', { timeout: 30_000 }, () => {
       return { code: 0, stdout: Buffer.from(`${head}\trefs/heads/main\n`) }
     })
     const p = provider('https://git.example.test/owner/repo.git', new Date(Date.now() + 60_000))
-    const service = new GitWorkspaceService(p, {
-      transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
-    })
+    const service = new GitWorkspaceService(p, { transport: https, mirrorDir })
     await expect(service.readBranchHead({ repo: ref, branch: 'main' })).resolves.toBe(head)
     expect(p.issueCredentials).toHaveBeenCalledExactlyOnceWith(ref, 'read', 120)
     expect(seen).toHaveLength(1)
@@ -1164,9 +1219,7 @@ describe('production boundaries', { timeout: 30_000 }, () => {
 
   it('fails closed when the remote answers a branch read with anything but one ref', async () => {
     const p = provider('https://git.example.test/owner/repo.git', new Date(Date.now() + 60_000))
-    const service = new GitWorkspaceService(p, {
-      transport: { kind: 'https', allowedOrigins: ['https://git.example.test'] },
-    })
+    const service = new GitWorkspaceService(p, { transport: https, mirrorDir })
     for (const stdout of [
       `${'b'.repeat(40)}\trefs/heads/other\n`,
       `${'b'.repeat(40)}\trefs/heads/main\n${'c'.repeat(40)}\trefs/heads/x/refs/heads/main\n`,

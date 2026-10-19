@@ -233,6 +233,7 @@ describe('TurnSupervisor on a runner', () => {
     const driver: AgentDriver = {
       id: sampleDriverId,
       image,
+      cliVersion: '1.0.0',
       capabilities: {
         resume: true,
         jsonEvents: true,

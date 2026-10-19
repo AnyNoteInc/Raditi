@@ -3,6 +3,9 @@ import { Buffer } from 'node:buffer'
 import {
   agentEventSchema,
   agentOutputLimits,
+  containsEnvValue,
+  maskEnvValues,
+  maskEnvValuesDeep,
   turnOutputRejected,
   turnOutputTooLarge,
   type AgentDriver,
@@ -29,11 +32,29 @@ export interface TurnOutputStart {
 }
 
 /**
+ * A line of the agent's output with every value of the client's variables masked before the
+ * driver parses it (docs/plan/53-chat-preview-release.md, Р13): the parser clips long text,
+ * and a value cut there could no longer be found. A JSON line is masked string by string — a
+ * value with a quote in it may spell a piece of the line's own syntax — any other line as text.
+ */
+export function maskOutputLine(text: string, values: readonly string[]): string {
+  if (values.length === 0 || !containsEnvValue(text, values)) return text
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return maskEnvValues(text, values)
+  }
+  return JSON.stringify(maskEnvValuesDeep(parsed, values))
+}
+
+/**
  * Strict byte accounting precedes decoding. A line longer than the parsers read — the whole
  * output of a tool in one row of the CLI, say — does not end the turn: it is skipped whole,
  * neither kept nor decoded, and leaves SKIPPED_LINE_MESSAGE in its place, so an over-long final
  * line cannot revive an older result. Everything a turn prints stays bounded by MAX_BYTES.
- * Returns only the events read here.
+ * The values of the client's variables of the turn (`envValues`) are masked in each line before
+ * it is parsed (maskOutputLine). Returns only the events read here.
  */
 export async function readTurnOutput(
   handle: Pick<ExecHandle, 'output'>,
@@ -42,6 +63,7 @@ export async function readTurnOutput(
   assertActive: () => void,
   knownSecrets: readonly string[] = [],
   start: TurnOutputStart = { cursor: { stdout: 0, stderr: 0 }, eventCount: 0 },
+  envValues: readonly string[] = [],
 ): Promise<{ events: AgentEvent[]; cursor: ExecCursor }> {
   const cursor = { stdout: start.cursor.stdout, stderr: start.cursor.stderr }
   const events: AgentEvent[] = []
@@ -72,7 +94,7 @@ export async function readTurnOutput(
       return false
     }
     if (containsSecret(text)) throw turnOutputRejected('Agent output contains a turn credential')
-    const parsed = driver.parseEvent(text).map((event) => {
+    const parsed = driver.parseEvent(maskOutputLine(text, envValues)).map((event) => {
       const checked = agentEventSchema.safeParse(event)
       if (!checked.success) throw turnOutputRejected('Agent event failed its schema')
       return checked.data
@@ -123,4 +145,24 @@ export async function readTurnOutput(
   if (skipping) await record({ ...cursor }, skipped())
   else if (pending.length > 0) await record({ ...cursor }, decode(pending))
   return { events, cursor }
+}
+
+/**
+ * The agent's events with every value of the client's variables of the turn replaced by
+ * ENV_VALUE_MASK (docs/plan/53-chat-preview-release.md, Р13). The agent's commands may print a
+ * value; the journal, the feed and the logs never hold one. The executor masks each line before
+ * it is parsed (readTurnOutput), so here nothing is left to mask; core still checks every batch
+ * before it is journaled, whichever executor read it, and checks each event it changes against
+ * its schema again.
+ */
+export function maskTurnEvents(
+  events: readonly AgentEvent[],
+  values: readonly string[],
+): AgentEvent[] {
+  if (values.length === 0) return [...events]
+  return events.map((event) => {
+    const checked = agentEventSchema.safeParse(maskEnvValuesDeep(event, values))
+    if (!checked.success) throw turnOutputRejected('Agent event failed its schema')
+    return checked.data
+  })
 }

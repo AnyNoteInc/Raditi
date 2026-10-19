@@ -33,6 +33,13 @@ export class MemoryTurnCredentials implements TurnCredentialSource {
     this.values.delete(key(turn))
     this.revoked.push(turn)
   }
+
+  /** What the site's variables hold now (plan 53, Р13): set by a test, none by default. */
+  site: string[] = []
+
+  async siteValues(): Promise<string[]> {
+    return [...this.site]
+  }
 }
 
 /** Synthetic issuance policy for turn lifecycle tests; production reads the approved catalog. */

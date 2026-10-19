@@ -45,6 +45,7 @@ import type {
   SnapshotParts,
 } from '../sessions/snapshot.service.ts'
 import { holdForRecovery, type LeaseGuard } from './lease-guard.ts'
+import { maskTurnEvents } from './turn-output.ts'
 import { readTurnResult } from './turn-result.ts'
 
 export interface TurnSnapshotStore {
@@ -109,6 +110,16 @@ export class TurnAttempt {
   credentialRef: TurnCredentialRef | undefined
   /** turnCredentials() of the run: a changed file of the candidate must not contain one. */
   credentials: readonly string[] = []
+  /**
+   * The values of the client's variables the run's commands got (plan 53, Р13, `runEnvValues`):
+   * masked in its events, refused in its candidate.
+   */
+  envValues: readonly string[] = []
+  /**
+   * The working-set commit the sandbox started from (plan 53, Р11), from the bundle; a recovered
+   * owner derives it again from the plan before it captures.
+   */
+  sandboxBaseSha: string | undefined
   #publication: TurnPublication | undefined
   #abandoned = false
   #destroyed = false
@@ -185,6 +196,7 @@ export class TurnAttempt {
       ...(this.execId ? { execId: this.execId } : {}),
       ...(this.#candidateHeadSha ? { candidateHeadSha: this.#candidateHeadSha } : {}),
       baseSha: plan.workspace.expectedBaseSha,
+      ...(this.sandboxBaseSha ? { sandboxBaseSha: this.sandboxBaseSha } : {}),
       committedAt: plan.committedAt,
       ...(this.#checkpointStarted
         ? { snapshotPrefix: turnSnapshotPrefix(labels.sessionId, labels.turn) }
@@ -214,6 +226,15 @@ export class TurnAttempt {
     this.execution = execution
     await this.init.guard.assertFence()
     await this.record('created')
+    // A runner's container is recorded by the runner API when the runner reports it; core's own
+    // is recorded here. The preview of the dialog exports the working tree of the turn by it
+    // (Р23): without it every sync of the turn was refused `no_turn` (stand R12).
+    if (this.assignment?.executor === 'local')
+      await this.deps.assignments.recordContainer({
+        id: this.assignment.id,
+        epoch: this.init.lease.epoch,
+        containerId: execution.containerId,
+      })
   }
 
   /** The turn was given up while its container was being created: remove it now. */
@@ -289,11 +310,12 @@ export class TurnAttempt {
             await guard.checkFence()
             // Operational evidence, never shown verbatim: a `failed` event's reason is raw
             // CLI/provider text; the chat shows a Russian text chosen by the event type.
+            const masked = maskTurnEvents(batch.events, this.envValues)
             await this.record('output', {
               cursor: batch.to,
-              ...(batch.events.length ? { events: batch.events } : {}),
+              ...(masked.length ? { events: masked } : {}),
             })
-            events.push(...batch.events)
+            events.push(...masked)
           }),
         ]),
       )
@@ -337,9 +359,17 @@ export class TurnAttempt {
         run.context.nativeSessionId = event.nativeSessionId
     }
     const home = driver.sessionState(run)
+    const sandboxBaseSha = await this.#sandboxBase()
     await guard.assertFence()
-    // Refused when the agent copied a turn credential into its home or the site.
-    const captured = await ready.capture({ home, baseSha: plan.workspace.expectedBaseSha })
+    // Refused when the agent copied a turn credential into its home or the site. The patch is
+    // against the commit the sandbox holds: the working set's when it got one.
+    const captured = await ready.capture({
+      home,
+      baseSha: plan.workspace.expectedBaseSha,
+      ...(sandboxBaseSha ? { sandboxBaseSha } : {}),
+      ...(plan.workspace.addOnlyPaths?.length ? { addOnlyPaths: plan.workspace.addOnlyPaths } : {}),
+    })
+    const refusedValues = await this.#refusedValues()
     await guard.assertFence()
     const publication = await guard.interruptibleResource(
       workspace.preparePublication({
@@ -351,10 +381,15 @@ export class TurnAttempt {
         untracked: captured.untracked,
         // Binary edits of tracked files are compressed in the patch: checked there in full.
         credentials: this.credentials,
+        ...(refusedValues.length ? { refusedValues } : {}),
       }),
       (late) => late.dispose(),
     )
     this.#publication = publication
+    // Publication cut the working set again from the full base: the same commit, or the patch
+    // was taken against something else.
+    if (publication.sandboxBaseSha !== sandboxBaseSha)
+      throw conflict('The candidate stands on another working set than the sandbox')
     this.#candidateHeadSha = publication.headSha
     await guard.assertFence()
     await this.record('checkpointing')
@@ -375,6 +410,7 @@ export class TurnAttempt {
           provider: plan.workspace.repo.provider,
           branch: plan.workspace.branch,
           baseSha: publication.baseSha,
+          ...(sandboxBaseSha ? { sandboxBaseSha } : {}),
           headSha: publication.headSha,
           publication: { taskId: labels.taskId, committedAt: plan.committedAt },
         },
@@ -434,6 +470,37 @@ export class TurnAttempt {
       throw leaseLost('Lease was lost before turn completion')
     this.#completed = true
     return { result, manifest }
+  }
+
+  /**
+   * The values the candidate must not hold (plan 53, Р13): the ones the turn's commands got and
+   * the ones the site's variables hold now — the preview may have shown the agent a value the
+   * client changed after the turn's key was issued. Vault that does not answer fails the turn.
+   */
+  async #refusedValues(): Promise<string[]> {
+    const { guard } = this.init
+    const current =
+      this.credentialRef && this.deps.credentials.siteValues
+        ? await guard.interruptible(this.deps.credentials.siteValues(this.credentialRef))
+        : []
+    return [...new Set([...this.envValues, ...current])]
+  }
+
+  /**
+   * The working-set commit of the turn: the bundle's, or for a recovered owner the one the plan
+   * gives again — deterministic, so the same the sandbox was given (plan 53, Р11).
+   */
+  async #sandboxBase(): Promise<string | undefined> {
+    const { plan, guard } = this.init
+    if (this.sandboxBaseSha || !plan.workspace.workingSet) return this.sandboxBaseSha
+    if (!this.deps.workspace.sandboxBase)
+      throw conflict('The workspace cannot derive a working set')
+    const derived = await guard.interruptible(
+      this.deps.workspace.sandboxBase(plan.workspace, plan.committedAt),
+    )
+    if (!derived) throw conflict('The workspace derived no working set')
+    this.sandboxBaseSha = derived
+    return derived
   }
 
   /** Why the turn failed, from where it stopped. */

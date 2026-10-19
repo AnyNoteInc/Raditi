@@ -6,8 +6,16 @@ import type { McpStorageConfig } from '../config/config.ts'
 
 export const MCP_CONTENT_STORAGE = Symbol('MCP_CONTENT_STORAGE')
 
-/** All the mcp role does with S3: create-only snapshots, their reads, their removal, health. */
-export type ContentStorage = Pick<ObjectStorage, 'putIfAbsent' | 'get' | 'delete' | 'checkBuckets'>
+/**
+ * All the mcp role does with S3: create-only snapshots, their reads, their removal, health, and
+ * the screenshots of the agent's browser (plan 53, N22). A screenshot is larger than a
+ * conditional write takes (64 KiB), so it is a plain `put` — which `artifactsOnly` lets reach
+ * the key of a screenshot alone: no bug can overwrite a snapshot or a value of a plan with it.
+ */
+export type ContentStorage = Pick<
+  ObjectStorage,
+  'putIfAbsent' | 'put' | 'get' | 'delete' | 'checkBuckets'
+>
 
 /**
  * The S3 adapter addresses buckets by kind. The role has one bucket, so every kind names it:
@@ -26,6 +34,10 @@ export function contentStorageConfig(config: McpStorageConfig): StorageConfig {
   }
 }
 
+/** The one shape of key `put` may write: `tasks/<taskId>/screenshots/<id>.png` (N22). */
+const SCREENSHOT_KEY =
+  /^tasks\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/screenshots\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.png$/
+
 /** The S3 key of the mcp role reaches the artifacts bucket alone (spec §14); so does this. */
 export function artifactsOnly(storage: ObjectStorage): ContentStorage {
   const only = (bucket: BucketKind) => {
@@ -35,6 +47,12 @@ export function artifactsOnly(storage: ObjectStorage): ContentStorage {
     async putIfAbsent(bucket, key, body, opts) {
       only(bucket)
       return storage.putIfAbsent(bucket, key, body, opts)
+    },
+    async put(bucket, key, body, opts) {
+      only(bucket)
+      if (!SCREENSHOT_KEY.test(key))
+        throw forbidden('The mcp role overwrites no object but a screenshot of its own key')
+      return storage.put(bucket, key, body, opts)
     },
     async get(bucket, key) {
       only(bucket)

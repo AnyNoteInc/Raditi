@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 
 import {
   agentOutputLimits,
+  ENV_VALUE_MASK,
   type AgentDriver,
   type AgentEvent,
   type ExecChunk,
@@ -10,7 +11,12 @@ import {
 import { createOpencodeDriver } from '@repo/agent-drivers'
 import { describe, expect, it, vi } from 'vitest'
 
-import { readTurnOutput, SKIPPED_LINE_MESSAGE } from './turn-output.ts'
+import {
+  maskOutputLine,
+  maskTurnEvents,
+  readTurnOutput,
+  SKIPPED_LINE_MESSAGE,
+} from './turn-output.ts'
 
 const image = `registry.invalid/raditi/sbx@sha256:${'a'.repeat(64)}`
 /** A turn result as a real CLI prints it in its final message. */
@@ -311,5 +317,80 @@ describe('bounded turn output', () => {
         { cursor: { stdout: 0, stderr: 0 }, eventCount: agentOutputLimits.turnEvents - 1 },
       ),
     ).rejects.toMatchObject({ ...tooLarge, message: 'Agent event limit exceeded' })
+  })
+})
+
+describe('the client variables of a turn in its events (plan 53, Р13)', () => {
+  const value = "pay-se'cret-0001"
+
+  it('masks every value in every string of every event, and keeps the rest', () => {
+    const events: AgentEvent[] = [
+      { type: 'started', nativeSessionId: 'native1' },
+      { type: 'message', text: `ключ ${value}, снова ${value}` },
+      { type: 'failed', reason: `HTTP 401 for ${JSON.stringify(value)}` },
+      { type: 'completed' },
+    ]
+    expect(maskTurnEvents(events, [value])).toEqual([
+      events[0],
+      { type: 'message', text: `ключ ${ENV_VALUE_MASK}, снова ${ENV_VALUE_MASK}` },
+      { type: 'failed', reason: `HTTP 401 for "${ENV_VALUE_MASK}"` },
+      events[3],
+    ])
+    expect(maskTurnEvents(events, [])).toEqual(events)
+  })
+
+  it('masks each line before the driver parses it: a long text is clipped after the mask', async () => {
+    const opencode = createOpencodeDriver({ image })
+    // Fewer letters than the mask, more bytes than the shortest value: «[скрыто]» is longer.
+    const short = 'пароль-1'
+    const limit = agentOutputLimits.messageText
+    const text = `${short} `.repeat(Math.ceil(limit / short.length) + 5)
+    // A value cut at the limit of the event would leave its first letters unmasked.
+    const straddling = `${'x'.repeat(limit - 4)}${value} tail`
+    const line = (part: string) =>
+      JSON.stringify({ type: 'text', part: { type: 'text', text: part } })
+    const bytes = Buffer.from(`${line(text)}\n${line(straddling)}\n`)
+    const read = await readTurnOutput(
+      handle([{ stream: 'stdout', offset: 0, data: bytes }]),
+      opencode,
+      async () => {},
+      () => {},
+      [],
+      undefined,
+      [short, value],
+    )
+    expect(read.events).toHaveLength(2)
+    for (const event of read.events) {
+      expect(event.type).toBe('message')
+      const shown = (event as { text: string }).text
+      expect(shown.length).toBeLessThanOrEqual(limit)
+      expect(shown).not.toContain(short)
+      expect(shown).not.toContain(value.slice(0, 4))
+    }
+    expect((read.events[0] as { text: string }).text.startsWith(`${ENV_VALUE_MASK} `)).toBe(true)
+    // Nothing is left for core to mask, so nothing grows past its schema there.
+    expect(maskTurnEvents(read.events, [short, value])).toEqual(read.events)
+  })
+
+  it('masks a JSON line field by field and any other line as text', () => {
+    const quoted = 'a","b":"c'
+    const json = JSON.stringify({ type: 'text', part: { text: `x ${quoted} y`, [quoted]: 1 } })
+    expect(JSON.parse(maskOutputLine(json, [quoted]))).toEqual({
+      type: 'text',
+      part: { text: `x ${ENV_VALUE_MASK} y`, [ENV_VALUE_MASK]: 1 },
+    })
+    expect(maskOutputLine(`plain ${value} line`, [value])).toBe(`plain ${ENV_VALUE_MASK} line`)
+    expect(maskOutputLine(json, [])).toBe(json)
+    expect(maskOutputLine('{"type":"completed"}', [value])).toBe('{"type":"completed"}')
+  })
+
+  it('refuses a masked event its schema no longer takes, rather than keep it', () => {
+    // A short value of wide letters: the mask is longer than the text it replaces.
+    const short = 'ключ'
+    const limit = agentOutputLimits.messageText
+    const text = short.repeat(Math.floor(limit / short.length))
+    expect(() => maskTurnEvents([{ type: 'message', text }], [short])).toThrow(
+      'Agent event failed its schema',
+    )
   })
 })

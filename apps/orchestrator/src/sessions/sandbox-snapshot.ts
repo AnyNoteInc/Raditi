@@ -1,7 +1,9 @@
 import { Buffer } from 'node:buffer'
 
 import {
+  addOnlyPathSchema,
   badRequest,
+  envValueForms,
   isSnapshotCredential,
   isTooLarge,
   publicationTooLarge,
@@ -57,16 +59,27 @@ export class SandboxSnapshotTransport {
 
   /**
    * `credentials` are the turn's own (turnCredentials): an archive or patch that contains one
-   * is refused before anything is saved or published (snapshotHasCredential).
+   * is refused before anything is saved or published (snapshotHasCredential). New files below
+   * `addOnlyPaths` (plan 53, Р12) are taken even when an ignore file of the site hides them:
+   * the media the agent adds there are part of its change, never in its working set. A home
+   * archive that holds a value of the client's variables of the turn (`envValues`, Р13) in any
+   * spelling the driver masks is refused the same way.
    */
   async capture(
     sandbox: Sandbox,
     state: SessionState,
     baseSha: string,
     credentials: readonly string[] = [],
+    addOnlyPaths: readonly string[] = [],
+    envValues: readonly string[] = [],
   ): Promise<SnapshotArchives> {
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha))
       throw badRequest('Snapshot capture requires the trusted base commit')
+    if (
+      addOnlyPaths.length > 8 ||
+      !addOnlyPaths.every((p) => addOnlyPathSchema.safeParse(p).success)
+    )
+      throw badRequest('Invalid add-only paths of a capture')
     const homeState = this.#state(state)
     const paths: string[] = []
     const checkedAncestors = new Set<string>()
@@ -88,21 +101,29 @@ export class SandboxSnapshotTransport {
       tooLarge: homeTooLarge,
     })
     await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
-    const untrackedList = await this.#exec(
-      sandbox,
-      ['git', '-c', 'core.fsmonitor=false', 'ls-files', '--others', '--exclude-standard', '-z'],
-      LIST_BYTES,
-      { cwd: SANDBOX_WORKDIR, tooLarge: changesTooLarge },
-    )
-    let names: string[]
-    try {
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(untrackedList.stdout)
-      if (text !== '' && !text.endsWith('\0')) throw commandFailed()
-      names = text === '' ? [] : text.slice(0, -1).split('\0')
-      if (new Set(names).size !== names.length) throw commandFailed()
-      names.forEach((name) => snapshotEntryPath(name))
-    } catch {
-      throw commandFailed()
+    const names = await this.#untracked(sandbox, [
+      'git',
+      '-c',
+      'core.fsmonitor=false',
+      'ls-files',
+      '--others',
+      '--exclude-standard',
+      '-z',
+    ])
+    if (addOnlyPaths.length) {
+      const seen = new Set(names)
+      const media = await this.#untracked(sandbox, [
+        'git',
+        '--literal-pathspecs',
+        '-c',
+        'core.fsmonitor=false',
+        'ls-files',
+        '--others',
+        '-z',
+        '--',
+        ...addOnlyPaths,
+      ])
+      for (const name of media) if (!seen.has(name)) names.push(name)
     }
     if (names.length > snapshotLimits.entries) throw changesTooLarge()
     const untracked = await this.#archive(sandbox, SANDBOX_WORKDIR, names, [], {
@@ -132,11 +153,30 @@ export class SandboxSnapshotTransport {
         homeState,
         { home, untracked, patch: patch.stdout },
         credentials,
+        envValueForms(envValues),
       )
     } catch (error) {
       if (isTooLarge(error) || isSnapshotCredential(error)) throw error
       // A link, special file or setuid bit in the agent's files: its output, not client input.
       throw turnOutputRejected('Captured snapshot archive is invalid')
+    }
+  }
+
+  /** The NUL list of untracked files one `ls-files` prints, each a checked entry path. */
+  async #untracked(sandbox: Sandbox, argv: string[]): Promise<string[]> {
+    const list = await this.#exec(sandbox, argv, LIST_BYTES, {
+      cwd: SANDBOX_WORKDIR,
+      tooLarge: changesTooLarge,
+    })
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(list.stdout)
+      if (text !== '' && !text.endsWith('\0')) throw commandFailed()
+      const names = text === '' ? [] : text.slice(0, -1).split('\0')
+      if (new Set(names).size !== names.length) throw commandFailed()
+      names.forEach((name) => snapshotEntryPath(name))
+      return names
+    } catch {
+      throw commandFailed()
     }
   }
 

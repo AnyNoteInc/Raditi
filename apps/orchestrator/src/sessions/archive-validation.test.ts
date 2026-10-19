@@ -1,7 +1,12 @@
 import { Buffer } from 'node:buffer'
 import { zstdCompressSync } from 'node:zlib'
 
-import { isSnapshotCredential, snapshotLimits, type SessionState } from '@repo/domain'
+import {
+  envValueForms,
+  isSnapshotCredential,
+  snapshotLimits,
+  type SessionState,
+} from '@repo/domain'
 import { pack, type Header } from 'tar-stream'
 import { describe, expect, it } from 'vitest'
 
@@ -418,5 +423,25 @@ describe('turn credentials in a captured snapshot', () => {
   it('accepts the same kind of archives when they hold no credential', async () => {
     const home = await archive([{ name: 'sessions/run.jsonl', body: '{"auth":"file"}\n' }])
     await expect(validateSnapshotArchives(state, await parts(home), [key])).resolves.toBeDefined()
+  })
+
+  it("refuses a client's value left in the home archive, and leaves the site's change to publication", async () => {
+    // A value of the client's variables (plan 53, Р13), as the session keeps it in JSON.
+    const value = 'pay-secret-0001'
+    const forms = envValueForms([value])
+    const home = await archive([
+      { name: 'sessions/run.jsonl', body: `{"output":${JSON.stringify(value)}}\n` },
+    ])
+    const error: unknown = await validateSnapshotArchives(state, await parts(home), [], forms).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    )
+    expect(isSnapshotCredential(error)).toBe(true)
+    expect(JSON.stringify(error) + String(error)).not.toContain(value)
+    // The same value in a new file of the site: the publication refuses it in words of its own.
+    const site = await archive([{ name: 'wp-content/env.txt', body: value }])
+    await expect(
+      validateSnapshotArchives(state, await parts(await archive([]), site), [], forms),
+    ).resolves.toBeDefined()
   })
 })

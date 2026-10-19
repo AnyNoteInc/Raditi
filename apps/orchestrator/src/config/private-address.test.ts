@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { ipLiteral, isPrivateAddress } from './private-address.ts'
+import { ipLiteral, isLoopbackAddress, isPrivateAddress } from './private-address.ts'
 
 describe('isPrivateAddress', () => {
   it.each([
@@ -55,4 +55,20 @@ describe('ipLiteral', () => {
     for (const host of ['core.internal', '10.1', '1.2.3.4.5', '[10.1.2.3]x', 'fe80::1%eth0'])
       expect(ipLiteral(host)).toBeUndefined()
   })
+})
+
+describe('isLoopbackAddress', () => {
+  it.each(['127.0.0.1', '127.1.2.3', '::1', '[::1]', '::ffff:127.0.0.1'])(
+    'accepts the loopback literal %s',
+    (host) => {
+      expect(isLoopbackAddress(host)).toBe(true)
+    },
+  )
+
+  it.each(['localhost', '10.0.0.1', '8.8.8.8', '::', '0.0.0.0', '128.0.0.1', ''])(
+    'refuses %s',
+    (host) => {
+      expect(isLoopbackAddress(host)).toBe(false)
+    },
+  )
 })

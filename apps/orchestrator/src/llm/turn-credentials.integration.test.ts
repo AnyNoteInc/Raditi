@@ -2,7 +2,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import { createPrismaClient, type PrismaClient } from '@repo/db'
-import type { SecretStore, TurnCredentialGrant, TurnCredentialRef } from '@repo/domain'
+import {
+  siteEnvVarPath,
+  type SecretStore,
+  type TurnCredentialGrant,
+  type TurnCredentialRef,
+} from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -307,6 +312,57 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       row,
     }
   }
+
+  it('gives the agent the values of the variables it may get, read at the versions of their rows (Р13)', async () => {
+    const f = await fixture()
+    const consented = { toAgent: true, agentConsentAt: new Date() }
+    await db.siteEnvVar.createMany({
+      data: [
+        { siteId: f.site.id, name: 'PAYMENT_KEY', hosts: ['api.example.ru:443'], ...consented },
+        // Vault holds version 1: a row naming version 2 is a write the turn does not take yet.
+        { siteId: f.site.id, name: 'LATER_KEY', hosts: [], keyVersion: 2, ...consented },
+        { siteId: f.site.id, name: 'PREVIEW_ONLY', hosts: [] },
+      ],
+    })
+    for (const name of ['PAYMENT_KEY', 'LATER_KEY', 'PREVIEW_ONLY'])
+      f.vault.entries.set(siteEnvVarPath(f.site.id, name), {
+        data: { value: `${name.toLowerCase()}-value` },
+        custom: {},
+        deleted: false,
+      })
+    const issued = await f.credentials.issue(f.ref, f.grant)
+    expect(issued.envValues).toEqual({ PAYMENT_KEY: 'payment_key-value' })
+    // The value changed meanwhile: the running turn keeps what its sandbox got.
+    f.vault.entries.get(siteEnvVarPath(f.site.id, 'PAYMENT_KEY'))!.data.value = 'changed-value-0002'
+    expect(await f.credentials.recover(f.ref)).toEqual(issued)
+    // What the candidate is refused for: every value of the site as Vault holds it now.
+    expect((await f.credentials.siteValues(f.ref)).sort()).toEqual([
+      'changed-value-0002',
+      'later_key-value',
+      'preview_only-value',
+    ])
+    // Nothing of a value in SQL.
+    const rows = JSON.stringify(await db.llmKey.findMany({ where: { taskId: f.task.id } }))
+    expect(rows).not.toContain('payment_key-value')
+
+    // A workspace of client data gives the agent nothing, whatever the rows say: here the gate
+    // of 152-FZ refuses the key, and no value was even read before it.
+    const client = await fixture({ client: true })
+    await db.siteEnvVar.create({
+      data: { siteId: client.site.id, name: 'PAYMENT_KEY', hosts: [], ...consented },
+    })
+    client.vault.entries.set(siteEnvVarPath(client.site.id, 'PAYMENT_KEY'), {
+      data: { value: 'client-value-0001' },
+      custom: {},
+      deleted: false,
+    })
+    await expect(client.credentials.issue(client.ref, client.grant)).rejects.toMatchObject({
+      code: 'CROSS_BORDER_NOT_CLEARED',
+    })
+    expect(
+      client.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
+    ).toEqual([])
+  })
 
   it('persists the selected binding and secret hash, and retry preserves the first budget and expiry', async () => {
     const f = await fixture()

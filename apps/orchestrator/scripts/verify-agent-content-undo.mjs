@@ -32,7 +32,8 @@ const app = await NestFactory.createApplicationContext(
       addr: process.env.VAULT_ADDR,
       appRole: { roleId: process.env.VAULT_ROLE_ID, secretId: process.env.VAULT_SECRET_ID },
     },
-    contentProfile: 'local',
+    // The P6 path of the stands: no previews here (plan 53, Р3).
+    contentProfile: 'local-site',
     storage: {
       endpoint: storage.endpoint,
       region: storage.region,

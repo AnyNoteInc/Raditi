@@ -82,6 +82,7 @@ describe('MCP journal input boundaries', () => {
         epoch: 1,
         stack: 'wordpress' as const,
         url: 'https://site.example.test/',
+        preview: null,
       }
       const command = {
         tool: 'wp_rest',
