@@ -1,0 +1,164 @@
+name: Preview
+
+# Previews of a dialog (docs/plan/53-chat-preview-release.md, Р15, Р18, Р21) on a real daemon,
+# under runc: the Docker runtime of @repo/sandbox-providers, the WordPress recipe and the database
+# copier against disposable containers, the preview manager of core end to end on PostgreSQL
+# (R5c) with the export of a turn's working tree, then the network of a preview probed from
+# every side. Local fixtures only: no repository secrets, no real site.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/preview.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - packages/domain/**
+      # The runtime, the recipe and the copier, and the images, the watchdog and the host
+      # firewall they rely on.
+      - packages/sandbox-providers/**
+      - packages/site-adapters/**
+      - packages/site-connections/**
+      # The agent's browser on a preview (R7): the Playwright adapter against the browser image.
+      - packages/browser-providers/**
+      - infra/preview/**
+      - infra/dev/preview-verify/**
+      - infra/sandbox/watchdog.mjs
+      - infra/sandbox/host-firewall.mjs
+      # The egress proxy of the client's variables (Р13), built by the network stand.
+      - infra/sandbox/client-egress.mjs
+      - infra/sandbox/Dockerfile
+      # The preview manager of core end to end (R5c), the gateway its browser goes through (R6)
+      # and the export of a running turn's working tree (Р23), on the schema of the database.
+      - apps/orchestrator/src/previews/**
+      - apps/orchestrator/src/preview-gateway/**
+      - apps/orchestrator/src/turns/working-tree-export.ts
+      - apps/orchestrator/src/turns/working-tree-export.docker.test.ts
+      - apps/orchestrator/src/testing/previews.ts
+      - packages/db/**
+  workflow_dispatch:
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  preview-docker:
+    runs-on: ubuntu-latest
+    # The sandbox image and the preview manager's suite added about ten minutes to the job.
+    timeout-minutes: 60
+    env:
+      # The engine of the sandbox VM (spec §8): fixed addresses on a subnet Docker picks need
+      # Docker Engine 29.1, and the runner image ships 28.0.4 (agent-driver.yml).
+      SANDBOX_DOCKER_VERSION: 29.5.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      - name: Docker Engine of the sandbox VM
+        run: |
+          key=$(mktemp)
+          curl -fsSL --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
+          fingerprint=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
+          if [ "$fingerprint" != 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 ]; then
+            echo "Unexpected fingerprint of the key of Docker's repository: $fingerprint" >&2
+            exit 1
+          fi
+          sudo install -D -m 0644 "$key" /etc/apt/keyrings/docker.asc
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+          sudo apt-get -q -o Acquire::Retries=3 update
+          package=$(apt-cache madison docker-ce | awk '{ print $3 }' \
+            | grep -F ":$SANDBOX_DOCKER_VERSION-" | head -n 1)
+          if [ -z "$package" ]; then
+            echo "Docker's repository has no docker-ce $SANDBOX_DOCKER_VERSION for $codename" >&2
+            exit 1
+          fi
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o Acquire::Retries=3 install \
+            --no-install-recommends --allow-downgrades --allow-change-held-packages \
+            "docker-ce=$package" "docker-ce-cli=$package"
+      # The runtime takes images pinned by digest only, and a local build has a repository digest
+      # only in the containerd image store.
+      - name: Docker with the containerd image store
+        run: |
+          daemon=/etc/docker/daemon.json
+          current=$(sudo cat "$daemon" 2>/dev/null || echo '{}')
+          printf '%s' "$current" \
+            | jq '.features = ((.features // {}) + {"containerd-snapshotter": true})' \
+            | sudo tee "$daemon" >/dev/null
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}' | grep -q io.containerd.snapshotter
+          test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"
+      # By tag, as the suites of the recipe and the copier name them; each must be the digest
+      # .env.example and the runtime's suite pin.
+      - name: Pull the public images of previews
+        run: |
+          while read -r tag digest; do
+            docker pull -q "$tag"
+            docker image inspect "$tag" --format '{{json .RepoDigests}}' | grep -qF "@$digest"
+          done <<'IMAGES'
+          wordpress:7.1.2-php8.3-apache sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5
+          wordpress:cli-php8.3 sha256:2b5e9d4d3e51909dca1aaa4732e9f5e5bf0377c2114dbd8ff39f060bff202586
+          mariadb:11.4.13 sha256:70cc072b29b4a89ae07abb2d4da2c64678a7f2dfe092751bb51c87d67dc1338b
+          IMAGES
+      - name: Build the images of previews
+        run: |
+          for target in tools browser; do
+            docker build -q -f infra/preview/Dockerfile --target "$target" \
+              -t "raditi-preview-$target:local" infra/preview
+          done
+          docker build -q -f infra/sandbox/Dockerfile --target client-egress \
+            -t raditi-client-egress:local .
+          # The working tree of a turn is exported by the commands of the sandbox image itself.
+          docker build -q -f infra/sandbox/Dockerfile --target runtime \
+            -t raditi-preview-sandbox:local .
+      - name: Preview suites against the real daemon
+        env:
+          RADITI_PREVIEW_DOCKER_TESTS: '1'
+        run: |
+          pnpm --filter @repo/sandbox-providers exec vitest run src/preview/runtime.integration.test.ts
+          pnpm --filter @repo/site-adapters exec vitest run src/wordpress-preview.integration.test.ts
+          pnpm --filter @repo/site-connections exec vitest run src/database-copy/mysql-copier.integration.test.ts
+          pnpm --filter @repo/browser-providers exec vitest run src/playwright.integration.test.ts
+      # The preview manager's suite keeps its previews, tasks and sites in PostgreSQL. Started here,
+      # not as a service container: the switch to the containerd image store above would hide one.
+      - name: Database of the preview manager
+        env:
+          APP_ENV: test
+          DATABASE_URL: postgresql://raditi:raditi@127.0.0.1:5432/raditi
+        run: |
+          docker run -d --name raditi-preview-postgres -e POSTGRES_USER=raditi \
+            -e POSTGRES_PASSWORD=raditi -e POSTGRES_DB=raditi -p 127.0.0.1:5432:5432 \
+            --tmpfs /var/lib/postgresql/data postgres:17.11-alpine3.24
+          # Over TCP: the server of the image's first start listens on its socket only.
+          for _ in $(seq 1 60); do
+            docker exec raditi-preview-postgres pg_isready -h 127.0.0.1 -U raditi -d raditi \
+              >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec raditi-preview-postgres pg_isready -h 127.0.0.1 -U raditi -d raditi
+          pnpm db:generate
+          pnpm db:deploy
+          pnpm db:seed
+      # The gateway of the suite listens on the bridge of this host, where the relay of the
+      # browser reaches it through `host-gateway`.
+      - name: Preview manager of core against the real daemon and PostgreSQL
+        env:
+          APP_ENV: test
+          DATABASE_URL: postgresql://raditi:raditi@127.0.0.1:5432/raditi
+          RADITI_GATEWAY_DB_TESTS: '1'
+          RADITI_PREVIEW_DOCKER_TESTS: '1'
+          P2_SANDBOX_IMAGE: raditi-preview-sandbox:local
+        run: |
+          pnpm --filter orchestrator exec vitest run --testTimeout=600000 \
+            src/previews/preview.docker.integration.test.ts src/turns/working-tree-export.docker.test.ts
+      - name: Network of a preview
+        run: pnpm verify:preview-network --no-build

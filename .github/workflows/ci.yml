@@ -103,15 +103,24 @@ jobs:
 
       # The companion plugin is the only code that writes to a client's WordPress database. Its
       # behaviour runs in the WordPress content workflow; a syntax error must not wait for that.
+      # The same for the wp-config.php and the mu-plugin every preview runs (plan 53, Р14, Р15).
       # A runner without PHP uses the PHP of the WordPress image pinned in verify-site.mjs.
       - name: WordPress plugin syntax
         run: |
           if command -v php >/dev/null; then
             php -l infra/wordpress/raditi-content.php
+            php -l infra/wordpress/raditi-preview.php
+            php -l infra/wordpress/preview-wp-config.php
           else
             docker run --rm --network none --entrypoint php \
               -v "$PWD/infra/wordpress:/plugin:ro" \
               wordpress:7.1.2-php8.3-apache@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 -l /plugin/raditi-content.php
+            docker run --rm --network none --entrypoint php \
+              -v "$PWD/infra/wordpress:/plugin:ro" \
+              wordpress:7.1.2-php8.3-apache@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 -l /plugin/raditi-preview.php
+            docker run --rm --network none --entrypoint php \
+              -v "$PWD/infra/wordpress:/plugin:ro" \
+              wordpress:7.1.2-php8.3-apache@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 -l /plugin/preview-wp-config.php
           fi
 
       - name: Format
