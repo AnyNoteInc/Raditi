@@ -502,7 +502,13 @@ export async function tagScenario(ctx) {
   })
   await tag('v1.1.0', v110)
   const installedRun = await endedRun('v1.1.0')
-  assert.equal(installedRun.job.conclusion, 'success', 'the release job failed')
+  // What deploy-step printed and reported says why a release job failed; it carries no secret.
+  assertNoSecret(installedRun.log, first)
+  assert.equal(
+    installedRun.job.conclusion,
+    'success',
+    `the release job failed: reports [${first.sequence.join(', ')}], ${stepLines(installedRun.log).join(' | ')}`,
+  )
   assert.deepEqual(first.sequence, [
     'conflicts started',
     'conflicts succeeded',

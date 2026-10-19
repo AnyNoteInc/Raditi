@@ -2,6 +2,7 @@
 // processes are given, the deploy runner and the loopback mirror its jobs see the host through,
 // and the answers of the scripted model. Nothing here starts Docker or a process.
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
 import { createFakeZaiState } from '../llm-verify/fake-zai.mjs'
@@ -23,6 +24,7 @@ import {
   NOTICE_PATH,
   OPENBAO_IMAGE,
   POSTGRES_IMAGE,
+  PREVIEW_ROOT_QUERY,
   PULLED_TAGS,
   REDIS_IMAGE,
   RUNNER_IMAGE,
@@ -232,6 +234,21 @@ test('the production site is a local WordPress without cron, whose application p
   assert.match(files[FOOTER_PATH], new RegExp(TEXT.footer(0)))
   assert.match(files[FOOTER_PATH], /get_template_part\( 'notice' \)/)
   assert.equal(files[NOTICE_PATH], undefined)
+})
+
+test("a query of a preview's database reads root's password from the file the product's container names", async () => {
+  // The product hands the passwords as files of the container's tmpfs (Vault, never its
+  // environment): the stand reads the file its environment names, and never an old variable.
+  const containers = await readFile(
+    new URL('../../../packages/sandbox-providers/src/preview/containers.ts', import.meta.url),
+    'utf8',
+  )
+  assert.match(containers, /`MARIADB_ROOT_PASSWORD_FILE=\$\{DATABASE_SECRET_FILES\.root\}`/)
+  assert.doesNotMatch(containers, /MARIADB_ROOT_PASSWORD=/)
+  assert.match(PREVIEW_ROOT_QUERY, /-p"\$\(cat "\$MARIADB_ROOT_PASSWORD_FILE"\)"/)
+  assert.doesNotMatch(PREVIEW_ROOT_QUERY, /\$MARIADB_ROOT_PASSWORD"/)
+  // The query is the script's first argument: never spliced into the command.
+  assert.match(PREVIEW_ROOT_QUERY, /-e "\$1"$/)
 })
 
 test('the scripted turns call tools the CLI declares and end with a result of the contract', () => {

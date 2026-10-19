@@ -413,6 +413,15 @@ export const siteDbEnvFile = (password) =>
     '',
   ].join('\n')
 
+/**
+ * A query of a preview's own database as root on its socket (`sh -c <this> sh <query>` in the
+ * container). The password is the file of the container's tmpfs its environment names
+ * (`MARIADB_ROOT_PASSWORD_FILE`): the product keeps the passwords in Vault and never in the
+ * environment of the container (owner's answer of 19.10.2026).
+ */
+export const PREVIEW_ROOT_QUERY =
+  'mariadb -uroot -p"$(cat "$MARIADB_ROOT_PASSWORD_FILE")" -N -B preview -e "$1"'
+
 const SITE_ENV = (password) => [
   'WORDPRESS_DB_HOST=db',
   'WORDPRESS_DB_USER=wordpress',

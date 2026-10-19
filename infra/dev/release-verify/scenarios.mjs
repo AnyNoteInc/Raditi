@@ -24,6 +24,7 @@ import {
   FOOTER_PATH,
   MODEL_TURNS,
   NOTICE_PATH,
+  PREVIEW_ROOT_QUERY,
   STYLE_PATH,
   TEXT,
   expectedCharge,
@@ -219,15 +220,7 @@ export async function runScenarios(stand) {
   const previewSql = async (previewId, query) => {
     const container = await iso.previewContainer(previewId, 'db')
     return (
-      await rt.docker([
-        'exec',
-        container,
-        'sh',
-        '-c',
-        'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" -N -B preview -e "$1"',
-        'sh',
-        query,
-      ])
+      await rt.docker(['exec', container, 'sh', '-c', PREVIEW_ROOT_QUERY, 'sh', query])
     ).output.trim()
   }
 
