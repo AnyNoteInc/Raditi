@@ -30,6 +30,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { INTERNAL_ERROR_MESSAGE } from '../errors.ts'
 import { appRouter, createCaller } from '../router.ts'
+import { resetSiteConnectionGate } from '../services/site-connection-gate.ts'
+import {
+  deleteSiteConnectionRows,
+  fakeSiteConnections,
+  siteCreateInput,
+} from '../testing/site-connections.ts'
 import { createContext, type BillingContext, type Context } from '../trpc.ts'
 
 // The payment functions of @repo/billing are wrapped: they run as they are — the PostgreSQL
@@ -69,7 +75,10 @@ const requiredConsents = legalDocuments.flatMap((document) =>
     : [],
 )
 
-beforeEach(() => vi.stubEnv('APP_ENV', 'test'))
+beforeEach(() => {
+  vi.stubEnv('APP_ENV', 'test')
+  resetSiteConnectionGate()
+})
 afterEach(() => {
   vi.unstubAllEnvs()
   // Back to the functions of the package, whatever a test scripted and did not use up.
@@ -172,6 +181,8 @@ function context(
         }
       : null,
     billing,
+    // Projects are made through the site connection wizard: a fake of its servers and Vault.
+    siteConnections: fakeSiteConnections().services,
   }
 }
 
@@ -1339,6 +1350,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
     })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
+    await deleteSiteConnectionRows(db, owned.workspaceId.in)
     await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
@@ -1392,7 +1404,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
   }
 
   const site = (name: string) =>
-    ({ name, url: `https://${randomUUID()}.example.ru`, stack: 'wordpress' }) as const
+    siteCreateInput({ name, url: `https://${randomUUID()}.example.ru` })
 
   it('marks the too-small tariff for a workspace with two sites', async () => {
     const { user: owner, caller } = await account()

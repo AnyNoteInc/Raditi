@@ -5,7 +5,9 @@ import { queueNames } from '../ports/job-queue.ts'
 import {
   connectionTlsModes,
   databaseEngines,
+  INITIAL_SITE_TAG,
   provisioningStages,
+  provisioningSteps,
   provisioningStageStatuses,
   SITE_REPOSITORY_OWNER,
   siteRepositoryName,
@@ -25,6 +27,7 @@ import {
   siteProvisionJobSchema,
   siteProvisionQueue,
   siteProvisionWakeJobId,
+  siteSetupState,
 } from './provisioning.ts'
 import {
   connectionCheckReasons,
@@ -152,8 +155,8 @@ describe('kinds', () => {
 describe('reasons and error codes', () => {
   it('lets a stage fail with every reason of a connection check', () => {
     for (const reason of connectionCheckReasons) expect(provisioningErrorCodes).toContain(reason)
-    expect(connectionCheckReasons).toHaveLength(15)
-    expect(provisioningErrorCodes).toHaveLength(31)
+    expect(connectionCheckReasons).toHaveLength(17)
+    expect(provisioningErrorCodes).toHaveLength(34)
     expect(importSkipReasons).toEqual([
       'excluded',
       'ci',
@@ -163,6 +166,7 @@ describe('reasons and error codes', () => {
       'too_large',
       'secret',
       'nested_site',
+      'unreadable',
     ])
   })
 
@@ -291,5 +295,26 @@ describe('limits', () => {
       provisioningLimits,
     ])
       expect(Object.isFrozen(limits)).toBe(true)
+  })
+})
+
+describe('steps of a running stage and the setup state of a site', () => {
+  it('names the steps as site_provisioning_stages.step accepts them', () => {
+    expect(provisioningSteps).toEqual(['fetch', 'publish'])
+    for (const step of provisioningSteps) expect(step).toMatch(/^[a-z][a-z_]{1,31}$/)
+  })
+
+  it('tags the first version v0.0.0, as the CHECK of site_initial_versions.tag reads a version', () => {
+    expect(INITIAL_SITE_TAG).toBe('v0.0.0')
+    expect(INITIAL_SITE_TAG).toMatch(/^v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$/)
+  })
+
+  it('shows the setup screen until code_import succeeds, and nothing for a site without the stage', () => {
+    expect(siteSetupState(null)).toBeNull()
+    expect(siteSetupState(undefined)).toBeNull()
+    expect(siteSetupState({ status: 'queued' })).toBe('pending')
+    expect(siteSetupState({ status: 'running' })).toBe('pending')
+    expect(siteSetupState({ status: 'failed' })).toBe('failed')
+    expect(siteSetupState({ status: 'succeeded' })).toBe('done')
   })
 })

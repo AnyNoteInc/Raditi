@@ -45,8 +45,13 @@ export interface KvListPage {
 export interface SecretStore {
   health(): Promise<SecretStoreHealth>
 
-  /** Logical KV v2 paths include the mount, e.g. turns/t_<id> or subs/<backend>/<id>. */
-  kvRead(path: string): Promise<KvSecret | null>
+  /**
+   * Logical KV v2 paths include the mount, e.g. turns/t_<id> or subs/<backend>/<id>. `version`
+   * reads that version instead of the current one (null when it is deleted, destroyed or never
+   * existed): a reader that follows a reference reads what the reference names, so a newer
+   * version written by a request that then failed does not stand in for it.
+   */
+  kvRead(path: string, options?: { version?: number }): Promise<KvSecret | null>
   kvWrite(
     path: string,
     data: Record<string, string>,

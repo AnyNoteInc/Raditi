@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // context it hands to the router.
 const stand = vi.hoisted(() => ({
   shop: { name: 'the shop of the process' } as object | null,
+  connections: { name: 'the site connections of the process' } as object | null,
   prisma: { name: 'the database client of the process' },
   headers: new Headers({ cookie: 'a=1' }),
   current: null as { session: object; user: object } | null,
@@ -12,6 +13,7 @@ const stand = vi.hoisted(() => ({
 }))
 
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
+vi.mock('@/server/site-connections', () => ({ siteConnections: () => stand.connections }))
 vi.mock('@/lib/session', () => ({
   getRequestHeaders: () => Promise.resolve(stand.headers),
   getSession: () => Promise.resolve(stand.current),
@@ -26,6 +28,7 @@ describe('the tRPC caller of Server Components', () => {
   beforeEach(() => {
     vi.resetModules()
     stand.shop = { name: 'the shop of the process' }
+    stand.connections = { name: 'the site connections of the process' }
     stand.current = null
     stand.createCaller.mockReset().mockReturnValue(stand.caller)
   })
@@ -39,6 +42,7 @@ describe('the tRPC caller of Server Components', () => {
       session: null,
       user: null,
       billing: stand.shop,
+      siteConnections: stand.connections,
     })
     const [context] = stand.createCaller.mock.calls[0] as [{ billing: unknown }]
     expect(context.billing).toBe(stand.shop)
@@ -51,6 +55,16 @@ describe('the tRPC caller of Server Components', () => {
 
     expect(stand.createCaller).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ billing: null }),
+    )
+  })
+
+  it('hands the router no site connections while Vault is not configured', async () => {
+    stand.connections = null
+
+    await serverCaller()
+
+    expect(stand.createCaller).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ siteConnections: null }),
     )
   })
 

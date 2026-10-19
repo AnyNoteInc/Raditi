@@ -1,5 +1,5 @@
 import type * as YookassaModule from '@repo/yookassa'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The route with its real handler; the shop settings, the database client, the shop client and
 // the settlement of @repo/billing are replaced, so the test sees what the route hands over.
@@ -100,6 +100,12 @@ const notifyRefunded = (ip: string) =>
 describe('ЮKassa notification route', () => {
   let info: ReturnType<typeof vi.spyOn>
   let error: ReturnType<typeof vi.spyOn>
+  // The first import transforms the whole graph of the route; on a machine busy with every other
+  // suite of `pnpm test` that alone outlasted the 5 s of the first test. Later imports after
+  // vi.resetModules() reuse the transform.
+  beforeAll(async () => {
+    await import('./route')
+  }, 60_000)
   beforeEach(() => {
     // The route keeps its handler for the life of the module: every test gets a new one.
     vi.resetModules()

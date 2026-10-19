@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -858,6 +858,40 @@ describe('trusted Git publication', { timeout: 30_000 }, () => {
     })
     await expect(readFile(f.scannerLog, 'utf8')).rejects.toThrow()
   })
+
+  it.each(['patch', 'untracked'] as const)(
+    'rejects a %s file at a path HFS+ reads as .git, on every platform',
+    async (via) => {
+      const f = await fixture()
+      const name = '.g\u200cit/config'
+      let patch = Buffer.alloc(0)
+      if (via === 'patch') {
+        await mkdir(join(f.work, '.g\u200cit'))
+        await writeFile(join(f.work, name), '[core]\n\thooksPath = /tmp\n')
+        await git(f.work, '-c', 'core.protectHFS=false', 'add', '--', name)
+        patch = await f.patch()
+      }
+      const untracked =
+        via === 'untracked'
+          ? [
+              { name, content: '[core]\n' },
+              { name: 'kept.txt', content: 'kept' },
+            ]
+          : []
+      // A git built for Linux has core.protectHFS off: set off in front of every option, as such
+      // a build has it. The trusted options turn it on again, so git refuses the path.
+      vi.mocked(runProcess).mockImplementation(async (binary, argv, options) =>
+        realRunProcess(
+          binary,
+          ['-c', 'core.protectHFS=false', '-c', 'core.protectNTFS=false', ...argv],
+          options,
+        ),
+      )
+      await expect(f.prepare(patch, await archive(untracked))).rejects.toMatchObject({
+        code: 'TURN_OUTPUT_REJECTED',
+      })
+    },
+  )
 
   it('requires the turn credentials explicitly, even when there are none', async () => {
     const f = await fixture()

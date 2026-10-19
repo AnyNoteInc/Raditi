@@ -69,6 +69,8 @@ const metadataSchema = z.object({
   }),
 })
 const writeOptionsSchema = z.strictObject({ cas: z.number().int().nonnegative().optional() })
+// Version 0 would mean the current one to KV v2: a reader that names a version names a real one.
+const readOptionsSchema = z.strictObject({ version: version.max(2_147_483_647).optional() })
 const listPageSchema = z.strictObject({
   after: z
     .string()
@@ -97,19 +99,30 @@ export function createKvStore(session: VaultSession, onMount?: (mount: string) =
     return url
   }
 
-  async function read(path: string) {
+  async function read(path: string, options: { version?: number } = {}) {
     const url = apiPath(path, 'data')
-    const response = await session.request(url, {
-      method: 'GET',
-      allowMissing: true,
-      responseLimit: 'kv',
-    })
+    // Validated before any request: a version is never pasted into the URL unchecked.
+    const parsed = readOptionsSchema.safeParse(options)
+    if (!parsed.success) throw new VaultError('Invalid Vault KV read options')
+    const wanted = parsed.data.version
+    // KV v2 answers 404 for a version that is deleted, destroyed or was never written.
+    const response = await session.request(
+      wanted === undefined ? url : `${url}?version=${wanted}`,
+      {
+        method: 'GET',
+        allowMissing: true,
+        responseLimit: 'kv',
+      },
+    )
     if (response.status === 404) return null
     const result = readSchema.safeParse(response.json)
     if (!result.success) throw new VaultError('Unexpected Vault KV read response')
     const { data, metadata } = result.data.data
     if (metadata.destroyed || hasDeleted(metadata.deletion_time)) return null
     if (data === null) throw new VaultError('Unexpected empty Vault KV data')
+    // A server that ignored the parameter would hand over another version than the one named.
+    if (wanted !== undefined && metadata.version !== wanted)
+      throw new VaultError('Unexpected Vault KV version')
     return { data, version: metadata.version }
   }
 

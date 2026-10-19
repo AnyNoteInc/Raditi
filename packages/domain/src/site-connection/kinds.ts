@@ -23,6 +23,16 @@ export type ProvisioningStage = (typeof provisioningStages)[number]
 export const provisioningStageStatuses = ['queued', 'running', 'succeeded', 'failed'] as const
 export type ProvisioningStageStatus = (typeof provisioningStageStatuses)[number]
 
+/**
+ * What a running stage is doing (site_provisioning_stages.step): code_import fetches the files and
+ * scans them, then publishes the first commit and its tag. NULL in every other status.
+ */
+export const provisioningSteps = ['fetch', 'publish'] as const
+export type ProvisioningStep = (typeof provisioningSteps)[number]
+
+/** The tag of the first version of every site repository (owner's decision of 17.10.2026). */
+export const INITIAL_SITE_TAG = 'v0.0.0'
+
 /** The organization of site repositories in the platform's Gitea, and the name of one. */
 export const SITE_REPOSITORY_OWNER = 'sites'
 export const siteRepositoryName = (siteId: string): string => `site-${siteId}`

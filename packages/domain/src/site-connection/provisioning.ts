@@ -1,7 +1,11 @@
 import { z } from 'zod'
 
 import type { QueueName } from '../ports/job-queue.ts'
-import { provisioningStages, type ProvisioningStage } from './kinds.ts'
+import {
+  provisioningStages,
+  type ProvisioningStage,
+  type ProvisioningStageStatus,
+} from './kinds.ts'
 
 /** Short stages (database_schema: at most a minute). */
 export const SITE_PROVISIONING_QUEUE = 'site-provisioning' satisfies QueueName
@@ -44,3 +48,18 @@ export const siteProvisionWakeJobId = (
   attempt: number,
   tag: string,
 ): string => `site-provisioning:${siteId}:${stage}:${attempt}:wake:${tag}`
+
+/**
+ * Whether the cabinet shows the setup screen of a site instead of its sections: `pending` while
+ * code_import is queued or running, `failed` after it failed, `done` once it succeeded. null for
+ * a site without the stage — one created before the wizard — which lives as it did.
+ */
+export type SiteSetupState = 'pending' | 'failed' | 'done'
+
+export function siteSetupState(
+  codeImport: { status: ProvisioningStageStatus } | null | undefined,
+): SiteSetupState | null {
+  if (!codeImport) return null
+  if (codeImport.status === 'succeeded') return 'done'
+  return codeImport.status === 'failed' ? 'failed' : 'pending'
+}

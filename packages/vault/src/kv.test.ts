@@ -71,6 +71,61 @@ describe('Vault KV v2 requests', () => {
     expect(new Headers(init?.headers).get('accept')).toBe('application/json')
   })
 
+  it('reads the version a reference names instead of the current one', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(read(2))
+    expect(await withFetch(fetch).kvRead('kv/sites/site_1/ftp', { version: 2 })).toEqual({
+      data: credential,
+      version: 2,
+    })
+    const [url, init] = fetch.mock.calls[0]!
+    expect(url).toBe(`${address}/v1/kv/data/sites/site_1/ftp?version=2`)
+    expect(init).toMatchObject({ method: 'GET', redirect: 'error' })
+    // Without a version the current one is read, as before.
+    const current = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(read(3))
+    await withFetch(current).kvRead('kv/sites/site_1/ftp', {})
+    expect(current.mock.calls[0]?.[0]).toBe(`${address}/v1/kv/data/sites/site_1/ftp`)
+  })
+
+  it.each([
+    ['never written, deleted or destroyed (404)', () => reply({ errors: [] }, 404)],
+    [
+      'deleted',
+      () =>
+        reply({
+          data: {
+            data: null,
+            metadata: { version: 2, deletion_time: '2026-09-30T12:00:00.000Z', destroyed: false },
+          },
+        }),
+    ],
+    ['destroyed', () => reply({ data: { data: null, metadata: { version: 2, destroyed: true } } })],
+  ])('returns null for a named version that is %s', async (_, answer) => {
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(answer())
+    expect(await withFetch(fetch).kvRead('kv/sites/site_1/ftp', { version: 2 })).toBeNull()
+  })
+
+  it('refuses an answer of another version than the one named', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(read(3))
+    await expect(
+      withFetch(fetch).kvRead('kv/sites/site_1/ftp', { version: 2 }),
+    ).rejects.toMatchObject({ name: 'VaultError', message: 'Unexpected Vault KV version' })
+  })
+
+  it.each([0, -1, 1.5, Number.NaN, 2 ** 31, '2', { version: 1, extra: true }])(
+    'refuses the read option %j before any request',
+    async (value) => {
+      const fetch = vi.fn<typeof globalThis.fetch>()
+      const options = (typeof value === 'object' ? value : { version: value }) as unknown as {
+        version?: number
+      }
+      await expect(withFetch(fetch).kvRead('kv/sites/site_1/ftp', options)).rejects.toBeInstanceOf(
+        VaultError,
+      )
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
+
   it.each([0, 1, 7])(
     'sends CAS %i without converting it into an unconditional write',
     async (cas) => {
@@ -417,6 +472,7 @@ describe('Vault boundary validation', () => {
       const store = createVaultSecretStore({ addr: address, appRole: role, fetch })
       for (const operation of [
         () => store.kvRead(path),
+        () => store.kvRead(path, { version: 1 }),
         () => store.kvWrite(path, credential, { cas: 0 }),
         () => store.kvCreateOnce(path, credential, custom),
         () => store.kvDelete(path),

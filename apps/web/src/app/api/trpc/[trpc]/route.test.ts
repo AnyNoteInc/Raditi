@@ -6,11 +6,13 @@ import { MAX_BATCH_SIZE } from '@/trpc/batch'
 // records what the route builds it from.
 const stand = vi.hoisted(() => ({
   shop: { name: 'the shop of the process' } as object | null,
+  connections: { name: 'the site connections of the process' } as object | null,
   contexts: [] as unknown[],
   shopFailure: new Error('YooKassa request timed out'),
 }))
 
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
+vi.mock('@/server/site-connections', () => ({ siteConnections: () => stand.connections }))
 vi.mock('@repo/trpc', async () => {
   const { initTRPC, TRPCError } = await import('@trpc/server')
   const t = initTRPC.create()
@@ -51,6 +53,7 @@ describe('tRPC route', () => {
   let error: ReturnType<typeof vi.spyOn>
   beforeEach(() => {
     stand.shop = { name: 'the shop of the process' }
+    stand.connections = { name: 'the site connections of the process' }
     stand.contexts = []
     error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   })
@@ -73,13 +76,17 @@ describe('tRPC route', () => {
     expect(MAX_BATCH_SIZE).toBeLessThanOrEqual(10)
   })
 
-  it('builds the context from the request headers and the shop of the process', async () => {
+  it('builds the context from the request headers and the services of the process', async () => {
     const request = new Request('http://localhost/api/trpc/ping', { headers: { cookie: 'a=1' } })
 
     expect((await GET(request)).status).toBe(200)
 
-    expect(stand.contexts).toEqual([{ headers: request.headers, billing: stand.shop }])
-    expect((stand.contexts[0] as { billing: unknown }).billing).toBe(stand.shop)
+    expect(stand.contexts).toEqual([
+      { headers: request.headers, billing: stand.shop, siteConnections: stand.connections },
+    ])
+    const [context] = stand.contexts as [{ billing: unknown; siteConnections: unknown }]
+    expect(context.billing).toBe(stand.shop)
+    expect(context.siteConnections).toBe(stand.connections)
   })
 
   it('builds the context without a shop while payments are off', async () => {
@@ -87,7 +94,19 @@ describe('tRPC route', () => {
 
     expect((await call('ping')).status).toBe(200)
 
-    expect(stand.contexts).toEqual([{ headers: expect.any(Headers), billing: null }])
+    expect(stand.contexts).toEqual([
+      { headers: expect.any(Headers), billing: null, siteConnections: stand.connections },
+    ])
+  })
+
+  it('builds the context without site connections while Vault is not configured', async () => {
+    stand.connections = null
+
+    expect((await call('ping')).status).toBe(200)
+
+    expect(stand.contexts).toEqual([
+      { headers: expect.any(Headers), billing: stand.shop, siteConnections: null },
+    ])
   })
 
   it('logs an unexpected failure with its cause', async () => {

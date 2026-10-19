@@ -7,6 +7,7 @@ import {
   baseURL,
   databaseUrl,
   fakeYookassa,
+  vault,
   webPort,
   yookassaShop,
 } from './fixtures/billing-stand.ts'
@@ -15,16 +16,23 @@ import {
 // slice, the billing scenarios (docs/plan/37-billing-plan.md). Tests live in tests/billing and
 // sign in through fixtures/signed-in.ts; the smoke run ignores that directory.
 //
-// The run needs one thing from outside: DATABASE_URL in the environment, naming a PostgreSQL
-// with migrations and seeds applied. A disposable one is meant: every test creates a user and
-// removes it afterwards. Nothing here reads .env, and without DATABASE_URL the run stops at once.
+// The run needs two things from outside: DATABASE_URL in the environment, naming a PostgreSQL
+// with migrations and seeds applied, and a local Docker (see OpenBao below). A disposable
+// database is meant: every test creates a user and removes it afterwards. Nothing here reads
+// .env, and without DATABASE_URL the run stops at once.
 //   export DATABASE_URL=postgresql://<user>:<password>@127.0.0.1:<port>/<database>
 //   pnpm db:deploy && pnpm db:seed    # both print the database they work on: check the line
 //   pnpm --filter e2e test:billing
-// Web starts on :3110 and the fake ЮKassa (infra/dev/billing-verify) on 127.0.0.1:4110;
-// E2E_BILLING_WEB_PORT and E2E_BILLING_YOOKASSA_PORT move them. Redis, S3 and Vault are not
-// needed: the pages under test read PostgreSQL only. As for the other runs, stop `pnpm dev`
-// first: Next allows one dev server per app directory.
+// Web starts on :3110, the fake ЮKassa (infra/dev/billing-verify) on 127.0.0.1:4110 and a
+// disposable OpenBao on 127.0.0.1:4210; E2E_BILLING_WEB_PORT, E2E_BILLING_YOOKASSA_PORT and
+// E2E_BILLING_VAULT_PORT move them. OpenBao is there because a customer's first site — what
+// makes the workspace and grants the gift — is added by the wizard «Добавить проект», which
+// writes the access of the site to Vault: the run needs a local Docker with the image
+// ghcr.io/openbao/openbao:2.7.0 loaded (infra/dev/billing-verify/README.md, «Что нужно»; nothing
+// is pulled). The site itself is a synthetic WordPress on an SFTP server the test worker starts
+// (fixtures/site-files.ts). Redis and S3 are not needed: the pages under test read PostgreSQL
+// only. As for the other runs, stop `pnpm dev` first: Next allows one dev server per app
+// directory.
 export default defineConfig({
   testDir: './tests/billing',
   // Playwright empties the directory at start: the traces of the other runs stay where they are.
@@ -36,6 +44,18 @@ export default defineConfig({
   reporter: 'list',
   use: { baseURL, trace: 'retain-on-failure' },
   webServer: [
+    {
+      name: 'Vault',
+      // The AppRole of web comes from the environment, as the shop of the fake: never from the
+      // arguments. The script removes its container when it is told to stop.
+      command: `node infra/dev/billing-verify/openbao.mjs --port ${vault.port}`,
+      cwd: fileURLToPath(new URL('../../', import.meta.url)),
+      // Ready once web can log in: the mounts, the policies and the AppRole are in place.
+      wait: { stdout: /"ready":true/ },
+      timeout: 60_000,
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 20_000 },
+      env: { VAULT_ROLE_ID: vault.roleId, VAULT_SECRET_ID: vault.secretId },
+    },
     {
       name: 'YooKassa',
       // The shop comes from the environment, as the fake wants it: never from the arguments.
@@ -74,16 +94,17 @@ export default defineConfig({
         METRICS_TOKEN: 'raditi-dev-metrics',
         // The grace of an overdue tariff: «Тарифы» names its last day by it.
         BILLING_PAST_DUE_DAYS: '7',
-        // Blank counts as unset and leaves Redis, S3 and Vault switched off: only /api/health
-        // and the avatar routes read them.
+        // The OpenBao of the run, by the AppRole `sites-writer`: «Добавить проект» writes there.
+        VAULT_ADDR: vault.address,
+        VAULT_ROLE_ID: vault.roleId,
+        VAULT_SECRET_ID: vault.secretId,
+        VAULT_DEV_ROOT_TOKEN: '',
+        // Blank counts as unset and leaves Redis and S3 switched off: only /api/health and the
+        // avatar routes read them.
         REDIS_URL: '',
         S3_ENDPOINT: '',
         S3_ACCESS_KEY_ID: '',
         S3_SECRET_ACCESS_KEY: '',
-        VAULT_ADDR: '',
-        VAULT_ROLE_ID: '',
-        VAULT_SECRET_ID: '',
-        VAULT_DEV_ROOT_TOKEN: '',
       },
     },
   ],

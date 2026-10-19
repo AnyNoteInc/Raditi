@@ -13,6 +13,7 @@ import { NotificationsModule } from '../notifications/notifications.module.ts'
 import { OutboxModule } from '../outbox/outbox.module.ts'
 import { QueueModule } from '../queue/queue.module.ts'
 import { SessionsModule } from '../sessions/sessions.module.ts'
+import { SiteProvisioningModule } from '../site-provisioning/site-provisioning.module.ts'
 import { TurnsModule } from '../turns/turns.module.ts'
 import { CoreConfigModule, type CoreModuleOptions } from './core-config.module.ts'
 
@@ -36,6 +37,7 @@ export class CoreModule {
         OutboxModule,
         NotificationsModule,
         BillingModule,
+        SiteProvisioningModule,
         DriversModule,
         SessionsModule,
         TurnsModule.forRoot(options.config.turnExecutor),

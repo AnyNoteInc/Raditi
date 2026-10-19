@@ -458,12 +458,22 @@ test('production and everything that is not a local synthetic WordPress site is 
     ['WORKSPACE_NOT_SYNTHETIC', { site: { dataClass: 'client' } }, {}],
     ['SITE_STATUS', { site: { status: 'archived' } }, {}],
     ['SITE_STATUS', { site: { status: 'paused' } }, {}],
+    // A site of the wizard whose import has not ended: the import makes its repository.
+    ['SITE_SETUP', { site: { codeImport: 'queued' } }, {}],
+    ['SITE_SETUP', { site: { codeImport: 'running' } }, {}],
+    ['SITE_SETUP', { site: { codeImport: 'failed' } }, {}],
     ['SITE_NOT_RUNNING', { wordpress: { ready: false } }, {}],
   ]
   for (const [code, setup, override] of cases) {
     const { ports, input, log } = world(setup)
     await assert.rejects(connectLocalSite(ports, { ...input, ...override }), refuses(code), code)
     assert.deepEqual(log, [], `${code}: nothing may be changed`)
+  }
+  // A site of the wizard is taken once its first version is imported, as one made before the wizard.
+  for (const codeImport of ['succeeded', null]) {
+    const { state, connect } = world({ site: { codeImport } })
+    await connect()
+    assert.ok(state.vault.secrets.get(ACCESS_PATH), `codeImport ${codeImport}`)
   }
   // Loopback names the content adapter accepts over plain http, and https on them.
   for (const url of ['http://127.0.0.1:8080', 'http://[::1]:8080', 'https://localhost:8443']) {

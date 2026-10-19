@@ -15,6 +15,7 @@ import {
   totalLeft,
 } from '../../fixtures/credit-words.ts'
 import { expect, test, type Credits } from '../../fixtures/credits.ts'
+import { addSiteInWizard, type SiteFiles } from '../../fixtures/site-files.ts'
 
 // The credits model on «Тарифы» and «Использование», from the registration to the limits, in a
 // real browser: a new user reads the gift as promised, gets it with the first site and spends
@@ -102,19 +103,12 @@ const plansLead = (page: Page) =>
 
 const fakePage = `http://127.0.0.1:${fakeYookassa.port}/pay/**`
 
-/** Adds the first site of the customer in the form of «Проекты»: it makes the workspace. */
-async function addFirstSite(page: Page, name: string) {
-  await page.goto('/projects')
-  await expect(page.getByRole('heading', { level: 1, name: 'Проекты' })).toBeVisible(SLOW)
-  await page.getByRole('button', { name: 'Добавить сайт' }).first().click()
-  const form = page.getByRole('form', { name: 'Новый проект' })
-  await form.getByLabel('Название проекта').fill(name)
-  await form.getByLabel('Адрес сайта').fill(`https://gift-${randomUUID()}.example.ru`)
-  await form.getByRole('button', { name: 'Создать проект' }).click()
-  await expect(page.getByRole('main').getByRole('alert')).toContainText(
-    `Проект «${name}» добавлен.`,
-    SLOW,
-  )
+/**
+ * Adds the first site of the customer through the wizard «Добавить проект», as they would: it
+ * makes the workspace. The page of the new site then says that the site is being set up.
+ */
+async function addFirstSite(page: Page, files: SiteFiles, name: string) {
+  await addSiteInWizard(page, files, { name, url: `https://gift-${randomUUID()}.example.ru` })
 }
 
 /** Chooses «Старт» on «Тарифы» and pays for it on the page of the fake. */
@@ -151,6 +145,7 @@ test('a new user gets the gift with the first site and spends it on tasks withou
   page,
   signedInUser,
   credits: queue,
+  siteFiles,
 }) => {
   const noTariff = section(page, 'Тариф не выбран')
   const giftKey = `user:${signedInUser.id}:signup-gift`
@@ -171,7 +166,7 @@ test('a new user gets the gift with the first site and spends it on tasks withou
   })
 
   await test.step('the first site makes the workspace, and the gift is granted with it, once', async () => {
-    await addFirstSite(page, 'Кофейня')
+    await addFirstSite(page, siteFiles, 'Кофейня')
 
     expect(await queue.stored()).toEqual({
       tariff: { balance: 0, held: 0, left: 0 },
@@ -282,11 +277,12 @@ test('the gift is used up without a tariff: both pages say so and lead to the ta
   page,
   signedInUser: _signedIn,
   credits: queue,
+  siteFiles,
 }) => {
   const noTariff = section(page, 'Тариф не выбран')
 
   await test.step('one task takes the whole gift', async () => {
-    await addFirstSite(page, 'Кофейня')
+    await addFirstSite(page, siteFiles, 'Кофейня')
     const landing = await queue.task({ title: 'Собрать страницу' })
     expect(landing.reserved).toEqual({ tariff: 0, gift: 35, pack: 0 })
     // 210 RUB of work is 35 credits: all that was set aside, and all there is.

@@ -2,8 +2,9 @@ name: Billing
 
 # The whole money path (docs/plan/37-billing-plan.md, «Проверочный стенд») on built web and
 # core: tariffs, packs, renewals, payment methods, refunds and the operator's commands against
-# the fake ЮKassa of infra/dev/billing-verify, on disposable PostgreSQL and Redis. Synthetic
-# data only: no repository secrets, no real shop, no customer data.
+# the fake ЮKassa of infra/dev/billing-verify, on disposable PostgreSQL, Redis and OpenBao, with
+# a synthetic WordPress on an SFTP server of the stand for the first site of a customer.
+# Synthetic data only: no repository secrets, no real shop, no customer data.
 on:
   pull_request:
     branches: [main]
@@ -18,6 +19,9 @@ on:
       - infra/dev/billing-verify/**
       # Bounded child processes of the stand.
       - infra/dev/db-verify/command.mjs
+      # The mounts and policies of the OpenBao web writes the access of a new site to.
+      - infra/vault/bootstrap.mjs
+      - infra/vault/policies/**
       # What the stand builds and runs: web (next build), the core role and the operator's
       # commands of the orchestrator, and every workspace package they are built from,
       # migrations and seeds included.
@@ -51,7 +55,8 @@ jobs:
         run: |
           for image in \
             postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24 \
-            redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+            redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0 \
+            ghcr.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315
           do
             docker pull --quiet "$image"
           done

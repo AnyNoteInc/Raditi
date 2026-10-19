@@ -8,7 +8,6 @@ import {
   assertPublicationChange,
   badRequest,
   conflict,
-  DomainError,
   forbidden,
   isDomainError,
   isPublicationPath,
@@ -25,7 +24,6 @@ import {
   snapshotHasCredential,
   snapshotLimits,
   turnOutputRejected,
-  type GitCredentials,
   type GitProvider,
   type PublicationMetadata,
   type PublicationSource,
@@ -42,6 +40,13 @@ import { BASE_BUNDLE_REF } from './base-bundle.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
 import { PROCESS_OUTPUT_LIMIT, runProcess, type ProcessResult } from './process.ts'
 import { CLONE_PREFIX } from './stale-clones.ts'
+import {
+  gitOperationFailed,
+  issueGitAuth,
+  runTrustedGit,
+  trustedGitEnvironment,
+  type TrustedGitContext,
+} from './trusted-git.ts'
 
 export interface GitWorkspaceOptions {
   transport:
@@ -70,7 +75,6 @@ interface Entry {
   oid: string
   path: string
 }
-const CREDENTIAL_TTL_SECONDS = 120
 const BOT_NAME = 'Raditi Bot'
 const BOT_EMAIL = 'bot@raditi.ru'
 const GITLEAKS_CONFIG = '[extend]\nuseDefault = true\n'
@@ -84,8 +88,7 @@ const GITLEAKS_FINDING_EXIT = 99
  */
 const SCAN_PREFIX = Buffer.from('GIF89a\n')
 export const scanCopy = (blob: Buffer): Buffer => Buffer.concat([SCAN_PREFIX, blob])
-const failed = () =>
-  new DomainError('GIT_OPERATION_FAILED', 'Trusted repository operation failed', 502)
+const failed = gitOperationFailed
 /** Any branch of the site, not only `agent/<taskId>`: the default branch is read too. */
 const branchHeadSchema = z
   .object({
@@ -519,62 +522,22 @@ export class GitWorkspaceService implements TurnWorkspace {
 
   private async auth(ref: RepoRef, access: 'read' | 'write'): Promise<NodeJS.ProcessEnv> {
     if (this.options.transport.kind === 'local-test') return {}
-    let credentials: GitCredentials
-    try {
-      credentials = await withTimeout(
-        this.provider.issueCredentials(ref, access, CREDENTIAL_TTL_SECONDS),
-        publicationLimits.commandMs,
-        'Repository credentials timed out',
-      )
-    } catch {
-      throw failed()
-    }
-    const ttl =
-      credentials.expiresAt instanceof Date ? credentials.expiresAt.getTime() - Date.now() : 0
-    const control = (value: string) =>
-      [...value].some(
-        (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-      )
-    if (
-      !Number.isFinite(ttl) ||
-      ttl < 5000 ||
-      ttl > (CREDENTIAL_TTL_SECONDS + 5) * 1000 ||
-      typeof credentials.username !== 'string' ||
-      typeof credentials.token !== 'string' ||
-      !credentials.username ||
-      credentials.username.length > 1024 ||
-      !credentials.token ||
-      credentials.token.length > 4096 ||
-      credentials.username.includes(':') ||
-      control(credentials.username) ||
-      control(credentials.token)
-    )
-      throw forbidden('Repository credentials are not a valid short-lived grant')
-    return {
-      RADITI_GIT_AUTH: `Authorization: Basic ${Buffer.from(`${credentials.username}:${credentials.token}`).toString('base64')}`,
-      RADITI_GIT_AUTH_EXPIRES: String(credentials.expiresAt.getTime()),
-    }
+    return issueGitAuth(this.provider, ref, access)
+  }
+
+  private context(workspace: Workspace): TrustedGitContext {
+    const { transport } = this.options
+    return transport.kind === 'https'
+      ? {
+          home: workspace.root,
+          protocol: 'https',
+          ...(transport.caFile === undefined ? {} : { caFile: transport.caFile }),
+        }
+      : { home: workspace.root, protocol: 'file' }
   }
 
   private environment(workspace: Workspace): NodeJS.ProcessEnv {
-    const { transport } = this.options
-    return {
-      // One more trusted CA when set; nothing here can switch certificate checks off.
-      ...(transport.kind === 'https' && transport.caFile !== undefined
-        ? { GIT_SSL_CAINFO: transport.caFile }
-        : {}),
-      PATH: process.env.PATH,
-      HOME: workspace.root,
-      XDG_CONFIG_HOME: workspace.root,
-      LC_ALL: 'C',
-      GIT_CONFIG_NOSYSTEM: '1',
-      GIT_CONFIG_SYSTEM: '/dev/null',
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_NO_REPLACE_OBJECTS: '1',
-      GIT_ATTR_NOSYSTEM: '1',
-      GIT_LITERAL_PATHSPECS: '1',
-    }
+    return trustedGitEnvironment(this.context(workspace))
   }
 
   private async command(
@@ -585,45 +548,7 @@ export class GitWorkspaceService implements TurnWorkspace {
     env: NodeJS.ProcessEnv = {},
     cwd = workspace.repo,
   ): Promise<ProcessResult> {
-    const options = [
-      '--no-pager',
-      '--no-replace-objects',
-      '-c',
-      'core.hooksPath=/dev/null',
-      '-c',
-      'core.fsmonitor=false',
-      '-c',
-      'submodule.recurse=false',
-      '-c',
-      'credential.helper=',
-      '-c',
-      'core.attributesFile=/dev/null',
-      '-c',
-      'protocol.allow=never',
-      '-c',
-      `protocol.${this.options.transport.kind === 'https' ? 'https' : 'file'}.allow=always`,
-      '-c',
-      'http.followRedirects=false',
-      '-c',
-      'transfer.fsckObjects=true',
-      '-c',
-      'fetch.fsckObjects=true',
-      '-c',
-      'commit.gpgsign=false',
-      '-c',
-      'gc.auto=0',
-    ]
-    if (env.RADITI_GIT_AUTH) {
-      if (Number(env.RADITI_GIT_AUTH_EXPIRES) <= Date.now())
-        throw forbidden('Repository credential expired before use')
-      options.push('--config-env=http.extraHeader=RADITI_GIT_AUTH')
-    }
-    return runProcess('git', [...options, ...args], {
-      cwd,
-      input,
-      maxBytes,
-      env: { ...this.environment(workspace), ...env },
-    })
+    return runTrustedGit(this.context(workspace), args, { cwd, input, maxBytes, env })
   }
 
   private async git(

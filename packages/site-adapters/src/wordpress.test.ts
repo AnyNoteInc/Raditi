@@ -65,20 +65,20 @@ describe('wordpressAdapter', () => {
     )
   })
 
-  it('never imports secrets, core, media or caches, anchoring root files', () => {
+  it('never imports secrets or caches, anchoring root files, and takes the core and the media', () => {
     const { gitignore, exclude } = wordpressAdapter.importRules(site)
-    expect(exclude).toEqual(
-      expect.arrayContaining([
-        '/wp-config.php',
-        '/wp-admin/',
-        '/wp-includes/',
-        '/wp-content/uploads/',
-        '/wp-content/cache/',
-        '/index.php',
-      ]),
-    )
-    // An unanchored index.php would hide every theme template from git.
-    expect(exclude).not.toContain('index.php')
+    expect(exclude).toEqual(expect.arrayContaining(['/wp-config.php', '/wp-content/cache/']))
+    // The first version is the site as it runs (owner's decision of 17.10.2026).
+    for (const taken of [
+      '/wp-admin/',
+      '/wp-includes/',
+      '/wp-content/uploads/',
+      '/wp-content/blogs.dir/',
+      '/index.php',
+      '/wp-*.php',
+      'index.php',
+    ])
+      expect(exclude).not.toContain(taken)
     expect(gitignore[0]).toMatch(/^# /)
     expect(gitignore.slice(1)).toEqual(exclude)
   })
@@ -170,7 +170,6 @@ describe('wordpressAdapter', () => {
     expect(exclude).toEqual(
       expect.arrayContaining([
         'wp-config*',
-        '/wp-content/blogs.dir/',
         '/wp-content/wflogs/',
         '*.csv',
         '*.xls',

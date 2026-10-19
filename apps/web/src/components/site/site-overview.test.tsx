@@ -49,4 +49,54 @@ describe('site overview', () => {
     render(<SiteOverview site={{ status: 'active', state }} />)
     expect(screen.getByText(phrase)).toBeTruthy()
   })
+
+  describe('a site whose files were imported', () => {
+    const version = {
+      tag: 'v0.0.0',
+      commitSha: 'a'.repeat(40),
+      importedAt: new Date('2026-10-17T09:40:00Z'),
+    }
+
+    it('shows the saved first version with its tag and the Moscow time', () => {
+      render(
+        <SiteOverview
+          site={{ status: 'onboarding', state: 'free', setup: 'done', initialVersion: version }}
+        />,
+      )
+      const card = screen
+        .getByRole('heading', { name: 'Первоначальная версия сайта сохранена' })
+        .closest('section')!
+      expect(card).toHaveTextContent('v0.0.0')
+      expect(card).toHaveTextContent('17 октября 2026, 12:40')
+      expect(card.querySelector('time')?.getAttribute('dateTime')).toBe('2026-10-17T09:40:00.000Z')
+    })
+
+    it('says the files are saved but the agent cannot change the site yet', () => {
+      render(
+        <SiteOverview
+          site={{ status: 'onboarding', state: 'free', setup: 'done', initialVersion: version }}
+        />,
+      )
+      expect(
+        screen.getByText(
+          'Файлы сайта сохранены, но агент пока не может менять сайт: остальную часть подключения мы ещё делаем.',
+        ),
+      ).toBeTruthy()
+      expect(screen.queryByText(/Подключение из кабинета мы ещё делаем/)).toBeNull()
+    })
+
+    it('shows the card for a done setup even before its version is read', () => {
+      render(<SiteOverview site={{ status: 'onboarding', state: 'free', setup: 'done' }} />)
+      expect(screen.getByText('Первоначальная версия сайта сохранена')).toBeTruthy()
+      expect(screen.getByText('Файлы сайта скопированы.')).toBeTruthy()
+    })
+
+    it('shows nothing of an import for a site from before the wizard', () => {
+      const { container } = render(
+        <SiteOverview site={{ status: 'onboarding', state: 'free', setup: null }} />,
+      )
+      expect(container.textContent).not.toMatch(/Первоначальная версия/)
+      expect(screen.getByText(/Подключение из кабинета мы ещё делаем/)).toBeTruthy()
+    })
+  })
 })

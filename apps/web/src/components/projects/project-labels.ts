@@ -9,9 +9,6 @@ export const stackLabels = {
 
 export type ProjectStack = keyof typeof stackLabels
 
-/** Platforms a new site can be connected on today: only these have a site adapter. */
-export const connectableStacks: readonly ProjectStack[] = ['wordpress']
-
 export const statusLabels = {
   onboarding: 'Ожидает подключения',
   active: 'Подключён',
@@ -19,3 +16,27 @@ export const statusLabels = {
   disconnected: 'Нет подключения',
   archived: 'В архиве',
 } as const
+
+/**
+ * Where the first import of a site stands (`siteSetupState`): `pending` while its files are being
+ * copied, `failed` after the copy stopped, `done` once the first version is saved; null for a site
+ * from before the wizard.
+ */
+export type ProjectSetup = 'pending' | 'failed' | 'done' | null
+
+/** While the site is being set up the chip says how that goes; then the status of the site. */
+const setupChips = {
+  pending: { label: 'Настраиваем', color: 'default' },
+  failed: { label: 'Ошибка настройки', color: 'error' },
+} as const
+
+export function projectChip(project: { status: keyof typeof statusLabels; setup?: ProjectSetup }): {
+  label: string
+  color: 'default' | 'success' | 'error'
+} {
+  if (project.setup === 'pending' || project.setup === 'failed') return setupChips[project.setup]
+  return {
+    label: statusLabels[project.status],
+    color: project.status === 'active' ? 'success' : 'default',
+  }
+}

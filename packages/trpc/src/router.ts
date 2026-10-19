@@ -2,6 +2,7 @@ import { billingRouter } from './routers/billing.ts'
 import { consentRouter } from './routers/consent.ts'
 import { healthRouter } from './routers/health.ts'
 import { projectRouter } from './routers/project.ts'
+import { siteConnectionRouter } from './routers/site-connection.ts'
 import { userRouter } from './routers/user.ts'
 import { createCallerFactory, router } from './trpc.ts'
 
@@ -10,6 +11,7 @@ export const appRouter = router({
   user: userRouter,
   consent: consentRouter,
   project: projectRouter,
+  siteConnection: siteConnectionRouter,
   billing: billingRouter,
 })
 

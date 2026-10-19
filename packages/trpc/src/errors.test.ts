@@ -24,6 +24,7 @@ import {
   forbidden,
   notFound,
   notImplemented,
+  siteConnectionLimits,
   taskRefusal,
   taskRefusalReasons,
   type TaskRefusalReason,
@@ -237,6 +238,80 @@ describe('toTRPCError', () => {
       expect(text.split('. ').length).toBeGreaterThanOrEqual(2)
     },
   )
+
+  it.each([
+    [
+      'SITE_CONNECTION_UNAVAILABLE',
+      503,
+      'SERVICE_UNAVAILABLE',
+      'Подключение сайтов сейчас недоступно. Попробуйте ещё раз немного позже',
+    ],
+    ['SITE_STACK_NOT_CONNECTABLE', 400, 'BAD_REQUEST', 'Эту платформу мы пока не подключаем'],
+    [
+      'SITE_CHECKS_LIMITED',
+      429,
+      'TOO_MANY_REQUESTS',
+      'Слишком много проверок подряд. Подождите несколько минут и попробуйте снова',
+    ],
+    [
+      'SITE_CONNECTIONS_BUSY',
+      429,
+      'TOO_MANY_REQUESTS',
+      'Сейчас подключаются три ваших сайта. Дождитесь, пока закончится хотя бы одно подключение',
+    ],
+    [
+      'PROJECT_CREATION_IN_PROGRESS',
+      409,
+      'CONFLICT',
+      'Проект уже добавляется. Подождите несколько секунд',
+    ],
+    [
+      'PROJECT_REQUEST_CONFLICT',
+      409,
+      'CONFLICT',
+      'Из этого окна уже добавлен проект с другим адресом. Откройте список проектов или начните добавление заново',
+    ],
+    [
+      'SITE_SETUP_NOT_FAILED',
+      409,
+      'CONFLICT',
+      'Настройку сейчас нельзя повторить. Обновите страницу, чтобы увидеть, как она идёт',
+    ],
+    [
+      'SITE_SETUP_RETRIES_LIMITED',
+      429,
+      'TOO_MANY_REQUESTS',
+      'Повторять настройку можно не чаще шести раз в час. Попробуйте немного позже',
+    ],
+    [
+      'SITE_SETUP_UNAVAILABLE',
+      409,
+      'CONFLICT',
+      'Настройку этого сайта уже нельзя повторить. Обновите страницу, чтобы увидеть, что изменилось',
+    ],
+  ] as const)(
+    'gives the refusal %s of the site connection wizard its own Russian text',
+    (domainCode, status, code, text) => {
+      const domainError = new DomainError(domainCode, 'English text for the logs', status)
+
+      const error = toTRPCError(domainError)
+
+      expect(error).toMatchObject({ code, message: text, cause: domainError })
+      expect(clientMessage(error)).toBe(text)
+      const generic = toTRPCError(new DomainError('UNLISTED', 'Unlisted', status))
+      expect(text).not.toBe(generic.message)
+      // No English, no jargon of the protocols, no final full stop; formal «вы» or impersonal.
+      expect(text).not.toMatch(/[A-Za-z]|SSH|FTP|Vault/)
+      expect(text).not.toMatch(/\.$/)
+      expect(text).not.toMatch(/(?:^|[^а-яё])(?:ты|тебя|тебе|твой|твоя|твоё|твои)(?:[^а-яё]|$)/i)
+    },
+  )
+
+  it('names in its words the very limits of the wizard that the texts promise', () => {
+    // The texts spell the numbers out; a changed limit must change its sentence too.
+    expect(siteConnectionLimits.connectionsInProgressPerUser).toBe(3)
+    expect(siteConnectionLimits.retriesPerHour).toBe(6)
+  })
 
   it('falls back by status class', () => {
     expect(trpcCodeForStatus(451)).toBe('BAD_REQUEST')

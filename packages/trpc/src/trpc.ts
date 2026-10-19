@@ -1,6 +1,12 @@
 import { getSessionFromHeaders, type Auth, type Session } from '@repo/auth'
 import { prisma as defaultPrisma, type PrismaClient } from '@repo/db'
-import { DomainError, isDomainError, missingRequiredConsents, type AppEnv } from '@repo/domain'
+import {
+  DomainError,
+  isDomainError,
+  missingRequiredConsents,
+  type AppEnv,
+  type SiteConnectionServices,
+} from '@repo/domain'
 import type { YookassaClient } from '@repo/yookassa'
 import { initTRPC, TRPCError } from '@trpc/server'
 import superjson from 'superjson'
@@ -36,6 +42,13 @@ export interface Context {
   user: Session['user'] | null
   /** null: payments are switched off (the shop is not set up); the tariff state is still read. */
   billing: BillingContext | null
+  /**
+   * What the site connection wizard checks and writes through (spec §12): DNS, the adapters of the
+   * file sources and databases, and a Vault store that can only write. Absent or null: Vault is
+   * not configured for web, and a project cannot be created — the checks and the creation refuse,
+   * everything else works. The app builds it once per process.
+   */
+  siteConnections?: SiteConnectionServices | null
 }
 
 export interface CreateContextOptions {
@@ -47,6 +60,8 @@ export interface CreateContextOptions {
   auth?: Auth
   /** Defaults to null: payments are switched off. */
   billing?: BillingContext | null
+  /** Defaults to null: projects cannot be created. */
+  siteConnections?: SiteConnectionServices | null
 }
 
 export async function createContext({
@@ -54,6 +69,7 @@ export async function createContext({
   prisma = defaultPrisma,
   auth,
   billing = null,
+  siteConnections = null,
 }: CreateContextOptions): Promise<Context> {
   const current = await getSessionFromHeaders(headers, auth)
   return {
@@ -62,6 +78,7 @@ export async function createContext({
     session: current?.session ?? null,
     user: current?.user ?? null,
     billing,
+    siteConnections,
   }
 }
 
