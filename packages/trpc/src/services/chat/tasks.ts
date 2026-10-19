@@ -18,6 +18,7 @@ import {
 import {
   assertTransition,
   conflict,
+  isDomainError,
   isProduction,
   llmBackendIds,
   maxTaskAttempts,
@@ -51,6 +52,7 @@ import {
   taskNotAccepted,
   taskNothingToContinue,
   taskNothingToRetry,
+  taskRetryDailyLimit,
 } from './refusals.ts'
 import { dialogTitle, requestPayload, requestText } from './request-text.ts'
 
@@ -398,13 +400,20 @@ export async function retryDialog(
     const attempt = task.attempt + 1
     await moveTo(tx, task, 'queued', { attempt, modelClass: 'heavy' })
     await releaseTask(tx, { taskId: task.id, now })
-    await placeCreditHold(tx, {
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      attempt,
-      now,
-      expiresAt: taskHoldExpiry(now, 'waiting'),
-    })
+    try {
+      await placeCreditHold(tx, {
+        workspaceId: task.workspaceId,
+        taskId: task.id,
+        attempt,
+        now,
+        expiresAt: taskHoldExpiry(now, 'waiting'),
+      })
+    } catch (error) {
+      // The words of a retry, not of a new task; the transaction rolls back all the same.
+      if (isDomainError(error) && error.code === 'BILLING_DAILY_LIMIT_REACHED')
+        throw taskRetryDailyLimit(error.details)
+      throw error
+    }
     const requestEventId = await writeRequest(tx, task.id, {
       v: 1,
       kind: 'retry',

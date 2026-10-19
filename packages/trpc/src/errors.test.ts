@@ -21,6 +21,7 @@ import {
   billingUnpaidWorkLimit,
   conflict,
   DomainError,
+  feedRetryText,
   forbidden,
   notFound,
   notImplemented,
@@ -42,6 +43,7 @@ import {
   toTRPCError,
   trpcCodeForStatus,
 } from './errors.ts'
+import { taskRetryDailyLimit } from './services/chat/refusals.ts'
 import { createCallerFactory, publicProcedure, router, type Context } from './trpc.ts'
 
 describe('toTRPCError', () => {
@@ -742,6 +744,23 @@ describe('the text of a refused task, built from the details of its refusal', ()
     ],
   ])('names the spent day: %o', (day, message) => {
     expect(toTRPCError(dayRefused(0, day))).toMatchObject({ code: 'CONFLICT', message })
+  })
+
+  it('tells a refused «Попробовать ещё» the line of its card, not the words of a new task', () => {
+    // retryDialog turns the refusal of the day into its own code (D7 of 17.10.2026).
+    for (const day of [
+      { limit: 50, used: 47 },
+      { limit: 50, used: 50 },
+    ]) {
+      const refusal = dayRefused(50 - day.used, day)
+      const error = toTRPCError(taskRetryDailyLimit(refusal.details))
+      expect(error).toMatchObject({ code: 'CONFLICT' })
+      expect(error.message).toBe(
+        'Кредиты по тарифу на сегодня закончились. Попробовать ещё раз можно завтра или сейчас — с пакетом кредитов',
+      )
+      expect(`${error.message}.`).toBe(feedRetryText.dailyLimit)
+      expect(error.message).not.toMatch(/задач/)
+    }
   })
 
   it('says the general words of the day when the details do not carry it', () => {

@@ -2,8 +2,16 @@ import { createHash, randomInt, randomUUID } from 'node:crypto'
 
 import { ensurePersonalWorkspaceWithGift, grantTariffCredits } from '@repo/billing'
 import { underPrivateCreditRate } from '@repo/billing/testing'
-import { createPrismaClient, insertFeedEvent, Prisma, type PrismaClient, type User } from '@repo/db'
 import {
+  createPrismaClient,
+  ensurePersonalWorkspace,
+  insertFeedEvent,
+  Prisma,
+  type PrismaClient,
+  type User,
+} from '@repo/db'
+import {
+  billingDay,
   browserScreenshotKey,
   legalDocuments,
   type DbPlanView,
@@ -280,11 +288,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     })
   }
 
-  /** An owner with the gift of the registration and an active site of their workspace. */
-  async function siteOwner(options: { database?: boolean } = {}) {
+  /**
+   * An owner with the gift of the registration and an active site of their workspace; `gift:
+   * false` — the workspace alone, as a test that counts tariff credits only needs it.
+   */
+  async function siteOwner(options: { database?: boolean; gift?: boolean } = {}) {
     const owner = await person()
     const workspace = await db.$transaction((tx) =>
-      ensurePersonalWorkspaceWithGift(tx, { userId: owner.id, appEnv: 'test' }),
+      options.gift === false
+        ? ensurePersonalWorkspace(tx, { userId: owner.id, appEnv: 'test' })
+        : ensurePersonalWorkspaceWithGift(tx, { userId: owner.id, appEnv: 'test' }),
     )
     const site = await db.site.create({
       data: {
@@ -310,9 +323,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
 
   /**
    * A paid tariff of a month with its credits, for a workspace that needs more than the gift:
-   * a plan of its own, never on sale, its paid order and the quota granted by that order.
+   * a plan of its own, never on sale, its paid order and the quota granted by that order. No
+   * daily cap unless `creditsPerDay` is given; the period began `startedDaysAgo` days ago.
    */
-  async function paidTariff(workspaceId: string) {
+  async function paidTariff(
+    workspaceId: string,
+    options: { creditsPerDay?: number; startedDaysAgo?: number } = {},
+  ) {
     const plan = await db.plan.create({
       data: {
         slug: `test-${randomUUID()}`,
@@ -320,12 +337,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         kind: 'quota',
         price: '4900.00',
         creditsPerMonth: 300,
+        creditsPerDay: options.creditsPerDay ?? null,
         maxSites: 3,
         isActive: false,
       },
     })
     planIds.push(plan.id)
-    const start = new Date(Date.now() - 24 * 3600 * 1000)
+    const start = new Date(Date.now() - (options.startedDaysAgo ?? 1) * 24 * 3600 * 1000)
     const end = new Date(start.getTime() + 30 * 24 * 3600 * 1000)
     const order = await db.order.create({
       data: {
@@ -1017,6 +1035,44 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
       expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([1])
       expect((await feedOf(taskId)).at(-1)?.type).toBe('feed.failure')
+    })
+
+    it('tells a retry the daily limit refused in the words of the retry, and moves nothing', async () => {
+      // Tariff credits only, 23 a day: the failed pass took 20 of yesterday, another dialog 20
+      // of today, so the 3 left of today cannot start the retry (D7 of 17.10.2026), and the
+      // chain it gives back returns nothing to today.
+      const { owner, site, workspaceId } = await siteOwner({ database: true, gift: false })
+      await paidTariff(workspaceId, { creditsPerDay: 23, startedDaysAgo: 3 })
+      const caller = callerOf(owner, { client: underRateAndHeavy(db) })
+      const { taskId } = await newDialog(caller, site.id)
+      await withCandidate(taskId)
+      const failureId = String(await failedPass(taskId))
+      const yesterday = new Date(billingDay(new Date()).start.getTime() - 60_000)
+      await db.creditHold.updateMany({ where: { taskId }, data: { placedAt: yesterday } })
+      const held = await activeHolds(taskId)
+      await newDialog(caller, site.id, 'Добавьте баннер на главную')
+
+      const refused = caller.task.retry({
+        taskId,
+        requestId: randomUUID(),
+        failureEventId: failureId,
+      })
+
+      await expect(refused).rejects.toMatchObject({
+        code: 'CONFLICT',
+        cause: { code: 'TASK_RETRY_DAILY_LIMIT' },
+        message:
+          'Кредиты по тарифу на сегодня закончились. Попробовать ещё раз можно завтра или сейчас — с пакетом кредитов',
+      })
+      // Nothing moved: the dialog waits with its candidate and the reserve of attempt 1.
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'awaiting_approval',
+        attempt: 1,
+        modelClass: 'standard',
+      })
+      expect(await activeHolds(taskId)).toEqual(held)
+      expect((await feedOf(taskId)).at(-1)).toMatchObject({ type: 'feed.failure' })
+      expect((await caller.task.feed({ taskId })).task.canRetry).toBe(true)
     })
 
     it('rolls the return of the reserve back when the new one is refused', async () => {
