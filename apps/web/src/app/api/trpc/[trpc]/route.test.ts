@@ -6,11 +6,13 @@ import { MAX_BATCH_SIZE } from '@/trpc/batch'
 // records what the route builds it from.
 const stand = vi.hoisted(() => ({
   shop: { name: 'the shop of the process' } as object | null,
+  chat: { name: 'the dialog services of the process' } as object | null,
   contexts: [] as unknown[],
   shopFailure: new Error('YooKassa request timed out'),
 }))
 
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
+vi.mock('@/server/chat-services', () => ({ chatServices: () => stand.chat }))
 vi.mock('@repo/trpc', async () => {
   const { initTRPC, TRPCError } = await import('@trpc/server')
   const t = initTRPC.create()
@@ -78,8 +80,11 @@ describe('tRPC route', () => {
 
     expect((await GET(request)).status).toBe(200)
 
-    expect(stand.contexts).toEqual([{ headers: request.headers, billing: stand.shop }])
+    expect(stand.contexts).toEqual([
+      { headers: request.headers, billing: stand.shop, chat: stand.chat },
+    ])
     expect((stand.contexts[0] as { billing: unknown }).billing).toBe(stand.shop)
+    expect((stand.contexts[0] as { chat: unknown }).chat).toBe(stand.chat)
   })
 
   it('builds the context without a shop while payments are off', async () => {
@@ -87,7 +92,9 @@ describe('tRPC route', () => {
 
     expect((await call('ping')).status).toBe(200)
 
-    expect(stand.contexts).toEqual([{ headers: expect.any(Headers), billing: null }])
+    expect(stand.contexts).toEqual([
+      { headers: expect.any(Headers), billing: null, chat: stand.chat },
+    ])
   })
 
   it('logs an unexpected failure with its cause', async () => {

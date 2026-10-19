@@ -10,5 +10,5 @@ export const metadata: Metadata = { title: 'Новый диалог' }
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
   const site = await loadSiteSection((await params).projectId, 'chat')
   if (site === UNAVAILABLE) return <ServiceUnavailable />
-  return <NewDialog />
+  return <NewDialog siteId={site.id} accepting={site.status === 'active'} />
 }

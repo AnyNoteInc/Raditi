@@ -27,6 +27,7 @@ describe('webEnvFromEnv', () => {
       metricsToken: DEV_METRICS_TOKEN,
       redisUrl: 'redis://localhost:6379',
       pastDueDays: 7,
+      preview: null,
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
@@ -103,6 +104,49 @@ describe('webEnvFromEnv', () => {
       webEnvFromEnv({ ...devEnv, APP_URL: 'ftp://files', REDIS_URL: 'http://cache:6379' }),
     ).toThrow(
       '[web] invalid configuration: APP_URL: must be an http(s) URL; REDIS_URL: must be a redis:// URL',
+    )
+  })
+})
+
+describe('the address of previews', () => {
+  it('reads the address of .env.example and nothing without a base domain', () => {
+    expect(
+      webEnvFromEnv({
+        ...devEnv,
+        PREVIEW_BASE_DOMAIN: 'localhost',
+        PREVIEW_SCHEME: 'http',
+        PREVIEW_PUBLIC_PORT: '8090',
+      }).preview,
+    ).toEqual({ baseDomain: 'localhost', scheme: 'http', publicPort: 8090 })
+    expect(webEnvFromEnv({ ...devEnv, PREVIEW_BASE_DOMAIN: '' }).preview).toBeNull()
+  })
+
+  it('takes https in production and refuses http there', () => {
+    expect(
+      webEnvFromEnv({ ...prodEnv, PREVIEW_BASE_DOMAIN: 'preview.raditi-sites.ru' }).preview,
+    ).toEqual({ baseDomain: 'preview.raditi-sites.ru', scheme: 'https', publicPort: null })
+    expect(() =>
+      webEnvFromEnv({
+        ...prodEnv,
+        PREVIEW_BASE_DOMAIN: 'preview.raditi-sites.ru',
+        PREVIEW_SCHEME: 'http',
+      }),
+    ).toThrow(/PREVIEW_SCHEME: must be https in production/)
+  })
+
+  it('refuses in production a base under the domain of the cabinet or of Gitea', () => {
+    expect(() => webEnvFromEnv({ ...prodEnv, PREVIEW_BASE_DOMAIN: 'preview.raditi.ru' })).toThrow(
+      /PREVIEW_BASE_DOMAIN: must not share its registrable domain with APP_URL/,
+    )
+    expect(() =>
+      webEnvFromEnv({
+        ...prodEnv,
+        PREVIEW_BASE_DOMAIN: 'p.code-raditi.ru',
+        GITEA_URL: 'https://git.code-raditi.ru',
+      }),
+    ).toThrow(/with GITEA_URL/)
+    expect(() => webEnvFromEnv({ ...prodEnv, PREVIEW_BASE_DOMAIN: 'localhost:8090' })).toThrow(
+      /PREVIEW_BASE_DOMAIN/,
     )
   })
 })

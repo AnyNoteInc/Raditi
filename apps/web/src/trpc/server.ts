@@ -5,6 +5,7 @@ import { createCaller } from '@repo/trpc'
 import { cache } from 'react'
 
 import { getRequestHeaders, getSession } from '@/lib/session'
+import { chatServices } from '@/server/chat-services'
 import { paymentShop } from '@/server/payment-shop'
 
 /**
@@ -20,5 +21,6 @@ export const getServerCaller = cache(async () => {
     session: current?.session ?? null,
     user: current?.user ?? null,
     billing: paymentShop(),
+    chat: chatServices(),
   })
 })

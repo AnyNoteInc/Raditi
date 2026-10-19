@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // context it hands to the router.
 const stand = vi.hoisted(() => ({
   shop: { name: 'the shop of the process' } as object | null,
+  chat: { name: 'the dialog services of the process' },
   prisma: { name: 'the database client of the process' },
   headers: new Headers({ cookie: 'a=1' }),
   current: null as { session: object; user: object } | null,
@@ -12,6 +13,7 @@ const stand = vi.hoisted(() => ({
 }))
 
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
+vi.mock('@/server/chat-services', () => ({ chatServices: () => stand.chat }))
 vi.mock('@/lib/session', () => ({
   getRequestHeaders: () => Promise.resolve(stand.headers),
   getSession: () => Promise.resolve(stand.current),
@@ -39,9 +41,11 @@ describe('the tRPC caller of Server Components', () => {
       session: null,
       user: null,
       billing: stand.shop,
+      chat: stand.chat,
     })
-    const [context] = stand.createCaller.mock.calls[0] as [{ billing: unknown }]
+    const [context] = stand.createCaller.mock.calls[0] as [{ billing: unknown; chat: unknown }]
     expect(context.billing).toBe(stand.shop)
+    expect(context.chat).toBe(stand.chat)
   })
 
   it('hands the router no shop while payments are off', async () => {

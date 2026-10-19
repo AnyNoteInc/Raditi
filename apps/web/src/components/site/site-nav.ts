@@ -68,6 +68,25 @@ export function siteItemOpen(pathname: string, siteId: string): boolean {
 }
 
 /**
+ * The panel beside an open dialog (docs/plan/53-chat-preview-release.md, Р20): the preview, the
+ * files, the database and the checks. From `lg` it stands at the right edge, the full height
+ * of the window, and the content leaves it this much room.
+ */
+export const SITE_PANE_WIDTH = 'clamp(440px, 46vw, 760px)'
+
+/** Sections whose open item has the panel beside it. */
+const panedSections: readonly SiteSection[] = ['chat']
+
+/**
+ * True on a dialog opened from the list of «Чат». From `lg` such an item gives the list column
+ * up: the dialog and the panel of its changes take the width (the way back to the list stays).
+ */
+export function sitePaneOpen(pathname: string, siteId: string): boolean {
+  const section = activeSiteSection(pathname, siteId)
+  return section !== undefined && panedSections.includes(section) && siteItemOpen(pathname, siteId)
+}
+
+/**
  * Why a site keeps only «Обзор» open, in the owner's words. The keys are the statuses in which
  * the platform does not work with the site; the phrase stands on «Обзор» and describes every
  * closed item of the navigation.

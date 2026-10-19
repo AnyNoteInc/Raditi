@@ -3,6 +3,7 @@ import type { TRPCError } from '@trpc/server'
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 
 import { MAX_TRPC_BODY_BYTES, withBodyLimit } from '@/server/body-limit'
+import { chatServices } from '@/server/chat-services'
 import { paymentShop } from '@/server/payment-shop'
 import { MAX_BATCH_SIZE } from '@/trpc/batch'
 
@@ -26,7 +27,8 @@ const handler = withBodyLimit(MAX_TRPC_BODY_BYTES, (req) =>
     req,
     router: appRouter,
     maxBatchSize: MAX_BATCH_SIZE,
-    createContext: () => createContext({ headers: req.headers, billing: paymentShop() }),
+    createContext: () =>
+      createContext({ headers: req.headers, billing: paymentShop(), chat: chatServices() }),
     onError: ({ path, error, type }) => {
       const failure = failureToLog(error)
       if (failure === undefined) return

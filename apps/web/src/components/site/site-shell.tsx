@@ -19,10 +19,12 @@ import {
   closedSectionsNote,
   hasSiteList,
   SITE_LIST_WIDTH,
+  SITE_PANE_WIDTH,
   SITE_RAIL_WIDTH,
   siteEntryHref,
   siteItemOpen,
   siteNav,
+  sitePaneOpen,
   siteSectionAvailable,
   type SiteNavEntry,
 } from './site-nav'
@@ -179,6 +181,10 @@ export function SiteShell({
   const framed = hasSiteList(active)
   // An open item takes the whole phone screen: its back arrow leads to the list and the bar.
   const itemOpen = siteItemOpen(pathname, site.id)
+  // An open dialog: from `lg` the list column gives way, and the panel of its changes stands at
+  // the right edge. The dialog draws the panel (`data-site-pane`), and the shell leaves it room
+  // only while it is there — not beside a dialog that is not found.
+  const paned = sitePaneOpen(pathname, site.id)
   const [moreOpen, setMoreOpen] = useState(false)
   const secondary = siteNav.filter((entry) => !entry.primary)
   const inMore = secondary.some((entry) => entry.section === active)
@@ -265,8 +271,14 @@ export function SiteShell({
             ...(framed && {
               md: `calc(${RAIL + SITE_LIST_WIDTH}px + env(safe-area-inset-left))`,
             }),
+            ...(paned && { lg: `calc(${RAIL}px + env(safe-area-inset-left))` }),
           },
           mr: 'env(safe-area-inset-right)',
+          ...(paned && {
+            '&:has([data-site-pane])': {
+              mr: { lg: `calc(${SITE_PANE_WIDTH} + env(safe-area-inset-right))` },
+            },
+          }),
           pb: {
             xs: itemOpen
               ? 'env(safe-area-inset-bottom)'
