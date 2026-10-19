@@ -28,6 +28,7 @@ test('the container is its own, on loopback only, with HTTPS and no host mounts'
   assert.deepEqual(values('-v'), [])
   assert.deepEqual(values('--volume'), [])
   assert.deepEqual(values('--network'), [])
+  assert.deepEqual(values('--add-host'), ['host.docker.internal:host-gateway'])
   const env = Object.fromEntries(values('-e').map((pair) => pair.split(/=(.*)/s).slice(0, 2)))
   assert.equal(env.GITEA__server__PROTOCOL, 'https')
   assert.equal(env.GITEA__server__ROOT_URL, 'https://127.0.0.1:43210/')
@@ -35,6 +36,24 @@ test('the container is its own, on loopback only, with HTTPS and no host mounts'
   assert.equal(env.GITEA__server__KEY_FILE, '/tls/server-key.pem')
   assert.equal(env.GITEA__service__DISABLE_REGISTRATION, 'true')
   assert.equal(env.GITEA__server__START_SSH_SERVER, 'false')
+  // Runs are created and stay queued (no runner); webhooks reach a private address only.
+  assert.equal(env.GITEA__actions__ENABLED, 'true')
+  assert.equal(env.GITEA__webhook__ALLOWED_HOST_LIST, 'private')
+  // Workflow files of a repository run here: the tag runs and dispatch of the scenario need them.
+  assert.ok(!('GITEA__actions__WORKFLOW_DIRS' in env))
+})
+
+test('the dev Gitea runs no workflow file of a site repository (plan 53, Р28)', async () => {
+  const { REPOSITORY_WORKFLOWS_OFF } = await import('../pipeline-verify/stand.mjs')
+  const compose = readFileSync(new URL('../docker-compose.yml', import.meta.url), 'utf8')
+  const gitea = /\n {2}gitea:\n([\s\S]*?)\n {2}[a-z][a-z-]*:\n/.exec(compose)?.[1] ?? ''
+  assert.match(gitea, /image: gitea\/gitea:1\.27\.3-rootless/)
+  assert.equal(
+    /GITEA__actions__WORKFLOW_DIRS: (\S+)/.exec(gitea)?.[1],
+    REPOSITORY_WORKFLOWS_OFF,
+    'the dev Gitea must keep workflow files of repositories from running',
+  )
+  assert.equal(REPOSITORY_WORKFLOWS_OFF, '.git/raditi-no-repository-workflows')
 })
 
 test('a name that is not the stand’s own is refused', () => {
@@ -60,6 +79,9 @@ test('the scenario gets a synthetic HOME and nothing of the caller but PATH', ()
     url: 'https://127.0.0.1:43210',
     token: 'synthetic-bot-token',
     gitleaks: '/opt/gitleaks/gitleaks',
+    ownerToken: 'synthetic-owner-token',
+    writerToken: 'synthetic-writer-token',
+    receiverHost: '127.0.0.1',
   })
   assert.deepEqual(env, {
     PATH: '/usr/bin:/bin',
@@ -71,6 +93,9 @@ test('the scenario gets a synthetic HOME and nothing of the caller but PATH', ()
     GITEA_URL: 'https://127.0.0.1:43210',
     GITEA_TOKEN: 'synthetic-bot-token',
     P2_GITLEAKS_BINARY: '/opt/gitleaks/gitleaks',
+    STAND_OWNER_TOKEN: 'synthetic-owner-token',
+    STAND_WRITER_TOKEN: 'synthetic-writer-token',
+    STAND_RECEIVER_HOST: '127.0.0.1',
   })
 })
 
@@ -92,7 +117,18 @@ test('an account gets a password Gitea generates: it is never a process argument
     giteaAccountArgs({ container: 'raditi-pipeline-verify-0123abcd-gitea', user: 'raditi-bot' })[1],
     'raditi-pipeline-verify-0123abcd-gitea',
   )
-  for (const other of ['raditi-dev-gitea-1', 'gitea', '', 'raditi-gitea-verify-0123abcd x'])
+  // And the Gitea of the release stand.
+  assert.equal(
+    giteaAccountArgs({ container: 'raditi-release-verify-0123abcd-gitea', user: 'raditi-bot' })[1],
+    'raditi-release-verify-0123abcd-gitea',
+  )
+  for (const other of [
+    'raditi-dev-gitea-1',
+    'gitea',
+    '',
+    'raditi-gitea-verify-0123abcd x',
+    'raditi-release-verify-0123abcd-runner',
+  ])
     assert.throws(
       () => giteaAccountArgs({ container: other, user: 'raditi-bot' }),
       /stand's own container/,

@@ -19,19 +19,27 @@ import { generatedGiteaPassword, giteaAccountArgs } from '../gitea-verify/stand.
 import { scenario } from './scenario.mjs'
 import {
   GITEA_IMAGE,
+  HOSTING_IMAGE,
+  HOSTING_ROOT,
+  HOSTING_USER,
   JOB_IMAGE,
   OPENBAO_IMAGE,
   RUNNER_IMAGE,
+  caWriterArgs,
   certificateConfigs,
   giteaContainerArgs,
   helperContainerArgs,
+  hostKeyFingerprint,
+  hostingContainerArgs,
   openbaoContainerArgs,
   runnerConfig,
   runnerContainerArgs,
   sanitizeWebhookBody,
+  siteServerArgs,
   standNames,
   standOptions,
 } from './stand.mjs'
+import { tagScenario } from './tag-scenario.mjs'
 
 const here = fileURLToPath(new URL('./', import.meta.url))
 const root = resolve(here, '../../..')
@@ -247,8 +255,9 @@ function giteaClient(port, ca) {
 async function startGitea({ port, repositoryWorkflows, ca }) {
   const name = repositoryWorkflows ? names.containers.gitea : names.containers.giteaHardened
   await docker(giteaContainerArgs({ names, port, repositoryWorkflows }))
-  if (repositoryWorkflows)
-    await docker(['network', 'connect', '--alias', 'gitea', names.networks.deploy, name])
+  // Runners and jobs of the deploy side reach either Gitea by its alias on the deploy network.
+  const alias = repositoryWorkflows ? 'gitea' : 'gitea-hardened'
+  await docker(['network', 'connect', '--alias', alias, names.networks.deploy, name])
   await docker(['cp', join(directory, 'tls'), `${name}:/tls`])
   await docker(['start', name])
   const binding = (await docker(['port', name, '3000/tcp'])).stdout.trim()
@@ -324,6 +333,11 @@ async function startOpenbao() {
  * the default bridge, so the receiver listens there (not checked on Linux yet).
  */
 async function startReceiver() {
+  /**
+   * The release API of the stand and its presigned uploads (tag-scenario.mjs):
+   * `async ({ method, path, headers, body }) → { status, json }`.
+   */
+  let releaseApi = null
   let host = '127.0.0.1'
   if (process.platform === 'linux') {
     const format = '{{(index .IPAM.Config 0).Gateway}}'
@@ -337,10 +351,27 @@ async function startReceiver() {
       size += chunk.length
       if (size <= 1024 * 1024) chunks.push(chunk)
     })
-    request.on('end', () => {
+    request.on('end', async () => {
       const headers = new Headers()
       for (const [key, value] of Object.entries(request.headers))
         headers.set(key, [value].flat().join(', '))
+      if (/^\/(v1\/releases\/|upload\/|health$)/.test(request.url ?? '')) {
+        let answer = { status: 503, json: null }
+        try {
+          if (releaseApi && size <= 1024 * 1024)
+            answer = await releaseApi({
+              method: request.method,
+              path: request.url,
+              headers,
+              body: Buffer.concat(chunks),
+            })
+        } catch {
+          answer = { status: 500, json: null }
+        }
+        response.writeHead(answer.status, { 'content-type': 'application/json' })
+        response.end(answer.json === null ? '' : JSON.stringify(answer.json))
+        return
+      }
       deliveries.push({
         event: headers.get('x-gitea-event') ?? '',
         headers,
@@ -356,6 +387,9 @@ async function startReceiver() {
   return {
     deliveries,
     port: server.address().port,
+    serveReleaseApi: (handler) => {
+      releaseApi = handler
+    },
     close: () =>
       new Promise((done) => {
         server.closeAllConnections()
@@ -364,17 +398,133 @@ async function startReceiver() {
   }
 }
 
-async function startRunner(kind, registrationToken) {
-  const name = kind === 'deploy' ? names.containers.runnerDeploy : names.containers.runnerCheck
+async function startRunner(kind, registrationToken, { deployImage } = {}) {
+  const name = {
+    check: names.containers.runnerCheck,
+    deploy: names.containers.runnerDeploy,
+    release: names.containers.runnerRelease,
+  }[kind]
   const config = join(directory, `runner-${kind}`)
   await mkdir(config)
-  await writeFile(join(config, 'runner.yaml'), runnerConfig({ names, kind }))
+  await writeFile(
+    join(config, 'runner.yaml'),
+    runnerConfig({ names, kind, releaseApiPort: receiver.port }),
+  )
   await writeFile(join(config, 'ca.pem'), await readFile(join(directory, 'ca.pem')))
   await writeFile(join(config, 'registration-token'), registrationToken, { mode: 0o600 })
-  await docker(runnerContainerArgs({ names, kind }))
+  await docker(runnerContainerArgs({ names, kind, deployImage }))
   await docker(['cp', config, `${name}:/config`])
   await docker(['start', name])
   return name
+}
+
+/** The uuid of a started runner: its job volumes carry it as a label. */
+async function rememberRunner(runner) {
+  // The registration file also holds the runner's token: only the uuid is taken.
+  const state = await docker(['exec', runner, 'cat', '/data/.runner'], { quiet: true })
+  const { uuid } = JSON.parse(state.stdout)
+  assert.match(uuid, /^[0-9a-f-]{36}$/, 'The runner has no uuid')
+  runnerUuids.add(uuid)
+}
+
+/**
+ * The hosting of the site of a release: SFTP (internal-sftp) on the deploy network, its password
+ * a file copied in before the start, its host key read from the container. The stand reads and
+ * writes the site's files with `docker exec`, as the hosting's own user.
+ */
+async function startHosting() {
+  const name = names.containers.hosting
+  await docker(['volume', 'create', '--label', names.label, names.hostingVolume])
+  await docker(hostingContainerArgs({ names }))
+  const password = secret(randomBytes(18).toString('base64url'))
+  const files = join(directory, 'hosting')
+  await mkdir(files, { mode: 0o755 })
+  await writeFile(join(files, 'password'), password, { mode: 0o644 })
+  await docker(['cp', files, `${name}:/stand`])
+  await docker(['start', name])
+  const quiet = { allowFailure: true, quiet: true }
+  const deadline = Date.now() + 60_000
+  let publicKey
+  for (;;) {
+    const key = await docker(
+      ['exec', name, 'cat', '/config/ssh_host_keys/ssh_host_ed25519_key.pub'],
+      quiet,
+    )
+    const listening = await docker(['exec', name, 'test', '-s', '/config/sshd.pid'], quiet)
+    if (key.code === 0 && listening.code === 0) {
+      publicKey = key.stdout
+      break
+    }
+    if (Date.now() > deadline) throw new Error('The hosting did not start in 60 seconds')
+    await pause(500)
+  }
+  await docker(['exec', name, 'chown', '1000:1000', HOSTING_ROOT])
+  const inside = (relative) => {
+    if (
+      !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(relative) ||
+      relative.split('/').includes('..')
+    )
+      throw new Error('Invalid path of the hosting')
+    return `${HOSTING_ROOT}/${relative}`
+  }
+  return {
+    access: {
+      v: '1',
+      host: 'hosting',
+      port: '2222',
+      hostKey: hostKeyFingerprint(publicKey),
+      rootPath: HOSTING_ROOT,
+      username: HOSTING_USER,
+      auth: 'password',
+      password,
+    },
+    /** A file of the site, or null. */
+    read: async (relative) => {
+      const read = await docker(['exec', name, 'cat', inside(relative)], quiet)
+      return read.code === 0 ? read.stdout : null
+    },
+    write: (relative, text) =>
+      docker(
+        [
+          'exec',
+          '-i',
+          '-u',
+          '1000:1000',
+          name,
+          'sh',
+          '-c',
+          'mkdir -p "$(dirname "$1")" && cat > "$1"',
+          'sh',
+          inside(relative),
+        ],
+        { input: text },
+      ),
+    /** Every path below the root, sorted. */
+    list: async () =>
+      (await docker(['exec', name, 'find', HOSTING_ROOT, '-mindepth', '1'])).stdout
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => line.slice(HOSTING_ROOT.length + 1))
+        .sort(),
+  }
+}
+
+/** The server of the site's pages on the deploy network (`site:8080`), from the deploy image. */
+async function startSiteServer(deployImage) {
+  await docker(siteServerArgs({ names, deployImage }))
+  await docker(['start', names.containers.siteServer])
+}
+
+/** Waits until `count` runners of a Gitea are online. */
+async function runnersOnline(gitea, count) {
+  const deadline = Date.now() + 90_000
+  for (;;) {
+    const list = await gitea.api('GET', '/admin/actions/runners', { as: gitea.admin, expect: 200 })
+    const online = (list.json?.runners ?? []).filter((runner) => runner.status === 'online')
+    if (online.length === count) return
+    if (Date.now() > deadline) throw new Error('The runners did not register in 90 seconds')
+    await pause(500)
+  }
 }
 
 async function main() {
@@ -391,9 +541,13 @@ async function main() {
   if (typeof endpoint !== 'string' || !/^(unix|npipe):\/\//.test(endpoint))
     throw new Error('This stand needs a local Docker socket; remote Docker endpoints are refused')
   await docker(['info', '--format', '{{.ServerVersion}}'])
-  for (const image of [GITEA_IMAGE, RUNNER_IMAGE, OPENBAO_IMAGE, JOB_IMAGE])
+  for (const image of [GITEA_IMAGE, RUNNER_IMAGE, OPENBAO_IMAGE, JOB_IMAGE, HOSTING_IMAGE])
     if ((await docker(['image', 'inspect', image], { allowFailure: true })).code !== 0)
       throw new Error(`The pinned image ${image} is missing locally; no image was pulled`)
+  if ((await docker(['image', 'inspect', options.deployImage], { allowFailure: true })).code !== 0)
+    throw new Error(
+      `The deploy image ${options.deployImage} is missing: build it with docker build -f apps/orchestrator/Dockerfile --target runtime -t ${options.deployImage} .`,
+    )
   await run('openssl', ['version'], { env: { PATH: process.env.PATH } })
 
   directory = await mkdtemp(join(tmpdir(), 'raditi-pipeline-verify-'))
@@ -408,6 +562,8 @@ async function main() {
   for (const network of Object.values(names.networks))
     await docker(['network', 'create', '--label', names.label, network])
   await docker(['volume', 'create', '--label', names.label, names.siteVolume])
+  await docker(['volume', 'create', '--label', names.label, names.caVolume])
+  await docker(caWriterArgs({ names }), { input: ca })
   await docker(helperContainerArgs({ names }))
   await docker(['start', names.containers.site])
 
@@ -427,35 +583,7 @@ async function main() {
   stage = 'starting the webhook receiver'
   receiver = await startReceiver()
 
-  stage = 'starting the runners'
-  const registration = await gitea.api('POST', '/admin/actions/runners/registration-token', {
-    as: gitea.admin,
-    expect: 200,
-  })
-  const registrationToken = secret(registration.json.token)
-  const runners = [
-    await startRunner('check', registrationToken),
-    await startRunner('deploy', registrationToken),
-  ]
-  const deadline = Date.now() + 90_000
-  for (;;) {
-    const list = await gitea.api('GET', '/admin/actions/runners', { as: gitea.admin, expect: 200 })
-    const online = (list.json?.runners ?? []).filter((runner) => runner.status === 'online')
-    if (online.length === 2) break
-    if (Date.now() > deadline) throw new Error('The runners did not register in 90 seconds')
-    await pause(500)
-  }
-  for (const runner of runners) {
-    // The registration file also holds the runner's token: only the uuid is taken.
-    const state = await docker(['exec', runner, 'cat', '/data/.runner'], { quiet: true })
-    const { uuid } = JSON.parse(state.stdout)
-    assert.match(uuid, /^[0-9a-f-]{36}$/, 'The runner has no uuid')
-    runnerUuids.add(uuid)
-  }
-  passed('two runners of gitea/runner 4.0.0 online: `check` and `deploy`, each on its own network')
-
-  stage = 'scenario'
-  const samples = await scenario({
+  const common = {
     names,
     root,
     signal: controller.signal,
@@ -465,26 +593,72 @@ async function main() {
       stage = text
     },
     pause,
-    gitea,
     bao,
     rootToken,
     deliveries: receiver.deliveries,
     receiverPort: receiver.port,
-    /** A file of the "site" (the deploy runner's volume), or null. */
-    site: async (path) => {
-      const read = await docker(['exec', names.containers.site, 'cat', `/site/${path}`], {
-        allowFailure: true,
-      })
-      return read.code === 0 ? read.stdout : null
-    },
     /** The second Gitea: the same image with repository workflow directories switched off. */
     startHardenedGitea: async () =>
       startGitea({ port: await availableLoopbackPort(), repositoryWorkflows: false, ca }),
-    /** What Docker knows about the job containers and volumes of the run right now. */
-    jobContainers: async () => {
-      const format = '{{.Names}}\t{{.Label "raditi.stand"}}\t{{.Networks}}'
-      const list = await docker(['ps', '--format', format, '--filter', 'name=GITEA-ACTIONS-TASK'])
-      return list.stdout.split('\n').filter((line) => line.includes(names.stand))
+  }
+
+  let samples = {}
+  if (!options.only) {
+    stage = 'starting the runners'
+    const registration = await gitea.api('POST', '/admin/actions/runners/registration-token', {
+      as: gitea.admin,
+      expect: 200,
+    })
+    const registrationToken = secret(registration.json.token)
+    const runners = [
+      await startRunner('check', registrationToken),
+      await startRunner('deploy', registrationToken),
+    ]
+    await runnersOnline(gitea, 2)
+    for (const runner of runners) await rememberRunner(runner)
+    passed(
+      'two runners of gitea/runner 4.0.0 online: `check` and `deploy`, each on its own network',
+    )
+
+    stage = 'scenario'
+    samples = await scenario({
+      ...common,
+      gitea,
+      /** A file of the "site" (the deploy runner's volume), or null. */
+      site: async (path) => {
+        const read = await docker(['exec', names.containers.site, 'cat', `/site/${path}`], {
+          allowFailure: true,
+        })
+        return read.code === 0 ? read.stdout : null
+      },
+      /** What Docker knows about the job containers and volumes of the run right now. */
+      jobContainers: async () => {
+        const format = '{{.Names}}\t{{.Label "raditi.stand"}}\t{{.Networks}}'
+        const list = await docker(['ps', '--format', format, '--filter', 'name=GITEA-ACTIONS-TASK'])
+        return list.stdout.split('\n').filter((line) => line.includes(names.stand))
+      },
+    })
+  }
+
+  stage = 'the release tag on the second Gitea'
+  await tagScenario({
+    ...common,
+    deployImage: options.deployImage,
+    serveReleaseApi: receiver.serveReleaseApi,
+    releaseApiPort: receiver.port,
+    startHosting,
+    startSiteServer: () => startSiteServer(options.deployImage),
+    /** The deploy runner of the second Gitea: the label `deploy` is the deploy image. */
+    startReleaseRunner: async (hardened) => {
+      const registration = await hardened.api('POST', '/admin/actions/runners/registration-token', {
+        as: hardened.admin,
+        expect: 200,
+      })
+      const runner = await startRunner('release', secret(registration.json.token), {
+        deployImage: options.deployImage,
+      })
+      await runnersOnline(hardened, 1)
+      await rememberRunner(runner)
     },
   })
 
@@ -508,7 +682,11 @@ async function cleanup() {
   const lines = (result) => result.stdout.split('\n').filter(Boolean)
   // The runners first: after this nothing creates a job container, a volume or a network.
   let runners = 0
-  for (const runner of [names.containers.runnerCheck, names.containers.runnerDeploy]) {
+  for (const runner of [
+    names.containers.runnerCheck,
+    names.containers.runnerDeploy,
+    names.containers.runnerRelease,
+  ]) {
     // Counted only if it was created: an early failure leaves no runner to remove.
     if ((await docker(['container', 'inspect', runner], quiet)).code === 0) runners += 1
     await docker(['rm', '--force', '--volumes', runner], quiet)

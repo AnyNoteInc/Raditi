@@ -8,7 +8,8 @@ import { addForeignSite, addSite, hideDevIndicator } from './site.ts'
 // and the screen a dialog starts from. Which of the list and the content a width leaves on the
 // screen is decided by styles, so only a browser sees it. The site of the run is not connected:
 // the pages are opened by address, as a saved link would open them, or by the link «Чат» of the
-// sections, which leads to a new dialog.
+// sections, which leads to a new dialog. A dialog itself — on a connected site — is in
+// dialog.spec.ts.
 
 const viewports = [
   ['phone', 390, 844],
@@ -16,9 +17,9 @@ const viewports = [
   ['desktop', 1280, 900],
 ] as const
 
-const EMPTY_LIST =
-  'Диалогов пока нет — они появятся здесь, когда мы начнём принимать задания из кабинета.'
-const SEND_OFF = 'Задания из кабинета мы пока не принимаем — этот раздел ещё в работе.'
+const EMPTY_LIST = 'Диалогов пока нет. Опишите, что поменять на сайте, — диалог появится здесь.'
+// The site of the run is not connected: a new dialog says so on the field and sends nothing.
+const SEND_OFF = 'Сайт ещё не подключён. Задачи можно будет ставить после подключения.'
 const CHAT_OFF = 'Режим «Чат» появится позже.'
 
 const dialogs = (page: Page) => page.getByRole('navigation', { name: 'Диалоги' })
@@ -187,16 +188,11 @@ for (const [name, width, height] of viewports) {
       })
     }
 
-    await test.step('the screen sends nothing and says why', async () => {
+    await test.step('the screen of a site that is not connected sends nothing and says why', async () => {
       await expect(message(page)).toBeVisible()
       await expect(send(page)).toBeVisible()
-      await expect(send(page)).toBeDisabled()
-      await message(page).fill('Поменяйте телефон в шапке сайта')
-      await expect(message(page)).toHaveValue('Поменяйте телефон в шапке сайта')
-      await expect(send(page)).toBeDisabled()
-      // Enter in the field is a new line, never a request.
-      await message(page).press('Enter')
-      await expect(page).toHaveURL(`/projects/${siteId}/chat/new`)
+      // Nothing can be sent before the site is connected: the field takes no words at all.
+      await expect(message(page)).toBeDisabled()
       await expect(send(page)).toBeDisabled()
       await expect(send(page)).toHaveAccessibleDescription(SEND_OFF)
       // The field says it too: a screen reader lands on it first.
@@ -245,8 +241,8 @@ for (const [name, width, height] of viewports) {
       await expect(rail(page)).toBeVisible()
       await expectChatCurrent(page, siteId)
     } else {
-      // With the field filled in: the bar is still there and still under the screen.
-      await test.step('the bottom bar stays under the dialog that is being written', async () => {
+      // After the screen was read through: the bar is still there and still under the screen.
+      await test.step('the bottom bar stays under the new dialog', async () => {
         await expectDialogAboveBar(page, siteId, height)
       })
     }

@@ -59,6 +59,8 @@ export default defineConfig({
         ORCHESTRATOR_PORT: String(CORE_PORT),
         MCP_PORT: String(MCP_PORT),
         TURN_EXECUTOR: 'local',
+        // The release API of a developer's .env would take the port of `pnpm dev`.
+        RELEASE_API_HOST: '',
         METRICS_TOKEN: metricsToken,
       },
     },

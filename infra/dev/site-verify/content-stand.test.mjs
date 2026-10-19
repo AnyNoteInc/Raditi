@@ -66,7 +66,7 @@ test('the site access reaches the role through Vault and credential_refs only', 
 test('the fixture resolver is only a wrapper around the regular one, for fault injection', () => {
   assert.match(worker, /McpAppModule\.forRoot\(config, \{\n\s+wrapResolver: \(resolver\) => \{/)
   assert.match(worker, /const gateway = await regular\(scope\)/)
-  assert.match(worker, /contentProfile: 'local'/)
+  assert.match(worker, /contentProfile: 'local-site'/)
   // The role composes its own S3 client and Vault client from the configuration.
   assert.doesNotMatch(worker, /McpAppModule\.forRoot\(config, \{\n\s+storage/)
 })

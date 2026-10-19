@@ -1,5 +1,8 @@
 // The questions of spike N18, asked of a real Gitea 1.27.3 with real runners. Every PASS line
 // states what the real Gitea did; an answer that changes with a Gitea release fails the stand.
+// platform/ci of this (first) Gitea holds check.yml of ci/ and the push-triggered pipeline of the
+// spike (workflows/deploy-spike.yml) as deploy.yml; the release tag and the setting
+// `[actions] WORKFLOW_DIRS` are asked of the second Gitea (tag-scenario.mjs).
 import assert from 'node:assert/strict'
 import { createHmac, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
@@ -80,7 +83,9 @@ export async function scenario(ctx) {
   // platform/ci: the product workflows of ci/ exactly as they are, plus the stand's probes.
   const sourceFiles = {
     'check.yml': await file(`ci/${SCOPED}/check.yml`),
-    'deploy.yml': await file(`ci/${SCOPED}/deploy.yml`),
+    // The push-triggered pipeline of the spike under the product's name: the questions below are
+    // about a deploy on a push to main. The product deploy.yml runs on the second Gitea.
+    'deploy.yml': await standWorkflow('deploy-spike.yml'),
     'probe.yml': await standWorkflow('probe.yml'),
     'probe-restricted.yml': await standWorkflow('probe-restricted.yml'),
     'cancel-probe.yml': await standWorkflow('cancel-probe.yml'),
@@ -450,8 +455,10 @@ export async function scenario(ctx) {
   for (const { delivery } of jobHooks) {
     const signature = createHmac('sha256', webhookSecret).update(delivery.raw).digest('hex')
     assert.equal(delivery.headers.get('x-gitea-signature'), signature, 'workflow_job is unsigned')
-    // GitWebhookEvent has no kind for a job: the parser answers null, the route acknowledges.
-    assert.equal(parsed(delivery), null)
+    // A job of the deploy run: the only event that names the step (plan 53, R8a).
+    const job = parsed(delivery)
+    assert.equal(job?.kind, 'workflow_job')
+    assert.equal(job.job.runId, String(deployRun.id))
   }
   const jobActions = [...new Set(jobHooks.map(({ body }) => body.action))]
   const jobDone = jobHooks.find(({ body }) => body.action === 'completed').body.workflow_job
@@ -490,7 +497,7 @@ export async function scenario(ctx) {
     `Q4 the run is visible by polling GET …/actions/runs and by three signed workflow_run webhooks (requested, in_progress, completed) that parseGiteaWebhook maps to queued → in_progress → completed/success; a foreign secret and a changed body give null; pull_request and push are parsed too`,
   )
   passed(
-    `workflow_job webhooks (${jobActions.join(', ')}) are signed and carry every step with its conclusion; parseGiteaWebhook answers null for them — the port has no event for a job`,
+    `workflow_job webhooks (${jobActions.join(', ')}) are signed and carry every step with its conclusion; parseGiteaWebhook maps them to workflow_job events of the deploy run`,
   )
 
   // --- Q5: the wrapped token is unwrapped exactly once -----------------------------------------
@@ -833,112 +840,6 @@ export async function scenario(ctx) {
   )
   passed(
     'Q7 the job token reads its own repository (200) and no other (another site and platform/ci → 404), cannot list secrets or set variables (403), but by default WRITES code to its repository (201); with `permissions: contents: read` in the workflow the write is refused (403)',
-  )
-
-  // --- The setting that switches repository workflows off ----------------------------------------
-  setStage('the second Gitea: repository workflow directories switched off')
-  const hardened = await ctx.startHardenedGitea()
-  const hard = (method, path, body, expect) =>
-    hardened.api(method, path, { as: hardened.admin, body, expect })
-  const hardCommit = async (repo, path, message, content = `${message}\n`) => {
-    const body = { content: b64(content), message, branch: 'main' }
-    return (await hard('POST', `/repos/${repo}/contents/${path}`, body, 201)).json.commit.sha
-  }
-  for (const [org, name] of [
-    ['platform', 'ci'],
-    ['sites', 'demo'],
-  ]) {
-    await hard('POST', '/orgs', { username: org, visibility: 'private' }, 201)
-    const repo = { name, private: true, auto_init: true, default_branch: 'main' }
-    await hard('POST', `/orgs/${org}/repos`, repo, 201)
-  }
-  await hardCommit(
-    'platform/ci',
-    `${SCOPED}/deploy.yml`,
-    'ci: deploy.yml',
-    sourceFiles['deploy.yml'],
-  )
-  await hardened.web('POST', '/-/admin/actions/scoped-workflows/add', {
-    cookie: await hardened.login(hardened.admin),
-    form: form({ repo_name: 'platform/ci' }),
-    expect: 200,
-  })
-  // Its webhooks come to the same receiver; a body names the origin of the Gitea that sent it.
-  const hook = {
-    type: 'gitea',
-    active: true,
-    events: ['workflow_run'],
-    config: {
-      url: `http://host.docker.internal:${ctx.receiverPort}/webhooks/gitea`,
-      content_type: 'json',
-      secret: webhookSecret,
-    },
-  }
-  await hard('POST', '/orgs/sites/hooks', hook, 201)
-  const repositoryWorkflow = await standWorkflow('impostor.yml')
-  const hardRuns = async () => {
-    const list = await hard('GET', '/repos/sites/demo/actions/runs?limit=50', undefined, 200)
-    return list.json.workflow_runs ?? []
-  }
-  const perPush = []
-  for (const [path, content] of [
-    ['.github/workflows/deploy.yml', repositoryWorkflow],
-    ['.gitea/workflows/deploy.yml', repositoryWorkflow],
-    ['page.php', 'a change of the site\n'],
-  ]) {
-    const sha = await hardCommit('sites/demo', path, `push of ${path}`, content)
-    // One push at a time: a run takes the head of the branch at the moment Gitea handles the
-    // push, so pushes made back to back all get runs of the last commit.
-    await waitFor(`the scoped run of ${path} on the second Gitea`, async () => {
-      return (await hardRuns()).some((run) => run.head_sha === sha)
-    })
-    // On the first Gitea such a push starts two runs at once; give a second one time to appear.
-    await pause(2000)
-    perPush.push((await hardRuns()).filter((run) => run.head_sha === sha).map((run) => run.path))
-  }
-  assert.deepEqual(
-    perPush,
-    [
-      ['deploy.yml@refs/heads/main'],
-      ['deploy.yml@refs/heads/main'],
-      ['deploy.yml@refs/heads/main'],
-    ],
-    'a repository workflow file started a run',
-  )
-  assert.equal((await hardRuns()).length, 3)
-  // REST gives the same `path` for both kinds of workflow; the file a run came from is in the
-  // webhook only. This Gitea has no runner: its runs are created and stay queued.
-  const fromHardened = (body) =>
-    body.action === 'requested' &&
-    body.repository?.html_url === 'https://gitea-hardened:3000/sites/demo'
-  const hardHooks = await waitFor(
-    'the workflow_run webhooks of the second Gitea',
-    async () => {
-      const all = hooks('workflow_run', fromHardened)
-      return all.length >= 3 ? all : null
-    },
-    30_000,
-  )
-  assert.equal(hardHooks.length, 3, 'the second Gitea announced another run')
-  for (const { delivery, body } of hardHooks) {
-    assert.ok(parsed(delivery), 'a webhook of the second Gitea is not signed')
-    assert.equal(body.workflow.path, `${SCOPED}/deploy.yml`, 'a repository workflow file ran')
-  }
-  const hardListed = await hard('GET', '/repos/sites/demo/actions/workflows', undefined, 200)
-  assert.equal(hardListed.json.total_count, 0)
-  // The configured directory itself cannot be filled: a path below .git is not a tree entry.
-  const untrackable = await hard(
-    'POST',
-    '/repos/sites/demo/contents/.git/raditi-no-repository-workflows/deploy.yml',
-    {
-      content: b64(repositoryWorkflow),
-      message: 'a file below .git',
-      branch: 'main',
-    },
-  )
-  assert.ok(untrackable.status >= 400, `a file below .git was committed: ${untrackable.status}`)
-  passed(
-    `with \`[actions] WORKFLOW_DIRS = .git/raditi-no-repository-workflows\` (a path git cannot track) the same Gitea creates exactly 1 run for each of 3 pushes to a site repository that carries .github/workflows/deploy.yml and .gitea/workflows/deploy.yml — by its webhook the scoped ${SCOPED}/deploy.yml of platform/ci (this Gitea has no runner: the runs stay queued); the first Gitea started 2 runs for such a push; GET …/actions/workflows → 0; a commit of a file below .git is refused (${untrackable.status})`,
   )
 
   return samples

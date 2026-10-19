@@ -138,6 +138,38 @@ export function mcpUpstream(port, { live = false } = {}) {
 
 const S3_BUCKET = 'raditi-p3verify-artifacts'
 
+/** What sandbox-gw writes once every listener of it listens (infra/sandbox/gateway.mjs). */
+export const GATEWAY_READY_CHECK =
+  "process.exit(require('node:fs').existsSync('/run/raditi-gateway/ready') ? 0 : 1)"
+
+/**
+ * Waits for sandbox-gw to listen. A gateway that ended at start — a module it imports missing
+ * from the mount, a listener that failed — would otherwise show only later, as a CLI whose MCP
+ * check and model requests reach nothing; here the stand stops with the gateway's own log.
+ */
+export async function gatewayReady(compose, onStage = () => {}, timeoutMs = 30_000) {
+  onStage('sandbox-gw readiness')
+  try {
+    await eventually(
+      async () =>
+        (
+          await compose(['exec', '-T', 'sandbox-gw', 'node', '-e', GATEWAY_READY_CHECK], {
+            allowFailure: true,
+          })
+        ).code === 0,
+      timeoutMs,
+    )
+  } catch (error) {
+    if (error.message === 'Verification interrupted') throw error
+    const logs = await compose(['logs', '--no-color', '--tail', '40', 'sandbox-gw'], {
+      allowFailure: true,
+    }).catch(() => ({ stdout: '', stderr: '' }))
+    throw Object.assign(new Error('sandbox-gw did not become ready'), {
+      infrastructureDiagnostic: `${logs.stdout}${logs.stderr}`.slice(-3000),
+    })
+  }
+}
+
 async function unusedPort() {
   const server = createServer()
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -394,6 +426,7 @@ export async function startVerificationStack({
       onStage('synthetic services readiness')
       await eventually(async () => (await fetch(`${control}/state`)).ok)
     }
+    await gatewayReady(compose, onStage)
     let s3
     if (content) {
       const endpoint = `http://${await port('s3', 8333)}`

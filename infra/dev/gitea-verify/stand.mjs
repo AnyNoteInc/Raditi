@@ -16,6 +16,10 @@ export function standOptions(argv) {
 /**
  * `docker create` of the stand's own Gitea: built-in HTTPS with the stand's certificate (copied
  * in before the start, so no host path is mounted), published on loopback only, SQLite inside.
+ * Actions are on without a runner: runs are created and stay queued. Workflow files of a
+ * repository do run here (no `[actions] WORKFLOW_DIRS`): the stand measures tag runs and
+ * dispatch on them; the obligatory workflows of platform/ci are the pipeline stand's. Webhooks go
+ * to the scenario on the host, a private address.
  */
 export function giteaContainerArgs({ name, port }) {
   if (typeof name !== 'string' || !CONTAINER_NAME.test(name))
@@ -33,6 +37,8 @@ export function giteaContainerArgs({ name, port }) {
     GITEA__server__DISABLE_SSH: 'true',
     GITEA__server__START_SSH_SERVER: 'false',
     GITEA__service__DISABLE_REGISTRATION: 'true',
+    GITEA__actions__ENABLED: 'true',
+    GITEA__webhook__ALLOWED_HOST_LIST: 'private',
     GITEA__log__LEVEL: 'Warn',
   }
   return [
@@ -45,13 +51,19 @@ export function giteaContainerArgs({ name, port }) {
     `raditi.stand=${name}`,
     '-p',
     `127.0.0.1:${port}:3000`,
+    // The webhook receiver is the scenario process; Docker Desktop resolves the name by itself.
+    ...['--add-host', 'host.docker.internal:host-gateway'],
     ...Object.entries(env).flatMap(([key, value]) => ['-e', `${key}=${value}`]),
     GITEA_IMAGE,
   ]
 }
 
-/** A Gitea container of this stand or of the pipeline stand (infra/dev/pipeline-verify). */
-const STAND_GITEA = /^raditi-(?:gitea-verify-[0-9a-f]{8}|pipeline-verify-[0-9a-f]{8}-[a-z-]+)$/
+/**
+ * A Gitea container of this stand, of the pipeline stand (infra/dev/pipeline-verify) or of the
+ * release stand (infra/dev/release-verify).
+ */
+const STAND_GITEA =
+  /^raditi-(?:gitea-verify-[0-9a-f]{8}|pipeline-verify-[0-9a-f]{8}-[a-z-]+|release-verify-[0-9a-f]{8}-gitea)$/
 const ACCOUNT = /^[a-z][a-z0-9-]{0,39}$/
 const PASSWORD_LENGTH = 36
 
@@ -106,7 +118,16 @@ export function certificateConfigs() {
  * reaches git through GIT_CA_FILE and the REST client through NODE_EXTRA_CA_CERTS, as in
  * production. NODE_ENV is not `test`: the local-file git transport of unit tests stays refused.
  */
-export function scenarioEnvironment({ path, directory, url, token, gitleaks }) {
+export function scenarioEnvironment({
+  path,
+  directory,
+  url,
+  token,
+  gitleaks,
+  ownerToken,
+  writerToken,
+  receiverHost,
+}) {
   return {
     PATH: path,
     HOME: `${directory}/home`,
@@ -117,5 +138,10 @@ export function scenarioEnvironment({ path, directory, url, token, gitleaks }) {
     GITEA_URL: url,
     GITEA_TOKEN: token,
     P2_GITLEAKS_BINARY: gitleaks,
+    // Tokens of two more accounts of the stand: an owner of the organization (Actions secrets,
+    // tag protection) and a second write member (refused a protected tag).
+    STAND_OWNER_TOKEN: ownerToken,
+    STAND_WRITER_TOKEN: writerToken,
+    STAND_RECEIVER_HOST: receiverHost,
   }
 }

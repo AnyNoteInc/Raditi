@@ -1,6 +1,6 @@
-// Real Gitea 1.27.3 for the two GitProvider methods a turn needs and for git over HTTPS with the
-// stand's own CA. The Gitea is a disposable container of this run: never the dev Gitea, the
-// repository .env, a pull or a real token. The checks themselves are in scenario.mjs.
+// Real Gitea 1.27.3 for the GitProvider methods a turn and a release need and for git over HTTPS
+// with the stand's own CA. The Gitea is a disposable container of this run: never the dev Gitea,
+// the repository .env, a pull or a real token. The checks themselves are in scenario.mjs.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -236,6 +236,9 @@ async function main() {
   }
   const admin = await account('stand-admin', true)
   const bot = await account('raditi-bot', false)
+  // An owner of the organization (Actions secrets, tag protection) and a second write member.
+  const owner = await account('stand-owner', false)
+  const writer = await account('stand-writer', false)
   const post = (path, body, as = admin, expect = 201) =>
     gitea(port, ca, 'POST', `/v1${path}`, { ...as, body, expect })
   await post('/orgs', { username: 'sites', visibility: 'private' })
@@ -245,16 +248,25 @@ async function main() {
     includes_all_repositories: true,
     units: ['repo.code', 'repo.pulls', 'repo.actions'],
   })
-  await gitea(port, ca, 'PUT', `/v1/teams/${team.json.id}/members/${bot.user}`, {
+  for (const member of [bot, writer])
+    await gitea(port, ca, 'PUT', `/v1/teams/${team.json.id}/members/${member.user}`, {
+      ...admin,
+      expect: 204,
+    })
+  const teams = await gitea(port, ca, 'GET', '/v1/orgs/sites/teams', { ...admin, expect: 200 })
+  const owners = teams.json?.find((entry) => entry.name === 'Owners')
+  assert.ok(owners, 'Gitea made no Owners team')
+  await gitea(port, ca, 'PUT', `/v1/teams/${owners.id}/members/${owner.user}`, {
     ...admin,
     expect: 204,
   })
-  await post('/orgs/sites/repos', {
-    name: 'demo',
-    private: true,
-    auto_init: true,
-    default_branch: 'main',
-  })
+  for (const name of ['demo', 'other'])
+    await post('/orgs/sites/repos', {
+      name,
+      private: true,
+      auto_init: true,
+      default_branch: 'main',
+    })
   for (const [path, content] of [
     ['index.php', '<?php echo "synthetic site";\n'],
     ['wp-config.php', '<?php // synthetic protected file\n'],
@@ -272,15 +284,40 @@ async function main() {
     bot,
   )
   assert.match(token.json?.sha1 ?? '', /^[0-9a-f]{40}$/, 'Gitea returned no bot token')
-  passed('organization sites, bot with write access, private repository sites/demo')
+  // The narrowest tokens of the other two: what GiteaProvider asks of the owner's.
+  const repositoryToken = async (account) => {
+    const made = await post(
+      `/users/${account.user}/tokens`,
+      { name: 'raditi-stand', scopes: ['write:repository'] },
+      account,
+    )
+    assert.match(made.json?.sha1 ?? '', /^[0-9a-f]{40}$/, 'Gitea returned no token')
+    return made.json.sha1
+  }
+  const tokens = { owner: await repositoryToken(owner), writer: await repositoryToken(writer) }
+  passed(
+    'organization sites: bot and a second member with write access, an owner; private repositories sites/demo and sites/other',
+  )
 
   stage = 'scenario'
+  // Docker Desktop and Colima route host.docker.internal to the loopback of the host; on a Linux
+  // host the name is the gateway of the default bridge, so the receiver listens there.
+  let receiverHost = '127.0.0.1'
+  if (process.platform === 'linux') {
+    const format = '{{(index .IPAM.Config 0).Gateway}}'
+    receiverHost = (
+      await docker(['network', 'inspect', 'bridge', '--format', format])
+    ).stdout.trim()
+  }
   const env = scenarioEnvironment({
     path: process.env.PATH,
     directory,
     url: `https://127.0.0.1:${port}`,
     token: token.json.sha1,
     gitleaks,
+    ownerToken: tokens.owner,
+    writerToken: tokens.writer,
+    receiverHost,
   })
   const code = await new Promise((done, reject) => {
     const child = spawn(process.execPath, [join(here, 'scenario.mjs')], {
@@ -299,7 +336,9 @@ async function main() {
   })
   if (controller.signal.aborted) throw new Error('Interrupted')
   if (code !== 0) throw new Error('The scenario failed')
-  console.log('PASS Gitea 1.27.3: repository lookup, short-lived grants and git over HTTPS')
+  console.log(
+    'PASS Gitea 1.27.3: repository lookup, short-lived grants, git over HTTPS and the release calls',
+  )
 }
 
 export async function verifyGitea() {

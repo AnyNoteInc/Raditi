@@ -114,6 +114,9 @@ services:
       GITEA__security__INSTALL_LOCK: 'true'
       GITEA__actions__ENABLED: 'true'
       GITEA__actions__DEFAULT_ACTIONS_URL: self
+      # Файлы workflow из репозиториев сайтов не запускаются: путь внутри .git git не хранит,
+      # обязательные workflow из platform/ci остаются (план 53, Р28; spec §10).
+      GITEA__actions__WORKFLOW_DIRS: .git/raditi-no-repository-workflows
       # Вебхуки — только на локальные и частные адреса (apps/web в dev).
       GITEA__webhook__ALLOWED_HOST_LIST: 'loopback,private'
       GITEA__metrics__ENABLED: 'true'

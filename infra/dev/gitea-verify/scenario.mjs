@@ -18,8 +18,18 @@ import {
   gitWorkspaceOptions,
 } from '../../../apps/orchestrator/dist/git-workspace/git-config.js'
 import { GitWorkspaceService } from '../../../apps/orchestrator/dist/git-workspace/git-workspace.service.js'
+import { verifyReleaseCalls } from './release-scenario.mjs'
+import { verifyWorkingSet } from './working-set-scenario.mjs'
 
-const { GITEA_URL, GITEA_TOKEN, GIT_CA_FILE, P2_GITLEAKS_BINARY } = process.env
+const {
+  GITEA_URL,
+  GITEA_TOKEN,
+  GIT_CA_FILE,
+  P2_GITLEAKS_BINARY,
+  STAND_OWNER_TOKEN,
+  STAND_WRITER_TOKEN,
+  STAND_RECEIVER_HOST,
+} = process.env
 const repo = { provider: 'gitea', owner: 'sites', name: 'demo' }
 const protectedPaths = ['wp-config.php', 'wp-admin/', 'wp-includes/']
 const createdAt = '2026-10-04T06:00:00.000Z'
@@ -452,6 +462,41 @@ async function main() {
   assert.notEqual(untrusted.code, 0, 'git trusted the stand certificate by the system store')
   assert.match(untrusted.stderr, /certificate/i, 'git failed for another reason than the CA')
   passed('without GIT_CA_FILE git refuses the certificate: verification stays on')
+
+  await verifyReleaseCalls({
+    url: GITEA_URL,
+    botToken: GITEA_TOKEN,
+    ownerToken: STAND_OWNER_TOKEN,
+    writerToken: STAND_WRITER_TOKEN,
+    receiverHost: STAND_RECEIVER_HOST,
+    repo,
+    git,
+    directory,
+    stage: (name) => {
+      stage = name
+    },
+    passed,
+  })
+
+  // Last: it moves main of sites/demo.
+  await verifyWorkingSet({
+    url: GITEA_URL,
+    repo,
+    provider,
+    real,
+    count,
+    options: { ...gitWorkspaceOptions(gitConfig), gitleaksBinary: P2_GITLEAKS_BINARY },
+    git,
+    directory,
+    serverHead,
+    serverCommit,
+    createdAt,
+    protectedPaths,
+    stage: (name) => {
+      stage = name
+    },
+    passed,
+  })
 
   await rm(directory, { recursive: true, force: true })
 }

@@ -652,6 +652,8 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     metricsToken: secrets.metrics,
     redisUrl: undefined,
     pastDueDays: PAST_DUE_DAYS,
+    // The stand gives web no preview settings: previews are off there.
+    preview: null,
   })
   // No captcha: a customer of the stand signs up over HTTP.
   assert.equal(authConfigFromEnv(env).captcha, null)
