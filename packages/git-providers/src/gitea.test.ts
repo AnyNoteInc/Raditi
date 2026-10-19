@@ -477,17 +477,14 @@ describe('GiteaProvider without a usable API address', () => {
     expect(gitea.calls).toEqual([])
   })
 
-  it('leaves the other eight methods to P8', async () => {
+  it('leaves pull requests and Actions variables to P8', async () => {
     const provider = createGiteaProvider({ baseUrl: BASE, token: BOT_TOKEN })
     for (const call of [
       () => provider.openPullRequest(ref, { head: 'a', base: 'b', title: 't', body: '' }),
       () => provider.getPullRequest(ref, 1),
       () => provider.mergePullRequest(ref, 1, 'a'.repeat(40)),
       () => provider.closePullRequest(ref, 1),
-      () => provider.setActionsSecret(ref, 'N', 'v'),
-      () => provider.deleteActionsSecret(ref, 'N'),
       () => provider.setActionsVariable(ref, 'N', 'v'),
-      () => provider.listWorkflowRuns(ref, {}),
     ])
       await expect(call()).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' })
   })

@@ -1,20 +1,37 @@
 import { randomBytes } from 'node:crypto'
 
-import { badRequest, type RepoRef } from '@repo/domain'
+import { badRequest, DomainError, type RepoRef, type WorkflowRun } from '@repo/domain'
 
 import { parseGitProviderConfig, type GitProviderConfig } from './config.ts'
 import type { ManagedGitProvider } from './credential-lifecycle.ts'
 import {
   createGiteaClient,
   giteaFailed,
+  giteaNotSupported,
+  giteaRefused,
   isGiteaName,
+  isGiteaTagPattern,
   type GiteaClient,
   type GiteaClientOptions,
+  type GiteaRun,
+  type GiteaRunFilter,
+  type GiteaTagProtection,
 } from './gitea-client.ts'
 import { createStubGitProvider } from './stub-provider.ts'
 import { parseGiteaWebhook } from './webhook.ts'
+import { runState, workflowOfRun } from './workflow-runs.ts'
 
-export type GiteaProviderOptions = GiteaClientOptions
+export interface GiteaProviderOptions extends GiteaClientOptions {
+  /**
+   * The token of an owner of the organization `sites`, asked for by each call that needs it:
+   * the Actions secrets of a repository and its tag protection, which Gitea 1.27.3 leaves to an
+   * owner alone (plan 53, Р29, Р35). Its account is also the release account: the one the
+   * protection of `v*` names and the one `createTag` acts as (Р26). Core reads it from Vault
+   * (`giteaOrgOwnerToken`); the bot token never serves here. Without it those calls fail as not
+   * configured.
+   */
+  ownerToken?: () => Promise<string>
+}
 
 /**
  * Gitea 1.27.3 access tokens have no lifetime, so the adapter enforces one: the expiry is part
@@ -32,11 +49,17 @@ const SWEEP_PAGES = 40
 const REVOKE_RETRY_MS = 30_000
 /** About ten minutes of retries; after that the sweep of a later grant takes over. */
 const REVOKE_RETRIES = 20
+/** 500 runs: a poll narrows the list by commit or event, not by reading the whole history. */
+const RUN_PAGES = 10
+/** Reads of a run list: another one when runs came or went while the pages were read. */
+const RUN_LIST_READS = 2
 
 /**
- * Our Gitea 1.27, organization `sites` (spec §10): `getRepository` and `issueCredentials`.
- * The other API methods stay P8 stubs. The API is called only over https and with a bot token;
- * webhook parsing needs neither.
+ * Our Gitea 1.27, organization `sites` (spec §10): what a turn needs (`getRepository`,
+ * `issueCredentials`) and what a release needs (plan 53, Р26–Р29: Actions secrets of a
+ * repository, tag protection, tags, runs and dispatch). Pull requests and Actions variables stay
+ * P8 stubs. The API is called only over https, with the bot token or, where Gitea wants an owner
+ * of the organization, with `ownerToken`; webhook parsing needs neither.
  */
 export function createGiteaProvider(
   config: GitProviderConfig,
@@ -45,6 +68,17 @@ export function createGiteaProvider(
   const parsed = parseGitProviderConfig('GiteaProvider', config)
   let client: GiteaClient | undefined
   const api = () => (client ??= createGiteaClient(parsed, options))
+  const { ownerToken } = options
+  /** Read for each call: a token the operator replaced in Vault takes effect at once. */
+  async function owner(): Promise<string> {
+    if (!ownerToken)
+      throw new DomainError(
+        'GIT_PROVIDER_NOT_CONFIGURED',
+        'Gitea calls of an organization owner need its token',
+        503,
+      )
+    return ownerToken()
+  }
   let login: Promise<string> | undefined
   let sweeping: Promise<void> | undefined
   let sweptAt = Number.NEGATIVE_INFINITY
@@ -128,6 +162,21 @@ export function createGiteaProvider(
     pending.set(id, { timer, own })
   }
 
+  /** One read of a run list, page by page; null when the total changed in the middle of it. */
+  async function readRuns(ref: RepoRef, filter: GiteaRunFilter): Promise<WorkflowRun[] | null> {
+    const runs = new Map<string, WorkflowRun>()
+    let first: number | undefined
+    for (let page = 1; page <= RUN_PAGES; page++) {
+      const { total, runs: batch } = await api().listRuns(ref.owner, ref.name, filter, page)
+      first ??= total
+      if (total !== first) return null
+      for (const run of batch)
+        if (!runs.has(String(run.id))) runs.set(String(run.id), workflowRun(run))
+      if (batch.length === 0 || runs.size >= total) return [...runs.values()]
+    }
+    throw giteaFailed('Gitea lists more runs than a poll reads')
+  }
+
   return {
     ...createStubGitProvider('gitea', 'GiteaProvider', parseGiteaWebhook),
     async getRepository(ref) {
@@ -175,6 +224,111 @@ export function createGiteaProvider(
       revokeAt(bot, created.id, expiresAt, true)
       return { username: bot, token: created.token, expiresAt: new Date(expiresAt) }
     },
+    async setActionsSecret(ref, name, value) {
+      assertGitea(ref)
+      await api().setRepositorySecret(ref.owner, ref.name, name, value, await owner())
+    },
+    async deleteActionsSecret(ref, name) {
+      assertGitea(ref)
+      await api().deleteRepositorySecret(ref.owner, ref.name, name, await owner())
+    },
+    /**
+     * One rule for `pattern`, naming the release account alone: the account of the owner's token,
+     * as Gitea tells it. Gitea 1.27.3 answers 403 both to a second rule of a pattern and to an
+     * account that may not protect (recorded 2026-10-17), so a refused creation is read again:
+     * another call may have made the rule meanwhile.
+     */
+    async protectTags(ref, pattern) {
+      assertGitea(ref)
+      if (!isGiteaTagPattern(pattern)) throw badRequest('Invalid tag protection')
+      const token = await owner()
+      const allowedUser = await api().tokenOwner(token)
+      const rule = { pattern, users: [allowedUser] }
+      const exact = (found: GiteaTagProtection) =>
+        found.pattern === pattern &&
+        found.teams.length === 0 &&
+        found.users.length === 1 &&
+        found.users[0] === allowedUser
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const found = (await api().listTagProtections(ref.owner, ref.name, token)).filter(
+          (rule) => rule.pattern === pattern,
+        )
+        if (found.length > 1) throw giteaFailed('Gitea holds two protections of one pattern')
+        if (found[0]) {
+          if (exact(found[0])) return
+          const edited = await api().editTagProtection(
+            ref.owner,
+            ref.name,
+            found[0].id,
+            rule,
+            token,
+          )
+          if (!exact(edited)) throw giteaFailed('Gitea kept another tag protection')
+          return
+        }
+        const created = await api().createTagProtection(ref.owner, ref.name, rule, token)
+        if (created) {
+          if (!exact(created)) throw giteaFailed('Gitea made another tag protection')
+          return
+        }
+      }
+      throw giteaRefused('forbidden', 'Gitea refused to protect the tags')
+    },
+    /**
+     * Through the API, not a git push: Gitea creates a tag there only when the name is free, so
+     * nothing here can move one, and the creation fires the same push webhook and Actions runs
+     * as a push of the tag (recorded 2026-10-17). A taken name is answered with the tag as it is.
+     */
+    async createTag(ref, name, commitSha) {
+      assertGitea(ref)
+      const created = await api().createTag(ref.owner, ref.name, name, commitSha, await owner())
+      const tag = created ?? (await api().getTag(ref.owner, ref.name, name))
+      if (!tag) throw giteaFailed('Gitea refused a tag name it does not show')
+      return { name: tag.name, commitSha: tag.commitSha, objectSha: tag.id }
+    },
+    async getTag(ref, name) {
+      assertGitea(ref)
+      const tag = await api().getTag(ref.owner, ref.name, name)
+      return tag && { name: tag.name, commitSha: tag.commitSha, objectSha: tag.id }
+    },
+    /**
+     * Pages run newest first, so a run that comes or goes between two reads shifts every row
+     * behind it: a row repeats, and another — the new run itself — is never seen. Rows count once
+     * by id, and a total that changed during the read starts it again from the first page.
+     */
+    async listWorkflowRuns(ref, filter) {
+      assertGitea(ref)
+      for (let read = 0; read < RUN_LIST_READS; read++) {
+        const runs = await readRuns(ref, filter)
+        if (runs) return runs
+      }
+      throw giteaFailed('Gitea kept adding runs while they were read')
+    },
+    async getWorkflowRun(ref, id) {
+      assertGitea(ref)
+      if (!/^[1-9]\d{0,14}$/.test(id)) throw badRequest('Invalid run id')
+      const run = await api().getRun(ref.owner, ref.name, Number(id))
+      return run && workflowRun(run)
+    },
+    async dispatchWorkflow(ref, dispatch) {
+      assertGitea(ref)
+      let sourceId: number | undefined
+      if (dispatch.source) {
+        assertGitea(dispatch.source)
+        const source = await api().getRepository(dispatch.source.owner, dispatch.source.name)
+        if (!source)
+          throw giteaNotSupported('not_found', 'Gitea does not show the source of the workflow')
+        sourceId = source.id
+      }
+      const runId = await api().dispatchWorkflow(
+        ref.owner,
+        ref.name,
+        dispatch.workflow,
+        { ref: dispatch.ref, inputs: dispatch.inputs ?? {} },
+        sourceId,
+      )
+      return { runId: String(runId) }
+    },
     async sweepCredentials() {
       await sweepIfDue(await botLogin())
     },
@@ -194,6 +348,27 @@ export function createGiteaProvider(
       if (deleted.some((result) => result.status === 'rejected'))
         throw giteaFailed('Gitea did not confirm the deletion of every issued token')
     },
+  }
+}
+
+/**
+ * A run of the REST API. It names the workflow by its file and ref only (`deploy.yml@refs/…`),
+ * so its name is the file and `workflowPath` stays null: only a webhook tells a scoped workflow
+ * from a file of the repository.
+ */
+function workflowRun(run: GiteaRun): WorkflowRun {
+  const workflow = workflowOfRun(run.path)
+  return {
+    id: String(run.id),
+    name: workflow.workflowFile ?? 'workflow',
+    headSha: run.headSha,
+    ...runState(run.status, run.conclusion),
+    url: run.htmlUrl,
+    ...workflow,
+    workflowPath: null,
+    event: run.event,
+    headBranch: run.headBranch,
+    runAttempt: run.runAttempt,
   }
 }
 

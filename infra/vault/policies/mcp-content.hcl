@@ -3,6 +3,16 @@ path "kv/data/sites/+/wp" {
   capabilities = ["read"]
 }
 
+# The application password of a preview's WordPress and the secret path of its browser
+# (plan 53, Р21, Р24): core writes both, the role reads them. Never the variables of a site.
+path "kv/data/previews/+/wp" {
+  capabilities = ["read"]
+}
+
+path "kv/data/previews/+/browser" {
+  capabilities = ["read"]
+}
+
 # Contact maps of tasks: written with CAS, read back, removed with every version.
 path "kv/data/content-masks/*" {
   capabilities = ["create", "read", "update"]

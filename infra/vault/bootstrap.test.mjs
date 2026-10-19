@@ -86,6 +86,9 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     // key management.
     'mcp-content': {
       'kv/data/sites/+/wp': ['read'],
+      // The secrets of a preview, never the variables of a site (plan 53, Р21, Р24).
+      'kv/data/previews/+/wp': ['read'],
+      'kv/data/previews/+/browser': ['read'],
       'kv/data/content-masks/*': ['create', 'read', 'update'],
       'kv/metadata/content-masks/*': ['delete'],
       'transit/datakey/plaintext/ws-*': ['update'],
@@ -95,7 +98,13 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'transit/datakey/plaintext/ws-*': ['update'],
       'transit/decrypt/ws-*': ['update'],
     },
-    'sites-writer': { 'kv/data/sites/*': ['create', 'update'], 'kv/metadata/sites/*': ['read'] },
+    // Site access and the variables of a site; of the metadata only the version for CAS and,
+    // on a variable, its limit of one version (plan 53, Р13).
+    'sites-writer': {
+      'kv/data/sites/*': ['create', 'update'],
+      'kv/metadata/sites/+/*': ['read'],
+      'kv/metadata/sites/+/env/*': ['create', 'update', 'read'],
+    },
     'workspace-provisioner': { 'transit/keys/ws-*': ['update'] },
     // The kinds a site is imported with, read-only: no wp or browser, no write, no metadata.
     'core-site-import': {
@@ -103,6 +112,19 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'kv/data/sites/+/ssh': ['read'],
       'kv/data/sites/+/git': ['read'],
       'kv/data/sites/+/db': ['read'],
+    },
+    // Releases and previews (plan 53, Р29, Р35): reads of what a release writes with, the
+    // secrets of a preview, and the three calls of a single-use wrapping — nothing that
+    // creates a token or a policy.
+    'core-release': {
+      'kv/data/sites/+/wp': ['read'],
+      'kv/data/sites/+/env/*': ['read'],
+      'kv/data/platform/gitea-org-owner': ['read'],
+      'kv/data/previews/*': ['create', 'read', 'update', 'delete'],
+      'kv/metadata/previews/*': ['read', 'update', 'list', 'delete'],
+      'sys/wrapping/wrap': ['update'],
+      'sys/wrapping/lookup': ['update'],
+      'auth/token/revoke-accessor': ['update'],
     },
   }
   // A policy that names a mount outside its list fails here, whatever the path under it.
@@ -116,6 +138,11 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     'sites-writer': ['kv'],
     'workspace-provisioner': ['transit'],
     'core-site-import': ['kv'],
+    'core-release': ['kv', 'sys', 'auth'],
+  }
+  // The only system and auth endpoints a policy may name.
+  const systemPaths = {
+    'core-release': ['sys/wrapping/wrap', 'sys/wrapping/lookup', 'auth/token/revoke-accessor'],
   }
   assert.deepEqual([...policyNames].sort(), Object.keys(expected).sort())
   assert.deepEqual(Object.keys(allowedMounts).sort(), Object.keys(expected).sort())
@@ -136,7 +163,14 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       [...allowedMounts[name]].sort(),
       name,
     )
-    assert.doesNotMatch(policy, /sudo|sys\/|auth\/|ops\/|\*"\s*{[^}]*"root"/)
+    assert.deepEqual(
+      Object.keys(grants).filter((path) => /^(sys|auth)\//.test(path)),
+      systemPaths[name] ?? [],
+      name,
+    )
+    // Outside the path names: no sudo, no root, no ops/.
+    const body = policy.replaceAll(/path "[^"]+"/g, 'path')
+    assert.doesNotMatch(body, /sudo|sys\/|auth\/|ops\/|"root"/, name)
   }
   const core = await readFile(new URL('./policies/core-turns.hcl', import.meta.url), 'utf8')
   assert.match(core, /allowed_parameters\s*=\s*{\s*"custom_metadata"\s*=\s*\[\]/)
@@ -148,6 +182,21 @@ test('every policy grants exactly its scoped privileges and only on its own moun
   )
   assert.match(provisioner, /allowed_parameters\s*=\s*{\s*"type"\s*=\s*\["aes256-gcm96"\]\s*}/)
   assert.equal([...provisioner.matchAll(/allowed_parameters/g)].length, 1)
+  // web may set one thing of the metadata of a variable: that it keeps one version. Any other
+  // value or parameter — a longer history, cas_required, a deletion delay — is refused.
+  const writer = await readFile(new URL('./policies/sites-writer.hcl', import.meta.url), 'utf8')
+  assert.match(
+    writer,
+    /path "kv\/metadata\/sites\/\+\/env\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"max_versions"\s*=\s*\["1"\]\s*}/,
+  )
+  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 1)
+  // core may attach recovery metadata to a secret of a preview, never weaken its retention.
+  const release = await readFile(new URL('./policies/core-release.hcl', import.meta.url), 'utf8')
+  assert.match(
+    release,
+    /path "kv\/metadata\/previews\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"custom_metadata"\s*=\s*\[\]\s*}/,
+  )
+  assert.equal([...release.matchAll(/allowed_parameters/g)].length, 1)
 })
 
 test('a new local bootstrap creates the four mounts and all the policies', async () => {
@@ -174,7 +223,7 @@ test('a new local bootstrap creates the four mounts and all the policies', async
     configWrites.map(({ path, body }) => [path, body]),
     Object.entries(mounts).map(([name, config]) => [`${name}/config`, config]),
   )
-  assert.equal(policyNames.length, 9)
+  assert.equal(policyNames.length, 10)
   assert.deepEqual(
     mock.calls.filter(({ path }) => path.startsWith('sys/policies/acl/')).map(({ path }) => path),
     policyNames.map((name) => `sys/policies/acl/${name}`),
@@ -344,7 +393,7 @@ test('a mount that failed to enable stops the run and is enabled by the next one
 test('the summary names the mounts, counts the policies and says what a new mount has lost', () => {
   const all = ['turns', 'subs', 'kv', 'transit']
   assert.deepEqual(bootstrapSummary({ mounts: all, policies: [...policyNames], created: [] }), [
-    'Local OpenBao ready: turns/, subs/, kv/, transit/; 9 policies',
+    'Local OpenBao ready: turns/, subs/, kv/, transit/; 10 policies',
   ])
   const [, fresh] = bootstrapSummary({ mounts: all, policies: [...policyNames], created: all })
   assert.match(fresh, /^Created now: turns\/, subs\/, kv\/, transit\/\. /)

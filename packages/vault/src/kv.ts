@@ -15,7 +15,7 @@ const segment = /^[A-Za-z0-9_.-]{1,128}$/
 const safeSegment = (value: string) => segment.test(value) && value !== '.' && value !== '..'
 const forbiddenKeys = new Set(['__proto__', 'constructor', 'prototype'])
 // A record parser can silently omit __proto__. Check descriptors first, without running getters.
-const stringsSchema = z.custom<Record<string, string>>((value: unknown) => {
+export const stringsSchema = z.custom<Record<string, string>>((value: unknown) => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const proto: unknown = Object.getPrototypeOf(value)
   if (proto !== Object.prototype && proto !== null) return false
@@ -68,7 +68,10 @@ const metadataSchema = z.object({
     versions: z.record(z.string().regex(/^[1-9]\d*$/), versionMetadata),
   }),
 })
-const writeOptionsSchema = z.strictObject({ cas: z.number().int().nonnegative().optional() })
+const writeOptionsSchema = z.strictObject({
+  cas: z.number().int().nonnegative().optional(),
+  maxVersions: z.number().int().min(1).max(100).optional(),
+})
 const listPageSchema = z.strictObject({
   after: z
     .string()
@@ -127,6 +130,15 @@ export function createKvStore(session: VaultSession, onMount?: (mount: string) =
       ...(parsed.data.cas === undefined ? {} : { options: { cas: parsed.data.cas } }),
     }
     validateBodySize(body)
+    if (parsed.data.maxVersions !== undefined) {
+      // Before the data: this very write then removes the versions beyond the limit (a limit set
+      // after it waits for the next write). A string, because a policy can allow a value of a
+      // parameter only as one: allowed_parameters matches no JSON number (OpenBao 2.7.0).
+      await session.request(apiPath(path, 'metadata'), {
+        method: 'POST',
+        body: { max_versions: String(parsed.data.maxVersions) },
+      })
+    }
     const response = await session.request(url, { method: 'POST', body, forbiddenExpected })
     const result = writeSchema.safeParse(response.json)
     if (!result.success) throw new VaultError('Unexpected Vault KV write response')
@@ -217,7 +229,7 @@ function kvApiPath(path: string, type: 'data' | 'metadata', prefix = false): str
   return `/v1/${mount}/${type}${parts.length > 0 ? `/${parts.join('/')}` : ''}`
 }
 
-function validateStrings(value: Record<string, string>): Record<string, string> {
+export function validateStrings(value: Record<string, string>): Record<string, string> {
   const result = stringsSchema.safeParse(value)
   if (!result.success) throw new VaultError('Invalid Vault KV string data')
   return { ...result.data }

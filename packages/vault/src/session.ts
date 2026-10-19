@@ -21,6 +21,13 @@ export interface VaultRequest {
    * drops a token that was really revoked.
    */
   forbiddenExpected?: boolean
+  /**
+   * Sent with this token instead of the session's own, without a login: the wrapping token of
+   * an unwrap, which is its own credential. A refusal of it never drops the session's token.
+   */
+  token?: string
+  /** Asks Vault to wrap the response for this long (X-Vault-Wrap-TTL); sys/wrapping/wrap needs it. */
+  wrapTtlSeconds?: number
 }
 export interface VaultReply {
   status: number
@@ -76,6 +83,9 @@ export function createVaultSession(options: VaultSessionOptions): VaultSession {
           accept: 'application/json',
           ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
           ...(token ? { 'x-vault-token': token } : {}),
+          ...(request.wrapTtlSeconds !== undefined
+            ? { 'x-vault-wrap-ttl': String(request.wrapTtlSeconds) }
+            : {}),
         },
         body,
         signal: AbortSignal.timeout(timeoutMs),
@@ -134,10 +144,17 @@ export function createVaultSession(options: VaultSessionOptions): VaultSession {
   return {
     async request(path, request) {
       const maxResponseBytes = responseLimitBytes(request.responseLimit)
+      if (request.token !== undefined && !tokenSchema.safeParse(request.token).success)
+        throw new VaultError('Invalid Vault request token')
+      if (
+        request.wrapTtlSeconds !== undefined &&
+        (!Number.isSafeInteger(request.wrapTtlSeconds) || request.wrapTtlSeconds <= 0)
+      )
+        throw new VaultError('Invalid Vault wrapping lifetime')
       return send(
         path,
         request,
-        request.authenticated === false ? undefined : await authenticate(),
+        request.token ?? (request.authenticated === false ? undefined : await authenticate()),
         maxResponseBytes,
       )
     },
