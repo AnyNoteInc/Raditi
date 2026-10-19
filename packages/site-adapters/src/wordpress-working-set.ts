@@ -9,7 +9,7 @@ import { archivesAndDumps, dataFiles, secretFiles, serverLogs } from './php-host
 
 // The agent's tree and its media for WordPress (docs/plan/53-chat-preview-release.md, Р11,
 // Р12). Patterns: the syntax of @repo/domain path-patterns (a trailing `/` — a folder and all
-// below it, a leading `/` — from the root, no slash — a name at any depth, `/*` — a root file).
+// below it, a leading `/` — from the root, no slash — a name at any depth).
 
 /** The files of the platform in the site: the content plugin and the mu-plugin of a preview. */
 export const wordpressPlatformFiles = [
@@ -24,21 +24,14 @@ export const wordpressPlatformFiles = [
  */
 export const WORDPRESS_MEDIA_DIR = 'wp-content/uploads/raditi/'
 
+/**
+ * The themes, plugins and mu-plugins of the site and nothing of its root: the root holds the core
+ * of WordPress and its configuration, which the agent never gets (owner's answer of 19.10.2026).
+ * The set is cut each turn from the head the planner reads from the site repository.
+ */
 const workingSet: AgentWorkingSet = {
-  include: [
-    '/wp-content/themes/',
-    '/wp-content/plugins/',
-    '/wp-content/mu-plugins/',
-    // Files of the root (robots.txt, a verification file); its folders are the core or unknown.
-    '/*',
-  ],
+  include: ['/wp-content/themes/', '/wp-content/plugins/', '/wp-content/mu-plugins/'],
   exclude: [
-    // The core in the root and the configuration with its copies.
-    '/wp-*.php',
-    '/index.php',
-    '/xmlrpc.php',
-    '/license.txt',
-    '/readme.html',
     ...wordpressPlatformFiles.map((path) => `/${path}`),
     // Dependencies and build output: large, never the agent's to change.
     'node_modules/',

@@ -29,12 +29,18 @@ describe('the WordPress working set (plan 53, Р11)', () => {
     'wp-content/themes/shop/functions.php',
     'wp-content/plugins/forms/forms.php',
     'wp-content/mu-plugins/shop-tweaks.php',
-    'robots.txt',
-    'google1234.html',
-    '.htaccess',
+    'wp-content/themes/shop/.htaccess',
   ])('gives the agent %s', (path) => {
     expect(inSet(path)).toBe(true)
   })
+
+  // The owner's answer of 19.10.2026: the root is the core of WordPress, never the agent's.
+  it.each(['robots.txt', 'google1234.html', '.htaccess', '.user.ini', 'php.ini', 'custom.php'])(
+    'leaves the root file %s out of the sandbox',
+    (path) => {
+      expect(inSet(path)).toBe(false)
+    },
+  )
 
   it.each([
     'wp-config.php',

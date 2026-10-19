@@ -290,10 +290,8 @@ describe('the agent working set (plan 53, Р11)', { timeout: 60_000 }, () => {
       (await f.service.buildBaseBundle(f.source, '2026-10-17T10:00:01.000Z')).sandboxBaseSha,
     ).not.toBe(sandboxBaseSha)
     const repoDir = await f.sandbox(bundle)
-    // Not the agent's media folder either: it only grows (below).
+    // Not the root (the core of WordPress), nor the agent's media folder: it only grows (below).
     expect((await out(repoDir, 'ls-files')).split('\n')).toEqual([
-      '.htaccess',
-      'robots.txt',
       'wp-content/plugins/forms/forms.php',
       'wp-content/themes/shop/functions.php',
       'wp-content/themes/shop/style.css',
@@ -476,12 +474,16 @@ describe('add-only media (plan 53, Р12)', { timeout: 60_000 }, () => {
     expect(candidate.sandboxBaseSha).toBe(bundle.sandboxBaseSha)
   })
 
-  it('takes new media a .gitignore of the site hides, as capture lists them', async () => {
+  it('takes new media an ignore file hides, as capture lists them', async () => {
     const f = await fixture({ gitignore: true })
     const bundle = await f.service.buildBaseBundle(f.source, committedAt)
     const repoDir = await f.sandbox(bundle)
-    await write(repoDir, { 'wp-content/uploads/raditi/2026/hero.png': png('hero') })
-    // The site's own rules ignore the media library.
+    // The root of the site, its .gitignore with it, is not in the set: in the sandbox the rules
+    // that ignore the media library (and themselves) are the agent's own.
+    await write(repoDir, {
+      '.gitignore': '/.gitignore\n/wp-content/uploads/\n',
+      'wp-content/uploads/raditi/2026/hero.png': png('hero'),
+    })
     expect(await out(repoDir, 'ls-files', '--others', '--exclude-standard')).toBe('')
     const { patch, untracked } = await f.capture(repoDir, bundle.sandboxBaseSha!)
     const candidate = await f.prepare(patch, untracked)
@@ -565,6 +567,40 @@ describe('the mirror of a site repository (plan 53, Р10)', { timeout: 60_000 },
     // The local transport clones from the real path of the fixture.
     const url = await realpath(f.remote)
     expect(repos).toEqual([mirrorPath(f.mirrorDir, f.repo, url).split('/').at(-1)])
+  })
+
+  // The owner's answer of 19.10.2026: a turn gets the WordPress of the site as it is now. The
+  // planner reads the head of `main` from the remote; the mirror and the bundles are named by
+  // commits, which name their content, so neither can hand a turn an older tree.
+  it('cuts the working set of a new main afresh, never from a bundle of the old one', async () => {
+    const f = await fixture()
+    const old = await f.service.buildBaseBundle(f.source, committedAt)
+    await write(f.work, { 'wp-content/themes/shop/style.css': 'body { color: green; }\n' })
+    await git(f.work, 'commit', '-qam', 'the site moved on')
+    const head = await out(f.work, 'rev-parse', 'HEAD')
+    await git(f.work, 'push', f.remote, 'HEAD:refs/heads/main')
+    await expect(f.service.readBranchHead({ repo: f.repo, branch: 'main' })).resolves.toBe(head)
+    // The same instant of the turn: only the base differs, and the commit with it.
+    const fresh = await f.service.buildBaseBundle(
+      { ...f.source, expectedBaseSha: head },
+      committedAt,
+    )
+    expect(fresh.baseSha).toBe(head)
+    expect(fresh.sandboxBaseSha).not.toBe(old.sandboxBaseSha)
+    expect(fresh.sha256).not.toBe(old.sha256)
+    expect(f.calls('fetch')).toBe(2)
+    const repoDir = await f.sandbox(fresh)
+    expect(await readFile(join(repoDir, 'wp-content/themes/shop/style.css'), 'utf8')).toBe(
+      'body { color: green; }\n',
+    )
+    // A set cut by other rules from the same base is another commit as well.
+    const wider = { ...f.source.workingSet!, include: [...f.source.workingSet!.include, '/*'] }
+    const other = await f.service.buildBaseBundle(
+      { ...f.source, expectedBaseSha: head, workingSet: wider },
+      committedAt,
+    )
+    expect(other.sandboxBaseSha).not.toBe(fresh.sandboxBaseSha)
+    expect(await out(await f.sandbox(other), 'ls-files', 'robots.txt')).toBe('robots.txt')
   })
 
   it('refuses a commit the repository does not have', async () => {
@@ -669,7 +705,7 @@ describe('the mirror of a site repository (plan 53, Р10)', { timeout: 60_000 },
       committedAt,
     )
     const repoDir = await f.sandbox(bundle)
-    expect((await out(repoDir, 'ls-files')).split('\n')).toHaveLength(5)
+    expect((await out(repoDir, 'ls-files')).split('\n')).toHaveLength(3)
   })
 
   it('tells the tree of a commit', async () => {
