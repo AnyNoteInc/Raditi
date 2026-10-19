@@ -18,6 +18,7 @@ import {
 import {
   additiveChange,
   addOnlyPathOf,
+  anyDepthPatterns,
   candidateFactsSchema,
   candidateFilesSchema,
   candidateMediaSchema,
@@ -671,7 +672,8 @@ export class ReleaseSkill {
   /**
    * The second line of rule 6: the release commit changes, against `main`, the candidate's files
    * and adds its media — and none of them may be a path publication could not have written (a
-   * CI path, a protected one, media outside its add-only folders). The trusted side built the
+   * CI path, a protected one, media outside its add-only folders or named by a protected pattern
+   * at any depth). The trusted side built the
    * candidate from its commits, but the head of `agent/<taskId>` is the only thing it checks
    * them against, and a head that someone else moved would be released as it is.
    */
@@ -686,7 +688,8 @@ export class ReleaseSkill {
       changed.data.every((file) => !isForbiddenPath(file.path, protectedPaths)) &&
       added.data.every(
         (file) =>
-          addOnlyPathOf(file.path, addOnlyPaths) !== undefined && !isForbiddenPath(file.path),
+          addOnlyPathOf(file.path, addOnlyPaths) !== undefined &&
+          !isForbiddenPath(file.path, anyDepthPatterns(protectedPaths)),
       )
     )
   }

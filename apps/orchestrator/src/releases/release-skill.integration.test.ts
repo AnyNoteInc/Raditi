@@ -538,6 +538,17 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
         await refused(await world({ candidatePath }), 'forbidden_path', 'technical')
     })
 
+    it('when the candidate adds media a protected pattern at any depth names (rule 6)', async () => {
+      // Under the add-only folder the patterns at any depth still hold (owner, 19.10.2026);
+      // a folder of the library outside it is no media of a candidate at all.
+      for (const candidateMedia of [
+        'wp-content/uploads/raditi/.htaccess',
+        'wp-content/uploads/raditi/a/php.ini',
+        'wp-content/uploads/2026/a.png',
+      ])
+        await refused(await world({ candidateMedia }), 'forbidden_path', 'technical')
+    })
+
     it('when a check of the candidate failed', async () => {
       await refused(await world({ failedCheck: true }), 'checks_failed', 'checks_failed')
     })

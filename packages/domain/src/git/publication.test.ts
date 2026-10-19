@@ -152,6 +152,26 @@ describe('the rules of a candidate (plan 53, Р11, Р12)', () => {
     )
   })
 
+  it('keeps the protected patterns at any depth under the add-only folder (owner, 19.10.2026)', () => {
+    // A name the media rules take: only the pattern refuses it, the second line next to them.
+    const guarded = candidateRulesOf({
+      ...source,
+      protectedPaths: [...source.protectedPaths, '**/sitemap.png'],
+    })
+    for (const path of [
+      'wp-content/uploads/raditi/sitemap.png',
+      'wp-content/uploads/raditi/a/SITEMAP.png',
+    ]) {
+      expect(() => assertCandidatePath(path, guarded)).toThrow(forbidden)
+      expect(() => assertCandidateChange(added(path), guarded)).toThrow(forbidden)
+      expect(() => assertCandidatePath(path, rules)).not.toThrow()
+    }
+    // The other protected paths still give way: the media library itself is protected.
+    expect(() =>
+      assertCandidateChange(added('wp-content/uploads/raditi/a.png'), guarded),
+    ).not.toThrow()
+  })
+
   it('checks the bytes of added media and leaves other files alone', () => {
     const picture = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1])
     expect(assertCandidateMedia('wp-content/uploads/raditi/a.png', picture, rules)).toBe(true)

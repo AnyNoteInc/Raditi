@@ -724,6 +724,8 @@ export interface ReleaseFixtureOptions {
   siteStatus?: 'onboarding' | 'active' | 'paused' | 'disconnected' | 'archived'
   /** The file the candidate changes; a file of a theme unless given. */
   candidatePath?: string
+  /** A media file the candidate adds; none unless given. */
+  candidateMedia?: string
 }
 
 /**
@@ -854,7 +856,16 @@ export async function releaseFixture(
           executable: false,
         },
       ],
-      media: [],
+      media: options.candidateMedia
+        ? [
+            {
+              path: options.candidateMedia,
+              contentType: 'image/png',
+              sizeBytes: 64,
+              sha256: 'c'.repeat(64),
+            },
+          ]
+        : [],
       dbPlan,
       dbPlanSha256: planSha256,
       ...(view

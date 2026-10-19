@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { publicationForbidden, publicationTooLarge, turnOutputRejected } from '../errors.ts'
-import { isForbiddenPath } from '../policies/diff-paths.ts'
+import { anyDepthPatterns, isForbiddenPath } from '../policies/diff-paths.ts'
 import { gitProviderKinds } from '../ports/git-provider.ts'
 import { snapshotLimits } from '../sessions/session-state.ts'
 import { snapshotIdSchema } from '../sessions/snapshot-manifest.ts'
@@ -82,7 +82,8 @@ export const publicationSourceSchema = z
     /**
      * `SiteAdapter.mediaRules().addOnlyPaths` (Р12): under these the patch may only add files,
      * which then pass `media`. They win over `protectedPaths` (a stack protects its media library
-     * and opens one directory of it). Absent — no path is add-only, as before.
+     * and opens one directory of it) but for the patterns at any depth, which hold there too
+     * (`anyDepthPatterns`). Absent — no path is add-only, as before.
      */
     addOnlyPaths: z.array(addOnlyPathSchema).max(8).optional(),
     /** The rest of `SiteAdapter.mediaRules()`; required with `addOnlyPaths`. */
@@ -215,13 +216,13 @@ const mediaOnlyAdded = () =>
 /**
  * The checks of a path whatever its change is — before a patch is applied its modes are not
  * known yet. An add-only directory wins over the working set and the protected paths, never
- * over the CI ones.
+ * over the CI ones nor over the protected patterns at any depth (owner's answer of 19.10.2026).
  */
 export function assertCandidatePath(path: string, rules: CandidateRules): void {
   assertPublicationPath(path)
   const prefix = addOnlyPathOf(path, rules.addOnlyPaths)
   if (!prefix && rules.inWorkingSet && !rules.inWorkingSet(path)) throw outsideWorkingSet()
-  if (isForbiddenPath(path, prefix ? [] : rules.protectedPaths))
+  if (isForbiddenPath(path, prefix ? anyDepthPatterns(rules.protectedPaths) : rules.protectedPaths))
     throw publicationForbidden('Publication changes a protected path')
   if (!prefix) return
   if (!rules.media) throw mediaOnlyAdded()

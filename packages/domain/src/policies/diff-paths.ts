@@ -62,6 +62,17 @@ function compilePattern(pattern: string): RegExp {
 const ciMatchers = forbiddenCiPaths.map(compilePattern)
 
 /**
+ * The patterns of `patterns` that match at any depth (a leading `**` part). They hold under the
+ * add-only directories too, where the other protected paths give way (docs/plan/53, Р12): the
+ * media name rules already refuse `.htaccess` there, and these patterns are the second line
+ * next to them (owner's answer of 19.10.2026), so a new any-depth pattern of an adapter holds
+ * there without a new media rule.
+ */
+export function anyDepthPatterns(patterns: readonly string[]): string[] {
+  return patterns.filter((pattern) => normalizeRepoPath(pattern)?.startsWith('**/') === true)
+}
+
+/**
  * True when an agent diff may not touch `path`: CI files of every provider (CLAUDE.md rule 6)
  * plus `extraProtected`, usually SiteAdapter.protectedPaths(). Untrustworthy paths
  * (`..`, NUL, empty) count as forbidden.
