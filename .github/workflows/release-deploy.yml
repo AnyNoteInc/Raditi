@@ -50,9 +50,11 @@ jobs:
       - name: Pull the images of the hosting and the site
         run: |
           docker pull -q linuxserver/openssh-server@sha256:96b9a4d3b5106746d08d43a6911650d4d21f7d5c7f2ac9660e792bdb5e63157c
+          # Docker Hub rebuilds an official image under the same tag; the pinned digest stays
+          # pullable, so the image is pulled by digest and tagged here.
           while read -r tag digest; do
-            docker pull -q "$tag"
-            docker image inspect "$tag" --format '{{json .RepoDigests}}' | grep -qF "@$digest"
+            docker pull -q "${tag%%:*}@$digest"
+            docker tag "${tag%%:*}@$digest" "$tag"
           done <<'IMAGES'
           wordpress:7.1.2-php8.3-apache sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5
           wordpress:cli-php8.3 sha256:2b5e9d4d3e51909dca1aaa4732e9f5e5bf0377c2114dbd8ff39f060bff202586
