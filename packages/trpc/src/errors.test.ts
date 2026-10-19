@@ -670,3 +670,109 @@ describe('the text of a refused task, built from the details of its refusal', ()
     }
   })
 })
+
+describe('the refusals of a dialog, its preview and its release', () => {
+  const codes = [
+    ['CHAT_NOT_CONFIGURED', 503],
+    ['TASK_NOT_ACCEPTED', 409],
+    ['TASK_TEXT_EMPTY', 400],
+    ['TASK_TEXT_TOO_LONG', 400],
+    ['TASK_TEXT_HAS_SECRET', 400],
+    ['TASK_TEXT_INVALID', 400],
+    ['TASK_BUSY', 409],
+    ['TASK_FINISHED', 409],
+    ['TASK_CONTINUE_REQUIRED', 409],
+    ['TASK_NOTHING_TO_CONTINUE', 409],
+    ['TASK_ATTEMPTS_EXHAUSTED', 409],
+    ['TASK_NOTHING_TO_RETRY', 409],
+    ['CHAT_COMMAND_UNAVAILABLE', 409],
+    ['RELEASE_IN_PROGRESS', 409],
+    ['RELEASE_CONFIRMATION_INVALID', 400],
+    ['RELEASE_CONFIRMATION_EXPIRED', 409],
+    ['RELEASE_CANDIDATE_CHANGED', 409],
+    ['RELEASE_VERSION_TAKEN', 409],
+    ['RELEASE_REVIEW_REQUIRED', 409],
+    ['RELEASE_VERSION_NOT_OFFERED', 409],
+    ['RELEASE_UNDO_PLAN_CHANGED', 409],
+    ['RELEASE_UNDO_VERSION_TAKEN', 409],
+    ['PREVIEW_NOT_READY', 409],
+    ['SITE_ENV_NOT_ALLOWED', 403],
+    ['SITE_ENV_NAME_INVALID', 400],
+    ['SITE_ENV_NAME_RESERVED', 400],
+    ['SITE_ENV_VALUE_INVALID', 400],
+    ['SITE_ENV_HOSTS_INVALID', 400],
+    ['SITE_ENV_CONSENT_REQUIRED', 400],
+    ['SITE_ENV_AGENT_CLOSED', 409],
+    ['SITE_ENV_LIMIT', 409],
+    ['SITE_ENV_HOSTS_LIMIT', 409],
+    ['SITE_ENV_CHANGED', 409],
+  ] as const
+
+  it.each(codes)('gives %s its own Russian text on «вы», without English', (domainCode, status) => {
+    const error = toTRPCError(new DomainError(domainCode, 'English text for the logs', status))
+    const generic = toTRPCError(new DomainError('UNLISTED', 'Unlisted', status))
+
+    expect(error.message).not.toBe(generic.message)
+    expect(error.message).not.toMatch(/[A-Za-z]/)
+    expect(error.message).not.toMatch(
+      /(?:^|[^а-яё])(?:ты|тебя|тебе|твой|твоя|твоё|твои)(?:[^а-яё]|$)/i,
+    )
+    expect(error.message).not.toMatch(/\.$/)
+  })
+
+  it('tells why a dialog is not taken by the reason of the refusal', () => {
+    const text = (reason?: string) =>
+      toTRPCError(
+        new DomainError(
+          'TASK_NOT_ACCEPTED',
+          'Not accepted',
+          409,
+          reason === undefined ? undefined : { reason },
+        ),
+      ).message
+    expect(text('site_not_active')).toContain('сайт ещё не подключён')
+    expect(text('not_synthetic')).toContain('тестовая среда')
+    expect(text('class_unavailable')).toContain('не можем повторить работу')
+    expect(text('other')).toBe('Задания для этого сайта сейчас не принимаются')
+    expect(text()).toBe('Задания для этого сайта сейчас не принимаются')
+  })
+
+  it('says of a refused command what the list of commands says of it', () => {
+    const text = (details: unknown) =>
+      toTRPCError(new DomainError('CHAT_COMMAND_UNAVAILABLE', 'Refused', 409, details)).message
+    expect(text({ command: 'release', refusal: 'not_allowed' })).toBe(
+      'Выпускать и отменять версии могут владелец и администраторы',
+    )
+    expect(text({ command: 'reset', refusal: 'busy' })).toBe('Подождите: агент ещё работает')
+    expect(text({ refusal: 'launch' })).toBe(
+      'Эта команда сейчас недоступна. Обновите страницу, чтобы увидеть, что изменилось',
+    )
+    expect(text(null)).toBe(
+      'Эта команда сейчас недоступна. Обновите страницу, чтобы увидеть, что изменилось',
+    )
+  })
+
+  it('names the refusal of a command to the screen, and nothing else of the details', () => {
+    const shape = { message: 'Refused', code: -32009, data: { code: 'CONFLICT', httpStatus: 409 } }
+    const formatted = (code: string, details: unknown) =>
+      formatError(shape, toTRPCError(new DomainError(code, 'Refused', 409, details)), false)
+
+    expect(
+      formatted('CHAT_COMMAND_UNAVAILABLE', { command: 'preview', refusal: 'preview_failed' }),
+    ).toEqual({
+      ...shape,
+      message:
+        'Предпросмотр не удалось подготовить. Сбросьте данные предпросмотра — мы соберём его заново',
+      data: {
+        ...shape.data,
+        domainCode: 'CHAT_COMMAND_UNAVAILABLE',
+        refusal: 'preview_failed',
+      },
+    })
+    // An unknown refusal, or the details of another code, are not passed on.
+    expect(formatted('CHAT_COMMAND_UNAVAILABLE', { refusal: 'launch' }).data).not.toHaveProperty(
+      'refusal',
+    )
+    expect(formatted('TASK_NOT_ACCEPTED', { refusal: 'busy' }).data).not.toHaveProperty('refusal')
+  })
+})

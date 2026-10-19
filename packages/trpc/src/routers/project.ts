@@ -145,10 +145,10 @@ const withHost = <Site extends { url: string }>(site: Site) => ({
  * A site the user may open: one in a workspace they are a member of. A site of someone else
  * and a site that does not exist answer the same — the caller must not learn which it is.
  */
-const accessibleSite = (userId: string, id: string) =>
+export const accessibleSite = (userId: string, id: string) =>
   ({ id, workspace: { members: { some: { userId } } } }) satisfies Prisma.SiteWhereInput
 
-const siteNotFound = () =>
+export const siteNotFound = () =>
   new DomainError('NOT_FOUND', 'No such site among the sites of the user', 404)
 
 /** The kinds of access a site itself has; a row of any other kind is not shown on its page. */
