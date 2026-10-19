@@ -1027,7 +1027,7 @@ let failure
 try {
   await main()
   console.log(
-    `PASS local site connection: ${checks} checks; the wizard, the packaged plugin and the import of the site remain open`,
+    `PASS local site connection: ${checks} checks; the activation of a site the wizard imported and the packaged plugin remain open`,
   )
 } catch (error) {
   failure = error
