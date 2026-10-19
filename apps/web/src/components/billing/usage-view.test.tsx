@@ -112,11 +112,14 @@ function meterOf(patch: Partial<Meter>): Meter {
   }
 }
 
-/** «Бизнес» in the middle of its period: 765 of its 800 credits are left. */
-function tariffOf(patch: Partial<TariffUsage> = {}): TariffUsage {
+/**
+ * «Бизнес» in the middle of its period: 765 of its 800 credits are left. Its day is the one the
+ * answer about a new task tells (`usageOf`).
+ */
+function tariffOf(patch: Partial<Omit<TariffUsage, 'today'>> = {}): TariffUsage {
   return {
     credits: meterOf({ charged: 34, held: 1, left: 765 }),
-    today: { used: 1, limit: 10 },
+    today: null,
     sites: { count: 2, max: 3 },
     bySite: [
       { siteId: bakery.id, name: bakery.name, credits: 21 },
@@ -146,9 +149,10 @@ type UsagePatch = Partial<
 >
 
 /**
- * «Бизнес» with 100 credits of a pack beside it: 865 credits left. Whether a new task would be
- * taken is what the server answers for these accounts, this tariff and this day
- * (`taskCreditsFor`); `facts` add the unpaid work and the credit rate.
+ * «Бизнес» with 100 credits of a pack beside it: 865 credits left; today 4 of the tariff were
+ * charged and 1 is set aside. Whether a new task would be taken is what the server answers for
+ * these accounts, this tariff and this day (`taskCreditsFor`); `facts` add another day, the
+ * unpaid work and the credit rate.
  */
 function usageOf(patch: UsagePatch = {}, facts: TaskFacts = {}): BillingUsage {
   const usage = {
@@ -169,20 +173,21 @@ function usageOf(patch: UsagePatch = {}, facts: TaskFacts = {}): BillingUsage {
     balance: left + held,
     held,
   })
-  const launchesToday = usage.tariff?.today.used ?? 0
+  const task = taskCreditsFor(
+    {
+      tariff: { balance: (credits?.left ?? 0) + heldOfTariff, held: heldOfTariff },
+      gift: account(usage.gift),
+      pack: account(usage.pack),
+    },
+    usage.subscription,
+    { today: { charged: 4, held: 1 }, ...facts },
+  )
   return {
     ...usage,
-    trial: usage.tariff === null ? { today: launchesToday, perDay: 3 } : null,
+    // The meter of the tariff tells the day the answer tells.
+    tariff: usage.tariff === null ? null : { ...usage.tariff, today: task.today },
     totalLeft: (credits?.left ?? 0) + usage.gift.left + usage.pack.left,
-    ...taskCreditsFor(
-      {
-        tariff: { balance: (credits?.left ?? 0) + heldOfTariff, held: heldOfTariff },
-        gift: account(usage.gift),
-        pack: account(usage.pack),
-      },
-      usage.subscription,
-      { launchesToday, ...facts },
-    ),
+    ...task,
   }
 }
 
@@ -897,6 +902,18 @@ describe('a customer whose tariff is not paid', () => {
 })
 
 describe('the limits of the tariff', () => {
+  const outside = 'Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены.'
+
+  // What the tile promises of tomorrow depends on whether the period of «Бизнес» in the fixtures
+  // (until 09:00 UTC on 18.10.2026) ends before the next Moscow midnight: the clock stands inside
+  // that period, so the answers do not change with the calendar. Only `Date` is faked.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-17T09:00:00Z') })
+    return () => {
+      vi.useRealTimers()
+    }
+  })
+
   it('measures the day and the sites, each with a named meter and a line', async () => {
     showUsage()
 
@@ -904,11 +921,21 @@ describe('the limits of the tariff', () => {
     const [today, sites] = within(limits)
       .getAllByRole('heading', { level: 2 })
       .map((heading) => heading.parentElement as HTMLElement)
-    expect(plain(today!.textContent)).toContain('Сегодня1 из 10 задач')
+    // The day counts the tariff credits of «Бизнес»: 4 charged and 1 set aside of 100.
+    expect(plain(today!.textContent)).toContain('Сегодня5 из 100 кредитов')
     expect(
-      tones(within(today!).getByRole('img', { name: 'Сегодня в работу взято 1 из 10' })),
-    ).toEqual(['spent', 'left'])
-    expect(plain(today!.textContent)).toContain('Сегодня можно поставить ещё 9 задач.')
+      tones(
+        within(today!).getByRole('img', {
+          name: 'Сегодня из 100 кредитов: 4 списано, 1 отложено под задачи в работе, 95 осталось',
+        }),
+      ),
+    ).toEqual(['spent', 'held', 'left'])
+    expect(plain(today!.textContent)).toContain(
+      'Сегодня потрачено 5 кредитов из 100: 4 списано и 1 отложено под задачи в работе.',
+    )
+    expect(plain(today!.textContent)).toContain(
+      `Сегодня можно потратить ещё 95 кредитов. ${outside}`,
+    )
 
     expect(plain(sites!.textContent)).toContain('Сайты2 из 3 сайтов')
     expect(tones(within(sites!).getByRole('img', { name: 'Добавлено 2 сайта из 3' }))).toEqual([
@@ -920,50 +947,110 @@ describe('the limits of the tariff', () => {
 
   it('fills the meters of a day and of a tariff that are full', async () => {
     getUsage.mockResolvedValue(
-      usageOf({
-        tariff: tariffOf({ today: { used: 10, limit: 10 }, sites: { count: 4, max: 3 } }),
-      }),
+      usageOf(
+        { tariff: tariffOf({ sites: { count: 4, max: 3 } }), pack: { left: 0, held: 0 } },
+        { today: { charged: 100 } },
+      ),
     )
     showUsage()
 
     const limits = await section('Лимиты тарифа')
     expect(
-      tones(within(limits).getByRole('img', { name: 'Сегодня в работу взято 10 из 10' })),
+      tones(
+        within(limits).getByRole('img', {
+          name: 'Сегодня из 100 кредитов: 100 списано, 0 отложено под задачи в работе, 0 осталось',
+        }),
+      ),
     ).toEqual(['spent'])
     expect(tones(within(limits).getByRole('img', { name: 'Добавлено 4 сайта из 3' }))).toEqual([
       'spent',
     ])
     expect(plain(limits.textContent)).toContain(
-      'Лимит на сегодня исчерпан. Новые задачи можно будет поставить завтра.',
+      `Кредиты по тарифу на сегодня закончились — завтра снова можно будет потратить до 100. ${outside}`,
     )
     expect(plain(limits.textContent)).toContain(
       'Сайтов больше, чем входит в тариф: новый добавить нельзя.',
     )
     // The server refuses a new task for the day, and the page says so above the meter.
     expect(plain(within(await section('Кредиты')).getByRole('status').textContent)).toBe(
-      'Лимит на сегодня исчерпан: в работу взято 10 из 10. Новую задачу можно будет поставить завтра. Задачи, которые уже в работе, можно продолжать.',
+      'Кредиты по тарифу на сегодня закончились: потрачено 100 из 100. Завтра снова можно будет потратить до 100 кредитов. Чтобы продолжить сегодня, купите пакет — 100 кредитов за 1 990 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.',
     )
-    // A pack does not lift the limit of the day: the offer stays where it always is.
-    expect(screen.queryByRole('button', { name: 'Купить пакет' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Купить ещё 100 кредитов — 1 990 ₽' })).toBeVisible()
+    // A pack lifts the day: the notice offers it.
+    expect(screen.getByRole('button', { name: 'Купить пакет' })).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'Купить ещё 100 кредитов — 1 990 ₽' }),
+    ).not.toBeInTheDocument()
   })
 
-  it('counts the day alone in its tile, whatever the credits are', async () => {
-    getUsage.mockResolvedValue(outOfCredits())
-    showUsage()
-
-    // The credits ran out — the notice says so —, and the day still has nine launches.
-    expect(plain((await section('Лимиты тарифа')).textContent)).toContain(
-      'Сегодня можно поставить ещё 9 задач.',
+  it('promises nothing of tomorrow when the day is spent and the rest of the tariff is held', async () => {
+    // Review of M5.33f: the day is spent and every tariff credit left is set aside for tasks in
+    // work, so no credit of the tariff is free for tomorrow's day. The server does not refuse with
+    // `daily_limit` then (that refusal implies a free tariff credit); the tile drops «завтра…».
+    getUsage.mockResolvedValue(
+      usageOf(
+        { tariff: tariffOf({ credits: meterOf({ charged: 700, held: 100, left: 0 }) }) },
+        { today: { charged: 0, held: 100 } },
+      ),
     )
-  })
-
-  it('draws no meter for a day without a limit', async () => {
-    getUsage.mockResolvedValue(usageOf({ tariff: tariffOf({ today: { used: 3, limit: null } }) }))
     showUsage()
 
     const limits = await section('Лимиты тарифа')
-    expect(plain(limits.textContent)).toContain('Сегодня3 задачи')
+    expect(plain(limits.textContent)).toContain(
+      `Кредиты по тарифу на сегодня закончились. ${outside}`,
+    )
+    expect(plain(limits.textContent)).not.toContain('завтра')
+  })
+
+  it('takes a task on a pack when the day of the tariff is spent', async () => {
+    getUsage.mockResolvedValue(usageOf({}, { today: { charged: 100 } }))
+    showUsage()
+
+    const limits = await section('Лимиты тарифа')
+    expect(plain(limits.textContent)).toContain('Сегодня100 из 100 кредитов')
+    expect(within(await section('Кредиты')).queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('says nothing of the day when the tariff has nothing left: the credits say so', async () => {
+    getUsage.mockResolvedValue(outOfCredits({}, { today: { charged: 0, held: 0 } }))
+    showUsage()
+
+    const limits = await section('Лимиты тарифа')
+    expect(plain(limits.textContent)).toContain('Сегодня0 из 100 кредитов')
+    expect(plain(limits.textContent)).not.toContain('Сегодня можно потратить')
+    expect(plain(limits.textContent)).toContain(outside)
+    // Review of M5.33d: the meter says what the tariff can give today — nothing — and fills none.
+    expect(
+      tones(
+        within(limits).getByRole('img', {
+          name: 'Сегодня из 100 кредитов: 0 списано, 0 отложено под задачи в работе, 0 осталось',
+        }),
+      ),
+    ).toEqual([])
+  })
+
+  // Review of M5.33d: with the month spent, tomorrow gives nothing until the next period.
+  it('promises nothing of tomorrow once the day and the month are both spent', async () => {
+    getUsage.mockResolvedValue(outOfCredits({}, { today: { charged: 100 } }))
+    showUsage()
+
+    const limits = await section('Лимиты тарифа')
+    expect(plain(limits.textContent)).toContain('Сегодня100 из 100 кредитов')
+    expect(plain(limits.textContent)).toContain(
+      `Кредиты по тарифу на сегодня закончились. ${outside}`,
+    )
+    expect(plain(limits.textContent)).not.toContain('завтра')
+  })
+
+  it('draws no meter for a day without a limit', async () => {
+    getUsage.mockResolvedValue(
+      usageOf({
+        subscription: subscriptionTo({ plan: { ...subscriptionTo().plan, creditsPerDay: null } }),
+      }),
+    )
+    showUsage()
+
+    const limits = await section('Лимиты тарифа')
+    expect(plain(limits.textContent)).toContain('Сегодня5 кредитов')
     expect(plain(limits.textContent)).toContain('Дневного лимита на вашем тарифе нет.')
     expect(texts(within(limits).getAllByRole('img'))).toHaveLength(1)
     expect(within(limits).getByRole('img', { name: 'Добавлено 2 сайта из 3' })).toBeVisible()
@@ -1361,7 +1448,7 @@ describe('the gift credits on «Использование»', () => {
   describe('of a customer without a tariff', () => {
     const state = async () => plain((await section('Тариф не выбран')).textContent)
     const onGift =
-      'У вас 35 подарочных кредитов. Без тарифа можно поставить до 3 задач в день. Здесь видно, сколько кредитов осталось и на что они ушли.'
+      'У вас 35 подарочных кредитов. Они не сгорают, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.'
 
     it('tells a new user, who has no workspace yet, of the gift they are promised', async () => {
       // Not granted yet: it is granted with the workspace, which the first site makes.
@@ -1486,24 +1573,25 @@ describe('what stands in the way of a new task on «Использование»
     )
   })
 
-  it('tells an unpaid tariff of the day of the gift when that is what refuses', async () => {
+  it('counts no day for an unpaid tariff: the gift carries the tasks', async () => {
     getUsage.mockResolvedValue(
-      usageOf({
-        subscription: subscriptionTo({ status: 'past_due' }),
-        tariff: tariffOf({ today: { used: 3, limit: 10 } }),
-        gift: giftOf(20),
-      }),
+      usageOf(
+        { subscription: subscriptionTo({ status: 'past_due' }), gift: giftOf(20) },
+        { today: { charged: 500 } },
+      ),
     )
     showUsage()
 
+    // No refusal: the notice is that of the tariff that is not paid.
     expect(await noticeOf()).toBe(
-      'На сегодня пробные задачи закончились: без тарифа — до 3 задач в день. Следующую можно поставить завтра, а после оплаты тарифа — сразу.',
+      'Оплата тарифа не прошла. Пока она не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты.',
     )
-    expect(within(await section('Кредиты')).getByRole('link', { name: 'К тарифам' })).toBeVisible()
-    // The tile of the day agrees with the notice: the next task is taken tomorrow, unpaid or not.
-    expect(plain((await section('Лимиты тарифа')).textContent)).toContain(
+    const limits = plain((await section('Лимиты тарифа')).textContent)
+    expect(limits).toContain(
       'Пока тариф не оплачен, новые задачи принимаются, только пока есть подарочные кредиты.',
     )
+    // The tile has no number and no meter of the day.
+    expect(limits).not.toMatch(/из 100 кредитов/)
     expect(pageText()).not.toContain('Новые задачи не принимаются')
   })
 
@@ -1543,13 +1631,14 @@ describe('what stands in the way of a new task on «Использование»
   describe('without a tariff', () => {
     const state = async () => plain((await section('Тариф не выбран')).textContent)
 
-    it('tells of the three tasks of a day', async () => {
-      getUsage.mockResolvedValue(noTariff(0, giftOf(20), noHistory, { launchesToday: 3 }))
+    it('tells of no day: the gift is the bound', async () => {
+      getUsage.mockResolvedValue(noTariff(0, giftOf(20), noHistory, { today: { charged: 500 } }))
       showUsage()
 
       expect(await state()).toContain(
-        'На сегодня пробные задачи закончились: без тарифа — до 3 задач в день. Следующую можно поставить завтра, а с тарифом — сразу.',
+        'У вас 20 подарочных кредитов. Они не сгорают, а задачи принимаются, пока подарочные кредиты не закончатся.',
       )
+      expect(await state()).not.toMatch(/в день/)
     })
 
     it('tells that the trial is over, and what a tariff keeps', async () => {

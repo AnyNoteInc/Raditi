@@ -777,7 +777,7 @@ export class PassSettlement {
         reserved: budget.reserved,
         used: budget.used,
         customerLeftRub: budget.customerLeftRub,
-        spendable: budget.spendable,
+        spendableNow: budget.spendableNow,
       },
       turn,
     )

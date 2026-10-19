@@ -72,9 +72,18 @@ export interface Credits {
   /**
    * A task of the customer is queued and taken into work on a site of the workspace: its
    * reserve is placed by `placeCreditHold`, with every check of a placement. `modelClass` is
-   * the mode it runs in: `standard` unless told otherwise, `heavy` for a large one.
+   * the mode it runs in: `standard` unless told otherwise, `heavy` for a large one. `at` is
+   * the moment it is queued — now unless told: an earlier one queues it on an earlier Moscow
+   * day of the period (`periodBegan`), and it is done a minute after it.
    */
-  task(input: { title: string; modelClass?: ModelClass }): Promise<TaskInWork>
+  task(input: { title: string; modelClass?: ModelClass; at?: Date }): Promise<TaskInWork>
+  /**
+   * The current period of the customer's tariff began at `start`, before the payment that
+   * opened it — so that tasks can be queued on earlier Moscow days of it: a tariff gives only
+   * so many of its credits a day. The start of the subscription's period and of the order that
+   * paid for it move together, as the product writes them; the end stays.
+   */
+  periodBegan(start: Date): Promise<void>
   /**
    * The tariff of the customer ended with its period, a day ago — by its row alone: the
    * subscription is rewritten, and what the scheduler does besides is not done. Nothing on the
@@ -202,7 +211,7 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
       select: { id: true, name: true },
     })
 
-  const task: Credits['task'] = async ({ title, modelClass = 'standard' }) => {
+  const task: Credits['task'] = async ({ title, modelClass = 'standard', at }) => {
     const id = await workspace()
     const on = await prisma.site.findFirst({
       where: { workspaceId: id },
@@ -221,7 +230,7 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
       },
       select: { id: true },
     })
-    const now = new Date()
+    const now = at ?? new Date()
     const placed = await prisma.$transaction(
       (tx) =>
         placeCreditHold(tx, {
@@ -242,7 +251,7 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
       id: taskId,
       reserved,
       async done(costRub) {
-        const finished = new Date()
+        const finished = at === undefined ? new Date() : new Date(at.getTime() + 60_000)
         // One finished model call of the task, its turn key closed: what the gateway leaves.
         await prisma.$transaction((tx) =>
           writeModelCall(tx, { taskId, pool, priceId, costRub, occurredAt: finished }),
@@ -279,7 +288,26 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
     })
   }
 
-  return { workspaceId, stored, journal, subscription, site, task, tariffEnded }
+  const periodBegan = async (start: Date) => {
+    const { id, currentPeriodEnd } = await subscription()
+    if (start.getTime() >= currentPeriodEnd.getTime())
+      throw new Error('periodBegan() moves the start of a period back, not past its end')
+    const { currentPeriodStart } = await prisma.subscription.findUniqueOrThrow({
+      where: { id },
+      select: { currentPeriodStart: true },
+    })
+    // The order of the period is found by its start, as «Использование» finds its quota.
+    await prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { subscriptionId: id, periodStart: currentPeriodStart },
+        data: { periodStart: start },
+      })
+      if (count !== 1) throw new Error('No order paid for the current period of the tariff')
+      await tx.subscription.update({ where: { id }, data: { currentPeriodStart: start } })
+    })
+  }
+
+  return { workspaceId, stored, journal, subscription, site, task, tariffEnded, periodBegan }
 }
 
 export { expect } from '@playwright/test'

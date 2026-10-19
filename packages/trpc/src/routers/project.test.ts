@@ -1040,7 +1040,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
           kind: 'quota',
           price: '4900.00',
           creditsPerMonth: 30,
-          tasksPerDay: 5,
+          creditsPerDay: 5,
           maxSites,
           isActive: false,
         },

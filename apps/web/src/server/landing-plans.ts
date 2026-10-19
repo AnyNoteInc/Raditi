@@ -58,7 +58,7 @@ async function readLandingPlans(): Promise<LandingPricingData> {
         kind: true,
         price: true,
         creditsPerMonth: true,
-        tasksPerDay: true,
+        creditsPerDay: true,
         maxSites: true,
         packCredits: true,
       },
@@ -73,8 +73,8 @@ async function readLandingPlans(): Promise<LandingPricingData> {
       row.kind !== 'quota' ||
       row.creditsPerMonth === null ||
       row.creditsPerMonth <= 0 ||
-      row.tasksPerDay === null ||
-      row.tasksPerDay <= 0 ||
+      row.creditsPerDay === null ||
+      row.creditsPerDay <= 0 ||
       row.maxSites === null ||
       row.maxSites <= 0 ||
       row.price.isNegative()
@@ -86,7 +86,7 @@ async function readLandingPlans(): Promise<LandingPricingData> {
       name: row.name,
       price: row.price.toFixed(2),
       creditsPerMonth: row.creditsPerMonth,
-      tasksPerDay: row.tasksPerDay,
+      creditsPerDay: row.creditsPerDay,
       maxSites: row.maxSites,
     })
   }

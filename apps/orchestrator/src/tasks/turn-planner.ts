@@ -329,7 +329,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
             reserved: budget.reserved,
             used: budget.used,
             customerLeftRub: budget.customerLeftRub,
-            spendable: budget.spendable,
+            spendableNow: budget.spendableNow,
           },
           Math.max(task.turnNo, 1),
         ),

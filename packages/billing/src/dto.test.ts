@@ -28,7 +28,7 @@ const plan = {
   name: 'Бизнес',
   price: '12900.00',
   creditsPerMonth: 80,
-  tasksPerDay: 10,
+  creditsPerDay: 10,
   maxSites: 3,
 }
 const pack = {
@@ -70,7 +70,9 @@ const notMoney = [12900, '12900', '12900.0', '12900.000', '-1.00', '012900.00', 
 describe('plan DTOs', () => {
   it('accept a tariff and a pack with string prices', () => {
     expect(planSchema.parse(plan)).toEqual(plan)
-    expect(planSchema.parse({ ...plan, tasksPerDay: null })).toMatchObject({ tasksPerDay: null })
+    expect(planSchema.parse({ ...plan, creditsPerDay: null })).toMatchObject({
+      creditsPerDay: null,
+    })
     expect(packSchema.parse(pack)).toEqual(pack)
     expect(planListSchema.parse({ plans: [plan], pack })).toEqual({ plans: [plan], pack })
     expect(planListSchema.parse({ plans: [], pack: null })).toEqual({ plans: [], pack: null })
@@ -85,7 +87,7 @@ describe('plan DTOs', () => {
     { creditsPerMonth: 0 },
     { creditsPerMonth: null },
     { creditsPerMonth: 80.5 },
-    { tasksPerDay: 0 },
+    { creditsPerDay: 0 },
     { maxSites: 0 },
     { maxSites: null },
     { id: 'business' },

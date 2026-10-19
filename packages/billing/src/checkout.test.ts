@@ -174,7 +174,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL checkout', () => {
           kind: 'pack' as const,
           packCredits: 10,
           creditsPerMonth: null,
-          tasksPerDay: null,
+          creditsPerDay: null,
           maxSites: null,
         },
         undefined,
@@ -942,7 +942,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL checkout', () => {
             name: 'Проверочный',
             price: '4900.00',
             creditsPerMonth: 30,
-            tasksPerDay: 5,
+            creditsPerDay: null,
             maxSites: 1,
           },
           period: {

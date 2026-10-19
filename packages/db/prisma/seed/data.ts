@@ -16,7 +16,8 @@ export function moscowMidnight(isoDate: string): Date {
 //
 // The credits of the tariffs and of the pack are the numbers of the credits model (spec §17): a
 // database seeded with the terms of before gets them by the migration billing_credit_amounts,
-// which runs before this seed.
+// which runs before this seed. The credits of a day (decision of 17.10.2026) come the same way,
+// by the migration billing_daily_credits.
 
 /** Everything except name and sortOrder is a plan term: the seed creates it but never changes it. */
 export interface PlanSeed {
@@ -26,7 +27,8 @@ export interface PlanSeed {
   /** RUB without VAT (the seller is self-employed), Decimal(12,2). */
   price: DecimalString
   creditsPerMonth: number | null
-  tasksPerDay: number | null
+  /** Tariff credits of a Moscow day, never more than the month; NULL: no daily cap. */
+  creditsPerDay: number | null
   packCredits: number | null
   maxSites: number | null
   sortOrder: number
@@ -39,7 +41,7 @@ export const planSeeds = [
     kind: 'quota',
     price: '4900.00',
     creditsPerMonth: 300,
-    tasksPerDay: 5,
+    creditsPerDay: 50,
     packCredits: null,
     maxSites: 1,
     sortOrder: 10,
@@ -50,7 +52,7 @@ export const planSeeds = [
     kind: 'quota',
     price: '12900.00',
     creditsPerMonth: 800,
-    tasksPerDay: 10,
+    creditsPerDay: 100,
     packCredits: null,
     maxSites: 3,
     sortOrder: 20,
@@ -61,7 +63,7 @@ export const planSeeds = [
     kind: 'quota',
     price: '39900.00',
     creditsPerMonth: 2500,
-    tasksPerDay: 30,
+    creditsPerDay: 300,
     packCredits: null,
     maxSites: 15,
     sortOrder: 30,
@@ -75,7 +77,7 @@ export const planSeeds = [
     kind: 'pack',
     price: '1990.00',
     creditsPerMonth: null,
-    tasksPerDay: null,
+    creditsPerDay: null,
     packCredits: 100,
     maxSites: null,
     sortOrder: 40,
@@ -88,7 +90,7 @@ export const planSeeds = [
     kind: 'payg',
     price: '0.00',
     creditsPerMonth: null,
-    tasksPerDay: null,
+    creditsPerDay: null,
     packCredits: null,
     maxSites: 1,
     sortOrder: 50,

@@ -144,9 +144,14 @@ describe('legal documents', () => {
       number(/в усиленном режиме: под нее и при ее продолжении резервируется не более (\d+) /),
     ).toBe(attemptStepCredits.heavy)
     expect(number(/но не менее (\d+) и не более зарезервированного/)).toBe(minTaskChargeCredits)
-    expect(number(/Если доступных Кредитов меньше (\d+) или достигнут дневной лимит/)).toBe(
+    // Clause 1.6: both refusals of a new task — too few credits on the accounts, and too few
+    // left within the day together with the gift and the pack — stop at the same minimum.
+    expect(number(/Если доступных Кредитов меньше (\d+), новые Задачи не принимаются/)).toBe(
       minStartCredits,
     )
+    expect(
+      number(/и Кредитами пакета меньше (\d+), — до наступления следующего календарного дня/),
+    ).toBe(minStartCredits)
     expect(Number(/но не меньше (\d+) за задачу/.exec(text('user-agreement'))?.[1])).toBe(
       minTaskChargeCredits,
     )

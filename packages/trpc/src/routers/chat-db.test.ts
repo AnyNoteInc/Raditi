@@ -320,7 +320,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         kind: 'quota',
         price: '4900.00',
         creditsPerMonth: 300,
-        tasksPerDay: 50,
         maxSites: 3,
         isActive: false,
       },

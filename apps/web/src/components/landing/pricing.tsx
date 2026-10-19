@@ -207,7 +207,7 @@ export function Pricing({
               <ul className={styles.features}>
                 <li>
                   <strong>{nbsp(formatCount(plan.creditsPerMonth))}</strong>
-                  {nbsp(`\u00a0${planInWords(plan.creditsPerMonth, plan.tasksPerDay)}`)}
+                  {nbsp(`\u00a0${planInWords(plan.creditsPerMonth, plan.creditsPerDay)}`)}
                 </li>
                 <li>
                   {plan.maxSites === 1
@@ -239,7 +239,7 @@ export function Pricing({
         {pack && (
           <p>
             {nbsp(
-              `Кредитов не хватит? Можно будет докупить пакет — ${formatCount(pack.credits)} ${pluralCredits(pack.credits)} за ${formatRubles(pack.price)} ₽. Кредиты из пакета не сгорают.`,
+              `Кредитов не хватит? Можно будет докупить пакет — ${formatCount(pack.credits)} ${pluralCredits(pack.credits)} за ${formatRubles(pack.price)} ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.`,
             )}
           </p>
         )}

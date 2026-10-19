@@ -36,14 +36,20 @@ export const PRICE = { start: '4900.00', business: '12900.00', pack: '1990.00' }
  */
 export const CREDITS = { start: 300, business: 800, pack: 100, gift: 35 }
 /**
- * What «Тарифы» sells, as the stand expects it of the seeds: the credits a month, the tasks a
- * day and the sites of each tariff, and the credits of the pack, with their prices.
+ * What «Тарифы» sells, as the stand expects it of the seeds: the credits a month, the tariff
+ * credits a day and the sites of each tariff, and the credits of the pack, with their prices.
  */
 export const ON_SALE = Object.freeze({
   plans: [
-    { slug: 'start', price: '4900.00', creditsPerMonth: 300, tasksPerDay: 5, maxSites: 1 },
-    { slug: 'business', price: '12900.00', creditsPerMonth: 800, tasksPerDay: 10, maxSites: 3 },
-    { slug: 'agency', price: '39900.00', creditsPerMonth: 2500, tasksPerDay: 30, maxSites: 15 },
+    { slug: 'start', price: '4900.00', creditsPerMonth: 300, creditsPerDay: 50, maxSites: 1 },
+    { slug: 'business', price: '12900.00', creditsPerMonth: 800, creditsPerDay: 100, maxSites: 3 },
+    {
+      slug: 'agency',
+      price: '39900.00',
+      creditsPerMonth: 2500,
+      creditsPerDay: 300,
+      maxSites: 15,
+    },
   ],
   pack: { slug: 'pack', price: '1990.00', credits: 100 },
 })
@@ -975,8 +981,6 @@ export const creditAccounts = ({ tariff, gift, pack, totalAvailable }) => ({
   totalAvailable,
 })
 
-/** How many tasks a day a workspace without a paid tariff may start, on its gift credits. */
-const TASKS_PER_DAY_WITHOUT_TARIFF = 3
 /** How many credits a new task needs to start. */
 const MIN_START_CREDITS = 5
 
@@ -989,12 +993,13 @@ const MIN_START_CREDITS = 5
  *
  * Beside the accounts both pages tell whether a new task would be taken, and its numbers follow
  * from the balances: what could be spent (gift credits always, the others only while the tariff
- * is paid), nothing launched today against the limit of the day, and the meter of the period
- * that adds up to its quota. The answer itself follows from what is stored as well. Until an
- * operator has approved a credit rate (`creditRateUsable`) no task is taken, and that is said
- * before anything else. Once a rate is in force a task is taken whenever five credits can be
- * spent — and they always can: the stand queues no task, so nothing spends the gift, nothing
- * is launched and no work is unpaid.
+ * is paid) and what could be spent now — the tariff no more than its credits of a day —, no
+ * tariff credit spent today against the daily limit of a paid tariff (no day without one), and
+ * the meter of the period that adds up to its quota. The answer itself follows from what is
+ * stored as well. Until an operator has approved a credit rate (`creditRateUsable`) no task is
+ * taken, and that is said before anything else. Once a rate is in force a task is taken
+ * whenever five credits can be spent now — and they always can: the stand queues no task, so
+ * nothing spends the gift, nothing takes a credit of a day and no work is unpaid.
  *
  * And «Тарифы» sells what the table of plans holds, in the credits the stand expects of it.
  */
@@ -1028,25 +1033,25 @@ export async function creditRateUsable(t) {
 }
 
 /**
- * The answer about a new task the stand expects of a customer who can spend `spendable`
- * credits: the pause of the platform without a usable rate, a task that is taken with one.
+ * The answer about a new task the stand expects of a customer who can spend `spendableNow`
+ * credits now: the pause of the platform without a usable rate, a task that is taken with one.
  */
-function newTaskOf(usable, spendable, who) {
+function newTaskOf(usable, spendableNow, who) {
   if (!usable) return { allowed: false, reason: 'rate_missing' }
-  if (spendable >= MIN_START_CREDITS) return { allowed: true, reason: null }
+  if (spendableNow >= MIN_START_CREDITS) return { allowed: true, reason: null }
   // No scenario can leave a customer here: no task is ever queued, so nothing spends a credit.
   throw new CheckFailed(
-    `${who} can spend ${spendable} credits, fewer than a task needs: the stand queues no task and expects nobody without credits`,
+    `${who} can spend ${spendableNow} credits now, fewer than a task needs: the stand queues no task and expects nobody without credits`,
   )
 }
 
 /** The tariffs and the pack on sale, as `billing.plans` and the table of plans both tell them. */
 const onSale = ({ plans, pack }) => ({
-  plans: plans.map(({ slug, price, creditsPerMonth, tasksPerDay, maxSites }) => ({
+  plans: plans.map(({ slug, price, creditsPerMonth, creditsPerDay, maxSites }) => ({
     slug,
     price,
     creditsPerMonth,
-    tasksPerDay,
+    creditsPerDay,
     maxSites,
   })),
   pack: pack && { slug: pack.slug, price: pack.price, credits: pack.credits },
@@ -1057,7 +1062,7 @@ export async function pagesShowWhatIsStored(t) {
   const usable = await creditRateUsable(t)
   const listed = await t.rows(
     `SELECT slug, kind::text AS kind, price::text AS price, credits_per_month AS "creditsPerMonth",
-       tasks_per_day AS "tasksPerDay", max_sites AS "maxSites", pack_credits AS credits
+       credits_per_day AS "creditsPerDay", max_sites AS "maxSites", pack_credits AS credits
      FROM plans WHERE is_active AND kind IN ('quota', 'pack') ORDER BY sort_order, slug`,
   )
   const sold = onSale({
@@ -1065,7 +1070,7 @@ export async function pagesShowWhatIsStored(t) {
     pack: listed.find(({ kind }) => kind === 'pack') ?? null,
   })
   t.equal(
-    'the table of plans holds the terms the stand expects: 300, 800 and 2 500 credits a month, a pack of 100',
+    'the table of plans holds the terms the stand expects: 300, 800 and 2 500 credits a month, 50, 100 and 300 a day, a pack of 100',
     sold,
     ON_SALE,
   )
@@ -1079,7 +1084,7 @@ export async function pagesShowWhatIsStored(t) {
     const live = workspace
       ? await t.one(
           `SELECT s.id, s.status::text AS status, p.slug AS plan, n.slug AS next_plan,
-             p.tasks_per_day, s.current_period_start, s.current_period_end,
+             p.credits_per_day, s.current_period_start, s.current_period_end,
              (s.payment_method_id IS NOT NULL AND NOT s.cancel_at_period_end) AS auto_renewal
            FROM subscriptions s JOIN plans p ON p.id = s.plan_id
              LEFT JOIN plans n ON n.id = s.next_plan_id
@@ -1111,7 +1116,16 @@ export async function pagesShowWhatIsStored(t) {
       credits: overview.credits,
       usage: [usage.subscription?.id ?? null, usage.gift, usage.pack, usage.totalLeft],
       // «Использование» tells of a new task what «Тарифы» does.
-      task: [usage.spendable, usage.setAside, usage.minToStart, usage.today, usage.newTask],
+      task: [
+        usage.spendable,
+        usage.spendableNow,
+        usage.setAside,
+        usage.minToStart,
+        usage.today,
+        usage.newTask,
+      ],
+      // The meter of the tariff tells the day the answer tells.
+      meterDay: usage.tariff && usage.tariff.today,
       meter: usage.tariff && meterAddsUp(usage.tariff.credits),
       payments: payments.items
         .map(({ id, kind, status, amount, refundedAmount }) => ({
@@ -1139,15 +1153,21 @@ export async function pagesShowWhatIsStored(t) {
     const paid = live?.status === 'active'
     const tariff = account('credit_tariff')
     const spent = (pick) => pick(gift) + (paid ? pick(tariff) + pick(pack) : 0)
+    // No tariff credit is spent in a day of the stand: no task is ever queued. A paid tariff has
+    // its whole limit left, or what its account has free when that is less; without a paid
+    // tariff there is no day.
+    const limit = paid ? live.credits_per_day : null
+    const left = limit === null ? tariff.available : Math.min(limit, tariff.available)
+    const today = paid ? { limit, charged: 0, held: 0, used: 0, room: limit, left } : null
     const task = {
       spendable: spent(({ available }) => available),
+      spendableNow: gift.available + (paid ? left + pack.available : 0),
       setAside: spent(({ held }) => held),
       minToStart: MIN_START_CREDITS,
-      // Nothing is launched in the stand: no task is ever queued.
-      today: { used: 0, limit: paid ? live.tasks_per_day : TASKS_PER_DAY_WITHOUT_TARIFF },
+      today,
     }
     // Without a usable credit rate no task is taken, which is said before anything else.
-    task.newTask = newTaskOf(usable, task.spendable, customer.email)
+    task.newTask = newTaskOf(usable, task.spendableNow, customer.email)
     const stored = {
       sold,
       conversion: null,
@@ -1172,7 +1192,15 @@ export async function pagesShowWhatIsStored(t) {
         { left: pack.available, held: pack.held },
         (usage.tariff?.credits.left ?? 0) + gift.available + pack.available,
       ],
-      task: [task.spendable, task.setAside, task.minToStart, task.today, task.newTask],
+      task: [
+        task.spendable,
+        task.spendableNow,
+        task.setAside,
+        task.minToStart,
+        task.today,
+        task.newTask,
+      ],
+      meterDay: live && (paid ? today : null),
       // What the period was granted is what was charged, set aside, expired and left; what the
       // account has free is what is left, and nothing of an earlier period is set aside.
       meter: live && { addsUp: true, left: tariff.available, held: 0, heldEarlier: 0 },

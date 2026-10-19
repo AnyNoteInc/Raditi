@@ -17,7 +17,7 @@ const quota = (price: string) => ({
   kind: 'quota',
   price: new Decimal(price),
   creditsPerMonth: 20,
-  tasksPerDay: 5,
+  creditsPerDay: 5,
   maxSites: 1,
   packCredits: null,
 })
@@ -44,7 +44,7 @@ describe('landing tariff data boundary', () => {
         kind: 'quota',
         price: new Decimal('5001.25'),
         creditsPerMonth: 35,
-        tasksPerDay: 6,
+        creditsPerDay: 6,
         maxSites: 2,
         packCredits: null,
       },
@@ -54,7 +54,7 @@ describe('landing tariff data boundary', () => {
         kind: 'pack',
         price: new Decimal('2030.10'),
         creditsPerMonth: null,
-        tasksPerDay: null,
+        creditsPerDay: null,
         maxSites: null,
         packCredits: 12,
       },
@@ -74,13 +74,27 @@ describe('landing tariff data boundary', () => {
           name: 'Текущий тариф',
           price: '5001.25',
           creditsPerMonth: 35,
-          tasksPerDay: 6,
+          creditsPerDay: 6,
           maxSites: 2,
         },
       ],
       pack: { price: '2030.10', credits: 12 },
     })
     expect(JSON.parse(JSON.stringify(data))).toEqual(data)
+  })
+
+  it('leaves out a tariff whose card could not name its daily limit in credits', async () => {
+    findMany.mockResolvedValue([
+      { ...quota('4900'), slug: 'no-day', creditsPerDay: null },
+      { ...quota('4900'), slug: 'zero-day', creditsPerDay: 0 },
+      quota('5200'),
+    ])
+
+    const data = await getLandingPlans()
+
+    expect(data.plans.map(({ slug, creditsPerDay }) => ({ slug, creditsPerDay }))).toEqual([
+      { slug: 'start', creditsPerDay: 5 },
+    ])
   })
 
   it('keeps the landing available without inventing prices when the database fails', async () => {

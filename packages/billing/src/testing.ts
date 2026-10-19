@@ -465,7 +465,9 @@ export function billingFixtures(db: PrismaClient) {
 
     /**
      * A tariff of its own. Not on sale unless asked for, so that nothing that lists plans
-     * elsewhere in a shared database ever shows it.
+     * elsewhere in a shared database ever shows it. No daily cap in credits unless asked for
+     * (`creditsPerDay`, never more than `creditsPerMonth`): a test that is not about the day
+     * is not bounded by it.
      */
     async plan(data: Partial<Prisma.PlanUncheckedCreateInput> = {}) {
       const plan = await db.plan.create({
@@ -475,7 +477,7 @@ export function billingFixtures(db: PrismaClient) {
           kind: 'quota',
           price: '4900.00',
           creditsPerMonth: 30,
-          tasksPerDay: 5,
+          creditsPerDay: null,
           maxSites: 1,
           isActive: false,
           ...data,

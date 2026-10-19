@@ -194,7 +194,7 @@ const plan = {
   name: 'Бизнес',
   price: '12900.00',
   creditsPerMonth: 80,
-  tasksPerDay: 10,
+  creditsPerDay: 20,
   maxSites: 3,
 }
 const noPage: UsageHistoryPageDto = { items: [], nextCursor: null }
@@ -214,15 +214,16 @@ const NO_RATE = { allowed: false, reason: 'rate_missing' } as const
 const noTariff: UsageSummaryDto = {
   subscription: null,
   tariff: null,
-  trial: { today: 0, perDay: 3 },
   gift: { left: 0, held: 0, granted: false },
   pack: { left: 0, held: 0 },
   totalLeft: 0,
   history: noPage,
   spendable: 0,
+  spendableNow: 0,
   setAside: 0,
   minToStart: 5,
-  today: { used: 0, limit: 3 },
+  // Without a tariff there is no day: the gift is the bound.
+  today: null,
   newTask: { allowed: false, reason: 'gift_spent' },
 }
 /** What a user without a workspace reads: no tariff and the gift they are promised. */
@@ -231,8 +232,11 @@ const promised: UsageSummaryDto = {
   gift: { left: 35, held: 0, granted: false },
   totalLeft: 35,
   spendable: 35,
+  spendableNow: 35,
   newTask: TAKEN,
 }
+/** «Бизнес» of this file, 20 tariff credits a day: one task charged 5 and one holding 14 today. */
+const busyDay = { limit: 20, charged: 5, held: 14, used: 19, room: 1, left: 1 }
 const onTariff = (): UsageSummaryDto => ({
   subscription: {
     id: randomUUID(),
@@ -246,19 +250,19 @@ const onTariff = (): UsageSummaryDto => ({
   },
   tariff: {
     credits: { granted: 80, charged: 17, held: 14, expired: 4, left: 45, heldEarlier: 9 },
-    today: { used: 1, limit: 10 },
+    today: busyDay,
     sites: { count: 2, max: 3 },
     bySite: [{ siteId: randomUUID(), name: 'Пекарня «Добро»', credits: 21 }],
   },
-  trial: null,
   gift: { left: 0, held: 0, granted: false },
   pack: { left: 10, held: 0 },
   totalLeft: 55,
   history: { items: [entry()], nextCursor: null },
   spendable: 55,
+  spendableNow: 11,
   setAside: 23,
   minToStart: 5,
-  today: { used: 1, limit: 10 },
+  today: busyDay,
   newTask: TAKEN,
 })
 
@@ -335,16 +339,16 @@ describe('billing.usage', () => {
       packOnSale: null,
       subscription: null,
       tariff: null,
-      trial: { today: 0, perDay: 3 },
       gift: { left: 35, held: 0, granted: false },
       pack: { left: 0, held: 0 },
       totalLeft: 35,
       history: noPage,
       // The first task would be taken on the gift that is promised.
       spendable: 35,
+      spendableNow: 35,
       setAside: 0,
       minToStart: 5,
-      today: { used: 0, limit: 3 },
+      today: null,
       newTask: TAKEN,
     })
     // Whether the gift is still to come is asked of the ledger, by the key of this user.
@@ -440,7 +444,7 @@ describe('billing.usage', () => {
         kind: 'pack',
         price: new Money('1990'),
         creditsPerMonth: null,
-        tasksPerDay: null,
+        creditsPerDay: null,
         maxSites: null,
         packCredits: 100,
       },
@@ -650,7 +654,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     if (row === null || row.maxSites === null || row.creditsPerMonth === null) {
       throw new Error(`The tariff «${slug}» is not on sale in this database: apply the seeds`)
     }
-    return { ...row, maxSites: row.maxSites, creditsPerMonth: row.creditsPerMonth }
+    if (row.creditsPerDay === null) {
+      throw new Error(`The tariff «${slug}» has no daily limit in this database: apply the seeds`)
+    }
+    return {
+      ...row,
+      maxSites: row.maxSites,
+      creditsPerMonth: row.creditsPerMonth,
+      creditsPerDay: row.creditsPerDay,
+    }
   }
 
   /** Pays for the tariff the way the customer does: checkout, the payment page, the return. */
@@ -723,6 +735,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     const tariff = await seeded('business')
 
     const subscription = await subscribe(paying, 'business')
+    const freshDay = {
+      limit: tariff.creditsPerDay,
+      charged: 0,
+      held: 0,
+      used: 0,
+      room: tariff.creditsPerDay,
+      left: tariff.creditsPerDay,
+    }
 
     expect(await paying.caller.billing.usage()).toEqual({
       paymentsEnabled: true,
@@ -739,20 +759,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
           left: tariff.creditsPerMonth,
           heldEarlier: 0,
         },
-        today: { used: 0, limit: tariff.tasksPerDay },
+        today: freshDay,
         sites: { count: 0, max: tariff.maxSites },
         bySite: [],
       },
-      trial: null,
       // The gift the checkout granted with the workspace, beside the quota.
       gift: { left: 35, held: 0, granted: true },
       pack: { left: 0, held: 0 },
       totalLeft: tariff.creditsPerMonth + 35,
       history: noPage,
       spendable: tariff.creditsPerMonth + 35,
+      // Of the tariff no more than the day gives; the gift is outside the day.
+      spendableNow: tariff.creditsPerDay + 35,
       setAside: 0,
       minToStart: 5,
-      today: { used: 0, limit: tariff.tasksPerDay },
+      today: freshDay,
       newTask: NO_RATE,
     })
     expect(await paying.caller.billing.usageHistory({})).toEqual(noPage)
@@ -801,7 +822,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
         left: quota - 67,
         heldEarlier: 0,
       },
-      today: { used: 3, limit: tariff.tasksPerDay },
+      // The day took the 22 charged and the 45 still set aside, all of the tariff.
+      today: {
+        limit: tariff.creditsPerDay,
+        charged: 22,
+        held: 45,
+        used: 67,
+        room: tariff.creditsPerDay - 67,
+        left: tariff.creditsPerDay - 67,
+      },
       sites: { count: 1, max: tariff.maxSites },
       bySite: [{ siteId: bakery.id, name: 'Пекарня «Добро»', credits: 22 }],
     })

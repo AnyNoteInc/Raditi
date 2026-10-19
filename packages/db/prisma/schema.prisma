@@ -1294,8 +1294,11 @@ model Plan {
   /// Monthly price (quota), one-off price (pack), 0 for pay-per-action.
   price           Decimal  @db.Decimal(12, 2)
   creditsPerMonth Int?     @map("credits_per_month")
-  /// The daily limit of a quota plan; NULL: none.
+  /// Unused since 17.10.2026 (the daily limit is in credits, `creditsPerDay`); dropped in M5.18.
   tasksPerDay     Int?     @map("tasks_per_day")
+  /// Tariff credits a quota plan gives a Moscow day, never more than its month; NULL: no daily
+  /// cap. Gift and pack credits are outside it.
+  creditsPerDay   Int?     @map("credits_per_day")
   /// Credits a pack adds to the account of purchased credits (unit = credit_pack).
   packCredits     Int?     @map("pack_credits")
   /// NULL for packs: they add credits, not sites.
@@ -1497,10 +1500,13 @@ model CreditHold {
   /// ended and before its renewal is settled is stamped with the last millisecond of that
   /// period. On a gift or a pack row the moment of placing.
   createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  /// The moment the reserve was placed, the same on every row of a placement: what the daily
-  /// limit counts launches by.
+  /// The moment the reserve was placed, the same on every row of a placement: the day whose
+  /// tariff credits the row takes.
   placedAt  DateTime    @default(now()) @map("placed_at") @db.Timestamptz(6)
   settledAt DateTime?   @map("settled_at") @db.Timestamptz(6)
+  /// What the row paid; written once when captured, NULL on every other status (CHECK
+  /// credit_holds_charged_check). A row of the rouble wallet has none.
+  charged   Decimal?    @db.Decimal(14, 2)
 
   account BillingAccount @relation(fields: [accountId, unit], references: [id, unit], onDelete: Restrict, onUpdate: Restrict)
   task    Task           @relation(fields: [taskId], references: [id], onDelete: Restrict)
@@ -1508,6 +1514,7 @@ model CreditHold {
   @@unique([taskId, attempt, accountId])
   @@index([accountId, status])
   @@index([accountId, placedAt])
+  @@index([accountId, settledAt])
   @@index([status, expiresAt])
   @@map("credit_holds")
 }

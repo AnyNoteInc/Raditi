@@ -6,7 +6,6 @@ import {
   minStartCredits,
   minTaskChargeCredits,
   signupGiftCredits,
-  tasksPerDayWithoutTariff,
   typicalTaskCredits,
 } from '@repo/domain/billing/credit-numbers'
 import { describe, expect, it } from 'vitest'
@@ -64,45 +63,48 @@ const periodEnd = new Date('2026-10-18T09:00:00Z')
 
 describe('the limits of a tariff', () => {
   it('puts a tariff into one line', () => {
-    expect(planLimits({ creditsPerMonth: 800, tasksPerDay: 10, maxSites: 3 })).toBe(
-      '800 кредитов в месяц, до 10 задач в день · до 3 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 800, creditsPerDay: 100, maxSites: 3 })).toBe(
+      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
     )
-    expect(planLimits({ creditsPerMonth: 300, tasksPerDay: 5, maxSites: 1 })).toBe(
-      '300 кредитов в месяц, до 5 задач в день · один сайт на WordPress',
+    expect(planLimits({ creditsPerMonth: 300, creditsPerDay: 50, maxSites: 1 })).toBe(
+      '300 кредитов в месяц, до 50 кредитов в день · один сайт на WordPress',
     )
-    expect(planLimits({ creditsPerMonth: 21, tasksPerDay: 1, maxSites: 2 })).toBe(
-      '21 кредит в месяц, до 1 задачи в день · до 2 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: 1, maxSites: 2 })).toBe(
+      '21 кредит в месяц, до 1 кредита в день · до 2 сайтов на WordPress',
     )
   })
 
   // A count of four digits is grouped as an amount of money is, with a plain space: the
   // component binds it where it is shown.
   it('groups the digits of a count of four digits', () => {
-    expect(planLimits({ creditsPerMonth: 2500, tasksPerDay: 30, maxSites: 15 })).toBe(
-      '2 500 кредитов в месяц, до 30 задач в день · до 15 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 2500, creditsPerDay: 300, maxSites: 15 })).toBe(
+      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress',
+    )
+    expect(planLimits({ creditsPerMonth: 5000, creditsPerDay: 1200, maxSites: 15 })).toBe(
+      '5 000 кредитов в месяц, до 1 200 кредитов в день · до 15 сайтов на WordPress',
     )
   })
 
   it('leaves the day out for a tariff without a daily limit', () => {
-    expect(planLimits({ creditsPerMonth: 21, tasksPerDay: null, maxSites: 2 })).toBe(
+    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: null, maxSites: 2 })).toBe(
       '21 кредит в месяц · до 2 сайтов на WordPress',
     )
     expect(planDailyLimit(null)).toBeNull()
   })
 
   it.each([
-    [1, 'До 1 задачи в день'],
-    [2, 'До 2 задач в день'],
-    [5, 'До 5 задач в день'],
-    [10, 'До 10 задач в день'],
-    [11, 'До 11 задач в день'],
-    [21, 'До 21 задачи в день'],
-    [22, 'До 22 задач в день'],
-    [25, 'До 25 задач в день'],
-    [30, 'До 30 задач в день'],
-    [101, 'До 101 задачи в день'],
-  ])('counts the daily limit of %i in tasks', (count, text) => {
-    expect(planDailyLimit(count)).toBe(text)
+    [1, 'До 1 кредита в день'],
+    [2, 'До 2 кредитов в день'],
+    [11, 'До 11 кредитов в день'],
+    [21, 'До 21 кредита в день'],
+    [22, 'До 22 кредитов в день'],
+    [50, 'До 50 кредитов в день'],
+    [100, 'До 100 кредитов в день'],
+    [101, 'До 101 кредита в день'],
+    [300, 'До 300 кредитов в день'],
+    [2500, 'До 2 500 кредитов в день'],
+  ])('counts the daily limit of %i in credits', (count, text) => {
+    expect(plain(planDailyLimit(count) ?? '')).toBe(text)
   })
 
   // A tariff is sold in credits, and a customer thinks in requests: the card says how many
@@ -377,8 +379,9 @@ describe('the gift of the registration', () => {
 
   it('tells a customer without a tariff what the gift is enough for, and that a tariff comes after it', () => {
     const text =
-      'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.'
-    expect(tasksPerDayWithoutTariff).toBe(3)
+      'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
+    // Without a tariff there is no day: the gift is the bound.
+    expect(text).not.toMatch(/в день/)
     expect(lead(gift(35))).toBe(text)
     // The same to a user who has no workspace yet: the gift is granted with it.
     expect(lead(gift(35, { granted: false }))).toBe(text)
@@ -389,19 +392,19 @@ describe('the gift of the registration', () => {
   it.each([
     [
       20,
-      'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
     [
       21,
-      'У вас 21 подарочный кредит — его хватит на четыре небольшие правки или на одну-две задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 21 подарочный кредит — его хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
     [
       22,
-      'У вас 22 подарочных кредита — их хватит на четыре небольшие правки или на одну-две задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 22 подарочных кредита — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
     [
       5,
-      'У вас 5 подарочных кредитов — их хватит на одну небольшую правку. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 5 подарочных кредитов — их хватит на одну небольшую правку. Когда кредиты закончатся, понадобится тариф.',
     ],
   ])('counts what is left of a gift that was partly spent: %i', (available, text) => {
     expect(lead(gift(available))).toBe(text)
@@ -452,7 +455,7 @@ describe('the gift of the registration', () => {
   it('does not send the customer to choose a tariff while nothing can be paid for', () => {
     const off = { canChoose: false }
     expect(lead(gift(35), off)).toBe(
-      'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Без тарифа можно поставить до 3 задач в день. Когда кредиты закончатся, понадобится тариф. Оплата пока недоступна.',
+      'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф. Оплата пока недоступна.',
     )
     expect(lead(gift(3), off)).toBe(
       'Осталось 3 подарочных кредита, а на новую задачу нужно не меньше 5. Оплата пока недоступна.',
@@ -718,14 +721,14 @@ describe('a pack of credits', () => {
   // the promise of its dialog.
   it('offers the pack with the average tasks its credits hold', () => {
     expect(packOffer(100)).toBe(
-      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+      'Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 9 задач. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
     expect(packOffer(11)).toBe(
-      `Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 1 задачи. ${packPromise(11)}`,
+      `Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 1 задачи. ${packPromise(11)}`,
     )
     // A pack that holds no average task makes no promise of tasks.
     expect(packOffer(5)).toBe(
-      `Пригодится, если кредиты по тарифу закончатся до конца периода. ${packPromise(5)}`,
+      `Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода. ${packPromise(5)}`,
     )
   })
 
@@ -741,7 +744,7 @@ describe('managing the tariff', () => {
     name: 'Агентство',
     price: '39900.00',
     creditsPerMonth: 2500,
-    tasksPerDay: 30,
+    creditsPerDay: 300,
     maxSites: 15,
   }
   const MIR = `Карта «Мир» ••${String.fromCharCode(0xa0)}4444`
@@ -898,10 +901,10 @@ describe('managing the tariff', () => {
       })
     expect(plain(coming({}).title)).toBe('С 18 октября — тариф «Агентство»')
     expect(plain(coming({ charge: 'unanswered' }).text)).toBe(
-      '2 500 кредитов в месяц, до 30 задач в день · до 15 сайтов на WordPress. Списание за следующий период уже отправлялось в банк, ответа пока нет. Отменить переход можно будет после него.',
+      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress. Списание за следующий период уже отправлялось в банк, ответа пока нет. Отменить переход можно будет после него.',
     )
     expect(coming({ autoRenewal: false }).title).toBe('Выбран тариф «Агентство»')
-    const limits = '2 500 кредитов в месяц, до 30 задач в день · до 15 сайтов на WordPress.'
+    const limits = '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress.'
     const ends = `${limits} Автопродление отключено, поэтому 18 октября тариф закончится и переход не состоится.`
     expect(plain(coming({ autoRenewal: false }).text)).toBe(
       `${ends} Чтобы перейти, включите автопродление: 18 октября спишем 39 900 ₽.`,
@@ -911,7 +914,7 @@ describe('managing the tariff', () => {
     expect(coming({ canResume: false })).toEqual(coming({}))
     // An overdue tariff is paid by hand: nothing is said of auto-renewal or of a day.
     expect(plain(coming({ pastDue: true, autoRenewal: false }).text)).toBe(
-      '2 500 кредитов в месяц, до 30 задач в день · до 15 сайтов на WordPress. К оплате — 39 900 ₽: тариф сменится, как только оплата пройдёт.',
+      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress. К оплате — 39 900 ₽: тариф сменится, как только оплата пройдёт.',
     )
     expect(plain(scheduledPlanNote(periodEnd, true))).toBe('Начнёт действовать 18 октября.')
     expect(scheduledPlanNote(periodEnd, false)).toBe('Выбран на следующий период.')

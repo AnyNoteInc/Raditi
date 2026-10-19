@@ -1,17 +1,17 @@
 import { formatCount } from '@/lib/count'
-import { formatMoscowDay } from '@/lib/moscow-date'
+import { formatMoscowDay, nextMoscowMidnight } from '@/lib/moscow-date'
 import { plural } from '@/lib/plural'
 import { formatRubles } from '@/lib/rubles'
 
 import type { TaskCredits } from './billing-types'
 import {
+  creditsOf,
   creditsWord,
   giftBelowStart,
   giftIsEnoughFor,
   giftOnHand,
   giftSpent,
   noGiftToSpeakOf,
-  tasksPerDayOnGift,
   type GiftCredits,
 } from './plan-format'
 
@@ -28,7 +28,7 @@ export interface NoticeTariff {
   periodEnd: Date
   autoRenewal: boolean
   /** The tariff of the next period: the scheduled one, else the current. */
-  nextPlan: { name: string; creditsPerMonth: number }
+  nextPlan: { name: string; creditsPerMonth: number; creditsPerDay: number | null }
 }
 
 export interface TaskNoticeInput {
@@ -44,6 +44,8 @@ export interface TaskNoticeInput {
   pack: { credits: number; price: string } | null
   /** «Включить автопродление» is offered: the shop saves payment methods. */
   canResume: boolean
+  /** The moment the page is read at; the clock of the browser unless told. */
+  now?: Date
 }
 
 /** A way out a notice names: the page offers each one it has a button for. */
@@ -82,6 +84,83 @@ function giftKept(left: number): string {
   const gift = plural(left, 'подарочный кредит', 'подарочных кредита', 'подарочных кредитов')
   const kept = plural(left, 'сохранится', 'сохранятся', 'сохранятся')
   return `${remaining} ${formatCount(left)} ${gift} ${kept}`
+}
+
+/**
+ * The daily limit «завтра» may promise: what the tariff gives when the next Moscow day starts,
+ * or null when it will give nothing then and no promise is made. A tariff that is paid and whose
+ * period runs past that midnight gives its own `limit` — while the period still has a free
+ * tariff credit (`monthSpent` false: tomorrow's day takes only what the month has). A tariff
+ * that renews before it starts the next period by then: fresh credits, on the plan of that
+ * period, whose day it is.
+ */
+export function dayLimitTomorrow(
+  tariff: Pick<NoticeTariff, 'status' | 'periodEnd' | 'autoRenewal' | 'nextPlan'>,
+  limit: number,
+  monthSpent: boolean,
+  now: Date = new Date(),
+): number | null {
+  if (tariff.status !== 'active') return null
+  if (tariff.periodEnd.getTime() > nextMoscowMidnight(now).getTime()) {
+    return monthSpent ? null : limit
+  }
+  return tariff.autoRenewal ? tariff.nextPlan.creditsPerDay : null
+}
+
+/** «до 50 кредитов», «до 21 кредита»: what a day of the tariff gives. */
+const upTo = (limit: number) => `до ${formatCount(limit)} ${creditsOf(limit)}`
+
+/**
+ * The tariff credits of the Moscow day are taken, or what is left of them with the gift and the
+ * pack cannot start a task, while the accounts could (spec §17, «Дневной лимит — в кредитах
+ * тарифа»). A pack bought today lifts it; the next day does too while the tariff still takes
+ * tasks then (`dayLimitTomorrow`; the refusal of the day implies a free tariff credit, so the
+ * month is not spent). Continuations and retries are under the day as well, so nothing is
+ * promised of the tasks in work.
+ */
+function dayTaken(input: TaskNoticeInput): TaskNotice {
+  const { task, tariff, pack } = input
+  const today = task.today
+  const limit = today?.limit ?? null
+  const next =
+    limit === null || tariff === null ? null : dayLimitTomorrow(tariff, limit, false, input.now)
+  const tomorrow = next === null ? null : `завтра снова можно будет потратить ${upTo(next)}`
+  const nextDay =
+    tomorrow === null ? '' : ` ${tomorrow.charAt(0).toLocaleUpperCase('ru')}${tomorrow.slice(1)}.`
+  let state: string
+  if (
+    today !== null &&
+    limit !== null &&
+    today.room === 0 &&
+    today.held > 0 &&
+    today.used <= limit
+  ) {
+    // The day is set aside for tasks in work: what they do not use comes back to it.
+    const charged = today.charged > 0 ? `списано ${formatCount(today.charged)} и ` : ''
+    const back = 'Неиспользованные кредиты вернутся, когда задачи закончатся'
+    state = `Кредиты по тарифу на сегодня заняты: из ${formatCount(limit)} ${charged}отложено под задачи в работе ${formatCount(today.held)}. ${tomorrow === null ? `${back}.` : `${back}, а ${tomorrow}.`}`
+  } else if (today !== null && today.room !== null && today.room > 0) {
+    // Something is left of the day, fewer than a new task needs with the gift and the pack.
+    const now = task.spendableNow
+    state = `Сегодня можно потратить ещё ${formatCount(now)} ${creditsWord(now)}, а на новую задачу нужно не меньше ${task.minToStart}.${nextDay}`
+  } else {
+    // After a renewal onto a smaller plan the day can have taken more than the limit of now.
+    const spent =
+      today === null || limit === null
+        ? ''
+        : today.used <= limit
+          ? `: потрачено ${formatCount(today.used)} из ${formatCount(limit)}`
+          : `: дневной лимит — ${formatCount(limit)}`
+    state = `Кредиты по тарифу на сегодня закончились${spent}.${nextDay}`
+  }
+  return {
+    state,
+    way:
+      pack === null
+        ? null
+        : `Чтобы продолжить сегодня, купите пакет — ${packPrice(pack)}. Кредиты из пакета не сгорают и дневным лимитом не ограничены.`,
+    actions: pack === null ? [] : ['buy_pack'],
+  }
 }
 
 /** The credits of a paid tariff ran out, or too few are left to start a task. */
@@ -167,16 +246,6 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
         way: `${overdue ? 'Оплатите' : 'Выберите'} тариф, чтобы продолжить; ${giftKept(input.giftLeft)}.`,
         actions: toTariff,
       }
-    case 'trial_daily_limit': {
-      const perDay = task.today.limit ?? task.today.used
-      const tasks = plural(perDay, 'задачи', 'задач', 'задач')
-      const sooner = overdue ? 'после оплаты тарифа' : 'с тарифом'
-      return {
-        state: `На сегодня пробные задачи закончились: без тарифа — до ${perDay} ${tasks} в день. Следующую можно поставить завтра, а ${sooner} — сразу.`,
-        way: null,
-        actions: toTariff,
-      }
-    }
     case 'empty':
     case 'below_start':
       // Both are of a paid tariff: the read model names them for nobody else.
@@ -194,14 +263,8 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
         way: null,
         actions: toTariff,
       }
-    case 'daily_limit': {
-      const { used, limit } = task.today
-      return {
-        state: `Лимит на сегодня исчерпан: в работу взято ${used} из ${limit ?? used}. Новую задачу можно будет поставить завтра. Задачи, которые уже в работе, можно продолжать.`,
-        way: null,
-        actions: [],
-      }
-    }
+    case 'daily_limit':
+      return dayTaken(input)
     case 'past_due':
       return {
         state: `Тариф «${tariff?.name ?? ''}» не оплачен, поэтому новые задачи не принимаются.`,
@@ -237,13 +300,13 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
 
 /**
  * A tariff that is not paid for still takes tasks on gift credits: one would be taken now, or
- * what refuses is of the moment — the tasks of the day without a tariff are used
- * (`trial_daily_limit`), the gift is set aside for the task in work (`held`). A sentence that
- * stands beside the notice of such a refusal says «принимаются, только пока есть подарочные
- * кредиты», not that no task is taken until the payment: the notice itself names the next one.
+ * what refuses is of the moment — the gift is set aside for the task in work (`held`). A
+ * sentence that stands beside the notice of such a refusal says «принимаются, только пока есть
+ * подарочные кредиты», not that no task is taken until the payment: the notice itself names
+ * the next one.
  */
 export function giftCarriesTasks({ newTask }: Pick<TaskCredits, 'newTask'>): boolean {
-  return newTask.allowed || newTask.reason === 'trial_daily_limit' || newTask.reason === 'held'
+  return newTask.allowed || newTask.reason === 'held'
 }
 
 /** The whole notice in one paragraph; `payable` false leaves out what takes a payment. */
@@ -273,7 +336,7 @@ export function plansWithoutTariff(input: {
     const enough = giftIsEnoughFor(gift.available)
     const holds =
       enough === null ? '' : ` — ${plural(gift.available, 'его', 'их', 'их')} хватит ${enough}`
-    const text = `${giftOnHand(gift.available)}${holds}. ${tasksPerDayOnGift()} Когда кредиты закончатся, понадобится тариф.`
+    const text = `${giftOnHand(gift.available)}${holds}. Когда кредиты закончатся, понадобится тариф.`
     return canChoose ? text : `${text} ${unavailable}`
   }
   // That a tariff has ended, and what it left, is told by the block of that tariff below.

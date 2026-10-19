@@ -9,6 +9,7 @@ import { ensureAccounts, lockCreditAccount, type BillingTx } from './accounts.ts
 import {
   attemptCreditBudget,
   chargeTask,
+  expireTaskHolds,
   modelClassPriced,
   releaseTask,
   taskChargeAuditActions,
@@ -122,20 +123,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
   /**
    * A workspace with its three credit accounts — `tariff` credits (300 unless told otherwise),
-   * `gift` and `pack` ones — on a tariff of 300 credits a month and 5 tasks a day, active for
-   * the period of the fixtures unless told otherwise; `subscription: null` for none.
+   * `gift` and `pack` ones — on a tariff of 300 credits a month without a daily limit unless
+   * told otherwise (`creditsPerDay`), active for the period of the fixtures unless told
+   * otherwise; `subscription: null` for none.
    */
   async function funded(
     options: {
       tariff?: number
       gift?: number
       pack?: number
+      creditsPerDay?: number
       subscription?: Partial<Parameters<typeof fixtures.subscription>[0]> | null
     } = {},
   ) {
-    const { tariff = 300, gift = 0, pack = 0 } = options
+    const { tariff = 300, gift = 0, pack = 0, creditsPerDay = null } = options
     const { workspaceId } = await fixtures.workspace()
-    const plan = await fixtures.plan({ creditsPerMonth: 300, tasksPerDay: 5 })
+    const plan = await fixtures.plan({ creditsPerMonth: 300, creditsPerDay })
     const subscription =
       options.subscription === null
         ? null
@@ -462,6 +465,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         fromGift: 0,
         fromPack: 0,
         expired: 0,
+        // A plan without a daily limit; nothing was taken from free tariff credits.
+        tariffRoom: null,
+        freeTariff: 0,
         costRub: '101.3700000000',
         rawCredits: '16.895',
         absorbedRub: '0.0000000000',
@@ -527,6 +533,40 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         expect(await accounts(workspaceId)).toMatchObject({ tariff: account(tariff - credits) })
       },
     )
+
+    // The charge moves the task towards the tariff only within what is left of the day of the
+    // charge, and the audit row keeps both: what was left, and what free tariff credits paid.
+    it('writes what was left of the day and what free tariff credits paid', async () => {
+      const model = await modelPool()
+      const { workspaceId } = await funded({ tariff: 0, pack: 100, creditsPerDay: 50 })
+      const [onPack, onTariff] = await Promise.all([task(workspaceId), task(workspaceId)])
+      // The tariff was empty when the first was queued; then the quota came, and the second
+      // set 45 of the fifty of the day aside.
+      await place(workspaceId, onPack)
+      await grant(workspaceId, 'tariff', 300)
+      await place(workspaceId, onTariff, { now: minutesAfter(1) })
+      expect(await reserve(onPack)).toEqual(['#1 pack 45 active'])
+      // 180 RUB of work: 30 credits.
+      await worked(model, onPack, '180')
+      await ended(onPack)
+
+      expect(await charge(onPack)).toMatchObject({
+        credits: 30,
+        from: { tariff: 5, gift: 0, pack: 25 },
+      })
+      expect(await chargeMeta(onPack)).toMatchObject({
+        reserved: 45,
+        charged: 30,
+        fromTariff: 5,
+        fromPack: 25,
+        tariffRoom: 5,
+        freeTariff: 5,
+      })
+      expect(await accounts(workspaceId)).toMatchObject({
+        tariff: account(295, 45),
+        pack: account(75),
+      })
+    })
 
     // Above the reserve the charge is the reserve, and the cost of the work above it is the
     // platform's: 297 − 45 × 6.00 = 27; 80 − 12 × 6.00 = 8; 272.99 − 270 = 2.99.
@@ -844,6 +884,81 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       })
     })
 
+    /** What each reserve row of a task paid, by attempt and account: `#1 tariff 5 → 5`. */
+    const paidByRow = async (taskId: string) =>
+      (await db.creditHold.findMany({ where: { taskId } }))
+        .map((row) => ({ row, kind: kindOf(row.unit) as CreditAccountKind }))
+        .sort(
+          (a, b) =>
+            a.row.attempt - b.row.attempt ||
+            creditAccountKinds.indexOf(a.kind) - creditAccountKinds.indexOf(b.kind),
+        )
+        .map(
+          ({ row, kind }) =>
+            `#${row.attempt} ${kind} ${row.amount.toFixed(0)} ${row.status} → ${row.charged?.toFixed(0) ?? 'null'}`,
+        )
+
+    it('records on each reserve row what it paid, and answers with the rows as written', async () => {
+      const { model, taskId } = await taskInWork({ tariff: 5, gift: 35, pack: 100 })
+      // 258 ÷ 6.00 = 43: the tariff row pays its 5, the gift row its 35, the pack row 3 of 5.
+      await worked(model, taskId, '258')
+      await ended(taskId)
+
+      const charged = await charge(taskId)
+
+      expect(await paidByRow(taskId)).toEqual([
+        '#1 tariff 5 captured → 5',
+        '#1 gift 35 captured → 35',
+        '#1 pack 5 captured → 3',
+      ])
+      expect(await db.creditHold.findMany({ where: { taskId } })).toEqual(
+        expect.arrayContaining(charged.holds),
+      )
+      expect(charged.holds).toHaveLength(3)
+      // Asked again, it reads the same rows back.
+      expect((await charge(taskId)).holds).toEqual(expect.arrayContaining(charged.holds))
+    })
+
+    it('records the oldest rows of a chain as paying first', async () => {
+      // Two attempts of 45 on the tariff; the chain costs 50: the first attempt's row pays all
+      // it held, the second's the rest.
+      const model = await modelPool()
+      const { workspaceId } = await funded()
+      const taskId = await task(workspaceId)
+      await place(workspaceId, taskId)
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10) })
+      // 300 ÷ 6.00 = 50, over the two attempts.
+      await worked(model, taskId, '150')
+      await worked(model, taskId, '150', { attempt: 2, occurredAt: minutesAfter(15) })
+      await ended(taskId)
+
+      expect(await charge(taskId)).toMatchObject({ credits: 50, from: { tariff: 50 } })
+      expect(await paidByRow(taskId)).toEqual([
+        '#1 tariff 45 captured → 45',
+        '#2 tariff 45 captured → 5',
+      ])
+    })
+
+    it('records nothing on a row that is given back, released or expired', async () => {
+      const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
+      const [released, expired] = [await task(workspaceId), await task(workspaceId)]
+      await place(workspaceId, released)
+      await place(workspaceId, expired, { now: minutesAfter(1) })
+
+      await db.$transaction((tx) => releaseTask(tx, { taskId: released, now: LATER }))
+      await db.$transaction((tx) =>
+        expireTaskHolds(tx, { taskId: expired, now: new Date(NOW.getTime() + 2 * DAY_MS) }),
+      )
+
+      expect(await paidByRow(released)).toEqual([
+        '#1 tariff 5 released → null',
+        '#1 gift 35 released → null',
+        '#1 pack 5 released → null',
+      ])
+      expect(await paidByRow(expired)).toEqual(['#1 pack 45 expired → null'])
+      await expectBooksToBalance(workspaceId)
+    })
+
     it('charges the reserve of an ended period first and says what expired with it', async () => {
       // 45 tariff credits reserved on the 17th; the period renews on the 18th with 300 new
       // credits; the task is done on the 19th for 17.
@@ -881,6 +996,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         from: { tariff: 17, gift: 0, pack: 0 },
         expired: 28,
       })
+      // The row paid 17: what expired with it is not what it paid.
+      expect(await paidByRow(taskId)).toEqual(['#1 tariff 45 captured → 17'])
       expect(await chargeMeta(taskId)).toMatchObject({
         reserved: 45,
         charged: 17,
@@ -1209,7 +1326,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         step: 45,
         reserved: 45,
         used: '0',
-        spendable: 255,
+        spendableNow: 255,
         customerLeftRub: '270.0000000000',
         ceilingLeftRub: '270.0000000000',
         finishRub: FINISH,
@@ -1242,7 +1359,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       expect(await budget(model, taskId)).toMatchObject({
         reserved: 12,
-        spendable: 0,
+        spendableNow: 0,
         customerLeftRub: '72.0000000000',
         ceilingLeftRub: '270.0000000000',
         // 72 + 46.50.
@@ -1261,7 +1378,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         step: 45,
         reserved: 45,
         used: '37.5',
-        spendable: 255,
+        spendableNow: 255,
         // (45 − 37.5) × 6.00.
         customerLeftRub: '45.0000000000',
         // 270 − 225: the step binds — it is below the 45 + 46.50 of the customer's side.
@@ -1284,7 +1401,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         step: 45,
         reserved: 12,
         used: '10',
-        spendable: 0,
+        spendableNow: 0,
         // (12 − 10) × 6.00.
         customerLeftRub: '12.0000000000',
         // 270 − 60: far above the 12 + 46.50 of the customer's side.
@@ -1301,7 +1418,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       await worked(model, taskId, '225')
 
       expect(await budget(model, taskId)).toMatchObject({
-        spendable: 0,
+        spendableNow: 0,
         customerLeftRub: '45.0000000000',
         ceilingLeftRub: '45.0000000000',
         budgetRub: '45.00',
@@ -1370,7 +1487,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         reserved: 135,
         // Three times 37.5: «на неё уже ушло 113 кредитов».
         used: '112.5',
-        spendable: 165,
+        spendableNow: 165,
         // (135 − 112.5) × 6.00.
         customerLeftRub: '135.0000000000',
         // 270 − 225 of the third attempt alone.
@@ -1392,7 +1509,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         attempt: 2,
         reserved: 50,
         used: '37',
-        spendable: 0,
+        spendableNow: 0,
         // 13 × 6.00.
         customerLeftRub: '78.0000000000',
         // The second attempt has spent nothing of its step.
@@ -1531,7 +1648,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       })
     })
 
-    it('counts as spendable what a next attempt could take: gift credits always, the others while the tariff is paid', async () => {
+    it('counts as spendable now what a next attempt could take: gift credits always, the others while the tariff is paid', async () => {
       const model = await modelPool()
       // The accounts of another workspace are nobody's to count.
       await funded({ tariff: 300, gift: 7, pack: 9 })
@@ -1540,15 +1657,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         const { workspaceId } = await funded({ tariff: 0, gift: 50, pack: 40, subscription })
         const taskId = await task(workspaceId)
         const { reserved } = await place(workspaceId, taskId)
-        const { spendable } = await budget(model, taskId)
-        return { reserved, spendable }
+        const { spendableNow } = await budget(model, taskId)
+        return { reserved, spendableNow }
       }
 
       // A paid tariff: 5 gift credits are left free, and the pack.
-      expect(await numbers('active')).toEqual({ reserved: 45, spendable: 45 })
+      expect(await numbers('active')).toEqual({ reserved: 45, spendableNow: 45 })
       // No tariff, and one that is not paid: the pack waits for a tariff.
-      expect(await numbers(null)).toEqual({ reserved: 45, spendable: 5 })
-      expect(await numbers('past_due')).toEqual({ reserved: 45, spendable: 5 })
+      expect(await numbers(null)).toEqual({ reserved: 45, spendableNow: 5 })
+      expect(await numbers('past_due')).toEqual({ reserved: 45, spendableNow: 5 })
 
       // A tariff that ended before the one that is paid now says nothing about this one.
       const { workspaceId, plan } = await funded({
@@ -1567,7 +1684,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       await fixtures.subscription({ workspaceId, planId: plan.id })
       const taskId = await task(workspaceId)
       await place(workspaceId, taskId)
-      expect(await budget(model, taskId)).toMatchObject({ reserved: 45, spendable: 45 })
+      expect(await budget(model, taskId)).toMatchObject({ reserved: 45, spendableNow: 45 })
+    })
+
+    // What «Продолжить» would be allowed: P12 chooses between the question and «кредиты
+    // закончились» by it, so it counts the day as a placement does.
+    it('counts as spendable now no more tariff credits than the day has left', async () => {
+      const model = await modelPool()
+      const { workspaceId } = await funded({ creditsPerDay: 50 })
+      const [first, second] = await Promise.all([task(workspaceId), task(workspaceId)])
+      await place(workspaceId, first)
+      expect(await budget(model, first)).toMatchObject({ reserved: 45, spendableNow: 5 })
+      await place(workspaceId, second, { now: minutesAfter(1) })
+      expect(await budget(model, first)).toMatchObject({ reserved: 45, spendableNow: 0 })
+      // The next day in Moscow gives its fifty again.
+      expect(
+        await budget(model, first, 1, { now: new Date('2026-10-04T21:00:00.000Z') }),
+      ).toMatchObject({ spendableNow: 50 })
     })
 
     it('answers a task that holds no reserve with nothing to spend', async () => {

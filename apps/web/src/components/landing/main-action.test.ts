@@ -1,8 +1,4 @@
-import {
-  giftTaskCounts,
-  signupGiftCredits,
-  tasksPerDayWithoutTariff,
-} from '@repo/domain/billing/credit-numbers'
+import { giftTaskCounts, signupGiftCredits } from '@repo/domain/billing/credit-numbers'
 import { describe, expect, it } from 'vitest'
 
 import { mainAction, mainActionNote } from './main-action'
@@ -13,9 +9,9 @@ describe('main action of the landing', () => {
     expect(mainAction(false)).toEqual({ href: '/projects', label: 'Открыть проекты' })
   })
 
-  it('tells a guest of the gift of the registration and of the day without a tariff', () => {
+  it('tells a guest of the gift of the registration, and of no day without a tariff', () => {
     expect(mainActionNote(true)).toBe(
-      'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Без тарифа — до 3 задач в день. Тариф выберете позже.',
+      'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
     )
   })
 
@@ -23,16 +19,12 @@ describe('main action of the landing', () => {
     const note = mainActionNote(true)
 
     expect(note).toContain(`— ${signupGiftCredits} кредитов в подарок`)
-    expect(note).toContain(`до ${tasksPerDayWithoutTariff} задач в день`)
     // «Несколько небольших правок» stands on the gift itself: it holds seven of them.
     expect(giftTaskCounts(signupGiftCredits).small).toBeGreaterThanOrEqual(3)
-    // The only counts of the line are the gift and the tasks of a day: the gift is not turned
-    // into a number of tasks, and no limit of a tariff is promised with it.
-    expect(note.match(/\d+/g)).toEqual([
-      String(signupGiftCredits),
-      String(tasksPerDayWithoutTariff),
-    ])
-    expect(note).not.toMatch(/30 задач|10 задач/)
+    // The only count of the line is the gift: it is not turned into a number of tasks, and no
+    // limit of a day — of a tariff or without one — is promised with it.
+    expect(note.match(/\d+/g)).toEqual([String(signupGiftCredits)])
+    expect(note).not.toMatch(/в день|задач/)
   })
 
   it('does not offer the registration or its gift to a visitor with an account', () => {

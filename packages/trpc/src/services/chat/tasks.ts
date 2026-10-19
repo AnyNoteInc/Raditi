@@ -359,9 +359,11 @@ const retryRefused: Readonly<Record<RetryRefusal, () => Error>> = {
  * back with the reserve: it is charged with the dialog, from the new reserve, and bounds the keys
  * of the retry (`chargeTask`, `attemptCreditBudget`); only the pass that failed stays free (its
  * turn is rejected). Who may open the dialog may press it, as
- * «Продолжить». Neither the three attempts nor the daily limit stop it (spec §20, decision 4 of
- * 11.10.2026). A repeat with the same `requestId` returns the row of the first delivery; a press
- * on a failure that was answered meanwhile, or on another one, is refused.
+ * «Продолжить». The three attempts do not stop it — it starts a new chain (spec §20, decision 4
+ * of 11.10.2026) —; the daily limit does, like a new task (D7 of 17.10.2026: five credits that can
+ * be spent now), after the chain it gives back has returned what it took of the day. A repeat
+ * with the same `requestId` returns the row of the first delivery; a press on a failure that was
+ * answered meanwhile, or on another one, is refused.
  */
 export async function retryDialog(
   db: PrismaClient,

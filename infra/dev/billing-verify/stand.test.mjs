@@ -19,7 +19,6 @@ import {
   attemptStepCredits,
   minStartCredits,
   signupGiftCredits,
-  tasksPerDayWithoutTariff,
 } from '../../../packages/domain/src/billing/credit-numbers.ts'
 import { creditAccountUnits } from '../../../packages/domain/src/billing/credits.ts'
 import { addBillingMonths, nextBillingPeriod } from '../../../packages/domain/src/billing/period.ts'
@@ -1386,16 +1385,20 @@ test('the pages are compared with the answer about a new task and with the meter
   // The whole of `credits` is compared, with what «Тарифы» tells of a new task; «Использование»
   // tells the same.
   assert.ok(pages.includes('credits: overview.credits,'))
+  const flat = pages.replace(/\s+/g, '')
   assert.ok(
-    pages.includes(
-      'task: [usage.spendable, usage.setAside, usage.minToStart, usage.today, usage.newTask],',
+    flat.includes(
+      'task:[usage.spendable,usage.spendableNow,usage.setAside,usage.minToStart,usage.today,usage.newTask,],',
     ),
   )
   assert.ok(
-    pages.includes(
-      'task: [task.spendable, task.setAside, task.minToStart, task.today, task.newTask],',
+    flat.includes(
+      'task:[task.spendable,task.spendableNow,task.setAside,task.minToStart,task.today,task.newTask,],',
     ),
   )
+  // The meter of the tariff tells the day the answer tells: a paid tariff, or none.
+  assert.ok(flat.includes('meterDay:usage.tariff&&usage.tariff.today,'))
+  assert.ok(flat.includes('meterDay:live&&(paid?today:null),'))
   assert.match(
     pages,
     /credits: \{\n\s+tariff,\n\s+gift,\n\s+pack,\n\s+totalAvailable: [^\n]+\n\s+\.\.\.task,\n\s+\},/,
@@ -1403,13 +1406,23 @@ test('the pages are compared with the answer about a new task and with the meter
   // The numbers of that answer are written in the stand on their own and agree with the product.
   const constant = (name) => Number(new RegExp(`\\nconst ${name} = (\\d+)\\n`).exec(kit)?.[1])
   assert.equal(constant('MIN_START_CREDITS'), minStartCredits)
-  assert.equal(constant('TASKS_PER_DAY_WITHOUT_TARIFF'), tasksPerDayWithoutTariff)
   assert.ok(pages.includes('minToStart: MIN_START_CREDITS,'))
+  // The day counts tariff credits (decision of 17.10.2026): none is spent in the stand, the
+  // limit of the plan is left — or the free tariff credits when fewer —, and without a paid
+  // tariff there is no day. No count of tasks a day is left in the stand.
+  assert.doesNotMatch(kit, /TASKS_PER_DAY|tasks_per_day|tasksPerDay/)
+  assert.ok(pages.includes('const limit = paid ? live.credits_per_day : null'))
   assert.ok(
     pages.includes(
-      'today: { used: 0, limit: paid ? live.tasks_per_day : TASKS_PER_DAY_WITHOUT_TARIFF },',
+      'const left = limit === null ? tariff.available : Math.min(limit, tariff.available)',
     ),
   )
+  assert.ok(
+    pages.includes(
+      'const today = paid ? { limit, charged: 0, held: 0, used: 0, room: limit, left } : null',
+    ),
+  )
+  assert.ok(pages.includes('spendableNow: gift.available + (paid ? left + pack.available : 0),'))
   // Gift credits are spent always, the others only while the tariff is paid.
   assert.ok(pages.includes("const paid = live?.status === 'active'"))
   assert.ok(
@@ -1419,12 +1432,12 @@ test('the pages are compared with the answer about a new task and with the meter
   // usable, a task that is taken from then on — five credits can always be spent in the stand,
   // which queues no task; a customer without them fails the check instead of passing as refused.
   assert.ok(pages.includes('const usable = await creditRateUsable(t)'))
-  assert.ok(pages.includes('task.newTask = newTaskOf(usable, task.spendable, customer.email)'))
+  assert.ok(pages.includes('task.newTask = newTaskOf(usable, task.spendableNow, customer.email)'))
   const [, answer] =
-    /\nfunction newTaskOf\(usable, spendable, who\) \{\n([^]*?)\n\}\n/.exec(kit) ?? []
+    /\nfunction newTaskOf\(usable, spendableNow, who\) \{\n([^]*?)\n\}\n/.exec(kit) ?? []
   assert.deepEqual((answer ?? '').split('\n').slice(0, 2), [
     "  if (!usable) return { allowed: false, reason: 'rate_missing' }",
-    '  if (spendable >= MIN_START_CREDITS) return { allowed: true, reason: null }',
+    '  if (spendableNow >= MIN_START_CREDITS) return { allowed: true, reason: null }',
   ])
   assert.match(answer ?? '', /throw new CheckFailed\(/)
   // A rate is usable by the rule of the product: one has started, and no price in force of an
@@ -1455,6 +1468,16 @@ test('the pages are compared with the answer about a new task and with the meter
     ],
   )
   assert.equal(ON_SALE.pack.credits, CREDITS.pack)
+  // The tariff credits of a day: defaults of the decision of 17.10.2026, never above the month.
+  assert.deepEqual(
+    ON_SALE.plans.map(({ slug, creditsPerDay }) => [slug, creditsPerDay]),
+    [
+      ['start', 50],
+      ['business', 100],
+      ['agency', 300],
+    ],
+  )
+  for (const plan of ON_SALE.plans) assert.ok(plan.creditsPerDay <= plan.creditsPerMonth)
   // No enabled model has a price in the stand: «Точный расчёт» has no table, with a rate or not.
   assert.ok(pages.includes('conversion: plans.creditConversion,'))
   assert.ok(pages.includes('conversion: null,'))

@@ -349,11 +349,15 @@ export async function storeOwnerToken(vault, token) {
 /**
  * A paid tariff «Агентство» for the current period, as a settled payment leaves it: the order,
  * the subscription and the credits of the period granted by `grantTariffCredits`. The money path
- * itself is `pnpm verify:billing`'s. «Агентство» (30 tasks a day): the scenarios start ten
- * dialogs (A–J) and retry one, «Бизнес» takes ten a day.
+ * itself is `pnpm verify:billing`'s. The scenarios start ten dialogs (A–J), hold several of
+ * them at once and retry one in `heavy` (120): more than the 300 tariff credits «Агентство» gives
+ * a Moscow day (decision of 17.10.2026, D2). Two paid packs carry the rest, as a client goes on
+ * the same day — pack credits are outside the day —, so every reserve is the full step of its
+ * class; the day itself is `verify:billing`'s and the tests of @repo/billing.
  */
 export async function grantTariff({ db, billing }, { workspaceId, userId }) {
   const plan = await db.plan.findFirstOrThrow({ where: { slug: 'agency' } })
+  const pack = await db.plan.findFirstOrThrow({ where: { slug: 'pack' } })
   const start = new Date(Date.now() - 60 * 60_000)
   const end = new Date(start.getTime() + 30 * 24 * 60 * 60_000)
   await db.$transaction(async (tx) => {
@@ -387,6 +391,25 @@ export async function grantTariff({ db, billing }, { workspaceId, userId }) {
       orderId: order.id,
       credits: plan.creditsPerMonth,
     })
+    for (let bought = 0; bought < 2; bought += 1) {
+      const packOrder = await tx.order.create({
+        data: {
+          workspaceId,
+          userId,
+          planId: pack.id,
+          kind: 'pack',
+          amount: pack.price,
+          status: 'paid',
+          idempotenceKey: `release-verify-${randomBytes(6).toString('hex')}`,
+          paidAt: start,
+        },
+      })
+      await billing.grantPackCredits(tx, {
+        workspaceId,
+        orderId: packOrder.id,
+        credits: pack.packCredits,
+      })
+    }
   })
   return plan
 }

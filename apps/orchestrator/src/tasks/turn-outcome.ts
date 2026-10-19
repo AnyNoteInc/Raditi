@@ -139,8 +139,12 @@ export interface CeilingFacts {
   used: InstanceType<typeof Money> | string | number
   /** What the reserves still hold for the client, RUB: zero — the client's credits ran out. */
   customerLeftRub: string
-  /** What the workspace could set aside for one more attempt. */
-  spendable: number
+  /**
+   * What the workspace could set aside for one more attempt now: the tariff part no larger than
+   * what is left of the Moscow day (`AttemptCreditBudget.spendableNow`). A day that is taken
+   * reads as credits that ran out — a pack carries the task on today.
+   */
+  spendableNow: number
 }
 
 /**
@@ -156,7 +160,7 @@ export function ceilingQuestionOf(
   const reason: FeedCeilingReason =
     facts.chainAttempts >= maxTaskAttempts
       ? 'attempts'
-      : new Money(facts.customerLeftRub).isZero() && facts.spendable < 1
+      : new Money(facts.customerLeftRub).isZero() && facts.spendableNow < 1
         ? 'credits'
         : 'step'
   return {

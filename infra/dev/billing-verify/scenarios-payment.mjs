@@ -391,13 +391,13 @@ scenarios.checkout = async (t) => {
       PRICE,
     )
     t.equal(
-      `${who}: and in credits — 300, 800 and 2 500 a month with 5, 10 and 30 tasks a day, a pack of 100`,
+      `${who}: and in credits — 300, 800 and 2 500 a month with 50, 100 and 300 a day, a pack of 100`,
       {
-        plans: plans.map(({ slug, price, creditsPerMonth, tasksPerDay, maxSites }) => ({
+        plans: plans.map(({ slug, price, creditsPerMonth, creditsPerDay, maxSites }) => ({
           slug,
           price,
           creditsPerMonth,
-          tasksPerDay,
+          creditsPerDay,
           maxSites,
         })),
         pack: pack && { slug: pack.slug, price: pack.price, credits: pack.credits },
@@ -658,7 +658,8 @@ scenarios.checkout = async (t) => {
       {
         // Read from the ledger: the order of the payment carries the start of its period.
         credits: { granted: 300, charged: 0, held: 0, expired: 0, left: 300, heldEarlier: 0 },
-        today: { used: 0, limit: 5 },
+        // «Старт» gives 50 of its tariff credits a day; none is spent yet.
+        today: { limit: 50, charged: 0, held: 0, used: 0, room: 50, left: 50 },
         sites: { count: 0, max: 1 },
         gift: { left: 35, held: 0, granted: true },
         pack: { left: 0, held: 0 },

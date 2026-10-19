@@ -128,7 +128,7 @@ describe('ceilingQuestionOf', () => {
     reserved: 45,
     used: '44.6',
     customerLeftRub: '0',
-    spendable: 0,
+    spendableNow: 0,
   }
 
   it('says the client credits ran out when nothing is left to set aside', () => {
@@ -147,9 +147,9 @@ describe('ceilingQuestionOf', () => {
 
   it('says the step is spent while the client could continue', () => {
     expect(
-      ceilingQuestionOf({ ...facts, customerLeftRub: '12.50', spendable: 30 }, 1),
+      ceilingQuestionOf({ ...facts, customerLeftRub: '12.50', spendableNow: 30 }, 1),
     ).toMatchObject({ reason: 'step', spent: 45, left: 0 })
-    expect(ceilingQuestionOf({ ...facts, spendable: 10 }, 1).reason).toBe('step')
+    expect(ceilingQuestionOf({ ...facts, spendableNow: 10 }, 1).reason).toBe('step')
   })
 
   it('says the attempts are used up at the third attempt of the chain', () => {

@@ -39,7 +39,6 @@ function giftOnly(gift: number, facts: TaskFacts = {}): BillingUsage {
     gift: { left: gift, held: 0, granted: true },
     pack: { left: 0, held: 0 },
     history: { items: [], nextCursor: null },
-    trial: { today: facts.launchesToday ?? 0, perDay: 3 },
     totalLeft: gift,
     ...taskCreditsFor(
       {

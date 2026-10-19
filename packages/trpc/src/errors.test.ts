@@ -162,7 +162,7 @@ describe('toTRPCError', () => {
       'BILLING_DAILY_LIMIT_REACHED',
       billingDailyLimitReached,
       'CONFLICT',
-      'Лимит задач на сегодня исчерпан. Новую задачу можно будет поставить завтра',
+      'Кредиты по тарифу на сегодня закончились. Завтра их снова можно будет тратить, а продолжить сегодня можно с пакетом кредитов — подробности в разделе «Использование»',
     ],
     [
       'BILLING_TASK_NEEDS_SUBSCRIPTION',
@@ -601,7 +601,8 @@ describe('the text of a refused task, built from the details of its refusal', ()
     held: 'Все кредиты отложены под задачи в работе. Дождитесь, пока они закончатся, или купите пакет кредитов',
     needsTariff:
       'Чтобы ставить задачи, нужен действующий тариф. Выберите или оплатите его в разделе «Тарифы»',
-    dailyLimit: 'Лимит задач на сегодня исчерпан. Новую задачу можно будет поставить завтра',
+    dailyLimit:
+      'Кредиты по тарифу на сегодня закончились. Завтра их снова можно будет тратить, а продолжить сегодня можно с пакетом кредитов — подробности в разделе «Использование»',
     unpaidLimit:
       'Новые задачи временно не принимаются: слишком много задач остановилось без результата. Напишите нам — разберёмся, в чём дело',
     rateMissing:
@@ -705,9 +706,62 @@ describe('the text of a refused task, built from the details of its refusal', ()
     }
   })
 
-  it('keeps the general words of the codes whose refusal names no number', () => {
+  /** A refusal by the day as the queue throws it: the numbers of the accounts and of the day. */
+  const dayRefused = (spendableNow: number, day: { limit: number; used: number }, needed = 5) =>
+    taskRefusal({ reason: 'daily_limit', spendable: 255, held: 45, needed, spendableNow, day })
+
+  // Review of M5.33a: what is left of the day is said first, the day need not be spent.
+  it.each([
+    [1, { limit: 50, used: 49 }, 'Сегодня можно потратить ещё 1 кредит'],
+    [4, { limit: 50, used: 47 }, 'Сегодня можно потратить ещё 4 кредита'],
+    [3, { limit: 100, used: 98 }, 'Сегодня можно потратить ещё 3 кредита'],
+  ])('names what is left of the day when it cannot start a task: %i', (now, day, first) => {
+    expect(toTRPCError(dayRefused(now, day))).toMatchObject({
+      code: 'CONFLICT',
+      message: `${first}, а на новую задачу нужно не меньше 5. Купите пакет кредитов — он дневным лимитом не ограничен — или поставьте задачу завтра`,
+    })
+  })
+
+  it.each([
+    [
+      { limit: 50, used: 50 },
+      'Кредиты по тарифу на сегодня закончились: потрачено 50 из 50. Завтра снова можно будет потратить до 50 кредитов, а продолжить сегодня можно с пакетом кредитов',
+    ],
+    [
+      { limit: 21, used: 21 },
+      'Кредиты по тарифу на сегодня закончились: потрачено 21 из 21. Завтра снова можно будет потратить до 21 кредита, а продолжить сегодня можно с пакетом кредитов',
+    ],
+    [
+      { limit: 2500, used: 2500 },
+      `Кредиты по тарифу на сегодня закончились: потрачено 2${NBSP}500 из 2${NBSP}500. Завтра снова можно будет потратить до 2${NBSP}500 кредитов, а продолжить сегодня можно с пакетом кредитов`,
+    ],
+    // a renewal onto a smaller plan in the middle of the day
+    [
+      { limit: 50, used: 120 },
+      'Кредиты по тарифу на сегодня закончились: дневной лимит — 50. Завтра снова можно будет потратить до 50 кредитов, а продолжить сегодня можно с пакетом кредитов',
+    ],
+  ])('names the spent day: %o', (day, message) => {
+    expect(toTRPCError(dayRefused(0, day))).toMatchObject({ code: 'CONFLICT', message })
+  })
+
+  it('says the general words of the day when the details do not carry it', () => {
     expect(toTRPCError(refused('daily_limit', 290)).message).toBe(GENERAL.dailyLimit)
-    expect(toTRPCError(refused('trial_daily_limit', 20)).message).toBe(GENERAL.dailyLimit)
+    expect(toTRPCError(billingDailyLimitReached()).message).toBe(GENERAL.dailyLimit)
+    // the day of another reason is no day to tell
+    expect(
+      toTRPCError(
+        new DomainError('BILLING_DAILY_LIMIT_REACHED', 'Refused', 409, {
+          reason: 'held',
+          spendable: 0,
+          held: 45,
+          needed: 5,
+          day: { limit: 50, used: 50 },
+        }),
+      ).message,
+    ).toBe(GENERAL.dailyLimit)
+  })
+
+  it('keeps the general words of the codes whose refusal names no number', () => {
     expect(toTRPCError(refused('unpaid_limit', 300)).message).toBe(GENERAL.unpaidLimit)
     expect(toTRPCError(refused('rate_missing', 300)).message).toBe(GENERAL.rateMissing)
   })

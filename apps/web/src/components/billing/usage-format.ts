@@ -5,13 +5,12 @@ import { formatMoscowDate, formatMoscowDay } from '@/lib/moscow-date'
 import { plural } from '@/lib/plural'
 import { formatRubles } from '@/lib/rubles'
 
-import type { TaskCredits } from './billing-types'
+import type { TariffDay, TaskCredits } from './billing-types'
 import {
   creditsOf,
   creditsWord,
   giftOnHand,
   noGiftToSpeakOf,
-  tasksPerDayOnGift,
   type GiftCredits,
 } from './plan-format'
 import { noticeText, RATE_PAUSE, taskNotice } from './task-notice'
@@ -40,7 +39,7 @@ export interface TariffState {
   periodEnd: Date
   autoRenewal: boolean
   /** The tariff of the next period: the scheduled one, else the current. */
-  nextPlan: { name: string; creditsPerMonth: number }
+  nextPlan: { name: string; creditsPerMonth: number; creditsPerDay: number | null }
   /** A change of the tariff is scheduled for the next period. */
   changes: boolean
 }
@@ -179,48 +178,77 @@ export function buyPackLabel(credits: number, price: string, more: boolean): str
   return `Купить ${more ? 'ещё ' : ''}${formatCount(credits)} ${creditsWord(credits)} — ${amount} ₽`
 }
 
-// The day counts launches: a new task, a continuation and a retry are one each.
+// The day counts the tariff credits taken since midnight in Moscow: what reserves placed that
+// day set aside, what they paid once their tasks were charged, and what a charge took of free
+// tariff credits in place of a gift or pack reserve. Gift and pack credits are outside it.
 
-/** «из 5 задач»: the daily limit after the number of launches of today. */
+/** «из 100 кредитов»: the daily limit after the tariff credits the day has taken. */
 export function ofDailyLimit(limit: number): string {
-  return `из ${limit} ${plural(limit, 'задачи', 'задач', 'задач')}`
+  return `из ${formatCount(limit)} ${creditsOf(limit)}`
 }
-
-/** «задача», «задачи», «задач»: the word after the launches of a day that has no limit. */
-export function launchesWord(used: number): string {
-  return plural(used, 'задача', 'задачи', 'задач')
-}
-
-/** «Сегодня в работу взято 3 из 5»: the accessible name of the meter of the day. */
-export function todayMeterLabel(used: number, limit: number): string {
-  return `Сегодня в работу взято ${used} из ${limit}`
-}
-
-const tasksToQueue = (count: number) =>
-  count === 1 ? 'одну задачу' : `${count} ${plural(count, 'задачу', 'задачи', 'задач')}`
 
 /**
- * What the day of the tariff still takes. `limit` null: the tariff has no daily limit. `paid`
- * is false while the tariff is not paid for: tasks are then taken only on gift credits — while
- * the gift still carries them (`tasksTaken`, `giftCarriesTasks`: one would be taken now, or what
- * refuses it is of the moment and the notice of the page names the next one). The count is of
- * the day alone, `limit − used`: when credits are short, the notice of the page says so.
+ * «Сегодня из 100 кредитов: 5 списано, 45 отложено под задачи в работе, 50 осталось»: the
+ * accessible name of the meter of the day, in the order of its parts. What is left is `left`:
+ * what the tariff can still give today — less than the room of the day when the month has less.
+ */
+export function todayMeterLabel({ limit, charged, held, left }: TariffDay & { limit: number }) {
+  return `Сегодня ${ofDailyLimit(limit)}: ${formatCount(charged)} списано, ${formatCount(held)} отложено под задачи в работе, ${formatCount(left)} осталось`
+}
+
+/**
+ * «Сегодня потрачено 50 кредитов из 100: 5 списано и 45 отложено под задачи в работе.»: what the
+ * day has taken; null while it has taken nothing or the tariff has no daily limit.
+ */
+export function todaySpent({ limit, charged, held, used }: TariffDay): string | null {
+  if (limit === null || used === 0) return null
+  const spent = `Сегодня ${plural(used, 'потрачен', 'потрачено', 'потрачено')} ${formatCount(used)} ${creditsWord(used)} из ${formatCount(limit)}`
+  if (held === 0) return `${spent}.`
+  const paid = charged === 0 ? '' : `${formatCount(charged)} списано и `
+  return `${spent}: ${paid}${formatCount(held)} отложено под задачи в работе.`
+}
+
+/** Said of every tariff with a daily limit: the day caps tariff credits only. */
+export const OUTSIDE_THE_DAY =
+  'Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены.'
+
+/**
+ * What the day of the tariff still gives. `today` null: the tariff is not paid; `paid` is false
+ * then, and tasks are taken only on gift credits — while the gift still carries them
+ * (`tasksTaken`, `giftCarriesTasks`: one would be taken now, or what refuses it is of the moment
+ * and the notice of the page names the next one). `tomorrow`: the daily limit the tariff gives
+ * when the next Moscow day starts (`dayLimitTomorrow`); null when it will give nothing then.
+ *
+ * The number is `today.left`: what is left of the day, or what the tariff has free when that is
+ * less. When the month itself is spent nothing is said of the day: the credits say «Лимиты
+ * закончились»; and once the day is spent too, nothing is promised of tomorrow (`tomorrow` null).
  */
 export function todayNote(input: {
-  used: number
-  limit: number | null
+  today: TariffDay | null
   paid: boolean
   tasksTaken: boolean
+  tomorrow: number | null
 }): string {
-  const { used, limit, paid, tasksTaken } = input
-  if (!paid) {
+  const { today, paid, tasksTaken, tomorrow } = input
+  if (!paid || today === null) {
     return tasksTaken
       ? 'Пока тариф не оплачен, новые задачи принимаются, только пока есть подарочные кредиты.'
       : 'Новые задачи не принимаются, пока не оплачен тариф.'
   }
-  if (limit === null) return 'Дневного лимита на вашем тарифе нет.'
-  if (used >= limit) return 'Лимит на сегодня исчерпан. Новые задачи можно будет поставить завтра.'
-  return `Сегодня можно поставить ещё ${tasksToQueue(limit - used)}.`
+  const { limit, room, left } = today
+  if (limit === null || room === null) return 'Дневного лимита на вашем тарифе нет.'
+  let day: string | null = null
+  if (room === 0) {
+    day =
+      tomorrow !== null
+        ? `Кредиты по тарифу на сегодня закончились — завтра снова можно будет потратить до ${formatCount(tomorrow)}.`
+        : 'Кредиты по тарифу на сегодня закончились.'
+  } else if (left > 0) {
+    const more = `Сегодня можно потратить ещё ${formatCount(left)} ${creditsWord(left)}`
+    // Tasks in work hold tariff credits that come back when they end: «свободно», not «осталось».
+    day = left < room ? `${more} по тарифу — столько их сейчас свободно.` : `${more}.`
+  }
+  return day === null ? OUTSIDE_THE_DAY : `${day} ${OUTSIDE_THE_DAY}`
 }
 
 const sitesWord = (count: number) => plural(count, 'сайт', 'сайта', 'сайтов')
@@ -259,13 +287,15 @@ export function packCredits(count: number): string {
 
 /**
  * The block «Тариф не выбран» of «Использование». While a task would be taken: the gift
- * credits a customer without a tariff can spend and how many tasks a day. Otherwise what stands
- * in the way of a new task, by the answer of the server (`taskNotice`) — or, with no gift to
- * speak of, that credits come with a tariff. `packLeft`: credits of a pack that wait for one.
+ * credits a customer without a tariff can spend — they are the bound, there is no day without a
+ * tariff. Otherwise what stands in the way of a new task, by the answer of the server
+ * (`taskNotice`) — or, with no gift to speak of, that credits come with a tariff. `packLeft`:
+ * credits of a pack that wait for one.
  */
 export function usageWithoutTariff(gift: GiftCredits, task: TaskCredits, packLeft: number): string {
   if (task.newTask.allowed) {
-    return `${giftOnHand(gift.available)}. ${tasksPerDayOnGift()} Здесь видно, сколько кредитов осталось и на что они ушли.`
+    const kept = plural(gift.available, 'Он не сгорает', 'Они не сгорают', 'Они не сгорают')
+    return `${giftOnHand(gift.available)}. ${kept}, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.`
   }
   if (noGiftToSpeakOf(gift, task)) {
     return 'Кредиты входят в тариф. Выберите тариф, чтобы ставить задачи: здесь появится, сколько кредитов осталось и на что они ушли.'

@@ -48,7 +48,7 @@ const planSelect = {
   kind: true,
   price: true,
   creditsPerMonth: true,
-  tasksPerDay: true,
+  creditsPerDay: true,
   maxSites: true,
   packCredits: true,
 } satisfies Prisma.PlanSelect
@@ -61,7 +61,7 @@ const planDto = (row: PlanRow) => ({
   name: row.name,
   price: row.price.toFixed(2),
   creditsPerMonth: row.creditsPerMonth,
-  tasksPerDay: row.tasksPerDay,
+  creditsPerDay: row.creditsPerDay,
   maxSites: row.maxSites,
 })
 
@@ -314,9 +314,10 @@ export function promisedCredits(giftGranted: boolean): CreditBalancesDto {
 /** The answer of the queue about a new task as the pages read it. */
 const taskCredits = (answer: NewTaskAnswer): TaskCreditsDto => ({
   spendable: answer.spendable,
+  spendableNow: answer.spendableNow,
   setAside: answer.held,
   minToStart: answer.needed,
-  today: { used: answer.day.launches, limit: answer.day.limit },
+  today: answer.today,
   newTask: { allowed: answer.allowed, reason: answer.reason },
 })
 
@@ -329,8 +330,9 @@ export interface CreditsOverviewInput {
 /**
  * The credits of the workspace as the settings pages read them: the three accounts
  * (`getCreditBalances`) and whether a new task would be taken at `now` — the answer the queue
- * itself would give (`newTaskCheck`), with its numbers: what a task could spend, what tasks in
- * work have set aside, and how many credits a new task needs.
+ * itself would give (`newTaskCheck`), with its numbers: what a task could spend by the accounts
+ * and now, what tasks in work have set aside, how many credits a new task needs, and the tariff
+ * credits of the Moscow day.
  *
  * The accounts and the answer are two reads and may be a moment apart; pass a snapshot
  * transaction to read them as of one instant.

@@ -79,7 +79,7 @@ const budget = (patch: Partial<AttemptCreditBudget> = {}): AttemptCreditBudget =
   step: toCredits(45),
   reserved: toCredits(45),
   used: new Money(0),
-  spendable: toCredits(30),
+  spendableNow: toCredits(30),
   customerLeftRub: '270.0000000000',
   ceilingLeftRub: '270.0000000000',
   finishRub: '12.5000000000',
