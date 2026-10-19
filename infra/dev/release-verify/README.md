@@ -86,7 +86,7 @@ docker pull chrislusf/seaweedfs:4.47
 - «Сбросить» (`/reset`), переменные окружения клиента и прокси выхода — не входят в сценарии; «Обновить» (`/update`) — только перенос без пересечений и конфликт файла (S4b), без плана БД и без переноса, после которого в `main` уже всё изменение.
 - Запросы на подтверждение (`request_approval`), медиа кандидата (`wp-content/uploads/raditi/`), вебхуки Gitea (core следит за запуском отчётами и опросом).
 - «Отменить выпуск» (S9): прод, изменённый между показом плана и записью задания, новая запись выпуска с комментариями или пунктами меню (`kept_dependents`), отмена файлов (выпуск G файлов не менял), окно отмены в браузере, отказ после 7 дней — интеграционные тесты `releases/undo.integration.test.ts`, `deploy-step/deploy-undo.test.ts`, tRPC (`chat-db.test.ts`) и компонентов web; время продукта стенд не двигает.
-- «Попробовать ещё» (S10) — только после причины `technical`: повтор, упавший так же, отказы `class_unavailable` и `TASK_NOTHING_TO_RETRY`, откат повтора при отказе резерва и счёт запусков дня — тесты `@repo/billing` (`holds.charge.test.ts`, `holds.test.ts`), tRPC (`chat-db.test.ts`) и `pass-settlement.integration.test.ts`.
+- «Попробовать ещё» (S10) — только после причины `technical`: повтор, упавший так же, отказы `class_unavailable` и `TASK_NOTHING_TO_RETRY`, откат повтора при отказе резерва и повтор вне дневного лимита (ответ владельца от 19.10.2026: день повтор не отклоняет и не урезает, а занятое им идёт в день) — тесты `@repo/billing` (`holds.charge.test.ts`, `holds.test.ts`), tRPC (`chat-db.test.ts`) и `pass-settlement.integration.test.ts`.
 - Workflow GitHub Actions для стенда нет.
 
 ## Что стенд нашёл в продукте (17–18.10.2026; второй круг — по ревью 18.10.2026)
