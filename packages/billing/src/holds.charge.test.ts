@@ -190,12 +190,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
     expiresAt?: Date
     /** K the reserve is placed under; it does not change what is set aside. */
     rate?: Partial<TestCreditRateData>
+    /** «Попробовать ещё»: what the retry of a dialog says, after it gave the chain back. */
+    retry?: true
   }
   /** Places a reserve the way the queue will, under a credit rate nobody else sees. */
   async function place(
     workspaceId: string,
     taskId: string,
-    { now = NOW, attempt = 1, expiresAt, rate = {} }: PlacementOptions = {},
+    { now = NOW, attempt = 1, expiresAt, rate = {}, retry }: PlacementOptions = {},
   ) {
     const placement: CreditHoldPlacement = {
       workspaceId,
@@ -203,6 +205,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       attempt,
       now,
       expiresAt: expiresAt ?? new Date(now.getTime() + DAY_MS),
+      ...(retry === undefined ? {} : { retry }),
     }
     const placed = await fixtures.reserve(placement, rate)
     await expectBooksToBalance(workspaceId)
@@ -763,7 +766,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         where: { id: taskId },
         data: { status: 'queued', modelClass: 'heavy', attempt },
       })
-      return place(workspaceId, taskId, { attempt, now: minutesAfter(10) })
+      return place(workspaceId, taskId, { attempt, now: minutesAfter(10), retry: true })
     }
 
     it('charges a retried dialog for the candidate and the retry, not for the pass that failed, whatever that one left open', async () => {
@@ -1746,7 +1749,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       // After a retry the chain is the second attempt alone.
       await db.$transaction((tx) => releaseTask(tx, { taskId, now: minutesAfter(8) }))
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10) })
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10), retry: true })
       await expect(budget(model, taskId, 1)).rejects.toMatchObject(outside)
       expect(await budget(model, taskId, 2)).toMatchObject({ attempt: 2, reserved: 45 })
     })
@@ -1762,7 +1765,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       await worked(model, taskId, '90', { turnNo: 2, turnStatus: 'failed', turnRejected: true })
       await db.$transaction((tx) => releaseTask(tx, { taskId, now: minutesAfter(8) }))
       await db.task.update({ where: { id: taskId }, data: { modelClass: 'heavy', attempt: 2 } })
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10) })
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10), retry: true })
 
       expect(await budget(model, taskId, 2, { enabled: [heavy] })).toMatchObject({
         attempt: 2,

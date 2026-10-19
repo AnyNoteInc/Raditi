@@ -3,7 +3,6 @@ import {
   chatCommandRefusalText,
   FEED_REQUEST_TEXT_LIMIT,
   feedInputText,
-  feedRetryText,
   feedTooLongText,
   isDomainError,
   taskRefusalDetailsSchema,
@@ -184,9 +183,6 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
     'Эту задачу больше нельзя продолжить: на неё ушли все заходы, которые даются одной задаче. Начните новый диалог или напишите нам',
   // «Попробовать ещё» (docs/plan/53, «Попробовать ещё (18.10)»): the failure was answered meanwhile.
   TASK_NOTHING_TO_RETRY: 'Повторить уже нельзя: в диалоге что-то изменилось',
-  // «Попробовать ещё» refused by the daily limit: the line of the failure card, not the words of
-  // a new task (D7 of 17.10.2026).
-  TASK_RETRY_DAILY_LIMIT: feedRetryText.dailyLimit.replace(/\.$/, ''),
   CHAT_COMMAND_UNAVAILABLE:
     'Эта команда сейчас недоступна. Обновите страницу, чтобы увидеть, что изменилось',
   RELEASE_IN_PROGRESS: 'Сейчас выпускается новая версия сайта. Дождитесь, пока выпуск закончится',

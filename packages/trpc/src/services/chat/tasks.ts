@@ -18,7 +18,6 @@ import {
 import {
   assertTransition,
   conflict,
-  isDomainError,
   isProduction,
   llmBackendIds,
   maxTaskAttempts,
@@ -52,7 +51,6 @@ import {
   taskNotAccepted,
   taskNothingToContinue,
   taskNothingToRetry,
-  taskRetryDailyLimit,
 } from './refusals.ts'
 import { dialogTitle, requestPayload, requestText } from './request-text.ts'
 
@@ -362,10 +360,12 @@ const retryRefused: Readonly<Record<RetryRefusal, () => Error>> = {
  * of the retry (`chargeTask`, `attemptCreditBudget`); only the pass that failed stays free (its
  * turn is rejected). Who may open the dialog may press it, as
  * «Продолжить». The three attempts do not stop it — it starts a new chain (spec §20, decision 4
- * of 11.10.2026) —; the daily limit does, like a new task (D7 of 17.10.2026: five credits that can
- * be spent now), after the chain it gives back has returned what it took of the day. A repeat
- * with the same `requestId` returns the row of the first delivery; a press on a failure that was
- * answered meanwhile, or on another one, is refused.
+ * of 11.10.2026) —, and neither does the daily limit (the owner, 19.10.2026): the reserve is
+ * placed as a retry (`retry: true`), whose tariff part only the free tariff credits bound, and
+ * what it takes still counts on the day for the placements after it. It needs five credits that
+ * can be spent, and unpaid work bounds it like a new task. A repeat with the same `requestId`
+ * returns the row of the first delivery; a press on a failure that was answered meanwhile, or on
+ * another one, is refused.
  */
 export async function retryDialog(
   db: PrismaClient,
@@ -400,20 +400,15 @@ export async function retryDialog(
     const attempt = task.attempt + 1
     await moveTo(tx, task, 'queued', { attempt, modelClass: 'heavy' })
     await releaseTask(tx, { taskId: task.id, now })
-    try {
-      await placeCreditHold(tx, {
-        workspaceId: task.workspaceId,
-        taskId: task.id,
-        attempt,
-        now,
-        expiresAt: taskHoldExpiry(now, 'waiting'),
-      })
-    } catch (error) {
-      // The words of a retry, not of a new task; the transaction rolls back all the same.
-      if (isDomainError(error) && error.code === 'BILLING_DAILY_LIMIT_REACHED')
-        throw taskRetryDailyLimit(error.details)
-      throw error
-    }
+    // A retry by the verdict above, which the day does not bound: said here, never by the client.
+    await placeCreditHold(tx, {
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      attempt,
+      now,
+      expiresAt: taskHoldExpiry(now, 'waiting'),
+      retry: true,
+    })
     const requestEventId = await writeRequest(tx, task.id, {
       v: 1,
       kind: 'retry',

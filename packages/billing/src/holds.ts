@@ -20,6 +20,7 @@ import {
   Money,
   newTaskVerdict,
   notFound,
+  placementTariffRoom,
   siteHostKey,
   spendableCredits,
   splitReserve,
@@ -83,8 +84,10 @@ import { ledgerKeys, post } from './ledger.ts'
 //
 // Tariff credits are also spent within a Moscow day (`plans.credits_per_day`): the tariff part
 // of a reserve, and what a charge takes from free tariff credits above the task's own rows, is
-// no larger than what is left of the day (`tariffCreditsOfDay`, `tariffDayRoom`). Gift and pack
-// credits are outside the day.
+// no larger than what is left of the day (`tariffCreditsOfDay`, `tariffDayRoom`). The reserve
+// of «Попробовать ещё» is the exception: the day does not bound it (`placementTariffRoom`), and
+// what it holds and pays counts on the day all the same. Gift and pack credits are outside the
+// day.
 
 const CREDIT_UNITS = Object.values(creditAccountUnits)
 
@@ -101,6 +104,13 @@ const placementSchema = z
     now: z.date(),
     /** When the reserve of a stuck task may be expired by cron; later than `now`. */
     expiresAt: z.date(),
+    /**
+     * «Попробовать ещё»: set by the server code that decided the press is a retry and gave the
+     * chain of the failed pass back (`releaseTask`) in the same transaction — never by what a
+     * client sends. The day does not bound a retry (`placementTariffRoom`). A later attempt with
+     * no active reserve before it is placed only so, and a retry only so.
+     */
+    retry: z.literal(true).optional(),
   })
   .refine(({ now, expiresAt }) => expiresAt.getTime() > now.getTime(), { path: ['expiresAt'] })
 export type CreditHoldPlacement = z.infer<typeof placementSchema>
@@ -227,8 +237,10 @@ export interface AttemptCreditBudget {
    */
   used: Decimal
   /**
-   * What the workspace could set aside for one more attempt now (`spendableCredits`): the tariff
-   * part no larger than what is left of the Moscow day, as a placement would count it.
+   * What the workspace could set aside for one more attempt of the chain now
+   * (`spendableCredits`): the tariff part no larger than what is left of the Moscow day, as
+   * «Продолжить» would count it — the next attempt of a chain is a continuation, which the day
+   * bounds.
    */
   spendableNow: Credits
   /** What the reserves still hold for the customer: max(0, reserved − used) × K, rounded down. */
@@ -436,7 +448,9 @@ function creditsOfDay(printed: string): Credits {
  *
  * «Попробовать ещё» gives the chain of the failed pass back, so a failed pass and its retries
  * take the day once — by the reserve of the last retry, and by what it paid when the task is
- * charged, the work of the candidate among it (`workAttemptsOf`).
+ * charged, the work of the candidate among it (`workAttemptsOf`). The day does not bound that
+ * reserve (`placementTariffRoom`), so it can take the day past its limit; the placements after
+ * it then find nothing left of the day.
  *
  * Read it after `lockWorkspace` where its answer bounds a write: under the lock of the tariff
  * account the reserves and the charges of the workspace are serialized.
@@ -582,8 +596,9 @@ const placementMoment = (now: Date, subscription: LiveSubscription | null): Date
  * the rule about the same things.
  *
  * The day is read for every placement: a continuation takes tariff credits of the day like a
- * new task. A continuation is not asked about unpaid work — the work is in progress and will be
- * charged if it is done —, so that is not read for it.
+ * new task, and a retry, which the day does not bound, is still told what the day has taken. A
+ * continuation is not asked about unpaid work — the work is in progress and will be charged if it
+ * is done —, so that is not read for it.
  */
 async function placementFacts(
   tx: BillingTx,
@@ -623,17 +638,20 @@ async function placementFacts(
  *
  * The attempt is a new task (`attempt` 1), a continuation — an earlier attempt of the task
  * still has its reserve, which stays and from now on lives as long as the new one — or a retry
- * (a later attempt of a task that has no active reserve). Whether it is taken is decided once,
- * by `newTaskVerdict` of @repo/domain, and a refusal is its error (`taskRefusal`) with the
- * reason and the numbers in the details; the checks come in this order:
+ * («Попробовать ещё», `retry`: a later attempt of a task whose chain was given back, so it has
+ * no active reserve). Whether it is taken is decided once, by `newTaskVerdict` of @repo/domain,
+ * and a refusal is its error (`taskRefusal`) with the reason and the numbers in the details;
+ * the checks come in this order:
  *
  * 1. a usable credit rate — BILLING_CREDIT_RATE_MISSING;
  * 2. credits: 5 that can be spent for a new task and a retry, 1 for a continuation —
  *    BILLING_CREDITS_HELD when other tasks in work hold them, BILLING_NOT_ENOUGH_CREDITS on a
  *    paid tariff, BILLING_TASK_NEEDS_SUBSCRIPTION without one;
- * 3. the tariff credits of the Moscow day, for every placement: what is left of the day on the
- *    tariff, with the gift and pack credits, cannot cover the start although the accounts
- *    can — BILLING_DAILY_LIMIT_REACHED;
+ * 3. the tariff credits of the Moscow day, for a new task and a continuation: what is left of
+ *    the day on the tariff, with the gift and pack credits, cannot cover the start although the
+ *    accounts can — BILLING_DAILY_LIMIT_REACHED. The daily limit does not apply to a retry (the
+ *    owner, 19.10.2026): its tariff part is bounded by the free tariff credits alone, and what it
+ *    holds counts on the day it is placed on for the placements after it;
  * 4. unpaid work, for a new task and a retry: what the workspace got without a charge since the
  *    start of its paid period against the monthly credits of the plan —
  *    BILLING_UNPAID_WORK_LIMIT —, without a paid tariff since the end of its last tariff
@@ -644,8 +662,9 @@ async function placementFacts(
  * A task of another workspace is not found. A conflict, before any of the above: a task that
  * is not billable or has no class of its model takes no reserve, a chain has at most
  * `maxTaskAttempts` attempts — a continuation of a third is refused, a retry starts a new chain
- * —, a charged task takes no further reserve, and an attempt is not placed below one that holds
- * a reserve. A refusal writes no reserve, no claim and moves no
+ * —, a charged task takes no further reserve, an attempt is not placed below one that holds
+ * a reserve, a retry is placed only after its chain was given back, and a later attempt without
+ * an active reserve only as a retry. A refusal writes no reserve, no claim and moves no
  * balance; a workspace that had no credit accounts is left with its three empty ones, which are
  * what a placement locks.
  *
@@ -656,7 +675,7 @@ export async function placeCreditHold(
   tx: BillingTx,
   input: CreditHoldPlacement,
 ): Promise<PlacedCreditHold> {
-  const { workspaceId, taskId, attempt, now, expiresAt } = placementSchema.parse(input)
+  const { workspaceId, taskId, attempt, now, expiresAt, retry } = placementSchema.parse(input)
   // Credits are reserved on the accounts of the workspace the task belongs to, whatever ids the
   // caller holds.
   const task = await tx.task.findFirst({
@@ -695,6 +714,14 @@ export async function placeCreditHold(
   let placement: TaskPlacement = 'retry'
   if (active.length > 0) placement = 'continuation'
   else if (attempt === 1) placement = 'new'
+  // Only the caller knows a press of «Попробовать ещё», and the rows must agree with it: a retry
+  // follows a chain that was given back, and nothing else places a later attempt without one.
+  if (retry === true && placement !== 'retry') {
+    throw conflict('A retry is a later attempt of a task whose chain was given back')
+  }
+  if (retry !== true && placement === 'retry') {
+    throw conflict('A later attempt without an active reserve is placed only by a retry')
+  }
   const continues = placement === 'continuation'
   // The attempts of a chain are bounded; a retry after a failure gave its chain back and starts
   // a new one (`maxTaskAttempts`).
@@ -744,7 +771,8 @@ export async function placeCreditHold(
     accounts: balances,
     amount: reserved,
     tariffTakesTasks: paid,
-    tariffRoom: verdict.today?.room ?? null,
+    // The room the verdict counted `spendableNow` by: none for a retry.
+    tariffRoom: placementTariffRoom(placement, verdict.today),
   })
   const holds: CreditHold[] = []
   for (const part of parts) {
@@ -1057,9 +1085,11 @@ const expiriesOf = (tx: BillingTx, rows: readonly ReserveRow[]): Promise<CreditL
  * pays first and expires what it does not pay, then the tariff, the gift and the pack pay in
  * that order from the rows of the task and from what is free on them now — free tariff credits
  * no more than is left of the Moscow day of the charge, read under the locks
- * (`tariffCreditsOfDay`); that part counts on this day. Every active reserve row of the task
- * becomes `captured` with what it paid; what the rows held above the charge returns to its
- * account — it simply stops being held.
+ * (`tariffCreditsOfDay`); that part counts on this day. The rows of the task pay whatever the
+ * day — the reserve of a retry, which the day did not bound, among them —, so the day never cuts
+ * a charge: it only decides how much of it moves onto free tariff credits. Every active reserve
+ * row of the task becomes `captured` with what it paid; what the rows held above the charge
+ * returns to its account — it simply stops being held.
  *
  * A repeated call finds no active row, finds the charge of the task in the ledger and returns
  * what the first call did; asked for another amount, it is a conflict. A task with no active
@@ -1470,9 +1500,9 @@ export async function modelClassPriced(
 }
 
 /**
- * What the workspace could set aside for one more attempt now, read without a lock: the
- * accounts as a placement counts them, the tariff no more than is left of the Moscow day of the
- * moment a placement would take its credits at (`placementMoment`).
+ * What the workspace could set aside for one more attempt of a chain now, read without a lock:
+ * the accounts as a continuation counts them, the tariff no more than is left of the Moscow day
+ * of the moment a placement would take its credits at (`placementMoment`).
  */
 async function spendableNow(tx: BillingTx, workspaceId: string, now: Date): Promise<Credits> {
   const subscription = await tx.subscription.findFirst({

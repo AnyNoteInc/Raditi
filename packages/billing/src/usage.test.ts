@@ -446,14 +446,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     data: Partial<Prisma.TaskUncheckedCreateInput> = {},
   ) => db.task.create({ data: { workspaceId, siteId, modelClass: 'standard', ...data } })
 
-  /** Sets the step of an attempt aside — 45 credits, or what is free —, as the queue will. */
-  const place = (workspaceId: string, taskId: string, { now = NOW, attempt = 1 } = {}) =>
+  /**
+   * Sets the step of an attempt aside — 45 credits, or what is free —, as the queue will;
+   * `retry`: «Попробовать ещё» after the chain was given back.
+   */
+  const place = (
+    workspaceId: string,
+    taskId: string,
+    { now = NOW, attempt = 1, retry }: { now?: Date; attempt?: number; retry?: true } = {},
+  ) =>
     fixtures.reserve({
       workspaceId,
       taskId,
       attempt,
       now,
       expiresAt: new Date(now.getTime() + 60 * DAY_MS),
+      ...(retry === undefined ? {} : { retry }),
     })
   /** The task is done for `credits`: the posting half of the charge. */
   const charge = (taskId: string, credits: number, { now = minutesAfter(20) } = {}) =>
@@ -951,7 +959,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect((await historyAt(workspaceId)).items).toMatchObject([
         { id: retried.id, outcome: 'unpaid', credits: null, from: null },
       ])
-      await place(workspaceId, retried.id, { now: minutesAfter(5), attempt: 2 })
+      await place(workspaceId, retried.id, { now: minutesAfter(5), attempt: 2, retry: true })
       // In work again: what is set aside is what its active rows hold — the 45 of the second
       // attempt, not the 45 of the first one as well, which came back.
       expect((await historyAt(workspaceId)).items).toMatchObject([

@@ -1,6 +1,10 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 
-import { ensurePersonalWorkspaceWithGift, grantTariffCredits } from '@repo/billing'
+import {
+  ensurePersonalWorkspaceWithGift,
+  grantTariffCredits,
+  tariffCreditsOfDay,
+} from '@repo/billing'
 import { underPrivateCreditRate } from '@repo/billing/testing'
 import {
   createPrismaClient,
@@ -1037,42 +1041,72 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect((await feedOf(taskId)).at(-1)?.type).toBe('feed.failure')
     })
 
-    it('tells a retry the daily limit refused in the words of the retry, and moves nothing', async () => {
-      // Tariff credits only, 23 a day: the failed pass took 20 of yesterday, another dialog 20
-      // of today, so the 3 left of today cannot start the retry (D7 of 17.10.2026), and the
-      // chain it gives back returns nothing to today.
+    // The owner, 19.10.2026: the daily limit does not apply to «Попробовать ещё». What the retry
+    // takes still counts on the day: «Продолжить» and a new dialog after it meet the day.
+    it('repeats a pass the day has no credits left for, and holds what comes after to the day', async () => {
+      // Tariff credits only, 48 a day: the failed pass took 45 of yesterday, another dialog 45
+      // of today, so 3 are left of today — too few for anything but the retry.
       const { owner, site, workspaceId } = await siteOwner({ database: true, gift: false })
-      await paidTariff(workspaceId, { creditsPerDay: 23, startedDaysAgo: 3 })
+      await paidTariff(workspaceId, { creditsPerDay: 48, startedDaysAgo: 3 })
       const caller = callerOf(owner, { client: underRateAndHeavy(db) })
       const { taskId } = await newDialog(caller, site.id)
       await withCandidate(taskId)
       const failureId = String(await failedPass(taskId))
       const yesterday = new Date(billingDay(new Date()).start.getTime() - 60_000)
       await db.creditHold.updateMany({ where: { taskId }, data: { placedAt: yesterday } })
-      const held = await activeHolds(taskId)
-      await newDialog(caller, site.id, 'Добавьте баннер на главную')
+      const { taskId: other } = await newDialog(caller, site.id, 'Добавьте баннер на главную')
+      expect((await activeHolds(other)).map((hold) => hold.amount.toFixed(0))).toEqual(['45'])
+      expect(await tariffCreditsOfDay(db, { workspaceId, now: new Date() })).toEqual({
+        charged: 0,
+        held: 45,
+      })
 
-      const refused = caller.task.retry({
+      const posted = await caller.task.retry({
         taskId,
         requestId: randomUUID(),
         failureEventId: failureId,
       })
 
-      await expect(refused).rejects.toMatchObject({
-        code: 'CONFLICT',
-        cause: { code: 'TASK_RETRY_DAILY_LIMIT' },
-        message:
-          'Кредиты по тарифу на сегодня закончились. Попробовать ещё раз можно завтра или сейчас — с пакетом кредитов',
-      })
-      // Nothing moved: the dialog waits with its candidate and the reserve of attempt 1.
+      // The full step of heavy, all of it tariff credits the day did not have.
       expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
-        status: 'awaiting_approval',
-        attempt: 1,
-        modelClass: 'standard',
+        status: 'queued',
+        attempt: 2,
+        modelClass: 'heavy',
       })
-      expect(await activeHolds(taskId)).toEqual(held)
-      expect((await feedOf(taskId)).at(-1)).toMatchObject({ type: 'feed.failure' })
-      expect((await caller.task.feed({ taskId })).task.canRetry).toBe(true)
+      expect(
+        (await db.creditHold.findMany({ where: { taskId }, orderBy: { attempt: 'asc' } })).map(
+          (hold) => [hold.attempt, hold.unit, hold.status, hold.amount.toFixed(0)],
+        ),
+      ).toEqual([
+        [1, 'credit_tariff', 'released', '45'],
+        [2, 'credit_tariff', 'active', '120'],
+      ])
+      expect((await outboxOf(taskId)).map((row) => row.dedupeKey)).toContain(
+        `turn.run:${taskId}:2:${posted.requestEventId}`,
+      )
+      // It counts on the day: 165 of 48, nothing left of it.
+      expect(await tariffCreditsOfDay(db, { workspaceId, now: new Date() })).toEqual({
+        charged: 0,
+        held: 165,
+      })
+
+      // «Продолжить» of the other dialog is held to the day, and nothing moves.
+      await asked(other, { kind: 'ceiling', reason: 'step', spent: 45, held: 45, left: 0 })
+      await expect(
+        caller.task.continue({ taskId: other, requestId: randomUUID() }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        cause: { code: 'BILLING_DAILY_LIMIT_REACHED', details: { reason: 'daily_limit' } },
+      })
+      expect(await db.task.findUniqueOrThrow({ where: { id: other } })).toMatchObject({
+        status: 'awaiting_user',
+        attempt: 1,
+      })
+      expect((await activeHolds(other)).map((hold) => hold.attempt)).toEqual([1])
+      // So is a new dialog.
+      await expect(newDialog(caller, site.id, 'Уберите баннер')).rejects.toMatchObject({
+        cause: { code: 'BILLING_DAILY_LIMIT_REACHED' },
+      })
     })
 
     it('rolls the return of the reserve back when the new one is refused', async () => {

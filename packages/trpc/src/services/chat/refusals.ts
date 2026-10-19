@@ -39,20 +39,6 @@ export const taskAttemptsExhausted = () =>
 /** «Попробовать ещё»: no failure of the dialog waits for a retry, or not the one pressed on. */
 export const taskNothingToRetry = () =>
   new DomainError('TASK_NOTHING_TO_RETRY', 'The dialog has no failure to retry', 409)
-/**
- * «Попробовать ещё» refused by the daily limit (D7 of 17.10.2026): the press is not a new task,
- * so its words are those of the retry (`feedRetryText.dailyLimit`), not those of
- * BILLING_DAILY_LIMIT_REACHED, which tell to put the task tomorrow. The details of the refusal
- * are kept for the logs.
- */
-export const taskRetryDailyLimit = (details: unknown) =>
-  new DomainError(
-    'TASK_RETRY_DAILY_LIMIT',
-    'The daily limit refused the retry of the dialog',
-    409,
-    details,
-  )
-
 /** A command of the chat the server does not allow now; the text is the one `task.commands` shows. */
 export const commandUnavailable = (command: ChatCommandId, refusal: ChatCommandRefusal) =>
   new DomainError('CHAT_COMMAND_UNAVAILABLE', `Command ${command} is refused: ${refusal}`, 409, {

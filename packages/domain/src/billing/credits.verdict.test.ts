@@ -4,6 +4,7 @@ import {
   minContinueCredits,
   minStartCredits,
   newTaskVerdict,
+  placementTariffRoom,
   taskPlacements,
   trialUnpaidWorkCredits,
   unpaidWork,
@@ -703,11 +704,35 @@ describe('newTaskVerdict', () => {
       )
     })
 
-    it('caps a retry by the day like a new task', () => {
+    // The owner, 19.10.2026: the daily limit does not apply to «Попробовать ещё».
+    it('leaves a retry outside the day: it may take every free tariff credit', () => {
       const dayTaken = { accounts: three(account(250), empty, empty), tariffCreditsToday: day(50) }
-      expect(ask({ placement: 'retry', ...dayTaken })).toEqual(refused('daily_limit', 250, 0, 5, 0))
-      expect(ask({ placement: 'new', ...dayTaken })).toEqual(
-        ask({ placement: 'retry', ...dayTaken }),
+      expect(ask({ placement: 'new', ...dayTaken })).toEqual(refused('daily_limit', 250, 0, 5, 0))
+      const retry = ask({ placement: 'retry', ...dayTaken })
+      expect(retry).toEqual(allowed(250, 0, 5, 250))
+      // the day is still told as it is
+      expect(retry.today).toEqual(today(50, 50, 0, 0, 0))
+      // past the limit — a retry before took it there — and with a little of the day left
+      expect(ask({ placement: 'retry', ...dayTaken, tariffCreditsToday: day(30, 140) })).toEqual(
+        allowed(250, 0, 5, 250),
+      )
+      expect(ask({ placement: 'retry', ...dayTaken, tariffCreditsToday: day(47) })).toEqual(
+        allowed(250, 0, 5, 250),
+      )
+    })
+
+    it('asks a retry everything else a new task is asked', () => {
+      const dayTaken = { tariffCreditsToday: day(50) }
+      // the credits, before the day
+      expect(
+        ask({ placement: 'retry', accounts: three(account(3), empty, empty), ...dayTaken }),
+      ).toEqual(refused('below_start', 3, 0, 5, 3))
+      expect(
+        ask({ placement: 'retry', accounts: three(account(45, 45), empty, empty), ...dayTaken }),
+      ).toEqual(refused('held', 0, 45, 5, 0))
+      // and unpaid work, which the day does not lift
+      expect(ask({ placement: 'retry', unpaidWork: credits('300'), ...dayTaken }).reason).toBe(
+        'unpaid_limit',
       )
     })
 
@@ -796,6 +821,36 @@ describe('newTaskVerdict', () => {
   describe('by what asks for the reserve', () => {
     it('knows a new task, a continuation and a retry', () => {
       expect(taskPlacements).toEqual(['new', 'continuation', 'retry'])
+    })
+
+    it('bounds the tariff part of a new task and a continuation by the day, never of a retry', () => {
+      const left = { room: toCredits(7) }
+      expect(placementTariffRoom('new', left)).toBe(7)
+      expect(placementTariffRoom('continuation', left)).toBe(7)
+      expect(placementTariffRoom('continuation', { room: toCredits(0) })).toBe(0)
+      expect(placementTariffRoom('retry', left)).toBeNull()
+      expect(placementTariffRoom('retry', { room: toCredits(0) })).toBeNull()
+      // no day: no paid tariff, or a plan without a daily limit
+      for (const placement of taskPlacements) {
+        expect(placementTariffRoom(placement, null)).toBeNull()
+        expect(placementTariffRoom(placement, { room: null })).toBeNull()
+      }
+    })
+
+    it('refuses a placement it does not know, and a room that is no count of credits', () => {
+      for (const placement of [
+        'restart',
+        'toString',
+        '',
+        undefined,
+      ] as unknown as TaskPlacement[]) {
+        expect(() => placementTariffRoom(placement, null)).toThrow(badRequest)
+      }
+      for (const room of [-1, 1.5, Number.NaN, '7'] as unknown as Credits[]) {
+        expect(() => placementTariffRoom('new', { room })).toThrow(badRequest)
+      }
+      // a retry is not asked about a room it does not use
+      expect(placementTariffRoom('retry', { room: -1 as Credits })).toBeNull()
     })
 
     it('asks five credits of a new task and of a retry, one of a continuation', () => {
