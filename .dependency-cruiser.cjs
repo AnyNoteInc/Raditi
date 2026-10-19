@@ -7,7 +7,7 @@
 
 const TOOLING = '^packages/(eslint-config|typescript-config)/'
 const ADAPTERS =
-  'db|storage|vault|git-providers|sandbox-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram'
+  'db|storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram'
 const SERVICES = 'auth|notifications|billing'
 // Every package must belong to a layer; an unclassified one would bypass all rules.
 const KNOWN = `^packages/(domain|observability|${ADAPTERS}|${SERVICES}|trpc|ui|eslint-config|typescript-config)/`
@@ -203,11 +203,28 @@ module.exports = {
       },
     },
     {
+      name: 'deploy-step-no-platform-access',
+      comment:
+        'The deploy-step command runs inside the deploy job of a site (docs/plan/53-chat-preview-release.md, Р30): it has no database, Redis or S3, not even transitively. Everything it needs comes from the release API.',
+      severity: 'error',
+      from: { path: '^apps/orchestrator/src/deploy-step/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: [
+          '^packages/(db|storage|billing)/',
+          ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+|pg'),
+        ],
+        reachable: true,
+      },
+    },
+    {
       name: 'web-no-sandbox',
-      comment: 'Only the orchestrator runs agents, sandboxes and subscription backends.',
+      comment: 'Only the orchestrator runs agents, sandboxes, browsers and subscription backends.',
       severity: 'error',
       from: { path: '^apps/web/' },
-      to: { path: '^packages/(sandbox-providers|agent-drivers|llm-backends)/', reachable: true },
+      to: {
+        path: '^packages/(sandbox-providers|browser-providers|agent-drivers|llm-backends)/',
+        reachable: true,
+      },
     },
   ],
   options: {

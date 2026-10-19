@@ -395,6 +395,9 @@ catalogs:
     pg:
       specifier: ^8.23.0
       version: 8.23.0
+    playwright-core:
+      specifier: 1.63.0
+      version: 1.63.0
     prettier:
       specifier: ^3.9.9
       version: 3.9.9
@@ -443,6 +446,9 @@ catalogs:
     tar-stream:
       specifier: ^3.2.1
       version: 3.2.1
+    tldts:
+      specifier: ^7.4.15
+      version: 7.4.15
     turbo:
       specifier: ^2.11.4
       version: 2.11.4
@@ -574,6 +580,9 @@ importers:
       '@repo/billing':
         specifier: workspace:*
         version: link:../../packages/billing
+      '@repo/browser-providers':
+        specifier: workspace:*
+        version: link:../../packages/browser-providers
       '@repo/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -634,6 +643,9 @@ importers:
       tar-stream:
         specifier: 'catalog:'
         version: 3.2.1
+      tldts:
+        specifier: 'catalog:'
+        version: 7.4.15
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -797,6 +809,9 @@ importers:
       superjson:
         specifier: 'catalog:'
         version: 2.2.6
+      tldts:
+        specifier: 'catalog:'
+        version: 7.4.15
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -935,6 +950,40 @@ importers:
       decimal.js:
         specifier: 'catalog:'
         version: 10.6.0
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/browser-providers:
+    dependencies:
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
       zod:
         specifier: 'catalog:'
         version: 4.6.5
