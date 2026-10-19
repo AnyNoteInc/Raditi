@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { request } from 'node:http'
 import { connect } from 'node:net'
 
@@ -88,6 +88,12 @@ function ustar(files: { path: string; content: string; type?: string }[]): Buffe
 const once = async function* (bytes: Buffer) {
   yield bytes
 }
+/** What core keeps in Vault `kv/previews/<previewId>/db` and hands to every build. */
+const passwords = {
+  user: randomBytes(24).toString('base64url'),
+  root: randomBytes(24).toString('base64url'),
+}
+const secrets = { env: { API_KEY: 'stand-secret-value' }, database: passwords }
 
 function specOf(): PreviewRuntimeSpec {
   const hostname = `site-0f3a9c1b-chat-${randomUUID().slice(0, 6)}.localhost`
@@ -183,11 +189,20 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
   it('serves the tree with its database and settings, refuses links, loads only data', async () => {
     const spec = specOf()
     owned.push(spec.previewId)
-    const upstream = await runtime.ensure(spec, { env: { API_KEY: 'stand-secret-value' } })
+    const upstream = await runtime.ensure(spec, secrets)
     await runtime.loadDatabase(
       spec.previewId,
       once(Buffer.from('CREATE TABLE t (a INT); INSERT INTO t VALUES (42);\n')),
+      passwords,
     )
+    // The passwords are files of the database's tmpfs: nothing Docker keeps shows them.
+    const [dbRow] = await docker.listContainers({
+      all: true,
+      filters: { label: [`io.raditi.preview.id=${spec.previewId}`, 'io.raditi.preview.role=db'] },
+    })
+    const dbInfo = JSON.stringify(await docker.getContainer(dbRow!.Id).inspect())
+    expect(dbInfo).not.toContain(passwords.user)
+    expect(dbInfo).not.toContain(passwords.root)
     await runtime.writeFiles(spec.previewId, {
       archive: once(
         ustar([
@@ -195,8 +210,14 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
           { path: 'old.txt', content: 'x' },
         ]),
       ),
-      deletes: ['old.txt'],
+      deletes: [],
       replace: true,
+    })
+    // Deletes go before the archive (infra/preview/files.mjs): a path of the old tree goes.
+    await runtime.writeFiles(spec.previewId, {
+      archive: once(ustar([])),
+      deletes: ['old.txt'],
+      replace: false,
     })
     const host = `${spec.hostname}:8090`
     expect((await get(upstream, host)).body).toBe(`${spec.hostname} 42 stand-secret-value`)
@@ -232,7 +253,11 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
 
     // Client commands of a seed never run: it is data, and this line is not.
     await expect(
-      runtime.loadDatabase(spec.previewId, once(Buffer.from('\\! touch /tmp/pwned\nSELECT 1;\n'))),
+      runtime.loadDatabase(
+        spec.previewId,
+        once(Buffer.from('\\! touch /tmp/pwned\nSELECT 1;\n')),
+        passwords,
+      ),
     ).rejects.toThrow()
     // Where the client ran: the database container, its own /tmp.
     expect(await codeIn(spec.previewId, 'db', ['test', '-d', '/tmp'])).toBe(0)
@@ -241,6 +266,7 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
     await runtime.loadDatabase(
       spec.previewId,
       once(Buffer.from('CREATE TABLE t (a INT); INSERT INTO t VALUES (42);\n')),
+      passwords,
     )
 
     // The PHP of the preview: the database and the egress slot on its network, nothing past them.
@@ -265,7 +291,7 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
       ).code,
     ).toBe(0)
     // Again: nothing replaced, the same entry.
-    expect(await runtime.ensure(spec, { env: { API_KEY: 'stand-secret-value' } })).toEqual(upstream)
+    expect(await runtime.ensure(spec, secrets)).toEqual(upstream)
     await runtime.writeFiles(spec.previewId, {
       archive: once(ustar([{ path: 'index.php', content: page }])),
       deletes: [],
@@ -274,7 +300,8 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
     expect((await get(upstream, host)).body).toBe(`${spec.hostname} 42 stand-secret-value`)
     await runtime.stop(spec.previewId)
     expect(await runtime.inspect(spec.previewId)).toMatchObject({ running: false })
-    const restarted = await runtime.ensure(spec, { env: { API_KEY: 'stand-secret-value' } })
+    // A restart empties the tmpfs: the database waits for its passwords again, from the caller.
+    const restarted = await runtime.ensure(spec, secrets)
     expect((await get(restarted, host)).body).toBe(`${spec.hostname} 42 stand-secret-value`)
     // Moved on without a build: a new lease only.
     await runtime.extend(spec.previewId, spec.expiresAt + 60_000)
@@ -299,7 +326,7 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
     if (!browserImage) return context.skip()
     const spec = { ...specOf(), images: { ...specOf().images, db: null, egress: null } }
     owned.push(spec.previewId)
-    await runtime.ensure(spec, { env: {} })
+    await runtime.ensure(spec, { env: {}, database: null })
     const endpoint = await runtime.startBrowser(spec.previewId, {
       image: browserImage!,
       hostname: spec.hostname,

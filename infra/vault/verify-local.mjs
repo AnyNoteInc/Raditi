@@ -904,8 +904,12 @@ async function verifyReleaseAccess({ rootToken, scopedTokens, expect, siteId, co
     ])
       await expect(token, `kv/metadata/${preview(id)}`, 403, post(body))
   }
+  // The passwords of the preview's database (owner's answer of 19.10.2026): core's alone.
+  await expect(core, `kv/data/${preview('db')}`, 200, write({ v: '1', user: 'u', root: 'r' }, 0))
+  const passwords = await expect(core, `kv/data/${preview('db')}`, 200)
+  assert.ok(passwords?.data?.data?.user === 'u', 'Preview database secret differs')
   const listed = await expect(core, `kv/metadata/previews/${previewId}`, 200, { method: 'LIST' })
-  assert.deepEqual([...(listed?.data?.keys ?? [])].sort(), ['browser', 'wp'])
+  assert.deepEqual([...(listed?.data?.keys ?? [])].sort(), ['browser', 'db', 'wp'])
 
   // mcp: the secrets of a preview, read-only; nothing of a variable of a site, no wrapping.
   for (const kind of ['wp', 'browser']) {

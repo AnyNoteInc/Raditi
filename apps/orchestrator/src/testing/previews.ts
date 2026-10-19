@@ -11,6 +11,7 @@ import {
   type DatabaseCopier,
   type KvSecret,
   type PreviewBrowserInput,
+  type PreviewDatabasePasswords,
   type PreviewExecInput,
   type PreviewFilesInput,
   type PreviewRuntime,
@@ -91,8 +92,15 @@ export class FakeRuntime implements PreviewRuntime {
     this.writes.push({ ...rest, bytes })
   }
 
-  async loadDatabase(_previewId: string, seed: AsyncIterable<Uint8Array>) {
+  readonly databasePasswords: PreviewDatabasePasswords[] = []
+
+  async loadDatabase(
+    _previewId: string,
+    seed: AsyncIterable<Uint8Array>,
+    passwords: PreviewDatabasePasswords,
+  ) {
     this.calls.push('loadDatabase')
+    this.databasePasswords.push(passwords)
     const parts: Buffer[] = []
     for await (const chunk of seed) parts.push(Buffer.from(chunk))
     this.seeds.push(Buffer.concat(parts).toString('utf8'))

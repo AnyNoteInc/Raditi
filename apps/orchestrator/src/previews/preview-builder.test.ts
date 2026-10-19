@@ -1,13 +1,16 @@
 import {
   DatabaseCopyError,
   DomainError,
+  previewDatabaseSecretPath,
   SiteConnectionError,
   type PreviewFilesInput,
 } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
+import { MemoryVault } from '../testing/previews.ts'
 import {
   DIFF_REBUILD_FILES,
+  previewDatabasePasswords,
   previewErrorCode,
   previewFailure,
   writePreviewTree,
@@ -188,5 +191,28 @@ describe('the error code of a failed preview', () => {
     expect(previewErrorCode(new Error('ENOENT /var/secret'))).toBe('build_failed')
     for (const code of ['no_base', 'database_auth_failed', 'copy_too_large', 'seed_invalid'])
       expect(code).toMatch(/^[a-z][a-z0-9_]{1,47}$/)
+  })
+})
+
+describe('the passwords of a preview database (owner, 19.10.2026: in Vault)', () => {
+  const previewId = '0196abcd-0000-7000-8000-00000000000a'
+  const path = previewDatabaseSecretPath(previewId)
+
+  it('makes them once and gives the same ones to every build after', async () => {
+    const vault = new MemoryVault()
+    const first = await previewDatabasePasswords({ secrets: vault }, previewId)
+    expect(first.user).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    expect(first.root).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    expect(first.root).not.toBe(first.user)
+    expect(vault.kv.get(path)).toEqual({ version: 1, data: { v: '1', ...first } })
+    expect(await previewDatabasePasswords({ secrets: vault }, previewId)).toEqual(first)
+    expect(vault.kv.get(path)?.version).toBe(1)
+  })
+
+  it('replaces a secret that does not parse, by its version', async () => {
+    const vault = new MemoryVault()
+    await vault.kvWrite(path, { v: '1', user: 'short' })
+    const made = await previewDatabasePasswords({ secrets: vault }, previewId)
+    expect(vault.kv.get(path)).toEqual({ version: 2, data: { v: '1', ...made } })
   })
 })

@@ -370,10 +370,14 @@ async function* archive() {
   yield Buffer.from('tar bytes')
 }
 
+/** The database passwords core keeps in Vault, and the client's variables. */
+const passwords = { user: 'u'.repeat(32), root: 'r'.repeat(32) }
+const secrets = (env: Record<string, string> = {}) => ({ env, database: passwords })
+
 describe('Docker preview runtime: ensure', () => {
   it('builds the preview on a hostless network, hardened, and returns the entry port', async () => {
     const fake = daemon()
-    const upstream = await runtimeOn(fake).ensure(spec(), { env: { API_KEY: secretValue } })
+    const upstream = await runtimeOn(fake).ensure(spec(), secrets({ API_KEY: secretValue }))
 
     const [network] = [...fake.networks.values()]
     expect(network).toMatchObject({
@@ -477,7 +481,7 @@ describe('Docker preview runtime: ensure', () => {
   it('gives the docroot to the PHP user from a helper with that volume alone, on every build', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     const init = fake.created.find(
       (item) => item.Labels?.['io.raditi.preview.role'] === 'files-helper',
     )!
@@ -500,7 +504,7 @@ describe('Docker preview runtime: ensure', () => {
     ])
     expect(fake.byRole('files-helper')).toHaveLength(0)
     // The helper leaves a docroot of the PHP user as it is: asking again costs one helper.
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     expect(
       fake.execs.filter((call) => call.role === 'files-helper' && call.argv.includes('init')),
     ).toHaveLength(2)
@@ -522,7 +526,7 @@ describe('Docker preview runtime: ensure', () => {
         'io.raditi.preview.role': 'files',
       },
     })
-    await runtimeOn(fake).ensure(spec(), { env: {} })
+    await runtimeOn(fake).ensure(spec(), secrets())
     expect(
       fake.execs.find((call) => call.role === 'files-helper' && call.argv.includes('init'))?.user,
     ).toBe('0:0')
@@ -535,21 +539,21 @@ describe('Docker preview runtime: ensure', () => {
         call.argv.includes('init') ? { code: 3, stderr: 'refused: root_owner\n' } : undefined,
     })
     const runtime = runtimeOn(fake)
-    await expect(runtime.ensure(spec(), { env: {} })).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(runtime.ensure(spec(), secrets())).rejects.toMatchObject({ code: 'CONFLICT' })
     // Created by that call and never prepared: removed, so the next call starts over.
     expect(fake.volumes.has(`rpv-${previewId}-files`)).toBe(false)
     fake.volumes.set(`rpv-${previewId}-files`, {
       Name: `rpv-${previewId}-files`,
       Labels: { ...fake.byRole('lease')[0]!.options.Labels!, 'io.raditi.preview.role': 'files' },
     })
-    await expect(runtime.ensure(spec(), { env: {} })).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(runtime.ensure(spec(), secrets())).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(fake.volumes.has(`rpv-${previewId}-files`)).toBe(true)
     expect(fake.byRole('web')).toHaveLength(0)
   })
 
   it('writes the configuration, then the settings the server waits for, and keeps secrets there only', async () => {
     const fake = daemon()
-    await runtimeOn(fake).ensure(spec(), { env: { API_KEY: secretValue } })
+    await runtimeOn(fake).ensure(spec(), secrets({ API_KEY: secretValue }))
     const writes = fake.execs.filter((call) => call.role === 'web' && call.argv[0] === '/bin/sh')
     expect(writes.map((call) => call.argv.at(-1))).toEqual([
       '/run/raditi/preview/httpd.conf',
@@ -557,9 +561,6 @@ describe('Docker preview runtime: ensure', () => {
     ])
     expect(writes.every((call) => call.user === '33:33')).toBe(true)
     const settings = previewSettingsSchema.parse(JSON.parse(writes[1]!.stdin.toString()))
-    const password = fake
-      .one('db')
-      .options.Env!.find((entry) => entry.startsWith('MARIADB_PASSWORD='))!
     expect(settings).toMatchObject({
       hostname,
       productionOrigin: 'https://shop.example.ru',
@@ -568,29 +569,73 @@ describe('Docker preview runtime: ensure', () => {
       settings: { DEBUG: false },
       env: { API_KEY: secretValue },
     })
-    expect(`MARIADB_PASSWORD=${settings.database!.password}`).toBe(password)
+    expect(settings.database!.password).toBe(passwords.user)
     // Never in a label, an argument or the environment of a container or a command.
     const visible = JSON.stringify([fake.created, fake.execs.map((call) => [call.argv, call.env])])
     expect(visible).not.toContain(secretValue)
-    expect(JSON.stringify(fake.created.map((item) => item.Labels))).not.toContain(
-      settings.database!.password,
-    )
+    expect(JSON.stringify(fake.created)).not.toContain(passwords.user)
+    expect(JSON.stringify(fake.created)).not.toContain(passwords.root)
+  })
+
+  it('gives the database its passwords as files of its tmpfs, never in its environment', async () => {
+    const fake = daemon()
+    await runtimeOn(fake).ensure(spec(), secrets())
+    const db = fake.one('db')
+    expect(db.options).toMatchObject({
+      User: '999:999',
+      Entrypoint: ['/bin/sh', '-c', expect.stringContaining('exec "$@"'), 'raditi-preview-db'],
+      Cmd: ['docker-entrypoint.sh', 'mariadbd'],
+      Env: [
+        'MARIADB_DATABASE=preview',
+        'MARIADB_USER=preview',
+        'MARIADB_PASSWORD_FILE=/run/raditi/db/user',
+        'MARIADB_ROOT_PASSWORD_FILE=/run/raditi/db/root',
+        'MARIADB_ROOT_HOST=localhost',
+      ],
+    })
+    expect(db.options.HostConfig!.Tmpfs!['/run/raditi/db']).toMatch(/uid=999,gid=999,mode=0700$/)
+    // Written by the database user before the server waits for them, then the server is asked.
+    const writes = fake.execs.filter((call) => call.role === 'db' && call.argv[0] === '/bin/sh')
+    expect(writes.map((call) => [call.argv.at(-1), call.user, call.stdin.toString()])).toEqual([
+      ['/run/raditi/db/user', '999:999', passwords.user],
+      ['/run/raditi/db/root', '999:999', passwords.root],
+    ])
+    const ready = fake.execs.find((call) => call.role === 'db' && call.argv[0] === 'mariadb')!
+    expect(ready.env).toEqual([`MYSQL_PWD=${passwords.user}`])
+    expect(fake.execs.indexOf(ready)).toBeGreaterThan(fake.execs.indexOf(writes[1]!))
+  })
+
+  it('refuses a database made with other passwords, and a build without them', async () => {
+    const fake = daemon()
+    const runtime = runtimeOn(fake)
+    await runtime.ensure(spec(), secrets())
+    // Vault lost the secret and core made new ones: the users of the volume would refuse them.
+    const other = { env: {}, database: { user: 'x'.repeat(32), root: 'y'.repeat(32) } }
+    await expect(runtime.ensure(spec(), other)).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(runtime.ensure(spec(), { env: {}, database: null })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+    // A recipe without a database needs none.
+    await runtime.ensure(spec({ images: { ...spec().images, db: null } }), {
+      env: {},
+      database: null,
+    })
   })
 
   it('is idempotent and moves the deadline only forward, with a new lease', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    const first = await runtime.ensure(spec(), { env: {} })
+    const first = await runtime.ensure(spec(), secrets())
     // Only the helper that prepares the docroot comes again.
     const lasting = () =>
       fake.created.filter((item) => item.Labels?.['io.raditi.preview.role'] !== 'files-helper')
         .length
     const before = lasting()
-    expect(await runtime.ensure(spec(), { env: {} })).toEqual(first)
+    expect(await runtime.ensure(spec(), secrets())).toEqual(first)
     expect(lasting()).toBe(before)
-    await runtime.ensure(spec({ expiresAt: 1_900_000_000_000 - 1 }), { env: {} })
+    await runtime.ensure(spec({ expiresAt: 1_900_000_000_000 - 1 }), secrets())
     expect(lasting()).toBe(before)
-    await runtime.ensure(spec({ expiresAt: 1_900_000_100_000 }), { env: {} })
+    await runtime.ensure(spec({ expiresAt: 1_900_000_100_000 }), secrets())
     const leases = fake.byRole('lease')
     expect(leases.map((item) => item.options.Labels!['io.raditi.preview.deadline'])).toEqual([
       label(1_900_000_100_000),
@@ -605,7 +650,7 @@ describe('Docker preview runtime: ensure', () => {
     await expect(runtime.extend(previewId, 1_900_000_000_000)).rejects.toMatchObject({
       code: 'CONFLICT',
     })
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     const before = fake.created.length
     await runtime.extend(previewId, 1_900_000_000_000 - 1)
     expect(fake.created.length).toBe(before)
@@ -622,7 +667,8 @@ describe('Docker preview runtime: ensure', () => {
     expect(
       fake.created.slice(before).map((item) => item.Labels?.['io.raditi.preview.role']),
     ).toEqual(['lease'])
-    expect(fake.execs.filter((call) => call.argv[0] === '/bin/sh')).toHaveLength(2)
+    // The two writes of the build (and the database's two files): none of extend.
+    expect(fake.execs.filter((call) => call.argv[0] === '/bin/sh')).toHaveLength(4)
     for (const value of [Date.now() - 1, 1.5, Number.MAX_SAFE_INTEGER])
       await expect(runtime.extend(previewId, value)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     await expect(runtime.extend('../etc', 1_900_000_300_000)).rejects.toMatchObject({
@@ -633,16 +679,15 @@ describe('Docker preview runtime: ensure', () => {
   it('replaces only the container whose desired state changed, keeping the database passwords', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     const db = fake.one('db')
-    const password = db.options.Env!.find((entry) => entry.startsWith('MARIADB_PASSWORD='))
-    await runtime.ensure(spec({ images: { ...spec().images, web: image('php84') } }), { env: {} })
+    await runtime.ensure(spec({ images: { ...spec().images, web: image('php84') } }), secrets())
     expect(fake.one('web').options.Image).toBe(image('php84'))
     expect(fake.one('db').id).toBe(db.id)
-    await runtime.ensure(spec({ images: { ...spec().images, db: image('mariadb2') } }), { env: {} })
+    await runtime.ensure(spec({ images: { ...spec().images, db: image('mariadb2') } }), secrets())
     expect(fake.one('db').id).not.toBe(db.id)
-    expect(fake.one('db').options.Env).toContain(password)
-    await runtime.ensure(spec({ egress: ['other.example.ru:443'] }), { env: {} })
+    expect(fake.one('db').files.get('/run/raditi/db/user')!.toString()).toBe(passwords.user)
+    await runtime.ensure(spec({ egress: ['other.example.ru:443'] }), secrets())
     expect(fake.one('egress').options.Env).toContain('ALLOWED_HOSTS=["other.example.ru:443"]')
     // The server reads its configuration at start: a new one is a new web container.
     const web = fake.one('web')
@@ -654,7 +699,7 @@ describe('Docker preview runtime: ensure', () => {
           web: { ...recipe.web, configFiles: [{ name: 'httpd.conf', content: 'Listen 8081' }] },
         },
       }),
-      { env: {} },
+      secrets(),
     )
     expect(fake.one('web').id).not.toBe(web.id)
     expect(fake.one('web').files.get('/run/raditi/preview/httpd.conf')!.toString()).toBe(
@@ -665,7 +710,7 @@ describe('Docker preview runtime: ensure', () => {
   it('tells the egress proxy the platform subnets it never connects to (Р13)', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake, { egressRefusedSubnets: ['84.201.128.0/18', '2a02:6b8::/32'] })
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     expect(fake.one('egress').options.Env).toEqual([
       'LISTEN_HOST=172.23.0.5',
       'LISTEN_PORT=3128',
@@ -678,10 +723,8 @@ describe('Docker preview runtime: ensure', () => {
   it('drops the database and the egress proxy of a preview that no longer has them', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
-    await runtime.ensure(spec({ images: { ...spec().images, db: null, egress: null } }), {
-      env: {},
-    })
+    await runtime.ensure(spec(), secrets())
+    await runtime.ensure(spec({ images: { ...spec().images, db: null, egress: null } }), secrets())
     expect(fake.byRole('db')).toHaveLength(0)
     expect(fake.byRole('egress')).toHaveLength(0)
     expect(fake.volumes.has(`rpv-${previewId}-db`)).toBe(false)
@@ -695,35 +738,36 @@ describe('Docker preview runtime: ensure', () => {
   it('refuses what it cannot run safely', async () => {
     const wrongRuntime = daemon()
     await expect(
-      runtimeOn(wrongRuntime).ensure(spec({ runtime: 'runsc' }), { env: {} }),
+      runtimeOn(wrongRuntime).ensure(spec({ runtime: 'runsc' }), secrets()),
     ).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
     await expect(
-      runtimeOn(daemon()).ensure({ ...spec(), hostname: 'x' }, { env: {} }),
+      runtimeOn(daemon()).ensure({ ...spec(), hostname: 'x' }, secrets()),
     ).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
     await expect(
-      runtimeOn(daemon()).ensure(spec(), { env: { PATH: '/tmp' } }),
+      runtimeOn(daemon()).ensure(spec(), secrets({ PATH: '/tmp' })),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     // Past its deadline the watchdog would take it at once.
     const expired = daemon()
     await expect(
-      runtimeOn(expired).ensure(spec({ expiresAt: Date.now() - 1 }), { env: {} }),
+      runtimeOn(expired).ensure(spec({ expiresAt: Date.now() - 1 }), secrets()),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(expired.created).toHaveLength(0)
     const volume = daemon({ images: { [image('php')]: { Config: { Volumes: { '/data': {} } } } } })
-    await expect(runtimeOn(volume).ensure(spec(), { env: {} })).rejects.toMatchObject({
+    await expect(runtimeOn(volume).ensure(spec(), secrets())).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
     expect(volume.created).toHaveLength(0)
     // PREVIEW_DB_IMAGE is MariaDB: another engine is refused before anything is created.
     const postgres = daemon()
     await expect(
-      runtimeOn(postgres).ensure(spec({ recipe: { ...spec().recipe, database: 'postgres' } }), {
-        env: {},
-      }),
+      runtimeOn(postgres).ensure(
+        spec({ recipe: { ...spec().recipe, database: 'postgres' } }),
+        secrets(),
+      ),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(postgres.created).toHaveLength(0)
     const runsc = daemon({
@@ -732,9 +776,7 @@ describe('Docker preview runtime: ensure', () => {
     await expect(
       runtimeOn(runsc, { runtime: 'runsc', firewallImage: image('guard') }).ensure(
         spec({ runtime: 'runsc' }),
-        {
-          env: {},
-        },
+        secrets(),
       ),
     ).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
     expect(() => createDockerPreviewRuntime({ runtime: 'runsc', gatewayPort: 8090 })).toThrow(
@@ -744,7 +786,7 @@ describe('Docker preview runtime: ensure', () => {
 
   it('never builds on a network with a host address, and leaves none behind', async () => {
     const fake = daemon({ hostedNetwork: true })
-    await expect(runtimeOn(fake).ensure(spec(), { env: {} })).rejects.toThrow()
+    await expect(runtimeOn(fake).ensure(spec(), secrets())).rejects.toThrow()
     expect(fake.networks.size).toBe(0)
     expect(fake.byRole('web')).toHaveLength(0)
   })
@@ -752,18 +794,18 @@ describe('Docker preview runtime: ensure', () => {
   it('does not take over a preview of another site, nor a database whose container is gone', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     await expect(
-      runtime.ensure(spec({ siteId: '0196abcd-0000-7000-8000-0000000000ff' }), { env: {} }),
+      runtime.ensure(spec({ siteId: '0196abcd-0000-7000-8000-0000000000ff' }), secrets()),
     ).rejects.toMatchObject({ code: 'CONFLICT' })
     fake.containers.delete(fake.one('db').id)
-    await expect(runtime.ensure(spec(), { env: {} })).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(runtime.ensure(spec(), secrets())).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 
   it('under runsc guards each preview bridge on the host before anything runs on it', async () => {
     const fake = daemon({ runtimes: { runsc: { path: '/usr/bin/runsc', runtimeArgs: [] } } })
     const runtime = runtimeOn(fake, { runtime: 'runsc', firewallImage: image('guard') })
-    await runtime.ensure(spec({ runtime: 'runsc' }), { env: {} })
+    await runtime.ensure(spec({ runtime: 'runsc' }), secrets())
     const firewall = fake.created.find(
       (item) => item.Labels?.['io.raditi.preview.role'] === 'firewall',
     )!
@@ -783,9 +825,7 @@ describe('Docker preview runtime: ensure', () => {
     const runtime = runtimeOn(fake, { runtime: 'runsc', firewallImage: image('guard') })
     await runtime.ensure(
       spec({ runtime: 'runsc', limits: { cpu: 1, memoryMiB: 1024, pids: 64 } }),
-      {
-        env: {},
-      },
+      secrets(),
     )
     const pids = (role: string) =>
       fake.created.find((item) => item.Labels?.['io.raditi.preview.role'] === role)!.HostConfig!
@@ -796,9 +836,7 @@ describe('Docker preview runtime: ensure', () => {
     // The platform's forwarders run on the daemon's default runtime, their own limit.
     expect(pids('forwarder')).toBe(64)
     const runc = daemon()
-    await runtimeOn(runc).ensure(spec({ limits: { cpu: 1, memoryMiB: 1024, pids: 64 } }), {
-      env: {},
-    })
+    await runtimeOn(runc).ensure(spec({ limits: { cpu: 1, memoryMiB: 1024, pids: 64 } }), secrets())
     expect(runc.one('web').options.HostConfig!.PidsLimit).toBe(64)
   })
 })
@@ -812,7 +850,7 @@ describe('Docker preview runtime: files, database, commands', () => {
           : undefined,
     })
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     await runtime.writeFiles(previewId, { archive: archive(), deletes: ['old.php'], replace: true })
     const write = fake.execs.find((call) => call.argv.includes('write'))!
     expect(write.user).toBe('33:33')
@@ -849,8 +887,8 @@ describe('Docker preview runtime: files, database, commands', () => {
   it('loads a seed as data only, the password in the environment of the command alone', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
-    await runtime.loadDatabase(previewId, archive())
+    await runtime.ensure(spec(), secrets())
+    await runtime.loadDatabase(previewId, archive(), passwords)
     const [drop, load] = fake.execs
       .filter((call) => call.role === 'db' && call.argv[0] === 'mariadb')
       .slice(-2)
@@ -866,12 +904,11 @@ describe('Docker preview runtime: files, database, commands', () => {
       ]),
     )
     expect(load!.stdin.toString()).toBe('tar bytes')
-    const password = fake
-      .one('db')
-      .options.Env!.find((entry) => entry.startsWith('MARIADB_PASSWORD='))!
-      .split('=')[1]!
-    expect(load!.env).toEqual([`MYSQL_PWD=${password}`])
-    expect(load!.argv.join(' ')).not.toContain(password)
+    expect(load!.env).toEqual([`MYSQL_PWD=${passwords.user}`])
+    expect(load!.argv.join(' ')).not.toContain(passwords.user)
+    await expect(
+      runtime.loadDatabase(previewId, archive(), { user: 'short', root: passwords.root }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 
   it('runs a command in a CLI container shaped like the web one, and removes it after', async () => {
@@ -880,7 +917,7 @@ describe('Docker preview runtime: files, database, commands', () => {
         call.argv[0] === 'wp' ? { code: 2, stdout: 'out', stderr: 'err' } : undefined,
     })
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: { API_KEY: secretValue } })
+    await runtime.ensure(spec(), secrets({ API_KEY: secretValue }))
     const result = await runtime.exec(previewId, {
       argv: ['wp', 'option', 'get', 'home'],
       timeoutMs: 5_000,
@@ -916,7 +953,7 @@ describe('Docker preview runtime: files, database, commands', () => {
         call.argv[0] === 'wp' ? { code: 0, stdout: 'x'.repeat(16 * 1024 * 1024 + 1) } : undefined,
     })
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     await expect(
       runtime.exec(previewId, { argv: ['wp', 'db', 'export', '-'], timeoutMs: 5_000 }),
     ).rejects.toThrow()
@@ -928,7 +965,7 @@ describe('Docker preview runtime: browser and lifecycle', () => {
   it('starts the browser on its own network behind a relay, its control port on loopback only', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     const endpoint = await runtime.startBrowser(previewId, { image: image('browser'), hostname })
     const network = [...fake.networks.values()].find((item) => item.Name.endsWith('-browser'))!
     expect(network.Options).toMatchObject({
@@ -979,7 +1016,7 @@ describe('Docker preview runtime: browser and lifecycle', () => {
   it('sends the browser to a gateway named by address when host-gateway is another machine', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake, { gatewayHost: '172.17.0.1' })
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     await runtime.startBrowser(previewId, { image: image('browser'), hostname })
     const relay = fake.one('relay').options
     expect(relay.Cmd![0]).toBe('172.24.0.2:3128=172.17.0.1:8090')
@@ -993,7 +1030,7 @@ describe('Docker preview runtime: browser and lifecycle', () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
     expect(await runtime.inspect(previewId)).toBeNull()
-    const upstream = await runtime.ensure(spec(), { env: {} })
+    const upstream = await runtime.ensure(spec(), secrets())
     expect(await runtime.inspect(previewId)).toEqual({
       previewId,
       runtime: 'runc',
@@ -1021,7 +1058,7 @@ describe('Docker preview runtime: browser and lifecycle', () => {
     ).rejects.toMatchObject({
       code: 'CONFLICT',
     })
-    await expect(runtime.loadDatabase(previewId, archive())).rejects.toMatchObject({
+    await expect(runtime.loadDatabase(previewId, archive(), passwords)).rejects.toMatchObject({
       code: 'CONFLICT',
     })
     await expect(
@@ -1039,7 +1076,7 @@ describe('Docker preview runtime: the platform files of the stack (R5b, R5c)', (
   it('gives them back before a whole tree replaces the docroot and writes them after it', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     await runtime.writeFiles(previewId, {
       archive: archive(),
       deletes: [],
@@ -1073,7 +1110,7 @@ describe('Docker preview runtime: the platform files of the stack (R5b, R5c)', (
   it('leaves them alone over a difference and refuses files of another shape', async () => {
     const fake = daemon()
     const runtime = runtimeOn(fake)
-    await runtime.ensure(spec(), { env: {} })
+    await runtime.ensure(spec(), secrets())
     await runtime.writeFiles(previewId, { archive: archive(), deletes: [], replace: false })
     expect(fake.execs.some((call) => call.argv.includes('release'))).toBe(false)
     expect(fake.execs.some((call) => call.argv.includes('platform'))).toBe(false)

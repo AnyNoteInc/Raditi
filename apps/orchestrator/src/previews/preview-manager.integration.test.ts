@@ -5,6 +5,7 @@ import { createPrismaClient, markStaleCandidates, type PrismaClient } from '@rep
 import {
   conflict,
   previewAccessPath,
+  previewDatabaseSecretPath,
   previewBrowserSecretPath,
   previewBrowserSecretSchema,
   previewHostname,
@@ -333,6 +334,20 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         (mismatch) => mismatch.objectRef,
       ),
     ).toEqual(['post:2'])
+    // The passwords of its database: made once in Vault, handed to the runtime on each build.
+    const stored = f.vault.kv.get(previewDatabaseSecretPath(preview.id))!
+    const passwords = { user: stored.data.user, root: stored.data.root }
+    expect(stored).toMatchObject({ version: 1, data: { v: '1' } })
+    expect(passwords.user).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    expect(passwords.root).not.toBe(passwords.user)
+    expect(f.runtime.secrets[0]).toEqual({ env: {}, database: passwords })
+    expect(f.runtime.databasePasswords).toEqual([passwords])
+    // The runtime lost it (a restart of the host): the next build gets the same passwords.
+    f.runtime.running.delete(preview.id)
+    await f.m.refresh(preview.id, { requested: true, lost: true })
+    expect(f.runtime.secrets).toHaveLength(2)
+    expect(f.vault.kv.get(previewDatabaseSecretPath(preview.id))?.version).toBe(1)
+    expect(f.runtime.secrets.at(-1)).toEqual({ env: {}, database: passwords })
   })
 
   it('runs on the closest PHP to the site’s and keeps what the preview lacks (Р2, Р18)', async () => {
@@ -752,6 +767,7 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     })
     expect(f.runtime.calls.at(-1)).toBe('destroy')
     expect(f.vault.kv.has(previewAccessPath(preview.id, 'wp'))).toBe(false)
+    expect(f.vault.kv.has(previewDatabaseSecretPath(preview.id))).toBe(false)
     expect(f.storage.objects.has(seedKey)).toBe(false)
     expect(
       await db.previewSyncRequest.findUniqueOrThrow({ where: { id: request.id } }),

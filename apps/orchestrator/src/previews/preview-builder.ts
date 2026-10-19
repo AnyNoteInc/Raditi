@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto'
+
 import type { Prisma, PrismaClient } from '@repo/db'
 import { markStaleCandidates } from '@repo/db'
 import {
@@ -10,6 +12,8 @@ import {
   isDomainError,
   isSiteConnectionError,
   previewAccessPath,
+  previewDatabaseSecretPath,
+  previewDatabaseSecretSchema,
   previewOrigin,
   previewRuntimeMatch,
   siteEnvVarPath,
@@ -17,6 +21,7 @@ import {
   type DatabaseCopier,
   type DbAccess,
   type ObjectStorage,
+  type PreviewDatabasePasswords,
   type PreviewRecipe,
   type PreviewRuntime,
   type PreviewRuntimeSpec,
@@ -653,16 +658,21 @@ export async function buildPreview(
     (preview.status === 'ready' || preview.status === 'expired') &&
     !preview.dirty &&
     (await runtime.inspect(preview.id)) !== null
+  // The passwords of its database live in Vault, not in Docker (owner's answer of 19.10.2026).
+  const passwords =
+    recipe.database === null ? null : await previewDatabasePasswords(deps, preview.id)
+  const secrets = { env: variables.env, database: passwords }
   let upstream: PreviewUpstream
   try {
-    upstream = await runtime.ensure(spec, { env: variables.env }, signal)
+    upstream = await runtime.ensure(spec, secrets, signal)
   } catch (error) {
-    // What is left of it cannot be taken over (a database volume without its container, a
-    // docroot of another user, R5a): it is destroyed and built anew from the seed.
+    // What is left of it cannot be taken over (a database volume without its container or made
+    // with other passwords, a docroot of another user, R5a): it is destroyed and built anew from
+    // the seed, with the passwords Vault holds.
     if (!isDomainError(error) || error.code !== 'CONFLICT') throw error
     await runtime.destroy(preview.id)
     kept = false
-    upstream = await runtime.ensure(spec, { env: variables.env }, signal)
+    upstream = await runtime.ensure(spec, secrets, signal)
   }
   const target = { upstream, hostname: preview.hostname }
 
@@ -685,6 +695,7 @@ export async function buildPreview(
     await runtime.loadDatabase(
       preview.id,
       await openPreviewSeed(deps, seedRef, { key: seed.key, sha256: seed.sha256 }),
+      passwords!,
       signal,
     )
   }
@@ -795,6 +806,29 @@ export async function failBuild(
 
 const isSeedLost = (error: unknown) =>
   isDomainError(error) && ['PREVIEW_SEED_MISSING', 'PREVIEW_SEED_INVALID'].includes(error.code)
+
+/**
+ * The passwords of the preview's database, `kv/previews/<previewId>/db`: made once — the first
+ * build with a database — and the same for every build after it, since the users of the database
+ * live in its volume; removed with the preview (`forgetPreviewSecrets`). The mcp role never reads
+ * them. A secret that does not parse is replaced: the runtime then finds a database made with
+ * other passwords and the build starts it over (CONFLICT).
+ */
+export async function previewDatabasePasswords(
+  deps: Pick<PreviewBuildDeps, 'secrets'>,
+  previewId: string,
+): Promise<PreviewDatabasePasswords> {
+  const path = previewDatabaseSecretPath(previewId)
+  const current = await deps.secrets.kvRead(path)
+  const stored = previewDatabaseSecretSchema.safeParse(current?.data)
+  if (stored.success) return { user: stored.data.user, root: stored.data.root }
+  const made = {
+    user: randomBytes(24).toString('base64url'),
+    root: randomBytes(24).toString('base64url'),
+  }
+  await deps.secrets.kvWrite(path, { v: '1', ...made }, { cas: current?.version ?? 0 })
+  return made
+}
 
 /** The platform's account of the preview for the mcp role: `kv/previews/<previewId>/<kind>`. */
 async function storePreviewAccess(

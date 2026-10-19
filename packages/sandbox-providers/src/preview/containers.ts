@@ -3,6 +3,7 @@ import { posix } from 'node:path'
 
 import {
   PREVIEW_SETTINGS_PATH,
+  type PreviewDatabasePasswords,
   type PreviewRuntimeKind,
   type PreviewRuntimeSpec,
 } from '@repo/domain'
@@ -115,18 +116,12 @@ const fixedAddress = (networkId: string, address: string): Docker.EndpointsConfi
  * `inputs` is what the container is given after its start and reads only then — the server's
  * configuration files — so a change of them replaces it too.
  */
-export function configHash(
-  options: Docker.ContainerCreateOptions,
-  secretEnv: string[] = [],
-  inputs: unknown = null,
-) {
+export function configHash(options: Docker.ContainerCreateOptions, inputs: unknown = null) {
   const { Labels: _labels, ...rest } = options
-  const env = (rest.Env ?? []).map((entry) => {
-    const name = entry.slice(0, entry.indexOf('='))
-    return secretEnv.includes(name) ? `${name}=` : entry
-  })
   return createHash('sha256')
-    .update(JSON.stringify({ ...rest, Env: env, ...(inputs === null ? {} : { inputs }) }))
+    .update(
+      JSON.stringify({ ...rest, Env: rest.Env ?? [], ...(inputs === null ? {} : { inputs }) }),
+    )
     .digest('hex')
 }
 
@@ -136,7 +131,6 @@ function labelled(
   role: PreviewRole,
   deadline: number,
   extra: Record<string, string> = {},
-  secretEnv: string[] = [],
   inputs: unknown = null,
 ): Docker.ContainerCreateOptions {
   return {
@@ -144,7 +138,7 @@ function labelled(
     Labels: {
       ...previewLabels(identity, role, deadline),
       ...extra,
-      [CONFIG_LABEL]: configHash(options, secretEnv, inputs),
+      [CONFIG_LABEL]: configHash(options, inputs),
     },
   }
 }
@@ -233,18 +227,45 @@ export function webContainer(
     spec.expiresAt,
     // The CLI containers copy the rest of their options from this one.
     { [CLI_IMAGE_LABEL]: spec.images.cli, [HOSTNAME_LABEL]: spec.hostname },
-    [],
     // The server reads its configuration at start only: another one is another container.
     web.configFiles,
   )
 }
 
-export const DATABASE_SECRET_ENV = ['MARIADB_PASSWORD', 'MARIADB_ROOT_PASSWORD']
+/**
+ * The passwords of the database as files of its tmpfs (owner's answer of 19.10.2026: from Vault,
+ * never in the container's environment, where `docker inspect` shows them): the image's
+ * entrypoint reads them through `MARIADB_*_PASSWORD_FILE` and unsets them before the server.
+ */
+export const DATABASE_SECRET_DIR = '/run/raditi/db'
+export const DATABASE_SECRET_FILES = Object.freeze({
+  user: `${DATABASE_SECRET_DIR}/user`,
+  root: `${DATABASE_SECRET_DIR}/root`,
+})
+/**
+ * Which passwords the database was made with: a hash, so that a call with others is a CONFLICT
+ * at once — the users live in the volume and would refuse them — and never the passwords.
+ */
+export const DATABASE_SECRET_LABEL = `${PREVIEW_LABEL}db-secret`
+export const databaseSecretMark = (passwords: PreviewDatabasePasswords): string =>
+  createHash('sha256')
+    .update(`raditi-preview-db\0${passwords.user}\0${passwords.root}`)
+    .digest('hex')
+
+/**
+ * The image's entrypoint starts once `ensure` wrote both password files into the tmpfs — at the
+ * first start and after any restart, which empties it: a fixed script of the image's /bin/sh.
+ */
+export const WAIT_FOR_DATABASE_SECRETS = [
+  'i=0',
+  `while [ ! -f ${DATABASE_SECRET_FILES.user} ] || [ ! -f ${DATABASE_SECRET_FILES.root} ]; do i=$((i+1)); if [ "$i" -gt 600 ]; then exit 70; fi; sleep 0.2; done`,
+  'exec "$@"',
+].join('; ')
 
 export function databaseContainer(
   spec: PreviewRuntimeSpec,
   network: NetworkPlace,
-  passwords: { user: string; root: string },
+  passwords: PreviewDatabasePasswords,
 ): Docker.ContainerCreateOptions {
   const names = previewNames(spec.previewId)
   return labelled(
@@ -252,11 +273,14 @@ export function databaseContainer(
       name: names.container('db'),
       Image: spec.images.db!,
       User: DATABASE_USER,
+      // The image's own entrypoint and command (an official MariaDB image), after the wait.
+      Entrypoint: ['/bin/sh', '-c', WAIT_FOR_DATABASE_SECRETS, 'raditi-preview-db'],
+      Cmd: ['docker-entrypoint.sh', 'mariadbd'],
       Env: [
         `MARIADB_DATABASE=${PREVIEW_DATABASE.name}`,
         `MARIADB_USER=${PREVIEW_DATABASE.user}`,
-        `MARIADB_PASSWORD=${passwords.user}`,
-        `MARIADB_ROOT_PASSWORD=${passwords.root}`,
+        `MARIADB_PASSWORD_FILE=${DATABASE_SECRET_FILES.user}`,
+        `MARIADB_ROOT_PASSWORD_FILE=${DATABASE_SECRET_FILES.root}`,
         // Root only on the container's own socket: the PHP of the preview gets the user above.
         'MARIADB_ROOT_HOST=localhost',
       ],
@@ -270,6 +294,7 @@ export function databaseContainer(
         Tmpfs: {
           '/run/mysqld': tmpfs(DATABASE_USER, '4m').replace('mode=0700', 'mode=0755'),
           '/tmp': tmpfs(DATABASE_USER, '256m'),
+          [DATABASE_SECRET_DIR]: tmpfs(DATABASE_USER, '1m'),
         },
       },
       NetworkingConfig: {
@@ -282,8 +307,7 @@ export function databaseContainer(
     identityOf(spec),
     'db',
     spec.expiresAt,
-    {},
-    DATABASE_SECRET_ENV,
+    { [DATABASE_SECRET_LABEL]: databaseSecretMark(passwords) },
   )
 }
 

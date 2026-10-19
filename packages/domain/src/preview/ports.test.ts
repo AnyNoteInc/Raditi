@@ -184,11 +184,23 @@ describe('the runtime and the browser', () => {
 
   it('hands the variables and the database to the preview in its settings file only', () => {
     expect(PREVIEW_SETTINGS_PATH).toMatch(/^\/run\/raditi\//)
+    const database = { user: 'u'.repeat(32), root: 'r'.repeat(32) }
     expect(
-      previewRuntimeSecretsSchema.safeParse({ env: { SHOP_API_KEY: 'k'.repeat(12) } }).success,
+      previewRuntimeSecretsSchema.safeParse({ env: { SHOP_API_KEY: 'k'.repeat(12) }, database })
+        .success,
     ).toBe(true)
+    expect(previewRuntimeSecretsSchema.safeParse({ env: {}, database: null }).success).toBe(true)
     for (const env of [{ WP_HOME: 'k'.repeat(12) }, { SHOP_API_KEY: 'short' }])
-      expect(previewRuntimeSecretsSchema.safeParse({ env }).success).toBe(false)
+      expect(previewRuntimeSecretsSchema.safeParse({ env, database }).success).toBe(false)
+    // The passwords of the database are Vault's (19.10.2026): named, random, never left out.
+    for (const passwords of [
+      undefined,
+      { user: 'short', root: database.root },
+      { user: database.user },
+    ])
+      expect(previewRuntimeSecretsSchema.safeParse({ env: {}, database: passwords }).success).toBe(
+        false,
+      )
     const settings = {
       v: 1,
       hostname: 'site-0f3a9c1b-chat-a1b2c3.localhost',

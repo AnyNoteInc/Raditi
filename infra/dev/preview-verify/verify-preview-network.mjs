@@ -391,8 +391,8 @@ async function measure(control, servers) {
   const rows = []
   try {
     stage = 'previews'
-    const upstreamA = await runtime.ensure(previewA, { env: {} })
-    const upstreamB = await runtime.ensure(previewB, { env: {} })
+    const upstreamA = await runtime.ensure(previewA, { env: {}, database: null })
+    const upstreamB = await runtime.ensure(previewB, { env: {}, database: null })
     for (const [spec, name] of [
       [previewA, 'a'],
       [previewB, 'b'],

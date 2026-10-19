@@ -8,6 +8,7 @@ import {
   isDomainError,
   PREVIEW_SETTINGS_PATH,
   previewBrowserInputSchema,
+  previewDatabasePasswordsSchema,
   previewExecInputSchema,
   previewGeneratedFileSchema,
   previewRuntimeSecretsSchema,
@@ -15,6 +16,7 @@ import {
   previewSettingsSchema,
   sandboxCommandFailed,
   type PreviewBrowserEndpoint,
+  type PreviewDatabasePasswords,
   type PreviewExecResult,
   type PreviewFilesInput,
   type PreviewRuntime,
@@ -47,7 +49,11 @@ import {
   CLI_IMAGE_LABEL,
   cliContainer,
   CONFIG_LABEL,
+  DATABASE_SECRET_FILES,
+  DATABASE_SECRET_LABEL,
+  DATABASE_USER,
   databaseContainer,
+  databaseSecretMark,
   EGRESS_PORT,
   egressContainer,
   filesHelperContainer,
@@ -92,9 +98,6 @@ const SERVICE_USER = '10001:10001'
 const MAX_EXPIRES_AT = 8_640_000_000_000_000
 /** A write of the settings file or a configuration: a fixed script of /bin/sh, the path as $1. */
 const WRITE_FILE = ['/bin/sh', '-c', 'umask 077 && cat > "$1.tmp" && mv -f "$1.tmp" "$1"', 'raditi']
-const password = () => randomBytes(24).toString('base64url')
-const envOf = (info: Docker.ContainerInspectInfo, name: string) =>
-  (info.Config.Env ?? []).find((entry) => entry.startsWith(`${name}=`))?.slice(name.length + 1)
 const suffix = () => randomBytes(4).toString('hex')
 const refusedReason = /^refused: ([a-z_]{1,32})\n?$/
 const addressOn = (info: Docker.ContainerInspectInfo, network: NetworkPlace) =>
@@ -462,25 +465,22 @@ export function createDockerPreviewRuntime(
 
   // --- the database ---------------------------------------------------------------------------
 
-  const databaseClient = (info: Docker.ContainerInspectInfo) => {
-    const secret = envOf(info, 'MARIADB_PASSWORD')
-    if (!secret) throw commandError()
-    return {
-      env: [`MYSQL_PWD=${secret}`],
-      argv: [
-        'mariadb',
-        '--protocol=TCP',
-        '--host=127.0.0.1',
-        `--user=${PREVIEW_DATABASE.user}`,
-        '--skip-ssl',
-        '--batch',
-        '--local-infile=0',
-      ],
-    }
-  }
+  /** The client as the preview's user: its password from the caller (Vault), never from Docker. */
+  const databaseClient = (password: string) => ({
+    env: [`MYSQL_PWD=${password}`],
+    argv: [
+      'mariadb',
+      '--protocol=TCP',
+      '--host=127.0.0.1',
+      `--user=${PREVIEW_DATABASE.user}`,
+      '--skip-ssl',
+      '--batch',
+      '--local-infile=0',
+    ],
+  })
 
-  const databaseReady = (info: Docker.ContainerInspectInfo) => async () => {
-    const client = databaseClient(info)
+  const databaseReady = (info: Docker.ContainerInspectInfo, password: string) => async () => {
+    const client = databaseClient(password)
     const outcome = await execIn(docker.getContainer(info.Id), {
       argv: [...client.argv, `--database=${PREVIEW_DATABASE.name}`, '--execute=SELECT 1'],
       user: info.Config.User,
@@ -633,26 +633,36 @@ export function createDockerPreviewRuntime(
 
       let database: PreviewSettings['database'] = null
       if (hasDatabase) {
+        const passwords = parsedSecrets.data.database
+        if (!passwords) throw badRequest('The passwords of the preview database are missing')
         const existing = await containerOf(spec.previewId, 'db')
         const volumeWasThere = await volumeExists(names.databaseVolume)
-        // The users of a database live in its volume: without the container that knew their
-        // passwords the volume is of no use, and a silently empty database is not a preview.
-        if (!existing && volumeWasThere)
+        // The users of a database live in its volume: without the container that tells which
+        // passwords made them the volume is of no use, and a silently empty database is not a
+        // preview. A container made with other passwords (a secret of Vault lost and made anew)
+        // would never become ready with these.
+        if (
+          (!existing && volumeWasThere) ||
+          (existing &&
+            existing.Config.Labels?.[DATABASE_SECRET_LABEL] !== databaseSecretMark(passwords))
+        )
           throw conflict(
             'The database of this preview was lost: destroy the preview and build it again',
           )
         const created = await ensureVolume(identity, names.databaseVolume, 'database', deadline)
-        const passwords = {
-          user: (existing && envOf(existing, 'MARIADB_PASSWORD')) || password(),
-          root: (existing && envOf(existing, 'MARIADB_ROOT_PASSWORD')) || password(),
-        }
         try {
           const db = await ensureContainer(
             databaseContainer(spec, network, passwords),
             null,
             signal,
           )
-          await waitFor(db, databaseReady(db), signal)
+          // Its entrypoint waits for these (WAIT_FOR_DATABASE_SECRETS); after a restart, again.
+          for (const [file, value] of [
+            [DATABASE_SECRET_FILES.user, passwords.user],
+            [DATABASE_SECRET_FILES.root, passwords.root],
+          ] as const)
+            await writeInto(db, DATABASE_USER, file, value, signal)
+          await waitFor(db, databaseReady(db, passwords.user), signal)
         } catch (error) {
           // A database that never started is not kept: its volume would outlive its passwords.
           if (created) {
@@ -879,11 +889,13 @@ export function createDockerPreviewRuntime(
       }
     },
 
-    async loadDatabase(previewId, seed, signal) {
+    async loadDatabase(previewId, seed, passwordsValue: PreviewDatabasePasswords, signal) {
       if (!isPreviewId(previewId)) throw badRequest('Invalid preview id')
+      const passwords = previewDatabasePasswordsSchema.safeParse(passwordsValue)
+      if (!passwords.success) throw badRequest('Invalid preview database passwords')
       const db = await containerOf(previewId, 'db')
       if (!db?.State.Running) throw conflict('The preview has no running database here')
-      const client = databaseClient(db)
+      const client = databaseClient(passwords.data.user)
       const container = docker.getContainer(db.Id)
       const name = PREVIEW_DATABASE.name
       await execChecked(container, {

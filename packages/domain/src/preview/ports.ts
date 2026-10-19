@@ -209,12 +209,31 @@ export interface PreviewRuntimeSecrets {
    * the agent may not see.
    */
   env: Readonly<Record<string, string>>
+  /**
+   * The passwords of the preview's database, from Vault `kv/previews/<previewId>/db`
+   * (`previewDatabaseSecretSchema`), which `core` writes once and removes with the preview; null
+   * — the recipe runs without a database. The same on every call: the users of the database live
+   * in its volume.
+   */
+  database: PreviewDatabasePasswords | null
 }
+
+/** A password of a preview's database: random, URL-safe, never chosen by anyone. */
+export const previewDatabasePasswordSchema = z.string().regex(/^[A-Za-z0-9_-]{24,128}$/)
+
+export const previewDatabasePasswordsSchema = z.strictObject({
+  /** The preview's own user (`PreviewDatabaseConnection.user`), the one PHP connects as. */
+  user: previewDatabasePasswordSchema,
+  /** Root on the database container's own socket only. */
+  root: previewDatabasePasswordSchema,
+})
+export type PreviewDatabasePasswords = z.infer<typeof previewDatabasePasswordsSchema>
 
 export const previewRuntimeSecretsSchema = z.strictObject({
   env: z
     .record(envVarNameSchema, envVarValueSchema)
     .refine((env) => Object.keys(env).length <= envVarLimits.perSite, 'too many variables'),
+  database: previewDatabasePasswordsSchema.nullable(),
 })
 
 /**
@@ -224,7 +243,10 @@ export const previewRuntimeSecretsSchema = z.strictObject({
  */
 export const PREVIEW_SETTINGS_PATH = '/run/raditi/preview/settings.json'
 
-/** The database the runtime created for the preview: its password never leaves the runtime but here. */
+/**
+ * The database the runtime created for the preview, as PHP connects to it: the password of
+ * `PreviewRuntimeSecrets.database`, here and in Vault only.
+ */
 export const previewDatabaseConnectionSchema = z.strictObject({
   engine: z.enum(databaseEngines),
   /** The database container on the preview's own network. */
@@ -232,7 +254,7 @@ export const previewDatabaseConnectionSchema = z.strictObject({
   port: z.number().int().min(1).max(65_535),
   name: identifier,
   user: identifier,
-  password: z.string().regex(/^[A-Za-z0-9_-]{24,128}$/),
+  password: previewDatabasePasswordSchema,
 })
 export type PreviewDatabaseConnection = z.infer<typeof previewDatabaseConnectionSchema>
 
@@ -339,8 +361,9 @@ export interface PreviewRuntime {
    * Creates what is missing and starts it; answers where the entry forwarder listens. Writes
    * the settings file (`previewSettingsSchema`) on every call — the spec's addresses, the
    * database it created and `secrets` — so a changed variable reaches the preview by the next
-   * call. The database password is the runtime's: it is created with the database container
-   * and kept by the runtime, never returned.
+   * call. The database passwords are the caller's (`secrets.database`, from Vault): the database
+   * container gets them as files of its tmpfs, never in its environment, a label or an argument,
+   * and nothing reads them back from Docker. A database that holds other passwords is a CONFLICT.
    */
   ensure(
     spec: PreviewRuntimeSpec,
@@ -359,10 +382,14 @@ export interface PreviewRuntime {
    * writes the recipe's `generatedFiles` over every tree it writes.
    */
   writeFiles(previewId: string, input: PreviewFilesInput, signal?: AbortSignal): Promise<void>
-  /** Loads a seed into the preview's database, replacing what was there. */
+  /**
+   * Loads a seed into the preview's database, replacing what was there, as its user: the
+   * passwords are those `ensure` was given (Vault), never read back from Docker.
+   */
   loadDatabase(
     previewId: string,
     seed: AsyncIterable<Uint8Array>,
+    passwords: PreviewDatabasePasswords,
     signal?: AbortSignal,
   ): Promise<void>
   exec(previewId: string, input: PreviewExecInput, signal?: AbortSignal): Promise<PreviewExecResult>

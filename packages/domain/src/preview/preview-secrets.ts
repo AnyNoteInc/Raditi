@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { badRequest } from '../errors.ts'
 import { siteAccessKinds, type SiteAccessKind } from '../ports/site-adapter.ts'
 import { isPreviewPath, previewGatewayPaths, previewTicketSchema } from './hostname.ts'
+import { previewDatabasePasswordsSchema } from './ports.ts'
 
 /**
  * Secrets of one preview in Vault (docs/plan/53-chat-preview-release.md, Р21, Р24): `core`
@@ -22,6 +23,21 @@ export function previewAccessPath(previewId: string, kind: SiteAccessKind): stri
     throw badRequest('Invalid preview access reference')
   return `kv/previews/${previewId}/${kind}`
 }
+
+/**
+ * The passwords of a preview's database (`kv/previews/<previewId>/db`): `core` creates them once
+ * on the first build with a database, hands them to `PreviewRuntime.ensure` and `loadDatabase`
+ * on every build and removes them with the preview. The mcp role never reads them (owner's answer
+ * of 19.10.2026: the password goes to Vault, not into the container's environment).
+ */
+export const previewDatabaseSecretPath = (previewId: string): string =>
+  previewAccessPath(previewId, 'db')
+
+/** `kv/previews/<previewId>/db`: strings only (KV). */
+export const previewDatabaseSecretSchema = previewDatabasePasswordsSchema.extend({
+  v: z.literal('1'),
+})
+export type PreviewDatabaseSecret = z.infer<typeof previewDatabaseSecretSchema>
 
 /** Where the browser of a preview is reached: its control socket on the host's loopback. */
 export const previewBrowserSecretPath = (previewId: string): string =>
