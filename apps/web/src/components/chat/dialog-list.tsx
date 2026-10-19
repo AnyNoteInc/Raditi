@@ -1,0 +1,232 @@
+'use client'
+
+import { feedStateText, taskStatusListHint } from '@repo/domain/tasks/client-feed-labels'
+import Alert from '@mui/material/Alert'
+import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
+import Skeleton from '@mui/material/Skeleton'
+import Typography from '@mui/material/Typography'
+import { useInfiniteQuery } from '@tanstack/react-query'
+import Link from 'next/link'
+import { useSelectedLayoutSegment } from 'next/navigation'
+import { useId } from 'react'
+
+import { siteHref } from '@/components/site/site-nav'
+import { useTRPCClient } from '@/trpc/client'
+
+import { dialogGroups, listTime } from './chat-format'
+import { listText, undoText } from './chat-texts'
+import type { DialogListItem } from './chat-types'
+import { StatusMark } from './status-mark'
+
+/** The key of the list of a site's dialogs: a new dialog makes it read again. */
+export const dialogListKey = (siteId: string) => ['chat', 'dialogs', siteId] as const
+
+/** The list is read again this often while the page is shown, to follow the statuses. */
+const LIST_REFRESH_MS = 15_000
+
+function DialogLink({
+  siteId,
+  item,
+  current,
+  now,
+}: {
+  siteId: string
+  item: DialogListItem
+  current: boolean
+  now: Date
+}) {
+  // A closed dialog whose release is being undone, or was: said beside its status (Р44).
+  const hint =
+    item.undo === 'running'
+      ? undoText.running
+      : item.undo === 'installed'
+        ? undoText.installed
+        : taskStatusListHint[item.status]
+  return (
+    <Box
+      component={Link}
+      href={`${siteHref(siteId, 'chat')}/${item.id}`}
+      aria-current={current ? 'page' : undefined}
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) auto',
+        alignItems: 'baseline',
+        gap: '2px 12px',
+        minHeight: 44,
+        px: 1.5,
+        py: 1.25,
+        borderRadius: '12px',
+        textDecoration: 'none',
+        color: 'text.primary',
+        bgcolor: current ? 'action.selected' : 'transparent',
+        '&:hover': { bgcolor: current ? 'action.selected' : 'action.hover' },
+        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
+      }}
+    >
+      <Typography
+        component="span"
+        sx={{
+          minWidth: 0,
+          fontSize: 15,
+          fontWeight: current ? 600 : 500,
+          lineHeight: 1.35,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {item.title ?? listText.untitled}
+      </Typography>
+      <Typography
+        component="span"
+        variant="caption"
+        color="text.secondary"
+        sx={{ whiteSpace: 'nowrap' }}
+      >
+        {listTime(item.updatedAt, now)}
+      </Typography>
+      <Box
+        component="span"
+        sx={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: '0 8px', minWidth: 0 }}
+      >
+        <StatusMark status={item.status} />
+        {hint ? (
+          <Typography component="span" variant="caption" color="text.secondary">
+            {hint}
+          </Typography>
+        ) : null}
+      </Box>
+    </Box>
+  )
+}
+
+function DialogGroup({
+  siteId,
+  label,
+  items,
+  currentId,
+  now,
+}: {
+  siteId: string
+  label: string
+  items: readonly DialogListItem[]
+  currentId: string | null
+  now: Date
+}) {
+  const labelId = useId()
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+      <Typography
+        id={labelId}
+        variant="caption"
+        color="text.secondary"
+        sx={{ px: 1.5, pt: 1, fontWeight: 600 }}
+      >
+        {label}
+      </Typography>
+      <Box
+        component="ul"
+        aria-labelledby={labelId}
+        sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 0.25 }}
+      >
+        {items.map((item) => (
+          <li key={item.id}>
+            <DialogLink
+              siteId={siteId}
+              item={item}
+              current={item.id.toLowerCase() === currentId}
+              now={now}
+            />
+          </li>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+/**
+ * The dialogs of a site in the column of «Чат»: those that wait for the client first, then the
+ * ones started today and earlier, each with its status in a sign and a word and its time. The
+ * open dialog is the current page. The list follows the statuses while the page is shown.
+ */
+export function DialogList({ siteId }: { siteId: string }) {
+  const client = useTRPCClient()
+  const segment = useSelectedLayoutSegment()
+  const currentId = segment === null ? null : segment.toLowerCase()
+  const list = useInfiniteQuery({
+    queryKey: dialogListKey(siteId),
+    queryFn: ({ pageParam }) =>
+      client.task.list.query(pageParam === null ? { siteId } : { siteId, cursor: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor,
+    refetchInterval: LIST_REFRESH_MS,
+  })
+
+  if (list.isPending) {
+    return (
+      <Box role="status" aria-label={listText.loading} sx={{ display: 'grid', gap: 1, pt: 1 }}>
+        {[0, 1, 2].map((index) => (
+          <Skeleton key={index} variant="rounded" height={56} sx={{ borderRadius: '12px' }} />
+        ))}
+      </Box>
+    )
+  }
+  if (list.isError) {
+    return (
+      <Alert
+        severity="error"
+        sx={{ borderRadius: '12px' }}
+        action={
+          <Button
+            color="inherit"
+            size="small"
+            sx={{ minHeight: 44 }}
+            loading={list.isFetching}
+            onClick={() => void list.refetch()}
+          >
+            {feedStateText.listRetry}
+          </Button>
+        }
+      >
+        {feedStateText.listFailed}
+      </Alert>
+    )
+  }
+
+  const items = list.data.pages.flatMap((page) => page.items)
+  if (items.length === 0) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        {listText.empty}
+      </Typography>
+    )
+  }
+  const now = new Date()
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mx: { md: -1.5 } }}>
+      {dialogGroups(items, now).map((group) => (
+        <DialogGroup
+          key={group.key}
+          siteId={siteId}
+          label={group.label}
+          items={group.items}
+          currentId={currentId}
+          now={now}
+        />
+      ))}
+      {list.hasNextPage ? (
+        <Button
+          variant="outlined"
+          onClick={() => void list.fetchNextPage()}
+          loading={list.isFetchingNextPage}
+          sx={{ alignSelf: 'flex-start', minHeight: 44, borderRadius: '999px', ml: 1.5 }}
+        >
+          {listText.more}
+        </Button>
+      ) : null}
+    </Box>
+  )
+}

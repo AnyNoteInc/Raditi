@@ -179,6 +179,7 @@ export class TurnPublicationRecovery {
         snapshotPrefix: turnSnapshotPrefix(reference.sessionId, reference.turn),
         candidateHeadSha: manifest.git.headSha,
         baseSha: manifest.git.baseSha,
+        ...(manifest.git.sandboxBaseSha ? { sandboxBaseSha: manifest.git.sandboxBaseSha } : {}),
         committedAt: metadata.committedAt,
         recoveredFromEpoch: input.heldFence.epoch,
         ...extra,
@@ -218,9 +219,11 @@ export class TurnPublicationRecovery {
         }),
         (late) => late.dispose(),
       )
+      // The working set is derived again too (plan 53, Р11): the one the checkpoint names.
       if (
         publication.baseSha !== manifest.git.baseSha ||
-        publication.headSha !== manifest.git.headSha
+        publication.headSha !== manifest.git.headSha ||
+        publication.sandboxBaseSha !== manifest.git.sandboxBaseSha
       )
         throw conflict('Reconstructed candidate differs from the immutable checkpoint')
       await guard.assertFence()

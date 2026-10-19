@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
+import { OPENCODE_CLI_VERSION } from './opencode.ts'
+
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
 
 interface LockedPackage {
@@ -61,6 +63,10 @@ describe('agent CLI lockfile', () => {
       (match) => match[1],
     )
     expect(checked.sort()).toEqual(pinned)
+  })
+
+  it('is the version the driver declares to the planner', () => {
+    expect(manifest.dependencies['opencode-ai']).toBe(OPENCODE_CLI_VERSION)
   })
 
   it('links the OpenCode binary of the image architecture, never the launcher stub', () => {

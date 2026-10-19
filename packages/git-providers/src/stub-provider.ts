@@ -40,8 +40,23 @@ export function createStubGitProvider(
     async setActionsVariable() {
       throw todo('setActionsVariable')
     },
+    async protectTags() {
+      throw todo('protectTags')
+    },
+    async createTag() {
+      throw todo('createTag')
+    },
+    async getTag() {
+      throw todo('getTag')
+    },
     async listWorkflowRuns() {
       throw todo('listWorkflowRuns')
+    },
+    async getWorkflowRun() {
+      throw todo('getWorkflowRun')
+    },
+    async dispatchWorkflow() {
+      throw todo('dispatchWorkflow')
     },
     parseWebhook,
   }

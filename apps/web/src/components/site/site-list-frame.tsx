@@ -28,6 +28,7 @@ export function SiteListFrame({
   action,
   backLabel,
   list,
+  collapseOnItem = false,
   children,
 }: {
   /** The accessible name of the list column. */
@@ -40,10 +41,16 @@ export function SiteListFrame({
   action?: { segment: string; label: string }
   backLabel: string
   list: ReactNode
+  /**
+   * From `lg` an item other than the action's gives the list column up: the item takes the
+   * width — a dialog with the panel of its changes beside it — and the way back is shown.
+   */
+  collapseOnItem?: boolean
   children: ReactNode
 }) {
   const segment = useSelectedLayoutSegment()
   const selected = segment !== null
+  const collapsed = collapseOnItem && selected && segment !== action?.segment
 
   // Below `md` a move between the list and an item hides the link that had the focus. The
   // focus then goes to the content instead of being dropped to the top of the document.
@@ -68,6 +75,7 @@ export function SiteListFrame({
             xs: selected ? 'none' : 'flex',
             sm: selected ? 'none' : 'grid',
             md: 'grid',
+            ...(collapsed && { lg: 'none' }),
           },
           flexDirection: 'column',
           flex: '1 0 auto',
@@ -154,7 +162,11 @@ export function SiteListFrame({
             component={Link}
             href={root}
             sx={{
-              display: { xs: 'inline-flex', md: 'none' },
+              display: {
+                xs: 'inline-flex',
+                md: 'none',
+                ...(collapsed && { lg: 'inline-flex' }),
+              },
               alignSelf: 'flex-start',
               alignItems: 'center',
               gap: 1,

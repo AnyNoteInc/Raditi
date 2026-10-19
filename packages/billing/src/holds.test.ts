@@ -18,6 +18,7 @@ import {
   releaseTask,
   settleTaskCharge,
   tariffCreditsOfDay,
+  taskChainAttempts,
   type CreditHoldPlacement,
 } from './holds.ts'
 import { expireTariffRemainder, grantTariffCredits, ledgerKeys, post } from './ledger.ts'
@@ -267,12 +268,26 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     now?: Date
     attempt?: number
     expiresAt?: Date
+    /** «Попробовать ещё»: what the retry of a dialog says, after it gave the chain back. */
+    retry?: true
   }
   const placement = (
     workspaceId: string,
     taskId: string,
-    { now = NOW, attempt = 1, expiresAt = new Date(now.getTime() + DAY_MS) }: PlacementOptions = {},
-  ): CreditHoldPlacement => ({ workspaceId, taskId, attempt, now, expiresAt })
+    {
+      now = NOW,
+      attempt = 1,
+      expiresAt = new Date(now.getTime() + DAY_MS),
+      retry,
+    }: PlacementOptions = {},
+  ): CreditHoldPlacement => ({
+    workspaceId,
+    taskId,
+    attempt,
+    now,
+    expiresAt,
+    ...(retry === undefined ? {} : { retry }),
+  })
 
   /** Places a reserve the way the queue will, under a credit rate nobody else sees. */
   const place = (workspaceId: string, taskId: string, options: PlacementOptions = {}) =>
@@ -1386,7 +1401,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
       // Four credits are free: neither a new task nor a retry starts on them…
       expect(await refused(workspaceId, fresh!)).toMatchObject(creditsHeld(4, 45))
-      expect(await refused(workspaceId, retried!, { attempt: 2 })).toMatchObject(creditsHeld(4, 45))
+      expect(await refused(workspaceId, retried!, { attempt: 2, retry: true })).toMatchObject(
+        creditsHeld(4, 45),
+      )
       // …and the task in work goes on with them: its own reserve is not «tasks in work».
       expect(
         await place(workspaceId, continued!, { attempt: 2, now: minutesAfter(30) }),
@@ -1417,7 +1434,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // «Попробовать ещё» runs in the stronger mode.
       await db.task.update({ where: { id: taskId }, data: { modelClass: 'heavy', attempt: 2 } })
 
-      const retry = await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(30) })
+      const retry = await place(workspaceId, taskId, {
+        attempt: 2,
+        now: minutesAfter(30),
+        retry: true,
+      })
 
       // The step is 120; fifty is everything there is.
       expect(retry).toMatchObject({ applied: true, reserved: 50 })
@@ -1429,7 +1450,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const taskId = await task(workspaceId)
       await place(workspaceId, taskId)
       await release(taskId)
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(30) })
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(30), retry: true })
 
       // «Продолжить» at the step of the retry: the rows of the failed attempt hold nothing.
       const third = await place(workspaceId, taskId, { attempt: 3, now: minutesAfter(60) })
@@ -1482,7 +1503,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await accounts(workspaceId)).toEqual(reserved)
     })
 
-    it('takes three attempts of a task and refuses the fourth', async () => {
+    it('takes three attempts of a chain and refuses a fourth continuation', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
       for (const attempt of [1, 2, 3]) {
@@ -1491,14 +1512,24 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
           reserved: 45,
         })
       }
+      expect(await taskChainAttempts(db, taskId)).toEqual([1, 2, 3])
 
       expect(await refused(workspaceId, taskId, { attempt: 4 })).toMatchObject(conflict)
       expect(await reserve(taskId)).toHaveLength(3)
       expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300, 135) })
 
-      // Nor after a failure: three attempts are all a task has.
+      // «Попробовать ещё» after a failure gives the chain back and starts a new one: the
+      // attempt in which the agent failed is not counted (spec §20, decision 4 of 11.10.2026).
       await release(taskId)
-      expect(await refused(workspaceId, taskId, { attempt: 4 })).toMatchObject(conflict)
+      expect(await taskChainAttempts(db, taskId)).toEqual([])
+      expect(await place(workspaceId, taskId, { attempt: 4, retry: true })).toMatchObject({
+        applied: true,
+        reserved: 45,
+      })
+      expect(await taskChainAttempts(db, taskId)).toEqual([4])
+      // And a continuation of it is the second attempt of its chain.
+      expect(await place(workspaceId, taskId, { attempt: 5 })).toMatchObject({ applied: true })
+      expect(await taskChainAttempts(db, taskId)).toEqual([4, 5])
     })
 
     it('takes no reserve for a charged task, nor for an attempt below one that holds a reserve', async () => {
@@ -1513,9 +1544,45 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(again.holds.map((hold) => hold.status)).toEqual(['captured'])
 
       // The second attempt was placed first: the first cannot come after it.
-      await place(workspaceId, skipped!, { attempt: 2 })
+      await place(workspaceId, skipped!, { attempt: 2, retry: true })
       expect(await refused(workspaceId, skipped!, { attempt: 1 })).toMatchObject(conflict)
       expect(await reserve(skipped!)).toEqual(['#2 tariff 45 active'])
+    })
+
+    // The owner, 19.10.2026: the daily limit does not apply to «Попробовать ещё» — so a retry is
+    // what its caller says it is, and the rows must agree with it.
+    it('places a retry only after its chain was given back, and a later attempt without a reserve only as a retry', async () => {
+      const { workspaceId } = await funded()
+      const [taskId, never] = await tasks(workspaceId, 2)
+      const notARetry = {
+        ...conflict,
+        message: 'A retry is a later attempt of a task whose chain was given back',
+      }
+      const onlyARetry = {
+        ...conflict,
+        message: 'A later attempt without an active reserve is placed only by a retry',
+      }
+      // The first attempt is no retry.
+      expect(await refused(workspaceId, taskId!, { retry: true })).toMatchObject(notARetry)
+      await place(workspaceId, taskId!)
+      // The chain still holds its reserve: the next attempt is «Продолжить».
+      expect(await refused(workspaceId, taskId!, { attempt: 2, retry: true })).toMatchObject(
+        notARetry,
+      )
+      await release(taskId!)
+      // Given back: only a retry places the next attempt.
+      expect(await refused(workspaceId, taskId!, { attempt: 2 })).toMatchObject(onlyARetry)
+      expect(await place(workspaceId, taskId!, { attempt: 2, retry: true })).toMatchObject({
+        applied: true,
+        reserved: 45,
+      })
+      // A repeat answers with the rows of the first call, whatever it says.
+      expect(await place(workspaceId, taskId!, { attempt: 2 })).toMatchObject({
+        applied: false,
+        reserved: 45,
+      })
+      // Nor is a later attempt of a task that never had a reserve anything but a retry.
+      expect(await refused(workspaceId, never!, { attempt: 2 })).toMatchObject(onlyARetry)
     })
   })
 
@@ -1576,9 +1643,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await today(workspaceId, NOW)).toBe('5 + 45')
     })
 
-    // «Продолжить» and «Попробовать ещё» take credits of the day like a new task: the task waits
-    // for the next day or a pack at the question it stopped at, never in the middle of a turn.
-    it('holds a continuation and a retry to the day, and lets a pack carry them', async () => {
+    // «Продолжить» takes credits of the day like a new task: the task waits for the next day or a
+    // pack at the question it stopped at, never in the middle of a turn. «Попробовать ещё» does
+    // not (the owner, 19.10.2026): its reserve is the step, or what is free, whatever the day, and
+    // its charge comes from its own rows — and the day counts both.
+    it('holds a continuation to the day and lets a pack carry it, and leaves a retry outside the day', async () => {
       const { workspaceId } = await funded({ plan: startDay })
       const model = await modelPool()
       const [working, failed, fresh] = await tasks(workspaceId, 3)
@@ -1586,17 +1655,20 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await place(workspaceId, failed!, { now: minutesAfter(1) })
       await worked(model, failed!, '6')
       await release(failed!, { now: minutesAfter(2) })
-      // «Попробовать ещё» takes the five the day has left…
-      expect(await place(workspaceId, failed!, { attempt: 2, now: minutesAfter(5) })).toMatchObject(
-        { applied: true, reserved: 5 },
-      )
-      // …and nothing is left for a new task, nor for «Продолжить» of the first.
+      expect(await today(workspaceId)).toBe('0 + 45')
+      // «Попробовать ещё» takes its whole step, though the day has five left…
+      expect(
+        await place(workspaceId, failed!, { attempt: 2, now: minutesAfter(5), retry: true }),
+      ).toMatchObject({ applied: true, reserved: 45 })
+      expect(await reserve(failed!)).toEqual(['#1 tariff 5 released', '#2 tariff 45 active'])
+      // …and the day counts it: nothing is left for a new task, nor for «Продолжить» of the first.
+      expect(await today(workspaceId)).toBe('0 + 90')
       expect(await refused(workspaceId, fresh!, { now: minutesAfter(6) })).toMatchObject(
-        dailyLimit(250, 50, { limit: 50, used: 50 }),
+        dailyLimit(210, 90, { limit: 50, used: 90 }),
       )
       expect(
         await refused(workspaceId, working!, { attempt: 2, now: minutesAfter(10) }),
-      ).toMatchObject(dailyLimit(250, 5, { limit: 50, used: 50 }, { needed: 1 }))
+      ).toMatchObject(dailyLimit(210, 45, { limit: 50, used: 90 }, { needed: 1 }))
 
       // One credit of a pack is enough to continue: the attempt sets aside what it can.
       await grant(workspaceId, 'pack', 1)
@@ -1604,7 +1676,54 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         await place(workspaceId, working!, { attempt: 2, now: minutesAfter(11) }),
       ).toMatchObject({ applied: true, reserved: 1 })
       expect(await reserve(working!)).toEqual(['#1 tariff 45 active', '#2 pack 1 active'])
+      expect(await today(workspaceId)).toBe('0 + 90')
+
+      // The day has nothing left, and the retry is charged in full from its own rows: the day
+      // never cuts a charge.
+      const settled = await settle(failed!, 45, { now: minutesAfter(20) })
+      expect(settled.from).toEqual({ tariff: 45, gift: 0, pack: 0 })
+      expect(await today(workspaceId)).toBe('45 + 45')
+    })
+
+    // «Попробовать ещё» gives the whole chain of the failed pass back — an attempt in which the
+    // agent failed is not counted against the client (spec §20, decision 4 of 11.10.2026) —, and
+    // the reserve of the retry takes the day in its place: a failed pass and its retries take the
+    // day once, by the reserve that stands.
+    it('counts a chain a retry gave back nothing, and the retry by its own reserve', async () => {
+      const { workspaceId } = await funded({ plan: startDay })
+      const model = await modelPool()
+      const taskId = await task(workspaceId)
+      // A new task and «Продолжить» that both did work: the continuation takes what the day has.
+      await place(workspaceId, taskId)
+      await worked(model, taskId, '6', { occurredAt: minutesAfter(1) })
+      expect(await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(2) })).toMatchObject({
+        applied: true,
+        reserved: 5,
+      })
+      await worked(model, taskId, '6', { attempt: 2, occurredAt: minutesAfter(3) })
       expect(await today(workspaceId)).toBe('0 + 50')
+
+      // The pass of attempt 2 failed and its dialog kept its candidate: the retry gives the chain
+      // back and places attempt 3 in the same moment, on the day the chain gave back.
+      await release(taskId, { now: minutesAfter(4) })
+      expect(await today(workspaceId)).toBe('0 + 0')
+      expect(
+        await place(workspaceId, taskId, { attempt: 3, now: minutesAfter(4), retry: true }),
+      ).toMatchObject({ applied: true, reserved: 45 })
+      expect(await today(workspaceId)).toBe('0 + 45')
+
+      // The retry fails before any model call and is tried again: still one reserve on the day.
+      await release(taskId, { now: minutesAfter(5) })
+      expect(
+        await place(workspaceId, taskId, { attempt: 4, now: minutesAfter(6), retry: true }),
+      ).toMatchObject({ applied: true, reserved: 45 })
+      expect(await today(workspaceId)).toBe('0 + 45')
+      expect(await reserve(taskId)).toEqual([
+        '#1 tariff 45 released',
+        '#2 tariff 5 released',
+        '#3 tariff 45 released',
+        '#4 tariff 45 active',
+      ])
     })
 
     it('counts the calendar day in Moscow, not in UTC and not the last 24 hours', async () => {
@@ -2743,7 +2862,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await place(workspaceId, taskId)
       await release(taskId)
       await db.task.update({ where: { id: taskId }, data: { modelClass: 'heavy', attempt: 2 } })
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(30) })
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(30), retry: true })
 
       const charged = await settle(taskId, 60, { now: minutesAfter(60) })
 

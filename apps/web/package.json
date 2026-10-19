@@ -50,6 +50,7 @@
     "server-only": "catalog:",
     "sharp": "catalog:",
     "superjson": "catalog:",
+    "tldts": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

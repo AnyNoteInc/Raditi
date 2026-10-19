@@ -6,6 +6,7 @@ import {
   PRICE,
   CREDITS,
   accountsOf,
+  addSite,
   auditOf,
   creditRateUsable,
   giftGrant,
@@ -67,11 +68,7 @@ scenarios['credit-rate'] = async (t) => {
   const paying = await subscribed(t)
   await packBought(t, paying.customer)
   const withSite = await t.customer()
-  await withSite.mutate('project.create', {
-    name: 'Кофейня',
-    url: `https://rate-${withSite.id}.example.ru`,
-    stack: 'wordpress',
-  })
+  await addSite(t, withSite, { name: 'Кофейня', url: `https://rate-${withSite.id}.example.ru` })
   t.equal(
     'without a rate nobody’s task is taken, whatever they could spend: the gift promised, the gift granted, 435 credits of three accounts',
     [await told(onlooker), await told(withSite), await told(paying.customer)],

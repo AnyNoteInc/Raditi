@@ -24,6 +24,9 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   // The passes of the renewal schedulers (apps/orchestrator/src/billing). A failed pass is
   // not retried: the next tick does the same work from the rows of the database.
   billing: lifecycleJobs,
+  // Builds, syncs and browsers of previews (docs/plan/53-chat-preview-release.md): a failed job
+  // is put again by the rows of its preview, never by BullMQ.
+  previews: lifecycleJobs,
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

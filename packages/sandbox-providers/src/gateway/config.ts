@@ -1,4 +1,12 @@
-import { DIGEST_PINNED_IMAGE, envVar, parseEnv, type Env } from '@repo/domain'
+import {
+  appEnvSchema,
+  DIGEST_PINNED_IMAGE,
+  envVar,
+  isProduction,
+  parseEnv,
+  parseIpSubnet,
+  type Env,
+} from '@repo/domain'
 import { z } from 'zod'
 
 const image = z.string().regex(DIGEST_PINNED_IMAGE)
@@ -18,12 +26,37 @@ const origin = z.url().refine((value) => {
   }
 }, 'expected an HTTP(S) origin without credentials or path')
 
+/** One CIDR subnet in the spelling the client egress proxy reads (`84.201.128.0/18`). */
+const subnet = z.string().refine((text) => parseIpSubnet(text) !== null, 'expected a CIDR subnet')
+
+/**
+ * The platform's own subnets the client egress proxies never connect to
+ * (docs/plan/53-chat-preview-release.md, Р13), besides every address that is not public: the
+ * public addresses of the platform's machines, which a client could point a name of its own at.
+ */
+export const egressRefusedSubnetsSchema = z.array(subnet).max(64)
+
+/** `SANDBOX_EGRESS_REFUSED_SUBNETS`: comma-separated CIDR; blank — none. */
+export const egressRefusedSubnetsVar = envVar(
+  z
+    .string()
+    .transform((text) =>
+      text
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean),
+    )
+    .pipe(egressRefusedSubnetsSchema)
+    .optional(),
+)
+
 export const gatewayConfigSchema = z
   .object({
     image,
     guardImage: image,
     llmUpstream: origin,
     mcpUpstream: origin,
+    egressRefusedSubnets: egressRefusedSubnetsSchema.optional(),
   })
   .strict()
 
@@ -35,17 +68,32 @@ const gatewayEnvSchema = z
     SANDBOX_NETWORK_GUARD_IMAGE: envVar(image),
     SANDBOX_LLM_UPSTREAM: envVar(origin),
     SANDBOX_MCP_UPSTREAM: envVar(origin),
+    SANDBOX_EGRESS_REFUSED_SUBNETS: egressRefusedSubnetsVar,
   })
   .transform((env): GatewayConfig => ({
     image: env.SANDBOX_GATEWAY_IMAGE,
     guardImage: env.SANDBOX_NETWORK_GUARD_IMAGE,
     llmUpstream: env.SANDBOX_LLM_UPSTREAM,
     mcpUpstream: env.SANDBOX_MCP_UPSTREAM,
+    ...(env.SANDBOX_EGRESS_REFUSED_SUBNETS?.length
+      ? { egressRefusedSubnets: env.SANDBOX_EGRESS_REFUSED_SUBNETS }
+      : {}),
   }))
 
-/** Optional only as a complete group: gateway-mode creation fails closed without it. */
+/**
+ * Optional only as a complete group: gateway-mode creation fails closed without it. In production
+ * the group names the platform's subnets as well: the gateway's client egress proxy sits on a
+ * network of the VM, and a name a client points at a public address of the platform's own would
+ * otherwise be tunnelled past the perimeter (docs/plan/53-chat-preview-release.md, Р13).
+ */
 export function gatewayConfigFromEnv(env: Env): GatewayConfig | undefined {
   const names = Object.keys(gatewayEnvSchema.in.shape)
   if (names.every((name) => !env[name]?.trim())) return undefined
-  return parseEnv('sandbox gateway', gatewayEnvSchema, env)
+  const config = parseEnv('sandbox gateway', gatewayEnvSchema, env)
+  const appEnv = appEnvSchema.safeParse(env.APP_ENV?.trim())
+  if (appEnv.success && isProduction(appEnv.data) && !config.egressRefusedSubnets?.length)
+    throw new Error(
+      "[sandbox gateway] invalid configuration: SANDBOX_EGRESS_REFUSED_SUBNETS: required in production, the public subnets of the platform's machines",
+    )
+  return config
 }

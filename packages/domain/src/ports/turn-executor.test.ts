@@ -83,6 +83,42 @@ describe('turn plan', () => {
     ).toEqual(request())
   })
 
+  it('keeps the egress proxy of client variables and never their values (Р13)', () => {
+    const original = request()
+    original.sandbox.network = {
+      mode: 'gateway',
+      routes: ['llm', 'mcp'],
+      egress: ['api.example.ru:443'],
+    }
+    original.context.egressProxy = 'http://sandbox-gw:3128'
+    original.context.envValues = { PAYMENT_KEY: 'pay-secret-0001' }
+    const unkeyed = withoutTurnCredentials(original)
+    expect(unkeyed.context).not.toHaveProperty('envValues')
+    const plan = toTurnPlan(unkeyed, 'opencode')
+    expect(JSON.stringify(plan)).not.toContain('pay-secret-0001')
+    expect(plan.context.egressProxy).toBe('http://sandbox-gw:3128')
+    expect(plan.sandbox.network).toEqual(original.sandbox.network)
+    // A request that still carries the values is not a plan.
+    expect(() => toTurnPlan(original, 'opencode')).toThrow('Invalid turn plan')
+    const restored = turnPlanSchema.parse(JSON.parse(JSON.stringify(plan)))
+    expect(
+      withTurnCredentials(restored, {
+        llmApiKey: 'sk-turn-llm-key',
+        mcpToken: 'mcp-turn-token',
+        envValues: { PAYMENT_KEY: 'pay-secret-0001' },
+      }),
+    ).toEqual(original)
+    // No variables: no field at all, as before Р13.
+    const bare = withTurnCredentials(restored, { llmApiKey: 'k', mcpToken: 't', envValues: {} })
+    expect(bare.context).not.toHaveProperty('envValues')
+    expect(() =>
+      toTurnPlan(
+        { ...unkeyed, context: { ...unkeyed.context, egressProxy: 'http://u:p@sandbox-gw:3128' } },
+        'opencode',
+      ),
+    ).toThrow('Invalid turn plan')
+  })
+
   it.each(['medium', 'provider-specific-effort', null, undefined])(
     'preserves reasoning effort %s through persistence and credential recovery',
     (reasoningEffort) => {
@@ -175,6 +211,33 @@ describe('turn plan', () => {
     const plan = toTurnPlan(request(), 'opencode')
     const stored = { ...plan.context, mcp: { url: 'http://sandbox-gw:8080/mcp?token=mcp-turn' } }
     expect(turnPlanSchema.safeParse({ ...plan, context: stored }).success).toBe(false)
+  })
+
+  it('keeps the working set, the add-only media paths and «rebased» of plan 53, all optional', () => {
+    // A plan stored before them is read as it was.
+    const stored = toTurnPlan(request(), 'opencode')
+    expect(turnPlanSchema.parse(JSON.parse(JSON.stringify(stored)))).toEqual(stored)
+    expect(stored).not.toHaveProperty('rebased')
+    const withWorkingSet = request()
+    withWorkingSet.workspace = {
+      ...withWorkingSet.workspace,
+      sandboxBaseSha: 'c'.repeat(40),
+      addOnlyPaths: ['wp-content/uploads/raditi/'],
+    }
+    withWorkingSet.rebased = true
+    const plan = toTurnPlan(withWorkingSet, 'opencode')
+    expect(plan.workspace).toMatchObject({
+      sandboxBaseSha: 'c'.repeat(40),
+      addOnlyPaths: ['wp-content/uploads/raditi/'],
+    })
+    expect(plan.rebased).toBe(true)
+    expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' }).rebased).toBe(true)
+    for (const workspace of [
+      { ...withWorkingSet.workspace, sandboxBaseSha: 'C'.repeat(40) },
+      { ...withWorkingSet.workspace, addOnlyPaths: ['wp-content/uploads/raditi'] },
+      { ...withWorkingSet.workspace, addOnlyPaths: ['../uploads/'] },
+    ])
+      expect(turnPlanSchema.safeParse({ ...plan, workspace }).success).toBe(false)
   })
 
   it('refuses turn secrets in the sandbox spec and an invalid request without echoing it', () => {

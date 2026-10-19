@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto'
+
 import type { Page } from '@playwright/test'
+import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { createPrismaClient, type SiteStatus } from '@repo/db'
 
-import { databaseUrl } from '../../fixtures/billing-stand.ts'
+import { authEnv, databaseUrl } from '../../fixtures/billing-stand.ts'
 
 /**
  * A site of the signed-in user, as «Новый проект» leaves it: not connected yet. `status` makes
@@ -24,6 +27,35 @@ export async function addSite(userId: string, status: SiteStatus = 'onboarding')
             members: { create: { userId, role: 'owner' } },
           },
         },
+      },
+      select: { id: true },
+    })
+    return site.id
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * A connected site of the signed-in user in the personal workspace, as the product makes it:
+ * the workspace comes with the gift of the registration, so the first dialog of the site is
+ * taken on gift credits. Nothing of a real connection exists: no core works on the dialog, so
+ * it waits in the queue. The workspace, its credits and its tasks go with the user.
+ */
+export async function addConnectedSite(userId: string): Promise<string> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const site = await prisma.site.create({
+      data: {
+        workspaceId: workspace.id,
+        name: 'Кофейня «Крошка»',
+        // An address of its own: a site spends gift credits in one workspace only.
+        url: `https://kroshka-${randomUUID()}.example`,
+        stack: 'wordpress',
+        status: 'active',
       },
       select: { id: true },
     })

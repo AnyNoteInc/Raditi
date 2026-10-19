@@ -1224,7 +1224,7 @@ describe('the documents of the web app', () => {
     // And the check reads the files it means to: both name the unit, and the change is still
     // «правка» where the demo is described.
     expect(design).toMatch(/остаток кредитов/)
-    expect(product).toMatch(/остатка кредитов/)
+    expect(product).toMatch(/остат[а-яё]* кредитов/)
     expect(design).toContain('Отменить правку')
   })
 

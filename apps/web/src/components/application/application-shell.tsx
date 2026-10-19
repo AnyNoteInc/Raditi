@@ -9,17 +9,23 @@ import type { ReactNode } from 'react'
 
 import { AppIcon } from './app-icon'
 import { applicationSurface } from './application-surface'
-import { ApplicationToolbar } from './application-toolbar'
+import { ApplicationToolbar, type Crumb } from './application-toolbar'
 import { SkipLink } from './skip-link'
 import type { ApplicationUser } from './user-avatar'
 import { UserMenu } from './user-menu'
 
+/** The list of projects: the page the rail's only item leads to. */
+const PROJECTS_CRUMBS: readonly Crumb[] = [{ label: 'Проекты' }]
+
 /** The project workspace: persistent rail, breadcrumb toolbar and one account menu. */
 export function ApplicationShell({
   user,
+  crumbs = PROJECTS_CRUMBS,
   children,
 }: {
   user: ApplicationUser
+  /** Where the page is; a page below the list leads back to it through the first crumb. */
+  crumbs?: readonly Crumb[]
   children: ReactNode
 }) {
   return (
@@ -96,7 +102,7 @@ export function ApplicationShell({
       </Box>
       <Box sx={{ ml: 'var(--app-rail-width)', minWidth: 0 }}>
         <ApplicationToolbar
-          crumbs={[{ label: 'Проекты' }]}
+          crumbs={crumbs}
           sx={{ px: { xs: 2.5, sm: 4, lg: 6 }, bgcolor: 'background.paper' }}
         />
         <Box

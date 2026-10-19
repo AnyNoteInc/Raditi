@@ -104,6 +104,8 @@ catalog:
   '@aws-sdk/s3-request-presigner': ^3.1140.0
   undici: ^8.11.2
   sendsay-api: ^2.4.0
+  # The registrable domain of a preview base, by the Public Suffix List (plan 53, Р19)
+  tldts: ^7.4.15
 
   # Orchestrator (NestJS 12, ESM)
   '@nestjs/core': ^12.1.0
@@ -138,6 +140,8 @@ catalog:
   remark-gfm: ^4.0.1
   server-only: ^0.0.1
   '@playwright/test': ^1.63.0
+  # The agent's browser on a preview (packages/browser-providers); the version of @playwright/test
+  playwright-core: 1.63.0
   '@axe-core/playwright': ^4.13.0
   '@next/env': 16.3.6
   '@fontsource-variable/golos-text': ^5.3.0

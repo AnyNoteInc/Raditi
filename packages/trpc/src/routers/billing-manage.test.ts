@@ -35,6 +35,12 @@ import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { appRouter, createCaller } from '../router.ts'
+import { resetSiteConnectionGate } from '../services/site-connection-gate.ts'
+import {
+  deleteSiteConnectionRows,
+  fakeSiteConnections,
+  siteCreateInput,
+} from '../testing/site-connections.ts'
 import type { BillingContext, Context } from '../trpc.ts'
 
 // What the customer changes about a tariff they have, through the router: auto-renewal off and
@@ -83,7 +89,10 @@ const requiredConsents = legalDocuments.flatMap((document) =>
     : [],
 )
 
-beforeEach(() => vi.stubEnv('APP_ENV', 'test'))
+beforeEach(() => {
+  vi.stubEnv('APP_ENV', 'test')
+  resetSiteConnectionGate()
+})
 afterEach(() => {
   vi.unstubAllEnvs()
   // Back to the functions of the package, whatever a test scripted and did not use up.
@@ -225,6 +234,8 @@ function context(
         }
       : null,
     billing,
+    // Projects are made through the site connection wizard: a fake of its servers and Vault.
+    siteConnections: fakeSiteConnections().services,
   }
 }
 
@@ -1026,6 +1037,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
+    await deleteSiteConnectionRows(db, owned.workspaceId.in)
     await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
@@ -1295,11 +1307,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     // Default «м» of docs/plan/37-billing-plan.md: a tariff the sites do not fit cannot be
     // chosen. Nothing counts the sites again when the renewal applies the choice, so from the
     // moment it is made `project.create` holds the workspace to the smaller of the two.
-    const site = (index: number) => ({
-      name: `Сайт ${index}`,
-      url: `https://limit-${index}-${randomUUID()}.example.ru`,
-      stack: 'wordpress' as const,
-    })
+    const site = (index: number) =>
+      siteCreateInput({
+        name: `Сайт ${index}`,
+        url: `https://limit-${index}-${randomUUID()}.example.ru`,
+      })
     const refusalOf = (adding: Promise<unknown>) =>
       adding.then(
         () => {

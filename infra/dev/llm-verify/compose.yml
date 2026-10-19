@@ -112,8 +112,11 @@ services:
       # agent-content stand names the real role mcp on the host instead (stack.mjs, mcpUpstream).
       MCP_UPSTREAM: ${VERIFY_MCP_UPSTREAM:?}
     extra_hosts: ['host.docker.internal:host-gateway']
+    # The gateway and every module it imports, as the gateway image copies them: with one of them
+    # missing node stops at the import and sandbox-gw never listens.
     volumes:
       - ${VERIFY_ROOT}/infra/sandbox/gateway.mjs:/repo/gateway.mjs:ro
+      - ${VERIFY_ROOT}/infra/sandbox/client-egress.mjs:/repo/client-egress.mjs:ro
     networks:
       cli:
         ipv4_address: ${VERIFY_GATEWAY_IP}

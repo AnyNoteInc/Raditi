@@ -457,12 +457,42 @@ describe('LocalTurnExecutor', () => {
     ).rejects.toThrow('ENOENT')
   })
 
+  it('captures against the commit it imported and nothing else (plan 53, Р11)', async () => {
+    const f = await fixture()
+    const sandboxBaseSha = 'd'.repeat(40)
+    const input = f.input()
+    const execution = await f.executor.prepare(
+      { ...input, bundle: { ...input.bundle, sandboxBaseSha } },
+      f.signal,
+    )
+    expect(f.importBundle).toHaveBeenCalledWith(
+      f.sandbox,
+      expect.objectContaining({ baseSha, sandboxBaseSha }),
+    )
+    // The full base is not in the sandbox: a diff against it is refused before it runs.
+    await expect(execution.capture({ home, baseSha })).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(
+      execution.capture({ home, baseSha, sandboxBaseSha: 'e'.repeat(40) }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(f.transport.capture).not.toHaveBeenCalled()
+    const addOnlyPaths = ['wp-content/uploads/raditi/']
+    await execution.capture({ home, baseSha, sandboxBaseSha, addOnlyPaths })
+    expect(f.transport.capture).toHaveBeenCalledWith(
+      f.sandbox,
+      home,
+      sandboxBaseSha,
+      credentials,
+      addOnlyPaths,
+      [],
+    )
+  })
+
   it('keeps the captured home and seals it with the snapshot AAD through the create-only PUT', async () => {
     const f = await fixture()
     const execution = await f.executor.prepare(f.input(), f.signal)
     await expect(execution.seal({} as never)).rejects.toMatchObject({ code: 'CONFLICT' })
     const captured = await execution.capture({ home, baseSha })
-    expect(f.transport.capture).toHaveBeenCalledWith(f.sandbox, home, baseSha, credentials)
+    expect(f.transport.capture).toHaveBeenCalledWith(f.sandbox, home, baseSha, credentials, [], [])
     expect(captured).toEqual({
       patch: f.captured.patch,
       untracked: f.captured.untracked,

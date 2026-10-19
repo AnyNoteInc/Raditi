@@ -319,8 +319,6 @@ describe('createVaultSecretStore() methods planned for P7', () => {
   it.each([
     ['sshSign', () => store.sshSign('deploy', 'ssh-ed25519 AAAA', 900)],
     ['createToken', () => store.createToken(['site-1-deploy'], 900)],
-    ['wrap', () => store.wrap({ token: 'x' }, 600)],
-    ['revokeAccessor', () => store.revokeAccessor('acc-1')],
   ])('%s rejects with NOT_IMPLEMENTED', async (method, call) => {
     const error = await call().catch((e: unknown) => e)
     expect(isDomainError(error)).toBe(true)

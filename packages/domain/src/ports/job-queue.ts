@@ -12,6 +12,8 @@ export const queueNames = [
   'site-provisioning',
   'site-import',
   'billing',
+  // Building, syncing and the browser of a dialog's preview (docs/plan/53-chat-preview-release.md).
+  'previews',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

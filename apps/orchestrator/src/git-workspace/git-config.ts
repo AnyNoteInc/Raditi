@@ -23,4 +23,5 @@ export const gitWorkspaceOptions = (git: GitConfig): GitWorkspaceOptions => ({
     allowedOrigins: [new URL(git.baseUrl).origin],
     ...(git.caFile === null ? {} : { caFile: git.caFile }),
   },
+  ...(git.mirrorDir === undefined ? {} : { mirrorDir: git.mirrorDir }),
 })

@@ -1,5 +1,9 @@
 import { BlockList, isIP } from 'node:net'
 
+const loopbackRanges = new BlockList()
+loopbackRanges.addSubnet('127.0.0.0', 8, 'ipv4')
+loopbackRanges.addAddress('::1', 'ipv6')
+
 const privateRanges = new BlockList()
 privateRanges.addSubnet('10.0.0.0', 8, 'ipv4')
 privateRanges.addSubnet('172.16.0.0', 12, 'ipv4')
@@ -31,5 +35,13 @@ export function isPrivateAddress(host: string): boolean {
   const literal = ipLiteral(host)
   return (
     literal !== undefined && privateRanges.check(literal, literal.includes(':') ? 'ipv6' : 'ipv4')
+  )
+}
+
+/** A loopback address literal: 127.0.0.0/8 or ::1 (and ::ffff:127.x.y.z). Never a name. */
+export function isLoopbackAddress(host: string): boolean {
+  const literal = ipLiteral(host)
+  return (
+    literal !== undefined && loopbackRanges.check(literal, literal.includes(':') ? 'ipv6' : 'ipv4')
   )
 }

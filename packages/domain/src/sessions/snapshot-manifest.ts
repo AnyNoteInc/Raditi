@@ -57,6 +57,12 @@ const snapshotGitSchema = z
         (s) => !s.includes('..') && !s.includes('//') && !s.endsWith('/') && !s.endsWith('.lock'),
       ),
     baseSha: gitSha,
+    /**
+     * The working-set commit the sandbox was checked out at (docs/plan/53-chat-preview-release.md,
+     * Р11). The saved patch is against `baseSha`, the full tree, with the same paths: it applies
+     * to both. Absent in snapshots of the full tree.
+     */
+    sandboxBaseSha: gitSha.optional(),
     headSha: gitSha,
     /** Rebuild the exact trusted candidate from baseSha and the complete saved patch. */
     publication: z

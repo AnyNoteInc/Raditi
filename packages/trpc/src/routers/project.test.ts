@@ -7,10 +7,18 @@ import {
   type PrismaClient,
   type User,
 } from '@repo/db'
-import { legalDocuments } from '@repo/domain'
+import { legalDocuments, siteConnectionLimits, type SiteConnectionServices } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { resetSiteConnectionGate } from '../services/site-connection-gate.ts'
+import {
+  createdProject,
+  deleteSiteConnectionRows,
+  fakeSiteConnections,
+  finishImports,
+  siteCreateInput,
+} from '../testing/site-connections.ts'
 import type { Context } from '../trpc.ts'
 import { MAX_SITES_PER_USER } from './project.ts'
 
@@ -30,12 +38,26 @@ const requiredConsents = legalDocuments.flatMap((document) =>
     ? [{ documentType: document.consentType, documentVersion: document.version, granted: true }]
     : [],
 )
-const input = { name: 'Мой сайт', url: 'https://example.ru', stack: 'wordpress' } as const
+const SITE_URL = 'https://example.ru'
+/** A valid request of `project.create` with a key of its own: every call is another request. */
+const input = (overrides: Parameters<typeof siteCreateInput>[0] = {}) => siteCreateInput(overrides)
 
-beforeEach(() => vi.stubEnv('APP_ENV', 'test'))
-afterEach(() => vi.unstubAllEnvs())
+// The limits of the checks count per process: every test starts with all of them.
+beforeEach(() => {
+  resetSiteConnectionGate()
+  // The orphaned secrets of a refused creation are logged; the tests that care spy on it.
+  vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+})
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
+})
 
-function context(prisma: PrismaClient, currentUser: User | null = user): Context {
+function context(
+  prisma: PrismaClient,
+  currentUser: User | null = user,
+  siteConnections: SiteConnectionServices | null = fakeSiteConnections().services,
+): Context {
   return {
     prisma,
     headers: new Headers(),
@@ -51,18 +73,29 @@ function context(prisma: PrismaClient, currentUser: User | null = user): Context
         }
       : null,
     billing: null,
+    siteConnections,
   }
 }
 
+/** The services of an environment; in production a name must resolve to a public address. */
+const servicesOf = (appEnv: 'production' | 'development' | 'test') =>
+  fakeSiteConnections({ appEnv, address: appEnv === 'production' ? '203.0.113.10' : '127.0.0.1' })
+    .services
+
+/**
+ * The client outside the transaction answers the read-only checks before it: no site, no workspace,
+ * nothing in progress. The transaction client is what the tests below give a tariff, a ceiling or a
+ * duplicate: what `project.create` decides under the lock of the user's row.
+ */
 function fakeDb() {
   const tx = {
     $queryRaw: vi.fn().mockResolvedValue([{ id: user.id }]),
     site: {
       findFirst: vi.fn().mockResolvedValue(null),
+      findUnique: vi.fn().mockResolvedValue(null),
       count: vi.fn().mockResolvedValue(0),
-      create: vi.fn(async ({ data }: { data: typeof input }) => ({
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         ...data,
-        id: randomUUID(),
         status: 'onboarding',
         createdAt: now,
       })),
@@ -97,10 +130,34 @@ function fakeDb() {
         .fn<() => Promise<{ plan: { maxSites: number | null } | null } | null>>()
         .mockResolvedValue(null),
     },
+    siteCreationClaim: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    siteProvisioningStage: {
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn().mockResolvedValue({}),
+    },
+    credentialRef: {
+      create: vi.fn(async () => ({ id: randomUUID() })),
+    },
+    siteCodeSource: { create: vi.fn().mockResolvedValue({}) },
+    siteDatabase: { create: vi.fn().mockResolvedValue({}) },
+    outboxEvent: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    auditLog: { create: vi.fn().mockResolvedValue({}) },
   }
   const db = {
     userConsent: { findMany: vi.fn().mockResolvedValue(requiredConsents) },
-    site: { findMany: vi.fn<() => Promise<unknown[]>>().mockResolvedValue([]) },
+    site: {
+      findMany: vi.fn<() => Promise<unknown[]>>().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+      findUnique: vi.fn().mockResolvedValue(null),
+      count: vi.fn().mockResolvedValue(0),
+    },
+    workspace: { findFirst: vi.fn().mockResolvedValue(null) },
+    subscription: { findFirst: vi.fn().mockResolvedValue(null) },
+    order: { findFirst: vi.fn().mockResolvedValue(null) },
+    siteProvisioningStage: { count: vi.fn().mockResolvedValue(0) },
+    // The claim of the site id is taken, and given back on every way out but the commit.
+    $queryRaw: vi.fn().mockResolvedValue([{ token: 'claimed' }]),
+    siteCreationClaim: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
     $transaction: vi.fn(async (callback: (db: typeof tx) => Promise<unknown>) => callback(tx)),
   }
   return { db, tx, prisma: db as unknown as PrismaClient }
@@ -112,12 +169,13 @@ describe('project input and access', () => {
     ['test', 'production', 'synthetic'],
     ['development', 'production', 'synthetic'],
   ] as const)(
-    'classifies APP_ENV=%s independently of NODE_ENV=%s',
+    'classifies the environment %s of the site connections independently of NODE_ENV=%s and of process.env',
     async (appEnv, nodeEnv, dataClass) => {
-      vi.stubEnv('APP_ENV', appEnv)
+      // The procedure reads the environment the app gave its services, never the process.
+      vi.stubEnv('APP_ENV', appEnv === 'production' ? 'test' : 'production')
       vi.stubEnv('NODE_ENV', nodeEnv)
       const { prisma, tx } = fakeDb()
-      await createCaller(context(prisma)).project.create(input)
+      await createCaller(context(prisma, user, servicesOf(appEnv))).project.create(input())
       expect(tx.workspace.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ dataClass }),
@@ -126,15 +184,20 @@ describe('project input and access', () => {
     },
   )
 
-  it.each([undefined, '', 'prod'])(
-    'refuses a missing or invalid APP_ENV (%s) before writing',
-    async (appEnv) => {
-      vi.stubEnv('APP_ENV', appEnv)
-      const { prisma, db } = fakeDb()
-      await expect(createCaller(context(prisma)).project.create(input)).rejects.toMatchObject({
-        code: 'INTERNAL_SERVER_ERROR',
+  it.each([null, undefined])(
+    'refuses with its own text when web has no site connections (%s), before reading or writing',
+    async (siteConnections) => {
+      const { prisma, db, tx } = fakeDb()
+      const ctx = { ...context(prisma), siteConnections }
+      await expect(createCaller(ctx).project.create(input())).rejects.toMatchObject({
+        code: 'SERVICE_UNAVAILABLE',
+        message: 'Подключение сайтов сейчас недоступно. Попробуйте ещё раз немного позже',
+        cause: { code: 'SITE_CONNECTION_UNAVAILABLE' },
       })
+      expect(db.site.findUnique).not.toHaveBeenCalled()
+      expect(db.$queryRaw).not.toHaveBeenCalled()
       expect(db.$transaction).not.toHaveBeenCalled()
+      expect(tx.site.create).not.toHaveBeenCalled()
     },
   )
 
@@ -142,7 +205,7 @@ describe('project input and access', () => {
     const { prisma, db } = fakeDb()
     const caller = createCaller(context(prisma, null))
     await expect(caller.project.list()).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
-    await expect(caller.project.create(input)).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+    await expect(caller.project.create(input())).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
     expect(db.userConsent.findMany).not.toHaveBeenCalled()
     expect(db.$transaction).not.toHaveBeenCalled()
     expect(db.site.findMany).not.toHaveBeenCalled()
@@ -153,7 +216,7 @@ describe('project input and access', () => {
     db.userConsent.findMany.mockResolvedValue([])
     const caller = createCaller(context(prisma))
     await expect(caller.project.list()).rejects.toMatchObject({ code: 'PRECONDITION_REQUIRED' })
-    await expect(caller.project.create(input)).rejects.toMatchObject({
+    await expect(caller.project.create(input())).rejects.toMatchObject({
       code: 'PRECONDITION_REQUIRED',
     })
     expect(db.$transaction).not.toHaveBeenCalled()
@@ -168,11 +231,9 @@ describe('project input and access', () => {
     ['https://example.ru:8443', 'https://example.ru:8443'],
   ])('normalizes %s and trims the project name', async (url, normalized) => {
     const { prisma } = fakeDb()
-    const result = await createCaller(context(prisma)).project.create({
-      ...input,
-      name: '  Студия  ',
-      url,
-    })
+    const result = await createdProject(
+      createCaller(context(prisma)).project.create(input({ name: '  Студия  ', url })),
+    )
     expect(result).toMatchObject({ name: 'Студия', url: normalized, status: 'onboarding' })
     expect(Object.keys(result).sort()).toEqual([
       'createdAt',
@@ -204,7 +265,15 @@ describe('project input and access', () => {
   ])('lists the site %s with the host its owner reads: %s', async (url, host) => {
     const { prisma, db } = fakeDb()
     db.site.findMany.mockResolvedValue([
-      { id: randomUUID(), name: 'Сайт', url, stack: 'wordpress', status: 'active', createdAt: now },
+      {
+        id: randomUUID(),
+        name: 'Сайт',
+        url,
+        stack: 'wordpress',
+        status: 'active',
+        createdAt: now,
+        provisioningStages: [],
+      },
     ])
     const [project] = await createCaller(context(prisma)).project.list()
     expect(project).toMatchObject({ url, host })
@@ -212,10 +281,9 @@ describe('project input and access', () => {
 
   it('returns the readable host of a created site and stores its ASCII address', async () => {
     const { prisma, tx } = fakeDb()
-    const created = await createCaller(context(prisma)).project.create({
-      ...input,
-      url: 'https://Кофейня.рф:8443/',
-    })
+    const created = await createdProject(
+      createCaller(context(prisma)).project.create(input({ url: 'https://Кофейня.рф:8443/' })),
+    )
     expect(created).toMatchObject({
       url: 'https://xn--e1aiboc0b6e.xn--p1ai:8443',
       host: 'кофейня.рф:8443',
@@ -225,8 +293,6 @@ describe('project input and access', () => {
   })
 
   describe.each(['production', 'development', 'test'] as const)('with APP_ENV=%s', (appEnv) => {
-    beforeEach(() => vi.stubEnv('APP_ENV', appEnv))
-
     it.each([
       'example.ru',
       'ftp://example.ru',
@@ -258,10 +324,11 @@ describe('project input and access', () => {
     ])('rejects a non-origin URL or a reserved host: %s', async (url) => {
       const { prisma, db } = fakeDb()
       await expect(
-        createCaller(context(prisma)).project.create({ ...input, url }),
+        createCaller(context(prisma, user, servicesOf(appEnv))).project.create(input({ url })),
       ).rejects.toMatchObject({
         code: 'BAD_REQUEST',
       })
+      expect(db.site.findUnique).not.toHaveBeenCalled()
       expect(db.$transaction).not.toHaveBeenCalled()
     })
   })
@@ -287,15 +354,18 @@ describe('project input and access', () => {
   it.each(localOrigins)(
     'refuses the local or private address %s in production with its own text',
     async (url) => {
-      vi.stubEnv('APP_ENV', 'production')
       const { prisma, db } = fakeDb()
+      const connections = fakeSiteConnections({ appEnv: 'production', address: '203.0.113.10' })
       await expect(
-        createCaller(context(prisma)).project.create({ ...input, url }),
+        createCaller(context(prisma, user, connections.services)).project.create(input({ url })),
       ).rejects.toMatchObject({
         code: 'BAD_REQUEST',
         message: 'Укажите адрес сайта, который открывается из интернета',
         cause: { code: 'SITE_ADDRESS_NOT_PUBLIC' },
       })
+      // Refused before any server is asked or any claim is taken.
+      expect(connections.sourceChecks).toEqual([])
+      expect(db.$queryRaw).not.toHaveBeenCalled()
       expect(db.$transaction).not.toHaveBeenCalled()
     },
   )
@@ -304,11 +374,13 @@ describe('project input and access', () => {
     it.each(localOrigins)(
       'accepts the local or private address %s for a local site',
       async (url, normalized) => {
-        vi.stubEnv('APP_ENV', appEnv)
         const { prisma, tx } = fakeDb()
         await expect(
-          createCaller(context(prisma)).project.create({ ...input, url }),
-        ).resolves.toMatchObject({ url: normalized, status: 'onboarding' })
+          createCaller(context(prisma, user, servicesOf(appEnv))).project.create(input({ url })),
+        ).resolves.toMatchObject({
+          outcome: 'created',
+          project: { url: normalized, status: 'onboarding' },
+        })
         // A local site never lands in a workspace cleared for real client data.
         expect(tx.workspace.create).toHaveBeenCalledWith(
           expect.objectContaining({ data: expect.objectContaining({ dataClass: 'synthetic' }) }),
@@ -326,10 +398,16 @@ describe('project input and access', () => {
     { stack: 'unknown' },
     { workspaceId: randomUUID() },
     { status: 'active' },
+    { id: randomUUID() },
+    { requestKey: 'not-a-uuid' },
+    { source: undefined },
+    { database: undefined },
   ])('rejects invalid fields or client-selected ownership: %o', async (overrides) => {
     const { prisma, db } = fakeDb()
     await expect(
-      createCaller(context(prisma)).project.create({ ...input, ...overrides } as typeof input),
+      createCaller(context(prisma)).project.create({ ...input(), ...overrides } as ReturnType<
+        typeof input
+      >),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(db.$transaction).not.toHaveBeenCalled()
   })
@@ -337,7 +415,7 @@ describe('project input and access', () => {
   it('stops at the site ceiling of one user before writing', async () => {
     const { prisma, tx } = fakeDb()
     tx.site.count.mockResolvedValue(MAX_SITES_PER_USER)
-    await expect(createCaller(context(prisma)).project.create(input)).rejects.toMatchObject({
+    await expect(createCaller(context(prisma)).project.create(input())).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'Вы добавили максимальное число сайтов. Напишите нам, если нужно больше',
       cause: { code: 'PROJECT_LIMIT_REACHED' },
@@ -349,8 +427,9 @@ describe('project input and access', () => {
     expect(tx.site.create).not.toHaveBeenCalled()
 
     tx.site.count.mockResolvedValue(MAX_SITES_PER_USER - 1)
-    await expect(createCaller(context(prisma)).project.create(input)).resolves.toMatchObject({
-      url: input.url,
+    await expect(createCaller(context(prisma)).project.create(input())).resolves.toMatchObject({
+      outcome: 'created',
+      project: { url: SITE_URL },
     })
   })
 
@@ -377,7 +456,7 @@ describe('project input and access', () => {
       async (maxSites, sites, message) => {
         const { prisma, tx } = subscribed(maxSites, sites)
 
-        await expect(createCaller(context(prisma)).project.create(input)).rejects.toMatchObject({
+        await expect(createCaller(context(prisma)).project.create(input())).rejects.toMatchObject({
           code: 'FORBIDDEN',
           message,
           cause: { code: 'PROJECT_PLAN_LIMIT_REACHED', details: { maxSites } },
@@ -390,8 +469,9 @@ describe('project input and access', () => {
     it('adds a site while the tariff has room, counting the sites of the personal workspace', async () => {
       const { prisma, tx } = subscribed(3, 2)
 
-      await expect(createCaller(context(prisma)).project.create(input)).resolves.toMatchObject({
-        url: input.url,
+      await expect(createCaller(context(prisma)).project.create(input())).resolves.toMatchObject({
+        outcome: 'created',
+        project: { url: SITE_URL },
       })
 
       // A tariff whose payment is overdue is still a tariff; an ended one is none.
@@ -427,8 +507,9 @@ describe('project input and access', () => {
       tx.workspace.findFirst.mockResolvedValue({ id: WORKSPACE })
       tx.site.count.mockResolvedValue(MAX_SITES_PER_USER - 1)
 
-      await expect(createCaller(context(prisma)).project.create(input)).resolves.toMatchObject({
-        url: input.url,
+      await expect(createCaller(context(prisma)).project.create(input())).resolves.toMatchObject({
+        outcome: 'created',
+        project: { url: SITE_URL },
       })
       expect(tx.subscription.findFirst).toHaveBeenCalledOnce()
       // Without a tariff the sites of the workspace are not counted.
@@ -438,7 +519,7 @@ describe('project input and access', () => {
     it('reports the ceiling before the tariff when both are reached', async () => {
       const { prisma, tx } = subscribed(15, MAX_SITES_PER_USER)
 
-      await expect(createCaller(context(prisma)).project.create(input)).rejects.toMatchObject({
+      await expect(createCaller(context(prisma)).project.create(input())).rejects.toMatchObject({
         cause: { code: 'PROJECT_LIMIT_REACHED' },
       })
       expect(tx.subscription.findFirst).not.toHaveBeenCalled()
@@ -447,8 +528,9 @@ describe('project input and access', () => {
     it('does not limit a tariff whose plan names no number of sites', async () => {
       const { prisma, tx } = subscribed(null, 30)
 
-      await expect(createCaller(context(prisma)).project.create(input)).resolves.toMatchObject({
-        url: input.url,
+      await expect(createCaller(context(prisma)).project.create(input())).resolves.toMatchObject({
+        outcome: 'created',
+        project: { url: SITE_URL },
       })
       expect(tx.site.count).toHaveBeenCalledOnce()
     })
@@ -477,7 +559,7 @@ describe('project input and access', () => {
       /** The refusal of `project.create`, or a failure of the test when the site is added. */
       async function refusal(prisma: PrismaClient) {
         const outcome: unknown = await createCaller(context(prisma))
-          .project.create(input)
+          .project.create(input())
           .then(
             () => null,
             (error: unknown) => error,
@@ -511,8 +593,9 @@ describe('project input and access', () => {
       it('adds a site while that tariff has room, counting the sites of the workspace', async () => {
         const { prisma, tx } = payingFor(3, 2)
 
-        await expect(createCaller(context(prisma)).project.create(input)).resolves.toMatchObject({
-          url: input.url,
+        await expect(createCaller(context(prisma)).project.create(input())).resolves.toMatchObject({
+          outcome: 'created',
+          project: { url: SITE_URL },
         })
         expect(tx.site.count.mock.calls).toEqual([
           [{ where: { workspace: { createdById: user.id } } }],
@@ -545,8 +628,9 @@ describe('project input and access', () => {
         tx.order.findFirst.mockResolvedValue(order)
         tx.site.count.mockResolvedValue(30)
 
-        await expect(createCaller(context(prisma)).project.create(input)).resolves.toMatchObject({
-          url: input.url,
+        await expect(createCaller(context(prisma)).project.create(input())).resolves.toMatchObject({
+          outcome: 'created',
+          project: { url: SITE_URL },
         })
         // Nothing limits: the sites of the workspace are not counted.
         expect(tx.site.count).toHaveBeenCalledOnce()
@@ -583,7 +667,7 @@ describe('project input and access', () => {
 
       const refusalOf = (prisma: PrismaClient) =>
         createCaller(context(prisma))
-          .project.create(input)
+          .project.create(input())
           .then(
             () => {
               throw new Error('The site was added')
@@ -617,8 +701,9 @@ describe('project input and access', () => {
       it('adds a site while the chosen tariff has room', async () => {
         const { prisma, tx } = scheduled(15, 3, 2)
 
-        await expect(createCaller(context(prisma)).project.create(input)).resolves.toMatchObject({
-          url: input.url,
+        await expect(createCaller(context(prisma)).project.create(input())).resolves.toMatchObject({
+          outcome: 'created',
+          project: { url: SITE_URL },
         })
         expect(tx.site.create).toHaveBeenCalledOnce()
       })
@@ -665,8 +750,9 @@ describe('project input and access', () => {
       it('does not limit by a chosen tariff that names no number of sites', async () => {
         const { prisma, tx } = scheduled(3, null, 2)
 
-        await expect(createCaller(context(prisma)).project.create(input)).resolves.toMatchObject({
-          url: input.url,
+        await expect(createCaller(context(prisma)).project.create(input())).resolves.toMatchObject({
+          outcome: 'created',
+          project: { url: SITE_URL },
         })
         expect(tx.site.create).toHaveBeenCalledOnce()
         // The tariff that is on still limits.
@@ -678,7 +764,7 @@ describe('project input and access', () => {
 
   it('serializes on the user row without blocking writes that reference the user', async () => {
     const { prisma, tx } = fakeDb()
-    await createCaller(context(prisma)).project.create(input)
+    await createCaller(context(prisma)).project.create(input())
     const [sql] = tx.$queryRaw.mock.calls[0] as [TemplateStringsArray]
     expect(sql.join('?').replace(/\s+/g, ' ').trim()).toBe(
       'SELECT id FROM users WHERE id = ?::uuid FOR NO KEY UPDATE',
@@ -687,7 +773,7 @@ describe('project input and access', () => {
 
   it('asks for the gift of the registration once the workspace is known, before the site is written', async () => {
     const { prisma, tx } = fakeDb()
-    await createCaller(context(prisma)).project.create(input)
+    await createCaller(context(prisma)).project.create(input())
     expect(tx.creditLedger.findUnique).toHaveBeenCalledExactlyOnceWith({
       where: { idempotencyKey: `user:${user.id}:signup-gift` },
     })
@@ -704,7 +790,7 @@ describe('project input and access', () => {
         clientVersion: 'test',
       }),
     )
-    await expect(createCaller(context(prisma)).project.create(input)).rejects.toMatchObject({
+    await expect(createCaller(context(prisma)).project.create(input())).rejects.toMatchObject({
       code: 'CONFLICT',
       message: 'Сайт с таким адресом уже добавлен',
       cause: { code: 'PROJECT_ALREADY_EXISTS' },
@@ -724,6 +810,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
   afterEach(async () => {
     const ids = userIds.splice(0)
     const owned = { createdById: { in: ids } }
+    // What the creation wrote beside each site holds it with Restrict keys.
+    const created = await db.workspace.findMany({ where: owned, select: { id: true } })
+    await deleteSiteConnectionRows(
+      db,
+      created.map(({ id }) => id),
+    )
     await db.site.deleteMany({ where: { workspace: owned } })
     // An order refers to its subscription, its workspace and its plan.
     await db.order.deleteMany({ where: { workspace: owned } })
@@ -790,12 +882,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
 
   it('creates a single personal workspace with one owner for concurrent distinct sites', async () => {
     const { user: owner, caller } = await account()
+    // As many as one user may have importing at once.
+    const count = siteConnectionLimits.connectionsInProgressPerUser
     const projects = await Promise.all(
-      Array.from({ length: 5 }, (_, index) =>
-        caller.project.create({ ...input, url: `https://site-${index}.example.ru` }),
+      Array.from({ length: count }, (_, index) =>
+        createdProject(caller.project.create(input({ url: `https://site-${index}.example.ru` }))),
       ),
     )
-    expect(projects).toHaveLength(5)
+    expect(projects).toHaveLength(count)
     const workspaces = await db.workspace.findMany({
       where: { createdById: owner.id },
       include: { members: true, sites: true },
@@ -805,11 +899,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
       dataClass: 'synthetic',
       members: [{ userId: owner.id, role: 'owner' }],
     })
-    expect(workspaces[0]!.sites).toHaveLength(5)
+    expect(workspaces[0]!.sites).toHaveLength(count)
     expect((await caller.project.list()).map((project) => project.id).sort()).toEqual(
       projects.map((project) => project.id).sort(),
     )
-    // The five requests that raced for the workspace granted its gift once.
+    // The requests that raced for the workspace granted its gift once.
     expect(await giftOf(owner.id)).toEqual({
       workspaceIds: [workspaces[0]!.id],
       granted: ['35.00'],
@@ -823,7 +917,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     const { user: owner, caller } = await account()
     expect(await giftOf(owner.id)).toEqual(noGift)
 
-    const first = await caller.project.create(input)
+    const first = await createdProject(caller.project.create(input()))
     const { workspaceId } = await db.site.findUniqueOrThrow({ where: { id: first.id } })
     const granted = {
       workspaceIds: [workspaceId],
@@ -835,8 +929,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     expect(await giftOf(owner.id)).toEqual(granted)
 
     // More sites, a repeated address and a refused one change nothing about the gift.
-    await caller.project.create({ ...input, url: 'https://second.example.ru' })
-    await expect(caller.project.create(input)).rejects.toMatchObject({ code: 'CONFLICT' })
+    await caller.project.create(input({ url: 'https://second.example.ru' }))
+    await expect(caller.project.create(input())).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(await giftOf(owner.id)).toEqual(granted)
   })
 
@@ -844,16 +938,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     const { user: owner, caller } = await account()
     // The address is taken by a site in a workspace the user is a member of.
     const other = await account()
-    const shared = await other.caller.project.create(input)
+    const shared = await createdProject(other.caller.project.create(input()))
     const { workspaceId } = await db.site.findUniqueOrThrow({ where: { id: shared.id } })
     await db.member.create({ data: { workspaceId, userId: owner.id, role: 'member' } })
 
-    await expect(caller.project.create(input)).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(caller.project.create(input())).rejects.toMatchObject({ code: 'CONFLICT' })
 
     expect(await db.workspace.count({ where: { createdById: owner.id } })).toBe(0)
     expect(await giftOf(owner.id)).toEqual(noGift)
     // The site that goes through makes the workspace and grants the gift.
-    await caller.project.create({ ...input, url: 'https://own.example.ru' })
+    await caller.project.create(input({ url: 'https://own.example.ru' }))
     expect((await giftOf(owner.id)).granted).toEqual(['35.00'])
   })
 
@@ -864,7 +958,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     )
     expect(await giftOf(owner.id)).toEqual(noGift)
 
-    await caller.project.create(input)
+    await caller.project.create(input())
 
     expect(await giftOf(owner.id)).toMatchObject({
       workspaceIds: [legacy.id],
@@ -876,8 +970,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
   it('creates exactly one site for simultaneous submissions of the same normalized origin', async () => {
     const { user: owner, caller } = await account()
     const results = await Promise.allSettled([
-      caller.project.create(input),
-      caller.project.create({ ...input, url: 'https://EXAMPLE.ru:443/' }),
+      caller.project.create(input()),
+      caller.project.create(input({ url: 'https://EXAMPLE.ru:443/' })),
     ])
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
     const rejected = results.find((result) => result.status === 'rejected')
@@ -892,7 +986,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     const outcome = await db.$transaction(async (holder) => {
       // What an INSERT with a foreign key to users (a session, a consent) holds until commit.
       await holder.$queryRaw`SELECT 1 FROM users WHERE id = ${owner.id}::uuid FOR KEY SHARE`
-      pending = caller.project.create(input)
+      pending = caller.project.create(input())
       return Promise.race([
         pending.then(
           () => 'created',
@@ -907,7 +1001,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
 
   it('counts the site ceiling under the user lock for concurrent submissions', async () => {
     const { user: owner, caller } = await account()
-    const first = await caller.project.create(input)
+    const first = await createdProject(caller.project.create(input()))
     const { workspaceId } = await db.site.findUniqueOrThrow({ where: { id: first.id } })
     await db.site.createMany({
       data: Array.from({ length: MAX_SITES_PER_USER - 3 }, (_, index) => ({
@@ -921,7 +1015,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
 
     const results = await Promise.allSettled(
       Array.from({ length: 5 }, (_, index) =>
-        caller.project.create({ ...input, url: `https://last-${index}.example.ru` }),
+        caller.project.create(input({ url: `https://last-${index}.example.ru` })),
       ),
     )
 
@@ -1002,7 +1096,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
       return { workspaceId: workspace.id, orderId: order.id, planId: plan.id }
     }
 
-    const siteAt = (index: number) => ({ ...input, url: `https://site-${index}.example.ru` })
+    const siteAt = (index: number) => input({ url: `https://site-${index}.example.ru` })
     const planLimit = (maxSites: number) => ({
       code: 'FORBIDDEN',
       cause: { code: 'PROJECT_PLAN_LIMIT_REACHED', details: { maxSites } },
@@ -1013,7 +1107,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
       // The tariff was paid before the first site: the site lands in the same workspace.
       const { workspaceId } = await subscribe(owner, 2)
 
-      const first = await caller.project.create(siteAt(1))
+      const first = await createdProject(caller.project.create(siteAt(1)))
       await caller.project.create(siteAt(2))
       await expect(caller.project.create(siteAt(3))).rejects.toMatchObject({
         ...planLimit(2),
@@ -1062,7 +1156,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     it('counts a site of any status against the limit', async () => {
       const { user: owner, caller } = await account()
       const { workspaceId } = await subscribe(owner, 1)
-      const first = await caller.project.create(siteAt(1))
+      const first = await createdProject(caller.project.create(siteAt(1)))
       await db.site.update({ where: { id: first.id }, data: { status: 'archived' } })
 
       await expect(caller.project.create(siteAt(2))).rejects.toMatchObject({
@@ -1110,8 +1204,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     it('does not limit a user without a tariff below the ceiling', async () => {
       const { user: owner, caller } = await account()
 
-      // More than the largest tariff holds.
-      for (let index = 0; index < 16; index += 1) await caller.project.create(siteAt(index))
+      // More than the largest tariff holds. Nothing runs the imports here: each is finished as core
+      // would finish it, and the limits of the checks start again, so only the sites are counted.
+      for (let index = 0; index < 16; index += 1) {
+        await createdProject(caller.project.create(siteAt(index)))
+        await finishImports(db, owner.id)
+        resetSiteConnectionGate()
+      }
 
       expect(await db.site.count({ where: { workspace: { createdById: owner.id } } })).toBe(16)
     })
@@ -1381,51 +1480,57 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
   it('isolates other users sites and does not disclose their duplicate URLs', async () => {
     const first = await account()
     const second = await account()
-    const projectA = await first.caller.project.create(input)
+    const projectA = await createdProject(first.caller.project.create(input()))
     expect(await second.caller.project.list()).toEqual([])
-    const projectB = await second.caller.project.create(input)
+    const projectB = await createdProject(second.caller.project.create(input()))
     expect(projectB.id).not.toBe(projectA.id)
-    expect(await first.caller.project.list()).toEqual([projectA])
-    expect(await second.caller.project.list()).toEqual([projectB])
+    expect(await first.caller.project.list()).toEqual([{ ...projectA, setup: 'pending' }])
+    expect(await second.caller.project.list()).toEqual([{ ...projectB, setup: 'pending' }])
   })
 
   it('lists shared sites only while membership exists and never creates into that workspace', async () => {
     const first = await account()
     const second = await account()
-    const shared = await first.caller.project.create(input)
+    const shared = await createdProject(first.caller.project.create(input()))
     const workspace = await db.workspace.findFirstOrThrow({ where: { createdById: first.user.id } })
     const member = await db.member.create({
       data: { workspaceId: workspace.id, userId: second.user.id, role: 'member' },
     })
-    expect(await second.caller.project.list()).toEqual([shared])
-    await expect(second.caller.project.create(input)).rejects.toMatchObject({ code: 'CONFLICT' })
-    const own = await second.caller.project.create({ ...input, url: 'https://own.example.ru' })
+    expect(await second.caller.project.list()).toEqual([{ ...shared, setup: 'pending' }])
+    await expect(second.caller.project.create(input())).rejects.toMatchObject({
+      code: 'CONFLICT',
+      cause: { code: 'PROJECT_ALREADY_EXISTS' },
+    })
+    const own = await createdProject(
+      second.caller.project.create(input({ url: 'https://own.example.ru' })),
+    )
     expect(await db.site.findUniqueOrThrow({ where: { id: own.id } })).not.toMatchObject({
       workspaceId: workspace.id,
     })
     await db.member.delete({ where: { id: member.id } })
-    expect(await second.caller.project.list()).toEqual([own])
+    expect(await second.caller.project.list()).toEqual([{ ...own, setup: 'pending' }])
   })
 
   it('does not treat a shared owner workspace or revoked owner membership as personal', async () => {
     const first = await account()
     const second = await account()
-    await first.caller.project.create(input)
+    await first.caller.project.create(input())
     const original = await db.workspace.findFirstOrThrow({ where: { createdById: first.user.id } })
     await db.member.create({
       data: { workspaceId: original.id, userId: second.user.id, role: 'member' },
     })
-    const project = await first.caller.project.create({
-      ...input,
-      url: 'https://private.example.ru',
-    })
+    const project = await createdProject(
+      first.caller.project.create(input({ url: 'https://private.example.ru' })),
+    )
     const site = await db.site.findUniqueOrThrow({ where: { id: project.id } })
     expect(site.workspaceId).not.toBe(original.id)
     await db.member.updateMany({
       where: { workspaceId: site.workspaceId },
       data: { role: 'member' },
     })
-    const next = await first.caller.project.create({ ...input, url: 'https://next.example.ru' })
+    const next = await createdProject(
+      first.caller.project.create(input({ url: 'https://next.example.ru' })),
+    )
     const nextSite = await db.site.findUniqueOrThrow({ where: { id: next.id } })
     expect(nextSite.workspaceId).not.toBe(site.workspaceId)
     expect(nextSite.workspaceId).not.toBe(original.id)

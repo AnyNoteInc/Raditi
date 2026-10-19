@@ -706,9 +706,14 @@ describe('RemoteTurnExecutor over the runner hub', () => {
         exclude: [],
       },
       baseSha,
+      addOnlyPaths: ['wp-content/uploads/raditi/'],
     })
     const [capture] = await vm.poll()
-    expect(capture).toMatchObject({ type: 'capture', baseSha })
+    expect(capture).toMatchObject({
+      type: 'capture',
+      baseSha,
+      addOnlyPaths: ['wp-content/uploads/raditi/'],
+    })
     const upload = async (part: 'patch' | 'untracked', bytes: Uint8Array) =>
       (await f.hub.candidate('sandbox-1', assignment.id, part, vm.headers(capture!)))(bytes)
     await upload('patch', patch)
@@ -846,6 +851,48 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     const adopted = (await adopting)!
     expect(adopted.containerId).toBe('container1')
     await expect(adopted.launch(1_000)).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
+  it("sends the values of the client's variables with the credentials, and only with them (Р13)", async () => {
+    const f = fixture()
+    const vm = f.runner()
+    const assignment = await f.open()
+    const envValues = ['pay-secret-0001']
+    void f.executor
+      .prepare(f.input(assignment.id, { envValues }), new AbortController().signal)
+      .catch(() => {})
+    const [prepare] = await vm.poll()
+    expect(prepare).toMatchObject({ type: 'prepare', credentials, envValues })
+    const adopt = (holdsCredentials: boolean, epoch: number) => {
+      void f.executor
+        .adopt(
+          {
+            assignmentId: assignment.id,
+            fence: { ...fence, epoch },
+            containerId: 'container1',
+            labels: { ...labels, leaseEpoch: 1 },
+            purpose: 'work',
+            remainingMs: 60_000,
+            driverId: sampleDriverId,
+            credentials,
+            envValues,
+            holdsCredentials,
+          },
+          new AbortController().signal,
+        )
+        .catch(() => {})
+      return vm.poll()
+    }
+    await vm.report(assignment.id, {
+      type: 'created',
+      commandId: prepare!.commandId,
+      containerId: 'container1',
+    })
+    const [again] = await adopt(false, 2)
+    expect(again).toMatchObject({ work: { credentials, envValues } })
+    const [held] = await adopt(true, 3)
+    expect(held).not.toHaveProperty('work.credentials')
+    expect(held).not.toHaveProperty('work.envValues')
   })
 
   it('leaves a turn no core drives to recovery and refuses a finished one', async () => {

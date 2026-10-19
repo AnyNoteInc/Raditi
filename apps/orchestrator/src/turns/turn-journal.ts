@@ -4,10 +4,12 @@ import type { PrismaClient } from '@repo/db'
 import {
   badRequest,
   conflict,
+  feedStepSchema,
   leaseLost,
   turnEvidenceSchema,
   type AgentEvent,
   type ExecCursor,
+  type FeedStep,
   type TurnEvidence,
   type TurnJournal,
   type TurnPhase,
@@ -16,6 +18,20 @@ import { z } from 'zod'
 
 /** Entries an owner may append for its own epoch after its lease expired or was held. */
 const endings: readonly TurnPhase[] = ['failed', 'recovery', 'vacating']
+
+/** The phases that mean the agent works: the task becomes `running` with the first of them. */
+const workPhases: readonly TurnPhase[] = ['running', 'resumed']
+
+/**
+ * The stages of work a journal entry tells the client about (docs/research/2026-10-client-feed/
+ * feed-design.md, «Что такое „шаг“»): by the phase alone, never by the agent's events, so every
+ * driver gives one set of stages. `site` and `files` wait for their trusted sources.
+ */
+export function feedStepsOf(phase: TurnPhase): FeedStep[] {
+  if (workPhases.includes(phase)) return ['work']
+  if (phase === 'quiesced') return ['save']
+  return []
+}
 
 /** Evidence as the journal holds it: parsed, with the fence reduced to its four fields. */
 export type JournaledEvidence = z.output<typeof turnEvidenceSchema>
@@ -41,7 +57,12 @@ const rangeSchema = z.object({
   toEpoch: z.number().int().positive(),
 })
 
-/** Operational evidence and TaskTurn metadata. No task transitions, billing or dispatch. */
+/**
+ * Operational evidence and TaskTurn metadata. One task transition only — `preparing → running`
+ * with the first entry that says the agent works — and the client's `feed.step` rows, both in
+ * the statement of the entry and under its fence: an owner that lost the site tells the client
+ * nothing. No billing or dispatch.
+ */
 export class TaskEventTurnJournal implements TurnJournal {
   constructor(private readonly db: Pick<PrismaClient, '$queryRaw'>) {}
 
@@ -55,9 +76,15 @@ export class TaskEventTurnJournal implements TurnJournal {
     for (const event of evidence.events ?? [])
       if (event.type === 'started' && event.nativeSessionId) nativeSessionId = event.nativeSessionId
     const recovery = endings.includes(evidence.phase)
+    const working = workPhases.includes(evidence.phase)
+    // Checked by the write schema's own enum here: the row itself is assembled in SQL.
+    const steps = z.array(feedStepSchema).parse(feedStepsOf(evidence.phase))
     // A failed, held or vacating owner may append evidence for its own epoch, never for a newer
     // owner.
-    // The fence check and append are one statement, not a check-then-write race.
+    // The fence check and append are one statement, not a check-then-write race; so are the
+    // move to `running` and the stage rows, which come only with an appended entry. A recovered
+    // owner writes `resumed` again under its new epoch: the status condition and NOT EXISTS
+    // leave the move and the stage as they were.
     const rows = await this.db.$queryRaw<Array<{ id: bigint }>>`
       WITH owned_lease AS MATERIALIZED (
         SELECT site_id, expires_at, held_for_operator FROM site_leases
@@ -87,6 +114,26 @@ export class TaskEventTurnJournal implements TurnJournal {
             LIMIT 1))
         FROM inserted WHERE tt.id = inserted.turn_id AND tt.status = 'running'
         RETURNING tt.id
+      ), started AS (
+        UPDATE tasks SET status = 'running', updated_at = now()
+        WHERE id = ${fence.taskId}::uuid AND status = 'preparing' AND ${working}
+          AND EXISTS (SELECT 1 FROM inserted)
+        RETURNING id
+      ), staged AS (
+        INSERT INTO task_events (task_id, turn_id, type, payload, client_visible)
+        SELECT task.id, inserted.turn_id, 'feed.step',
+          jsonb_build_object('v', 1, 'turn', ${evidence.turn}::int, 'attempt', task.attempt,
+            'step', stage.step),
+          true
+        FROM inserted
+        JOIN tasks task ON task.id = ${fence.taskId}::uuid
+        CROSS JOIN unnest(${steps}::text[]) AS stage(step)
+        WHERE inserted.turn_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM task_events e
+            WHERE e.turn_id = inserted.turn_id AND e.type = 'feed.step'
+              AND e.payload->>'step' = stage.step)
+        RETURNING id
       ) SELECT id FROM inserted`
     // Fence lost, not an outage: a failed statement rejects with its own database error.
     if (rows.length !== 1) throw leaseLost('Turn evidence no longer owns its site lease')

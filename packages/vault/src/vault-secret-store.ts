@@ -6,6 +6,7 @@ import { VaultError } from './errors.ts'
 import { createKvStore } from './kv.ts'
 import { createVaultSession, vaultBaseAddress } from './session.ts'
 import { createTransitStore, TRANSIT_MOUNT } from './transit.ts'
+import { createWrappingStore } from './wrapping.ts'
 
 export interface VaultSecretStoreOptions extends VaultConfig {
   fetch?: typeof fetch
@@ -42,7 +43,8 @@ const MAX_TRACKED_MOUNTS = 16
 
 /**
  * SecretStore port over the Vault HTTP API (OpenBao or Deckhouse Stronghold, spec §15).
- * Health, Transit and KV v2 are implemented. SSH CA, deploy tokens and wrapping are P7.
+ * Health, Transit, KV v2 and response wrapping are implemented; the SSH CA and the creation of
+ * tokens stay P7 (the release flow of plan 53 creates no token, Р29).
  * The config is kept in this closure and never logged.
  */
 export function createVaultSecretStore(options: VaultSecretStoreOptions): SecretStore {
@@ -129,9 +131,8 @@ export function createVaultSecretStore(options: VaultSecretStoreOptions): Secret
     ...createTransitStore(options, session, () => {
       transitUsed = true
     }),
+    ...createWrappingStore(session),
     sshSign: pending('sshSign'),
     createToken: pending('createToken'),
-    wrap: pending('wrap'),
-    revokeAccessor: pending('revokeAccessor'),
   }
 }

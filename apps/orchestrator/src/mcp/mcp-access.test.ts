@@ -20,17 +20,47 @@ const scope = () => ({
   stack: 'wordpress',
   url: 'https://site.example.test',
 })
+const preview = {
+  id: randomUUID(),
+  status: 'ready',
+  database: true,
+  hostname: 'site-0a1b2c3d-chat-0a1b2c.localhost',
+}
+/** The admission row: the scope and the columns of the dialog's preview, NULL without one. */
+const row = (base = scope(), of: typeof preview | null = null) => ({
+  ...base,
+  previewId: of?.id ?? null,
+  previewStatus: of?.status ?? null,
+  previewDatabase: of?.database ?? null,
+  previewHostname: of?.hostname ?? null,
+})
 
 describe('MCP token access', () => {
   it('passes only the token hash to SQL and validates returned scope', async () => {
-    const row = scope()
-    const $queryRaw = vi.fn(async () => [row])
+    const base = scope()
+    const $queryRaw = vi.fn(async () => [row(base)])
     const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
-    expect(await store.authenticate(token)).toEqual(row)
+    expect(await store.authenticate(token)).toEqual({ ...base, preview: null })
     expect(JSON.stringify($queryRaw.mock.calls)).not.toContain(token)
     expect(JSON.stringify($queryRaw.mock.calls)).toContain(
       createHash('sha256').update(token).digest('hex'),
     )
+  })
+
+  it('carries the preview of the dialog, never one named by the request', async () => {
+    const base = scope()
+    const $queryRaw = vi.fn(async () => [row(base, preview)])
+    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    expect(await store.authenticate(token)).toEqual({ ...base, preview })
+    const sql = ($queryRaw.mock.calls[0] as unknown as [string[]])[0].join('$').replace(/\s+/g, ' ')
+    expect(sql).toContain(
+      'LEFT JOIN preview_environments p ON p.task_id = t.id AND p.site_id = s.id',
+    )
+    // A row of another status or an unknown one is broken data: closed, never guessed.
+    $queryRaw.mockResolvedValueOnce([row(scope(), { ...preview, status: 'serving' })])
+    await expect(store.authenticate(token)).rejects.toMatchObject({
+      code: 'MCP_ACCESS_SCOPE_INVALID',
+    })
   })
 
   it('looks up the token its issuer generates, by the hash its issuer stores', async () => {
@@ -96,9 +126,9 @@ describe('MCP token access', () => {
     const $queryRaw = vi.fn()
     const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
     for (const rows of [
-      [scope(), scope()],
-      [{ ...scope(), url: 'https://password:secret@site.example.test' }],
-      [{ ...scope(), url: 'https://site.example.test/blog/' }],
+      [row(), row()],
+      [row({ ...scope(), url: 'https://password:secret@site.example.test' })],
+      [row({ ...scope(), url: 'https://site.example.test/blog/' })],
     ]) {
       $queryRaw.mockResolvedValueOnce(rows)
       const error = await store.authenticate(token).catch((caught: unknown) => caught)

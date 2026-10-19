@@ -1,6 +1,12 @@
 import {
+  chatCommandRefusals,
+  chatCommandRefusalText,
+  FEED_REQUEST_TEXT_LIMIT,
+  feedInputText,
+  feedTooLongText,
   isDomainError,
   taskRefusalDetailsSchema,
+  type ChatCommandRefusal,
   type DomainError,
   type TaskRefusalDetails,
 } from '@repo/domain'
@@ -57,6 +63,27 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   PROJECT_ALREADY_EXISTS: 'Сайт с таким адресом уже добавлен',
   PROJECT_LIMIT_REACHED: 'Вы добавили максимальное число сайтов. Напишите нам, если нужно больше',
   SITE_ADDRESS_NOT_PUBLIC: 'Укажите адрес сайта, который открывается из интернета',
+  // The wizard «Добавить проект» and the screen «Настраиваем сайт» (docs/plan/39-site-connection-wizard.md).
+  // Why a check of the files or the database failed is told by its reason, not by these.
+  SITE_CONNECTION_UNAVAILABLE:
+    'Подключение сайтов сейчас недоступно. Попробуйте ещё раз немного позже',
+  SITE_STACK_NOT_CONNECTABLE: 'Эту платформу мы пока не подключаем',
+  SITE_CHECKS_LIMITED:
+    'Слишком много проверок подряд. Подождите несколько минут и попробуйте снова',
+  SITE_CONNECTIONS_BUSY:
+    'Сейчас подключаются три ваших сайта. Дождитесь, пока закончится хотя бы одно подключение',
+  PROJECT_CREATION_IN_PROGRESS: 'Проект уже добавляется. Подождите несколько секунд',
+  // This opening of the wizard already added a project, at another address (its answer was lost).
+  PROJECT_REQUEST_CONFLICT:
+    'Из этого окна уже добавлен проект с другим адресом. Откройте список проектов или начните добавление заново',
+  // Any stage that is not failed: still going, or already done in another tab.
+  SITE_SETUP_NOT_FAILED:
+    'Настройку сейчас нельзя повторить. Обновите страницу, чтобы увидеть, как она идёт',
+  SITE_SETUP_RETRIES_LIMITED:
+    'Повторять настройку можно не чаще шести раз в час. Попробуйте немного позже',
+  // A failed import of a site that is no longer being connected (activated, paused, archived).
+  SITE_SETUP_UNAVAILABLE:
+    'Настройку этого сайта уже нельзя повторить. Обновите страницу, чтобы увидеть, что изменилось',
   NOT_IMPLEMENTED: 'Эта возможность ещё в разработке',
   [CONSENT_REQUIRED]: CONSENT_REQUIRED_MESSAGE,
   // Tariffs and their payment: what the customer can do next. Why a bank declined a payment
@@ -137,6 +164,61 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   EXEC_LOST: 'Работа агента прервалась из-за технического сбоя. Попробуйте ещё раз',
   GIT_OPERATION_FAILED:
     'Не удалось получить или сохранить файлы сайта. Попробуйте ещё раз немного позже',
+  // A dialog, its preview and the release of its changes (docs/plan/53-chat-preview-release.md).
+  CHAT_NOT_CONFIGURED: 'Диалоги сейчас недоступны. Попробуйте ещё раз немного позже',
+  TASK_NOT_ACCEPTED: 'Задания для этого сайта сейчас не принимаются',
+  TASK_TEXT_EMPTY: 'Напишите, что нужно сделать на сайте',
+  TASK_TEXT_TOO_LONG: feedTooLongText(FEED_REQUEST_TEXT_LIMIT),
+  TASK_TEXT_HAS_SECRET: feedInputText.secret,
+  TASK_TEXT_INVALID:
+    'В сообщении есть символы, которые мы не можем сохранить. Уберите их и отправьте снова',
+  TASK_BUSY:
+    'Подождите: агент ещё работает. Написать можно будет, когда он закончит или задаст вопрос',
+  TASK_FINISHED: 'Диалог завершён. Чтобы попросить что-то ещё, начните новый',
+  TASK_CONTINUE_REQUIRED:
+    'Кредиты, отложенные на эту работу, закончились. Нажмите «Продолжить», чтобы агент работал дальше',
+  TASK_NOTHING_TO_CONTINUE:
+    'Продолжать нечего: диалог не ждёт вашего решения. Обновите страницу, чтобы увидеть, что изменилось',
+  TASK_ATTEMPTS_EXHAUSTED:
+    'Эту задачу больше нельзя продолжить: на неё ушли все заходы, которые даются одной задаче. Начните новый диалог или напишите нам',
+  // «Попробовать ещё» (docs/plan/53, «Попробовать ещё (18.10)»): the failure was answered meanwhile.
+  TASK_NOTHING_TO_RETRY: 'Повторить уже нельзя: в диалоге что-то изменилось',
+  CHAT_COMMAND_UNAVAILABLE:
+    'Эта команда сейчас недоступна. Обновите страницу, чтобы увидеть, что изменилось',
+  RELEASE_IN_PROGRESS: 'Сейчас выпускается новая версия сайта. Дождитесь, пока выпуск закончится',
+  RELEASE_CONFIRMATION_INVALID: 'Не удалось подтвердить выпуск. Откройте выпуск версии заново',
+  RELEASE_CONFIRMATION_EXPIRED:
+    'Подтверждение устарело. Откройте выпуск версии заново и подтвердите его ещё раз',
+  RELEASE_CANDIDATE_CHANGED:
+    'Изменения обновились, пока вы подтверждали выпуск. Посмотрите их и подтвердите выпуск ещё раз',
+  RELEASE_VERSION_TAKEN:
+    'Этот номер версии уже занят. Откройте выпуск заново и выберите номер из предложенных',
+  RELEASE_REVIEW_REQUIRED:
+    'Изменений базы данных много, или часть из них показана не полностью. Посмотрите их все, отметьте, что проверили, и подтвердите выпуск',
+  RELEASE_VERSION_NOT_OFFERED:
+    'Этот номер версии больше не подходит. Откройте выпуск заново и выберите номер из предложенных',
+  RELEASE_UNDO_PLAN_CHANGED:
+    'Пока вы подтверждали отмену, на сайте что-то изменилось. Откройте «Отменить выпуск» ещё раз — мы проверим заново',
+  RELEASE_UNDO_VERSION_TAKEN:
+    'Этот номер версии уже занят. Откройте «Отменить выпуск» ещё раз — мы предложим следующий',
+  PREVIEW_NOT_READY: 'Предпросмотр ещё готовится. Откройте его через минуту',
+  SITE_ENV_NOT_ALLOWED: 'Переменные сайта могут видеть и менять только владелец и администраторы',
+  SITE_ENV_NAME_INVALID:
+    'Имя переменной может состоять только из заглавных латинских букв, цифр и знака подчёркивания и должно начинаться с буквы. Исправьте его и сохраните снова',
+  SITE_ENV_NAME_RESERVED: 'Это имя занято платформой. Выберите другое имя переменной',
+  SITE_ENV_VALUE_INVALID:
+    'Значение должно быть не короче 8 знаков и не слишком длинным. Проверьте, что вы вставили его целиком',
+  SITE_ENV_HOSTS_INVALID:
+    'Укажите адреса сервисов, к которым обращается переменная: имя сайта и, если нужно, порт через двоеточие. Адреса из цифр и внутренние имена не подходят',
+  SITE_ENV_CONSENT_REQUIRED:
+    'Чтобы передать переменную агенту, подтвердите, что агент увидит ответы этого сервиса',
+  SITE_ENV_AGENT_CLOSED:
+    'Для этого сайта передавать переменные агенту пока нельзя, а без агента их не получает и предпросмотр. Выключите «Передавать агенту», чтобы сохранить переменную',
+  SITE_ENV_LIMIT:
+    'У сайта уже 64 переменные — больше добавить нельзя. Удалите ненужную и попробуйте снова',
+  SITE_ENV_HOSTS_LIMIT:
+    'У переменных сайта не может быть больше 256 разных адресов сервисов. Уберите адреса, которые больше не нужны, и сохраните снова',
+  SITE_ENV_CHANGED: 'Переменную только что изменили. Обновите страницу и попробуйте ещё раз',
 }
 
 const CODE_BY_HTTP_STATUS: Readonly<Record<number, TRPC_ERROR_CODE_KEY>> = {
@@ -199,6 +281,20 @@ function refusalOf(details: unknown): TaskRefusalDetails | null {
 
 const CHOOSE_PLAN = 'Выберите тариф в разделе «Тарифы»'
 
+/** `details.reason` of a refusal, when it is a string. */
+function reasonOf(details: unknown): string | null {
+  const { reason }: { reason?: unknown } =
+    typeof details === 'object' && details !== null ? details : {}
+  return typeof reason === 'string' ? reason : null
+}
+
+/** `details.refusal` of a refused command of the chat, when it is one the chat knows. */
+function commandRefusalOf(details: unknown): ChatCommandRefusal | null {
+  const { refusal }: { refusal?: unknown } =
+    typeof details === 'object' && details !== null ? details : {}
+  return chatCommandRefusals.find((known) => known === refusal) ?? null
+}
+
 /**
  * Why a task is refused without a paid tariff, by the reason of the refusal: what is told
  * first, before the way out. A reason that is not here is told in the general words of its
@@ -259,7 +355,9 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
       const credits = plural(spendableNow, 'кредит', 'кредита', 'кредитов')
       return `Сегодня можно потратить ещё ${counted(spendableNow)} ${credits}, а на новую задачу нужно не меньше ${counted(needed)}. Купите пакет кредитов — он дневным лимитом не ограничен — или поставьте задачу завтра`
     }
-    // After a renewal onto a smaller plan the day can have taken more than the limit of now.
+    // The day can have taken more than the limit of now after a retry, which the day does not
+    // bound, or after a renewal onto a smaller plan. The details carry what the day took, not how
+    // much of it is set aside: the page itself tells set-aside credits that come back (`dayTaken`).
     const spent =
       day.used <= day.limit
         ? `потрачено ${counted(day.used)} из ${counted(day.limit)}`
@@ -278,6 +376,24 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
     return why === null
       ? MESSAGE_BY_DOMAIN_CODE.BILLING_TASK_NEEDS_SUBSCRIPTION!
       : `${why} ${CHOOSE_PLAN}`
+  },
+  // Why a dialog is not taken (task.create): `details.reason`.
+  TASK_NOT_ACCEPTED: (details) => {
+    const reason = reasonOf(details)
+    if (reason === 'site_not_active')
+      return 'Задания для этого сайта пока не принимаются: сайт ещё не подключён или его работа приостановлена. Подробности — в разделе «Обзор»'
+    if (reason === 'not_synthetic')
+      return 'Это тестовая среда: здесь принимаются задания только для проверочных сайтов. Настоящие данные в неё не передаются'
+    if (reason === 'class_unavailable')
+      return 'Сейчас мы не можем повторить работу. Попробуйте ещё раз немного позже или напишите агенту, что сделать'
+    return MESSAGE_BY_DOMAIN_CODE.TASK_NOT_ACCEPTED!
+  },
+  // A command of the chat the server refused: the words `task.commands` shows for it.
+  CHAT_COMMAND_UNAVAILABLE: (details) => {
+    const refusal = commandRefusalOf(details)
+    return refusal === null
+      ? MESSAGE_BY_DOMAIN_CODE.CHAT_COMMAND_UNAVAILABLE!
+      : chatCommandRefusalText[refusal].replace(/\.$/, '')
   },
   // The site limit of the tariff (project.create): `details.maxSites`. `details.unpaid` is
   // true when the limit is of a tariff the customer has started to pay for and does not have yet,
@@ -356,11 +472,18 @@ export interface ErrorDetails {
 
 /**
  * Error shape sent to clients: a Russian message on «вы» (clientMessage) and the DomainError
- * code in `data.domainCode`. The original message, zod issues and the stack trace are added
- * only in development.
+ * code in `data.domainCode`; a refused command of the chat adds which refusal it was,
+ * `data.refusal` — one of `chatCommandRefusals`, the same id `task.commands` gives — so the
+ * screen can offer the way out (a reset for a broken preview) without parsing words. Nothing
+ * else of the details leaves the server. The original message, zod issues and the stack trace
+ * are added only in development.
  */
 export function formatError<S extends ErrorShape>(shape: S, error: TRPCError, isDev: boolean) {
   const domainCode = isDomainError(error.cause) ? error.cause.code : null
+  const refusal =
+    isDomainError(error.cause) && error.cause.code === 'CHAT_COMMAND_UNAVAILABLE'
+      ? commandRefusalOf(error.cause.details)
+      : null
   const { stack, ...data } = shape.data
   let details: ErrorDetails | undefined
   if (isDev) {
@@ -374,6 +497,7 @@ export function formatError<S extends ErrorShape>(shape: S, error: TRPCError, is
     data: {
       ...data,
       domainCode,
+      ...(refusal === null ? {} : { refusal }),
       ...(details ? { details } : {}),
       ...(isDev && stack ? { stack } : {}),
     },

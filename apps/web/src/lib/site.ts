@@ -37,13 +37,16 @@ export const loadSite = cache(async (projectId: string) => {
 
 /**
  * The site of a page of one section. «Not found» comes first, as in `loadSite`; then a site
- * whose status closes the section — paused, disconnected or archived — is sent to «Обзор».
- * The page itself calls it: the layout above is not rendered again on navigation.
+ * that is being set up, or whose status closes the section — paused, disconnected or archived —
+ * is sent to «Обзор». The page itself calls it: the layout above is not rendered again on
+ * navigation.
  */
 export async function loadSiteSection(projectId: string, section: SiteSection) {
   const site = await loadSite(projectId)
   if (site === UNAVAILABLE) return UNAVAILABLE
-  if (!siteSectionAvailable(site.status, section)) redirect(siteHref(site.id, 'overview'))
+  if (!siteSectionAvailable(site.status, section, site.setup)) {
+    redirect(siteHref(site.id, 'overview'))
+  }
   return site
 }
 
@@ -57,5 +60,20 @@ export const loadSiteCredentials = cache(async (projectId: string) => {
     if (isNotFound(error)) notFound()
     console.error(`[web] site accesses lookup failed: ${errorMessage(error)}`)
     return UNAVAILABLE
+  }
+})
+
+/**
+ * The first import of a site for the setup screen, with the page; null when it cannot be read —
+ * the screen then asks for it itself. Access is the procedure's own check: the page calls it only
+ * after `loadSite` found the site.
+ */
+export const loadSiteSetup = cache(async (projectId: string) => {
+  try {
+    return await (await getServerCaller()).siteConnection.setup({ id: projectId })
+  } catch (error) {
+    unstable_rethrow(error)
+    console.error(`[web] site setup lookup failed: ${errorMessage(error)}`)
+    return null
   }
 })

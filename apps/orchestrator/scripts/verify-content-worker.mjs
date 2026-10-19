@@ -204,8 +204,8 @@ try {
       return result
     },
   })
-  // What MCP_CONTENT_PROFILE=local gives the regular role: the profile, the S3 connection with
-  // the artifacts bucket alone, and Vault under the AppRole of the mcp service.
+  // What MCP_CONTENT_PROFILE=local-site gives the regular role: the profile, the S3 connection
+  // with the artifacts bucket alone, and Vault under the AppRole of the mcp service.
   const config = {
     appEnv: 'test',
     port: 0,
@@ -218,7 +218,13 @@ try {
         secretId: process.env.VAULT_SECRET_ID,
       },
     },
-    contentProfile: 'local',
+    // The P6 path of the stands — content into the site itself — is a profile of its own,
+    // refused where previews are configured (plan 53, Р3, Р24).
+    contentProfile: 'local-site',
+    // The agent's browser goes to previews of dialogs (plan 53, Р21): this stand has none.
+    browserProfile: 'off',
+    previewUpstreamHost: '127.0.0.1',
+    preview: null,
     storage: {
       endpoint: storageConfig.endpoint,
       region: storageConfig.region,
@@ -302,6 +308,7 @@ try {
   const json = (result) => JSON.parse(result.content[0].text)
   const route = `/wp/v2/pages/${fixture.pageId}`
   const listed = await rpc('tools/list', {})
+  // Exactly the content profile: no browser_* tool without the browser profile and a preview.
   assert.deepEqual(listed.tools.map((item) => item.name).sort(), [
     'restore',
     'site_info',

@@ -125,6 +125,10 @@ export function scenarioContext(stand, scenario, counter) {
   const t = {
     webUrl: stand.webUrl,
     coreUrl: stand.coreUrl,
+    /** The files of the site customers add (`addSite`) and the logins its server has seen. */
+    site: stand.site,
+    /** The current version of a secret in the Vault web writes to; null for none. */
+    vaultVersion: stand.vaultVersion,
     /** Every customer the scenario has signed up. */
     customers: [],
     /** One printed line per check; the first one that does not hold ends the stand. */
@@ -627,6 +631,70 @@ export const outboxOf = async (t, type, keyEnd) =>
   ).map(({ status }) => status)
 
 // ─── What scenarios share ─────────────────────────────────────────────────────
+
+/**
+ * The access to the files of the stand's site as «Доступ к файлам» sends it: SSH, a password,
+ * the folder of the site; with `hostKey` once the customer has confirmed the key of the server.
+ */
+export const siteAccess = (t, hostKey) => ({
+  kind: 'sftp',
+  host: t.site.host,
+  port: t.site.port,
+  username: t.site.username,
+  auth: { method: 'password', password: t.site.password },
+  rootPath: t.site.rootPath,
+  ...(hostKey === undefined ? {} : { hostKey }),
+})
+
+/**
+ * Adds a site the way the wizard «Добавить проект» does, over HTTP and step by step — the one
+ * way the product makes a site, and so a workspace with its gift. «Основные данные»: the name
+ * and the address as they will be stored. «Доступ к файлам»: the first check names the key the
+ * server presented and sends it no login; the customer confirms that key, and the check passes.
+ * «База данных»: none; «Добавить проект» checks the files once more, writes the access to Vault
+ * and creates the site. Resolves to the project and the input of the creation, which may be
+ * sent again.
+ */
+export async function addSite(t, customer, { name, url }, who = '') {
+  const stack = 'wordpress'
+  const basics = await customer.mutate('siteConnection.checkBasics', { name, url, stack })
+  t.equal(
+    `${who}«Основные данные»: the name and the address are taken as they will be stored`,
+    basics,
+    { name, url: new URL(url).origin, host: new URL(url).host, stack },
+  )
+  const logins = t.site.logins()
+  const first = await customer.mutate('siteConnection.checkSource', {
+    stack,
+    source: siteAccess(t),
+  })
+  t.equal(
+    `${who}«Доступ к файлам»: the first check names the key the server presented and sends it no login`,
+    [first, t.site.logins() - logins],
+    [{ ok: false, reason: 'host_key_unknown', hostKey: t.site.hostKey }, 0],
+  )
+  const source = siteAccess(t, first.hostKey)
+  const checked = await customer.mutate('siteConnection.checkSource', { stack, source })
+  const request = {
+    requestKey: randomUUID(),
+    name: basics.name,
+    url: basics.url,
+    stack,
+    source,
+    database: null,
+  }
+  const created = await customer.mutate('project.create', request)
+  t.check(
+    `${who}the key confirmed, the files are found, and «Добавить проект» without a database creates the project`,
+    checked.ok === true &&
+      checked.hostKey === t.site.hostKey &&
+      created.outcome === 'created' &&
+      created.project.url === basics.url &&
+      created.project.status === 'onboarding',
+    { checked, created },
+  )
+  return { project: created.project, request }
+}
 
 /**
  * Time passes for subscriptions: their current period now ends at `end`, and with it the period

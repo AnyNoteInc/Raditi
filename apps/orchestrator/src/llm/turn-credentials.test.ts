@@ -9,13 +9,28 @@ import { GatewayTurnCredentials, type GatewayTurnCredentialsOptions } from './tu
 
 const decimal = (value: string) => ({ toFixed: (digits: number) => Number(value).toFixed(digits) })
 
+interface SiteVariable {
+  name: string
+  keyVersion: number
+  toAgent: boolean
+  toPreview: boolean
+  agentConsentAt: Date | null
+}
+
 function fixture(
   options: Partial<Pick<GatewayTurnCredentialsOptions, 'capacityOf' | 'probeAccounts'>> & {
     /** The stored state of the pool's one account, over the default. */
     account?: Record<string, unknown>
+    /** The data class of the site's workspace. */
+    dataClass?: 'synthetic' | 'client'
+    /** Rows of `site_env_vars` of the site, as the query would return them. */
+    variables?: SiteVariable[]
+    /** Vault keys of the site's variables by name: their data and version. */
+    values?: Record<string, { data: Record<string, string>; version: number }>
   } = {},
 ) {
   const now = new Date('2026-09-30T12:00:00Z')
+  const siteId = randomUUID()
   const accountId = randomUUID()
   const modelId = randomUUID()
   const ref: TurnCredentialRef = {
@@ -47,7 +62,17 @@ function fixture(
     $queryRaw: vi.fn(async (query: Prisma.Sql | TemplateStringsArray) => {
       const sql = 'sql' in query ? query.sql : query.join(' ')
       if (sql.includes('FOR UPDATE OF l'))
-        return owned ? [{ id: ref.taskId, attempt: 1, dataClass: 'synthetic', now }] : []
+        return owned
+          ? [
+              {
+                id: ref.taskId,
+                attempt: 1,
+                siteId,
+                dataClass: options.dataClass ?? 'synthetic',
+                now,
+              },
+            ]
+          : []
       if (sql.includes('SELECT EXISTS')) return [{ owned }]
       if (sql.includes('FROM llm_models'))
         return [{ modelId, providerId: randomUUID(), enabled: true, reserveOutputTokens: 32_000 }]
@@ -118,6 +143,7 @@ function fixture(
       update: vi.fn(async () => ({})),
     },
     subscriptionAccount: { update: vi.fn(async () => ({})) },
+    siteEnvVar: { findMany: vi.fn(async () => options.variables ?? []) },
   }
   const db = {
     $transaction: vi.fn(async (work: (value: typeof tx) => Promise<unknown>) => {
@@ -130,8 +156,14 @@ function fixture(
     }),
   }
   const secrets = {
-    kvRead: vi.fn(async () => {
+    kvRead: vi.fn(async (path: string) => {
       expect(transaction).toBe(false)
+      const variable = /^kv\/sites\/([^/]+)\/env\/([A-Z0-9_]+)$/.exec(path)
+      if (variable) {
+        expect(variable[1]).toBe(siteId)
+        const stored = options.values?.[variable[2]!]
+        return stored ? { data: { ...stored.data }, version: stored.version } : null
+      }
       return vault && !deleted ? { data: { ...vault }, version: 1 } : null
     }),
     kvMetadata: vi.fn(async () =>
@@ -169,6 +201,7 @@ function fixture(
     credentials,
     ref,
     grant,
+    siteId,
     tx,
     db,
     secrets,
@@ -401,5 +434,104 @@ describe('durable turn credentials', () => {
     } as never)
     await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(f.secrets.kvCreateOnce).not.toHaveBeenCalled()
+  })
+})
+
+describe('the client variables of a turn (plan 53, Р13)', () => {
+  const consented = new Date('2026-09-29T10:00:00Z')
+  const row = (name: string, keyVersion: number, extra: Partial<SiteVariable> = {}) => ({
+    name,
+    keyVersion,
+    toAgent: true,
+    toPreview: true,
+    agentConsentAt: consented,
+    ...extra,
+  })
+
+  it('gives the agent the values of its variables at their versions, kept with the turn', async () => {
+    const f = fixture({
+      variables: [row('HOOK_TOKEN', 3), row('PAYMENT_KEY', 1), row('RENAMED', 2)],
+      values: {
+        HOOK_TOKEN: { data: { value: 'hook-token-0003' }, version: 3 },
+        PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 },
+        // Written after the row was read: it waits for the next turn.
+        RENAMED: { data: { value: 'newer-value-0003' }, version: 3 },
+      },
+    })
+    const values = await f.credentials.issue(f.ref, f.grant)
+    expect(values.envValues).toEqual({
+      HOOK_TOKEN: 'hook-token-0003',
+      PAYMENT_KEY: 'pay-secret-0001',
+    })
+    // Kept in the turn's own record in Vault, never in SQL.
+    expect(JSON.parse(f.vault()!.env!)).toEqual(values.envValues)
+    expect(JSON.stringify(f.tx.llmKey.create.mock.calls)).not.toContain('pay-secret-0001')
+    // A retry and a recovery return what the sandbox got, whatever the site holds now.
+    expect(await f.credentials.issue(f.ref, f.grant)).toEqual(values)
+    expect(await f.credentials.recover(f.ref)).toEqual(values)
+  })
+
+  it('gives nothing without consent, for a removed variable, or in a workspace of client data', async () => {
+    const values = {
+      PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 },
+      REMOVED_KEY: { data: { removed: '2026-09-29T11:00:00.000Z' }, version: 2 },
+      OFF_KEY: { data: { value: 'off-value-0001' }, version: 1 },
+    }
+    const variables = [
+      row('PAYMENT_KEY', 1),
+      row('REMOVED_KEY', 2),
+      row('OFF_KEY', 1, { toAgent: false }),
+      row('UNSIGNED_KEY', 1, { agentConsentAt: null }),
+    ]
+    const synthetic = fixture({ variables, values })
+    expect((await synthetic.credentials.issue(synthetic.ref, synthetic.grant)).envValues).toEqual({
+      PAYMENT_KEY: 'pay-secret-0001',
+    })
+    // Past the gate of 152-FZ for its provider (this fake clears every one), a workspace of
+    // client data still gives the agent no variable: none is even read.
+    const client = fixture({ variables, values, dataClass: 'client' })
+    expect(await client.credentials.issue(client.ref, client.grant)).not.toHaveProperty('envValues')
+    expect(
+      client.secrets.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
+    ).toEqual([])
+    const none = fixture()
+    const bare = await none.credentials.issue(none.ref, none.grant)
+    expect(bare).not.toHaveProperty('envValues')
+    expect(none.vault()).not.toHaveProperty('env')
+  })
+
+  it('carries every set of variables a site may have, and refuses more than that', async () => {
+    // 8 KiB of what JSON escapes sixfold: the most one record of the turn has to hold.
+    const worst = '\u0001'.repeat(8 * 1024)
+    const site = (count: number) => {
+      const names = Array.from({ length: count }, (_, i) => `BIG_${i}`)
+      return fixture({
+        variables: names.map((name) => row(name, 1)),
+        values: Object.fromEntries(
+          names.map((name) => [name, { data: { value: worst }, version: 1 }]),
+        ),
+      })
+    }
+    const full = site(64)
+    const issued = await full.credentials.issue(full.ref, full.grant)
+    expect(Object.keys(issued.envValues!)).toHaveLength(64)
+    expect(await full.credentials.recover(full.ref)).toEqual(issued)
+    // Only two writers adding rows at once get a site past 64 variables.
+    const over = site(70)
+    await expect(over.credentials.issue(over.ref, over.grant)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      details: { reason: 'client_variables_too_large' },
+    })
+    expect(over.vault()).toBeNull()
+  })
+
+  it('takes a stored record with variables that no longer pass their rules for no record', async () => {
+    const f = fixture({
+      variables: [row('PAYMENT_KEY', 1)],
+      values: { PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 } },
+    })
+    await f.credentials.issue(f.ref, f.grant)
+    f.alterVault({ env: JSON.stringify({ PATH: '/tmp/planted-0001' }) })
+    expect(await f.credentials.recover(f.ref)).toBeNull()
   })
 })

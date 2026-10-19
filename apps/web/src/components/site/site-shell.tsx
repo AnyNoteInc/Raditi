@@ -18,16 +18,27 @@ import {
   activeSiteSection,
   closedSectionsNote,
   hasSiteList,
+  inSiteSetup,
   SITE_LIST_WIDTH,
+  SITE_PANE_WIDTH,
   SITE_RAIL_WIDTH,
   siteEntryHref,
   siteItemOpen,
   siteNav,
+  sitePaneOpen,
   siteSectionAvailable,
   type SiteNavEntry,
+  type SiteSetup,
 } from './site-nav'
 
-export type ShellSite = { id: string; name: string; url: string; status: string }
+export type ShellSite = {
+  id: string
+  name: string
+  url: string
+  status: string
+  /** Absent or null: a site from before the wizard, shown as it was. */
+  setup?: SiteSetup
+}
 
 /** The phrase every closed item of the navigation is described by. */
 const CLOSED_NOTE = 'site-closed-sections'
@@ -84,6 +95,37 @@ function ClosedMark() {
       }}
     >
       <AppIcon name="lock" size={12} style={{ strokeWidth: 2.2 }} />
+    </Box>
+  )
+}
+
+/** «Открыть сайт» beside the breadcrumbs, and the account menu when no rail holds it. */
+function ToolbarEnd({
+  user,
+  site,
+  menuEverywhere,
+}: {
+  user: ApplicationUser
+  site: ShellSite
+  /** No rail: the menu stays in the bar on every width, not only on a phone. */
+  menuEverywhere: boolean
+}) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <MuiLink
+        href={site.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        variant="body2"
+        aria-label={`Открыть сайт ${site.name} в новой вкладке`}
+        sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, minHeight: 44 }}
+      >
+        Открыть сайт
+        <AppIcon name="arrow" size={16} />
+      </MuiLink>
+      <Box sx={{ display: menuEverywhere ? 'block' : { xs: 'block', sm: 'none' } }}>
+        <UserMenu user={user} placement="toolbar" />
+      </Box>
     </Box>
   )
 }
@@ -162,6 +204,9 @@ function SectionLink({
  * The page of one site: a rail of its six sections with the site's mark on top, breadcrumbs
  * that lead back to the projects, and on a phone a bottom bar instead of the rail. Which of
  * the two is shown is decided by styles alone, so the first paint is right on every width.
+ *
+ * While the site is being set up the page is the setup screen alone: no rail, no bottom bar, no
+ * «Ещё» — the breadcrumbs are the way back to the projects.
  */
 export function SiteShell({
   user,
@@ -179,6 +224,10 @@ export function SiteShell({
   const framed = hasSiteList(active)
   // An open item takes the whole phone screen: its back arrow leads to the list and the bar.
   const itemOpen = siteItemOpen(pathname, site.id)
+  // An open dialog: from `lg` the list column gives way, and the panel of its changes stands at
+  // the right edge. The dialog draws the panel (`data-site-pane`), and the shell leaves it room
+  // only while it is there — not beside a dialog that is not found.
+  const paned = sitePaneOpen(pathname, site.id)
   const [moreOpen, setMoreOpen] = useState(false)
   const secondary = siteNav.filter((entry) => !entry.primary)
   const inMore = secondary.some((entry) => entry.section === active)
@@ -186,6 +235,45 @@ export function SiteShell({
   const closedNote = closedSectionsNote(site.status)
   // The first character whole: a name may start with one that takes two UTF-16 units.
   const mark = Array.from(site.name.trim())[0]?.toLocaleLowerCase('ru') || '•'
+  const crumbs = [{ label: 'Проекты', href: '/projects' }, { label: site.name }]
+  const toolbarSx = {
+    px: SIDE_PADDING,
+    py: 1.25,
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: '8px 16px',
+  } as const
+
+  if (inSiteSetup(site.setup)) {
+    return (
+      <Box sx={{ ...applicationSurface, bgcolor: 'background.paper' }}>
+        <SkipLink target="site-content" left={8} />
+        <Box
+          sx={{
+            ml: 'env(safe-area-inset-left)',
+            mr: 'env(safe-area-inset-right)',
+            pb: 'env(safe-area-inset-bottom)',
+            minWidth: 0,
+          }}
+        >
+          <ApplicationToolbar
+            label="Панель сайта"
+            crumbs={crumbs}
+            end={<ToolbarEnd user={user} site={site} menuEverywhere />}
+            sx={toolbarSx}
+          />
+          <Box
+            component="main"
+            id="site-content"
+            tabIndex={-1}
+            sx={{ px: SIDE_PADDING, py: { xs: 3, md: 3.5 }, minWidth: 0, outline: 'none' }}
+          >
+            {children}
+          </Box>
+        </Box>
+      </Box>
+    )
+  }
 
   return (
     <Box sx={{ ...applicationSurface, bgcolor: 'background.paper' }}>
@@ -265,8 +353,14 @@ export function SiteShell({
             ...(framed && {
               md: `calc(${RAIL + SITE_LIST_WIDTH}px + env(safe-area-inset-left))`,
             }),
+            ...(paned && { lg: `calc(${RAIL}px + env(safe-area-inset-left))` }),
           },
           mr: 'env(safe-area-inset-right)',
+          ...(paned && {
+            '&:has([data-site-pane])': {
+              mr: { lg: `calc(${SITE_PANE_WIDTH} + env(safe-area-inset-right))` },
+            },
+          }),
           pb: {
             xs: itemOpen
               ? 'env(safe-area-inset-bottom)'
@@ -279,32 +373,9 @@ export function SiteShell({
       >
         <ApplicationToolbar
           label="Панель сайта"
-          crumbs={[{ label: 'Проекты', href: '/projects' }, { label: site.name }]}
-          end={
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <MuiLink
-                href={site.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                variant="body2"
-                aria-label={`Открыть сайт ${site.name} в новой вкладке`}
-                sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, minHeight: 44 }}
-              >
-                Открыть сайт
-                <AppIcon name="arrow" size={16} />
-              </MuiLink>
-              <Box sx={{ display: { xs: 'block', sm: 'none' } }}>
-                <UserMenu user={user} placement="toolbar" />
-              </Box>
-            </Box>
-          }
-          sx={{
-            px: SIDE_PADDING,
-            py: 1.25,
-            flexWrap: 'wrap',
-            justifyContent: 'space-between',
-            gap: '8px 16px',
-          }}
+          crumbs={crumbs}
+          end={<ToolbarEnd user={user} site={site} menuEverywhere={false} />}
+          sx={toolbarSx}
         />
         <Box
           component="main"

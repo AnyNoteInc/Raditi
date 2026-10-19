@@ -31,6 +31,20 @@ const paths = {
   lock: 'M8 11V8a4 4 0 0 1 8 0v3M6 11h12a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z',
   warning:
     'M12 9v4M12 17h.01M10.3 3.9 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z',
+  // The chat of a site (docs/plan/53-chat-preview-release.md, R9): commands, the preview, files.
+  slash: 'M15.5 4 8.5 20',
+  eye: 'M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
+  file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5ZM14 3v5h5',
+  stop: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM9 9h6v6H9V9Z',
+  /** SSH: a window with a prompt. */
+  terminal:
+    'M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM7.5 9l3 3-3 3M13 15h3.5',
+  /** FTP: files coming down into a folder. */
+  folder:
+    'M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6ZM12 10v6M9.5 13.5 12 16l2.5-2.5',
+  /** The key of a server. */
+  key: 'M12 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM10.8 10.8 20 20M17 17l2-2M14.5 14.5l2-2',
+  retry: 'M20.5 12a8.5 8.5 0 1 1-2.6-6.1M21 4v4h-4',
 } as const
 
 export type AppIconName = keyof typeof paths

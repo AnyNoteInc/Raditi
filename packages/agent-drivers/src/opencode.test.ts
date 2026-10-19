@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readdirSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
@@ -6,8 +7,13 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
+import { DatabaseSync } from 'node:sqlite'
 
 import {
+  containsEnvValue,
+  ENV_VALUE_MASK,
+  envValueBytes,
+  envVarLimits,
   preparedRunExposesSecret,
   preparedRunSchema,
   SANDBOX_INBOX,
@@ -373,6 +379,10 @@ interface CliRecord {
     }
   >
   imported?: string
+  /** What the command of the shell tool printed (`run.shell`). */
+  shell?: string
+  /** The bytes of the WAL the session left (`run.session`). */
+  wal?: number
 }
 interface Behaviour {
   /** `plant`: a file this CLI process leaves in the working copy; `plantHome`: in its home. */
@@ -397,6 +407,17 @@ interface Behaviour {
      * milliseconds: it watches the credential pipes and says how long they stayed on their paths.
      */
     helperMs?: number
+    /** A command the CLI runs as its shell tool does: `$SHELL -c` in its own environment. */
+    shell?: string
+    /** Rows the CLI keeps in its session database, as a text column and as a blob. */
+    session?: string[]
+    /**
+     * Then, as the CLI does when it compacts the output of a tool: the WAL merged into the
+     * database, and the first row rewritten shorter — what it held is only in freed space.
+     */
+    sessionRewrite?: boolean
+    /** Then a trigger in the session database that voids every change of a row. */
+    sessionTrigger?: boolean
   }
 }
 interface Launch {
@@ -417,6 +438,8 @@ interface Launch {
     /** The working copy and the directory above it, after the wrapper ended. */
     repo: string[]
     aboveRepo: string[]
+    /** The session database as the snapshot would take it: its files, its rows and its bytes. */
+    session: { files: string[]; rows: { data: string; raw: string }[]; bytes: Buffer } | null
   }
 }
 const PROJECT_FILES = ['.opencode', 'opencode.json', 'opencode.jsonc']
@@ -497,7 +520,12 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
    * in the working copy, with an environment the CLI must not inherit.
    */
   async function launch(
-    turn: { session?: string; prompt?: string } = {},
+    turn: {
+      session?: string
+      prompt?: string
+      envValues?: Record<string, string>
+      egressProxy?: string
+    } = {},
     behaviour: Behaviour = {},
     before?: (paths: { home: string; secrets: string; repo: string }) => Promise<void>,
     limitMs = 20_000,
@@ -507,6 +535,8 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       ...context,
       mcp: { ...context.mcp, url: mcpUrl },
       ...(turn.session ? { nativeSessionId: turn.session } : {}),
+      ...(turn.envValues ? { envValues: turn.envValues } : {}),
+      ...(turn.egressProxy ? { egressProxy: turn.egressProxy } : {}),
     })
     driver.command(run, { prompt: turn.prompt ?? input.prompt, attachments: [] })
     const directory = await mkdtemp(join(tmpdir(), 'raditi-opencode-wrapper-'))
@@ -592,6 +622,23 @@ const probe = () => Object.fromEntries(refs.map((ref) => {
 if (step.probe) record.probed = probe();
 else if (step.readSecrets !== false) record.delivered = read();
 if (step.readTwice) record.again = read();
+// As the CLI's shell tool: stdin a socket pair, which bash takes for a remote shell's.
+if (step.shell) record.shell = require('node:child_process').spawnSync(process.env.SHELL ?? '/bin/sh', ['-c', step.shell], { env: process.env, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).stdout;
+if (step.session) {
+  const data = path.join(process.env.HOME, '.local/share/opencode');
+  fs.mkdirSync(data, { recursive: true });
+  const { DatabaseSync } = require('node:sqlite');
+  const database = new DatabaseSync(path.join(data, 'opencode.db'));
+  database.exec('PRAGMA journal_mode = WAL; CREATE TABLE part (id INTEGER PRIMARY KEY, data TEXT, raw BLOB)');
+  for (const row of step.session) database.prepare('INSERT INTO part (data, raw) VALUES (?, ?)').run(row, Buffer.from(row));
+  if (step.sessionRewrite) {
+    database.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    database.prepare("UPDATE part SET data = 'compacted', raw = x'00' WHERE id = 1").run();
+  }
+  if (step.sessionTrigger) database.exec('CREATE TRIGGER keep BEFORE UPDATE ON part BEGIN SELECT RAISE(IGNORE); END');
+  // Not closed: as after the CLI's own exit, the rows are still in the WAL.
+  record.wal = fs.statSync(path.join(data, 'opencode.db-wal')).size;
+}
 save();
 if (step.stderr) process.stderr.write(step.stderr);
 if (step.stdout) process.stdout.write(step.stdout);
@@ -650,6 +697,35 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       const helperSeen = await readFile(join(directory, 'helper.json'), 'utf8').catch(
         () => undefined,
       )
+      const data = join(paths.home, '.local/share/opencode')
+      const sessionFiles = await readdir(data).catch(() => null)
+      let session: Launch['left']['session'] = null
+      // Only a session the stand-in kept (`run.session`); its import writes a placeholder file.
+      if (sessionFiles && behaviour.run?.session) {
+        // Byte for byte first: the reader below may write a WAL of its own.
+        const bytes = Buffer.concat(
+          await Promise.all(
+            ['opencode.db', 'opencode.db-wal']
+              .filter((name) => sessionFiles.includes(name))
+              .map((name) => readFile(join(data, name))),
+          ),
+        )
+        const database = new DatabaseSync(join(data, 'opencode.db'), { readOnly: true })
+        try {
+          session = {
+            files: sessionFiles.sort(),
+            bytes,
+            rows: (
+              database.prepare('SELECT data, raw FROM part ORDER BY id').all() as {
+                data: string
+                raw: Uint8Array
+              }[]
+            ).map((row) => ({ data: row.data, raw: Buffer.from(row.raw).toString('utf8') })),
+          }
+        } finally {
+          database.close()
+        }
+      }
       return {
         ...result,
         ...(helperSeen === undefined
@@ -665,6 +741,7 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
           exportFile: (await readdir(paths.home)).some((name) => name.includes('export')),
           repo: (await readdir(paths.repo, { recursive: true })).sort(),
           aboveRepo: (await readdir(directory)).sort(),
+          session,
         },
       }
     } finally {
@@ -1266,6 +1343,211 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
         { timeout: 5_000 },
       )
       .toBe('gone')
+  })
+
+  describe('the client variables of the turn (plan 53, Р13)', () => {
+    const values = {
+      HOOK_TOKEN: 'hook-token-0002\nsecond line',
+      PAYMENT_KEY: 'pay-se\'cret-"0001',
+      PATH_KEY: 'c:\\keys\\$HOME-`id`-\u0001',
+    }
+    const egressProxy = 'http://sandbox-gw:3128'
+    /** Any spelling of a value, byte for byte: as the wrapper looks for it after masking. */
+    const holdsValue = (bytes: Buffer) =>
+      envValueBytes(Object.values(values)).some((form) => bytes.includes(form))
+
+    it('hands them and the egress proxy to the commands of the shell tool only', async () => {
+      mcpAnswer = accept
+      const result = await launch(
+        { envValues: values, egressProxy },
+        {
+          run: {
+            shell:
+              'printf "%s|%s|%s|%s|%s|%s" "$PAYMENT_KEY" "$HOOK_TOKEN" "$PATH_KEY" "$HTTPS_PROXY" "$no_proxy" "$NODE_USE_ENV_PROXY"',
+          },
+        },
+      )
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      const [cli] = result.records as [CliRecord]
+      expect(cli.shell).toBe(
+        // The MCP server of this stand-in listens on loopback, the model's gateway is sandbox-gw.
+        `${values.PAYMENT_KEY}|${values.HOOK_TOKEN}|${values.PATH_KEY}|${egressProxy}|sandbox-gw,127.0.0.1,localhost|1`,
+      )
+      // The CLI holds the path of the script and no value, no proxy of its own: the gateway
+      // routes of the model and the MCP server stay direct.
+      expect(cli.env.BASH_ENV).toMatch(/\/secrets\/shell-env\.sh$/)
+      expect(cli.env.SHELL).toBe('/bin/bash')
+      // Started with a socket pair as stdin and no shell level, bash takes itself for a remote
+      // shell's and reads ~/.bashrc instead of BASH_ENV.
+      expect(cli.env.SHLVL).toBe('1')
+      expect(Object.keys(cli.env).filter((name) => /proxy/i.test(name))).toEqual([])
+      expect(containsEnvValue(JSON.stringify(cli), Object.values(values).slice(0, 1))).toBe(true)
+      expect(containsEnvValue(JSON.stringify({ ...cli, shell: '' }), Object.values(values))).toBe(
+        false,
+      )
+      // The files of the variables went before anything started; the script goes with the CLI.
+      expect(cli.secrets.map((entry) => entry.name).sort()).toEqual(['llm', 'mcp', 'shell-env.sh'])
+      expect(result.left.secrets).toEqual([])
+    })
+
+    it('gives the shell the proxy alone when no value reached the turn, and nothing without either', async () => {
+      mcpAnswer = accept
+      const proxied = await launch(
+        { egressProxy },
+        { run: { shell: 'printf "%s|%s" "$HTTPS_PROXY" "$PAYMENT_KEY"' } },
+      )
+      expect(proxied.code).toBe(0)
+      expect(proxied.records[0]!.shell).toBe(`${egressProxy}|`)
+      const bare = await launch({}, { run: { shell: 'printf "%s|%s" "$BASH_ENV" "$HTTPS_PROXY"' } })
+      expect(bare.code).toBe(0)
+      expect(bare.records[0]!.shell).toBe('|')
+      expect(bare.records[0]!.env).not.toHaveProperty('BASH_ENV')
+    })
+
+    it('masks every value in the session database the snapshot takes, and merges its WAL', async () => {
+      mcpAnswer = accept
+      const rows = [
+        JSON.stringify({ output: `token ${values.PAYMENT_KEY} done` }),
+        JSON.stringify({ output: JSON.stringify({ token: values.HOOK_TOKEN }) }),
+        'nothing of the client here',
+      ]
+      const result = await launch({ envValues: values }, { run: { session: rows } })
+      expect(result.code).toBe(0)
+      expect(result.records[0]!.wal).toBeGreaterThan(0)
+      const session = result.left.session!
+      expect(session.files).not.toContain('opencode.db-wal')
+      expect(session.rows).toHaveLength(3)
+      for (const row of session.rows) {
+        expect(containsEnvValue(row.data, Object.values(values))).toBe(false)
+        expect(containsEnvValue(row.raw, Object.values(values))).toBe(false)
+      }
+      expect(holdsValue(session.bytes)).toBe(false)
+      expect(JSON.parse(session.rows[0]!.data)).toEqual({ output: `token ${ENV_VALUE_MASK} done` })
+      expect(JSON.parse(JSON.parse(session.rows[1]!.data).output)).toEqual({
+        token: ENV_VALUE_MASK,
+      })
+      expect(session.rows[1]!.raw).toBe(session.rows[1]!.data)
+      expect(session.rows[2]).toEqual({ data: rows[2], raw: rows[2] })
+    })
+
+    it('leaves no value in what a change freed in the database, nor where SQL did not reach', async () => {
+      mcpAnswer = accept
+      const rows = [`{"output":"PAYMENT_KEY=${values.PAYMENT_KEY}"}${' '.repeat(6000)}`, 'other']
+      const rewritten = await launch(
+        { envValues: values },
+        { run: { session: rows, sessionRewrite: true } },
+      )
+      expect(rewritten.code).toBe(0)
+      // Through SQL the row holds nothing of the value any more; its old bytes were freed.
+      expect(rewritten.left.session!.rows[0]).toEqual({ data: 'compacted', raw: '\0' })
+      expect(holdsValue(rewritten.left.session!.bytes)).toBe(false)
+      // A trigger of the agent's commands voids the masking: the turn fails.
+      const voided = await launch(
+        { envValues: values },
+        { run: { session: rows, sessionTrigger: true } },
+      )
+      expect(voided.code).toBe(1)
+      expect(failure(voided.stdout)).toEqual([
+        {
+          type: 'failed',
+          reason: 'RaditiWrapperError: Could not mask the client variables in the session',
+        },
+      ])
+    })
+
+    it('splits as many variables as a site may have over several files, and the shell gets every one', async () => {
+      mcpAnswer = accept
+      const value = (index: number) => {
+        let text = `${index}:`
+        for (const unit of ["'", '\\', '\n', '\u0001', '$', '"', 'ж', '😀'])
+          while (Buffer.byteLength(text + unit) <= envVarLimits.valueMaxBytes) text += unit
+        return text
+      }
+      const many = Object.fromEntries(
+        Array.from({ length: envVarLimits.perSite }, (_, index) => [`VAR_${index}`, value(index)]),
+      )
+      const digest = (entries: [string, string][]) => {
+        const hash = createHash('sha256')
+        for (const [name, text] of entries.sort(([left], [right]) => (left < right ? -1 : 1)))
+          hash.update(`${name}=${text}\0`)
+        return hash.digest('hex')
+      }
+      const result = await launch(
+        { envValues: many },
+        {
+          run: {
+            // The CLI's own PATH has no Node of this machine: its path, as the test runs it.
+            shell: `${JSON.stringify(process.execPath)} -e 'const h = require("node:crypto").createHash("sha256"); for (const name of Object.keys(process.env).filter((name) => name.startsWith("VAR_")).sort()) h.update(name + "=" + process.env[name] + "\\0"); process.stdout.write(h.digest("hex"))'`,
+          },
+        },
+      )
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      expect(result.records[0]!.shell).toBe(digest(Object.entries(many)))
+      expect(result.left.secrets).toEqual([])
+    })
+
+    it('starts no CLI over variables other than the ones the driver staged', async () => {
+      mcpAnswer = accept
+      const result = await launch({ envValues: values }, {}, async (paths) => {
+        await rm(join(paths.secrets, 'env.0'))
+        const planted = { ...values, LD_PRELOAD: '/tmp/planted.so' }
+        await writeFile(
+          join(paths.secrets, 'env.0'),
+          Object.keys(planted)
+            .sort()
+            .map((name) => `${name}\0${planted[name as keyof typeof planted]}\0`)
+            .join(''),
+          { mode: 0o400 },
+        )
+      })
+      expect(result.code).toBe(1)
+      expect(result.records).toEqual([])
+      expect(failure(result.stdout)).toEqual([
+        {
+          type: 'failed',
+          reason:
+            'RaditiWrapperError: The client variables of the turn differ from what was staged',
+        },
+      ])
+      expect(result.left.secrets).toEqual([])
+    })
+
+    it('never names the values in a prepared file, the environment or the command', async () => {
+      const run = await driver.prepare({ ...context, envValues: values, egressProxy })
+      const argv = driver.command(run, input)
+      expect(preparedRunSchema.parse(run)).toEqual(run)
+      const credentials = turnCredentials(run.context, run.secrets)
+      expect(preparedRunExposesSecret(run, credentials, argv)).toBe(false)
+      expect(
+        containsEnvValue(JSON.stringify([run.files, run.env, argv]), Object.values(values)),
+      ).toBe(false)
+      expect(run.secrets.map((entry) => entry.path)).toEqual([
+        `${SANDBOX_SECRETS_DIR}/llm`,
+        `${SANDBOX_SECRETS_DIR}/mcp`,
+        `${SANDBOX_SECRETS_DIR}/env.0`,
+      ])
+      expect(run.secrets[2]!.content).toBe(
+        `HOOK_TOKEN\0${values.HOOK_TOKEN}\0PATH_KEY\0${values.PATH_KEY}\0PAYMENT_KEY\0${values.PAYMENT_KEY}\0`,
+      )
+      // The names are no secret: the wrapper checks the files against them.
+      expect(file(run, 'run.mjs')).toContain('"names":["HOOK_TOKEN","PATH_KEY","PAYMENT_KEY"]')
+    })
+
+    it.each([
+      'PATH',
+      'BASH_ENV',
+      'NO_PROXY',
+      'HTTPS_PROXY',
+      'LD_PRELOAD',
+      'OPENCODE_CONFIG',
+      'lower',
+    ])('refuses a variable named %s before anything is prepared', async (name) => {
+      await expect(
+        driver.prepare({ ...context, envValues: { [name]: 'value-0001' } }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    })
   })
 
   it('reports a CLI ended by a signal as a failed process', async () => {

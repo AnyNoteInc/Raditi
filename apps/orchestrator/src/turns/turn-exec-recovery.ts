@@ -5,6 +5,7 @@ import {
   conflict,
   execLost,
   isDomainError,
+  runEnvValues,
   TURN_PUBLICATION_GRACE_MS,
   withTimeout,
   withTurnCredentials,
@@ -412,6 +413,7 @@ export class TurnExecRecovery {
       if (!values) throw execLost('The turn credentials cannot be recovered')
       const run = await recoveredRun(driver, assignment.plan, turn, values)
       attempt.credentials = run.credentials
+      attempt.envValues = runEnvValues(run.prepared.context)
       const execution = await guard.interruptible(
         this.deps.executor.adopt(
           {
@@ -423,6 +425,7 @@ export class TurnExecRecovery {
             remainingMs: guard.remainingMs,
             driverId: driver.id,
             credentials: run.credentials,
+            ...(attempt.envValues.length ? { envValues: attempt.envValues } : {}),
             ...(takeover.holdsCredentials ? { holdsCredentials: true } : {}),
           },
           guard.signal,

@@ -1,0 +1,18 @@
+# Stand only (pnpm verify:pipeline): a scoped workflow of platform/ci of the SECOND Gitea that a
+# push to main starts. With `[actions] WORKFLOW_DIRS` it is the only run a push of a site gets:
+# the files .gitea/workflows and .github/workflows of the site start none, and the product
+# deploy.yml starts on a release tag only. No runner serves its label: its run stays queued.
+name: push-probe
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: gitea.repository_owner == 'sites'
+    runs-on: push-probe
+    steps:
+      - name: probe
+        run: |
+          echo "a push to main"

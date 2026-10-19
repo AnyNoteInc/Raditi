@@ -29,6 +29,8 @@ export function snapshotAad(
       ...(manifest.git.publication
         ? [manifest.git.publication.taskId, manifest.git.publication.committedAt]
         : []),
+      // Tagged and last: a snapshot of the full tree keeps the AAD it was sealed with.
+      ...(manifest.git.sandboxBaseSha ? ['sandboxBaseSha', manifest.git.sandboxBaseSha] : []),
     ]),
   )
 }

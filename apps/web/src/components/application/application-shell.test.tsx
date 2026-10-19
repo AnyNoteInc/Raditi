@@ -46,6 +46,24 @@ describe('application shell', () => {
     expect(within(crumbs).queryByRole('link')).not.toBeInTheDocument()
   })
 
+  it('leads back to the list from a page below it', () => {
+    render(
+      <ApplicationShell
+        user={user}
+        crumbs={[{ label: 'Проекты', href: '/projects' }, { label: 'Новый проект' }]}
+      >
+        <h1>Новый проект</h1>
+      </ApplicationShell>,
+    )
+
+    const crumbs = screen.getByRole('navigation', { name: 'Хлебные крошки' })
+    expect(within(crumbs).getByRole('link', { name: 'Проекты' })).toHaveAttribute(
+      'href',
+      '/projects',
+    )
+    expect(within(crumbs).getByText('Новый проект')).toHaveAttribute('aria-current', 'page')
+  })
+
   it('puts the skip link first and points it at the content', () => {
     render(shell())
 

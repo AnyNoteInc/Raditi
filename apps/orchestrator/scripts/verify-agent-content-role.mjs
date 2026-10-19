@@ -48,7 +48,8 @@ export function roleEnvironment({ path, home, port, allowedHosts, databaseUrl, v
     ORCHESTRATOR_ROLES: 'mcp',
     MCP_PORT: String(port),
     MCP_ALLOWED_HOSTS: allowedHosts.join(','),
-    MCP_CONTENT_PROFILE: 'local',
+    // The P6 path of the stands: the role writes the site, no previews (plan 53, Р3).
+    MCP_CONTENT_PROFILE: 'local-site',
     DATABASE_URL: databaseUrl,
     VAULT_ADDR: vault.address,
     VAULT_ROLE_ID: vault.roleId,

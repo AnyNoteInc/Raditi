@@ -26,18 +26,26 @@ export const terminalTaskStatuses: readonly TaskStatus[] = [
 
 const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   queued: ['preparing', 'cancelled'],
-  // the site is busy with another operation (SITE_BUSY): back to the queue, not a failure
-  preparing: ['running', 'queued', 'failed', 'cancelled'],
-  // content-only changes finish right away; code changes wait for "Применить"
+  // the site is busy with another operation (SITE_BUSY): back to the queue, not a failure.
+  // The key of the pass cannot cover a first call: the platform asks «Продолжить?» before a
+  // turn — awaiting_approval when the dialog has a candidate (docs/plan/53-chat-preview-release.md, Р8).
+  preparing: ['running', 'queued', 'awaiting_user', 'awaiting_approval', 'failed', 'cancelled'],
+  // a pass that left a candidate waits for `/release` (Р6); one that changed nothing and had no
+  // candidate ends the dialog (Р7)
   running: ['awaiting_user', 'awaiting_approval', 'done', 'failed', 'cancelled'],
   // the client's answer starts the next turn of the same task
   awaiting_user: ['queued', 'cancelled'],
-  // "Применить" → deploying; "Изменить" → next turn; "Отмена" → cancelled
-  awaiting_approval: ['deploying', 'queued', 'cancelled'],
-  deploying: ['verifying', 'rolled_back', 'failed'],
+  // `/release` → deploying; the client's words → the next pass over the candidate; `/cancel` →
+  // cancelled. «Обновить» that finds the whole change on main already leaves nothing to release:
+  // done, as a pass without changes (docs/plan/53-chat-preview-release.md, Р6, Р7, R3).
+  awaiting_approval: ['deploying', 'queued', 'cancelled', 'done'],
+  // A release refused without a write to the hosting (a conflict, an outdated candidate, a job
+  // that did not start) returns the dialog to its candidate (docs/plan/53-chat-preview-release.md, Р6).
+  deploying: ['verifying', 'awaiting_approval', 'rolled_back', 'failed'],
   verifying: ['done', 'rolled_back'],
   done: [],
-  // "Попробовать ещё" re-queues the same task
+  // Declared, no procedure takes it: «Попробовать ещё» is awaiting_approval → queued, for a
+  // dialog that kept its candidate (spec §7)
   failed: ['queued'],
   rolled_back: [],
   cancelled: [],

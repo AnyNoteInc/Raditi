@@ -21,8 +21,16 @@ const YOOKASSA_PORT = port(
   'E2E_BILLING_YOOKASSA_PORT',
   4110,
 )
-if (WEB_PORT === YOOKASSA_PORT)
-  throw new Error('E2E_BILLING_WEB_PORT and E2E_BILLING_YOOKASSA_PORT must differ')
+const VAULT_PORT = port(
+  // eslint-disable-next-line turbo/no-undeclared-env-vars -- Port of a local run, outside Turbo tasks.
+  process.env.E2E_BILLING_VAULT_PORT,
+  'E2E_BILLING_VAULT_PORT',
+  4210,
+)
+if (new Set([WEB_PORT, YOOKASSA_PORT, VAULT_PORT]).size !== 3)
+  throw new Error(
+    'E2E_BILLING_WEB_PORT, E2E_BILLING_YOOKASSA_PORT and E2E_BILLING_VAULT_PORT must differ',
+  )
 
 /** The origin of web in this run; the session cookie belongs to its host. */
 export const baseURL = `http://localhost:${WEB_PORT}`
@@ -37,6 +45,18 @@ export const fakeYookassa = {
   controlUrl: `${yookassaOrigin}/__control`,
   /** Where the fake sends notifications. */
   webhookUrl: `${baseURL}/api/webhooks/yookassa`,
+} as const
+
+/**
+ * The OpenBao web writes the access of a new site to (infra/dev/billing-verify/openbao.mjs): a
+ * disposable container on loopback, started by the config. Web logs in by an AppRole with the
+ * one policy `sites-writer`, as in production; the pair is synthetic and opens nothing else.
+ */
+export const vault = {
+  port: VAULT_PORT,
+  address: `http://127.0.0.1:${VAULT_PORT}`,
+  roleId: 'e2e-billing-sites-writer',
+  secretId: 'synthetic-secret-id-of-the-e2e-billing-run',
 } as const
 
 /**

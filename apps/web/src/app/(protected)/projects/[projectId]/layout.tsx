@@ -27,7 +27,13 @@ export default async function SiteLayout({
   return (
     <SiteShell
       user={session.user}
-      site={{ id: site.id, name: site.name, url: site.url, status: site.status }}
+      site={{
+        id: site.id,
+        name: site.name,
+        url: site.url,
+        status: site.status,
+        setup: site.setup,
+      }}
     >
       {children}
     </SiteShell>

@@ -458,12 +458,22 @@ test('production and everything that is not a local synthetic WordPress site is 
     ['WORKSPACE_NOT_SYNTHETIC', { site: { dataClass: 'client' } }, {}],
     ['SITE_STATUS', { site: { status: 'archived' } }, {}],
     ['SITE_STATUS', { site: { status: 'paused' } }, {}],
+    // A site of the wizard whose import has not ended: the import makes its repository.
+    ['SITE_SETUP', { site: { codeImport: 'queued' } }, {}],
+    ['SITE_SETUP', { site: { codeImport: 'running' } }, {}],
+    ['SITE_SETUP', { site: { codeImport: 'failed' } }, {}],
     ['SITE_NOT_RUNNING', { wordpress: { ready: false } }, {}],
   ]
   for (const [code, setup, override] of cases) {
     const { ports, input, log } = world(setup)
     await assert.rejects(connectLocalSite(ports, { ...input, ...override }), refuses(code), code)
     assert.deepEqual(log, [], `${code}: nothing may be changed`)
+  }
+  // A site of the wizard is taken once its first version is imported, as one made before the wizard.
+  for (const codeImport of ['succeeded', null]) {
+    const { state, connect } = world({ site: { codeImport } })
+    await connect()
+    assert.ok(state.vault.secrets.get(ACCESS_PATH), `codeImport ${codeImport}`)
   }
   // Loopback names the content adapter accepts over plain http, and https on them.
   for (const url of ['http://127.0.0.1:8080', 'http://[::1]:8080', 'https://localhost:8443']) {
@@ -954,6 +964,26 @@ test('the command is a stand tool: no .env, no secret in its output, no product 
   assert.match(command, /workspaceTransitKey\(/)
   assert.match(command, /accessSchema\.safeParse\(/)
   assert.match(command, /activateSite\(/)
+})
+
+test("the command's own home holds the compose plugin of the stand's Docker CLI and nothing else of Docker", () => {
+  const stand = read('infra/dev/site-verify/verify-site-connect.mjs')
+  // The command gets a home of its own, never the developer's.
+  assert.match(stand, /\n    HOME: join\(directory, 'home'\),\n/)
+  // Docker Desktop may keep the compose plugin only under the home: without it every WP-CLI
+  // call of the command fails, and the command reports a site that does not run.
+  assert.match(stand, /docker\(\['info', '--format', '\{\{json \.ClientInfo\.Plugins\}\}'\]\)/)
+  assert.match(
+    stand,
+    /const commandPlugins = join\(directory, 'home', '\.docker', 'cli-plugins'\)\n\s+await mkdir\(commandPlugins, \{ recursive: true, mode: 0o700 \}\)\n\s+await symlink\(composePlugin, join\(commandPlugins, 'docker-compose'\)\)/,
+  )
+  // Only the plugin: no configuration (credentials, contexts) is copied into that home.
+  assert.doesNotMatch(stand, /config\.json/)
+  // The command's CLI is checked before the first connection.
+  assert.match(
+    stand,
+    /await command\('docker', \['compose', 'version', '--short'\], \{ env: connectEnvironment\(\) \}\)/,
+  )
 })
 
 test('the stand keeps its signal handlers through the cleanup and is started by exec', () => {

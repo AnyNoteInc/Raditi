@@ -382,4 +382,88 @@ describe.skipIf(!image || !gatewayImage || !guardImage)('real isolated sandbox n
       if (runtime === 'runsc') expect(await hostRule(client, bridgeName(resourceId))).not.toBe(0)
     }
   }, 180_000)
+
+  // The client egress of a turn (docs/plan/53-chat-preview-release.md, Р13): sandbox-gw's own
+  // listener on 3128 tunnels HTTPS to the listed public hosts and to nothing else. Reaches the
+  // internet from the default bridge, as the gateway does in production.
+  it(`${runtime}: the client egress proxy tunnels only to listed public hosts`, async () => {
+    const provider = createDockerSandboxProvider({
+      runtime,
+      socketPath,
+      gateway: {
+        image: gatewayImage!,
+        guardImage: guardImage!,
+        llmUpstream: `http://${upstreamHost}:9`,
+        mcpUpstream: `http://${upstreamHost}:9`,
+      },
+    })
+    let sandbox: Sandbox | undefined
+    const curl = async (...argv: string[]) => {
+      const exec = await sandbox!.exec({
+        argv: ['curl', '-sS', '-o', '/dev/null', '--max-time', '20', ...argv],
+        timeoutMs: 30_000,
+      })
+      const chunks: Buffer[] = []
+      for await (const chunk of exec.output())
+        if (chunk.stream === 'stdout') chunks.push(Buffer.from(chunk.data))
+      return { output: Buffer.concat(chunks).toString(), code: (await exec.wait()).code }
+    }
+    try {
+      const id = randomUUID()
+      sandbox = await provider.create({
+        image: image!,
+        runtime,
+        user: { uid: 10001, gid: 10001 },
+        resources: { cpu: 1, memoryMiB: 512, pids: 128 },
+        hardTimeoutMs: 120_000,
+        labels: {
+          workspaceId: 'network-test',
+          siteId: id,
+          taskId: id,
+          sessionId: id,
+          turn: 1,
+          leaseEpoch: 1,
+        },
+        env: {},
+        secrets: [],
+        network: {
+          mode: 'gateway',
+          routes: ['llm', 'mcp'],
+          // localtest.me is public DNS for 127.0.0.1.
+          egress: ['example.com:443', 'localtest.me:443'],
+        },
+      })
+      const proxy = ['--proxy', 'http://sandbox-gw:3128']
+      // The listed public host, TLS end to end.
+      expect(await curl(...proxy, '-w', '%{http_code}', 'https://example.com/')).toEqual({
+        output: '200',
+        code: 0,
+      })
+      // Not listed, listed on another port, a listed name of a loopback address, plain HTTP.
+      for (const url of [
+        'https://example.org/',
+        'https://example.com:8443/',
+        'https://localtest.me/',
+      ])
+        expect((await curl(...proxy, '-w', '%{http_connect}', url)).output).toBe('403')
+      expect(await curl(...proxy, '-w', '%{http_code}', 'http://example.com/')).toEqual({
+        output: '405',
+        code: 0,
+      })
+      // The listed name with the TLS of another site (`CONNECT example.com:443`, SNI
+      // example.org): a shared front end would serve it, so the tunnel closes before its hello.
+      const fronted = await curl(
+        ...proxy,
+        ...['--connect-to', 'example.org:443:example.com:443', '-w', '%{http_connect}'],
+        'https://example.org/',
+      )
+      expect(fronted.output).toBe('200')
+      expect(fronted.code).not.toBe(0)
+      // Without the proxy nothing leaves: no name server, no route.
+      expect((await curl('--connect-timeout', '3', 'https://example.com/')).code).not.toBe(0)
+      expect((await curl('--connect-timeout', '3', 'https://93.184.215.14/')).code).not.toBe(0)
+    } finally {
+      await sandbox?.destroy('completed')
+    }
+  }, 180_000)
 })

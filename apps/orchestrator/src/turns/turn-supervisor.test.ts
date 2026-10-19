@@ -9,6 +9,7 @@ import {
   leaseLost,
   leftNothing,
   MAX_PRESIGN_TTL_MS,
+  ENV_VALUE_MASK,
   MAX_SANDBOX_TURN_MS,
   notFound,
   preparedRunLimits,
@@ -279,6 +280,7 @@ function turnFixture(kind: string) {
   const driver: AgentDriver = {
     id: sampleDriverId,
     image,
+    cliVersion: '1.0.0',
     capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
     prepare: vi.fn(async (context) => {
       order.push('prepare')
@@ -815,6 +817,51 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     },
   )
 
+  it('masks the client variables of the turn in its journal and refuses them in its candidate (Р13)', async () => {
+    const f = fixture()
+    const value = 'pay-se"cret-0001'
+    vi.mocked(f.credentials.issue).mockResolvedValue({
+      llmApiKey: f.request.context.llm.apiKey,
+      mcpToken: f.request.context.mcp.token,
+      envValues: { PAYMENT_KEY: value },
+    })
+    // The client changed another value after the key was issued: the preview may show it.
+    const rotated = 'rotated-secret-0002'
+    f.credentials.site = [value, rotated]
+    const events: AgentEvent[] = [
+      nativeEvents[0]!,
+      { type: 'message', text: `Ключ: ${value}; в JSON: ${JSON.stringify({ key: value })}` },
+      ...nativeEvents.slice(1),
+    ]
+    f.stdout(events.map((event) => JSON.stringify(event)).join('\n') + '\n')
+    const finished = await f.run()
+    expect(finished.result).toEqual(result)
+    const journaled = JSON.stringify(f.evidence)
+    expect(journaled).not.toContain('cret-0001')
+    expect(
+      f.evidence.flatMap((entry) => entry.events ?? []).find((event) => event.type === 'message'),
+    ).toEqual({
+      type: 'message',
+      text: `Ключ: ${ENV_VALUE_MASK}; в JSON: ${JSON.stringify({ key: ENV_VALUE_MASK })}`,
+    })
+    // The candidate is checked for the values, in every spelling, by the trusted publication:
+    // the ones the turn got and the ones the site holds now.
+    expect(f.workspace.preparePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ refusedValues: [value, rotated] }),
+    )
+    // The executor masks them before the parser and refuses a home archive that holds one.
+    expect(f.transport.capture).toHaveBeenCalledWith(
+      f.sandbox,
+      home,
+      baseSha,
+      expect.any(Array),
+      [],
+      [value],
+    )
+    // Nothing of them in the plan the assignment keeps.
+    expect(JSON.stringify([...f.assignments.rows.values()])).not.toContain('cret-0001')
+  })
+
   it('snapshots the candidate before destroying the container and publishing', async () => {
     const f = fixture()
     const finished = await f.run()
@@ -846,11 +893,14 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       expect.objectContaining({ ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS }),
     )
     // The capture refuses the turn's own credentials: the LLM key, the MCP token, secret files.
-    expect(f.transport.capture).toHaveBeenCalledWith(f.sandbox, home, baseSha, [
-      'synthetic-llm-secret',
-      'synthetic-mcp-secret',
-      'synthetic-llm-secret',
-    ])
+    expect(f.transport.capture).toHaveBeenCalledWith(
+      f.sandbox,
+      home,
+      baseSha,
+      ['synthetic-llm-secret', 'synthetic-mcp-secret', 'synthetic-llm-secret'],
+      [],
+      [],
+    )
     expect(f.snapshots.save).toHaveBeenCalledWith(
       expect.objectContaining({
         git: expect.objectContaining({
@@ -882,6 +932,94 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       'completed',
     ])
     expect(f.evidence[1]).toMatchObject({ containerId: f.sandbox.id })
+  })
+
+  describe('with a working set (plan 53, Р11)', () => {
+    const sandboxBaseSha = 'd'.repeat(40)
+    const workingSet = { include: ['/wp-content/themes/'], exclude: [], maxBytes: 1024 }
+    const sliced = (f: Fixture, sha: string | undefined) =>
+      f.workspace.buildBaseBundle.mockImplementation(async () => {
+        f.order.push('bundle')
+        return {
+          baseSha,
+          ...(sha ? { sandboxBaseSha: sha } : {}),
+          branch: f.request.workspace.branch,
+          sha256: '0'.repeat(64),
+          sizeBytes: 1,
+          read: async function* () {},
+        }
+      })
+
+    it('gives the sandbox the working set and takes its patch against it', async () => {
+      const f = fixture()
+      f.request.workspace.workingSet = workingSet
+      // The media the agent adds count even when an ignore file of the site hides them.
+      f.request.workspace.addOnlyPaths = ['wp-content/uploads/raditi/']
+      f.request.workspace.media = {
+        extensions: { png: [{ offset: 0, hex: '89504e47' }] },
+        refusedNameParts: ['.php'],
+        maxFileBytes: 1024,
+      }
+      sliced(f, sandboxBaseSha)
+      Object.assign(f.publication, { sandboxBaseSha })
+      await f.run()
+      expect(f.workspace.buildBaseBundle).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedBaseSha: baseSha, workingSet }),
+        f.request.committedAt,
+      )
+      expect(f.importBundle).toHaveBeenCalledWith(
+        f.sandbox,
+        expect.objectContaining({ baseSha, sandboxBaseSha }),
+      )
+      expect(f.transport.capture).toHaveBeenCalledWith(
+        f.sandbox,
+        home,
+        sandboxBaseSha,
+        expect.any(Array),
+        ['wp-content/uploads/raditi/'],
+        [],
+      )
+      // Publication still starts from the full base; the manifest keeps both commits.
+      expect(f.workspace.preparePublication).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedBaseSha: baseSha, workingSet }),
+      )
+      expect(f.snapshots.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          git: expect.objectContaining({ baseSha, sandboxBaseSha, headSha }),
+        }),
+        expect.anything(),
+        expect.any(AbortSignal),
+      )
+      expect(f.evidence.find((entry) => entry.phase === 'restored')).toMatchObject({
+        baseSha,
+        sandboxBaseSha,
+      })
+      expect(f.publication.publish).toHaveBeenCalledOnce()
+    })
+
+    it.each([
+      ['a full bundle for a plan with a working set', workingSet, undefined, undefined],
+      ['a working set for a plan without one', undefined, sandboxBaseSha, undefined],
+      ['another commit than the plan names', workingSet, sandboxBaseSha, 'e'.repeat(40)],
+    ])('refuses %s before a container is made', async (_, set, bundled, planned) => {
+      const f = fixture()
+      if (set) f.request.workspace.workingSet = set
+      if (planned) f.request.workspace.sandboxBaseSha = planned
+      sliced(f, bundled)
+      await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })
+      expect(f.sandboxes.create).not.toHaveBeenCalled()
+      expectSiteFree(f)
+    })
+
+    it('publishes nothing from a candidate cut from another working set', async () => {
+      const f = fixture()
+      f.request.workspace.workingSet = workingSet
+      sliced(f, sandboxBaseSha)
+      Object.assign(f.publication, { sandboxBaseSha: 'e'.repeat(40) })
+      await expect(f.run()).rejects.toThrow('another working set')
+      expect(f.snapshots.save).not.toHaveBeenCalled()
+      expect(f.publication.publish).not.toHaveBeenCalled()
+    })
   })
 
   it('keeps lease authority beyond a late 60-second push without a heartbeat', async () => {
@@ -1359,6 +1497,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       expiresAt: new Date(Date.now() + 60_000),
       serverNow: new Date(),
       heldForOperator: false,
+      inflightReleaseId: null,
     } satisfies SiteLeaseAuthority as never)
     created.resolve()
     await vi.waitFor(() => expect(f.sandbox.destroy).toHaveBeenCalled())
@@ -1387,10 +1526,19 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
   })
 
   it.each([
-    ['another operation owns it', false, 'SITE_BUSY'],
-    ['it waits for an operator', true, 'SITE_HELD'],
-    ['the lease lookup fails', undefined, 'SITE_BUSY'],
-  ] as const)('tells the client why a site is refused: %s', async (_, held, code) => {
+    ['another operation owns it', false, null, 'SITE_BUSY'],
+    ['it waits for an operator', true, null, 'SITE_HELD'],
+    // A release held for the operator (Р31): the site waits for `releases:resolve`, so does the
+    // turn — the dialog is not ended for it.
+    [
+      'a release held for the operator stands',
+      true,
+      '00000000-0000-4000-8000-00000000000a',
+      'SITE_BUSY',
+    ],
+    ['a release barrier stands', false, '00000000-0000-4000-8000-00000000000a', 'SITE_BUSY'],
+    ['the lease lookup fails', undefined, null, 'SITE_BUSY'],
+  ] as const)('tells the client why a site is refused: %s', async (_, held, release, code) => {
     const f = fixture()
     f.leases.acquire.mockResolvedValueOnce(null as never)
     if (held === undefined) f.leases.inspect.mockRejectedValueOnce(new Error('connection reset'))
@@ -1398,11 +1546,12 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       f.leases.inspect.mockResolvedValueOnce({
         siteId: labels.siteId,
         taskId: '00000000-0000-4000-8000-000000000009',
-        operation: 'turn',
+        operation: release ? 'deploy' : 'turn',
         epoch: 7,
         expiresAt: new Date(),
         serverNow: new Date(),
         heldForOperator: held,
+        inflightReleaseId: release,
       } satisfies SiteLeaseAuthority as never)
     await expect(f.run()).rejects.toMatchObject({ code, httpStatus: 409 })
     expect(f.leases.inspect).toHaveBeenCalledWith(labels.siteId)
@@ -1422,6 +1571,100 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
     f.request.context = { ...f.request.context, turn: 2 }
     await expect(f.run()).rejects.toThrow('previous checkpoint')
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+  })
+
+  it('starts a turn after «Обновить» as a new session, with no checkpoint (plan 53, Р27)', async () => {
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.rebased = true
+    await f.run()
+    expect(f.snapshots.restoreSource).not.toHaveBeenCalled()
+    expect(f.transport.restore).not.toHaveBeenCalled()
+    expect(f.driver.prepare).toHaveBeenCalledWith(
+      expect.not.objectContaining({ nativeSessionId: expect.anything() }),
+    )
+    expect(f.workspace.buildBaseBundle).toHaveBeenCalledWith(
+      f.request.workspace,
+      f.request.committedAt,
+    )
+    expect(f.evidence.at(-1)?.phase).toBe('completed')
+  })
+
+  it('replaces an unsuccessful turn after «Обновить» with a new session, its content undone first', async () => {
+    // The turn that failed before the move, or a failed new session on the moved head (R3).
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.replacesTurn = 1
+    f.request.workspace = { ...f.request.workspace, expectedBranchSha: baseSha }
+    f.request.rebased = true
+    const rollback = vi.fn(async () => {
+      expect(f.workspace.buildBaseBundle).not.toHaveBeenCalled()
+      f.order.push('undo')
+    })
+    f.deps.contentRollback = { rollback }
+    await f.run()
+    expect(rollback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ turn: 1 }))
+    expect(f.order.indexOf('undo')).toBeLessThan(f.order.indexOf('create'))
+    expect(f.snapshots.restoreSource).not.toHaveBeenCalled()
+    expect(f.driver.prepare).toHaveBeenCalledWith(
+      expect.not.objectContaining({ nativeSessionId: expect.anything() }),
+    )
+    expect([...f.assignments.rows.values()][0]!.plan).toMatchObject({
+      replacesTurn: 1,
+      rebased: true,
+    })
+    expect(f.evidence.at(-1)?.phase).toBe('completed')
+  })
+
+  it.each([
+    ['a first turn', (f: Fixture) => void f],
+    [
+      'a checkpoint',
+      (f: Fixture) => {
+        f.request.previous = {
+          workspaceId: labels.workspaceId,
+          sessionId: labels.sessionId,
+          turn: 1,
+          image,
+          driver: { id: sampleDriverId, version: '1.0.0' },
+          home,
+        }
+      },
+    ],
+    [
+      'a replacement that restores a checkpoint',
+      (f: Fixture) => {
+        f.request.replacesTurn = 1
+        f.request.workspace = { ...f.request.workspace, expectedBranchSha: baseSha }
+        f.request.previous = {
+          workspaceId: labels.workspaceId,
+          sessionId: labels.sessionId,
+          turn: 1,
+          image,
+          driver: { id: sampleDriverId, version: '1.0.0' },
+          home,
+        }
+        f.deps.contentRollback = { rollback: vi.fn(async () => {}) }
+      },
+    ],
+    [
+      'a resumed session',
+      (f: Fixture) => {
+        f.request.context = { ...f.request.context, nativeSessionId: 'prior-native' }
+      },
+    ],
+  ])('refuses a rebased turn with %s before the lease', async (name, change) => {
+    const f = fixture()
+    if (name !== 'a first turn') {
+      f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+      f.request.context = { ...f.request.context, turn: 2 }
+    }
+    change(f)
+    f.request.rebased = true
+    await expect(f.run()).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(f.leases.acquire).not.toHaveBeenCalled()
   })
 
@@ -2248,6 +2491,25 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     f.takeOver.mockResolvedValueOnce(null)
     await expect(f.recover()).rejects.toThrow('held lease')
     expect(f.workspace.preparePublication).not.toHaveBeenCalled()
+  })
+
+  it('holds the site again when replay derives another working set than the checkpoint', async () => {
+    const f = await recoveryFixture()
+    f.loaded.manifest.git.sandboxBaseSha = 'd'.repeat(40)
+    await expect(f.recover()).rejects.toThrow('candidate differs')
+    expect(f.publication.publish).not.toHaveBeenCalled()
+    expect(f.leases.holdForRecovery).toHaveBeenCalledWith(expect.objectContaining({ epoch: 2 }))
+  })
+
+  it('publishes a checkpoint of a working set when replay derives the same one', async () => {
+    const f = await recoveryFixture()
+    f.loaded.manifest.git.sandboxBaseSha = 'd'.repeat(40)
+    Object.assign(f.publication, { sandboxBaseSha: 'd'.repeat(40) })
+    await expect(f.recover()).resolves.toMatchObject({ headSha })
+    expect(f.evidence.at(-1)).toMatchObject({
+      phase: 'publication_recovered',
+      sandboxBaseSha: 'd'.repeat(40),
+    })
   })
 
   it('holds the site again when replay would produce a different commit', async () => {

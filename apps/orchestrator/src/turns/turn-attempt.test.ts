@@ -76,7 +76,7 @@ afterEach(() => {
 })
 
 /** A supervisor's attempt on a leased site with an open assignment; the turn is cancelled. */
-async function given() {
+async function given({ executor = 'runner' }: { executor?: 'runner' | 'local' } = {}) {
   const leases = new MemorySiteLeases()
   const journal = new MemoryTurnJournal(leases)
   const assignments = new MemoryTurnAssignments(leases)
@@ -110,7 +110,7 @@ async function given() {
     fence: lease,
     sessionId: labels.sessionId,
     turn: 1,
-    executor: 'runner',
+    executor,
     plan,
     remainingMs: MAX_SANDBOX_TURN_MS,
   }))!
@@ -327,6 +327,23 @@ describe('TurnAttempt given up while its prepare was out (spec §8)', () => {
     expect(t.release).not.toHaveBeenCalled()
     expect(t.finish).not.toHaveBeenCalled()
     expect(t.journal.phases().at(-1)).toBe('vacating')
+  })
+})
+
+describe('TurnAttempt and the container of its assignment (plan 53, Р23)', () => {
+  it('records the container of a turn in core’s own Docker on its assignment', async () => {
+    // The preview of the dialog exports the working tree of the turn by this container; with
+    // none recorded every sync of a local turn was refused `no_turn` (stand R12).
+    const t = await given({ executor: 'local' })
+    await t.attempt.created(t.execution)
+    expect([...t.assignments.rows.values()][0]!.containerId).toBe('container1')
+  })
+
+  it('leaves the container of a runner’s turn to the runner API', async () => {
+    const t = await given()
+    const record = vi.spyOn(t.assignments, 'recordContainer')
+    await t.attempt.created(t.execution)
+    expect(record).not.toHaveBeenCalled()
   })
 })
 
@@ -649,5 +666,134 @@ describe('TurnAttempt over a runner: delivery against giving up (spec §8)', () 
     expect(await t.poll()).toEqual([])
     expect(t.dispatched).not.toHaveBeenCalled()
     expect(t.release).toHaveBeenCalledOnce()
+  })
+})
+
+describe('TurnAttempt with a working set (plan 53, Р11)', () => {
+  const sandboxBaseSha = 'd'.repeat(40)
+  const result = {
+    summary: 'Готово',
+    change_type: 'code',
+    client_message: 'Изменение готово к проверке.',
+    files_changed: ['wp-content/themes/shop/style.css'],
+    questions: [],
+    needs_approval: false,
+    risk: 'low',
+  }
+  const home = { root: `/agent-home/${sampleDriverId}`, include: ['state.db'], exclude: [] }
+
+  /** A recovered owner's attempt: it never saw the bundle, so it has no working-set commit yet. */
+  async function recovered(derived: string | null, published: string | undefined) {
+    const leases = new MemorySiteLeases()
+    const journal = new MemoryTurnJournal(leases)
+    const lease = (await leases.acquire({
+      siteId: labels.siteId,
+      taskId: labels.taskId,
+      operation: 'turn',
+      ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS,
+    }))!
+    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_TURN_MS)
+    guards.push(guard)
+    const plan = toTurnPlan(
+      {
+        ...request,
+        workspace: {
+          ...request.workspace,
+          workingSet: { include: ['/wp-content/themes/'], exclude: [], maxBytes: 1024 },
+        },
+      },
+      sampleDriverId,
+    )
+    const publication = {
+      baseSha: request.workspace.expectedBaseSha,
+      headSha: 'c'.repeat(40),
+      ...(published ? { sandboxBaseSha: published } : {}),
+      patch: Buffer.from('patch'),
+      untracked: Buffer.from('untracked'),
+      publish: vi.fn(async (assertFence: () => Promise<void>) => assertFence()),
+      dispose: vi.fn(async () => {}),
+    }
+    const workspace = {
+      buildBaseBundle: vi.fn(),
+      sandboxBase: vi.fn(async () => derived),
+      preparePublication: vi.fn(async () => publication),
+    }
+    const save = vi.fn(async (metadata: object) => ({
+      ...metadata,
+      schemaVersion: 1,
+      createdAt: request.committedAt,
+      parts: [],
+    }))
+    const capture = vi.fn(async () => ({
+      patch: Buffer.from('p'),
+      untracked: Buffer.from('u'),
+      homeBytes: 4,
+    }))
+    const execution = {
+      containerId: 'container1',
+      quiesce: vi.fn(async () => {}),
+      capture,
+      seal: vi.fn(),
+      destroy: vi.fn(async () => {}),
+    } as unknown as TurnExecution
+    const driver = {
+      id: sampleDriverId,
+      sessionState: () => home,
+      extractResult: () => result,
+    }
+    const attempt = new TurnAttempt(
+      {
+        leases,
+        assignments: new MemoryTurnAssignments(leases),
+        journal,
+        credentials: new MemoryTurnCredentials(),
+        workspace,
+        snapshots: { save } as never,
+      },
+      { lease, guard, plan, driver: driver as never },
+    )
+    attempt.execution = execution
+    const run = { context: { ...request.context }, files: [], env: {}, secrets: [] }
+    return { attempt, workspace, capture, save, publication, journal, run }
+  }
+
+  it('derives the commit of the working set again before it captures against it', async () => {
+    const r = await recovered(sandboxBaseSha, sandboxBaseSha)
+    await r.attempt.complete([], r.run as never)
+    expect(r.workspace.sandboxBase).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedBaseSha: request.workspace.expectedBaseSha }),
+      request.committedAt,
+    )
+    expect(r.capture).toHaveBeenCalledWith({
+      home,
+      baseSha: request.workspace.expectedBaseSha,
+      sandboxBaseSha,
+    })
+    expect(r.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        git: expect.objectContaining({
+          baseSha: request.workspace.expectedBaseSha,
+          sandboxBaseSha,
+        }),
+      }),
+      expect.anything(),
+      expect.any(AbortSignal),
+    )
+    expect(r.publication.publish).toHaveBeenCalledOnce()
+  })
+
+  it('publishes nothing from a candidate cut from another working set', async () => {
+    const r = await recovered(sandboxBaseSha, 'e'.repeat(40))
+    await expect(r.attempt.complete([], r.run as never)).rejects.toThrow('another working set')
+    expect(r.save).not.toHaveBeenCalled()
+    expect(r.publication.publish).not.toHaveBeenCalled()
+  })
+
+  it('captures nothing when the workspace derives no working set for a plan that has one', async () => {
+    const r = await recovered(null, undefined)
+    await expect(r.attempt.complete([], r.run as never)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    })
+    expect(r.capture).not.toHaveBeenCalled()
   })
 })

@@ -26,6 +26,7 @@ function fixture() {
     firstEpoch: 1,
     stack: 'wordpress',
     url: 'https://site.example.test/',
+    preview: null,
   }
   const reserve = vi.fn<PostgresMcpJournal['reserve']>(async () => ({
     kind: 'replay',
@@ -81,6 +82,7 @@ function writing() {
     ttlMs: 12_345,
     snapshotId: snapshot.id,
     restoresSnapshotId: null,
+    preview: null,
   }
   const journal = {
     reserve: vi.fn<PostgresMcpJournal['reserve']>(async () => ({

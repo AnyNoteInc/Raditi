@@ -159,6 +159,19 @@ describe('runner commands', () => {
   )
   it('accepts a full prepare and every other command', () => {
     expect(runnerCommandSchema.parse(prepare())).toMatchObject({ type: 'prepare' })
+    const workingSet = {
+      ...prepare(),
+      bundle: { ...prepare().bundle, sandboxBaseSha: 'd'.repeat(40) },
+    }
+    expect(runnerCommandSchema.parse(workingSet)).toMatchObject({
+      bundle: { sandboxBaseSha: 'd'.repeat(40) },
+    })
+    expect(
+      runnerCommandSchema.safeParse({
+        ...prepare(),
+        bundle: { ...prepare().bundle, sandboxBaseSha: 'main' },
+      }).success,
+    ).toBe(false)
     for (const cmd of [
       { ...envelope, type: 'launch', timeoutMs: 420_000 },
       {
@@ -178,6 +191,20 @@ describe('runner commands', () => {
           exclude: [],
         },
         baseSha: 'b'.repeat(40),
+      },
+      // With a working set (plan 53, Р11) the patch is taken against its root commit.
+      {
+        ...envelope,
+        type: 'capture',
+        home: {
+          root: '/agent-home/opencode',
+          include: ['.local/share/opencode/opencode.db'],
+          exclude: [],
+        },
+        baseSha: 'b'.repeat(40),
+        sandboxBaseSha: 'd'.repeat(40),
+        // New media below these count even when an ignore file hides them (Р12).
+        addOnlyPaths: ['wp-content/uploads/raditi/'],
       },
       sealCommand(),
       { ...envelope, type: 'abort' },
@@ -220,6 +247,20 @@ describe('runner commands', () => {
       },
     ],
     ['a container outliving the turn', { ...prepare(), remainingMs: 599_999 }],
+    [
+      'an add-only path of capture that is no folder of the repository',
+      {
+        ...envelope,
+        type: 'capture',
+        home: {
+          root: '/agent-home/opencode',
+          include: ['.local/share/opencode/opencode.db'],
+          exclude: [],
+        },
+        baseSha: 'b'.repeat(40),
+        addOnlyPaths: ['../media/'],
+      },
+    ],
     [
       'a restore part as PUT',
       {
@@ -350,6 +391,33 @@ describe('runner credentials', () => {
     ]) {
       expect(runnerCommandSchema.safeParse({ ...full, credentials: values }).success).toBe(false)
       expect(runnerCommandSchema.safeParse(adopt(values)).success).toBe(false)
+    }
+  })
+
+  it("carry the values of the client's variables a turn may have (plan 53, Р13)", () => {
+    const values = Array.from({ length: runnerLimits.envValues }, (_, i) =>
+      `value-${i}`.padEnd(8192, 'x'),
+    )
+    const withValues = (envValues: unknown) => ({ ...prepare(), envValues })
+    const adopt = (envValues: unknown) => ({
+      ...envelope,
+      type: 'adopt',
+      containerId: 'c1',
+      labels,
+      purpose: 'work',
+      work: { remainingMs: 1_000, driverId: 'opencode', credentials: ['k'], envValues },
+    })
+    for (const build of [withValues, adopt]) {
+      expect(runnerCommandSchema.safeParse(build(values)).success).toBe(true)
+      // A value the form refuses never travels: too short, too long, a NUL, too many or none.
+      for (const bad of [
+        ['short'],
+        ['x'.repeat(8193)],
+        ['value\0-0001'],
+        [...values, 'one-more-0001'],
+        [],
+      ])
+        expect(runnerCommandSchema.safeParse(build(bad)).success).toBe(false)
     }
   })
 })

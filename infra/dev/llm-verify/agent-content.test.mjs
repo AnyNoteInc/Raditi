@@ -160,7 +160,7 @@ test('the role mcp is the regular one: the entry point of the build under its ow
   assert.match(role, /^ {4}NODE_ENV: 'production',$/m)
   assert.match(role, /^ {4}APP_ENV: 'test',$/m)
   assert.match(role, /^ {4}ORCHESTRATOR_ROLES: 'mcp',$/m)
-  assert.match(role, /^ {4}MCP_CONTENT_PROFILE: 'local',$/m)
+  assert.match(role, /^ {4}MCP_CONTENT_PROFILE: 'local-site',$/m)
   assert.match(role, /^ {4}VAULT_ROLE_ID: vault\.roleId,$/m)
   // Nothing of the launcher's environment is inherited, and no operator token is named.
   assert.doesNotMatch(role, /\.\.\.process\.env|VAULT_DEV_ROOT_TOKEN|X-Vault-Token/)

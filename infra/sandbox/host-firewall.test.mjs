@@ -101,3 +101,24 @@ test('check requires the rule of a live bridge in every family', () => {
   assert.throws(() => firewall.check(live), /missing/)
   assert.throws(() => firewall.check(gone), /Unknown sandbox bridge/)
 })
+
+test('the bridges of previews and of their browsers get the same rule; others do not', () => {
+  const previews = ['rpv0123456789ab', 'rpb0123456789ab']
+  const tables = fakeTables()
+  const firewall = hostFirewall({
+    run: tables.run,
+    bridgeExists: (name) => previews.includes(name),
+    ipv6: false,
+  })
+  for (const bridge of previews) firewall.install(bridge)
+  assert.deepEqual(tables.chains.get('/usr/sbin/iptables'), [
+    '-A INPUT -i rpb0123456789ab -j DROP',
+    '-A INPUT -i rpv0123456789ab -j DROP',
+  ])
+  for (const bridge of ['rpx0123456789ab', 'rpv0123456789AB', 'rpv0123456789abc'])
+    assert.throws(() => firewall.install(bridge), /Unknown sandbox bridge/)
+  // A gone preview bridge is swept like a gone attempt bridge.
+  tables.chains.get('/usr/sbin/iptables').push('-A INPUT -i rpvffffffffffff -j DROP')
+  firewall.sweep()
+  assert.equal(tables.chains.get('/usr/sbin/iptables').length, 2)
+})

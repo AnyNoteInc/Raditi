@@ -30,8 +30,11 @@ export * from './credit-numbers.ts'
 export const minContinueCredits = 1
 
 /**
- * The most attempts one task may have. A new task is the first; «Продолжить» and «Попробовать
- * ещё» each start the next one; after the third the task is handed to a specialist or stopped.
+ * The most attempts one chain of a task may have: the attempts that hold an active reserve
+ * together. A new task is the first; «Продолжить» starts the next one of the chain, and after the
+ * third the task is handed to a specialist or stopped. «Попробовать ещё» after a failure gives
+ * the chain back and starts a new one: an attempt in which the agent failed is not counted (spec
+ * §20, decision 4 of 11.10.2026), so `tasks.attempt` itself may pass this number.
  */
 export const maxTaskAttempts = 3
 
@@ -53,7 +56,8 @@ export const trialUnpaidWorkCredits = 70
  *
  * Tariff credits are also spent within a day: a paid plan says how many of them a Moscow day
  * may take (`dailyTariffCredits`), and a reserve or a charge takes no more of them than is left
- * of that day (`tariffDayRoom`). Gift and pack credits are outside the day.
+ * of that day (`tariffDayRoom`) — but for the reserve of «Попробовать ещё», which the day does
+ * not bound (`placementTariffRoom`). Gift and pack credits are outside the day.
  */
 export const creditAccountKinds = ['tariff', 'gift', 'pack'] as const
 export type CreditAccountKind = (typeof creditAccountKinds)[number]
@@ -207,7 +211,8 @@ const tariffDaySchema = z.strictObject({
  * How many tariff credits a Moscow day still gives: max(0, limit − used); null when the day has
  * no limit. `limit` is `dailyTariffCredits` of the plan live now, `used` what the day has taken
  * of the tariff — reserves placed that day and what charges moved onto free tariff credits that
- * day. A renewal onto a smaller plan can leave `used` above the limit: nothing is left then.
+ * day. A retry, whose reserve the day does not bound (`placementTariffRoom`), and a renewal onto
+ * a smaller plan can leave `used` above the limit: nothing is left then.
  */
 export function tariffDayRoom(day: { limit: Credits | null; used: Credits }): Credits | null {
   const result = tariffDaySchema.safeParse(day)
@@ -329,8 +334,9 @@ export interface CreditReserveInput {
   /** Whether the tariff is paid: without it only gift credits are reserved. */
   tariffTakesTasks: boolean
   /**
-   * What is left of the day's tariff credits (`tariffDayRoom`): the tariff part of the reserve
-   * is no larger. Null or left out — the day sets no limit.
+   * What is left of the day's tariff credits for this placement (`placementTariffRoom`): the
+   * tariff part of the reserve is no larger. Null or left out — the day bounds nothing: the plan
+   * sets no limit, or the placement is «Попробовать ещё».
    */
   tariffRoom?: Credits | null
 }
@@ -763,12 +769,46 @@ export function unpaidWork(input: UnpaidWorkInput): Decimal {
  * the next attempt of a task whose earlier reserves are active. `retry`: «Попробовать ещё» —
  * a later attempt after a failure released every reserve.
  *
- * Each places reserve rows stamped with the moment they are placed (`credit_holds.placed_at`):
- * the tariff part of a continuation and of a retry takes credits of the day it is placed on,
- * like that of a new task (`tariffDayRoom`).
+ * Each places reserve rows stamped with the moment they are placed (`credit_holds.placed_at`),
+ * and what their tariff part holds and pays counts on the day it is placed on
+ * (`tariffCreditsOfDay` of @repo/billing). Which of them the day also bounds says
+ * `placementTariffRoom`.
  */
 export const taskPlacements = ['new', 'continuation', 'retry'] as const
 export type TaskPlacement = (typeof taskPlacements)[number]
+
+// Which placements the daily limit bounds — the one place that says it.
+// - new, continuation: the tariff part takes no more than is left of the day (decision D7 of
+//   17.10.2026), and the placement is refused by the day (`daily_limit`).
+// - retry: the daily limit does not apply to «Попробовать ещё» (the owner, 19.10.2026): the
+//   tariff part is bounded by the tariff credits that are free, as before the day was counted,
+//   and the retry is never refused by the day. What it holds and pays still counts on the day
+//   for every later placement of the workspace: the day measures what the day spent.
+const dayBoundPlacements = Object.freeze({
+  new: true,
+  continuation: true,
+  retry: false,
+} as const satisfies Record<TaskPlacement, boolean>)
+
+/**
+ * What bounds the tariff part of a placement by the day: what is left of it (`today.room`) for a
+ * new task and a continuation; null — the day bounds nothing — for «Попробовать ещё», without a
+ * paid tariff (`today` null) and on a plan without a daily limit. `newTaskVerdict` counts
+ * `spendableNow` by it and `placeCreditHold` of @repo/billing splits the reserve by it, so the
+ * check and the reserve never disagree.
+ */
+export function placementTariffRoom(
+  placement: TaskPlacement,
+  today: Pick<TariffDay, 'room'> | null,
+): Credits | null {
+  if (typeof placement !== 'string' || !Object.hasOwn(dayBoundPlacements, placement)) {
+    throw badRequest('Invalid placement of a task')
+  }
+  if (!dayBoundPlacements[placement] || today === null) return null
+  const room = tariffRoomSchema.safeParse(today.room)
+  if (!room.success) throw badRequest('Invalid room of the tariff day')
+  return room.data
+}
 
 // What the active reserve rows of one task hold on each account.
 const taskReserveSchema = z.strictObject({
@@ -835,8 +875,8 @@ export interface NewTaskInput {
   } | null
   /**
    * The tariff credits the Moscow day of the placement has taken so far (`tariffCreditsOfDay`
-   * of @repo/billing), for every placement: a continuation and a retry take credits of the day
-   * like a new task.
+   * of @repo/billing), for every placement: the verdict reports the day to each, and bounds a
+   * new task and a continuation by it — a retry is outside the day (`placementTariffRoom`).
    */
   tariffCreditsToday: TariffCreditsToday
   /** `unpaidWork` of the workspace. */
@@ -878,9 +918,10 @@ export function dailyTariffCredits(
 
 /**
  * The tariff credits of the Moscow day of a paid tariff, as the pages and the refusals tell
- * them. `used` = `charged` + `held` can stand above `limit` after a renewal onto a smaller plan;
- * `room` = max(0, `limit` − `used`) is then nothing. `left` = min(`room`, free tariff credits) is
- * what the tariff can still give today: the room, or less when the account itself has less.
+ * them. `used` = `charged` + `held` can stand above `limit` after a retry, which the day does not
+ * bound, and after a renewal onto a smaller plan; `room` = max(0, `limit` − `used`) is then
+ * nothing. `left` = min(`room`, free tariff credits) is what the tariff can still give today: the
+ * room, or less when the account itself has less.
  */
 export interface TariffDay {
   /** `plans.credits_per_day`; null — the plan sets no daily limit. */
@@ -902,7 +943,8 @@ export type NewTaskVerdict = {
   spendable: Credits
   /**
    * What a task may take now: `spendable` with the tariff part no larger than what is left of
-   * the day. The reserve of an attempt is the step or this, whichever is less.
+   * the day — for a retry, which the day does not bound, `spendable` itself
+   * (`placementTariffRoom`). The reserve of an attempt is the step or this, whichever is less.
    */
   spendableNow: Credits
   /**
@@ -928,10 +970,10 @@ export type NewTaskVerdict = {
  *    paid tariff `empty` or, with a few credits left, `below_start`; without one `past_due` for
  *    an overdue tariff, `ended` when credits of a pack wait for a tariff, otherwise `gift_spent`
  *    or `gift_below_start`;
- * 3. the day, for every placement: the tariff credits free within what is left of the day,
- *    with the gift and pack credits, cannot cover what the placement needs although the
+ * 3. the day, for a new task and a continuation: the tariff credits free within what is left of
+ *    the day, with the gift and pack credits, cannot cover what the placement needs although the
  *    accounts can — `daily_limit`. Only a paid tariff whose plan has a daily limit gets here; a
- *    pack bought today lifts it;
+ *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`);
  * 4. unpaid work, for a new task and a retry: against the monthly credits of the plan —
  *    `unpaid_limit` — or `trialUnpaidWorkCredits` — `trial_unpaid_limit`;
  * 5. without a paid tariff, the gift of the site: `gift_site_used` when another workspace has
@@ -939,7 +981,9 @@ export type NewTaskVerdict = {
  *
  * A continuation is never refused by unpaid work: the work is in progress and will be charged
  * if it is done. It is refused by the day like a new task — it would take tariff credits of
- * the day otherwise — and waits for the next day or a pack.
+ * the day otherwise — and waits for the next day or a pack. «Попробовать ещё» is the other way
+ * round: the daily limit does not apply to it (the owner, 19.10.2026), unpaid work does. What
+ * bounds retries in a row is the credits and unpaid work.
  *
  * The reserve of the task that asks is not «tasks in work» to wait for: it stays held whatever
  * the answer is. So a continuation — the one placement of a task that has a reserve — says what
@@ -966,7 +1010,7 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   const heldByOthers = (kind: CreditAccountKind): number => accounts[kind].held - own[kind]
   const numbers = {
     spendable: free.total,
-    spendableNow: spendableCredits(accounts, paid, today?.room ?? null).total,
+    spendableNow: spendableCredits(accounts, paid, placementTariffRoom(placement, today)).total,
     held: toCredits(
       heldByOthers('gift') + (paid ? heldByOthers('tariff') + heldByOthers('pack') : 0),
     ),

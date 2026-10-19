@@ -1,9 +1,46 @@
 import { describe, expect, it } from 'vitest'
-import { forbiddenCiPaths, isForbiddenPath, normalizeRepoPath } from './diff-paths.ts'
+import {
+  anyDepthPatterns,
+  forbiddenCiPaths,
+  isForbiddenPath,
+  normalizeRepoPath,
+} from './diff-paths.ts'
 
 const wordpressProtected = ['wp-config.php', 'wp-admin/', 'wp-includes/', '/wp-content/uploads/']
 
 describe('isForbiddenPath', () => {
+  it('protects a name at any depth with a leading **/ (plan 53, Р12)', () => {
+    const anyDepth = ['**/.htaccess', '**/.user.ini', '**/php.ini']
+    for (const path of [
+      '.htaccess',
+      'wp-content/themes/shop/.htaccess',
+      'wp-content/uploads/raditi/.HTACCESS',
+      'a/b/c/.user.ini',
+      'php.ini',
+      'wp-content/plugins/x/php.ini',
+    ])
+      expect(isForbiddenPath(path, anyDepth)).toBe(true)
+    for (const path of ['x.htaccess', 'wp-content/themes/shop/htaccess.txt', 'a/myphp.ini'])
+      expect(isForbiddenPath(path, anyDepth)).toBe(false)
+  })
+
+  it('picks the patterns at any depth, the ones that hold under add-only folders', () => {
+    expect(
+      anyDepthPatterns([
+        'wp-config.php',
+        '**/.htaccess',
+        '/**/php.ini',
+        'wp-content/uploads/',
+        'a/**',
+      ]),
+    ).toEqual(['**/.htaccess', '/**/php.ini'])
+    expect(anyDepthPatterns([])).toEqual([])
+  })
+
+  it.each(['**', '**/', '/**/', 'a/**/b', '**/a/**'])('refuses the pattern %s', (pattern) => {
+    expect(() => isForbiddenPath('a', [pattern])).toThrow()
+  })
+
   it.each([
     '.github/workflows/x.yml',
     './.gitlab-ci.yml',

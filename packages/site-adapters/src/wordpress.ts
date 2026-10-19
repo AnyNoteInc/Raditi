@@ -1,17 +1,34 @@
 import type { McpToolDescriptor, SiteAdapter } from '@repo/domain'
 import { notImplemented } from '@repo/domain'
 import { phpConfigStrings, secretValues } from './php-config.ts'
+import { wordpressBrowserRequestDenied } from './wordpress-browser.ts'
+import { wordpressDatabaseCopyPolicy, wordpressDatabaseSettings } from './wordpress-db-copy.ts'
+import {
+  wordpressDbOperationKinds,
+  wordpressDbPlanGuide,
+  wordpressDbSettings,
+} from './wordpress-db.ts'
+import { wordpressPreviewRecipe } from './wordpress-preview.ts'
+import { wordpressVerifyPlan } from './wordpress-verify.ts'
+import {
+  wordpressAgentWorkingSet,
+  wordpressMediaRules,
+  wordpressPlatformFiles,
+} from './wordpress-working-set.ts'
 import {
   archivesAndDumps,
   dataFiles,
   phpServerConfigFiles,
+  phpServerConfigProtected,
   secretFiles,
   serverLogs,
 } from './php-hosting.ts'
 
 // Pattern syntax (the domain port leaves it open, so it is fixed here):
 // - protectedPaths: path prefixes from the repository root, `*` within one segment,
-//   a trailing `/` marks a directory — the syntax of forbiddenCiPaths (spec §10);
+//   a trailing `/` marks a directory, a leading `**/` — at any depth: the syntax of
+//   forbiddenCiPaths (spec §10);
+// - agentWorkingSet: the path patterns of @repo/domain (wordpress-working-set.ts);
 // - importRules and snapshotExcludes: .gitignore lines, usable as rsync and
 //   `git ls-files --exclude` patterns. A leading `/` anchors to the root; patterns without a
 //   slash (`*.sql`, `.env`) match at any depth.
@@ -51,6 +68,43 @@ const buildOutput = ['node_modules/', '*.log']
 /** Uploads of a legacy multisite and the firewall logs of Wordfence: visitors' data, not code. */
 const dataDirs = ['wp-content/blogs.dir/', 'wp-content/wflogs/']
 
+/**
+ * Folders inside the media where plugins keep what visitors sent: form attachments, the files of
+ * shop customers, avatars, comment attachments, shop logs. The media library is imported (owner's
+ * decision of 17.10.2026); these are personal data of third parties and never are (CLAUDE.md rule 1,
+ * spec §11). A plugin that is not listed here is caught only by the scanners.
+ */
+const visitorDirs = [
+  'gravity_forms/',
+  'wpforms/',
+  'wpcf7_uploads/',
+  'ninja-forms/',
+  'formidable/',
+  'forminator/',
+  'fluentform/',
+  'elementor/forms/',
+  'woocommerce_uploads/',
+  'wc-logs/',
+  // PDF invoices and packing slips of WooCommerce: names and addresses of customers.
+  'wpo_wcpdf/',
+  'edd/',
+  'ultimatemember/',
+  'avatars/',
+  'group-avatars/',
+  'buddypress/',
+  'wpdiscuz/',
+]
+
+/**
+ * The same folders in the media of every site of a network: `uploads/sites/<N>/` since WordPress 3.5,
+ * `blogs.dir/<N>/files/` before it. `*` stays inside one segment, so `<N>` is any one folder name.
+ */
+const visitorUploadDirs = [
+  'wp-content/uploads/',
+  'wp-content/uploads/sites/*/',
+  'wp-content/blogs.dir/*/files/',
+].flatMap((media) => visitorDirs.map((dir) => `${media}${dir}`))
+
 const anchored = (paths: readonly string[]) => paths.map((p) => `/${p}`)
 
 const protectedPaths = [
@@ -63,7 +117,9 @@ const protectedPaths = [
   ...generatedDirs,
   ...backupDirs,
   ...dropIns,
-  ...phpServerConfigFiles,
+  ...phpServerConfigProtected,
+  // The platform's own files inside the site (plan 53, Р11): the agent never sees or changes them.
+  ...wordpressPlatformFiles,
 ]
 
 const snapshotExcludes = [
@@ -76,14 +132,14 @@ const snapshotExcludes = [
 ]
 
 // gitleaks scans the imported tree as well (P11): these lines are the first filter, not the only one.
+// The core of WordPress and the media are imported (owner's decision of 17.10.2026): the first
+// version of a site is the site as it runs, so it can be put back. The protected paths keep an
+// agent diff out of them all the same.
 const importExcludes = [
   ...anchored([
     'wp-config.php',
-    ...coreRootFiles,
-    'wp-admin/',
-    'wp-includes/',
-    'wp-content/uploads/',
-    ...dataDirs,
+    'wp-content/wflogs/',
+    ...visitorUploadDirs,
     ...generatedDirs,
     ...backupDirs,
     ...dropIns,
@@ -211,7 +267,7 @@ export const wordpressAdapter: SiteAdapter = {
   importRules() {
     return {
       gitignore: [
-        '# Managed by Raditi: core, secrets, media and caches stay out of git',
+        '# Managed by Raditi: secrets, caches, backups and logs stay out of git',
         ...importExcludes,
       ],
       exclude: [...importExcludes],
@@ -223,9 +279,7 @@ export const wordpressAdapter: SiteAdapter = {
   backup() {
     throw todo('backup')
   },
-  verify() {
-    throw todo('verify')
-  },
+  verify: wordpressVerifyPlan,
   mcpTools() {
     return mcpTools.map((tool) => ({ ...tool }))
   },
@@ -245,4 +299,13 @@ export const wordpressAdapter: SiteAdapter = {
     const values = await phpConfigStrings(read, 'wp-config.php', secretDefine, defineEnd)
     return secretValues(values.filter((value) => value !== samplePhrase))
   },
+  agentWorkingSet: wordpressAgentWorkingSet,
+  mediaRules: wordpressMediaRules,
+  databaseSettings: wordpressDatabaseSettings,
+  previewRecipe: wordpressPreviewRecipe,
+  databaseCopyPolicy: wordpressDatabaseCopyPolicy,
+  dbOperationKinds: wordpressDbOperationKinds,
+  dbSettings: wordpressDbSettings,
+  dbPlanGuide: wordpressDbPlanGuide,
+  browserRequestDenied: wordpressBrowserRequestDenied,
 }

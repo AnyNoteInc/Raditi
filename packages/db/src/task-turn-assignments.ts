@@ -83,19 +83,29 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         const prior = await tx.taskTurn.findUniqueOrThrow({
           where: { taskId_turnNo: { taskId: task.id, turnNo: turn - 1 } },
         })
+        const branch = await taskBranch(tx, task.id, prior)
         if (plan.replacesTurn === undefined) {
           if (prior.status !== 'completed') throw conflict('An unsuccessful turn must be replaced')
-          if (plan.previous?.turn !== turn - 1 || plan.workspace.expectedBaseSha !== prior.headSha)
-            throw conflict('Continuation does not restore the completed product turn')
+          // After «Обновить» (plan 53, Р27) the turn is a new session on the moved candidate;
+          // a continuation would restore a session of the old `main` and publish over the move.
+          if (plan.rebased) {
+            if (
+              branch.movedAfterLastTurn === null ||
+              plan.previous ||
+              plan.workspace.expectedBaseSha !== branch.movedAfterLastTurn
+            )
+              throw conflict('A rebased turn does not start on the candidate «Обновить» moved')
+          } else {
+            if (
+              plan.previous?.turn !== turn - 1 ||
+              plan.workspace.expectedBaseSha !== prior.headSha
+            )
+              throw conflict('Continuation does not restore the completed product turn')
+            if (branch.movedAfterLastTurn !== null)
+              throw conflict('«Обновить» moved the task branch after the completed product turn')
+          }
         } else {
-          const published = await tx.taskTurn.findFirst({
-            where: { taskId: task.id, status: 'completed' },
-            orderBy: { turnNo: 'desc' },
-            select: { headSha: true },
-          })
-          if (published && !published.headSha)
-            throw conflict('Completed product turn has no publication evidence')
-          if (plan.workspace.expectedBranchSha !== (published?.headSha ?? null))
+          if (plan.workspace.expectedBranchSha !== branch.written)
             throw conflict('Replacement does not pin the published task branch')
           const previous = await tx.turnAssignment.findMany({
             where: { taskId: task.id, turnNo: plan.replacesTurn },
@@ -106,14 +116,25 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
           const saved = turnPlanSchema.safeParse(previous[0]!.plan)
           if (!saved.success) throw conflict('The replaced turn can no longer be restored')
           const replaced = saved.data
-          if (
-            previous[0]!.sessionId !== sessionId ||
+          if (previous[0]!.sessionId !== sessionId)
+            throw conflict('Replacement does not restore the replaced turn input')
+          if (branch.movedAfterLastTurn !== null) {
+            // «Обновить» moved the candidate after the replaced turn (plan 53, Р27): its input
+            // stands on the old `main`, so the replacement is a new session on the moved head.
+            if (
+              !plan.rebased ||
+              plan.previous ||
+              plan.workspace.expectedBaseSha !== branch.movedAfterLastTurn
+            )
+              throw conflict('Replacement does not start on the candidate «Обновить» moved')
+          } else if (
+            (plan.rebased === true) !== (replaced.rebased === true) ||
             !isDeepStrictEqual(plan.previous, replaced.previous) ||
             plan.workspace.expectedBaseSha !== replaced.workspace.expectedBaseSha
           )
             throw conflict('Replacement does not restore the replaced turn input')
         }
-      } else if (plan.previous || plan.replacesTurn !== undefined) {
+      } else if (plan.previous || plan.replacesTurn !== undefined || plan.rebased) {
         throw badRequest('The first product turn has no predecessor')
       }
       const assignment = await new PostgresTurnAssignmentStore(tx).open(parsed)
@@ -246,6 +267,52 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
       },
       data: { status: turnStatus('failed', reason), failureReason: reason },
     })
+  }
+}
+
+/**
+ * Where the platform last left `agent/<taskId>` (docs/plan/53-chat-preview-release.md, R3), the
+ * rule the planner's facts follow too. `written` — the head of the last completed turn or, when
+ * «Обновить» moved the standing candidate after it, the candidate's head; null before the first
+ * publication. `movedAfterLastTurn` — the candidate's head when «Обновить» moved it after the
+ * turn before this one (it records the candidate under the task's turn number, with a head that
+ * turn did not write); null otherwise.
+ */
+async function taskBranch(
+  tx: Tx,
+  taskId: string,
+  prior: { turnNo: number; headSha: string | null },
+): Promise<{ written: string | null; movedAfterLastTurn: string | null }> {
+  const published = await tx.taskTurn.findFirst({
+    where: { taskId, status: 'completed' },
+    orderBy: { turnNo: 'desc' },
+    select: { turnNo: true, headSha: true },
+  })
+  if (published && !published.headSha)
+    throw conflict('Completed product turn has no publication evidence')
+  // The latest revision whatever its status: an «Обновить» that left nothing to release while a
+  // pass was queued records the head it pushed as a revision superseded at once (plan 53, R3).
+  const standing = await tx.taskCandidate.findFirst({
+    where: { taskId },
+    orderBy: { revision: 'desc' },
+    select: { turnNo: true, headSha: true },
+  })
+  const own = standing
+    ? standing.turnNo === prior.turnNo
+      ? prior.headSha
+      : ((
+          await tx.taskTurn.findUnique({
+            where: { taskId_turnNo: { taskId, turnNo: standing.turnNo } },
+            select: { headSha: true },
+          })
+        )?.headSha ?? null)
+    : null
+  const moved = standing && standing.headSha !== own ? standing : null
+  const written =
+    moved && moved.turnNo >= (published?.turnNo ?? 0) ? moved.headSha : (published?.headSha ?? null)
+  return {
+    written,
+    movedAfterLastTurn: moved && moved.turnNo === prior.turnNo ? moved.headSha : null,
   }
 }
 

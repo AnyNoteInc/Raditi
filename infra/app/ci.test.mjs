@@ -674,17 +674,26 @@ test('CI runs the presigned-URL suite of the storage adapter on a real S3', () =
 
 test('the required CI job checks the syntax of the WordPress plugin', () => {
   const gates = job('gates')
-  assert.ok(read('infra/wordpress/raditi-content.php').startsWith('<?php'))
-  assert.match(gates, /^ {12}php -l infra\/wordpress\/raditi-content\.php$/m)
-  // A runner without PHP uses the PHP of the pinned WordPress image, offline and read-only.
-  const [, image] =
-    /docker run --rm --network none --entrypoint php \\\n +-v "\$PWD\/infra\/wordpress:\/plugin:ro" \\\n +(\S+) -l \/plugin\/raditi-content\.php/.exec(
-      gates,
-    ) ?? []
-  assert.equal(
-    image,
-    siteImages.find((name) => name.startsWith('wordpress:7.')),
-  )
+  // Every PHP file there: the content plugin, and the wp-config.php and mu-plugin of a preview.
+  const files = readdirSync(join(root, 'infra/wordpress'))
+    .filter((name) => name.endsWith('.php'))
+    .sort()
+  assert.deepEqual(files, ['preview-wp-config.php', 'raditi-content.php', 'raditi-preview.php'])
+  for (const file of files) {
+    const name = file.replaceAll('.', '\\.')
+    assert.ok(read(`infra/wordpress/${file}`).startsWith('<?php'))
+    assert.match(gates, new RegExp(`^ {12}php -l infra/wordpress/${name}$`, 'm'))
+    // A runner without PHP uses the PHP of the pinned WordPress image, offline and read-only.
+    const [, image] =
+      new RegExp(
+        `docker run --rm --network none --entrypoint php \\\\\\n +-v "\\$PWD/infra/wordpress:/plugin:ro" \\\\\\n +(\\S+) -l /plugin/${name}`,
+      ).exec(gates) ?? []
+    assert.equal(
+      image,
+      siteImages.find((name) => name.startsWith('wordpress:7.')),
+      file,
+    )
+  }
 })
 
 test('a cached gate sees a source change in a package it depends on', () => {
@@ -720,6 +729,17 @@ test('a cached test run sees a change of a file its tests read outside their pac
       'apps/orchestrator/src/llm-gateway/sandbox-routes.contract.test.ts',
       'apps/orchestrator/src/llm/backends.test.ts',
     ],
+    // The files a WordPress preview gets, embedded in the adapter, against their sources; the
+    // policy of its database copy, against the file the copier is tested with (plan 53, R5b).
+    'infra/wordpress/raditi-content.php': ['packages/site-adapters/src/wordpress-preview.test.ts'],
+    'infra/wordpress/raditi-preview.php': ['packages/site-adapters/src/wordpress-preview.test.ts'],
+    'infra/wordpress/preview-wp-config.php': [
+      'packages/site-adapters/src/wordpress-preview.test.ts',
+    ],
+    'infra/wordpress/preview-apache.conf': ['packages/site-adapters/src/wordpress-preview.test.ts'],
+    'packages/site-connections/src/database-copy/wordpress-policy.fixture.json': [
+      'packages/site-adapters/src/wordpress-db-copy.test.ts',
+    ],
   }
   for (const [file, readers] of Object.entries(outside)) {
     assert.ok(inputs.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of test`)
@@ -728,6 +748,15 @@ test('a cached test run sees a change of a file its tests read outside their pac
         read(reader).includes(`'${relative(dirname(reader), file)}'`),
         `${reader} no longer reads ${file}`,
       )
+  }
+  // A file the readers above load through an import of theirs: its readers are theirs too.
+  const imported = { 'infra/sandbox/client-egress.mjs': 'infra/sandbox/gateway.mjs' }
+  for (const [file, importer] of Object.entries(imported)) {
+    assert.ok(inputs.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of test`)
+    assert.ok(
+      read(importer).includes(`'./${relative(dirname(importer), file)}'`),
+      `${importer} no longer imports ${file}`,
+    )
   }
 })
 

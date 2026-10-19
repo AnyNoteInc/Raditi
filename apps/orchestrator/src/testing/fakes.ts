@@ -5,7 +5,13 @@ import type { TestingModuleBuilder } from '@nestjs/testing'
 import { bucketKinds, queueNames, type BucketKind } from '@repo/domain'
 import { vi } from 'vitest'
 
-import { loadConfig, type CoreConfig, type McpConfig, type RunnerConfig } from '../config/config.ts'
+import {
+  loadConfig,
+  type CoreConfig,
+  type McpConfig,
+  type PreviewGatewayConfig,
+  type RunnerConfig,
+} from '../config/config.ts'
 import { OBJECT_STORAGE, PRISMA, REDIS, SECRET_STORE } from '../infra/tokens.ts'
 
 export const TEST_METRICS_TOKEN = 'test-metrics-token'
@@ -35,6 +41,19 @@ export function testMcpConfig(): McpConfig {
   const { mcp } = loadConfig(testEnv)
   if (!mcp) throw new Error('test env has no mcp role')
   return mcp
+}
+
+export function testPreviewConfig(): PreviewGatewayConfig {
+  const { preview } = loadConfig({
+    APP_ENV: 'test',
+    APP_URL: 'http://localhost:3000',
+    ORCHESTRATOR_ROLES: 'preview',
+    DATABASE_URL: testEnv.DATABASE_URL,
+    PREVIEW_BASE_DOMAIN: 'localhost',
+    PREVIEW_PUBLIC_PORT: '8090',
+  })
+  if (!preview) throw new Error('test env has no preview role')
+  return preview
 }
 
 export function testRunnerConfig(overrides: Record<string, string> = {}): RunnerConfig {

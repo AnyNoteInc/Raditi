@@ -61,7 +61,11 @@ describe('the storage of content snapshots', () => {
       })
       await expect(content.get(bucket, 'k')).rejects.toMatchObject({ code: 'FORBIDDEN' })
       await expect(content.delete(bucket, 'k')).rejects.toMatchObject({ code: 'FORBIDDEN' })
+      await expect(content.put(bucket, 'k', Buffer.from('x'))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      })
     }
+    expect(storage.put).not.toHaveBeenCalled()
     expect(storage.putIfAbsent).not.toHaveBeenCalled()
     expect(storage.get).not.toHaveBeenCalled()
     expect(storage.delete).not.toHaveBeenCalled()
@@ -75,11 +79,41 @@ describe('the storage of content snapshots', () => {
     expect(storage.checkBuckets.mock.calls).toEqual([[['artifacts']], [['artifacts']]])
   })
 
-  it('exposes nothing else of the S3 adapter: no overwrite, no presigned URL', () => {
+  it('writes a screenshot of the agent browser under its own key, and nothing else', async () => {
+    const storage = inner()
+    const png = Buffer.from('89504e47', 'hex')
+    const task = '0196abcd-0000-7000-8000-00000000000b'
+    const shot = '01960000-0000-7000-8000-00000000000a'
+    const key = `tasks/${task}/screenshots/${shot}.png`
+    await artifactsOnly(storage).put('artifacts', key, png, {
+      contentType: 'image/png',
+      sizeBytes: 4,
+    })
+    expect(storage.put).toHaveBeenCalledExactlyOnceWith('artifacts', key, png, {
+      contentType: 'image/png',
+      sizeBytes: 4,
+    })
+    // A snapshot, a sealed value of a plan, anything else: never overwritten.
+    for (const other of [
+      `snapshots/${task}.json`,
+      `tasks/${task}/db/${shot}/after.json`,
+      `tasks/${task}/screenshots/${shot}.png.json`,
+      `tasks/${task}/screenshots/../db/${shot}.png`,
+      `tasks/${task.toUpperCase()}/screenshots/${shot}.png`,
+    ])
+      await expect(artifactsOnly(storage).put('artifacts', other, png)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      })
+    expect(storage.put).toHaveBeenCalledOnce()
+  })
+
+  // `put` is for screenshots (plan 53, N22): each under a key of a new id, never a snapshot's.
+  it('exposes nothing else of the S3 adapter: no presigned URL, no listing', () => {
     expect(Object.keys(artifactsOnly(inner())).sort()).toEqual([
       'checkBuckets',
       'delete',
       'get',
+      'put',
       'putIfAbsent',
     ])
   })

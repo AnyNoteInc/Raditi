@@ -5,6 +5,7 @@ export * from '../ports/site-repository-provisioner.ts'
 export * from './access.ts'
 export * from './address.ts'
 export * from './database-schema.ts'
+export * from './hosting-writer.ts'
 export * from './import-policy.ts'
 // By name: the field helpers that access.ts shares with the inputs (`oneLine`, `passwordSchema`, …)
 // stay inside this folder.

@@ -50,6 +50,28 @@ export interface OpencodeWrapperSettings {
   mcpUrl: string
   /** The name of the MCP server in the CLI's configuration, as the CLI's log prints it. */
   mcpServer: string
+  /**
+   * The client's variables of the turn (docs/plan/53-chat-preview-release.md, Р13): files in the
+   * tmpfs of `NAME\0value\0` pairs (cli-run.ts `envFiles`) that hold exactly these names, read
+   * and removed at once like the credentials; null — the turn has none.
+   */
+  variables: { paths: readonly string[]; names: readonly string[] } | null
+  /**
+   * The script the commands of the CLI's shell tool read through BASH_ENV: the variables and the
+   * egress proxy, in the tmpfs, written just before the CLI starts and removed when it exits.
+   * Only the CLI of the turn gets BASH_ENV — never a value — and only its shell reads the file.
+   */
+  shellEnv: string
+  /** The client egress proxy of the sandbox for those commands; null — they have no way out. */
+  egressProxy: string | null
+  /** The hosts those commands reach without the proxy: the platform's gateway and loopback. */
+  noProxy: readonly string[]
+  /** The session database the turn leaves: every value in it is masked when the CLI ends. */
+  sessionDatabase: string
+  /** The files of the session the snapshot takes: none may hold a value, byte for byte. */
+  sessionFiles: readonly string[]
+  /** What a value becomes there (ENV_VALUE_MASK). */
+  mask: string
 }
 
 /**
@@ -143,6 +165,16 @@ process.exit(accepted ? 0 : 1);
  * 6. The CLI's own MCP connection may still fail, and then the run goes on without the site's
  *    tools and exits 0. The only sign is one WARN line of `--print-logs`: on it the CLI is
  *    stopped and the turn fails.
+ * 7. The client's variables (plan 53, Р13) are read and removed with the credentials. The CLI
+ *    gets only BASH_ENV, the path of a script in the tmpfs; its shell tool runs commands in
+ *    bash, which sources that script first, so only the agent's commands hold the values and
+ *    HTTPS_PROXY of the egress proxy — the CLI, the MCP check, export and import hold neither.
+ *    The script goes with the CLI. When the CLI has ended, every value — as it is and as a JSON
+ *    string holds it — is masked in each text column of the session database the snapshot
+ *    takes; with secure_delete on and a VACUUM after it, no page keeps what a change freed, and
+ *    the WAL is merged into the file. Then the files the snapshot takes are read byte for byte:
+ *    a value still there — a trigger the agent's commands added, a process the CLI left that
+ *    holds the database — fails the turn, as does any step of this that does not succeed.
  *
  * A failure of the wrapper is printed as the CLI's own `error` row, so the parser reports it.
  * The CLI stays in the process group of the sandbox runtime: a timeout or a cancellation of the
@@ -150,9 +182,10 @@ process.exit(accepted ? 0 : 1);
  */
 export function opencodeWrapper(settings: OpencodeWrapperSettings): string {
   return `import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 const settings = ${JSON.stringify(settings)};
 const mcpCheck = ${JSON.stringify(MCP_CHECK)};
@@ -168,12 +201,129 @@ const report = (message) =>
   process.stdout.write('\\n' + JSON.stringify({ type: 'error', error: { name: 'RaditiWrapperError', data: { message } } }) + '\\n');
 const remove = (path) => rmSync(path, { recursive: true, force: true });
 const secrets = [];
+/** The client's variables, by name; their values never leave this process but in the script. */
+let variables = [];
 const forget = () => {
   for (const secret of secrets) {
     secret.value.fill(0);
     if (secret.pipe !== undefined) try { closeSync(secret.pipe); } catch {}
     secret.pipe = undefined;
     try { remove(secret.path); } catch {}
+  }
+  for (const path of settings.variables?.paths ?? []) try { remove(path); } catch {}
+  try { remove(settings.shellEnv); } catch {}
+};
+/** Exactly the names the driver staged, each once with a value of text: anything else is refused. */
+const readVariables = () => {
+  if (settings.variables === null) return [];
+  const pairs = [];
+  // Every file is read and removed first: none stays behind a refusal.
+  const texts = settings.variables.paths.map((path) => {
+    const text = readFileSync(path, 'utf8');
+    rmSync(path);
+    return text;
+  });
+  for (const text of texts) {
+    const parts = text.split('\\0');
+    if (parts.length % 2 !== 1 || parts.pop() !== '') refuse('The client variables of the turn are not pairs');
+    for (let index = 0; index < parts.length; index += 2) pairs.push([parts[index], parts[index + 1]]);
+  }
+  const names = pairs.map(([name]) => name);
+  if (JSON.stringify(names) !== JSON.stringify([...settings.variables.names].sort()) ||
+    pairs.some(([, value]) => value.length === 0))
+    refuse('The client variables of the turn differ from what was staged');
+  return pairs;
+};
+// $'…': only the backslash and the quote escaped, so the script takes twice a value at most.
+const shellQuote = (value) => "$'" + value.replaceAll('\\\\', '\\\\\\\\').replaceAll("'", "\\\\'") + "'";
+/** What bash sources before each command of the shell tool. */
+const shellScript = () => {
+  const lines = ['# The launch wrapper of the turn: client variables and the egress proxy (Р13).'];
+  for (const [name, value] of variables) lines.push('export ' + name + '=' + shellQuote(value));
+  if (settings.egressProxy !== null) {
+    const proxy = shellQuote(settings.egressProxy);
+    const direct = shellQuote(settings.noProxy.join(','));
+    lines.push('export HTTPS_PROXY=' + proxy + ' https_proxy=' + proxy + ' NO_PROXY=' + direct + ' no_proxy=' + direct + ' NODE_USE_ENV_PROXY=1');
+  }
+  return lines.join('\\n') + '\\n';
+};
+const shellEnvNeeded = () => variables.length > 0 || settings.egressProxy !== null;
+const inJsonString = (value) => JSON.stringify(value).slice(1, -1);
+/**
+ * Each value as it is, as a JSON string holds it once and twice and as the script quotes it,
+ * longest first: the spellings \`envValueForms\` of @repo/domain masks in core.
+ */
+const valueForms = () => [...new Set(variables.flatMap(([, value]) => {
+  const once = inJsonString(value);
+  return [value, once, inJsonString(once), value.replaceAll('\\\\', '\\\\\\\\').replaceAll("'", "\\\\'")];
+}))].sort((left, right) => right.length - left.length);
+/** The bytes of each spelling: UTF-8, and UTF-16 in either order — a database may keep text so. */
+const valueBytes = () => valueForms().flatMap((form) => {
+  const little = Buffer.from(form, 'utf16le');
+  return [Buffer.from(form, 'utf8'), little, Buffer.from(little).swap16()];
+});
+/** Whether a file holds one of the patterns, read in chunks with an overlap of the longest. */
+const holdsAny = (path, patterns) => {
+  if (!present(path)) return false;
+  const keep = Math.max(...patterns.map((pattern) => pattern.length)) - 1;
+  const chunk = Buffer.alloc(1024 * 1024);
+  const fd = openSync(path, 'r');
+  try {
+    let tail = Buffer.alloc(0);
+    for (;;) {
+      const read = readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) return false;
+      const joined = Buffer.concat([tail, chunk.subarray(0, read)]);
+      if (patterns.some((pattern) => joined.includes(pattern))) return true;
+      tail = joined.subarray(Math.max(0, joined.length - keep));
+    }
+  } finally {
+    closeSync(fd);
+  }
+};
+const quoteName = (name) => '"' + name.replaceAll('"', '""') + '"';
+/**
+ * Every value masked in every text column of the session database (and of its virtual tables).
+ * SQLite keeps what a change frees in the pages until something overwrites it: with
+ * secure_delete it overwrites that with zeros, and VACUUM writes a copy of the live rows only.
+ * Then the WAL is merged into the database, and the files the snapshot takes are read byte for
+ * byte: SQL saw only what a trigger let it change.
+ */
+const scrub = () => {
+  if (variables.length === 0) return;
+  const forms = valueForms();
+  if (present(settings.sessionDatabase)) mask(forms);
+  const patterns = valueBytes();
+  if (settings.sessionFiles.some((path) => holdsAny(path, patterns)))
+    throw new Error('A value of a client variable is left in the session');
+};
+const mask = (forms) => {
+  const database = new DatabaseSync(settings.sessionDatabase);
+  try {
+    database.exec('PRAGMA busy_timeout = 5000');
+    database.exec('PRAGMA secure_delete = ON');
+    const tables = database.prepare("SELECT name FROM pragma_table_list WHERE schema = 'main' AND type IN ('table', 'virtual') AND name NOT LIKE 'sqlite~_%' ESCAPE '~'").all();
+    for (const { name: table } of tables) {
+      for (const { name: column } of database.prepare('SELECT name FROM pragma_table_info(?)').all(table)) {
+        const field = quoteName(column);
+        let text = field;
+        let bytes = 'CAST(' + field + ' AS TEXT)';
+        for (const _ of forms) {
+          text = 'replace(' + text + ', ?, ?)';
+          bytes = 'replace(' + bytes + ', ?, ?)';
+        }
+        const replaced = forms.flatMap((form) => [form, settings.mask]);
+        const found = (cast) => forms.map(() => 'instr(' + field + ', ' + (cast ? 'CAST(? AS BLOB)' : '?') + ') > 0').join(' OR ');
+        database.prepare('UPDATE ' + quoteName(table) + ' SET ' + field + ' = ' + text + " WHERE typeof(" + field + ") = 'text' AND (" + found(false) + ')').run(...replaced, ...forms);
+        database.prepare('UPDATE ' + quoteName(table) + ' SET ' + field + ' = CAST(' + bytes + " AS BLOB) WHERE typeof(" + field + ") = 'blob' AND (" + found(true) + ')').run(...replaced, ...forms);
+      }
+    }
+    database.exec('VACUUM');
+    // A reader that still holds the WAL keeps frames of it from the database.
+    if (database.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get()?.busy !== 0)
+      throw new Error('The session database is still in use');
+  } finally {
+    database.close();
   }
 };
 const writable = (mode) => {
@@ -235,6 +385,7 @@ try {
     secrets.push({ path, value: readFileSync(path), done: false });
     rmSync(path);
   }
+  variables = readVariables();
   const args = JSON.parse(readFileSync(settings.args, 'utf8'));
   hide();
   guard();
@@ -307,11 +458,19 @@ try {
       secret.pipe = openSync(secret.path, constants.O_WRONLY | constants.O_NONBLOCK);
     } finally { closeSync(own); }
   }
+  // Only for the commands of the CLI's shell tool: bash sources it, the CLI itself never reads it.
+  const env = { ...settings.env };
+  if (shellEnvNeeded()) {
+    writeFileSync(settings.shellEnv, shellScript(), { mode: 0o400, flag: 'wx' });
+    // bash whose stdin is a socket pair — what a runtime's pipe often is — takes itself for a
+    // remote shell's, reads ~/.bashrc instead of BASH_ENV and stops there, unless it is nested.
+    Object.assign(env, { BASH_ENV: settings.shellEnv, SHELL: '/bin/bash', SHLVL: '1' });
+  }
   const input = openSync(settings.prompt, 'r');
   let child;
   try {
     // Not detached: the CLI and its commands share the process group the sandbox runtime kills.
-    child = spawn(settings.cli, args, { cwd: settings.workdir, env: settings.env, stdio: [input, 'inherit', 'pipe'] });
+    child = spawn(settings.cli, args, { cwd: settings.workdir, env, stdio: [input, 'inherit', 'pipe'] });
   } finally {
     closeSync(input);
   }
@@ -371,6 +530,7 @@ try {
     writable(0o700);
     const unrevealed = reveal();
     if (unrevealed !== undefined) failure ??= unrevealed;
+    try { scrub(); } catch { failure ??= 'Could not mask the client variables in the session'; }
     if (failure !== undefined) {
       report(failure);
       process.exitCode = 1;

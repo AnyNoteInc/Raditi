@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 import {
   MAX_SANDBOX_TURN_MS,
+  SANDBOX_EGRESS_PORT,
   type NetworkPolicy,
   type SandboxLabels,
   type SandboxRuntime,
@@ -12,6 +13,34 @@ import type Docker from 'dockerode'
 import { bounded, commandError, createOwned, isMissing, startDetachedExec } from '../docker-api.ts'
 import type { DockerGatewayManager } from '../gateway-types.ts'
 import { gatewayConfigSchema, type GatewayConfig } from './config.ts'
+
+/** The variables of the client egress listener (infra/sandbox/client-egress.mjs, Р13). */
+const EGRESS_ENV = ['EGRESS_PORT', 'EGRESS_ALLOWED_HOSTS', 'EGRESS_REFUSED_SUBNETS'] as const
+
+/**
+ * What the gateway proxy is told about the client egress of an attempt: its port and the
+ * `host:port` of the policy, with the platform's own subnets; nothing without hosts — then no
+ * egress listener runs at all.
+ */
+function egressEnv(
+  policy: Extract<NetworkPolicy, { mode: 'gateway' }>,
+  config: GatewayConfig,
+): Partial<Record<(typeof EGRESS_ENV)[number], string>> {
+  if (!policy.egress?.length) return {}
+  return {
+    EGRESS_PORT: String(SANDBOX_EGRESS_PORT),
+    EGRESS_ALLOWED_HOSTS: JSON.stringify(policy.egress),
+    ...(config.egressRefusedSubnets?.length
+      ? { EGRESS_REFUSED_SUBNETS: config.egressRefusedSubnets.join(',') }
+      : {}),
+  }
+}
+
+/** The network guard opens the egress port next to the gateway's (runc). */
+const guardEgressEnv = (
+  policy: Extract<NetworkPolicy, { mode: 'gateway' }>,
+): Partial<Record<'EGRESS_PORT', string>> =>
+  policy.egress?.length ? { EGRESS_PORT: String(SANDBOX_EGRESS_PORT) } : {}
 
 const PREFIX = 'io.raditi.gateway.'
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
@@ -316,6 +345,9 @@ export function createDockerGatewayManager(
               `ALLOWED_ROUTES=${JSON.stringify(input.policy.routes)}`,
               `LLM_UPSTREAM=${config.llmUpstream}`,
               `MCP_UPSTREAM=${config.mcpUpstream}`,
+              ...Object.entries(egressEnv(input.policy, config)).map(
+                ([name, value]) => `${name}=${value}`,
+              ),
             ],
             HostConfig: {
               ...serviceHost(network.id, false),
@@ -345,7 +377,13 @@ export function createDockerGatewayManager(
             Entrypoint: entrypoint('network-guard.mjs'),
             Cmd: [],
             Labels: label('guard'),
-            Env: [`GATEWAY_IPV4=${ips.gateway}`, 'GATEWAY_PORT=8080'],
+            Env: [
+              `GATEWAY_IPV4=${ips.gateway}`,
+              'GATEWAY_PORT=8080',
+              ...Object.entries(guardEgressEnv(input.policy)).map(
+                ([name, value]) => `${name}=${value}`,
+              ),
+            ],
             HostConfig: { ...serviceHost(network.id, true), ExtraHosts: extraHosts },
             NetworkingConfig: { EndpointsConfig: endpoints(ips.client) },
           }),
@@ -451,17 +489,23 @@ export function createDockerGatewayManager(
               return [entry.slice(0, split), entry.slice(split + 1)]
             }),
           )
+          const egress: Record<string, string> = isGuard
+            ? guardEgressEnv(policy)
+            : egressEnv(policy, config)
           const expectedEnv: Record<string, string> = isGuard
-            ? { GATEWAY_IPV4: ips.gateway, GATEWAY_PORT: '8080' }
+            ? { GATEWAY_IPV4: ips.gateway, GATEWAY_PORT: '8080', ...egress }
             : {
                 LISTEN_HOST: ips.gateway,
                 CLIENT_IPV4: ips.client,
                 ALLOWED_ROUTES: JSON.stringify(policy.routes),
                 LLM_UPSTREAM: config.llmUpstream,
                 MCP_UPSTREAM: config.mcpUpstream,
+                ...egress,
               }
           if (
             !labelsMatch(environment, expectedEnv) ||
+            // Exactly the egress of the policy: none it did not ask for, no host more.
+            EGRESS_ENV.some((key) => environment[key] !== egress[key]) ||
             ['NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH'].some(
               (key) => environment[key],
             )

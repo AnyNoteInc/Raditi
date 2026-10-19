@@ -1,24 +1,22 @@
+'use client'
+
+import { taskModeLabel } from '@repo/domain/tasks/client-feed-labels'
 import Box from '@mui/material/Box'
-import IconButton from '@mui/material/IconButton'
 import Typography from '@mui/material/Typography'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
+import { useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { callErrorText } from '@/components/chat/call-error'
+import { composerText } from '@/components/chat/chat-texts'
+import { Composer, offScreen } from '@/components/chat/composer'
+import { dialogListKey } from '@/components/chat/dialog-list'
+import { uuidv7 } from '@/components/chat/uuid'
+import { useTRPC } from '@/trpc/client'
 
-/** A native control that stays in the accessibility tree and off the screen. */
-const offScreen = {
-  position: 'absolute',
-  width: '1px',
-  height: '1px',
-  m: '-1px',
-  p: 0,
-  border: 0,
-  overflow: 'hidden',
-  clipPath: 'inset(50%)',
-  whiteSpace: 'nowrap',
-} as const
+import { siteHref } from './site-nav'
 
-const MESSAGE = 'new-dialog-message'
-const SEND_OFF = 'new-dialog-send-off'
 const CHAT_OFF = 'new-dialog-chat-off'
 
 /** One word of the mode switch: a native radio inside its label. */
@@ -75,13 +73,69 @@ function Mode({
   )
 }
 
+function Modes() {
+  return (
+    <Box
+      role="radiogroup"
+      aria-label={composerText.modes}
+      sx={{
+        display: 'flex',
+        p: '3px',
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: '999px',
+        bgcolor: 'background.paper',
+      }}
+    >
+      <Mode value="chat" label={taskModeLabel.chat} describedBy={CHAT_OFF} />
+      <Mode value="work" label={taskModeLabel.work} checked />
+    </Box>
+  )
+}
+
 /**
- * The screen a dialog starts from. Tasks from the cabinet are not accepted yet, so nothing on
- * it pretends to work: sending is off and the screen says why; the «Чат» mode is shown and
- * cannot be chosen. Beside the list at the root of the section the heading of the page is the
- * list's, so the screen takes the level below.
+ * The screen a dialog starts from (docs/plan/53-chat-preview-release.md, R9). The first words
+ * start a dialog in the mode «Работа»: the browser invents the id of the dialog, so a repeat of
+ * the same request after a lost answer finds the same dialog, and the screen moves to it. «Чат»
+ * is shown and cannot be chosen yet. A site that is not connected takes no tasks, and the
+ * screen says so on the field. Beside the list at the root of the section the heading of the
+ * page is the list's, so the screen takes the level below.
  */
-export function NewDialog({ heading = 'h1' }: { heading?: 'h1' | 'h2' }) {
+export function NewDialog({
+  siteId,
+  accepting,
+  heading = 'h1',
+}: {
+  siteId: string
+  /** The site is connected: a dialog can be started. */
+  accepting: boolean
+  heading?: 'h1' | 'h2'
+}) {
+  const trpc = useTRPC()
+  const queryClient = useQueryClient()
+  const router = useRouter()
+  // One id per dialog being started: a repeat after a lost answer lands on the same one.
+  const taskId = useRef<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const create = useMutation(trpc.task.create.mutationOptions())
+
+  async function start(text: string): Promise<boolean> {
+    taskId.current ??= uuidv7()
+    setError(null)
+    try {
+      const created = await create.mutateAsync({ siteId, taskId: taskId.current, text })
+      taskId.current = null
+      void queryClient.invalidateQueries({ queryKey: dialogListKey(siteId) })
+      // The new dialog set credits aside: the credits under the list are read again.
+      void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
+      router.push(`${siteHref(siteId, 'chat')}/${created.taskId}`)
+      return true
+    } catch (failure) {
+      setError(callErrorText(failure))
+      return false
+    }
+  }
+
   return (
     <Box
       sx={{
@@ -102,78 +156,21 @@ export function NewDialog({ heading = 'h1' }: { heading?: 'h1' | 'h2' }) {
           Новый диалог
         </Typography>
 
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 0.5,
-            p: 1,
-            border: 1,
-            // The edge of the field: the divider is too faint to mark a control.
-            borderColor: 'var(--raditi-rule-strong)',
-            borderRadius: '22px',
-            bgcolor: 'background.default',
-          }}
+        <Composer
+          placeholder={composerText.newPlaceholder}
+          disabledReason={accepting ? null : composerText.notConnected}
+          error={error}
+          busy={create.isPending}
+          onSend={start}
+          modes={<Modes />}
+        />
+        <Typography
+          id={CHAT_OFF}
+          variant="body2"
+          color="text.secondary"
+          sx={{ textAlign: 'center' }}
         >
-          <Box component="label" htmlFor={MESSAGE} sx={offScreen}>
-            Сообщение
-          </Box>
-          <Box
-            component="textarea"
-            id={MESSAGE}
-            rows={2}
-            placeholder="Что поменять на сайте?"
-            aria-describedby={SEND_OFF}
-            sx={{
-              display: 'block',
-              width: '100%',
-              minHeight: 44,
-              px: 1.5,
-              py: 1.25,
-              border: 0,
-              borderRadius: '14px',
-              resize: 'none',
-              bgcolor: 'transparent',
-              color: 'text.primary',
-              font: 'inherit',
-              '&::placeholder': { color: 'text.secondary', opacity: 1 },
-            }}
-          />
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Box
-              role="radiogroup"
-              aria-label="Режим диалога"
-              sx={{
-                display: 'flex',
-                p: '3px',
-                border: 1,
-                borderColor: 'divider',
-                borderRadius: '999px',
-                bgcolor: 'background.paper',
-              }}
-            >
-              <Mode value="chat" label="Чат" describedBy={CHAT_OFF} />
-              <Mode value="work" label="Работа" checked />
-            </Box>
-            <IconButton
-              disabled
-              aria-label="Отправить"
-              aria-describedby={SEND_OFF}
-              sx={{ width: 44, height: 44, flex: 'none', border: 1, borderColor: 'divider' }}
-            >
-              <AppIcon name="send" />
-            </IconButton>
-          </Box>
-        </Box>
-
-        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
-          <span id={SEND_OFF}>
-            Задания из кабинета мы пока не принимаем — этот раздел ещё в работе.
-          </span>{' '}
-          <span id={CHAT_OFF}>Режим «Чат» появится позже.</span>
-        </Typography>
-        <Typography sx={{ fontSize: 12.5, color: 'text.secondary', textAlign: 'center' }}>
-          ИИ может допускать ошибки. Проверяйте важное.
+          {composerText.chatLater}
         </Typography>
       </Box>
     </Box>

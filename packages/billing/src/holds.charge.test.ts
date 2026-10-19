@@ -10,6 +10,7 @@ import {
   attemptCreditBudget,
   chargeTask,
   expireTaskHolds,
+  modelClassPriced,
   releaseTask,
   taskChargeAuditActions,
   taskChargeRefusals,
@@ -189,12 +190,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
     expiresAt?: Date
     /** K the reserve is placed under; it does not change what is set aside. */
     rate?: Partial<TestCreditRateData>
+    /** «Попробовать ещё»: what the retry of a dialog says, after it gave the chain back. */
+    retry?: true
   }
   /** Places a reserve the way the queue will, under a credit rate nobody else sees. */
   async function place(
     workspaceId: string,
     taskId: string,
-    { now = NOW, attempt = 1, expiresAt, rate = {} }: PlacementOptions = {},
+    { now = NOW, attempt = 1, expiresAt, rate = {}, retry }: PlacementOptions = {},
   ) {
     const placement: CreditHoldPlacement = {
       workspaceId,
@@ -202,6 +205,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       attempt,
       now,
       expiresAt: expiresAt ?? new Date(now.getTime() + DAY_MS),
+      ...(retry === undefined ? {} : { retry }),
     }
     const placed = await fixtures.reserve(placement, rate)
     await expectBooksToBalance(workspaceId)
@@ -225,7 +229,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
     turnNo?: number
     occurredAt?: Date
     estimateReason?: TestEstimateReason
-    turnStatus?: 'completed' | 'lost'
+    turnStatus?: 'completed' | 'lost' | 'failed'
+    /** The pass of the turn ended in a `feed.failure` (`task_turns.rejected_at`). */
+    turnRejected?: boolean
     usageClosed?: boolean
     priceId?: string
   }
@@ -452,6 +458,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       ])
       expect(await chargeMeta(taskId)).toEqual({
         attempts: 1,
+        // No attempt of the task gave its reserve back to «Попробовать ещё».
+        givenBack: 0,
         firstAttempt: 1,
         lastAttempt: 1,
         reserved: 45,
@@ -652,6 +660,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       })
     })
 
+    // docs/plan/53, «Попробовать ещё (18.10)»: a dialog kept its candidate after a failed pass
+    // and is released without a retry — the failed pass is not the client's to pay.
+    it('leaves the calls of a turn whose pass ended in a failure out of the charge', async () => {
+      const { model, taskId } = await taskInWork()
+      await worked(model, taskId, '60', { turnStatus: 'completed' })
+      await worked(model, taskId, '90', { turnNo: 2, turnStatus: 'failed', turnRejected: true })
+      await worked(model, taskId, '30', { turnNo: 3, turnStatus: 'completed', turnRejected: true })
+      await ended(taskId)
+
+      // 60 ÷ 6.00.
+      expect(await charge(taskId)).toMatchObject({ credits: 10 })
+      expect(await chargeMeta(taskId)).toMatchObject({
+        costRub: '60.0000000000',
+        rawCredits: '10',
+      })
+    })
+
     it('charges a task that made no call at all the minimum', async () => {
       const { workspaceId, taskId } = await taskInWork()
       await ended(taskId)
@@ -730,37 +755,102 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       },
     )
 
-    it('charges only the retry of a task whose first attempt failed, whatever that one left open', async () => {
-      const { model, workspaceId, taskId } = await taskInWork()
-      // The first attempt failed after 150 RUB of calls; the accounting of its key never closed.
-      await worked(model, taskId, '150', { usageClosed: false })
-      await ended(taskId, 'failed')
+    /**
+     * «Попробовать ещё» the way `task.retry` does it (docs/plan/53, «Попробовать ещё (18.10)»):
+     * the chain of the dialog is given back and the next attempt, in `heavy`, sets its reserve
+     * aside. The dialog kept the candidate its earlier turns built.
+     */
+    async function retried(workspaceId: string, taskId: string, attempt = 2) {
       await db.$transaction((tx) => releaseTask(tx, { taskId, now: minutesAfter(8) }))
-      // «Попробовать ещё»: the next attempt in the stronger mode, with a reserve of its own.
       await db.task.update({
         where: { id: taskId },
-        data: { status: 'queued', modelClass: 'heavy' },
+        data: { status: 'queued', modelClass: 'heavy', attempt },
       })
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10) })
-      await worked(model, taskId, '90', { attempt: 2, occurredAt: minutesAfter(12) })
+      return place(workspaceId, taskId, { attempt, now: minutesAfter(10), retry: true })
+    }
+
+    it('charges a retried dialog for the candidate and the retry, not for the pass that failed, whatever that one left open', async () => {
+      const { model, workspaceId, taskId } = await taskInWork()
+      // Turn 1 built the candidate: 120 RUB, 20 credits. The pass of turn 2 failed after
+      // 150 RUB of calls, and the accounting of its key never closed.
+      await worked(model, taskId, '120', { turnNo: 1, turnStatus: 'completed' })
+      await worked(model, taskId, '150', {
+        turnNo: 2,
+        turnStatus: 'failed',
+        turnRejected: true,
+        usageClosed: false,
+      })
+      await retried(workspaceId, taskId)
+      // The retry replaced turn 2: 90 RUB, 15 credits.
+      await worked(model, taskId, '90', { attempt: 2, turnNo: 3, occurredAt: minutesAfter(12) })
       await ended(taskId)
 
       const charged = await charge(taskId)
 
-      expect(charged).toMatchObject({ credits: 15, reserved: 120, applied: true })
+      expect(charged).toMatchObject({ credits: 35, reserved: 120, applied: true })
       expect(await reserve(taskId)).toEqual(['#1 tariff 45 released', '#2 tariff 120 captured'])
-      // Asked again, the reserve of the charge is still that of the retry alone.
+      // Asked again, the charge answers with what it settled: the reserve of the retry.
       expect(await charge(taskId)).toEqual({ ...charged, applied: false })
       expect(await chargeMeta(taskId)).toMatchObject({
-        attempts: 1,
-        firstAttempt: 2,
+        attempts: 2,
+        givenBack: 1,
+        firstAttempt: 1,
         lastAttempt: 2,
         reserved: 120,
-        charged: 15,
-        costRub: '90.0000000000',
-        rawCredits: '15',
+        charged: 35,
+        costRub: '210.0000000000',
+        rawCredits: '35',
+        minimumApplied: false,
       })
-      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(285) })
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(265) })
+    })
+
+    // A failure the client can bring about on purpose — a change of `.github/` refused, a secret
+    // in a file — kept the candidate; the retry fails the same way and keeps it again, and the
+    // candidate is released. The work that built it is charged all the same.
+    it('charges the work that built the kept candidate when the retry failed as well', async () => {
+      const { model, workspaceId, taskId } = await taskInWork()
+      // Turn 1: 240 RUB, 40 credits — the candidate. Turn 2: refused, 30 RUB.
+      await worked(model, taskId, '240', { turnNo: 1, turnStatus: 'completed' })
+      await worked(model, taskId, '30', { turnNo: 2, turnStatus: 'completed', turnRejected: true })
+      await retried(workspaceId, taskId)
+      // Turn 3 of the retry: refused again, 60 RUB.
+      await worked(model, taskId, '60', {
+        attempt: 2,
+        turnNo: 3,
+        turnStatus: 'completed',
+        turnRejected: true,
+        occurredAt: minutesAfter(12),
+      })
+      await ended(taskId)
+
+      // Not the minimum of a task: the 40 credits of turn 1, from the reserve of the retry.
+      expect(await charge(taskId)).toMatchObject({ credits: 40, reserved: 120 })
+      expect(await chargeMeta(taskId)).toMatchObject({
+        attempts: 2,
+        givenBack: 1,
+        charged: 40,
+        costRub: '240.0000000000',
+        rawCredits: '40',
+        minimumApplied: false,
+      })
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(260) })
+    })
+
+    it('waits for the usage of a given-back attempt whose calls it counts', async () => {
+      const { model, workspaceId, taskId } = await taskInWork()
+      const built = await worked(model, taskId, '120', {
+        turnNo: 1,
+        turnStatus: 'completed',
+        usageClosed: false,
+      })
+      await retried(workspaceId, taskId)
+      await worked(model, taskId, '90', { attempt: 2, turnNo: 3, occurredAt: minutesAfter(12) })
+      await ended(taskId)
+
+      await expect(charge(taskId)).rejects.toMatchObject(conflict('usage_open'))
+      await db.llmKey.update({ where: { id: built.keyId }, data: { usageClosedAt: LATER } })
+      expect(await charge(taskId)).toMatchObject({ credits: 35 })
     })
 
     it('says which accounts paid: the tariff, then the gift, then the pack', async () => {
@@ -1235,6 +1325,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       expect(await budget(model, taskId)).toEqual({
         attempt: 1,
+        chainAttempts: 1,
         step: 45,
         reserved: 45,
         used: '0',
@@ -1286,6 +1377,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       expect(await budget(model, taskId)).toEqual({
         attempt: 1,
+        chainAttempts: 1,
         step: 45,
         reserved: 45,
         used: '37.5',
@@ -1308,6 +1400,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       expect(await budget(model, taskId)).toEqual({
         attempt: 1,
+        chainAttempts: 1,
         step: 45,
         reserved: 12,
         used: '10',
@@ -1392,6 +1485,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       expect(await budget(model, taskId, 3, { now: minutesAfter(30) })).toEqual({
         attempt: 3,
+        chainAttempts: 3,
         step: 45,
         reserved: 135,
         // Three times 37.5: «на неё уже ушло 113 кредитов».
@@ -1438,14 +1532,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
     it('counts calls the customer is not charged for against the step, not against the reserve', async () => {
       const { model, taskId } = await taskInWork()
       await worked(model, taskId, '60')
-      await worked(model, taskId, '30', { estimateReason: 'aborted_platform' })
+      await worked(model, taskId, '20', { estimateReason: 'aborted_platform' })
       await worked(model, taskId, '12', { turnNo: 2, turnStatus: 'lost' })
+      // A turn whose pass ended in a failure (docs/plan/53, «Попробовать ещё (18.10)»).
+      await worked(model, taskId, '10', { turnNo: 3, turnStatus: 'failed', turnRejected: true })
 
       expect(await budget(model, taskId)).toMatchObject({
         used: '10',
         // (45 − 10) × 6.00.
         customerLeftRub: '210.0000000000',
-        // 270 − 60 − 30 − 12: a lost call spent the pool too.
+        // 270 − 60 − 20 − 12 − 10: a lost call and a rejected turn spent the pool too.
         ceilingLeftRub: '168.0000000000',
         budgetRub: '168.00',
       })
@@ -1653,9 +1749,38 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       // After a retry the chain is the second attempt alone.
       await db.$transaction((tx) => releaseTask(tx, { taskId, now: minutesAfter(8) }))
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10) })
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10), retry: true })
       await expect(budget(model, taskId, 1)).rejects.toMatchObject(outside)
       expect(await budget(model, taskId, 2)).toMatchObject({ attempt: 2, reserved: 45 })
+    })
+
+    // docs/plan/53, «Попробовать ещё (18.10)»: the work that built the kept candidate is charged
+    // with the dialog, from the reserve of the retry, so it bounds the keys of the retry.
+    it('bounds the keys of a retry by the work the kept candidate was built with', async () => {
+      const { model, workspaceId, taskId } = await taskInWork()
+      // A model of the class the retry runs in, at the price of the tests' model.
+      const heavy = await modelPool({ modelClass: 'heavy' })
+      // Turn 1 built the candidate for 240 RUB, 40 credits; the pass of turn 2 failed.
+      await worked(model, taskId, '240', { turnNo: 1, turnStatus: 'completed' })
+      await worked(model, taskId, '90', { turnNo: 2, turnStatus: 'failed', turnRejected: true })
+      await db.$transaction((tx) => releaseTask(tx, { taskId, now: minutesAfter(8) }))
+      await db.task.update({ where: { id: taskId }, data: { modelClass: 'heavy', attempt: 2 } })
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(10), retry: true })
+
+      expect(await budget(model, taskId, 2, { enabled: [heavy] })).toMatchObject({
+        attempt: 2,
+        chainAttempts: 1,
+        step: 120,
+        reserved: 120,
+        // Turn 1 alone: the failed pass is not the client's to pay.
+        used: '40',
+        // (120 − 40) × 6.00.
+        customerLeftRub: '480.0000000000',
+        // The step of the retry is its own: nothing of it is spent yet.
+        ceilingLeftRub: '720.0000000000',
+        // min(750, min(480 + 46.50, 720)).
+        budgetRub: '526.50',
+      })
     })
 
     it('takes the first call of the dearest enabled model of the class that has a price', async () => {
@@ -1733,6 +1858,58 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       await expect(budget(model, taskId, 1, { enabled: [] })).rejects.toMatchObject(missing)
       await expect(budget(model, taskId, 1, { enabled: [heavy] })).rejects.toMatchObject(missing)
       await expect(budget(model, taskId, 1, { enabled: [later] })).rejects.toMatchObject(missing)
+    })
+
+    // «Попробовать ещё» moves a dialog to `heavy`: the press asks first what the planner will
+    // ask for its profile (docs/plan/53).
+    it('says whether a pass of a class could run: the profile of the planner, with a price in force', async () => {
+      const heavy = await modelPool({ modelClass: 'heavy' })
+      const later = await modelPool(
+        { modelClass: 'heavy' },
+        { effectiveFrom: new Date(LATER.getTime() + DAY_MS) },
+      )
+      const backends = [heavy.pool.provider, later.pool.provider]
+      /** The models switched on, with a provider model id, under providers switched on. */
+      const priced = (
+        enabled: readonly Model[],
+        options: { providers?: readonly Model[]; providerModelId?: string | null } = {},
+      ) =>
+        inRolledBackTransaction(db, async (tx) => {
+          const { providers = enabled, providerModelId = 'glm-5.3' } = options
+          await tx.llmModel.updateMany({
+            where: { id: { in: enabled.map(({ pool }) => pool.modelId) } },
+            data: { enabled: true, providerModelId },
+          })
+          await tx.llmProvider.updateMany({
+            where: { id: { in: providers.map(({ pool }) => pool.providerId) } },
+            data: { enabled: true },
+          })
+          return modelClassPriced(tx, { modelClass: 'heavy', backends, now: LATER })
+        })
+      expect(await priced([heavy])).toBe(true)
+      expect(await priced([later])).toBe(false)
+      expect(await priced([])).toBe(false)
+      // A price is not enough: the planner would refuse the pass `unavailable`.
+      expect(await priced([heavy], { providers: [] })).toBe(false)
+      expect(await priced([heavy], { providerModelId: null })).toBe(false)
+      expect(
+        await inRolledBackTransaction(db, async (tx) => {
+          await tx.llmModel.update({
+            where: { id: heavy.pool.modelId },
+            data: { enabled: true, providerModelId: 'glm-5.3' },
+          })
+          await tx.llmProvider.update({
+            where: { id: heavy.pool.providerId },
+            data: { enabled: true },
+          })
+          // The provider is not a backend the caller runs.
+          return modelClassPriced(tx, {
+            modelClass: 'heavy',
+            backends: ['billing-elsewhere'],
+            now: LATER,
+          })
+        }),
+      ).toBe(false)
     })
 
     it('issues no number without a usable credit rate', async () => {

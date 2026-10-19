@@ -904,6 +904,16 @@ describe('a customer whose tariff is not paid', () => {
 describe('the limits of the tariff', () => {
   const outside = 'Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены.'
 
+  // What the tile promises of tomorrow depends on whether the period of «Бизнес» in the fixtures
+  // (until 09:00 UTC on 18.10.2026) ends before the next Moscow midnight: the clock stands inside
+  // that period, so the answers do not change with the calendar. Only `Date` is faked.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-17T09:00:00Z') })
+    return () => {
+      vi.useRealTimers()
+    }
+  })
+
   it('measures the day and the sites, each with a named meter and a line', async () => {
     showUsage()
 

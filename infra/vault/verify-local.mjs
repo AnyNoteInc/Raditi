@@ -153,9 +153,14 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
         ...init,
         headers: { ...init.headers, 'Content-Type': 'application/merge-patch+json' },
       })
+    // sys/wrapping/wrap answers 400 without the lifetime of the wrapping in this header.
+    const wrapping = (ttl) => (input, init) =>
+      fetch(input, { ...init, headers: { ...init.headers, 'X-Vault-Wrap-TTL': String(ttl) } })
     const expect = async (token, path, status, options) => {
-      const fetchImpl = options?.method === 'PATCH' ? mergePatch : fetch
-      const result = await localVaultRequest({ address, token, fetchImpl }, path, options)
+      const { wrapTtl, ...request } = options ?? {}
+      const fetchImpl =
+        request.method === 'PATCH' ? mergePatch : wrapTtl ? wrapping(wrapTtl) : fetch
+      const result = await localVaultRequest({ address, token, fetchImpl }, path, request)
       assert.equal(result.status, status, `Unexpected ACL result for ${path}`)
       checks += 1
       return result.body
@@ -516,7 +521,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     mcp: { name: 'raditi-verify-mcp', policies: ['mcp-content'] },
     core: {
       name: 'raditi-verify-core',
-      policies: ['core-turns', 'core-transit', 'core-site-import'],
+      policies: ['core-turns', 'core-transit', 'core-site-import', 'core-release'],
     },
   }
   await expect(rootToken, 'sys/auth/approle', 204, post({ type: 'approle' }))
@@ -666,8 +671,8 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   await expect(mcp, `transit/datakey/plaintext/${unprovisioned}`, 400, post(dataKey))
   await expect(rootToken, `transit/keys/${unprovisioned}`, 404)
 
-  // core: data keys of turn snapshots next to its turn keys and the access a site is imported
-  // with; no WordPress or browser access and no maps.
+  // core: data keys of turn snapshots next to its turn keys, the access a site is imported with
+  // and the WordPress access a release writes with (core-release); no browser access, no maps.
   const coreIssued = await expect(core, `transit/datakey/plaintext/${key}`, 200, post(dataKey))
   const coreWrapped = coreIssued?.data?.ciphertext
   assert.ok(typeof coreWrapped === 'string', 'Wrapped key differs')
@@ -679,8 +684,9 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   )
   assert.ok(coreUnwrapped?.data?.plaintext === coreIssued.data.plaintext, 'Data key differs')
   await expect(core, 'turns/data/t_synthetic_role_1_1', 200, write({ key: 'synthetic-turn' }, 0))
+  const released = await expect(core, `kv/data/${wp}`, 200)
+  assert.ok(released?.data?.data?.applicationPassword === 'synthetic-password-2', 'Access differs')
   for (const [path, options] of [
-    [`kv/data/${wp}`, {}],
     [`kv/data/sites/${siteId}/browser`, {}],
     [`kv/data/${wp}`, write(access('synthetic-core'), 2)],
     [`kv/data/${mask}`, {}],
@@ -715,7 +721,8 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     const replaced = await expect(token, `kv/data/sites/${siteId}/db?version=1`, 200)
     assert.ok(replaced?.data?.data?.password === 'synthetic-db-1', 'Replaced access differs')
     for (const [path, options] of [
-      [`kv/data/${wp}`, {}],
+      // The role reads it under core-release (below); the import policy alone does not.
+      ...(token === importer ? [[`kv/data/${wp}`, {}]] : []),
       [`kv/data/sites/${siteId}/browser`, {}],
       [`kv/data/sites/${siteId}`, {}],
       [`kv/data/sites/${siteId}/db/extra`, {}],
@@ -800,7 +807,17 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   const next = await expect(mcp, `transit/datakey/plaintext/${key}`, 200, post(dataKey))
   assert.ok(next?.data?.ciphertext?.startsWith('vault:v2:'), 'Rotation did not take effect')
 
+  const release = await verifyReleaseAccess({
+    rootToken,
+    scopedTokens,
+    expect,
+    siteId,
+    core,
+    mcp,
+  })
+
   return {
+    ...release,
     credentials,
     key,
     siteId,
@@ -809,9 +826,227 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   }
 }
 
+/**
+ * Real rights of releases and previews (docs/plan/53-chat-preview-release.md, Р13, Р21, Р24,
+ * Р29, Р35): `core` wraps the credentials of a release attempt, sees whether they were opened
+ * and revokes them, and creates no token or policy; web writes a variable of a site and never
+ * reads it back; `mcp` reads the secrets of a preview and not the variables of a site.
+ */
+async function verifyReleaseAccess({ rootToken, scopedTokens, expect, siteId, core, mcp }) {
+  const post = (body) => ({ method: 'POST', ...(body === undefined ? {} : { body }) })
+  const write = (data, cas) => post({ options: { cas }, data })
+  const previewId = randomUUID()
+  const variable = `sites/${siteId}/env/PAYMENT_API_KEY`
+  const preview = (kind) => `previews/${previewId}/${kind}`
+  const owner = 'platform/gitea-org-owner'
+  const releaser = scopedTokens['core-release']
+  const sitesWriter = scopedTokens['sites-writer']
+
+  // web (sites-writer): a variable of a site keeps one version — set on its metadata before the
+  // first write — and is written with CAS and removed by a tombstone; never read back, never
+  // deleted: the policy is not widened for it.
+  await expect(sitesWriter, `kv/metadata/${variable}`, 204, post({ max_versions: '1' }))
+  await expect(sitesWriter, `kv/data/${variable}`, 200, write({ value: 'synthetic-1' }, 0))
+  await expect(sitesWriter, `kv/data/${variable}`, 400, write({ value: 'stale' }, 0))
+  const stored = await expect(sitesWriter, `kv/metadata/${variable}`, 200)
+  assert.equal(stored?.data?.current_version, 1)
+  assert.equal(stored?.data?.max_versions, 1)
+  // Set again before each write: it changes nothing and needs no read of what is there.
+  await expect(sitesWriter, `kv/metadata/${variable}`, 204, post({ max_versions: '1' }))
+  const removed = new Date().toISOString()
+  await expect(sitesWriter, `kv/data/${variable}`, 200, write({ removed }, 1))
+  for (const [path, options] of [
+    // A longer history, or anything else of the metadata, of a variable or of site access.
+    [`kv/metadata/${variable}`, post({ max_versions: '2' })],
+    [`kv/metadata/${variable}`, post({ max_versions: '0' })],
+    // A number matches no value a policy lists: only the string "1" passes.
+    [`kv/metadata/${variable}`, post({ max_versions: 1 })],
+    [`kv/metadata/${variable}`, post({ max_versions: '1', cas_required: true })],
+    [`kv/metadata/${variable}`, post({ delete_version_after: '1h' })],
+    [`kv/metadata/${variable}`, post({ custom_metadata: { kept: 'yes' } })],
+    [`kv/metadata/${variable}`, { method: 'PATCH', body: { max_versions: '1' } }],
+    [`kv/metadata/sites/${siteId}/wp`, post({ max_versions: '1' })],
+    [`kv/metadata/sites/${siteId}/db`, post({ max_versions: '1' })],
+    [`kv/data/${variable}`, {}],
+    [`kv/data/${variable}?version=1`, {}],
+    [`kv/data/${variable}`, { method: 'DELETE' }],
+    [`kv/metadata/${variable}`, { method: 'DELETE' }],
+    [`kv/delete/${variable}`, post({ versions: [1] })],
+    [`kv/destroy/${variable}`, post({ versions: [1] })],
+    [`kv/metadata/sites/${siteId}/env`, { method: 'LIST' }],
+    [`kv/data/${preview('wp')}`, write({ v: '1', password: 'x' }, 0)],
+    [`kv/data/${owner}`, {}],
+    ['sys/wrapping/wrap', { ...post({ value: 'synthetic' }), wrapTtl: 60 }],
+  ]) {
+    await expect(sitesWriter, path, 403, options)
+  }
+
+  // The operator stores the token of the Gitea organization owner; no service writes it.
+  await expect(rootToken, `kv/data/${owner}`, 200, write({ v: '1', token: 'synthetic-owner' }, 0))
+
+  // core: the secrets of a preview are its own — written, read, listed and removed.
+  for (const token of [core, releaser]) {
+    const id = token === core ? 'wp' : 'browser'
+    await expect(token, `kv/data/${preview(id)}`, 404)
+    await expect(token, `kv/data/${preview(id)}`, 200, write({ v: '1', secret: 'synthetic' }, 0))
+    await expect(token, `kv/data/${preview(id)}`, 200, write({ v: '1', secret: 'synthetic-2' }, 1))
+    const read = await expect(token, `kv/data/${preview(id)}`, 200)
+    assert.ok(read?.data?.data?.secret === 'synthetic-2', 'Preview secret differs')
+    const metadata = await expect(token, `kv/metadata/${preview(id)}`, 200)
+    assert.equal(metadata?.data?.current_version, 2)
+    // Recovery metadata of a write-once secret (kvCreateOnce); nothing that shortens history.
+    await expect(token, `kv/metadata/${preview(id)}`, 204, post({ custom_metadata: { id } }))
+    for (const body of [
+      { max_versions: 1 },
+      { max_versions: '1' },
+      { cas_required: true },
+      { delete_version_after: '1s' },
+    ])
+      await expect(token, `kv/metadata/${preview(id)}`, 403, post(body))
+  }
+  // The passwords of the preview's database (owner's answer of 19.10.2026): core's alone.
+  await expect(core, `kv/data/${preview('db')}`, 200, write({ v: '1', user: 'u', root: 'r' }, 0))
+  const passwords = await expect(core, `kv/data/${preview('db')}`, 200)
+  assert.ok(passwords?.data?.data?.user === 'u', 'Preview database secret differs')
+  const listed = await expect(core, `kv/metadata/previews/${previewId}`, 200, { method: 'LIST' })
+  assert.deepEqual([...(listed?.data?.keys ?? [])].sort(), ['browser', 'db', 'wp'])
+
+  // mcp: the secrets of a preview, read-only; nothing of a variable of a site, no wrapping.
+  for (const kind of ['wp', 'browser']) {
+    const read = await expect(mcp, `kv/data/${preview(kind)}`, 200)
+    assert.ok(read?.data?.data?.secret === 'synthetic-2', 'Preview secret differs')
+  }
+  for (const [path, options] of [
+    [`kv/data/${preview('db')}`, {}],
+    [`kv/data/${preview('wp')}`, write({ v: '1', secret: 'synthetic-mcp' }, 2)],
+    [`kv/data/${preview('wp')}`, { method: 'DELETE' }],
+    [`kv/metadata/${preview('wp')}`, {}],
+    [`kv/metadata/${preview('wp')}`, post({ custom_metadata: { id: 'mcp' } })],
+    [`kv/metadata/previews/${previewId}`, { method: 'LIST' }],
+    [`kv/data/${variable}`, {}],
+    [`kv/data/${owner}`, {}],
+    ['sys/wrapping/wrap', { ...post({ value: 'synthetic' }), wrapTtl: 60 }],
+    ['auth/token/revoke-accessor', post({ accessor: 'synthetic-accessor' })],
+  ]) {
+    await expect(mcp, path, 403, options)
+  }
+
+  // core and a token of core-release alone: what a release reads, and the wrapping of one
+  // release attempt — opened once by its own token, never by core's.
+  const attempt = { apiToken: 'synthetic-release-api-token', dataKey: 'synthetic-backup-key' }
+  for (const token of [core, releaser]) {
+    const env = await expect(token, `kv/data/${variable}`, 200)
+    assert.ok(env?.data?.data?.removed === removed, 'The tombstone of a variable differs')
+    // One version: the removed value is gone from Vault, for core as for everybody.
+    await expect(token, `kv/data/${variable}?version=1`, 404)
+    const gitea = await expect(token, `kv/data/${owner}`, 200)
+    assert.ok(gitea?.data?.data?.token === 'synthetic-owner', 'The owner token differs')
+    await expect(token, `kv/data/sites/${siteId}/wp`, 200)
+
+    await expect(token, 'sys/wrapping/wrap', 400, post(attempt))
+    const wrapped = await expect(token, 'sys/wrapping/wrap', 200, {
+      ...post(attempt),
+      wrapTtl: 1800,
+    })
+    const info = wrapped?.wrap_info
+    assert.ok(
+      typeof info?.token === 'string' &&
+        typeof info.accessor === 'string' &&
+        info.ttl === 1800 &&
+        info.creation_path === 'sys/wrapping/wrap' &&
+        wrapped.data === null,
+      'Wrapping differs',
+    )
+    const lookup = await expect(token, 'sys/wrapping/lookup', 200, post({ token: info.token }))
+    assert.equal(lookup?.data?.creation_ttl, 1800)
+    assert.equal(lookup?.data?.creation_path, 'sys/wrapping/wrap')
+    // A lookup leaves it unopened; core cannot open it with its own token.
+    await expect(token, 'sys/wrapping/unwrap', 403, post({ token: info.token }))
+    await expect(token, 'sys/wrapping/lookup', 200, post({ token: info.token }))
+    const opened = await expect(info.token, 'sys/wrapping/unwrap', 200, post())
+    assert.deepEqual(opened?.data, attempt)
+    await expect(info.token, 'sys/wrapping/unwrap', 400, post())
+    await expect(token, 'sys/wrapping/lookup', 400, post({ token: info.token }))
+    // A spent wrapping is answered 200 with a warning: revoking it changes nothing.
+    await expect(token, 'auth/token/revoke-accessor', 200, post({ accessor: info.accessor }))
+
+    const revoked = await expect(token, 'sys/wrapping/wrap', 200, {
+      ...post(attempt),
+      wrapTtl: 600,
+    })
+    await expect(
+      token,
+      'auth/token/revoke-accessor',
+      204,
+      post({ accessor: revoked.wrap_info.accessor }),
+    )
+    await expect(revoked.wrap_info.token, 'sys/wrapping/unwrap', 400, post())
+    await expect(token, 'sys/wrapping/lookup', 400, post({ token: revoked.wrap_info.token }))
+    // No rewrap either: a live wrapping stays as it was. (A dead one is answered 400 first.)
+    const live = await expect(token, 'sys/wrapping/wrap', 200, { ...post(attempt), wrapTtl: 60 })
+    await expect(token, 'sys/wrapping/rewrap', 403, post({ token: live.wrap_info.token }))
+    await expect(token, 'sys/wrapping/lookup', 200, post({ token: live.wrap_info.token }))
+    await expect(
+      token,
+      'auth/token/revoke-accessor',
+      204,
+      post({ accessor: live.wrap_info.accessor }),
+    )
+
+    for (const [path, options] of [
+      ['sys/policies/acl/site-synthetic-deploy', { method: 'PUT', body: { policy: '' } }],
+      ['sys/policies/acl/core-release', { method: 'PUT', body: { policy: '' } }],
+      ['sys/policies/acl', { method: 'LIST' }],
+      ['auth/token/create', post({ policies: ['core-release'] })],
+      ['auth/token/create-orphan', post({ policies: ['default'] })],
+      ['auth/token/revoke', post({ token: revoked.wrap_info.token })],
+      ['auth/token/lookup-accessor', post({ accessor: revoked.wrap_info.accessor })],
+      ['auth/token/lookup-self', {}],
+      ['sys/mounts', {}],
+      ['subs/data/zai-coding/synthetic-content', {}],
+      ['subs/metadata/zai-coding/synthetic-content', {}],
+      [`kv/data/sites/${siteId}/browser`, {}],
+      [`kv/data/sites/${siteId}/wp`, write({ v: '1', password: 'synthetic-core' }, 2)],
+      [`kv/data/${variable}`, write({ value: 'synthetic-core' }, 2)],
+      [`kv/metadata/${variable}`, {}],
+      [`kv/metadata/${variable}`, { method: 'DELETE' }],
+      [`kv/metadata/sites/${siteId}/env`, { method: 'LIST' }],
+      [`kv/data/${owner}`, write({ v: '1', token: 'synthetic-core' }, 1)],
+      [`kv/metadata/${owner}`, {}],
+      ['kv/data/platform/other', {}],
+      ['kv/metadata/platform', { method: 'LIST' }],
+    ]) {
+      await expect(token, path, 403, options)
+    }
+    // Which previews hold secrets: what a sweeper of destroyed previews walks.
+    const previews = await expect(token, 'kv/metadata/previews', 200, { method: 'LIST' })
+    assert.ok(previews?.data?.keys?.includes(`${previewId}/`), 'The preview is not listed')
+  }
+  // The metadata delete of core removes every version of a destroyed preview's secret.
+  await expect(core, `kv/metadata/${preview('browser')}`, 204, { method: 'DELETE' })
+  await expect(rootToken, `kv/data/${preview('browser')}?version=1`, 404)
+  await expect(mcp, `kv/data/${preview('browser')}`, 404)
+
+  // The other policies open nothing of it.
+  for (const policy of policyNames.filter((name) => name !== 'core-release')) {
+    for (const [path, options] of [
+      ['sys/wrapping/wrap', { ...post(attempt), wrapTtl: 60 }],
+      ['auth/token/revoke-accessor', post({ accessor: 'synthetic-accessor' })],
+      [`kv/data/${owner}`, {}],
+      ...(policy === 'mcp-content' ? [] : [[`kv/data/${preview('wp')}`, {}]]),
+      ...(policy === 'sites-writer' ? [] : [[`kv/data/${variable}`, {}]]),
+    ]) {
+      await expect(scopedTokens[policy], path, 403, options)
+    }
+  }
+  return { previewId, variable: `kv/${variable}`, removed }
+}
+
 async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
   const { createVaultSecretStore, createDevSubscriptionToken } =
     await import('../../packages/vault/src/index.ts')
+  const { siteEnvVarSecret, siteEnvVarTombstone, siteEnvVarValueOf } =
+    await import('../../packages/domain/src/release/env-vars.ts')
   let checks = 0
   const checked = async (name, operation) => {
     try {
@@ -1317,6 +1552,150 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     )
     assert.equal(replaced.status, 404)
   })
+  // Releases and previews (plan 53, Р13, Р21, Р24, Р29, Р35) through the adapter.
+  const attempt = { apiToken: 'synthetic-release-api-token', dataKey: 'synthetic-backup-key' }
+  // The deploy job holds no Vault credential at all: the wrapping token is its own.
+  const job = createVaultSecretStore({ addr: address })
+  await checked('core role wraps a release attempt; the job opens it once', async () => {
+    const before = Date.now()
+    const wrapped = await role.wrap(attempt, 1800)
+    assert.ok(wrapped.expiresAt.getTime() >= before + 1_800_000)
+    const info = await role.lookupWrapping(wrapped.token)
+    assert.equal(info?.creationPath, 'sys/wrapping/wrap')
+    assert.equal(info.expiresAt.getTime() - info.createdAt.getTime(), 1_800_000)
+    assert.deepEqual(await job.unwrap(wrapped.token), attempt)
+    assert.equal(await job.unwrap(wrapped.token), null)
+    assert.equal(await role.lookupWrapping(wrapped.token), null)
+    // Spent: the revocation finds no token and still resolves.
+    await role.revokeAccessor(wrapped.accessor)
+    assert.equal(logins.core, 1)
+  })
+  await checked('core role revokes an unopened wrapping by its accessor', async () => {
+    const wrapped = await role.wrap(attempt, 600)
+    await role.revokeAccessor(wrapped.accessor)
+    assert.equal(await role.lookupWrapping(wrapped.token), null)
+    assert.equal(await job.unwrap(wrapped.token), null)
+    await role.revokeAccessor(wrapped.accessor)
+    assert.equal(logins.core, 1)
+  })
+  await checked('a wrapping nobody opened expires', async () => {
+    const wrapped = await role.wrap(attempt, 1)
+    await new Promise((resolve) => setTimeout(resolve, 2_500))
+    assert.equal(await role.lookupWrapping(wrapped.token), null)
+    assert.equal(await job.unwrap(wrapped.token), null)
+  })
+  const variable = content.variable
+  const previewSecret = (kind) => `kv/previews/${content.previewId}/${kind}`
+  await checked('mcp role reads the secrets of a preview with the same login', async () => {
+    const wp = await mcp.kvRead(previewSecret('wp'))
+    assert.ok(wp?.version === 2 && wp.data.secret === 'synthetic-2')
+    assert.equal(await mcp.kvRead(previewSecret('browser')), null)
+    assert.equal(logins.mcp, 1)
+  })
+  await checked('core role writes a secret of a preview once, with recovery metadata', async () => {
+    const browser = { v: '1', path: 'synthetic-browser-path' }
+    const custom = { previewId: content.previewId }
+    assert.equal(await role.kvCreateOnce(previewSecret('browser'), browser, custom), 'created')
+    assert.equal(await role.kvCreateOnce(previewSecret('browser'), browser, custom), 'exists')
+    assert.deepEqual((await role.kvMetadata(previewSecret('browser')))?.custom, custom)
+    assert.deepEqual((await mcp.kvRead(previewSecret('browser')))?.data, browser)
+    await role.kvDestroyAll(previewSecret('browser'))
+    assert.equal(await mcp.kvRead(previewSecret('browser')), null)
+    assert.equal(logins.core, 1)
+  })
+  await checked(
+    'core role reads what a release writes with, and keeps the secrets of a preview',
+    async () => {
+      const env = await role.kvRead(variable)
+      assert.ok(env?.version === 2 && env.data.removed === content.removed)
+      assert.equal(siteEnvVarValueOf(env.data), null)
+      const owner = await role.kvRead('kv/platform/gitea-org-owner')
+      assert.ok(owner?.data.token === 'synthetic-owner')
+      assert.equal((await role.kvRead(accessPath('wp')))?.version, 2)
+      assert.deepEqual(
+        await role.kvWrite(previewSecret('wp'), { v: '1', secret: 'synthetic-3' }, { cas: 2 }),
+        { version: 3 },
+      )
+      assert.equal((await role.kvMetadata(previewSecret('wp')))?.currentVersion, 3)
+      await role.kvDestroyAll(previewSecret('wp'))
+      assert.equal(await role.kvRead(previewSecret('wp')), null)
+      assert.equal(await mcp.kvRead(previewSecret('wp')), null)
+      assert.equal((await role.health()).sealed, false)
+      assert.equal(logins.core, 1)
+    },
+  )
+  const web = createVaultSecretStore({ addr: address, token: scopedTokens['sites-writer'] })
+  const second = `kv/sites/${content.siteId}/env/SECOND_API_KEY`
+  // A version of the variable as core would ask for it (`?version=N`), outside the adapter.
+  const versionOf = async (version) =>
+    (
+      await localVaultRequest(
+        { address, token: scopedTokens['core-release'] },
+        `kv/data/sites/${content.siteId}/env/SECOND_API_KEY?version=${version}`,
+      )
+    ).status
+  await checked(
+    'web writes a variable keeping one version: a replaced or removed value is gone',
+    async () => {
+      const keep = { maxVersions: 1 }
+      assert.deepEqual(
+        await web.kvWrite(second, siteEnvVarSecret('synthetic-second-1'), { cas: 0, ...keep }),
+        { version: 1 },
+      )
+      assert.deepEqual(
+        await web.kvWrite(second, siteEnvVarSecret('synthetic-second-2'), { cas: 1, ...keep }),
+        { version: 2 },
+      )
+      assert.equal(siteEnvVarValueOf((await role.kvRead(second)).data), 'synthetic-second-2')
+      assert.equal(await versionOf(1), 404)
+      const metadata = await web.kvMetadata(second)
+      assert.equal(metadata?.currentVersion, 2)
+      const tombstone = siteEnvVarTombstone(new Date())
+      assert.deepEqual(
+        await web.kvWrite(second, tombstone, { cas: metadata.currentVersion, ...keep }),
+        { version: 3 },
+      )
+      const removed = await role.kvRead(second)
+      assert.ok(removed?.version === 3)
+      assert.deepEqual(removed.data, tombstone)
+      assert.equal(siteEnvVarValueOf(removed.data), null)
+      assert.equal(await versionOf(2), 404)
+    },
+  )
+  await expectRejected(
+    'web cannot keep a longer history of a variable',
+    () => web.kvWrite(second, siteEnvVarSecret('synthetic-second-3'), { cas: 3, maxVersions: 2 }),
+    403,
+  )
+  await expectRejected('web cannot read a variable back', () => web.kvRead(second), 403)
+  await expectRejected(
+    'web cannot remove the versions of a variable',
+    () => web.kvDestroyAll(second),
+    403,
+  )
+  const contentOnly = createVaultSecretStore({ addr: address, token: scopedTokens['mcp-content'] })
+  await expectRejected(
+    'the content policy is refused the variables of a site',
+    () => contentOnly.kvRead(variable),
+    403,
+  )
+  const releaseOnly = createVaultSecretStore({ addr: address, token: scopedTokens['core-release'] })
+  await checked('the release policy alone wraps, looks up and revokes', async () => {
+    const wrapped = await releaseOnly.wrap(attempt, 60)
+    assert.equal(
+      (await releaseOnly.lookupWrapping(wrapped.token))?.creationPath,
+      'sys/wrapping/wrap',
+    )
+    await releaseOnly.revokeAccessor(wrapped.accessor)
+    assert.equal(await releaseOnly.lookupWrapping(wrapped.token), null)
+  })
+  for (const [name, store] of [
+    ['the import policy', importer],
+    ['the content policy', contentOnly],
+    ['the writer of site access', web],
+  ])
+    await expectRejected(`${name} cannot wrap`, () => store.wrap(attempt, 60), 403)
+
   // Last: a refusal drops the cached AppRole token, and the SecretID is already spent.
   await expectRejected(
     'mcp role is refused the SSH access of the same site, not told that it is missing',
@@ -1324,8 +1703,8 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     403,
   )
   await expectRejected(
-    'core role is refused the WordPress access of the same site, not told that it is missing',
-    () => role.kvRead(accessPath('wp')),
+    'core role is refused the browser access of the same site, not told that it is missing',
+    () => role.kvRead(accessPath('browser')),
     403,
   )
   return checks

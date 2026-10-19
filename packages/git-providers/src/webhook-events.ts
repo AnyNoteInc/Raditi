@@ -1,6 +1,8 @@
 import type { GitProviderKind, GitWebhookEvent, RepoRef, WorkflowRun } from '@repo/domain'
 import { z } from 'zod'
 
+import { runState, workflowOfRun } from './workflow-runs.ts'
+
 // Provider webhook payloads → GitWebhookEvent. Only the fields the orchestrator needs are
 // read; everything else is ignored. A payload that does not match yields null.
 
@@ -23,15 +25,27 @@ const branch = z
   .regex(/^[^\x00-\x1f\x7f]+$/)
 
 const BRANCH_REF = 'refs/heads/'
+const TAG_REF = 'refs/tags/'
 
-/** A push to a branch; tags and branch deletions are not events for the orchestrator. */
+/** A push to a branch; branch deletions are not events for the orchestrator. */
 function pushEvent(repo: RepoRef, ref: string, after: string): GitWebhookEvent | null {
   if (!ref.startsWith(BRANCH_REF) || isZeroSha(after)) return null
   const parsed = branch.safeParse(ref.slice(BRANCH_REF.length))
   return parsed.success ? { kind: 'push', repo, branch: parsed.data, headSha: after } : null
 }
 
-// --- Gitea and GitHub: Gitea mirrors the GitHub payloads for these three events ------------
+/**
+ * A tag created or moved (plan 53, Р28: a release tag starts the deploy). Gitea 1.27.3 sends a
+ * `push` with `refs/tags/<name>`; `after` is the commit of a lightweight tag and the tag object
+ * of an annotated one. A deleted tag is no event, as a deleted branch is not.
+ */
+function tagEvent(repo: RepoRef, ref: string, after: string): GitWebhookEvent | null {
+  if (!ref.startsWith(TAG_REF) || isZeroSha(after)) return null
+  const parsed = branch.safeParse(ref.slice(TAG_REF.length))
+  return parsed.success ? { kind: 'tag', repo, tag: parsed.data, sha: after } : null
+}
+
+// --- Gitea and GitHub: Gitea mirrors the GitHub payloads for these events -----------------
 
 const githubStyleRepository = z.object({
   name: segment,
@@ -50,17 +64,52 @@ const githubStylePullRequest = z.object({
   repository: githubStyleRepository,
 })
 
+const runAttempt = z.number().int().positive().max(1_000_000)
+const workflowPath = z.string().min(1).max(1024)
+
 const githubStyleWorkflowRun = z.object({
   workflow_run: z.object({
     id: z.number().int().nonnegative(),
     name: z.string().max(255).nullish(),
     display_title: z.string().max(1024).nullish(),
     head_sha: sha,
+    // Gitea leaves out an empty field: a tag push has no head_branch.
+    head_branch: branch.nullish(),
+    path: workflowPath.nullish(),
+    event: z.string().min(1).max(64).nullish(),
+    run_attempt: runAttempt.nullish(),
     status: z.string().max(64),
     conclusion: z.string().max(64).nullish(),
     html_url: httpUrl,
   }),
-  workflow: z.object({ name: z.string().max(255).nullish() }).nullish(),
+  workflow: z
+    .object({ name: z.string().max(255).nullish(), path: workflowPath.nullish() })
+    .nullish(),
+  repository: githubStyleRepository,
+})
+
+const githubStyleWorkflowJob = z.object({
+  workflow_job: z.object({
+    id: z.number().int().nonnegative(),
+    run_id: z.number().int().nonnegative(),
+    name: z.string().min(1).max(255),
+    head_sha: sha,
+    head_branch: branch.nullish(),
+    run_attempt: runAttempt.nullish(),
+    status: z.string().max(64),
+    conclusion: z.string().max(64).nullish(),
+    html_url: httpUrl,
+    steps: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(255),
+          status: z.string().max(64),
+          conclusion: z.string().max(64).nullish(),
+        }),
+      )
+      .max(256)
+      .nullish(),
+  }),
   repository: githubStyleRepository,
 })
 
@@ -70,30 +119,6 @@ const githubStylePush = z.object({
   deleted: z.boolean().optional(),
   repository: githubStyleRepository,
 })
-
-/**
- * GitHub statuses and conclusions, which Gitea reuses. Anything that is not clearly a success
- * counts as a failure: an unknown conclusion must never pass for a successful deploy.
- */
-function runState(
-  status: string,
-  conclusion: string | null | undefined,
-): Pick<WorkflowRun, 'status' | 'conclusion'> {
-  if (status === 'in_progress') return { status: 'in_progress', conclusion: null }
-  if (status !== 'completed') return { status: 'queued', conclusion: null }
-  switch (conclusion) {
-    case 'success':
-      return { status: 'completed', conclusion: 'success' }
-    case 'skipped':
-    case 'neutral':
-      return { status: 'completed', conclusion: 'skipped' }
-    case 'cancelled':
-    case 'stale':
-      return { status: 'completed', conclusion: 'cancelled' }
-    default:
-      return { status: 'completed', conclusion: 'failure' }
-  }
-}
 
 /** `event` is X-Gitea-Event or X-GitHub-Event. */
 export function normalizeGithubStyleEvent(
@@ -138,13 +163,42 @@ export function normalizeGithubStyleEvent(
           headSha: run.head_sha,
           ...runState(run.status, run.conclusion),
           url: run.html_url,
+          ...workflowOfRun(run.path),
+          workflowPath: parsed.data.workflow?.path ?? null,
+          event: run.event ?? null,
+          headBranch: run.head_branch ?? null,
+          runAttempt: run.run_attempt ?? null,
+        },
+      }
+    }
+    case 'workflow_job': {
+      const parsed = githubStyleWorkflowJob.safeParse(payload)
+      if (!parsed.success) return null
+      const job = parsed.data.workflow_job
+      return {
+        kind: 'workflow_job',
+        repo: repoRef(parsed.data.repository),
+        job: {
+          id: String(job.id),
+          runId: String(job.run_id),
+          name: job.name,
+          headSha: job.head_sha,
+          headBranch: job.head_branch ?? null,
+          runAttempt: job.run_attempt ?? null,
+          ...runState(job.status, job.conclusion),
+          url: job.html_url,
+          steps: (job.steps ?? []).map((step) => ({
+            name: step.name,
+            ...runState(step.status, step.conclusion),
+          })),
         },
       }
     }
     case 'push': {
       const parsed = githubStylePush.safeParse(payload)
       if (!parsed.success || parsed.data.deleted) return null
-      return pushEvent(repoRef(parsed.data.repository), parsed.data.ref, parsed.data.after)
+      const { ref, after, repository } = parsed.data
+      return pushEvent(repoRef(repository), ref, after) ?? tagEvent(repoRef(repository), ref, after)
     }
     default:
       return null
@@ -253,6 +307,13 @@ export function normalizeGitlabEvent(event: string, payload: unknown): GitWebhoo
           headSha: pipeline.sha,
           ...gitlabRunState(pipeline.status),
           url: pipeline.url ?? `${parsed.data.project.web_url}/-/pipelines/${pipeline.id}`,
+          // Not read from a pipeline until P8 gives GitLab its API client.
+          workflowFile: null,
+          workflowPath: null,
+          ref: null,
+          event: null,
+          headBranch: null,
+          runAttempt: null,
         },
       }
     }

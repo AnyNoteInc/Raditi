@@ -909,10 +909,22 @@ describe('SandboxRunner snapshot parts', () => {
     const { lines } = startRunner(core.transport, side.executor, {
       s3Origin: 'https://s3.invalid/raditi-sessions',
     })
-    await core.send(prepareCommand())
+    // The values of the client's variables of the turn (plan 53, Р13) come with the prepare.
+    await core.send(prepareCommand({ envValues: ['pay-secret-0001'] }))
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
-    await core.send(command('capture', { home, baseSha }))
+    // New media below an add-only path count even when an ignore file hides them (plan 53, Р12).
+    const addOnlyPaths = ['wp-content/uploads/raditi/']
+    await core.send(command('capture', { home, baseSha, addOnlyPaths }))
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'captured']))
+    // The home archive is refused when one of them is left in it.
+    expect(side.snapshot.capture).toHaveBeenCalledWith(
+      side.sandbox,
+      home,
+      baseSha,
+      expect.any(Array),
+      addOnlyPaths,
+      ['pay-secret-0001'],
+    )
     expect(core.transport.candidate).toHaveBeenCalledTimes(2)
     const seal = (turn: string, target = url(turn)) =>
       command('seal', {

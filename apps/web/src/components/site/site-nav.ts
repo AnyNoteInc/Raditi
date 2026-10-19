@@ -68,6 +68,25 @@ export function siteItemOpen(pathname: string, siteId: string): boolean {
 }
 
 /**
+ * The panel beside an open dialog (docs/plan/53-chat-preview-release.md, Р20): the preview, the
+ * files, the database and the checks. From `lg` it stands at the right edge, the full height
+ * of the window, and the content leaves it this much room.
+ */
+export const SITE_PANE_WIDTH = 'clamp(440px, 46vw, 760px)'
+
+/** Sections whose open item has the panel beside it. */
+const panedSections: readonly SiteSection[] = ['chat']
+
+/**
+ * True on a dialog opened from the list of «Чат». From `lg` such an item gives the list column
+ * up: the dialog and the panel of its changes take the width (the way back to the list stays).
+ */
+export function sitePaneOpen(pathname: string, siteId: string): boolean {
+  const section = activeSiteSection(pathname, siteId)
+  return section !== undefined && panedSections.includes(section) && siteItemOpen(pathname, siteId)
+}
+
+/**
  * Why a site keeps only «Обзор» open, in the owner's words. The keys are the statuses in which
  * the platform does not work with the site; the phrase stands on «Обзор» and describes every
  * closed item of the navigation.
@@ -86,18 +105,35 @@ const allSections: readonly SiteSection[] = siteNav.map((entry) => entry.section
 const overviewOnly: readonly SiteSection[] = ['overview']
 
 /**
- * The sections a site in this status opens: a paused, a disconnected and an archived site keep
- * «Обзор» alone. The rail, the pages and the address of the site all ask here.
+ * Where the first import of a site stands (`siteSetupState`, spec §12): `pending` while its files
+ * are being copied, `failed` after the copy stopped, `done` once the first version is saved; null
+ * — or absent — for a site from before the wizard, which lives as it did.
  */
-export const availableSiteSections = (status: string): readonly SiteSection[] =>
-  closedSectionsNote(status) === undefined ? allSections : overviewOnly
-
-export const siteSectionAvailable = (status: string, section: SiteSection): boolean =>
-  availableSiteSections(status).includes(section)
+export type SiteSetup = 'pending' | 'failed' | 'done' | null
 
 /**
- * Where the address of a site itself leads: a site that is not connected yet has no dialogs,
- * and a site whose chat is closed has only the overview.
+ * The page of the site is the setup screen: «Обзор» shows how the copy goes, and the other
+ * sections have nothing to work with yet.
  */
-export const siteLanding = (status: string): SiteSection =>
-  status === 'onboarding' || !siteSectionAvailable(status, 'chat') ? 'overview' : 'chat'
+export const inSiteSetup = (setup: SiteSetup | undefined): boolean =>
+  setup === 'pending' || setup === 'failed'
+
+/**
+ * The sections a site opens: one being set up, and a paused, a disconnected and an archived site
+ * keep «Обзор» alone. The rail, the pages and the address of the site all ask here.
+ */
+export const availableSiteSections = (status: string, setup?: SiteSetup): readonly SiteSection[] =>
+  inSiteSetup(setup) || closedSectionsNote(status) !== undefined ? overviewOnly : allSections
+
+export const siteSectionAvailable = (
+  status: string,
+  section: SiteSection,
+  setup?: SiteSetup,
+): boolean => availableSiteSections(status, setup).includes(section)
+
+/**
+ * Where the address of a site itself leads: a site being set up shows how that goes, a site that
+ * is not connected yet has no dialogs, and a site whose chat is closed has only the overview.
+ */
+export const siteLanding = (status: string, setup?: SiteSetup): SiteSection =>
+  status === 'onboarding' || !siteSectionAvailable(status, 'chat', setup) ? 'overview' : 'chat'

@@ -2,6 +2,11 @@ import { createHmac } from 'node:crypto'
 import type { GitProviderKind } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 import { createGitProvider } from './create-git-provider.ts'
+import {
+  giteaReleaseWebhooksRecorded,
+  RECORDED_TAG_COMMIT,
+  RECORDED_TAG_OBJECT,
+} from './testing/gitea-release-recorded.ts'
 import { giteaWebhooksRecorded, type RecordedWebhook } from './testing/gitea-webhooks-recorded.ts'
 
 const secret = 'webhook-secret'
@@ -121,8 +126,46 @@ describe.each(['gitea', 'github'] as const)('%s parseWebhook', (kind) => {
         status: 'completed',
         conclusion: 'success',
         url: 'http://localhost:3300/sites/shop/actions/runs/42',
+        workflowFile: null,
+        workflowPath: null,
+        ref: null,
+        event: null,
+        headBranch: 'main',
+        runAttempt: null,
       },
     })
+  })
+
+  it('reads the workflow, its ref, the event and the attempt of a run', () => {
+    const payload = workflowRunPayload({
+      path: 'deploy.yml@refs/tags/v1.2.0',
+      event: 'push',
+      run_attempt: 2,
+      head_branch: undefined,
+    })
+    expect(
+      parse(kind, 'workflow_run', {
+        ...payload,
+        workflow: { name: 'deploy', path: '.gitea/scoped_workflows/deploy.yml' },
+      }),
+    ).toMatchObject({
+      run: {
+        workflowFile: 'deploy.yml',
+        workflowPath: '.gitea/scoped_workflows/deploy.yml',
+        ref: 'refs/tags/v1.2.0',
+        event: 'push',
+        headBranch: null,
+        runAttempt: 2,
+      },
+    })
+    // A path without a ref is a file alone; a ref that is not one is dropped, not guessed.
+    expect(
+      parse(kind, 'workflow_run', workflowRunPayload({ path: '.github/workflows/deploy.yml' })),
+    ).toMatchObject({ run: { workflowFile: '.github/workflows/deploy.yml', ref: null } })
+    expect(
+      parse(kind, 'workflow_run', workflowRunPayload({ path: 'deploy.yml@main' })),
+    ).toMatchObject({ run: { workflowFile: 'deploy.yml', ref: null } })
+    expect(parse(kind, 'workflow_run', workflowRunPayload({ run_attempt: 0 }))).toBeNull()
   })
 
   it.each([
@@ -150,10 +193,67 @@ describe.each(['gitea', 'github'] as const)('%s parseWebhook', (kind) => {
     })
   })
 
-  it('ignores tag pushes and branch deletions', () => {
-    expect(parse(kind, 'push', pushPayload({ ref: 'refs/tags/v1' }))).toBeNull()
+  it('parses a pushed tag; ignores deletions of a tag or a branch', () => {
+    expect(parse(kind, 'push', pushPayload({ ref: 'refs/tags/v1.2.0' }))).toEqual({
+      kind: 'tag',
+      repo,
+      tag: 'v1.2.0',
+      sha: head,
+    })
+    expect(parse(kind, 'push', pushPayload({ ref: 'refs/tags/v1', after: zero }))).toBeNull()
+    expect(parse(kind, 'push', pushPayload({ ref: 'refs/tags/v1', deleted: true }))).toBeNull()
     expect(parse(kind, 'push', pushPayload({ after: zero }))).toBeNull()
     expect(parse(kind, 'push', pushPayload({ deleted: true }))).toBeNull()
+    // Neither a branch nor a tag: notes, pull refs and the like are no event.
+    expect(parse(kind, 'push', pushPayload({ ref: 'refs/notes/commits' }))).toBeNull()
+    expect(parse(kind, 'push', pushPayload({ ref: 'refs/tags/' }))).toBeNull()
+  })
+
+  it('parses a signed workflow_job event with its steps', () => {
+    const job = {
+      action: 'completed',
+      workflow_job: {
+        id: 11,
+        run_id: 42,
+        name: 'deploy',
+        head_sha: head,
+        run_attempt: 1,
+        status: 'completed',
+        conclusion: 'failure',
+        html_url: 'http://localhost:3300/sites/shop/actions/runs/42/jobs/11',
+        steps: [
+          { name: 'backup', number: 0, status: 'completed', conclusion: 'success' },
+          { name: 'verify', number: 1, status: 'completed', conclusion: 'failure' },
+          { name: 'rollback', number: 2, status: 'in_progress', conclusion: null },
+        ],
+      },
+      repository: repository('sites'),
+    }
+    expect(parse(kind, 'workflow_job', job)).toEqual({
+      kind: 'workflow_job',
+      repo,
+      job: {
+        id: '11',
+        runId: '42',
+        name: 'deploy',
+        headSha: head,
+        headBranch: null,
+        runAttempt: 1,
+        status: 'completed',
+        conclusion: 'failure',
+        url: 'http://localhost:3300/sites/shop/actions/runs/42/jobs/11',
+        steps: [
+          { name: 'backup', status: 'completed', conclusion: 'success' },
+          { name: 'verify', status: 'completed', conclusion: 'failure' },
+          { name: 'rollback', status: 'in_progress', conclusion: null },
+        ],
+      },
+    })
+    const { steps: _, ...withoutSteps } = job.workflow_job
+    expect(parse(kind, 'workflow_job', { ...job, workflow_job: withoutSteps })).toMatchObject({
+      job: { steps: [] },
+    })
+    expect(parse(kind, 'workflow_job', { ...job, workflow_job: { id: 11 } })).toBeNull()
   })
 
   it('returns null for a bad, foreign or missing signature', () => {
@@ -277,6 +377,12 @@ describe('gitlab parseWebhook', () => {
         status: 'completed',
         conclusion: 'success',
         url: 'https://gitlab.com/client/sites/shop/-/pipelines/31',
+        workflowFile: null,
+        workflowPath: null,
+        ref: null,
+        event: null,
+        headBranch: null,
+        runAttempt: null,
       },
     })
     const withUrl = pipeline({ name: 'deploy', url: 'https://gitlab.com/x/-/pipelines/31' })
@@ -336,7 +442,16 @@ describe('gitea parseWebhook on bodies recorded from Gitea 1.27.3', () => {
 
   interface RunBody {
     workflow: { name: string; path: string; html_url: string }
-    workflow_run: { id: number; head_sha: string; html_url: string; name?: string }
+    workflow_run: {
+      id: number
+      head_sha: string
+      html_url: string
+      name?: string
+      path: string
+      event: string
+      head_branch: string
+      run_attempt: number
+    }
     repository: { name: string }
   }
   const runBody = (sample: RecordedWebhook) => JSON.parse(sample.body) as RunBody
@@ -361,8 +476,15 @@ describe('gitea parseWebhook on bodies recorded from Gitea 1.27.3', () => {
         status,
         conclusion,
         url: body.workflow_run.html_url,
+        workflowFile: 'deploy.yml',
+        workflowPath: '.gitea/scoped_workflows/deploy.yml',
+        ref: 'refs/heads/main',
+        event: 'push',
+        headBranch: 'main',
+        runAttempt: 1,
       },
     })
+    expect(body.workflow_run.path).toBe('deploy.yml@refs/heads/main')
     expect(body.workflow_run.html_url).toMatch(
       /^https:\/\/gitea\.example\.test\/sites\/(demo|other)\/actions\/runs\/\d+$/,
     )
@@ -403,18 +525,23 @@ describe('gitea parseWebhook on bodies recorded from Gitea 1.27.3', () => {
     })
   })
 
-  it('answers null for a signed workflow_job: the port has no event for a job', () => {
+  it('parses a signed workflow_job: the only event that names the step that failed', () => {
     const sample = recorded.jobFailure
     expect(sample.event).toBe('workflow_job')
-    expect(deliver(sample)).toBeNull()
-    // Only this body names the step that failed; workflow_run says `failure` and nothing else.
-    const job = (
-      JSON.parse(sample.body) as {
-        workflow_job: { conclusion: string; steps: { name: string; conclusion: string }[] }
-      }
-    ).workflow_job
-    expect(job.conclusion).toBe('failure')
-    expect(job.steps.map((step) => `${step.name}=${step.conclusion}`)).toEqual([
+    const event = deliver(sample)
+    // workflow_run says `failure` and nothing else.
+    expect(event).toMatchObject({
+      kind: 'workflow_job',
+      repo: { provider: 'gitea', owner: 'sites', name: 'demo' },
+      job: { name: 'deploy', status: 'completed', conclusion: 'failure', runAttempt: 1 },
+    })
+    if (event?.kind !== 'workflow_job') throw new Error('kind')
+    const body = JSON.parse(sample.body) as { workflow_job: { id: number; run_id: number } }
+    expect([event.job.id, event.job.runId]).toEqual([
+      String(body.workflow_job.id),
+      String(body.workflow_job.run_id),
+    ])
+    expect(event.job.steps.map((step) => `${step.name}=${step.conclusion}`)).toEqual([
       'vault-login=success',
       'backup=success',
       'deploy=success',
@@ -424,20 +551,27 @@ describe('gitea parseWebhook on bodies recorded from Gitea 1.27.3', () => {
     ])
   })
 
-  it('cannot tell a workflow file of the site repository from the obligatory one', () => {
-    // A known gap for P8: WorkflowRun of the port carries no path of the workflow file. A file
-    // .gitea/workflows/deploy.yml of a site repository, named `deploy` like the scoped workflow of
-    // platform/ci, yields the same event; only `workflow.path` of the body tells them apart.
+  it('tells a workflow file of the site repository from the obligatory one by its path', () => {
+    // A file .gitea/workflows/deploy.yml of a site repository, named `deploy` like the scoped
+    // workflow of platform/ci, has the same name and the same `deploy.yml@refs/heads/main`;
+    // only `workflow.path` of the body tells them apart, and the event carries it.
     const obligatory = runBody(recorded.runSuccess)
     const repository = runBody(recorded.runRepositoryWorkflow)
-    expect(obligatory.workflow.path).toBe('.gitea/scoped_workflows/deploy.yml')
     expect(obligatory.workflow.html_url).toMatch(
       /^https:\/\/gitea\.example\.test\/platform\/ci\/src\/commit\/[0-9a-f]{40}\//,
     )
-    expect(repository.workflow.path).toBe('.gitea/workflows/deploy.yml')
+    expect(repository.workflow_run.path).toBe(obligatory.workflow_run.path)
+    expect(deliver(recorded.runSuccess)).toMatchObject({
+      run: { name: 'deploy', workflowPath: '.gitea/scoped_workflows/deploy.yml' },
+    })
     expect(deliver(recorded.runRepositoryWorkflow)).toMatchObject({
       kind: 'workflow_run',
-      run: { name: 'deploy', status: 'completed', conclusion: 'success' },
+      run: {
+        name: 'deploy',
+        status: 'completed',
+        conclusion: 'success',
+        workflowPath: '.gitea/workflows/deploy.yml',
+      },
     })
   })
 
@@ -448,6 +582,93 @@ describe('gitea parseWebhook on bodies recorded from Gitea 1.27.3', () => {
       expect(sample.body).not.toMatch(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/)
       expect(sample.body).not.toMatch(/\/(Users|home)\//)
       expect(Object.keys(sample).sort()).toEqual(['body', 'event'])
+    }
+  })
+})
+
+// Bodies of the release flow from Gitea 1.27.3 (recorded 2026-10-17, plan 53): a tag push and
+// the run it starts, a dispatched run, the job of a run.
+describe('gitea parseWebhook on release bodies recorded from Gitea 1.27.3', () => {
+  const recorded = giteaReleaseWebhooksRecorded
+  const repo = { provider: 'gitea', owner: 'sites', name: 'demo' }
+  const deliver = (sample: RecordedWebhook) =>
+    provider('gitea').parseWebhook(signed('gitea', sample.event, sample.body), sample.body, secret)
+
+  it('parses a lightweight tag push: the tag names its commit', () => {
+    expect(deliver(recorded.pushTag)).toEqual({
+      kind: 'tag',
+      repo,
+      tag: 'v1.0.0',
+      sha: RECORDED_TAG_COMMIT,
+    })
+  })
+
+  it('parses an annotated tag push: the ref names the tag object, not the commit', () => {
+    expect(deliver(recorded.pushAnnotatedTag)).toEqual({
+      kind: 'tag',
+      repo,
+      tag: 'v1.1.0',
+      sha: RECORDED_TAG_OBJECT,
+    })
+  })
+
+  it('parses the run a tag push starts: its ref is the tag, it has no branch', () => {
+    const body = JSON.parse(recorded.runOfTagRequested.body) as {
+      workflow_run: { id: number; head_branch?: string }
+    }
+    expect(body.workflow_run.head_branch).toBeUndefined()
+    expect(deliver(recorded.runOfTagRequested)).toMatchObject({
+      kind: 'workflow_run',
+      repo,
+      run: {
+        id: String(body.workflow_run.id),
+        headSha: RECORDED_TAG_COMMIT,
+        status: 'queued',
+        conclusion: null,
+        workflowFile: 'probe.yml',
+        workflowPath: '.gitea/workflows/probe.yml',
+        ref: 'refs/tags/v1.0.0',
+        event: 'push',
+        headBranch: null,
+        runAttempt: 1,
+      },
+    })
+  })
+
+  it('parses a dispatched run: event workflow_dispatch on the branch it was given', () => {
+    expect(deliver(recorded.runDispatchedRequested)).toMatchObject({
+      kind: 'workflow_run',
+      run: {
+        workflowFile: 'probe.yml',
+        ref: 'refs/heads/main',
+        event: 'workflow_dispatch',
+        headBranch: 'main',
+        runAttempt: 1,
+      },
+    })
+  })
+
+  it('parses the queued job of the run of a tag', () => {
+    const run = deliver(recorded.runOfTagRequested)
+    expect(deliver(recorded.jobOfTagQueued)).toMatchObject({
+      kind: 'workflow_job',
+      job: {
+        runId: run?.kind === 'workflow_run' ? run.run.id : 'none',
+        name: 'probe',
+        headSha: RECORDED_TAG_COMMIT,
+        headBranch: null,
+        status: 'queued',
+        conclusion: null,
+        steps: [],
+      },
+    })
+  })
+
+  it('keeps no address of the recording in the samples', () => {
+    for (const sample of Object.values(recorded)) {
+      expect(sample.body).not.toMatch(/localhost|host\.docker\.internal|127\.0\.0\.1/)
+      expect(sample.body).not.toMatch(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/)
+      expect(sample.body).not.toMatch(/\/(Users|home)\//)
     }
   })
 })

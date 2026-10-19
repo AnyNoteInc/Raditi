@@ -196,6 +196,7 @@ function world(kind: string) {
   const driver: AgentDriver = {
     id: sampleDriverId,
     image,
+    cliVersion: '1.0.0',
     capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
     prepare: vi.fn(async (context) => ({
       context: { ...context },
@@ -583,6 +584,18 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
       })
     },
   )
+
+  it('refuses the client variables of a recovered turn in its candidate (Р13)', async () => {
+    const w = world(kind)
+    w.credentials.keep(reference, { ...values, envValues: { PAYMENT_KEY: 'pay-secret-0001' } })
+    w.vm.finish()
+    const { after } = await w.crashAt('quiesced')
+    await w.recover(after.recovery)
+    expectCompleted(w)
+    expect(w.workspace.preparePublication.mock.calls.at(-1)![0]).toMatchObject({
+      refusedValues: ['pay-secret-0001'],
+    })
+  })
 
   it('captures a quiesced turn again and publishes it', async () => {
     const w = world(kind)

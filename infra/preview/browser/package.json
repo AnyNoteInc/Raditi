@@ -1,0 +1,11 @@
+{
+  "name": "raditi-preview-browser",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Playwright of the preview browser image. Not a workspace package: infra/preview/Dockerfile installs it with npm ci, so the tarball is checked against package-lock.json.",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

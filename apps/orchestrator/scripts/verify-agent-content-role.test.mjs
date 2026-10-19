@@ -45,7 +45,7 @@ test('the role gets the environment of one regular role and nothing of the launc
     ORCHESTRATOR_ROLES: 'mcp',
     MCP_PORT: '18082',
     MCP_ALLOWED_HOSTS: 'host.docker.internal',
-    MCP_CONTENT_PROFILE: 'local',
+    MCP_CONTENT_PROFILE: 'local-site',
     DATABASE_URL: 'postgresql://raditi:synthetic@127.0.0.1:5432/raditi',
     VAULT_ADDR: 'http://127.0.0.1:8200',
     VAULT_ROLE_ID: 'role',

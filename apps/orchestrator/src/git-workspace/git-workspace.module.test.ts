@@ -71,6 +71,11 @@ describe('GitWorkspaceModule', () => {
     expect(gitWorkspaceOptions({ ...git, caFile: null })).toEqual({
       transport: { kind: 'https', allowedOrigins: ['https://gitea.raditi.test:3443'] },
     })
+    // GIT_MIRROR_DIR (plan 53, Р10): where the mirrors and the bundle cache live.
+    expect(gitWorkspaceOptions({ ...git, caFile: null, mirrorDir: '/work/mirrors' })).toEqual({
+      transport: { kind: 'https', allowedOrigins: ['https://gitea.raditi.test:3443'] },
+      mirrorDir: '/work/mirrors',
+    })
     await moduleRef.close()
   })
 

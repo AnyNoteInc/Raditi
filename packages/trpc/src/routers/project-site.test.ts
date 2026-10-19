@@ -33,6 +33,9 @@ const row = {
   createdAt: now,
 }
 
+/** A site from before the wizard: no stage of its first import, no first version. */
+const legacy = { provisioningStages: [], initialVersion: null }
+
 const sessionOf = (userId: string) => ({
   id: randomUUID(),
   userId,
@@ -69,17 +72,43 @@ function setup(currentUser: User | null = user) {
 describe('project.get', () => {
   it('returns the site with its readable host and whether an operation holds it', async () => {
     const { db, caller } = setup()
-    db.site.findFirst.mockResolvedValue({ ...row, lease: null })
+    db.site.findFirst.mockResolvedValue({ ...row, ...legacy, lease: null })
     await expect(caller.project.get({ id: siteId })).resolves.toEqual({
       ...row,
       host: 'кофейня.рф',
       state: 'free',
+      // A site from before the wizard lives as it did.
+      setup: null,
+      initialVersion: null,
     })
   })
 
+  const imported = { tag: 'v0.0.0', commitSha: 'a'.repeat(40), importedAt: now }
+  it.each([
+    ['queued', 'pending', { ...imported, importedAt: null }, null],
+    ['running', 'pending', null, null],
+    ['failed', 'failed', null, null],
+    ['succeeded', 'done', imported, imported],
+  ] as const)(
+    'tells the setup of a site whose first import is %s, and its first version once confirmed',
+    async (status, setupState, stored, initialVersion) => {
+      const { db, caller } = setup()
+      db.site.findFirst.mockResolvedValue({
+        ...row,
+        lease: null,
+        provisioningStages: [{ status }],
+        initialVersion: stored,
+      })
+      await expect(caller.project.get({ id: siteId })).resolves.toMatchObject({
+        setup: setupState,
+        initialVersion,
+      })
+    },
+  )
+
   it('looks the site up only among the workspaces the user is a member of', async () => {
     const { db, caller } = setup()
-    db.site.findFirst.mockResolvedValue({ ...row, lease: null })
+    db.site.findFirst.mockResolvedValue({ ...row, ...legacy, lease: null })
     await caller.project.get({ id: siteId })
     expect(db.site.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -116,7 +145,7 @@ describe('project.get', () => {
     ['a free lease row', free, 'free'],
   ] as const)('reports %s', async (_name, lease, state) => {
     const { db, caller } = setup()
-    db.site.findFirst.mockResolvedValue({ ...row, lease })
+    db.site.findFirst.mockResolvedValue({ ...row, ...legacy, lease })
     await expect(caller.project.get({ id: siteId })).resolves.toMatchObject({ state })
   })
 
@@ -269,6 +298,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the page of a site and whose it is', 
       await expect(caller.project.get({ id: created.id })).resolves.toMatchObject({
         id: created.id,
         state: 'free',
+        setup: null,
+        initialVersion: null,
       })
       const accesses = await caller.project.credentials({ id: created.id })
       // The git credential of the repository is not an access of the site.

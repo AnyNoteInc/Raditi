@@ -1,5 +1,6 @@
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
+import type { ReactNode } from 'react'
 
 import { stackLabels } from '@/components/projects/project-labels'
 import { formatMoscowMoment } from '@/lib/moscow-date'
@@ -12,15 +13,18 @@ type SettingsSite = { name: string; host: string; stack: keyof typeof stackLabel
 type Access = { kind: string; version: number; updatedAt: Date }
 
 /**
- * «Настройки» for reading: what the site is and which accesses are saved. Of an access the
- * cabinet knows its kind, version and date — the values live in the vault and never come back.
+ * «Настройки»: what the site is and which accesses are saved. Of an access the cabinet knows its
+ * kind, version and date — the values live in the vault and never come back. `children` — the
+ * sections below them (the client's variables of the site).
  */
 export function SiteSettings({
   site,
   accesses,
+  children,
 }: {
   site: SettingsSite
   accesses: readonly Access[] | null
+  children?: ReactNode
 }) {
   return (
     <Box sx={{ maxWidth: 920, display: 'flex', flexDirection: 'column', gap: 2.25 }}>
@@ -71,6 +75,7 @@ export function SiteSettings({
           </Box>
         )}
       </SiteCard>
+      {children}
     </Box>
   )
 }

@@ -55,7 +55,23 @@ export interface RunContext {
   instructions: string
   /** Native session id of the previous turn, restored from its snapshot. */
   nativeSessionId?: string
+  /**
+   * The client's variables the agent's shell commands may use (docs/plan/53-chat-preview-release.md,
+   * Р13), by name. Installed with the turn credentials (TurnCredentialValues.envValues); the
+   * driver hands them to its command tool only, through a secret file — never to the agent
+   * process, a file it keeps, its environment or its arguments. Absent — none.
+   */
+  envValues?: Readonly<Record<string, string>>
+  /**
+   * The client egress proxy of the sandbox (`http://sandbox-gw:3128`, NetworkPolicy.egress) the
+   * agent's shell commands reach the variables' hosts through. Absent — they have no way out.
+   */
+  egressProxy?: string
 }
+
+/** The values of the client's variables of a run: what the platform masks and refuses (Р13). */
+export const runEnvValues = (context: Pick<RunContext, 'envValues'>): string[] =>
+  Object.values(context.envValues ?? {}).filter((value) => value.length > 0)
 
 export interface SandboxFile {
   path: string
@@ -320,6 +336,11 @@ export interface AgentDriver {
   readonly id: AgentDriverId
   /** Sandbox image with the CLI, pinned by digest. */
   readonly image: string
+  /**
+   * Version of the CLI in that image: a session continues only with the same version
+   * (spec §8 «Сессии и снимки»).
+   */
+  readonly cliVersion: string
   readonly capabilities: AgentCapabilities
   prepare(context: RunContext): Promise<PreparedRun>
   /**

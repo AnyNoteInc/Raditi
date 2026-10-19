@@ -14,6 +14,7 @@ import {
   turnOutputTooLarge,
 } from '../errors.ts'
 import {
+  addOnlyPathSchema,
   publicationLimits,
   publicationShaSchema,
   publicationSourceSchema,
@@ -41,6 +42,7 @@ import {
   type ExecExit,
 } from '../ports/sandbox-provider.ts'
 import { execLost, siteLeaseFenceSchema, snapshotHasCredential } from '../ports/turn-runner.ts'
+import { envVarValueSchema } from '../release/env-vars.ts'
 
 /**
  * Pull protocol between core and a runner VM — spec §8 «Раннер на песочной ВМ». The runner
@@ -99,6 +101,8 @@ export const runnerLimits = Object.freeze({
   inventory: 256,
   /** turnCredentials(): the LLM key, the MCP token and every secret file. */
   credentials: preparedRunLimits.secretFiles + 2,
+  /** The values of the client's variables of one turn (plan 53, Р13): a site has up to 64. */
+  envValues: 256,
   events: agentOutputLimits.turnEvents,
 })
 
@@ -194,6 +198,8 @@ const command = <K extends string, T extends z.ZodRawShape>(type: K, shape: T) =
     })
     .strict()
 
+const turnEnvValuesSchema = z.array(envVarValueSchema).min(1).max(runnerLimits.envValues)
+
 const prepareCommand = command('prepare', {
   sandbox: sandboxSpecSchema,
   /**
@@ -206,6 +212,11 @@ const prepareCommand = command('prepare', {
     .object({
       /** Its single ref points here; the agent's branch starts from it. */
       baseSha: publicationShaSchema,
+      /**
+       * With a working set (docs/plan/53-chat-preview-release.md, Р11): the root commit of it,
+       * which the single ref then points at instead of `baseSha`. Absent — the full tree.
+       */
+      sandboxBaseSha: publicationShaSchema.optional(),
       branch: publicationSourceSchema.shape.branch,
       sha256: sha256Hex,
       sizeBytes: z.number().int().positive().max(publicationLimits.bundleBytes),
@@ -233,6 +244,11 @@ const prepareCommand = command('prepare', {
     .array(z.string().min(1).max(preparedRunLimits.secretChars))
     .min(1)
     .max(runnerLimits.credentials),
+  /**
+   * The values of the client's variables the turn's commands get (TurnPrepareInput.envValues):
+   * masked in the output before it is parsed, refused in the home archive.
+   */
+  envValues: turnEnvValuesSchema.optional(),
 })
 
 const adoptCommand = command('adopt', {
@@ -250,6 +266,8 @@ const adoptCommand = command('adopt', {
         .min(1)
         .max(runnerLimits.credentials)
         .optional(),
+      /** Sent with the credentials only. */
+      envValues: turnEnvValuesSchema.optional(),
     })
     .strict()
     .optional(),
@@ -268,7 +286,14 @@ export const runnerCommandSchema = z
       eventCount: z.number().int().nonnegative().max(runnerLimits.events),
     }),
     command('quiesce', {}),
-    command('capture', { home: sessionStateSchema, baseSha: publicationShaSchema }),
+    command('capture', {
+      home: sessionStateSchema,
+      baseSha: publicationShaSchema,
+      /** The patch is taken against the working-set commit when there is one (plan 53, Р11). */
+      sandboxBaseSha: publicationShaSchema.optional(),
+      /** New files below these are taken even when an ignore file hides them (Р12). */
+      addOnlyPaths: z.array(addOnlyPathSchema).max(8).optional(),
+    }),
     command('seal', {
       base: snapshotSealBaseSchema,
       /** The captured home size, signed into the PUT as its Content-Length. */

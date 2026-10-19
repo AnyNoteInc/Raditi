@@ -28,17 +28,21 @@ const withMDX = createMDX({
   options: { remarkPlugins: ['remark-gfm'] },
 })
 
-// Directives that need no allowlist of scripts. Images come only from the site itself (the
-// avatar route, a chosen photo's preview as blob:) and the captcha, so a stored external
-// address can never make the browser call another host.
-// TODO(M8): full CSP (script-src and frame-src with per-request nonces from the proxy, plus
-// smartcaptcha.cloud.yandex.ru for the captcha script and frame).
+// The policy of every route, fixed when this file loads (`next build` in production): it frames
+// no preview of dialogs, whose address belongs to the environment, not to the image. proxy.ts
+// sends the same policy on every page with this environment's previews added (plan 53, Р20);
+// both come from src/lib/content-security-policy.ts, which this file does not import — Next
+// loads it before any bundler, and a relative import would resolve against the working
+// directory. next-config.test.ts checks the two are one policy.
+// TODO(M8): full CSP (script-src with per-request nonces from the proxy, plus
+// smartcaptcha.cloud.yandex.ru for the captcha script).
 const contentSecurityPolicy = [
   "frame-ancestors 'none'",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
   "img-src 'self' data: blob: https://smartcaptcha.cloud.yandex.ru",
+  "frame-src 'self' https://smartcaptcha.cloud.yandex.ru",
 ].join('; ')
 
 const securityHeaders = [
@@ -67,14 +71,25 @@ const nextConfig: NextConfig = {
     '@repo/mail',
     '@repo/notifications',
     '@repo/observability',
+    '@repo/site-adapters',
+    '@repo/site-connections',
     '@repo/storage',
     '@repo/trpc',
     '@repo/ui',
     '@repo/vault',
     '@repo/yookassa',
   ],
-  // Loaded by Node at runtime instead of being bundled: the pg driver and Prisma's runtime.
-  serverExternalPackages: ['pg', '@prisma/client', '@prisma/adapter-pg'],
+  // Loaded by Node at runtime instead of being bundled: the pg driver and Prisma's runtime, and
+  // the drivers the site connection wizard reaches a client's server with — ssh2 loads native
+  // optional bindings, basic-ftp and mysql2 open their own sockets.
+  serverExternalPackages: [
+    'pg',
+    '@prisma/client',
+    '@prisma/adapter-pg',
+    'ssh2',
+    'basic-ftp',
+    'mysql2',
+  ],
   ...(workspaceRoot ? { outputFileTracingRoot: workspaceRoot } : {}),
   experimental: {
     // Next copies the body of every request that passes proxy.ts (every page) into memory and

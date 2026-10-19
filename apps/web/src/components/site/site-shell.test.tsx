@@ -15,10 +15,14 @@ vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
 const user = { name: 'Анна', lastName: 'Петрова', email: 'anna@example.ru' }
 const site = { id, name: 'Кофейня «Крошка»', url: 'https://kroshka.example', status: 'active' }
 
-function showShell(section = 'chat', status = 'active') {
+function showShell(
+  section = 'chat',
+  status = 'active',
+  setup?: 'pending' | 'failed' | 'done' | null,
+) {
   mocks.pathname = `/projects/${id}/${section}`
   render(
-    <SiteShell user={user} site={{ ...site, status }}>
+    <SiteShell user={user} site={{ ...site, status, setup }}>
       <h1>Содержимое раздела</h1>
     </SiteShell>,
   )
@@ -197,5 +201,40 @@ describe('site shell', () => {
     expect(skip.textContent).toBe('Перейти к содержимому')
     expect(skip.getAttribute('href')).toBe('#site-content')
     expect(screen.getByRole('main').id).toBe('site-content')
+  })
+
+  describe.each(['pending', 'failed'] as const)('of a site whose setup is %s', (setup) => {
+    it('shows no navigation of sections: no rail, no phone bar, no «Ещё»', () => {
+      showShell('overview', 'onboarding', setup)
+      expect(screen.queryByRole('navigation', { name: 'Разделы сайта' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Ещё' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('img', { name: `Сайт ${site.name}` })).not.toBeInTheDocument()
+      for (const label of ['Чат', 'Изменения', 'Запуски', 'Настройки']) {
+        expect(screen.queryByText(label)).not.toBeInTheDocument()
+      }
+    })
+
+    it('keeps the way back to the projects, the site, the account menu and the content', () => {
+      showShell('overview', 'onboarding', setup)
+      const crumbs = screen.getByRole('navigation', { name: 'Хлебные крошки' })
+      expect(within(crumbs).getByRole('link', { name: 'Проекты' })).toHaveAttribute(
+        'href',
+        '/projects',
+      )
+      expect(within(crumbs).getByText(site.name)).toHaveAttribute('aria-current', 'page')
+      expect(
+        screen.getByRole('link', { name: `Открыть сайт ${site.name} в новой вкладке` }),
+      ).toBeInTheDocument()
+      const bar = screen.getByRole('banner', { name: 'Панель сайта' })
+      expect(within(bar).getByRole('button')).toBeInTheDocument()
+      expect(screen.getByRole('main')).toHaveTextContent('Содержимое раздела')
+      expect(screen.getAllByRole('link')[0]).toHaveTextContent('Перейти к содержимому')
+    })
+  })
+
+  it.each(['done', null] as const)('shows the sections of a site whose setup is %s', (setup) => {
+    showShell('overview', 'onboarding', setup)
+    expect(within(rail()).getAllByRole('link')).toHaveLength(6)
   })
 })

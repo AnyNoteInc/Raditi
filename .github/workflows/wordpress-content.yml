@@ -34,6 +34,11 @@ on:
       # the stand's OpenBao, and the health and error helpers.
       - packages/vault/**
       - packages/observability/**
+      # The agent's browser on a preview and the gateway to a preview's copy of the plugin that
+      # the role composes (plan 53, R7; the latter is core's own, R5c).
+      - packages/browser-providers/**
+      - apps/orchestrator/src/previews/preview-content.ts
+      - apps/orchestrator/src/previews/preview-transport.ts
       # The stand configures its OpenBao with the real bootstrap and runs the role `mcp` under the
       # real policies (mcp-content, sites-writer, workspace-provisioner).
       - infra/vault/**

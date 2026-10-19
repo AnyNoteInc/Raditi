@@ -25,12 +25,14 @@
     "billing:refunds-needed": "node scripts/billing-refunds-needed.mjs",
     "billing:settle-payment": "node scripts/billing-settle-payment.mjs",
     "billing:rates": "node scripts/billing-rates.mjs",
+    "releases:resolve": "node scripts/releases-resolve.mjs",
     "verify:llm-gateway": "exec node scripts/verify-llm-gateway.mjs",
     "verify:opencode-supervisor": "pnpm build && exec node scripts/verify-opencode-supervisor.mjs"
   },
   "dependencies": {
     "@repo/agent-drivers": "workspace:*",
     "@repo/billing": "workspace:*",
+    "@repo/browser-providers": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/git-providers": "workspace:*",
@@ -60,6 +62,7 @@
     "pg": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
+    "tldts": "catalog:",
     "zod": "catalog:",
     "tar-stream": "catalog:"
   },

@@ -11,6 +11,7 @@ import {
   preparedRunLimits,
   preparedRunSchema,
   publicationMetadataSchema,
+  runEnvValues,
   siteBusy,
   siteHeld,
   snapshotPlanSchema,
@@ -93,9 +94,12 @@ export class TurnSupervisor {
       ttlMs: request.sandbox.hardTimeoutMs + TURN_PUBLICATION_GRACE_MS,
     })
     if (!lease) {
-      // Only to tell the client why; a failed lookup is still just a busy site.
+      // Only to tell the client why; a failed lookup is still just a busy site. A release the
+      // operator holds (Р31) keeps its barrier: the site waits for `releases:resolve`, and the
+      // turn with it — the release that frees the site wakes it. Only a hold without a release
+      // (a turn or a content write the operator must settle) ends the turn's dialog.
       const current = await this.deps.leases.inspect(labels.siteId).catch(() => null)
-      throw current?.heldForOperator ? siteHeld() : siteBusy()
+      throw current?.heldForOperator && current.inflightReleaseId === null ? siteHeld() : siteBusy()
     }
     // Before the assignment exists: recovery never takes over a turn this process drives.
     this.deps.live.enter(lease)
@@ -167,9 +171,11 @@ export class TurnSupervisor {
         await guard.assertFence()
       }
       // Cloned on the host with a short read-only credential; the executor gets objects only.
+      // With a working set it carries that part of the site only, as its own root commit.
       let bundle: TurnBundleSource | undefined = await guard.interruptible(
-        this.deps.workspace.buildBaseBundle(request.workspace),
+        this.deps.workspace.buildBaseBundle(request.workspace, request.committedAt),
       )
+      attempt.sandboxBaseSha = checkedSandboxBase(plan, bundle)
       let restore: TurnRestoreSource | undefined
       if (request.previous) {
         await guard.assertFence()
@@ -197,6 +203,7 @@ export class TurnSupervisor {
       const argv = this.deps.driver.command(prepared, request.input)
       const { files, credentials } = checkPreparedRun(context, prepared, argv)
       attempt.credentials = credentials
+      attempt.envValues = runEnvValues(context)
       await guard.assertFence()
       const ready = await guard.interruptible(
         this.deps.executor.prepare(
@@ -216,6 +223,7 @@ export class TurnSupervisor {
             prepared: files,
             argv,
             credentials,
+            ...(attempt.envValues.length ? { envValues: attempt.envValues } : {}),
             created: (created) => attempt.created(created),
             // Until a container is reported, only these tell whether the site may be freed.
             dispatched: () => attempt.dispatched(),
@@ -275,7 +283,16 @@ export class TurnSupervisor {
       throw badRequest('Replacement requires the published task branch fence')
     if (request.replacesTurn !== undefined && !request.previous && request.context.nativeSessionId)
       throw badRequest('A replacement without a checkpoint must start a fresh session')
-    if (labels.turn > 1 && !request.previous && request.replacesTurn === undefined)
+    // After «Обновить» (plan 53, Р27) the dialog stands on a new `main`: the next turn starts a
+    // new session from the moved candidate, with nothing of the old one to restore. It replaces
+    // the last turn when that one did not succeed (its content is undone first), and a failed
+    // rebased turn is replaced by a rebased one; the store checks which head it starts on.
+    if (request.rebased === true) {
+      if (labels.turn < 2) throw badRequest('A rebased turn follows an earlier turn')
+      if (request.previous) throw badRequest('A rebased turn restores no checkpoint')
+      if (request.context.nativeSessionId)
+        throw badRequest('A rebased turn must start a fresh session')
+    } else if (labels.turn > 1 && !request.previous && request.replacesTurn === undefined)
       throw badRequest('A resumed turn requires the previous checkpoint')
     if (request.sandbox.secrets.length !== 0)
       throw badRequest('Turn secrets are installed only after restore')
@@ -308,6 +325,9 @@ export class TurnSupervisor {
         provider: request.workspace.repo.provider,
         branch: request.workspace.branch,
         baseSha: request.workspace.expectedBaseSha,
+        ...(request.workspace.sandboxBaseSha
+          ? { sandboxBaseSha: request.workspace.sandboxBaseSha }
+          : {}),
         publication: { taskId: labels.taskId, committedAt: request.committedAt },
       },
     })
@@ -331,6 +351,21 @@ export class TurnSupervisor {
     }
     return toTurnPlan(request, this.deps.driver.id)
   }
+}
+
+/**
+ * The working-set commit a bundle starts the sandbox from, as the plan allows it (plan 53, Р11):
+ * none without a working set, one — the planned one, when the plan names it — with it.
+ */
+export function checkedSandboxBase(plan: TurnPlan, bundle: TurnBundleSource): string | undefined {
+  const { workingSet, sandboxBaseSha } = plan.workspace
+  if (
+    bundle.baseSha !== plan.workspace.expectedBaseSha ||
+    (workingSet === undefined) !== (bundle.sandboxBaseSha === undefined) ||
+    (sandboxBaseSha !== undefined && bundle.sandboxBaseSha !== sandboxBaseSha)
+  )
+    throw conflict('The base bundle differs from the planned workspace')
+  return bundle.sandboxBaseSha
 }
 
 /**

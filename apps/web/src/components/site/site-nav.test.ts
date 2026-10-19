@@ -5,11 +5,13 @@ import {
   availableSiteSections,
   closedSectionsNote,
   hasSiteList,
+  inSiteSetup,
   siteEntryHref,
   siteHref,
   siteItemOpen,
   siteLanding,
   siteNav,
+  sitePaneOpen,
   siteSectionAvailable,
 } from './site-nav'
 
@@ -49,6 +51,17 @@ describe('site navigation', () => {
     expect(activeSiteSection(path, id)).toBe('chat')
     expect(siteItemOpen(path, id)).toBe(false)
     expect(siteItemOpen(`/projects/${id.toUpperCase()}/chat/42`, id)).toBe(true)
+  })
+
+  it('gives the panel of changes to a dialog opened from the list, and to nothing else', () => {
+    expect(sitePaneOpen(`/projects/${id}/chat/0199a3f2-0000-7000-8000-000000000001`, id)).toBe(true)
+    for (const path of [
+      `/projects/${id}/chat`,
+      `/projects/${id}/chat/new`,
+      `/projects/${id}/runs/42`,
+      `/projects/${id}/settings`,
+    ])
+      expect(sitePaneOpen(path, id)).toBe(false)
   })
 
   it('builds the address of a section', () => {
@@ -122,4 +135,29 @@ describe('site navigation', () => {
       'Пока сайт в архиве, остальные разделы сайта недоступны.',
     )
   })
+
+  it.each(['pending', 'failed'] as const)(
+    'opens only the overview of a site whose setup is %s, whatever its status',
+    (setup) => {
+      expect(inSiteSetup(setup)).toBe(true)
+      for (const status of ['onboarding', 'active', 'paused']) {
+        expect(availableSiteSections(status, setup)).toEqual(['overview'])
+        expect(siteSectionAvailable(status, 'chat', setup)).toBe(false)
+        expect(siteSectionAvailable(status, 'overview', setup)).toBe(true)
+        expect(siteLanding(status, setup)).toBe('overview')
+      }
+    },
+  )
+
+  it.each(['done', null, undefined] as const)(
+    'leaves the sections of a site whose setup is %s to its status',
+    (setup) => {
+      expect(inSiteSetup(setup)).toBe(false)
+      expect(availableSiteSections('onboarding', setup)).toEqual(
+        siteNav.map((entry) => entry.section),
+      )
+      expect(availableSiteSections('paused', setup)).toEqual(['overview'])
+      expect(siteLanding('active', setup)).toBe('chat')
+    },
+  )
 })

@@ -13,12 +13,16 @@ import type {
   LlmRoleConfig,
   McpConfig,
   OrchestratorConfig,
+  PreviewGatewayConfig,
   RunnerConfig,
 } from './config/config.ts'
 import { CoreModule } from './core/core.module.ts'
 import { LlmAppModule, LlmRuntime } from './llm-gateway/llm-app.module.ts'
 import { McpAppModule } from './mcp/mcp-app.module.ts'
 import { mountMcp } from './mcp/mcp-server.ts'
+import { PreviewGatewayModule } from './preview-gateway/preview-gateway.module.ts'
+import { PreviewGatewayServer } from './preview-gateway/preview-gateway.server.ts'
+import { ReleaseApiServer } from './release-api/release-api.server.ts'
 import { RunnerApiServer } from './runner-api/runner-api.server.ts'
 import { RunnerModule } from './runner/runner.module.ts'
 
@@ -69,6 +73,39 @@ export async function startCore(config: CoreConfig): Promise<INestApplication> {
       throw err
     }
   }
+  if (config.releaseApi) {
+    try {
+      // The address deploy jobs reach: set explicitly (RELEASE_API_HOST), loopback by default in dev.
+      const releaseApi = await app
+        .get(ReleaseApiServer)
+        .listen(config.releaseApi.port, config.releaseApi.host)
+      logger.log(`release API listening on ${config.releaseApi.host}:${releaseApi.port}`)
+    } catch (err) {
+      await app.close()
+      throw err
+    }
+  }
+  return app
+}
+
+/**
+ * The gateway of previews: its own port, on PREVIEW_GATEWAY_HOST — loopback outside production
+ * unless a stand names the Docker bridge (docs/plan/53, Р19, Р21).
+ */
+export async function startPreview(config: PreviewGatewayConfig): Promise<INestApplicationContext> {
+  const app = await NestFactory.createApplicationContext(PreviewGatewayModule.forRoot(config), {
+    abortOnError: false,
+    logger: appLogger(config.appEnv),
+  })
+  app.enableShutdownHooks([...SHUTDOWN_SIGNALS])
+  try {
+    const host = config.host
+    const address = await app.get(PreviewGatewayServer).listen(config.port, host)
+    logger.log(`preview role listening on ${host ?? '*'}:${address.port}`)
+  } catch (err) {
+    await app.close()
+    throw err
+  }
   return app
 }
 
@@ -81,9 +118,10 @@ export async function startMcp(config: McpConfig): Promise<INestApplication> {
   app.enableShutdownHooks([...SHUTDOWN_SIGNALS])
   await mountMcp(app)
   const address = await listen(app, config.port, config.appEnv)
-  // The profile is the configuration's (MCP_CONTENT_PROFILE); the module refuses it in production.
+  // The profiles are the configuration's (MCP_CONTENT_PROFILE, MCP_BROWSER_PROFILE); the module
+  // refuses them in production.
   logger.log(
-    `mcp role listening on ${address} (/mcp, /health); content profile ${config.contentProfile}`,
+    `mcp role listening on ${address} (/mcp, /health); content profile ${config.contentProfile}, browser profile ${config.browserProfile}`,
   )
   return app
 }
@@ -129,6 +167,7 @@ export interface RoleStarters {
   mcp: (config: McpConfig) => Promise<INestApplicationContext>
   runner: (config: RunnerConfig) => Promise<INestApplicationContext>
   llm: (config: LlmRoleConfig) => Promise<INestApplicationContext>
+  preview: (config: PreviewGatewayConfig) => Promise<INestApplicationContext>
 }
 
 /**
@@ -139,13 +178,20 @@ export interface RoleStarters {
  */
 export async function startRoles(
   config: OrchestratorConfig,
-  starters: RoleStarters = { core: startCore, mcp: startMcp, runner: startRunner, llm: startLlm },
+  starters: RoleStarters = {
+    core: startCore,
+    mcp: startMcp,
+    runner: startRunner,
+    llm: startLlm,
+    preview: startPreview,
+  },
 ): Promise<INestApplicationContext[]> {
   const apps: INestApplicationContext[] = []
   try {
     if (config.core) apps.push(await starters.core(config.core))
     if (config.mcp) apps.push(await starters.mcp(config.mcp))
     if (config.llm) apps.push(await starters.llm(config.llm))
+    if (config.preview) apps.push(await starters.preview(config.preview))
     if (config.runner) apps.push(await starters.runner(config.runner))
   } catch (err) {
     await Promise.allSettled(apps.map((app) => app.close()))

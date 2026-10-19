@@ -109,3 +109,68 @@ test('the gateway stand keeps its signal listeners until its cleanup has ended',
   // Removed last, after every owned resource was closed.
   assert.match(main, /process\.removeListener\('SIGTERM', interrupt\)\n\}\n$/)
 })
+
+/** The modules of infra/sandbox a module imports, itself among them, by relative name. */
+async function sandboxModules(name, seen = new Set()) {
+  if (seen.has(name)) return seen
+  seen.add(name)
+  const source = await readFile(new URL(`../../sandbox/${name}`, import.meta.url), 'utf8')
+  for (const [, imported] of source.matchAll(/^import [^;]*? from '\.\/([a-z-]+\.mjs)'$/gm))
+    await sandboxModules(imported, seen)
+  return seen
+}
+
+test('sandbox-gw of the stand mounts the gateway with every module it imports', async () => {
+  const source = await readFile(new URL('./compose.yml', import.meta.url), 'utf8')
+  const [, gateway] = /^ {2}sandbox-gw:\n((?: {4}.*\n)+)/m.exec(source) ?? []
+  assert.ok(gateway, 'compose.yml has the sandbox-gw service')
+  assert.match(gateway, /^ {4}entrypoint: \['node', '\/repo\/gateway\.mjs'\]$/m)
+  const modules = await sandboxModules('gateway.mjs')
+  // The client egress proxy (plan 53, Р13) is a module of its own since R10.
+  assert.ok(modules.has('client-egress.mjs'))
+  const mounted = [
+    ...gateway.matchAll(
+      /^ {6}- \$\{VERIFY_ROOT\}\/infra\/sandbox\/([a-z-]+\.mjs):\/repo\/\1:ro$/gm,
+    ),
+  ].map(([, name]) => name)
+  assert.deepEqual(mounted.sort(), [...modules].sort())
+})
+
+test('the stack waits for sandbox-gw to listen and stops with its log when it does not', async () => {
+  const { gatewayReady, GATEWAY_READY_CHECK } = await import('./stack.mjs')
+  const source = await readFile(new URL('./stack.mjs', import.meta.url), 'utf8')
+  // Every stack, the live ones too: they start sandbox-gw by name (live.mjs).
+  assert.match(source, /\n {4}await gatewayReady\(compose, onStage\)\n/)
+  // The ready file gateway.mjs writes once all its listeners listen.
+  const gatewaySource = await readFile(
+    new URL('../../sandbox/gateway.mjs', import.meta.url),
+    'utf8',
+  )
+  assert.match(gatewaySource, /writeFileSync\('\/run\/raditi-gateway\/ready'/)
+  assert.ok(GATEWAY_READY_CHECK.includes("'/run/raditi-gateway/ready'"))
+  const calls = []
+  const ready = async (args) => {
+    calls.push(args)
+    return { code: calls.length < 3 ? 1 : 0, stdout: '', stderr: '' }
+  }
+  await gatewayReady(ready)
+  assert.equal(calls.length, 3)
+  assert.deepEqual(calls[0], ['exec', '-T', 'sandbox-gw', 'node', '-e', GATEWAY_READY_CHECK])
+  // A gateway that ended at start: the stand stops with what it printed.
+  const asked = []
+  const ended = async (args) => {
+    asked.push(args[0])
+    return args[0] === 'logs'
+      ? { code: 0, stdout: 'sandbox-gw-1  | Error [ERR_MODULE_NOT_FOUND]\n', stderr: '' }
+      : { code: 1, stdout: '', stderr: 'service "sandbox-gw" is not running' }
+  }
+  await assert.rejects(
+    gatewayReady(ended, () => {}, 300),
+    (error) => {
+      assert.equal(error.message, 'sandbox-gw did not become ready')
+      assert.match(error.infrastructureDiagnostic, /ERR_MODULE_NOT_FOUND/)
+      return true
+    },
+  )
+  assert.equal(asked.at(-1), 'logs')
+})

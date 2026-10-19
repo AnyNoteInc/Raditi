@@ -19,6 +19,7 @@ describe('Gitea REST client on responses recorded from Gitea 1.27.3', () => {
   it('reads a repository with the bot token in the header and follows no redirect', async () => {
     const { client: api, calls } = client(() => giteaRecorded.repository)
     await expect(api.getRepository('sites', 'demo')).resolves.toEqual({
+      id: 1,
       owner: 'sites',
       name: 'demo',
       defaultBranch: 'main',
@@ -66,7 +67,7 @@ describe('Gitea REST client on responses recorded from Gitea 1.27.3', () => {
   })
 
   it('refuses a response over the size limit', async () => {
-    const { client: api } = client(() => ({ status: 200, body: `[${' '.repeat(300 * 1024)}]` }))
+    const { client: api } = client(() => ({ status: 200, body: `[${' '.repeat(1024 * 1024)}]` }))
     await expect(api.listTokens('raditi-bot', 1)).rejects.toMatchObject(failed)
   })
 
@@ -199,6 +200,7 @@ describe('Gitea REST client: a new repository of an organization (recorded from 
   it('asks for a private repository without a first commit and with the default branch main', async () => {
     const { client: api, calls } = client(() => created)
     await expect(api.createOrganizationRepository('sites', SITE)).resolves.toEqual({
+      id: 3,
       owner: 'sites',
       name: SITE,
       defaultBranch: 'main',

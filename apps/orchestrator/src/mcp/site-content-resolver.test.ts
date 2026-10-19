@@ -33,6 +33,7 @@ const scope: McpAccess = {
   epoch: 1,
   stack: 'wordpress',
   url: 'https://site.example.test/',
+  preview: null,
 }
 const SECRET = 'private-site-password-0123456789'
 const refId = '0196abcd-0000-7000-8000-00000000aaaa'

@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import { loadConfig } from '../config/config.ts'
 import { testMcpConfig } from '../testing/fakes.ts'
-import { mcpBodyAllowed, mcpHeadersAllowed, parseMcpHosts } from './mcp-policy.ts'
+import type { McpAccess } from './mcp-access.ts'
+import {
+  mcpBodyAllowed,
+  mcpHeadersAllowed,
+  mcpToolFamiliesOf,
+  parseMcpHosts,
+  type McpSecurity,
+} from './mcp-policy.ts'
 
 describe('MCP request policy', () => {
   it('accepts only exact upstream hosts and requires them in production', () => {
@@ -141,5 +148,126 @@ describe('MCP request policy', () => {
         MCP_ALLOWED_HOSTS: 'invalid/unused',
       }).mcp,
     ).toBeNull()
+  })
+
+  it('offers content into a preview with its database, the browser on an open preview, never more', () => {
+    const access = (preview: McpAccess['preview']): McpAccess => ({
+      keyId: '01960000-0000-7000-8000-000000000001',
+      taskId: '01960000-0000-7000-8000-000000000002',
+      workspaceId: '01960000-0000-7000-8000-000000000003',
+      siteId: '01960000-0000-7000-8000-000000000004',
+      sessionId: 'synthetic',
+      turn: 1,
+      firstEpoch: 1,
+      epoch: 1,
+      stack: 'wordpress',
+      url: 'https://site.example.test',
+      preview,
+    })
+    const preview = (status: NonNullable<McpAccess['preview']>['status'], database = true) => ({
+      id: '01960000-0000-7000-8000-000000000005',
+      status,
+      database,
+      hostname: 'site-0a1b2c3d-chat-0a1b2c.localhost',
+    })
+    const base = { allowedHosts: ['mcp'], allowLocalOrigin: false }
+    const both: McpSecurity = { ...base, contentTools: true, browserTools: true }
+    // Р3, Р4: the preview with its own database takes content; one without, or gone, takes none.
+    // `db_schema` where the build found tables writable — or before any build has said: the
+    // CLI asks for its tools once, as its first turn starts beside the build (each call checks).
+    const built = (kinds: NonNullable<McpAccess['preview']>['dbKinds']) => ({
+      ...preview('ready'),
+      dbKinds: kinds,
+    })
+    expect(mcpToolFamiliesOf(access(built(['content_update'])), both)).toEqual([
+      'content',
+      'browser',
+    ])
+    expect(mcpToolFamiliesOf(access(built(['content_update', 'schema_migration'])), both)).toEqual([
+      'content',
+      'schema',
+      'browser',
+    ])
+    expect(mcpToolFamiliesOf(access(preview('ready')), both)).toEqual([
+      'content',
+      'schema',
+      'browser',
+    ])
+    expect(mcpToolFamiliesOf(access(preview('building')), both)).toEqual([
+      'content',
+      'schema',
+      'browser',
+    ])
+    expect(mcpToolFamiliesOf(access(preview('ready', false)), both)).toEqual(['browser'])
+    for (const closed of ['unavailable', 'destroyed'] as const)
+      expect(mcpToolFamiliesOf(access(preview(closed)), both)).toEqual([])
+    // Without a preview: no browser, and the site itself only on the P6 path of the stands.
+    expect(mcpToolFamiliesOf(access(null), both)).toEqual([])
+    expect(mcpToolFamiliesOf(access(null), { ...both, siteContent: true })).toEqual(['content'])
+    // A preview never opens the site's path, whatever the role allows.
+    expect(
+      mcpToolFamiliesOf(access(preview('ready', false)), { ...both, siteContent: true }),
+    ).toEqual(['browser'])
+    // Families follow the profiles of the role.
+    expect(mcpToolFamiliesOf(access(preview('ready')), base)).toEqual([])
+    expect(mcpToolFamiliesOf(access(preview('ready')), { ...base, browserTools: true })).toEqual([
+      'browser',
+    ])
+  })
+
+  it('admits a call of a family only to a request of that family, by its strict arguments', () => {
+    const call = (name: string, args?: unknown) => ({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name, ...(args === undefined ? {} : { arguments: args }) },
+    })
+    const allowed = [
+      call('browser_navigate', { path: '/about/' }),
+      call('browser_click', { selector: '#go' }),
+      call('browser_click', { role: 'button', name: 'Отправить' }),
+      call('browser_fill', { selector: '#name', value: 'Анна' }),
+      call('browser_expect', { selector: 'h1', text: 'О нас' }),
+      call('browser_expect', { selector: 'h1', state: 'hidden' }),
+      call('browser_snapshot', {}),
+      call('browser_snapshot'),
+      call('browser_screenshot', {}),
+      call('browser_console', {}),
+      call('browser_network', {}),
+      call('browser_run_checks', { checks: [{ path: '/', status: 200, selector: 'h1' }] }),
+    ]
+    for (const body of allowed) {
+      expect(mcpBodyAllowed(body, ['browser'])).toBe(true)
+      // A request without a preview names no browser tool.
+      expect(mcpBodyAllowed(body, ['content'])).toBe(false)
+      expect(mcpBodyAllowed(body)).toBe(false)
+    }
+    const refused = [
+      // The preview, the site or an origin are never arguments.
+      call('browser_navigate', { path: '/', previewId: 'foreign' }),
+      call('browser_navigate', {}),
+      call('browser_navigate', { path: '/\nx' }),
+      call('browser_click', { selector: '#go', role: 'button' }),
+      call('browser_click', { name: 'Отправить' }),
+      call('browser_click', { role: 'Button' }),
+      call('browser_fill', { selector: '#name' }),
+      call('browser_fill', { selector: '#name', value: 'x'.repeat(10_001) }),
+      call('browser_expect', { selector: 'h1', state: 'visible', text: 'x' }),
+      call('browser_expect', { selector: 'h1', state: 'shown' }),
+      call('browser_snapshot', { full: true }),
+      call('browser_run_checks', { checks: [] }),
+      call('browser_run_checks', { checks: Array.from({ length: 11 }, () => ({ path: '/' })) }),
+      call('browser_run_checks', { checks: [{ path: '/', text: 'без элемента' }] }),
+      // Agent-written code has no tool.
+      call('browser_run_checks', { checks: [{ path: '/', script: 'alert(1)' }] }),
+      call('browser_evaluate', { expression: 'document.cookie' }),
+    ]
+    for (const body of refused) expect(mcpBodyAllowed(body, ['browser', 'content'])).toBe(false)
+    expect(
+      mcpBodyAllowed(call('wp_rest', { method: 'GET', route: '/wp/v2/pages/42' }), ['browser']),
+    ).toBe(false)
+    expect(
+      mcpBodyAllowed(call('wp_rest', { method: 'GET', route: '/wp/v2/pages/42' }), ['content']),
+    ).toBe(true)
   })
 })

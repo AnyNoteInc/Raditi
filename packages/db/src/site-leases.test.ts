@@ -29,6 +29,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL site leases', () => {
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
       await db.siteLease.deleteMany({ where: { site: { workspaceId } } })
+      await db.siteRelease.deleteMany({ where: { site: { workspaceId } } })
       await db.task.deleteMany({ where: { workspaceId } })
       await db.site.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })
@@ -154,6 +155,75 @@ describe.skipIf(!databaseUrl)('PostgreSQL site leases', () => {
     expect(next.epoch).toBe(lease.epoch + 1)
     expect(await store.free(lease)).toBe(false)
     expect(await store.assert(next)).toBe(true)
+  })
+
+  /** A release of the first task's candidate, as the barrier names it. */
+  async function releaseOf(input: Awaited<ReturnType<typeof fixture>>): Promise<string> {
+    const candidate = await db.taskCandidate.create({
+      data: {
+        taskId: input.taskId,
+        revision: 1,
+        turnNo: 1,
+        baseSha: 'a'.repeat(40),
+        baseTree: 'b'.repeat(40),
+        headSha: 'c'.repeat(40),
+        dbPlanSha256: 'd'.repeat(64),
+        proposedBump: 'patch',
+        proposedVersion: 'v0.0.1',
+        facts: {},
+      },
+    })
+    const release = await db.siteRelease.create({
+      data: {
+        siteId: input.siteId,
+        taskId: input.taskId,
+        candidateId: candidate.id,
+        candidateRevision: 1,
+        attempt: 1,
+        releaseKey: 'e'.repeat(64),
+        version: 'v0.0.1',
+        tag: 'v0.0.1',
+        bump: 'patch',
+        mainBeforeSha: 'a'.repeat(40),
+        approvedSha: 'f'.repeat(40),
+        mainPushedAt: new Date(),
+        status: 'deploying',
+        committedAt: new Date(),
+        approvedAt: new Date(),
+      },
+    })
+    return release.id
+  }
+
+  it('refuses the site while a release barrier stands, expired or not, and never frees it', async () => {
+    const input = await fixture()
+    const deploy = (await store.acquire({ ...input, operation: 'deploy' }))!
+    const releaseId = await releaseOf(input)
+    await db.$executeRaw`UPDATE site_leases SET inflight_release_id = ${releaseId}::uuid WHERE site_id = ${input.siteId}::uuid`
+    expect(await store.inspect(input.siteId)).toMatchObject({
+      operation: 'deploy',
+      inflightReleaseId: releaseId,
+    })
+    // core died mid-release: the deploy lease expired, the barrier stands. A turn of another
+    // dialog is told the site is busy instead of failing on the barrier's CHECK.
+    await db.$executeRaw`UPDATE site_leases SET expires_at = clock_timestamp() - interval '1 second' WHERE site_id = ${input.siteId}::uuid`
+    expect(await store.acquire({ ...input, taskId: input.otherTaskId })).toBeNull()
+    expect(await store.acquire({ ...input, operation: 'deploy' })).toBeNull()
+    expect(await store.free(deploy)).toBe(false)
+    expect(await store.inspect(input.siteId)).toMatchObject({
+      taskId: input.taskId,
+      epoch: deploy.epoch,
+      inflightReleaseId: releaseId,
+    })
+    // Live, the deploy keeps its lease until the release clears the barrier itself.
+    await db.$executeRaw`UPDATE site_leases SET expires_at = clock_timestamp() + interval '1 minute' WHERE site_id = ${input.siteId}::uuid`
+    expect(await store.release(deploy)).toBe(false)
+    expect(await store.assert(deploy)).toBe(true)
+    await db.$executeRaw`UPDATE site_leases SET inflight_release_id = NULL WHERE site_id = ${input.siteId}::uuid`
+    expect(await store.release(deploy)).toBe(true)
+    const next = await store.acquire({ ...input, taskId: input.otherTaskId })
+    expect(next).toMatchObject({ operation: 'turn', epoch: deploy.epoch + 1 })
+    expect(await store.inspect(input.siteId)).toMatchObject({ inflightReleaseId: null })
   })
 
   it('refuses a task belonging to another site', async () => {

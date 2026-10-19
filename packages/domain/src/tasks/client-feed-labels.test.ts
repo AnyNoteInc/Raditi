@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { previewUnavailableReasons } from '../preview/preview-state.ts'
+import { chatCommandIds } from '../release/chat-commands.ts'
+import { versionBumps } from '../release/semver.ts'
 import {
   feedCancelledBys,
   feedCeilingReasons,
   feedCreditsStates,
   feedLimits,
+  feedReleaseOutcomes,
+  feedReleaseReasons,
   feedSteps,
   taskModes,
   taskWaitingReasons,
@@ -14,6 +19,20 @@ import {
   FEED_QUEUE_TIMEOUT_CLOSING,
   FEED_REMOVED_AUTHOR,
   feedApprovalSiteText,
+  feedCandidateText,
+  feedCandidateVersionText,
+  feedCommandText,
+  feedDecisionText,
+  feedMediaAddedText,
+  feedRecordsChangedText,
+  feedReleaseKeptText,
+  feedReleaseReasonText,
+  feedReleaseText,
+  feedReleaseTitle,
+  feedVersionBumpLabel,
+  feedVersionText,
+  previewPanelText,
+  previewUnavailableText,
   feedCancelledSentence,
   feedCancelledText,
   feedCardTitle,
@@ -80,6 +99,13 @@ const composed: string[] = [
   ),
   feedTooLongText(feedLimits.requestText),
   ...[0, 1, 2, 5, 21, 2500].map(creditsCountText),
+  ...['v0.0.1', 'v1.4.0', 'v12.0.0'].flatMap((tag) => [
+    feedCandidateVersionText(tag),
+    feedDecisionText(tag),
+    ...feedReleaseOutcomes.map((outcome) => feedReleaseText(outcome, tag)),
+  ]),
+  feedRecordsChangedText(3),
+  feedMediaAddedText(2500),
 ]
 
 const tables = Object.values(labels).filter((value) => typeof value !== 'function')
@@ -125,6 +151,38 @@ describe('totality of the catalogue', () => {
   it('has a question text for every ceiling reason', () => {
     for (const reason of feedCeilingReasons)
       expect(feedCeilingText({ reason, spent: 10, held: 12, left: 2 })).not.toBe('')
+  })
+
+  it('has a text for every command, version kind, release outcome and reason, and preview gap', () => {
+    expect(sorted(Object.keys(feedCommandText))).toEqual(sorted(chatCommandIds))
+    expect(sorted(Object.keys(feedVersionBumpLabel))).toEqual(sorted(versionBumps))
+    expect(sorted(Object.keys(feedReleaseTitle))).toEqual(sorted(feedReleaseOutcomes))
+    expect(sorted(Object.keys(feedReleaseReasonText))).toEqual(sorted(feedReleaseReasons))
+    expect(sorted(Object.keys(previewUnavailableText))).toEqual(sorted(previewUnavailableReasons))
+    expect(Object.keys(previewPanelText)).toEqual(
+      expect.arrayContaining(['preview', 'files', 'database', 'checks', 'openInNewTab']),
+    )
+    expect(feedCandidateText.release).toBe('Выпустить новую версию')
+  })
+
+  it('says what a rollback left on the site', () => {
+    expect(feedReleaseKeptText(undefined)).toEqual([])
+    expect(feedReleaseKeptText({ records: 0, tables: 0 })).toEqual([])
+    const [tables, records] = feedReleaseKeptText({ records: 1, tables: 2 })
+    expect(tables).toMatch(/^Новые таблицы и поля базы данных остались на сайте/)
+    // The row keeps a count alone: the words name a page and a post, and both reasons.
+    expect(records).toBe(
+      'Страница или запись, которую добавил выпуск, осталась на сайте: после выпуска её изменили или к ней уже что-то добавили, поэтому мы её не убрали. Если она не нужна, удалите её в админке сайта.',
+    )
+    expect(feedReleaseKeptText({ records: 3, tables: 0 })).toEqual([
+      'Страницы и записи, которые добавил выпуск, остались на сайте (3): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке сайта.',
+    ])
+  })
+
+  it('shows a version without the letter of the tag', () => {
+    expect(feedVersionText('v1.4.0')).toBe('1.4.0')
+    expect(feedReleaseText('installed', 'v2.0.0')).toBe('Версия 2.0.0 установлена на сайт.')
+    expect(feedDecisionText('v0.0.1')).toBe('Вы решили выпустить версию 0.0.1.')
   })
 
   it('freezes every table', () => {
@@ -477,6 +535,7 @@ describe('the neutral lines of the reader and of the input area', () => {
 
   it('reads the customer’s presses', () => {
     expect(feedRowText.retry).toBe('Вы попросили попробовать ещё раз')
+    expect(feedRowText.continue).toBe('Вы попросили продолжить работу')
     expect(feedRowText.otherRequest).toBe('Вы продолжили задачу.')
   })
 
@@ -495,8 +554,6 @@ describe('the neutral lines of the reader and of the input area', () => {
       button: 'Попробовать ещё',
       hint: 'Повторная попытка может стоить больше кредитов.',
       noAttempts: 'Больше попыток для этой задачи нет. Начните новый диалог или напишите нам.',
-      dailyLimit:
-        'Кредиты по тарифу на сегодня закончились. Попробовать ещё раз можно завтра или сейчас — с пакетом кредитов.',
       siteNotConnected: 'Сайт ещё не подключён. Задачи можно будет ставить после подключения',
     })
   })

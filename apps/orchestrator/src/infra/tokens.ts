@@ -3,6 +3,8 @@
 
 /** CoreConfig of this process. */
 export const CORE_CONFIG = Symbol('CORE_CONFIG')
+/** PreviewGatewayConfig of the `preview` role. */
+export const PREVIEW_GATEWAY_CONFIG = Symbol('PREVIEW_GATEWAY_CONFIG')
 /** false in tests and tools: no BullMQ workers, no polling loops. */
 export const BACKGROUND_JOBS = Symbol('BACKGROUND_JOBS')
 
@@ -41,3 +43,18 @@ export const METRICS_REGISTRY = Symbol('METRICS_REGISTRY')
 export const MAILER = Symbol('MAILER')
 /** YookassaClient from @repo/yookassa, or null while payments are off (CoreConfig.yookassa). */
 export const YOOKASSA = Symbol('YOOKASSA')
+
+/** (kind: SiteSourceKind) => SiteSourceAdapter: where the files of a connected site come from. */
+export const SITE_SOURCES = Symbol('SITE_SOURCES')
+/**
+ * (engine: DatabaseEngine) => DatabaseInspector: databaseInspector of @repo/site-connections. The
+ * import reads the database access of a site through it, to keep its password out of the files.
+ */
+export const SITE_DATABASES = Symbol('SITE_DATABASES')
+/** HostLookup: DNS of the site connection (A and AAAA, no hosts file). */
+export const HOST_LOOKUP = Symbol('HOST_LOOKUP')
+/**
+ * SiteRepositoryProvisioner of our Gitea, or null while git or GITEA_PROVISIONER_TOKEN is not
+ * configured: the import of a connected site then refuses `repository_not_configured`.
+ */
+export const SITE_REPOSITORY_PROVISIONER = Symbol('SITE_REPOSITORY_PROVISIONER')

@@ -1,0 +1,68 @@
+name: Release deploy
+
+# The deploy job of a release (docs/plan/53-chat-preview-release.md, Р30, Р31) on a real daemon:
+# the SFTP writer of @repo/site-connections against OpenSSH, its FTP(S) writer against vsftpd
+# (plain and AUTH TLS) and ProFTPD (`AllowOverwrite off`) — an image the suite builds from
+# alpine:3.22 with both packages pinned —, and the `deploy-step` command of the orchestrator
+# against a disposable WordPress with the plugin «Радити» and an SFTP hosting over its document
+# root — files, a page in the exact-bytes mode, the check of the site and the rollback.
+# Local fixtures only: no repository secrets, no real site. The Gitea half (the release tag, the
+# scoped workflow, workflow_dispatch) is `pnpm verify:pipeline`, which needs the orchestrator image
+# and runs locally (infra/dev/pipeline-verify/README.md).
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/release-deploy.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - packages/domain/**
+      - packages/site-connections/**
+      - packages/site-adapters/**
+      - apps/orchestrator/src/deploy-step/**
+      - apps/orchestrator/src/releases/release-db-values.ts
+      - apps/orchestrator/src/testing/deploy-step.ts
+      - infra/wordpress/raditi-content.php
+  workflow_dispatch:
+
+concurrency:
+  group: release-deploy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-step:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      # By tag, as the suites name them; each must be the digest the preview suites pin. The
+      # hosting is named by its digest in the suites themselves.
+      - name: Pull the images of the hosting and the site
+        run: |
+          docker pull -q linuxserver/openssh-server@sha256:96b9a4d3b5106746d08d43a6911650d4d21f7d5c7f2ac9660e792bdb5e63157c
+          # Docker Hub rebuilds an official image under the same tag; the pinned digest stays
+          # pullable, so the image is pulled by digest and tagged here.
+          while read -r tag digest; do
+            docker pull -q "${tag%%:*}@$digest"
+            docker tag "${tag%%:*}@$digest" "$tag"
+          done <<'IMAGES'
+          wordpress:7.1.2-php8.3-apache sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5
+          wordpress:cli-php8.3 sha256:2b5e9d4d3e51909dca1aaa4732e9f5e5bf0377c2114dbd8ff39f060bff202586
+          mariadb:11.4.13 sha256:70cc072b29b4a89ae07abb2d4da2c64678a7f2dfe092751bb51c87d67dc1338b
+          IMAGES
+      - name: Hosting and deploy suites against the real daemon
+        env:
+          RADITI_HOSTING_DOCKER_TESTS: '1'
+        run: |
+          pnpm --filter @repo/site-connections exec vitest run src/hosting/sftp-writer.integration.test.ts src/hosting/ftp-writer.integration.test.ts
+          pnpm --filter orchestrator exec vitest run src/deploy-step/deploy.integration.test.ts

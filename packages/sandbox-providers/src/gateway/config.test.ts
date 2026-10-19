@@ -44,4 +44,40 @@ describe('trusted gateway config', () => {
       /^\[sandbox gateway\] invalid configuration: SANDBOX_LLM_UPSTREAM: /,
     )
   })
+  it('takes the platform subnets the client egress never reaches, and nothing but CIDR', () => {
+    expect(gatewayConfigFromEnv(env)).not.toHaveProperty('egressRefusedSubnets')
+    expect(
+      gatewayConfigFromEnv({ ...env, SANDBOX_EGRESS_REFUSED_SUBNETS: ' ' }),
+    ).not.toHaveProperty('egressRefusedSubnets')
+    expect(
+      gatewayConfigFromEnv({
+        ...env,
+        SANDBOX_EGRESS_REFUSED_SUBNETS: '84.201.128.0/18, 2a02:6b8:c00::/40',
+      })?.egressRefusedSubnets,
+    ).toEqual(['84.201.128.0/18', '2a02:6b8:c00::/40'])
+    for (const bad of ['84.201.128.0', '84.201.128.0/33', 'example.ru/8', '10.0.0.0/08'])
+      expect(() => gatewayConfigFromEnv({ ...env, SANDBOX_EGRESS_REFUSED_SUBNETS: bad })).toThrow(
+        /SANDBOX_EGRESS_REFUSED_SUBNETS/,
+      )
+    // Alone it is no gateway: the group stays complete or absent.
+    expect(() =>
+      gatewayConfigFromEnv({ SANDBOX_EGRESS_REFUSED_SUBNETS: '84.201.128.0/18' }),
+    ).toThrow(/SANDBOX_GATEWAY_IMAGE/)
+  })
+  it('requires the platform subnets in production, where every sandbox VM runs a gateway', () => {
+    const production = { ...env, APP_ENV: 'production' }
+    for (const subnets of [undefined, '', ' '])
+      expect(() =>
+        gatewayConfigFromEnv({ ...production, SANDBOX_EGRESS_REFUSED_SUBNETS: subnets }),
+      ).toThrow(
+        /^\[sandbox gateway\] invalid configuration: SANDBOX_EGRESS_REFUSED_SUBNETS: [^;]+$/,
+      )
+    expect(
+      gatewayConfigFromEnv({ ...production, SANDBOX_EGRESS_REFUSED_SUBNETS: '84.201.128.0/18' })
+        ?.egressRefusedSubnets,
+    ).toEqual(['84.201.128.0/18'])
+    // Outside production none is needed; without a gateway nothing is asked.
+    expect(gatewayConfigFromEnv({ ...env, APP_ENV: 'development' })).toBeDefined()
+    expect(gatewayConfigFromEnv({ APP_ENV: 'production' })).toBeUndefined()
+  })
 })

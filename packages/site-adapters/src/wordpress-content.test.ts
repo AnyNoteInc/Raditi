@@ -393,6 +393,104 @@ describe('the transport of the WordPress content gateway', () => {
   })
 })
 
+describe('the code cache of the site through the plugin (R12)', () => {
+  const json = (value: unknown) => ({ status: 200, body: Buffer.from(JSON.stringify(value)) })
+  const cache = {
+    version: 1,
+    kind: 'code_cache',
+    enabled: true,
+    validateTimestamps: true,
+    revalidateSeconds: 2,
+    refresh: true,
+  }
+
+  it('reads the cache and refreshes named files on fixed routes', async () => {
+    const requests: SiteHttpRequest[] = []
+    const transport: SiteHttpTransport = async (request) => {
+      requests.push(request)
+      return json(
+        request.method === 'GET'
+          ? cache
+          : { version: 1, kind: 'code_cache_refreshed', refreshed: 1, absent: 1, failed: 0 },
+      )
+    }
+    const gateway = wordpressContentAdapter.createCodeCache!({
+      siteId,
+      origin: connection.origin,
+      access: { v: '1', origin: connection.origin, username: 'u', applicationPassword: 'p' },
+      transport,
+      allowLoopbackHttp: true,
+    })
+    expect(await gateway.codeCache()).toEqual(cache)
+    expect(
+      await gateway.refreshCode(['wp-content/themes/a/footer.php', 'wp-content/old.php']),
+    ).toEqual({ version: 1, kind: 'code_cache_refreshed', refreshed: 1, absent: 1, failed: 0 })
+    expect(requests.map((request) => [request.method, request.url])).toEqual([
+      ['GET', 'http://127.0.0.1:8099/?rest_route=%2Fraditi%2Fv1%2Fcode-cache'],
+      ['POST', 'http://127.0.0.1:8099/?rest_route=%2Fraditi%2Fv1%2Fcode-cache'],
+    ])
+    expect(JSON.parse(requests[1]!.body!)).toEqual({
+      version: 1,
+      paths: ['wp-content/themes/a/footer.php', 'wp-content/old.php'],
+    })
+  })
+
+  it('refuses paths outside the root and answers it does not trust', async () => {
+    const transport = vi.fn<SiteHttpTransport>(async () =>
+      json({ version: 1, kind: 'code_cache_refreshed', refreshed: 1, absent: 0, failed: 0 }),
+    )
+    const gateway = new WordpressPublishedContentGateway(connection, transport)
+    for (const paths of [[], ['../wp-config.php'], ['/etc/passwd'], ['a//b.php'], ['a\\b.php']])
+      await expect(gateway.refreshCode(paths)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(transport).not.toHaveBeenCalled()
+    // Counts that do not add up to the paths named, or another kind of answer.
+    await expect(gateway.refreshCode(['a.php', 'b.php'])).rejects.toMatchObject({
+      code: 'CONTENT_GATEWAY_UNAVAILABLE',
+    })
+    const other = new WordpressPublishedContentGateway(connection, async () =>
+      json({ ...cache, revalidateSeconds: -1 }),
+    )
+    await expect(other.codeCache()).rejects.toMatchObject({ code: 'CONTENT_GATEWAY_UNAVAILABLE' })
+    // An older plugin has no such route: WordPress answers 404.
+    const older = new WordpressPublishedContentGateway(connection, async () => ({
+      status: 404,
+      body: Buffer.from('{"code":"rest_no_route"}'),
+    }))
+    await expect(older.codeCache()).rejects.toMatchObject({ code: 'CONTENT_GATEWAY_UNAVAILABLE' })
+  })
+})
+
+describe('the runtime of the site through the plugin (Р2, Р18)', () => {
+  const json = (value: unknown) => ({ status: 200, body: Buffer.from(JSON.stringify(value)) })
+
+  it('reads the version of PHP and its extensions on a fixed route, and nothing it does not trust', async () => {
+    const runtime = {
+      version: 1,
+      kind: 'runtime',
+      runtimeVersion: '7.4',
+      extensions: ['core', 'curl', 'imagick', 'ioncube loader'],
+    }
+    const requests: SiteHttpRequest[] = []
+    const gateway = new WordpressPublishedContentGateway(connection, async (request) => {
+      requests.push(request)
+      return json(runtime)
+    })
+    expect(await gateway.runtime()).toEqual(runtime)
+    expect(requests.map((request) => [request.method, request.url])).toEqual([
+      ['GET', 'http://127.0.0.1:8099/?rest_route=%2Fraditi%2Fv1%2Fruntime'],
+    ])
+    for (const wrong of [
+      { ...runtime, runtimeVersion: '7' },
+      { ...runtime, extensions: ['<script>'] },
+      { ...runtime, extensions: Array.from({ length: 257 }, (_, i) => `x${i}`) },
+      { ...runtime, kind: 'code_cache' },
+    ]) {
+      const other = new WordpressPublishedContentGateway(connection, async () => json(wrong))
+      await expect(other.runtime()).rejects.toMatchObject({ code: 'CONTENT_GATEWAY_UNAVAILABLE' })
+    }
+  })
+})
+
 describe('the WordPress content access in Vault', () => {
   const access = {
     v: '1' as const,

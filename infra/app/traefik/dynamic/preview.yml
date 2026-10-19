@@ -1,0 +1,22 @@
+# Previews of dialogs (docs/plan/53-chat-preview-release.md, Р17, Р19). Only with
+# docker-compose.preview.yml, which gives Traefik PREVIEW_BASE_DOMAIN; without it this file holds
+# no route and orders no certificate. Exactly the preview hosts, one label under the base, go to
+# the gateway role `preview`; it finds the preview by that Host and never by anything a client
+# sends. The wildcard certificate is the resolver `preview` (DNS-01, Yandex Cloud DNS): HTTP-01
+# cannot issue a wildcard. The cabinet's routers in raditi.yml stay web-only. The guard sits in
+# comments, so the file stays YAML before Traefik renders it.
+# {{ if env "PREVIEW_BASE_DOMAIN" }}
+http:
+  routers:
+    preview:
+      entryPoints: [websecure]
+      rule: 'HostRegexp(`^site-[0-9a-z]{4,12}-chat-[0-9a-z]{4,12}\.{{ env "PREVIEW_BASE_DOMAIN" | replace "." "\\." }}$`)'
+      service: preview
+      tls:
+        certResolver: preview
+        domains: [{ main: '*.{{ env "PREVIEW_BASE_DOMAIN" }}' }]
+  services:
+    preview:
+      loadBalancer:
+        servers: [{ url: 'http://preview:8090' }]
+# {{ end }}

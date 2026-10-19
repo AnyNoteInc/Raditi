@@ -15,7 +15,7 @@ export default async function Page({ params }: { params: Promise<{ projectId: st
   // Beside the list only: on a narrow screen the list is the whole area.
   return (
     <Box sx={{ display: { xs: 'none', md: 'flex' }, flex: '1 0 auto', flexDirection: 'column' }}>
-      <NewDialog heading="h2" />
+      <NewDialog siteId={site.id} accepting={site.status === 'active'} heading="h2" />
     </Box>
   )
 }

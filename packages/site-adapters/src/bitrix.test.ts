@@ -1,5 +1,5 @@
 import type { SiteFacts } from '@repo/domain'
-import { siteImportLimits } from '@repo/domain'
+import { isForbiddenPath, siteImportLimits } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 import { bitrixAdapter } from './bitrix.ts'
 
@@ -34,6 +34,18 @@ describe('bitrixAdapter', () => {
     const protectedPaths = bitrixAdapter.protectedPaths(site)
     expect(protectedPaths).toEqual(expect.arrayContaining(['bitrix/', 'upload/']))
     expect(protectedPaths.some((p) => p.startsWith('local'))).toBe(false)
+  })
+
+  it('carries no change of its database, and tells the agent nothing of one', () => {
+    expect(bitrixAdapter.dbOperationKinds(site)).toEqual([])
+    expect(bitrixAdapter.dbPlanGuide(site)).toBe('')
+  })
+
+  it('protects the configuration of the PHP server at any depth (plan 53, Р12)', () => {
+    const protectedPaths = bitrixAdapter.protectedPaths(site)
+    for (const path of ['.htaccess', 'local/templates/x/.htaccess', 'local/php.ini', 'a/.user.ini'])
+      expect(isForbiddenPath(path, protectedPaths)).toBe(true)
+    expect(isForbiddenPath('local/templates/x/template.php', protectedPaths)).toBe(false)
   })
 
   it('excludes caches and media from turn snapshots', () => {
@@ -250,6 +262,11 @@ describe('bitrixAdapter', () => {
       throw new Error('connection lost')
     }
     await expect(bitrixAdapter.configSecrets(read)).rejects.toThrow('connection lost')
+  })
+
+  it('copies no database before stage 3, so its preview is unavailable rather than broken', async () => {
+    const read = async () => new TextEncoder().encode(`<?php $DBName = "shop";`)
+    expect(await bitrixAdapter.databaseSettings(read)).toBeNull()
   })
 
   it('has no MCP tools before stage 3', () => {

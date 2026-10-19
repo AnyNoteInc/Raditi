@@ -71,6 +71,61 @@ describe('Vault KV v2 requests', () => {
     expect(new Headers(init?.headers).get('accept')).toBe('application/json')
   })
 
+  it('reads the version a reference names instead of the current one', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(read(2))
+    expect(await withFetch(fetch).kvRead('kv/sites/site_1/ftp', { version: 2 })).toEqual({
+      data: credential,
+      version: 2,
+    })
+    const [url, init] = fetch.mock.calls[0]!
+    expect(url).toBe(`${address}/v1/kv/data/sites/site_1/ftp?version=2`)
+    expect(init).toMatchObject({ method: 'GET', redirect: 'error' })
+    // Without a version the current one is read, as before.
+    const current = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(read(3))
+    await withFetch(current).kvRead('kv/sites/site_1/ftp', {})
+    expect(current.mock.calls[0]?.[0]).toBe(`${address}/v1/kv/data/sites/site_1/ftp`)
+  })
+
+  it.each([
+    ['never written, deleted or destroyed (404)', () => reply({ errors: [] }, 404)],
+    [
+      'deleted',
+      () =>
+        reply({
+          data: {
+            data: null,
+            metadata: { version: 2, deletion_time: '2026-09-30T12:00:00.000Z', destroyed: false },
+          },
+        }),
+    ],
+    ['destroyed', () => reply({ data: { data: null, metadata: { version: 2, destroyed: true } } })],
+  ])('returns null for a named version that is %s', async (_, answer) => {
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(answer())
+    expect(await withFetch(fetch).kvRead('kv/sites/site_1/ftp', { version: 2 })).toBeNull()
+  })
+
+  it('refuses an answer of another version than the one named', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(read(3))
+    await expect(
+      withFetch(fetch).kvRead('kv/sites/site_1/ftp', { version: 2 }),
+    ).rejects.toMatchObject({ name: 'VaultError', message: 'Unexpected Vault KV version' })
+  })
+
+  it.each([0, -1, 1.5, Number.NaN, 2 ** 31, '2', { version: 1, extra: true }])(
+    'refuses the read option %j before any request',
+    async (value) => {
+      const fetch = vi.fn<typeof globalThis.fetch>()
+      const options = (typeof value === 'object' ? value : { version: value }) as unknown as {
+        version?: number
+      }
+      await expect(withFetch(fetch).kvRead('kv/sites/site_1/ftp', options)).rejects.toBeInstanceOf(
+        VaultError,
+      )
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
+
   it.each([0, 1, 7])(
     'sends CAS %i without converting it into an unconditional write',
     async (cas) => {
@@ -417,6 +472,7 @@ describe('Vault boundary validation', () => {
       const store = createVaultSecretStore({ addr: address, appRole: role, fetch })
       for (const operation of [
         () => store.kvRead(path),
+        () => store.kvRead(path, { version: 1 }),
         () => store.kvWrite(path, credential, { cas: 0 }),
         () => store.kvCreateOnce(path, credential, custom),
         () => store.kvDelete(path),
@@ -699,5 +755,92 @@ describe('Vault response and credential safety', () => {
     expect(new Headers(fetch.mock.calls[4]?.[1]?.headers).get('x-vault-token')).toBe(
       'second-role-token',
     )
+  })
+})
+
+// Paths of plan 53 (Р13, Р21, Р24): a variable of a site and the secrets of a preview.
+describe('Vault KV paths of site variables and previews', () => {
+  const siteId = '0b6f6d1e-5f0f-4c53-9d0a-7c2f4d3e2a10'
+  const previewId = '7c2f4d3e-2a10-4c53-9d0a-0b6f6d1e5f0f'
+
+  it.each([
+    [`kv/sites/${siteId}/env/PAYMENT_API_KEY`, `kv/data/sites/${siteId}/env/PAYMENT_API_KEY`],
+    [`kv/previews/${previewId}/wp`, `kv/data/previews/${previewId}/wp`],
+    [`kv/previews/${previewId}/browser`, `kv/data/previews/${previewId}/browser`],
+  ])('writes and reads %s under the data path of kv/', async (path, api) => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(written(1))
+      .mockResolvedValueOnce(read(1))
+    const store = withFetch(fetch)
+    await store.kvWrite(path, { value: 'synthetic-value' }, { cas: 0 })
+    await store.kvRead(path)
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+      `${address}/v1/${api}`,
+      `${address}/v1/${api}`,
+    ])
+  })
+
+  it('limits the versions of a variable on its metadata before writing the value', async () => {
+    const path = `kv/sites/${siteId}/env/PAYMENT_API_KEY`
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(empty())
+      .mockResolvedValueOnce(written(2))
+    await expect(
+      withFetch(fetch).kvWrite(path, { removed: createdTime }, { cas: 1, maxVersions: 1 }),
+    ).resolves.toEqual({ version: 2 })
+    expect(
+      fetch.mock.calls.map(([url, init]) => [url, init?.method, JSON.parse(String(init?.body))]),
+    ).toEqual([
+      // A string: the only form a policy can allow a value of (sites-writer allows "1").
+      [
+        `${address}/v1/kv/metadata/sites/${siteId}/env/PAYMENT_API_KEY`,
+        'POST',
+        { max_versions: '1' },
+      ],
+      [
+        `${address}/v1/kv/data/sites/${siteId}/env/PAYMENT_API_KEY`,
+        'POST',
+        { options: { cas: 1 }, data: { removed: createdTime } },
+      ],
+    ])
+  })
+
+  it('writes no value when the limit of versions is refused', async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(reply({ errors: ['permission denied'] }, 403))
+    await expect(
+      withFetch(fetch).kvWrite(
+        `kv/sites/${siteId}/env/PAYMENT_API_KEY`,
+        { value: 'synthetic-value' },
+        { cas: 0, maxVersions: 1 },
+      ),
+    ).rejects.toMatchObject({ name: 'VaultError', status: 403 })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([0, 101, 1.5, -1, Number.NaN])(
+    'refuses the limit of versions %s before any request',
+    async (maxVersions) => {
+      const fetch = vi.fn<typeof globalThis.fetch>()
+      await expect(
+        withFetch(fetch).kvWrite(
+          `kv/sites/${siteId}/env/PAYMENT_API_KEY`,
+          { value: 'synthetic-value' },
+          { cas: 0, maxVersions },
+        ),
+      ).rejects.toBeInstanceOf(VaultError)
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
+
+  it('removes every version of the secrets of a preview through its metadata', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(empty())
+    await withFetch(fetch).kvDestroyAll(`kv/previews/${previewId}/wp`)
+    const [url, init] = fetch.mock.calls[0]!
+    expect(url).toBe(`${address}/v1/kv/metadata/previews/${previewId}/wp`)
+    expect(init?.method).toBe('DELETE')
   })
 })

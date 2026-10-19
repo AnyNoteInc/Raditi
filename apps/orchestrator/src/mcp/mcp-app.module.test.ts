@@ -35,12 +35,16 @@ const scope = {
   epoch: 1,
   stack: 'wordpress' as const,
   url: 'https://site.example.test',
+  preview: null,
 }
 
-/** The configuration of the role with MCP_CONTENT_PROFILE=local; no S3 is ever contacted. */
+/**
+ * The configuration of the role with MCP_CONTENT_PROFILE=local-site — the P6 path of the stands,
+ * without previews; no S3 is ever contacted.
+ */
 const contentConfig = (): McpConfig => ({
   ...testMcpConfig(),
-  contentProfile: 'local',
+  contentProfile: 'local-site',
   storage: {
     endpoint: 'http://127.0.0.1:9',
     region: 'us-east-1',

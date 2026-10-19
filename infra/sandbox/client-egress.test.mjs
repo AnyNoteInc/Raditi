@@ -1,0 +1,618 @@
+import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
+import { connect, createServer as createTcpServer } from 'node:net'
+import { after, test } from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
+import { connect as tlsConnect } from 'node:tls'
+
+import {
+  isEgressAddressAllowed,
+  parseEgressHost,
+  parseIpSubnet,
+} from '../../packages/domain/src/preview/egress-hosts.ts'
+import {
+  addressCheck,
+  clientEgressConfig,
+  clientHelloServerName,
+  clientEgressLimits,
+  createClientEgressProxy,
+  interfaceSubnets,
+  parseAllowedHosts,
+  parseSubnets,
+  parseTarget,
+} from './client-egress.mjs'
+
+// What the tunnels lead to: one local server whatever address the proxy dials, so a test sees
+// both what the proxy chose to dial and that the bytes went through.
+const echo = createTcpServer((socket) => socket.pipe(socket))
+await new Promise((resolve) => echo.listen(0, '127.0.0.1', resolve))
+after(() => echo.close())
+
+const servers = []
+after(() => servers.forEach((server) => server.close()))
+
+/** A proxy over a fake resolver; `dialed` records every address and port it connected to. */
+async function proxy({ names = {}, allow = ['api.example.ru:443'], ...options } = {}) {
+  const lookups = []
+  const dialed = []
+  const logs = []
+  const server = createClientEgressProxy({
+    allow: new Set(allow),
+    lookup: async (host) => {
+      lookups.push(host)
+      const answer = names[host]
+      if (typeof answer === 'function') return answer(lookups.filter((h) => h === host).length)
+      if (answer === undefined) throw Object.assign(new Error('not found'), { code: 'ENOTFOUND' })
+      return answer
+    },
+    dial: ({ address, port }) => {
+      dialed.push({ address, port })
+      return connect({ host: '127.0.0.1', port: echo.address().port })
+    },
+    log: (entry) => logs.push(entry),
+    ...options,
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  servers.push(server)
+  return { port: server.address().port, lookups, dialed, logs, server }
+}
+
+/** CONNECT through the proxy; the status line and the socket, still open after a 200. */
+function tunnel(port, target, { extra = '' } = {}) {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: '127.0.0.1', port })
+    let head = Buffer.alloc(0)
+    const onData = (chunk) => {
+      head = Buffer.concat([head, chunk])
+      const end = head.indexOf('\r\n\r\n')
+      if (end < 0) return
+      socket.removeListener('data', onData)
+      const text = head.subarray(0, end).toString('latin1')
+      resolve({
+        status: Number(/^HTTP\/1\.1 (\d{3})/.exec(text)?.[1]),
+        refusal: /raditi-egress: (\S+)/.exec(text)?.[1] ?? null,
+        socket,
+        rest: head.subarray(end + 4),
+      })
+    }
+    socket.on('data', onData)
+    socket.once('error', reject)
+    socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${extra}\r\n`)
+  })
+}
+
+const u16 = (value) => Buffer.from([value >> 8, value & 255])
+const extension = (type, data) => Buffer.concat([u16(type), u16(data.length), data])
+const serverNameExtension = (name) => {
+  const host = Buffer.from(name, 'latin1')
+  const entry = Buffer.concat([Buffer.from([0]), u16(host.length), host])
+  return extension(0x0000, Buffer.concat([u16(entry.length), entry]))
+}
+
+/**
+ * A ClientHello as a TLS client starts a connection with: the server name `name` (null — none),
+ * other extensions after it, cut into records of at most `recordBytes` bytes.
+ */
+function clientHello(name, { extensions = [], recordBytes = 16_384 } = {}) {
+  const list = Buffer.concat([...(name === null ? [] : [serverNameExtension(name)]), ...extensions])
+  const body = Buffer.concat([
+    Buffer.from([3, 3]),
+    Buffer.alloc(32, 7),
+    Buffer.from([0]),
+    u16(2),
+    Buffer.from([0x13, 0x01]),
+    Buffer.from([1, 0]),
+    u16(list.length),
+    list,
+  ])
+  const handshake = Buffer.concat([
+    Buffer.from([1, (body.length >> 16) & 255, (body.length >> 8) & 255, body.length & 255]),
+    body,
+  ])
+  const records = []
+  for (let at = 0; at < handshake.length; at += recordBytes) {
+    const fragment = handshake.subarray(at, at + recordBytes)
+    records.push(Buffer.concat([Buffer.from([22, 3, 1]), u16(fragment.length), fragment]))
+  }
+  return Buffer.concat(records)
+}
+
+/** The first bytes a real TLS client of this Node writes for `servername`. */
+async function realClientHello(servername) {
+  const capture = createTcpServer()
+  await new Promise((resolve) => capture.listen(0, '127.0.0.1', resolve))
+  try {
+    const first = new Promise((resolve) =>
+      capture.once('connection', (socket) => socket.once('data', (chunk) => resolve(chunk))),
+    )
+    const client = tlsConnect({ host: '127.0.0.1', port: capture.address().port, servername })
+    client.on('error', () => {})
+    const bytes = await first
+    client.destroy()
+    return bytes
+  } finally {
+    capture.close()
+  }
+}
+
+/** Writes the ClientHello of the listed host and then `text`; resolves with what came back. */
+const roundTrip = (socket, text, name = 'api.example.ru') =>
+  new Promise((resolve) => {
+    const hello = clientHello(name)
+    let received = Buffer.alloc(0)
+    const onData = (chunk) => {
+      received = Buffer.concat([received, chunk])
+      if (received.length < hello.length + Buffer.byteLength(text)) return
+      socket.removeListener('data', onData)
+      assert.deepEqual(received.subarray(0, hello.length), hello)
+      resolve(received.subarray(hello.length).toString())
+    }
+    socket.on('data', onData)
+    socket.write(Buffer.concat([hello, Buffer.from(text)]))
+  })
+
+test('a listed name with only public addresses gets a tunnel to the address it was checked at', async () => {
+  const p = await proxy({ names: { 'api.example.ru': ['93.184.216.34'] } })
+  const answer = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(answer.status, 200)
+  assert.equal(await roundTrip(answer.socket, 'ping'), 'ping')
+  answer.socket.destroy()
+  assert.deepEqual(p.lookups, ['api.example.ru'])
+  // The literal that passed the check, never the name: nothing is resolved a second time.
+  assert.deepEqual(p.dialed, [{ address: '93.184.216.34', port: 443 }])
+})
+
+test('the target is matched in lower case, exactly, port included', async () => {
+  const p = await proxy({ names: { 'api.example.ru': ['93.184.216.34'] } })
+  const upper = await tunnel(p.port, 'API.Example.RU:443')
+  assert.equal(upper.status, 200)
+  upper.socket.destroy()
+  for (const target of [
+    'api.example.ru:8443',
+    'other.example.ru:443',
+    'evil.api.example.ru:443',
+    'api.example.ru',
+    '93.184.216.34:443',
+    '[2a00:1450:4010:c05::64]:443',
+    'host.docker.internal:443',
+    'localhost:443',
+    '127.0.0.1:443',
+  ]) {
+    const answer = await tunnel(p.port, target)
+    assert.equal(answer.status, 403, target)
+    assert.equal(answer.refusal, 'forbidden_host', target)
+  }
+  assert.deepEqual(p.lookups, ['api.example.ru'])
+  assert.equal(p.dialed.length, 1)
+})
+
+test('a name that resolves to any address that is not public is refused before a connection', async () => {
+  const cases = {
+    'loopback.example.ru': ['127.0.0.1'],
+    'private.example.ru': ['10.1.2.3'],
+    'rfc1918b.example.ru': ['172.16.5.4'],
+    'bridge.example.ru': ['172.17.0.1'],
+    'home.example.ru': ['192.168.1.1'],
+    'metadata.example.ru': ['169.254.169.254'],
+    'cgnat.example.ru': ['100.64.0.1'],
+    'zero.example.ru': ['0.0.0.0'],
+    'multicast.example.ru': ['224.0.0.1'],
+    'broadcast.example.ru': ['255.255.255.255'],
+    'ula.example.ru': ['fd12:3456::1'],
+    'v6loop.example.ru': ['::1'],
+    'linklocal.example.ru': ['fe80::1'],
+    'mapped.example.ru': ['::ffff:10.0.0.1'],
+    'nat64.example.ru': ['64:ff9b::a00:1'],
+    'mixed.example.ru': ['93.184.216.34', '10.0.0.1'],
+    'mixed6.example.ru': ['2a00:1450:4010:c05::64', 'fc00::1'],
+    'docs.example.ru': ['192.0.2.10'],
+  }
+  const allow = Object.keys(cases).map((name) => `${name}:443`)
+  const p = await proxy({ names: cases, allow })
+  for (const name of Object.keys(cases)) {
+    const answer = await tunnel(p.port, `${name}:443`)
+    assert.equal(answer.status, 403, name)
+    assert.equal(answer.refusal, 'forbidden_address', name)
+  }
+  assert.deepEqual(p.dialed, [])
+})
+
+test('every connection resolves anew: a name that turns private is refused the next time', async () => {
+  // Rebinding: public at the first lookup, the metadata service at the second. Each tunnel is
+  // checked on what its own lookup said and dialed there, so the change cannot slip in between.
+  const p = await proxy({
+    names: { 'api.example.ru': (n) => (n === 1 ? ['93.184.216.34'] : ['169.254.169.254']) },
+  })
+  const first = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(first.status, 200)
+  first.socket.destroy()
+  const second = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(second.status, 403)
+  assert.equal(second.refusal, 'forbidden_address')
+  assert.deepEqual(p.lookups, ['api.example.ru', 'api.example.ru'])
+  assert.deepEqual(p.dialed, [{ address: '93.184.216.34', port: 443 }])
+})
+
+test('the platform’s own subnets and those of the proxy’s interfaces are refused', async () => {
+  const p = await proxy({
+    names: { 'ours.example.ru': ['84.201.130.7'], 'theirs.example.ru': ['84.201.192.7'] },
+    allow: ['ours.example.ru:443', 'theirs.example.ru:443'],
+    refused: parseSubnets('84.201.128.0/18, 2a02:6b8:c00::/40'),
+  })
+  const ours = await tunnel(p.port, 'ours.example.ru:443')
+  assert.equal(ours.refusal, 'forbidden_address')
+  const theirs = await tunnel(p.port, 'theirs.example.ru:443')
+  assert.equal(theirs.status, 200)
+  theirs.socket.destroy()
+
+  const check = addressCheck(
+    interfaceSubnets({
+      eth0: [{ address: '84.201.130.7', cidr: '84.201.128.0/18', family: 'IPv4' }],
+      eth1: [{ address: '2a02:6b8:c00::5', cidr: '2a02:6b8:c00::/40', family: 'IPv6' }],
+    }),
+  )
+  assert.equal(check('84.201.130.200'), false)
+  assert.equal(check('2a02:6b8:c00::9'), false)
+  assert.equal(check('84.201.192.7'), true)
+})
+
+test('the address rule refuses everything the domain rule refuses, the same corpus', () => {
+  const check = addressCheck()
+  for (const address of [
+    '93.184.216.34',
+    '8.8.8.8',
+    '2a00:1450:4010:c05::64',
+    '10.1.2.3',
+    '172.16.0.1',
+    '172.31.255.255',
+    '192.168.1.1',
+    '127.0.0.1',
+    '169.254.169.254',
+    '100.64.0.1',
+    '100.127.255.255',
+    '0.0.0.0',
+    '0.1.2.3',
+    '224.0.0.1',
+    '255.255.255.255',
+    '198.18.0.1',
+    '192.0.0.8',
+    '::1',
+    '::',
+    'fc00::1',
+    'fd12:3456::1',
+    'fe80::1',
+    'ff02::1',
+    '::ffff:10.0.0.1',
+    '::ffff:8.8.8.8',
+    '64:ff9b::808:808',
+    '2001::1',
+    '2001:db8::1',
+    '2002::1',
+    'example.ru',
+    '',
+  ]) {
+    if (!isEgressAddressAllowed(address)) assert.equal(check(address), false, address)
+    else assert.equal(check(address), true, address)
+  }
+  // Stricter than the domain only where no service lives: documentation and relay ranges.
+  for (const address of ['192.0.2.1', '198.51.100.1', '203.0.113.1', '192.88.99.1'])
+    assert.equal(check(address), false, address)
+  const subnets = ['84.201.128.0/18', '2a02:6b8:c00::/40']
+  const proxySide = addressCheck(parseSubnets(subnets.join(',')))
+  const domainSide = subnets.map((text) => parseIpSubnet(text))
+  for (const address of ['84.201.130.7', '84.201.192.7', '2a02:6b8:c00::1', '2a02:6b8:d00::1'])
+    assert.equal(proxySide(address), isEgressAddressAllowed(address, domainSide), address)
+})
+
+test('a listed host is a public DNS name with a port, as the domain stores it', () => {
+  for (const text of [
+    'api.example.ru:443',
+    'hooks.example.com:8443',
+    'xn--80aswg.xn--p1ai:443',
+    'a-b.c-d.example.org:1',
+  ]) {
+    const domain = parseEgressHost(text)
+    assert.deepEqual(parseTarget(text), domain, text)
+  }
+  for (const text of [
+    'api.example.ru',
+    'API.example.ru:443',
+    '127.0.0.1:443',
+    '127.1:443',
+    '2130706433:443',
+    '0x7f.1:443',
+    '[::1]:443',
+    'localhost:443',
+    'api.localhost:443',
+    'host.docker.internal:443',
+    'metadata.google.internal:80',
+    'printer.local:443',
+    'site.test:443',
+    'router.lan:443',
+    'nas.home:443',
+    'intranet:443',
+    'secret.onion:443',
+    'x.invalid:443',
+    'api.example.ru.:443',
+    'api.example.ru:0',
+    'api.example.ru:65536',
+    'api_example.ru:443',
+    'user@api.example.ru:443',
+  ])
+    assert.equal(parseTarget(text), null, text)
+  assert.deepEqual(
+    [...parseAllowedHosts('["a.example.ru:443","b.example.ru:8443"]')],
+    ['a.example.ru:443', 'b.example.ru:8443'],
+  )
+  for (const json of [
+    '',
+    '[]',
+    '{}',
+    '["a.example.ru:443","a.example.ru:443"]',
+    '["a.example.ru"]',
+    '["127.0.0.1:443"]',
+    '[1]',
+    JSON.stringify(
+      Array.from({ length: clientEgressLimits.hosts + 1 }, (_, i) => `h${i}.example.ru:443`),
+    ),
+  ])
+    assert.throws(() => parseAllowedHosts(json), json)
+})
+
+test('plain HTTP is never forwarded', async () => {
+  const p = await proxy({ names: { 'api.example.ru': ['93.184.216.34'] } })
+  const status = await new Promise((resolve) => {
+    const socket = connect({ host: '127.0.0.1', port: p.port })
+    socket.once('data', (chunk) => {
+      resolve(Number(/^HTTP\/1\.1 (\d{3})/.exec(chunk.toString())?.[1]))
+      socket.destroy()
+    })
+    socket.write('GET http://api.example.ru:443/ HTTP/1.1\r\nHost: api.example.ru:443\r\n\r\n')
+  })
+  assert.equal(status, 405)
+  assert.deepEqual(p.lookups, [])
+  assert.deepEqual(p.dialed, [])
+})
+
+test('only the sandbox’s address may open a tunnel on sandbox-gw', async () => {
+  const p = await proxy({ names: { 'api.example.ru': ['93.184.216.34'] }, clientIp: '10.9.9.3' })
+  const answer = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(answer.status, 403)
+  assert.equal(answer.refusal, 'forbidden_client')
+  assert.deepEqual(p.lookups, [])
+})
+
+test('a name that does not resolve, an address that does not answer and a slow resolver', async () => {
+  const p = await proxy({
+    names: {
+      'gone.example.ru': [],
+      'down.example.ru': ['93.184.216.34', '93.184.216.35'],
+      'slow.example.ru': () => new Promise(() => {}),
+    },
+    allow: [
+      'gone.example.ru:443',
+      'missing.example.ru:443',
+      'down.example.ru:443',
+      'slow.example.ru:443',
+    ],
+    connectTimeoutMs: 200,
+    dial: ({ address, port }) => {
+      p.dialed.push({ address, port })
+      // The first address refuses; the second is tried, within the same deadline.
+      return address === '93.184.216.34'
+        ? connect({ host: '127.0.0.1', port: 1 })
+        : connect({ host: '127.0.0.1', port: echo.address().port })
+    },
+  })
+  assert.equal((await tunnel(p.port, 'gone.example.ru:443')).refusal, 'resolve')
+  assert.equal((await tunnel(p.port, 'missing.example.ru:443')).refusal, 'resolve')
+  const down = await tunnel(p.port, 'down.example.ru:443')
+  assert.equal(down.status, 200)
+  down.socket.destroy()
+  assert.deepEqual(
+    p.dialed.map((entry) => entry.address),
+    ['93.184.216.34', '93.184.216.35'],
+  )
+  const slow = await tunnel(p.port, 'slow.example.ru:443')
+  assert.equal(slow.status, 504)
+  assert.equal(slow.refusal, 'connect_timeout')
+})
+
+test('tunnels are counted and bounded; the log names only listed hosts', async () => {
+  const p = await proxy({ names: { 'api.example.ru': ['93.184.216.34'] }, maxTunnels: 1 })
+  const first = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(first.status, 200)
+  assert.equal(await roundTrip(first.socket, 'ping'), 'ping')
+  const second = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(second.status, 503)
+  first.socket.destroy()
+  for (let i = 0; i < 50 && p.logs.filter((e) => e.result === 'ok').length === 0; i++)
+    await delay(10)
+  const third = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(third.status, 200)
+  assert.equal(await roundTrip(third.socket, 'pong'), 'pong')
+  third.socket.destroy()
+  await tunnel(p.port, 'secret-path.attacker.example:443')
+  for (let i = 0; i < 50 && p.logs.length < 5; i++) await delay(10)
+  const text = JSON.stringify(p.logs)
+  assert.doesNotMatch(text, /attacker/)
+  assert.ok(p.logs.some((entry) => entry.host === 'api.example.ru:443' && entry.result === 'ok'))
+  assert.ok(p.logs.some((entry) => entry.host === null && entry.result === 'forbidden_host'))
+})
+
+test('a tunnel carries only TLS whose ClientHello names the listed host', async () => {
+  // What the far side received: on a shared front end the address of the listed host serves any
+  // other site as well, so not a byte goes there before the hello names the host.
+  const received = []
+  const far = createTcpServer((socket) => {
+    const bytes = []
+    received.push(bytes)
+    socket.on('data', (chunk) => bytes.push(chunk))
+    socket.on('error', () => {})
+  })
+  await new Promise((resolve) => far.listen(0, '127.0.0.1', resolve))
+  after(() => far.close())
+  const p = await proxy({
+    names: { 'api.example.ru': ['93.184.216.34'] },
+    dial: () => connect({ host: '127.0.0.1', port: far.address().port }),
+  })
+  const closedAfter = async (bytes) => {
+    const answer = await tunnel(p.port, 'api.example.ru:443')
+    assert.equal(answer.status, 200)
+    const closed = new Promise((resolve) => answer.socket.once('close', resolve))
+    answer.socket.on('error', () => {})
+    answer.socket.write(bytes)
+    await closed
+  }
+  const refusedHellos = {
+    'another site': clientHello('attacker.example'),
+    'a subdomain of it': clientHello('evil.api.example.ru'),
+    'no server name': clientHello(null),
+    'an encrypted ClientHello': clientHello('api.example.ru', {
+      extensions: [extension(0xfe0d, Buffer.alloc(40, 1))],
+    }),
+    'the draft ESNI': clientHello('api.example.ru', {
+      extensions: [extension(0xffce, Buffer.alloc(40, 1))],
+    }),
+    'two server names': clientHello('api.example.ru', {
+      extensions: [serverNameExtension('attacker.example')],
+    }),
+    'plain HTTP': Buffer.from('GET / HTTP/1.1\r\nHost: attacker.example\r\n\r\n'),
+    'a real client for another site': await realClientHello('attacker.example'),
+  }
+  for (const [label, bytes] of Object.entries(refusedHellos)) await closedAfter(bytes, label)
+  for (let i = 0; i < 50 && p.logs.length < Object.keys(refusedHellos).length; i++) await delay(10)
+  assert.equal(
+    p.logs.filter((entry) => entry.result === 'forbidden_sni').length,
+    Object.keys(refusedHellos).length,
+  )
+  assert.ok(received.every((bytes) => bytes.length === 0))
+  // Nothing the client sent is logged, the name it claimed included.
+  assert.doesNotMatch(JSON.stringify(p.logs), /attacker/)
+
+  // The listed host, in a real client's hello and in one cut into tiny records and writes.
+  for (const hello of [
+    await realClientHello('api.example.ru'),
+    clientHello('API.Example.RU', { recordBytes: 7 }),
+  ]) {
+    const before = received.length
+    const answer = await tunnel(p.port, 'api.example.ru:443')
+    assert.equal(answer.status, 200)
+    for (let at = 0; at < hello.length; at += 5) {
+      answer.socket.write(hello.subarray(at, at + 5))
+      await delay(1)
+    }
+    for (let i = 0; i < 100 && Buffer.concat(received[before] ?? []).length < hello.length; i++)
+      await delay(10)
+    assert.deepEqual(Buffer.concat(received[before]), hello)
+    answer.socket.destroy()
+  }
+})
+
+test('a client that sends no ClientHello loses the tunnel at its deadline', async () => {
+  const p = await proxy({ names: { 'api.example.ru': ['93.184.216.34'] }, helloMs: 100 })
+  const answer = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(answer.status, 200)
+  await new Promise((resolve) => answer.socket.once('close', resolve))
+  assert.ok(p.logs.some((entry) => entry.result === 'forbidden_sni'))
+})
+
+test('the server name of a ClientHello: whole, partial or refused', () => {
+  const hello = clientHello('api.example.ru')
+  assert.deepEqual(clientHelloServerName(hello), { state: 'name', name: 'api.example.ru' })
+  for (const cut of [0, 3, 5, 40, hello.length - 1])
+    assert.deepEqual(clientHelloServerName(hello.subarray(0, cut)), { state: 'more' }, String(cut))
+  // Records of one byte each still make one handshake.
+  assert.deepEqual(clientHelloServerName(clientHello('a.example.ru', { recordBytes: 1 })), {
+    state: 'name',
+    name: 'a.example.ru',
+  })
+  const bad = (bytes, label) =>
+    assert.deepEqual(clientHelloServerName(bytes), { state: 'refused' }, label)
+  bad(Buffer.from('\x17\x03\x03\x00\x05hello', 'latin1'), 'application data')
+  bad(Buffer.from([22, 3, 1, 0, 4, 2, 0, 0, 0]), 'a ServerHello')
+  bad(Buffer.from([22, 3, 1, 0x50, 0]), 'a record too large')
+  bad(Buffer.from([22, 3, 1, 0, 4, 1, 0x7f, 0, 0]), 'a hello too large')
+  bad(clientHello('api.example.ru.'), 'a trailing dot')
+  bad(clientHello('api_example.ru'), 'not a host name')
+  bad(clientHello('localhost'), 'a single label')
+})
+
+test('the far side closing ends the tunnel for the client', async () => {
+  const closing = createTcpServer((socket) => socket.end('bye'))
+  await new Promise((resolve) => closing.listen(0, '127.0.0.1', resolve))
+  after(() => closing.close())
+  const p = await proxy({
+    names: { 'api.example.ru': ['93.184.216.34'] },
+    dial: () => connect({ host: '127.0.0.1', port: closing.address().port }),
+  })
+  const answer = await tunnel(p.port, 'api.example.ru:443')
+  assert.equal(answer.status, 200)
+  const received = await new Promise((resolve) => {
+    let text = answer.rest.toString()
+    answer.socket.on('data', (chunk) => (text += chunk.toString()))
+    answer.socket.on('end', () => resolve(text))
+    answer.socket.write(clientHello('api.example.ru'))
+  })
+  assert.equal(received, 'bye')
+  answer.socket.destroy()
+})
+
+test('the configuration comes from the environment and refuses anything else', () => {
+  const config = clientEgressConfig({
+    LISTEN_HOST: '10.200.0.5',
+    LISTEN_PORT: '3128',
+    ALLOWED_HOSTS: '["api.example.ru:443"]',
+    REFUSED_SUBNETS: '84.201.128.0/18',
+  })
+  assert.equal(config.listenHost, '10.200.0.5')
+  assert.equal(config.listenPort, 3128)
+  assert.equal(config.clientIp, null)
+  assert.deepEqual([...config.allow], ['api.example.ru:443'])
+  assert.deepEqual(config.refused[0], { address: '84.201.128.0', prefix: 18, family: 4 })
+  const base = {
+    LISTEN_HOST: '10.200.0.5',
+    LISTEN_PORT: '3128',
+    ALLOWED_HOSTS: '["a.example.ru:443"]',
+  }
+  for (const bad of [
+    { LISTEN_HOST: 'egress' },
+    { LISTEN_HOST: '::1' },
+    { LISTEN_PORT: '0' },
+    { LISTEN_PORT: '70000' },
+    { ALLOWED_HOSTS: '[]' },
+    { REFUSED_SUBNETS: '10.0.0.0' },
+    { REFUSED_SUBNETS: '10.0.0.0/33' },
+    { REFUSED_SUBNETS: 'example.ru/8' },
+    { CLIENT_IPV4: 'sandbox' },
+  ])
+    assert.throws(() => clientEgressConfig({ ...base, ...bad }), JSON.stringify(bad))
+  assert.equal(clientEgressConfig({ ...base, CLIENT_IPV4: '10.200.0.3' }).clientIp, '10.200.0.3')
+})
+
+test('a client that resets its connection in the middle of a refusal or a lookup never stops the proxy', async () => {
+  // Whatever the server answers, the client is gone already: a write into a reset socket fails.
+  // Node removes the HTTP server's own error handler from a CONNECT socket: without one of the
+  // proxy's, that failure would end the process — the LLM and MCP gateway with it on sandbox-gw.
+  const p = await proxy({
+    names: { 'slow.example.ru': () => delay(50).then(() => ['93.184.216.34']) },
+    allow: ['slow.example.ru:443'],
+  })
+  const reset = (target) =>
+    new Promise((resolve) => {
+      const socket = connect({ host: '127.0.0.1', port: p.port })
+      socket.once('connect', () => {
+        socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`, () =>
+          socket.resetAndDestroy(),
+        )
+      })
+      socket.once('close', resolve)
+      socket.once('error', () => {})
+    })
+  for (let i = 0; i < 20; i++)
+    await Promise.all([reset('evil.example.ru:443'), reset('slow.example.ru:443')])
+  await delay(200)
+  const answer = await tunnel(p.port, 'slow.example.ru:443')
+  assert.equal(answer.status, 200)
+  answer.socket.destroy()
+})

@@ -6,7 +6,16 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./billing/credit-numbers": "./src/billing/credit-numbers.ts"
+    "./billing/credit-numbers": "./src/billing/credit-numbers.ts",
+    "./tasks/client-feed-labels": "./src/tasks/client-feed-labels.ts",
+    "./tasks/client-feed-failures": "./src/tasks/client-feed-failures.ts",
+    "./tasks/client-feed-text": "./src/tasks/client-feed-text.ts",
+    "./tasks/task-status": "./src/tasks/task-status.ts",
+    "./release/chat-commands": "./src/release/chat-commands.ts",
+    "./release/db-objects": "./src/release/db-objects.ts",
+    "./preview/hostname": "./src/preview/hostname.ts",
+    "./release/env-vars": "./src/release/env-vars.ts",
+    "./release/release-state": "./src/release/release-state.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

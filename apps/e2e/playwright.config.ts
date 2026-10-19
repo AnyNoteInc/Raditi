@@ -17,7 +17,12 @@ export default defineConfig({
   testDir: './tests',
   // A local tool with its own config (playwright.style-snapshot.config.ts), not a smoke test;
   // the billing tests run on their own web server and database (playwright.billing.config.ts).
-  testIgnore: ['landing-style-snapshot.spec.ts', 'tests/billing/**', 'tests/site/**'],
+  testIgnore: [
+    'landing-style-snapshot.spec.ts',
+    'tests/billing/**',
+    'tests/site/**',
+    'tests/site-import/**',
+  ],
   timeout: 60_000,
   reporter: 'list',
   use: { baseURL, trace: 'retain-on-failure' },
@@ -59,6 +64,8 @@ export default defineConfig({
         ORCHESTRATOR_PORT: String(CORE_PORT),
         MCP_PORT: String(MCP_PORT),
         TURN_EXECUTOR: 'local',
+        // The release API of a developer's .env would take the port of `pnpm dev`.
+        RELEASE_API_HOST: '',
         METRICS_TOKEN: metricsToken,
       },
     },

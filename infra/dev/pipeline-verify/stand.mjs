@@ -1,6 +1,7 @@
 // Pure parts of the pipeline stand: names, container arguments, runner configuration, the form
 // of Gitea's scoped-workflow settings, the reader of probe lines and the sanitiser of recorded
 // webhook bodies. Nothing here touches Docker, the network or the file system.
+import { createHash } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 
 import { GITEA_IMAGE } from '../gitea-verify/stand.mjs'
@@ -19,6 +20,19 @@ export const JOB_IMAGE =
   'alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce'
 
 /**
+ * The hosting of the site of a release (plan 53, Р30): OpenSSH with internal-sftp, by digest,
+ * already pulled. A release job writes the site's files there over SFTP.
+ */
+export const HOSTING_IMAGE =
+  'linuxserver/openssh-server@sha256:96b9a4d3b5106746d08d43a6911650d4d21f7d5c7f2ac9660e792bdb5e63157c'
+
+/** Where the hosting keeps the site, and the SFTP account a release job logs in with. */
+export const HOSTING_ROOT = '/srv/site'
+export const HOSTING_USER = 'site'
+/** The site's address as a release job checks it: the site server on the deploy network. */
+export const SITE_ORIGIN = 'http://site:8080'
+
+/**
  * `[actions] WORKFLOW_DIRS` of the second Gitea. Git refuses to track a path below `.git`, so no
  * commit can put a workflow file there: repository workflows are off, scoped ones are not.
  */
@@ -33,15 +47,45 @@ export const VAULT_INSIDE = 'http://openbao:8200'
 
 const RUN_ID = /^[0-9a-f]{8}$/
 
-/** `--record=<absolute directory>` writes sanitised webhook bodies there; nothing else is taken. */
+/**
+ * The image of the runner label `deploy` on the second Gitea: the orchestrator image built from
+ * this tree (`docker build -f apps/orchestrator/Dockerfile --target runtime -t <this> .`). Its
+ * command `deploy-step` is what the product workflow runs; the stand never builds or pulls it.
+ */
+export const DEPLOY_IMAGE = 'raditi-pipeline-verify/orchestrator:local'
+const IMAGE_REFERENCE =
+  /^[a-z0-9][a-z0-9._/-]{0,199}(?::[A-Za-z0-9._-]{1,128})?(?:@sha256:[a-f0-9]{64})?$/
+
+/**
+ * `--record=<absolute directory>` writes sanitised webhook bodies there; `--only=tags` asks only
+ * the questions of the release tag (the second Gitea); `--deploy-image=<reference>` names another
+ * local image for the runner label `deploy` of the second Gitea. Nothing else is taken.
+ */
 export function standOptions(argv) {
   const args = argv.filter((arg) => arg !== '--')
-  const usage = new Error('Usage: verify-pipeline.mjs [--record=<absolute directory>]')
-  if (args.length > 1) throw usage
-  if (args.length === 0) return { record: null }
-  const [, record] = /^--record=(.+)$/.exec(args[0]) ?? []
-  if (!record || !isAbsolute(record)) throw usage
-  return { record }
+  const usage = new Error(
+    'Usage: verify-pipeline.mjs [--record=<absolute directory>] [--only=tags] [--deploy-image=<image>]',
+  )
+  const options = { record: null, only: null, deployImage: DEPLOY_IMAGE }
+  const seen = new Set()
+  for (const arg of args) {
+    const [, name, value] = /^--(record|only|deploy-image)=(.+)$/.exec(arg) ?? []
+    if (!name || seen.has(name)) throw usage
+    seen.add(name)
+    if (name === 'record') {
+      if (!isAbsolute(value)) throw usage
+      options.record = value
+    } else if (name === 'only') {
+      if (value !== 'tags') throw usage
+      options.only = value
+    } else {
+      if (!IMAGE_REFERENCE.test(value)) throw usage
+      options.deployImage = value
+    }
+  }
+  // The samples are bodies of the first Gitea's runs: a run without it has none to record.
+  if (options.record && options.only) throw usage
+  return options
 }
 
 /** Every resource of one run. Nothing outside these names is ever created or removed by name. */
@@ -57,13 +101,34 @@ export function standNames(id) {
       openbao: `${stand}-openbao`,
       runnerCheck: `${stand}-runner-check`,
       runnerDeploy: `${stand}-runner-deploy`,
+      // The deploy runner of the second Gitea: the product workflow on a release tag.
+      runnerRelease: `${stand}-runner-release`,
       site: `${stand}-site-reader`,
+      // The site a release job deploys to: its SFTP hosting and the server of its pages.
+      hosting: `${stand}-hosting`,
+      siteServer: `${stand}-site-server`,
     },
     // Two networks, as two kinds of runner machines: only the deploy side reaches OpenBao.
     networks: { check: `${stand}-check`, deploy: `${stand}-deploy` },
     siteVolume: `${stand}-site`,
+    // The stand's CA for the release jobs: they check the certificate of the second Gitea.
+    caVolume: `${stand}-ca`,
+    // The files of the site of a release: written over SFTP, served by the site server.
+    hostingVolume: `${stand}-hosting-files`,
   }
 }
+
+/**
+ * The release API as a job of the second Gitea sees it: the stand process on the host. Like the
+ * address of Vault, it is a part of the runner's configuration, never of a site repository.
+ */
+export const releaseApiInside = (port) => {
+  if (!Number.isInteger(port) || port < 1024 || port > 65_535) throw new Error('Invalid port')
+  return `http://host.docker.internal:${port}`
+}
+
+/** Where a release job finds the stand's CA (the volume `caVolume`, read-only). */
+export const CA_INSIDE = '/run/raditi/ca/ca.pem'
 
 const created = (names, name) => [
   'create',
@@ -141,24 +206,49 @@ export function openbaoContainerArgs({ names }) {
   ]
 }
 
+/**
+ * `check` and `deploy` serve the first Gitea (spike N18); `release` is the deploy runner of the
+ * second Gitea, the one the product workflow of a release tag runs on.
+ */
+const runnerKinds = ['check', 'deploy', 'release']
+
 function runnerKind(kind) {
-  if (kind !== 'check' && kind !== 'deploy') throw new Error('Unknown runner kind')
+  if (!runnerKinds.includes(kind)) throw new Error('Unknown runner kind')
   return kind
 }
+
+const runnerNetwork = (names, kind) => names.networks[kind === 'check' ? 'check' : 'deploy']
 
 /**
  * The configuration of infra/dev/runner.yaml (no Docker socket, no privileges and no host volumes
  * for a job) plus what a disposable stand needs: its own network instead of a network per job,
- * the label of the run on every job container and no pull. Only a deploy job gets a volume — the
- * substitute "site" — and the address of OpenBao in its environment.
+ * the label of the run on every job container and no pull. A deploy job of the first Gitea gets a
+ * volume — the substitute "site" — and the address of OpenBao in its environment. A release job
+ * of the second Gitea gets the addresses of OpenBao and of the release API, the stand's CA (a
+ * read-only volume and NODE_EXTRA_CA_CERTS, as a deploy machine of the platform would hold the CA
+ * of its Gitea and Vault) and APP_ENV: all of it from the runner, nothing from the repository.
  */
-export function runnerConfig({ names, kind }) {
+export function runnerConfig({ names, kind, releaseApiPort }) {
   const deploy = runnerKind(kind) === 'deploy'
+  const release = kind === 'release'
   const options = [
     `--label ${names.label}`,
     '--add-host host.docker.internal:host-gateway',
     ...(deploy ? [`--volume ${names.siteVolume}:/site`] : []),
+    ...(release ? [`--volume ${names.caVolume}:${CA_INSIDE.replace(/\/[^/]+$/, '')}:ro`] : []),
   ].join(' ')
+  const envs = deploy
+    ? ['  envs:', `    RADITI_VAULT_ADDR: ${VAULT_INSIDE}`]
+    : release
+      ? [
+          '  envs:',
+          `    RADITI_VAULT_ADDR: ${VAULT_INSIDE}`,
+          `    RADITI_RELEASE_API_URL: ${releaseApiInside(releaseApiPort)}`,
+          `    NODE_EXTRA_CA_CERTS: ${CA_INSIDE}`,
+          '    APP_ENV: development',
+        ]
+      : []
+  const volumes = deploy ? [names.siteVolume] : release ? [names.caVolume] : []
   return [
     'log:',
     '  level: info',
@@ -168,14 +258,16 @@ export function runnerConfig({ names, kind }) {
     '  fetch_interval: 1s',
     '  fetch_interval_max: 2s',
     '  shutdown_timeout: 0s',
-    ...(deploy ? ['  envs:', `    RADITI_VAULT_ADDR: ${VAULT_INSIDE}`] : []),
+    ...envs,
     'container:',
-    `  network: ${names.networks[kind]}`,
+    `  network: ${runnerNetwork(names, kind)}`,
     "  docker_host: '-'",
     '  privileged: false',
     '  force_pull: false',
     `  options: ${options}`,
-    ...(deploy ? ['  valid_volumes:', `    - ${names.siteVolume}`] : ['  valid_volumes: []']),
+    ...(volumes.length > 0
+      ? ['  valid_volumes:', ...volumes.map((volume) => `    - ${volume}`)]
+      : ['  valid_volumes: []']),
     '',
   ].join('\n')
 }
@@ -183,25 +275,117 @@ export function runnerConfig({ names, kind }) {
 /**
  * `docker create` of one runner. /config (runner.yaml, the stand's CA and the registration token
  * file) is copied in before the start. The Docker socket is the runner's own: job containers do
- * not get it (`docker_host: '-'`).
+ * not get it (`docker_host: '-'`). The label `deploy` of the release runner names the image of a
+ * release job: the orchestrator image, chosen by the runner and never by the repository.
  */
-export function runnerContainerArgs({ names, kind }) {
-  const name =
-    runnerKind(kind) === 'deploy' ? names.containers.runnerDeploy : names.containers.runnerCheck
+export function runnerContainerArgs({ names, kind, deployImage = DEPLOY_IMAGE }) {
+  runnerKind(kind)
+  if (!IMAGE_REFERENCE.test(deployImage)) throw new Error('Invalid deploy image')
+  const name = {
+    check: names.containers.runnerCheck,
+    deploy: names.containers.runnerDeploy,
+    release: names.containers.runnerRelease,
+  }[kind]
   return [
     ...created(names, name),
-    ...['--network', names.networks[kind]],
+    ...['--network', runnerNetwork(names, kind)],
     ...['-v', '/var/run/docker.sock:/var/run/docker.sock'],
     ...variables({
-      GITEA_INSTANCE_URL: 'https://gitea:3000',
+      GITEA_INSTANCE_URL: kind === 'release' ? 'https://gitea-hardened:3000' : 'https://gitea:3000',
       GITEA_RUNNER_REGISTRATION_TOKEN_FILE: '/config/registration-token',
       GITEA_RUNNER_NAME: name,
-      GITEA_RUNNER_LABELS: `${kind}:docker://${JOB_IMAGE}`,
+      GITEA_RUNNER_LABELS:
+        kind === 'release' ? `deploy:docker://${deployImage}` : `${kind}:docker://${JOB_IMAGE}`,
       CONFIG_FILE: '/config/runner.yaml',
       SSL_CERT_FILE: '/config/ca.pem',
     }),
     RUNNER_IMAGE,
   ]
+}
+
+/** Writes the stand's CA into the CA volume: a container without network, the PEM on stdin. */
+export function caWriterArgs({ names }) {
+  return [
+    'run',
+    '--rm',
+    '-i',
+    '--pull',
+    'never',
+    ...['--label', names.label],
+    ...['--network', 'none'],
+    ...['--mount', `type=volume,src=${names.caVolume},dst=/ca`],
+    JOB_IMAGE,
+    'sh',
+    '-c',
+    'umask 022; cat > /ca/ca.pem',
+  ]
+}
+
+/**
+ * `docker create` of the hosting: on the deploy network as `hosting`, no published port, the
+ * site's files on their own volume. The password of the SFTP account is a file copied in before
+ * the start (`USER_PASSWORD_FILE`), never an argument.
+ */
+export function hostingContainerArgs({ names }) {
+  return [
+    ...created(names, names.containers.hosting),
+    ...['--network', names.networks.deploy, '--network-alias', 'hosting'],
+    ...['--mount', `type=volume,src=${names.hostingVolume},dst=${HOSTING_ROOT}`],
+    ...variables({
+      PUID: '1000',
+      PGID: '1000',
+      USER_NAME: HOSTING_USER,
+      PASSWORD_ACCESS: 'true',
+      USER_PASSWORD_FILE: '/stand/password',
+    }),
+    HOSTING_IMAGE,
+  ]
+}
+
+/**
+ * The server of the site's pages: the front page is the file `index.php` of the hosting as it is,
+ * read-only; a release job checks it at SITE_ORIGIN. The deploy image, so nothing is pulled.
+ */
+export const SITE_SERVER_SCRIPT = [
+  "const { createServer } = require('node:http')",
+  "const { readFile } = require('node:fs/promises')",
+  'createServer(async (request, response) => {',
+  "  if (request.url !== '/') return response.writeHead(404).end()",
+  '  try {',
+  `    const page = await readFile('${HOSTING_ROOT}/index.php')`,
+  "    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)",
+  '  } catch {',
+  '    response.writeHead(500).end()',
+  '  }',
+  '}).listen(8080)',
+].join('\n')
+
+export function siteServerArgs({ names, deployImage = DEPLOY_IMAGE }) {
+  if (!IMAGE_REFERENCE.test(deployImage)) throw new Error('Invalid deploy image')
+  return [
+    ...created(names, names.containers.siteServer),
+    ...['--network', names.networks.deploy, '--network-alias', 'site'],
+    ...['--mount', `type=volume,src=${names.hostingVolume},dst=${HOSTING_ROOT},readonly`],
+    '--read-only',
+    ...['--cap-drop', 'ALL'],
+    ...['--security-opt', 'no-new-privileges'],
+    ...['--entrypoint', 'node'],
+    deployImage,
+    '-e',
+    SITE_SERVER_SCRIPT,
+  ]
+}
+
+/**
+ * The host key of an OpenSSH `.pub` line as an access names it (`hostKeySchema`): the key type and
+ * `SHA256:` with the unpadded base64 of the SHA-256 of the key blob — what `ssh-keygen -l` prints.
+ */
+export function hostKeyFingerprint(publicKeyLine) {
+  const [type, blob] = publicKeyLine.trim().split(/\s+/)
+  if (!/^ssh-[a-z0-9-]+$/.test(type ?? '') || !/^[A-Za-z0-9+/]+={0,2}$/.test(blob ?? ''))
+    throw new Error('Not an OpenSSH public key line')
+  const digest = createHash('sha256').update(Buffer.from(blob, 'base64')).digest('base64')
+  return `${type} SHA256:${digest.replace(/=+$/, '')}`
 }
 
 /** The stand's reader of the site volume: read-only, no network, lives for the run. */

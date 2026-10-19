@@ -56,6 +56,9 @@ services:
       SANDBOX_NETWORK_GUARD_IMAGE: ${SANDBOX_NETWORK_GUARD_IMAGE:-}
       SANDBOX_LLM_UPSTREAM: ${SANDBOX_LLM_UPSTREAM:-}
       SANDBOX_MCP_UPSTREAM: ${SANDBOX_MCP_UPSTREAM:-}
+      # The public addresses of the platform's machines: the client egress proxy of sandbox-gw
+      # never tunnels to them (plan 53, Р13). Required in production.
+      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:-}
     volumes:
       - ${SANDBOX_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       - /etc/raditi:/etc/raditi:ro

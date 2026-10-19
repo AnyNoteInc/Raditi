@@ -9,7 +9,9 @@ import { test } from 'node:test'
 
 import {
   createGateway,
+  gatewayEgressConfig,
   gatewayLimits,
+  listenGatewayEgress,
   llmPaths,
   llmRequestHeaders,
   llmResponseHeaders,
@@ -1183,3 +1185,68 @@ test(
     assert.equal(received, 0)
   },
 )
+
+test('the client egress of a turn is a listener of its own, configured only by its own variables', () => {
+  const env = {
+    LISTEN_HOST: '10.200.0.2',
+    CLIENT_IPV4: '10.200.0.3',
+    ALLOWED_ROUTES: '["llm","mcp"]',
+  }
+  // No host listed: no egress listener at all, whatever else the gateway is told.
+  assert.equal(gatewayEgressConfig(env), null)
+  assert.equal(gatewayEgressConfig({ ...env, EGRESS_PORT: '3128' }), null)
+  const egress = gatewayEgressConfig({
+    ...env,
+    EGRESS_PORT: '3128',
+    EGRESS_ALLOWED_HOSTS: '["api.example.ru:443"]',
+    EGRESS_REFUSED_SUBNETS: '84.201.128.0/18',
+  })
+  assert.equal(egress.listenHost, '10.200.0.2')
+  assert.equal(egress.listenPort, 3128)
+  // Only the sandbox opens tunnels, as only the sandbox calls the gateway.
+  assert.equal(egress.clientIp, '10.200.0.3')
+  assert.deepEqual([...egress.allow], ['api.example.ru:443'])
+  assert.deepEqual(egress.refused[0], { address: '84.201.128.0', prefix: 18, family: 4 })
+  for (const bad of [
+    { EGRESS_PORT: '8080' },
+    { EGRESS_PORT: '' },
+    { EGRESS_ALLOWED_HOSTS: '["10.0.0.1:443"]' },
+    { EGRESS_REFUSED_SUBNETS: 'ten/8' },
+  ])
+    assert.throws(() =>
+      gatewayEgressConfig({
+        ...env,
+        EGRESS_PORT: '3128',
+        EGRESS_ALLOWED_HOSTS: '["api.example.ru:443"]',
+        ...bad,
+      }),
+    )
+})
+
+test('a failure of the egress listener after it started closes it alone, never the gateway', async (t) => {
+  const gateway = createGateway({
+    listenHost: '127.0.0.1',
+    clientIp: '127.0.0.1',
+    routes: ['llm'],
+    llmUpstream: 'http://127.0.0.1:9',
+  })
+  await new Promise((resolve) => gateway.listen(0, '127.0.0.1', resolve))
+  t.after(() => gateway.close())
+  const lines = []
+  const egress = await listenGatewayEgress(
+    {
+      listenHost: '127.0.0.1',
+      listenPort: 0,
+      allow: new Set(['api.example.ru:443']),
+      refused: [],
+      clientIp: null,
+    },
+    (line) => lines.push(line),
+  )
+  // Without a listener of its own this would be an uncaught exception of the whole process.
+  egress.emit('error', Object.assign(new Error('accept EMFILE'), { code: 'EMFILE' }))
+  await once(egress, 'close')
+  assert.deepEqual(lines, ['Client egress listener failed'])
+  assert.equal(egress.listening, false)
+  assert.equal(gateway.listening, true)
+})

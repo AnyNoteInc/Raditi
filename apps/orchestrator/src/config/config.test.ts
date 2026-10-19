@@ -6,7 +6,7 @@ import { DEV_METRICS_TOKEN } from '@repo/observability'
 import { describe, expect, it } from 'vitest'
 
 import { mcpHeadersAllowed } from '../mcp/mcp-policy.ts'
-import { ConfigError, loadConfig } from './config.ts'
+import { ConfigError, DEV_PREVIEW_SESSION_SECRET, loadConfig } from './config.ts'
 import { runnerCredentialAddress } from './runner-tokens.ts'
 
 /** .env.example exactly as `cp .env.example .env` gives it to a new developer. */
@@ -175,7 +175,12 @@ describe('loadConfig — development', () => {
       vault: { addr: 'http://localhost:8200', token: 'raditi-dev-root' },
       // Published-content tools stay off until MCP_CONTENT_PROFILE turns them on.
       contentProfile: 'off',
+      // So does the agent's browser on a preview (MCP_BROWSER_PROFILE, plan 53, Р21).
+      browserProfile: 'off',
       storage: null,
+      previewUpstreamHost: '127.0.0.1',
+      // The role is read here alone: no PREVIEW_BASE_DOMAIN, no previews.
+      preview: null,
     })
     expect(loadConfig(exampleEnv).mcp).toMatchObject({ contentProfile: 'off', storage: null })
   })
@@ -212,6 +217,7 @@ describe('loadConfig — development', () => {
         mcpEnv({
           ...s3,
           MCP_CONTENT_PROFILE: 'local',
+          PREVIEW_BASE_DOMAIN: 'localhost',
           S3_BUCKET_ARTIFACTS: 'raditi-test-artifacts',
           // Buckets and addresses of the other roles: the mcp role neither reads nor checks them.
           S3_BUCKET_SESSIONS: 'NOT A BUCKET',
@@ -229,27 +235,50 @@ describe('loadConfig — development', () => {
         buckets: { artifacts: 'raditi-test-artifacts' },
       })
       expect(
-        loadConfig(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: 'local' })).mcp?.storage?.buckets,
+        loadConfig(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: 'local-site' })).mcp?.storage?.buckets,
       ).toEqual({ artifacts: 'raditi-artifacts' })
+    })
+
+    it('says where the content goes: into previews, or the site on the stands without them', () => {
+      const previews = { PREVIEW_BASE_DOMAIN: 'localhost', PREVIEW_PUBLIC_PORT: '8090' }
+      expect(
+        loadConfig(mcpEnv({ ...s3, ...previews, MCP_CONTENT_PROFILE: 'local' })).mcp,
+      ).toMatchObject({ contentProfile: 'local', preview: { baseDomain: 'localhost' } })
+      expect(loadConfig(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: 'local-site' })).mcp).toMatchObject({
+        contentProfile: 'local-site',
+        preview: null,
+      })
+      // Without previews `local` has nowhere to write; beside them the site path is refused —
+      // nothing turns the agent back onto the site by an empty variable (Р3).
+      expect(problemsOf(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: 'local' }))).toEqual([
+        'MCP_CONTENT_PROFILE: local writes into previews and needs PREVIEW_BASE_DOMAIN',
+      ])
+      expect(problemsOf(mcpEnv({ ...s3, ...previews, MCP_CONTENT_PROFILE: 'local-site' }))).toEqual(
+        [
+          'MCP_CONTENT_PROFILE: local-site writes the connected site itself and is refused where previews are configured (PREVIEW_BASE_DOMAIN)',
+        ],
+      )
     })
 
     it('requires the S3 settings with the local profile and never prints their values', () => {
       const problems = problemsOf(
-        mcpEnv({ MCP_CONTENT_PROFILE: 'local', S3_SECRET_ACCESS_KEY: 'very-secret-s3-key' }),
+        mcpEnv({ MCP_CONTENT_PROFILE: 'local-site', S3_SECRET_ACCESS_KEY: 'very-secret-s3-key' }),
       )
       expect(problems).toHaveLength(1)
       expect(problems[0]).toMatch(/S3_ENDPOINT/)
       expect(problems[0]).toMatch(/S3_ACCESS_KEY_ID/)
       expect(problems.join('\n')).not.toContain('very-secret-s3-key')
       expect(
-        problemsOf(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: 'local', S3_BUCKET_ARTIFACTS: 'BAD' }))[0],
+        problemsOf(
+          mcpEnv({ ...s3, MCP_CONTENT_PROFILE: 'local-site', S3_BUCKET_ARTIFACTS: 'BAD' }),
+        )[0],
       ).toMatch(/S3_BUCKET_ARTIFACTS/)
     })
 
     it('knows no other profile', () => {
       for (const value of ['on', 'true', 'production', 'LOCAL', 'local,off'])
         expect(problemsOf(mcpEnv({ ...s3, MCP_CONTENT_PROFILE: value }))).toEqual([
-          'MCP_CONTENT_PROFILE: must be one of off, local',
+          'MCP_CONTENT_PROFILE: must be one of off, local, local-site',
         ])
     })
 
@@ -262,8 +291,31 @@ describe('loadConfig — development', () => {
       expect(config.mcp).toBeNull()
     })
 
+    it('has a browser profile of its own that needs the same S3 settings (plan 53, Р21)', () => {
+      expect(loadConfig(mcpEnv()).mcp).toMatchObject({ browserProfile: 'off', storage: null })
+      const config = loadConfig(
+        mcpEnv({
+          ...s3,
+          MCP_BROWSER_PROFILE: 'local',
+          PREVIEW_BASE_DOMAIN: 'localhost',
+          PREVIEW_PUBLIC_PORT: '8090',
+        }),
+      )
+      expect(config.mcp).toMatchObject({
+        contentProfile: 'off',
+        browserProfile: 'local',
+        storage: { buckets: { artifacts: 'raditi-artifacts' } },
+        preview: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
+      })
+      expect(problemsOf(mcpEnv({ MCP_BROWSER_PROFILE: 'local' }))[0]).toMatch(/S3_ENDPOINT/)
+      for (const value of ['on', 'LOCAL', 'playwright'])
+        expect(problemsOf(mcpEnv({ ...s3, MCP_BROWSER_PROFILE: value }))).toEqual([
+          'MCP_BROWSER_PROFILE: must be one of off, local',
+        ])
+    })
+
     it('runs beside core and llm in the local process with the shared S3 settings', () => {
-      const config = loadConfig({ ...devEnv, MCP_CONTENT_PROFILE: 'local' })
+      const config = loadConfig({ ...devEnv, MCP_CONTENT_PROFILE: 'local-site' })
       expect(config.mcp?.storage).toEqual({
         endpoint: 'http://localhost:8333',
         region: 'ru-central1',
@@ -528,7 +580,7 @@ describe('loadConfig — development', () => {
 
   it('rejects unknown roles and an empty list', () => {
     expect(problemsOf({ ...devEnv, ORCHESTRATOR_ROLES: 'core,worker' })).toEqual([
-      'ORCHESTRATOR_ROLES: unknown role "worker"; expected core, mcp, runner, llm',
+      'ORCHESTRATOR_ROLES: unknown role "worker"; expected core, mcp, runner, llm, preview',
     ])
     expect(problemsOf({ ...devEnv, ORCHESTRATOR_ROLES: ' , ' })).toEqual([
       'ORCHESTRATOR_ROLES: at least one role is required',
@@ -554,8 +606,23 @@ describe('loadConfig — development', () => {
 
   it('starts the roles of `pnpm dev` and `pnpm e2e` from a fresh copy of .env.example', () => {
     expect(loadConfig(exampleEnv)).toMatchObject({
-      roles: ['core', 'mcp', 'llm'],
-      core: { turnExecutor: 'local', agentDrivers: { image: exampleEnv.SANDBOX_IMAGE } },
+      roles: ['core', 'mcp', 'llm', 'preview'],
+      core: {
+        turnExecutor: 'local',
+        agentDrivers: { image: exampleEnv.SANDBOX_IMAGE },
+        previews: {
+          address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
+          executor: 'local',
+          runtime: 'runc',
+          upstreamHost: '127.0.0.1',
+        },
+        releaseApi: { host: '127.0.0.1', port: 8085, startTimeoutMinutes: 10 },
+      },
+      preview: {
+        port: 8090,
+        address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
+        sessionSecret: DEV_PREVIEW_SESSION_SECRET,
+      },
     })
     // apps/e2e/playwright.config.ts on top of the same file.
     const e2e = loadConfig({
@@ -649,6 +716,13 @@ describe('loadConfig — development', () => {
       })
     })
 
+    it('takes the directory of the repository mirrors when it is set (plan 53, Р10)', () => {
+      expect(loadConfig(gitEnv({ GIT_MIRROR_DIR: '/work/mirrors' })).core?.git).toMatchObject({
+        mirrorDir: '/work/mirrors',
+      })
+      expect(loadConfig(gitEnv({ GIT_MIRROR_DIR: '' })).core?.git).not.toHaveProperty('mirrorDir')
+    })
+
     it('leaves git unconfigured, and core starting, with the plain-http Gitea of .env.example', () => {
       expect(exampleEnv.GITEA_URL).toBe('http://localhost:3300')
       expect(loadConfig(exampleEnv).core?.git).toBeNull()
@@ -666,6 +740,9 @@ describe('loadConfig — development', () => {
       ])
       expect(problemsOf(gitEnv({ GIT_CA_FILE: 'gitea-ca.pem' }))).toEqual([
         'GIT_CA_FILE: must be an absolute path',
+      ])
+      expect(problemsOf(gitEnv({ GIT_MIRROR_DIR: 'mirrors' }))).toEqual([
+        'GIT_MIRROR_DIR: must be an absolute path',
       ])
       for (const url of [
         'https://bot:password@gitea.raditi.test',
@@ -1211,13 +1288,22 @@ describe('loadConfig — production', () => {
         storage: null,
       })
     // With every S3 setting in place: the refusal is the profile itself, not a missing value.
-    expect(problemsOf(mcp({ MCP_CONTENT_PROFILE: 'local' }))).toEqual([
-      'MCP_CONTENT_PROFILE: only off is allowed in production (published content is not open there)',
-    ])
+    for (const value of ['local', 'local-site'])
+      expect(problemsOf(mcp({ MCP_CONTENT_PROFILE: value }))).toEqual([
+        'MCP_CONTENT_PROFILE: only off is allowed in production (published content is not open there)',
+      ])
     expect(
       problemsOf(mcp({ MCP_CONTENT_PROFILE: 'local', S3_ENDPOINT: '', S3_ACCESS_KEY_ID: '' })),
     ).toEqual([
       'MCP_CONTENT_PROFILE: only off is allowed in production (published content is not open there)',
+    ])
+    // The agent's browser on a preview (plan 53, Р21) is not open there either.
+    expect(loadConfig(mcp({ MCP_BROWSER_PROFILE: 'off' })).mcp).toMatchObject({
+      browserProfile: 'off',
+      storage: null,
+    })
+    expect(problemsOf(mcp({ MCP_BROWSER_PROFILE: 'local' }))).toEqual([
+      'MCP_BROWSER_PROFILE: only off is allowed in production (the agent browser is not open there)',
     ])
   })
 
@@ -1462,5 +1548,258 @@ describe('loadConfig — production', () => {
     })
     // Until the turn handler is wired (P12) a core without git still starts.
     expect(loadConfig(prodEnv()).core?.git).toBeNull()
+  })
+})
+
+describe('loadConfig — previews and releases', () => {
+  const digest = `@sha256:${'a'.repeat(64)}`
+  const previewDev = (overrides: Env = {}): Env => ({
+    ...devEnv,
+    ORCHESTRATOR_ROLES: 'core,mcp,preview',
+    PREVIEW_BASE_DOMAIN: 'localhost',
+    PREVIEW_PUBLIC_PORT: '8090',
+    ...overrides,
+  })
+  const previewProd = (overrides: Env = {}): Env =>
+    prodEnv({
+      PREVIEW_BASE_DOMAIN: 'preview.raditi-sites.ru',
+      RELEASE_API_HOST: '10.20.0.4',
+      RELEASE_API_PUBLIC_URL: 'http://10.20.0.4:8085',
+      ...overrides,
+    })
+  const gatewayProd = (overrides: Env = {}): Env => ({
+    APP_ENV: 'production',
+    APP_URL: 'https://raditi.ru',
+    ORCHESTRATOR_ROLES: 'preview',
+    DATABASE_URL: 'postgresql://raditi:secret@db.internal:5432/raditi',
+    PREVIEW_BASE_DOMAIN: 'preview.raditi-sites.ru',
+    PREVIEW_SESSION_SECRET: 's'.repeat(32),
+    ...overrides,
+  })
+
+  it('builds no preview without a base domain and starts core as before', () => {
+    expect(loadConfig(devEnv).core).toMatchObject({ previews: null })
+    expect(loadConfig(prodEnv()).core).toMatchObject({ previews: null, releaseApi: null })
+  })
+
+  it('reads previews of core with local defaults and pinned images', () => {
+    const config = loadConfig(
+      previewDev({
+        PREVIEW_WEB_IMAGES: `8.3=registry.raditi.ru/preview-php${digest}`,
+        PREVIEW_DB_IMAGE: `mariadb${digest}`,
+        PREVIEW_TTL_HOURS: '24',
+      }),
+    )
+    expect(config.core?.previews).toEqual({
+      address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
+      ttlHours: 24,
+      executor: 'local',
+      runtime: 'runc',
+      webImages: { '8.3': `registry.raditi.ru/preview-php${digest}` },
+      images: { db: `mariadb${digest}`, cli: null, forwarder: null, browser: null, egress: null },
+      upstreamHost: '127.0.0.1',
+      gatewayPort: 8090,
+      egressRefusedSubnets: [],
+      docker: { socketPath: '/var/run/docker.sock', firewallImage: null },
+    })
+    expect(config.mcp?.previewUpstreamHost).toBe('127.0.0.1')
+  })
+
+  it("gives previews the platform's subnets the sandbox gateway refuses too (R10)", () => {
+    // On runner VMs, as production runs turns: core's own sandbox gateway is not configured.
+    expect(
+      loadConfig(
+        previewProd({ SANDBOX_EGRESS_REFUSED_SUBNETS: '84.201.128.0/18, 2a02:6b8:c00::/40' }),
+      ).core?.previews?.egressRefusedSubnets,
+    ).toEqual(['84.201.128.0/18', '2a02:6b8:c00::/40'])
+    expect(loadConfig(previewProd()).core?.previews?.egressRefusedSubnets).toEqual([])
+    expect(problemsOf(previewProd({ SANDBOX_EGRESS_REFUSED_SUBNETS: '84.201.128.0' }))[0]).toMatch(
+      /^SANDBOX_EGRESS_REFUSED_SUBNETS\b.*CIDR/,
+    )
+  })
+
+  it('gives core its Docker for local previews and none for runner VMs (R5c)', () => {
+    const local = loadConfig(
+      previewDev({ SANDBOX_DOCKER_SOCKET: '/run/docker.sock', PREVIEW_GATEWAY_PORT: '18090' }),
+    )
+    expect(local.core?.previews).toMatchObject({
+      gatewayPort: 18090,
+      docker: { socketPath: '/run/docker.sock', firewallImage: null },
+    })
+    expect(loadConfig(previewDev({ PREVIEW_EXECUTOR: 'runner' })).core?.previews?.docker).toBeNull()
+  })
+
+  it('refuses images without a digest and an upstream that is not an address', () => {
+    expect(problemsOf(previewDev({ PREVIEW_CLI_IMAGE: 'wordpress:cli' }))[0]).toMatch(
+      /^PREVIEW_CLI_IMAGE: /,
+    )
+    expect(problemsOf(previewDev({ PREVIEW_WEB_IMAGES: '8.3=php:8.3' }))).toEqual([
+      'PREVIEW_WEB_IMAGES: the image of 8.3 must be pinned by digest',
+    ])
+    expect(problemsOf(previewDev({ PREVIEW_UPSTREAM_HOST: 'localhost' }))).toEqual([
+      'PREVIEW_UPSTREAM_HOST: must be an IP address',
+    ])
+  })
+
+  it('starts the gateway with its port, address, the dev secret and the database', () => {
+    const config = loadConfig(previewDev())
+    expect(config.preview).toEqual({
+      appEnv: 'development',
+      port: 8090,
+      address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
+      sessionSecret: DEV_PREVIEW_SESSION_SECRET,
+      appUrl: 'http://localhost:3000',
+      db: { databaseUrl: 'postgresql://raditi:raditi@localhost:5432/raditi' },
+      // This machine and Docker's bridges (preview-relays.ts).
+      browserRelays: [
+        { address: '127.0.0.1', prefix: 32, family: 'ipv4' },
+        { address: '::1', prefix: 128, family: 'ipv6' },
+        { address: '172.16.0.0', prefix: 12, family: 'ipv4' },
+      ],
+      host: '127.0.0.1',
+    })
+    expect(problemsOf(previewDev({ PREVIEW_BASE_DOMAIN: '' }))).toEqual([
+      'PREVIEW_BASE_DOMAIN: required for the preview role',
+    ])
+    expect(problemsOf(previewDev({ PREVIEW_GATEWAY_PORT: '8082' }))).toEqual([
+      'PREVIEW_GATEWAY_PORT: must differ from the other role ports',
+    ])
+    expect(problemsOf(previewDev({ PREVIEW_SESSION_SECRET: 'short' }))).toEqual([
+      'PREVIEW_SESSION_SECRET: must be at least 32 bytes',
+    ])
+  })
+
+  it('listens where PREVIEW_GATEWAY_HOST says: loopback in dev, every address in production', () => {
+    // A Linux stand: the relay of the agent's browser reaches the host on the bridge's gateway.
+    expect(loadConfig(previewDev({ PREVIEW_GATEWAY_HOST: '172.17.0.1' })).preview?.host).toBe(
+      '172.17.0.1',
+    )
+    expect(loadConfig(gatewayProd()).preview?.host).toBeUndefined()
+    expect(problemsOf(previewDev({ PREVIEW_GATEWAY_HOST: 'localhost' }))).toEqual([
+      'PREVIEW_GATEWAY_HOST: must be an IP address',
+    ])
+  })
+
+  it('opens the release API only where RELEASE_API_HOST says, with a default URL outside production', () => {
+    expect(loadConfig(devEnv).core?.releaseApi).toBeNull()
+    expect(loadConfig({ ...devEnv, RELEASE_API_HOST: '127.0.0.1' }).core?.releaseApi).toEqual({
+      host: '127.0.0.1',
+      port: 8085,
+      publicUrl: 'http://127.0.0.1:8085',
+      startTimeoutMinutes: 10,
+    })
+    expect(
+      loadConfig({
+        ...devEnv,
+        RELEASE_API_HOST: '172.17.0.1',
+        RELEASE_API_PUBLIC_URL: 'http://host.docker.internal:8085/',
+      }).core?.releaseApi,
+    ).toMatchObject({ host: '172.17.0.1', publicUrl: 'http://host.docker.internal:8085' })
+    const local = { ...devEnv, RELEASE_API_HOST: '127.0.0.1' }
+    expect(problemsOf({ ...local, RELEASE_API_PORT: '8081' })).toEqual([
+      'RELEASE_API_PORT: must differ from the other ports of this process',
+    ])
+    expect(problemsOf({ ...local, RELEASE_API_PUBLIC_URL: 'http://x:8085/v1' })).toEqual([
+      'RELEASE_API_PUBLIC_URL: expected an origin (no path, credentials or query)',
+    ])
+    expect(problemsOf({ ...devEnv, RELEASE_API_PUBLIC_URL: 'http://127.0.0.1:8085' })).toEqual([
+      'RELEASE_API_HOST: required with RELEASE_API_PUBLIC_URL',
+    ])
+    expect(problemsOf({ ...devEnv, RELEASE_API_HOST: 'localhost' })).toEqual([
+      'RELEASE_API_HOST: must be an IP address',
+    ])
+    // The port of the llm role is taken as well: bind would fail at start-up.
+    expect(
+      problemsOf({ ...local, ORCHESTRATOR_ROLES: 'core,llm', RELEASE_API_PORT: '8084' }),
+    ).toEqual(['RELEASE_API_PORT: must differ from the other ports of this process'])
+  })
+
+  it('takes previews and the release API in production over https on private addresses', () => {
+    const core = loadConfig(previewProd()).core
+    expect(core?.previews).toMatchObject({
+      address: { baseDomain: 'preview.raditi-sites.ru', scheme: 'https', publicPort: null },
+      executor: 'runner',
+      runtime: 'runsc',
+    })
+    expect(core?.releaseApi).toEqual({
+      host: '10.20.0.4',
+      port: 8085,
+      publicUrl: 'http://10.20.0.4:8085',
+      startTimeoutMinutes: 10,
+    })
+  })
+
+  it('refuses in production http previews, the local executor, runc and a shared domain', () => {
+    expect(problemsOf(previewProd({ PREVIEW_SCHEME: 'http' }))).toEqual([
+      'PREVIEW_SCHEME: must be https in production',
+    ])
+    expect(problemsOf(previewProd({ PREVIEW_EXECUTOR: 'local' }))).toEqual([
+      'PREVIEW_EXECUTOR: production runs previews only on runner VMs (runner)',
+    ])
+    expect(problemsOf(previewProd({ PREVIEW_RUNTIME: 'runc' }))).toEqual([
+      'PREVIEW_RUNTIME: production previews run under gVisor (runsc)',
+    ])
+    expect(problemsOf(previewProd({ PREVIEW_BASE_DOMAIN: 'preview.raditi.ru' }))[0]).toMatch(
+      /^PREVIEW_BASE_DOMAIN: must not share its registrable domain with APP_URL/,
+    )
+    expect(
+      problemsOf(
+        previewProd({
+          PREVIEW_BASE_DOMAIN: 'preview.git-sites.ru',
+          GITEA_URL: 'https://gitea.git-sites.ru',
+          GITEA_TOKEN: 'token',
+        }),
+      )[0],
+    ).toMatch(/GITEA_URL/)
+    expect(problemsOf(previewProd({ PREVIEW_BASE_DOMAIN: 'localhost' }))[0]).toMatch(
+      /^PREVIEW_BASE_DOMAIN: must be a name under a public suffix/,
+    )
+  })
+
+  it('sends the content of a preview in production only to a private or loopback upstream', () => {
+    expect(problemsOf(previewProd({ PREVIEW_UPSTREAM_HOST: '203.0.113.7' }))).toEqual([
+      'PREVIEW_UPSTREAM_HOST: must be a private or loopback IP address in production (spec §19)',
+    ])
+    expect(
+      loadConfig(previewProd({ PREVIEW_UPSTREAM_HOST: '10.20.0.9' })).core?.previews,
+    ).toMatchObject({ upstreamHost: '10.20.0.9' })
+    expect(loadConfig(previewProd()).core?.previews).toMatchObject({ upstreamHost: '127.0.0.1' })
+    expect(
+      problemsOf({ ...prodEnv(), ORCHESTRATOR_ROLES: 'mcp', PREVIEW_UPSTREAM_HOST: '8.8.8.8' }),
+    ).toContain(
+      'PREVIEW_UPSTREAM_HOST: must be a private or loopback IP address in production (spec §19)',
+    )
+    // Outside production any address literal is taken, as before.
+    expect(loadConfig(previewDev({ PREVIEW_UPSTREAM_HOST: '203.0.113.7' })).mcp).toMatchObject({
+      previewUpstreamHost: '203.0.113.7',
+    })
+  })
+
+  it('keeps the release API in production on a private address with an explicit URL', () => {
+    expect(problemsOf(previewProd({ RELEASE_API_HOST: '203.0.113.7' }))).toContain(
+      'RELEASE_API_HOST: must be a private IP address in production (spec §19)',
+    )
+    expect(problemsOf(previewProd({ RELEASE_API_PUBLIC_URL: '' }))).toEqual([
+      'RELEASE_API_PUBLIC_URL: required with RELEASE_API_HOST in production',
+    ])
+    expect(problemsOf(previewProd({ RELEASE_API_PUBLIC_URL: 'http://release.raditi.ru' }))).toEqual(
+      ['RELEASE_API_PUBLIC_URL: plain http only to a private IP address in production (spec §19)'],
+    )
+    expect(problemsOf(previewProd({ RELEASE_API_HOST: '' }))).toEqual([
+      'RELEASE_API_HOST: required with RELEASE_API_PUBLIC_URL',
+    ])
+  })
+
+  it('starts the gateway alone in production with a secret of its own', () => {
+    expect(loadConfig(gatewayProd()).preview).toMatchObject({
+      appEnv: 'production',
+      port: 8090,
+      address: { scheme: 'https', baseDomain: 'preview.raditi-sites.ru' },
+    })
+    const problems = problemsOf(gatewayProd({ PREVIEW_SESSION_SECRET: '' }))
+    expect(problems).toEqual(['PREVIEW_SESSION_SECRET: required in production'])
+    const short = problemsOf(gatewayProd({ PREVIEW_SESSION_SECRET: 'tiny-secret' }))
+    expect(short.join('\n')).not.toContain('tiny-secret')
+    expect(problemsOf(gatewayProd({ PREVIEW_BASE_DOMAIN: 'app.raditi.ru' }))[0]).toMatch(/APP_URL/)
   })
 })

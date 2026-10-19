@@ -24,8 +24,10 @@ on:
       # The drivers' real prepare and command in the production agent runtime.
       - packages/agent-drivers/**
       - packages/sandbox-providers/runtime/**
-      # The WordPress content gateway and the snapshot storage of the role mcp.
+      # The WordPress content gateway and the snapshot storage of the role mcp, and the browser
+      # adapter its module loads (R7).
       - packages/site-adapters/**
+      - packages/browser-providers/**
       - packages/storage/**
       - packages/vault/**
       - packages/observability/**

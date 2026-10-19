@@ -324,4 +324,106 @@ describe('Docker gateway manager', () => {
     await manager.release(attachment.resourceId)
     expect(fake.events.at(-1)).toBe('remove network')
   })
+
+  describe('the client egress of an attempt (plan 53, Р13)', () => {
+    const egressPolicy = {
+      mode: 'gateway' as const,
+      routes: ['llm' as const, 'mcp' as const],
+      egress: ['api.example.ru:443', 'hooks.example.com:8443'],
+    }
+    const envOf = (fake: ReturnType<typeof daemon>, role: string) =>
+      Object.fromEntries(
+        (
+          [...fake.containers.values()].find((stored) => stored.options.Labels?.[ROLE] === role)
+            ?.options.Env ?? []
+        ).map((entry) => [entry.slice(0, entry.indexOf('=')), entry.slice(entry.indexOf('=') + 1)]),
+      )
+
+    it.each(['runc', 'runsc'] as const)(
+      '%s: the proxy runs the egress listener with the hosts of the policy and the platform subnets',
+      async (runtime) => {
+        const fake = daemon()
+        const manager = createDockerGatewayManager(
+          { ...config, egressRefusedSubnets: ['84.201.128.0/18'] },
+          fake.client,
+          runtime,
+        )
+        const attachment = await manager.prepare({ ...input(), policy: egressPolicy })
+        expect(envOf(fake, 'proxy')).toMatchObject({
+          EGRESS_PORT: '3128',
+          EGRESS_ALLOWED_HOSTS: JSON.stringify(egressPolicy.egress),
+          EGRESS_REFUSED_SUBNETS: '84.201.128.0/18',
+          LISTEN_HOST: '172.30.0.2',
+          CLIENT_IPV4: '172.30.0.3',
+        })
+        // runc: the guard of the shared netns opens the egress port as well; runsc has none.
+        if (runtime === 'runc')
+          expect(envOf(fake, 'guard')).toEqual({
+            GATEWAY_IPV4: '172.30.0.2',
+            GATEWAY_PORT: '8080',
+            EGRESS_PORT: '3128',
+          })
+        const sandbox = await fake.sandbox(attachment)
+        const [networkId] = fake.networks.keys()
+        const deadline = Number(
+          fake.networks.get(networkId!)!.options.Labels!['io.raditi.gateway.deadline'],
+        )
+        const check = async (policyValue: typeof egressPolicy | typeof policy) =>
+          manager.validate({
+            resourceId: attachment.resourceId,
+            labels,
+            deadline,
+            policy: policyValue,
+            sandbox: await sandbox.info(),
+          })
+        expect(await check(egressPolicy)).toBe(true)
+        // Another list of hosts than the attempt was made with is not this attempt.
+        expect(await check({ ...egressPolicy, egress: ['api.example.ru:443'] })).toBe(false)
+        expect(await check(policy)).toBe(false)
+        // A host added to the running proxy behind the policy's back.
+        const proxy = [...fake.containers.values()].find(
+          (stored) => stored.options.Labels?.[ROLE] === 'proxy',
+        )!
+        proxy.options.Env = proxy.options.Env!.map((entry) =>
+          entry.startsWith('EGRESS_ALLOWED_HOSTS=')
+            ? `EGRESS_ALLOWED_HOSTS=${JSON.stringify([...egressPolicy.egress, 'evil.example.ru:443'])}`
+            : entry,
+        )
+        expect(await check(egressPolicy)).toBe(false)
+      },
+    )
+
+    it('without hosts no egress variable reaches the proxy or the guard, and one that does fails validation', async () => {
+      const fake = daemon()
+      const manager = createDockerGatewayManager(
+        { ...config, egressRefusedSubnets: ['84.201.128.0/18'] },
+        fake.client,
+        'runc',
+      )
+      const attachment = await manager.prepare(input())
+      for (const role of ['proxy', 'guard'])
+        expect(Object.keys(envOf(fake, role)).filter((name) => name.startsWith('EGRESS_'))).toEqual(
+          [],
+        )
+      const sandbox = await fake.sandbox(attachment)
+      const [networkId] = fake.networks.keys()
+      const deadline = Number(
+        fake.networks.get(networkId!)!.options.Labels!['io.raditi.gateway.deadline'],
+      )
+      const check = async () =>
+        manager.validate({
+          resourceId: attachment.resourceId,
+          labels,
+          deadline,
+          policy,
+          sandbox: await sandbox.info(),
+        })
+      expect(await check()).toBe(true)
+      const guard = [...fake.containers.values()].find(
+        (stored) => stored.options.Labels?.[ROLE] === 'guard',
+      )!
+      guard.options.Env = [...guard.options.Env!, 'EGRESS_PORT=3128']
+      expect(await check()).toBe(false)
+    })
+  })
 })

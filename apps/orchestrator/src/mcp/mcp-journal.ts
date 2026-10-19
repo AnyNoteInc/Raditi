@@ -6,11 +6,26 @@ import {
   conflict,
   contentHashSchema,
   contentUndoFenceSchema,
+  DB_CREATED_ID_BASE,
+  DB_CREATED_ID_MAX,
+  dbContentFields,
+  dbJournalKinds,
+  dbJournalOperationSchema,
+  dbKindFields,
+  dbOperationNotAllowed,
+  dbValueRefSchema,
   DomainError,
+  isCreatedRef,
   isDomainError,
   leaseLost,
+  orderDbContentFields,
+  previewStatuses,
+  siteStacks,
   terminalTaskStatuses,
   turnPlanSchema,
+  type DbContentField,
+  type DbJournalKind,
+  type DbValueRef,
   type SiteLeaseFence,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -30,6 +45,9 @@ import {
   type ContentSnapshotReceipt,
   type ContentSnapshotRef,
 } from './content-snapshots.ts'
+import type { McpPreviewTarget } from './preview-content.ts'
+import { previewDbValueKey } from './preview-db-values.ts'
+import { previewDbRuntimeSchema, textOnlyDbRuntime } from '../previews/preview-record.ts'
 
 type Tx = Prisma.TransactionClient
 type Call = Prisma.McpCallGetPayload<{
@@ -79,6 +97,18 @@ export interface McpCallCompletion {
 export interface McpRestoreSource {
   receipt: ContentSnapshotReceipt
   expectedStateHash: string
+  /** The call that took the snapshot: the mark of a record it created (`post_trash`). */
+  callId?: string
+}
+/**
+ * A creation's call: the journal gives the record its id under its lock (docs/plan/53,
+ * «Операции БД и миграции») — the next one above every id the task has ever used, its excluded
+ * turns included, and not below `floor`, the lowest free id the preview's plugin named. The
+ * caller's command names the record `<type>:new`; the call is written under the id.
+ */
+export interface McpCreation {
+  type: 'post' | 'page'
+  floor: number
 }
 export type McpCallReservation =
   | {
@@ -86,6 +116,15 @@ export type McpCallReservation =
       callId: string
       snapshot: ContentSnapshotRef
       restoreSource?: McpRestoreSource
+      /** The preview the call writes into, read under the lock (Р24); absent — the site. */
+      preview?: McpPreviewTarget
+      /** The object the call is written under: a creation's id given by the journal. */
+      objectRef?: string
+      /**
+       * Every id the task's journal gave a created record, this call's included: no value the
+       * call writes may name one (`mentionsCreatedId`).
+       */
+      createdIds?: number[]
     }
   | {
       kind: 'pending'
@@ -111,6 +150,69 @@ const busy = () =>
 const mismatch = () => conflict('MCP call does not match its original scope or input')
 const hostInactive = () => leaseLost('MCP host scope is no longer active')
 const hostRequestSchema = z.strictObject({ fence: contentUndoFenceSchema, targetTaskId: z.uuid() })
+/** The preview is being built or synced: a retry a little later can pass. */
+const previewNotReady = () =>
+  new DomainError('CONTENT_PREVIEW_NOT_READY', 'The preview of the dialog is not ready', 503)
+/** The preview takes no content in this turn: failed, expired, gone or without a database. */
+const previewUnavailable = () =>
+  new DomainError(
+    'CONTENT_PREVIEW_UNAVAILABLE',
+    'The preview of the dialog does not take content',
+    409,
+  )
+/** The preview was rebuilt since the call was admitted: its database is another one. */
+const previewReset = () =>
+  new DomainError('CONTENT_PREVIEW_RESET', 'The preview was rebuilt after the call', 409)
+/** After the seed the object differs from production (Р15): no release could replay a change. */
+const seedMismatch = () =>
+  new DomainError('CONTENT_OBJECT_UNAVAILABLE', 'Published content object is not available', 404)
+
+/**
+ * What one write into a preview adds to the database plan of its dialog (Р3, Р24, «Операции БД и
+ * миграции»): its kind — `content_update` when absent —, the fields of the kind in their one
+ * order, the state hashes before and after (the plugin's receipt), and the sealed values of both
+ * states (`PreviewDbValueStorage`). null — the write changed nothing.
+ */
+export const mcpPreviewOperationSchema = z
+  .strictObject({
+    kind: z.enum(dbJournalKinds).default('content_update'),
+    fields: z.array(z.string()).max(dbContentFields.length),
+    beforeHash: contentHashSchema,
+    afterHash: contentHashSchema,
+    before: dbValueRefSchema,
+    after: dbValueRefSchema,
+  })
+  .refine(
+    (operation) =>
+      operation.kind === 'content_update'
+        ? operation.fields.length > 0 &&
+          JSON.stringify(operation.fields) ===
+            JSON.stringify(orderDbContentFields(operation.fields as DbContentField[]))
+        : JSON.stringify(operation.fields) === JSON.stringify(dbKindFields[operation.kind]),
+    'the fields of the kind in their one order, each once',
+  )
+export type McpPreviewOperation = {
+  kind?: DbJournalKind
+  fields: readonly string[]
+  beforeHash: string
+  afterHash: string
+  before: DbValueRef
+  after: DbValueRef
+}
+const previewRowSchema = z.object({
+  id: z.uuid(),
+  status: z.enum(previewStatuses),
+  dbMode: z.enum(['copy', 'none']),
+  hostname: z.string().min(1).max(253),
+  upstreamHost: z.string().nullable(),
+  upstreamPort: z.number().int().nullable(),
+  writeEpoch: z.number().int().min(0),
+  /** `runtime->'db'` of the row: null — a build before the kinds of a plan. */
+  db: z.unknown(),
+})
+/** A record a plan created: ten digits from DB_CREATED_ID_BASE (the CHECK of the journal). */
+const CREATED_REF_PATTERN = '^[a-z][a-z_]{0,31}:[1-9][0-9]{9}$'
+type PreviewRow = z.infer<typeof previewRowSchema>
 
 /** Stable JSON with limits applied before recursive descent. No input enters diagnostics. */
 export function mcpCanonicalJson(value: unknown): string {
@@ -160,6 +262,19 @@ export class PostgresMcpJournal {
     const scope = this.#access(inputScope)
     await this.#transaction(async (tx) => {
       await this.#active(tx, scope)
+    })
+  }
+
+  /**
+   * The preview of an admitted turn as a read reaches it (Р24), noted like any content access.
+   * A write reads it again under its own lock (`reserve`, `beginWrite`).
+   */
+  async previewTarget(inputScope: McpAccess): Promise<McpPreviewTarget> {
+    const scope = this.#access(inputScope)
+    if (!scope.preview) throw previewUnavailable()
+    return this.#transaction(async (tx) => {
+      await this.#active(tx, scope)
+      return this.#target(scope, await this.#previewRow(tx, scope, false))
     })
   }
 
@@ -216,6 +331,7 @@ export class PostgresMcpJournal {
     input: McpMutationCommand,
     restoresSnapshotId?: string,
     hostUndo = false,
+    creation?: McpCreation,
   ): Promise<McpCallReservation> {
     const scope = this.#scope(inputScope)
     const parsed = commandSchema.safeParse(input)
@@ -226,6 +342,15 @@ export class PostgresMcpJournal {
       (!z.uuid().safeParse(restoresSnapshotId).success || command.tool !== 'restore')
     )
       throw badRequest('Invalid restore source')
+    if (
+      creation !== undefined &&
+      (restoresSnapshotId !== undefined ||
+        scope.host ||
+        !['post', 'page'].includes(creation.type) ||
+        command.objectRef !== `${creation.type}:new` ||
+        !Number.isSafeInteger(creation.floor))
+    )
+      throw badRequest('Invalid creation')
     const requestHash = hash(
       mcpCanonicalJson({
         tool: command.tool,
@@ -242,6 +367,10 @@ export class PostgresMcpJournal {
     }
     return this.#transaction(async (tx) => {
       const owned = await this.#active(tx, scope)
+      // Locked after the lease, as every writer of a preview row takes them.
+      const preview = scope.preview
+        ? this.#target(scope, await this.#previewRow(tx, scope, true))
+        : undefined
       const idempotencyKey = hash(
         JSON.stringify([owned.assignmentId, scope.keyId, command.idempotencyKey]),
       )
@@ -287,11 +416,66 @@ export class PostgresMcpJournal {
       // a write: close it under this lock.
       // Legacy in-flight calls are conservatively included until an operator reconciles them.
       await this.#closeAbandonedCaptures(tx, scope.siteId)
-      const unfinished = await tx.mcpCall.findFirst({
-        where: { result: null, turn: { task: { siteId: scope.siteId } } },
-        select: { id: true },
-      })
-      if (unfinished || owned.inflightMcpCallId !== null) throw busy()
+      if (preview) {
+        // A preview is its own target (Р24): one call at a time into it, and none while a write
+        // of unknown outcome waits for its reset. The site's barrier is not its business.
+        await this.#closeResetCalls(tx, preview, owned.now)
+        if (
+          !creation &&
+          (await tx.previewSeedMismatch.findUnique({
+            where: {
+              previewId_objectRef: { previewId: preview.previewId, objectRef: command.objectRef },
+            },
+            select: { objectRef: true },
+          }))
+        )
+          throw seedMismatch()
+        // A record in the range of created ids that no creation of this dialog made — one the
+        // preview's own code published past a creation's id — is not on production: no plan
+        // carries a change of it, so the call is refused now, not the plan later.
+        if (
+          !creation &&
+          isCreatedRef(command.objectRef) &&
+          !(await tx.previewDbOperation.findFirst({
+            where: {
+              taskId: scope.taskId,
+              objectRef: command.objectRef,
+              kind: 'post_create',
+              excluded: false,
+            },
+            select: { id: true },
+          }))
+        )
+          throw dbOperationNotAllowed('content_update')
+        if (
+          await tx.mcpCall.findFirst({
+            where: { result: null, previewId: preview.previewId },
+            select: { id: true },
+          })
+        )
+          throw busy()
+      } else {
+        const unfinished = await tx.mcpCall.findFirst({
+          where: { result: null, previewId: null, turn: { task: { siteId: scope.siteId } } },
+          select: { id: true },
+        })
+        if (unfinished || owned.inflightMcpCallId !== null) throw busy()
+      }
+      // Every id the task ever gave a created record, excluded turns included: a new one is
+      // never one an earlier turn of the dialog used, whatever became of it (M6 of the review).
+      const created = await tx.$queryRaw<Array<{ id: bigint }>>`
+        SELECT DISTINCT split_part(c.object_ref, ':', 2)::bigint AS id
+        FROM mcp_calls c JOIN task_turns t ON t.id = c.turn_id
+        WHERE t.task_id = ${scope.taskId}::uuid AND c.object_ref ~ ${CREATED_REF_PATTERN}`
+      const createdIds = created.map((row) => Number(row.id)).sort((a, b) => a - b)
+      let objectRef = command.objectRef
+      if (creation) {
+        if (!preview?.db?.createdIds) throw dbOperationNotAllowed('post_create')
+        const id = Math.max(DB_CREATED_ID_BASE, (createdIds.at(-1) ?? 0) + 1, creation.floor)
+        if (id > DB_CREATED_ID_MAX) throw conflict('No id is left for a created record')
+        objectRef = `${creation.type}:${id}`
+        createdIds.push(id)
+      }
       const restoreSource = restoresSnapshotId
         ? await this.#restoreSource(
             tx,
@@ -314,7 +498,7 @@ export class PostgresMcpJournal {
           select: { objectRef: true },
           distinct: ['objectRef'],
         })
-        if (objects.length >= 20 && !objects.some((row) => row.objectRef === command.objectRef))
+        if (objects.length >= 20 && !objects.some((row) => row.objectRef === objectRef))
           throw new DomainError(
             'MCP_APPROVAL_REQUIRED',
             'Changing more than 20 objects requires approval',
@@ -328,9 +512,10 @@ export class PostgresMcpJournal {
           id: snapshotId,
           siteId: scope.siteId,
           taskId: scope.taskId,
-          objectRef: command.objectRef,
+          objectRef,
           s3Key: contentSnapshotKey({ siteId: scope.siteId, id: snapshotId }),
           expiresAt,
+          ...(preview ? { previewId: preview.previewId } : {}),
         },
       })
       const reference: ContentSnapshotRef = {
@@ -338,14 +523,14 @@ export class PostgresMcpJournal {
         workspaceId: scope.workspaceId,
         siteId: scope.siteId,
         taskId: scope.taskId,
-        objectRef: command.objectRef,
+        objectRef,
         expiresAt,
       }
       const call = await tx.mcpCall.create({
         data: {
           turnId: owned.turnId,
           tool: command.tool,
-          objectRef: command.objectRef,
+          objectRef,
           idempotencyKey,
           requestHash,
           credentialKeyId: scope.keyId,
@@ -356,13 +541,19 @@ export class PostgresMcpJournal {
           // Prisma would fill this from the clock of this process; the age of a preparation
           // is measured against PostgreSQL's.
           createdAt: owned.now,
+          ...(preview
+            ? { previewId: preview.previewId, previewWriteEpoch: preview.writeEpoch }
+            : {}),
         },
       })
       return {
         kind: 'claimed',
         callId: call.id,
         snapshot: reference,
+        objectRef,
+        createdIds,
         ...(restoreSource ? { restoreSource } : {}),
+        ...(preview ? { preview } : {}),
       }
     })
   }
@@ -436,7 +627,7 @@ export class PostgresMcpJournal {
       }
     }
     const unfinished = await tx.mcpCall.findFirst({
-      where: { result: null, turn: { task: { siteId: scope.siteId } } },
+      where: { result: null, previewId: null, turn: { task: { siteId: scope.siteId } } },
       select: { id: true },
     })
     if (unfinished || owned.inflightMcpCallId !== null) throw busy()
@@ -479,6 +670,8 @@ export class PostgresMcpJournal {
         objectRef: command.objectRef,
         expiresAt,
       },
+      objectRef: command.objectRef,
+      createdIds: [],
       restoreSource,
     }
   }
@@ -532,15 +725,37 @@ export class PostgresMcpJournal {
         call.revertedAt
       )
         throw conflict('MCP write requires an acknowledged content snapshot')
-      if (owned.inflightMcpCallId !== null) throw busy()
+      if (call.previewId) {
+        // Fenced by the preview's write epoch, never by the site's barrier (Р24).
+        const agent = this.#agent(scope)
+        const preview = this.#target(agent, await this.#previewRow(tx, agent, true))
+        if (preview.previewId !== call.previewId) throw mismatch()
+        if (preview.writeEpoch !== call.previewWriteEpoch) throw previewReset()
+        if (
+          await tx.mcpCall.findFirst({
+            where: { previewId: call.previewId, result: null, NOT: { id: call.id } },
+            select: { id: true },
+          })
+        )
+          throw busy()
+      } else if (owned.inflightMcpCallId !== null) throw busy()
       if (call.restoresSnapshotId)
         await this.#restoreSource(tx, scope, call.restoresSnapshotId, true)
       if (owned.deadlineAt.getTime() - owned.now.getTime() < 2000)
         throw leaseLost('MCP write deadline is too close')
-      await tx.siteLease.update({
-        where: { siteId: scope.siteId },
-        data: { inflightMcpCallId: call.id },
-      })
+      if (!call.previewId)
+        await tx.siteLease.update({
+          where: { siteId: scope.siteId },
+          data: { inflightMcpCallId: call.id },
+        })
+      // The preview's own durable mark of a write that may land (Р22, Р24): from here on it no
+      // longer shows its revision, whatever becomes of this process. Its next rebuild — under a
+      // new write epoch — replays the plan and closes a call left open.
+      else
+        await tx.previewEnvironment.update({
+          where: { id: call.previewId },
+          data: { dirty: true },
+        })
       await tx.mcpCall.update({
         where: { id: call.id },
         data: { writeStartedAt: owned.now, writeDeadlineAt: owned.deadlineAt },
@@ -553,15 +768,30 @@ export class PostgresMcpJournal {
    * Only a proven outcome may complete a write. An expired/revoked owner can persist its
    * evidence while it still owns the same epoch; it cannot authorize another external call.
    * A transport timeout is ambiguous: call markAmbiguous(), never finish(error).
+   *
+   * `operation`: a successful write into a preview adds it to the database plan of the dialog in
+   * this same transaction — what it changed (null: nothing). Only that call takes it.
    */
   async finish(
     inputScope: McpJournalScope,
     callId: string,
     completion: McpCallCompletion,
+    operation?: McpPreviewOperation | null,
   ): Promise<void> {
     const scope = this.#scope(inputScope)
     if (!['ok', 'error', 'denied'].includes(completion.result))
       throw badRequest('Invalid MCP completion')
+    let planned: z.output<typeof mcpPreviewOperationSchema> | null | undefined
+    if (operation !== undefined) {
+      const parsed = operation === null ? null : mcpPreviewOperationSchema.safeParse(operation)
+      if (
+        completion.result !== 'ok' ||
+        (parsed !== null &&
+          (!parsed.success || parsed.data.afterHash !== completion.appliedStateHash))
+      )
+        throw badRequest('Invalid preview database operation')
+      planned = parsed === null ? null : parsed.data
+    }
     if (
       completion.appliedStateHash !== undefined &&
       (completion.result !== 'ok' ||
@@ -583,7 +813,18 @@ export class PostgresMcpJournal {
       }
       if (completion.result === 'ok' && !call.writeStartedAt)
         throw conflict('MCP write has not started')
-      if (call.writeStartedAt && owned.inflightMcpCallId !== call.id) throw mismatch()
+      // A write into a preview records what it changed, and only such a write does.
+      if (
+        call.previewId && completion.result === 'ok' ? planned === undefined : planned !== undefined
+      )
+        throw badRequest('Invalid preview database operation')
+      if (call.previewId) {
+        // A reset since the write began replaced the database it wrote into: it closes the call.
+        if (call.writeStartedAt) {
+          const preview = await this.#previewRow(tx, this.#agent(scope), true)
+          if (preview.writeEpoch !== call.previewWriteEpoch) throw mismatch()
+        }
+      } else if (call.writeStartedAt && owned.inflightMcpCallId !== call.id) throw mismatch()
       if (call.restoresSnapshotId && completion.result === 'ok') {
         if (!completion.appliedStateHash) throw badRequest('Restore requires content proof')
         const source = await this.#restoreCall(tx, scope, call.restoresSnapshotId)
@@ -603,20 +844,75 @@ export class PostgresMcpJournal {
           appliedStateHash: completion.appliedStateHash,
         },
       })
-      if (call.writeStartedAt)
+      if (call.writeStartedAt && !call.previewId)
         await tx.siteLease.update({
           where: { siteId: scope.siteId },
           data: { inflightMcpCallId: null },
         })
       // An operator hold is not silently cleared by a late acknowledgement.
+      if (call.previewId && planned) {
+        const value = (side: 'before' | 'after') => ({
+          taskId: scope.taskId,
+          callId: call.id,
+          side,
+        })
+        if (
+          planned.before.key !== previewDbValueKey(value('before')) ||
+          planned.after.key !== previewDbValueKey(value('after')) ||
+          !dbJournalOperationSchema.safeParse({ ...planned, objectRef: call.objectRef }).success
+        )
+          throw badRequest('Invalid preview database operation')
+        // A record is created once in a task's journal, and only a created one goes to the trash
+        // (M6 of the review): the plan never holds two creations of one id.
+        if (planned.kind === 'post_create' || planned.kind === 'post_trash') {
+          const creations = await tx.previewDbOperation.count({
+            where: { taskId: scope.taskId, objectRef: call.objectRef!, kind: 'post_create' },
+          })
+          if (creations !== (planned.kind === 'post_create' ? 0 : 1))
+            throw badRequest('Invalid preview database operation')
+        }
+        await tx.previewDbOperation.create({
+          data: {
+            taskId: scope.taskId,
+            previewId: call.previewId,
+            turnNo: call.turn.turnNo,
+            mcpCallId: call.id,
+            kind: planned.kind,
+            objectRef: call.objectRef!,
+            fields: [...planned.fields],
+            beforeHash: planned.beforeHash,
+            afterHash: planned.afterHash,
+            beforeObjectKey: planned.before.key,
+            beforeSha256: planned.before.sha256,
+            beforeBytes: planned.before.sizeBytes,
+            afterObjectKey: planned.after.key,
+            afterSha256: planned.after.sha256,
+            afterBytes: planned.after.sizeBytes,
+            createdAt: owned.now,
+          },
+        })
+      }
     })
   }
 
+  /**
+   * A write of unknown outcome. On the site it holds the site for the operator. In a preview it
+   * stays open — no other write enters the preview — and the preview stays dirty (`beginWrite`
+   * marked it): the reset that brings it back to its seed and plan closes the call (Р22, Р24).
+   */
   async markAmbiguous(inputScope: McpJournalScope, callId: string): Promise<void> {
     const scope = this.#scope(inputScope)
     await this.#transaction(async (tx) => {
       const owned = await this.#held(tx, scope)
       const call = await this.#call(tx, scope, callId)
+      if (call.previewId) {
+        if (call.result !== null || !call.writeStartedAt) throw mismatch()
+        await tx.previewEnvironment.update({
+          where: { id: call.previewId },
+          data: { dirty: true },
+        })
+        return
+      }
       if (call.result !== null || !call.writeStartedAt || owned.inflightMcpCallId !== call.id)
         throw mismatch()
       await tx.siteLease.update({
@@ -650,6 +946,11 @@ export class PostgresMcpJournal {
         ttlMs: call.writeDeadlineAt.getTime() - owned.now.getTime(),
         snapshotId: call.snapshotId!,
         restoresSnapshotId: call.restoresSnapshotId,
+        /** Into a preview: its id and the write epoch the call was admitted under. */
+        preview:
+          call.previewId === null
+            ? null
+            : { previewId: call.previewId, writeEpoch: call.previewWriteEpoch! },
       }
     })
   }
@@ -672,6 +973,8 @@ export class PostgresMcpJournal {
         })
         return { kind: 'closed' as const, committed: false }
       }
+      // An unknown write into a preview is closed by its reset, never reconciled here.
+      if (call.previewId) throw conflict('A write into a preview is closed by its reset')
       if (!call.writeDeadlineAt || owned.inflightMcpCallId !== call.id) throw mismatch()
       return {
         kind: 'write' as const,
@@ -751,6 +1054,7 @@ export class PostgresMcpJournal {
         await tx.mcpCall.count({
           where: {
             turn: { taskId: scope.taskId, turnNo },
+            previewId: null,
             result: null,
             writeStartedAt: { not: null },
           },
@@ -758,9 +1062,11 @@ export class PostgresMcpJournal {
       )
         // For the host an unknown write is a reason to come back after its reconciliation.
         throw scope.host ? busy() : conflict('Turn contains an unresolved content write')
+      // Edits of the site only: a preview gives its edits back by its rebuild (Р22).
       const calls = await tx.mcpCall.findMany({
         where: {
           turn: { taskId: scope.taskId, turnNo },
+          previewId: null,
           restoresSnapshotId: null,
           result: 'ok',
           revertedAt: null,
@@ -784,13 +1090,19 @@ export class PostgresMcpJournal {
       await this.#hostActive(tx, scope)
       if (
         await tx.mcpCall.count({
-          where: { turn: { taskId: scope.taskId }, result: null, writeStartedAt: { not: null } },
+          where: {
+            turn: { taskId: scope.taskId },
+            previewId: null,
+            result: null,
+            writeStartedAt: { not: null },
+          },
         })
       )
         throw busy()
       const calls = await tx.mcpCall.findMany({
         where: {
           turn: { taskId: scope.taskId },
+          previewId: null,
           restoresSnapshotId: null,
           result: 'ok',
           revertedAt: null,
@@ -873,6 +1185,8 @@ export class PostgresMcpJournal {
     if (
       calls.length !== 1 ||
       !call ||
+      // A snapshot of a preview is restored into that preview only, never into the site.
+      call.previewId !== (scope.host ? null : (scope.preview?.id ?? null)) ||
       !call.assignmentId ||
       call.assignment?.taskId !== scope.taskId ||
       call.assignment.siteId !== scope.siteId ||
@@ -914,6 +1228,7 @@ export class PostgresMcpJournal {
       const latest = await tx.mcpCall.findFirst({
         where: {
           objectRef: call.objectRef,
+          previewId: call.previewId,
           restoresSnapshotId: null,
           result: 'ok',
           revertedAt: null,
@@ -931,6 +1246,7 @@ export class PostgresMcpJournal {
         sizeBytes: call.snapshot!.sizeBytes!,
       },
       expectedStateHash: call.appliedStateHash!,
+      callId: call.id,
     }
   }
 
@@ -973,6 +1289,7 @@ export class PostgresMcpJournal {
     const assignment = call.assignment
     if (
       !assignment ||
+      call.previewId !== (scope.preview?.id ?? null) ||
       call.credentialKeyId !== scope.keyId ||
       !call.requestHash ||
       (exactEpoch && call.leaseEpoch !== scope.epoch) ||
@@ -1013,6 +1330,8 @@ export class PostgresMcpJournal {
           call.assignment.turnNo === call.turn.turnNo
     if (
       !owner ||
+      // The host restores the site only; a write into a preview is closed by its reset.
+      call.previewId !== null ||
       !call.requestHash ||
       (exactEpoch && call.leaseEpoch !== scope.epoch) ||
       call.turn.taskId !== scope.taskId ||
@@ -1124,6 +1443,75 @@ export class PostgresMcpJournal {
       data: { contentAccessedAt: row.now },
     })
     return { ...lease, ...row, turnId: row.turnId }
+  }
+
+  /** The agent's scope of a call into a preview: the host never owns one (#hostOwns). */
+  #agent(scope: Scope): McpAccess {
+    if (scope.host || !scope.preview) throw mismatch()
+    return scope
+  }
+
+  /**
+   * The preview of the turn's dialog, locked when the caller is going to write into it; locks are
+   * taken after the site lease. The row of another task or site does not exist for this scope.
+   */
+  async #previewRow(tx: Tx, scope: McpAccess, lock: boolean): Promise<PreviewRow> {
+    if (!scope.preview) throw previewUnavailable()
+    const rows = await tx.$queryRaw<unknown[]>`
+      SELECT id, status::text AS status, db_mode::text AS "dbMode", hostname,
+        upstream_host AS "upstreamHost", upstream_port AS "upstreamPort", write_epoch AS "writeEpoch",
+        runtime->'db' AS db
+      FROM preview_environments
+      WHERE id = ${scope.preview.id}::uuid AND task_id = ${scope.taskId}::uuid
+        AND site_id = ${scope.siteId}::uuid
+      ${lock ? Prisma.sql`FOR UPDATE` : Prisma.empty}`
+    if (rows.length !== 1) throw previewUnavailable()
+    const row = previewRowSchema.safeParse(rows[0])
+    if (!row.success)
+      throw new DomainError('MCP_ACCESS_SCOPE_INVALID', 'MCP admission row is invalid', 503)
+    return row.data
+  }
+
+  /**
+   * A preview that takes content now (Р4, Р24): built, with its own database and an upstream.
+   * A build moves the write epoch to 1 and on before it loads the seed: 0 means none ran yet.
+   */
+  #target(scope: McpAccess, row: PreviewRow): McpPreviewTarget {
+    if (row.dbMode !== 'copy') throw previewUnavailable()
+    if (row.status === 'pending' || row.status === 'building') throw previewNotReady()
+    if (row.status !== 'ready') throw previewUnavailable()
+    if (row.upstreamHost === null || row.upstreamPort === null || row.writeEpoch < 1)
+      throw previewNotReady()
+    return {
+      previewId: row.id,
+      siteId: scope.siteId,
+      workspaceId: scope.workspaceId,
+      stack: z.enum(siteStacks).parse(scope.stack),
+      hostname: row.hostname,
+      upstream: { host: row.upstreamHost, port: row.upstreamPort },
+      writeEpoch: row.writeEpoch,
+      // What its last build found the agent may change in its database; a build before the kinds
+      // of a plan, or a record of another shape, takes the text of records alone.
+      db: previewDbRuntimeSchema.safeParse(row.db).data ?? { ...textOnlyDbRuntime },
+    }
+  }
+
+  /**
+   * Calls into the preview left open under an earlier write epoch: the reset that moved the
+   * epoch replaced the database they wrote into, so they changed nothing that stays. A started
+   * write closes only past its deadline, as the reset waits for it: until then its request may
+   * still be on its way. Closed under the preview's lock.
+   */
+  async #closeResetCalls(tx: Tx, preview: McpPreviewTarget, now: Date): Promise<void> {
+    await tx.mcpCall.updateMany({
+      where: {
+        previewId: preview.previewId,
+        result: null,
+        previewWriteEpoch: { lt: preview.writeEpoch },
+        OR: [{ writeStartedAt: null }, { writeDeadlineAt: { lte: now } }],
+      },
+      data: { result: 'error', response: { code: 'CONTENT_PREVIEW_RESET' }, finishedAt: now },
+    })
   }
 
   async #transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {

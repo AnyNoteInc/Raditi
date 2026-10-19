@@ -302,6 +302,27 @@ describe('on a paid tariff that renews', () => {
     expect(told({ tariff: 700, facts: { today: { charged: 120 } } }).text).toBe(
       `Кредиты по тарифу на сегодня закончились: дневной лимит — 50. ${tomorrow}`,
     )
+    // What is set aside cannot give the day back once the charges took all of it.
+    expect(
+      told({ tariff: 700, tariffHeld: 10, facts: { today: { charged: 60, held: 10 } } }).text,
+    ).toBe(`Кредиты по тарифу на сегодня закончились: дневной лимит — 50. ${tomorrow}`)
+  })
+
+  // The owner, 19.10.2026: the day does not bound «Попробовать ещё», so its reserve can hold more
+  // than the limit; what it does not use still comes back to the day.
+  it('says that the day is set aside when a retry holds more than the limit', () => {
+    expect(
+      told({ tariff: 180, tariffHeld: 120, offer: PACK, facts: { today: { held: 120 } } }),
+    ).toEqual({
+      reason: 'daily_limit',
+      text: `Кредиты по тарифу на сегодня заняты: при дневном лимите 50 отложено под задачи в работе 120. Неиспользованные кредиты вернутся, когда задачи закончатся, а завтра снова можно будет потратить до 50 кредитов. ${packToday}`,
+      actions: ['buy_pack'],
+    })
+    expect(
+      told({ tariff: 170, tariffHeld: 120, facts: { today: { charged: 10, held: 120 } } }).text,
+    ).toBe(
+      'Кредиты по тарифу на сегодня заняты: при дневном лимите 50 списано 10 и отложено под задачи в работе 120. Неиспользованные кредиты вернутся, когда задачи закончатся, а завтра снова можно будет потратить до 50 кредитов.',
+    )
   })
 
   // C7: «завтра» only while the tariff still takes tasks when the next Moscow day starts.

@@ -5,6 +5,12 @@
 export const phpServerConfigFiles = ['.htaccess', '.user.ini', 'php.ini'] as const
 
 /**
+ * The same files as protected paths at any depth (docs/plan/53-chat-preview-release.md, Р12):
+ * Apache and PHP read them in every folder, a theme's or the media library's included.
+ */
+export const phpServerConfigProtected = phpServerConfigFiles.map((name) => `**/${name}`)
+
+/**
  * Database dumps and archives: full copies of the site with personal data and credentials.
  * Never imported into git or packed into a turn snapshot, at any depth (.gitignore lines).
  */

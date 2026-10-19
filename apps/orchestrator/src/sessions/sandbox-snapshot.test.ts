@@ -140,6 +140,51 @@ describe('SandboxSnapshotTransport', () => {
     )
   })
 
+  it('takes new media below add-only paths that an ignore file hides (plan 53, Р12)', async () => {
+    const parts = await fixture()
+    const media = 'wp-content/uploads/raditi/hero.png'
+    const fake = sandboxFixture(parts, (spec) =>
+      spec.argv.includes('ls-files') && !spec.argv.includes('--exclude-standard')
+        ? { stdout: Buffer.from(`new.txt\0${media}\0`) }
+        : undefined,
+    )
+    await new SandboxSnapshotTransport().capture(
+      fake.sandbox,
+      state,
+      baseSha,
+      [],
+      ['wp-content/uploads/raditi/'],
+    )
+    const lists = fake.calls.filter(({ spec }) => spec.argv.includes('ls-files'))
+    expect(lists.map(({ spec }) => spec.argv)).toEqual([
+      ['git', '-c', 'core.fsmonitor=false', 'ls-files', '--others', '--exclude-standard', '-z'],
+      [
+        'git',
+        '--literal-pathspecs',
+        '-c',
+        'core.fsmonitor=false',
+        'ls-files',
+        '--others',
+        '-z',
+        '--',
+        'wp-content/uploads/raditi/',
+      ],
+    ])
+    const untracked = fake.calls.filter(({ spec }) => spec.argv.includes('--create'))[1]!
+    // Each name once, the ignored media after what the site's ignore files let through.
+    expect(untracked.stdin.toString()).toBe(`new.txt\0${media}\0`)
+  })
+
+  it('lists untracked files once without add-only paths, and refuses add-only paths it cannot read', async () => {
+    const parts = await fixture()
+    const fake = sandboxFixture(parts)
+    await new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha)
+    expect(fake.calls.filter(({ spec }) => spec.argv.includes('ls-files'))).toHaveLength(1)
+    await expect(
+      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha, [], ['../x/']),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
   it('refuses a capture whose home or new files hold a turn credential, before returning it', async () => {
     const key = 'synthetic-mcp-token-0123456789'
     const clean = await fixture()
@@ -155,6 +200,33 @@ describe('SandboxSnapshotTransport', () => {
     const fake = sandboxFixture(clean)
     await expect(
       new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha, [key]),
+    ).resolves.toEqual(clean)
+  })
+
+  it("refuses a home that still holds a value of the client's variables, in any spelling (Р13)", async () => {
+    const value = 'pay-se"cret-0001'
+    const clean = await fixture()
+    // As a JSON row of the session holds it: escaped once.
+    const home = await archive('sessions/run.jsonl', JSON.stringify({ output: value }))
+    await expect(
+      new SandboxSnapshotTransport().capture(
+        sandboxFixture({ ...clean, home }).sandbox,
+        state,
+        baseSha,
+        [],
+        [],
+        [value],
+      ),
+    ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+    await expect(
+      new SandboxSnapshotTransport().capture(
+        sandboxFixture(clean).sandbox,
+        state,
+        baseSha,
+        [],
+        [],
+        [value],
+      ),
     ).resolves.toEqual(clean)
   })
 
