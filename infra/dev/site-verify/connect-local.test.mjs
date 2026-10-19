@@ -966,6 +966,26 @@ test('the command is a stand tool: no .env, no secret in its output, no product 
   assert.match(command, /activateSite\(/)
 })
 
+test("the command's own home holds the compose plugin of the stand's Docker CLI and nothing else of Docker", () => {
+  const stand = read('infra/dev/site-verify/verify-site-connect.mjs')
+  // The command gets a home of its own, never the developer's.
+  assert.match(stand, /\n    HOME: join\(directory, 'home'\),\n/)
+  // Docker Desktop may keep the compose plugin only under the home: without it every WP-CLI
+  // call of the command fails, and the command reports a site that does not run.
+  assert.match(stand, /docker\(\['info', '--format', '\{\{json \.ClientInfo\.Plugins\}\}'\]\)/)
+  assert.match(
+    stand,
+    /const commandPlugins = join\(directory, 'home', '\.docker', 'cli-plugins'\)\n\s+await mkdir\(commandPlugins, \{ recursive: true, mode: 0o700 \}\)\n\s+await symlink\(composePlugin, join\(commandPlugins, 'docker-compose'\)\)/,
+  )
+  // Only the plugin: no configuration (credentials, contexts) is copied into that home.
+  assert.doesNotMatch(stand, /config\.json/)
+  // The command's CLI is checked before the first connection.
+  assert.match(
+    stand,
+    /await command\('docker', \['compose', 'version', '--short'\], \{ env: connectEnvironment\(\) \}\)/,
+  )
+})
+
 test('the stand keeps its signal handlers through the cleanup and is started by exec', () => {
   const stand = read('infra/dev/site-verify/verify-site-connect.mjs')
   assert.doesNotMatch(stand, /process\.once\('SIG/)

@@ -12,11 +12,11 @@
 // No .env file, subscription, cloud or image pull.
 import assert from 'node:assert/strict'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { request as httpsRequest } from 'node:https'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -395,6 +395,21 @@ async function main() {
   await chmod(directory, 0o700)
   for (const leaf of ['home', 'role-home', 'tokens'])
     await mkdir(join(directory, leaf), { mode: 0o700 })
+  // The command runs with a home of its own (connectEnvironment): nothing of the developer's home
+  // reaches it. Docker Desktop may keep the compose plugin of the CLI only under that home
+  // (~/.docker/cli-plugins, measured 19.10.2026): the plugin the stand's CLI runs is linked into
+  // the command's home — never the configuration and the credentials beside it.
+  const clientPlugins = JSON.parse(
+    (await docker(['info', '--format', '{{json .ClientInfo.Plugins}}'])).stdout,
+  )
+  const composePlugin = clientPlugins.find((plugin) => plugin?.Name === 'compose')?.Path
+  assert(
+    typeof composePlugin === 'string' && isAbsolute(composePlugin),
+    'The Docker CLI of the stand has no compose plugin',
+  )
+  const commandPlugins = join(directory, 'home', '.docker', 'cli-plugins')
+  await mkdir(commandPlugins, { recursive: true, mode: 0o700 })
+  await symlink(composePlugin, join(commandPlugins, 'docker-compose'))
   const marker = randomBytes(16).toString('hex')
   resources = ownedContainers(docker, marker)
   const databasePassword = randomBytes(24).toString('hex')
@@ -640,6 +655,8 @@ async function main() {
     CONNECT_COMPOSE_PROJECT: project,
     SITE_WPCLI_IMAGE: wpcliImage,
   })
+  // The Docker CLI of the command finds compose in its own home, or it could not run WP-CLI.
+  await command('docker', ['compose', 'version', '--short'], { env: connectEnvironment() })
   const outputs = []
   const connect = async (siteId, overrides = {}) => {
     const result = await command(process.execPath, [connectScript, '--site', siteId], {
