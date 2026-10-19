@@ -16,6 +16,11 @@ const databaseUrl = process.env.DATABASE_URL
 const image = `registry.invalid/raditi/opencode@sha256:${'a'.repeat(64)}`
 const baseSha = 'b'.repeat(40)
 const headSha = 'c'.repeat(40)
+const home = {
+  root: '/agent-home/opencode',
+  include: ['.local/share/opencode/opencode.db'],
+  exclude: [],
+}
 
 describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
   let schema: MigratedSchema
@@ -128,8 +133,185 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         context: { ...plan.context, turn },
       },
     })
-    return { task, site, input, plan, next, leases, fence }
+    /**
+     * A later turn as the planner builds it (plan 53, R3): a continuation names the checkpoint
+     * of turn `previous`, a rebased start or replacement names none.
+     */
+    const step = (
+      turn: number,
+      options: { base: string; previous?: number; rebased?: true; pin?: string | null },
+    ): OpenTurnAssignment => {
+      const opened = options.pin === undefined ? next(turn) : next(turn, turn - 1, options.pin)
+      const previous = options.previous
+      opened.plan = {
+        ...opened.plan,
+        ...(previous === undefined
+          ? {}
+          : {
+              previous: {
+                workspaceId: workspace.id,
+                sessionId,
+                turn: previous,
+                image,
+                driver: { id: 'opencode' as const, version: '1.0.0' },
+                home,
+              },
+            }),
+        ...(options.rebased ? { rebased: true } : {}),
+        workspace: { ...opened.plan.workspace, expectedBaseSha: options.base },
+      }
+      return opened
+    }
+    /** Closes a turn; a completed one published `head`. */
+    const close = async (
+      assignment: { id: string; turn: number },
+      outcome: 'completed' | 'failed',
+      head?: string,
+    ) => {
+      if (head)
+        await db.taskTurn.updateMany({
+          where: { taskId: task.id, turnNo: assignment.turn },
+          data: { headSha: head },
+        })
+      expect(await store.finish({ id: assignment.id, epoch: 1, outcome })).toBe(true)
+    }
+    let revision = 0
+    /** The standing candidate of the dialog; «Обновить» records its head under the task's turn. */
+    const candidate = async (turnNo: number, head: string) => {
+      await db.taskCandidate.updateMany({
+        where: { taskId: task.id, status: 'current' },
+        data: { status: 'superseded', supersededAt: new Date() },
+      })
+      await db.taskCandidate.create({
+        data: {
+          taskId: task.id,
+          revision: ++revision,
+          turnNo,
+          baseSha,
+          baseTree: 'd'.repeat(40),
+          headSha: head,
+          dbPlanSha256: '0'.repeat(64),
+          proposedBump: 'minor',
+          proposedVersion: 'v0.1.0',
+          facts: {},
+        },
+      })
+    }
+    return { task, site, input, plan, next, leases, fence, step, close, candidate }
   }
+
+  describe('after «Обновить» moved the candidate (plan 53, Р27)', () => {
+    const moved = 'e'.repeat(40)
+    const movedAgain = 'f'.repeat(40)
+
+    it('continues a completed turn while the candidate stands on its head', async () => {
+      const f = await fixture()
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.candidate(1, headSha)
+      await expect(store.open(f.step(2, { base: headSha, rebased: true }))).rejects.toThrow(
+        'does not start on the candidate',
+      )
+      expect(await store.open(f.step(2, { base: headSha, previous: 1 }))).not.toBeNull()
+    })
+
+    it('starts a new session on the moved head and refuses the continuation of the old one', async () => {
+      const f = await fixture()
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.candidate(1, headSha)
+      await f.candidate(1, moved)
+
+      await expect(store.open(f.step(2, { base: headSha, previous: 1 }))).rejects.toThrow(
+        '«Обновить» moved the task branch',
+      )
+      for (const wrong of [
+        f.step(2, { base: headSha, rebased: true }),
+        f.step(2, { base: moved, rebased: true, previous: 1 }),
+      ])
+        await expect(store.open(wrong)).rejects.toMatchObject({
+          code: 'CONFLICT',
+          message: 'A rebased turn does not start on the candidate «Обновить» moved',
+        })
+      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(1)
+
+      const second = (await store.open(f.step(2, { base: moved, rebased: true })))!
+      expect(second.plan.rebased).toBe(true)
+      expect(
+        await db.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId: f.task.id, turnNo: 2 } },
+        }),
+      ).toMatchObject({ status: 'running', baseSha: moved })
+
+      // The new session completed without a change: the candidate stays on the moved head, and
+      // the next turn continues the session that stands there.
+      await f.close(second, 'completed', moved)
+      expect(await store.open(f.step(3, { base: moved, previous: 2 }))).not.toBeNull()
+    })
+
+    it('replaces a failed new session with its own input, pinned on the moved head', async () => {
+      const f = await fixture()
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.candidate(1, moved)
+      await f.close((await store.open(f.step(2, { base: moved, rebased: true })))!, 'failed')
+
+      for (const [wrong, message] of [
+        [f.step(3, { base: moved, rebased: true, pin: headSha }), 'pin the published task branch'],
+        [f.step(3, { base: moved, pin: moved }), 'replaced turn input'],
+        [f.step(3, { base: headSha, previous: 1, pin: moved }), 'replaced turn input'],
+      ] as const)
+        await expect(store.open(wrong)).rejects.toThrow(message)
+
+      const third = await store.open(f.step(3, { base: moved, rebased: true, pin: moved }))
+      expect(third?.plan).toMatchObject({ replacesTurn: 2, rebased: true })
+    })
+
+    it('replaces a turn that failed before the move with a new session on the moved head', async () => {
+      const f = await fixture()
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.candidate(1, headSha)
+      await f.close((await store.open(f.step(2, { base: headSha, previous: 1 })))!, 'failed')
+      // The dialog waited with its candidate; «Обновить» moved it under the task's turn 2.
+      await f.candidate(2, moved)
+
+      await expect(store.open(f.step(3, { base: moved, rebased: true }))).rejects.toThrow(
+        'must be replaced',
+      )
+      await expect(
+        store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })),
+      ).rejects.toThrow('pin the published task branch')
+      // The input of the failed turn stands on the old main: publishing it would undo the move.
+      for (const wrong of [
+        f.step(3, { base: headSha, previous: 1, pin: moved }),
+        f.step(3, { base: moved, previous: 1, pin: moved, rebased: true }),
+      ])
+        await expect(store.open(wrong)).rejects.toMatchObject({
+          code: 'CONFLICT',
+          message: 'Replacement does not start on the candidate «Обновить» moved',
+        })
+
+      const third = (await store.open(f.step(3, { base: moved, rebased: true, pin: moved })))!
+      expect(third.plan).toMatchObject({ replacesTurn: 2, rebased: true })
+      await f.close(third, 'failed')
+
+      // A second «Обновить» after the failed new session: the next one starts on its head.
+      await f.candidate(3, movedAgain)
+      await expect(
+        store.open(f.step(4, { base: moved, rebased: true, pin: movedAgain })),
+      ).rejects.toThrow('does not start on the candidate')
+      expect(
+        await store.open(f.step(4, { base: movedAgain, rebased: true, pin: movedAgain })),
+      ).not.toBeNull()
+    })
+
+    it('never starts the first turn as rebased', async () => {
+      const f = await fixture()
+      await expect(
+        store.open({ ...f.input, plan: { ...f.plan, rebased: true } }),
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The first product turn has no predecessor',
+      })
+    })
+  })
 
   it('atomically admits one running TaskTurn and never reuses its number', async () => {
     const f = await fixture()

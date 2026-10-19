@@ -11,6 +11,27 @@ export {
 } from './client.ts'
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
 export {
+  enqueueAgentTurn,
+  enqueuePreviewBrowser,
+  enqueuePreviewSync,
+  enqueueReleaseAdvance,
+  enqueueSiteWaitingPasses,
+} from './chat-outbox.ts'
+export { enqueueCandidateRebase, enqueueTurnCancel } from './task-commands-outbox.ts'
+export { taskHasProductionWrites } from './task-production-writes.ts'
+export { classProfile, type ClassProfile } from './class-profile.ts'
+export {
+  BROWSER_CHECKS_EVENT,
+  BROWSER_SCREENSHOT_EVENT,
+  browserChecksEventSchema,
+  browserScreenshotEventSchema,
+  carryBrowserChecks,
+  recordBrowserChecks,
+  type BrowserChecksRun,
+} from './browser-checks.ts'
+export { markStaleCandidates } from './preview-staleness.ts'
+export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
+export {
   ensurePersonalWorkspace,
   findPersonalWorkspace,
   lockUserRow,
@@ -24,14 +45,76 @@ export {
   type SiteActivationResult,
 } from './site-activation.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
+export {
+  freeReleaseLease,
+  holdReleaseForOperator,
+  ownsReleaseLease,
+  raiseReleaseBarrier,
+  recordReleaseLease,
+  renewReleaseLease,
+  returnReleaseFromOperator,
+  takeOverReleaseLease,
+  type ReleaseLease,
+} from './release-leases.ts'
+export {
+  recordReleaseStep,
+  releaseAttemptWrote,
+  releaseWritingAttempt,
+  wakeRelease,
+  type ReleaseStepRecord,
+} from './release-records.ts'
+export {
+  installRelease,
+  markSiteCandidatesStale,
+  type InstalledRelease,
+} from './release-install.ts'
+export {
+  enqueueUndoPlan,
+  failUndoPlan,
+  recordUndoPlan,
+  requestUndoPlan,
+  undoReturnsTo,
+  wakeUndoPlan,
+  type ReadyUndoPlan,
+  type UndoPlanRequest,
+} from './release-undo.ts'
+export {
+  RELEASE_RESOLVE_AUDIT_ACTION,
+  resolveRelease,
+  type ReleaseResolveInput,
+  type ReleaseResolveResult,
+} from './release-resolve.ts'
 export { enqueueSiteProvisioningStage } from './site-provisioning.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
+export {
+  cancelWaitingTask,
+  claimQueuedTask,
+  excludeTurnDbOperations,
+  finishEmptiedDialog,
+  nextCandidateRevision,
+  recordCandidate,
+  rejectTurn,
+  requestPreviewSync,
+  settledTaskStatuses,
+  settleTurn,
+  supersedeStandingCandidate,
+  waitingTaskStatuses,
+  type CandidateRecordInput,
+  type ClaimedTask,
+  type RecordedCandidate,
+  type SettledTaskStatus,
+  type SettledTurn,
+  type SettleTurnInput,
+  type TaskClaimInput,
+} from './task-settle.ts'
 
 export { Prisma, PrismaClient } from './generated/prisma/client.ts'
 export {
   AuditActorType,
   BillingUnit,
+  CandidateCheckStatus,
+  CandidateStatus,
   ChangeType,
   Channel,
   ConnectionTls,
@@ -39,6 +122,7 @@ export {
   ConsentSource,
   CredentialKind,
   DatabaseEngine,
+  DbOperationKind,
   DeployMethod,
   DeploymentKind,
   DeploymentStatus,
@@ -56,17 +140,25 @@ export {
   OrderStatus,
   OutboxEventStatus,
   PlanKind,
+  PreviewDbMode,
+  PreviewStatus,
   ProvisioningStage,
   ProvisioningStageStatus,
   ReceiptStatus,
+  ReleaseKind,
+  ReleaseStatus,
   SiteSourceKind,
   SiteStack,
   SiteStatus,
   SubscriptionStatus,
+  TaskMode,
   TaskStatus,
+  TaskWaiting,
   TurnAssignmentOutcome,
   TurnExecutorKind,
   TurnStatus,
+  UndoPlanStatus,
+  VersionBump,
   WorkspaceDataClass,
 } from './generated/prisma/client.ts'
 export type {
@@ -75,6 +167,7 @@ export type {
   Attachment,
   AuditLog,
   BillingAccount,
+  CandidateCheck,
   ChannelIdentity,
   ChatSession,
   CreditHold,
@@ -93,19 +186,30 @@ export type {
   Order,
   OutboxEvent,
   Plan,
+  PreviewBrowserRequest,
+  PreviewDbOperation,
+  PreviewEnvironment,
+  PreviewSession,
+  PreviewSyncRequest,
+  PreviewTicket,
   PricingRule,
   RateLimit,
+  ReleaseStep,
+  ReleaseUndoPlan,
   Session,
   Site,
   SiteCodeSource,
   SiteDatabase,
   SiteDatabaseSchema,
+  SiteEnvVar,
   SiteLease,
   SiteProvisioningStage,
+  SiteRelease,
   Snapshot,
   Subscription,
   SubscriptionAccount,
   Task,
+  TaskCandidate,
   TaskEvent,
   TaskTurn,
   TokenUsage,

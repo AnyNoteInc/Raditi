@@ -32,6 +32,7 @@ const rowsSchema = z.array(
     expires_at: z.coerce.date().nullable(),
     server_now: z.coerce.date(),
     held_for_operator: z.boolean(),
+    inflight_release_id: id.nullable(),
   }),
 )
 
@@ -46,6 +47,7 @@ function authority(raw: unknown): SiteLeaseAuthority | null {
         expiresAt: row.expires_at,
         serverNow: row.server_now,
         heldForOperator: row.held_for_operator,
+        inflightReleaseId: row.inflight_release_id,
       }
     : null
 }
@@ -83,7 +85,9 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
     input: Omit<SiteLeaseFence, 'epoch'> & { ttlMs: number },
   ): Promise<SiteLeaseGrant | null> {
     const parsed = fenceSchema.omit({ epoch: true }).extend({ ttlMs: ttlSchema }).parse(input)
-    // The task/site match is checked here, not left to two independent foreign keys.
+    // The task/site match is checked here, not left to two independent foreign keys. A release
+    // barrier refuses even under an expired lease: recovery of a release moves its lease with
+    // its own row (plan 53, R8b), never through acquire.
     return grant(
       await this.db.$queryRaw`
       WITH lease_clock AS MATERIALIZED (SELECT clock_timestamp() AS instant)
@@ -99,10 +103,11 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
         expires_at = EXCLUDED.expires_at, held_for_operator = false, updated_at = EXCLUDED.updated_at
       WHERE NOT site_leases.held_for_operator
         AND site_leases.inflight_mcp_call_id IS NULL
+        AND site_leases.inflight_release_id IS NULL
         AND (site_leases.holder_task_id IS NULL OR site_leases.expires_at <= (SELECT instant FROM lease_clock))
         AND site_leases.epoch < 2147483647
       RETURNING site_id, holder_task_id, operation, epoch, expires_at, held_for_operator,
-        (SELECT instant FROM lease_clock) AS server_now`,
+        inflight_release_id, (SELECT instant FROM lease_clock) AS server_now`,
     )
   }
 
@@ -127,7 +132,7 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
       FROM locked WHERE l.site_id = locked.site_id
         AND NOT l.held_for_operator AND l.expires_at > clock_timestamp()
       RETURNING l.site_id, l.holder_task_id, l.operation, l.epoch, l.expires_at, l.held_for_operator,
-        clock_timestamp() AS server_now`,
+        l.inflight_release_id, clock_timestamp() AS server_now`,
     )
   }
 
@@ -150,7 +155,8 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
         expires_at = NULL, updated_at = clock_timestamp()
       WHERE site_id = ${f.siteId}::uuid AND holder_task_id = ${f.taskId}::uuid
         AND epoch = ${f.epoch} AND operation = ${f.operation}::"LeaseOperation"
-        AND NOT held_for_operator AND inflight_mcp_call_id IS NULL AND expires_at > clock_timestamp()
+        AND NOT held_for_operator AND inflight_mcp_call_id IS NULL AND inflight_release_id IS NULL
+        AND expires_at > clock_timestamp()
       RETURNING site_id`
     return rows.length === 1
   }
@@ -160,7 +166,8 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
     return authority(
       await this.db.$queryRaw`
       SELECT site_id, holder_task_id, operation, epoch, expires_at, held_for_operator,
-        clock_timestamp() AS server_now FROM site_leases WHERE site_id = ${checked}::uuid`,
+        inflight_release_id, clock_timestamp() AS server_now
+      FROM site_leases WHERE site_id = ${checked}::uuid`,
     )
   }
 
@@ -178,12 +185,13 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
   async free(input: SiteLeaseFence): Promise<boolean> {
     const f = fenceSchema.parse(input)
     // The epoch stays: every fenced write also names the holder, and the next acquire moves on.
+    // A release barrier is never freed here: what its deploy wrote is the release's to settle.
     const rows = await this.db.$queryRaw<Array<{ site_id: string }>>`
       UPDATE site_leases SET holder_task_id = NULL, operation = NULL, acquired_at = NULL,
         expires_at = NULL, held_for_operator = false, updated_at = clock_timestamp()
       WHERE site_id = ${f.siteId}::uuid AND holder_task_id = ${f.taskId}::uuid
         AND epoch = ${f.epoch} AND operation = ${f.operation}::"LeaseOperation"
-        AND inflight_mcp_call_id IS NULL
+        AND inflight_mcp_call_id IS NULL AND inflight_release_id IS NULL
       RETURNING site_id`
     return rows.length === 1
   }

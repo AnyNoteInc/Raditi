@@ -45,6 +45,12 @@ model User {
   tasksCreated      Task[]
   attachments       Attachment[]
   orders            Order[]
+  previewTickets    PreviewTicket[]
+  previewSessions   PreviewSession[]
+  releasesApproved  SiteRelease[]
+  undoPlansAsked    ReleaseUndoPlan[]
+  envVarsConsented  SiteEnvVar[]      @relation("SiteEnvVarConsent")
+  envVarsCreated    SiteEnvVar[]      @relation("SiteEnvVarCreator")
 
   @@map("users")
 }
@@ -231,26 +237,41 @@ enum Channel {
 // ─── Sites (spec §10, §12, §13) ───────────────────────────────────────────────
 
 model Site {
-  id             String      @id @default(uuid(7)) @db.Uuid
-  workspaceId    String      @map("workspace_id") @db.Uuid
-  name           String      @db.VarChar(255)
+  id                 String      @id @default(uuid(7)) @db.Uuid
+  workspaceId        String      @map("workspace_id") @db.Uuid
+  name               String      @db.VarChar(255)
   /// Public origin of the production site, e.g. https://example.ru.
-  url            String      @db.VarChar(512)
-  stack          SiteStack
-  status         SiteStatus  @default(onboarding)
+  url                String      @db.VarChar(512)
+  stack              SiteStack
+  status             SiteStatus  @default(onboarding)
   /// sync: server-side changes are committed to main before a deploy; freeze: DISALLOW_FILE_MODS.
-  driftPolicy    DriftPolicy @default(sync) @map("drift_policy")
+  driftPolicy        DriftPolicy @default(sync) @map("drift_policy")
   /// First tasks go through an operator before the client sees them (spec §12, step 8).
-  operatorReview Boolean     @default(true) @map("operator_review")
+  operatorReview     Boolean     @default(true) @map("operator_review")
   /// What the site is about, in the owner's words (wizard, step 1). Not given to an agent.
-  description    String?     @db.VarChar(2000)
+  description        String?     @db.VarChar(2000)
   /// A page on the site's own origin that shows the site works. Stored, never requested; whoever
   /// requests it later must resolve and check the address again (spec §12).
-  healthcheckUrl String?     @map("healthcheck_url") @db.VarChar(1024)
-  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  healthcheckUrl     String?     @map("healthcheck_url") @db.VarChar(1024)
+  /// The first label of its preview addresses (docs/plan/53-chat-preview-release.md, Р17): eight
+  /// hex characters drawn by the database, unique across the platform; an insert whose alias is
+  /// taken draws again (trigger sites_free_alias). CHECK sites_alias_check.
+  alias              String      @unique @default(dbgenerated("substr(md5((gen_random_uuid())::text), 1, 8)")) @db.VarChar(12)
+  /// What the hosting holds: changed only after a release passed its check (Р26). All three
+  /// together (CHECK sites_installed_check); the release is NULL for the version of the import.
+  installedVersion   String?     @map("installed_version") @db.VarChar(32)
+  installedSha       String?     @map("installed_sha") @db.Char(40)
+  installedAt        DateTime?   @map("installed_at") @db.Timestamptz(6)
+  installedReleaseId String?     @map("installed_release_id") @db.Uuid
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   workspace          Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  installedRelease   SiteRelease?            @relation("SiteInstalledRelease", fields: [installedReleaseId], references: [id], onDelete: SetNull)
+  releases           SiteRelease[]           @relation("SiteReleases")
+  undoPlans          ReleaseUndoPlan[]
+  previews           PreviewEnvironment[]
+  envVars            SiteEnvVar[]
   lease              SiteLease?
   gitRepositories    GitRepository[]
   environments       Environment[]
@@ -266,6 +287,7 @@ model Site {
   provisioningStages SiteProvisioningStage[]
 
   @@unique([workspaceId, url])
+  @@index([installedReleaseId])
   @@map("sites")
 }
 
@@ -307,11 +329,15 @@ model SiteLease {
   heldForOperator   Boolean         @default(false) @map("held_for_operator")
   /// Durable barrier: expiry or a process crash cannot free an unconfirmed content write.
   inflightMcpCallId String?         @unique @map("inflight_mcp_call_id") @db.Uuid
+  /// Durable barrier of a release (plan 53, Р9): acquire refuses while it stands; only under
+  /// the lease of a deploy (CHECK site_leases_release_barrier_check).
+  inflightReleaseId String?         @unique @map("inflight_release_id") @db.Uuid
   updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  site            Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  holderTask      Task?    @relation(fields: [holderTaskId], references: [id], onDelete: Restrict)
-  inflightMcpCall McpCall? @relation("McpWriteLease", fields: [inflightMcpCallId], references: [id], onDelete: Restrict)
+  site            Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  holderTask      Task?        @relation(fields: [holderTaskId], references: [id], onDelete: Restrict)
+  inflightMcpCall McpCall?     @relation("McpWriteLease", fields: [inflightMcpCallId], references: [id], onDelete: Restrict)
+  inflightRelease SiteRelease? @relation("ReleaseLeaseBarrier", fields: [inflightReleaseId], references: [id], onDelete: Restrict)
 
   @@index([holderTaskId])
   @@map("site_leases")
@@ -382,10 +408,13 @@ enum EnvironmentKind {
   prod
 }
 
+/// Must equal deployMethods in @repo/domain (checked by a test).
 enum DeployMethod {
   rsync
   git_ftp
   docker
+  sftp
+  ftp
 }
 
 /// A pointer to a secret in Vault, never the secret itself (CLAUDE.md, rule 2; spec §15).
@@ -462,39 +491,48 @@ model ChatSession {
 /// One client request: one logical agent session and one task branch (spec §7). The status
 /// changes only by a conditional UPDATE in the same transaction as its credit_ledger entry.
 model Task {
-  id            String      @id @default(uuid(7)) @db.Uuid
-  workspaceId   String      @map("workspace_id") @db.Uuid
-  siteId        String      @map("site_id") @db.Uuid
-  chatSessionId String?     @map("chat_session_id") @db.Uuid
-  createdById   String?     @map("created_by_id") @db.Uuid
+  id            String       @id @default(uuid(7)) @db.Uuid
+  workspaceId   String       @map("workspace_id") @db.Uuid
+  siteId        String       @map("site_id") @db.Uuid
+  chatSessionId String?      @map("chat_session_id") @db.Uuid
+  createdById   String?      @map("created_by_id") @db.Uuid
   /// «Отменить» of a done task: this task reverts that one and is never billed.
-  revertsTaskId String?     @map("reverts_task_id") @db.Uuid
-  status        TaskStatus  @default(queued)
+  revertsTaskId String?      @map("reverts_task_id") @db.Uuid
+  status        TaskStatus   @default(queued)
   /// From the turn result (turnResultSchema.change_type); NULL until the first turn ends.
-  changeType    ChangeType? @map("change_type")
+  changeType    ChangeType?  @map("change_type")
   /// Class profile selected before queueing; selects the pricing rule.
-  modelClass    ModelClass? @map("model_class")
+  modelClass    ModelClass?  @map("model_class")
   /// Summary of the latest turn result.
-  summary       String?     @db.VarChar(500)
+  summary       String?      @db.VarChar(500)
   /// Number of the latest turn; 0 before the first one.
-  turnNo        Int         @default(0) @map("turn_no")
+  turnNo        Int          @default(0) @map("turn_no")
   /// «Попробовать ещё» (failed → queued) starts a new attempt with a new hold.
-  attempt       Int         @default(1)
-  prNumber      Int?        @map("pr_number")
-  prUrl         String?     @map("pr_url") @db.VarChar(1024)
+  attempt       Int          @default(1)
+  prNumber      Int?         @map("pr_number")
+  prUrl         String?      @map("pr_url") @db.VarChar(1024)
   /// The deployment that shipped (or last tried to ship) this task.
-  deploymentId  String?     @unique @map("deployment_id") @db.Uuid
+  deploymentId  String?      @unique @map("deployment_id") @db.Uuid
   /// Pinned when queued on the pay-per-action plan (spec §17).
-  pricingRuleId String?     @map("pricing_rule_id") @db.Uuid
+  pricingRuleId String?      @map("pricing_rule_id") @db.Uuid
   /// Σ token_usage.cost_rub plus sandbox cost, full precision, never rounded.
-  costRub       Decimal     @default(0) @map("cost_rub") @db.Decimal(18, 10)
+  costRub       Decimal      @default(0) @map("cost_rub") @db.Decimal(18, 10)
   /// Charged to the wallet on done, rounded HALF_UP once; NULL on quota plans or until charged.
-  billedRub     Decimal?    @map("billed_rub") @db.Decimal(12, 2)
+  billedRub     Decimal?     @map("billed_rub") @db.Decimal(12, 2)
   /// false for «Отменить» and operator retries: no hold, no charge.
-  billable      Boolean     @default(true)
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
-  finishedAt    DateTime?   @map("finished_at") @db.Timestamptz(6)
+  billable      Boolean      @default(true)
+  /// The second label of the dialog's preview address (plan 53, Р17): six hex characters drawn
+  /// by the database, unique within the site; an insert whose alias is taken draws again
+  /// (trigger tasks_free_alias). CHECK tasks_alias_check.
+  alias         String       @default(dbgenerated("substr(md5((gen_random_uuid())::text), 1, 6)")) @db.VarChar(12)
+  /// Set once from the first request (feed design, «Ограничения в базе»).
+  title         String?      @db.VarChar(120)
+  mode          TaskMode     @default(work)
+  /// Why a queued task waits; cleared when it leaves `queued` (CHECK tasks_waiting_check).
+  waiting       TaskWaiting?
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  finishedAt    DateTime?    @map("finished_at") @db.Timestamptz(6)
 
   /// First bounded content access, including GET-only privacy maps.
   contentAccessedAt    DateTime? @map("content_accessed_at") @db.Timestamptz(6)
@@ -502,15 +540,15 @@ model Task {
   contentRetiredAt     DateTime? @map("content_retired_at") @db.Timestamptz(6)
   contentMasksPurgedAt DateTime? @map("content_masks_purged_at") @db.Timestamptz(6)
 
-  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  site            Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  chatSession     ChatSession?        @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
-  createdBy       User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  revertsTask     Task?               @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
-  revertedBy      Task[]              @relation("TaskReverts")
-  deployment      Deployment?         @relation("TaskCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
-  pricingRule     PricingRule?        @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
-  deployments     Deployment[]        @relation("TaskDeployments")
+  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  site            Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  chatSession     ChatSession?         @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
+  createdBy       User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  revertsTask     Task?                @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
+  revertedBy      Task[]               @relation("TaskReverts")
+  deployment      Deployment?          @relation("TaskCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
+  pricingRule     PricingRule?         @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  deployments     Deployment[]         @relation("TaskDeployments")
   turns           TaskTurn[]
   events          TaskEvent[]
   attachments     Attachment[]
@@ -523,8 +561,14 @@ model Task {
   llmKeys         LlmKey[]
   accountBinding  TaskAccountBinding?
   /// Content restores the trusted host made while this task held the site lease.
-  hostMcpCalls    McpCall[]           @relation("McpHostTask")
+  hostMcpCalls    McpCall[]            @relation("McpHostTask")
+  preview         PreviewEnvironment?
+  candidates      TaskCandidate[]
+  releases        SiteRelease[]
+  dbOperations    PreviewDbOperation[]
 
+  @@unique([siteId, alias])
+  @@index([siteId, updatedAt(sort: Desc)], map: "tasks_site_updated_idx")
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([siteId, status])
   @@index([status, updatedAt])
@@ -591,6 +635,9 @@ model TaskTurn {
   createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   startedAt       DateTime?  @map("started_at") @db.Timestamptz(6)
   finishedAt      DateTime?  @map("finished_at") @db.Timestamptz(6)
+  /// The pass of this turn ended in a `feed.failure`: the platform refused its result. Replaced,
+  /// never continued; its model calls are not charged to the client (docs/plan/53, «Попробовать ещё»).
+  rejectedAt      DateTime?  @map("rejected_at") @db.Timestamptz(6)
 
   task         Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
   driver       AgentDriver   @relation(fields: [driverId], references: [id], onDelete: Restrict)
@@ -646,9 +693,11 @@ model TurnAssignment {
   updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
   finishedAt       DateTime?              @map("finished_at") @db.Timestamptz(6)
 
-  task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  site     Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  mcpCalls McpCall[]
+  task            Task                    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  site            Site                    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  mcpCalls        McpCall[]
+  previewSyncs    PreviewSyncRequest[]
+  previewBrowsers PreviewBrowserRequest[]
 
   @@unique([taskId, turnNo], map: "turn_assignments_active_turn_key", where: raw("finished_at IS NULL"))
   @@index([siteId])
@@ -693,6 +742,8 @@ model TaskEvent {
   // The casts are what PostgreSQL stores for a varchar column: without them migrate diff reports
   // the index as changed.
   @@index([taskId], map: "task_events_llm_policy_flagged_idx", where: raw("type::text = 'llm.policy_flagged'::text"))
+  // What a reader of the feed reads (CHECK task_events_feed_visible_check: visible = `feed.*`).
+  @@index([taskId, id], map: "task_events_feed_idx", where: raw("client_visible"))
   @@map("task_events")
 }
 
@@ -717,6 +768,10 @@ model McpCall {
   hostTaskId         String?         @map("host_task_id") @db.Uuid
   /// The operation of that lease: turn or revert.
   hostOperation      LeaseOperation? @map("host_operation")
+  /// A call of the agent that writes to its dialog's preview (plan 53, Р24), fenced by the
+  /// preview's write epoch at admission instead of the site's barrier. NULL for the production site.
+  previewId          String?         @map("preview_id") @db.Uuid
+  previewWriteEpoch  Int?            @map("preview_write_epoch")
   requestHash        String?         @map("request_hash") @db.VarChar(64)
   leaseEpoch         Int?            @map("lease_epoch")
   /// Set atomically with SiteLease.inflightMcpCallId, before any external mutation.
@@ -738,14 +793,17 @@ model McpCall {
   /// Set when «Изменить» or a turn retry rolled the edit back.
   revertedAt         DateTime?       @map("reverted_at") @db.Timestamptz(6)
 
-  turn             TaskTurn        @relation(fields: [turnId], references: [id], onDelete: Cascade)
-  snapshot         Snapshot?       @relation("McpCapturedSnapshot", fields: [snapshotId], references: [id], onDelete: Restrict)
-  restoresSnapshot Snapshot?       @relation("McpRestoredSnapshot", fields: [restoresSnapshotId], references: [id], onDelete: Restrict)
-  assignment       TurnAssignment? @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
-  hostTask         Task?           @relation("McpHostTask", fields: [hostTaskId], references: [id], onDelete: Restrict)
-  writeLease       SiteLease?      @relation("McpWriteLease")
+  turn             TaskTurn             @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  snapshot         Snapshot?            @relation("McpCapturedSnapshot", fields: [snapshotId], references: [id], onDelete: Restrict)
+  restoresSnapshot Snapshot?            @relation("McpRestoredSnapshot", fields: [restoresSnapshotId], references: [id], onDelete: Restrict)
+  assignment       TurnAssignment?      @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  hostTask         Task?                @relation("McpHostTask", fields: [hostTaskId], references: [id], onDelete: Restrict)
+  writeLease       SiteLease?           @relation("McpWriteLease")
+  preview          PreviewEnvironment?  @relation(fields: [previewId], references: [id], onDelete: Restrict)
+  dbOperations     PreviewDbOperation[]
 
   @@index([turnId])
+  @@index([previewId])
   @@index([snapshotId])
   @@index([assignmentId])
   @@index([hostTaskId])
@@ -796,14 +854,18 @@ model Snapshot {
   /// Encrypted artifact integrity. Both NULL until the immutable payload is acknowledged.
   payloadSha256    String?   @map("payload_sha256") @db.VarChar(64)
   sizeBytes        Int?      @map("size_bytes")
+  /// The object was taken from a preview, not from the production site (plan 53, Р24).
+  previewId        String?   @map("preview_id") @db.Uuid
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  site         Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  task         Task?     @relation(fields: [taskId], references: [id], onDelete: Restrict)
-  mcpCalls     McpCall[] @relation("McpCapturedSnapshot")
-  restoreCalls McpCall[] @relation("McpRestoredSnapshot")
+  site         Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  task         Task?               @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  preview      PreviewEnvironment? @relation(fields: [previewId], references: [id], onDelete: Restrict)
+  mcpCalls     McpCall[]           @relation("McpCapturedSnapshot")
+  restoreCalls McpCall[]           @relation("McpRestoredSnapshot")
 
   @@index([siteId, objectRef])
+  @@index([previewId])
   @@index([taskId])
   @@index([expiresAt])
   @@map("snapshots")
@@ -814,7 +876,8 @@ model Snapshot {
 model Deployment {
   id            String           @id @default(uuid(7)) @db.Uuid
   siteId        String           @map("site_id") @db.Uuid
-  environmentId String           @map("environment_id") @db.Uuid
+  /// NULL only for the deploy of a release (CHECK deployments_target_check).
+  environmentId String?          @map("environment_id") @db.Uuid
   taskId        String           @map("task_id") @db.Uuid
   kind          DeploymentKind   @default(deploy)
   status        DeploymentStatus @default(pending)
@@ -824,15 +887,21 @@ model Deployment {
   workflowRunId String?          @map("workflow_run_id") @db.VarChar(64)
   /// raditi-backups prefix: sites/<siteId>/<deployId>/.
   backupPrefix  String?          @map("backup_prefix") @db.VarChar(512)
+  /// The release this deploy runs (plan 53, Р30), its tag and version.
+  releaseId     String?          @unique @map("release_id") @db.Uuid
+  tag           String?          @db.VarChar(32)
+  version       String?          @db.VarChar(32)
   createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
   startedAt     DateTime?        @map("started_at") @db.Timestamptz(6)
   finishedAt    DateTime?        @map("finished_at") @db.Timestamptz(6)
 
-  site        Site        @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  environment Environment @relation(fields: [environmentId], references: [id], onDelete: Restrict)
-  task        Task        @relation("TaskDeployments", fields: [taskId], references: [id], onDelete: Restrict)
-  currentOf   Task?       @relation("TaskCurrentDeployment")
+  site             Site         @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  environment      Environment? @relation(fields: [environmentId], references: [id], onDelete: Restrict)
+  task             Task         @relation("TaskDeployments", fields: [taskId], references: [id], onDelete: Restrict)
+  currentOf        Task?        @relation("TaskCurrentDeployment")
+  release          SiteRelease? @relation("DeploymentRelease", fields: [releaseId], references: [id], onDelete: Restrict)
+  currentOfRelease SiteRelease? @relation("ReleaseCurrentDeployment")
 
   @@index([siteId, createdAt(sort: Desc)])
   @@index([environmentId])
@@ -1781,4 +1850,522 @@ model SiteDatabaseSchema {
   site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
 
   @@map("site_database_schemas")
+}
+
+// ─── Previews, candidates and releases (docs/plan/53-chat-preview-release.md) ──────────────────
+
+/// Must equal taskModes in @repo/domain (checked by a test).
+enum TaskMode {
+  work
+  chat
+}
+
+/// Must equal taskWaitingReasons in @repo/domain (checked by a test).
+enum TaskWaiting {
+  agents
+  site
+}
+
+/// Must equal previewStatuses in @repo/domain (checked by a test).
+enum PreviewStatus {
+  pending
+  building
+  ready
+  failed
+  unavailable
+  expired
+  destroyed
+}
+
+/// Must equal previewDbModes in @repo/domain (checked by a test).
+enum PreviewDbMode {
+  copy
+  none
+}
+
+/// Must equal candidateStatuses in @repo/domain (checked by a test).
+enum CandidateStatus {
+  current
+  superseded
+  stale
+  released
+}
+
+/// Must equal candidateCheckStatuses in @repo/domain (checked by a test).
+enum CandidateCheckStatus {
+  pending
+  passed
+  failed
+  stale
+}
+
+/// Must equal releaseKinds in @repo/domain (checked by a test).
+enum ReleaseKind {
+  release
+  undo
+}
+
+/// Must equal undoPlanStatuses in @repo/domain (checked by a test).
+enum UndoPlanStatus {
+  pending
+  ready
+  failed
+}
+
+/// Must equal releaseStatuses in @repo/domain (checked by a test).
+enum ReleaseStatus {
+  approved
+  publishing
+  published
+  deploying
+  verifying
+  installed
+  rolling_back
+  rolled_back
+  failed
+  unknown
+}
+
+/// Must equal versionBumps in @repo/domain (checked by a test).
+enum VersionBump {
+  patch
+  minor
+  major
+}
+
+/// Must equal dbJournalKinds in @repo/domain (checked by a test): the kinds of a plan, and
+/// `post_trash` of the journal of a preview alone.
+enum DbOperationKind {
+  content_update
+  option_update
+  post_create
+  schema_migration
+  post_trash
+}
+
+/// The working copy of one dialog (Р2): the full tree of its candidate, its own database copy and
+/// PHP. Never a deploy target. The gateway of the `preview` role finds the upstream by the exact
+/// `hostname`; nothing a client or the agent sends names an upstream.
+model PreviewEnvironment {
+  id                String        @id @default(uuid(7)) @db.Uuid
+  siteId            String        @map("site_id") @db.Uuid
+  taskId            String        @unique @map("task_id") @db.Uuid
+  status            PreviewStatus @default(pending)
+  dbMode            PreviewDbMode @default(none) @map("db_mode")
+  /// Set exactly while `unavailable` (no_database, no_core, …).
+  unavailableReason String?       @map("unavailable_reason") @db.VarChar(32)
+  /// previewHostname() in @repo/domain.
+  hostname          String        @unique @db.VarChar(253)
+  /// The candidate the preview was built to; NULL — the base of the dialog.
+  candidateId       String?       @map("candidate_id") @db.Uuid
+  filesSha          String?       @map("files_sha") @db.Char(40)
+  revision          Int           @default(0)
+  /// A browser action that may write happened since the build (Р22).
+  dirty             Boolean       @default(false)
+  /// Handles of containers and networks of the runtime; never a secret.
+  runtime           Json?
+  upstreamHost      String?       @map("upstream_host") @db.VarChar(253)
+  upstreamPort      Int?          @map("upstream_port")
+  /// Bumped to end every session (a revoked membership, a reset).
+  accessEpoch       Int           @default(0) @map("access_epoch")
+  /// Fence of content writes into the preview (Р24): a reset or a rebuild bumps it.
+  writeEpoch        Int           @default(0) @map("write_epoch")
+  /// raditi-artifacts previews/<siteId>/<previewId>/seed.sql.zst.enc and its SHA-256.
+  seedObjectKey     String?       @map("seed_object_key") @db.VarChar(1024)
+  seedSha256        String?       @map("seed_sha256") @db.Char(64)
+  /// sites.installed_release_id when the seed was taken: a release ending later makes it stale.
+  seedReleaseId     String?       @map("seed_release_id") @db.Uuid
+  leaseEpoch        Int           @default(0) @map("lease_epoch")
+  heartbeatAt       DateTime?     @map("heartbeat_at") @db.Timestamptz(6)
+  attempt           Int           @default(1)
+  enqueues          Int           @default(1)
+  /// Set exactly while `failed`.
+  errorCode         String?       @map("error_code") @db.VarChar(48)
+  expiresAt         DateTime      @map("expires_at") @db.Timestamptz(6)
+  lastViewedAt      DateTime?     @map("last_viewed_at") @db.Timestamptz(6)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site            Site                    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  task            Task                    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  candidate       TaskCandidate?          @relation("PreviewCandidate", fields: [candidateId], references: [id], onDelete: SetNull)
+  seedRelease     SiteRelease?            @relation("PreviewSeedRelease", fields: [seedReleaseId], references: [id], onDelete: SetNull)
+  tickets         PreviewTicket[]
+  sessions        PreviewSession[]
+  syncRequests    PreviewSyncRequest[]
+  browserRequests PreviewBrowserRequest[]
+  dbOperations    PreviewDbOperation[]
+  mcpCalls        McpCall[]
+  snapshots       Snapshot[]
+  seedMismatches  PreviewSeedMismatch[]
+
+  @@index([siteId])
+  @@index([candidateId])
+  @@index([seedReleaseId])
+  @@index([status, expiresAt])
+  @@map("preview_environments")
+}
+
+/// An object whose state in the preview after the seed differs from production (Р15, Р24):
+/// core writes it with the seed, the mcp role refuses to change it.
+model PreviewSeedMismatch {
+  previewId String   @map("preview_id") @db.Uuid
+  /// <type>:<id>, the notation of preview_db_operations.object_ref.
+  objectRef String   @map("object_ref") @db.VarChar(128)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  preview PreviewEnvironment @relation(fields: [previewId], references: [id], onDelete: Cascade)
+
+  @@id([previewId, objectRef])
+  @@map("preview_seed_mismatches")
+}
+
+/// A one-time way in (Р19): 60 seconds, one session. Only the SHA-256 of the token is kept.
+model PreviewTicket {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  previewId String    @map("preview_id") @db.Uuid
+  /// NULL — the service ticket of the agent's browser (kind browser).
+  userId    String?   @map("user_id") @db.Uuid
+  /// user | browser (previewSessionKinds).
+  kind      String    @db.VarChar(16)
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  preview PreviewEnvironment @relation(fields: [previewId], references: [id], onDelete: Cascade)
+  user    User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([previewId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("preview_tickets")
+}
+
+/// A session of the gateway cookie; ends with the access epoch of its preview.
+model PreviewSession {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  previewId   String    @map("preview_id") @db.Uuid
+  userId      String?   @map("user_id") @db.Uuid
+  kind        String    @db.VarChar(16)
+  accessEpoch Int       @map("access_epoch")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
+  /// Membership and the site status were checked again (at least every 60 s).
+  checkedAt   DateTime? @map("checked_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  preview PreviewEnvironment @relation(fields: [previewId], references: [id], onDelete: Cascade)
+  user    User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([previewId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("preview_sessions")
+}
+
+/// The agent's tools ask core to lay the sandbox tree onto the preview (Р23).
+model PreviewSyncRequest {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  previewId    String    @map("preview_id") @db.Uuid
+  assignmentId String?   @map("assignment_id") @db.Uuid
+  requestedAt  DateTime  @default(now()) @map("requested_at") @db.Timestamptz(6)
+  completedAt  DateTime? @map("completed_at") @db.Timestamptz(6)
+  filesDigest  String?   @map("files_digest") @db.Char(64)
+  errorCode    String?   @map("error_code") @db.VarChar(48)
+
+  preview    PreviewEnvironment @relation(fields: [previewId], references: [id], onDelete: Cascade)
+  assignment TurnAssignment?    @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+
+  @@index([previewId])
+  @@index([assignmentId])
+  @@map("preview_sync_requests")
+}
+
+/// The agent's tools ask core for a browser on the preview (Р21).
+model PreviewBrowserRequest {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  previewId    String    @map("preview_id") @db.Uuid
+  assignmentId String?   @map("assignment_id") @db.Uuid
+  requestedAt  DateTime  @default(now()) @map("requested_at") @db.Timestamptz(6)
+  readyAt      DateTime? @map("ready_at") @db.Timestamptz(6)
+  stoppedAt    DateTime? @map("stopped_at") @db.Timestamptz(6)
+  errorCode    String?   @map("error_code") @db.VarChar(48)
+
+  preview    PreviewEnvironment @relation(fields: [previewId], references: [id], onDelete: Cascade)
+  assignment TurnAssignment?    @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+
+  @@index([previewId])
+  @@index([assignmentId])
+  @@map("preview_browser_requests")
+}
+
+/// A content write into a preview as an operation of the candidate's plan (Р3); the values are
+/// encrypted objects in raditi-artifacts. `excluded` — written by a turn that did not complete.
+/// A row is a whole operation: `dbPlanEntryFromJournal` (@repo/domain) reads it back.
+model PreviewDbOperation {
+  id              BigInt          @id @default(autoincrement())
+  taskId          String          @map("task_id") @db.Uuid
+  previewId       String          @map("preview_id") @db.Uuid
+  turnNo          Int             @map("turn_no")
+  mcpCallId       String          @map("mcp_call_id") @db.Uuid
+  kind            DbOperationKind
+  objectRef       String          @map("object_ref") @db.VarChar(128)
+  /// The fields written, each once, in the order of orderDbContentFields (CHECK
+  /// preview_db_operations_fields_check).
+  fields          String[]
+  beforeHash      String          @map("before_hash") @db.Char(64)
+  afterHash       String          @map("after_hash") @db.Char(64)
+  /// Each side: the key, the SHA-256 and the size of the encrypted object (dbValueRefSchema).
+  afterObjectKey  String          @map("after_object_key") @db.VarChar(1024)
+  afterSha256     String          @map("after_sha256") @db.Char(64)
+  afterBytes      Int             @map("after_bytes")
+  beforeObjectKey String          @map("before_object_key") @db.VarChar(1024)
+  beforeSha256    String          @map("before_sha256") @db.Char(64)
+  beforeBytes     Int             @map("before_bytes")
+  excluded        Boolean         @default(false)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  task    Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  preview PreviewEnvironment @relation(fields: [previewId], references: [id], onDelete: Cascade)
+  mcpCall McpCall            @relation(fields: [mcpCallId], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, mcpCallId])
+  @@index([previewId, id])
+  @@index([mcpCallId])
+  @@map("preview_db_operations")
+}
+
+/// What a pass that changed something left (Р5): the base, the commit of its files, media, the
+/// compacted database plan, the proposed version. One `current` per dialog.
+model TaskCandidate {
+  id              String          @id @default(uuid(7)) @db.Uuid
+  taskId          String          @map("task_id") @db.Uuid
+  revision        Int
+  turnNo          Int             @map("turn_no")
+  status          CandidateStatus @default(current)
+  /// The commit of `main` the candidate stands on, its tree and its version.
+  baseSha         String          @map("base_sha") @db.Char(40)
+  baseTree        String          @map("base_tree") @db.Char(40)
+  baseVersion     String?         @map("base_version") @db.VarChar(32)
+  /// The commit of the files on agent/<taskId>.
+  headSha         String          @map("head_sha") @db.Char(40)
+  /// candidateFilesSchema, candidateMediaSchema, dbPlanSchema, candidateFactsSchema.
+  files           Json            @default("[]")
+  media           Json            @default("[]")
+  dbPlan          Json            @default("[]") @map("db_plan")
+  dbPlanSha256    String          @map("db_plan_sha256") @db.Char(64)
+  proposedBump    VersionBump     @map("proposed_bump")
+  proposedVersion String          @map("proposed_version") @db.VarChar(32)
+  facts           Json
+  previewRevision Int?            @map("preview_revision")
+  /// dbPlanViewSchema: the plan with its values for the client; null — empty plan, or recorded
+  /// before descriptions, or superseded (CHECK task_candidates_db_view_check).
+  dbView          Json?           @map("db_view")
+  dbViewSha256    String?         @map("db_view_sha256") @db.Char(64)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  supersededAt    DateTime?       @map("superseded_at") @db.Timestamptz(6)
+
+  task     Task                 @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  checks   CandidateCheck[]
+  previews PreviewEnvironment[] @relation("PreviewCandidate")
+  releases SiteRelease[]        @relation("ReleaseCandidate")
+
+  @@unique([taskId, revision])
+  @@unique([taskId], map: "task_candidates_current_key", where: raw("status = 'current'::\"CandidateStatus\""))
+  @@map("task_candidates")
+}
+
+/// A check of a candidate at a revision of its preview.
+model CandidateCheck {
+  id          String               @id @default(uuid(7)) @db.Uuid
+  candidateId String               @map("candidate_id") @db.Uuid
+  revision    Int
+  /// php_lint | preview_smoke | agent_browser (candidateCheckKinds).
+  kind        String               @db.VarChar(32)
+  status      CandidateCheckStatus @default(pending)
+  /// Counts and codes only.
+  summary     Json?
+  artifactKey String?              @map("artifact_key") @db.VarChar(1024)
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  finishedAt  DateTime?            @map("finished_at") @db.Timestamptz(6)
+
+  candidate TaskCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, kind])
+  @@map("candidate_checks")
+}
+
+/// A release of a candidate (Р25–Р33): the deterministic commit on `main`, its tag and the one
+/// deploy of it. `release_key` makes a repeated confirmation land on the same row.
+model SiteRelease {
+  id                   String        @id @default(uuid(7)) @db.Uuid
+  siteId               String        @map("site_id") @db.Uuid
+  taskId               String        @map("task_id") @db.Uuid
+  /// `release` — of a candidate; `undo` — «Отменить выпуск» of the release `undoesReleaseId`, in
+  /// its dialog, with the plan the client confirmed (CHECK site_releases_kind_check).
+  kind                 ReleaseKind   @default(release)
+  /// NULL only for an undo.
+  candidateId          String?       @map("candidate_id") @db.Uuid
+  candidateRevision    Int?          @map("candidate_revision")
+  undoesReleaseId      String?       @map("undoes_release_id") @db.Uuid
+  undoPlanId           String?       @map("undo_plan_id") @db.Uuid
+  undoPlanSha256       String?       @map("undo_plan_sha256") @db.Char(64)
+  /// The n-th release of this candidate.
+  attempt              Int
+  releaseKey           String        @unique @map("release_key") @db.Char(64)
+  /// Burnt when the release fails: never reused, the tag stays.
+  version              String        @db.VarChar(32)
+  tag                  String        @db.VarChar(32)
+  bump                 VersionBump
+  mainBeforeSha        String        @map("main_before_sha") @db.Char(40)
+  installedBeforeSha   String?       @map("installed_before_sha") @db.Char(40)
+  /// The release commit; known from `published` on.
+  approvedSha          String?       @map("approved_sha") @db.Char(40)
+  /// Trusted time of the release commit: a retry builds the same SHA.
+  committedAt          DateTime      @map("committed_at") @db.Timestamptz(6)
+  status               ReleaseStatus @default(approved)
+  /// The step of the deploy job's last report (releaseSteps, `reverify` the check after a rollback).
+  step                 String?       @db.VarChar(32)
+  approvedBy           String?       @map("approved_by") @db.Uuid
+  approvedAt           DateTime      @map("approved_at") @db.Timestamptz(6)
+  deploymentId         String?       @unique @map("deployment_id") @db.Uuid
+  deployAttempt        Int           @default(0) @map("deploy_attempt")
+  /// SHA-256 of the release API token of the current deploy attempt.
+  deployTokenHash      String?       @map("deploy_token_hash") @db.Char(64)
+  deployTokenExpiresAt DateTime?     @map("deploy_token_expires_at") @db.Timestamptz(6)
+  /// Accessor of the wrapping token in the repository secret: revoked when the job is silent.
+  wrapAccessor         String?       @map("wrap_accessor") @db.VarChar(128)
+  accessIssuedAt       DateTime?     @map("access_issued_at") @db.Timestamptz(6)
+  backupObjectKey      String?       @map("backup_object_key") @db.VarChar(1024)
+  backupSha256         String?       @map("backup_sha256") @db.Char(64)
+  backupBytes          BigInt?       @map("backup_bytes")
+  backupVerifiedAt     DateTime?     @map("backup_verified_at") @db.Timestamptz(6)
+  /// The release commit reached `main` (the CAS push answered, or ls-remote after a lost
+  /// answer): a `failed` release without it is `refused` (releaseOutcomeOf) and gets no revert.
+  /// Set from `published` on (CHECK site_releases_main_pushed_check).
+  mainPushedAt         DateTime?     @map("main_pushed_at") @db.Timestamptz(6)
+  /// The revert commit that put `main` back to the installed tree (Р27).
+  revertSha            String?       @map("revert_sha") @db.Char(40)
+  leaseEpoch           Int           @default(0) @map("lease_epoch")
+  /// Raised with every enqueue of `release.advance`, in its transaction: the `seq` of the job.
+  enqueues             Int           @default(1)
+  errorCode            String?       @map("error_code") @db.VarChar(48)
+  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site           Site                 @relation("SiteReleases", fields: [siteId], references: [id], onDelete: Restrict)
+  task           Task                 @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  candidate      TaskCandidate?       @relation("ReleaseCandidate", fields: [candidateId], references: [id], onDelete: Restrict)
+  undoes         SiteRelease?         @relation("ReleaseUndoes", fields: [undoesReleaseId], references: [id], onDelete: Restrict)
+  undoneBy       SiteRelease[]        @relation("ReleaseUndoes")
+  undoPlan       ReleaseUndoPlan?     @relation("ReleaseUndoPlan", fields: [undoPlanId], references: [id], onDelete: Restrict)
+  undoPlans      ReleaseUndoPlan[]    @relation("UndoPlanRelease")
+  approver       User?                @relation(fields: [approvedBy], references: [id], onDelete: SetNull)
+  deployment     Deployment?          @relation("ReleaseCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
+  deploymentOf   Deployment?          @relation("DeploymentRelease")
+  installedOn    Site[]               @relation("SiteInstalledRelease")
+  leaseBarrier   SiteLease?           @relation("ReleaseLeaseBarrier")
+  seededPreviews PreviewEnvironment[] @relation("PreviewSeedRelease")
+  steps          ReleaseStep[]
+
+  @@unique([siteId, version])
+  @@unique([candidateId, attempt])
+  @@unique([candidateId], map: "site_releases_candidate_open_key", where: raw("status <> ALL (ARRAY['failed'::\"ReleaseStatus\", 'rolled_back'::\"ReleaseStatus\", 'installed'::\"ReleaseStatus\"])"))
+  @@unique([undoesReleaseId, attempt])
+  @@unique([undoesReleaseId], map: "site_releases_undo_open_key", where: raw("kind = 'undo' AND status <> ALL (ARRAY['failed'::\"ReleaseStatus\", 'rolled_back'::\"ReleaseStatus\", 'installed'::\"ReleaseStatus\"])"))
+  @@index([undoPlanId])
+  @@index([siteId, createdAt(sort: Desc)])
+  @@index([taskId])
+  @@index([approvedBy])
+  @@index([status, updatedAt])
+  @@map("site_releases")
+}
+
+/// What «Отменить выпуск» of a release would do (plan 53, «Отмена выпуска»), as core read it from
+/// git and production: the files, the verdict of each object of the release's plan, and the
+/// writes of the undo. References, hashes and fields only; values never are here.
+model ReleaseUndoPlan {
+  id            String         @id @default(uuid(7)) @db.Uuid
+  siteId        String         @map("site_id") @db.Uuid
+  /// The release the plan would undo.
+  releaseId     String         @map("release_id") @db.Uuid
+  requestedBy   String?        @map("requested_by") @db.Uuid
+  status        UndoPlanStatus @default(pending)
+  /// `sites.installed_sha` the plan was made against: the commit of the release.
+  installedSha  String         @map("installed_sha") @db.Char(40)
+  /// The tree of the undo commit: the version before the release and the media it added.
+  targetTree    String?        @map("target_tree") @db.Char(40)
+  /// undoFilesSummarySchema.
+  files         Json           @default("{}")
+  /// undoPlanItemSchema[].
+  items         Json           @default("[]")
+  /// dbUndoPlanSchema: the writes of the undo.
+  dbPlan        Json           @default("[]") @map("db_plan")
+  nothingToUndo Boolean        @default(false) @map("nothing_to_undo")
+  planSha256    String?        @map("plan_sha256") @db.Char(64)
+  errorCode     String?        @map("error_code") @db.VarChar(48)
+  /// Raised with every enqueue of `release.undoPlan`, in its transaction: the `seq` of the job.
+  enqueues      Int            @default(1)
+  computedAt    DateTime?      @map("computed_at") @db.Timestamptz(6)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site      Site          @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  release   SiteRelease   @relation("UndoPlanRelease", fields: [releaseId], references: [id], onDelete: Cascade)
+  requester User?         @relation(fields: [requestedBy], references: [id], onDelete: SetNull)
+  undoes    SiteRelease[] @relation("ReleaseUndoPlan")
+
+  @@index([releaseId, createdAt(sort: Desc)])
+  @@index([siteId])
+  @@index([requestedBy])
+  @@index([status, updatedAt])
+  @@map("release_undo_plans")
+}
+
+/// A report of a step of the deploy job; a repeated report is the same row (report_key).
+model ReleaseStep {
+  id            BigInt   @id @default(autoincrement())
+  releaseId     String   @map("release_id") @db.Uuid
+  deployAttempt Int      @map("deploy_attempt")
+  step          String   @db.VarChar(32)
+  /// started | succeeded | failed | unknown (releaseStepStates).
+  state         String   @db.VarChar(16)
+  reportKey     String   @map("report_key") @db.VarChar(128)
+  detail        Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  release SiteRelease @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  @@unique([releaseId, reportKey])
+  @@map("release_steps")
+}
+
+/// A variable of the client's site (Р13): the name and the hosts it may reach. The value is in
+/// Vault kv/sites/<siteId>/env/<NAME> only.
+model SiteEnvVar {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  siteId         String    @map("site_id") @db.Uuid
+  name           String    @db.VarChar(64)
+  /// `host:port` strings, at most sixteen (egressHostListSchema).
+  hosts          Json      @default("[]")
+  /// Off by default; on only with a recorded consent (CHECK site_env_vars_agent_check).
+  toAgent        Boolean   @default(false) @map("to_agent")
+  toPreview      Boolean   @default(true) @map("to_preview")
+  agentConsentAt DateTime? @map("agent_consent_at") @db.Timestamptz(6)
+  agentConsentBy String?   @map("agent_consent_by") @db.Uuid
+  /// KV v2 version the platform last wrote.
+  keyVersion     Int       @default(1) @map("key_version")
+  createdBy      String?   @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site           Site  @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  agentConsenter User? @relation("SiteEnvVarConsent", fields: [agentConsentBy], references: [id], onDelete: SetNull)
+  creator        User? @relation("SiteEnvVarCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@unique([siteId, name])
+  @@index([agentConsentBy])
+  @@index([createdBy])
+  @@map("site_env_vars")
 }

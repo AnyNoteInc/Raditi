@@ -1,40 +1,64 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  candidateCheckStatuses,
+  candidateStatuses,
   connectionTlsModes,
   consentDocumentTypes,
   databaseEngines,
   creditAccountUnits,
+  dbJournalKinds,
+  deployMethods,
   gitProviderKinds,
   orderKinds,
   orderStatuses,
+  previewDbModes,
+  previewStatuses,
   provisioningStages,
   provisioningStageStatuses,
+  releaseKinds,
+  releaseStatuses,
   siteSourceKinds,
   siteStacks,
   subscriptionStatuses,
+  taskModes,
   taskStatuses,
+  taskWaitingReasons,
   turnAssignmentOutcomes,
   turnExecutorKinds,
   turnResultSchema,
+  undoPlanStatuses,
+  versionBumps,
 } from '@repo/domain'
 import {
   BillingUnit,
+  CandidateCheckStatus,
+  CandidateStatus,
   ChangeType,
   ConnectionTls,
   ConsentDocumentType,
   DatabaseEngine,
+  DbOperationKind,
+  DeployMethod,
   GitProviderKind,
   OrderKind,
   OrderStatus,
+  PreviewDbMode,
+  PreviewStatus,
   ProvisioningStage,
   ProvisioningStageStatus,
+  ReleaseKind,
+  ReleaseStatus,
   SiteSourceKind,
   SiteStack,
   SubscriptionStatus,
+  TaskMode,
   TaskStatus,
+  TaskWaiting,
   TurnAssignmentOutcome,
   TurnExecutorKind,
+  UndoPlanStatus,
+  VersionBump,
 } from './index.ts'
 
 describe('database enums match the domain', () => {
@@ -104,5 +128,32 @@ describe('database enums match the domain', () => {
 
   it('ProvisioningStageStatus has exactly the statuses of a stage', () => {
     expect(Object.values(ProvisioningStageStatus)).toEqual([...provisioningStageStatuses])
+  })
+
+  it('TaskMode and TaskWaiting match the head of a task in the feed', () => {
+    expect(Object.values(TaskMode)).toEqual([...taskModes])
+    expect(Object.values(TaskWaiting)).toEqual([...taskWaitingReasons])
+  })
+
+  it('PreviewStatus and PreviewDbMode match the preview state of the domain', () => {
+    expect(Object.values(PreviewStatus)).toEqual([...previewStatuses])
+    expect(Object.values(PreviewDbMode)).toEqual([...previewDbModes])
+  })
+
+  it('CandidateStatus and CandidateCheckStatus match the candidate of the domain', () => {
+    expect(Object.values(CandidateStatus)).toEqual([...candidateStatuses])
+    expect(Object.values(CandidateCheckStatus)).toEqual([...candidateCheckStatuses])
+  })
+
+  it('ReleaseStatus, VersionBump and DbOperationKind match the release of the domain', () => {
+    expect(Object.values(ReleaseStatus)).toEqual([...releaseStatuses])
+    expect(Object.values(VersionBump)).toEqual([...versionBumps])
+    expect(Object.values(DbOperationKind)).toEqual([...dbJournalKinds])
+    expect(Object.values(ReleaseKind)).toEqual([...releaseKinds])
+    expect(Object.values(UndoPlanStatus)).toEqual([...undoPlanStatuses])
+  })
+
+  it('DeployMethod has the methods of a deploy, sftp and ftp last', () => {
+    expect(Object.values(DeployMethod)).toEqual([...deployMethods])
   })
 })
