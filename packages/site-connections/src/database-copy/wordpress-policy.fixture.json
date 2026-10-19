@@ -1,0 +1,346 @@
+{
+  "engine": "mysql",
+  "tables": [
+    {
+      "table": "posts",
+      "where": [
+        {
+          "op": "in",
+          "column": "post_type",
+          "values": [
+            "post",
+            "page",
+            "attachment",
+            "nav_menu_item",
+            "wp_block",
+            "wp_template",
+            "wp_template_part",
+            "wp_global_styles",
+            "wp_navigation",
+            "custom_css",
+            "wp_font_family",
+            "wp_font_face",
+            "elementor_library"
+          ]
+        },
+        {
+          "op": "in",
+          "column": "post_status",
+          "values": ["publish", "private", "draft", "inherit"]
+        }
+      ],
+      "columns": {
+        "post_password": "empty"
+      }
+    },
+    {
+      "table": "postmeta",
+      "where": [
+        {
+          "op": "inCopied",
+          "column": "post_id",
+          "table": "posts",
+          "key": "ID"
+        },
+        {
+          "op": "notLike",
+          "column": "meta_key",
+          "patterns": [
+            "%password%",
+            "%passwd%",
+            "%secret%",
+            "%token%",
+            "%api\\_key%",
+            "%apikey%",
+            "%\\_key",
+            "%\\_salt",
+            "%credential%",
+            "%license%",
+            "%session%",
+            "%nonce%",
+            "%pwd%",
+            "%pass"
+          ]
+        }
+      ],
+      "columns": {
+        "meta_value": "scrub_secrets"
+      }
+    },
+    {
+      "table": "users",
+      "where": [
+        {
+          "op": "inCopied",
+          "column": "ID",
+          "table": "posts",
+          "key": "post_author"
+        }
+      ],
+      "columns": {
+        "user_login": "synthetic_login",
+        "user_nicename": "synthetic_login",
+        "user_email": "synthetic_email",
+        "user_pass": "random_password_hash",
+        "user_url": "empty",
+        "user_activation_key": "empty",
+        "display_name": "synthetic_name"
+      }
+    },
+    {
+      "table": "term_taxonomy",
+      "where": [
+        {
+          "op": "in",
+          "column": "taxonomy",
+          "values": [
+            "category",
+            "post_tag",
+            "post_format",
+            "nav_menu",
+            "link_category",
+            "wp_theme",
+            "wp_template_part_area",
+            "wp_pattern_category",
+            "elementor_library_type",
+            "elementor_library_category"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "terms",
+      "where": [
+        {
+          "op": "inCopied",
+          "column": "term_id",
+          "table": "term_taxonomy",
+          "key": "term_id"
+        }
+      ]
+    },
+    {
+      "table": "term_relationships",
+      "where": [
+        {
+          "op": "inCopied",
+          "column": "object_id",
+          "table": "posts",
+          "key": "ID"
+        },
+        {
+          "op": "inCopied",
+          "column": "term_taxonomy_id",
+          "table": "term_taxonomy",
+          "key": "term_taxonomy_id"
+        }
+      ]
+    },
+    {
+      "table": "termmeta",
+      "where": [
+        {
+          "op": "inCopied",
+          "column": "term_id",
+          "table": "terms",
+          "key": "term_id"
+        },
+        {
+          "op": "notLike",
+          "column": "meta_key",
+          "patterns": [
+            "%password%",
+            "%passwd%",
+            "%secret%",
+            "%token%",
+            "%api\\_key%",
+            "%apikey%",
+            "%\\_key",
+            "%\\_salt",
+            "%credential%",
+            "%license%",
+            "%session%",
+            "%nonce%",
+            "%pwd%",
+            "%pass"
+          ]
+        }
+      ],
+      "columns": {
+        "meta_value": "scrub_secrets"
+      }
+    },
+    {
+      "table": "options",
+      "where": [
+        {
+          "op": "like",
+          "column": "option_name",
+          "patterns": [
+            "siteurl",
+            "home",
+            "blogname",
+            "blogdescription",
+            "blog\\_charset",
+            "html\\_type",
+            "db\\_version",
+            "initial\\_db\\_version",
+            "fresh\\_site",
+            "WPLANG",
+            "timezone\\_string",
+            "gmt\\_offset",
+            "date\\_format",
+            "time\\_format",
+            "start\\_of\\_week",
+            "permalink\\_structure",
+            "category\\_base",
+            "tag\\_base",
+            "show\\_on\\_front",
+            "page\\_on\\_front",
+            "page\\_for\\_posts",
+            "wp\\_page\\_for\\_privacy\\_policy",
+            "posts\\_per\\_page",
+            "posts\\_per\\_rss",
+            "rss\\_use\\_excerpt",
+            "sticky\\_posts",
+            "default\\_category",
+            "default\\_post\\_format",
+            "use\\_smilies",
+            "use\\_balanceTags",
+            "default\\_comment\\_status",
+            "default\\_ping\\_status",
+            "comment\\_registration",
+            "require\\_name\\_email",
+            "close\\_comments\\_for\\_old\\_posts",
+            "close\\_comments\\_days\\_old",
+            "show\\_comments\\_cookies\\_opt\\_in",
+            "thread\\_comments",
+            "thread\\_comments\\_depth",
+            "page\\_comments",
+            "comments\\_per\\_page",
+            "default\\_comments\\_page",
+            "comment\\_order",
+            "show\\_avatars",
+            "avatar\\_rating",
+            "avatar\\_default",
+            "thumbnail\\_size\\_w",
+            "thumbnail\\_size\\_h",
+            "thumbnail\\_crop",
+            "medium\\_size\\_w",
+            "medium\\_size\\_h",
+            "medium\\_large\\_size\\_w",
+            "medium\\_large\\_size\\_h",
+            "large\\_size\\_w",
+            "large\\_size\\_h",
+            "image\\_default\\_link\\_type",
+            "image\\_default\\_size",
+            "image\\_default\\_align",
+            "uploads\\_use\\_yearmonth\\_folders",
+            "upload\\_path",
+            "upload\\_url\\_path",
+            "wp\\_attachment\\_pages\\_enabled",
+            "link\\_manager\\_enabled",
+            "template",
+            "stylesheet",
+            "current\\_theme",
+            "active\\_plugins",
+            "sidebars\\_widgets",
+            "nav\\_menu\\_options",
+            "site\\_icon",
+            "site\\_logo",
+            "elementor\\_version",
+            "elementor\\_pro\\_version",
+            "elementor\\_active\\_kit",
+            "elementor\\_pro\\_theme\\_builder\\_conditions",
+            "elementor\\_cpt\\_support",
+            "elementor\\_disable\\_color\\_schemes",
+            "elementor\\_disable\\_typography\\_schemes",
+            "elementor\\_container\\_width",
+            "elementor\\_space\\_between\\_widgets",
+            "elementor\\_stretched\\_section\\_container",
+            "elementor\\_page\\_title\\_selector",
+            "elementor\\_viewport\\_lg",
+            "elementor\\_viewport\\_md",
+            "elementor\\_global\\_image\\_lightbox",
+            "elementor\\_css\\_print\\_method",
+            "elementor\\_font\\_display",
+            "elementor\\_load\\_fa4\\_shim",
+            "wp\\_user\\_roles",
+            "theme\\_mods\\_%",
+            "widget\\_%"
+          ]
+        },
+        {
+          "op": "notLike",
+          "column": "option_name",
+          "patterns": ["\\_transient\\_%", "\\_site\\_transient\\_%", "raditi\\_content\\_call\\_%"]
+        },
+        {
+          "op": "notLike",
+          "column": "option_name",
+          "patterns": [
+            "%password%",
+            "%passwd%",
+            "%secret%",
+            "%token%",
+            "%api\\_key%",
+            "%apikey%",
+            "%\\_key",
+            "%\\_salt",
+            "%credential%",
+            "%license%",
+            "%session%",
+            "%nonce%",
+            "%pwd%",
+            "%pass"
+          ]
+        }
+      ],
+      "columns": {
+        "option_value": "scrub_secrets"
+      }
+    }
+  ],
+  "overrides": [
+    {
+      "table": "options",
+      "match": {
+        "column": "option_name",
+        "value": "raditi_content_site_id"
+      },
+      "set": {
+        "option_value": "0196abcd-0000-7000-8000-00000000000a"
+      }
+    },
+    {
+      "table": "options",
+      "match": {
+        "column": "option_name",
+        "value": "raditi_content_epoch"
+      },
+      "set": {
+        "option_value": "0"
+      }
+    },
+    {
+      "table": "options",
+      "match": {
+        "column": "option_name",
+        "value": "blog_public"
+      },
+      "set": {
+        "option_value": "0"
+      }
+    },
+    {
+      "table": "options",
+      "match": {
+        "column": "option_name",
+        "value": "admin_email"
+      },
+      "set": {
+        "option_value": "admin@preview.invalid"
+      }
+    }
+  ]
+}

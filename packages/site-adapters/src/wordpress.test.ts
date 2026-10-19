@@ -32,9 +32,23 @@ describe('wordpressAdapter', () => {
         'wp-admin/',
         'wp-includes/',
         'wp-content/uploads/',
-        '.htaccess',
+        '**/.htaccess',
       ]),
     )
+  })
+
+  it('protects the server configuration at any depth and the platform files (plan 53, Р12)', () => {
+    const protectedPaths = wordpressAdapter.protectedPaths(site)
+    for (const path of [
+      '.htaccess',
+      'wp-content/themes/shop/.htaccess',
+      'wp-content/uploads/raditi/.user.ini',
+      'wp-content/plugins/x/php.ini',
+      'wp-content/mu-plugins/raditi-content.php',
+      'wp-content/mu-plugins/raditi-preview.php',
+    ])
+      expect(isForbiddenPath(path, protectedPaths)).toBe(true)
+    expect(isForbiddenPath('wp-content/mu-plugins/shop-tweaks.php', protectedPaths)).toBe(false)
   })
 
   it('keeps the themes and plugins editable', () => {
@@ -379,7 +393,6 @@ describe('wordpressAdapter', () => {
     for (const call of [
       () => wordpressAdapter.deployVars(site),
       () => wordpressAdapter.backup(site),
-      () => wordpressAdapter.verify(site),
       () => wordpressAdapter.agentGuide(site),
     ]) {
       expect(call).toThrow('(P10)')

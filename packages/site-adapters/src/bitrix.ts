@@ -5,6 +5,7 @@ import {
   archivesAndDumps,
   dataFiles,
   phpServerConfigFiles,
+  phpServerConfigProtected,
   secretFiles,
   serverLogs,
 } from './php-hosting.ts'
@@ -14,7 +15,10 @@ import {
 
 const anchored = (paths: readonly string[]) => paths.map((p) => `/${p}`)
 
-const protectedPaths = ['bitrix/', 'upload/', ...phpServerConfigFiles]
+const kernelAndMedia = ['bitrix/', 'upload/']
+
+// `.htaccess`, `.user.ini` and `php.ini` at any depth: Apache and PHP read them in every folder.
+const protectedPaths = [...kernelAndMedia, ...phpServerConfigProtected]
 
 const buildOutput = ['node_modules/', '*.log']
 
@@ -37,7 +41,7 @@ const snapshotExcludes = [
 // Backups live in /bitrix/backup/, already excluded with the core; dumps and archives elsewhere
 // are caught by pattern. gitleaks scans the imported tree as well (P11).
 const importExcludes = [
-  ...anchored(protectedPaths),
+  ...anchored([...kernelAndMedia, ...phpServerConfigFiles]),
   ...buildOutput,
   ...serverLogs,
   ...archivesAndDumps,
@@ -116,5 +120,36 @@ export const bitrixAdapter: SiteAdapter = {
       elementEnd,
     )
     return secretValues([...dbconn, ...settings])
+  },
+  // Previews and releases of Bitrix come with stage 3 (docs/plan/53-chat-preview-release.md).
+  agentWorkingSet() {
+    throw todo('agentWorkingSet')
+  },
+  mediaRules() {
+    throw todo('mediaRules')
+  },
+  // Until stage 3 a database of Bitrix is not copied: its preview is `unavailable`.
+  async databaseSettings() {
+    return null
+  },
+  previewRecipe() {
+    throw todo('previewRecipe')
+  },
+  databaseCopyPolicy() {
+    throw todo('databaseCopyPolicy')
+  },
+  // Until stage 3 a release of Bitrix carries no database operation.
+  dbOperationKinds() {
+    return []
+  },
+  dbSettings() {
+    return []
+  },
+  dbPlanGuide() {
+    return ''
+  },
+  // No preview of Bitrix runs before stage 3: its browser opens nothing.
+  browserRequestDenied() {
+    return true
   },
 }

@@ -1,7 +1,13 @@
 import type { SiteAdapter, SiteFacts } from '@repo/domain'
 import { createImportPathPolicy, siteStacks } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
-import { dataFiles, secretFiles, serverLogs } from './php-hosting.ts'
+import {
+  dataFiles,
+  phpServerConfigFiles,
+  phpServerConfigProtected,
+  secretFiles,
+  serverLogs,
+} from './php-hosting.ts'
 import { connectableStacks, getSiteAdapter } from './registry.ts'
 
 // The import of a connected site builds its path policy from the exclude lines of the adapter
@@ -81,6 +87,19 @@ describe('exclude lines of the adapters', () => {
         expect(adapter.importRules(facts).exclude).toEqual(
           expect.arrayContaining([...dataFiles, ...serverLogs, ...clientToolFiles]),
         )
+      })
+
+      it('protects the server configuration at any depth, and imports it below the root', () => {
+        // Two syntaxes, two lists: `**/` belongs to protectedPaths (plan 53, Р12), which the
+        // import policy refuses; the import leaves out the root's copy only.
+        expect(adapter.protectedPaths(facts)).toEqual(
+          expect.arrayContaining(phpServerConfigProtected),
+        )
+        for (const line of adapter.importRules(facts).exclude) expect(line).not.toContain('**')
+        for (const name of phpServerConfigFiles) {
+          expect(importPolicy(adapter).decide(name, 'file')).toBe('excluded')
+          expect(importPolicy(adapter).decide(`some/folder/below/${name}`, 'file')).toBe('take')
+        }
       })
 
       it('keeps server logs and the files of client tools out of turn snapshots', () => {

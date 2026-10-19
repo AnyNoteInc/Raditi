@@ -6,7 +6,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./database-copy": "./src/database-copy/index.ts",
     "./databases": "./src/databases/index.ts",
+    "./hosting": "./src/hosting/index.ts",
     "./services": "./src/services.ts",
     "./testing": "./src/testing/index.ts",
     "./testing/certificates": "./src/testing/certificates.ts"

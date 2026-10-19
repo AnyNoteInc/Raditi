@@ -1,17 +1,34 @@
 import type { McpToolDescriptor, SiteAdapter } from '@repo/domain'
 import { notImplemented } from '@repo/domain'
 import { phpConfigStrings, secretValues } from './php-config.ts'
+import { wordpressBrowserRequestDenied } from './wordpress-browser.ts'
+import { wordpressDatabaseCopyPolicy, wordpressDatabaseSettings } from './wordpress-db-copy.ts'
+import {
+  wordpressDbOperationKinds,
+  wordpressDbPlanGuide,
+  wordpressDbSettings,
+} from './wordpress-db.ts'
+import { wordpressPreviewRecipe } from './wordpress-preview.ts'
+import { wordpressVerifyPlan } from './wordpress-verify.ts'
+import {
+  wordpressAgentWorkingSet,
+  wordpressMediaRules,
+  wordpressPlatformFiles,
+} from './wordpress-working-set.ts'
 import {
   archivesAndDumps,
   dataFiles,
   phpServerConfigFiles,
+  phpServerConfigProtected,
   secretFiles,
   serverLogs,
 } from './php-hosting.ts'
 
 // Pattern syntax (the domain port leaves it open, so it is fixed here):
 // - protectedPaths: path prefixes from the repository root, `*` within one segment,
-//   a trailing `/` marks a directory — the syntax of forbiddenCiPaths (spec §10);
+//   a trailing `/` marks a directory, a leading `**/` — at any depth: the syntax of
+//   forbiddenCiPaths (spec §10);
+// - agentWorkingSet: the path patterns of @repo/domain (wordpress-working-set.ts);
 // - importRules and snapshotExcludes: .gitignore lines, usable as rsync and
 //   `git ls-files --exclude` patterns. A leading `/` anchors to the root; patterns without a
 //   slash (`*.sql`, `.env`) match at any depth.
@@ -63,7 +80,9 @@ const protectedPaths = [
   ...generatedDirs,
   ...backupDirs,
   ...dropIns,
-  ...phpServerConfigFiles,
+  ...phpServerConfigProtected,
+  // The platform's own files inside the site (plan 53, Р11): the agent never sees or changes them.
+  ...wordpressPlatformFiles,
 ]
 
 const snapshotExcludes = [
@@ -223,9 +242,7 @@ export const wordpressAdapter: SiteAdapter = {
   backup() {
     throw todo('backup')
   },
-  verify() {
-    throw todo('verify')
-  },
+  verify: wordpressVerifyPlan,
   mcpTools() {
     return mcpTools.map((tool) => ({ ...tool }))
   },
@@ -245,4 +262,13 @@ export const wordpressAdapter: SiteAdapter = {
     const values = await phpConfigStrings(read, 'wp-config.php', secretDefine, defineEnd)
     return secretValues(values.filter((value) => value !== samplePhrase))
   },
+  agentWorkingSet: wordpressAgentWorkingSet,
+  mediaRules: wordpressMediaRules,
+  databaseSettings: wordpressDatabaseSettings,
+  previewRecipe: wordpressPreviewRecipe,
+  databaseCopyPolicy: wordpressDatabaseCopyPolicy,
+  dbOperationKinds: wordpressDbOperationKinds,
+  dbSettings: wordpressDbSettings,
+  dbPlanGuide: wordpressDbPlanGuide,
+  browserRequestDenied: wordpressBrowserRequestDenied,
 }
