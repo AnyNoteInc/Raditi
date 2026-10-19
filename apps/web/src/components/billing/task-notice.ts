@@ -115,8 +115,9 @@ const upTo = (limit: number) => `до ${formatCount(limit)} ${creditsOf(limit)}`
  * pack cannot start a task, while the accounts could (spec §17, «Дневной лимит — в кредитах
  * тарифа»). A pack bought today lifts it; the next day does too while the tariff still takes
  * tasks then (`dayLimitTomorrow`; the refusal of the day implies a free tariff credit, so the
- * month is not spent). Continuations and retries are under the day as well, so nothing is
- * promised of the tasks in work.
+ * month is not spent). Continuations are under the day as well, so nothing is promised of the
+ * tasks in work. «Попробовать ещё» is not (the owner, 19.10.2026): its reserve can take the day
+ * past the limit, and what it does not use comes back to the day all the same.
  */
 function dayTaken(input: TaskNoticeInput): TaskNotice {
   const { task, tariff, pack } = input
@@ -133,18 +134,23 @@ function dayTaken(input: TaskNoticeInput): TaskNotice {
     limit !== null &&
     today.room === 0 &&
     today.held > 0 &&
-    today.used <= limit
+    today.charged < limit
   ) {
-    // The day is set aside for tasks in work: what they do not use comes back to it.
+    // The day is set aside for tasks in work: what they do not use comes back to it, and gives
+    // the day back while the charges have not taken all of it. The reserve of a retry, which the
+    // day does not bound, can hold more than the limit.
     const charged = today.charged > 0 ? `списано ${formatCount(today.charged)} и ` : ''
+    const of =
+      today.used <= limit ? `из ${formatCount(limit)}` : `при дневном лимите ${formatCount(limit)}`
     const back = 'Неиспользованные кредиты вернутся, когда задачи закончатся'
-    state = `Кредиты по тарифу на сегодня заняты: из ${formatCount(limit)} ${charged}отложено под задачи в работе ${formatCount(today.held)}. ${tomorrow === null ? `${back}.` : `${back}, а ${tomorrow}.`}`
+    state = `Кредиты по тарифу на сегодня заняты: ${of} ${charged}отложено под задачи в работе ${formatCount(today.held)}. ${tomorrow === null ? `${back}.` : `${back}, а ${tomorrow}.`}`
   } else if (today !== null && today.room !== null && today.room > 0) {
     // Something is left of the day, fewer than a new task needs with the gift and the pack.
     const now = task.spendableNow
     state = `Сегодня можно потратить ещё ${formatCount(now)} ${creditsWord(now)}, а на новую задачу нужно не меньше ${task.minToStart}.${nextDay}`
   } else {
-    // After a renewal onto a smaller plan the day can have taken more than the limit of now.
+    // The charges took the whole day. They can have taken more than the limit of now after a
+    // renewal onto a smaller plan, or after a retry, which the day does not bound.
     const spent =
       today === null || limit === null
         ? ''

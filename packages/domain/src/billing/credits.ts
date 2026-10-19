@@ -211,7 +211,8 @@ const tariffDaySchema = z.strictObject({
  * How many tariff credits a Moscow day still gives: max(0, limit − used); null when the day has
  * no limit. `limit` is `dailyTariffCredits` of the plan live now, `used` what the day has taken
  * of the tariff — reserves placed that day and what charges moved onto free tariff credits that
- * day. A renewal onto a smaller plan can leave `used` above the limit: nothing is left then.
+ * day. A retry, whose reserve the day does not bound (`placementTariffRoom`), and a renewal onto
+ * a smaller plan can leave `used` above the limit: nothing is left then.
  */
 export function tariffDayRoom(day: { limit: Credits | null; used: Credits }): Credits | null {
   const result = tariffDaySchema.safeParse(day)
@@ -917,9 +918,10 @@ export function dailyTariffCredits(
 
 /**
  * The tariff credits of the Moscow day of a paid tariff, as the pages and the refusals tell
- * them. `used` = `charged` + `held` can stand above `limit` after a renewal onto a smaller plan;
- * `room` = max(0, `limit` − `used`) is then nothing. `left` = min(`room`, free tariff credits) is
- * what the tariff can still give today: the room, or less when the account itself has less.
+ * them. `used` = `charged` + `held` can stand above `limit` after a retry, which the day does not
+ * bound, and after a renewal onto a smaller plan; `room` = max(0, `limit` − `used`) is then
+ * nothing. `left` = min(`room`, free tariff credits) is what the tariff can still give today: the
+ * room, or less when the account itself has less.
  */
 export interface TariffDay {
   /** `plans.credits_per_day`; null — the plan sets no daily limit. */

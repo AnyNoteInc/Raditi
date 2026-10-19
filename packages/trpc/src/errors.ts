@@ -355,7 +355,9 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
       const credits = plural(spendableNow, 'кредит', 'кредита', 'кредитов')
       return `Сегодня можно потратить ещё ${counted(spendableNow)} ${credits}, а на новую задачу нужно не меньше ${counted(needed)}. Купите пакет кредитов — он дневным лимитом не ограничен — или поставьте задачу завтра`
     }
-    // After a renewal onto a smaller plan the day can have taken more than the limit of now.
+    // The day can have taken more than the limit of now after a retry, which the day does not
+    // bound, or after a renewal onto a smaller plan. The details carry what the day took, not how
+    // much of it is set aside: the page itself tells set-aside credits that come back (`dayTaken`).
     const spent =
       day.used <= day.limit
         ? `потрачено ${counted(day.used)} из ${counted(day.limit)}`

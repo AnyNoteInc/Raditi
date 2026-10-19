@@ -89,10 +89,11 @@ const ENDED: readonly TaskStatus[] = ['done', 'failed', 'rolled_back', 'cancelle
  * Whether «Попробовать ещё» is offered: decided by the server alone (`canRetry` of the head of
  * the feed, the command `/retry`, the procedure `task.retry`). A dialog that waits with its
  * candidate after a failure that allows a retry, while nothing answered the failure. The three
- * attempts of a task do not stop it (spec §20, decision 4 of 11.10.2026): what bounds retries in
- * a row is the credits a new reserve needs — within the tariff credits of the day (D7 of
- * 17.10.2026) — and the bound on unpaid work, which the reserve checks when the press comes, so
- * the offer does not depend on them.
+ * attempts of a task do not stop it (spec §20, decision 4 of 11.10.2026), and neither does the
+ * daily limit (the owner, 19.10.2026: `placementTariffRoom`): what bounds retries in a row is the
+ * five credits a new reserve needs that can be spent, the free tariff credits its tariff part is
+ * taken from and the bound on unpaid work, which the reserve checks when the press comes, so the
+ * offer does not depend on them.
  */
 export function retryVerdict(input: {
   status: TaskStatus

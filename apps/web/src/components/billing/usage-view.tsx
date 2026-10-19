@@ -436,8 +436,8 @@ const taken = (count: number, limit: number): MeterPart[] => [
 /**
  * The meter of the day, like that of the tariff: charged, set aside, left — what the tariff can
  * still give today (`left`), less than the room of the day when the month has less; the rest of
- * the track stays empty. A day that took more than the limit of now — after a renewal onto a
- * smaller plan — fills the track.
+ * the track stays empty. A day that took more than the limit of now — after a retry, whose
+ * reserve the day does not bound, or after a renewal onto a smaller plan — fills the track.
  */
 const dayParts = ({ charged, held, left }: TariffDay): MeterPart[] => [
   { tone: 'spent', value: charged },

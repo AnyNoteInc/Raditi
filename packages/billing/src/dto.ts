@@ -153,7 +153,8 @@ export type NewTaskDto = z.infer<typeof newTaskSchema>
 /**
  * The tariff credits of the Moscow day of a paid tariff: the limit of its plan, what the day
  * took — charged and set aside —, what is left of it and what the tariff can still give today.
- * `used` can stand above `limit` after a renewal onto a smaller plan; nothing is left then.
+ * `used` can stand above `limit` after a retry, whose reserve the day does not bound (the owner,
+ * 19.10.2026), and after a renewal onto a smaller plan; nothing is left then.
  */
 export const tariffDaySchema = z
   .object({
