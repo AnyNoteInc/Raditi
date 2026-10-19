@@ -149,6 +149,15 @@ services:
       - --certificatesresolvers.le.acme.keytype=EC256
       - --certificatesresolvers.le.acme.certificatesduration=${ACME_CERT_HOURS:-2160}
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      # The wildcard of previews (docker-compose.preview.yml, traefik/dynamic/preview.yml): DNS-01
+      # through Yandex Cloud DNS, the only challenge that issues *.<PREVIEW_BASE_DOMAIN>. Nothing
+      # uses it, and nothing reads its credentials, until the preview file is added.
+      - --certificatesresolvers.preview.acme.email=${ACME_EMAIL:?Set ACME_EMAIL}
+      - --certificatesresolvers.preview.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.preview.acme.storage=/acme/${ACME_STORAGE_FILE:-acme.json}
+      - --certificatesresolvers.preview.acme.keytype=EC256
+      - --certificatesresolvers.preview.acme.certificatesduration=${ACME_CERT_HOURS:-2160}
+      - --certificatesresolvers.preview.acme.dnschallenge.provider=yandexcloud
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN}
     ports:

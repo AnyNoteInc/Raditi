@@ -1,7 +1,8 @@
 // The edge routes (spec §19): web only, separate certificates for apex and www, the reset token
-// and the metrics never through the edge, a limit on the bodies sent to the API.
+// and the metrics never through the edge, a limit on the bodies sent to the API. The previews of
+// dialogs (docs/plan/53, Р19) have a file of their own: exactly their hosts, to the gateway role.
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
 const routes = readFileSync(new URL('./traefik/dynamic/raditi.yml', import.meta.url), 'utf8')
@@ -96,4 +97,71 @@ test('TLS 1.2 at least, and only for the names the edge serves', () => {
   assert.match(code, /minVersion: VersionTLS12/)
   assert.match(code, /sniStrict: true/)
   assert.doesNotMatch(code, /CBC|RC4|3DES/)
+})
+
+// --- Previews of dialogs: traefik/dynamic/preview.yml --------------------------------------------
+
+const previewRoutes = readFileSync(
+  new URL('./traefik/dynamic/preview.yml', import.meta.url),
+  'utf8',
+)
+
+/** The file as Traefik's Go template renders it with this environment (the parts it uses). */
+function rendered(baseDomain) {
+  const guarded = /^# \{\{ if env "PREVIEW_BASE_DOMAIN" \}\}\n([\s\S]*)^# \{\{ end \}\}\n$/m.exec(
+    previewRoutes,
+  )
+  assert.ok(guarded, 'the whole file is guarded by PREVIEW_BASE_DOMAIN')
+  // Nothing outside the guard but comments, and nothing inside it is one.
+  const outside = previewRoutes.replace(guarded[0], '')
+  assert.ok(outside.split('\n').every((line) => line === '' || line.startsWith('# ')))
+  assert.doesNotMatch(outside, /\{\{/)
+  if (!baseDomain) return ''
+  return guarded[1]
+    .replaceAll(
+      '{{ env "PREVIEW_BASE_DOMAIN" | replace "." "\\\\." }}',
+      baseDomain.replaceAll('.', '\\.'),
+    )
+    .replaceAll('{{ env "PREVIEW_BASE_DOMAIN" }}', baseDomain)
+}
+
+test('the edge has two route files: the cabinet (web only) and previews', () => {
+  const files = readdirSync(new URL('./traefik/dynamic/', import.meta.url)).sort()
+  assert.deepEqual(files, ['preview.yml', 'raditi.yml'])
+  assert.doesNotMatch(code, /preview|8090|HostRegexp/i)
+})
+
+test('without PREVIEW_BASE_DOMAIN the preview file routes nothing and orders no certificate', () => {
+  assert.equal(rendered(''), '')
+})
+
+test('previews: exactly their hosts, one label under the base, to the gateway role alone', () => {
+  const yaml = rendered('preview.example.com')
+  assert.doesNotMatch(yaml, /\{\{|\}\}/)
+  assert.deepEqual(
+    [...yaml.matchAll(/url: '([^']+)'/g)].map(([, url]) => url),
+    ['http://preview:8090'],
+  )
+  assert.doesNotMatch(yaml, /web:3000|core|8081|8083|mcp|8082|llm|8084|middlewares/i)
+  assert.match(yaml, /entryPoints: \[websecure\]/)
+  assert.match(yaml, /certResolver: preview$/m)
+  assert.match(yaml, /domains: \[\{ main: '\*\.preview\.example\.com' \}\]/)
+  const rule = /rule: 'HostRegexp\(`([^`]+)`\)'/.exec(yaml)?.[1]
+  assert.ok(rule)
+  const host = new RegExp(rule)
+  for (const name of [
+    'site-abcd1234-chat-ef5678.preview.example.com',
+    'site-0000-chat-0000.preview.example.com',
+  ])
+    assert.match(name, host, name)
+  for (const name of [
+    'preview.example.com',
+    'www.preview.example.com',
+    'site-abcd1234-chat-ef5678.preview.example.com.evil.ru',
+    'x.site-abcd1234-chat-ef5678.preview.example.com',
+    'site-abcd1234-chat-ef5678xpreviewxexample.com',
+    'site-ab-chat-ef5678.preview.example.com',
+    'site-abcd1234-chat-ef5678.raditi.ru',
+  ])
+    assert.doesNotMatch(name, host, name)
 })

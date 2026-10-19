@@ -96,6 +96,19 @@ if printf '%s\n%s\n' "$(setting COMPOSE_PROFILES)" "${COMPOSE_PROFILES-}" |
     fail "docker.service must require raditi-llm-firewall.service"
 fi
 
+# Optional previews of dialogs (docker-compose.preview.yml, README.md «Предпросмотры»): Traefik
+# reads the DNS-01 credentials of the wildcard, the gateway its database and cookie secret. Both
+# sources, as for llm: a shell override must not skip what the file selects.
+if printf '%s\n%s\n' "$(setting COMPOSE_FILE)" "${COMPOSE_FILE-}" |
+  grep -q 'docker-compose\.preview\.yml'; then
+  check_secrets traefik 65532 yandex-cloud-iam-token yandex-cloud-folder-id
+  check_secrets preview 10009 app.env
+  setting PREVIEW_BASE_DOMAIN | grep -Eqx '[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}' ||
+    fail "PREVIEW_BASE_DOMAIN must be the domain of previews"
+  [ "$(setting PREVIEW_BASE_DOMAIN)" != preview.example.com ] ||
+    fail "PREVIEW_BASE_DOMAIN still has the documentation value"
+fi
+
 # 5. Compose's .env is not a secret store (RUNNER_TOKENS holds only hashes).
 if grep -Eq '^[A-Z0-9_]*(PASSWORD|SECRET|SECRET_ID|TOKEN|_KEY|DATABASE_URL|REDIS_URL)=' "$env_file"; then
   fail "$env_file holds secret-like names: secrets are files in $secrets"

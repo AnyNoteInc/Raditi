@@ -578,4 +578,158 @@ test('every ACME resolver has exactly one challenge type', () => {
   assert.ok(challenges.has('le'))
   for (const [resolver, types] of challenges)
     assert.equal(types.size, 1, `${resolver}: ${[...types].join(', ') || 'no challenge'}`)
+  // The wildcard of previews: DNS-01 through Yandex Cloud DNS, never HTTP-01.
+  assert.deepEqual([...(challenges.get('preview') ?? [])], ['dns'])
+  assert.ok(
+    services.traefik.command.includes(
+      '--certificatesresolvers.preview.acme.dnschallenge.provider=yandexcloud',
+    ),
+  )
+})
+
+// --- Previews of dialogs (docker-compose.preview.yml, docs/plan/53, Р19) -----------------------
+
+const previewFile = fileURLToPath(new URL('./docker-compose.preview.yml', import.meta.url))
+const previewSource = readFileSync(previewFile, 'utf8')
+const withPreview = resolve(file, previewFile)
+const previewOf = (name) => Object.keys(withPreview.services[name].networks ?? {})
+const sharedWithPreview = (a, b) => previewOf(a).filter((network) => previewOf(b).includes(network))
+
+test('previews are opt-in: the default stack has no gateway and Traefik reads no DNS secret', () => {
+  assert.equal(services.preview, undefined)
+  assert.deepEqual(Object.keys(services.traefik.environment), ['APP_DOMAIN'])
+  assert.ok(!(services.traefik.volumes ?? []).some((volume) => volume.target === '/run/raditi'))
+  assert.ok(!networksOf('traefik').includes('preview-edge'))
+  // The cabinet's stack is the same with or without the file, but for the additions below.
+  assert.deepEqual(Object.keys(withPreview.services).sort(), [...names, 'preview'].sort())
+  for (const name of names)
+    assert.equal(services[name].environment?.PREVIEW_BASE_DOMAIN, undefined, name)
+})
+
+test('web, core and the gateway read one address of previews', () => {
+  const address = (name) => {
+    const environment = withPreview.services[name].environment
+    return ['PREVIEW_BASE_DOMAIN', 'PREVIEW_SCHEME', 'PREVIEW_PUBLIC_PORT'].map(
+      (key) => environment[key],
+    )
+  }
+  const expected = [example.PREVIEW_BASE_DOMAIN, 'https', undefined]
+  for (const name of ['web', 'core', 'preview']) assert.deepEqual(address(name), expected, name)
+  // The file adds the address and nothing else to the services of the cabinet.
+  for (const name of ['web', 'core']) {
+    const added = Object.keys(withPreview.services[name].environment).filter(
+      (key) => !(key in services[name].environment),
+    )
+    assert.deepEqual(added.sort(), ['PREVIEW_BASE_DOMAIN', 'PREVIEW_SCHEME'], name)
+  }
+})
+
+test('the gateway of previews: its own role, uid and secrets, nothing published', () => {
+  const preview = withPreview.services.preview
+  assert.equal(preview.user, '10009:10009')
+  assert.ok(!Object.values(uids).includes(preview.user))
+  assert.equal(preview.image, example.ORCHESTRATOR_IMAGE)
+  assert.equal(preview.read_only, true)
+  assert.deepEqual(preview.cap_drop, ['ALL'])
+  assert.deepEqual(preview.security_opt, ['no-new-privileges:true'])
+  assert.equal(preview.init, true)
+  assert.equal(preview.logging.driver, 'journald')
+  assert.equal(preview.ports, undefined)
+  assert.equal(preview.expose, undefined)
+  assert.equal(preview.deploy.replicas, 1)
+  assert.deepEqual(Object.keys(preview.depends_on), ['postgres'])
+  assert.equal(preview.environment.ORCHESTRATOR_ROLES, 'preview')
+  assert.equal(preview.environment.APP_ENV, 'production')
+  assert.equal(preview.environment.APP_URL, `https://${example.APP_DOMAIN}`)
+  assert.equal(preview.environment.PREVIEW_SCHEME, 'https')
+  assert.equal(preview.environment.PREVIEW_BASE_DOMAIN, example.PREVIEW_BASE_DOMAIN)
+  for (const key of Object.keys(preview.environment)) {
+    assert.doesNotMatch(key, /^(REDIS_|S3_|VAULT_|RUNNER_|SANDBOX_|LLM_)/, key)
+    assert.doesNotMatch(key, /(PASSWORD|SECRET|SECRET_ID|TOKEN|_KEY|DATABASE_URL|REDIS_URL)$/, key)
+  }
+  const binds = preview.volumes.filter((volume) => volume.target === '/run/raditi')
+  assert.equal(binds.length, 1)
+  assert.equal(binds[0].read_only, true)
+  assert.equal(binds[0].bind?.create_host_path ?? false, false)
+  assert.equal(binds[0].source, `${example.SECRETS_DIR}/preview`)
+  assert.ok(preview.healthcheck.test.at(-1).includes('/__raditi/health'))
+  assert.ok(preview.healthcheck.test.at(-1).includes('r.status === 200'))
+  assert.ok(Number(preview.mem_limit) > 0 && preview.pids_limit > 0 && preview.cpus > 0)
+  const secrets = readFileSync(
+    new URL('./secrets.example/preview/app.env', import.meta.url),
+    'utf8',
+  )
+  assert.deepEqual(
+    [...secrets.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map(([, name]) => name),
+    ['DATABASE_URL', 'PREVIEW_SESSION_SECRET'],
+  )
+})
+
+test('Traefik alone reaches the gateway; the gateway meets neither web nor core', () => {
+  const pairs = {
+    'traefik preview': ['preview-edge'],
+    'web preview': [],
+    'core preview': [],
+    'llm preview': [],
+    'redis preview': [],
+    'postgres preview': ['preview-data'],
+    'traefik web': ['edge'],
+    'traefik core': [],
+    'traefik postgres': [],
+  }
+  for (const [pair, expected] of Object.entries(pairs)) {
+    const [a, b] = pair.split(' ')
+    assert.deepEqual(sharedWithPreview(a, b), expected, pair)
+  }
+  for (const network of ['preview-edge', 'preview-data'])
+    assert.equal(withPreview.networks[network].internal, true, network)
+  assert.notEqual(withPreview.networks['preview-out'].internal, true)
+  assert.deepEqual(
+    Object.keys(withPreview.services).filter((name) => previewOf(name).includes('preview-out')),
+    ['preview'],
+  )
+  assert.equal(
+    withPreview.networks['preview-out'].driver_opts['com.docker.network.bridge.name'],
+    `${example.BRIDGE_PREFIX}-preview`,
+  )
+  // Traefik keeps every network it had and gains this one only.
+  assert.deepEqual(previewOf('traefik').sort(), [...networksOf('traefik'), 'preview-edge'].sort())
+})
+
+test('Traefik takes the DNS-01 credentials from files of its own secret directory', () => {
+  const traefik = withPreview.services.traefik
+  assert.equal(traefik.environment.PREVIEW_BASE_DOMAIN, example.PREVIEW_BASE_DOMAIN)
+  assert.equal(
+    traefik.environment.YANDEX_CLOUD_IAM_TOKEN_FILE,
+    '/run/raditi/yandex-cloud-iam-token',
+  )
+  assert.equal(
+    traefik.environment.YANDEX_CLOUD_FOLDER_ID_FILE,
+    '/run/raditi/yandex-cloud-folder-id',
+  )
+  assert.equal(traefik.environment.YANDEX_CLOUD_IAM_TOKEN, undefined)
+  const binds = traefik.volumes.filter((volume) => volume.target === '/run/raditi')
+  assert.equal(binds.length, 1)
+  assert.equal(binds[0].read_only, true)
+  assert.equal(binds[0].bind?.create_host_path ?? false, false)
+  assert.equal(binds[0].source, `${example.SECRETS_DIR}/traefik`)
+  // Static configuration stays flags: the file changes no flag of Traefik.
+  assert.deepEqual(traefik.command, services.traefik.command)
+})
+
+test('every variable the preview file substitutes is in env.example, and preflight checks it', () => {
+  const used = new Set(
+    previewSource
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .flatMap((line) => [...line.matchAll(/\$\{([A-Z][A-Z0-9_]*)/g)].map(([, name]) => name)),
+  )
+  assert.ok(used.has('PREVIEW_BASE_DOMAIN'))
+  for (const name of used) assert.ok(name in example, `${name} is missing from env.example`)
+  assert.match(preflight, /grep -q 'docker-compose\\\.preview\\\.yml'/)
+  assert.match(
+    preflight,
+    /check_secrets traefik 65532 yandex-cloud-iam-token yandex-cloud-folder-id/,
+  )
+  assert.match(preflight, /check_secrets preview 10009 app\.env/)
 })

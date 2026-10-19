@@ -1,0 +1,99 @@
+# Previews of dialogs on the app VM (docs/plan/53-chat-preview-release.md, Р17, Р19; README.md,
+# «Предпросмотры»). Opt-in, on top of docker-compose.yml: COMPOSE_FILE in .env names both files.
+# Traefik gets PREVIEW_BASE_DOMAIN (the router of traefik/dynamic/preview.yml appears), the
+# Yandex Cloud DNS credentials of the DNS-01 resolver `preview` from its own secret directory,
+# and one more internal network: to the gateway role `preview` alone. The gateway reads the
+# database and reaches the upstreams of previews on the sandbox VMs' private addresses (M10);
+# it shares no network with web or core. No secret lives in this file or in `environment:`.
+name: raditi-app
+
+# Where previews are served, one value for all who read it: web builds the ticket URLs and the
+# frame sources of its pages from it, core the hostnames of previews, the gateway routes by it.
+# https on the scheme's own port — what Traefik serves (PREVIEW_PUBLIC_PORT stays unset).
+x-preview-address: &preview-address
+  PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
+  PREVIEW_SCHEME: https
+
+services:
+  web:
+    environment:
+      <<: *preview-address
+
+  core:
+    environment:
+      <<: *preview-address
+
+  traefik:
+    environment:
+      PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
+      # lego reads the provider's credentials from files: a service account key and its folder.
+      YANDEX_CLOUD_IAM_TOKEN_FILE: /run/raditi/yandex-cloud-iam-token
+      YANDEX_CLOUD_FOLDER_ID_FILE: /run/raditi/yandex-cloud-folder-id
+    volumes:
+      - type: bind
+        source: ${SECRETS_DIR:-/run/raditi}/traefik
+        target: /run/raditi
+        read_only: true
+        bind: { create_host_path: false }
+    networks: [preview-edge]
+
+  preview:
+    image: ${ORCHESTRATOR_IMAGE:?Set the digest-pinned orchestrator image}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    logging:
+      driver: journald
+      options: { tag: '{{.Name}}' }
+    user: '10009:10009'
+    command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
+    # One gateway: its caches of hosts and sessions live in its memory.
+    deploy: { replicas: 1 }
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      <<: *preview-address
+      NODE_ENV: production
+      APP_ENV: production
+      APP_URL: https://${APP_DOMAIN:?Set APP_DOMAIN}
+      ORCHESTRATOR_ROLES: preview
+      PREVIEW_GATEWAY_PORT: '8090'
+      HOME: /tmp
+    volumes:
+      - type: bind
+        source: ${SECRETS_DIR:-/run/raditi}/preview
+        target: /run/raditi
+        read_only: true
+        bind: { create_host_path: false }
+    tmpfs:
+      - /tmp:size=16m,uid=10009,gid=10009,mode=0700
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:8090/__raditi/health').then(r => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    # SHUTDOWN_TIMEOUT_MS is 30 s (roles.ts); compose's default 10 s would cut it short
+    stop_grace_period: 40s
+    cpus: 1
+    mem_limit: 1g
+    pids_limit: 256
+    networks: [preview-edge, preview-data, preview-out]
+
+  postgres:
+    networks: [preview-data]
+
+networks:
+  preview-edge: { internal: true } # Traefik ↔ the gateway of previews
+  preview-data: { internal: true } # the gateway ↔ PostgreSQL
+  # The gateway → the upstreams of previews on the sandbox VMs' private addresses; the host
+  # firewall of M10 keeps it to their subnet.
+  preview-out:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-preview' }
