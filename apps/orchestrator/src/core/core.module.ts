@@ -17,6 +17,7 @@ import { QueueModule } from '../queue/queue.module.ts'
 import { ReleaseApiModule } from '../release-api/release-api.module.ts'
 import { ReleasesModule } from '../releases/releases.module.ts'
 import { SessionsModule } from '../sessions/sessions.module.ts'
+import { SiteProvisioningModule } from '../site-provisioning/site-provisioning.module.ts'
 import { TasksModule } from '../tasks/tasks.module.ts'
 import { TurnsModule } from '../turns/turns.module.ts'
 import { CoreConfigModule, type CoreModuleOptions } from './core-config.module.ts'
@@ -41,6 +42,7 @@ export class CoreModule {
         OutboxModule,
         NotificationsModule,
         BillingModule,
+        SiteProvisioningModule,
         DriversModule,
         SessionsModule,
         // Git of site repositories: the turn supervisor and the candidates of dialogs (R3).

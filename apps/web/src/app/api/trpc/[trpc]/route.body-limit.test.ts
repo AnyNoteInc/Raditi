@@ -44,6 +44,7 @@ vi.mock('@repo/trpc', async (importOriginal) => {
 // The shop settings are read from the environment, which this test does not set.
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => null }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => null }))
+vi.mock('@/server/site-connections', () => ({ siteConnections: () => null }))
 
 const { POST } = await import('./route')
 

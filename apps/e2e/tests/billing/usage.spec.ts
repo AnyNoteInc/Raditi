@@ -3,13 +3,15 @@ import type { Page } from '@playwright/test'
 import { fakeYookassa } from '../../fixtures/billing-stand.ts'
 import { leftHeadline, leftHeadlineOf, totalLeft } from '../../fixtures/credit-words.ts'
 import { expect, test } from '../../fixtures/credits.ts'
+import { addSiteInWizard, fillBasics, openWizard } from '../../fixtures/site-files.ts'
 
 // «Настройки → Использование» in a real browser, and the site limit of a tariff: a signed-in
 // customer pays for a tariff on the page of the fake ЮKassa, sees its quota untouched and an
 // empty history, reads on «Тарифы» how credits are counted, and is refused a site beyond the
-// number the tariff takes. The fixture removes the user with everything the payment and the form
-// created, and keeps a credit rate in force for the run: without one the pages would say only
-// that no task is taken.
+// number the tariff takes — at the first step of the wizard «Добавить проект», after a first site
+// was added through the whole wizard. The fixture removes the user with everything the payment
+// and the wizard created, and keeps a credit rate in force for the run: without one the pages
+// would say only that no task is taken.
 
 // Each step opens a page the development server compiles on first use.
 test.describe.configure({ timeout: 180_000 })
@@ -218,38 +220,27 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
 test('a site beyond the number the tariff takes is refused', async ({
   page,
   signedInUser: _signedIn,
+  siteFiles,
 }) => {
-  const addSite = async (name: string, address: string) => {
-    await page.getByRole('button', { name: 'Добавить сайт' }).first().click()
-    const form = page.getByRole('form', { name: 'Новый проект' })
-    await form.getByLabel('Название проекта').fill(name)
-    await form.getByLabel('Адрес сайта').fill(address)
-    await form.getByRole('button', { name: 'Создать проект' }).click()
-    return form
-  }
-
   await test.step('the customer pays for «Старт», a tariff for one site', async () => {
     await payFor(page, 'Старт')
   })
 
-  await test.step('the first site is added', async () => {
-    await page.goto('/projects')
-    await expect(page.getByRole('heading', { level: 1, name: 'Проекты' })).toBeVisible(SLOW)
-    await addSite('Кофейня', 'https://coffee.example.ru')
-    await expect(page.getByRole('main').getByRole('alert')).toContainText(
-      'Проект «Кофейня» добавлен.',
-      SLOW,
-    )
+  await test.step('the first site is added through the wizard', async () => {
+    await addSiteInWizard(page, siteFiles, { name: 'Кофейня', url: 'https://coffee.example.ru' })
   })
 
-  await test.step('the second one is refused with the limit of the tariff', async () => {
-    const form = await addSite('Пекарня', 'https://bakery.example.ru')
-    await expect(form.getByRole('alert')).toHaveText(
+  await test.step('the second one is refused at «Далее» of the first step, with the limit of the tariff', async () => {
+    await openWizard(page)
+    await fillBasics(page, { name: 'Пекарня', url: 'https://bakery.example.ru' })
+    await expect(page.getByRole('main').getByRole('alert')).toHaveText(
       'В ваш тариф входит один сайт. Чтобы добавить ещё один, выберите другой тариф в настройках.',
       SLOW,
     )
-    // Nothing was added: the list still has one site.
-    await form.getByRole('button', { name: 'Отмена' }).click()
+    // The wizard stays on its first step: nothing was checked on a server, nothing was added.
+    await expect(page.getByRole('heading', { level: 2, name: 'Основные данные' })).toBeVisible()
+    await page.getByRole('link', { name: 'Отмена' }).click()
+    await expect(page).toHaveURL('/projects', SLOW)
     await expect(page.getByRole('list', { name: 'Сайты' }).getByRole('listitem')).toHaveCount(1)
   })
 

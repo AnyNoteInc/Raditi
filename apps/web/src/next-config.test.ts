@@ -121,3 +121,17 @@ describe('request bodies', () => {
     expect(config.experimental?.serverActions?.bodySizeLimit).toBeUndefined()
   })
 })
+
+describe('packages', () => {
+  it('transpiles the workspace packages of the site connection wizard', () => {
+    expect(config.transpilePackages).toEqual(
+      expect.arrayContaining(['@repo/site-adapters', '@repo/site-connections']),
+    )
+  })
+
+  it('leaves the drivers that reach a client server to Node instead of bundling them', () => {
+    expect(config.serverExternalPackages).toEqual(
+      expect.arrayContaining(['pg', 'ssh2', 'basic-ftp', 'mysql2']),
+    )
+  })
+})

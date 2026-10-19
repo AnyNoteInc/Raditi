@@ -29,6 +29,7 @@ import {
   type PinnedAddress,
 } from '@repo/domain'
 
+import { epsvPort, pasvPort, rawFromTyped } from '../sources/ftp.ts'
 import { whenAborted, withinIdle } from './abort.ts'
 import { ancestorsOf, hostingFullPath, temporaryFor } from './paths.ts'
 
@@ -53,26 +54,6 @@ export interface FtpWriterOptions {
   loginTimeoutMs?: number
   /** Tests only: the PEM of a CA that `verified` trusts in place of the default store. */
   trustedCa?: string
-}
-
-/** A text (UTF-8) as the latin1 string of its bytes: what the control connection writes. */
-export const rawFromTyped = (text: string): string => Buffer.from(text, 'utf8').toString('latin1')
-
-/** Only the port of an EPSV reply exists: the host is always the control connection's. */
-export function epsvPort(message: string): number | null {
-  const match = /[|!]{3}(\d{1,5})[|!]/.exec(message)
-  const port = match ? Number(match[1]) : NaN
-  return port >= 1 && port <= 65_535 ? port : null
-}
-
-/** The port of a PASV reply; its four address numbers are read past and never used. */
-export function pasvPort(message: string): number | null {
-  const match = /\d{1,3},\d{1,3},\d{1,3},\d{1,3},(\d{1,3}),(\d{1,3})/.exec(message)
-  if (!match) return null
-  const high = Number(match[1])
-  const low = Number(match[2])
-  const port = high * 256 + low
-  return high <= 255 && low <= 255 && port >= 1 ? port : null
 }
 
 /**

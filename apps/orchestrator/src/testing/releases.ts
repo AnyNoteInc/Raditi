@@ -333,7 +333,14 @@ export class FakeReleaseVault {
       return new Uint8Array(plaintext)
     })
 
-  kvRead = async (path: string) => this.kv.get(path) ?? null
+  /** Earlier versions of a path, as KV v2 keeps them: a read that names its version gets one. */
+  readonly kvHistory = new Map<string, Array<{ data: Record<string, string>; version: number }>>()
+
+  kvRead = async (path: string, options: { version?: number } = {}) => {
+    const current = this.kv.get(path) ?? null
+    if (options.version === undefined || current?.version === options.version) return current
+    return this.kvHistory.get(path)?.find((entry) => entry.version === options.version) ?? null
+  }
 
   /** The API token of the latest wrapping: what the deploy job unwraps. */
   latestToken(): string {

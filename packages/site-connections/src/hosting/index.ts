@@ -7,22 +7,17 @@ import type { DeployMethod, HostingWriter } from '@repo/domain'
 import { ftpHostingWriter } from './ftp-writer.ts'
 import { sftpHostingWriter } from './sftp-writer.ts'
 
-export {
-  createFtpHostingWriter,
-  epsvPort,
-  ftpHostingWriter,
-  pasvPort,
-  rawFromTyped,
-  type FtpWriterOptions,
-} from './ftp-writer.ts'
-export { createHostLookup, createLookupWith, type ResolverLike } from './lookup.ts'
+export { createHostLookup, createLookupWith, type ResolverLike } from '../lookup.ts'
+export { sshKeyFingerprint } from '../sources/host-key.ts'
+export { keyDerivationAllowed } from '../sources/private-key.ts'
+export { epsvPort, pasvPort, rawFromTyped } from '../sources/ftp.ts'
+export { createFtpHostingWriter, ftpHostingWriter, type FtpWriterOptions } from './ftp-writer.ts'
 export {
   createSftpHostingWriter,
   sftpHostingWriter,
   type SftpWriterOptions,
 } from './sftp-writer.ts'
 export { createPinnedSiteTransport } from './site-http.ts'
-export { keyDerivationAllowed, sshKeyFingerprint } from './ssh.ts'
 
 const writers: Partial<Record<DeployMethod, HostingWriter>> = {
   sftp: sftpHostingWriter as HostingWriter,

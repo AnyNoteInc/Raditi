@@ -25,7 +25,9 @@ export interface SourceCheckContext extends ConnectionContext {
   markers: readonly string[]
   /**
    * create and replaceAccess: an adapter that pins a host key refuses when none was sent. (The worker does
-   * not come through `check`: `open` and `probe` take the secret, which always holds the key.)
+   * not come through `check`: `open` and `probe` take the secret, which always holds the key.) Without it a
+   * check that was sent no key logs in nowhere: it answers `host_key_unknown` with the key the server
+   * presented, and the wizard asks the user to confirm it before the next check sends credentials.
    */
   pinRequired: boolean
 }
@@ -42,8 +44,11 @@ export interface SourceCheckPassed {
 
 export type SourceCheckOutcome =
   | ({ ok: true } & SourceCheckPassed)
-  /** `suggestedRoot`: only with `not_site_root`, a folder one level down that has the markers. */
-  | { ok: false; reason: ConnectionCheckReason; suggestedRoot?: string }
+  /**
+   * `suggestedRoot`: only with `not_site_root`, a folder one level down that has the markers.
+   * `hostKey`: only with `host_key_unknown` and `host_key_changed`, the key the server presented.
+   */
+  | { ok: false; reason: ConnectionCheckReason; suggestedRoot?: string; hostKey?: string }
 
 export type DatabaseCheckOutcome =
   { ok: true; tables: number } | { ok: false; reason: ConnectionCheckReason }
@@ -110,13 +115,16 @@ export interface FileSourceSession {
    * `realpath(dir)` equals `realpath(root)` plus the segments) and rejects with
    * `FileSourceGuardError('outside_root')` otherwise. Past `maxEntries` → `FileSourceGuardError('entries')`,
    * past the listing byte cap → `FileSourceGuardError('listing')`. A broken or idle transfer →
-   * `SiteConnectionError('transfer_failed')`.
+   * `SiteConnectionError('transfer_failed')`. A folder its parent listed that the server refuses to open
+   * → `SiteConnectionError('access_denied')`, one that is gone → `SiteConnectionError('not_found')`: the
+   * walker leaves it out and counts it as `unreadable`.
    */
   list(directory: readonly string[], maxEntries: number): Promise<FileSourceEntry[]>
   /**
    * Streams one file into `sink` and resolves with the byte count. More than `maxBytes` →
    * `FileSourceGuardError('bytes')`; no byte for `idleMs`, or a broken transfer →
-   * `SiteConnectionError('transfer_failed')`; no such file → `SiteConnectionError('not_found')`.
+   * `SiteConnectionError('transfer_failed')`; no such file → `SiteConnectionError('not_found')`; a file
+   * the server refuses to open → `SiteConnectionError('access_denied')`.
    */
   read(
     path: readonly string[],

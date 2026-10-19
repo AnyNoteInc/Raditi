@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { epsvPort, modeOf, pasvPort, rawFromTyped } from './ftp-writer.ts'
+import { epsvPort, pasvPort, rawFromTyped } from '../sources/ftp.ts'
+import { modeOf } from './ftp-writer.ts'
 import { ftpHostingWriter, hostingWriterOf, sftpHostingWriter } from './index.ts'
 
 describe('the FTP(S) writer of a release', () => {

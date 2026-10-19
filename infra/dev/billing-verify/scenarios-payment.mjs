@@ -11,6 +11,7 @@ import {
   PRICE,
   CREDITS,
   actionsOf,
+  addSite,
   auditOf,
   creditAccounts,
   creditsCount,
@@ -23,6 +24,7 @@ import {
   journalsOf,
   ledgerHolds,
   moscowDate,
+  notYet,
   orderBecomes,
   orderById,
   orderIsOld,
@@ -83,12 +85,12 @@ scenarios['signup-gift'] = async (t) => {
     [[], []],
   )
 
-  // The first site makes the workspace, and the gift is granted with it.
+  // The first site makes the workspace, and the gift is granted with it. A site is added the one
+  // way the product has: the wizard checks its files, and the access goes to Vault.
   const address = `https://gift-${randomUUID()}.example.ru`
-  const site = await customer.mutate('project.create', {
+  const { project: site, request } = await addSite(t, customer, {
     name: 'Кофейня',
     url: address,
-    stack: 'wordpress',
   })
   const workspaceId = await customer.workspaceId()
   const granted = [
@@ -144,20 +146,105 @@ scenarios['signup-gift'] = async (t) => {
       usage: [{ left: 35, held: 0, granted: true }, { left: 0, held: 0 }, 35],
     },
   )
+  // What the site was made with: the access is in Vault, the database names where it is, and
+  // the first import of the files is queued with it — a stage of the site, not a task.
   t.equal(
-    'a site that is refused — the same address again — grants nothing more',
+    'the first site: the access to its files is in Vault, and the database holds only where — kv/sites/<site>/ssh, version 1',
     [
-      await customer.refusal('project.create', {
+      await t.rows(
+        `SELECT kind::text AS kind, vault_path, key_version, workspace_id FROM credential_refs
+         WHERE site_id = $1`,
+        [site.id],
+      ),
+      await t.vaultVersion(`kv/sites/${site.id}/ssh`),
+      await t.rows(
+        `SELECT kind::text AS kind, host, port, root_path, host_key FROM site_code_sources
+         WHERE site_id = $1`,
+        [site.id],
+      ),
+    ],
+    [
+      [
+        {
+          kind: 'ssh',
+          vault_path: `kv/sites/${site.id}/ssh`,
+          key_version: 1,
+          workspace_id: workspaceId,
+        },
+      ],
+      1,
+      [
+        {
+          kind: 'sftp',
+          host: t.site.host,
+          port: t.site.port,
+          root_path: t.site.rootPath,
+          host_key: t.site.hostKey,
+        },
+      ],
+    ],
+  )
+  // Core takes the import and ends it at once: the stand gives it no git to keep a repository
+  // in. Whatever becomes of the import, it is no task and spends nothing.
+  await t.until(
+    'the first import of the files ends without a repository: core has no git in the stand',
+    async () => {
+      const stage = await t.one(
+        `SELECT stage::text AS stage, status::text AS status, error_code
+         FROM site_provisioning_stages WHERE site_id = $1`,
+        [site.id],
+      )
+      return stage?.status === 'failed' &&
+        stage.stage === 'code_import' &&
+        stage.error_code === 'repository_not_configured'
+        ? stage
+        : notYet(stage)
+    },
+  )
+  t.equal(
+    'the import of the site is no task and takes nothing: no task, nothing set aside, the gift whole',
+    [
+      await t.rows(`SELECT id FROM tasks WHERE workspace_id = $1`, [workspaceId]),
+      await t.rows(
+        `SELECT h.id FROM credit_holds h JOIN billing_accounts a ON a.id = h.account_id
+         WHERE a.workspace_id = $1`,
+        [workspaceId],
+      ),
+      await giftRows(),
+    ],
+    [[], [], granted],
+  )
+  const sites = async () =>
+    (await t.rows(`SELECT id FROM sites WHERE workspace_id = $1`, [workspaceId])).map(
+      ({ id }) => id,
+    )
+  // The answer of «Добавить проект» was lost, and the wizard sends the same request again.
+  t.equal(
+    'the same request again — its answer lost — finds the same site and grants nothing more',
+    [await customer.mutate('project.create', request), await giftRows(), await sites()],
+    [{ outcome: 'created', project: site }, granted, [site.id]],
+  )
+  const logins = t.site.logins()
+  t.equal(
+    'a site that is refused — the same address again — grants nothing more: «Далее» and «Добавить проект» say it is there, and nobody logs in to its server',
+    [
+      await customer.refusal('siteConnection.checkBasics', {
         name: 'Кофейня',
         url: address,
         stack: 'wordpress',
       }),
+      await customer.refusal('project.create', { ...request, requestKey: randomUUID() }),
+      t.site.logins() - logins,
       await giftRows(),
-      (await t.rows(`SELECT id FROM sites WHERE workspace_id = $1`, [workspaceId])).map(
-        ({ id }) => id,
-      ),
+      await sites(),
     ],
-    [{ status: 409, code: 'PROJECT_ALREADY_EXISTS' }, granted, [site.id]],
+    [
+      { status: 409, code: 'PROJECT_ALREADY_EXISTS' },
+      { status: 409, code: 'PROJECT_ALREADY_EXISTS' },
+      0,
+      granted,
+      [site.id],
+    ],
   )
 
   // A tariff is paid for: the checkout finds the workspace and its gift, and adds nothing to it.
@@ -192,9 +279,9 @@ scenarios['signup-gift'] = async (t) => {
     [[{ kind: 'grant', amount: '300.00', key: `order:${order.id}:grant` }], granted],
   )
   t.equal(
-    'with a tariff: the audit holds one grant of the gift beside the start of the tariff',
+    'with a tariff: the audit holds one grant of the gift beside the site and the start of the tariff',
     await actionsOf(t, workspaceId),
-    ['billing.gift.grant', 'billing.subscription.start'],
+    ['billing.gift.grant', 'billing.subscription.start', 'site.create'],
   )
   t.equal(
     'with a tariff: «Тарифы» and «Использование» count the gift beside the quota — 335 credits',

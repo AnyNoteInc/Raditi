@@ -10,11 +10,14 @@ export const POSTGRES_IMAGE =
   'postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
 export const REDIS_IMAGE =
   'redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0'
+/** OpenBao of infra/dev, infra/vault and the other stands, by digest: the Vault web writes to. */
+export const OPENBAO_IMAGE =
+  'ghcr.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315'
 
 /** Every container of a run carries `io.raditi.billing-verify=<run>`. */
 export const STAND_LABEL = 'io.raditi.billing-verify'
 const RUN = /^[0-9a-f]{8}$/
-const SERVICES = ['postgres', 'redis']
+const SERVICES = ['postgres', 'redis', 'vault']
 
 /** The scheduler of core runs every pass this often: the lower bound of BILLING_TICK_SECONDS. */
 export const TICK_SECONDS = 1
@@ -23,6 +26,21 @@ export const RENEWAL_NOTICE_DAYS = 3
 export const PAST_DUE_DAYS = 7
 /** The shop of the fake: digits only, as ЮKassa numbers its shops. No real shop exists. */
 export const SHOP_ID = '100500'
+
+/**
+ * The site every customer of the stand adds: a synthetic WordPress on the stand's own SFTP server
+ * (the test server of @repo/site-connections, in the process of the stand, on loopback), in this
+ * folder and behind a password of the run. It holds what the check of «Доступ к файлам» reads —
+ * the two markers of the platform and a small file — and nothing of anyone.
+ */
+export const SITE_ROOT = '/var/www/kofeynya'
+export const SITE_USER = 'kofeynya'
+export const SITE_FILES = Object.freeze({
+  [`${SITE_ROOT}/index.php`]:
+    "<?php\n// A synthetic WordPress of the billing stand.\nrequire __DIR__ . '/wp-blog-header.php';\n",
+  [`${SITE_ROOT}/wp-includes/version.php`]: "<?php\n$wp_version = '6.8.3';\n",
+  [`${SITE_ROOT}/wp-content/index.php`]: '<?php\n// Silence is golden.\n',
+})
 
 // ─── Options ──────────────────────────────────────────────────────────────────
 
@@ -110,6 +128,23 @@ export function redisContainerArgs({ run, envFile }) {
 }
 
 export const redisEnvFile = (password) => `REDIS_PASSWORD=${password}\n`
+
+/**
+ * `docker run` of the stand's OpenBao, the Vault web writes the access of a new site to: dev
+ * mode, data in memory, a random port on loopback. The root token comes from an env file of the
+ * run, as the passwords above.
+ */
+export function vaultContainerArgs({ run, envFile }) {
+  return [
+    ...containerArgs(run, 'vault'),
+    ...['-p', '127.0.0.1::8200', '--env-file', envFileOf(envFile)],
+    OPENBAO_IMAGE,
+  ]
+}
+
+/** What the env file of the OpenBao container holds: the root token and the listener of dev mode. */
+export const vaultEnvFile = (rootToken) =>
+  `BAO_DEV_ROOT_TOKEN_ID=${rootToken}\nBAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200\n`
 
 /** The loopback port Docker published, from the output of `docker port`. */
 export function publishedPort(output) {
@@ -465,12 +500,22 @@ const shopOf = ({ secrets, fakeApiUrl }) => ({
 })
 
 /**
- * The whole environment of web (the standalone server of `next build`). Redis, S3 and Vault
- * are left out: only /api/health and the avatar routes read them. NODE_ENV is what the
- * standalone server sets anyway; APP_ENV is not production, so the fake's address and the
- * loopback senders are accepted.
+ * The whole environment of web (the standalone server of `next build`). Vault is the stand's
+ * OpenBao, and web logs in to it by the AppRole `sites-writer`: «Добавить проект» writes the
+ * access of a new site there before it creates the site. Redis and S3 are left out: only
+ * /api/health and the avatar routes read them. NODE_ENV is what the standalone server sets
+ * anyway; APP_ENV is not production, so the fake's address, the loopback senders and a site on
+ * loopback are accepted.
  */
-export function webEnvironment({ path, directory, ports, databaseUrl, fakeApiUrl, secrets }) {
+export function webEnvironment({
+  path,
+  directory,
+  ports,
+  databaseUrl,
+  fakeApiUrl,
+  secrets,
+  vault,
+}) {
   return {
     ...sandboxed({ path, directory }),
     NODE_ENV: 'production',
@@ -488,6 +533,9 @@ export function webEnvironment({ path, directory, ports, databaseUrl, fakeApiUrl
     // the address of the connection there, 127.0.0.1 or ::1.
     YOOKASSA_WEBHOOK_ALLOWLIST: '127.0.0.1,::1',
     BILLING_PAST_DUE_DAYS: String(PAST_DUE_DAYS),
+    VAULT_ADDR: vault.address,
+    VAULT_ROLE_ID: vault.roleId,
+    VAULT_SECRET_ID: vault.secretId,
   }
 }
 
@@ -495,7 +543,9 @@ export function webEnvironment({ path, directory, ports, databaseUrl, fakeApiUrl
  * The whole environment of a `core` process. PostgreSQL and Redis are the stand's own. S3 and
  * Vault are throwaway values: core parses both sections at start and connects to neither
  * until a turn or a health check asks, and no turn runs here. They name the discard port of
- * loopback, where nothing listens. NODE_ENV=production keeps core from looking for a `.env`.
+ * loopback, where nothing listens. The first import of a new site does not reach Vault either:
+ * without git (no GITEA_*) it ends `repository_not_configured` before it reads the access.
+ * NODE_ENV=production keeps core from looking for a `.env`.
  */
 export function coreEnvironment({
   path,
@@ -555,17 +605,20 @@ export function databaseEnvironment({ path, home, databaseUrl }) {
 
 /**
  * What a run removes, in this order: whoever writes to the database or calls the fake stops
- * first, the fake after the last notification could be sent, the containers after everything
- * that held a connection to them, the files and the lock of the copy last. The logs of a run
- * that failed are kept aside before its directory goes.
+ * first, the fake after the last notification could be sent, the SFTP server of the site after
+ * web, which checks the files there, the containers after everything that held a connection to
+ * them, the files and the lock of the copy last. The logs of a run that failed are kept aside
+ * before its directory goes.
  */
 export const CLEANUP_ORDER = Object.freeze([
   'second core',
   'core',
   'web',
   'fake',
+  'site server',
   'database client',
   'queue client',
+  'vault container',
   'redis container',
   'postgres container',
   'logs of a failed run',

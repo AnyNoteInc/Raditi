@@ -7,12 +7,14 @@ import { MAX_BATCH_SIZE } from '@/trpc/batch'
 const stand = vi.hoisted(() => ({
   shop: { name: 'the shop of the process' } as object | null,
   chat: { name: 'the dialog services of the process' } as object | null,
+  connections: { name: 'the site connections of the process' } as object | null,
   contexts: [] as unknown[],
   shopFailure: new Error('YooKassa request timed out'),
 }))
 
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => stand.chat }))
+vi.mock('@/server/site-connections', () => ({ siteConnections: () => stand.connections }))
 vi.mock('@repo/trpc', async () => {
   const { initTRPC, TRPCError } = await import('@trpc/server')
   const t = initTRPC.create()
@@ -53,6 +55,7 @@ describe('tRPC route', () => {
   let error: ReturnType<typeof vi.spyOn>
   beforeEach(() => {
     stand.shop = { name: 'the shop of the process' }
+    stand.connections = { name: 'the site connections of the process' }
     stand.contexts = []
     error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   })
@@ -75,16 +78,25 @@ describe('tRPC route', () => {
     expect(MAX_BATCH_SIZE).toBeLessThanOrEqual(10)
   })
 
-  it('builds the context from the request headers and the shop of the process', async () => {
+  it('builds the context from the request headers and the services of the process', async () => {
     const request = new Request('http://localhost/api/trpc/ping', { headers: { cookie: 'a=1' } })
 
     expect((await GET(request)).status).toBe(200)
 
     expect(stand.contexts).toEqual([
-      { headers: request.headers, billing: stand.shop, chat: stand.chat },
+      {
+        headers: request.headers,
+        billing: stand.shop,
+        chat: stand.chat,
+        siteConnections: stand.connections,
+      },
     ])
-    expect((stand.contexts[0] as { billing: unknown }).billing).toBe(stand.shop)
-    expect((stand.contexts[0] as { chat: unknown }).chat).toBe(stand.chat)
+    const [context] = stand.contexts as [
+      { billing: unknown; chat: unknown; siteConnections: unknown },
+    ]
+    expect(context.billing).toBe(stand.shop)
+    expect(context.chat).toBe(stand.chat)
+    expect(context.siteConnections).toBe(stand.connections)
   })
 
   it('builds the context without a shop while payments are off', async () => {
@@ -93,7 +105,27 @@ describe('tRPC route', () => {
     expect((await call('ping')).status).toBe(200)
 
     expect(stand.contexts).toEqual([
-      { headers: expect.any(Headers), billing: null, chat: stand.chat },
+      {
+        headers: expect.any(Headers),
+        billing: null,
+        chat: stand.chat,
+        siteConnections: stand.connections,
+      },
+    ])
+  })
+
+  it('builds the context without site connections while Vault is not configured', async () => {
+    stand.connections = null
+
+    expect((await call('ping')).status).toBe(200)
+
+    expect(stand.contexts).toEqual([
+      {
+        headers: expect.any(Headers),
+        billing: stand.shop,
+        chat: stand.chat,
+        siteConnections: null,
+      },
     ])
   })
 

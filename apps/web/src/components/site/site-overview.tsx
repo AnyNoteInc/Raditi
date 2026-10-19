@@ -1,13 +1,23 @@
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
+import { fontFamilies } from '@repo/ui/theme/tokens'
 
 import { statusLabels } from '@/components/projects/project-labels'
+import { formatMoscowMoment } from '@/lib/moscow-date'
 
 import { SectionTitle } from './section-empty'
-import { SiteCard } from './site-cards'
-import { closedSectionsNote } from './site-nav'
+import { Fact, Facts, SiteCard } from './site-cards'
+import { closedSectionsNote, type SiteSetup } from './site-nav'
 
-type OverviewSite = { status: keyof typeof statusLabels; state: 'free' | 'busy' | 'held' }
+/** The first commit of the site repository, once `main` and its tag are on the remote. */
+export type InitialVersion = { tag: string; commitSha: string; importedAt: Date }
+
+type OverviewSite = {
+  status: keyof typeof statusLabels
+  state: 'free' | 'busy' | 'held'
+  setup?: SiteSetup
+  initialVersion?: InitialVersion | null
+}
 
 /** What is going on at the site right now, by its state. */
 const stateNotes: Readonly<Record<OverviewSite['state'], string>> = {
@@ -25,9 +35,45 @@ const statusNotes: Readonly<Partial<Record<OverviewSite['status'], string>>> = {
   archived: 'Сайт в архиве: правки для него не принимаются.',
 }
 
+/**
+ * A site whose files the wizard copied: what is saved and what is not there yet. The rest of the
+ * connection — the access to WordPress and the deploys — is still being built.
+ */
+const IMPORTED_ONBOARDING_NOTE =
+  'Файлы сайта сохранены, но агент пока не может менять сайт: остальную часть подключения мы ещё делаем.'
+
+/** The saved first version: its tag and when it was saved, by the Moscow clock. */
+function InitialVersionCard({ version }: { version: InitialVersion | null }) {
+  return (
+    <SiteCard
+      title="Первоначальная версия сайта сохранена"
+      note="Копия файлов сайта на момент подключения: с неё начнётся история его изменений."
+    >
+      {version ? (
+        <Facts>
+          <Fact name="Версия">
+            <Box component="span" translate="no" sx={{ fontFamily: fontFamilies.mono }}>
+              {version.tag}
+            </Box>
+          </Fact>
+          <Fact name="Сохранена">
+            <time dateTime={version.importedAt.toISOString()}>
+              {formatMoscowMoment(version.importedAt)}
+            </time>
+          </Fact>
+        </Facts>
+      ) : (
+        <Typography sx={{ px: { xs: 2, sm: 2.75 }, py: 2.25 }}>Файлы сайта скопированы.</Typography>
+      )}
+    </SiteCard>
+  )
+}
+
 /** «Обзор» while it has only what the platform already knows: connection and whether it is busy. */
 export function SiteOverview({ site }: { site: OverviewSite }) {
-  const note = statusNotes[site.status]
+  const imported = site.setup === 'done' || Boolean(site.initialVersion)
+  const note =
+    imported && site.status === 'onboarding' ? IMPORTED_ONBOARDING_NOTE : statusNotes[site.status]
   // A paused, a disconnected and an archived site keep this section alone open.
   const closed = closedSectionsNote(site.status)
   return (
@@ -48,6 +94,7 @@ export function SiteOverview({ site }: { site: OverviewSite }) {
           {closed ? <Typography color="text.secondary">{closed}</Typography> : null}
         </Box>
       </SiteCard>
+      {imported ? <InitialVersionCard version={site.initialVersion ?? null} /> : null}
       <SiteCard title="Что сейчас происходит">
         <Typography sx={{ px: { xs: 2, sm: 2.75 }, py: 2.25 }}>{stateNotes[site.state]}</Typography>
       </SiteCard>

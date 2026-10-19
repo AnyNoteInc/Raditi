@@ -4,16 +4,16 @@ import {
   type SiteDatabaseSettings,
 } from '@repo/domain'
 
-// What the database of a site is, for its copy (docs/plan/53-chat-preview-release.md, Р15, R5c).
-// `SiteAdapter.databaseSettings(read)` takes the table prefix and the encoding from the
-// configuration on the hosting; this tree has no reader of the hosting's files yet (the sources
-// of the connection wizard, plan 39), so core finds the same two facts in the catalog of the
-// database itself: the prefix is the one under which every table the adapter's copy policy names
-// exists — one prefix, or none is guessed — and the encoding is the character set those tables
-// share, with their collation when they share one too — else the server's default of that set: a
-// condition of the copy compares by the collation of its column, which outranks the connection's.
-// Tables in different character sets — a text read through the wrong one is changed — are not
-// copied.
+// What the database of a site is, for its copy (docs/plan/53-chat-preview-release.md, Р15, R5c),
+// when the configuration on the hosting does not tell it. `SiteAdapter.databaseSettings(read)`
+// takes the table prefix and the encoding from that configuration, through the file source the
+// connection wizard recorded (plan 39, site-sources.ts); a site without one, a hosting that cannot
+// be read now, or a configuration that computes them leaves core the catalog of the database
+// itself: the prefix is the one under which every table the adapter's copy policy names exists —
+// one prefix, or none is guessed — and the encoding is the character set those tables share, with
+// their collation when they share one too — else the server's default of that set: a condition of
+// the copy compares by the collation of its column, which outranks the connection's. Tables in
+// different character sets — a text read through the wrong one is changed — are not copied.
 
 export interface CatalogTable {
   name: string

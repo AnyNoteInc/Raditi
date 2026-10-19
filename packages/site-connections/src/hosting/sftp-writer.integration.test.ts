@@ -13,7 +13,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { createSftpHostingWriter } from './sftp-writer.ts'
-import { sshKeyFingerprint } from './ssh.ts'
+import { sshKeyFingerprint } from '../sources/host-key.ts'
 
 // The SFTP writer of a release against a real OpenSSH server (linuxserver/openssh-server,
 // internal-sftp, already pulled; nothing is pulled here). Runs with RADITI_HOSTING_DOCKER_TESTS=1.

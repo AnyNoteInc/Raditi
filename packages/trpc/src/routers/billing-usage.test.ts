@@ -15,6 +15,13 @@ import { YookassaApiError, type Payment, type YookassaClient } from '@repo/yooka
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { resetSiteConnectionGate } from '../services/site-connection-gate.ts'
+import {
+  createdProject,
+  deleteSiteConnectionRows,
+  fakeSiteConnections,
+  siteCreateInput,
+} from '../testing/site-connections.ts'
 import type { BillingContext, Context } from '../trpc.ts'
 
 // «Настройки → Использование» through the router: `billing.usage` and `billing.usageHistory`.
@@ -55,6 +62,7 @@ const requiredConsents = legalDocuments.flatMap((document) =>
 
 beforeEach(() => {
   vi.stubEnv('APP_ENV', 'test')
+  resetSiteConnectionGate()
   // Only the clock is set; timers run as they are, the database client needs them.
   vi.useFakeTimers({ toFake: ['Date'], now: NOW })
 })
@@ -149,6 +157,8 @@ function context(
         }
       : null,
     billing,
+    // Projects are made through the site connection wizard: a fake of its servers and Vault.
+    siteConnections: fakeSiteConnections().services,
   }
 }
 
@@ -604,6 +614,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     await db.creditHold.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
     await db.task.deleteMany({ where: owned })
+    await deleteSiteConnectionRows(db, owned.workspaceId.in)
     await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
@@ -671,7 +682,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
   }
 
   const site = (name: string) =>
-    ({ name, url: `https://${randomUUID()}.example.ru`, stack: 'wordpress' }) as const
+    siteCreateInput({ name, url: `https://${randomUUID()}.example.ru` })
 
   it('has no tariff and no workspace before the first payment, and the gift as promised', async () => {
     const { user: owner, caller } = await account()
@@ -752,7 +763,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     const tariff = await seeded('business')
     await subscribe(paying, 'business')
     const { caller } = paying
-    const bakery = await caller.project.create(site('Пекарня «Добро»'))
+    const bakery = await createdProject(caller.project.create(site('Пекарня «Добро»')))
     const { workspaceId } = await db.site.findUniqueOrThrow({ where: { id: bakery.id } })
     const expiresAt = new Date(NOW.getTime() + DAY_MS)
     const taken: string[] = []

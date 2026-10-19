@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { QueryClient, QueryClientProvider, type UseMutationOptions } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectsView } from './projects-view'
@@ -12,13 +12,12 @@ type Project = {
   host: string
   stack: 'wordpress' | 'bitrix'
   status: 'onboarding' | 'active'
+  setup: 'pending' | 'failed' | 'done' | null
   createdAt: Date
 }
-type NewProject = { name: string; url: string; stack: string }
 
-const { listProjects, createProject } = vi.hoisted(() => ({
+const { listProjects } = vi.hoisted(() => ({
   listProjects: vi.fn<() => Promise<Project[]>>(),
-  createProject: vi.fn<(input: NewProject) => Promise<Project>>(),
 }))
 
 vi.mock('@/trpc/client', () => ({
@@ -27,12 +26,6 @@ vi.mock('@/trpc/client', () => ({
       list: {
         queryKey: () => ['project', 'list'],
         queryOptions: () => ({ queryKey: ['project', 'list'], queryFn: listProjects }),
-      },
-      create: {
-        mutationOptions: (options: UseMutationOptions<Project, Error, NewProject>) => ({
-          ...options,
-          mutationFn: createProject,
-        }),
       },
     },
   }),
@@ -45,6 +38,7 @@ const project = (overrides: Partial<Project> = {}): Project => ({
   host: 'кофейня.рф',
   stack: 'wordpress',
   status: 'onboarding',
+  setup: null,
   createdAt: new Date('2026-10-01T10:00:00Z'),
   ...overrides,
 })
@@ -60,31 +54,9 @@ function showProjects() {
   )
 }
 
-async function openForm() {
-  showProjects()
-  fireEvent.click(await screen.findByRole('button', { name: 'Добавить сайт' }))
-  fireEvent.change(screen.getByRole('textbox', { name: /Название проекта/ }), {
-    target: { value: 'Магазин' },
-  })
-}
-
-function submitAddress(address: string) {
-  fireEvent.change(screen.getByRole('textbox', { name: /Адрес сайта/ }), {
-    target: { value: address },
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'Создать проект' }))
-}
-
-/** What the tRPC client throws: the Russian text of the server and its codes. */
-const serverError = (message: string, code: string, domainCode: string | null) =>
-  Object.assign(new Error(message), { data: { code, domainCode } })
-
 beforeEach(() => {
   vi.clearAllMocks()
   listProjects.mockResolvedValue([])
-  createProject.mockImplementation(async (input) =>
-    project({ ...input, host: new URL(input.url).host, stack: 'wordpress' }),
-  )
 })
 
 describe('project list', () => {
@@ -141,94 +113,46 @@ describe('project list', () => {
   })
 })
 
-describe('new project form', () => {
-  it.each([
-    ['shop.example.ru:8443', 'https://shop.example.ru:8443'],
-    ['example.ru', 'https://example.ru'],
-    ['localhost:8080', 'https://localhost:8080'],
-    ['HTTP://example.ru/', 'HTTP://example.ru/'],
-    ['http://example.ru:8080', 'http://example.ru:8080'],
-  ])('accepts %s and sends %s', async (typed, sent) => {
-    await openForm()
-    submitAddress(typed)
-    await waitFor(() => expect(createProject).toHaveBeenCalledTimes(1))
-    expect(createProject.mock.calls[0]?.[0]).toEqual({
-      name: 'Магазин',
-      url: sent,
-      stack: 'wordpress',
-    })
+describe('adding a project', () => {
+  it('leads from the empty list to the wizard of a new project', async () => {
+    showProjects()
+    const add = await screen.findByRole('link', { name: 'Добавить проект' })
+    expect(add).toHaveAttribute('href', '/projects/new')
+    // No form in the list: the wizard is a page of its own.
+    expect(screen.queryByRole('textbox', { name: /Название проекта/ })).not.toBeInTheDocument()
   })
 
-  it.each([
-    'example.ru/shop',
-    'mailto:owner@example.ru',
-    'ftp://example.ru',
-    'javascript:alert(1)',
-  ])('refuses %s before any request', async (typed) => {
-    await openForm()
-    submitAddress(typed)
-    expect(
-      screen.getByText('Укажите адрес сайта без пути к странице, например https://example.ru'),
-    ).toBeVisible()
-    expect(createProject).not.toHaveBeenCalled()
+  it('leads from the heading of a list with projects to the same wizard', async () => {
+    listProjects.mockResolvedValue([project()])
+    showProjects()
+    await screen.findByRole('list', { name: 'Сайты' })
+    const links = screen.getAllByRole('link', { name: 'Добавить проект' })
+    expect(links).toHaveLength(1)
+    expect(links[0]).toHaveAttribute('href', '/projects/new')
   })
+})
 
-  it('offers only the platform that can be connected and marks the others as coming', async () => {
-    await openForm()
-    expect(screen.getByText('Сейчас подключаем сайты на WordPress.')).toBeVisible()
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Платформа сайта' }))
-    const options = within(screen.getByRole('listbox')).getAllByRole('option')
-    expect(options.map((option) => option.textContent)).toEqual([
-      'WordPress',
-      '1С-Битрикс — скоро',
-      'Laravel — скоро',
-      'HTML / CSS — скоро',
-      'Node.js — скоро',
-      'Python — скоро',
-    ])
-    expect(options.map((option) => option.getAttribute('aria-disabled') === 'true')).toEqual([
-      false,
-      true,
-      true,
-      true,
-      true,
-      true,
-    ])
-  })
+describe('the chip of a project', () => {
+  const chipOf = async (overrides: Partial<Project>) => {
+    listProjects.mockResolvedValue([project(overrides)])
+    showProjects()
+    const [site] = within(await screen.findByRole('list', { name: 'Сайты' })).getAllByRole(
+      'listitem',
+    )
+    return site!.querySelector('.MuiChip-root')
+  }
 
   it.each([
-    [
-      serverError(
-        'Укажите адрес сайта, который открывается из интернета',
-        'BAD_REQUEST',
-        'SITE_ADDRESS_NOT_PUBLIC',
-      ),
-      'Укажите адрес сайта, который открывается из интернета.',
-    ],
-    [
-      serverError(
-        'Вы добавили максимальное число сайтов. Напишите нам, если нужно больше',
-        'FORBIDDEN',
-        'PROJECT_LIMIT_REACHED',
-      ),
-      'Вы добавили максимальное число сайтов. Напишите нам, если нужно больше.',
-    ],
-    [
-      serverError('Сайт с таким адресом уже добавлен', 'CONFLICT', 'PROJECT_ALREADY_EXISTS'),
-      'Сайт с таким адресом уже добавлен.',
-    ],
-    [
-      serverError('Проверьте введённые данные', 'BAD_REQUEST', null),
-      'Проверьте название и адрес сайта. Нужен полный адрес без пути к странице.',
-    ],
-    [
-      serverError('Что-то пошло не так', 'INTERNAL_SERVER_ERROR', null),
-      'Не удалось добавить проект. Попробуйте ещё раз.',
-    ],
-  ])('explains a refusal of the server: %s', async (error, text) => {
-    createProject.mockRejectedValue(error)
-    await openForm()
-    submitAddress('https://example.ru')
-    expect(await screen.findByText(text)).toBeVisible()
+    [{ setup: 'pending' }, 'Настраиваем'],
+    [{ setup: 'failed' }, 'Ошибка настройки'],
+    [{ setup: 'done' }, 'Ожидает подключения'],
+    [{ setup: null }, 'Ожидает подключения'],
+    [{ setup: null, status: 'active' }, 'Подключён'],
+  ] as const)('says %o as «%s»', async (overrides, label) => {
+    expect(await chipOf(overrides)).toHaveTextContent(label)
+  })
+
+  it('marks a failed setup by its colour as well as its words', async () => {
+    expect(await chipOf({ setup: 'failed' })).toHaveClass('MuiChip-colorError')
   })
 })

@@ -10,10 +10,17 @@ export const connectionCheckReasons = [
   'unreachable',
   // The server does not offer encryption.
   'tls_unavailable',
+  // The server refuses a connection without encryption (FTP 534, MySQL «insecure transport»):
+  // not a refused login, so it does not count against the endpoint.
+  'tls_required',
   // The certificate does not verify for this name.
   'certificate_untrusted',
-  // sftp: not the key that was shown, or no key was sent where one is required.
+  // sftp: not the key that was shown, or no key was sent where one is required. The outcome carries
+  // the key the server presented now; it is accepted only by an explicit choice of the user.
   'host_key_changed',
+  // sftp: a check without a key. Nothing was sent to the server but the key exchange: the outcome
+  // carries the key it presented, for the user to compare and confirm before any login.
+  'host_key_unknown',
   // Login, password, key or token refused.
   'auth_failed',
   // The private key cannot be read or its passphrase is wrong.
@@ -50,6 +57,9 @@ export const provisioningErrorCodes = [
   'repository_not_configured',
   'repository_not_created',
   'repository_push_failed',
+  // The remote `main` or the initial tag points at another commit than the one the import
+  // recorded: never forced, never retagged.
+  'repository_mismatch',
   // Over 100 000 files, 128 MiB, the listing ceilings or a 64 MiB bundle.
   'source_too_large',
   // The server sent more than it listed.
@@ -79,6 +89,8 @@ export const importSkipReasons = [
   'too_large',
   'secret',
   'nested_site',
+  // A folder or a file the server listed but refused to open or no longer has.
+  'unreadable',
 ] as const
 export type ImportSkipReason = (typeof importSkipReasons)[number]
 

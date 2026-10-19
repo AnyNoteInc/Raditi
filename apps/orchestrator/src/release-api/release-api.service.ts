@@ -431,8 +431,9 @@ export class ReleaseApi {
 
   /**
    * One access of the site from Vault, by its one reference (`credential_refs`): the reference
-   * must name the only path of that access and the version Vault holds, as the content
-   * resolver of the mcp role requires. null — the site has no access of this kind.
+   * must name the only path of that access, and the secret is read at the version the reference
+   * names — a newer one a request of the connection wizard wrote before it failed to move the
+   * reference does not stand in for it (plan 39). null — the site has no access of this kind.
    */
   async #secret(siteId: string, kind: SiteAccessKind): Promise<Record<string, string> | null> {
     const refs = await this.deps.db.credentialRef.findMany({
@@ -444,7 +445,7 @@ export class ReleaseApi {
     const ref = refs.length === 1 ? refs[0]! : null
     if (!ref || ref.vaultPath !== siteAccessPath(siteId, kind))
       throw conflict('The access of the site has no single reference')
-    const stored = await this.deps.secrets.kvRead(ref.vaultPath)
+    const stored = await this.deps.secrets.kvRead(ref.vaultPath, { version: ref.keyVersion })
     if (!stored || stored.version !== ref.keyVersion)
       throw conflict('The access of the site is not the one referenced')
     return stored.data

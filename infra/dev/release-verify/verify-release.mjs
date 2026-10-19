@@ -484,12 +484,7 @@ async function main(options, owned) {
   rt.setStage('the owner, the workspace and the site')
   const webUrl = `http://127.0.0.1:${ports.web}`
   const owner = await signUpOwner(rt, { webUrl, db })
-  const project = await owner.mutate('project.create', {
-    name: TEXT_SITE,
-    url: siteUrl,
-    stack: 'wordpress',
-  })
-  const siteId = project.id
+  const siteId = await createSiteRows({ db, billing: modules.billing }, owner, siteUrl)
   const siteRow = await db.site.findUniqueOrThrow({
     where: { id: siteId },
     include: { workspace: true },
@@ -554,6 +549,32 @@ async function main(options, owned) {
 }
 
 const TEXT_SITE = 'Цветочная лавка'
+
+/**
+ * The site of the owner as the stand writes it itself (CLAUDE.md, «Как писать код»: a test that
+ * needs a site makes it through `project.create` with fakes or writes the rows): the personal
+ * workspace through the product's own `ensurePersonalWorkspaceWithGift`, with the gift of the
+ * registration, and the site `onboarding`. The wizard of plan 39 is not walked here — its stand is
+ * `verify:site-import` — and no code_import stage is written: a site without one lives as it did
+ * before the wizard. Its accesses, the rows of the wizard beside them and the repository of the
+ * import follow (`importRepository`, `connectSite`).
+ */
+async function createSiteRows({ db, billing }, owner, siteUrl) {
+  const workspace = await db.$transaction((tx) =>
+    billing.ensurePersonalWorkspaceWithGift(tx, { userId: owner.id, appEnv: 'test' }),
+  )
+  const site = await db.site.create({
+    data: {
+      workspaceId: workspace.id,
+      name: TEXT_SITE,
+      url: siteUrl,
+      stack: 'wordpress',
+      status: 'onboarding',
+    },
+    select: { id: true },
+  })
+  return site.id
+}
 
 /**
  * Waits for a signal. A timer holds the event loop: a signal listener alone does not, and a

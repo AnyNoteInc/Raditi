@@ -36,21 +36,22 @@ model User {
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  sessions          Session[]
-  accounts          Account[]
-  consents          UserConsent[]
-  memberships       Member[]
-  channelIdentities ChannelIdentity[]
-  workspacesCreated Workspace[]
-  tasksCreated      Task[]
-  attachments       Attachment[]
-  orders            Order[]
-  previewTickets    PreviewTicket[]
-  previewSessions   PreviewSession[]
-  releasesApproved  SiteRelease[]
-  undoPlansAsked    ReleaseUndoPlan[]
-  envVarsConsented  SiteEnvVar[]      @relation("SiteEnvVarConsent")
-  envVarsCreated    SiteEnvVar[]      @relation("SiteEnvVarCreator")
+  sessions           Session[]
+  accounts           Account[]
+  consents           UserConsent[]
+  memberships        Member[]
+  channelIdentities  ChannelIdentity[]
+  workspacesCreated  Workspace[]
+  tasksCreated       Task[]
+  attachments        Attachment[]
+  orders             Order[]
+  siteCreationClaims SiteCreationClaim[]
+  previewTickets     PreviewTicket[]
+  previewSessions    PreviewSession[]
+  releasesApproved   SiteRelease[]
+  undoPlansAsked     ReleaseUndoPlan[]
+  envVarsConsented   SiteEnvVar[]        @relation("SiteEnvVarConsent")
+  envVarsCreated     SiteEnvVar[]        @relation("SiteEnvVarCreator")
 
   @@map("users")
 }
@@ -285,6 +286,7 @@ model Site {
   database           SiteDatabase?
   databaseSchema     SiteDatabaseSchema?
   provisioningStages SiteProvisioningStage[]
+  initialVersion     SiteInitialVersion?
 
   @@unique([workspaceId, url])
   @@index([installedReleaseId])
@@ -366,8 +368,9 @@ model GitRepository {
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  site          Site           @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  credentialRef CredentialRef? @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+  site            Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  credentialRef   CredentialRef?       @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+  initialVersions SiteInitialVersion[]
 
   // Webhooks find the repository by provider and full name.
   @@unique([provider, owner, name])
@@ -1813,6 +1816,8 @@ model SiteProvisioningStage {
   /// Fencing token of the worker that holds the stage.
   leaseEpoch  Int                     @default(0) @map("lease_epoch")
   heartbeatAt DateTime?               @map("heartbeat_at") @db.Timestamptz(6)
+  /// What a running stage is doing (provisioningSteps in @repo/domain); NULL unless running.
+  step        String?                 @db.VarChar(32)
   /// One of provisioningErrorCodes in @repo/domain; never a message.
   errorCode   String?                 @map("error_code") @db.VarChar(64)
   /// Counts and the `recheck` flag only (provisioningStageSummarySchema); progress while running,
@@ -1828,6 +1833,48 @@ model SiteProvisioningStage {
   @@id([siteId, stage])
   @@index([updatedAt], map: "site_provisioning_stages_unfinished_idx", where: raw("finished_at IS NULL"))
   @@map("site_provisioning_stages")
+}
+
+/// The first version of a site's repository: the root commit of the imported tree and its tag
+/// (docs/plan/39-site-connection-wizard.md). The commit is written before the push, with the lease
+/// of the code_import holder, so a retry knows what was published; `imported_at` is set once
+/// `main` and the tag are confirmed on the remote.
+model SiteInitialVersion {
+  siteId          String    @id @map("site_id") @db.Uuid
+  gitRepositoryId String    @map("git_repository_id") @db.Uuid
+  commitSha       String    @map("commit_sha") @db.Char(40)
+  /// INITIAL_SITE_TAG in @repo/domain: v0.0.0.
+  tag             String    @db.VarChar(64)
+  files           Int
+  bytes           Int
+  /// lease_epoch of the code_import stage whose holder wrote the commit.
+  leaseEpoch      Int       @map("lease_epoch")
+  importedAt      DateTime? @map("imported_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site          Site          @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  gitRepository GitRepository @relation(fields: [gitRepositoryId], references: [id], onDelete: Restrict)
+
+  @@index([gitRepositoryId])
+  @@map("site_initial_versions")
+}
+
+/// «Добавить проект» in flight: the site id the wizard derives, held for createClaimMs so that a
+/// second identical request does not write Vault at the same time. Deleted by the transaction
+/// that creates the site; an expired row is taken over.
+model SiteCreationClaim {
+  /// No foreign key: the site does not exist yet.
+  siteId    String   @id @map("site_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("site_creation_claims")
 }
 
 /// Structure of the site's database as last read: names of tables, columns, indexes and foreign

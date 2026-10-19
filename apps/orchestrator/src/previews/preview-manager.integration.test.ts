@@ -20,6 +20,8 @@ import {
   type TurnPlan,
 } from '@repo/domain'
 import { wordpressAdapter } from '@repo/site-adapters'
+import { createHostLookup, siteSource } from '@repo/site-connections'
+import { databaseInspector } from '@repo/site-connections/databases'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import type { PreviewsConfig } from '../config/config.ts'
@@ -40,6 +42,7 @@ import {
 } from '../testing/previews.ts'
 import { PreviewManager } from './preview-manager.ts'
 import { previewRecordOf } from './preview-record.ts'
+import { createPreviewSiteSources } from './site-sources.ts'
 
 // The manager of previews over PostgreSQL with its runtime, copier, git, storage and Vault faked
 // (docs/plan/53-chat-preview-release.md, R5c). Runs on a disposable database only:
@@ -217,6 +220,15 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         runtime,
         copier: options.copier ?? fakeCopier(),
         catalog: fakeCatalog(),
+        // No file source in these sites: the prefix comes from the catalog.
+        sources: createPreviewSiteSources({
+          db,
+          secrets: vault,
+          sources: siteSource,
+          databases: databaseInspector,
+          lookup: createHostLookup(),
+          appEnv: 'test',
+        }),
         git,
         storage,
         secrets: vault,

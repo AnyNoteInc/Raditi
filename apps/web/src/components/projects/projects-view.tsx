@@ -18,16 +18,15 @@ import { useRef, useState } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
-import { CreateProjectForm } from './create-project-form'
-import { stackLabels, statusLabels } from './project-labels'
+import { projectChip, stackLabels } from './project-labels'
+
+/** The wizard of a new project is a page of its own (spec §12). */
+const NEW_PROJECT = '/projects/new'
 
 export function ProjectsView() {
   const trpc = useTRPC()
   const projects = useQuery(trpc.project.list.queryOptions())
-  const [creating, setCreating] = useState(false)
   const [search, setSearch] = useState('')
-  const [createdName, setCreatedName] = useState('')
-  const addButton = useRef<HTMLButtonElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
   const allProjects = projects.data ?? []
   const query = search.trim().toLocaleLowerCase('ru')
@@ -41,19 +40,9 @@ export function ProjectsView() {
     lg: 'repeat(3, minmax(0, 1fr))',
   }
 
-  function openForm() {
-    setCreating(true)
-    setCreatedName('')
-  }
-
   function clearSearch() {
     setSearch('')
     searchInput.current?.focus()
-  }
-
-  function closeForm() {
-    setCreating(false)
-    requestAnimationFrame(() => addButton.current?.focus())
   }
 
   return (
@@ -85,41 +74,15 @@ export function ProjectsView() {
         </Box>
         {showHeaderAction && (
           <Button
-            ref={addButton}
             variant="contained"
+            href={NEW_PROJECT}
             startIcon={<AppIcon name="plus" size={18} />}
-            onClick={openForm}
-            disabled={creating}
-            aria-expanded={creating}
-            aria-controls={creating ? 'create-project' : undefined}
             sx={{ flexShrink: 0, width: { xs: '100%', sm: 'auto' } }}
           >
-            Добавить сайт
+            Добавить проект
           </Button>
         )}
       </Box>
-
-      {createdName && (
-        <Alert
-          severity="success"
-          onClose={() => setCreatedName('')}
-          sx={{ mt: 3, overflowWrap: 'anywhere' }}
-        >
-          Проект «{createdName}» добавлен.
-        </Alert>
-      )}
-      {creating && (
-        <Box id="create-project">
-          <CreateProjectForm
-            onClose={closeForm}
-            onCreated={(name) => {
-              setCreatedName(name)
-              setSearch('')
-              closeForm()
-            }}
-          />
-        </Box>
-      )}
 
       {projects.isPending ? (
         <Box
@@ -149,56 +112,54 @@ export function ProjectsView() {
           Не удалось загрузить проекты. Попробуйте ещё раз.
         </Alert>
       ) : allProjects.length === 0 ? (
-        !creating && (
-          <Box
-            sx={{
-              mt: 4,
-              border: 1,
-              borderColor: 'divider',
-              borderRadius: '14px',
-              bgcolor: 'background.default',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              textAlign: 'center',
-              px: { xs: 2, sm: 4 },
-              py: { xs: 5, sm: 7 },
-            }}
-          >
-            <Box sx={{ maxWidth: 400, minWidth: 0 }}>
-              <Box sx={{ color: 'primary.main', mb: 2.5 }}>
-                <AppIcon name="globe" size={36} />
-              </Box>
-              <Typography
-                component="h2"
-                sx={{
-                  fontSize: { xs: 22, sm: 24 },
-                  fontWeight: 600,
-                  lineHeight: 1.3,
-                  letterSpacing: '-0.02em',
-                  textWrap: 'balance',
-                }}
-              >
-                Здесь будут ваши сайты
-              </Typography>
-              <Typography
-                color="text.secondary"
-                sx={{ mt: 1.5, mb: 3, lineHeight: 1.6, textWrap: 'pretty' }}
-              >
-                Добавьте первый сайт: укажите его название, адрес и платформу.
-              </Typography>
-              <Button
-                ref={addButton}
-                variant="contained"
-                startIcon={<AppIcon name="plus" size={18} />}
-                onClick={openForm}
-                sx={{ width: { xs: '100%', sm: 'auto' } }}
-              >
-                Добавить сайт
-              </Button>
+        <Box
+          sx={{
+            mt: 4,
+            border: 1,
+            borderColor: 'divider',
+            borderRadius: '14px',
+            bgcolor: 'background.default',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            textAlign: 'center',
+            px: { xs: 2, sm: 4 },
+            py: { xs: 5, sm: 7 },
+          }}
+        >
+          <Box sx={{ maxWidth: 400, minWidth: 0 }}>
+            <Box sx={{ color: 'primary.main', mb: 2.5 }}>
+              <AppIcon name="globe" size={36} />
             </Box>
+            <Typography
+              component="h2"
+              sx={{
+                fontSize: { xs: 22, sm: 24 },
+                fontWeight: 600,
+                lineHeight: 1.3,
+                letterSpacing: '-0.02em',
+                textWrap: 'balance',
+              }}
+            >
+              Здесь будут ваши сайты
+            </Typography>
+            <Typography
+              color="text.secondary"
+              sx={{ mt: 1.5, mb: 3, lineHeight: 1.6, textWrap: 'pretty' }}
+            >
+              Добавьте первый сайт: укажите его адрес и доступ к файлам, а мы сохраним его
+              первоначальную версию.
+            </Typography>
+            <Button
+              variant="contained"
+              href={NEW_PROJECT}
+              startIcon={<AppIcon name="plus" size={18} />}
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
+            >
+              Добавить проект
+            </Button>
           </Box>
-        )
+        </Box>
       ) : (
         <>
           <Box
@@ -288,96 +249,99 @@ export function ProjectsView() {
                 listStyle: 'none',
               }}
             >
-              {visibleProjects.map((project) => (
-                <Box
-                  component="li"
-                  key={project.id}
-                  sx={{
-                    p: { xs: 2.5, sm: 3 },
-                    minWidth: 0,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    border: 1,
-                    borderColor: 'divider',
-                    borderRadius: '14px',
-                    bgcolor: 'background.paper',
-                  }}
-                >
+              {visibleProjects.map((project) => {
+                const chip = projectChip(project)
+                return (
                   <Box
+                    component="li"
+                    key={project.id}
                     sx={{
+                      p: { xs: 2.5, sm: 3 },
+                      minWidth: 0,
                       display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 1.5,
-                      mb: 2.5,
-                    }}
-                  >
-                    <AppIcon name="globe" size={24} />
-                    <Typography variant="caption" color="text.secondary">
-                      {stackLabels[project.stack]}
-                    </Typography>
-                  </Box>
-                  <Typography
-                    component="h3"
-                    sx={{
-                      fontSize: 19,
-                      fontWeight: 600,
-                      overflowWrap: 'anywhere',
-                      lineHeight: 1.35,
-                    }}
-                  >
-                    <Link
-                      component={NextLink}
-                      href={`/projects/${project.id}`}
-                      color="inherit"
-                      underline="hover"
-                      sx={{ display: 'inline-flex', alignItems: 'center', minHeight: 44 }}
-                    >
-                      {project.name}
-                    </Link>
-                  </Typography>
-                  <Link
-                    href={project.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    color="text.secondary"
-                    aria-label={`Открыть сайт ${project.name} в новой вкладке`}
-                    sx={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 0.5,
-                      maxWidth: '100%',
-                      fontSize: 14,
-                      mt: 0.75,
-                      textUnderlineOffset: '3px',
+                      flexDirection: 'column',
+                      border: 1,
+                      borderColor: 'divider',
+                      borderRadius: '14px',
+                      bgcolor: 'background.paper',
                     }}
                   >
                     <Box
-                      component="span"
-                      sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    >
-                      {project.host}
-                    </Box>
-                    <AppIcon name="arrow" size={15} />
-                  </Link>
-                  <Box sx={{ mt: 'auto', pt: 2.5 }}>
-                    <Divider sx={{ mb: 2 }} />
-                    <Chip
-                      size="small"
-                      label={statusLabels[project.status]}
-                      variant="outlined"
-                      color={project.status === 'active' ? 'success' : 'default'}
                       sx={{
-                        maxWidth: '100%',
-                        height: 'auto',
-                        minHeight: 26,
-                        fontSize: 12,
-                        '& .MuiChip-label': { py: 0.25, whiteSpace: 'normal' },
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 1.5,
+                        mb: 2.5,
                       }}
-                    />
+                    >
+                      <AppIcon name="globe" size={24} />
+                      <Typography variant="caption" color="text.secondary">
+                        {stackLabels[project.stack]}
+                      </Typography>
+                    </Box>
+                    <Typography
+                      component="h3"
+                      sx={{
+                        fontSize: 19,
+                        fontWeight: 600,
+                        overflowWrap: 'anywhere',
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      <Link
+                        component={NextLink}
+                        href={`/projects/${project.id}`}
+                        color="inherit"
+                        underline="hover"
+                        sx={{ display: 'inline-flex', alignItems: 'center', minHeight: 44 }}
+                      >
+                        {project.name}
+                      </Link>
+                    </Typography>
+                    <Link
+                      href={project.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      color="text.secondary"
+                      aria-label={`Открыть сайт ${project.name} в новой вкладке`}
+                      sx={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 0.5,
+                        maxWidth: '100%',
+                        fontSize: 14,
+                        mt: 0.75,
+                        textUnderlineOffset: '3px',
+                      }}
+                    >
+                      <Box
+                        component="span"
+                        sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {project.host}
+                      </Box>
+                      <AppIcon name="arrow" size={15} />
+                    </Link>
+                    <Box sx={{ mt: 'auto', pt: 2.5 }}>
+                      <Divider sx={{ mb: 2 }} />
+                      <Chip
+                        size="small"
+                        label={chip.label}
+                        variant="outlined"
+                        color={chip.color}
+                        sx={{
+                          maxWidth: '100%',
+                          height: 'auto',
+                          minHeight: 26,
+                          fontSize: 12,
+                          '& .MuiChip-label': { py: 0.25, whiteSpace: 'normal' },
+                        }}
+                      />
+                    </Box>
                   </Box>
-                </Box>
-              ))}
+                )
+              })}
             </Box>
           )}
         </>

@@ -63,6 +63,27 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   PROJECT_ALREADY_EXISTS: 'Сайт с таким адресом уже добавлен',
   PROJECT_LIMIT_REACHED: 'Вы добавили максимальное число сайтов. Напишите нам, если нужно больше',
   SITE_ADDRESS_NOT_PUBLIC: 'Укажите адрес сайта, который открывается из интернета',
+  // The wizard «Добавить проект» and the screen «Настраиваем сайт» (docs/plan/39-site-connection-wizard.md).
+  // Why a check of the files or the database failed is told by its reason, not by these.
+  SITE_CONNECTION_UNAVAILABLE:
+    'Подключение сайтов сейчас недоступно. Попробуйте ещё раз немного позже',
+  SITE_STACK_NOT_CONNECTABLE: 'Эту платформу мы пока не подключаем',
+  SITE_CHECKS_LIMITED:
+    'Слишком много проверок подряд. Подождите несколько минут и попробуйте снова',
+  SITE_CONNECTIONS_BUSY:
+    'Сейчас подключаются три ваших сайта. Дождитесь, пока закончится хотя бы одно подключение',
+  PROJECT_CREATION_IN_PROGRESS: 'Проект уже добавляется. Подождите несколько секунд',
+  // This opening of the wizard already added a project, at another address (its answer was lost).
+  PROJECT_REQUEST_CONFLICT:
+    'Из этого окна уже добавлен проект с другим адресом. Откройте список проектов или начните добавление заново',
+  // Any stage that is not failed: still going, or already done in another tab.
+  SITE_SETUP_NOT_FAILED:
+    'Настройку сейчас нельзя повторить. Обновите страницу, чтобы увидеть, как она идёт',
+  SITE_SETUP_RETRIES_LIMITED:
+    'Повторять настройку можно не чаще шести раз в час. Попробуйте немного позже',
+  // A failed import of a site that is no longer being connected (activated, paused, archived).
+  SITE_SETUP_UNAVAILABLE:
+    'Настройку этого сайта уже нельзя повторить. Обновите страницу, чтобы увидеть, что изменилось',
   NOT_IMPLEMENTED: 'Эта возможность ещё в разработке',
   [CONSENT_REQUIRED]: CONSENT_REQUIRED_MESSAGE,
   // Tariffs and their payment: what the customer can do next. Why a bank declined a payment

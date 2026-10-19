@@ -1,7 +1,7 @@
 import type { MemberRole, Prisma } from '@repo/db'
 import type { TaskStatus } from '@repo/domain'
 
-import { siteNotFound } from '../../routers/project.ts'
+import { siteNotFound } from '../site-basics.ts'
 
 /**
  * A dialog the user may open: a task of a workspace they are a member of. A task of someone

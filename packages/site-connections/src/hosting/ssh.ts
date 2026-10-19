@@ -1,75 +1,21 @@
-import { createHash } from 'node:crypto'
-
 import type { AnyAuthMethod, Client as SshClient, ParsedKey, Prompt, SFTPWrapper } from 'ssh2'
 import ssh2 from 'ssh2'
 
 import {
-  hostKeySchema,
   SiteConnectionError,
   type ConnectionCheckReason,
   type PinnedAddress,
   type SshAccess,
 } from '@repo/domain'
 
+import { sshKeyFingerprint } from '../sources/host-key.ts'
+import { keyDerivationAllowed } from '../sources/private-key.ts'
 import { whenAborted, withinIdle } from './abort.ts'
 
-// The SSH half of the SFTP writer: the host key fingerprint, the bound on a private key's KDF and
-// the login. The same rules as src/sources/{host-key,private-key,sftp}.ts of the site connection
-// wizard (plan 39, not merged into this branch yet): the merge keeps one copy.
+// The SSH half of the SFTP writer: the login, with the host key fingerprint and the bound on a
+// private key's KDF of the wizard's file sources (src/sources/host-key.ts, private-key.ts).
 
 const { Client, utils } = ssh2
-
-/**
- * "<key type> SHA256:<base64 of the SHA-256 of the key blob, no padding>", the form `ssh-keygen -l`
- * prints and hostKeySchema accepts; null for a blob ssh2 cannot read or a type the schema refuses.
- */
-export function sshKeyFingerprint(blob: Buffer): string | null {
-  const parsed: unknown = utils.parseKey(blob)
-  const key = Array.isArray(parsed) ? (parsed[0] as unknown) : parsed
-  if (key instanceof Error || typeof key !== 'object' || key === null) return null
-  const { type } = key as { type?: unknown }
-  if (typeof type !== 'string') return null
-  const digest = createHash('sha256').update(blob).digest('base64').replace(/=+$/, '')
-  const fingerprint = `${type} SHA256:${digest}`
-  return hostKeySchema.safeParse(fingerprint).success ? fingerprint : null
-}
-
-/** ssh-keygen writes 16 KDF rounds by default; ssh2 runs bcrypt_pbkdf synchronously. */
-export const MAX_KEY_KDF_ROUNDS = 64
-const OPENSSH_KEY =
-  /^-----BEGIN OPENSSH PRIVATE KEY-----(?:\r\n|\n)([\s\S]+)(?:\r\n|\n)-----END OPENSSH PRIVATE KEY-----$/
-const MAGIC = 'openssh-key-v1\0'
-
-function readString(data: Buffer, offset: number): { value: Buffer; end: number } | null {
-  if (offset < 0 || offset + 4 > data.length) return null
-  const length = data.readUInt32BE(offset)
-  const end = offset + 4 + length
-  if (end > data.length) return null
-  return { value: data.subarray(offset + 4, end), end }
-}
-
-/**
- * Whether ssh2 may be given this private key: an OpenSSH key without a KDF or with a bcrypt KDF of
- * at most MAX_KEY_KDF_ROUNDS rounds, or any other format ssh2 reads.
- */
-export function keyDerivationAllowed(privateKey: string): boolean {
-  const match = OPENSSH_KEY.exec(privateKey.trim())
-  if (match === null) return true
-  const data = Buffer.from(match[1] ?? '', 'base64')
-  if (data.length < MAGIC.length || data.toString('latin1', 0, MAGIC.length) !== MAGIC) return false
-  const cipher = readString(data, MAGIC.length)
-  if (!cipher) return false
-  const kdf = readString(data, cipher.end)
-  if (!kdf) return false
-  const options = readString(data, kdf.end)
-  if (!options) return false
-  const kdfName = kdf.value.toString('latin1')
-  if (kdfName === 'none') return true
-  if (kdfName !== 'bcrypt') return false
-  const salt = readString(options.value, 0)
-  if (!salt || salt.end + 4 > options.value.length) return false
-  return options.value.readUInt32BE(salt.end) <= MAX_KEY_KDF_ROUNDS
-}
 
 /** The private key as ssh2 will sign with it; null when it cannot be read or the passphrase is wrong. */
 function readPrivateKey(privateKey: string, passphrase: string | undefined): ParsedKey | null {

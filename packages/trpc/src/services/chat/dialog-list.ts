@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@repo/db'
 import type { TaskMode, TaskStatus } from '@repo/domain'
 
-import { accessibleSite, siteNotFound } from '../../routers/project.ts'
+import { accessibleSite, siteNotFound } from '../site-basics.ts'
 
 /** Dialogs of one page of the list. */
 export const DIALOG_PAGE = 50

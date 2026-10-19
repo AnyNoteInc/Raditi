@@ -30,6 +30,8 @@ import {
   createMysqlDatabaseCatalog,
   createMysqlDatabaseCopier,
 } from '@repo/site-connections/database-copy'
+import { siteSource } from '@repo/site-connections'
+import { databaseInspector } from '@repo/site-connections/databases'
 import { createHostLookup } from '@repo/site-connections/hosting'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -49,6 +51,7 @@ import { previewContentGateway } from './preview-content.ts'
 import { PreviewManager } from './preview-manager.ts'
 import { previewRecordOf } from './preview-record.ts'
 import { previewRequest } from './preview-transport.ts'
+import { createPreviewSiteSources } from './site-sources.ts'
 
 // A preview end to end on this machine's Docker (docs/plan/53-chat-preview-release.md, R5c): a
 // synthetic «production» — MariaDB 11.4.13 with a WordPress 7.1.2 database — a git repository
@@ -417,6 +420,14 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       runtime,
       copier: createMysqlDatabaseCopier(connections),
       catalog: createMysqlDatabaseCatalog(connections),
+      // No file source in this site: the prefix comes from the catalog of production.
+      sources: createPreviewSiteSources({
+        db,
+        secrets: vault,
+        sources: siteSource,
+        databases: databaseInspector,
+        ...connections,
+      }),
       git: git_,
       storage: new MemoryStorage(),
       secrets: vault,

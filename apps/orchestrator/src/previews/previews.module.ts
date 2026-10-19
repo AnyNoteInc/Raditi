@@ -14,6 +14,8 @@ import {
   createMysqlDatabaseCatalog,
   createMysqlDatabaseCopier,
 } from '@repo/site-connections/database-copy'
+import { siteSource } from '@repo/site-connections'
+import { databaseInspector } from '@repo/site-connections/databases'
 import { createHostLookup, createPinnedSiteTransport } from '@repo/site-connections/hosting'
 
 import type { CoreConfig, PreviewsConfig } from '../config/config.ts'
@@ -35,6 +37,7 @@ import { previewDbPlanValues } from './db-plan-values.ts'
 import { PreviewLoops } from './preview-loops.ts'
 import { PreviewManager } from './preview-manager.ts'
 import { PreviewsProcessor } from './previews.processor.ts'
+import { createPreviewSiteSources } from './site-sources.ts'
 
 /** PreviewRuntime of core's own Docker, or null when previews run elsewhere or not at all. */
 export const PREVIEW_RUNTIME = Symbol('PREVIEW_RUNTIME')
@@ -92,6 +95,14 @@ export function previewRuntimeConfig(previews: PreviewsConfig | null): DockerPre
           runtime,
           copier: createMysqlDatabaseCopier(connections),
           catalog: createMysqlDatabaseCatalog(connections),
+          // Where the site's files and database are, as the connection wizard recorded them.
+          sources: createPreviewSiteSources({
+            db: prisma,
+            secrets,
+            sources: siteSource,
+            databases: databaseInspector,
+            ...connections,
+          }),
           git,
           executor,
           credentials,

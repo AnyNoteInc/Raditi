@@ -28,7 +28,7 @@ import {
   type TaskStatus,
 } from '@repo/domain'
 
-import { accessibleSite } from '../../routers/project.ts'
+import { accessibleSite } from '../site-basics.ts'
 import { taskNotFound } from './access.ts'
 import type { ChatContext } from './context.ts'
 import { assertCommandAvailable, dialogFacts } from './dialog-facts.ts'

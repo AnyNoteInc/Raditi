@@ -158,9 +158,9 @@ describe('import of a WordPress site', () => {
   const facts = factsOf(adapter)
   const policy = importPolicy(adapter)
 
-  it('excludes copies of the configuration at any depth and the two data folders', () => {
+  it('excludes copies of the configuration at any depth and the firewall logs', () => {
     expect(adapter.importRules(facts).exclude).toEqual(
-      expect.arrayContaining(['wp-config*', '/wp-content/blogs.dir/', '/wp-content/wflogs/']),
+      expect.arrayContaining(['wp-config*', '/wp-content/wflogs/']),
     )
     expect(adapter.snapshotExcludes(facts)).toEqual(
       expect.arrayContaining(['/wp-content/blogs.dir/', '/wp-content/wflogs/']),
@@ -184,17 +184,24 @@ describe('import of a WordPress site', () => {
     ['wp-content/plugins/wp-config-file-editor', 'directory'],
     ['wp-content/plugins/wp-config-file-editor/includes/editor.php', 'file'],
     ['wp-content/themes/wp-configurator/style.css', 'file'],
-    ['wp-content/blogs.dir', 'directory'],
-    ['wp-content/blogs.dir/1/files/a.jpg', 'file'],
     ['wp-content/wflogs', 'directory'],
     ['wp-content/wflogs/config.php', 'file'],
-    ['wp-content/uploads', 'directory'],
-    ['wp-content/uploads/2026/a.jpg', 'file'],
-    ['wp-includes', 'directory'],
-    ['wp-includes/version.php', 'file'],
-    ['wp-admin/index.php', 'file'],
-    ['wp-login.php', 'file'],
-    ['index.php', 'file'],
+    // What visitors sent stays out, the media library around it is taken.
+    ['wp-content/uploads/gravity_forms', 'directory'],
+    ['wp-content/uploads/gravity_forms/1-abc/2026/10/passport.pdf', 'file'],
+    ['wp-content/uploads/wpforms/1/resume.docx', 'file'],
+    ['wp-content/uploads/wpcf7_uploads', 'directory'],
+    ['wp-content/uploads/woocommerce_uploads/2026/10/invoice.pdf', 'file'],
+    ['wp-content/uploads/wc-logs/fatal-errors.log', 'file'],
+    ['wp-content/uploads/elementor/forms/upload.jpg', 'file'],
+    ['wp-content/uploads/avatars/12/photo.jpg', 'file'],
+    ['wp-content/uploads/wpdiscuz/attachment.png', 'file'],
+    ['wp-content/uploads/wpo_wcpdf/attachments/invoice-12.pdf', 'file'],
+    // The same folders of the other sites of a network, in both layouts of the media.
+    ['wp-content/uploads/sites/2/gravity_forms/1-abc/passport.pdf', 'file'],
+    ['wp-content/uploads/sites/12/woocommerce_uploads/2026/10/invoice.pdf', 'file'],
+    ['wp-content/blogs.dir/3/files/wpforms/1/resume.docx', 'file'],
+    ['wp-content/blogs.dir/3/files/avatars/7/photo.jpg', 'file'],
     ['wp-content/debug.log', 'file'],
     ['wp-content/plugins/shop/error_log', 'file'],
     ['wp-content/themes/shop/export.csv', 'file'],
@@ -220,6 +227,20 @@ describe('import of a WordPress site', () => {
     ['wp-content/themes/shop/wflogs/a.php', 'file'],
     ['old/wp-content/themes/shop/style.css', 'file'],
     ['my-wp-config.php', 'file'],
+    // The core and the media (owner's decision of 17.10.2026).
+    ['wp-includes', 'directory'],
+    ['wp-includes/version.php', 'file'],
+    ['wp-admin/index.php', 'file'],
+    ['wp-login.php', 'file'],
+    ['index.php', 'file'],
+    ['wp-content/uploads', 'directory'],
+    ['wp-content/uploads/2026/a.jpg', 'file'],
+    ['wp-content/blogs.dir', 'directory'],
+    ['wp-content/blogs.dir/1/files/a.jpg', 'file'],
+    ['wp-content/uploads/elementor/css/post-12.css', 'file'],
+    ['wp-content/uploads/2026/10/avatars-of-the-team.jpg', 'file'],
+    ['wp-content/uploads/sites/2/2026/10/photo.jpg', 'file'],
+    ['wp-content/blogs.dir/3/files/2010/05/photo.jpg', 'file'],
   ] as const)('takes %s', (path, type) => {
     expect(policy.decide(path, type)).toBe('take')
   })

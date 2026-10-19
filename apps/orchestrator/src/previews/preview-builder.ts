@@ -3,7 +3,6 @@ import { markStaleCandidates } from '@repo/db'
 import {
   assertPreviewTransition,
   DB_CREATED_ID_BASE,
-  dbAccessSchema,
   DomainError,
   egressHostListSchema,
   envVarReachesPreview,
@@ -13,7 +12,6 @@ import {
   previewAccessPath,
   previewOrigin,
   previewRuntimeMatch,
-  siteAccessPath,
   siteEnvVarPath,
   siteEnvVarValueOf,
   type DatabaseCopier,
@@ -59,6 +57,7 @@ import {
   type PreviewRecord,
 } from './preview-record.ts'
 import { openPreviewSeed, storePreviewSeed, type PreviewSeedRef } from './preview-seed.ts'
+import type { PreviewSiteSources } from './site-sources.ts'
 
 // One build of a preview (docs/plan/53-chat-preview-release.md, Р15–Р18, Р22): the preview is
 // brought to the revision of the dialog's candidate — or to its base, revision 0 — files and
@@ -97,7 +96,10 @@ export interface PreviewBuildDeps {
   /** null — this core runs no preview (PREVIEW_EXECUTOR=runner until M10). */
   runtime: PreviewRuntime | null
   copier: DatabaseCopier
+  /** The prefix and the encoding when the configuration on the hosting does not tell them. */
   catalog: PreviewDatabaseCatalog
+  /** The file source and the database of the site as the connection wizard recorded them. */
+  sources: PreviewSiteSources
   git: PreviewGit | null
   storage: Pick<ObjectStorage, 'put' | 'get' | 'delete'>
   secrets: Pick<
@@ -250,20 +252,25 @@ export const previewOriginOf = (config: PreviewsConfig, hostname: string): strin
   previewOrigin(hostname, config.address)
 
 /**
- * The settings the stack's recipe and copy are made with, read once per seed. No reader of the
- * hosting's configuration files exists in this tree yet (the sources of the connection wizard,
- * plan 39), so `SiteAdapter.databaseSettings` is not asked: the catalog of the production
- * database names the tables of the stack's copy policy under one prefix, and the collation they
- * share is the encoding of the copy (database-settings.ts).
+ * The settings the stack's recipe and copy are made with, read once per seed (Р15). First the
+ * configuration on the hosting, as `SiteAdapter.databaseSettings(read)` reads it through the file
+ * source the connection wizard recorded (plan 39); a site without one, a hosting that cannot be
+ * read now, or a configuration that does not state them as constants falls back to the catalog
+ * of the production database: the tables of the stack's copy policy under one prefix, and the
+ * collation they share is the encoding of the copy (database-settings.ts).
  */
 async function databaseSettings(
   deps: PreviewBuildDeps,
   adapter: SiteAdapter,
-  site: { stack: SiteStack; url: string },
+  site: { id: string; stack: SiteStack; url: string },
   previewId: string,
-  access: DbAccess,
+  access: () => Promise<DbAccess>,
   signal: AbortSignal,
 ): Promise<SiteDatabaseSettings> {
+  const configured = await deps.sources.withRoot(site.id, signal, (read) =>
+    adapter.databaseSettings(read),
+  )
+  if (configured) return configured
   let named
   try {
     // The tables a copy policy names do not depend on the prefix: any settings name them.
@@ -274,26 +281,19 @@ async function databaseSettings(
   } catch {
     throw new PreviewUnavailable('not_supported')
   }
-  const settings = databaseSettingsFromCatalog(named, await deps.catalog.tables(access, signal))
+  const settings = databaseSettingsFromCatalog(
+    named,
+    await deps.catalog.tables(await access(), signal),
+  )
   if (!settings) throw new PreviewUnavailable('not_supported')
   return settings
 }
 
 /** The site's database access from Vault, at the version its reference names (spec §15). */
 async function databaseAccess(deps: PreviewBuildDeps, siteId: string): Promise<DbAccess> {
-  const path = siteAccessPath(siteId, 'db')
-  const reference = await deps.db.credentialRef.findFirst({
-    where: { siteId, kind: 'db', vaultPath: path },
-    select: { keyVersion: true },
-  })
-  if (!reference) throw previewFailure('access_missing')
-  const stored = await deps.secrets.kvRead(path)
-  if (!stored) throw previewFailure('access_missing')
-  // A rotation writes Vault first and the reference second: until both agree, nothing is used.
-  if (stored.version !== reference.keyVersion) throw previewFailure('access_mismatch')
-  const access = dbAccessSchema.safeParse(stored.data)
-  if (!access.success) throw previewFailure('access_mismatch')
-  return access.data
+  const found = await deps.sources.databaseAccess(siteId)
+  if (!found.ok) throw previewFailure(found.code)
+  return found.access
 }
 
 /** The client's variables the preview gets (Р13, `envVarReachesPreview`) and their hosts. */
@@ -537,7 +537,7 @@ export async function buildPreview(
   const accessOf = async () => (access ??= await databaseAccess(deps, site.id))
   const database =
     (!freshSeed && preview.record.database) ||
-    (await databaseSettings(deps, adapter, site, preview.id, await accessOf(), signal))
+    (await databaseSettings(deps, adapter, site, preview.id, accessOf, signal))
   // Production, through its plugin: what its server runs, and the state of its objects for the
   // seed. One that cannot be asked now leaves the defaults and asks again at the next build.
   let production: PublishedContentGateway | null = null

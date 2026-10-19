@@ -115,8 +115,9 @@ async function write(root: string, files: Record<string, Buffer | string>) {
 }
 
 /**
- * A WordPress site with its core and media in git, as plan 39 imports it; with `gitignore`, the
- * root .gitignore of the adapter's import rules too (the media library stays in git).
+ * A WordPress site with its core and media in git, as plan 39 imports it; with `gitignore`, a
+ * root .gitignore of the site's own that ignores the media library — the import adds none of its
+ * own (plan 39), and the library stays in git all the same.
  */
 async function fixture(options: { gitignore?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'raditi-working-set-test-'))
@@ -140,10 +141,7 @@ async function fixture(options: { gitignore?: boolean } = {}) {
     'wp-content/uploads/2026/10/photo.jpg': jpeg,
     'wp-content/uploads/raditi/old.png': png('old'),
   })
-  if (options.gitignore)
-    await write(work, {
-      '.gitignore': `${getSiteAdapter('wordpress').importRules(site).gitignore.join('\n')}\n`,
-    })
+  if (options.gitignore) await write(work, { '.gitignore': '/wp-content/uploads/\n*.log\n' })
   // A link outside the working set: the agent never sees it, so it does not stop a turn.
   await mkdir(join(work, 'wp-content/cache'), { recursive: true })
   await symlink('../../index.php', join(work, 'wp-content/cache/index.php'))

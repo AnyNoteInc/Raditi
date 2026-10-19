@@ -1,5 +1,3 @@
-// A copy of src/lookup.ts of the site connection wizard (plan 39, not merged into this branch yet):
-// the deploy job resolves the hosting and the site the same way. The merge keeps one of the two.
 import { Resolver } from 'node:dns'
 
 import {

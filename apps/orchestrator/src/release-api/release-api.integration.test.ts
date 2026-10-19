@@ -352,6 +352,24 @@ describe.skipIf(!enabled)('the release API with PostgreSQL', () => {
     })
   })
 
+  it('gives the hosting access at the version its reference names, not a newer one', async () => {
+    const r = await published()
+    const path = siteAccessPath(r.f.siteId, 'ssh')
+    const referenced = r.vault.kv.get(path)!
+    // «Изменить доступ» of the wizard wrote version 2 and failed before it moved the reference.
+    r.vault.kvHistory.set(path, [referenced])
+    r.vault.kv.set(path, {
+      data: { ...referenced.data, password: 'never-referenced' },
+      version: 2,
+    })
+    await r.report('conflicts', 'started')
+    const access = await r.api.access(r.f.releaseId, r.auth, { deployAttempt: 1 })
+    expect(access.hosting).toMatchObject({
+      method: 'sftp',
+      access: { password: 'synthetic-password' },
+    })
+  })
+
   it('gives the plugin access to a job without records too: it refreshes the code cache (R12)', async () => {
     const r = await published({ contentAccess: true })
     r.vault.kv.set(siteAccessPath(r.f.siteId, 'wp'), {

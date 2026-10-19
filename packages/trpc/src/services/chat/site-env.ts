@@ -15,7 +15,7 @@ import {
   type SecretStore,
 } from '@repo/domain'
 
-import { accessibleSite, siteNotFound } from '../../routers/project.ts'
+import { accessibleSite, siteNotFound } from '../site-basics.ts'
 import { isManagerRole, memberRole } from './access.ts'
 import {
   siteEnvAgentClosed,

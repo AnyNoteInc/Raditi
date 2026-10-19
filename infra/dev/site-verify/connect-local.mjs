@@ -1,8 +1,9 @@
 // Trusted local connection of a WordPress site to the platform: a preparation step of the
-// local stands, not product code. It turns a site created in the cabinet («Новый проект»,
-// status `onboarding`) into one a turn can work on: the plugin is bound to the site, its
-// access is in OpenBao behind a `credential_refs` row, the workspace has its Transit key, the
-// site has a repository in the organization `sites`, and the site is `active`.
+// local stands, not product code. It turns a site in status `onboarding` — one a stand inserted,
+// or one the wizard «Новый проект» created once its first version was imported — into one a turn
+// can work on: the plugin is bound to the site, its access is in OpenBao behind a
+// `credential_refs` row, the workspace has its Transit key, the site has a repository in the
+// organization `sites`, and the site is `active`.
 //
 // Only outside production and only with loopback PostgreSQL, OpenBao, Gitea and WordPress. The
 // environment is given explicitly: no env-file is discovered or loaded here. Tokens come from
@@ -464,6 +465,13 @@ export async function connectLocalSite(
     throw refuse('WORKSPACE_NOT_SYNTHETIC', 'Рабочее пространство сайта не synthetic')
   if (!['onboarding', 'active'].includes(site.status))
     throw refuse('SITE_STATUS', 'Сайт не в статусе onboarding или active')
+  // A site of the wizard gets its repository and its first version from the import of core: this
+  // command must not create another repository, nor make the site active, before that import ends.
+  if (site.codeImport != null && site.codeImport !== 'succeeded')
+    throw refuse(
+      'SITE_SETUP',
+      'Сайт ещё настраивается: дождитесь первоначальной версии в кабинете и запустите команду снова',
+    )
 
   const accessPath = siteAccessPath(site.id, adapter.accessKind)
   const references = await db.accessRefs(site.id, adapter.accessKind)
@@ -640,11 +648,14 @@ async function databasePort(databaseUrl) {
           stack: true,
           status: true,
           workspace: { select: { dataClass: true } },
+          provisioningStages: { where: { stage: 'code_import' }, select: { status: true } },
         },
       })
       if (!row) return null
-      const { workspace, ...site } = row
-      return { ...site, dataClass: workspace.dataClass }
+      const { workspace, provisioningStages, ...site } = row
+      // null: a site made before the wizard, without the stage.
+      const codeImport = provisioningStages[0]?.status ?? null
+      return { ...site, dataClass: workspace.dataClass, codeImport }
     },
     siteExists: async (id) => (await prisma.site.count({ where: { id } })) > 0,
     accessRefs: (siteId, kind) =>

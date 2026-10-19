@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const stand = vi.hoisted(() => ({
   shop: { name: 'the shop of the process' } as object | null,
   chat: { name: 'the dialog services of the process' },
+  connections: { name: 'the site connections of the process' } as object | null,
   prisma: { name: 'the database client of the process' },
   headers: new Headers({ cookie: 'a=1' }),
   current: null as { session: object; user: object } | null,
@@ -14,6 +15,7 @@ const stand = vi.hoisted(() => ({
 
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => stand.chat }))
+vi.mock('@/server/site-connections', () => ({ siteConnections: () => stand.connections }))
 vi.mock('@/lib/session', () => ({
   getRequestHeaders: () => Promise.resolve(stand.headers),
   getSession: () => Promise.resolve(stand.current),
@@ -28,6 +30,7 @@ describe('the tRPC caller of Server Components', () => {
   beforeEach(() => {
     vi.resetModules()
     stand.shop = { name: 'the shop of the process' }
+    stand.connections = { name: 'the site connections of the process' }
     stand.current = null
     stand.createCaller.mockReset().mockReturnValue(stand.caller)
   })
@@ -42,10 +45,14 @@ describe('the tRPC caller of Server Components', () => {
       user: null,
       billing: stand.shop,
       chat: stand.chat,
+      siteConnections: stand.connections,
     })
-    const [context] = stand.createCaller.mock.calls[0] as [{ billing: unknown; chat: unknown }]
+    const [context] = stand.createCaller.mock.calls[0] as [
+      { billing: unknown; chat: unknown; siteConnections: unknown },
+    ]
     expect(context.billing).toBe(stand.shop)
     expect(context.chat).toBe(stand.chat)
+    expect(context.siteConnections).toBe(stand.connections)
   })
 
   it('hands the router no shop while payments are off', async () => {
@@ -55,6 +62,16 @@ describe('the tRPC caller of Server Components', () => {
 
     expect(stand.createCaller).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ billing: null }),
+    )
+  })
+
+  it('hands the router no site connections while Vault is not configured', async () => {
+    stand.connections = null
+
+    await serverCaller()
+
+    expect(stand.createCaller).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ siteConnections: null }),
     )
   })
 
