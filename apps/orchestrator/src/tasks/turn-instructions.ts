@@ -1,4 +1,4 @@
-import type { PreviewUnavailableReason } from '@repo/domain'
+import type { AgentWorkingSet, MediaChecks, PreviewUnavailableReason } from '@repo/domain'
 
 // The instructions of a pass (spec §8 «Инструкции агенту», item 1; docs/plan/53-chat-preview-
 // release.md, Р3, Р4, Р21): what the platform asks of the agent on every site, and what it says
@@ -110,18 +110,62 @@ function variablesSection({ names, hosts }: ClientVariableFacts): string {
 }
 
 /**
+ * Where the agent's changes may go (docs/plan/53-chat-preview-release.md, Р11, Р12; spec §8):
+ * the folders of the stack's working set and the folders where media is only added, as the
+ * site's adapter gives them (`siteWorkspaceRules`) — what publication accepts
+ * (`assertCandidatePath`). Without a working set (a stack whose adapter has none yet, R4) the
+ * turn has the full tree, and the protected paths of the rules above are all there is to say.
+ */
+export interface WorkingCopyFacts {
+  workingSet?: AgentWorkingSet
+  addOnlyPaths?: readonly string[]
+  media?: MediaChecks
+}
+
+/** A pattern of the working set (`git/path-patterns.ts`) as a path of the working copy. */
+const folderOf = (pattern: string) => pattern.replace(/^\//, '')
+
+function filesSection({ workingSet, addOnlyPaths = [], media }: WorkingCopyFacts): string {
+  if (!workingSet) return ''
+  const folders = workingSet.include.map(folderOf).join(', ')
+  const lines = [
+    '\n## The files you may change',
+    `- Your working copy holds only these parts of the site: ${folders}. Change and add files ` +
+      'only there.',
+    '- Nothing else of the site can change: not a file in its root (robots.txt, .htaccess, a ' +
+      'verification file of a search engine), not a file anywhere outside the parts above. Do ' +
+      'not create such a file: a change outside them is refused, and all the work of the pass ' +
+      'is lost with it. When the request needs one, do not make it: tell the client in ' +
+      '`client_message`, plainly, that the platform cannot change this file of the site yet, ' +
+      'and what you did instead, if anything.',
+  ]
+  if (addOnlyPaths.length && media) {
+    const types = Object.keys(media.extensions).join(', ')
+    const mib = Math.floor(media.maxFileBytes / (1024 * 1024))
+    lines.push(
+      `- New images and other media files go only to ${addOnlyPaths.join(', ')} — ${types}, ` +
+        `each at most ${mib} MiB, one extension in its name. There you only add: the files ` +
+        'already there are not in your working copy and cannot be changed or removed, and a ' +
+        'name one of them has is refused, so give each new file a name of its own.',
+    )
+  }
+  return `${lines.join('\n')}\n`
+}
+
+/**
  * The platform's instructions of one pass. `database` is what the site's adapter says of the
- * database changes of its stack (`SiteAdapter.dbPlanGuide`, CLAUDE.md rule 8): the rules above
- * know no stack.
+ * database changes of its stack (`SiteAdapter.dbPlanGuide`, CLAUDE.md rule 8), `files` where its
+ * working set lets the agent write: the rules above know no stack.
  */
 export function turnInstructions(
   preview: PreviewFacts,
   variables: ClientVariableFacts = { names: [], hosts: [] },
   database = '',
+  files: WorkingCopyFacts = {},
 ): string {
   const guide = database.trim() ? `${database.trimEnd()}\n` : ''
   const rules = PLATFORM_RULES.replace('{{database}}', () => guide)
-  return `${rules}\n${previewSection(preview)}${variablesSection(variables)}`
+  return `${rules}${filesSection(files)}\n${previewSection(preview)}${variablesSection(variables)}`
 }
 
 /**

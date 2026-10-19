@@ -271,6 +271,11 @@ describe('planTurn', () => {
       addOnlyPaths: ['wp-content/uploads/raditi/'],
       media,
     })
+    // The agent is told the same: where it writes, where media goes, that the root is not its.
+    expect(plan.request.context.instructions).toContain(
+      'only these parts of the site: wp-content/themes/.',
+    )
+    expect(plan.request.context.instructions).toContain('go only to wp-content/uploads/raditi/')
     expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
   })
 

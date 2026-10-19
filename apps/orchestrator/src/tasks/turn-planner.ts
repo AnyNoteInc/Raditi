@@ -410,6 +410,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         facts.preview,
         { names: facts.variables ?? [], hosts: egress },
         facts.databaseGuide,
+        facts.rules,
       ),
       ...(egress.length ? { egressProxy: SANDBOX_EGRESS_PROXY_URL } : {}),
     },
