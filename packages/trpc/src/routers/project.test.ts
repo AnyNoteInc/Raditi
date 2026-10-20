@@ -983,21 +983,26 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
   it('does not wait for an uncommitted write that references the user', async () => {
     const { user: owner, caller } = await account()
     let pending: Promise<unknown> = Promise.resolve()
-    const outcome = await db.$transaction(async (holder) => {
-      // What an INSERT with a foreign key to users (a session, a consent) holds until commit.
-      await holder.$queryRaw`SELECT 1 FROM users WHERE id = ${owner.id}::uuid FOR KEY SHARE`
-      pending = caller.project.create(input())
-      return Promise.race([
-        pending.then(
-          () => 'created',
-          () => 'failed',
-        ),
-        new Promise<string>((resolve) => setTimeout(resolve, 1500, 'blocked')),
-      ])
-    })
+    // A create that waits on the holder never finishes while it is open: the window only has to
+    // outlast a slow create on a busy CI runner (1.5 s did not), and the transaction the window.
+    const outcome = await db.$transaction(
+      async (holder) => {
+        // What an INSERT with a foreign key to users (a session, a consent) holds until commit.
+        await holder.$queryRaw`SELECT 1 FROM users WHERE id = ${owner.id}::uuid FOR KEY SHARE`
+        pending = caller.project.create(input())
+        return Promise.race([
+          pending.then(
+            () => 'created',
+            () => 'failed',
+          ),
+          new Promise<string>((resolve) => setTimeout(resolve, 10_000, 'blocked')),
+        ])
+      },
+      { timeout: 20_000 },
+    )
     await pending.catch(() => undefined)
     expect(outcome).toBe('created')
-  })
+  }, 30_000)
 
   it('counts the site ceiling under the user lock for concurrent submissions', async () => {
     const { user: owner, caller } = await account()
