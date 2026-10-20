@@ -496,8 +496,9 @@ describe('e-mail addresses', () => {
       const masked = await privacy.mask(scope, fields(content))
       const elapsed = performance.now() - startedAt
       expect(masked.content === content).toBe(true)
-      // The quadratic scan needed 1.7 s for 32 KiB, that is hours for this line.
-      expect(elapsed).toBeLessThan(10_000)
+      // The quadratic scan needed 1.7 s for 32 KiB, that is hours for this line. A linear one
+      // takes seconds, more on a CI runner whose cores test core, llm and mcp at once (18 s seen).
+      expect(elapsed).toBeLessThan(45_000)
     },
     60_000,
   )
@@ -508,7 +509,8 @@ describe('e-mail addresses', () => {
     const content = unit.repeat(Math.ceil(size / unit.length))
     const startedAt = performance.now()
     const masked = await privacy.mask(scope, fields(content))
-    expect(performance.now() - startedAt).toBeLessThan(10_000)
+    // Hours for a quadratic scan, seconds for a linear one even on a busy CI runner.
+    expect(performance.now() - startedAt).toBeLessThan(45_000)
     expect(short(masked.content)).toBe('№ <phone>; <phone>; '.repeat(Math.ceil(size / unit.length)))
     expect(secrets.kvWrite).toHaveBeenCalledOnce()
   }, 60_000)
@@ -751,9 +753,10 @@ describe('a marker the agent moves never brings its contact back in plain text',
     const field = row(1050)
     expect(field.length).toBeGreaterThan(30_000)
     expect(field.length).toBeLessThanOrEqual(32_768)
-    expect(await timed(field)).toBeLessThan(2000)
-    // Sixty-four times the text against the same map: a quadratic scan would need minutes.
-    expect(await timed(row(1050 * 64))).toBeLessThan(20_000)
+    expect(await timed(field)).toBeLessThan(10_000)
+    // Sixty-four times the text against the same map: a quadratic scan would need hours, a
+    // linear one seconds even on a CI runner whose cores test several apps at once.
+    expect(await timed(row(1050 * 64))).toBeLessThan(45_000)
     expect(secrets.kvWrite).toHaveBeenCalledOnce()
   }, 60_000)
 })

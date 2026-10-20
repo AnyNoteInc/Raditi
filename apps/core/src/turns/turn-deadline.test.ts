@@ -147,7 +147,9 @@ afterEach(async () => {
   vi.useRealTimers()
 })
 
-describe('turn deadline chain (spec §8 «Срок контейнера и аренда»)', () => {
+// Starts real processes under fake timers: slow on a loaded machine (the parallel gates), not
+// stuck — the 30 s of CI's --testTimeout, also when the local gates run without it.
+describe('turn deadline chain (spec §8 «Срок контейнера и аренда»)', { timeout: 30_000 }, () => {
   it('never labels a container past the supervisor’s deadline, nor that past the lease’s grace', async () => {
     vi.useFakeTimers()
     // The monotonic clock follows the fake clock, as it would on a real host.

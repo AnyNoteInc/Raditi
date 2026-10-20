@@ -59,7 +59,9 @@ process.exit(found.length ? 99 : 0)
   }
 }
 
-describe('scanForSecrets', () => {
+// Each case runs scanner processes: slow on a loaded machine (the parallel gates), not stuck —
+// the 30 s of CI's --testTimeout, also when the local gates run without it.
+describe('scanForSecrets', { timeout: 30_000 }, () => {
   it('names the flagged files across batches and leaves no copy behind', async () => {
     const s = await setup(['clean', 'a leak', 'clean', 'clean', 'leak again'])
     const flagged = await s.scan({ scanBatchFiles: 2 })
