@@ -1,5 +1,5 @@
 import { profileNameSchema } from '@repo/auth'
-import { findPersonalWorkspace, lockUserRow, SiteStack, type Prisma } from '@repo/db'
+import { lockUserRow, SiteStack, type Prisma } from '@repo/db'
 import {
   codeSourceInputSchema,
   connectionCheckReasons,
@@ -25,7 +25,7 @@ import {
 import {
   accessibleSite,
   assertConnectionsNotBusy,
-  assertRoomForSite,
+  assertRoomForSiteSnapshot,
   assertSiteAccepted,
   assertStackConnectable,
   siteNotFound,
@@ -135,9 +135,7 @@ export const siteConnectionRouter = router({
       const services = requireSiteConnections(ctx.siteConnections)
       assertSiteAccepted(services, input)
       const owner = { userId: ctx.user.id, appEnv: services.appEnv }
-      await assertRoomForSite(ctx.prisma, { userId: owner.userId, url: input.url }, () =>
-        findPersonalWorkspace(ctx.prisma, owner),
-      )
+      await assertRoomForSiteSnapshot(ctx.prisma, owner, input.url)
       return withHost(input)
     }),
 

@@ -154,10 +154,19 @@ function fakeDb() {
         return { count: 1 }
       }),
     },
-    $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => {
+    // The transaction that writes, under the lock of the user's row.
+    writeTransaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => {
       order.push('transaction')
       return callback(tx)
     }),
+    // The room checks before the lock read one REPEATABLE READ snapshot of the outside reads.
+    $transaction: (
+      callback: (client: never) => Promise<unknown>,
+      options?: { isolationLevel?: string },
+    ) =>
+      options?.isolationLevel === 'RepeatableRead'
+        ? callback(db as never)
+        : db.writeTransaction(callback as (client: typeof tx) => Promise<unknown>),
   }
   return { db, tx, order, prisma: db as unknown as PrismaClient }
 }
@@ -343,7 +352,7 @@ describe('project.create, the last step of the wizard', () => {
       ).resolves.toEqual({ outcome: 'source_refused', ...refusal })
 
       expect(fake.secrets.writes).toEqual([])
-      expect(db.$transaction).not.toHaveBeenCalled()
+      expect(db.writeTransaction).not.toHaveBeenCalled()
       // The claim is given back: the next press of the button is not refused as «in progress».
       expect(order).toEqual(['claim', 'release'])
       expect(db.siteCreationClaim.deleteMany).toHaveBeenCalledExactlyOnceWith({
@@ -378,7 +387,7 @@ describe('project.create, the last step of the wizard', () => {
       ),
     ).resolves.toEqual({ outcome: 'database_refused', reason: 'host_not_allowed' })
     expect(fake.secrets.writes).toEqual([])
-    expect(db.$transaction).not.toHaveBeenCalled()
+    expect(db.writeTransaction).not.toHaveBeenCalled()
     expect(order).toEqual(['claim', 'release'])
   })
 
@@ -560,7 +569,7 @@ describe('project.create, the last step of the wizard', () => {
       code: 'SERVICE_UNAVAILABLE',
       cause: { code: 'SITE_CONNECTION_UNAVAILABLE' },
     })
-    expect(db.$transaction).not.toHaveBeenCalled()
+    expect(db.writeTransaction).not.toHaveBeenCalled()
     expect(order.at(-1)).toBe('release')
     const logged = warn.mock.calls.map((call) => call.join(' ')).join('\n')
     expect(logged).toContain('site_connection_secret_failed error=VaultError')

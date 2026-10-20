@@ -99,6 +99,13 @@ function fakeDb() {
     order: { findFirst: vi.fn().mockResolvedValue(null) },
     siteProvisioningStage: { count: vi.fn().mockResolvedValue(0) },
     auditLog: { count: vi.fn().mockResolvedValue(0) },
+    // The room check reads one REPEATABLE READ snapshot; there is no transaction that writes.
+    $transaction: vi.fn(
+      (callback: (client: never) => Promise<unknown>, options?: { isolationLevel?: string }) => {
+        if (options?.isolationLevel !== 'RepeatableRead') throw new Error('Nothing writes here')
+        return callback(db as never)
+      },
+    ),
   }
   return { db, prisma: db as unknown as PrismaClient }
 }
