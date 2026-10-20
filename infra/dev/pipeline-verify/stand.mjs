@@ -49,10 +49,10 @@ const RUN_ID = /^[0-9a-f]{8}$/
 
 /**
  * The image of the runner label `deploy` on the second Gitea: the orchestrator image built from
- * this tree (`docker build -f apps/orchestrator/Dockerfile --target runtime -t <this> .`). Its
+ * this tree (`docker build -f apps/core/Dockerfile --target runtime -t <this> .`). Its
  * command `deploy-step` is what the product workflow runs; the stand never builds or pulls it.
  */
-export const DEPLOY_IMAGE = 'raditi-pipeline-verify/orchestrator:local'
+export const DEPLOY_IMAGE = 'raditi-pipeline-verify/core:local'
 const IMAGE_REFERENCE =
   /^[a-z0-9][a-z0-9._/-]{0,199}(?::[A-Za-z0-9._-]{1,128})?(?:@sha256:[a-f0-9]{64})?$/
 

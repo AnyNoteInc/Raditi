@@ -9,10 +9,10 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const read = (path) => readFileSync(join(root, path), 'utf8')
 const launcher = read('infra/dev/site-verify/verify-content.mjs')
-const workers = readdirSync(join(root, 'apps/orchestrator/scripts'))
+const workers = readdirSync(join(root, 'apps/core/scripts'))
   .filter((name) => /^verify-content-.*\.mjs$/.test(name))
-  .map((name) => read(`apps/orchestrator/scripts/${name}`))
-const worker = read('apps/orchestrator/scripts/verify-content-worker.mjs')
+  .map((name) => read(`apps/core/scripts/${name}`))
+const worker = read('apps/core/scripts/verify-content-worker.mjs')
 
 test('the operator token stays in the launcher: the role logs in by AppRole mcp', () => {
   // Mounts and policies come from the bootstrap every stand and the dev OpenBao share.

@@ -17,7 +17,20 @@ on:
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       # The stand's scripts, the roles llm and mcp and the turn-key issuer of the build.
-      - apps/orchestrator/**
+      - apps/core/**
+      - apps/preview/**
+      - packages/preview-gateway/**
+      - packages/ip-address/**
+      - apps/runner/**
+      - packages/runner-engine/**
+      - apps/mcp/**
+      - apps/llm/**
+      - packages/snapshots/**
+      - packages/local-turns/**
+      - packages/turn-keys/**
+      - packages/site-content/**
+      - packages/service-runtime/**
+      - packages/app-bootstrap/**
       - packages/domain/**
       - packages/db/**
       - packages/llm-backends/**

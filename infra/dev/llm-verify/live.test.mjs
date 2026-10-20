@@ -10,7 +10,7 @@ import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { inspect } from 'node:util'
 
-import { egressConfigFromEnv } from '../../../apps/orchestrator/src/config/llm-config.ts'
+import { egressConfigFromEnv } from '../../../apps/llm/src/llm-config.ts'
 import { startFakeSubscriptions } from './fake-subscriptions.mjs'
 import { llmBackends } from '../../../packages/llm-backends/src/index.ts'
 import * as liveModule from './live.mjs'
@@ -336,10 +336,7 @@ test('the live profile of the role llm is the production list, on the direct pat
 })
 
 test('the worker of the role llm decides its profile by that one function, before it listens', async () => {
-  const worker = await readFile(
-    join(repository, 'apps/orchestrator/scripts/verify-llm-worker.mjs'),
-    'utf8',
-  )
+  const worker = await readFile(join(repository, 'apps/core/scripts/verify-llm-worker.mjs'), 'utf8')
   assert.match(worker, /profile: z\.enum\(\['synthetic', 'live'\]\)\.default\('synthetic'\)/)
   assert.match(
     worker,
@@ -978,7 +975,7 @@ test('a rehearsal can have the observer answer a request in place of the role; a
     /rehearsal/,
   )
   assert.match(
-    await readFile(join(repository, 'apps/orchestrator/scripts/verify-llm-live-run.mjs'), 'utf8'),
+    await readFile(join(repository, 'apps/core/scripts/verify-llm-live-run.mjs'), 'utf8'),
     /scripted: rehearsal,/,
   )
 })
@@ -1440,7 +1437,7 @@ test('after a failure the search goes on past a place it cannot read and names i
 })
 
 test('the codes and signals of the provider are read from the log lines the role writes', async () => {
-  // The lines as apps/orchestrator/src/llm-gateway/server.ts writes them: one JSON object a
+  // The lines as apps/llm/src/gateway/server.ts writes them: one JSON object a
   // call, with `signal` and `code` only when the provider refused.
   const call = (extra) =>
     `${JSON.stringify({
@@ -1469,10 +1466,7 @@ test('the codes and signals of the provider are read from the log lines the role
   assert.deepEqual(liveModule.providerSignals(call({}) + call({})), { codes: [], signals: [] })
   assert.deepEqual(liveModule.providerSignals(''), { codes: [], signals: [] })
   // The role writes these two fields exactly so, and only for a refusal.
-  const server = await readFile(
-    join(repository, 'apps/orchestrator/src/llm-gateway/server.ts'),
-    'utf8',
-  )
+  const server = await readFile(join(repository, 'apps/llm/src/gateway/server.ts'), 'utf8')
   assert.match(server, /event: 'llm_call',[\s\S]{0,700}\.\.\.signalLine\(finish\.signal\),/)
   assert.match(
     server,
@@ -1482,8 +1476,8 @@ test('the codes and signals of the provider are read from the log lines the role
 
 const node = dirname(process.execPath)
 const stands = {
-  gateway: 'apps/orchestrator/scripts/verify-llm-gateway.mjs',
-  content: 'apps/orchestrator/scripts/verify-agent-content.mjs',
+  gateway: 'apps/core/scripts/verify-llm-gateway.mjs',
+  content: 'apps/core/scripts/verify-agent-content.mjs',
 }
 // PATH holds node alone: a stand that got past its refusals would fail on `docker`, not exit 2.
 const started = (script, args, env) =>
@@ -1610,10 +1604,10 @@ test('a signal sent to the command of a stand reaches the stand: its package lin
   // OpenBao container holding the plan key.
   const root = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8')).scripts
   const orchestrator = JSON.parse(
-    await readFile(join(repository, 'apps/orchestrator/package.json'), 'utf8'),
+    await readFile(join(repository, 'apps/core/package.json'), 'utf8'),
   ).scripts
   assert.equal(root['verify:agent-content'], `exec node ${stands.content}`)
-  assert.equal(root['verify:llm-gateway'], 'pnpm --filter orchestrator verify:llm-gateway')
+  assert.equal(root['verify:llm-gateway'], 'pnpm --filter core verify:llm-gateway')
   assert.equal(orchestrator['verify:llm-gateway'], 'exec node scripts/verify-llm-gateway.mjs')
   for (const script of Object.values(stands)) {
     const source = await readFile(join(repository, script), 'utf8')
@@ -1621,10 +1615,7 @@ test('a signal sent to the command of a stand reaches the stand: its package lin
     assert.doesNotMatch(source, /process\.once\('SIG/)
   }
   // The live flow of the gateway stand is a run of its own with the same two listeners.
-  const live = await readFile(
-    join(repository, 'apps/orchestrator/scripts/verify-llm-live.mjs'),
-    'utf8',
-  )
+  const live = await readFile(join(repository, 'apps/core/scripts/verify-llm-live.mjs'), 'utf8')
   assert.match(live, /process\.on\('SIGINT', interrupt\)\n\s+process\.on\('SIGTERM', interrupt\)/)
   assert.match(live, /if \(interrupted\) return\n\s+interrupted = true/)
   assert.doesNotMatch(live, /process\.once\('SIG/)

@@ -265,7 +265,7 @@ test('every workspace with tests gated on DATABASE_URL runs in the gate', () => 
   const suites = [...source.matchAll(/^ {2}await suite\('([^']+)', '[^']+'\)$/gm)].map(
     ([, filter]) => filter,
   )
-  assert.deepEqual(suites, ['@repo/db', 'orchestrator', '@repo/billing', '@repo/trpc', 'web'])
+  assert.deepEqual(suites, ['@repo/db', 'core', 'llm', 'mcp', '@repo/billing', '@repo/trpc', 'web'])
   // Only @repo/db gets the empty database; the others read the seeded catalogue, as in CI.
   const seeded = source.indexOf("stage = 'reference data seed'")
   assert.ok(seeded > 0)
@@ -294,6 +294,6 @@ test('every workspace with tests gated on DATABASE_URL runs in the gate', () => 
       )
         gated.add(JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')).name)
     }
-  assert.ok(gated.size >= 5, 'the database, orchestrator, billing, tRPC and web suites exist')
+  assert.ok(gated.size >= 7, 'the database, core, llm, mcp, billing, tRPC and web suites exist')
   for (const name of gated) assert.ok(suites.includes(name), `${name} is outside verify:db`)
 })

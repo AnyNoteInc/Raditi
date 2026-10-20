@@ -1,0 +1,41 @@
+{
+  "name": "runner",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter @repo/runner-engine build && nest build",
+    "start": "node dist/main.js",
+    "runner-token": "node scripts/runner-token.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@nestjs/common": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@repo/app-bootstrap": "workspace:*",
+    "@repo/domain": "workspace:*",
+    "@repo/ip-address": "workspace:*",
+    "@repo/observability": "workspace:*",
+    "@repo/runner-engine": "workspace:*",
+    "@repo/sandbox-providers": "workspace:*",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "catalog:",
+    "@nestjs/testing": "catalog:",
+    "@repo/eslint-config": "workspace:*",
+    "@repo/typescript-config": "workspace:*",
+    "@swc/core": "catalog:",
+    "@types/node": "catalog:",
+    "@typescript/native": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "unplugin-swc": "catalog:",
+    "vitest": "catalog:"
+  }
+}

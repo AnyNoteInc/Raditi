@@ -34,12 +34,14 @@ on:
       - packages/db/src/client.ts
       - packages/mail/src/mailer.ts
       - packages/observability/src/**
-      - apps/orchestrator/src/main.ts
-      - apps/orchestrator/src/config/**
-      - apps/orchestrator/src/health/**
-      - apps/orchestrator/src/roles.ts
-      - apps/orchestrator/src/runner-api/runner-auth.ts
-      - apps/orchestrator/src/runner-api/runner-api.server.ts
+      - packages/service-runtime/**
+      - packages/app-bootstrap/**
+      - apps/core/src/main.ts
+      - apps/core/src/config/**
+      - apps/core/src/health/**
+      - apps/core/src/start.ts
+      - apps/core/src/runner-api/runner-auth.ts
+      - apps/core/src/runner-api/runner-api.server.ts
   workflow_dispatch:
     inputs:
       renewal:
@@ -107,24 +109,24 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: apps/orchestrator/Dockerfile
+          file: apps/core/Dockerfile
           target: runtime
-          tags: raditi-verify/orchestrator:local
+          tags: raditi-verify/core:local
           load: true
           push: false
-          cache-from: type=gha,scope=edge-orchestrator
-          cache-to: type=gha,scope=edge-orchestrator,mode=max
+          cache-from: type=gha,scope=edge-core
+          cache-to: type=gha,scope=edge-core,mode=max
 
       - name: Build migrate
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: apps/orchestrator/Dockerfile
+          file: apps/core/Dockerfile
           target: migrate
           tags: raditi-verify/migrate:local
           load: true
           push: false
-          cache-from: type=gha,scope=edge-orchestrator
+          cache-from: type=gha,scope=edge-core
 
       - name: Verify the edge
         env:

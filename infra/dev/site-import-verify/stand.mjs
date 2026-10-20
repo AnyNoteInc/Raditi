@@ -2,7 +2,7 @@
 // site touches, disposable and on loopback — the platform's PostgreSQL, Redis, S3 and OpenBao
 // (real policies, AppRoles `web` and `core`), its Gitea over HTTPS with the stand's own CA, a
 // hosting with SFTP and FTP(S) that serves a synthetic WordPress, the site's MySQL and PostgreSQL,
-// and the `core` role from apps/orchestrator/dist. `startStand` brings it up and hands back the
+// and the `core` role from apps/core/dist. `startStand` brings it up and hands back the
 // environments of core and web, the coordinates of every service and helpers; `stop` removes it.
 //
 // The upper half of the file is pure (the arguments of every container, the environments of the
@@ -41,7 +41,7 @@ import {
   localDesktop,
   runCommand,
   serviceImages,
-} from '../../../apps/orchestrator/scripts/verify-agent-supervisor.mjs'
+} from '../../../apps/core/scripts/verify-agent-supervisor.mjs'
 import {
   bootstrapLocalVault,
   localVaultRequest,
@@ -517,8 +517,8 @@ export function bucketNames(run) {
 }
 
 /**
- * The whole environment of `node apps/orchestrator/dist/main.js` as the core role. NODE_ENV is
- * production so the repository .env is not loaded (apps/orchestrator/src/env-file.ts); APP_ENV
+ * The whole environment of `node apps/core/dist/main.js` as the core role. NODE_ENV is
+ * production so the repository .env is not loaded (packages/app-bootstrap/src/env-file.ts); APP_ENV
  * is development, so loopback addresses of the hosting are allowed. The stand's CA is the one
  * extra root (Gitea API, FTPS, TLS of the databases) and the CA of git. Docker of the local
  * executor and the control channel of llm point where nothing listens: no turn runs here and
@@ -544,8 +544,7 @@ export function coreEnvironment({
     NO_COLOR: '1',
     APP_ENV: 'development',
     APP_URL: webOrigin,
-    ORCHESTRATOR_ROLES: 'core',
-    ORCHESTRATOR_PORT: String(portOf(port)),
+    CORE_PORT: String(portOf(port)),
     TURN_EXECUTOR: 'local',
     SANDBOX_DOCKER_SOCKET: join(directory, 'no-docker.sock'),
     LLM_CONTROL_URL: 'http://127.0.0.1:9',
@@ -973,7 +972,7 @@ async function writeTree(directory, entries) {
 
 /** The `core` role from its build, with a log file of the run. */
 function coreProcess({ env, port, logFile, cwd, metricsToken, record, signal }) {
-  const mainJs = join(repository, 'apps/orchestrator/dist/main.js')
+  const mainJs = join(repository, 'apps/core/dist/main.js')
   let child
   let log = ''
   let exited = Promise.resolve(null)
@@ -1000,7 +999,7 @@ function coreProcess({ env, port, logFile, cwd, metricsToken, record, signal }) 
     async start({ overrides = {}, wait = true } = {}) {
       if (running()) throw new Error('core is running already')
       if (!existsSync(mainJs))
-        throw new Error('Build the orchestrator first: pnpm --filter orchestrator build')
+        throw new Error('Build the orchestrator first: pnpm --filter core build')
       const file = createWriteStream(logFile, { flags: 'a', mode: 0o600 })
       child = spawn(process.execPath, [mainJs], {
         cwd,

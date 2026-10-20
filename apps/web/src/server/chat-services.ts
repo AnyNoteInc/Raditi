@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { env } from '@/env'
 
 // PREVIEW_TTL_HOURS with the bounds and the default of the core role
-// (apps/orchestrator/src/config/config.ts): web writes `expires_at` of a new preview by it.
+// (apps/core/src/config/config.ts): web writes `expires_at` of a new preview by it.
 const ttlSchema = z.object({
   PREVIEW_TTL_HOURS: envVar(
     z.coerce.number().int().min(1).max(720).default(previewDefaults.ttlHours),

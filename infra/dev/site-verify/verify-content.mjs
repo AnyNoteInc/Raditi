@@ -14,7 +14,7 @@ import {
   provisionServices,
   runCommand,
   serviceImages,
-} from '../../../apps/orchestrator/scripts/verify-agent-supervisor.mjs'
+} from '../../../apps/core/scripts/verify-agent-supervisor.mjs'
 import { workspaceTransitKey } from '../../../packages/domain/src/sessions/workspace-transit-key.ts'
 import { bootstrapLocalVault, localVaultRequest } from '../../vault/bootstrap.mjs'
 import { verifyContentFidelity } from './content-fidelity.mjs'
@@ -304,7 +304,7 @@ try {
       // nor the password of the site is in their environment or files.
       const { VAULT_DEV_ROOT_TOKEN: _operator, ...roleEnv } = env
       const result = await command(process.execPath, ['scripts/verify-content-worker.mjs'], {
-        cwd: join(repository, 'apps/orchestrator'),
+        cwd: join(repository, 'apps/core'),
         env: {
           ...roleEnv,
           VAULT_ROLE_ID: appRole.roleId,

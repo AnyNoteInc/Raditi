@@ -182,6 +182,6 @@ test('a signal to pnpm reaches the stand: its script line replaces the shell', (
   // it waits for. Without `exec` pnpm ends at once while the stand is still running.
   assert.equal(
     scripts['verify:gitea'],
-    'pnpm --filter orchestrator build && exec node infra/dev/gitea-verify/verify-gitea.mjs',
+    'pnpm --filter core build && exec node infra/dev/gitea-verify/verify-gitea.mjs',
   )
 })

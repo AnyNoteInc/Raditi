@@ -83,15 +83,26 @@ test('CI fails when schema.prisma and the deployed migrations differ', () => {
   )
 })
 
-test('CI runs every opt-in database test of the orchestrator on its own PostgreSQL', () => {
-  const source = join(root, 'apps/orchestrator/src')
-  const gated = readdirSync(source, { recursive: true })
-    .filter((name) => name.endsWith('.test.ts'))
-    .filter((name) => readFileSync(join(source, name), 'utf8').includes('RADITI_GATEWAY_DB_TESTS'))
-  assert.ok(gated.length >= 9, 'the gateway, turn key, pool, login and MCP suites exist')
-  const [, filter] = /^vitest run (\S+)$/.exec(scripts('apps/orchestrator')['test:db'] ?? '') ?? []
-  assert.ok(filter, 'orchestrator has a test:db script with one Vitest file filter')
-  for (const name of gated) assert.ok(name.includes(filter), `${name} is outside test:db`)
+// The apps whose own opt-in database suites run in the one gateway-db job, in the order of its steps.
+const databaseApps = ['apps/core', 'apps/llm', 'apps/mcp']
+
+test('CI runs every opt-in database test of the role apps on its own PostgreSQL', () => {
+  const found = {}
+  for (const app of databaseApps) {
+    const source = join(root, app, 'src')
+    const gated = readdirSync(source, { recursive: true })
+      .filter((name) => name.endsWith('.test.ts'))
+      .filter((name) =>
+        readFileSync(join(source, name), 'utf8').includes('RADITI_GATEWAY_DB_TESTS'),
+      )
+    found[app] = gated.length
+    const [, filter] = /^vitest run (\S+)$/.exec(scripts(app)['test:db'] ?? '') ?? []
+    assert.ok(filter, `${app} has a test:db script with one Vitest file filter`)
+    for (const name of gated) assert.ok(name.includes(filter), `${app}: ${name} is outside test:db`)
+  }
+  assert.ok(found['apps/core'] >= 3, 'the turn key, sweeper and release suites exist')
+  assert.ok(found['apps/llm'] >= 5, 'the gateway, pool, lock, login and retire suites exist')
+  assert.ok(found['apps/mcp'] >= 3, 'the access, undo and preview suites of the MCP gateway exist')
 
   const database = job('gateway-db')
   assert.ok(database, 'ci.yml has the gateway-db job')
@@ -108,16 +119,19 @@ test('CI runs every opt-in database test of the orchestrator on its own PostgreS
     schemaDiff,
     'pnpm db:seed',
   ])
-  assert.match(runs[4], /^pnpm --filter orchestrator test:db --testTimeout=\d+$/)
+  databaseApps.forEach((app, index) => {
+    const name = JSON.parse(read(`${app}/package.json`)).name
+    assert.match(runs[4 + index], new RegExp(`^pnpm --filter ${name} test:db --testTimeout=\\d+$`))
+  })
   // The shared job keeps them skipped: Turbo runs @repo/db, @repo/trpc and orchestrator at once.
   assert.doesNotMatch(job('gates'), /RADITI_GATEWAY_DB_TESTS/)
 })
 
 test('CI runs the opt-in database tests of every other workspace in the same job', () => {
-  // `test:db` of the orchestrator reaches only its own files, and the gates job keeps the flag
+  // `test:db` of a role app reaches only its own files, and the gates job keeps the flag
   // unset: a suite gated by it in another workspace runs in CI only when a step names its file.
   const gated = workspaces
-    .filter((workspace) => workspace !== 'apps/orchestrator')
+    .filter((workspace) => !databaseApps.includes(workspace))
     .flatMap((workspace) =>
       readdirSync(join(root, workspace), { recursive: true })
         .filter((file) => /\.test\.tsx?$/.test(file))
@@ -135,7 +149,7 @@ test('CI runs the opt-in database tests of every other workspace in the same job
   const runs = [...job('gateway-db').matchAll(/^ {8}run: (.+)$/gm)].map(([, command]) => command)
   // After the orchestrator's suites, one step per workspace: Vitest in the package, the files
   // by name, and the timeout of CI without a `--` before it.
-  const named = runs.slice(5).flatMap((command) => {
+  const named = runs.slice(4 + databaseApps.length).flatMap((command) => {
     const [, name, files] =
       /^pnpm --filter (\S+) exec vitest run ((?:\S+\.test\.tsx? )+)--testTimeout=\d+$/.exec(
         command,
@@ -156,9 +170,9 @@ test('the subscription gateway workflow starts on every source its stand runs', 
   const filter = pathFilter(workflow('llm-gateway'))
   assert.ok(filter.length > 10, 'llm-gateway.yml has a path filter')
   const stand = [
-    ...readdirSync(join(root, 'apps/orchestrator/scripts'))
+    ...readdirSync(join(root, 'apps/core/scripts'))
       .filter((name) => /^verify-llm-.+\.mjs$/.test(name))
-      .map((name) => `apps/orchestrator/scripts/${name}`),
+      .map((name) => `apps/core/scripts/${name}`),
     ...readdirSync(join(root, 'infra/dev/llm-verify'))
       .filter((name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))
       .map((name) => `infra/dev/llm-verify/${name}`),
@@ -179,7 +193,7 @@ test('the subscription gateway workflow starts on every source its stand runs', 
       `packages/${name}/** does not start the workflow`,
     )
   // The images the stand builds: every file they copy from the repository.
-  const main = read('apps/orchestrator/scripts/verify-llm-gateway.mjs')
+  const main = read('apps/core/scripts/verify-llm-gateway.mjs')
   const targets = [...main.matchAll(/'--target',\n\s+'([a-z-]+)',/g)].map(([, target]) => target)
   assert.deepEqual(targets, ['runtime', 'network-guard'])
   for (const target of targets) {
@@ -323,7 +337,7 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     assert.ok(live.includes(`['${option}', '`), `${option} is an option of the stands`)
   // GitHub sets CI in every job: that refuses a live run and must not refuse its rehearsal.
   assert.match(
-    read('apps/orchestrator/scripts/verify-llm-live-run.mjs'),
+    read('apps/core/scripts/verify-llm-live-run.mjs'),
     /let refusal = rehearsal \? null : liveStartRefusal\(process\.env\)/,
   )
   // No other workflow runs a rehearsal: the images and the build are those of these two jobs.
@@ -514,20 +528,20 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     'infra/wordpress/**',
     'infra/dev/site-verify/**',
     'packages/site-adapters/**',
-    'apps/orchestrator/src/mcp/**',
-    'apps/orchestrator/scripts/verify-content-*.mjs',
+    'apps/mcp/**',
+    'apps/core/scripts/verify-content-*.mjs',
   ])
     assert.ok(filter.includes(pattern), `${pattern} is in the path filter`)
   // The plugin, every script of the stand and the helpers it imports start the workflow.
   const stand = [
     'infra/wordpress/raditi-content.php',
-    'apps/orchestrator/scripts/verify-agent-supervisor.mjs',
+    'apps/core/scripts/verify-agent-supervisor.mjs',
     ...readdirSync(join(root, 'infra/dev/site-verify')).map(
       (name) => `infra/dev/site-verify/${name}`,
     ),
-    ...readdirSync(join(root, 'apps/orchestrator/scripts'))
+    ...readdirSync(join(root, 'apps/core/scripts'))
       .filter((name) => name.startsWith('verify-content-'))
-      .map((name) => `apps/orchestrator/scripts/${name}`),
+      .map((name) => `apps/core/scripts/${name}`),
   ]
   assert.ok(stand.length >= 9)
   for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
@@ -541,19 +555,22 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     for (const [, name] of text.matchAll(/'(?:@repo|(?:\.\.\/)+packages)\/([a-z-]+)[/']/g))
       imported.add(`packages/${name}/src/index.ts`)
     for (const [, directory] of text.matchAll(/'\.\.\/dist\/([a-z-]+)\//g))
-      imported.add(`apps/orchestrator/src/${directory}/index.ts`)
+      imported.add(`apps/core/src/${directory}/index.ts`)
+    // The builds of the other apps: apps/mcp/dist and apps/llm/dist.
+    for (const [, app] of text.matchAll(/'\.\.\/\.\.\/([a-z-]+)\/dist\//g))
+      imported.add(`apps/${app}/src/index.ts`)
     for (const [, file] of text.matchAll(/'\.\.\/src\/([^']+\.ts)'/g))
-      imported.add(`apps/orchestrator/src/${file}`)
+      imported.add(`apps/core/src/${file}`)
   }
   for (const source of [
     'packages/db/src/index.ts',
     'packages/storage/src/index.ts',
     'packages/domain/src/index.ts',
     'packages/site-adapters/src/index.ts',
-    'apps/orchestrator/src/mcp/index.ts',
-    'apps/orchestrator/src/turns/index.ts',
+    'apps/mcp/src/index.ts',
+    'apps/core/src/turns/index.ts',
     // The sample ids of the turns the stand makes up.
-    'apps/orchestrator/src/testing/ids.ts',
+    'apps/core/src/testing/ids.ts',
   ])
     assert.ok(imported.has(source), `the stand loads ${source.replace('/index.ts', '')}`)
   for (const source of imported)
@@ -571,7 +588,7 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
   // The MCP modules are what the stand runs for real, against its own OpenBao, S3 and
   // PostgreSQL: every workspace package they import starts it too (the contact masks live in
   // the KV client of @repo/vault, and no other workflow exercises them on a real OpenBao).
-  const mcp = join(root, 'apps/orchestrator/src/mcp')
+  const mcp = join(root, 'apps/mcp/src')
   const packages = new Set(
     readdirSync(mcp, { recursive: true })
       .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
@@ -588,19 +605,19 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     )
   // The stand applies the real migrations to its PostgreSQL.
   assert.match(
-    read('apps/orchestrator/scripts/verify-agent-supervisor.mjs'),
+    read('apps/core/scripts/verify-agent-supervisor.mjs'),
     /'packages\/db\/prisma\/migrations'/,
   )
   assert.ok(starts(filter, 'packages/db/prisma/migrations/x/migration.sql'))
   assert.match(
     read('infra/dev/site-verify/verify-content.mjs'),
-    /from '\.\.\/\.\.\/\.\.\/apps\/orchestrator\/scripts\/verify-agent-supervisor\.mjs'/,
+    /from '\.\.\/\.\.\/\.\.\/apps\/core\/scripts\/verify-agent-supervisor\.mjs'/,
   )
 
   // The stand never pulls (--pull=never, `compose up --pull never`): CI pulls exactly what the
   // scripts pin, by digest. The WP-CLI image is the verified digest, never its mutable tag.
   const services = pinnedImages(
-    'apps/orchestrator/scripts/verify-agent-supervisor.mjs',
+    'apps/core/scripts/verify-agent-supervisor.mjs',
     'export const serviceImages = Object.freeze({',
   )
   assert.equal(services.length, 3)
@@ -622,7 +639,7 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
   assert.equal(
     JSON.parse(read('package.json')).scripts['verify:mcp-content'],
     // `exec`: a signal sent to pnpm must reach the stand, or its cleanup runs outside the stand lock.
-    'pnpm --filter orchestrator build && exec node infra/dev/site-verify/verify-content.mjs',
+    'pnpm --filter core --filter mcp build && exec node infra/dev/site-verify/verify-content.mjs',
   )
   // On the runner the engine is native Linux Docker, not Docker Desktop.
   assert.match(source, /^ {4}runs-on: ubuntu-latest$/m)
@@ -650,7 +667,7 @@ test('CI runs the presigned-URL suite of the storage adapter on a real S3', () =
   assert.match(storage, /-v "\$PWD\/infra\/dev\/seaweedfs-s3\.json:\/etc\/seaweedfs\/s3\.json:ro"/)
   // The S3 server the stands pin, by digest, published on loopback only.
   const [, s3] = pinnedImages(
-    'apps/orchestrator/scripts/verify-agent-supervisor.mjs',
+    'apps/core/scripts/verify-agent-supervisor.mjs',
     'export const serviceImages = Object.freeze({',
   )
   assert.match(s3, /^chrislusf\/seaweedfs:/)
@@ -720,14 +737,14 @@ test('a cached test run sees a change of a file its tests read outside their pac
   assert.ok(inputs.includes('$TURBO_DEFAULT$'), 'test keeps the files of its package as inputs')
   const outside = {
     '.env.example': [
-      'apps/orchestrator/src/config/config.test.ts',
+      'apps/core/src/config/config.test.ts',
       'apps/web/src/lib/legal-content.test.ts',
     ],
     'apps/web/content/legal/public-offer.md': ['packages/db/prisma/seed/data.test.ts'],
     // The LLM paths of sandbox-gw against the routes of the registry and the base URL of each.
     'infra/sandbox/gateway.mjs': [
-      'apps/orchestrator/src/llm-gateway/sandbox-routes.contract.test.ts',
-      'apps/orchestrator/src/llm/backends.test.ts',
+      'apps/llm/src/gateway/sandbox-routes.contract.test.ts',
+      'packages/turn-keys/src/backends.test.ts',
     ],
     // The files a WordPress preview gets, embedded in the adapter, against their sources; the
     // policy of its database copy, against the file the copier is tested with (plan 53, R5b).
@@ -740,6 +757,11 @@ test('a cached test run sees a change of a file its tests read outside their pac
     'packages/site-connections/src/database-copy/wordpress-policy.fixture.json': [
       'packages/site-adapters/src/wordpress-db-copy.test.ts',
     ],
+    // The token command of the runner image (the runbook issues it on the sandbox VM), against
+    // the RUNNER_TOKENS entries core accepts.
+    'apps/runner/scripts/runner-token.mjs': ['apps/core/src/runner-api/runner-auth.test.ts'],
+    // The llm service of the app VM's compose against the one extra CA the production role takes.
+    'infra/app/docker-compose.yml': ['apps/llm/src/llm-config.contract.test.ts'],
   }
   for (const [file, readers] of Object.entries(outside)) {
     assert.ok(inputs.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of test`)
@@ -789,7 +811,7 @@ test('the llm profile of the app VM is verified on the engine of the VM, without
     'if pgrep -x docker-proxy; then',
     `test "$(docker version --format '{{.Server.Version}}')" = "$APP_DOCKER_VERSION"`,
     'run: pnpm verify:llm-firewall',
-    'run: docker build -f apps/orchestrator/Dockerfile --target runtime -t raditi-p3verify-orchestrator:b14 .',
+    'run: docker build -f apps/llm/Dockerfile --target runtime -t raditi-p3verify-llm:b14 .',
     'run: pnpm verify:llm-app',
   ].map((text) => source.indexOf(text))
   assert.deepEqual(
@@ -801,7 +823,7 @@ test('the llm profile of the app VM is verified on the engine of the VM, without
   // The stand takes the image the job builds, and its engine gate has tests of its own.
   assert.match(
     read('infra/app/verify-llm-app.mjs'),
-    /^ {4}image: \{ type: 'string', default: 'raditi-p3verify-orchestrator:b14' \},$/m,
+    /^ {4}image: \{ type: 'string', default: 'raditi-p3verify-llm:b14' \},$/m,
   )
   assert.match(source, /^ {8}run: node --test .* infra\/app\/verify-llm-app\.test\.mjs$/m)
   const filter = pathFilter(source)
@@ -810,7 +832,7 @@ test('the llm profile of the app VM is verified on the engine of the VM, without
     'infra/app/verify-llm-app.mjs',
     'infra/app/preflight.sh',
     'infra/app/docker-compose.yml',
-    'apps/orchestrator/Dockerfile',
+    'apps/llm/Dockerfile',
   ])
     assert.ok(starts(filter, file), `${file} does not start the workflow`)
 })

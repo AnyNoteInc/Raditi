@@ -19,10 +19,10 @@ scrape_configs:
     authorization: { credentials: raditi-dev-metrics }
     static_configs: [{ targets: ['host.docker.internal:3000'], labels: { app: web } }]
 
-  - job_name: orchestrator
+  - job_name: core
     metrics_path: /metrics
     authorization: { credentials: raditi-dev-metrics }
-    static_configs: [{ targets: ['host.docker.internal:8081'], labels: { app: orchestrator } }]
+    static_configs: [{ targets: ['host.docker.internal:8081'], labels: { app: core } }]
 
   # Шлюз подписок (роль llm): собственный порт и собственный реестр метрик, на 8081 их нет.
   # Host — из LLM_GATEWAY_HOSTS, адрес контейнера — из LLM_GATEWAY_CLIENTS (.env.example).
@@ -73,7 +73,7 @@ scrape_configs:
           - http://s3:8333/healthz
       - targets: ['http://site:80/']
         labels: { compose_profile: site }
-      # Роль `llm` в dev может быть убрана из ORCHESTRATOR_ROLES, а её health отвечает 503
+      # Приложение `llm` в dev может быть не запущено, а его health отвечает 503
       # (degraded), когда задан прокси выхода без рабочего канала, когда провайдер недостижим
       # на прямом пути или недоступны база и Vault. Без прокси шлюз с G4 отвечает 200. Поэтому
       # проба помечена профилем и не входит в обязательные и в алерт EndpointDown.

@@ -9,7 +9,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { openBackup } from '../../../apps/orchestrator/src/deploy-step/backup.ts'
+import { openBackup } from '../../../apps/core/src/deploy-step/backup.ts'
 import {
   deployAccessSchema,
   deployManifestSchema,

@@ -1,7 +1,7 @@
 // The whole request of the owner on this machine (docs/plan/53-chat-preview-release.md, R12):
 // a dialog in the chat changes a synthetic production site in its preview, the preview shows
 // it, `/release` publishes it — tag, Gitea Actions, `deploy-step`, SFTP, the plugin, the check,
-// the rollback — with the real roles of the orchestrator, web, the real OpenCode CLI in its
+// the rollback — with the real apps core, llm, mcp, preview, web, the real OpenCode CLI in its
 // sandbox on a scripted synthetic Z.ai, a real Gitea with its runner, OpenBao, PostgreSQL,
 // Redis, S3 and WordPress. Disposable services only; never the repository .env, the dev
 // infrastructure, a real model or a real key. The scenarios are in scenarios.mjs.
@@ -102,7 +102,7 @@ const exists = (path) =>
 
 // ─── The private copy and the images ──────────────────────────────────────────
 
-/** Where web and the orchestrator are built: outside the repository, kept between runs. */
+/** Where web and the apps are built: outside the repository, kept between runs. */
 function copyDirectory() {
   const given = process.env.RELEASE_VERIFY_BUILD_DIR
   const directory = resolve(given ? given : join(tmpdir(), 'raditi-release-verify-build'))
@@ -181,6 +181,17 @@ async function buildCopy(copy, options) {
       })
       console.log(`PASS build: ${step.title} (${Math.round((Date.now() - started) / 1000)} s)`)
     }
+    // The llm, mcp and preview roles are apps of their own (docs/plan/55-split-orchestrator.md).
+    rt.setStage('build: the llm, mcp and preview apps')
+    const llmStarted = Date.now()
+    await rt.run('pnpm', ['--filter', 'llm', '--filter', 'mcp', '--filter', 'preview', 'build'], {
+      cwd: copy,
+      env,
+      timeoutMs: 20 * 60_000,
+    })
+    console.log(
+      `PASS build: the llm, mcp and preview apps (${Math.round((Date.now() - llmStarted) / 1000)} s)`,
+    )
     await rm(join(copy, BUILD_OUTPUT.webStaticServed), { recursive: true, force: true })
     await cp(join(copy, BUILD_OUTPUT.webStatic), join(copy, BUILD_OUTPUT.webStaticServed), {
       recursive: true,
@@ -189,7 +200,12 @@ async function buildCopy(copy, options) {
     return entries
   }
   rt.setStage('checking the builds of the copy')
-  for (const path of Object.values(BUILD_OUTPUT))
+  for (const path of [
+    ...Object.values(BUILD_OUTPUT),
+    'apps/llm/dist/main.js',
+    'apps/mcp/dist/main.js',
+    'apps/preview/dist/main.js',
+  ])
     assert.ok(
       await exists(join(copy, path)),
       `The copy has no build ${path}: run without --no-build`,
@@ -366,7 +382,7 @@ async function main(options, owned) {
   const gitea = await startGitea(rt, names, { port: ports.gitea, certificates, directory })
   await storeOwnerToken(vault, gitea.tokens.owner)
   await startMirror(rt, names, {
-    image: images.orchestrator,
+    image: images.core,
     // A port a container publishes is on the loopback of the Docker VM already; the processes
     // of the platform listen on the Mac.
     ports: [ports.releaseApi],
@@ -374,13 +390,13 @@ async function main(options, owned) {
   const runner = await startRunner(rt, names, {
     gitea,
     ports,
-    deployImage: images.orchestrator,
+    deployImage: images.core,
     certificates,
     directory,
   })
   owned.runnerUuid = runner.uuid
   console.log(
-    'PASS Gitea 1.27.3 over HTTPS with WORKFLOW_DIRS, platform/ci as the source of scoped workflows, the bot, the release account and its token in Vault; gitea/runner 4.0.0 with the orchestrator image of this tree as `deploy`',
+    'PASS Gitea 1.27.3 over HTTPS with WORKFLOW_DIRS, platform/ci as the source of scoped workflows, the bot, the release account and its token in Vault; gitea/runner 4.0.0 with the core image of this tree as `deploy`',
   )
 
   rt.setStage('the production site')
@@ -423,7 +439,10 @@ async function main(options, owned) {
 
   rt.setStage('the platform processes')
   owned.processes = []
-  const orchestrator = join(copy, 'apps/orchestrator')
+  const coreApp = join(copy, 'apps/core')
+  const llmApp = join(copy, 'apps/llm')
+  const mcpApp = join(copy, 'apps/mcp')
+  const previewApp = join(copy, 'apps/preview')
   const start = async (name, args, cwd, env, health) => {
     const service = startProcess(rt, name, args, {
       cwd,
@@ -445,28 +464,28 @@ async function main(options, owned) {
   processes.llm = await start(
     'llm',
     ['dist/main.js'],
-    orchestrator,
+    llmApp,
     roleEnvironment('llm', context),
     `http://127.0.0.1:${ports.llm}/health`,
   )
   processes.mcp = await start(
     'mcp',
     ['dist/main.js'],
-    orchestrator,
+    mcpApp,
     roleEnvironment('mcp', context),
     `http://127.0.0.1:${ports.mcp}/health`,
   )
   processes.preview = await start(
     'preview',
     ['dist/main.js'],
-    orchestrator,
+    previewApp,
     roleEnvironment('preview', context),
     `http://127.0.0.1:${ports.preview}/__raditi/health`,
   )
   processes.core = await start(
     'core',
     ['dist/main.js'],
-    orchestrator,
+    coreApp,
     roleEnvironment('core', context),
     `http://127.0.0.1:${ports.core}/health`,
   )
@@ -478,7 +497,7 @@ async function main(options, owned) {
     `http://127.0.0.1:${ports.web}/api/health`,
   )
   console.log(
-    'PASS roles llm, mcp, preview and core of the orchestrator build and web of `next build`, each its own process with its own AppRole',
+    'PASS the apps llm, mcp, preview and core of their builds and web of `next build`, each its own process with its own AppRole',
   )
 
   rt.setStage('the owner, the workspace and the site')

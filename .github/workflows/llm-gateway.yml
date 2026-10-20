@@ -14,10 +14,23 @@ on:
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
-      - apps/orchestrator/**
+      - apps/core/**
+      - apps/preview/**
+      - packages/preview-gateway/**
+      - packages/ip-address/**
+      - apps/runner/**
+      - packages/runner-engine/**
+      - apps/mcp/**
+      - apps/llm/**
+      - packages/site-content/**
+      - packages/service-runtime/**
+      - packages/app-bootstrap/**
       - packages/domain/**
       - packages/db/**
       - packages/llm-backends/**
+      - packages/turn-keys/**
+      - packages/snapshots/**
+      - packages/local-turns/**
       # The stand runs the drivers' real prepare and command in the production agent runtime.
       - packages/agent-drivers/**
       - packages/sandbox-providers/runtime/**

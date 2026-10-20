@@ -33,7 +33,7 @@
 
 ```sh
 APP_ENV=<окружение> DATABASE_URL=<адрес базы> \
-  pnpm --filter orchestrator billing:rates -- \
+  pnpm --filter core billing:rates -- \
     --file infra/billing/rates/2026-10-17-zai-api.json \
     --reason "Ставки API Z.ai по курсу ЦБ на 17.10.2026 с маржой 30% и курс кредита"
 ```

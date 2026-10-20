@@ -10,7 +10,7 @@ const TEST_TIMEOUT_MS = 15 * 60_000
 const GRACE_MS = 5_000
 
 /**
- * The limit of one test suite. The orchestrator suite runs its files one by one against the
+ * The limit of one test suite. The core suite runs its files one by one against the
  * database and grows with every step: a laptop needs minutes, a shared runner several times
  * more. VERIFY_DB_TEST_TIMEOUT_MS overrides the default of 15 minutes.
  */

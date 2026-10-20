@@ -1,7 +1,7 @@
 // `pnpm verify:site-import [-- --infra-only | --only <ids>] [--keep]`: the whole first import of
 // a connected site on real servers (docs/plan/39-site-connection-wizard.md, W5). The stand
 // (stand.mjs) brings up the platform's services, two hostings with SFTP and FTP(S), the site's
-// MySQL and PostgreSQL, core from apps/orchestrator/dist and next dev of apps/web; then
+// MySQL and PostgreSQL, core from apps/core/dist and next dev of apps/web; then
 //
 //   infra   the self-checks of the stand (infra-checks.mjs);
 //   phase 0 core stopped: the site of r6 is created and its password changed on the hosting;
@@ -24,7 +24,7 @@ import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 
-import { cleanEnvironment } from '../../../apps/orchestrator/scripts/verify-agent-supervisor.mjs'
+import { cleanEnvironment } from '../../../apps/core/scripts/verify-agent-supervisor.mjs'
 import { createAccounts } from './accounts.mjs'
 import { startControl } from './control.mjs'
 import { runInfraChecks, stage as infraStage } from './infra-checks.mjs'

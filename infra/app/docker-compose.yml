@@ -221,7 +221,7 @@ services:
 
   core:
     <<: *node
-    image: ${ORCHESTRATOR_IMAGE:?Set the digest-pinned orchestrator image}
+    image: ${CORE_IMAGE:?Set the digest-pinned core image}
     user: '10002:10002'
     command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
     depends_on:
@@ -231,8 +231,7 @@ services:
     environment:
       <<: *platform-env
       S3_RUNNER_ENDPOINT: ${S3_RUNNER_ENDPOINT:-}
-      ORCHESTRATOR_ROLES: core
-      ORCHESTRATOR_PORT: '8081'
+      CORE_PORT: '8081'
       # Cross the host's private published endpoint: core and llm share no container network.
       LLM_CONTROL_URL: http://${APP_PRIVATE_IP}:${LLM_GATEWAY_PUBLISH:-8084}
       TURN_EXECUTOR: runner
@@ -258,7 +257,7 @@ services:
         - -e
         - fetch('http://127.0.0.1:8081/health').then(() => process.exit(0), () => process.exit(1))
       <<: *node-health
-    # SHUTDOWN_TIMEOUT_MS is 30 s (roles.ts); compose's default 10 s would cut it short
+    # SHUTDOWN_TIMEOUT_MS is 30 s (@repo/app-bootstrap); compose's default 10 s would cut it short
     stop_grace_period: 40s
     cpus: 2
     mem_limit: 3g
@@ -267,7 +266,7 @@ services:
 
   llm:
     <<: *node
-    image: ${ORCHESTRATOR_IMAGE:?Set the digest-pinned orchestrator image}
+    image: ${LLM_IMAGE:?Set the digest-pinned llm image}
     profiles: [llm]
     user: '10008:10008'
     command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
@@ -277,7 +276,6 @@ services:
     environment:
       NODE_ENV: production
       APP_ENV: production
-      ORCHESTRATOR_ROLES: llm
       VAULT_ADDR: ${VAULT_ADDR:?Set VAULT_ADDR}
       NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
       LLM_GATEWAY_PORT: '8084'

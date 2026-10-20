@@ -10,7 +10,7 @@
 // FTPS (verified with the stand's CA only) and plain FTP on the published passive ports, and was
 // not written to; Gitleaks flags exactly the file the manifest says; both site databases answer
 // over verified TLS and log what was sent; core starts on the stand and reports every dependency
-// healthy (when apps/orchestrator/dist is built).
+// healthy (when apps/core/dist is built).
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -21,7 +21,7 @@ import process from 'node:process'
 import { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 
-import { runCommand } from '../../../apps/orchestrator/scripts/verify-agent-supervisor.mjs'
+import { runCommand } from '../../../apps/core/scripts/verify-agent-supervisor.mjs'
 import { hostKeyFingerprint } from './ssh-keys.mjs'
 
 const here = fileURLToPath(new URL('./', import.meta.url))
@@ -430,7 +430,7 @@ async function checkGitleaks(stand) {
     await mkdir(dirname(target), { recursive: true })
     await cp(source, target)
   }
-  // The configuration of the product's scan (apps/orchestrator/src/git-workspace).
+  // The configuration of the product's scan (apps/core/src/git-workspace).
   await writeFile(join(scan, 'gitleaks.toml'), '[extend]\nuseDefault = true\n', { mode: 0o600 })
   const report = join(scan, 'report.json')
   await runCommand(
@@ -538,10 +538,8 @@ async function checkSiteDatabases(stand) {
 
 async function checkCore(stand) {
   stage = 'core on the stand'
-  if (!existsSync(join(repository, 'apps/orchestrator/dist/main.js'))) {
-    console.log(
-      'SKIP core: apps/orchestrator/dist/main.js is not built (pnpm --filter orchestrator build)',
-    )
+  if (!existsSync(join(repository, 'apps/core/dist/main.js'))) {
+    console.log('SKIP core: apps/core/dist/main.js is not built (pnpm --filter core build)')
     return
   }
   await stand.core.start()
@@ -562,7 +560,7 @@ async function checkCore(stand) {
   ])
     assert.ok(!log.includes(secret), 'A secret reached the log of core')
   passed(
-    `core (node apps/orchestrator/dist/main.js, AppRole core, APP_ENV=development) on ${stand.coordinates.core.url}: database, Redis, S3 and Vault ok; stopped by SIGTERM; no secret in its log`,
+    `core (node apps/core/dist/main.js, AppRole core, APP_ENV=development) on ${stand.coordinates.core.url}: database, Redis, S3 and Vault ok; stopped by SIGTERM; no secret in its log`,
   )
 }
 

@@ -138,7 +138,7 @@ fi
 
 # 9. Images by digest only (spec §19): a tag is not a rollback point. env.example's all-zero
 # digests are placeholders; core would start with SANDBOX_IMAGE's and fail only at a turn.
-for name in WEB_IMAGE ORCHESTRATOR_IMAGE MIGRATE_IMAGE TRAEFIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE SANDBOX_IMAGE; do
+for name in WEB_IMAGE CORE_IMAGE LLM_IMAGE PREVIEW_GATEWAY_IMAGE MIGRATE_IMAGE TRAEFIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE SANDBOX_IMAGE; do
   setting "$name" | grep -Eq '@sha256:[0-9a-f]{64}$' || fail "$name must be pinned by digest"
   ! setting "$name" | grep -Eq '@sha256:0{64}$' || fail "$name still has the all-zero placeholder digest"
 done

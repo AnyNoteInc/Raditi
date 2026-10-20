@@ -344,7 +344,7 @@ export function buildEnvironment({ path, home }) {
 
 /**
  * The builds, in order, each a command run in the copy. The steps of apps/web/Dockerfile and
- * apps/orchestrator/Dockerfile without Docker: the stand needs its processes on the loopback
+ * apps/core/Dockerfile without Docker: the stand needs its processes on the loopback
  * of the host, next to the fake.
  */
 export const BUILD_STEPS = Object.freeze([
@@ -359,7 +359,7 @@ export const BUILD_STEPS = Object.freeze([
     // prisma.config.ts reads DATABASE_URL; generate never connects.
     env: { DATABASE_URL: 'postgresql://build@localhost/build' },
   },
-  { title: 'build the orchestrator', args: ['--filter', 'orchestrator', 'build'], env: {} },
+  { title: 'build the orchestrator', args: ['--filter', 'core', 'build'], env: {} },
   { title: 'build web', args: ['--filter', 'web', 'build'], env: {} },
 ])
 
@@ -368,8 +368,8 @@ export const BUILD_OUTPUT = Object.freeze({
   web: 'apps/web/.next/standalone/apps/web/server.js',
   webStatic: 'apps/web/.next/static',
   webStaticServed: 'apps/web/.next/standalone/apps/web/.next/static',
-  core: 'apps/orchestrator/dist/main.js',
-  operatorScripts: 'apps/orchestrator/scripts',
+  core: 'apps/core/dist/main.js',
+  operatorScripts: 'apps/core/scripts',
   database: 'packages/db/package.json',
 })
 
@@ -563,8 +563,7 @@ export function coreEnvironment({
     NO_COLOR: '1',
     APP_ENV: 'test',
     APP_URL: origin(ports.web),
-    ORCHESTRATOR_ROLES: 'core',
-    ORCHESTRATOR_PORT: String(port),
+    CORE_PORT: String(port),
     // core's own Docker would run turns; none is started, and Docker is not asked at start.
     TURN_EXECUTOR: 'local',
     DATABASE_URL: databaseUrl,
@@ -583,7 +582,7 @@ export function coreEnvironment({
 }
 
 /**
- * The environment of an operator command (apps/orchestrator/scripts/billing-*.mjs), as its
+ * The environment of an operator command (apps/core/scripts/billing-*.mjs), as its
  * header asks for it: what core reads for the same things, given explicitly.
  */
 export function operatorEnvironment({ path, directory, ports, databaseUrl, fakeApiUrl, secrets }) {
@@ -926,7 +925,7 @@ export const LETTER_MIRROR_SQL = Object.freeze([
 
 /**
  * What reads a letter the way its reader would: a program for `node --input-type=module -e`,
- * run in apps/orchestrator of the private copy. It takes `[{ type, payload }]` on stdin — rows
+ * run in apps/core of the private copy. It takes `[{ type, payload }]` on stdin — rows
  * of the mirror — and hands each to `deliverNotification`, the function the notifications
  * worker of core calls with a job, with a mailer whose transport keeps the letter instead of
  * sending it: the catalogue, the mailer and the template of the copy do what they do in core.

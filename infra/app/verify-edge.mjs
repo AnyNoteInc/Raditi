@@ -9,7 +9,7 @@
 //
 //   pnpm verify:edge [-- --no-build] [--keep] [--renewal] [--real-address]
 //
-//   --no-build      use raditi-verify/{web,orchestrator,migrate}:local as they are
+//   --no-build      use raditi-verify/{web,core,migrate}:local as they are
 //   --keep          leave the stack, its volumes and the temporary directory for a look
 //   --renewal       plus the certificate renewal: a 30-minute certificate, ~15 more minutes
 //   --real-address  Linux with "userland-proxy": false and sudo only (CI): the edge and the runner
@@ -54,7 +54,7 @@ const REDIS_IMAGE =
   'redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0'
 const LOCAL = {
   web: 'raditi-verify/web:local',
-  orchestrator: 'raditi-verify/orchestrator:local',
+  core: 'raditi-verify/core:local',
   migrate: 'raditi-verify/migrate:local',
 }
 
@@ -512,8 +512,8 @@ try {
   if (!options['no-build']) {
     for (const [file, target, tag] of [
       ['apps/web/Dockerfile', 'runtime', LOCAL.web],
-      ['apps/orchestrator/Dockerfile', 'runtime', LOCAL.orchestrator],
-      ['apps/orchestrator/Dockerfile', 'migrate', LOCAL.migrate],
+      ['apps/core/Dockerfile', 'runtime', LOCAL.core],
+      ['apps/core/Dockerfile', 'migrate', LOCAL.migrate],
     ]) {
       console.log(`build ${tag}`)
       await docker(
@@ -571,7 +571,10 @@ try {
       BRIDGE_PREFIX: 'rdv',
       COMPOSE_PROFILES: '',
       WEB_IMAGE: LOCAL.web,
-      ORCHESTRATOR_IMAGE: LOCAL.orchestrator,
+      CORE_IMAGE: LOCAL.core,
+      // The compose file interpolates every service, the llm profile's too: the stack of this
+      // stand never starts it, so the image is a placeholder that is never pulled.
+      LLM_IMAGE: `raditi-verify/llm@sha256:${'b'.repeat(64)}`,
       MIGRATE_IMAGE: LOCAL.migrate,
       TRAEFIK_IMAGE,
       POSTGRES_IMAGE,

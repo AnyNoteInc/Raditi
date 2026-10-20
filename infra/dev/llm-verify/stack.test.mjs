@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { serviceImages } from '../../../apps/orchestrator/scripts/verify-agent-supervisor.mjs'
+import { serviceImages } from '../../../apps/core/scripts/verify-agent-supervisor.mjs'
 import { parseClientPins } from '../../egress/llm-egress.mjs'
 import { createVerificationCertificates } from './certificates.mjs'
 import { chooseCliSubnet, mcpUpstream } from './stack.mjs'
@@ -97,7 +97,7 @@ test(
 
 test('the gateway stand keeps its signal listeners until its cleanup has ended', async () => {
   const main = await readFile(
-    new URL('../../../apps/orchestrator/scripts/verify-llm-gateway.mjs', import.meta.url),
+    new URL('../../../apps/core/scripts/verify-llm-gateway.mjs', import.meta.url),
     'utf8',
   )
   // With `once` no listener is left after the first signal: the second one (a second Ctrl-C,

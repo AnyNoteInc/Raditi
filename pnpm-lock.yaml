@@ -506,54 +506,9 @@ importers:
         specifier: 'catalog:'
         version: '@typescript/typescript6@6.0.2'
 
-  apps/e2e:
-    devDependencies:
-      '@axe-core/playwright':
-        specifier: 'catalog:'
-        version: 4.13.0(playwright-core@1.63.0)
-      '@playwright/test':
-        specifier: 'catalog:'
-        version: 1.63.0
-      '@repo/auth':
-        specifier: workspace:*
-        version: link:../../packages/auth
-      '@repo/billing':
-        specifier: workspace:*
-        version: link:../../packages/billing
-      '@repo/db':
-        specifier: workspace:*
-        version: link:../../packages/db
-      '@repo/eslint-config':
-        specifier: workspace:*
-        version: link:../../packages/eslint-config
-      '@repo/site-connections':
-        specifier: workspace:*
-        version: link:../../packages/site-connections
-      '@repo/typescript-config':
-        specifier: workspace:*
-        version: link:../../packages/typescript-config
-      '@types/node':
-        specifier: 'catalog:'
-        version: 26.6.2
-      '@typescript/native':
-        specifier: 'catalog:'
-        version: typescript@7.0.2
-      eslint:
-        specifier: 'catalog:'
-        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
-      typescript:
-        specifier: 'catalog:'
-        version: '@typescript/typescript6@6.0.2'
-
-  apps/orchestrator:
+  apps/core:
     dependencies:
       '@modelcontextprotocol/core':
-        specifier: 'catalog:'
-        version: 2.1.0
-      '@modelcontextprotocol/node':
-        specifier: 'catalog:'
-        version: 2.1.0(@modelcontextprotocol/server@2.1.0)(hono@4.13.9)
-      '@modelcontextprotocol/server':
         specifier: 'catalog:'
         version: 2.1.0
       '@nestjs/bullmq':
@@ -565,9 +520,6 @@ importers:
       '@nestjs/core':
         specifier: 'catalog:'
         version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/microservices':
-        specifier: 'catalog:'
-        version: 12.1.0(@grpc/grpc-js@1.14.5)(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(ioredis@6.0.0(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/platform-express':
         specifier: 'catalog:'
         version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(supports-color@7.2.0)
@@ -580,6 +532,9 @@ importers:
       '@repo/agent-drivers':
         specifier: workspace:*
         version: link:../../packages/agent-drivers
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../../packages/app-bootstrap
       '@repo/billing':
         specifier: workspace:*
         version: link:../../packages/billing
@@ -595,9 +550,15 @@ importers:
       '@repo/git-providers':
         specifier: workspace:*
         version: link:../../packages/git-providers
+      '@repo/ip-address':
+        specifier: workspace:*
+        version: link:../../packages/ip-address
       '@repo/llm-backends':
         specifier: workspace:*
         version: link:../../packages/llm-backends
+      '@repo/local-turns':
+        specifier: workspace:*
+        version: link:../../packages/local-turns
       '@repo/mail':
         specifier: workspace:*
         version: link:../../packages/mail
@@ -607,18 +568,36 @@ importers:
       '@repo/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@repo/preview-gateway':
+        specifier: workspace:*
+        version: link:../../packages/preview-gateway
+      '@repo/runner-engine':
+        specifier: workspace:*
+        version: link:../../packages/runner-engine
       '@repo/sandbox-providers':
         specifier: workspace:*
         version: link:../../packages/sandbox-providers
+      '@repo/service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/service-runtime
       '@repo/site-adapters':
         specifier: workspace:*
         version: link:../../packages/site-adapters
       '@repo/site-connections':
         specifier: workspace:*
         version: link:../../packages/site-connections
+      '@repo/site-content':
+        specifier: workspace:*
+        version: link:../../packages/site-content
+      '@repo/snapshots':
+        specifier: workspace:*
+        version: link:../../packages/snapshots
       '@repo/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@repo/turn-keys':
+        specifier: workspace:*
+        version: link:../../packages/turn-keys
       '@repo/vault':
         specifier: workspace:*
         version: link:../../packages/vault
@@ -689,6 +668,403 @@ importers:
       supertest:
         specifier: 'catalog:'
         version: 7.3.0(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      unplugin-swc:
+        specifier: 'catalog:'
+        version: 2.0.0(@swc/core@1.16.2(@swc/helpers@0.5.23))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  apps/e2e:
+    devDependencies:
+      '@axe-core/playwright':
+        specifier: 'catalog:'
+        version: 4.13.0(playwright-core@1.63.0)
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.63.0
+      '@repo/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@repo/billing':
+        specifier: workspace:*
+        version: link:../../packages/billing
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/eslint-config
+      '@repo/site-connections':
+        specifier: workspace:*
+        version: link:../../packages/site-connections
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+
+  apps/llm:
+    dependencies:
+      '@nestjs/common':
+        specifier: 'catalog:'
+        version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
+      '@nestjs/core':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@prometheus-io/client':
+        specifier: 'catalog:'
+        version: 0.16.1
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../../packages/app-bootstrap
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@repo/ip-address':
+        specifier: workspace:*
+        version: link:../../packages/ip-address
+      '@repo/llm-backends':
+        specifier: workspace:*
+        version: link:../../packages/llm-backends
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@repo/service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/service-runtime
+      '@repo/turn-keys':
+        specifier: workspace:*
+        version: link:../../packages/turn-keys
+      '@repo/vault':
+        specifier: workspace:*
+        version: link:../../packages/vault
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.0
+      reflect-metadata:
+        specifier: 'catalog:'
+        version: 0.2.2
+      rxjs:
+        specifier: 'catalog:'
+        version: 7.8.2
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@nestjs/cli':
+        specifier: 'catalog:'
+        version: 12.0.7(@swc/core@1.16.2(@swc/helpers@0.5.23))(@types/node@26.6.2)(prettier@3.9.9)(tsconfig-paths-webpack-plugin@4.2.0)
+      '@nestjs/testing':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/typescript-config
+      '@swc/core':
+        specifier: 'catalog:'
+        version: 1.16.2(@swc/helpers@0.5.23)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      unplugin-swc:
+        specifier: 'catalog:'
+        version: 2.0.0(@swc/core@1.16.2(@swc/helpers@0.5.23))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  apps/mcp:
+    dependencies:
+      '@modelcontextprotocol/core':
+        specifier: 'catalog:'
+        version: 2.1.0
+      '@modelcontextprotocol/node':
+        specifier: 'catalog:'
+        version: 2.1.0(@modelcontextprotocol/server@2.1.0)(hono@4.13.9)
+      '@modelcontextprotocol/server':
+        specifier: 'catalog:'
+        version: 2.1.0
+      '@nestjs/common':
+        specifier: 'catalog:'
+        version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
+      '@nestjs/core':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/microservices':
+        specifier: 'catalog:'
+        version: 12.1.0(@grpc/grpc-js@1.14.5)(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(ioredis@6.0.0(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/platform-express':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(supports-color@7.2.0)
+      '@rekog/mcp-nest':
+        specifier: 'catalog:'
+        version: 2.0.7(@modelcontextprotocol/core@2.1.0)(@modelcontextprotocol/node@2.1.0(@modelcontextprotocol/server@2.1.0)(hono@4.13.9))(@modelcontextprotocol/server@2.1.0)(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(@nestjs/microservices@12.1.0)(express@5.2.1(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)(zod@4.6.5)
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../../packages/app-bootstrap
+      '@repo/browser-providers':
+        specifier: workspace:*
+        version: link:../../packages/browser-providers
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@repo/ip-address':
+        specifier: workspace:*
+        version: link:../../packages/ip-address
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@repo/service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/service-runtime
+      '@repo/site-adapters':
+        specifier: workspace:*
+        version: link:../../packages/site-adapters
+      '@repo/site-content':
+        specifier: workspace:*
+        version: link:../../packages/site-content
+      '@repo/snapshots':
+        specifier: workspace:*
+        version: link:../../packages/snapshots
+      '@repo/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      '@repo/turn-keys':
+        specifier: workspace:*
+        version: link:../../packages/turn-keys
+      '@repo/vault':
+        specifier: workspace:*
+        version: link:../../packages/vault
+      express:
+        specifier: 'catalog:'
+        version: 5.2.1(supports-color@7.2.0)
+      reflect-metadata:
+        specifier: 'catalog:'
+        version: 0.2.2
+      rxjs:
+        specifier: 'catalog:'
+        version: 7.8.2
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@nestjs/cli':
+        specifier: 'catalog:'
+        version: 12.0.7(@swc/core@1.16.2(@swc/helpers@0.5.23))(@types/node@26.6.2)(prettier@3.9.9)(tsconfig-paths-webpack-plugin@4.2.0)
+      '@nestjs/testing':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/typescript-config
+      '@swc/core':
+        specifier: 'catalog:'
+        version: 1.16.2(@swc/helpers@0.5.23)
+      '@types/express':
+        specifier: 'catalog:'
+        version: 5.0.6
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
+      '@types/supertest':
+        specifier: 'catalog:'
+        version: 7.2.1
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      supertest:
+        specifier: 'catalog:'
+        version: 7.3.0(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      unplugin-swc:
+        specifier: 'catalog:'
+        version: 2.0.0(@swc/core@1.16.2(@swc/helpers@0.5.23))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  apps/preview:
+    dependencies:
+      '@nestjs/common':
+        specifier: 'catalog:'
+        version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
+      '@nestjs/core':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../../packages/app-bootstrap
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@repo/ip-address':
+        specifier: workspace:*
+        version: link:../../packages/ip-address
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@repo/preview-gateway':
+        specifier: workspace:*
+        version: link:../../packages/preview-gateway
+      '@repo/service-runtime':
+        specifier: workspace:*
+        version: link:../../packages/service-runtime
+      reflect-metadata:
+        specifier: 'catalog:'
+        version: 0.2.2
+      rxjs:
+        specifier: 'catalog:'
+        version: 7.8.2
+      tldts:
+        specifier: 'catalog:'
+        version: 7.4.15
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@nestjs/cli':
+        specifier: 'catalog:'
+        version: 12.0.7(@swc/core@1.16.2(@swc/helpers@0.5.23))(@types/node@26.6.2)(prettier@3.9.9)(tsconfig-paths-webpack-plugin@4.2.0)
+      '@nestjs/testing':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/typescript-config
+      '@swc/core':
+        specifier: 'catalog:'
+        version: 1.16.2(@swc/helpers@0.5.23)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      unplugin-swc:
+        specifier: 'catalog:'
+        version: 2.0.0(@swc/core@1.16.2(@swc/helpers@0.5.23))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  apps/runner:
+    dependencies:
+      '@nestjs/common':
+        specifier: 'catalog:'
+        version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
+      '@nestjs/core':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../../packages/app-bootstrap
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@repo/ip-address':
+        specifier: workspace:*
+        version: link:../../packages/ip-address
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@repo/runner-engine':
+        specifier: workspace:*
+        version: link:../../packages/runner-engine
+      '@repo/sandbox-providers':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-providers
+      reflect-metadata:
+        specifier: 'catalog:'
+        version: 0.2.2
+      rxjs:
+        specifier: 'catalog:'
+        version: 7.8.2
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@nestjs/cli':
+        specifier: 'catalog:'
+        version: 12.0.7(@swc/core@1.16.2(@swc/helpers@0.5.23))(@types/node@26.6.2)(prettier@3.9.9)(tsconfig-paths-webpack-plugin@4.2.0)
+      '@nestjs/testing':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/typescript-config
+      '@swc/core':
+        specifier: 'catalog:'
+        version: 1.16.2(@swc/helpers@0.5.23)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
       typescript:
         specifier: 'catalog:'
         version: '@typescript/typescript6@6.0.2'
@@ -870,6 +1246,46 @@ importers:
       '@repo/domain':
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/app-bootstrap:
+    dependencies:
+      '@nestjs/common':
+        specifier: 'catalog:'
+        version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      reflect-metadata:
+        specifier: 'catalog:'
+        version: 0.2.2
+      rxjs:
+        specifier: 'catalog:'
+        version: 7.8.2
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -1152,6 +1568,30 @@ importers:
         specifier: 'catalog:'
         version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
 
+  packages/ip-address:
+    devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
   packages/llm-backends:
     dependencies:
       '@repo/domain':
@@ -1161,6 +1601,43 @@ importers:
         specifier: 'catalog:'
         version: 4.6.5
     devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/local-turns:
+    dependencies:
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@repo/snapshots':
+        specifier: workspace:*
+        version: link:../snapshots
+      tar-stream:
+        specifier: 'catalog:'
+        version: 3.2.1
+    devDependencies:
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../app-bootstrap
       '@repo/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
@@ -1285,6 +1762,107 @@ importers:
         specifier: 'catalog:'
         version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
 
+  packages/preview-gateway:
+    dependencies:
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@repo/ip-address':
+        specifier: workspace:*
+        version: link:../ip-address
+    devDependencies:
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../app-bootstrap
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/runner-engine:
+    dependencies:
+      '@nestjs/common':
+        specifier: 'catalog:'
+        version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
+      '@repo/agent-drivers':
+        specifier: workspace:*
+        version: link:../agent-drivers
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@repo/local-turns':
+        specifier: workspace:*
+        version: link:../local-turns
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../observability
+      '@repo/sandbox-providers':
+        specifier: workspace:*
+        version: link:../sandbox-providers
+      '@repo/snapshots':
+        specifier: workspace:*
+        version: link:../snapshots
+      reflect-metadata:
+        specifier: 'catalog:'
+        version: 0.2.2
+      rxjs:
+        specifier: 'catalog:'
+        version: 7.8.2
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../app-bootstrap
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@swc/core':
+        specifier: 'catalog:'
+        version: 1.16.2(@swc/helpers@0.5.23)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      unplugin-swc:
+        specifier: 'catalog:'
+        version: 2.0.0(@swc/core@1.16.2(@swc/helpers@0.5.23))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
   packages/sandbox-providers:
     dependencies:
       '@repo/domain':
@@ -1318,6 +1896,64 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/service-runtime:
+    dependencies:
+      '@nestjs/common':
+        specifier: 'catalog:'
+        version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
+      '@prometheus-io/client':
+        specifier: 'catalog:'
+        version: 0.16.1
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../observability
+      reflect-metadata:
+        specifier: 'catalog:'
+        version: 0.2.2
+      rxjs:
+        specifier: 'catalog:'
+        version: 7.8.2
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../app-bootstrap
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@swc/core':
+        specifier: 'catalog:'
+        version: 1.16.2(@swc/helpers@0.5.23)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      unplugin-swc:
+        specifier: 'catalog:'
+        version: 2.0.0(@swc/core@1.16.2(@swc/helpers@0.5.23))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
       vitest:
         specifier: 'catalog:'
         version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
@@ -1389,6 +2025,83 @@ importers:
       '@types/ssh2':
         specifier: 'catalog:'
         version: 1.15.6
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/site-content:
+    dependencies:
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@repo/snapshots':
+        specifier: workspace:*
+        version: link:../snapshots
+      '@repo/turn-keys':
+        specifier: workspace:*
+        version: link:../turn-keys
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../app-bootstrap
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/snapshots:
+    dependencies:
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      tar-stream:
+        specifier: 'catalog:'
+        version: 3.2.1
+    devDependencies:
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../app-bootstrap
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
       '@typescript/native':
         specifier: 'catalog:'
         version: typescript@7.0.2
@@ -1506,6 +2219,46 @@ importers:
       '@repo/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/turn-keys:
+    dependencies:
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/app-bootstrap':
+        specifier: workspace:*
+        version: link:../app-bootstrap
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/llm-backends':
+        specifier: workspace:*
+        version: link:../llm-backends
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config

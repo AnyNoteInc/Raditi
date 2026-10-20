@@ -41,7 +41,7 @@ test('health sees the database, Redis, S3 and Vault with the metrics token', asy
   expect(res.status()).toBe(200)
 })
 
-test('orchestrator core starts and sees its dependencies', async ({ request }) => {
+test('core starts and sees its dependencies', async ({ request }) => {
   const url = 'http://127.0.0.1:8181/health'
   const publicResponse = await request.get(url)
   expect(publicResponse.status()).toBe(200)
@@ -57,9 +57,7 @@ test('orchestrator core starts and sees its dependencies', async ({ request }) =
   })
 })
 
-test('orchestrator MCP starts and reports healthy without exposing details', async ({
-  request,
-}) => {
+test('mcp starts and reports healthy without exposing details', async ({ request }) => {
   const res = await request.get('http://127.0.0.1:8182/health')
   expect(res.status()).toBe(200)
   expect(await res.json()).toEqual({ status: 'ok' })

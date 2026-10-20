@@ -51,7 +51,7 @@ const webEnvSchema = z
         .optional(),
     ),
     REDIS_URL: envVar(z.url({ protocol: /^rediss?$/, error: 'must be a redis:// URL' }).optional()),
-    // The bounds and the default of the core role (apps/orchestrator/src/config/config.ts).
+    // The bounds and the default of the core role (apps/core/src/config/config.ts).
     BILLING_PAST_DUE_DAYS: envVar(z.coerce.number().int().min(1).max(90).default(7)),
     ...previewAddressEnvShape,
     // Read for the check of the preview domain only.

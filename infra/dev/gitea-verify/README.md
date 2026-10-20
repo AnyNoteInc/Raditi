@@ -4,7 +4,7 @@
 P2_GITLEAKS_BINARY=/абсолютный/путь/gitleaks pnpm verify:gitea
 ```
 
-Проход поднимает одноразовую Gitea 1.27.3 (свой контейнер `raditi-gitea-verify-<id>`, встроенный HTTPS с сертификатом собственного CA стенда, порт только на `127.0.0.1`), создаёт организацию `sites`, бота `raditi-bot` и второго участника `stand-writer` с правом записи, владельца организации `stand-owner` (команда Owners, токен только с `write:repository`) и приватные репозитории `sites/demo` и `sites/other`, затем проверяет собранный `apps/orchestrator` так, как его собирает `GitWorkspaceModule`: `CoreConfig.git` из `GITEA_URL`, `GITEA_TOKEN` и `GIT_CA_FILE`, провайдер Gitea из `packages/git-providers`, `GitWorkspaceService` с транспортом HTTPS.
+Проход поднимает одноразовую Gitea 1.27.3 (свой контейнер `raditi-gitea-verify-<id>`, встроенный HTTPS с сертификатом собственного CA стенда, порт только на `127.0.0.1`), создаёт организацию `sites`, бота `raditi-bot` и второго участника `stand-writer` с правом записи, владельца организации `stand-owner` (команда Owners, токен только с `write:repository`) и приватные репозитории `sites/demo` и `sites/other`, затем проверяет собранный `apps/core` так, как его собирает `GitWorkspaceModule`: `CoreConfig.git` из `GITEA_URL`, `GITEA_TOKEN` и `GIT_CA_FILE`, провайдер Gitea из `packages/git-providers`, `GitWorkspaceService` с транспортом HTTPS.
 
 Что проверяется:
 
@@ -21,7 +21,7 @@ P2_GITLEAKS_BINARY=/абсолютный/путь/gitleaks pnpm verify:gitea
 - подметание при старте (`sweepCredentials`) удаляет просроченный доступ без единой выдачи; остановка (`revokeCredentials`) сразу удаляет доступ на 120 секунд, выданный этим экземпляром, и не трогает чужой живой;
 - без `GIT_CA_FILE` git отказывается от сертификата стенда: проверка TLS не выключается. Обратное стенд не проверяет: `GIT_CA_FILE` добавляет CA и системный набор не отключает.
 
-Методы выпуска (`release-scenario.mjs`, [план 53](../../../docs/plan/53-chat-preview-release.md), Р26–Р29, Р35) — адаптер из исходников `packages/git-providers`: в orchestrator их ещё не подключили (R8b):
+Методы выпуска (`release-scenario.mjs`, [план 53](../../../docs/plan/53-chat-preview-release.md), Р26–Р29, Р35) — адаптер из исходников `packages/git-providers`: в `core` их тогда ещё не подключили (R8b):
 
 - секрет Actions репозитория (`setActionsSecret`, `deleteActionsSecret`) пишется, заменяется и удаляется токеном владельца организации; бот получает от Gitea 403 и на запись, и на список; у второго репозитория организации секрета нет — это секрет репозитория, а не организации; повторное удаление проходит; без токена владельца провайдер отказывает до запроса (`GIT_PROVIDER_NOT_CONFIGURED`);
 - защита тегов `v*` (`protectTags`): прежнее правило, называющее бота, сужается до учётной записи токена владельца организации (её имя адаптер берёт из `GET /token`), повтор ничего не меняет; без токена владельца — `GIT_PROVIDER_NOT_CONFIGURED`; бот сам защитить теги не может (403);
@@ -40,7 +40,7 @@ P2_GITLEAKS_BINARY=/абсолютный/путь/gitleaks pnpm verify:gitea
 
 Раннеров у этой Gitea нет: запуски создаются и остаются в очереди. `[actions] WORKFLOW_DIRS` здесь не задан, файлы workflow репозитория запускаются — на них стенд и меряет теги и dispatch. Обязательные workflow из `platform/ci`, `WORKFLOW_DIRS` и запуск scoped workflow по тегу и через `workflow_dispatch` (`scoped_workflow_source_repo_id`) проверяет стенд пайплайна (`pnpm verify:pipeline`, R8c).
 
-Чего здесь нет: PR, обязательного workflow, раннеров Actions, песочницы и супервизора хода. Ход целиком с локальным git-репозиторием проверяют `pnpm --filter orchestrator verify:publication` и `pnpm verify:opencode-supervisor`.
+Чего здесь нет: PR, обязательного workflow, раннеров Actions, песочницы и супервизора хода. Ход целиком с локальным git-репозиторием проверяют `pnpm --filter core verify:publication` и `pnpm verify:opencode-supervisor`.
 
 Нужны локальный Docker с уже загруженным образом `gitea/gitea:1.27.3-rootless` (стенд образы не скачивает), `git`, `openssl` и Gitleaks 8.30.1. Корневой `.env`, dev-Gitea (`raditi-dev-gitea-1`) и настоящие токены не используются; опций у стенда нет. Пароли учётных записей стенда генерирует сама Gitea (`gitea admin user create --random-password`), стенд читает их из вывода: в аргументах процессов их нет. Сценарий идёт в отдельном процессе с синтетическим `HOME` внутри временного каталога стенда: CA доходит до git через `GIT_CA_FILE`, до REST-клиента — через `NODE_EXTRA_CA_CERTS`, как в production. Контейнер и временный каталог удаляются в конце и при SIGINT/SIGTERM; о каждом — своя строка `PASS`. Повторный сигнал уборку не обрывает. Сигнал, посланный `pnpm verify:gitea`, доходит до стенда: строка скрипта заменяет оболочку стендом (`exec node …`), и pnpm возвращает его код после уборки.
 

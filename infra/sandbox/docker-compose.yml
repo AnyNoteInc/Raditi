@@ -44,7 +44,6 @@ services:
     environment:
       NODE_ENV: production
       APP_ENV: production
-      ORCHESTRATOR_ROLES: runner
       RUNNER_CORE_URL: ${RUNNER_CORE_URL:-}
       RUNNER_TOKEN_FILE: /etc/raditi/runner-token
       RUNNER_CORE_CA_FILE: ${RUNNER_CORE_CA_FILE:-}

@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 
 // The web server of the two landing configs: playwright.landing.config.ts and
 // playwright.style-snapshot.config.ts. A database with seeds is enough for it (the plans come
-// from the database), the orchestrator is not started. As for the smoke suite, stop `pnpm dev`
+// from the database), core and the other apps are not started. As for the smoke suite, stop `pnpm dev`
 // first: Next allows one dev server per app directory.
 const PORT = 3100
 
