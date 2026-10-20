@@ -158,7 +158,16 @@ function fakeDb() {
     // The claim of the site id is taken, and given back on every way out but the commit.
     $queryRaw: vi.fn().mockResolvedValue([{ token: 'claimed' }]),
     siteCreationClaim: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
-    $transaction: vi.fn(async (callback: (db: typeof tx) => Promise<unknown>) => callback(tx)),
+    // The transaction that writes, under the lock of the user's row.
+    writeTransaction: vi.fn(async (callback: (db: typeof tx) => Promise<unknown>) => callback(tx)),
+    // The room checks before the lock read one REPEATABLE READ snapshot of what is outside.
+    $transaction: (
+      callback: (db: never) => Promise<unknown>,
+      options?: { isolationLevel?: string },
+    ) =>
+      options?.isolationLevel === 'RepeatableRead'
+        ? callback(db as never)
+        : db.writeTransaction(callback as (db: typeof tx) => Promise<unknown>),
   }
   return { db, tx, prisma: db as unknown as PrismaClient }
 }
@@ -196,7 +205,7 @@ describe('project input and access', () => {
       })
       expect(db.site.findUnique).not.toHaveBeenCalled()
       expect(db.$queryRaw).not.toHaveBeenCalled()
-      expect(db.$transaction).not.toHaveBeenCalled()
+      expect(db.writeTransaction).not.toHaveBeenCalled()
       expect(tx.site.create).not.toHaveBeenCalled()
     },
   )
@@ -207,7 +216,7 @@ describe('project input and access', () => {
     await expect(caller.project.list()).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
     await expect(caller.project.create(input())).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
     expect(db.userConsent.findMany).not.toHaveBeenCalled()
-    expect(db.$transaction).not.toHaveBeenCalled()
+    expect(db.writeTransaction).not.toHaveBeenCalled()
     expect(db.site.findMany).not.toHaveBeenCalled()
   })
 
@@ -219,7 +228,7 @@ describe('project input and access', () => {
     await expect(caller.project.create(input())).rejects.toMatchObject({
       code: 'PRECONDITION_REQUIRED',
     })
-    expect(db.$transaction).not.toHaveBeenCalled()
+    expect(db.writeTransaction).not.toHaveBeenCalled()
     expect(db.site.findMany).not.toHaveBeenCalled()
   })
 
@@ -329,7 +338,7 @@ describe('project input and access', () => {
         code: 'BAD_REQUEST',
       })
       expect(db.site.findUnique).not.toHaveBeenCalled()
-      expect(db.$transaction).not.toHaveBeenCalled()
+      expect(db.writeTransaction).not.toHaveBeenCalled()
     })
   })
 
@@ -366,7 +375,7 @@ describe('project input and access', () => {
       // Refused before any server is asked or any claim is taken.
       expect(connections.sourceChecks).toEqual([])
       expect(db.$queryRaw).not.toHaveBeenCalled()
-      expect(db.$transaction).not.toHaveBeenCalled()
+      expect(db.writeTransaction).not.toHaveBeenCalled()
     },
   )
 
@@ -409,7 +418,7 @@ describe('project input and access', () => {
         typeof input
       >),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-    expect(db.$transaction).not.toHaveBeenCalled()
+    expect(db.writeTransaction).not.toHaveBeenCalled()
   })
 
   it('stops at the site ceiling of one user before writing', async () => {

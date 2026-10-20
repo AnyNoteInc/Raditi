@@ -1,7 +1,12 @@
 import { BlockList, isIP } from 'node:net'
 import { domainToUnicode } from 'node:url'
 
-import type { Prisma } from '@repo/db'
+import {
+  findPersonalWorkspace,
+  type PersonalWorkspaceOwner,
+  type Prisma,
+  type PrismaClient,
+} from '@repo/db'
 import {
   DomainError,
   isProduction,
@@ -313,6 +318,25 @@ export async function assertRoomForSite<Workspace extends { id: string } | null>
 
   await assertConnectionsNotBusy(db, userId)
   return workspace
+}
+
+/**
+ * `assertRoomForSite` before the lock of the user's row — the wizard's «Основные данные» and the fail-fast of
+ * `project.create` — in one snapshot. Read by separate statements, a site and its import that another request
+ * of the user commits between them would show the imports in progress full while the sites are not, and answer
+ * SITE_CONNECTIONS_BUSY where PROJECT_LIMIT_REACHED is due. Read-only, so REPEATABLE READ never fails to
+ * serialize; `project.create` asks everything again under the lock. Returns the personal workspace, if any.
+ */
+export function assertRoomForSiteSnapshot(
+  prisma: Pick<PrismaClient, '$transaction'>,
+  owner: PersonalWorkspaceOwner,
+  url: string,
+): Promise<{ id: string } | null> {
+  return prisma.$transaction(
+    (tx) =>
+      assertRoomForSite(tx, { userId: owner.userId, url }, () => findPersonalWorkspace(tx, owner)),
+    { isolationLevel: 'RepeatableRead' },
+  )
 }
 
 /**

@@ -3,14 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { clientIp, profileNameSchema } from '@repo/auth'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import type { CredentialKind } from '@repo/db'
-import {
-  enqueueSiteProvisioningStage,
-  findPersonalWorkspace,
-  lockUserRow,
-  Prisma,
-  SiteStack,
-  SiteStatus,
-} from '@repo/db'
+import { enqueueSiteProvisioningStage, lockUserRow, Prisma, SiteStack, SiteStatus } from '@repo/db'
 import {
   codeSourceInputSchema,
   connectionCheckReasons,
@@ -41,6 +34,7 @@ import {
   accessibleSite,
   alreadyExists,
   assertRoomForSite,
+  assertRoomForSiteSnapshot,
   assertSiteAccepted,
   siteNotFound,
   siteOrigin,
@@ -311,7 +305,7 @@ export const projectRouter = router({
       assertSiteAccepted(services, input)
       const owner = { userId, appEnv }
       try {
-        await assertRoomForSite(ctx.prisma, request, () => findPersonalWorkspace(ctx.prisma, owner))
+        await assertRoomForSiteSnapshot(ctx.prisma, owner, input.url)
       } catch (error) {
         // An identical request may have committed since the replay above: its own site is then the
         // duplicate, or the site or the import that leaves no room. That site is the answer.
