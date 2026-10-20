@@ -618,16 +618,16 @@ test('the builds are the steps of the two Dockerfiles, in their order', () => {
     [
       'pnpm install --frozen-lockfile --prefer-offline',
       'pnpm --filter @repo/db db:generate',
-      'pnpm --filter orchestrator build',
+      'pnpm --filter core build',
       'pnpm --filter web build',
     ],
   )
   const web = read('apps/web/Dockerfile')
-  const orchestrator = read('apps/orchestrator/Dockerfile')
+  const orchestrator = read('apps/core/Dockerfile')
   const generate =
     'DATABASE_URL=postgresql://build@localhost/build pnpm --filter @repo/db db:generate'
   assert.ok(web.includes(`RUN ${generate} \\\n && pnpm --filter web build`))
-  assert.ok(orchestrator.includes(`RUN ${generate} \\\n && pnpm --filter orchestrator build`))
+  assert.ok(orchestrator.includes(`RUN ${generate} \\\n && pnpm --filter core build`))
   assert.deepEqual(BUILD_STEPS[1].env, { DATABASE_URL: 'postgresql://build@localhost/build' })
   for (const index of [0, 2, 3]) assert.deepEqual(BUILD_STEPS[index].env, {})
   // What runs afterwards is what the images run.
@@ -639,11 +639,8 @@ test('the builds are the steps of the two Dockerfiles, in their order', () => {
     /^COPY --from=build \/repo\/apps\/web\/\.next\/static \.\/apps\/web\/\.next\/static$/m,
   )
   assert.equal(BUILD_OUTPUT.webStaticServed, 'apps/web/.next/standalone/apps/web/.next/static')
-  assert.equal(
-    JSON.parse(read('apps/orchestrator/package.json')).scripts.start,
-    'node dist/main.js',
-  )
-  assert.equal(BUILD_OUTPUT.core, 'apps/orchestrator/dist/main.js')
+  assert.equal(JSON.parse(read('apps/core/package.json')).scripts.start, 'node dist/main.js')
+  assert.equal(BUILD_OUTPUT.core, 'apps/core/dist/main.js')
   assert.match(read('apps/web/next.config.ts'), /output: 'standalone'/)
 })
 
@@ -786,13 +783,12 @@ test('core gets PostgreSQL and Redis of the stand; S3 and Vault are throwaway va
     'BILLING_PAST_DUE_DAYS',
     'BILLING_RENEWAL_NOTICE_DAYS',
     'BILLING_TICK_SECONDS',
+    'CORE_PORT',
     'DATABASE_URL',
     'HOME',
     'METRICS_TOKEN',
     'NODE_ENV',
     'NO_COLOR',
-    'ORCHESTRATOR_PORT',
-    'ORCHESTRATOR_ROLES',
     'PATH',
     'REDIS_URL',
     'S3_ACCESS_KEY_ID',
@@ -806,8 +802,7 @@ test('core gets PostgreSQL and Redis of the stand; S3 and Vault are throwaway va
     'YOOKASSA_SECRET_KEY',
     'YOOKASSA_SHOP_ID',
   ])
-  assert.equal(env.ORCHESTRATOR_ROLES, 'core')
-  assert.equal(env.ORCHESTRATOR_PORT, '43200')
+  assert.equal(env.CORE_PORT, '43200')
   assert.equal(env.DATABASE_URL, shared.databaseUrl)
   assert.equal(env.REDIS_URL, shared.redisUrl)
   // The letters of core link to web, and web tells the day an overdue tariff ends by the same
@@ -821,10 +816,13 @@ test('core gets PostgreSQL and Redis of the stand; S3 and Vault are throwaway va
   // NODE_ENV=production: core looks for no `.env` (load-env.ts); APP_ENV is what decides
   // everything else, and it is not production.
   assert.equal(env.NODE_ENV, 'production')
-  assert.match(read('apps/orchestrator/src/env-file.ts'), /if \(nodeEnv === 'production'\) return/)
+  assert.match(
+    read('packages/app-bootstrap/src/env-file.ts'),
+    /if \(nodeEnv === 'production'\) return/,
+  )
   assert.equal(env.APP_ENV, 'test')
   // The tick is the lower bound the settings of core allow, and the days are its defaults.
-  const config = read('apps/orchestrator/src/config/config.ts')
+  const config = read('apps/core/src/config/config.ts')
   assert.match(config, /BILLING_TICK_SECONDS: envVar\(z\.coerce\.number\(\)\.int\(\)\.min\(1\)/)
   assert.equal(TICK_SECONDS, 1)
   assert.match(config, /BILLING_RENEWAL_NOTICE_DAYS: envVar\(.*\.default\(3\)\)/)
@@ -1093,7 +1091,7 @@ test('the sweep takes what carries the id of a dead run, and of processes only t
     lockPid: 4242,
     cwds: new Map([
       [4250, `${copy}/apps/web/.next/standalone/apps/web`],
-      [4251, `${copy}/apps/orchestrator`],
+      [4251, `${copy}/apps/core`],
     ]),
   }
 
@@ -1126,7 +1124,7 @@ test('the sweep takes what carries the id of a dead run, and of processes only t
       alive: living(4250, 4251),
       cwds: new Map([
         [4250, elsewhere],
-        [4251, `${copy}/apps/orchestrator`],
+        [4251, `${copy}/apps/core`],
       ]),
     })
     assert.deepEqual(sweep.processes, [{ name: 'core', pid: 4251 }], String(elsewhere))
@@ -1813,12 +1811,9 @@ test('each rule of expiry of the credits model is a check of a scenario, on the 
 test('what a letter is made of is kept by a mirror of the outbox in the stand’s own database', () => {
   // The product keeps none of it: the relay clears the payload of a published row, and a
   // delivered notification leaves Redis at once.
+  assert.match(read('apps/core/src/outbox/outbox-relay.service.ts'), /payload: Prisma\.DbNull,/)
   assert.match(
-    read('apps/orchestrator/src/outbox/outbox-relay.service.ts'),
-    /payload: Prisma\.DbNull,/,
-  )
-  assert.match(
-    read('apps/orchestrator/src/queue/queues.ts'),
+    read('apps/core/src/queue/queues.ts'),
     /notifications: \{\n\s+attempts: 8,\n[^]*?removeOnComplete: true,/,
   )
   assert.equal(LETTER_MIRROR, 'stand_letter_mirror')
@@ -1858,7 +1853,7 @@ test('a letter is read by the mailer of the product: its catalogue, its template
   assert.doesNotMatch(LETTER_READER, /process\.env|DATABASE_URL|fetch\(|node:fs/)
   // What the notifications worker of core calls with a job is that function.
   assert.match(
-    read('apps/orchestrator/src/notifications/notifications.processor.ts'),
+    read('apps/core/src/notifications/notifications.processor.ts'),
     /deliverNotification\(/,
   )
   const stand = read('infra/dev/billing-verify/verify-billing.mjs')
@@ -1866,7 +1861,7 @@ test('a letter is read by the mailer of the product: its catalogue, its template
     stand,
     /inCopy\(\['--input-type=module', '-e', LETTER_READER\], \{\n\s+env: letterReaderEnvironment\(shared\),\n\s+input: JSON\.stringify\(rows\),/,
   )
-  assert.match(stand, /cwd: join\(copy, 'apps\/orchestrator'\),\n\s+env,/)
+  assert.match(stand, /cwd: join\(copy, 'apps\/core'\),\n\s+env,/)
 
   // And it reads: the program itself, on the sources of this tree, as it runs in the copy.
   const rows = [
@@ -1894,7 +1889,7 @@ test('a letter is read by the mailer of the product: its catalogue, its template
     },
   ]
   const run = spawnSync(process.execPath, ['--input-type=module', '-e', LETTER_READER], {
-    cwd: join(root, 'apps/orchestrator'),
+    cwd: join(root, 'apps/core'),
     env: { PATH: process.env.PATH, HOME: tmpdir(), TMPDIR: tmpdir() },
     input: JSON.stringify(rows),
     encoding: 'utf8',
@@ -1921,7 +1916,7 @@ test('a letter is read by the mailer of the product: its catalogue, its template
     assert.ok(plainText(pack.text).includes(sentence), `${sentence}\n${pack.text}`)
   // A row that is no notification of the catalogue is refused, not passed over.
   const refused = spawnSync(process.execPath, ['--input-type=module', '-e', LETTER_READER], {
-    cwd: join(root, 'apps/orchestrator'),
+    cwd: join(root, 'apps/core'),
     env: { PATH: process.env.PATH, HOME: tmpdir(), TMPDIR: tmpdir() },
     input: JSON.stringify([{ type: 'billing.payment_succeeded', payload: { to: 'x' } }]),
     encoding: 'utf8',
@@ -2130,11 +2125,11 @@ test('the cookies of a session: set, replaced, and dropped when the server delet
 
 test('letters are read from the log of core’s mailer: subject, recipient, links', () => {
   const log = [
-    '[Orchestrator] 1  - 10/09/2026, 10:07:08 PM     LOG [Mail] [mail] not sent (SENDSAY_API_KEY is empty): "Подтвердите адрес почты" to a@example.ru',
+    '[core] 1  - 10/09/2026, 10:07:08 PM     LOG [Mail] [mail] not sent (SENDSAY_API_KEY is empty): "Подтвердите адрес почты" to a@example.ru',
     '  http://127.0.0.1:1/api/auth/verify-email?token=t.o.k&callbackURL=%2F',
-    '[Orchestrator] 1  - 10/09/2026, 10:07:09 PM     LOG [Billing] billing notices: notified=1',
+    '[core] 1  - 10/09/2026, 10:07:09 PM     LOG [Billing] billing notices: notified=1',
     '  http://127.0.0.1:1/not-a-letter',
-    '[Orchestrator] 1  - 10/09/2026, 10:07:09 PM     LOG [Mail] [mail] not sent (SENDSAY_API_KEY is empty): "Скоро спишем 4\u00a0900\u00a0₽ за тариф «Старт»" to b@example.ru',
+    '[core] 1  - 10/09/2026, 10:07:09 PM     LOG [Mail] [mail] not sent (SENDSAY_API_KEY is empty): "Скоро спишем 4\u00a0900\u00a0₽ за тариф «Старт»" to b@example.ru',
     '  http://127.0.0.1:1/settings/plans',
     '  http://127.0.0.1:1/terms',
     '',
@@ -2176,7 +2171,7 @@ test('a counter of a core process is summed over the series its labels match', (
   assert.equal(metricValue(text, name), 10)
   assert.equal(metricValue(text, name, { job: 'charges', outcome: 'blocked' }), 0)
   // The counter and its labels are the ones the billing module of core registers.
-  const module = read('apps/orchestrator/src/billing/billing.module.ts')
+  const module = read('apps/core/src/billing/billing.module.ts')
   assert.match(module, /name: 'raditi_billing_renewal_rows_total'/)
   assert.match(module, /labelNames: \['job', 'outcome'\]/)
 })
@@ -2249,7 +2244,7 @@ test('the billing workflow starts on every source the stand builds and runs', ()
   // decides the versions of all of them.
   const packages = new Set([
     ...workspaceDependencies('apps/web'),
-    ...workspaceDependencies('apps/orchestrator'),
+    ...workspaceDependencies('apps/core'),
   ])
   for (const name of ['@repo/billing', '@repo/yookassa', '@repo/db', '@repo/trpc', '@repo/auth'])
     assert.ok(packages.has(name), `the stand builds ${name}`)
@@ -2261,8 +2256,8 @@ test('the billing workflow starts on every source the stand builds and runs', ()
   for (const file of [
     'apps/web/src/app/api/webhooks/yookassa/route.ts',
     'apps/web/next.config.ts',
-    'apps/orchestrator/src/billing/billing.module.ts',
-    'apps/orchestrator/scripts/billing-refund.mjs',
+    'apps/core/src/billing/billing.module.ts',
+    'apps/core/scripts/billing-refund.mjs',
     'packages/db/prisma/migrations/x/migration.sql',
     'packages/db/prisma/seed/data.ts',
     'pnpm-lock.yaml',

@@ -54,7 +54,7 @@ jobs:
         env:
           RADITI_DEPLOY_WRAP: ${{ secrets.RADITI_DEPLOY_WRAP }}
         run: |
-          exec node /app/apps/orchestrator/dist/deploy-step/cli.js match
+          exec node /app/apps/core/dist/deploy-step/cli.js match
       # Unwraps the secret once and deploys through the release API of core: conflicts, backup,
       # files, records, the check of the site, and the rollback after a failure behind a write.
       - name: deploy
@@ -64,4 +64,4 @@ jobs:
           # Reads the files of the release commit from this repository, nothing else.
           RADITI_JOB_TOKEN: ${{ gitea.token }}
         run: |
-          exec node /app/apps/orchestrator/dist/deploy-step/cli.js run
+          exec node /app/apps/core/dist/deploy-step/cli.js run

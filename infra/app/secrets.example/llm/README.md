@@ -2,12 +2,12 @@
 
 | Файл | Содержимое |
 | --- | --- |
-| `app.env` | Общий пользователь PostgreSQL `raditi`, отдельные AppRole/SecretID роли `llm`, общий с `core` `METRICS_TOKEN` |
+| `app.env` | Общий пользователь PostgreSQL `raditi`, отдельные AppRole/SecretID приложения `llm`, общий с `core` `METRICS_TOKEN` |
 | `egress-client.pem` | Клиентский сертификат app-ВМ и промежуточный client CA, выпущенные `infra/egress/make-ca.sh` |
 | `egress-client-key.pem` | Соответствующий незашифрованный закрытый ключ клиента |
 | `egress-ca.pem` | `root.pem` иерархии egress; только публичный корневой CA |
 | `vault-ca.pem` | Публичный CA сервера `vault.raditi.internal`, подключённый через `NODE_EXTRA_CA_CERTS` |
 
-AppRole `llm` получает политику `llm-subscriptions`; права `core` и `subscriptions-writer` ей не добавляются. Политики создаёт bootstrap из `infra/vault`. Закрытые ключи CA остаются у владельца офлайн. В `app.env` разрешены только четыре поля из образца; настройки сети, TLS, роль процесса и `LLM_CONTROL_URL` задаёт Compose.
+AppRole `llm` получает политику `llm-subscriptions`; права `core` и `subscriptions-writer` ей не добавляются. Политики создаёт bootstrap из `infra/vault`. Закрытые ключи CA остаются у владельца офлайн. В `app.env` разрешены только четыре поля из образца; настройки сети, TLS и `LLM_CONTROL_URL` задаёт Compose.
 
 При выключенном профиле `llm` каталог не требуется. При включённом preflight проверяет формат, раздельные AppRole, общий управляющий токен и его отличие от `METRICS_TOKEN` web, `vault-ca.pem` в каталогах web, core и llm, срок сертификатов, подписи клиентской цепочки и соответствие ключа сертификату. Он не подключается к Vault или провайдерам и не доказывает фактические права AppRole; это отдельная проверка при подготовке реальной среды.

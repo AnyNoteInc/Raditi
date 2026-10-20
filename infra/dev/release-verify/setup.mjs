@@ -423,15 +423,16 @@ export async function grantTariff({ db, billing }, { workspaceId, userId }) {
 export async function switchOnModel(rt, { db, copy, context, vault, directory }) {
   const writerFile = join(directory, 'subscriptions-writer.token')
   await writeFile(writerFile, vault.tokens['subscriptions-writer'], { mode: 0o400 })
-  const scripts = join(copy, 'apps/orchestrator')
+  const scripts = join(copy, 'apps/core')
+  const llmApp = join(copy, 'apps/llm')
   const login = await rt.run(
     process.execPath,
     [
-      join(scripts, 'scripts/subscription-login.mjs'),
+      join(llmApp, 'scripts/subscription-login.mjs'),
       ...['--backend', 'zai-coding', '--label', 'release-verify', '--plan', 'lite'],
       ...['--vault-token-file', writerFile],
     ],
-    { cwd: scripts, env: operatorEnvironment(context), input: `${SYNTHETIC_ZAI_KEY}\n` },
+    { cwd: llmApp, env: operatorEnvironment(context), input: `${SYNTHETIC_ZAI_KEY}\n` },
   )
   const accountId = JSON.parse(login.output.slice(login.output.indexOf('{'))).accountId
   const provider = await db.llmProvider.update({

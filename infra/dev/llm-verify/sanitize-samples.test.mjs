@@ -698,7 +698,7 @@ test('the command copies only through the sanitiser, checks its output and scans
 
 // ---- what the gates of the G0 and G1 batch added ---------------------------------------------
 
-/** Shaped like `mcpToken` of apps/orchestrator/src/llm/turn-key.ts; nothing ever issued it. */
+/** Shaped like `mcpToken` of packages/turn-keys/src/turn-key.ts; nothing ever issued it. */
 const MCP_TOKEN = `mcp_${'5e7a'.repeat(16)}`
 
 test('the MCP token of the platform is removed wherever it stands, with no name to give it away', () => {

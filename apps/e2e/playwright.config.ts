@@ -44,24 +44,27 @@ export default defineConfig({
       },
     },
     {
-      name: 'Orchestrator',
-      // Build the current sources, then replace the shell with Node: no watcher or detached
-      // pnpm children survive Playwright's process-group shutdown.
-      command: 'node node_modules/@nestjs/cli/bin/nest.js build && exec node dist/main.js',
-      cwd: fileURLToPath(new URL('../orchestrator/', import.meta.url)),
-      // MCP starts after core. Port readiness lets the tests report failed health checks,
-      // while waiting on /health would turn a dependency outage into a startup timeout.
-      port: MCP_PORT,
+      name: 'core',
+      // Build the current sources (the shared runtime package first, which `nest build` does not
+      // chain), then replace the shell with the Node of core: no watcher or detached pnpm
+      // children survive Playwright's process-group shutdown. The mcp app (apps/mcp) is started
+      // beside core in the same group, from its own build.
+      command:
+        "sh -c 'pnpm --filter @repo/service-runtime build && (cd ../mcp && node node_modules/@nestjs/cli/bin/nest.js build) && node node_modules/@nestjs/cli/bin/nest.js build && (cd ../mcp && node dist/main.js &) && exec node dist/main.js'",
+      cwd: fileURLToPath(new URL('../core/', import.meta.url)),
+      // core starts after mcp. Port readiness lets the tests report failed health checks, while
+      // waiting on /health would turn a dependency outage into a startup timeout.
+      port: CORE_PORT,
       timeout: 180_000,
       reuseExistingServer: false,
       gracefulShutdown: { signal: 'SIGINT', timeout: 35_000 },
       // Everything but the connections is set here, so a developer's .env cannot turn the smoke
       // into another setup: turns stay with core (no runner API to bind or tokens to check),
-      // and core reads no stack image outside production (SANDBOX_IMAGE may be unset).
+      // and core reads no stack image outside production (SANDBOX_IMAGE may be unset). Both
+      // processes read the variables they need and none of the other's.
       env: {
         APP_ENV: 'test',
-        ORCHESTRATOR_ROLES: 'core,mcp',
-        ORCHESTRATOR_PORT: String(CORE_PORT),
+        CORE_PORT: String(CORE_PORT),
         MCP_PORT: String(MCP_PORT),
         TURN_EXECUTOR: 'local',
         // The release API of a developer's .env would take the port of `pnpm dev`.

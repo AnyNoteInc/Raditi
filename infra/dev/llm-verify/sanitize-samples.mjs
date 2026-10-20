@@ -80,7 +80,7 @@ const SECRET_RULES = [
   },
   // No word boundary in front: a token glued to a letter is a token still.
   { rule: 'jwt', pattern: /eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{4,}/g, replace: () => REMOVED },
-  // The platform's own MCP token of a turn (`mcp_` and 64 hex digits, apps/orchestrator/src/llm/
+  // The platform's own MCP token of a turn (`mcp_` and 64 hex digits, apps/core/src/llm/
   // turn-key.ts): anywhere, glued to a letter, in either case, with whatever hex follows it.
   // Before the rules that need a name or a scheme: the report then says which kind it was.
   { rule: 'mcp-token', pattern: /mcp_[0-9a-f]{64,}/gi, replace: () => REMOVED },

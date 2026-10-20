@@ -12,7 +12,20 @@ on:
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
-      - apps/orchestrator/**
+      - apps/core/**
+      - apps/preview/**
+      - packages/preview-gateway/**
+      - packages/ip-address/**
+      - apps/runner/**
+      - packages/runner-engine/**
+      - apps/mcp/**
+      - apps/llm/**
+      - packages/snapshots/**
+      - packages/local-turns/**
+      - packages/turn-keys/**
+      - packages/site-content/**
+      - packages/service-runtime/**
+      - packages/app-bootstrap/**
       - packages/**
       - infra/app/**
       - infra/dev/llm-verify/**
@@ -85,7 +98,7 @@ jobs:
         run: node --test infra/app/compose.test.mjs infra/app/llm-preflight.test.mjs infra/app/llm-firewall.test.mjs infra/app/verify-llm-firewall.test.mjs infra/app/verify-llm-app.test.mjs
       - name: Verify packet filtering inside an isolated container
         run: pnpm verify:llm-firewall
-      - name: Build production orchestrator
-        run: docker build -f apps/orchestrator/Dockerfile --target runtime -t raditi-p3verify-orchestrator:b14 .
+      - name: Build production llm
+        run: docker build -f apps/llm/Dockerfile --target runtime -t raditi-p3verify-llm:b14 .
       - name: Verify production LLM service
         run: pnpm verify:llm-app

@@ -3,7 +3,7 @@
 AI-поддержка сайтов малого бизнеса: владелец пишет в чат — агент меняет сайт. Домен — raditi.ru.
 
 Агент — одна оболочка и одна модель: OpenCode CLI 1.18.34 в песочнице и модель GLM на Z.ai по плану
-GLM Coding Plan. Запросы модели идут только через шлюз платформы (роль `llm`); юрлицо и страна получателя
+GLM Coding Plan. Запросы модели идут только через шлюз платформы (приложение `apps/llm`); юрлицо и страна получателя
 данных не установлены, и до гейта 152-ФЗ модели уходят только синтетические данные (правило 1 в `CLAUDE.md`).
 Локально работают вход и юридические страницы, песочница под gVisor с pull-раннером и зашифрованными
 снимками, шлюз с ключами хода и бюджетом, правка контента WordPress через MCP со снимком и возвратом.
@@ -39,8 +39,10 @@ pnpm db:seed
 pnpm dev
 ```
 
-Web: http://localhost:3000, core: http://localhost:8081/health, MCP: http://localhost:8082/health,
-шлюз подписок: http://127.0.0.1:8084/health (`ORCHESTRATOR_ROLES=core,mcp,llm`). Без прокси узла выхода
+`pnpm dev` запускает по процессу на приложение: web (http://localhost:3000), `core` (http://localhost:8081/health),
+`mcp` (http://localhost:8082/health), шлюз подписок `llm` (http://127.0.0.1:8084/health) и шлюз предпросмотров
+`preview` (:8090); раннера (`apps/runner`) среди них нет — он работает на песочной ВМ или в стендах.
+У `llm`, `mcp`, `preview` и `runner` свой `src/config.ts` со своей схемой переменных, у `core` — `src/config/config.ts`; общего выбора ролей нет. Без прокси узла выхода
 (четыре `LLM_EGRESS_*` пусты) dev-шлюз идёт прямым путём: допуск открыт, к провайдеру он соединяется сам
 и только к Z.ai. С заданным mTLS-прокси через него идут все провайдеры, допуск открывает успешная проба
 канала, иначе шлюз отвечает `degraded`. Темп и потолок вызовов одного ключа хода задают
@@ -58,7 +60,7 @@ B9–B14 реализованы и проверены локально, в то�
 Для проверок окон из `core` задайте `LLM_CONTROL_URL` частным origin шлюза: его Host должен
 входить в `LLM_GATEWAY_HOSTS`, адрес `core` — в `LLM_GATEWAY_CLIENTS`; авторизация —
 `METRICS_TOKEN`. В production адрес задаётся явно. Без него неизвестные окна остаются
-в ожидании; доступ к ключу плана в `subs/` роли `core` не нужен.
+в ожидании; доступ к ключу плана в `subs/` приложению `core` не нужен.
 Останавливайте `pnpm dev` через Ctrl-C (SIGINT). Юридические страницы написаны под самозанятую
 (редакции от 11.10.2026): имя, ИНН и адрес исполнителя перенесены из AnyNote и ждут подтверждения
 владельца, почта и телефон — заглушки; перед публикацией тексты читает юрист
@@ -102,23 +104,23 @@ pnpm verify:site-connect
 `gates` проверяет формат, окружение, типы, линтер, архитектурные слои, тесты, тесты инфраструктуры и сборку.
 Стенды шлюза, драйвера и контента — `verify:llm-gateway`, `verify:opencode`, `verify:opencode-supervisor`,
 `verify:mcp-content`, `verify:agent-content` — описаны ниже; стенды края app-ВМ и профиля `llm` — `verify:edge`,
-`verify:llm-app`, `verify:llm-firewall` — в [инструкции app-ВМ](infra/app/README.md), «Проверки».
+`verify:llm-app`, `verify:llm-firewall` — и образы `llm`, `mcp`, `preview` и раннера (`verify:images`) — в [инструкции app-ВМ](infra/app/README.md), «Проверки».
 Для тестов базы задавайте `DATABASE_URL` явно: без него тесты с базой пропускаются. Обычный путь для них —
-`pnpm verify:db` на одноразовой PostgreSQL; интеграционные наборы orchestrator
-(`pnpm --filter orchestrator test:db`, `RADITI_GATEWAY_DB_TESTS=1`) меняют общие строки справочников
-и идут только на такой базе.
-Перед `pnpm e2e` остановите `pnpm dev`. Smoke-набор сам запускает web на 3100 и core/MCP на 8181/8182,
+`pnpm verify:db` на одноразовой PostgreSQL; интеграционные наборы `core`, `llm` и `mcp`
+(`pnpm --filter core test:db`, `pnpm --filter llm test:db`, `pnpm --filter mcp test:db`,
+`RADITI_GATEWAY_DB_TESTS=1`) меняют общие строки справочников и идут только на такой базе.
+Перед `pnpm e2e` остановите `pnpm dev`. Smoke-набор сам запускает web на 3100, `core` на 8181 и `mcp` на 8182,
 проверяет главную, юридическую страницу и health всех трёх приложений, затем останавливает процессы.
 Инфраструктура должна оставаться запущенной, миграции и сиды — применены (`pnpm db:deploy && pnpm db:seed`):
 главная показывает тарифы из базы. Экспортированные `DATABASE_URL` и `REDIS_URL` важнее `.env`.
 
-`verify:vault` проверяет клиент KV v2 и Transit и реальные политики, включая роли `mcp` и `core` под AppRole
-и отказ роли `llm` в записи секрета подписки, на одноразовом локальном OpenBao.
+`verify:vault` проверяет клиент KV v2 и Transit и реальные политики, включая приложения `mcp` и `core` под AppRole
+и отказ `llm` в записи секрета подписки, на одноразовом локальном OpenBao.
 `verify:site` проверяет настоящую страницу локального WordPress: снимок → изменение → публичный HTTP → восстановление.
 `verify:db` применяет миграции на отдельной PostgreSQL, сверяет схему с `schema.prisma`, проверяет единого пользователя `raditi`,
 переход со старых ролей, переключение на OpenCode на базе прежних оболочек настоящими командами Prisma,
 сиды на этой базе и на новой — каталог одной оболочки, повторный запуск ничего не меняет, — затем запускает
-четыре набора тестов: базы, orchestrator, tRPC и web. [Подробности](infra/dev/db-verify/README.md).
+семь наборов тестов: базы, `core`, `llm`, `mcp`, биллинга, tRPC и web. [Подробности](infra/dev/db-verify/README.md).
 `verify:gitea` проверяет git хода на одноразовой Gitea 1.27.3 по HTTPS: доступы на чтение и запись со сроком,
 клон, push в `agent/<taskId>`, отказ диффу с `.gitea/`. Нужен `P2_GITLEAKS_BINARY`.
 [Подробности](infra/dev/gitea-verify/README.md), [отчёт](docs/plan/32-gitea-turn-git.md).
@@ -128,7 +130,7 @@ pnpm verify:site-connect
 `verify:site-connect` проверяет локальное подключение сайта: команда `infra/dev/site-verify/connect-local.mjs`
 на одноразовых PostgreSQL, OpenBao и Gitea и профиле `site` dev compose под собственным проектом пишет доступ
 в OpenBao, привязывает плагин, создаёт ключ рабочего пространства и репозиторий и переводит сайт в `active`;
-затем штатная роль `mcp` правит страницу. Сначала собирается orchestrator.
+затем штатное приложение `mcp` правит страницу. Сначала собираются `core` и `mcp`.
 [Подробности](infra/dev/site-verify/README.md), [отчёт](docs/plan/36-local-site-connect.md).
 Эти проходы используют отдельные ресурсы и удаляют их после проверки; нужны уже загруженные образы и локальный Docker.
 По указанию владельца от 30.09.2026 облачная выкладка отложена до полного локального e2e через агента,
@@ -148,11 +150,11 @@ docker compose --env-file .env -f infra/dev/docker-compose.yml --profile monitor
 Проверяются обязательные цели и цели включённых профилей. Выключенные дополнительные цели
 ожидаемо отображаются как DOWN; подробности — в [инструкции мониторинга](infra/dev/monitoring/README.md).
 Для профиля `ci` нужна регистрация раннера. Шлюз подписок на синтетическом Z.ai проверяет `pnpm verify:llm-gateway`:
-настоящий OpenCode CLI в контейнерах, одноразовые PostgreSQL и OpenBao; роль `llm` идёт к синтетическому Z.ai
+настоящий OpenCode CLI в контейнерах, одноразовые PostgreSQL и OpenBao; `llm` идёт к синтетическому Z.ai
 напрямую, один ход — через прокси стенда — [инструкция](infra/dev/llm-verify/README.md).
-Production-профиль `llm` находится в `infra/app`; облачная выкладка остаётся за гейтом WordPress e2e.
+Production-профиль `llm` (отдельный образ `LLM_IMAGE`) находится в `infra/app`; облачная выкладка остаётся за гейтом WordPress e2e.
 Основной шлюз, ключи хода и операторские команды реализованы в B9–B12; обновителя токенов и входа по коду
-с G8 нет: секрет подписки — ключ плана, роль `llm` его только читает ([отчёт](docs/plan/48-removal.md)).
+с G8 нет: секрет подписки — ключ плана, приложение `llm` его только читает ([отчёт](docs/plan/48-removal.md)).
 Новые аккаунты импортируются выключенными; действующий порядок входа, повторного входа и вывода — spec §15
 и отчёт G8, а [runbook B12](docs/plan/19-p3-subscription-commands.md) — история: он описывает ещё device-вход
 и автоматический отзыв токенов. B13 и B14 проверены локально: общий проход с CLI, синтетическим провайдером
@@ -179,8 +181,8 @@ Docker Desktop для одноразовых PostgreSQL/S3/OpenBao и локал
 
 Первый локальный блок P6 защищает `/mcp` токеном хода и предоставляет `site_info`
 с публичным адресом и стеком назначенного сайта. Проверка на отдельной PostgreSQL —
-`pnpm verify:db`; настройка точных upstream Host — `MCP_ALLOWED_HOSTS`, обязательна для роли
-`mcp` в production. Добавлена локальная основа зашифрованных снимков и долговременного
+`pnpm verify:db`; настройка точных upstream Host — `MCP_ALLOWED_HOSTS`, обязательна для `mcp`
+в production. Добавлена локальная основа зашифрованных снимков и долговременного
 журнала: повтор ответа и блокировка незавершённой записи сохраняются после перезапуска.
 В явно включённом локальном профиле подключены ограниченный `wp_rest`, `restore`, маскирование
 контактов, обратный откат хода и восстановление по квитанции сайта. Доверенный возврат правок идёт
@@ -189,7 +191,7 @@ Docker Desktop для одноразовых PostgreSQL/S3/OpenBao и локал
 из очереди и интерфейса ещё впереди. Проверка настоящего
 WordPress с PostgreSQL, S3 и Vault — `pnpm verify:mcp-content` (Docker Desktop или обычный Docker
 на Linux; в CI — workflow `wordpress-content.yml`). Та же правка настоящим OpenCode
-CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетическом провайдере, —
+CLI через `sandbox-gw` и приложения `llm` и `mcp`, на синтетическом провайдере, —
 `pnpm verify:agent-content` (в CI — workflow `agent-content.yml`);
 [отчёт](docs/plan/30-agent-content-stand.md), [строка OpenCode](docs/plan/44-agent-content-opencode.md).
 С флагом `--live` оба стенда — этот и `pnpm verify:llm-gateway` — идут на настоящем GLM (`api.z.ai`): только
@@ -199,8 +201,8 @@ CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетиче�
 ([отчёт G7](docs/plan/47-common-scenarios-zai.md)). У стенда шлюза есть ещё `--live --results` — узкий замер итога хода:
 десять ходов, не больше 20 запросов провайдеру и 10 минут (`infra/dev/llm-verify/README.md`, «Живой режим»;
 [отчёт G6](docs/plan/45-zai-live.md), [отчёт об итоге хода](docs/plan/46-turn-result-glm.md)).
-Контент в запущенной роли включает `MCP_CONTENT_PROFILE=local` (по умолчанию `off` — только `site_info`;
-в production допустим только `off`): доступ сайта роль читает из Vault по ссылке `credential_refs` —
+Контент в запущенном `mcp` включает `MCP_CONTENT_PROFILE=local` (по умолчанию `off` — только `site_info`;
+в production допустим только `off`): доступ сайта `mcp` читает из Vault по ссылке `credential_refs` —
 [отчёт](docs/plan/33-mcp-role-content-resolver.md); production-подключение и продуктовый откат остаются в P6. Границы и повтор —
 [доступ MCP](docs/plan/24-p6-mcp-access.md), [снимки и журнал](docs/plan/25-p6-content-journal.md),
 [контент WordPress](docs/plan/26-p6-wordpress-content.md).
@@ -210,9 +212,13 @@ CLI через `sandbox-gw` и роли `llm` и `mcp`, на синтетиче�
 | Путь | Содержимое |
 | --- | --- |
 | `apps/web` | Next.js: вход, кабинет, юридические страницы, API |
-| `apps/orchestrator` | NestJS: роли core, MCP, llm (шлюз подписок) и pull-runner; очередь, outbox, уведомления |
+| `apps/core` | NestJS: ядро — задачи и диалоги, очередь, outbox, уведомления, песочницы, git, выпуск, биллинг, предпросмотры; операторские команды и большинство стендов |
+| `apps/llm` | NestJS: шлюз подписок (единственный процесс с ключом провайдера) и команды `subscriptions:*` |
+| `apps/mcp` | NestJS: MCP-шлюз к сайтам (контент WordPress, браузер агента) |
+| `apps/runner` | Pull-раннер песочной ВМ: контейнеры ходов, без доступа к БД, Redis, Vault и S3 |
+| `apps/preview` | NestJS: шлюз предпросмотров диалогов |
 | `apps/e2e` | Smoke-тесты Playwright |
-| `packages` | Domain, порты и адаптеры, Prisma, auth, tRPC, UI |
+| `packages` | Domain, порты и адаптеры, Prisma, auth, tRPC, UI; общее приложений — `app-bootstrap`, `service-runtime`, `runner-engine`, `turn-keys`, `site-content`, `snapshots`, `local-turns`, `preview-gateway`, `ip-address` |
 | `infra/dev` | Docker Compose, мониторинг и локальные стенды (`db-verify`, `site-verify`, `gitea-verify`, `pipeline-verify`, `llm-verify`) |
 | `ci` | Обязательные workflow сайтов для `platform/ci` в Gitea (пока подменные шаги) |
 | `infra/app`, `infra/sandbox`, `infra/egress` | app-ВМ, песочная ВМ и узел выхода к провайдерам моделей |

@@ -14,8 +14,7 @@ const job = (name) =>
   new RegExp(`^  - job_name: ${name}\\n(?:(?:    .*)?\\n)+`, 'm').exec(prometheus)?.[0] ?? ''
 
 test('the subscription gateway of pnpm dev is scraped on its own port', () => {
-  // The llm role keeps its own registry: nothing of it shows on the port of core.
-  assert.ok(setting('ORCHESTRATOR_ROLES').split(',').includes('llm'))
+  // The llm app keeps its own registry: nothing of it shows on the port of core.
   const target = `host.docker.internal:${setting('LLM_GATEWAY_PORT')}`
   assert.equal(target, 'host.docker.internal:8084')
   // The gateway answers only for the Host names it lists.
@@ -35,7 +34,7 @@ test('the gateway health is probed apart from the required endpoints', () => {
   const groups = probes.split(/^ {6}- targets:/m).slice(1)
   const own = groups.filter((group) => group.includes(health))
   assert.equal(own.length, 1, 'one target group probes the gateway health')
-  // In dev the role may be left out of ORCHESTRATOR_ROLES, and its health is degraded (503)
+  // In dev the llm app may not be running, and its health is degraded (503)
   // with a proxy configured and no channel or with a provider out of reach on the direct path
   // (without a proxy it answers 200 since G4): under a profile label the probe stays out of
   // EndpointDown and of the required panel.
@@ -44,7 +43,7 @@ test('the gateway health is probed apart from the required endpoints', () => {
 })
 
 test('the gateway has an alert and a panel, and both name metrics the gateway exports', () => {
-  const server = read('../../../apps/orchestrator/src/llm-gateway/server.ts')
+  const server = read('../../../apps/llm/src/gateway/server.ts')
   const [, counters] = /#counters = \{\n([^}]+)\}/.exec(server) ?? []
   assert.ok(counters, 'the counters of the gateway are found in server.ts')
   const exported = new Set([

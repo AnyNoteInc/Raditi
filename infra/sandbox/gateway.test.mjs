@@ -746,7 +746,7 @@ test(
 
 test('the LLM backstop stays above the request limit of the role llm', async () => {
   const role = await readFile(
-    new URL('../../apps/orchestrator/src/llm-gateway/server.ts', import.meta.url),
+    new URL('../../apps/llm/src/gateway/server.ts', import.meta.url),
     'utf8',
   )
   const limit = /\brequestMs:\s*([\d_]+)/.exec(role)

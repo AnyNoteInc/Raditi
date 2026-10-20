@@ -6,8 +6,8 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { emptyUntrackedArchive } from '../../../apps/orchestrator/dist/git-workspace/archive.js'
-import { GitWorkspaceService } from '../../../apps/orchestrator/dist/git-workspace/git-workspace.service.js'
+import { emptyUntrackedArchive } from '../../../apps/core/dist/git-workspace/archive.js'
+import { GitWorkspaceService } from '../../../apps/core/dist/git-workspace/git-workspace.service.js'
 
 const png = (text) => Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.from(text)])
 

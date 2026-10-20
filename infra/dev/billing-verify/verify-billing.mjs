@@ -740,7 +740,7 @@ async function main(options, owned) {
   owned.web = web
   const startCore = (name, port) =>
     start(name, join(copy, BUILD_OUTPUT.core), {
-      cwd: join(copy, 'apps/orchestrator'),
+      cwd: join(copy, 'apps/core'),
       env: coreEnvironment({ ...shared, port }),
       logFile: join(directory, `logs/${name}.log`),
     })
@@ -790,7 +790,7 @@ async function main(options, owned) {
 
   // The queue of the renewal passes: which passes core has finished, and when; and the one
   // thing a scenario may change there — the scheduler of a pass, taken away for a while.
-  const { Queue } = createRequire(join(copy, 'apps/orchestrator/package.json'))('bullmq')
+  const { Queue } = createRequire(join(copy, 'apps/core/package.json'))('bullmq')
   const queue = new Queue('billing', { connection: { url: redisUrl, maxRetriesPerRequest: null } })
   queue.on('error', () => {})
   owned.queue = queue
@@ -838,12 +838,12 @@ async function main(options, owned) {
   }
 
   /**
-   * A node process of the private copy, run from apps/orchestrator with the environment it is
+   * A node process of the private copy, run from apps/core with the environment it is
    * given and nothing else; `input` is written to its stdin. `{ code, stdout, stderr }`.
    */
   const inCopy = async (args, { env, input }) => {
     const child = spawn(process.execPath, args, {
-      cwd: join(copy, 'apps/orchestrator'),
+      cwd: join(copy, 'apps/core'),
       env,
       stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     })
@@ -916,7 +916,7 @@ async function main(options, owned) {
           counts[job.name] = (counts[job.name] ?? 0) + 1
       return counts
     },
-    /** An operator's command, run as its header says: from apps/orchestrator, explicit environment. */
+    /** An operator's command, run as its header says: from apps/core, explicit environment. */
     operator: (script, args) =>
       inCopy([`scripts/${script}.mjs`, ...args], { env: operatorEnvironment(shared) }),
     /**

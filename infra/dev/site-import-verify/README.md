@@ -7,7 +7,7 @@ pnpm verify:site-import -- --only b1,r3              # отдельные час
 pnpm verify:site-import -- --keep                    # оставить стенд после прохода до Ctrl-C
 ```
 
-Скрипт пакета собирает orchestrator и запускает `node infra/dev/site-import-verify/verify-site-import.mjs`; без сборки проверяется та сборка `apps/orchestrator/dist`, что лежит в дереве.
+Скрипт пакета собирает `core` (`pnpm --filter core build`) и запускает `node infra/dev/site-import-verify/verify-site-import.mjs`; без сборки проверяется та сборка `apps/core/dist`, что лежит в дереве.
 
 Стенд среза W5 плана [мастера подключения сайта](../../../docs/plan/39-site-connection-wizard.md): путь «мастер → outbox → скачивание файлов по SFTP или FTP → приватный репозиторий Gitea → первый коммит и тег `v0.0.0`» на настоящих серверах — одноразовых и только на `127.0.0.1`. Браузер (Playwright) проходит мастер, экран «Настраиваем сайт» и «Изменить доступ»; сам стенд ведёт сценарии восстановления через API кабинета (tRPC с cookie сессии) и снаружи — Docker, Gitea, PostgreSQL, OpenBao — проверяет каждый импортированный сайт и всё, что прогон оставил.
 
@@ -34,7 +34,7 @@ pnpm verify:site-import -- --keep                    # оставить стен
 
 В конце (`all`): ни одного секрета стенда — паролей, ключей и их строк, парольной фразы, паролей баз, ключей и солей `wp-config.php`, поддельного ключа AWS, токенов и SecretID — в `pg_dump` базы платформы, в каждом ключе и значении Redis (BullMQ), в каждом объекте git каждого репозитория `sites` (у сайта с входом по ключу `notes/leaked.txt` с паролями хостинга законно попадает в репозиторий), в журналах `core` и `next dev`; MySQL и PostgreSQL сайта с начала сценариев не получили ни записи, ни запроса к таблицам пользователя; оба хостинга байт в байт прежние; в OpenBao доступы ровно тех сайтов, на которые ссылаются `credential_refs`; не осталось захватов создания.
 
-Весь прогон на Mac с Docker Desktop вместе со сборкой orchestrator занимает 3,5–4 минуты (два прогона подряд 17.10.2026: 227 и 200 с, по 47 проверок): подъём стенда — около 16 с, самопроверки — около 10 с, `next dev` с первой компиляцией страниц — около 20 с, браузерная половина (10 тестов) вместе с `r3`, `r4` — около 40 с, сценарии `r1`, `r2`, `r5` — около двух с половиной минут (`r1` ждёт сборщика: этап становится «молчащим» через 120 с после последнего пульса, сборщик ходит раз в минуту; в прогонах — 129–130 с). Если `next dev` для `apps/web` уже запущен кем-то другим (Next разрешает один на каталог приложения), стенд ждёт до 15 минут и пишет об этом строку.
+Весь прогон на Mac с Docker Desktop вместе со сборкой `core` занимает 3,5–4 минуты (два прогона подряд 17.10.2026: 227 и 200 с, по 47 проверок): подъём стенда — около 16 с, самопроверки — около 10 с, `next dev` с первой компиляцией страниц — около 20 с, браузерная половина (10 тестов) вместе с `r3`, `r4` — около 40 с, сценарии `r1`, `r2`, `r5` — около двух с половиной минут (`r1` ждёт сборщика: этап становится «молчащим» через 120 с после последнего пульса, сборщик ходит раз в минуту; в прогонах — 129–130 с). Если `next dev` для `apps/web` уже запущен кем-то другим (Next разрешает один на каталог приложения), стенд ждёт до 15 минут и пишет об этом строку.
 
 ## Что поднимается
 
@@ -42,13 +42,13 @@ pnpm verify:site-import -- --keep                    # оставить стен
 | --- | --- | --- |
 | PostgreSQL платформы | `postgres:17.11-alpine3.24` (digest) | данные в tmpfs, пользователь `raditi`; миграции и сиды дерева применяются собственным конфигом Prisma стенда (конфиг репозитория загружает `.env`) |
 | Redis | `redis:8.10.2-alpine` (digest) | пароль из файла, `noeviction`, без диска |
-| S3 | `chrislusf/seaweedfs:4.47` (digest) | бакеты `raditi-siteimport-<run>-{inbox,sessions,logs,artifacts,backups,platform}`; роли `core` S3 обязателен: конфигурация разбирает его при старте, health проверяет четыре бакета |
+| S3 | `chrislusf/seaweedfs:4.47` (digest) | бакеты `raditi-siteimport-<run>-{inbox,sessions,logs,artifacts,backups,platform}`; приложению `core` S3 обязателен: конфигурация разбирает его при старте, health проверяет четыре бакета |
 | OpenBao | `ghcr.io/openbao/openbao:2.7.0` (digest) | dev-сервер; `bootstrapLocalVault` (`infra/vault/bootstrap.mjs`) создаёт `turns/`, `subs/`, `kv/`, `transit/` и девять политик; AppRole `web` — `sites-writer`, AppRole `core` — `core-turns`, `core-transit`, `core-site-import` |
 | Gitea | `gitea/gitea:1.27.3-rootless` (digest) | HTTPS с CA стенда, организация `sites` (private); команда `bots` (write, все репозитории, code/pulls/actions) с ботом `raditi-bot` и его токеном `write:user`, `write:repository` (`GITEA_TOKEN`); команда `provisioners` (`can_create_org_repo`) с `raditi-provisioner` и его токеном `write:organization`, `write:repository` (`GITEA_PROVISIONER_TOKEN`) |
 | Хостинги `site` и `spare` | `raditi-siteimport-server:<хеш>` из `Dockerfile` (Alpine 3.22 по digest) | OpenSSH 10: только SFTP (`internal-sftp`, chroot `/home/site`) для `site` (пароль и ключи), `siteb`, `sitec`; vsftpd 3.0.5: явный FTPS (`AUTH TLS`, сертификат CA стенда, `require_ssl_reuse=YES`) и обычный FTP для `site` и `ftpsite`, только пассивный режим на `127.0.0.1`. `spare` — тот же сервер для сценариев, которые меняют его на ходу (другой ключ, пауза) |
 | MySQL сайта | `mysql:8.4` (digest) | база `wp_stand`, пользователь `stand` (его пароль — `DB_PASSWORD` в `wp-config.php` сайта), таблица `wp_posts` с одной строкой; TLS с сертификатом CA стенда; general log в `mysql.general_log` |
 | PostgreSQL сайта | `postgres:17.11-alpine3.24` (digest) | база и пользователь `stand`, таблица `pages` с одной строкой; `ssl=on` с сертификатом CA стенда; `log_statement=all` |
-| `core` | `node apps/orchestrator/dist/main.js` | `stand.core.start()`; окружение — `env.core` (ниже) |
+| `core` | `node apps/core/dist/main.js` | `stand.core.start()`; окружение — `env.core` (ниже) |
 | web | `next dev` в `apps/web` на `127.0.0.1` | `stand.web.start()`; окружение — `env.web`; своя группа процессов, журнал `logs/web.log` |
 
 Порты — случайные свободные на `127.0.0.1`. У хостингов порты SSH, FTP и диапазон из десяти пассивных портов выбираются заранее и публикуются 1:1: vsftpd называет в ответе PASV адрес `127.0.0.1` и номер порта, который снаружи тот же. Ключ сервера SSH меняется без перезапуска контейнера: `useHostKey('second')` подставляет второй ключ и шлёт sshd `SIGHUP`.
@@ -67,7 +67,7 @@ pnpm verify:site-import -- --keep                    # оставить стен
 
 `startStand({ signal, log })` из `stand.mjs` поднимает стенд и возвращает объект:
 
-- `env.core` — всё окружение роли `core`: `NODE_ENV=production` (чтобы не загружался `.env` репозитория), `APP_ENV=development` (адреса хостинга на loopback допустимы), `ORCHESTRATOR_ROLES=core`, база, Redis, S3, AppRole `core` (`VAULT_ROLE_ID`, `VAULT_SECRET_ID`), `GITEA_URL` по HTTPS, `GITEA_TOKEN`, `GITEA_PROVISIONER_TOKEN`, `GIT_CA_FILE` и `NODE_EXTRA_CA_CERTS` — CA стенда, `PATH` с Gitleaks 8.30.1 первым; Docker локального исполнителя и канал к `llm` указывают туда, где ничего не слушает;
+- `env.core` — всё окружение приложения `core`: `NODE_ENV=production` (чтобы не загружался `.env` репозитория), `APP_ENV=development` (адреса хостинга на loopback допустимы), база, Redis, S3, AppRole `core` (`VAULT_ROLE_ID`, `VAULT_SECRET_ID`), `GITEA_URL` по HTTPS, `GITEA_TOKEN`, `GITEA_PROVISIONER_TOKEN`, `GIT_CA_FILE` и `NODE_EXTRA_CA_CERTS` — CA стенда, `PATH` с Gitleaks 8.30.1 первым; Docker локального исполнителя и канал к `llm` указывают туда, где ничего не слушает;
 - `env.web` — окружение `next dev`: каждое имя `.env.example` задано (пустое, если web оно не нужно — пустое значение считается незаданным, и `.env` разработчика ничего не добавит), AppRole `web`, CA стенда, `APP_ENV=development`, случайный `BETTER_AUTH_SECRET`, `APP_URL` — `http://127.0.0.1:<порт>`;
 - `coordinates` — адреса, порты, пользователи и имена контейнеров каждого сервиса (`siteServer`, `spareServer` с отпечатками двух ключей в формате продукта `ssh-ed25519 SHA256:…`), папки сайта, `role_id` и файлы SecretID обеих AppRole, файлы токенов Gitea;
 - `caPath`, `logsDir`, `directory` — CA стенда, каталог журналов (`core.log`, `web.log`, `playwright.log`), каталог запуска;
@@ -96,7 +96,7 @@ pnpm verify:site-import -- --keep                    # оставить стен
 6. Дерево хостинга после проверок байт в байт прежнее.
 7. Gitleaks 8.30.1 с конфигурацией продукта (`[extend] useDefault = true`) находит среди пропускаемых правилами файлов ровно `notes/aws.txt`.
 8. MySQL и PostgreSQL сайта отвечают по TLS, проверенному CA стенда; по одной таблице; их журналы показывают присланные запросы, строк таблиц никто не читал.
-9. Только с `--infra-only`: `core` из `apps/orchestrator/dist` стартует на стенде (AppRole `core`, `APP_ENV=development`): база, Redis, S3 и Vault — `ok`; останавливается по SIGTERM; секретов в его журнале нет.
+9. Только с `--infra-only`: `core` из `apps/core/dist` стартует на стенде (AppRole `core`, `APP_ENV=development`): база, Redis, S3 и Vault — `ok`; останавливается по SIGTERM; секретов в его журнале нет.
 
 `--infra-only` занимает около 30 секунд.
 
@@ -143,5 +143,5 @@ docker rmi raditi-siteimport-server:<тег>
 - Gitea заполняет таблицы веток и тегов после push в фоне и до этого отвечает на `GET /branches/main` кодом 500, а на `DELETE /tags/v0.0.0` — 404; `giteaApi.refs` читает сам git, `deleteTag` и `pushTag` работают через git.
 - Пока Gitea не обработала в фоне первый push, она считает репозиторий пустым, и ветка, созданная в это время, становится веткой по умолчанию. Тогда повтор импорта справедливо отказывает `repository_not_created`: ветка по умолчанию не `main`. Поэтому `r4` делает чужую ветку только после того, как Gitea сама видит `main` и репозиторий непустой.
 - Один CA на все серверы стенда: сертификата, которому продукт не доверяет (`certificate_untrusted`), у стенда пока нет.
-- `core` запускается из `apps/orchestrator/dist` дерева: проверяется та сборка, что лежит там сейчас.
+- `core` запускается из `apps/core/dist` дерева: проверяется та сборка, что лежит там сейчас.
 - Пределы мастера (единицы проверок, отказы входа, проверки одновременно, три подключения в работе) считаются на пользователя: у каждого сценария и каждого отказа `b4` свой пользователь.

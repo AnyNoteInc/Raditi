@@ -17,7 +17,7 @@
    pnpm exec prettier --write package-lock.json
    ```
 
-3. Поправить проверки версии: строку `npm ls …` в `infra/sandbox/Dockerfile`, версию в `infra/dev/llm-verify/cli.Dockerfile` и ожидаемую версию в стендах (`scripts/verify-opencode.mjs`, `apps/orchestrator/scripts/opencode-runner-fixture.mjs`, `apps/orchestrator/scripts/verify-runner.mjs`, `infra/dev/llm-verify/cli.mjs`).
+3. Поправить проверки версии: строку `npm ls …` в `infra/sandbox/Dockerfile`, версию в `infra/dev/llm-verify/cli.Dockerfile` и ожидаемую версию в стендах (`scripts/verify-opencode.mjs`, `apps/core/scripts/opencode-runner-fixture.mjs`, `apps/core/scripts/verify-runner.mjs`, `infra/dev/llm-verify/cli.mjs`).
 4. Пересобрать образ и пройти `pnpm verify:opencode` и `pnpm verify:opencode-supervisor`.
 
 Новая версия OpenCode — отдельная задача: обёртка драйвера опирается на свойства 1.18.34 (строка лога об отказе MCP, формат экспорта сессии, имена выключателей, места, откуда CLI импортирует код: три имени рабочей копии, каталог конфигурации и `~/.opencode`), поэтому сначала повторяется разведка `docs/plan/40-opencode-spike.md`, а после — сценарии 9–12 стенда `pnpm verify:opencode`.

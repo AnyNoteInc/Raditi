@@ -76,9 +76,9 @@ export const BUILT_IMAGES = Object.freeze({
     context: 'infra/preview',
   },
   // The image of the deploy runner's label `deploy` and of the stand's loopback mirror.
-  orchestrator: {
-    tag: 'raditi-release-verify/orchestrator:local',
-    file: 'apps/orchestrator/Dockerfile',
+  core: {
+    tag: 'raditi-release-verify/core:local',
+    file: 'apps/core/Dockerfile',
     target: 'runtime',
   },
 })
@@ -545,7 +545,7 @@ export function roleEnvironment(role, context) {
     NODE_ENV: 'production',
     NO_COLOR: '1',
     APP_ENV: 'test',
-    ORCHESTRATOR_ROLES: role,
+    // The llm app has no roles to choose from: it is one role.
     DATABASE_URL: databaseUrl,
     METRICS_TOKEN: secrets.metrics,
   }
@@ -592,7 +592,7 @@ export function roleEnvironment(role, context) {
         ...s3Of(s3),
         ...previewAddress(ports),
         APP_URL: origin(ports.web),
-        ORCHESTRATOR_PORT: String(loopbackPort(ports.core)),
+        CORE_PORT: String(loopbackPort(ports.core)),
         REDIS_URL: context.redisUrl,
         LLM_CONTROL_URL: origin(ports.llm),
         TURN_EXECUTOR: 'local',

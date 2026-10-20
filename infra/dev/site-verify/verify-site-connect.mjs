@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url'
 import {
   roleEnvironment,
   startRegularRole,
-} from '../../../apps/orchestrator/scripts/verify-agent-content-role.mjs'
+} from '../../../apps/core/scripts/verify-agent-content-role.mjs'
 import {
   cleanEnvironment,
   localDesktop,
@@ -32,7 +32,7 @@ import {
   provisionServices,
   runCommand,
   serviceImages,
-} from '../../../apps/orchestrator/scripts/verify-agent-supervisor.mjs'
+} from '../../../apps/core/scripts/verify-agent-supervisor.mjs'
 import { siteAccessPath } from '../../../packages/domain/src/ports/site-adapter.ts'
 import { workspaceTransitKey } from '../../../packages/domain/src/sessions/workspace-transit-key.ts'
 import { WordpressPublishedContentGateway } from '../../../packages/site-adapters/src/wordpress-content.ts'
@@ -384,9 +384,10 @@ async function main() {
   assert.equal(cliVersion.stdout.trim(), 'WP-CLI 2.12.0', 'Unexpected local WP-CLI version')
   await command('openssl', ['version'], { env: { PATH: process.env.PATH } })
   try {
-    await access(join(repository, 'apps/orchestrator/dist/main.js'))
+    await access(join(repository, 'apps/core/dist/main.js'))
+    await access(join(repository, 'apps/mcp/dist/main.js'))
   } catch {
-    throw new Error('Build the orchestrator first: pnpm --filter orchestrator build')
+    throw new Error('Build the apps first: pnpm --filter core --filter mcp build')
   }
   const { createPrismaClient, PostgresSiteLeaseStore } =
     await import('../../../packages/db/src/index.ts')

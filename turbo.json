@@ -11,6 +11,7 @@
     "BILLING_RENEWAL_NOTICE_DAYS",
     "BILLING_TICK_SECONDS",
     "CI",
+    "CORE_PORT",
     "DATABASE_URL",
     "GITEA_PROVISIONER_TOKEN",
     "GITEA_RUNNER_TOKEN",
@@ -41,8 +42,6 @@
     "MCP_PORT",
     "METRICS_TOKEN",
     "NODE_ENV",
-    "ORCHESTRATOR_PORT",
-    "ORCHESTRATOR_ROLES",
     "P2_GITLEAKS_BINARY",
     "P2_RUNNER_DOCKER_SOCKET",
     "P2_RUNNER_HOST",
@@ -156,11 +155,13 @@
         "$TURBO_ROOT$/infra/wordpress/raditi-preview.php",
         "$TURBO_ROOT$/infra/wordpress/preview-wp-config.php",
         "$TURBO_ROOT$/infra/wordpress/preview-apache.conf",
-        "$TURBO_ROOT$/packages/site-connections/src/database-copy/wordpress-policy.fixture.json"
+        "$TURBO_ROOT$/packages/site-connections/src/database-copy/wordpress-policy.fixture.json",
+        "$TURBO_ROOT$/apps/runner/scripts/runner-token.mjs",
+        "$TURBO_ROOT$/infra/app/docker-compose.yml"
       ]
     },
     "dev": {
-      "dependsOn": ["^db:generate", "db:generate"],
+      "dependsOn": ["^build", "^db:generate", "db:generate"],
       "cache": false,
       "persistent": true
     }

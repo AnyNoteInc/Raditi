@@ -16,19 +16,25 @@ on:
       - infra/wordpress/**
       - infra/dev/site-verify/**
       - packages/site-adapters/**
-      - apps/orchestrator/src/mcp/**
-      - apps/orchestrator/scripts/verify-content-*.mjs
+      - apps/mcp/**
+      - apps/core/scripts/verify-content-*.mjs
       # Containers, clean environment and data services of the stand.
-      - apps/orchestrator/scripts/verify-agent-supervisor.mjs
+      - apps/core/scripts/verify-agent-supervisor.mjs
       # What the stand's scripts load besides the MCP modules: the turn supervisor and DI tokens
       # of the orchestrator build, the journal tables and migrations, snapshot storage, the diff
       # path policy.
-      - apps/orchestrator/src/turns/**
-      - apps/orchestrator/src/infra/**
+      - apps/core/src/turns/**
+      - apps/core/src/infra/**
       # The sample ids of the turns the stand's scripts make up, loaded from the sources.
-      - apps/orchestrator/src/testing/**
+      - apps/core/src/testing/**
       - packages/db/**
       - packages/storage/**
+      - packages/snapshots/**
+      - packages/ip-address/**
+      - packages/local-turns/**
+      - packages/service-runtime/**
+      - packages/app-bootstrap/**
+      - packages/turn-keys/**
       - packages/domain/**
       # What the MCP modules import besides those: the KV client that keeps the contact masks in
       # the stand's OpenBao, and the health and error helpers.
@@ -37,8 +43,7 @@ on:
       # The agent's browser on a preview and the gateway to a preview's copy of the plugin that
       # the role composes (plan 53, R7; the latter is core's own, R5c).
       - packages/browser-providers/**
-      - apps/orchestrator/src/previews/preview-content.ts
-      - apps/orchestrator/src/previews/preview-transport.ts
+      - packages/site-content/**
       # The stand configures its OpenBao with the real bootstrap and runs the role `mcp` under the
       # real policies (mcp-content, sites-writer, workspace-provisioner).
       - infra/vault/**

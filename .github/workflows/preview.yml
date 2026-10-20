@@ -32,11 +32,17 @@ on:
       - infra/sandbox/Dockerfile
       # The preview manager of core end to end (R5c), the gateway its browser goes through (R6)
       # and the export of a running turn's working tree (Р23), on the schema of the database.
-      - apps/orchestrator/src/previews/**
-      - apps/orchestrator/src/preview-gateway/**
-      - apps/orchestrator/src/turns/working-tree-export.ts
-      - apps/orchestrator/src/turns/working-tree-export.docker.test.ts
-      - apps/orchestrator/src/testing/previews.ts
+      - apps/core/src/previews/**
+      - apps/preview/**
+      - packages/preview-gateway/**
+      - packages/service-runtime/**
+      - packages/app-bootstrap/**
+      - packages/ip-address/**
+      - packages/local-turns/**
+      - packages/site-content/**
+      - packages/snapshots/**
+      - apps/core/src/turns/working-tree-export.docker.test.ts
+      - apps/core/src/testing/previews.ts
       - packages/db/**
   workflow_dispatch:
 
@@ -160,7 +166,7 @@ jobs:
           RADITI_PREVIEW_DOCKER_TESTS: '1'
           P2_SANDBOX_IMAGE: raditi-preview-sandbox:local
         run: |
-          pnpm --filter orchestrator exec vitest run --testTimeout=600000 \
+          pnpm --filter core exec vitest run --testTimeout=600000 \
             src/previews/preview.docker.integration.test.ts src/turns/working-tree-export.docker.test.ts
       - name: Network of a preview
         run: pnpm verify:preview-network --no-build

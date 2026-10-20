@@ -24,30 +24,30 @@ const starts = (file) =>
         .join('.*')}$`,
     ).test(file),
   )
-const scripts = readdirSync(join(root, 'apps/orchestrator/scripts'))
+const scripts = readdirSync(join(root, 'apps/core/scripts'))
   .filter((name) => /^verify-agent-content.*\.mjs$/.test(name) && !name.endsWith('.test.mjs'))
-  .map((name) => `apps/orchestrator/scripts/${name}`)
+  .map((name) => `apps/core/scripts/${name}`)
 
 test('the stand is one command over its own scripts', () => {
   assert.deepEqual(scripts.sort(), [
     // The turns of the live mode, and the trusted return they end with.
-    'apps/orchestrator/scripts/verify-agent-content-live.mjs',
-    'apps/orchestrator/scripts/verify-agent-content-role.mjs',
-    'apps/orchestrator/scripts/verify-agent-content-turns.mjs',
-    'apps/orchestrator/scripts/verify-agent-content-undo.mjs',
-    'apps/orchestrator/scripts/verify-agent-content.mjs',
+    'apps/core/scripts/verify-agent-content-live.mjs',
+    'apps/core/scripts/verify-agent-content-role.mjs',
+    'apps/core/scripts/verify-agent-content-turns.mjs',
+    'apps/core/scripts/verify-agent-content-undo.mjs',
+    'apps/core/scripts/verify-agent-content.mjs',
   ])
   // `exec`: a signal sent to the command reaches the stand itself, which then removes its
   // stacks — in a live run the OpenBao container that holds the plan key.
   assert.equal(
     JSON.parse(read('package.json')).scripts['verify:agent-content'],
-    'exec node apps/orchestrator/scripts/verify-agent-content.mjs',
+    'exec node apps/core/scripts/verify-agent-content.mjs',
   )
   // The role mcp is no worker of the stand: the shared launcher starts core and llm only.
   assert.doesNotMatch(read('infra/dev/llm-verify/workers.mjs'), /^ {2}mcp:/m)
   // No real subscription, site, env-file or key file can be named: the options are those of
   // live.mjs (standMode), and the plan key of a live run comes from the environment alone.
-  const main = read('apps/orchestrator/scripts/verify-agent-content.mjs')
+  const main = read('apps/core/scripts/verify-agent-content.mjs')
   assert.match(main, /const mode = standMode\(process\.argv\.slice\(2\), \{ stand: 'content' \}\)/)
   assert.doesNotMatch(main, /process\.argv\.slice\(2\)(?!, \{ stand: 'content' \}\))/)
   assert.doesNotMatch(
@@ -57,8 +57,8 @@ test('the stand is one command over its own scripts', () => {
 })
 
 test('every CLI of the stand is a row of one table and runs only what its driver prepared', () => {
-  const turns = read('apps/orchestrator/scripts/verify-agent-content-turns.mjs')
-  const main = read('apps/orchestrator/scripts/verify-agent-content.mjs')
+  const turns = read('apps/core/scripts/verify-agent-content-turns.mjs')
+  const main = read('apps/core/scripts/verify-agent-content.mjs')
   const rows = [
     ...turns.matchAll(/^ {2}([a-z]+): \{\n {4}name: '([A-Za-z]+)',\n {4}driver: (\w+),/gm),
   ]
@@ -84,7 +84,7 @@ test('every CLI of the stand is a row of one table and runs only what its driver
   // to write: the issuer asks the role llm for one, as core does.
   assert.match(main, /await zaiLogin\(zaiOperator\(stack, env\.LLM_UPSTREAM_CA_FILE\), \{/)
   assert.match(main, /probeAccounts: createPoolProbeClient\(/)
-  const setup = read('apps/orchestrator/scripts/verify-llm-zai-setup.mjs')
+  const setup = read('apps/core/scripts/verify-llm-zai-setup.mjs')
   // The plan the operator names at import is data of the offer: `lite` for the plan, `payg`
   // for the API.
   assert.match(setup, /'--plan',\s+offer\.plan,/)
@@ -95,13 +95,13 @@ test('every CLI of the stand is a row of one table and runs only what its driver
   assert.doesNotMatch(setup, /limitWindows|limitsSeenAt/)
   // What both stands of OpenCode need is one module, not a copy in each.
   assert.match(
-    read('apps/orchestrator/scripts/verify-llm-zai.mjs'),
+    read('apps/core/scripts/verify-llm-zai.mjs'),
     /\} from '\.\/verify-llm-zai-setup\.mjs'/,
   )
 })
 
 test('the edit turn reads what the write and its repeat were answered, not only their statuses', () => {
-  const turns = read('apps/orchestrator/scripts/verify-agent-content-turns.mjs')
+  const turns = read('apps/core/scripts/verify-agent-content-turns.mjs')
   const edit = turns.slice(turns.indexOf('// Turn A:'), turns.indexOf('// Turn B'))
   // The role refuses a call after admission with HTTP 200 as well, so three statuses of 200 do
   // not say that the repeat was replayed. What the CLI handed the model is judged against the
@@ -118,7 +118,7 @@ test('the edit turn reads what the write and its repeat were answered, not only 
 })
 
 test('a repeated signal cannot end the cleanup and a silent role cannot pass the log check', () => {
-  const main = read('apps/orchestrator/scripts/verify-agent-content.mjs')
+  const main = read('apps/core/scripts/verify-agent-content.mjs')
   // With `once` no listener is left after the first signal: the second one (a CI cancellation
   // sends two) ends the process in the middle of its cleanup and both stacks stay behind.
   assert.match(main, /process\.on\('SIGINT', interrupt\)\nprocess\.on\('SIGTERM', interrupt\)/)
@@ -130,11 +130,11 @@ test('a repeated signal cannot end the cleanup and a silent role cannot pass the
 })
 
 test('the role mcp is the regular one: the entry point of the build under its own AppRole', () => {
-  const main = read('apps/orchestrator/scripts/verify-agent-content.mjs')
-  const role = read('apps/orchestrator/scripts/verify-agent-content-role.mjs')
+  const main = read('apps/core/scripts/verify-agent-content.mjs')
+  const role = read('apps/core/scripts/verify-agent-content-role.mjs')
   // The trusted return of the live mode is the one script that puts the role's module
   // together: the product has no network channel to the role's trusted side yet (N8).
-  const undo = 'apps/orchestrator/scripts/verify-agent-content-undo.mjs'
+  const undo = 'apps/core/scripts/verify-agent-content-undo.mjs'
   const all = scripts
     .filter((name) => name !== undo)
     .map(read)
@@ -159,7 +159,8 @@ test('the role mcp is the regular one: the entry point of the build under its ow
   // because the content profile is refused in production.
   assert.match(role, /^ {4}NODE_ENV: 'production',$/m)
   assert.match(role, /^ {4}APP_ENV: 'test',$/m)
-  assert.match(role, /^ {4}ORCHESTRATOR_ROLES: 'mcp',$/m)
+  // The mcp app is one role: nothing to choose, so no ORCHESTRATOR_ROLES.
+  assert.doesNotMatch(role, /ORCHESTRATOR_ROLES/)
   assert.match(role, /^ {4}MCP_CONTENT_PROFILE: 'local-site',$/m)
   assert.match(role, /^ {4}VAULT_ROLE_ID: vault\.roleId,$/m)
   // Nothing of the launcher's environment is inherited, and no operator token is named.
@@ -205,14 +206,15 @@ test('the workflow starts on every source the stand runs', () => {
   ])
   const packages = new Set()
   const builds = new Set()
+  const apps = new Set()
   // The stand's scripts and what they import from beside them: the Z.ai setup of the gateway
   // stand, shared by both.
   const beside = scripts.flatMap((script) =>
     [...read(script).matchAll(/'\.\/(verify-[a-z-]+\.mjs)'/g)].map(
-      ([, name]) => `apps/orchestrator/scripts/${name}`,
+      ([, name]) => `apps/core/scripts/${name}`,
     ),
   )
-  assert.ok(beside.includes('apps/orchestrator/scripts/verify-llm-zai-setup.mjs'))
+  assert.ok(beside.includes('apps/core/scripts/verify-llm-zai-setup.mjs'))
   for (const script of new Set([...scripts, ...beside])) {
     sources.add(script)
     const text = read(script)
@@ -222,6 +224,8 @@ test('the workflow starts on every source the stand runs', () => {
       packages.add(name)
     for (const [, directory] of text.matchAll(/'\.\.\/(?:dist|src)\/([a-z-]+)\//g))
       builds.add(directory)
+    // The builds of the apps beside the orchestrator: ../../mcp/dist and ../../llm/dist.
+    for (const [, app] of text.matchAll(/'\.\.\/\.\.\/([a-z-]+)\/dist\//g)) apps.add(app)
   }
   for (const path of [
     'infra/dev/llm-verify/stack.mjs',
@@ -253,12 +257,14 @@ test('the workflow starts on every source the stand runs', () => {
   packages.add('site-adapters').add('observability').add('llm-backends')
   for (const name of packages)
     assert.ok(starts(`packages/${name}/src/index.ts`), `packages/${name}/** does not start it`)
-  for (const directory of ['mcp', 'llm'])
-    assert.ok(builds.has(directory), `the stand loads the orchestrator's ${directory}`)
-  // The role llm and the operator command of the plan key are processes of their own, started
-  // from the build.
-  for (const directory of [...builds, 'llm-gateway', 'subscriptions'])
-    assert.ok(starts(`apps/orchestrator/src/${directory}/index.ts`))
+  // The mcp app is loaded from its build by the scripts; the llm app by the worker the stand
+  // spawns (verify-llm-worker.mjs) and by the operator command of the plan key.
+  assert.ok(apps.has('mcp'), 'the stand loads the build of the mcp app')
+  apps.add('llm')
+  // The roles llm and mcp and the operator command of the plan key are processes of their own,
+  // started from the build.
+  for (const directory of builds) assert.ok(starts(`apps/core/src/${directory}/index.ts`))
+  for (const app of apps) assert.ok(starts(`apps/${app}/src/index.ts`))
 })
 
 test('the workflow pulls exactly the images the WordPress fixture refuses to pull', () => {
@@ -296,8 +302,8 @@ test('the workflow runs the stand on a native Linux engine without secrets', () 
   // as outside production it always does; the stand's hop in front of it listens on the bridge
   // gateway address, not on every interface.
   assert.match(
-    read('apps/orchestrator/scripts/verify-agent-content.mjs'),
+    read('apps/core/scripts/verify-agent-content.mjs'),
     /listenHost: process\.platform === 'linux' \? await bridgeGateway\(\) : '127\.0\.0\.1',/,
   )
-  assert.doesNotMatch(read('apps/orchestrator/scripts/verify-agent-content-role.mjs'), /0\.0\.0\.0/)
+  assert.doesNotMatch(read('apps/core/scripts/verify-agent-content-role.mjs'), /0\.0\.0\.0/)
 })

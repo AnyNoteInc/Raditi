@@ -969,7 +969,7 @@ export function sumUsage(items) {
 /**
  * What the log of the role llm says of the provider's refusals: the adapter's codes for Z.ai
  * and the kinds of signal, each once, in the order they first appear. The role writes them into
- * its `llm_call` line and only for a refusal (apps/orchestrator/src/llm-gateway/server.ts).
+ * its `llm_call` line and only for a refusal (apps/llm/src/gateway/server.ts).
  */
 export function providerSignals(roleLog) {
   const each = (pattern) => [...new Set([...roleLog.matchAll(pattern)].map((match) => match[1]))]

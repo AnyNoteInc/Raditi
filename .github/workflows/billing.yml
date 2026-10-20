@@ -26,7 +26,20 @@ on:
       # commands of the orchestrator, and every workspace package they are built from,
       # migrations and seeds included.
       - apps/web/**
-      - apps/orchestrator/**
+      - apps/core/**
+      - apps/preview/**
+      - packages/preview-gateway/**
+      - packages/ip-address/**
+      - apps/runner/**
+      - packages/runner-engine/**
+      - apps/mcp/**
+      - apps/llm/**
+      - packages/snapshots/**
+      - packages/local-turns/**
+      - packages/turn-keys/**
+      - packages/site-content/**
+      - packages/service-runtime/**
+      - packages/app-bootstrap/**
       - packages/**
   workflow_dispatch:
 

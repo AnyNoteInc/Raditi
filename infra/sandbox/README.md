@@ -2,6 +2,19 @@
 
 `Dockerfile` собирает цели: `runtime` (образ песочницы с OpenCode CLI), `gateway` (`sandbox-gw` — `gateway.mjs` и прокси выхода переменных клиента), `network-guard` (`network-guard.mjs` и `host-firewall.mjs`), `watchdog` и `client-egress` (прокси выхода предпросмотра). Правила песочницы — spec §8 и правило 5 `CLAUDE.md`.
 
+## Раннер песочной ВМ
+
+`docker-compose.yml` ВМ поднимает `watchdog` и, с профилем `runner`, раннер: приложение `apps/runner` забирает ходы у API раннеров `core` и управляет Docker этой ВМ. Образ раннера — `RUNNER_IMAGE`, собирается из `apps/runner/Dockerfile` (`turbo prune runner`; без `git` и `gitleaks` — git хода работает внутри песочницы; код раннера не достаёт базу, Redis, Vault и S3):
+
+```sh
+docker build --platform linux/amd64 -f apps/runner/Dockerfile --target runtime -t <реестр>/raditi/runner .
+```
+
+- Образ у раннера свой (`apps/runner/Dockerfile`), образ `core` ему не нужен: переменной `ORCHESTRATOR_ROLES` больше нет, и production-раннер с ней не стартует. Поэтому compose песочной ВМ и образ раннера меняют вместе: образ после разделения со старым compose (он задавал эту переменную) не запустится, а прежний образ без неё — тоже (требует её); откатывают оба сразу. Токен ВМ выпускает скрипт `scripts/runner-token.mjs` из этого же образа (`infra/app/README.md`, «Токены раннеров»).
+- Окружение раннера — `RUNNER_CORE_URL`, `RUNNER_TOKEN_FILE`, `RUNNER_CORE_CA_FILE`, `RUNNER_S3_ORIGIN`, `RUNNER_MAX_TURNS` и `SANDBOX_*`; из своего `.env` compose ВМ берёт `RUNNER_CORE_URL`, `RUNNER_CORE_CA_FILE`, `RUNNER_S3_ORIGIN`, образы и адреса шлюза песочницы, а `RUNNER_TOKEN_FILE`, `RUNNER_MAX_TURNS` и `SANDBOX_RUNTIME` задаёт сам. В production раннер не стартует с любой другой переменной, кроме системных, `APP_ENV` и `NODE_ENV`: на ВМ не должно быть платформенных секретов (`apps/runner/src/config.ts`).
+- Портов раннер не открывает и к PostgreSQL, Redis, Vault и S3 со своими ключами не ходит: снимки хода он переносит по временным ссылкам S3, которые присылает `core`, и только на origin из `RUNNER_S3_ORIGIN`.
+- Выкладка — сначала `core`, потом `RUNNER_IMAGE` на песочных ВМ; откат — наоборот (`infra/app/README.md`, «`core` и раннеры»).
+
 ## Прокси выхода переменных клиента
 
 [План 53](../../docs/plan/53-chat-preview-release.md), Р13 (ответ владельца: «агенту и предпросмотру, оба в сеть»). Переменная клиента ведёт только к `host:port` из своего списка; путь туда — только через прокси выхода `client-egress.mjs`, не через код шлюза `sandbox-gw`.
@@ -22,7 +35,7 @@
 
 Подсети платформы (`SANDBOX_EGRESS_REFUSED_SUBNETS`) на песочной ВМ:
 
-- в production обязательны: роль `runner` со шлюзом песочницы без них не стартует; compose передаёт переменную раннеру, раннер — каждому `sandbox-gw` (`EGRESS_REFUSED_SUBNETS`);
+- в production обязательны: раннер со шлюзом песочницы без них не стартует; compose передаёт переменную раннеру, раннер — каждому `sandbox-gw` (`EGRESS_REFUSED_SUBNETS`);
 - в списке — публичные адреса всех машин платформы (app-ВМ, песочные ВМ, узел выхода, Vault, Gitea, S3 и реестр, если они на своих адресах), по одному `/32` или подсетью провайдера: имя клиента, указывающее на такой адрес, иначе прошло бы туннелем с моста Docker мимо правил периметра;
 - при выкладке (M10) runbook ВМ сверяет список с адресами из инвентаря; предпросмотры на раннерах получат ту же переменную (`createDockerPreviewRuntime({ egressRefusedSubnets })`).
 

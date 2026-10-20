@@ -103,7 +103,7 @@ test('llm is opt-in and does not become a dependency of the default stack', () =
 test('llm gets only its own role, TLS files and private endpoints; health requires readiness', () => {
   const { environment: env } = services.llm
   assert.equal(env.APP_ENV, 'production')
-  assert.equal(env.ORCHESTRATOR_ROLES, 'llm')
+  assert.equal(env.ORCHESTRATOR_ROLES, undefined)
   for (const key of Object.keys(env)) assert.doesNotMatch(key, /^(REDIS_|S3_|RUNNER_|SANDBOX_)/)
   assert.equal(env.LLM_EGRESS_PROXY_URL, `https://${example.EGRESS_PROXY_IP}:443`)
   assert.equal(env.LLM_GATEWAY_CLIENTS, `127.0.0.1/32,${example.LLM_GATEWAY_CLIENTS}`)
@@ -115,7 +115,7 @@ test('llm gets only its own role, TLS files and private endpoints; health requir
     LLM_EGRESS_CLIENT_KEY_FILE: 'egress-client-key.pem',
   }))
     assert.equal(env[name], `/run/raditi/${path}`)
-  // Nothing the role refuses in production (apps/orchestrator/src/config/llm-config.ts).
+  // Nothing the role refuses in production (apps/llm/src/llm-config.ts).
   for (const name of [
     'LLM_UPSTREAM_CA_FILE',
     'NODE_TLS_REJECT_UNAUTHORIZED',
@@ -331,7 +331,11 @@ test('preflight.sh requires a full revision and the journald limits of the runbo
 })
 
 test("preflight.sh requires a digest for every image of the server's .env", () => {
-  const images = [...source.matchAll(/\$\{([A-Z_]+_IMAGE):\?/g)].map(([, name]) => name)
+  // The overlay of previews adds the image of its gateway: set once it is switched on.
+  const overlay = readFileSync(new URL('./docker-compose.preview.yml', import.meta.url), 'utf8')
+  const images = [...`${source}${overlay}`.matchAll(/\$\{([A-Z_]+_IMAGE):\?/g)].map(
+    ([, name]) => name,
+  )
   const checked = /^for name in ([A-Z_ ]+); do$/m.exec(preflight)?.[1].split(' ')
   assert.deepEqual([...new Set(images)].sort(), checked?.sort())
   assert.ok(preflight.includes("grep -Eq '@sha256:[0-9a-f]{64}$'"))
@@ -628,7 +632,7 @@ test('the gateway of previews: its own role, uid and secrets, nothing published'
   const preview = withPreview.services.preview
   assert.equal(preview.user, '10009:10009')
   assert.ok(!Object.values(uids).includes(preview.user))
-  assert.equal(preview.image, example.ORCHESTRATOR_IMAGE)
+  assert.equal(preview.image, example.PREVIEW_GATEWAY_IMAGE)
   assert.equal(preview.read_only, true)
   assert.deepEqual(preview.cap_drop, ['ALL'])
   assert.deepEqual(preview.security_opt, ['no-new-privileges:true'])
@@ -638,7 +642,6 @@ test('the gateway of previews: its own role, uid and secrets, nothing published'
   assert.equal(preview.expose, undefined)
   assert.equal(preview.deploy.replicas, 1)
   assert.deepEqual(Object.keys(preview.depends_on), ['postgres'])
-  assert.equal(preview.environment.ORCHESTRATOR_ROLES, 'preview')
   assert.equal(preview.environment.APP_ENV, 'production')
   assert.equal(preview.environment.APP_URL, `https://${example.APP_DOMAIN}`)
   assert.equal(preview.environment.PREVIEW_SCHEME, 'https')

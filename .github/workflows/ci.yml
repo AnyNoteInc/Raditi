@@ -181,8 +181,14 @@ jobs:
         run: pnpm db:seed
 
       # No `--` here: pnpm would hand it to Vitest, which then reads the flag as a file filter.
-      - name: Gateway, turn key, pool, login and MCP tests with PostgreSQL
-        run: pnpm --filter orchestrator test:db --testTimeout=30000
+      - name: Turn key, sweeper and release tests with PostgreSQL
+        run: pnpm --filter core test:db --testTimeout=30000
+
+      - name: Gateway, pool, lock, login and retire tests with PostgreSQL
+        run: pnpm --filter llm test:db --testTimeout=30000
+
+      - name: MCP gateway access, undo and preview tests with PostgreSQL
+        run: pnpm --filter mcp test:db --testTimeout=30000
 
       # The approval of the credit rate reads the whole catalogue — every enabled model, every
       # tariff on sale — and locks `credit_rates`, so its PostgreSQL cases are opt-in as well and

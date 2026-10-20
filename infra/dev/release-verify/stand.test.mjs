@@ -53,7 +53,7 @@ import {
 } from './stand.mjs'
 
 const names = standNames('0123abcd')
-const digest = `raditi-release-verify/orchestrator@sha256:${'a'.repeat(64)}`
+const digest = `raditi-release-verify/core@sha256:${'a'.repeat(64)}`
 const ports = {
   gitea: 40001,
   vault: 40002,
@@ -194,7 +194,7 @@ test('each process of the platform is its own role with its own AppRole, and nev
   for (const [role, env] of roles) {
     assert.equal(env.NODE_ENV, 'production', `${role} would look for a .env`)
     assert.equal(env.APP_ENV, 'test')
-    assert.equal(env.ORCHESTRATOR_ROLES, role)
+    assert.equal(env.ORCHESTRATOR_ROLES, undefined)
     assert.equal(env.ZAI_API_KEY, undefined)
     assert.equal(env.VAULT_DEV_ROOT_TOKEN, undefined)
     if (env.VAULT_ROLE_ID) assert.equal(env.VAULT_ROLE_ID, `${role}-id`)

@@ -1,0 +1,56 @@
+name: Images
+
+# The production images of the apps no other workflow builds (docs/plan/55-split-orchestrator.md):
+# llm, mcp, preview and the runner of the sandbox VMs, each built from its own Dockerfile and
+# checked from the outside (pnpm verify:images): its own app starts and refuses an empty
+# configuration, no git, gitleaks or .env, and nothing of the platform's data in the runner.
+# core and web are built by edge.yml, the llm image also runs for real in llm-app.yml.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/images.yml
+      - .nvmrc
+      - .dockerignore
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - turbo.json
+      - apps/llm/**
+      - apps/mcp/**
+      - apps/preview/**
+      - apps/runner/**
+      - packages/**
+      - infra/app/verify-images.mjs
+  workflow_dispatch:
+
+concurrency:
+  group: images-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Four images, each with a pruned workspace install in its layers, plus the build cache:
+      # drop preinstalled toolchains this job never uses (as edge.yml does).
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker image prune --all --force >/dev/null
+          df -h /
+      # verify-images.mjs needs Node alone: Docker builds the images, the workspace is not installed.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Build and check the images of llm, mcp, preview and runner
+        run: node infra/app/verify-images.mjs

@@ -1,4 +1,4 @@
-// The platform images (apps/*/Dockerfile): pinned bases, pnpm from its version and turbo from the
+// The platform images (apps/{web,core,llm,mcp,preview,runner}/Dockerfile): pinned bases, pnpm from its version and turbo from the
 // lockfile, a non-root runtime, and the git that publication needs. The third-party images of the
 // app VM: verify:edge runs exactly the digests that env.example deploys.
 import assert from 'node:assert/strict'
@@ -8,7 +8,11 @@ import { test } from 'node:test'
 const root = new URL('../../', import.meta.url)
 const dockerfiles = {
   web: readFileSync(new URL('apps/web/Dockerfile', root), 'utf8'),
-  orchestrator: readFileSync(new URL('apps/orchestrator/Dockerfile', root), 'utf8'),
+  core: readFileSync(new URL('apps/core/Dockerfile', root), 'utf8'),
+  llm: readFileSync(new URL('apps/llm/Dockerfile', root), 'utf8'),
+  mcp: readFileSync(new URL('apps/mcp/Dockerfile', root), 'utf8'),
+  preview: readFileSync(new URL('apps/preview/Dockerfile', root), 'utf8'),
+  runner: readFileSync(new URL('apps/runner/Dockerfile', root), 'utf8'),
 }
 const DIGEST = /@sha256:[0-9a-f]{64}$/
 
@@ -66,14 +70,25 @@ for (const [app, text] of Object.entries(dockerfiles)) {
   })
 }
 
-test('orchestrator: the build fails without git 2.47, which publication needs', () => {
-  const runtime = stage(dockerfiles.orchestrator, 'runtime').join('\n')
+for (const app of ['llm', 'mcp', 'preview', 'runner']) {
+  test(`${app}: its own image prunes and builds its own app, and carries no git or gitleaks`, () => {
+    const code = instructions(dockerfiles[app]).join('\n')
+    assert.match(code, new RegExp(`turbo prune ${app} --docker`))
+    assert.match(code, new RegExp(`pnpm --filter ${app} build`))
+    assert.match(code, new RegExp(`WORKDIR /app/apps/${app}$`, 'm'))
+    // Only core publishes to git and scans for secrets; the other processes hold no such tools.
+    assert.doesNotMatch(code, /gitleaks|apt-get install[^\n]*\bgit\b/)
+  })
+}
+
+test('core: the build fails without git 2.47, which publication needs', () => {
+  const runtime = stage(dockerfiles.core, 'runtime').join('\n')
   assert.match(runtime, /git --version \| awk .*v\[2\] >= 47/)
   assert.match(runtime, /COPY --from=gitleaks \/usr\/bin\/gitleaks \/usr\/local\/bin\/gitleaks/)
 })
 
-test('orchestrator: migrate runs the Prisma CLI of @repo/db as its own uid', () => {
-  const migrate = stage(dockerfiles.orchestrator, 'migrate')
+test('core: migrate runs the Prisma CLI of @repo/db as its own uid', () => {
+  const migrate = stage(dockerfiles.core, 'migrate')
   assert.ok(migrate.includes('WORKDIR /repo/packages/db'))
   assert.ok(migrate.includes('USER 10004:10004'))
 })

@@ -498,7 +498,6 @@ test('core runs as the role core of a development stand, without the repository 
   const env = coreEnv()
   assert.equal(env.NODE_ENV, 'production', 'NODE_ENV=production keeps loadRepoEnv away')
   assert.equal(env.APP_ENV, 'development')
-  assert.equal(env.ORCHESTRATOR_ROLES, 'core')
   assert.equal(env.PATH, '/opt/tools:/usr/bin:/bin')
   assert.equal(env.HOME, '/tmp/raditi-siteimport-0123abcd/home')
   assert.equal(env.GIT_CA_FILE, env.NODE_EXTRA_CA_CERTS)

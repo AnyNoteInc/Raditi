@@ -8,7 +8,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { runCommand } from '../../../apps/orchestrator/scripts/verify-agent-supervisor.mjs'
+import { runCommand } from '../../../apps/core/scripts/verify-agent-supervisor.mjs'
 import { trpcClient } from './trpc.mjs'
 
 const STAGE = 'code_import'

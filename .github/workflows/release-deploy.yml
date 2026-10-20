@@ -22,9 +22,9 @@ on:
       - packages/domain/**
       - packages/site-connections/**
       - packages/site-adapters/**
-      - apps/orchestrator/src/deploy-step/**
-      - apps/orchestrator/src/releases/release-db-values.ts
-      - apps/orchestrator/src/testing/deploy-step.ts
+      - apps/core/src/deploy-step/**
+      - apps/core/src/releases/release-db-values.ts
+      - apps/core/src/testing/deploy-step.ts
       - infra/wordpress/raditi-content.php
   workflow_dispatch:
 
@@ -65,4 +65,4 @@ jobs:
           RADITI_HOSTING_DOCKER_TESTS: '1'
         run: |
           pnpm --filter @repo/site-connections exec vitest run src/hosting/sftp-writer.integration.test.ts src/hosting/ftp-writer.integration.test.ts
-          pnpm --filter orchestrator exec vitest run src/deploy-step/deploy.integration.test.ts
+          pnpm --filter core exec vitest run src/deploy-step/deploy.integration.test.ts

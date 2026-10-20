@@ -14,11 +14,11 @@ tools: Read, Grep, Glob, Bash
 
 Помни об отличиях Радити от AnyNote:
 
-- Вместо `apps/agents` (Python) и `apps/engines` в Радити одно NestJS-приложение `apps/orchestrator` с ролями core, mcp и runner: агент теперь внешний CLI в песочнице.
+- Вместо `apps/agents` (Python) и `apps/engines` в Радити пять NestJS-приложений, по одному на процесс: `apps/core` (ядро: задачи, очереди, биллинг, выпуск), `apps/llm` (шлюз подписок), `apps/mcp` (MCP-шлюз), `apps/preview` (шлюз предпросмотров) и `apps/runner` (раннер песочной ВМ). Агент — внешний CLI в песочнице. Общий код приложений — пакеты `app-bootstrap` (запуск процесса, без БД и Redis), `service-runtime` (Prisma, `/health`, `/metrics`), `runner-engine`, `snapshots`, `local-turns`, `turn-keys`, `site-content`, `preview-gateway`, `ip-address`; приложения друг друга не импортируют.
 - `packages/domain` — ядро портов и адаптеров: порты там, адаптеры зависят только от него.
 - Очереди — BullMQ на Redis (`@nestjs/bullmq`); в AnyNote их нет.
 - S3 для разработки — SeaweedFS, а не MinIO. Деньги — Decimal, а не целые копейки.
-- Новые пакеты: vault, git-providers, sandbox-providers, agent-drivers, site-adapters; `storage` расширяем (несколько бакетов, presigned, multipart), `yookassa` — чеками 54-ФЗ.
+- Новые адаптеры: vault, git-providers, sandbox-providers, browser-providers, agent-drivers, llm-backends, site-adapters, site-connections; `storage` расширяем (несколько бакетов, presigned, multipart). `yookassa` — без чеков 54-ФЗ: продавец самозанятая (правило 9 CLAUDE.md).
 - Всё, что относится к продукту AnyNote (заметки, его домен, его тексты), в Радити не переносится.
 
 Если в AnyNote чего-то нет — так и скажи, не выдумывай. Отвечай компактно: список путей и выводов, без пересказа файлов целиком.

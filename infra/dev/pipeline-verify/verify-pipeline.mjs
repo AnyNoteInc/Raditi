@@ -546,7 +546,7 @@ async function main() {
       throw new Error(`The pinned image ${image} is missing locally; no image was pulled`)
   if ((await docker(['image', 'inspect', options.deployImage], { allowFailure: true })).code !== 0)
     throw new Error(
-      `The deploy image ${options.deployImage} is missing: build it with docker build -f apps/orchestrator/Dockerfile --target runtime -t ${options.deployImage} .`,
+      `The deploy image ${options.deployImage} is missing: build it with docker build -f apps/core/Dockerfile --target runtime -t ${options.deployImage} .`,
     )
   await run('openssl', ['version'], { env: { PATH: process.env.PATH } })
 

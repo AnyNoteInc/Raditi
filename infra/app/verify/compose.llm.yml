@@ -34,7 +34,7 @@ services:
       llm-out: { ipv4_address: '${VAULT_PRIVATE_IP}' }
       verify-management: {}
   verify-egress:
-    image: ${ORCHESTRATOR_IMAGE}
+    image: ${CORE_IMAGE}
     user: '10008:10008'
     read_only: true
     cap_drop: [ALL]
@@ -53,7 +53,7 @@ services:
     networks:
       llm-out: { ipv4_address: '${EGRESS_PROXY_IP}' }
   verify-core:
-    image: ${ORCHESTRATOR_IMAGE}
+    image: ${CORE_IMAGE}
     user: '10002:10002'
     read_only: true
     cap_drop: [ALL]

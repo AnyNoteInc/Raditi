@@ -995,7 +995,7 @@ test('the stand keeps its signal handlers through the cleanup and is started by 
   const scripts = JSON.parse(read('package.json')).scripts
   assert.equal(
     scripts['verify:site-connect'],
-    'pnpm --filter orchestrator build && exec node infra/dev/site-verify/verify-site-connect.mjs',
+    'pnpm --filter core --filter mcp build && exec node infra/dev/site-verify/verify-site-connect.mjs',
   )
   // The role under test is the regular one, with the AppRole of the mcp service.
   assert.match(stand, /startRegularRole\(/)

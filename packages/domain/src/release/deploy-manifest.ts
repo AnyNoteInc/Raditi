@@ -139,7 +139,7 @@ export const deployWrapDataMatches = (data: DeployWrapData, wrap: DeployWrap): b
  * stored — each side names it from what it already holds (`deployBackupAad`, `deployValueAad`),
  * so a backup of another attempt or the value of another object does not open. One code for both
  * sides: `sealDeployEnvelope` and `openDeployEnvelope` of
- * `apps/orchestrator/src/deploy-step/envelope.ts` (core seals the values with it, R8b; the job
+ * `apps/core/src/deploy-step/envelope.ts` (core seals the values with it, R8b; the job
  * seals and opens its backup and opens the values, R8c).
  */
 export const DEPLOY_ENVELOPE_MAGIC = 'RDE1'
@@ -147,7 +147,7 @@ export const DEPLOY_ENVELOPE_MAGIC = 'RDE1'
 /**
  * The associated data of the backup of one attempt: the object `raditi-backups`
  * `…/<attempt>/backup.tar.zst.enc`, a zstd-compressed tar (its layout is in
- * `apps/orchestrator/src/deploy-step/backup.ts`). The job writes it; the job of an attempt
+ * `apps/core/src/deploy-step/backup.ts`). The job writes it; the job of an attempt
  * «только возврат» reads it; core checks only its size and SHA-256.
  */
 export const deployBackupAad = (releaseId: string, deployAttempt: number): string =>

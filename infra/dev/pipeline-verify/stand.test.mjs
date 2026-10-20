@@ -70,7 +70,7 @@ test('every image is pinned by digest and never pulled', () => {
   assert.deepEqual(writer.slice(0, 6), ['run', '--rm', '-i', '--pull', 'never', '--label'])
   assert.deepEqual(values(writer, '--network'), ['none'])
   // The deploy image is built from this tree and never pulled: the runner has `force_pull: false`.
-  assert.equal(DEPLOY_IMAGE, 'raditi-pipeline-verify/orchestrator:local')
+  assert.equal(DEPLOY_IMAGE, 'raditi-pipeline-verify/core:local')
 })
 
 test('names belong to one run and nothing of the dev infrastructure can be named', () => {
@@ -353,9 +353,9 @@ test('the stand takes its options and nothing else', () => {
   assert.deepEqual(standOptions(['--']), plain)
   assert.deepEqual(standOptions(['--record=/tmp/samples']), { ...plain, record: '/tmp/samples' })
   assert.deepEqual(standOptions(['--only=tags']), { ...plain, only: 'tags' })
-  assert.deepEqual(standOptions(['--deploy-image=raditi/orchestrator:abc']), {
+  assert.deepEqual(standOptions(['--deploy-image=raditi/core:abc']), {
     ...plain,
-    deployImage: 'raditi/orchestrator:abc',
+    deployImage: 'raditi/core:abc',
   })
   for (const argv of [
     ['--record=relative/dir'],
@@ -471,8 +471,8 @@ test('the product deploy runs on a release tag only, never on a push to main (Р
     )
   // Two steps of the orchestrator image: `match` decides, `deploy` runs only when it said yes.
   assert.deepEqual(scriptsOf(deploy), [
-    '          exec node /app/apps/orchestrator/dist/deploy-step/cli.js match\n',
-    '          exec node /app/apps/orchestrator/dist/deploy-step/cli.js run\n',
+    '          exec node /app/apps/core/dist/deploy-step/cli.js match\n',
+    '          exec node /app/apps/core/dist/deploy-step/cli.js run\n',
   ])
   assert.match(deploy, /- name: match\n {8}id: match\n/)
   assert.match(deploy, /- name: deploy\n {8}if: steps\.match\.outputs\.matched == 'true'\n/)
@@ -482,12 +482,9 @@ test('the product deploy runs on a release tag only, never on a push to main (Р
     ['secrets.RADITI_DEPLOY_WRAP', 'secrets.RADITI_DEPLOY_WRAP', 'gitea.token'],
   )
   // The command is built from this source: Nest compiles src/ into dist/ (tsconfig rootDir src).
-  assert.ok(read('../../../apps/orchestrator/src/deploy-step/cli.ts').length > 0)
-  assert.match(read('../../../apps/orchestrator/tsconfig.json'), /"rootDir": "src"/)
-  assert.match(
-    read('../../../apps/orchestrator/Dockerfile'),
-    /\nWORKDIR \/app\/apps\/orchestrator\n/,
-  )
+  assert.ok(read('../../../apps/core/src/deploy-step/cli.ts').length > 0)
+  assert.match(read('../../../apps/core/tsconfig.json'), /"rootDir": "src"/)
+  assert.match(read('../../../apps/core/Dockerfile'), /\nWORKDIR \/app\/apps\/core\n/)
 })
 
 test('the Vault address and the release API reach a deploy job from its runner, never from the repository', () => {

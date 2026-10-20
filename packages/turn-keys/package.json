@@ -1,0 +1,32 @@
+{
+  "name": "@repo/turn-keys",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@repo/db": "workspace:*",
+    "@repo/domain": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@repo/app-bootstrap": "workspace:*",
+    "@repo/eslint-config": "workspace:*",
+    "@repo/llm-backends": "workspace:*",
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@typescript/native": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

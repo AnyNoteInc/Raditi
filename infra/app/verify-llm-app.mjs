@@ -19,7 +19,7 @@ const app = join(root, 'infra/app')
 const { values: options } = parseArgs({
   args: process.argv.slice(2).filter((arg) => arg !== '--'),
   options: {
-    image: { type: 'string', default: 'raditi-p3verify-orchestrator:b14' },
+    image: { type: 'string', default: 'raditi-p3verify-llm:b14' },
     'hairpin-only': { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
   },
@@ -29,7 +29,7 @@ if (options.help) {
     'Usage: node infra/app/verify-llm-app.mjs [--image <local production image>] [--hairpin-only]\n',
   )
   process.stdout.write(
-    'Build first: docker build -f apps/orchestrator/Dockerfile --target runtime -t raditi-p3verify-orchestrator:b14 .\n',
+    'Build first: docker build -f apps/llm/Dockerfile --target runtime -t raditi-p3verify-llm:b14 .\n',
   )
   process.exit(0)
 }
@@ -306,7 +306,8 @@ async function main() {
     APP_DOMAIN: 'b14.invalid',
     APP_PRIVATE_IP: privateIp,
     APP_REVISION: 'a'.repeat(40),
-    ORCHESTRATOR_IMAGE: options.image,
+    CORE_IMAGE: options.image,
+    LLM_IMAGE: options.image,
     POSTGRES_IMAGE:
       'postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24',
     SECRETS_DIR: secrets,
@@ -345,7 +346,6 @@ async function main() {
   compose = (args, init) => docker([...composeArgs, ...args], init)
   const config = JSON.parse((await compose(['config', '--format', 'json'])).stdout)
   assert.equal(config.services.llm.user, '10008:10008')
-  assert.equal(config.services.llm.environment.ORCHESTRATOR_ROLES, 'llm')
   assert.equal(config.services.llm.environment.APP_ENV, 'production')
   assert.equal(config.services.llm.ports.length, 1)
   assert.equal(config.services.llm.ports[0].host_ip, privateIp)

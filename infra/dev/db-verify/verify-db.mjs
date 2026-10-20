@@ -596,7 +596,7 @@ async function main() {
   await assertUntouched('left by the database tests')
   passed('database tests left no row in public and no schema behind')
   stage = 'reference data seed'
-  // The orchestrator's integration tests read the seeded catalogue, as in CI after db:seed.
+  // The integration tests of core read the seeded catalogue, as in CI after db:seed.
   assert.match(await seed(), /\[seed\] \w+: \+[1-9]\d* created, 0 updated/)
   // A new database: one shell and the catalogue of its backends, no row of an earlier shell or
   // provider.
@@ -608,7 +608,9 @@ async function main() {
   passed(
     'reference data seeded: the catalogue of one shell and its two backends; a rerun changes nothing',
   )
-  await suite('orchestrator', 'orchestrator')
+  await suite('core', 'core')
+  await suite('llm', 'llm')
+  await suite('mcp', 'mcp')
   // Their PostgreSQL suites (billing accounts, the ledger and its read models; project and
   // profile writes; the avatar upload limit) skip themselves without DATABASE_URL, in
   // `pnpm gates` too: this is their only local run. They create and remove their own rows.
@@ -616,7 +618,7 @@ async function main() {
   await suite('@repo/trpc', 'trpc')
   await suite('web', 'web')
   passed(
-    `${checks} shared-user and upgrade checks; database, orchestrator, billing, tRPC and web suites`,
+    `${checks} shared-user and upgrade checks; database, core, llm, mcp, billing, tRPC and web suites`,
   )
 }
 

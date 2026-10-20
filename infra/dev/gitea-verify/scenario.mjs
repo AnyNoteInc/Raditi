@@ -11,13 +11,13 @@ import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
-import { loadConfig } from '../../../apps/orchestrator/dist/config/config.js'
-import { emptyUntrackedArchive } from '../../../apps/orchestrator/dist/git-workspace/archive.js'
+import { loadConfig } from '../../../apps/core/dist/config/config.js'
+import { emptyUntrackedArchive } from '../../../apps/core/dist/git-workspace/archive.js'
 import {
   configuredGitProvider,
   gitWorkspaceOptions,
-} from '../../../apps/orchestrator/dist/git-workspace/git-config.js'
-import { GitWorkspaceService } from '../../../apps/orchestrator/dist/git-workspace/git-workspace.service.js'
+} from '../../../apps/core/dist/git-workspace/git-config.js'
+import { GitWorkspaceService } from '../../../apps/core/dist/git-workspace/git-workspace.service.js'
 import { verifyReleaseCalls } from './release-scenario.mjs'
 import { verifyWorkingSet } from './working-set-scenario.mjs'
 
@@ -41,7 +41,6 @@ let stage = 'configuration'
 const coreEnv = (git) => ({
   APP_ENV: 'test',
   APP_URL: 'http://127.0.0.1:1',
-  ORCHESTRATOR_ROLES: 'core',
   DATABASE_URL: 'postgresql://raditi:synthetic@127.0.0.1:1/raditi',
   REDIS_URL: 'redis://127.0.0.1:1',
   S3_ENDPOINT: 'http://127.0.0.1:1',
@@ -159,7 +158,7 @@ const rejects = async (promise, code, message) => {
 
 async function main() {
   // 1. CoreConfig.git and the composition of GitWorkspaceModule.
-  const { git: gitConfig } = loadConfig(coreEnv({ GITEA_URL, GITEA_TOKEN, GIT_CA_FILE })).core
+  const { git: gitConfig } = loadConfig(coreEnv({ GITEA_URL, GITEA_TOKEN, GIT_CA_FILE }))
   assert.deepEqual(
     gitConfig,
     { kind: 'gitea', baseUrl: GITEA_URL, token: GITEA_TOKEN, caFile: GIT_CA_FILE },
@@ -168,7 +167,7 @@ async function main() {
   const plain = loadConfig(
     coreEnv({ GITEA_URL: GITEA_URL.replace('https:', 'http:'), GITEA_TOKEN }),
   )
-  assert.equal(plain.core.git, null, 'A plain-http Gitea must leave git unconfigured')
+  assert.equal(plain.git, null, 'A plain-http Gitea must leave git unconfigured')
   const real = configuredGitProvider(gitConfig)
   const grants = []
   const provider = {

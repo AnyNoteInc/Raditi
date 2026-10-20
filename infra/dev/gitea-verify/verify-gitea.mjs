@@ -194,9 +194,9 @@ async function main() {
   await run('git', ['--version'], { env: toolEnv })
   await run('openssl', ['version'], { env: toolEnv })
   try {
-    await access(join(root, 'apps/orchestrator/dist/git-workspace/git-config.js'))
+    await access(join(root, 'apps/core/dist/git-workspace/git-config.js'))
   } catch {
-    throw new Error('Build the orchestrator first: pnpm --filter orchestrator build')
+    throw new Error('Build the orchestrator first: pnpm --filter core build')
   }
 
   directory = await mkdtemp(join(tmpdir(), 'raditi-gitea-verify-'))
