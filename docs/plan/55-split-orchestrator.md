@@ -272,13 +272,15 @@ packages/ (новые)
 
 После правок по `/spec-check` (правило тестовых модулей, Dockerfile раннера, сборка `runner-engine`, порядок импортов) ещё раз прошли `pnpm gates`, `verify:images` (22), `verify:llm-gateway` (58), `verify:agent-content` (13), `verify:mcp-content`, `verify:db` (566), `verify:release` (196, 803 с) и `pnpm e2e` (169); стенды раннера под gVisor шли до этих правок — код процесса раннера они не меняли, образ раннера после них проверил `verify:images`.
 
-Не запускались: `verify:vault` и `verify:preview-network` (второй заход их кода не касался; в первом — зелёные), `verify:snapshots` и `verify:transport` (читают корневой `.env`), workflow GitHub (прогон PR).
+Не запускались: `verify:vault` и `verify:preview-network` (второй заход их кода не касался; в первом — зелёные), `verify:snapshots` и `verify:transport` (читают корневой `.env`).
+
+GitHub, PR #10 (20.10.2026): после оплаты Actions прошли все 11 workflow на `d98fa9c`, кроме `gates` — два теста скорости `content-privacy` (`mcp`) заняли 18 и 15 с при потолке 10 с: `core`, `llm` и `mcp` теперь тестируются параллельно на четырёх ядрах раннера. Потолки подняты до 45 с (квадратичный проход занял бы часы), набор `turn-deadline` и `import-scan` получил 30 с и в локальных гейтах (коммит `c122975`); на нём зелёные все 11 workflow, включая впервые исполненные `preview.yml`, `release-deploy.yml` и `images.yml`.
 
 ### Открыто
 
 - Клиент доверенного возврата и канал `core → mcp` (N8): вне этой работы.
 - Сервис `mcp` в compose app-ВМ — вместе с P6.
-- Подтвердить на GitHub workflow под новыми именами — прогон чернового PR (ответ владельца от 20.10.2026).
+- SonarCloud: quality gate PR #10 не прошёл по надёжности (рейтинг D). Все 33 замечания — в перенесённом коде, который был и до разделения (Sonar считает перенесённые файлы новыми; PR #9 не прошёл так же): `sort()` без функции сравнения в `deploy-step/deploy.ts`, асинхронная работа в конструкторе `exec-stream.ts`, `async` без `await`, `charCodeAt` и т. п. Исправление меняет поведение — отдельной работой.
 - `preflight.sh` проверяет дайджесты `LLM_IMAGE` и `PREVIEW_GATEWAY_IMAGE` всегда, хотя профиль `llm` и наложение предпросмотров необязательны: условным его делать или нет — решение владельца.
 - Усилить контракт `ci.test.mjs`: фильтр `/**` должен называть каталог, в котором есть файл.
 - `ioredis` в образе раннера: необязательная зависимость `@nestjs/microservices`, которую pnpm подставляет к `@nestjs/core` всех приложений (её тянет `mcp`); раннер её не загружает, `dedupePeerDependents: false` её не убирает. Убрать совсем можно только отказом `mcp` от `@nestjs/microservices` или отдельным lockfile раннера.
