@@ -21,7 +21,6 @@
   "devDependencies": {
     "@repo/app-bootstrap": "workspace:*",
     "@repo/eslint-config": "workspace:*",
-    "@repo/llm-backends": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:",

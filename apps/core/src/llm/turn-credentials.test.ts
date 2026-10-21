@@ -4,7 +4,7 @@ import type { Prisma, PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialGrant, TurnCredentialRef } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
-import { sampleBackendCapacity, sampleBackendId, sampleDriverId } from './testing.ts'
+import { sampleBackendCapacity, sampleBackendId, sampleDriverId } from '../testing/ids.ts'
 import { GatewayTurnCredentials, type GatewayTurnCredentialsOptions } from './turn-credentials.ts'
 
 const decimal = (value: string) => ({ toFixed: (digits: number) => Number(value).toFixed(digits) })

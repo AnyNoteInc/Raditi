@@ -2,7 +2,12 @@ import type { SecretStore } from '@repo/domain'
 import { zaiCodingBackend } from '@repo/llm-backends'
 import { describe, expect, it, vi } from 'vitest'
 
-import { createCredentialSource, encodeSubscriptionCredential } from './credentials.ts'
+import { sampleBackendId } from '../testing/ids.ts'
+import {
+  createCredentialSource,
+  encodeSubscriptionCredential,
+  subscriptionCredentialPath,
+} from './credentials.ts'
 
 const context = {
   accountId: 'account_1',
@@ -132,6 +137,15 @@ describe('subscription credential source', () => {
     })
     expect(() => encodeSubscriptionCredential({ token: 'x'.repeat(32_768) })).toThrow(
       'Subscription credential unavailable',
+    )
+  })
+})
+
+describe('subscription pool conventions', () => {
+  it('names the Vault path of an account by its backend and id', () => {
+    const accountId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    expect(subscriptionCredentialPath(sampleBackendId, accountId)).toBe(
+      `subs/${sampleBackendId}/${accountId}`,
     )
   })
 })

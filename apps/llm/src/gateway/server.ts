@@ -24,17 +24,14 @@ import { z } from 'zod'
 import {
   LLM_KEY_PATTERN,
   turnKeyHash,
-  EgressNotDelivered,
   GatewayRecordRejected,
-  type GatewayCall,
   type GatewayFinish,
-  type GatewayKey,
-  type GatewayStore,
 } from '@repo/turn-keys'
 
+import type { GatewayCall, GatewayKey, GatewayStore } from '../accounting/gateway-types.ts'
 import type { LlmConfig } from '../llm-config.ts'
 import type { CredentialSource } from './credentials.ts'
-import type { StreamingEgress, StreamingEgressResponse } from './egress.ts'
+import { EgressNotDelivered, type StreamingEgress, type StreamingEgressResponse } from './egress.ts'
 
 const limits = Object.freeze({
   requests: 64,

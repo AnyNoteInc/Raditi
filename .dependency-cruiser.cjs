@@ -148,12 +148,12 @@ module.exports = {
     {
       name: 'turn-keys-tier',
       comment:
-        'turn-keys composes db and the backend registry; never the sandbox, trpc, ui or other services.',
+        'turn-keys is what core and llm share of a turn key (format, call ledger, revocation): domain and db only; never the backend registry, the sandbox, trpc, ui or other services.',
       severity: 'error',
       from: { path: '^packages/turn-keys/' },
       to: {
         path: '^packages/',
-        pathNot: ['^packages/(domain|db|llm-backends|turn-keys)/', TOOLING],
+        pathNot: ['^packages/(domain|db|turn-keys)/', TOOLING],
       },
     },
     {

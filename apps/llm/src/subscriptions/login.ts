@@ -7,10 +7,10 @@ import {
   type LlmBackend,
   type SecretStore,
 } from '@repo/domain'
+import { lockSubscriptionPool } from '@repo/turn-keys'
 import { z } from 'zod'
-import { lockSubscriptionPool, subscriptionCredentialPath } from '@repo/turn-keys'
 
-import { encodeSubscriptionCredential } from '../gateway/credentials.ts'
+import { encodeSubscriptionCredential, subscriptionCredentialPath } from '../gateway/credentials.ts'
 import type { SubscriptionLockLease, SubscriptionLocks } from '../gateway/session-lock.ts'
 
 export type SubscriptionLoginErrorCode =

@@ -2250,9 +2250,6 @@ importers:
       '@repo/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
-      '@repo/llm-backends':
-        specifier: workspace:*
-        version: link:../llm-backends
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config

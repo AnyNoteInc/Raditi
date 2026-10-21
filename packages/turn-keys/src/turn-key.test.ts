@@ -7,7 +7,6 @@ import {
   MCP_TOKEN_PATTERN,
   newTurnKeys,
   parseTurnCredentialPath,
-  subscriptionCredentialPath,
   TURN_KEY_IN_TEXT,
   turnCredentialPath,
   turnKeyHash,
@@ -68,12 +67,6 @@ describe('turn key conventions', () => {
 })
 
 describe('subscription pool conventions', () => {
-  it('names the Vault path of an account by its backend and id', () => {
-    expect(subscriptionCredentialPath(sampleBackendId, taskId)).toBe(
-      `subs/${sampleBackendId}/${taskId}`,
-    )
-  })
-
   it('takes the pool lock in one statement, with the whole key as its only value', async () => {
     const statements: { sql: string; values: unknown[] }[] = []
     const $queryRaw = vi.fn(async (parts: TemplateStringsArray, ...values: unknown[]) => {

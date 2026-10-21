@@ -7,11 +7,15 @@ import type { Duplex } from 'node:stream'
 import type { EgressRequest, LlmBackend } from '@repo/domain'
 import { llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { EgressNotDelivered } from '@repo/turn-keys'
 
 import { llmConfigFromEnv, type EgressConfig } from '../llm-config.ts'
 import { createLlmTestCertificates } from '../testing/llm-certificates.ts'
-import { createControlEgress, createEgressTransport, EgressNotSentError } from './egress.ts'
+import {
+  createControlEgress,
+  createEgressTransport,
+  EgressNotDelivered,
+  EgressNotSentError,
+} from './egress.ts'
 
 let certificates: ReturnType<typeof createLlmTestCertificates>
 let certFile: string

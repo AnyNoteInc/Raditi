@@ -5,7 +5,7 @@ import { llmBackends, zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
-import { sampleBackendCapacity, sampleBackendId } from './testing.ts'
+import { sampleBackendCapacity, sampleBackendId } from '../testing/ids.ts'
 import { backendCapacities, llmGatewayBaseUrl } from './backends.ts'
 
 const gateway = 'http://sandbox-gw:8080'
@@ -62,7 +62,7 @@ describe('the base URL of a backend in the sandbox', () => {
   it('leads the client of every backend to a path sandbox-gw passes on', async () => {
     // The file of the sandbox VM, read as sandbox-routes.contract.test.ts reads it.
     const gatewayFile = fileURLToPath(
-      new URL('../../../infra/sandbox/gateway.mjs', import.meta.url),
+      new URL('../../../../infra/sandbox/gateway.mjs', import.meta.url),
     )
     const { llmPaths } = z
       .object({ llmPaths: z.array(z.string()).readonly() })

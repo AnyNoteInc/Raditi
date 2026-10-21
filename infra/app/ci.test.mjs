@@ -744,7 +744,7 @@ test('a cached test run sees a change of a file its tests read outside their pac
     // The LLM paths of sandbox-gw against the routes of the registry and the base URL of each.
     'infra/sandbox/gateway.mjs': [
       'apps/llm/src/gateway/sandbox-routes.contract.test.ts',
-      'packages/turn-keys/src/backends.test.ts',
+      'apps/core/src/llm/backends.test.ts',
     ],
     // The files a WordPress preview gets, embedded in the adapter, against their sources; the
     // policy of its database copy, against the file the copier is tested with (plan 53, R5b).

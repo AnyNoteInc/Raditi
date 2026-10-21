@@ -12,9 +12,21 @@ import {
   type LlmBackend,
 } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
-import { EgressNotDelivered } from '@repo/turn-keys'
 
 import type { EgressConfig } from '../llm-config.ts'
+
+/**
+ * An egress failure after which no byte of the request can have reached the provider: the
+ * channel was closed, or the tunnel or provider TLS session was never established. The call
+ * then closes without a usage estimate. Any other egress failure may follow a delivered
+ * request, and its estimate stays in the attempt ceiling.
+ */
+export class EgressNotDelivered extends Error {
+  constructor() {
+    super('Subscription egress unavailable')
+    this.name = 'EgressNotDelivered'
+  }
+}
 
 export interface StreamingEgressResponse {
   status: number

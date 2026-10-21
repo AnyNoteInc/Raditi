@@ -11,9 +11,10 @@ import {
   type TurnCredentialRef,
   type TurnCredentialSource,
 } from '@repo/domain'
+import { lockSubscriptionPool } from '@repo/turn-keys'
 import { z } from 'zod'
-import { lockSubscriptionPool, subscriptionCredentialPath } from '@repo/turn-keys'
 
+import { subscriptionCredentialPath } from '../gateway/credentials.ts'
 import type { SubscriptionLocks } from '../gateway/session-lock.ts'
 
 type Transaction = Prisma.TransactionClient

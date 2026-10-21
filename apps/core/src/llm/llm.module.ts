@@ -13,13 +13,10 @@ import {
   METRICS_REGISTRY,
 } from '../infra/tokens.ts'
 import { MetricsModule } from '../metrics/metrics.module.ts'
-import {
-  backendCapacities,
-  CredentialSweeper,
-  type CredentialSweepKind,
-  GatewayTurnCredentials,
-} from '@repo/turn-keys'
+import { backendCapacities } from './backends.ts'
+import { CredentialSweeper, type CredentialSweepKind } from './credential-sweeper.ts'
 import { createPoolProbeClient } from './pool-probe-client.ts'
+import { GatewayTurnCredentials } from './turn-credentials.ts'
 
 export const TURN_CREDENTIAL_SWEEP_INTERVAL_MS = 60_000
 const sweepKinds: readonly CredentialSweepKind[] = [

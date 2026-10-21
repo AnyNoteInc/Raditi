@@ -510,8 +510,8 @@ async function stand(site) {
   )
   stage = 'trusted turn-key issuer'
   // The trusted side of the stand is this process: the product's issuer under the core AppRole.
-  const { GatewayTurnCredentials } = await import('@repo/turn-keys')
-  const { backendCapacities } = await import('@repo/turn-keys')
+  const { GatewayTurnCredentials } = await import('../dist/llm/turn-credentials.js')
+  const { backendCapacities } = await import('../dist/llm/backends.js')
   const { llmBackends } = await import('@repo/llm-backends')
   const { createPoolProbeClient } = await import('../dist/llm/pool-probe-client.js')
   const { ContentSnapshotStorage, contentSnapshotKey } =

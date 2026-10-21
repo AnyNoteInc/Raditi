@@ -8,8 +8,9 @@ import {
   type LlmBackend,
   type ProbeResult,
 } from '@repo/domain'
-import type { GatewayCall, GatewayFinish } from '@repo/turn-keys'
+import type { GatewayFinish } from '@repo/turn-keys'
 
+import type { GatewayCall } from '../accounting/gateway-types.ts'
 import type { CredentialSource } from './credentials.ts'
 import {
   paymentPauseMs,

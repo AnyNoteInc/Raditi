@@ -1,9 +1,10 @@
 import type { PrismaClient } from '@repo/db'
 import type { EgressHttp, LlmBackend, ProbeResult } from '@repo/domain'
 import { zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
+import type { GatewayFinish } from '@repo/turn-keys'
 import { describe, expect, it, vi } from 'vitest'
-import type { GatewayCall, GatewayFinish } from '@repo/turn-keys'
 
+import type { GatewayCall } from '../accounting/gateway-types.ts'
 import { SubscriptionPoolHealth } from './pool-health.ts'
 import type { PoolHealthAccount, PoolHealthStore } from './pool-health-store.ts'
 

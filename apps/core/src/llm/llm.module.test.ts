@@ -4,7 +4,6 @@ import type { Registry } from '@prometheus-io/client'
 import type { PrismaClient } from '@repo/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PRISMA } from '@repo/service-runtime'
-import { CredentialSweeper, GatewayTurnCredentials } from '@repo/turn-keys'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CoreConfigModule } from '../core/core-config.module.ts'
@@ -12,11 +11,13 @@ import { InfraModule } from '../infra/infra.module.ts'
 import { TURN_CREDENTIALS, METRICS_REGISTRY } from '../infra/tokens.ts'
 import { fakeInfra, overrideCoreInfra, testCoreConfig } from '../testing/fakes.ts'
 import { sampleBackendId, sampleDriverId } from '../testing/ids.ts'
+import { CredentialSweeper } from './credential-sweeper.ts'
 import {
   CoreCredentialRuntime,
   LlmModule,
   TURN_CREDENTIAL_SWEEP_INTERVAL_MS,
 } from './llm.module.ts'
+import { GatewayTurnCredentials } from './turn-credentials.ts'
 
 const apps: INestApplication[] = []
 const runtimes: CoreCredentialRuntime[] = []

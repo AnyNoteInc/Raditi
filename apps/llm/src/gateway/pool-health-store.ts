@@ -7,8 +7,7 @@ import {
   type LlmBackendId,
   type ProbeResult,
 } from '@repo/domain'
-
-import { decodeLimitWindows, limitWindowColumns, resetsPlausible } from '@repo/turn-keys'
+import { decodeLimitWindows, limitWindowColumns } from '@repo/turn-keys'
 
 type Database = Pick<PrismaClient, '$transaction'>
 type Transaction = Prisma.TransactionClient
@@ -58,6 +57,15 @@ export const paymentPauseMs = [5 * 60_000, 15 * 60_000, 45 * 60_000] as const
  */
 export const balancePauseMs = [5 * 60_000, 15 * 60_000, 45 * 60_000, 60 * 60_000] as const
 const dayMs = 24 * 60 * 60_000
+
+/**
+ * The adapters' rule, checked again before a write: a window whose reset lies further ahead
+ * than the window is long makes its whole report unreadable.
+ */
+export const resetsPlausible = (windows: readonly LimitWindow[], now: Date): boolean =>
+  windows.every(
+    (window) => window.resetsAt === null || limitResetPlausible(window.resetsAt, now, window.name),
+  )
 
 /**
  * A probe overtaken by a newer snapshot may increase consumption but cannot replenish capacity:

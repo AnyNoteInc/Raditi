@@ -1,6 +1,9 @@
 import type { KvSecret, LlmBackend, SecretStore, SubscriptionCredential } from '@repo/domain'
 
-import { subscriptionCredentialPath } from '@repo/turn-keys'
+/** Where the llm role keeps an account's subscription credential; `credential_refs` stores it. */
+export function subscriptionCredentialPath(backendId: string, accountId: string): string {
+  return `subs/${backendId}/${accountId}`
+}
 
 export interface CredentialContext {
   accountId: string

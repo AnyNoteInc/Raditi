@@ -69,7 +69,6 @@ import {
 } from '@repo/domain'
 
 import { z } from 'zod'
-import { readSiteEnvValuesToRefuse } from '@repo/turn-keys'
 import { publishedValueRefusal } from '@repo/site-content'
 
 import { contentCallId, createdHashOf } from '../deploy-step/content.ts'
@@ -80,6 +79,7 @@ import {
   type ReleaseGit,
   type TrustedCommitInput,
 } from '../git-workspace/release-git.ts'
+import { readSiteEnvValuesToRefuse } from '../site-env/site-env-values.ts'
 import {
   sealDbOperationValue,
   sealDeployValue,

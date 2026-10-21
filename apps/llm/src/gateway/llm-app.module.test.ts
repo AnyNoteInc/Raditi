@@ -28,8 +28,7 @@ const fakes = vi.hoisted(() => ({
   poolTick: vi.fn(),
   poolClose: vi.fn(),
 }))
-vi.mock('@repo/turn-keys', async (importOriginal) => ({
-  ...(await importOriginal<object>()),
+vi.mock('../accounting/gateway-store.ts', () => ({
   PostgresGatewayStore: class {
     constructor(_db: unknown, options: unknown) {
       fakes.createStore(options)
@@ -65,10 +64,13 @@ vi.mock('./pool-health.ts', () => ({
   },
 }))
 
+import type { GatewayFinish } from '@repo/turn-keys'
+
+import type { GatewayCall } from '../accounting/gateway-types.ts'
+import { EgressNotDelivered } from './egress.ts'
 import { LlmRuntime } from './llm-app.module.ts'
 import type { LlmGatewayOptions } from './server.ts'
 import type { SubscriptionPoolHealthOptions } from './pool-health.ts'
-import { EgressNotDelivered, type GatewayCall, type GatewayFinish } from '@repo/turn-keys'
 
 const config = (withEgress = false): LlmRoleConfig => ({
   ...llmConfigFromEnv(

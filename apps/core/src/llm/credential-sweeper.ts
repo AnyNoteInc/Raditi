@@ -5,9 +5,7 @@ import {
   type TurnCredentialRef,
   type TurnCredentialSource,
 } from '@repo/domain'
-
-import { PostgresGatewayStore } from './gateway-store.ts'
-import { lockSubscriptionPool, parseTurnCredentialPath } from './turn-key.ts'
+import { LlmCallLedger, lockSubscriptionPool, parseTurnCredentialPath } from '@repo/turn-keys'
 
 type Database = Pick<PrismaClient, '$transaction' | '$queryRaw'>
 type Transaction = Prisma.TransactionClient
@@ -29,7 +27,7 @@ export interface CredentialSweeperOptions {
   secrets: SecretStore
   credentials: Pick<TurnCredentialSource, 'revoke'>
   logger?: { warn(message: string): void }
-  /** The real implementation reuses gateway accounting, with core's longer crash allowance. */
+  /** The real implementation is the gateway's call ledger, with core's longer crash allowance. */
   backup?: { collectLost(): Promise<number> }
   onSwept?: (kind: CredentialSweepKind) => void
 }
@@ -54,7 +52,7 @@ export class CredentialSweeper {
     this.#options = options
     this.#backup =
       options.backup ??
-      new PostgresGatewayStore(options.prisma, {
+      new LlmCallLedger(options.prisma, {
         lostAfterMs: 30 * 60_000,
         ...(options.logger ? { logger: options.logger } : {}),
       })

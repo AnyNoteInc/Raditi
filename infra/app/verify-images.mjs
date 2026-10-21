@@ -17,8 +17,6 @@ export const APPS = ['llm', 'mcp', 'preview', 'runner']
 /**
  * The workspace packages an image may not carry: what dependency-cruiser forbids the app to reach
  * (llm-, mcp- and preview-minimal-packages, runner-minimal-packages, runner-no-platform-access).
- * One exception is documented: llm-backends lands in the mcp image through the devDependencies of
- * turn-keys (turbo prune takes them), and no code of mcp imports it.
  */
 export const FORBIDDEN_PACKAGES = {
   llm: [
@@ -45,6 +43,7 @@ export const FORBIDDEN_PACKAGES = {
     'git-providers',
     'sandbox-providers',
     'agent-drivers',
+    'llm-backends',
     'site-connections',
     'local-turns',
     'yookassa',
