@@ -7,7 +7,7 @@ import {
   type PublishedContentState,
 } from '@repo/domain'
 
-import type { PreviewDbValueRef, PreviewDbValueSide } from './preview-db-values.ts'
+import type { PreviewDbValueRef, PreviewDbValueSide } from '@repo/site-content'
 
 // The values of a candidate's database plan (docs/plan/53-chat-preview-release.md, Р3, Р22, Р24):
 // each side of an operation is the state of the object the mcp role sealed when the agent wrote

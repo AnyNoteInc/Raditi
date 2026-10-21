@@ -12,7 +12,7 @@ import {
   type TaskStatus,
 } from '@repo/domain'
 
-import { previewRecordOf, type PreviewRecord } from '@repo/site-content'
+import { previewRecordOf, type PreviewRecord } from './preview-record.ts'
 
 // What the manager of previews knows of one preview when it acts (docs/plan/53, R5c): the row,
 // its dialog, its site and the candidate it should show — read from PostgreSQL each time, never

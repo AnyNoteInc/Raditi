@@ -4,11 +4,12 @@ import { publishedContentHashMaterial, type PublishedContentState } from '@repo/
 import { describe, expect, it } from 'vitest'
 
 import { memoryStorage, memoryTransit } from '@repo/snapshots/testing'
+
 import {
   PreviewDbValueStorage,
   previewDbValueKey,
   type PreviewDbValueRef,
-} from '@repo/site-content'
+} from './preview-db-values.ts'
 
 const stateOf = (title: string): PublishedContentState => {
   const fields = {

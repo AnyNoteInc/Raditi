@@ -13,9 +13,9 @@ import {
 } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { getSiteAdapter } from '@repo/site-adapters'
-import { BACKGROUND_JOBS, OBJECT_STORAGE, PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import { readSiteEnvValuesToRefuse } from '@repo/turn-keys'
-import { PreviewDbValueStorage, previewDbPlanValues } from '@repo/site-content'
+import { PreviewDbValueStorage } from '@repo/site-content'
 
 import type { CoreConfig } from '../config/config.ts'
 import { DriversModule } from '../drivers/drivers.module.ts'
@@ -30,10 +30,13 @@ import {
   TURN_ASSIGNMENTS,
   TURN_CREDENTIALS,
   TURN_EXECUTOR,
+  BACKGROUND_JOBS,
+  OBJECT_STORAGE,
 } from '../infra/tokens.ts'
 import { LlmModule } from '../llm/llm.module.ts'
 import { SessionsModule } from '../sessions/sessions.module.ts'
 import { SnapshotService } from '../sessions/snapshot.service.ts'
+import { previewDbPlanValues } from '../site-content/db-plan-values.ts'
 import { LiveTurns } from '../turns/live-turns.ts'
 import { TurnExecRecovery } from '../turns/turn-exec-recovery.ts'
 import { TaskEventTurnJournal } from '../turns/turn-journal.ts'

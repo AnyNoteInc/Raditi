@@ -12,7 +12,7 @@ const ADAPTERS =
 // tier rule names it (preview-gateway); the other tier rules do not allow it.
 const LEAVES = 'ip-address'
 const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|site-content|preview-gateway'
-// The frame and runtime of the apps (process start and stop, Nest wiring, health, metrics):
+// The frame and runtime of the apps (process start and stop, Nest wiring, health):
 // app-side code that lives in a package, so it may use observability, which no library package may.
 const RUNTIME = 'app-bootstrap|service-runtime|runner-engine'
 // Every package must belong to a layer; an unclassified one would bypass all rules.
@@ -178,7 +178,7 @@ module.exports = {
     {
       name: 'app-bootstrap-tier',
       comment:
-        'app-bootstrap is the frame of every app process (start, stop, logger, .env, version): domain only, so the runner can take it without a database or Redis.',
+        'app-bootstrap is the frame of every app process (start, stop, logger, .env): domain only, so the runner can take it without a database or Redis.',
       severity: 'error',
       from: { path: '^packages/app-bootstrap/' },
       to: { path: '^packages/', pathNot: ['^packages/(domain|app-bootstrap)/', TOOLING] },
@@ -186,7 +186,7 @@ module.exports = {
     {
       name: 'service-runtime-tier',
       comment:
-        'service-runtime wires Prisma, health and metrics for the apps with a database: domain, db and observability only (the network guard of its tests is test support).',
+        'service-runtime wires Prisma and health for the apps with a database: domain, db and observability only (the network guard of its tests is test support).',
       severity: 'error',
       from: { path: '^packages/service-runtime/' },
       to: {

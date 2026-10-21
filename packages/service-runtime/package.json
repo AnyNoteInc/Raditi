@@ -20,15 +20,15 @@
   },
   "dependencies": {
     "@nestjs/common": "catalog:",
-    "@prometheus-io/client": "catalog:",
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/observability": "workspace:*",
     "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
-    "zod": "catalog:"
+    "rxjs": "catalog:"
   },
   "devDependencies": {
+    "@nestjs/core": "catalog:",
+    "@nestjs/testing": "catalog:",
     "@repo/app-bootstrap": "workspace:*",
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",

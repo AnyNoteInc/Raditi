@@ -1286,9 +1286,6 @@ importers:
       rxjs:
         specifier: 'catalog:'
         version: 7.8.2
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5
     devDependencies:
       '@repo/eslint-config':
         specifier: workspace:*
@@ -1905,9 +1902,6 @@ importers:
       '@nestjs/common':
         specifier: 'catalog:'
         version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
-      '@prometheus-io/client':
-        specifier: 'catalog:'
-        version: 0.16.1
       '@repo/db':
         specifier: workspace:*
         version: link:../db
@@ -1923,10 +1917,13 @@ importers:
       rxjs:
         specifier: 'catalog:'
         version: 7.8.2
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5
     devDependencies:
+      '@nestjs/core':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/testing':
+        specifier: 'catalog:'
+        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)
       '@repo/app-bootstrap':
         specifier: workspace:*
         version: link:../app-bootstrap

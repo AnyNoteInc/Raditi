@@ -4,12 +4,16 @@ import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
 import type { DatabaseEngine, DatabaseInspector, SiteRepositoryProvisioner } from '@repo/domain'
 import { afterEach, describe, expect, it } from 'vitest'
-import { METRICS_REGISTRY } from '@repo/service-runtime'
 import { RunnerModule } from '@repo/runner-engine'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CoreModule } from '../core/core.module.ts'
-import { SITE_DATABASES, SITE_REPOSITORY_PROVISIONER, SITE_SOURCES } from '../infra/tokens.ts'
+import {
+  SITE_DATABASES,
+  SITE_REPOSITORY_PROVISIONER,
+  SITE_SOURCES,
+  METRICS_REGISTRY,
+} from '../infra/tokens.ts'
 import { fakeInfra, overrideCoreInfra, testCoreConfig } from '../testing/fakes.ts'
 import { SiteImportProcessor } from './site-import.processor.ts'
 import { siteImportOutcomes, SiteImportRunner } from './site-import.runner.ts'

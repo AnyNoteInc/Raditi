@@ -1,11 +1,10 @@
 import {
-  dbOperationKinds,
   isPublicationPath,
   previewImageSchema,
   previewRuntimeMatchSchema,
   siteDatabaseSettingsSchema,
-  type SiteDatabaseSettings,
 } from '@repo/domain'
+import { previewDbRuntimeSchema } from '@repo/site-content'
 import { z } from 'zod'
 
 // What core keeps of a built preview in `preview_environments.runtime` (docs/plan/53, R5c): never
@@ -27,25 +26,6 @@ const syncSchema = z.strictObject({
   paths: z.array(z.string().refine(isPublicationPath)).nullable(),
 })
 export type PreviewSyncRecord = z.infer<typeof syncSchema>
-
-/**
- * What the agent may change in the database of this preview (docs/plan/53, «Операции БД и
- * миграции»): the kinds the stack's adapter, production's plugin and the preview's plugin all
- * have, the settings (names in the database) of the list both plugins keep, and whether records
- * may be created — production's ids are below DB_CREATED_ID_BASE. Read at every build.
- */
-export const previewDbRuntimeSchema = z.strictObject({
-  kinds: z.array(z.enum(dbOperationKinds)).max(dbOperationKinds.length),
-  settings: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/)).max(64),
-  createdIds: z.boolean(),
-})
-export type PreviewDbRuntime = z.infer<typeof previewDbRuntimeSchema>
-/** A preview of a build before these kinds, or whose production could not be asked. */
-export const textOnlyDbRuntime: PreviewDbRuntime = Object.freeze({
-  kinds: ['content_update' as const],
-  settings: [],
-  createdIds: false,
-})
 
 export const previewRecordSchema = z.strictObject({
   v: z.literal(1),
@@ -97,5 +77,3 @@ export function withSyncedPaths(
   const bytes = paths.reduce((sum, path) => sum + Buffer.byteLength(path) + 3, 0)
   return bytes > SYNC_PATHS_BYTES ? null : paths
 }
-
-export type { SiteDatabaseSettings }

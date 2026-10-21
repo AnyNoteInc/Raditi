@@ -23,10 +23,10 @@ import {
   type SiteContentAdapter,
 } from '@repo/domain'
 import { wordpressContentAccessSchema } from '@repo/site-adapters'
-import type { DbPlanValueOwner, DbPlanValueReader } from '@repo/site-content'
 
 import { TAR_END, tarFileHeader, tarPadding } from '../git-workspace/tree-tar.ts'
 import type { PreviewSyncGit } from '../previews/preview-sync.ts'
+import type { DbPlanValueOwner, DbPlanValueReader } from '../site-content/db-plan-values.ts'
 
 export const hash = (c: string) => c.repeat(64)
 

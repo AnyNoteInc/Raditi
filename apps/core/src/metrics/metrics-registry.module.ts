@@ -1,7 +1,7 @@
 import { Module, type DynamicModule } from '@nestjs/common'
 import { createMetricsRegistry } from '@repo/observability'
 
-import { METRICS_REGISTRY } from './tokens.ts'
+import { METRICS_REGISTRY } from '../infra/tokens.ts'
 
 /**
  * The Prometheus registry of the process: every module that counts something imports the module

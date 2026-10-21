@@ -78,8 +78,6 @@ import {
 } from './mcp-journal.ts'
 import type { McpPreviewTarget, PreviewGatewayResolver } from './preview-content.ts'
 
-export { hostSearchText, mentionsPreviewHost } from '@repo/site-content'
-
 export const MCP_CONTENT = Symbol('MCP_CONTENT')
 const recordRoute = z.string().regex(/^\/wp\/v2\/(posts|pages)\/[1-9][0-9]{0,9}$/)
 const collectionRoute = z.string().regex(/^\/wp\/v2\/(posts|pages)$/)

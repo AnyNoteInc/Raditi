@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { emptyPreviewRecord } from '@repo/site-content'
 
 import { previewAction, previewShowsTarget, type PreviewFacts } from './preview-facts.ts'
+import { emptyPreviewRecord } from './preview-record.ts'
 
 const now = new Date('2026-10-17T12:00:00Z')
 const later = new Date(now.getTime() + 3_600_000)

@@ -14,7 +14,7 @@ import {
 import { Registry } from '@prometheus-io/client'
 import { bearerTokenMatches } from '@repo/observability'
 
-import { METRICS_REGISTRY, METRICS_TOKEN } from './tokens.ts'
+import { METRICS_REGISTRY, METRICS_TOKEN } from '../infra/tokens.ts'
 
 @Injectable()
 export class MetricsTokenGuard implements CanActivate {
@@ -32,8 +32,8 @@ export class MetricsTokenGuard implements CanActivate {
 }
 
 /**
- * GET /metrics, on the core port only: the MCP port is reachable from sandboxes. The role that
- * serves it provides METRICS_TOKEN and MetricsTokenGuard beside this controller.
+ * GET /metrics, on the core port only: the MCP port is reachable from sandboxes. MetricsModule
+ * provides METRICS_TOKEN and MetricsTokenGuard beside this controller.
  */
 @Controller('metrics')
 @UseGuards(MetricsTokenGuard)

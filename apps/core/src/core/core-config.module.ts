@@ -1,8 +1,7 @@
 import { Module, type DynamicModule } from '@nestjs/common'
-import { BACKGROUND_JOBS } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG } from '../infra/tokens.ts'
+import { CORE_CONFIG, BACKGROUND_JOBS } from '../infra/tokens.ts'
 
 export interface CoreModuleOptions {
   config: CoreConfig

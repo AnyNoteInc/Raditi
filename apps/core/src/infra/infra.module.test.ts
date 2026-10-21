@@ -5,13 +5,13 @@ import type { AddressInfo } from 'node:net'
 import { Test } from '@nestjs/testing'
 import type { YookassaClient } from '@repo/yookassa'
 import { afterEach, describe, expect, it } from 'vitest'
-import { OBJECT_STORAGE, PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CoreConfigModule } from '../core/core-config.module.ts'
 import { fakeInfra, testCoreConfig } from '../testing/fakes.ts'
 import { InfraModule } from './infra.module.ts'
-import { YOOKASSA, REDIS } from './tokens.ts'
+import { YOOKASSA, REDIS, OBJECT_STORAGE } from './tokens.ts'
 
 const servers: Server[] = []
 afterEach(async () => {

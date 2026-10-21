@@ -3,8 +3,17 @@
 
 /** CoreConfig of this process. */
 export const CORE_CONFIG = Symbol('CORE_CONFIG')
+/** false in tests and tools: no BullMQ workers, no polling loops. */
+export const BACKGROUND_JOBS = Symbol('BACKGROUND_JOBS')
 /** ioredis client for health checks and pub/sub; BullMQ keeps its own connections. */
 export const REDIS = Symbol('REDIS')
+/** ObjectStorage port (S3). */
+export const OBJECT_STORAGE = Symbol('OBJECT_STORAGE')
+
+/** Prometheus registry served by GET /metrics. */
+export const METRICS_REGISTRY = Symbol('METRICS_REGISTRY')
+/** The bearer token of GET /metrics (and of the details of GET /health). */
+export const METRICS_TOKEN = Symbol('METRICS_TOKEN')
 
 /** SiteLeaseStore port (PostgreSQL). */
 export const SITE_LEASES = Symbol('SITE_LEASES')

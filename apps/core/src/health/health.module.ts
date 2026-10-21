@@ -6,7 +6,6 @@ import {
   HEALTH_DETAILS_TOKEN,
   HealthController,
   HEALTH_CHECKS,
-  OBJECT_STORAGE,
   PRISMA,
   SECRET_STORE,
 } from '@repo/service-runtime'
@@ -14,7 +13,7 @@ import type { Redis } from 'ioredis'
 import { redisCheck } from '../infra/redis.ts'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG, REDIS } from '../infra/tokens.ts'
+import { CORE_CONFIG, REDIS, OBJECT_STORAGE } from '../infra/tokens.ts'
 import { CORE_BUCKETS } from './health-checks.ts'
 
 /** GET /health of the core role: database, Redis, its own S3 buckets and Vault. */

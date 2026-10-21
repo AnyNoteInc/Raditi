@@ -17,7 +17,7 @@ import { createGiteaRepositoryProvisioner } from '@repo/git-providers'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { createHostLookup, siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
-import { BACKGROUND_JOBS, METRICS_REGISTRY, PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
 import { gitWorkspaceOptions } from '../git-workspace/git-config.ts'
@@ -30,6 +30,8 @@ import {
   SITE_DATABASES,
   SITE_REPOSITORY_PROVISIONER,
   SITE_SOURCES,
+  BACKGROUND_JOBS,
+  METRICS_REGISTRY,
 } from '../infra/tokens.ts'
 import { MetricsModule } from '../metrics/metrics.module.ts'
 import { InitialVersionGit } from './initial-version.ts'

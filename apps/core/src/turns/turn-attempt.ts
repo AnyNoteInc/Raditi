@@ -44,8 +44,8 @@ import type {
   SealedElsewhere,
   SnapshotParts,
 } from '../sessions/snapshot.service.ts'
-import { maskTurnEvents } from '@repo/local-turns'
 import { holdForRecovery, type LeaseGuard } from './lease-guard.ts'
+import { maskTurnEvents } from './turn-events-mask.ts'
 import { readTurnResult } from './turn-result.ts'
 
 export interface TurnSnapshotStore {

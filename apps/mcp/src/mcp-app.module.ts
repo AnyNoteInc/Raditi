@@ -45,11 +45,8 @@ import { MCP_CONTENT, McpContentService, type ContentGatewayResolver } from './m
 import { McpContentController } from './mcp-content.controller.ts'
 import { PostgresMcpJournal } from './mcp-journal.ts'
 import { MCP_CONTENT_MAINTENANCE, McpContentMaintenance } from './mcp-content-maintenance.ts'
-import {
-  createSiteContentResolver,
-  MCP_CONTENT_RESOLVER,
-  PreviewDbValueStorage,
-} from '@repo/site-content'
+import { MCP_CONTENT_RESOLVER } from './content-resolver.ts'
+import { createSiteContentResolver, PreviewDbValueStorage } from '@repo/site-content'
 import {
   createPreviewContentResolver,
   MCP_PREVIEW_RESOLVER,

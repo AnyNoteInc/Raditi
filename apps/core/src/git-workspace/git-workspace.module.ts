@@ -5,10 +5,9 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common'
 import type { GitCredentialLifecycle, ManagedGitProvider } from '@repo/git-providers'
-import { BACKGROUND_JOBS } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG, GIT_PROVIDER } from '../infra/tokens.ts'
+import { CORE_CONFIG, GIT_PROVIDER, BACKGROUND_JOBS } from '../infra/tokens.ts'
 import { configuredGitProvider, gitWorkspaceOptions } from './git-config.ts'
 import { GitWorkspaceService } from './git-workspace.service.ts'
 

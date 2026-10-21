@@ -8,17 +8,18 @@ import { HEALTH_CHECK_TIMEOUT_MS } from '@repo/observability'
 import { createS3ObjectStorage } from '@repo/storage'
 import { createVaultSecretStore } from '@repo/vault'
 import { createYookassaClient, type YookassaClient } from '@repo/yookassa'
-import {
-  PrismaLifecycle,
-  createAppPrisma,
-  OBJECT_STORAGE,
-  PRISMA,
-  SECRET_STORE,
-} from '@repo/service-runtime'
+import { PrismaLifecycle, createAppPrisma, PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
 import { RedisLifecycle, createRedisClient } from './redis.ts'
-import { CORE_CONFIG, SITE_LEASES, TURN_ASSIGNMENTS, YOOKASSA, REDIS } from './tokens.ts'
+import {
+  CORE_CONFIG,
+  SITE_LEASES,
+  TURN_ASSIGNMENTS,
+  YOOKASSA,
+  REDIS,
+  OBJECT_STORAGE,
+} from './tokens.ts'
 
 /** Adapters of the core role. Nothing connects here: Prisma and S3 connect on first use. */
 @Global()

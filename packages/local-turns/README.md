@@ -1,6 +1,6 @@
 # @repo/local-turns
 
-Сторона песочницы в ходе агента над локальным `SandboxProvider`: `LocalTurnExecutor`, разбор вывода хода (`turn-output`), экспорт рабочего дерева (`working-tree-export`) и базовый бандл (`base-bundle`). Общий для `core` при `TURN_EXECUTOR=local` и для раннера песочной ВМ (`@repo/runner-engine`).
+Сторона песочницы в ходе агента над локальным `SandboxProvider`: `LocalTurnExecutor`, разбор вывода хода (`turn-output`), экспорт рабочего дерева (`working-tree-export`) и базовый бандл (`base-bundle`). Общий для `core` при `TURN_EXECUTOR=local` и для раннера песочной ВМ (`@repo/runner-engine`). Последнюю проверку событий хода перед журналом — маскирование значений переменных клиента в событиях любого исполнителя (`maskTurnEvents`) — делает только `core` (`apps/core/src/turns/turn-events-mask.ts`).
 
 ## Что читает
 

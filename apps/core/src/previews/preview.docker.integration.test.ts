@@ -34,7 +34,7 @@ import { siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { createHostLookup } from '@repo/site-connections/hosting'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { previewContentGateway, previewRecordOf, previewRequest } from '@repo/site-content'
+import { previewContentGateway, previewRequest } from '@repo/site-content'
 
 import type { PreviewsConfig } from '../config/config.ts'
 import {
@@ -51,6 +51,7 @@ import {
   workingTreeArchive,
 } from '../testing/previews.ts'
 import { PreviewManager } from './preview-manager.ts'
+import { previewRecordOf } from './preview-record.ts'
 import { createPreviewSiteSources } from './site-sources.ts'
 
 // A preview end to end on this machine's Docker (docs/plan/53-chat-preview-release.md, R5c): a

@@ -3,10 +3,15 @@ import { Counter, type Registry } from '@prometheus-io/client'
 import type { PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialSource } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
-import { BACKGROUND_JOBS, METRICS_REGISTRY, PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG, TURN_CREDENTIALS } from '../infra/tokens.ts'
+import {
+  CORE_CONFIG,
+  TURN_CREDENTIALS,
+  BACKGROUND_JOBS,
+  METRICS_REGISTRY,
+} from '../infra/tokens.ts'
 import { MetricsModule } from '../metrics/metrics.module.ts'
 import {
   backendCapacities,

@@ -33,6 +33,8 @@ on:
       # The preview manager of core end to end (R5c), the gateway its browser goes through (R6)
       # and the export of a running turn's working tree (Р23), on the schema of the database.
       - apps/core/src/previews/**
+      # The values of a candidate's database plan a build replays (Р22).
+      - apps/core/src/site-content/**
       - apps/preview/**
       - packages/preview-gateway/**
       - packages/service-runtime/**

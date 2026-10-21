@@ -12,9 +12,9 @@ import { Prisma, type PrismaClient } from '@repo/db'
 import { withTimeout, type JobQueue } from '@repo/domain'
 import { errorMessage, throttledLogger } from '@repo/observability'
 import { z } from 'zod'
-import { BACKGROUND_JOBS, PRISMA } from '@repo/service-runtime'
+import { PRISMA } from '@repo/service-runtime'
 
-import { JOB_QUEUE } from '../infra/tokens.ts'
+import { JOB_QUEUE, BACKGROUND_JOBS } from '../infra/tokens.ts'
 import { isQueueName } from '../queue/queues.ts'
 
 export const OUTBOX_POLL_INTERVAL_MS = 1_000

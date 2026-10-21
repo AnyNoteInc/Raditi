@@ -3,16 +3,16 @@
 import { getQueueToken } from '@nestjs/bullmq'
 import type { TestingModuleBuilder } from '@nestjs/testing'
 import { queueNames } from '@repo/domain'
-import { OBJECT_STORAGE, PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import {
+  fakeInfra as fakeSharedInfra,
+  TEST_METRICS_TOKEN,
+  type Dependencies as SharedDependencies,
+} from '@repo/service-runtime/testing/fakes'
+import { vi } from 'vitest'
 
 import { loadConfig, type CoreConfig } from '../config/config.ts'
-import { REDIS } from '../infra/tokens.ts'
-import {
-  fakeInfra,
-  TEST_METRICS_TOKEN,
-  type Dependencies,
-  type FakeInfra,
-} from '@repo/service-runtime/testing/fakes'
+import { OBJECT_STORAGE, REDIS } from '../infra/tokens.ts'
 
 const testEnv = {
   APP_ENV: 'test',
@@ -31,6 +31,34 @@ const testEnv = {
 export function testCoreConfig(): CoreConfig {
   return loadConfig(testEnv)
 }
+
+export interface Dependencies extends SharedDependencies {
+  redis: boolean
+}
+
+/** The shared infra fakes of @repo/service-runtime, with core's Redis and BullMQ queues. */
+export function fakeInfra(overrides: Partial<Dependencies> = {}) {
+  const { redis = true, ...shared } = overrides
+  const down = () => Promise.reject(new Error('connect ECONNREFUSED'))
+  return {
+    ...fakeSharedInfra(shared),
+    redis: {
+      status: redis ? 'ready' : 'reconnecting',
+      ping: vi.fn(() => (redis ? Promise.resolve('PONG') : down())),
+      quit: vi.fn(() => Promise.resolve('OK')),
+      disconnect: vi.fn(),
+    },
+    queue: {
+      add: vi.fn(() => Promise.resolve({ id: 'job' })),
+      on: vi.fn(),
+      close: vi.fn(() => Promise.resolve()),
+      /** Forced close of a queue's connection (Redis unreachable on shutdown). */
+      backendClose: vi.fn((_force?: boolean) => Promise.resolve()),
+    },
+  }
+}
+
+export type FakeInfra = ReturnType<typeof fakeInfra>
 
 /** Replaces every provider of CoreModule that would open a connection. */
 export function overrideCoreInfra(builder: TestingModuleBuilder, infra: FakeInfra) {
@@ -52,4 +80,4 @@ export function overrideCoreInfra(builder: TestingModuleBuilder, infra: FakeInfr
   return result
 }
 
-export { fakeInfra, TEST_METRICS_TOKEN, type Dependencies, type FakeInfra }
+export { TEST_METRICS_TOKEN }
