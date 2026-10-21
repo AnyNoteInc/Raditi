@@ -2,7 +2,7 @@
 // S3 or Vault. Only for *.test.ts files (excluded from the build).
 import { getQueueToken } from '@nestjs/bullmq'
 import type { TestingModuleBuilder } from '@nestjs/testing'
-import { queueNames } from '@repo/domain'
+import { bucketKinds, queueNames, type BucketKind } from '@repo/domain'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import {
   fakeInfra as fakeSharedInfra,
@@ -34,14 +34,25 @@ export function testCoreConfig(): CoreConfig {
 
 export interface Dependencies extends SharedDependencies {
   redis: boolean
+  /** Buckets that do not answer. */
+  missingBuckets: BucketKind[]
 }
 
-/** The shared infra fakes of @repo/service-runtime, with core's Redis and BullMQ queues. */
+/** The shared infra fakes of @repo/service-runtime, with core's Redis, BullMQ queues and S3. */
 export function fakeInfra(overrides: Partial<Dependencies> = {}) {
-  const { redis = true, ...shared } = overrides
+  const { redis = true, missingBuckets = [], ...shared } = overrides
   const down = () => Promise.reject(new Error('connect ECONNREFUSED'))
   return {
     ...fakeSharedInfra(shared),
+    storage: {
+      checkBuckets: vi.fn((kinds: readonly BucketKind[] = bucketKinds) =>
+        Promise.resolve(
+          Object.fromEntries(
+            kinds.map((kind) => [kind, !missingBuckets.includes(kind)]),
+          ) as Partial<Record<BucketKind, boolean>>,
+        ),
+      ),
+    },
     redis: {
       status: redis ? 'ready' : 'reconnecting',
       ping: vi.fn(() => (redis ? Promise.resolve('PONG') : down())),

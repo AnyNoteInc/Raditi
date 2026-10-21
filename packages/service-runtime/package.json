@@ -21,7 +21,6 @@
   "dependencies": {
     "@nestjs/common": "catalog:",
     "@repo/db": "workspace:*",
-    "@repo/domain": "workspace:*",
     "@repo/observability": "workspace:*",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:"

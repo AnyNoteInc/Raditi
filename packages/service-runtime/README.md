@@ -5,7 +5,7 @@
 ## Что даёт
 
 - Основной вход: `createAppPrisma` и `PrismaLifecycle`; `DatabaseModule.forRoot(db)` — глобальный модуль с `PRISMA` и `PrismaLifecycle`: пул закрывается после остановки остальных модулей; `HealthController` (подробности — по токену, который приложение даёт под `HEALTH_DETAILS_TOKEN`; у `core` — значение `METRICS_TOKEN`) и `HealthModule.forRootAsync({ imports, inject, useFactory, details })` — `/health` по проверкам приложения; токены DI `PRISMA`, `SECRET_STORE`, `HEALTH_CHECKS`. `DatabaseModule.forRoot` вызывается в приложении один раз: Nest различает динамические модули по ссылке, второй вызов открыл бы второй пул.
-- `./testing/fakes` — фейки базы, S3 и Vault для тестов приложений (в `dist` не попадает); фейки Redis и очередей — у `core` (`apps/core/src/testing/fakes.ts`).
+- `./testing/fakes` — фейки базы и Vault для тестов приложений (в `dist` не попадает); фейки Redis, очередей и S3 — у `core` (`apps/core/src/testing/fakes.ts`).
 
 ## Что читает
 
