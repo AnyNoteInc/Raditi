@@ -10,7 +10,7 @@ import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { inspect } from 'node:util'
 
-import { egressConfigFromEnv } from '../../../apps/llm/src/llm-config.ts'
+import { egressConfigFromEnv } from '../../../apps/llm/src/config/llm-config.ts'
 import { startFakeSubscriptions } from './fake-subscriptions.mjs'
 import { llmBackends } from '../../../packages/llm-backends/src/index.ts'
 import * as liveModule from './live.mjs'
@@ -336,7 +336,7 @@ test('the live profile of the role llm is the production list, on the direct pat
 })
 
 test('the worker of the role llm decides its profile by that one function, before it listens', async () => {
-  const worker = await readFile(join(repository, 'apps/core/scripts/verify-llm-worker.mjs'), 'utf8')
+  const worker = await readFile(join(repository, 'apps/llm/scripts/verify-llm-worker.mjs'), 'utf8')
   assert.match(worker, /profile: z\.enum\(\['synthetic', 'live'\]\)\.default\('synthetic'\)/)
   assert.match(
     worker,
@@ -345,7 +345,7 @@ test('the worker of the role llm decides its profile by that one function, befor
   assert.match(worker, /processEnv: process\.env,\n\s+execArgv: process\.execArgv,/)
   assert.match(worker, /guarded: globalThis\[Symbol\.for\('raditi\.live-guard'\)\] !== undefined/)
   assert.ok(
-    worker.indexOf('roleProfileProblems({') < worker.indexOf('new LlmRuntime('),
+    worker.indexOf('roleProfileProblems({') < worker.indexOf('AppModule.forRoot('),
     'The role is created before its profile is checked',
   )
   // The same symbol the guard sets when it is installed.

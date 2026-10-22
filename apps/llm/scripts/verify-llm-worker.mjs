@@ -1,16 +1,22 @@
 /* global Buffer, clearTimeout, process, setTimeout, URL */
 // B13's isolated llm role. The harness supplies only disposable local configuration by IPC;
 // importing this worker never reads an env-file or the operator's subscription login.
-import { createPrismaClient, dbConfigFromEnv } from '@repo/db'
+import 'reflect-metadata'
+
+import { NestFactory } from '@nestjs/core'
+import { appLogger } from '@repo/app-bootstrap'
+import { dbConfigFromEnv } from '@repo/db'
 import { llmBackends } from '@repo/llm-backends'
-import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { vaultConfigFromEnv } from '@repo/vault'
 import { z } from 'zod'
 
 import { roleProfileProblems } from '../../../infra/dev/llm-verify/live.mjs'
-import { egressConfigFromEnv, llmConfigFromEnv } from '../../llm/dist/llm-config.js'
-import { decodeSubscriptionCredential } from '../../llm/dist/gateway/credentials.js'
-import { createControlEgress, createEgressTransport } from '../../llm/dist/gateway/egress.js'
-import { LlmRuntime } from '../../llm/dist/gateway/llm-app.module.js'
+import { AppModule } from '../dist/app.module.js'
+import { egressConfigFromEnv, llmConfigFromEnv } from '../dist/config/llm-config.js'
+import { createControlEgress, createEgressTransport } from '../dist/egress/egress.js'
+import { LlmRuntime } from '../dist/gateway/llm-runtime.js'
+import { decodeSubscriptionCredential } from '../dist/pool/credentials.js'
 
 const initSchema = z.strictObject({
   type: z.literal('init'),
@@ -91,8 +97,9 @@ function stop(code, response) {
     const forced = setTimeout(() => process.exit(1), 12_000)
     forced.unref()
     try {
+      // The stop of the role itself, as Nest runs it on close: called here, a failed step fails
+      // the close the stand asked for instead of only being logged by Nest.
       if (runtime) await runtime.onApplicationShutdown()
-      else if (db) await db.$disconnect()
     } catch {
       code = 1
     }
@@ -110,7 +117,7 @@ function stop(code, response) {
 
 async function main() {
   if (process.argv.length === 3 && process.argv[2] === '--help') {
-    process.stdout.write('B13 llm worker: start by IPC after building orchestrator.\n')
+    process.stdout.write('B13 llm worker: start by IPC after building the llm app.\n')
     return
   }
   if (!process.send || process.argv.length !== 2) throw new Error('Invalid worker invocation')
@@ -166,9 +173,15 @@ async function main() {
     .string()
     .regex(/^\S{24,4096}$/)
     .parse(env.METRICS_TOKEN)
-  db = createPrismaClient({ ...database, log: [] })
-  const secrets = createVaultSecretStore(vault)
-  runtime = new LlmRuntime({ ...config, db: database, vault, metricsToken }, db, secrets)
+  // The role as the product composes it (start.ts), without its signal hooks: this process
+  // stops by the stand's word or its own signals.
+  const app = await NestFactory.createApplicationContext(
+    AppModule.forRoot({ ...config, db: database, vault, metricsToken }),
+    { abortOnError: false, logger: appLogger(config.appEnv, 'llm') },
+  )
+  db = app.get(PRISMA)
+  const secrets = app.get(SECRET_STORE)
+  runtime = app.get(LlmRuntime)
   const address = await runtime.listen()
   process.on('message', (request) => {
     const parsed = requestSchema.safeParse(request)

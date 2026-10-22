@@ -15,8 +15,8 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { GatewayCall, GatewayKey, GatewayStore } from '../accounting/gateway-types.ts'
-import type { LlmConfig } from '../llm-config.ts'
-import { EgressNotDelivered, type StreamingEgress } from './egress.ts'
+import type { LlmConfig } from '../config/llm-config.ts'
+import { EgressNotDelivered, type StreamingEgress } from '../egress/egress.ts'
 import { createLlmGateway, type LlmGateway, type LlmGatewayOptions } from './server.ts'
 
 const turnKey = `sk-rdt-${Buffer.alloc(32, 7).toString('base64url')}`

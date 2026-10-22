@@ -346,6 +346,17 @@ module.exports = {
       },
     },
     {
+      name: 'llm-operator-cli-no-nest',
+      comment:
+        'The operator commands of llm (subscriptions:*) run from their TypeScript sources by type stripping, outside Nest: they reach no Nest module and no @nestjs package, not even transitively, so no decorator enters what Node strips (plan 56 §3, item 11).',
+      severity: 'error',
+      from: { path: '^apps/llm/src/subscriptions/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: ['^apps/llm/src/.+\\.module\\.ts$', ...npm('@nestjs/[^/]+')],
+        reachable: true,
+      },
+    },
+    {
       name: 'preview-minimal-packages',
       comment:
         'The preview app serves the iframe of the cabinet from the database: no storage, Vault, git, sandbox, agent, payments, mail or content code, not even transitively.',

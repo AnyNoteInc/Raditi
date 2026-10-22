@@ -14,7 +14,7 @@ import {
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { PostgresGatewayStore } from '../accounting/gateway-store.ts'
-import { SessionSubscriptionLock } from '../gateway/session-lock.ts'
+import { SessionSubscriptionLock } from './session-lock.ts'
 import {
   sampleBackendCapacity,
   sampleBackendId,

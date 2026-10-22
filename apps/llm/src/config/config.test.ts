@@ -9,7 +9,7 @@ import { ConfigError, loadLlmConfig } from './config.ts'
 
 /** .env.example exactly as `cp .env.example .env` gives it to a new developer. */
 const exampleEnv: Env = parseEnv(
-  readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../../.env.example', import.meta.url), 'utf8'),
 )
 
 const PROD_METRICS_TOKEN = 'test-metrics-token-'.padEnd(32, 'x')

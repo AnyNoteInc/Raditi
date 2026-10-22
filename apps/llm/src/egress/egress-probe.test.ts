@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { llmBackends } from '@repo/llm-backends'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
-import type { EgressConfig } from '../llm-config.ts'
+import type { EgressConfig } from '../config/llm-config.ts'
 import { createLlmTestCertificates } from '../testing/llm-certificates.ts'
 import { createEgressProbe, EgressHealth, egressProbeBytes } from './egress-probe.ts'
 

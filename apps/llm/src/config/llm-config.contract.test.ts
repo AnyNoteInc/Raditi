@@ -8,7 +8,9 @@ import { PRODUCTION_VAULT_CA_FILE } from './llm-config.ts'
 // In production the role llm refuses every extra CA but one: the CA of Vault, at the path the
 // profile of the app VM gives it. That profile is a Compose file of another directory, read by
 // no code of the role; this is the one place that holds the two sides to each other.
-const composeFile = fileURLToPath(new URL('../../../infra/app/docker-compose.yml', import.meta.url))
+const composeFile = fileURLToPath(
+  new URL('../../../../infra/app/docker-compose.yml', import.meta.url),
+)
 
 describe('the extra CA of the production role llm and the profile of the app VM', () => {
   const compose = readFileSync(composeFile, 'utf8')

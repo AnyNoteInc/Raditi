@@ -115,7 +115,7 @@ test('llm gets only its own role, TLS files and private endpoints; health requir
     LLM_EGRESS_CLIENT_KEY_FILE: 'egress-client-key.pem',
   }))
     assert.equal(env[name], `/run/raditi/${path}`)
-  // Nothing the role refuses in production (apps/llm/src/llm-config.ts).
+  // Nothing the role refuses in production (apps/llm/src/config/llm-config.ts).
   for (const name of [
     'LLM_UPSTREAM_CA_FILE',
     'NODE_TLS_REJECT_UNAUTHORIZED',

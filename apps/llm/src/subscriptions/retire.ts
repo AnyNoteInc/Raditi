@@ -14,8 +14,8 @@ import {
 import { lockSubscriptionPool } from '@repo/turn-keys'
 import { z } from 'zod'
 
-import { subscriptionCredentialPath } from '../gateway/credentials.ts'
-import type { SubscriptionLocks } from '../gateway/session-lock.ts'
+import { subscriptionCredentialPath } from '../pool/credentials.ts'
+import type { SubscriptionLocks } from './session-lock.ts'
 
 type Transaction = Prisma.TransactionClient
 type Account = Prisma.SubscriptionAccountGetPayload<{

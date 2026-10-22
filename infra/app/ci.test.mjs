@@ -173,6 +173,10 @@ test('the subscription gateway workflow starts on every source its stand runs', 
     ...readdirSync(join(root, 'apps/core/scripts'))
       .filter((name) => /^verify-llm-.+\.mjs$/.test(name))
       .map((name) => `apps/core/scripts/${name}`),
+    // The worker of the role llm lives with the app it hosts.
+    ...readdirSync(join(root, 'apps/llm/scripts'))
+      .filter((name) => /^verify-.+\.mjs$/.test(name))
+      .map((name) => `apps/llm/scripts/${name}`),
     ...readdirSync(join(root, 'infra/dev/llm-verify'))
       .filter((name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))
       .map((name) => `infra/dev/llm-verify/${name}`),
@@ -761,7 +765,7 @@ test('a cached test run sees a change of a file its tests read outside their pac
     // the RUNNER_TOKENS entries core accepts.
     'apps/runner/scripts/runner-token.mjs': ['apps/core/src/runner-api/runner-auth.test.ts'],
     // The llm service of the app VM's compose against the one extra CA the production role takes.
-    'infra/app/docker-compose.yml': ['apps/llm/src/llm-config.contract.test.ts'],
+    'infra/app/docker-compose.yml': ['apps/llm/src/config/llm-config.contract.test.ts'],
   }
   for (const [file, readers] of Object.entries(outside)) {
     assert.ok(inputs.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of test`)

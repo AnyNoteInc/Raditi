@@ -1,6 +1,6 @@
 # @repo/turn-keys
 
-Ключи хода — то, чего держатся обе стороны протокола `core` ↔ `llm` (план 56, решение 3): `core` выдаёт ключи, подметает их и пробует пул, `llm` принимает запросы по ним и выводит аккаунты, `mcp` проверяет формат пары и хеш. Без портов и без фреймворка. Своя половина каждой стороны лежит в её приложении: выдача ключей (`GatewayTurnCredentials`), сборщик (`CredentialSweeper`), ёмкости бэкендов и маршрут шлюза (`backends.ts`) — в `apps/core/src/llm`, значения переменных окружения клиента — в `apps/core/src/site-env`; приём запросов шлюзом (`PostgresGatewayStore`: `lookup`, `admit`, `refuse`) и его типы — в `apps/llm/src/accounting`, путь ключа аккаунта в Vault `subs/` — в `apps/llm/src/gateway/credentials.ts`.
+Ключи хода — то, чего держатся обе стороны протокола `core` ↔ `llm` (план 56, решение 3): `core` выдаёт ключи, подметает их и пробует пул, `llm` принимает запросы по ним и выводит аккаунты, `mcp` проверяет формат пары и хеш. Без портов и без фреймворка. Своя половина каждой стороны лежит в её приложении: выдача ключей (`GatewayTurnCredentials`), сборщик (`CredentialSweeper`), ёмкости бэкендов и маршрут шлюза (`backends.ts`) — в `apps/core/src/llm`, значения переменных окружения клиента — в `apps/core/src/site-env`; приём запросов шлюзом (`PostgresGatewayStore`: `lookup`, `admit`, `refuse`) и его типы — в `apps/llm/src/accounting`, путь ключа аккаунта в Vault `subs/` — в `apps/llm/src/pool/credentials.ts`.
 
 ## Что внутри
 

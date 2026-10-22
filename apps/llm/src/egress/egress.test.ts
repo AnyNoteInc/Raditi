@@ -8,7 +8,7 @@ import type { EgressRequest, LlmBackend } from '@repo/domain'
 import { llmBackends, zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { llmConfigFromEnv, type EgressConfig } from '../llm-config.ts'
+import { llmConfigFromEnv, type EgressConfig } from '../config/llm-config.ts'
 import { createLlmTestCertificates } from '../testing/llm-certificates.ts'
 import {
   createControlEgress,

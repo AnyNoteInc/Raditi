@@ -4,7 +4,7 @@ import { isIP } from 'node:net'
 
 import { withTimeout } from '@repo/domain'
 
-import type { EgressConfig } from '../llm-config.ts'
+import type { EgressConfig } from '../config/llm-config.ts'
 
 export interface EgressProbe {
   check(signal: AbortSignal): Promise<boolean>

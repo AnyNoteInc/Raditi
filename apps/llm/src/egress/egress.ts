@@ -13,7 +13,7 @@ import {
 } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 
-import type { EgressConfig } from '../llm-config.ts'
+import type { EgressConfig } from '../config/llm-config.ts'
 
 /**
  * An egress failure after which no byte of the request can have reached the provider: the
@@ -53,6 +53,14 @@ export class EgressNotSentError extends EgressNotDelivered {
   constructor() {
     super()
     this.name = 'EgressNotSentError'
+  }
+}
+
+/** The transport while `open()` holds. A closed gate sends nothing: a generation spends no quota. */
+export function gatedEgress(transport: StreamingEgress, open: () => boolean): StreamingEgress {
+  return {
+    request: (...args) =>
+      open() ? transport.request(...args) : Promise.reject(new EgressNotSentError()),
   }
 }
 
