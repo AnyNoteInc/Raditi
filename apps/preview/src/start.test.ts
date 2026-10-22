@@ -1,7 +1,7 @@
 import type { INestApplicationContext } from '@nestjs/common'
-import { PreviewGatewayServer } from '@repo/preview-gateway'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { PreviewGatewayServer } from './gateway/preview-gateway.server.ts'
 import { startPreview } from './start.ts'
 import { testPreviewConfig } from './testing/fakes.ts'
 

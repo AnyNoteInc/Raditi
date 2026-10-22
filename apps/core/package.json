@@ -36,7 +36,6 @@
     "@repo/agent-drivers": "workspace:*",
     "@repo/app-bootstrap": "workspace:*",
     "@repo/billing": "workspace:*",
-    "@repo/browser-providers": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/git-providers": "workspace:*",
@@ -46,7 +45,6 @@
     "@repo/mail": "workspace:*",
     "@repo/notifications": "workspace:*",
     "@repo/observability": "workspace:*",
-    "@repo/preview-gateway": "workspace:*",
     "@repo/runner-engine": "workspace:*",
     "@repo/sandbox-providers": "workspace:*",
     "@repo/service-runtime": "workspace:*",
@@ -71,6 +69,7 @@
   "devDependencies": {
     "@nestjs/cli": "catalog:",
     "@nestjs/testing": "catalog:",
+    "@repo/browser-providers": "workspace:*",
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@swc/core": "catalog:",

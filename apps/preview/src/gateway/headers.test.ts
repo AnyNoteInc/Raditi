@@ -6,7 +6,7 @@ import {
   siteSetCookie,
   upstreamRequestHeaders,
   withoutFrameAncestors,
-} from './preview-headers.ts'
+} from './headers.ts'
 
 const context = { originHost: 'site-abcd1234-chat-ef5678.localhost:8090', scheme: 'http' }
 const appOrigin = 'http://localhost:3000'

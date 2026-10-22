@@ -8,10 +8,10 @@
 const TOOLING = '^packages/(eslint-config|typescript-config)/'
 const ADAPTERS =
   'db|storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|snapshots|yookassa|mail|telegram'
-// A leaf: imports nothing of the repository. The apps import it, and so does a package whose
-// tier rule names it (preview-gateway); the other tier rules do not allow it.
+// A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
+// allows it.
 const LEAVES = 'ip-address'
-const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|site-content|preview-gateway'
+const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|site-content'
 // The frame and runtime of the apps (process start and stop, Nest wiring, health):
 // app-side code that lives in a package, so it may use observability, which no library package may.
 const RUNTIME = 'app-bootstrap|service-runtime|runner-engine'
@@ -199,21 +199,6 @@ module.exports = {
       },
     },
     {
-      name: 'preview-gateway-tier',
-      comment:
-        'preview-gateway serves previews from the database: domain, db and the address helpers only (the runtime is test support).',
-      severity: 'error',
-      from: { path: '^packages/preview-gateway/' },
-      to: {
-        path: '^packages/',
-        pathNot: [
-          '^packages/(domain|db|ip-address|preview-gateway)/',
-          '^packages/app-bootstrap/src/testing/',
-          TOOLING,
-        ],
-      },
-    },
-    {
       name: 'package-testing-only-in-tests',
       comment:
         'The testing part of a package (sample ids, the network guard, scripted fakes, the test config of the runner) is test support: only tests, the testing modules of the apps and the stand scripts import it.',
@@ -354,6 +339,17 @@ module.exports = {
       to: {
         path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|site-content|runner-engine|trpc|ui)/',
         reachable: true,
+      },
+    },
+    {
+      name: 'preview-request-path',
+      comment:
+        'A request through the preview gateway (its server, the access checks, the cookie) is served from the database alone: domain, db, the address helpers and the Prisma token of service-runtime.',
+      severity: 'error',
+      from: { path: '^apps/preview/src/(gateway|access|cookie)/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: '^packages/',
+        pathNot: ['^packages/(domain|db|ip-address|service-runtime)/', TOOLING],
       },
     },
     {

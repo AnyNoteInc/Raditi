@@ -16,7 +16,6 @@ on:
       - pnpm-workspace.yaml
       - apps/core/**
       - apps/preview/**
-      - packages/preview-gateway/**
       - packages/ip-address/**
       - apps/runner/**
       - packages/runner-engine/**

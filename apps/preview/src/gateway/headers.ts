@@ -4,7 +4,7 @@ import {
   cookiesForUpstream,
   isGatewayCookieName,
   previewRevisionSetCookie,
-} from './preview-cookie.ts'
+} from '../cookie/preview-cookie.ts'
 
 /**
  * Headers across the gateway of previews (docs/plan/53-chat-preview-release.md, Р19). Towards

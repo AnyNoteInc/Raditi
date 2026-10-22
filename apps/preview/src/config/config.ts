@@ -14,10 +14,11 @@ import {
 } from '@repo/domain'
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
 import { ipLiteral } from '@repo/ip-address'
-import { parsePreviewRelays, type PreviewRelayRange } from '@repo/preview-gateway'
 import { ConfigError } from '@repo/app-bootstrap'
 import { getDomain } from 'tldts'
 import { z } from 'zod'
+
+import { parsePreviewRelays, type PreviewRelayRange } from './browser-relays.ts'
 
 export { ConfigError }
 

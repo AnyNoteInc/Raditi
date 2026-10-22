@@ -84,7 +84,7 @@ test('CI fails when schema.prisma and the deployed migrations differ', () => {
 })
 
 // The apps whose own opt-in database suites run in the one gateway-db job, in the order of its steps.
-const databaseApps = ['apps/core', 'apps/llm', 'apps/mcp']
+const databaseApps = ['apps/core', 'apps/llm', 'apps/mcp', 'apps/preview']
 
 test('CI runs every opt-in database test of the role apps on its own PostgreSQL', () => {
   const found = {}
@@ -103,6 +103,7 @@ test('CI runs every opt-in database test of the role apps on its own PostgreSQL'
   assert.ok(found['apps/core'] >= 3, 'the turn key, sweeper and release suites exist')
   assert.ok(found['apps/llm'] >= 5, 'the gateway, pool, lock, login and retire suites exist')
   assert.ok(found['apps/mcp'] >= 3, 'the access, undo and preview suites of the MCP gateway exist')
+  assert.ok(found['apps/preview'] >= 2, 'the access and entry suites of the preview gateway exist')
 
   const database = job('gateway-db')
   assert.ok(database, 'ci.yml has the gateway-db job')
