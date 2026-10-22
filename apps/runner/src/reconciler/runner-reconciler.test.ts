@@ -1,18 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
-import { MAX_SANDBOX_TURN_MS, type Sandbox, type TurnPlan } from '@repo/domain'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { RunnerCallError, RunnerReconciler } from '@repo/runner-engine'
+import type { Sandbox } from '@repo/domain'
+import { labels } from '@repo/local-turns/testing'
+import { describe, expect, it, vi } from 'vitest'
 
-import { RunnerHub } from '../runner-api/runner-hub.ts'
-import { loopbackTransport } from '../testing/runner-loopback.ts'
-import { fence, labels } from '../testing/runner-sandbox.ts'
-import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
-
-const hubs: RunnerHub[] = []
-afterEach(() => {
-  for (const hub of hubs.splice(0)) hub.close()
-})
+import { RunnerCallError } from '../core-api/core-client.ts'
+import { RunnerReconciler } from './runner-reconciler.ts'
 
 const otherTask = '00000000-0000-4000-8000-000000000009'
 const turnLabels = { ...labels, leaseEpoch: 1 }
@@ -57,32 +50,13 @@ function fakeDocker() {
 
 describe('RunnerReconciler', () => {
   it('removes only orphans it reported, holds no turn of and whose identity is unchanged', async () => {
-    const assignments = new MemoryTurnAssignments()
-    const hub = new RunnerHub({
-      assignments,
-      leases: { assert: vi.fn() },
-      logger: { warn: vi.fn() },
-    })
-    hubs.push(hub)
     const session = randomUUID()
-    const assignment = (await assignments.open({
-      fence,
-      sessionId: labels.sessionId,
-      turn: labels.turn,
-      executor: 'runner',
-      plan: {} as TurnPlan,
-      remainingMs: MAX_SANDBOX_TURN_MS,
-    }))!
-    await assignments.claim({
-      ids: [assignment.id],
-      runnerId: 'sandbox-1',
-      runnerSession: session,
-      limit: 1,
-    })
+    // Core found an unfinished assignment for `owned` only: it names the other three.
+    const transport = { reconcile: vi.fn(async () => ({ remove: ['orphan', 'changed', 'held'] })) }
     const docker = fakeDocker()
     const reconciler = new RunnerReconciler({
       runner: { session, holds: (id) => id === 'held' },
-      transport: loopbackTransport(hub),
+      transport,
       sandboxes: docker.provider,
     })
 
@@ -90,6 +64,14 @@ describe('RunnerReconciler', () => {
       removed: ['orphan'],
       kept: ['held'],
       uncertain: ['changed'],
+    })
+    expect(transport.reconcile).toHaveBeenCalledExactlyOnceWith({
+      runnerSession: session,
+      inventory: ['owned', 'orphan', 'changed', 'held'].map((containerId) => ({
+        containerId,
+        labels: containerId === 'owned' ? turnLabels : orphanLabels,
+        ageMs: expect.any(Number),
+      })),
     })
     expect(docker.sandboxes.get('orphan')!.destroy).toHaveBeenCalledWith('gc')
     for (const id of ['owned', 'changed', 'held'])

@@ -7,8 +7,8 @@ import {
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 
-import { RunnerCallError, type RunnerTransport } from './core-client.ts'
-import { runnerInventory, type SandboxRunner } from './sandbox-runner.ts'
+import { RunnerCallError, type RunnerTransport } from '../core-api/core-client.ts'
+import { runnerInventory, type SandboxRunner } from '../sandbox-runner/sandbox-runner.ts'
 
 /** A container of a turn no core knows lives at most this much past its removal by core. */
 export const RUNNER_RECONCILE_MS = 5 * 60_000

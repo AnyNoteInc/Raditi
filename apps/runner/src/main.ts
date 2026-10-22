@@ -6,7 +6,7 @@ import { isDomainError } from '@repo/domain'
 import { errorMessage } from '@repo/observability'
 import { armShutdownTimeout } from '@repo/app-bootstrap'
 
-import { ConfigError, loadRunnerConfig } from './config.ts'
+import { ConfigError, loadRunnerConfig } from './config/config.ts'
 import { startRunner } from './start.ts'
 
 const logger = new Logger('runner')

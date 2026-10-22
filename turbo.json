@@ -138,7 +138,12 @@
       "dependsOn": ["^transit"]
     },
     "typecheck": {
-      "dependsOn": ["^db:generate", "db:generate", "transit"]
+      "dependsOn": ["^db:generate", "db:generate", "transit"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/runner/src/core-api/core-client.ts",
+        "$TURBO_ROOT$/apps/runner/src/sandbox-runner/sandbox-runner.ts"
+      ]
     },
     "lint": {
       "dependsOn": ["transit"]
@@ -157,6 +162,8 @@
         "$TURBO_ROOT$/infra/wordpress/preview-apache.conf",
         "$TURBO_ROOT$/packages/site-connections/src/database-copy/wordpress-policy.fixture.json",
         "$TURBO_ROOT$/apps/runner/scripts/runner-token.mjs",
+        "$TURBO_ROOT$/apps/runner/src/core-api/core-client.ts",
+        "$TURBO_ROOT$/apps/runner/src/sandbox-runner/sandbox-runner.ts",
         "$TURBO_ROOT$/infra/app/docker-compose.yml"
       ]
     },

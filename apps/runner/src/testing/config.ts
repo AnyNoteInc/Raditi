@@ -1,7 +1,7 @@
-// The configuration of a runner as tests of core and of the app make it up. Only for *.test.ts.
+// The configuration of a runner as its tests make it up. Only for *.test.ts.
 import { sandboxConfigFromEnv } from '@repo/sandbox-providers'
 
-import type { RunnerConfig } from '../runner-config.ts'
+import type { RunnerConfig } from '../config/config.ts'
 
 export function testRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerConfig {
   return {

@@ -481,9 +481,11 @@ test('the product deploy runs on a release tag only, never on a push to main (Р
     [...deploy.matchAll(/\$\{\{ (secrets\.[A-Z_]+|gitea\.token) \}\}/g)].map(([, name]) => name),
     ['secrets.RADITI_DEPLOY_WRAP', 'secrets.RADITI_DEPLOY_WRAP', 'gitea.token'],
   )
-  // The command is built from this source: Nest compiles src/ into dist/ (tsconfig rootDir src).
+  // The command is built from this source: Nest compiles src/ into dist/ (rootDir src of the
+  // build config, the one nest-cli.json names).
   assert.ok(read('../../../apps/core/src/deploy-step/cli.ts').length > 0)
-  assert.match(read('../../../apps/core/tsconfig.json'), /"rootDir": "src"/)
+  assert.match(read('../../../apps/core/nest-cli.json'), /"tsConfigPath": "tsconfig\.build\.json"/)
+  assert.match(read('../../../apps/core/tsconfig.build.json'), /"rootDir": "src"/)
   assert.match(read('../../../apps/core/Dockerfile'), /\nWORKDIR \/app\/apps\/core\n/)
 })
 

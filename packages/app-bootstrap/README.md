@@ -19,4 +19,4 @@
 
 ## Чего не должно достигать
 
-Только `domain` (`app-bootstrap-tier`): ни базы, ни Redis, ни Vault, ни S3, ни `observability`. Из пакетов каркаса раннер берёт только этот, а пакеты, которые он запускает (`runner-engine`, `snapshots`, `local-turns`), — ни одного (им `app-bootstrap` нужен лишь ради сторожа сети тестов): `service-runtime` и `db` им недоступны даже транзитивно (`runner-minimal-packages`).
+Только `domain` (`app-bootstrap-tier`): ни базы, ни Redis, ни Vault, ни S3, ни `observability`. Из пакетов каркаса раннер берёт только этот, а пакеты, которые он запускает (`snapshots`, `local-turns`), — ни одного (им `app-bootstrap` нужен лишь ради сторожа сети тестов): `service-runtime` и `db` им недоступны даже транзитивно (`runner-minimal-packages`).

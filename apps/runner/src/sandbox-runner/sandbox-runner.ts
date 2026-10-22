@@ -36,7 +36,11 @@ import {
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 
-import { RunnerCallError, type RunnerCommandFence, type RunnerTransport } from './core-client.ts'
+import {
+  RunnerCallError,
+  type RunnerCommandFence,
+  type RunnerTransport,
+} from '../core-api/core-client.ts'
 
 type Phase = (typeof runnerAssignmentPhases)[number]
 type Command<T extends RunnerCommand['type']> = Extract<RunnerCommand, { type: T }>

@@ -25,7 +25,6 @@ import {
   type TurnResult,
 } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SandboxRunner } from '@repo/runner-engine'
 import { LocalTurnExecutor } from '@repo/local-turns'
 
 import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
@@ -35,6 +34,7 @@ import type { SealedElsewhere, SnapshotParts } from '../sessions/snapshot.servic
 import { crashable } from '../testing/crash.ts'
 import { sampleDriverId } from '../testing/ids.ts'
 import { loopbackTransport, type LoopbackTransport } from '../testing/runner-loopback.ts'
+import { SandboxRunner } from '../testing/runner-side.ts'
 import { MemorySiteLeases } from '../testing/site-leases.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { MemoryTurnCredentials, testTurnCredentialPolicy } from '../testing/turn-credentials.ts'

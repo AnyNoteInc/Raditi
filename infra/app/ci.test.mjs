@@ -760,6 +760,10 @@ test('a cached test run sees a change of a file its tests read outside their pac
     // The token command of the runner image (the runbook issues it on the sandbox VM), against
     // the RUNNER_TOKENS entries core accepts.
     'apps/runner/scripts/runner-token.mjs': ['apps/core/src/runner-api/runner-auth.test.ts'],
+    // The runner engine core's cross-app tests drive (plan 56, decision 1), through the one file
+    // of core that imports the runner app.
+    'apps/runner/src/core-api/core-client.ts': ['apps/core/src/testing/runner-side.ts'],
+    'apps/runner/src/sandbox-runner/sandbox-runner.ts': ['apps/core/src/testing/runner-side.ts'],
     // The llm service of the app VM's compose against the one extra CA the production role takes.
     'infra/app/docker-compose.yml': ['apps/llm/src/llm-config.contract.test.ts'],
   }
@@ -770,6 +774,19 @@ test('a cached test run sees a change of a file its tests read outside their pac
         read(reader).includes(`'${relative(dirname(reader), file)}'`),
         `${reader} no longer reads ${file}`,
       )
+  }
+  // Every runner file the gateway imports is named above, and core's typecheck, which compiles
+  // it with core's sources, sees a change of it too.
+  const gateway = 'apps/core/src/testing/runner-side.ts'
+  const engine = [...read(gateway).matchAll(/from '((?:\.\.\/)+runner\/src\/[^']+\.ts)'/g)].map(
+    ([, specifier]) => relative(root, join(root, dirname(gateway), specifier)),
+  )
+  assert.ok(engine.length > 0, `${gateway} imports the runner engine`)
+  const typecheck = JSON.parse(read('turbo.json')).tasks.typecheck.inputs ?? []
+  assert.ok(typecheck.includes('$TURBO_DEFAULT$'), 'typecheck keeps the files of its package')
+  for (const file of engine) {
+    assert.deepEqual(outside[file], [gateway], `${file} is not named with its reader`)
+    assert.ok(typecheck.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of typecheck`)
   }
   // A file the readers above load through an import of theirs: its readers are theirs too.
   const imported = { 'infra/sandbox/client-egress.mjs': 'infra/sandbox/gateway.mjs' }

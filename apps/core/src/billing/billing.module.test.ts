@@ -6,13 +6,11 @@ import {
   type INestApplication,
   type Type,
 } from '@nestjs/common'
-import { testRunnerConfig } from '@repo/runner-engine/testing'
 import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
 import { renewalJobs, renewalOutcomes } from '@repo/billing'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PRISMA } from '@repo/service-runtime'
-import { RunnerModule } from '@repo/runner-engine'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CoreConfigModule } from '../core/core-config.module.ts'
@@ -152,11 +150,10 @@ describe('BillingModule in the core role', () => {
     expect(new Set(labels)).toEqual(new Set(['job,outcome,app']))
   })
 
-  it('belongs to core alone: the runner renew nothing', () => {
+  it('belongs to core: its root module imports it', () => {
+    // No other app can: apps-are-isolated, and the runner reaches no billing even transitively
+    // (runner-no-platform-access).
     const coreModule = CoreModule.forRoot({ config: testCoreConfig(), background: false })
     expect(imports(coreModule, BillingModule)).toBe(true)
-
-    const others = [RunnerModule.forRoot(testRunnerConfig())]
-    for (const module of others) expect(imports(module, BillingModule)).toBe(false)
   })
 })
