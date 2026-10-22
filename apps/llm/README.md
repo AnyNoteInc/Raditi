@@ -1,6 +1,6 @@
 # llm
 
-Шлюз подписок (spec §5, §15): единственный процесс, который держит ключ провайдера модели (Z.ai: `zai-coding`, `zai-api`). Проверяет ключ хода, подставляет ключ аккаунта пула, держит бюджет ключа хода, пишет расход в `llm_calls` и `token_usage`, следит за здоровьем пула. Слушает порт 8084 (`LLM_GATEWAY_PORT`) на частном адресе, одна реплика. Вход — `src/main.ts` → `src/start.ts` (`startLlm`), конфигурация — `src/config.ts` (`loadLlmConfig`); код шлюза — `src/gateway`, операторские команды — `src/subscriptions`.
+Шлюз подписок (spec §5, §15): единственный процесс, который держит ключ провайдера модели (Z.ai: `zai-coding`, `zai-api`). Проверяет ключ хода, подставляет ключ аккаунта пула, держит бюджет ключа хода, пишет расход в `llm_calls` и `token_usage`, следит за здоровьем пула. Слушает порт 8084 (`LLM_GATEWAY_PORT`) на частном адресе, одна реплика. Вход — `src/main.ts` → `src/start.ts` (`startLlm`), конфигурация — `src/config.ts` (`loadLlmConfig`); код шлюза — `src/gateway`, приём запросов по ключу хода (`PostgresGatewayStore`: `lookup`, `admit`, `refuse` поверх журнала вызовов `@repo/turn-keys`) и его типы — `src/accounting`, операторские команды — `src/subscriptions`.
 
 ## Что читает
 

@@ -69,7 +69,7 @@
 8. **Порядок остановки,** у которого больше одного шага со сроками, остаётся в одном провайдере: `LlmRuntime` у `llm`, `PreviewGatewayServer.close()` у `preview`, `RunnerLifecycle` у `runner`. Внутри одного модуля Nest 12.1 останавливает провайдеры одного уровня одновременно, а глобальные модули — последними; на это опираются только там, где это сказано явно, и тест проверяет порядок.
 9. **Без изменений:** контексты логгеров, тексты строк логов (их ищут стенды и тесты), имена и метки метрик, тексты отказов, имена переменных окружения, порты, пути Vault, очереди, протоколы.
 10. **`src/testing/`** — только в корне `src` приложения (его исключает `tsconfig.build.json`, на него опираются правила и SonarCloud); `version.ts` у `mcp` — в корне `src` (путь `../package.json` считается во время работы).
-11. **Код, который Node запускает из исходников** (type stripping), остаётся без декораторов, параметров-свойств и `enum`: замыкание команд оператора `llm` (`subscriptions/*`, `egress.ts`, `egress-probe.ts`, `credentials.ts`, `session-lock.ts`, `llm-config.ts`), `apps/core/src/{billing,releases}/operator-cli.ts`, `turns/turn-result.ts`, `testing/ids.ts`, `deploy-step/{backup,envelope}.ts`, `git-workspace/process.ts`. Их подключают фабрики.
+11. **Код, который Node запускает из исходников** (type stripping), остаётся без декораторов, параметров-свойств и `enum`: замыкание команд оператора `llm` (`subscriptions/*`, `egress.ts`, `egress-probe.ts`, `credentials.ts`, `session-lock.ts`, `llm-config.ts`), `apps/core/src/{billing,releases}/operator-cli.ts`, `turns/turn-result.ts`, `testing/ids.ts`, `deploy-step/{backup,envelope}.ts`, `git-workspace/process.ts`, `llm/backends.ts` (с С2 его грузит из исходников `scripts/verify-llm-zai-setup.mjs`, а с ним — `node --test scripts/*.test.mjs` из `test` приложения `core`). Их подключают фабрики.
 
 ## 4. Целевая раскладка приложений
 
@@ -193,7 +193,7 @@ src/testing/                          + runner-side.ts (решение 1), previ
 - Каталог `core/` уходит, `src/runner/` (только тесты) уходит, мёртвый `src/version.ts` удаляется.
 - `TurnsModule` перестаёт быть глобальным и владеет движком хода; `TasksModule` и `PreviewsModule` импортируют его явно; `TurnsModule.forRoot` строится один раз.
 - Классы, которые строят стенды из `dist` (`TurnSupervisor`, `LiveTurns`, `TaskEventTurnJournal`, `RunnerHub`, `RemoteTurnExecutor`, `RunnerApiServer`, `SnapshotService`, `GitWorkspaceService` и др.), сохраняют конструкторы и пути файлов.
-- Пути, на которые опираются стенды и CI, не меняются: `dist/main.js`, `dist/deploy-step/cli.js`, `dist/{config,git-workspace,llm,runner-api,sessions,turns}/…` классов, которые грузят стенды; тексты, которые читают контрактные тесты (имена метрик в `billing.module.ts` и т. п.), переносятся вместе с контрактом.
+- Пути, на которые опираются стенды и CI, не меняются: `dist/main.js`, `dist/deploy-step/cli.js`, `dist/{config,git-workspace,llm,runner-api,sessions,turns}/…` классов, которые грузят стенды, и `src/llm/backends.ts`, который стенды грузят из исходников (§3, п. 11); тексты, которые читают контрактные тесты (имена метрик в `billing.module.ts` и т. п.), переносятся вместе с контрактом.
 
 ## 5. Общие пакеты
 
