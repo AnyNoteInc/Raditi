@@ -370,6 +370,8 @@ src/testing/                          + runner-side.ts (решение 1), previ
 
 Отклонено одно замечание: интеграционные тесты `core` и `llm` после С2 сверяют «чужую» сторону копиями её SQL (`admissibleKey`, `requestRetirement`, `withdrawRetirement` в `apps/core/src/llm/turn-credentials.integration.test.ts`, `retireDrained` в `apps/llm/src/subscriptions/retire.integration.test.ts`). Оба голоса: копии совпадают с продуктовым SQL построчно (заявленного расхождения нет), так решено в §5.3 — `apps-are-isolated` не даёт тесту одного приложения импортировать другое, — а связку `core` ↔ `llm` целиком ведёт стенд B13 (`verify:llm-gateway`, `llm-gateway.yml` на каждое изменение `apps/core`, `apps/llm`, `turn-keys` и `db`): выдачу на выводимом аккаунте, приём и отзыв, вывод аккаунта сборщиком и командой оператора. Свой SQL каждая сторона по-прежнему проверяет настоящим кодом в своём наборе.
 
+Проверка по спецификации (`/spec-check`) после итога подтвердила одно мелкое замечание о документах: CLAUDE.md в «Стеке» и «Структуре» называл `@repo/turn-keys` общим для `core` и `llm`, а формат токена MCP и ключа хода из пакета берёт и `mcp` (`apps/mcp/src/access/mcp-access.ts`, `mcp-auth.guard.ts`, `apps/mcp/src/browser/mcp-browser.ts`). Обе строки теперь говорят то же, что spec §6 и README пакета; код не менялся.
+
 ### Не запускалось
 
 - Живой режим (`--live`) — по правилам; `.env` не читался.
