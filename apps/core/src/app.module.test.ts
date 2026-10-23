@@ -82,7 +82,10 @@ function recordHooks(types: (abstract new (...args: never[]) => object)[]): stri
   return calls
 }
 
-/** What starts and stops in a core of either executor, in the order it always did. */
+/**
+ * What starts and stops in a core of either executor, in the order it always did, but for the
+ * two connections at the end.
+ */
 function lifecycleOf(runner: boolean): string[] {
   return [
     'onModuleInit StaleClonesSweep',
@@ -108,6 +111,9 @@ function lifecycleOf(runner: boolean): string[] {
     'onApplicationShutdown ReleaseApiServer',
     ...(runner ? ['onApplicationShutdown RunnerApiServer', 'onApplicationShutdown RunnerHub'] : []),
     'onApplicationShutdown GitCredentialRuntime',
+    // These two hooks used to run at the same time, both in one InfraModule. DatabaseModule is a
+    // global module of its own now, and Redis quits before Prisma disconnects: the one conscious
+    // difference of plan 56 for core (docs/plan/56-nest-modules.md §4.5).
     'onApplicationShutdown RedisLifecycle',
     'onApplicationShutdown PrismaLifecycle',
   ]
