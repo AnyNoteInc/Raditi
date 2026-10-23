@@ -14,7 +14,7 @@ import {
 import { Registry } from '@prometheus-io/client'
 import { bearerTokenMatches } from '@repo/observability'
 
-import { METRICS_REGISTRY, METRICS_TOKEN } from '../infra/tokens.ts'
+import { METRICS_REGISTRY, METRICS_TOKEN } from './metrics.tokens.ts'
 
 @Injectable()
 export class MetricsTokenGuard implements CanActivate {

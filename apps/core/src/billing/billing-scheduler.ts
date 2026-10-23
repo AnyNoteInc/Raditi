@@ -11,7 +11,7 @@ import { errorMessage } from '@repo/observability'
 import type { Queue } from 'bullmq'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG, BACKGROUND_JOBS } from '../infra/tokens.ts'
+import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { BILLING_QUEUE } from './billing-jobs.ts'
 
 /** The id of the job scheduler of a pass: one per pass for all core processes. */

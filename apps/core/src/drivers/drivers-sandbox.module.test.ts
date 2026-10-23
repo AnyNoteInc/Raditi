@@ -3,11 +3,12 @@ import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { SandboxProvider } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
-import { CoreConfigModule } from '../core/core-config.module.ts'
-import { AGENT_DRIVERS, SANDBOX_PROVIDER } from '../infra/tokens.ts'
+import { CoreConfigModule } from '../config/config.module.ts'
 import { SandboxModule } from '../sandbox/sandbox.module.ts'
+import { SANDBOX_PROVIDER } from '../sandbox/sandbox.tokens.ts'
 import { testCoreConfig } from '../testing/fakes.ts'
 import { DriversModule, ENABLED_AGENT_DRIVERS } from './drivers.module.ts'
+import { AGENT_DRIVERS } from './drivers.tokens.ts'
 
 describe('DriversModule and SandboxModule', () => {
   it('provide the agent driver registry and the sandbox provider', async () => {

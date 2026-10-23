@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common'
 import type { SiteLeaseStore, TurnAssignmentStore } from '@repo/domain'
 
 import type { CoreConfig } from '../config/config.ts'
+import { CORE_CONFIG } from '../config/config.tokens.ts'
 import { runnerCredentialAddress } from '../config/runner-tokens.ts'
-import { CORE_CONFIG, SITE_LEASES, TURN_ASSIGNMENTS } from '../infra/tokens.ts'
+import { LeasesModule } from '../leases/leases.module.ts'
+import { SITE_LEASES, TURN_ASSIGNMENTS } from '../leases/leases.tokens.ts'
 import { RemoteTurnExecutor } from './remote-turn-executor.ts'
 import { RunnerApiServer } from './runner-api.server.ts'
 import { RunnerAuthenticator } from './runner-auth.ts'
@@ -11,9 +13,11 @@ import { RunnerHub } from './runner-hub.ts'
 
 /**
  * The runner API of the core role (TURN_EXECUTOR=runner). startCore opens its listener on
- * RUNNER_API_PORT next to the main port; RemoteTurnExecutor is the TurnExecutor it serves.
+ * RUNNER_API_PORT next to the main port (app.get(RunnerApiServer)); RemoteTurnExecutor is the
+ * TurnExecutor it serves, the one the turn engine (TurnsModule) runs turns with.
  */
 @Module({
+  imports: [LeasesModule],
   providers: [
     {
       provide: RunnerHub,
@@ -45,6 +49,6 @@ import { RunnerHub } from './runner-hub.ts'
       inject: [RunnerHub, SITE_LEASES, TURN_ASSIGNMENTS, CORE_CONFIG],
     },
   ],
-  exports: [RunnerHub, RunnerApiServer, RemoteTurnExecutor],
+  exports: [RemoteTurnExecutor],
 })
 export class RunnerApiModule {}

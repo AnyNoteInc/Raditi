@@ -12,7 +12,7 @@ import {
 import { vi } from 'vitest'
 
 import { loadConfig, type CoreConfig } from '../config/config.ts'
-import { OBJECT_STORAGE, REDIS } from '../infra/tokens.ts'
+import { OBJECT_STORAGE, REDIS } from '../infra/infra.tokens.ts'
 
 const testEnv = {
   APP_ENV: 'test',
@@ -71,7 +71,7 @@ export function fakeInfra(overrides: Partial<Dependencies> = {}) {
 
 export type FakeInfra = ReturnType<typeof fakeInfra>
 
-/** Replaces every provider of CoreModule that would open a connection. */
+/** Replaces every provider of AppModule that would open a connection. */
 export function overrideCoreInfra(builder: TestingModuleBuilder, infra: FakeInfra) {
   let result = builder
     .overrideProvider(PRISMA)

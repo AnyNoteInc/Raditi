@@ -2,25 +2,116 @@ import type { INestApplication, LoggerService } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { JobQueue, SandboxProvider, TurnExecutor } from '@repo/domain'
+import { PrismaLifecycle } from '@repo/service-runtime'
 import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { OutboxRelayService } from '../outbox/outbox-relay.service.ts'
-import type { CoreConfig } from '../config/config.ts'
-import { StaleClonesSweep } from '../git-workspace/stale-clones.ts'
-import { hashRunnerToken, parseRunnerTokens } from '../config/runner-tokens.ts'
-import { AGENT_DRIVERS, JOB_QUEUE, SANDBOX_PROVIDER, TURN_EXECUTOR } from '../infra/tokens.ts'
-import { RunnerApiServer } from '../runner-api/runner-api.server.ts'
+import { BillingScheduler } from './billing/billing-scheduler.ts'
+import { OutboxRelayService } from './outbox/outbox-relay.service.ts'
+import type { CoreConfig } from './config/config.ts'
+import { GitCredentialRuntime } from './git-workspace/git-credential-runtime.ts'
+import { StaleClonesSweep } from './git-workspace/stale-clones.ts'
+import { hashRunnerToken, parseRunnerTokens } from './config/runner-tokens.ts'
+import { AGENT_DRIVERS } from './drivers/drivers.tokens.ts'
+import { RedisLifecycle } from './infra/redis.ts'
+import { CoreCredentialRuntime } from './llm/credential-runtime.ts'
+import { METRICS_REGISTRY } from './metrics/metrics.tokens.ts'
+import { PreviewLoops } from './previews/preview-loops.ts'
+import { BullMqShutdownService } from './queue/bullmq-shutdown.service.ts'
+import { JOB_QUEUE } from './queue/queue.tokens.ts'
+import { ReleaseApiServer } from './release-api/release-api.server.ts'
+import { ReleaseSweepRuntime } from './releases/release-sweep.ts'
+import { SANDBOX_PROVIDER } from './sandbox/sandbox.tokens.ts'
+import { SiteImportProcessor } from './site-provisioning/site-import.processor.ts'
+import { SiteImportSweeper } from './site-provisioning/site-import.sweeper.ts'
+import { TaskSweepRuntime } from './tasks/task-sweep.ts'
+import { LiveTurns } from './turns/live-turns.ts'
+import { TurnRuntime } from './turns/turn-runtime.ts'
+import { TURN_EXECUTOR } from './turns/turns.tokens.ts'
+import { RunnerApiServer } from './runner-api/runner-api.server.ts'
+import { RunnerHub } from './runner-api/runner-hub.ts'
 import {
   fakeInfra,
   overrideCoreInfra,
   TEST_METRICS_TOKEN,
   testCoreConfig,
   type FakeInfra,
-} from '../testing/fakes.ts'
-import { CoreModule } from './core.module.ts'
+} from './testing/fakes.ts'
+import { AppModule } from './app.module.ts'
 
 let app: INestApplication | undefined
+
+/** The runner VMs' executor, as loadConfig demands it: the runner's one address. */
+function runnerConfig(): CoreConfig {
+  const token = `rnr_sandbox-1.${'a'.repeat(43)}`
+  return {
+    ...testCoreConfig(),
+    turnExecutor: 'runner',
+    runnerApi: {
+      port: 0,
+      tokens: parseRunnerTokens(`sandbox-1:${hashRunnerToken(token)}@127.0.0.1`).hashes,
+    },
+  }
+}
+
+const hooks = [
+  'onModuleInit',
+  'onApplicationBootstrap',
+  'onModuleDestroy',
+  'beforeApplicationShutdown',
+  'onApplicationShutdown',
+] as const
+type Hook = (typeof hooks)[number]
+
+/** Records each lifecycle hook of `types` as `<hook> <class>` when Nest calls it. */
+function recordHooks(types: (abstract new (...args: never[]) => object)[]): string[] {
+  const calls: string[] = []
+  for (const type of types) {
+    const prototype = type.prototype as Partial<Record<Hook, (...args: unknown[]) => unknown>>
+    for (const hook of hooks) {
+      const original = prototype[hook]
+      if (!original) continue
+      vi.spyOn(prototype as Record<Hook, (...args: unknown[]) => unknown>, hook).mockImplementation(
+        function (this: object, ...args: unknown[]) {
+          calls.push(`${hook} ${type.name}`)
+          return original.apply(this, args)
+        },
+      )
+    }
+  }
+  return calls
+}
+
+/** What starts and stops in a core of either executor, in the order it always did. */
+function lifecycleOf(runner: boolean): string[] {
+  return [
+    'onModuleInit StaleClonesSweep',
+    'onApplicationBootstrap GitCredentialRuntime',
+    'onApplicationBootstrap CoreCredentialRuntime',
+    'onApplicationBootstrap OutboxRelayService',
+    'onApplicationBootstrap BillingScheduler',
+    'onApplicationBootstrap SiteImportSweeper',
+    'onApplicationBootstrap TurnRuntime',
+    'onApplicationBootstrap TaskSweepRuntime',
+    'onApplicationBootstrap PreviewLoops',
+    'onApplicationBootstrap ReleaseSweepRuntime',
+    'onModuleDestroy ReleaseSweepRuntime',
+    'onModuleDestroy PreviewLoops',
+    'onModuleDestroy TaskSweepRuntime',
+    'onModuleDestroy TurnRuntime',
+    'onModuleDestroy SiteImportProcessor',
+    'onModuleDestroy SiteImportSweeper',
+    'onModuleDestroy BillingScheduler',
+    'onModuleDestroy OutboxRelayService',
+    'onModuleDestroy CoreCredentialRuntime',
+    'beforeApplicationShutdown BullMqShutdownService',
+    'onApplicationShutdown ReleaseApiServer',
+    ...(runner ? ['onApplicationShutdown RunnerApiServer', 'onApplicationShutdown RunnerHub'] : []),
+    'onApplicationShutdown GitCredentialRuntime',
+    'onApplicationShutdown RedisLifecycle',
+    'onApplicationShutdown PrismaLifecycle',
+  ]
+}
 
 async function startCore(
   infra: FakeInfra,
@@ -28,7 +119,7 @@ async function startCore(
   config: CoreConfig = testCoreConfig(),
 ): Promise<INestApplication> {
   const builder = Test.createTestingModule({
-    imports: [CoreModule.forRoot({ config, background: false })],
+    imports: [AppModule.forRoot({ config, background: false })],
   })
   const moduleRef = await overrideCoreInfra(builder, infra).compile()
   app = moduleRef.createNestApplication({ logger })
@@ -44,7 +135,7 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-describe('CoreModule', () => {
+describe('AppModule', () => {
   it('answers /health 200 with public status only and disables caching', async () => {
     const server = (await startCore(fakeInfra())).getHttpServer()
 
@@ -187,15 +278,7 @@ describe('CoreModule', () => {
     await app?.close()
 
     const token = `rnr_sandbox-1.${'a'.repeat(43)}`
-    const core = await startCore(fakeInfra(), false, {
-      ...testCoreConfig(),
-      turnExecutor: 'runner',
-      runnerApi: {
-        port: 0,
-        // As loadConfig demands with this executor: the runner's one address.
-        tokens: parseRunnerTokens(`sandbox-1:${hashRunnerToken(token)}@127.0.0.1`).hashes,
-      },
-    })
+    const core = await startCore(fakeInfra(), false, runnerConfig())
     expect(core.get<TurnExecutor>(TURN_EXECUTOR).kind).toBe('runner')
     // Core drives no Docker of its own then: the runners do.
     expect(() => core.get(SANDBOX_PROVIDER)).toThrow()
@@ -234,4 +317,49 @@ describe('CoreModule', () => {
     expect(infra.prisma.$disconnect).toHaveBeenCalledOnce()
     expect(infra.redis.quit).toHaveBeenCalledOnce()
   })
+
+  it('builds one turn engine and one metrics registry for the whole process', async () => {
+    for (const config of [testCoreConfig(), runnerConfig()]) {
+      const core = await startCore(fakeInfra(), false, config)
+      // Nest tells dynamic modules apart by reference: a second TurnsModule.forRoot would be a
+      // second LiveTurns, and a turn driven here would be taken over by recovery.
+      expect(core.get(LiveTurns, { strict: false, each: true })).toHaveLength(1)
+      expect(core.get(METRICS_REGISTRY, { strict: false, each: true })).toHaveLength(1)
+      await core.close()
+      app = undefined
+    }
+  })
+
+  it.each([false, true])(
+    'starts and stops its background in the order it always had (runner VMs=%s)',
+    async (runner) => {
+      const calls = recordHooks([
+        StaleClonesSweep,
+        GitCredentialRuntime,
+        CoreCredentialRuntime,
+        OutboxRelayService,
+        BillingScheduler,
+        SiteImportSweeper,
+        SiteImportProcessor,
+        TurnRuntime,
+        TaskSweepRuntime,
+        PreviewLoops,
+        ReleaseSweepRuntime,
+        BullMqShutdownService,
+        ReleaseApiServer,
+        RunnerApiServer,
+        RunnerHub,
+        RedisLifecycle,
+        PrismaLifecycle,
+      ])
+      const core = await startCore(fakeInfra(), false, runner ? runnerConfig() : testCoreConfig())
+
+      await core.close()
+      app = undefined
+
+      // The workers stop after every loop, the connections after everything else; the runner
+      // API closes before the git credentials of this process are revoked.
+      expect(calls).toEqual(lifecycleOf(runner))
+    },
+  )
 })

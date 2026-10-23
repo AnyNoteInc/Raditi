@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { PreviewTurnRollback } from './preview-rollback.ts'
+import { PreviewTurnRollback } from './preview-turn-rollback.ts'
 
 const fence = {
   siteId: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61',

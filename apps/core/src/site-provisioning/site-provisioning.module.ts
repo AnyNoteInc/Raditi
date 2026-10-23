@@ -15,30 +15,29 @@ import {
 } from '@repo/domain'
 import { createGiteaRepositoryProvisioner } from '@repo/git-providers'
 import { getSiteAdapter } from '@repo/site-adapters'
-import { createHostLookup, siteSource } from '@repo/site-connections'
+import { siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
+import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { gitWorkspaceOptions } from '../git-workspace/git-config.ts'
 import { GitWorkspaceModule } from '../git-workspace/git-workspace.module.ts'
-import {
-  CORE_CONFIG,
-  GIT_PROVIDER,
-  HOST_LOOKUP,
-  JOB_QUEUE,
-  SITE_DATABASES,
-  SITE_REPOSITORY_PROVISIONER,
-  SITE_SOURCES,
-  BACKGROUND_JOBS,
-  METRICS_REGISTRY,
-} from '../infra/tokens.ts'
-import { MetricsModule } from '../metrics/metrics.module.ts'
+import { GIT_PROVIDER } from '../git-workspace/git-workspace.tokens.ts'
+import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
+import { JOB_QUEUE } from '../queue/queue.tokens.ts'
+import { SiteContentModule } from '../site-content/site-content.module.ts'
+import { HOST_LOOKUP } from '../site-content/site-content.tokens.ts'
 import { InitialVersionGit } from './initial-version.ts'
 import { importSite, type SiteImportGit } from './site-import.ts'
 import { SiteImportProcessor } from './site-import.processor.ts'
 import { siteImportOutcomes, SiteImportRunner } from './site-import.runner.ts'
 import { SiteImportSweeper } from './site-import.sweeper.ts'
+import {
+  SITE_DATABASES,
+  SITE_REPOSITORY_PROVISIONER,
+  SITE_SOURCES,
+} from './site-provisioning.tokens.ts'
 import { PostgresSiteImportStore } from './stage-store.ts'
 
 /** Core's gitleaks: the one of the orchestrator image (PATH), as the publication of a turn. */
@@ -47,12 +46,13 @@ const GITLEAKS_BINARY = 'gitleaks'
 /**
  * The initial import of a connected site in the core role (docs/plan/39-site-connection-wizard.md,
  * W3): the worker of the `site-import` queue, the sweep that returns silent stages, and their
- * ports — the file sources, the database inspectors and DNS of @repo/site-connections, the
- * repository provisioner of our Gitea and the bot's git provider. Without git or without the
- * provisioner token core starts as before; an import then fails `repository_not_configured`.
+ * ports — the file sources and the database inspectors of @repo/site-connections, DNS of a
+ * site's address (SiteContentModule), the repository provisioner of our Gitea and the bot's git
+ * provider. Without git or without the provisioner token core starts as before; an import then
+ * fails `repository_not_configured`.
  */
 @Module({
-  imports: [GitWorkspaceModule, MetricsModule],
+  imports: [GitWorkspaceModule, SiteContentModule],
   providers: [
     {
       provide: SITE_SOURCES,
@@ -62,7 +62,6 @@ const GITLEAKS_BINARY = 'gitleaks'
       provide: SITE_DATABASES,
       useValue: (engine: DatabaseEngine): DatabaseInspector => databaseInspector(engine),
     },
-    { provide: HOST_LOOKUP, useFactory: (): HostLookup => createHostLookup() },
     {
       provide: SITE_REPOSITORY_PROVISIONER,
       useFactory: (config: CoreConfig): SiteRepositoryProvisioner | null =>

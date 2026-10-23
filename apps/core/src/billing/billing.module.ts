@@ -2,14 +2,16 @@ import { Logger, Module } from '@nestjs/common'
 import { Counter, type Registry } from '@prometheus-io/client'
 import { renewalJobs, renewalOutcomes, type RenewalDeps } from '@repo/billing'
 import type { PrismaClient } from '@repo/db'
+import { createYookassaClient, type YookassaClient } from '@repo/yookassa'
 import { PRISMA } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG, YOOKASSA, METRICS_REGISTRY } from '../infra/tokens.ts'
-import { MetricsModule } from '../metrics/metrics.module.ts'
+import { CORE_CONFIG } from '../config/config.tokens.ts'
+import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 import { BillingJobs } from './billing-jobs.ts'
 import { BillingScheduler } from './billing-scheduler.ts'
 import { BillingProcessor } from './billing.processor.ts'
+import { YOOKASSA } from './billing.tokens.ts'
 
 /**
  * Renewal of tariffs in the core role (docs/plan/37-billing-plan.md, M5.11): the schedulers
@@ -18,8 +20,14 @@ import { BillingProcessor } from './billing.processor.ts'
  * shop (CoreConfig.yookassa is null) the passes run and charge nobody.
  */
 @Module({
-  imports: [MetricsModule],
   providers: [
+    {
+      // null while payments are off: whoever charges must check before it starts.
+      provide: YOOKASSA,
+      useFactory: (config: CoreConfig): YookassaClient | null =>
+        config.yookassa ? createYookassaClient(config.yookassa) : null,
+      inject: [CORE_CONFIG],
+    },
     {
       provide: BillingJobs,
       useFactory: (

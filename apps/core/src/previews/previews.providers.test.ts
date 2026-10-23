@@ -2,7 +2,7 @@ import { dockerPreviewConfigSchema } from '@repo/sandbox-providers'
 import { describe, expect, it } from 'vitest'
 
 import type { PreviewsConfig } from '../config/config.ts'
-import { previewRuntimeConfig } from './previews.module.ts'
+import { previewRuntimeConfig } from './previews.providers.ts'
 
 const previews: PreviewsConfig = {
   address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },

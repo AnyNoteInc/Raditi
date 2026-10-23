@@ -3,20 +3,19 @@ import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
 import type { PrismaClient } from '@repo/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PRISMA } from '@repo/service-runtime'
+import { DatabaseModule, PRISMA } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CoreConfigModule } from '../core/core-config.module.ts'
+import { CoreConfigModule } from '../config/config.module.ts'
 import { InfraModule } from '../infra/infra.module.ts'
-import { TURN_CREDENTIALS, METRICS_REGISTRY } from '../infra/tokens.ts'
+import { MetricsRegistryModule } from '../metrics/metrics-registry.module.ts'
+import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 import { fakeInfra, overrideCoreInfra, testCoreConfig } from '../testing/fakes.ts'
 import { sampleBackendId, sampleDriverId } from '../testing/ids.ts'
+import { CoreCredentialRuntime, TURN_CREDENTIAL_SWEEP_INTERVAL_MS } from './credential-runtime.ts'
 import { CredentialSweeper } from './credential-sweeper.ts'
-import {
-  CoreCredentialRuntime,
-  LlmModule,
-  TURN_CREDENTIAL_SWEEP_INTERVAL_MS,
-} from './llm.module.ts'
+import { LlmModule } from './llm.module.ts'
+import { TURN_CREDENTIALS } from './llm.tokens.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 
 const apps: INestApplication[] = []
@@ -32,7 +31,13 @@ async function application(config: CoreConfig = testCoreConfig(), prisma?: Prism
   const infra = fakeInfra()
   const builder = overrideCoreInfra(
     Test.createTestingModule({
-      imports: [CoreConfigModule.forRoot({ config, background: false }), InfraModule, LlmModule],
+      imports: [
+        CoreConfigModule.forRoot({ config, background: false }),
+        DatabaseModule.forRoot(config.db),
+        InfraModule,
+        MetricsRegistryModule,
+        LlmModule,
+      ],
     }),
     infra,
   )

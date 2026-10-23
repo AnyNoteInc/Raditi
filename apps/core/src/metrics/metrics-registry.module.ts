@@ -1,19 +1,16 @@
-import { Module, type DynamicModule } from '@nestjs/common'
+import { Global, Module } from '@nestjs/common'
 import { createMetricsRegistry } from '@repo/observability'
 
-import { METRICS_REGISTRY } from '../infra/tokens.ts'
+import { METRICS_REGISTRY } from './metrics.tokens.ts'
 
 /**
- * The Prometheus registry of the process: every module that counts something imports the module
- * that registers it. Its metrics carry the label `app` — the name of the app's container.
+ * The one Prometheus registry of the process, for every module that counts something: global,
+ * and static, so Nest makes it once however many import it. Its metrics carry `app="core"` — the
+ * name of the container.
  */
-@Module({})
-export class MetricsRegistryModule {
-  static forApp(app: string): DynamicModule {
-    return {
-      module: MetricsRegistryModule,
-      providers: [{ provide: METRICS_REGISTRY, useFactory: () => createMetricsRegistry(app) }],
-      exports: [METRICS_REGISTRY],
-    }
-  }
-}
+@Global()
+@Module({
+  providers: [{ provide: METRICS_REGISTRY, useFactory: () => createMetricsRegistry('core') }],
+  exports: [METRICS_REGISTRY],
+})
+export class MetricsRegistryModule {}

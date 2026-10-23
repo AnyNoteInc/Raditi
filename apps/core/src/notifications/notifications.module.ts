@@ -2,7 +2,8 @@ import { Logger, Module } from '@nestjs/common'
 import { createMailer } from '@repo/mail'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG, MAILER } from '../infra/tokens.ts'
+import { CORE_CONFIG } from '../config/config.tokens.ts'
+import { MAILER } from './notifications.tokens.ts'
 import { NotificationsProcessor } from './notifications.processor.ts'
 
 @Module({

@@ -4,7 +4,7 @@ import { createPrismaClient, type PrismaClient } from '@repo/db'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { sampleDriverId } from '../testing/ids.ts'
-import { PreviewTurnRollback } from './preview-rollback.ts'
+import { PreviewTurnRollback } from './preview-turn-rollback.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`

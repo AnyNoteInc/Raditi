@@ -2,8 +2,8 @@ import { Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nest
 import { isProduction, type SandboxRuntime } from '@repo/domain'
 
 import type { CoreConfig } from '../config/config.ts'
-import type { TurnExecRecovery } from '../turns/turn-exec-recovery.ts'
-import type { TurnReconciler } from '../turns/turn-reconciler.ts'
+import type { TurnExecRecovery } from './turn-exec-recovery.ts'
+import type { TurnReconciler } from './turn-reconciler.ts'
 
 /**
  * The runtime a turn spec names: core's own Docker with the local executor, the runners' with
