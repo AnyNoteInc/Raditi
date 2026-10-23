@@ -1,11 +1,14 @@
-// A runner's sandbox side for *.test.ts files: a LocalTurnExecutor over a fake Docker whose
-// agent prints three events, the last one only once the test lets it finish.
+// A runner's sandbox side for *.test.ts files of the runner and of core's cross-app tests: a
+// LocalTurnExecutor over a fake Docker whose agent prints three events, the last one only once
+// the test lets it finish. Only for tests (package-testing-only-in-tests).
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
+import { zstdCompressSync } from 'node:zlib'
 
 import {
   MAX_SANDBOX_TURN_MS,
   SANDBOX_SECRETS_DIR,
+  type AgentDriverId,
   type AgentEvent,
   type ExecCursor,
   type ExecHandle,
@@ -17,10 +20,13 @@ import {
 } from '@repo/domain'
 import { vi } from 'vitest'
 import type { PresignedTransfer } from '@repo/snapshots'
-import { LocalTurnExecutor } from '@repo/local-turns'
 
-import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
-import { sampleDriverId } from './ids.ts'
+import { LocalTurnExecutor } from './local-turn-executor.ts'
+
+/** The driver the turns of these tests run: a test that means «a driver» in general. */
+const sampleDriverId = 'opencode' as const satisfies AgentDriverId
+/** An untracked archive without a file, as a turn that added none leaves it: an empty tar. */
+export const emptyUntrackedArchive = (): Uint8Array => zstdCompressSync(Buffer.alloc(1024))
 
 export const siteId = '00000000-0000-4000-8000-000000000002'
 export const taskId = '00000000-0000-4000-8000-000000000003'

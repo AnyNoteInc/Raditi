@@ -1,10 +1,8 @@
 import type { DynamicModule, INestApplication, Type } from '@nestjs/common'
-import { testRunnerConfig } from '@repo/runner-engine/testing'
 import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
 import type { DatabaseEngine, DatabaseInspector, SiteRepositoryProvisioner } from '@repo/domain'
 import { afterEach, describe, expect, it } from 'vitest'
-import { RunnerModule } from '@repo/runner-engine'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CoreModule } from '../core/core.module.ts'
@@ -104,11 +102,9 @@ describe('SiteProvisioningModule in the core role', () => {
     expect(new Set(labels)).toEqual(new Set(['outcome,app']))
   })
 
-  it('belongs to core alone: the runner import nothing', () => {
+  it('belongs to core: its root module imports it', () => {
+    // No other app can: apps-are-isolated keeps every app to its own modules.
     const coreModule = CoreModule.forRoot({ config: testCoreConfig(), background: false })
     expect(imports(coreModule, SiteProvisioningModule)).toBe(true)
-
-    for (const module of [RunnerModule.forRoot(testRunnerConfig())])
-      expect(imports(module, SiteProvisioningModule)).toBe(false)
   })
 })

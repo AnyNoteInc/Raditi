@@ -571,9 +571,6 @@ importers:
       '@repo/preview-gateway':
         specifier: workspace:*
         version: link:../../packages/preview-gateway
-      '@repo/runner-engine':
-        specifier: workspace:*
-        version: link:../../packages/runner-engine
       '@repo/sandbox-providers':
         specifier: workspace:*
         version: link:../../packages/sandbox-providers
@@ -1013,6 +1010,9 @@ importers:
       '@nestjs/core':
         specifier: 'catalog:'
         version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@repo/agent-drivers':
+        specifier: workspace:*
+        version: link:../../packages/agent-drivers
       '@repo/app-bootstrap':
         specifier: workspace:*
         version: link:../../packages/app-bootstrap
@@ -1022,15 +1022,18 @@ importers:
       '@repo/ip-address':
         specifier: workspace:*
         version: link:../../packages/ip-address
+      '@repo/local-turns':
+        specifier: workspace:*
+        version: link:../../packages/local-turns
       '@repo/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      '@repo/runner-engine':
-        specifier: workspace:*
-        version: link:../../packages/runner-engine
       '@repo/sandbox-providers':
         specifier: workspace:*
         version: link:../../packages/sandbox-providers
+      '@repo/snapshots':
+        specifier: workspace:*
+        version: link:../../packages/snapshots
       reflect-metadata:
         specifier: 'catalog:'
         version: 0.2.2
@@ -1792,70 +1795,6 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: '@typescript/typescript6@6.0.2'
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
-
-  packages/runner-engine:
-    dependencies:
-      '@nestjs/common':
-        specifier: 'catalog:'
-        version: 12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
-      '@repo/agent-drivers':
-        specifier: workspace:*
-        version: link:../agent-drivers
-      '@repo/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@repo/local-turns':
-        specifier: workspace:*
-        version: link:../local-turns
-      '@repo/observability':
-        specifier: workspace:*
-        version: link:../observability
-      '@repo/sandbox-providers':
-        specifier: workspace:*
-        version: link:../sandbox-providers
-      '@repo/snapshots':
-        specifier: workspace:*
-        version: link:../snapshots
-      reflect-metadata:
-        specifier: 'catalog:'
-        version: 0.2.2
-      rxjs:
-        specifier: 'catalog:'
-        version: 7.8.2
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5
-    devDependencies:
-      '@repo/app-bootstrap':
-        specifier: workspace:*
-        version: link:../app-bootstrap
-      '@repo/eslint-config':
-        specifier: workspace:*
-        version: link:../eslint-config
-      '@repo/typescript-config':
-        specifier: workspace:*
-        version: link:../typescript-config
-      '@swc/core':
-        specifier: 'catalog:'
-        version: 1.16.2(@swc/helpers@0.5.23)
-      '@types/node':
-        specifier: 'catalog:'
-        version: 26.6.2
-      '@typescript/native':
-        specifier: 'catalog:'
-        version: typescript@7.0.2
-      eslint:
-        specifier: 'catalog:'
-        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
-      typescript:
-        specifier: 'catalog:'
-        version: '@typescript/typescript6@6.0.2'
-      unplugin-swc:
-        specifier: 'catalog:'
-        version: 2.0.0(@swc/core@1.16.2(@swc/helpers@0.5.23))(rolldown@1.2.11)(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
       vitest:
         specifier: 'catalog:'
         version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))

@@ -17,7 +17,6 @@ on:
       - packages/preview-gateway/**
       - packages/ip-address/**
       - apps/runner/**
-      - packages/runner-engine/**
       - apps/mcp/**
       - apps/llm/**
       - packages/snapshots/**

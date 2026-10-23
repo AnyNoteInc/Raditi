@@ -69,7 +69,6 @@ export const FORBIDDEN_PACKAGES = {
     'site-content',
     'snapshots',
     'local-turns',
-    'runner-engine',
     'yookassa',
     'mail',
     'telegram',

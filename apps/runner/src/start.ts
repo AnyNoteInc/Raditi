@@ -1,9 +1,9 @@
 import { Logger } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
-import { RunnerModule } from '@repo/runner-engine'
 import { appLogger, SHUTDOWN_SIGNALS } from '@repo/app-bootstrap'
 
-import type { RunnerConfig } from './config.ts'
+import { AppModule } from './app.module.ts'
+import type { RunnerConfig } from './config/config.ts'
 
 const logger = new Logger('runner')
 
@@ -13,7 +13,7 @@ const logger = new Logger('runner')
  */
 export async function startRunner(config: RunnerConfig) {
   const app = await NestFactory.createApplicationContext(
-    RunnerModule.forRoot(config, {
+    AppModule.forRoot(config, {
       onRetired: () => {
         process.exitCode = 1
         process.kill(process.pid, 'SIGTERM')

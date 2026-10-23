@@ -14,7 +14,12 @@ const LEAVES = 'ip-address'
 const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|site-content|preview-gateway'
 // The frame and runtime of the apps (process start and stop, Nest wiring, health):
 // app-side code that lives in a package, so it may use observability, which no library package may.
-const RUNTIME = 'app-bootstrap|service-runtime|runner-engine'
+const RUNTIME = 'app-bootstrap|service-runtime'
+// The runner engine core's cross-app tests drive through apps/core/src/testing/runner-side.ts
+// (plan 56, decision 1): the files that speak the runner protocol, without the runner's modules.
+const RUNNER_ENGINE =
+  '^apps/runner/src/(core-api/core-client|sandbox-runner/sandbox-runner|reconciler/runner-reconciler)\\.ts$'
+const RUNNER_SIDE = '^apps/core/src/testing/runner-side\\.ts$'
 // Every package must belong to a layer; an unclassified one would bypass all rules.
 const KNOWN = `^packages/(domain|observability|${ADAPTERS}|${SERVICES}|${RUNTIME}|${LEAVES}|trpc|ui|eslint-config|typescript-config)/`
 const npm = (names) => [`node_modules/\\.pnpm/(${names})@`, `node_modules/(${names})/`]
@@ -95,7 +100,7 @@ module.exports = {
       severity: 'error',
       from: {
         path: '^packages/([^/]+)/',
-        pathNot: '^packages/(observability|service-runtime|runner-engine)/',
+        pathNot: '^packages/(observability|service-runtime)/',
       },
       to: { path: '^packages/observability/' },
     },
@@ -216,7 +221,7 @@ module.exports = {
     {
       name: 'package-testing-only-in-tests',
       comment:
-        'The testing part of a package (sample ids, the network guard, scripted fakes, the test config of the runner) is test support: only tests, the testing modules of the apps and the stand scripts import it.',
+        'The testing part of a package (sample ids, the network guard, scripted fakes, the sandbox side of a runner in @repo/local-turns/testing) is test support: only tests, the testing modules of the apps and the stand scripts import it.',
       severity: 'error',
       from: {
         path: '^(apps|packages)/',
@@ -230,8 +235,8 @@ module.exports = {
       },
       to: {
         path: [
-          '^packages/(turn-keys|snapshots)/src/testing\\.ts$',
-          '^packages/(app-bootstrap|service-runtime|runner-engine)/src/testing/',
+          '^packages/(turn-keys|snapshots|local-turns)/src/testing\\.ts$',
+          '^packages/(app-bootstrap|service-runtime)/src/testing/',
         ],
       },
     },
@@ -247,16 +252,15 @@ module.exports = {
       },
     },
     {
-      name: 'runner-engine-tier',
+      name: 'runner-app-packages',
       comment:
-        'runner-engine drives a sandbox VM: the sandbox and agent adapters, the local-turn code and the snapshots — no database, Redis, Vault or S3 (plan 55).',
+        'The runner app drives a sandbox VM: the sandbox and agent adapters, the local-turn code, the snapshots and the frame of a process — no database, Redis, Vault or S3 (plan 56).',
       severity: 'error',
-      from: { path: '^packages/runner-engine/' },
+      from: { path: '^apps/runner/' },
       to: {
         path: '^packages/',
         pathNot: [
-          '^packages/(domain|agent-drivers|sandbox-providers|local-turns|snapshots|observability|runner-engine)/',
-          '^packages/app-bootstrap/src/testing/',
+          '^packages/(domain|app-bootstrap|ip-address|observability|agent-drivers|sandbox-providers|local-turns|snapshots)/',
           TOOLING,
         ],
       },
@@ -264,10 +268,29 @@ module.exports = {
     {
       name: 'runner-minimal-packages',
       comment:
-        'The runner app holds no platform credentials: it composes the runner engine, the sandbox settings and the frame of a process (app-bootstrap), never the runtime of the apps with a database, not even transitively (rule 5, spec §19).',
+        'The runner app holds no platform credentials: it composes its engine, the sandbox settings and the frame of a process (app-bootstrap), never the runtime of the apps with a database, not even transitively — its tests neither (rule 5, spec §19).',
       severity: 'error',
-      from: { path: '^(apps/runner|packages/(runner-engine|snapshots|local-turns))/' },
+      from: { path: '^(apps/runner|packages/(snapshots|local-turns))/' },
       to: { path: '^packages/(service-runtime|db)/', reachable: true },
+    },
+    {
+      name: 'runner-engine-speaks-the-protocol-only',
+      comment:
+        'The engine files core’s cross-app tests reach import only domain, observability, @nestjs/common (for its Logger; the rule cannot tell one export from another), the types of zod and each other: never a module, a token or the configuration of the runner app (plan 56, decision 1).',
+      severity: 'error',
+      from: { path: RUNNER_ENGINE },
+      to: {
+        dependencyTypesNot: ['core'],
+        pathNot: [RUNNER_ENGINE, '^packages/(domain|observability)/', ...npm('@nestjs/common|zod')],
+      },
+    },
+    {
+      name: 'runner-engine-takes-only-types-of-zod',
+      comment:
+        'The engine files read the runner protocol through the schemas of domain: from zod they import only types (the rule above lets zod in, this one keeps a value import of it out).',
+      severity: 'error',
+      from: { path: RUNNER_ENGINE },
+      to: { path: npm('zod'), dependencyTypesNot: ['type-only'] },
     },
     {
       name: 'billing-testing-only-in-tests',
@@ -303,10 +326,19 @@ module.exports = {
     },
     {
       name: 'apps-are-isolated',
-      comment: 'Apps talk over the network (HTTP, queues), never by importing each other.',
+      comment:
+        'Apps talk over the network (HTTP, queues), never by importing each other. The one exception is a test file of core: runner-side.ts gives core’s cross-app tests the runner engine (plan 56, decision 1).',
       severity: 'error',
-      from: { path: '^apps/([^/]+)/' },
+      from: { path: '^apps/([^/]+)/', pathNot: RUNNER_SIDE },
       to: { path: '^apps/', pathNot: ['^apps/$1/'] },
+    },
+    {
+      name: 'runner-side-reaches-the-engine-only',
+      comment:
+        'apps/core/src/testing/runner-side.ts reaches in the other apps only the runner engine files that speak the protocol (plan 56, decision 1); core-product-no-testing keeps it out of the product.',
+      severity: 'error',
+      from: { path: RUNNER_SIDE },
+      to: { path: '^apps/', pathNot: ['^apps/core/', RUNNER_ENGINE] },
     },
     {
       name: 'core-no-trpc-ui',
@@ -352,7 +384,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/preview/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|site-content|runner-engine|trpc|ui)/',
+        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|site-content|trpc|ui)/',
         reachable: true,
       },
     },
@@ -373,7 +405,7 @@ module.exports = {
         'The runner role and the local executor it drives never reach PostgreSQL, Redis, Vault, S3, the payment shop or core’s runner API, not even transitively: a sandbox VM holds no platform credentials (spec §8, §19).',
       severity: 'error',
       from: {
-        path: '^(apps/runner/|packages/(snapshots|local-turns|runner-engine)/)',
+        path: '^(apps/runner/|packages/(snapshots|local-turns)/)',
         pathNot: '\\.test\\.ts$',
       },
       to: {

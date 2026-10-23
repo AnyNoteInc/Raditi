@@ -15,7 +15,7 @@ test('every app the stand builds has its own Dockerfile and a list of what it ma
 
 test('the runner image may carry the frame of a process, never the data of the platform', () => {
   assert.deepEqual(
-    forbiddenPackagesOf('runner', ['app-bootstrap', 'domain', 'runner-engine', 'snapshots']),
+    forbiddenPackagesOf('runner', ['app-bootstrap', 'domain', 'local-turns', 'snapshots']),
     [],
   )
   assert.deepEqual(forbiddenPackagesOf('runner', ['app-bootstrap', 'db', 'service-runtime']), [

@@ -5,9 +5,6 @@ import { defineConfig } from 'vitest/config'
 // both read from tsconfig.json.
 export default defineConfig({
   plugins: [swc.vite()],
-  // @repo/runner-engine has Nest decorators, so Node gets its built dist; the tests read its
-  // sources. The condition belongs to the ssr environment.
-  ssr: { resolve: { conditions: ['source'] } },
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],

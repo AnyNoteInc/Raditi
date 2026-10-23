@@ -1,14 +1,51 @@
 import { isAbsolute } from 'node:path'
 
-import { appEnvSchema, envProblems, envVar, isProduction, type Env } from '@repo/domain'
+import {
+  appEnvSchema,
+  envProblems,
+  envVar,
+  isProduction,
+  type AppEnv,
+  type Env,
+} from '@repo/domain'
 import { isPrivateAddress } from '@repo/ip-address'
-import type { RunnerConfig } from '@repo/runner-engine'
-import { sandboxConfigFromEnv } from '@repo/sandbox-providers'
+import { sandboxConfigFromEnv, type SandboxConfig } from '@repo/sandbox-providers'
 import { ConfigError } from '@repo/app-bootstrap'
 import { z } from 'zod'
 
 export { ConfigError }
-export type { RunnerConfig }
+
+/**
+ * The runner role on a sandbox VM (spec §8): Docker and core's runner API only. In production
+ * it starts only with its own, the sandbox and the system variables; the VM token is read from
+ * its file at start.
+ */
+export interface RunnerConfig {
+  appEnv: AppEnv
+  /**
+   * RUNNER_CORE_URL: the origin of core's runner API; http:// only to a private IP address in
+   * production, otherwise https://.
+   */
+  coreUrl: URL
+  /** RUNNER_TOKEN_FILE: the file with the VM token, never an env value (docker inspect shows env). */
+  tokenFile: string
+  /** RUNNER_CORE_CA_FILE: a private CA, only for an https:// core. */
+  caFile: string | null
+  /**
+   * RUNNER_S3_ORIGIN: the only origin of presigned URLs the runner follows, with the sessions
+   * bucket as its path for path-style S3; https:// in production, null (no pin) only outside it.
+   */
+  s3Origin: string | null
+  /** RUNNER_MAX_TURNS: turns at once; one until several runners are supported (stage 2). */
+  maxTurns: number
+  sandbox: SandboxConfig
+}
+
+/** What the process gives the runner besides its configuration. */
+export interface RunnerOptions {
+  /** Core retired this session: the process should end so that it restarts under a new one. */
+  onRetired?: () => void
+}
 
 const ownEnvSchema = z.object({
   // Required, never defaulted: a missing APP_ENV must not switch the production checks off.

@@ -47,7 +47,6 @@
     "@repo/notifications": "workspace:*",
     "@repo/observability": "workspace:*",
     "@repo/preview-gateway": "workspace:*",
-    "@repo/runner-engine": "workspace:*",
     "@repo/sandbox-providers": "workspace:*",
     "@repo/service-runtime": "workspace:*",
     "@repo/site-adapters": "workspace:*",

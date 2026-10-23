@@ -3,54 +3,47 @@ import { randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 
 import {
-  leaseLost,
   leftNothing,
-  MAX_SANDBOX_TURN_MS,
   sandboxCommandFailed,
+  SNAPSHOT_SCHEMA_VERSION,
+  snapshotManifestSchema,
+  snapshotPartFiles,
+  snapshotPartNames,
+  turnSnapshotPrefix,
   TURN_PUBLICATION_GRACE_MS,
-  type RunnerPollRequest,
-  type RunnerReport,
+  workspaceTransitKey,
   type Sandbox,
   type SandboxSpec,
-  type SiteLeaseFence,
-  type TurnOutputBatch,
-  type TurnPlan,
+  type SnapshotPartName,
 } from '@repo/domain'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { memoryStorage, memoryTransit, tarZst } from '@repo/snapshots/testing'
-
-import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
-import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
-import { RunnerHub } from '../runner-api/runner-hub.ts'
-import { SnapshotService } from '../sessions/snapshot.service.ts'
-import { sampleDriverId } from '../testing/ids.ts'
-import { loopbackTransport } from '../testing/runner-loopback.ts'
 import {
   baseSha,
   branch,
   bundleBytes,
   credentials,
+  emptyUntrackedArchive,
   events,
   fence,
   home,
   image,
   labels,
   prepared,
-  prepareInput,
   sandboxSide,
   sandboxSpec,
   sha256,
-} from '../testing/runner-sandbox.ts'
-import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
+} from '@repo/local-turns/testing'
+import { sealSnapshotPart, type SnapshotSealBase } from '@repo/snapshots'
+import { memoryStorage, tarZst } from '@repo/snapshots/testing'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { RunnerCallError, type RunnerTransport } from '../core-api/core-client.ts'
+import { sampleDriverId } from '../testing/ids.ts'
+import { scriptedCore } from '../testing/scripted-core.ts'
 import {
-  RunnerCallError,
-  type RunnerTransport,
   isTurnSnapshotUrl,
   SandboxRunner,
   type SandboxRunnerDependencies,
-} from '@repo/runner-engine'
-
-const signal = new AbortController().signal
+} from './sandbox-runner.ts'
 
 /**
  * A create that ends only when it is stopped: with the provider's proof that it left nothing,
@@ -66,19 +59,10 @@ const stoppedCreate = (proven: boolean, started?: () => void) =>
     })) as unknown as () => Promise<Sandbox>
 
 const runners: SandboxRunner[] = []
-const hubs: RunnerHub[] = []
 afterEach(async () => {
   for (const runner of runners.splice(0)) await runner.stop()
-  for (const hub of hubs.splice(0)) hub.close()
   vi.restoreAllMocks()
 })
-
-function coreSide(assignments: MemoryTurnAssignments) {
-  const leases = { assert: vi.fn(async () => true) }
-  const hub = new RunnerHub({ assignments, leases, logger: { warn: vi.fn() } })
-  hubs.push(hub)
-  return { hub, executor: new RemoteTurnExecutor(hub, leases, assignments) }
-}
 
 function startRunner(
   transport: RunnerTransport,
@@ -97,91 +81,6 @@ function startRunner(
   runner.start()
   runners.push(runner)
   return { runner, lines }
-}
-
-/** A takeover moves the held lease to the next epoch; the hub only asserts fences here. */
-const recoveryLeases = () => ({
-  takeOverHeld: async (held: SiteLeaseFence, ttlMs: number) => ({
-    ...held,
-    epoch: held.epoch + 1,
-    expiresAt: new Date(Date.now() + ttlMs),
-    serverNow: new Date(),
-  }),
-})
-
-const open = async (assignments: MemoryTurnAssignments) =>
-  (await assignments.open({
-    fence,
-    sessionId: labels.sessionId,
-    turn: 1,
-    executor: 'runner',
-    plan: {} as TurnPlan,
-    remainingMs: MAX_SANDBOX_TURN_MS,
-  }))!
-
-interface WaitingPoll {
-  answer(commands: unknown[]): void
-  /** Core wrote its answer: from now on a dropped connection loses it. */
-  sent: boolean
-}
-
-/**
- * A core that answers only what a test sends it: polls wait for `send`, reports are kept. Like
- * the hub, a newer poll of the session answers the older ones empty, and like HTTP, a poll the
- * runner aborts after core wrote its answer loses that answer.
- */
-function scriptedCore() {
-  const polls: RunnerPollRequest[] = []
-  const reports: RunnerReport[] = []
-  const waiting: WaitingPoll[] = []
-  const transport = {
-    poll: vi.fn((request: RunnerPollRequest, abort: AbortSignal) => {
-      polls.push(structuredClone(request))
-      for (const older of waiting.splice(0)) older.answer([])
-      return new Promise<unknown>((resolve, reject) => {
-        const poll: WaitingPoll = { answer: (commands) => resolve({ commands }), sent: false }
-        waiting.push(poll)
-        abort.addEventListener(
-          'abort',
-          () => {
-            const index = waiting.indexOf(poll)
-            if (index >= 0) waiting.splice(index, 1)
-            // Written already: the answer goes down with the connection. Otherwise core requeues.
-            if (poll.sent) reject(new RunnerCallError('poll', null))
-            else resolve({ commands: [] })
-          },
-          { once: true },
-        )
-      })
-    }),
-    report: vi.fn(async (report: RunnerReport) => {
-      reports.push(structuredClone(report))
-    }),
-    reconcile: vi.fn(async () => ({ remove: [] })),
-    bundle: async function* () {
-      yield Buffer.from(bundleBytes)
-    },
-    key: vi.fn(async (): Promise<Uint8Array> => new Uint8Array(32).fill(7)),
-    candidate: vi.fn(async () => {}),
-  } satisfies RunnerTransport
-  return {
-    transport,
-    polls,
-    reports,
-    types: () => reports.map((report) => report.type),
-    /** Answers the runner's waiting poll. */
-    async send(...commands: unknown[]) {
-      await vi.waitFor(() => expect(waiting.length).toBeGreaterThan(0))
-      waiting.shift()!.answer(commands)
-    },
-    /** Answers the waiting poll with `commands` that reach the runner only on `arrive()`. */
-    async sendSlowly(...commands: unknown[]) {
-      await vi.waitFor(() => expect(waiting.length).toBeGreaterThan(0))
-      const poll = waiting.shift()!
-      poll.sent = true
-      return { arrive: () => poll.answer(commands) }
-    },
-  }
 }
 
 const assignmentId = '00000000-0000-4000-8000-0000000000a1'
@@ -208,178 +107,6 @@ const prepareCommand = (body: Record<string, unknown> = {}, epoch = 1) =>
     },
     epoch,
   )
-
-describe('SandboxRunner with core', () => {
-  it('carries a turn through a restart of core and resumes the agent from the journal', async () => {
-    const assignments = new MemoryTurnAssignments(recoveryLeases())
-    const side = sandboxSide()
-    const before = coreSide(assignments)
-    const transport = loopbackTransport(before.hub)
-    startRunner(transport, side.executor)
-    const assignment = await open(assignments)
-    const execution = await before.executor.prepare(prepareInput(assignment.id), signal)
-    const agent = await execution.launch(60_000)
-    const journal: TurnOutputBatch[] = []
-    void agent.output(async (batch) => void journal.push(batch)).catch(() => {})
-    await vi.waitFor(() => expect(journal).toHaveLength(1))
-
-    // Core dies while the agent still prints; the runner and its container live on.
-    before.hub.close()
-    const after = coreSide(assignments)
-    transport.hub = after.hub
-    await vi.waitFor(() => expect(after.hub.inventory({})).toHaveLength(1))
-    await assignments.takeOver({ id: assignment.id, fence, ttlMs: 60_000 })
-    // The runner still holds the turn credentials: recovery does not send them again.
-    const adopted = await after.executor.adopt(
-      {
-        assignmentId: assignment.id,
-        fence: { ...fence, epoch: 2 },
-        containerId: 'container1',
-        labels: { ...labels, leaseEpoch: 1 },
-        purpose: 'work',
-        remainingMs: 60_000,
-        driverId: sampleDriverId,
-        credentials,
-        holdsCredentials: true,
-      },
-      signal,
-    )
-    const resumed = await adopted!.attach({
-      execId: 'exec1',
-      cursor: journal[0]!.to,
-      eventCount: journal[0]!.events.length,
-    })
-    const ended = resumed!.output(async (batch) => void journal.push(batch))
-    await vi.waitFor(() => expect(journal).toHaveLength(2))
-    side.finish()
-    await ended
-
-    expect(await resumed!.wait()).toEqual({ code: 0, reason: 'exited' })
-    expect(journal.flatMap((batch) => batch.events)).toEqual(events)
-    expect(journal[1]!.from).toEqual(journal[0]!.to)
-    expect(side.sandbox.attach).toHaveBeenCalledWith('exec1', journal[0]!.to)
-    expect(side.kill).not.toHaveBeenCalled()
-    expect(side.sandboxes.create).toHaveBeenCalledOnce()
-    expect(side.sandbox.destroy).not.toHaveBeenCalled()
-    await adopted!.destroy('completed')
-    expect(side.sandbox.destroy).toHaveBeenCalledWith('completed')
-  })
-
-  it('lets a restarted runner take the container over by its labels, only with the turn credentials', async () => {
-    const assignments = new MemoryTurnAssignments(recoveryLeases())
-    const side = sandboxSide()
-    const core = coreSide(assignments)
-    const gone = startRunner(loopbackTransport(core.hub), side.executor)
-    const assignment = await open(assignments)
-    await core.executor.prepare(prepareInput(assignment.id), signal)
-    // kill -9 of the runner: its memory is gone, its container stays.
-    await gone.runner.stop()
-    const transport = loopbackTransport(core.hub)
-    let polls = 0
-    transport.intercept = (route) => void (route === 'poll' && polls++)
-    const { runner } = startRunner(transport, side.executor)
-    await vi.waitFor(() => expect(polls).toBeGreaterThan(0))
-    await assignments.takeOver({
-      id: assignment.id,
-      fence,
-      ttlMs: 60_000,
-      runnerSession: runner.session,
-    })
-    const adopt = (sent: boolean) =>
-      core.executor.adopt(
-        {
-          assignmentId: assignment.id,
-          fence: { ...fence, epoch: 2 },
-          containerId: 'container1',
-          labels: { ...labels, leaseEpoch: 1 },
-          purpose: 'work',
-          remainingMs: 60_000,
-          driverId: sampleDriverId,
-          credentials,
-          ...(sent ? {} : { holdsCredentials: true }),
-        },
-        signal,
-      )
-
-    // Only the process that launched the agent held its credentials: without them it is lost.
-    await expect(adopt(false)).rejects.toMatchObject({ code: 'EXEC_LOST' })
-    // A container gone meanwhile answers the adoption with `destroyed`.
-    side.sandboxes.get.mockResolvedValueOnce(null)
-    side.sandboxes.getForRemoval.mockResolvedValueOnce(null)
-    await expect(adopt(true)).resolves.toBeNull()
-    // One that can no longer run the agent (its gateway died) is lost for work, not gone.
-    side.sandboxes.get.mockResolvedValueOnce(null)
-    await expect(adopt(true)).rejects.toMatchObject({ code: 'EXEC_LOST' })
-    expect(runner.holds('container1')).toBe(false)
-    const adopted = await adopt(true)
-
-    expect(adopted?.containerId).toBe('container1')
-    expect(side.sandboxes.get).toHaveBeenCalledWith('container1')
-    expect(runner.holds('container1')).toBe(true)
-    await adopted!.destroy('failed')
-    expect(side.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('failed')
-    expect(runner.holds('container1')).toBe(false)
-  })
-
-  it('stops the agent and removes the container itself when core answers that the lease is lost', async () => {
-    const assignments = new MemoryTurnAssignments()
-    const side = sandboxSide()
-    const core = coreSide(assignments)
-    const transport = loopbackTransport(core.hub)
-    const sent: string[] = []
-    transport.intercept = (route, body) => {
-      if (route === 'report') sent.push((body as RunnerReport).type)
-    }
-    const { runner, lines } = startRunner(transport, side.executor)
-    const assignment = await open(assignments)
-    const execution = await core.executor.prepare(prepareInput(assignment.id), signal)
-    const agent = await execution.launch(60_000)
-
-    await expect(
-      agent.output(async () => {
-        throw leaseLost('Turn evidence no longer owns its site lease')
-      }),
-    ).rejects.toMatchObject({ code: 'LEASE_LOST' })
-    await vi.waitFor(() => expect(sent.at(-1)).toBe('destroyed'))
-
-    expect(side.kill).toHaveBeenCalled()
-    expect(side.sandbox.destroy).toHaveBeenCalledWith('failed')
-    expect(runner.holds('container1')).toBe(false)
-    // Core knows the container is gone: its own destroy sends nothing more.
-    await execution.destroy('failed')
-    expect(side.sandbox.destroy).toHaveBeenCalledOnce()
-    expect(lines).toContain(
-      'A turn lost its site lease: its agent is stopped and its container removed',
-    )
-  })
-
-  it('reads the output again from where core stands after a gap', async () => {
-    const assignments = new MemoryTurnAssignments()
-    const side = sandboxSide()
-    side.finish()
-    const core = coreSide(assignments)
-    const transport = loopbackTransport(core.hub)
-    let refused = false
-    transport.intercept = (route, body) => {
-      if (route !== 'report' || (body as RunnerReport).type !== 'output' || refused) return
-      refused = true
-      throw new RunnerCallError('report', 409, {
-        error: 'CURSOR_MISMATCH',
-        expected: { stdout: 0, stderr: 0 },
-      })
-    }
-    startRunner(transport, side.executor)
-    const assignment = await open(assignments)
-    const execution = await core.executor.prepare(prepareInput(assignment.id), signal)
-    const agent = await execution.launch(60_000)
-    const journal: TurnOutputBatch[] = []
-    await agent.output(async (batch) => void journal.push(batch))
-
-    expect(side.sandbox.attach).toHaveBeenCalledWith('exec1', { stdout: 0, stderr: 0 })
-    expect(journal.flatMap((batch) => batch.events)).toEqual(events)
-    expect(await agent.wait()).toEqual({ code: 0, reason: 'exited' })
-  })
-})
 
 describe('SandboxRunner commands', () => {
   it('reports its capacity and turns, and drops invalid, expired and stale commands', async () => {
@@ -754,54 +481,134 @@ describe('SandboxRunner commands', () => {
     expect(core.reports.at(-1)).toMatchObject({ type: 'failed', code: 'CREDENTIALS_LOST' })
     expect(side.sandboxes.getForRemoval).toHaveBeenCalledTimes(3)
   })
+
+  it('stops the agent and removes the container itself when core answers that the lease is lost', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore()
+    // Another owner holds the site now: core refuses the turn's output with LEASE_LOST.
+    core.transport.report.mockImplementation(async (report) => {
+      core.reports.push(report)
+      if (report.type === 'output')
+        throw new RunnerCallError('report', 409, { error: 'LEASE_LOST' })
+    })
+    const { runner, lines } = startRunner(core.transport, side.executor)
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+
+    await core.send(command('launch', { timeoutMs: 60_000 }))
+    await vi.waitFor(() => expect(core.types().at(-1)).toBe('destroyed'))
+
+    expect(core.types()).toEqual(['created', 'prepared', 'running', 'output', 'destroyed'])
+    expect(core.reports.at(-1)).not.toHaveProperty('commandId')
+    expect(side.kill).toHaveBeenCalled()
+    expect(side.sandbox.destroy).toHaveBeenCalledWith('failed')
+    expect(runner.holds('container1')).toBe(false)
+    // Core knows the container is gone: its own destroy is answered without a second removal.
+    await core.send(command('destroy', { reason: 'failed' }))
+    await vi.waitFor(() => expect(core.types()).toHaveLength(6))
+    expect(core.reports.at(-1)).toMatchObject({ type: 'destroyed', containerId: 'container1' })
+    expect(side.sandbox.destroy).toHaveBeenCalledOnce()
+    expect(lines).toContain(
+      'A turn lost its site lease: its agent is stopped and its container removed',
+    )
+  })
+
+  it('reads the output again from where core stands after a gap', async () => {
+    const side = sandboxSide()
+    side.finish()
+    const core = scriptedCore()
+    // Core's journal ends before the runner's first batch: it asks for the output from there.
+    let refused = false
+    core.transport.report.mockImplementation(async (report) => {
+      if (report.type === 'output' && !refused) {
+        refused = true
+        throw new RunnerCallError('report', 409, {
+          error: 'CURSOR_MISMATCH',
+          expected: { stdout: 0, stderr: 0 },
+        })
+      }
+      core.reports.push(report)
+    })
+    startRunner(core.transport, side.executor)
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+
+    await core.send(command('launch', { timeoutMs: 60_000 }))
+    await vi.waitFor(() => expect(core.types().at(-1)).toBe('exited'))
+
+    expect(refused).toBe(true)
+    expect(side.sandbox.attach).toHaveBeenCalledWith('exec1', { stdout: 0, stderr: 0 })
+    const journal = core.reports.flatMap((report) => (report.type === 'output' ? [report] : []))
+    expect(journal.flatMap((batch) => batch.events)).toEqual(events)
+    expect(journal[0]!.from).toEqual({ stdout: 0, stderr: 0 })
+    expect(core.reports.at(-1)).toMatchObject({ exit: { code: 0, reason: 'exited' } })
+  })
 })
 
 describe('SandboxRunner snapshot parts', () => {
+  /**
+   * Turn 1 as core leaves it in S3: its three parts sealed with one data key under the AAD of
+   * the manifest, the manifest checked by its schema, presigned GETs of the parts. The data key
+   * comes back fresh on every call, as an unwrap by Transit gives it.
+   */
   async function previousTurn() {
     const memory = memoryStorage()
-    const transit = memoryTransit()
-    const service = new SnapshotService(memory.storage, transit.secrets)
-    await service.save(
-      {
-        workspaceId: labels.workspaceId,
-        sessionId: labels.sessionId,
-        turn: 1,
-        image,
-        driver: { id: sampleDriverId, version: '1.0.0', nativeSessionId: 'prior-native' },
-        home,
-        git: { provider: 'gitea', branch, baseSha: 'a'.repeat(40), headSha: baseSha },
-      },
-      {
-        home: await tarZst({ [home.include[0]!]: 'prior conversation' }),
-        untracked: emptyUntrackedArchive(),
-        patch: Buffer.from('prior patch'),
-      },
-    )
-    const source = await service.restoreSource(
-      {
-        workspaceId: labels.workspaceId,
-        sessionId: labels.sessionId,
-        turn: 1,
-        image,
-        driver: { id: sampleDriverId, version: '1.0.0' },
-        home,
-      },
-      60_000,
-    )
-    const wire = ({ method, url, headers }: { method: string; url: string; headers: object }) => ({
-      method,
-      url,
-      headers,
+    const dataKey = async () => new Uint8Array(32).fill(7)
+    const base: SnapshotSealBase = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0', nativeSessionId: 'prior-native' },
+      home,
+      git: { provider: 'gitea', branch, baseSha: 'a'.repeat(40), headSha: baseSha },
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+      createdAt: new Date().toISOString(),
+    }
+    const archives: Record<SnapshotPartName, Uint8Array> = {
+      home: await tarZst({ [home.include[0]!]: 'prior conversation' }),
+      untracked: emptyUntrackedArchive(),
+      patch: Buffer.from('prior patch'),
+    }
+    const prefix = turnSnapshotPrefix(base.sessionId, base.turn)
+    const key = await dataKey()
+    const parts = snapshotPartNames.map((name) => {
+      const { body, sealed } = sealSnapshotPart(base, name, archives[name], key)
+      const object = `${prefix}${snapshotPartFiles[name]}`
+      memory.objects.set(object, body)
+      return {
+        name,
+        key: object,
+        sha256: sealed.sha256,
+        sizeBytes: sealed.sizeBytes,
+        encryption: {
+          algorithm: 'aes-256-gcm' as const,
+          keyId: workspaceTransitKey(base.workspaceId),
+          wrappedKey: 'vault:v1:wrapped',
+          iv: sealed.iv,
+          tag: sealed.tag,
+        },
+      }
     })
+    const manifest = snapshotManifestSchema.parse({ ...base, parts })
+    const get = async (name: SnapshotPartName) => {
+      const { method, url, headers } = await memory.storage.presign({
+        bucket: 'sessions',
+        key: `${prefix}${snapshotPartFiles[name]}`,
+        method: 'GET',
+        ttlMs: 60_000,
+      })
+      return { method, url, headers }
+    }
     return {
       memory,
-      source,
+      source: { dataKey },
       restore: {
-        manifest: source.manifest,
+        manifest,
         parts: {
-          home: wire(source.parts.home),
-          untracked: wire(source.parts.untracked),
-          patch: wire(source.parts.patch),
+          home: await get('home'),
+          untracked: await get('untracked'),
+          patch: await get('patch'),
         },
       },
     }

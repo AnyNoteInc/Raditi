@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { readRunnerToken } from './runner-token.ts'
+import { readRunnerToken, runnerIdOf } from './runner-token.ts'
 
 const token = `rnr_sandbox-1.${'a'.repeat(43)}`
 let dir: string
@@ -44,6 +44,15 @@ describe('readRunnerToken', () => {
     )
     await expect(readRunnerToken(dir, 'test')).rejects.toThrow(
       'RUNNER_TOKEN_FILE: not a regular file',
+    )
+  })
+})
+
+describe('runnerIdOf', () => {
+  it('names the runner id of a VM token, never the token in a refusal', () => {
+    expect(runnerIdOf(token)).toBe('sandbox-1')
+    expect(() => runnerIdOf('rnr_Sandbox.not-a-token')).toThrow(
+      'RUNNER_TOKEN_FILE: does not hold a runner token',
     )
   })
 })

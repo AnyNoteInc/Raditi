@@ -9,10 +9,10 @@ import {
   runnerReportSchema,
 } from '@repo/domain'
 import { ZodError } from 'zod'
-import { RunnerCallError, type RunnerCommandFence, type RunnerTransport } from '@repo/runner-engine'
 
 import { RunnerApiError } from '../runner-api/runner-api-error.ts'
 import type { RunnerBinaryHeaders, RunnerHub } from '../runner-api/runner-hub.ts'
+import { RunnerCallError, type RunnerCommandFence, type RunnerTransport } from './runner-side.ts'
 
 const wire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
