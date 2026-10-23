@@ -487,26 +487,40 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
   }, 600_000)
 
   afterAll(async () => {
-    await gateway?.stop()
+    // Every step runs even when one throws: stop() of the preview app throws when its network
+    // guard refused something or it did not end by SIGTERM, and the containers, the rows and the
+    // directory of the suite must not stay behind. The errors fail the run once all have run.
+    const errors: unknown[] = []
+    const step = async (cleanUp: () => unknown) => {
+      try {
+        await cleanUp()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    await step(() => gateway?.stop())
     if (ids.preview) await runtime.destroy(ids.preview).catch(() => {})
     await docker('rm', '--force', prod.db).catch(() => {})
     await docker('volume', 'rm', '--force', prod.volume).catch(() => {})
     await docker('network', 'rm', prod.network).catch(() => {})
-    if (ids.workspace) {
-      const of = { task: { workspaceId: ids.workspace } }
-      await db.outboxEvent.deleteMany({
-        where: { dedupeKey: { startsWith: `preview.sync:${ids.preview}:` } },
+    if (ids.workspace)
+      await step(async () => {
+        const of = { task: { workspaceId: ids.workspace } }
+        await db.outboxEvent.deleteMany({
+          where: { dedupeKey: { startsWith: `preview.sync:${ids.preview}:` } },
+        })
+        await db.previewEnvironment.deleteMany({ where: of })
+        await db.turnAssignment.deleteMany({ where: of })
+        await db.task.deleteMany({ where: { workspaceId: ids.workspace } })
+        await db.gitRepository.deleteMany({ where: { siteId: ids.site } })
+        await db.credentialRef.deleteMany({ where: { siteId: ids.site } })
+        await db.site.deleteMany({ where: { workspaceId: ids.workspace } })
+        await db.workspace.deleteMany({ where: { id: ids.workspace } })
       })
-      await db.previewEnvironment.deleteMany({ where: of })
-      await db.turnAssignment.deleteMany({ where: of })
-      await db.task.deleteMany({ where: { workspaceId: ids.workspace } })
-      await db.gitRepository.deleteMany({ where: { siteId: ids.site } })
-      await db.credentialRef.deleteMany({ where: { siteId: ids.site } })
-      await db.site.deleteMany({ where: { workspaceId: ids.workspace } })
-      await db.workspace.deleteMany({ where: { id: ids.workspace } })
-    }
-    await db?.$disconnect()
-    if (root) await rm(root, { recursive: true, force: true })
+    await step(() => db?.$disconnect())
+    if (root) await step(() => rm(root, { recursive: true, force: true }))
+    if (errors.length > 1) throw new AggregateError(errors, 'The cleanup of the suite failed')
+    if (errors.length === 1) throw errors[0]
   }, 120_000)
 
   it('builds the preview from the copy of production and the tree of main', async () => {

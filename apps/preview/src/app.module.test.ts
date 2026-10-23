@@ -40,4 +40,17 @@ describe('AppModule', () => {
     expect(events).toEqual(['gateway', 'database'])
     expect(createPrismaClient).toHaveBeenCalledOnce()
   })
+
+  it('gives startPreview the server of the gateway, which no module exports', async () => {
+    // No module injects the server (plan 56, §3, item 4); app.get looks in every module.
+    const { GatewayModule } = await import('./gateway/gateway.module.ts')
+    expect(Reflect.getMetadata('exports', GatewayModule)).toBeUndefined()
+    const app = await NestFactory.createApplicationContext(AppModule.forRoot(testPreviewConfig()), {
+      logger: false,
+    })
+    const gateway = app.get(PreviewGatewayServer)
+    expect(gateway).toBeInstanceOf(PreviewGatewayServer)
+    expect(app.select(GatewayModule).get(PreviewGatewayServer, { strict: true })).toBe(gateway)
+    await app.close()
+  })
 })
