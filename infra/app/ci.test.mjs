@@ -1,6 +1,7 @@
 // The CI contract: what the workflows of .github/workflows run against the scripts they reach, and
 // which changes start them. Text only: GitHub itself runs them after the branch is pushed.
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, relative } from 'node:path'
@@ -10,10 +11,13 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const read = (path) => readFileSync(join(root, path), 'utf8')
 const ci = read('.github/workflows/ci.yml')
+// The workspaces of pnpm-workspace.yaml: a directory under apps/ or packages/ with a package.json.
+// A folder left behind with only ignored build output (a deleted package's dist/) is not one.
 const workspaces = ['apps', 'packages'].flatMap((directory) =>
   readdirSync(join(root, directory), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => `${directory}/${entry.name}`),
+    .map((entry) => `${directory}/${entry.name}`)
+    .filter((workspace) => existsSync(join(root, workspace, 'package.json'))),
 )
 const scripts = (workspace) => JSON.parse(read(`${workspace}/package.json`)).scripts ?? {}
 // One job of the workflow, from its key to the next key of the same depth.
@@ -298,6 +302,54 @@ test('every package script a workflow runs exists', () => {
     }
   // A floor that only shows the loop read the workflows: a step removed is not a defect.
   assert.ok(checked >= 20, `only ${checked} scripts of the workflows were checked`)
+})
+
+test('every build module a stand loads has its source in that app', () => {
+  // Stands load classes from the build of an app (`../dist/<path>.js`, `../../<app>/dist/…`,
+  // `apps/<app>/dist/…` from the root). Several run by hand only, with no workflow behind them
+  // (verify:runner, verify:snapshots, verify:publication, verify:gitea): a source moved to another
+  // folder would break them silently, until someone runs them. dist/<path>.js is built from
+  // src/<path>.ts. Only what the repository tracks: a local file nobody committed decides nothing.
+  const stands = execFileSync(
+    'git',
+    ['ls-files', '-z', '--', ':(glob)apps/*/scripts/*.mjs', ':(glob)infra/dev/**/*.mjs'],
+    { cwd: root, encoding: 'utf8' },
+  )
+    .split('\0')
+    .filter(Boolean)
+  const loaded = new Map()
+  for (const file of stands) {
+    const text = read(file)
+    // A relative literal, from the directory of the script; a template part names no one file.
+    for (const [, , literal] of text.matchAll(
+      /(['"`])((?:\.\.\/)+(?:[^'"`\s]*\/)?dist\/[^'"`\s]+\.js)\1/g,
+    ))
+      if (!literal.includes('${'))
+        loaded.set(`${file}: ${literal}`, relative(root, join(root, dirname(file), literal)))
+    // A path from the root of the repository, wherever it stands (an image's /app/apps/… too).
+    for (const [path] of text.matchAll(/\bapps\/[a-z-]+\/dist\/[\w./-]+?\.js\b/g))
+      loaded.set(`${file}: ${path}`, path)
+  }
+  for (const [where, path] of loaded) {
+    const [, app, module] = /^apps\/([a-z-]+)\/dist\/(.+)\.js$/.exec(path) ?? []
+    assert.ok(app, `${where} is not a module of an app's build`)
+    assert.ok(
+      existsSync(join(root, 'apps', app, 'src', `${module}.ts`)),
+      `${where}: apps/${app}/src/${module}.ts does not exist`,
+    )
+  }
+  // The manual stands among them: the runner's core side, the publication, the snapshots, Gitea.
+  for (const stand of [
+    'apps/core/scripts/verify-runner-core.mjs',
+    'apps/core/scripts/verify-publication.mjs',
+    'apps/core/scripts/verify-snapshots.mjs',
+    'infra/dev/gitea-verify/scenario.mjs',
+  ])
+    assert.ok(
+      [...loaded.keys()].some((where) => where.startsWith(`${stand}: `)),
+      `${stand} was read`,
+    )
+  assert.ok(loaded.size >= 50, `only ${loaded.size} build modules of the stands were checked`)
 })
 
 test('the live mode of the stands never runs in CI: no workflow names it or the provider key', () => {

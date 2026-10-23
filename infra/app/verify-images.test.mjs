@@ -1,9 +1,11 @@
 // The pure rules of verify:images: which workspace packages, npm modules and stands an image may
 // not carry, and which operator's commands it keeps.
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { readdirSync, readFileSync } from 'node:fs'
 import { matchesGlob } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import {
   APPS,
@@ -13,6 +15,8 @@ import {
   OPERATOR_SCRIPTS,
   standFilesOf,
 } from './verify-images.mjs'
+
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 
 /** The patterns of the repository's .dockerignore, the build context of every app image. */
 const DOCKER_IGNORE = readFileSync(new URL('../../.dockerignore', import.meta.url), 'utf8')
@@ -37,10 +41,17 @@ function ignoredByDocker(file) {
   return ignored
 }
 
-/** The files of `<directory>/scripts` of the repository, as paths from its root. */
+/**
+ * The files of `<directory>/scripts` the repository tracks, as paths from its root: a local file
+ * nobody committed is in no image Docker builds from a checkout, and changes no verdict here.
+ */
 function scriptsOf(directory) {
-  const url = new URL(`../../${directory}/scripts/`, import.meta.url)
-  return existsSync(url) ? readdirSync(url).map((name) => `${directory}/scripts/${name}`) : []
+  return execFileSync('git', ['ls-files', '-z', '--', `${directory}/scripts/`], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  })
+    .split('\0')
+    .filter((path) => path !== '' && !path.slice(`${directory}/scripts/`.length).includes('/'))
 }
 
 test('every app the stand builds has its own Dockerfile and a list of what it may not carry', () => {
