@@ -30,13 +30,15 @@ on:
       # The egress proxy of the client's variables (Р13), built by the network stand.
       - infra/sandbox/client-egress.mjs
       - infra/sandbox/Dockerfile
-      # The preview manager of core end to end (R5c), the gateway its browser goes through (R6)
-      # and the export of a running turn's working tree (Р23), on the schema of the database.
+      # The preview manager of core end to end (R5c), the gateway its browser goes through (R6) —
+      # the build of the preview app, which the suite starts as a process — and the export of a
+      # running turn's working tree (Р23), on the schema of the database.
       - apps/core/src/previews/**
       # The values of a candidate's database plan a build replays (Р22).
       - apps/core/src/site-content/**
+      - apps/core/src/testing/preview-app.ts
       - apps/preview/**
-      - packages/preview-gateway/**
+      - packages/observability/**
       - packages/service-runtime/**
       - packages/app-bootstrap/**
       - packages/ip-address/**
@@ -158,6 +160,10 @@ jobs:
           pnpm db:generate
           pnpm db:deploy
           pnpm db:seed
+      # The suite starts the built preview app (apps/core/src/testing/preview-app.ts) as the
+      # gateway its browser goes through.
+      - name: Build the preview app
+        run: pnpm --filter preview build
       # The gateway of the suite listens on the bridge of this host, where the relay of the
       # browser reaches it through `host-gateway`.
       - name: Preview manager of core against the real daemon and PostgreSQL

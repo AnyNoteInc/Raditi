@@ -13,5 +13,8 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     // A TCP connection or a dns.lookup outside this machine fails the test that tried it.
     setupFiles: ['@repo/app-bootstrap/testing/network-guard-setup'],
+    // The PostgreSQL suites run one file at a time, as those of core, llm and mcp do on the same
+    // disposable database.
+    fileParallelism: process.env.RADITI_GATEWAY_DB_TESTS !== '1',
   },
 })

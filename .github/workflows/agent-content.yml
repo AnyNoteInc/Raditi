@@ -19,7 +19,6 @@ on:
       # The stand's scripts, the roles llm and mcp and the turn-key issuer of the build.
       - apps/core/**
       - apps/preview/**
-      - packages/preview-gateway/**
       - packages/ip-address/**
       - apps/runner/**
       - apps/mcp/**

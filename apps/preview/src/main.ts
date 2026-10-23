@@ -6,7 +6,7 @@ import { isDomainError } from '@repo/domain'
 import { errorMessage } from '@repo/observability'
 import { armShutdownTimeout } from '@repo/app-bootstrap'
 
-import { ConfigError, loadPreviewConfig } from './config.ts'
+import { ConfigError, loadPreviewConfig } from './config/config.ts'
 import { startPreview } from './start.ts'
 
 const logger = new Logger('preview')

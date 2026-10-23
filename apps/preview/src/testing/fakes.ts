@@ -1,5 +1,5 @@
 // The configuration of the preview app as a test env gives it. Only for *.test.ts files.
-import { loadPreviewConfig, type PreviewGatewayConfig } from '../config.ts'
+import { loadPreviewConfig, type PreviewGatewayConfig } from '../config/config.ts'
 
 export function testPreviewConfig(): PreviewGatewayConfig {
   return loadPreviewConfig({

@@ -28,7 +28,6 @@ on:
       - apps/web/**
       - apps/core/**
       - apps/preview/**
-      - packages/preview-gateway/**
       - packages/ip-address/**
       - apps/runner/**
       - apps/mcp/**

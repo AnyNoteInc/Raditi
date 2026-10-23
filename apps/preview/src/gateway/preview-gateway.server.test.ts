@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import {
   createServer,
@@ -9,18 +8,17 @@ import {
 } from 'node:http'
 import { connect, type AddressInfo, type Socket } from 'node:net'
 
-import { PREVIEW_SESSION_COOKIE, type PreviewSessionKind } from '@repo/domain'
+import type { TestingModule } from '@nestjs/testing'
+import { PREVIEW_SESSION_COOKIE } from '@repo/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import type {
-  EnterInput,
-  PreviewAccessStore,
-  PreviewRoute,
-  PreviewSessionRecord,
-} from './preview-access.ts'
-import { previewCookieValue, previewTicketHash } from './preview-cookie.ts'
-import { PreviewGatewayServer, type PreviewGatewayOptions } from './preview-gateway.server.ts'
-import { PREVIEW_TICKET_REQUEST } from './preview-pages.ts'
+import type { PreviewRoute } from '../access/preview-access.ts'
+import type { PreviewGatewayConfig } from '../config/config.ts'
+import { previewCookieValue } from '../cookie/preview-cookie.ts'
+import { createTestGateway } from '../testing/gateway.ts'
+import { MemoryAccess } from '../testing/memory-access.ts'
+import { PREVIEW_TICKET_REQUEST } from './pages.ts'
+import { PreviewGatewayServer } from './preview-gateway.server.ts'
 
 const SECRET = 's'.repeat(48)
 const APP = 'http://localhost:3000'
@@ -29,118 +27,6 @@ const OTHER = 'site-abcd1234-chat-000111.localhost'
 const ORIGIN = `http://${HOST}:8090`
 const T0 = Date.UTC(2026, 9, 17, 12)
 const REV = '__Host-raditi-preview-rev'
-
-// ---------------------------------------------------------------------------------------------
-// A store in memory, with the semantics of PostgresPreviewAccess
-// ---------------------------------------------------------------------------------------------
-
-interface Ticket {
-  previewId: string
-  userId: string | null
-  kind: PreviewSessionKind
-  expiresAt: number
-  usedAt: number | null
-}
-
-class MemoryAccess implements PreviewAccessStore {
-  readonly routes = new Map<string, PreviewRoute>()
-  readonly tickets = new Map<string, Ticket>()
-  readonly sessions = new Map<string, PreviewSessionRecord>()
-  /** Users who are members of the site's workspace. */
-  readonly members = new Set<string>(['user-1'])
-  readonly calls = { route: 0, enter: 0, session: 0, recheck: 0 }
-  #next = 1
-
-  private readonly now: () => number
-
-  constructor(now: () => number) {
-    this.now = now
-  }
-
-  addRoute(hostname: string, patch: Partial<PreviewRoute> = {}): PreviewRoute {
-    const route: PreviewRoute = {
-      id: `preview-${hostname.slice(19, 25)}`,
-      siteId: 'site-1',
-      hostname,
-      status: 'ready',
-      revision: 1,
-      accessEpoch: 0,
-      upstream: null,
-      ...patch,
-    }
-    this.routes.set(hostname, route)
-    return route
-  }
-
-  ticket(
-    route: PreviewRoute,
-    kind: PreviewSessionKind = 'user',
-    patch: Partial<Ticket> = {},
-  ): string {
-    const token = randomBytes(32).toString('base64url')
-    this.tickets.set(previewTicketHash(token), {
-      previewId: route.id,
-      userId: kind === 'user' ? 'user-1' : null,
-      kind,
-      expiresAt: this.now() + 60_000,
-      usedAt: null,
-      ...patch,
-    })
-    return token
-  }
-
-  async route(hostname: string): Promise<PreviewRoute | null> {
-    this.calls.route++
-    const route = this.routes.get(hostname)
-    return route && route.status !== 'destroyed' ? { ...route } : null
-  }
-
-  async enter(input: EnterInput): Promise<PreviewSessionRecord | null> {
-    this.calls.enter++
-    const ticket = this.tickets.get(input.tokenHash)
-    if (
-      !ticket ||
-      ticket.previewId !== input.previewId ||
-      ticket.kind !== input.kind ||
-      ticket.usedAt !== null ||
-      ticket.expiresAt <= this.now()
-    )
-      return null
-    ticket.usedAt = this.now()
-    if (ticket.kind === 'user' && !this.members.has(ticket.userId ?? '')) return null
-    const route = [...this.routes.values()].find((one) => one.id === input.previewId)!
-    const id = `01960000-0000-7000-8000-${String(this.#next++).padStart(12, '0')}`
-    const session: PreviewSessionRecord = {
-      id,
-      previewId: input.previewId,
-      userId: ticket.userId,
-      kind: ticket.kind,
-      accessEpoch: route.accessEpoch,
-      expiresAt: new Date(this.now() + 12 * 3_600_000),
-      revokedAt: null,
-      checkedAt: new Date(this.now()),
-    }
-    this.sessions.set(id, session)
-    return { ...session }
-  }
-
-  async session(id: string): Promise<PreviewSessionRecord | null> {
-    this.calls.session++
-    const session = this.sessions.get(id)
-    return session ? { ...session } : null
-  }
-
-  async recheck(sessionId: string): Promise<{ checkedAt: Date } | null> {
-    this.calls.recheck++
-    const session = this.sessions.get(sessionId)!
-    if (session.kind === 'browser' || this.members.has(session.userId ?? '')) {
-      session.checkedAt = new Date(this.now())
-      return { checkedAt: session.checkedAt }
-    }
-    session.revokedAt = new Date(this.now())
-    return null
-  }
-}
 
 // ---------------------------------------------------------------------------------------------
 // A real upstream: the PHP of a preview stands behind it
@@ -215,21 +101,26 @@ interface Answer {
 let clock = T0
 let store: MemoryAccess
 let upstream: Upstream
+let app: TestingModule | undefined
 let gateway: PreviewGatewayServer
 let port = 0
 
-async function startGateway(patch: Partial<PreviewGatewayOptions> = {}): Promise<void> {
-  await gateway?.close()
-  gateway = new PreviewGatewayServer({
-    appEnv: 'development',
-    address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
-    sessionSecret: SECRET,
-    appUrl: APP,
-    browserRelays: [{ address: '127.0.0.1', prefix: 32, family: 'ipv4' }],
+/** The gateway as GatewayModule wires it, on the store and the clock of this file. */
+async function startGateway(patch: Partial<PreviewGatewayConfig> = {}): Promise<void> {
+  await app?.close()
+  app = await createTestGateway({
     store,
     now: () => clock,
-    ...patch,
+    config: {
+      appEnv: 'development',
+      address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
+      sessionSecret: SECRET,
+      appUrl: APP,
+      browserRelays: [{ address: '127.0.0.1', prefix: 32, family: 'ipv4' }],
+      ...patch,
+    },
   })
+  gateway = app.get(PreviewGatewayServer)
   port = (await gateway.listen(0, '127.0.0.1')).port
 }
 
@@ -280,7 +171,8 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await gateway.close()
+  await app?.close()
+  app = undefined
   upstream.server.closeAllConnections()
   upstream.server.close()
 })

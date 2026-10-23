@@ -1,10 +1,10 @@
 import { Logger } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
-import { PreviewGatewayServer } from '@repo/preview-gateway'
 import { appLogger, SHUTDOWN_SIGNALS } from '@repo/app-bootstrap'
 
-import type { PreviewGatewayConfig } from './config.ts'
-import { PreviewGatewayModule } from './preview-gateway.module.ts'
+import { AppModule } from './app.module.ts'
+import type { PreviewGatewayConfig } from './config/config.ts'
+import { PreviewGatewayServer } from './gateway/preview-gateway.server.ts'
 
 const logger = new Logger('preview')
 
@@ -13,7 +13,7 @@ const logger = new Logger('preview')
  * unless a stand names the Docker bridge (docs/plan/53-chat-preview-release.md, Р19, Р21).
  */
 export async function startPreview(config: PreviewGatewayConfig) {
-  const app = await NestFactory.createApplicationContext(PreviewGatewayModule.forRoot(config), {
+  const app = await NestFactory.createApplicationContext(AppModule.forRoot(config), {
     abortOnError: false,
     logger: appLogger(config.appEnv, 'preview'),
   })

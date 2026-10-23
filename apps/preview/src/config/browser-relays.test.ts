@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { DEV_PREVIEW_BROWSER_RELAYS, parsePreviewRelays } from './preview-relays.ts'
+import { DEV_PREVIEW_BROWSER_RELAYS, parsePreviewRelays } from './browser-relays.ts'
 
 describe('PREVIEW_BROWSER_RELAYS', () => {
   it('is this machine and the Docker bridges outside production, nobody in production', () => {

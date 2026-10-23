@@ -40,7 +40,7 @@ describe('loadPreviewConfig', () => {
       sessionSecret: DEV_PREVIEW_SESSION_SECRET,
       appUrl: 'http://localhost:3000',
       db: { databaseUrl: 'postgresql://raditi:raditi@localhost:5432/raditi' },
-      // This machine and Docker's bridges (preview-relays.ts).
+      // This machine and Docker's bridges (browser-relays.ts).
       browserRelays: [
         { address: '127.0.0.1', prefix: 32, family: 'ipv4' },
         { address: '::1', prefix: 128, family: 'ipv6' },

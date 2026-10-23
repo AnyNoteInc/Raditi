@@ -10,6 +10,11 @@
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./tokens": {
+      "source": "./src/tokens.ts",
+      "types": "./src/tokens.ts",
+      "default": "./dist/tokens.js"
+    },
     "./testing/fakes": "./src/testing/fakes.ts"
   },
   "scripts": {
