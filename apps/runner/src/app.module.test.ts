@@ -14,7 +14,7 @@ import { SANDBOX_PROVIDER } from './sandbox/sandbox.tokens.ts'
 import { SandboxRunner } from './sandbox-runner/sandbox-runner.ts'
 import { testRunnerConfig } from './testing/config.ts'
 import { fakeCoreServer } from './testing/fake-core-server.ts'
-import { RUNNER_TOKEN } from './vm-token/vm-token.tokens.ts'
+import { RUNNER_ID, RUNNER_TOKEN } from './vm-token/vm-token.tokens.ts'
 
 const closers: Array<() => Promise<unknown>> = []
 afterEach(async () => {
@@ -54,6 +54,8 @@ describe('AppModule', () => {
       .compile()
     closers.push(() => moduleRef.close())
     await moduleRef.init()
+    // Its turn containers carry the runner id the token names.
+    expect(moduleRef.get(RUNNER_ID)).toBe('sandbox-1')
 
     // The poll brought the inventory; the reconcile at start removes what core named.
     await vi.waitFor(() => expect(core.polls).toHaveLength(1))

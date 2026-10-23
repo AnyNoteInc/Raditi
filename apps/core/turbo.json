@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "typecheck": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/runner/src/core-api/core-client.ts",
+        "$TURBO_ROOT$/apps/runner/src/sandbox-runner/sandbox-runner.ts",
+        "$TURBO_ROOT$/apps/runner/src/reconciler/runner-reconciler.ts"
+      ]
+    }
+  }
+}

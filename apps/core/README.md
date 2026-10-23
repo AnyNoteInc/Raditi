@@ -16,6 +16,6 @@
 
 ## Чего не должно достигать
 
-- Других приложений: общаются по сети, не импортом (`apps-are-isolated`); `@repo/trpc` и `@repo/ui` (`core-no-trpc-ui`).
+- Других приложений: общаются по сети, не импортом (`apps-are-isolated`); `@repo/trpc` и `@repo/ui` (`core-no-trpc-ui`). Исключение — тестовый `src/testing/runner-side.ts`: он даёт перекрёстным тестам настоящий движок раннера, три файла `apps/runner/src` (план 56, решение 1; `runner-side-reaches-the-engine-only`). Поэтому эти файлы названы во входах `typecheck` в `apps/core/turbo.json` и `test` в корневом `turbo.json`.
 - Ключа аккаунта пула: его читает только `llm` (`subs/` в Vault).
 - `src/testing` из продуктового кода (`core-product-no-testing`); `src/deploy-step` не достаёт БД, Redis и S3 даже транзитивно.

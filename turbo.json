@@ -138,12 +138,7 @@
       "dependsOn": ["^transit"]
     },
     "typecheck": {
-      "dependsOn": ["^db:generate", "db:generate", "transit"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "$TURBO_ROOT$/apps/runner/src/core-api/core-client.ts",
-        "$TURBO_ROOT$/apps/runner/src/sandbox-runner/sandbox-runner.ts"
-      ]
+      "dependsOn": ["^db:generate", "db:generate", "transit"]
     },
     "lint": {
       "dependsOn": ["transit"]
@@ -164,6 +159,7 @@
         "$TURBO_ROOT$/apps/runner/scripts/runner-token.mjs",
         "$TURBO_ROOT$/apps/runner/src/core-api/core-client.ts",
         "$TURBO_ROOT$/apps/runner/src/sandbox-runner/sandbox-runner.ts",
+        "$TURBO_ROOT$/apps/runner/src/reconciler/runner-reconciler.ts",
         "$TURBO_ROOT$/infra/app/docker-compose.yml"
       ]
     },

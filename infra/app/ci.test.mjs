@@ -2,6 +2,7 @@
 // which changes start them. Text only: GitHub itself runs them after the branch is pushed.
 import assert from 'node:assert/strict'
 import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -760,10 +761,6 @@ test('a cached test run sees a change of a file its tests read outside their pac
     // The token command of the runner image (the runbook issues it on the sandbox VM), against
     // the RUNNER_TOKENS entries core accepts.
     'apps/runner/scripts/runner-token.mjs': ['apps/core/src/runner-api/runner-auth.test.ts'],
-    // The runner engine core's cross-app tests drive (plan 56, decision 1), through the one file
-    // of core that imports the runner app.
-    'apps/runner/src/core-api/core-client.ts': ['apps/core/src/testing/runner-side.ts'],
-    'apps/runner/src/sandbox-runner/sandbox-runner.ts': ['apps/core/src/testing/runner-side.ts'],
     // The llm service of the app VM's compose against the one extra CA the production role takes.
     'infra/app/docker-compose.yml': ['apps/llm/src/llm-config.contract.test.ts'],
   }
@@ -775,19 +772,6 @@ test('a cached test run sees a change of a file its tests read outside their pac
         `${reader} no longer reads ${file}`,
       )
   }
-  // Every runner file the gateway imports is named above, and core's typecheck, which compiles
-  // it with core's sources, sees a change of it too.
-  const gateway = 'apps/core/src/testing/runner-side.ts'
-  const engine = [...read(gateway).matchAll(/from '((?:\.\.\/)+runner\/src\/[^']+\.ts)'/g)].map(
-    ([, specifier]) => relative(root, join(root, dirname(gateway), specifier)),
-  )
-  assert.ok(engine.length > 0, `${gateway} imports the runner engine`)
-  const typecheck = JSON.parse(read('turbo.json')).tasks.typecheck.inputs ?? []
-  assert.ok(typecheck.includes('$TURBO_DEFAULT$'), 'typecheck keeps the files of its package')
-  for (const file of engine) {
-    assert.deepEqual(outside[file], [gateway], `${file} is not named with its reader`)
-    assert.ok(typecheck.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of typecheck`)
-  }
   // A file the readers above load through an import of theirs: its readers are theirs too.
   const imported = { 'infra/sandbox/client-egress.mjs': 'infra/sandbox/gateway.mjs' }
   for (const [file, importer] of Object.entries(imported)) {
@@ -797,6 +781,51 @@ test('a cached test run sees a change of a file its tests read outside their pac
       `${importer} no longer imports ${file}`,
     )
   }
+})
+
+test('a cached typecheck or test of core sees a change of the runner engine its tests drive', () => {
+  // core's cross-app tests compile and run the runner engine with core's sources through the one
+  // file of core that imports the runner app (plan 56, decision 1). The engine files may import
+  // each other (dependency-cruiser: runner-engine-speaks-the-protocol-only), so what the gateway
+  // reaches can grow among them without a new import of its own: core names every engine file.
+  const gateway = 'apps/core/src/testing/runner-side.ts'
+  const { forbidden } = createRequire(import.meta.url)('../../.dependency-cruiser.cjs')
+  const rule = forbidden.find(({ name }) => name === 'runner-engine-speaks-the-protocol-only')
+  const isEngine = new RegExp(rule.from.path)
+  const engine = readdirSync(join(root, 'apps/runner/src'), { recursive: true })
+    .map((file) => `apps/runner/src/${file}`)
+    .filter((file) => isEngine.test(file))
+    .toSorted()
+  assert.ok(engine.length > 0, 'dependency-cruiser names the engine files')
+  // The gateway's imports and, through theirs, every runner file core compiles.
+  const reached = new Set()
+  const pending = [gateway]
+  while (pending.length > 0) {
+    const file = pending.pop()
+    for (const [, specifier] of read(file).matchAll(/from '(\.{1,2}\/[^']+\.ts)'/g)) {
+      const target = relative(root, join(root, dirname(file), specifier))
+      if (!target.startsWith('apps/runner/') || reached.has(target)) continue
+      reached.add(target)
+      pending.push(target)
+    }
+  }
+  assert.ok(reached.size > 0, `${gateway} imports the runner engine`)
+  for (const file of reached) assert.ok(engine.includes(file), `${gateway} reaches ${file}`)
+  const runnerFiles = (inputs = []) =>
+    inputs
+      .filter((input) => input.startsWith('$TURBO_ROOT$/apps/runner/src/'))
+      .map((input) => input.slice('$TURBO_ROOT$/'.length))
+      .toSorted()
+  const shared = JSON.parse(read('turbo.json')).tasks
+  assert.deepEqual(runnerFiles(shared.test.inputs), engine, 'test names the engine files')
+  // Only core compiles them: its own configuration names them for typecheck, so a change of the
+  // engine leaves the cached typecheck of every other workspace alone.
+  assert.equal(shared.typecheck.inputs, undefined, 'the typecheck of every workspace names none')
+  const core = JSON.parse(read('apps/core/turbo.json'))
+  assert.deepEqual(core.extends, ['//'], 'core extends the configuration of the repository')
+  const { inputs } = core.tasks.typecheck
+  assert.ok(inputs.includes('$TURBO_DEFAULT$'), "core's typecheck keeps the files of its package")
+  assert.deepEqual(runnerFiles(inputs), engine, "core's typecheck names the engine files")
 })
 
 test('the llm profile of the app VM is verified on the engine of the VM, without the userland proxy', () => {

@@ -7,14 +7,14 @@ Pull-раннер песочной ВМ (spec §8, §19): сам забирае�
 - `src/main.ts` — `.env`, разбор конфигурации до Nest, предел остановки; `src/start.ts` — `startRunner`: контекст `AppModule.forRoot(config, { onRetired })`. Сессию, которую `core` вывел, процесс завершает, чтобы перезапуститься с новой.
 - `src/app.module.ts` — `AppModule`: модули разделов и `RunnerLifecycle` (`src/runner-lifecycle.ts`), единственный провайдер с хуками. Запуск — опрос, затем сверка контейнеров; остановка — сверка, опрос, затем соединения с `core`; контейнеры остаются. Порядок проверяет `src/app.module.test.ts`.
 - `src/config/` — `loadRunnerConfig` и `RunnerConfig`, глобальный `RunnerConfigModule` (токены `RUNNER_CONFIG`, `RUNNER_OPTIONS`).
-- `src/vm-token/` — токен ВМ из `RUNNER_TOKEN_FILE`, прочитанный один раз при запуске (`RUNNER_TOKEN`).
+- `src/vm-token/` — токен ВМ из `RUNNER_TOKEN_FILE`, прочитанный один раз при запуске (`RUNNER_TOKEN`), и id раннера, который он называет (`RUNNER_ID`).
 - `src/core-api/` — `HttpRunnerTransport` к API раннеров `core`, `RunnerCallError`, `runnerRefusal`.
 - `src/sandbox/` — Docker ВМ через локальный сокет (`SANDBOX_PROVIDER`; контейнеры ходов помечены id раннера из токена) и `LocalTurnExecutor` над ним (`TURN_EXECUTOR`).
 - `src/sandbox-runner/` — цикл опроса `SandboxRunner`: команды `core`, их исполнение и отчёты.
 - `src/reconciler/` — `RunnerReconciler`: уборка контейнеров ходов, у которых, по ответу `core`, нет владельца.
 - `src/testing/` — только тестам: `testRunnerConfig`, поддельный `core` в памяти (`scripted-core.ts`) и по HTTP с проверкой токена (`fake-core-server.ts`) на схемах протокола `@repo/domain`, образцовые id. Сторону песочницы тестам даёт `@repo/local-turns/testing`.
 
-`src/core-api/core-client.ts`, `src/sandbox-runner/sandbox-runner.ts` и `src/reconciler/runner-reconciler.ts` импортируют только `@repo/domain`, `@repo/observability`, `Logger` из `@nestjs/common` и друг друга, а из `zod` — один тип (`runner-engine-speaks-the-protocol-only`): перекрёстные тесты `core` ведут настоящий движок через `apps/core/src/testing/runner-side.ts` (план 56, решение 1) — единственный файл другого приложения, которому разрешено импортировать раннер (`apps-are-isolated`, `runner-side-reaches-the-engine-only`). Поэтому файлы движка, которые он импортирует, названы во входах `test` и `typecheck` в `turbo.json`.
+`src/core-api/core-client.ts`, `src/sandbox-runner/sandbox-runner.ts` и `src/reconciler/runner-reconciler.ts` импортируют только `@repo/domain`, `@repo/observability`, `@nestjs/common` (из него — `Logger`; правило не различает, что взято из пакета), из `zod` — только типы, и друг друга (`runner-engine-speaks-the-protocol-only`, `runner-engine-takes-only-types-of-zod`): перекрёстные тесты `core` ведут настоящий движок через `apps/core/src/testing/runner-side.ts` (план 56, решение 1) — единственный файл другого приложения, которому разрешено импортировать раннер (`apps-are-isolated`, `runner-side-reaches-the-engine-only`). Поэтому все три файла движка названы во входах `test` в `turbo.json` и `typecheck` в `apps/core/turbo.json` — и те, которые `runner-side.ts` сейчас не импортирует: файлы движка могут импортировать друг друга (это держит `infra/app/ci.test.mjs`).
 
 ## Что читает
 

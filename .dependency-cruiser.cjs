@@ -221,7 +221,7 @@ module.exports = {
     {
       name: 'package-testing-only-in-tests',
       comment:
-        'The testing part of a package (sample ids, the network guard, scripted fakes, the test config of the runner) is test support: only tests, the testing modules of the apps and the stand scripts import it.',
+        'The testing part of a package (sample ids, the network guard, scripted fakes, the sandbox side of a runner in @repo/local-turns/testing) is test support: only tests, the testing modules of the apps and the stand scripts import it.',
       severity: 'error',
       from: {
         path: '^(apps|packages)/',
@@ -276,13 +276,21 @@ module.exports = {
     {
       name: 'runner-engine-speaks-the-protocol-only',
       comment:
-        'The engine files core’s cross-app tests reach import only domain, observability, the Logger of Nest and each other: never a module, a token or the configuration of the runner app (plan 56, decision 1). zod is a type import of the protocol.',
+        'The engine files core’s cross-app tests reach import only domain, observability, @nestjs/common (for its Logger; the rule cannot tell one export from another), the types of zod and each other: never a module, a token or the configuration of the runner app (plan 56, decision 1).',
       severity: 'error',
       from: { path: RUNNER_ENGINE },
       to: {
         dependencyTypesNot: ['core'],
         pathNot: [RUNNER_ENGINE, '^packages/(domain|observability)/', ...npm('@nestjs/common|zod')],
       },
+    },
+    {
+      name: 'runner-engine-takes-only-types-of-zod',
+      comment:
+        'The engine files read the runner protocol through the schemas of domain: from zod they import only types (the rule above lets zod in, this one keeps a value import of it out).',
+      severity: 'error',
+      from: { path: RUNNER_ENGINE },
+      to: { path: npm('zod'), dependencyTypesNot: ['type-only'] },
     },
     {
       name: 'billing-testing-only-in-tests',

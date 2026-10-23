@@ -32,6 +32,13 @@ export async function readRunnerToken(path: string, appEnv: AppEnv): Promise<str
   }
 }
 
+/** The runner id a VM token names; a token that names none is refused as the file above is. */
+export function runnerIdOf(token: string): string {
+  const parsed = parseRunnerToken(token)
+  if (!parsed) throw new Error('RUNNER_TOKEN_FILE: does not hold a runner token')
+  return parsed.runnerId
+}
+
 function causeOf(error: unknown): string {
   const code = (error as { code?: unknown }).code
   return typeof code === 'string' ? code : 'error'

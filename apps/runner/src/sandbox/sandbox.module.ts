@@ -8,7 +8,7 @@ import { fetchPresignedTransfer, SandboxSnapshotTransport } from '@repo/snapshot
 import type { RunnerConfig } from '../config/config.ts'
 import { RUNNER_CONFIG } from '../config/config.tokens.ts'
 import { VmTokenModule } from '../vm-token/vm-token.module.ts'
-import { RUNNER_TOKEN } from '../vm-token/vm-token.tokens.ts'
+import { RUNNER_ID } from '../vm-token/vm-token.tokens.ts'
 import { runnerSandboxConfig } from './runner-sandbox-config.ts'
 import { SANDBOX_PROVIDER, TURN_EXECUTOR } from './sandbox.tokens.ts'
 
@@ -22,9 +22,9 @@ import { SANDBOX_PROVIDER, TURN_EXECUTOR } from './sandbox.tokens.ts'
   providers: [
     {
       provide: SANDBOX_PROVIDER,
-      useFactory: (config: RunnerConfig, token: string) =>
-        createDockerSandboxProvider(runnerSandboxConfig(config, token)),
-      inject: [RUNNER_CONFIG, RUNNER_TOKEN],
+      useFactory: (config: RunnerConfig, runnerId: string) =>
+        createDockerSandboxProvider(runnerSandboxConfig(config, runnerId)),
+      inject: [RUNNER_CONFIG, RUNNER_ID],
     },
     {
       provide: TURN_EXECUTOR,
