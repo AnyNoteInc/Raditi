@@ -6,7 +6,7 @@ import { isDomainError } from '@repo/domain'
 import { errorMessage } from '@repo/observability'
 import { armShutdownTimeout } from '@repo/app-bootstrap'
 
-import { ConfigError, loadMcpConfig } from './config.ts'
+import { ConfigError, loadMcpConfig } from './config/config.ts'
 import { startMcp } from './start.ts'
 
 const logger = new Logger('mcp')

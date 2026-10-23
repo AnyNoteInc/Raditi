@@ -1,22 +1,20 @@
-import { Logger, Module, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common'
+import { Logger, Module } from '@nestjs/common'
 import { Counter, type Registry } from '@prometheus-io/client'
 import type { PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialSource } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
-import { BACKGROUND_JOBS, METRICS_REGISTRY, PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG, TURN_CREDENTIALS } from '../infra/tokens.ts'
-import { MetricsModule } from '../metrics/metrics.module.ts'
-import {
-  backendCapacities,
-  CredentialSweeper,
-  type CredentialSweepKind,
-  GatewayTurnCredentials,
-} from '@repo/turn-keys'
+import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
+import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
+import { backendCapacities } from './backends.ts'
+import { CoreCredentialRuntime } from './credential-runtime.ts'
+import { CredentialSweeper, type CredentialSweepKind } from './credential-sweeper.ts'
+import { TURN_CREDENTIALS } from './llm.tokens.ts'
 import { createPoolProbeClient } from './pool-probe-client.ts'
+import { GatewayTurnCredentials } from './turn-credentials.ts'
 
-export const TURN_CREDENTIAL_SWEEP_INTERVAL_MS = 60_000
 const sweepKinds: readonly CredentialSweepKind[] = [
   'requested',
   'expired',
@@ -27,52 +25,8 @@ const sweepKinds: readonly CredentialSweepKind[] = [
   'lost',
 ]
 
-/** The core timer only starts in running applications; durable rows make every pass repeatable. */
-export class CoreCredentialRuntime implements OnApplicationBootstrap, OnModuleDestroy {
-  #timer: NodeJS.Timeout | undefined
-  #pending: Promise<void> | undefined
-  #closing = false
-
-  constructor(
-    private readonly sweeper: Pick<CredentialSweeper, 'tick' | 'close'>,
-    private readonly background: boolean,
-    private readonly logger: { warn(message: string): void } = new Logger('CoreCredentials'),
-  ) {}
-
-  onApplicationBootstrap(): void {
-    if (!this.background || this.#timer || this.#closing) return
-    this.#timer = setInterval(() => void this.tick(), TURN_CREDENTIAL_SWEEP_INTERVAL_MS)
-    this.#timer.unref()
-    void this.tick()
-  }
-
-  tick(): Promise<void> {
-    if (this.#closing) return Promise.resolve()
-    if (this.#pending) return this.#pending
-    const pending = Promise.resolve()
-      .then(() => this.sweeper.tick())
-      .catch(() => {
-        if (!this.#closing) this.logger.warn('llm_credentials_sweep_failed kind=runtime')
-      })
-      .finally(() => {
-        if (this.#pending === pending) this.#pending = undefined
-      })
-    this.#pending = pending
-    return pending
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    if (this.#closing) return
-    this.#closing = true
-    clearInterval(this.#timer)
-    this.#timer = undefined
-    await this.sweeper.close()
-  }
-}
-
 /** Core's turn-key lifecycle. Subscription credentials remain exclusive to the llm role. */
 @Module({
-  imports: [MetricsModule],
   providers: [
     {
       provide: TURN_CREDENTIALS,
@@ -125,6 +79,6 @@ export class CoreCredentialRuntime implements OnApplicationBootstrap, OnModuleDe
       inject: [CredentialSweeper, BACKGROUND_JOBS],
     },
   ],
-  exports: [TURN_CREDENTIALS, GatewayTurnCredentials],
+  exports: [TURN_CREDENTIALS],
 })
 export class LlmModule {}

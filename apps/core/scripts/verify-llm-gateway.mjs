@@ -211,7 +211,7 @@ try {
     token: stack.tokens['subscriptions-admin'],
   })
   // Loaded here: the build of the llm app exists only after the stand has built it.
-  const { SessionSubscriptionLock } = await import('../../llm/dist/gateway/session-lock.js')
+  const { SessionSubscriptionLock } = await import('../../llm/dist/subscriptions/session-lock.js')
   locks = new SessionSubscriptionLock(stack.databaseUrl)
   const writerFile = join(stack.directory, 'writer.token')
   await writeFile(writerFile, stack.tokens['subscriptions-writer'], { mode: 0o400 })

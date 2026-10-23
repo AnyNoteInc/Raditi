@@ -4,7 +4,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express'
 import { appLogger, listen, listenHost, SHUTDOWN_SIGNALS } from '@repo/app-bootstrap'
 
 import type { CoreConfig } from './config/config.ts'
-import { CoreModule } from './core/core.module.ts'
+import { AppModule } from './app.module.ts'
 import { ReleaseApiServer } from './release-api/release-api.server.ts'
 import { RunnerApiServer } from './runner-api/runner-api.server.ts'
 
@@ -16,7 +16,7 @@ const logger = new Logger('core')
  */
 export async function startCore(config: CoreConfig): Promise<INestApplication> {
   const app = await NestFactory.create<NestExpressApplication>(
-    CoreModule.forRoot({ config, background: true }),
+    AppModule.forRoot({ config, background: true }),
     { abortOnError: false, logger: appLogger(config.appEnv, 'core') },
   )
   app.disable('x-powered-by')

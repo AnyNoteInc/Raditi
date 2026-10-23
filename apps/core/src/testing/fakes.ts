@@ -2,17 +2,17 @@
 // S3 or Vault. Only for *.test.ts files (excluded from the build).
 import { getQueueToken } from '@nestjs/bullmq'
 import type { TestingModuleBuilder } from '@nestjs/testing'
-import { queueNames } from '@repo/domain'
-import { OBJECT_STORAGE, PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { bucketKinds, queueNames, type BucketKind } from '@repo/domain'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import {
+  fakeInfra as fakeSharedInfra,
+  TEST_METRICS_TOKEN,
+  type Dependencies as SharedDependencies,
+} from '@repo/service-runtime/testing/fakes'
+import { vi } from 'vitest'
 
 import { loadConfig, type CoreConfig } from '../config/config.ts'
-import { REDIS } from '../infra/tokens.ts'
-import {
-  fakeInfra,
-  TEST_METRICS_TOKEN,
-  type Dependencies,
-  type FakeInfra,
-} from '@repo/service-runtime/testing/fakes'
+import { OBJECT_STORAGE, REDIS } from '../infra/infra.tokens.ts'
 
 const testEnv = {
   APP_ENV: 'test',
@@ -32,7 +32,46 @@ export function testCoreConfig(): CoreConfig {
   return loadConfig(testEnv)
 }
 
-/** Replaces every provider of CoreModule that would open a connection. */
+export interface Dependencies extends SharedDependencies {
+  redis: boolean
+  /** Buckets that do not answer. */
+  missingBuckets: BucketKind[]
+}
+
+/** The shared infra fakes of @repo/service-runtime, with core's Redis, BullMQ queues and S3. */
+export function fakeInfra(overrides: Partial<Dependencies> = {}) {
+  const { redis = true, missingBuckets = [], ...shared } = overrides
+  const down = () => Promise.reject(new Error('connect ECONNREFUSED'))
+  return {
+    ...fakeSharedInfra(shared),
+    storage: {
+      checkBuckets: vi.fn((kinds: readonly BucketKind[] = bucketKinds) =>
+        Promise.resolve(
+          Object.fromEntries(
+            kinds.map((kind) => [kind, !missingBuckets.includes(kind)]),
+          ) as Partial<Record<BucketKind, boolean>>,
+        ),
+      ),
+    },
+    redis: {
+      status: redis ? 'ready' : 'reconnecting',
+      ping: vi.fn(() => (redis ? Promise.resolve('PONG') : down())),
+      quit: vi.fn(() => Promise.resolve('OK')),
+      disconnect: vi.fn(),
+    },
+    queue: {
+      add: vi.fn(() => Promise.resolve({ id: 'job' })),
+      on: vi.fn(),
+      close: vi.fn(() => Promise.resolve()),
+      /** Forced close of a queue's connection (Redis unreachable on shutdown). */
+      backendClose: vi.fn((_force?: boolean) => Promise.resolve()),
+    },
+  }
+}
+
+export type FakeInfra = ReturnType<typeof fakeInfra>
+
+/** Replaces every provider of AppModule that would open a connection. */
 export function overrideCoreInfra(builder: TestingModuleBuilder, infra: FakeInfra) {
   let result = builder
     .overrideProvider(PRISMA)
@@ -52,4 +91,4 @@ export function overrideCoreInfra(builder: TestingModuleBuilder, infra: FakeInfr
   return result
 }
 
-export { fakeInfra, TEST_METRICS_TOKEN, type Dependencies, type FakeInfra }
+export { TEST_METRICS_TOKEN }

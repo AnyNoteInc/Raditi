@@ -2,14 +2,15 @@ import { Logger } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
 import { appLogger, SHUTDOWN_SIGNALS } from '@repo/app-bootstrap'
 
-import type { LlmRoleConfig } from './config.ts'
-import { LlmAppModule, LlmRuntime } from './gateway/llm-app.module.ts'
+import { AppModule } from './app.module.ts'
+import type { LlmRoleConfig } from './config/config.ts'
+import { LlmRuntime } from './gateway/llm-runtime.ts'
 
 const logger = new Logger('llm')
 
 /** The subscription gateway: an application context that listens on its own port. */
 export async function startLlm(config: LlmRoleConfig) {
-  const app = await NestFactory.createApplicationContext(LlmAppModule.forRoot(config), {
+  const app = await NestFactory.createApplicationContext(AppModule.forRoot(config), {
     abortOnError: false,
     logger: appLogger(config.appEnv, 'llm'),
   })

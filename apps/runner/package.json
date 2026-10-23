@@ -5,7 +5,7 @@
   "license": "UNLICENSED",
   "type": "module",
   "scripts": {
-    "build": "pnpm --filter @repo/runner-engine build && nest build",
+    "build": "nest build",
     "start": "node dist/main.js",
     "runner-token": "node scripts/runner-token.mjs",
     "typecheck": "tsc --noEmit",
@@ -15,12 +15,14 @@
   "dependencies": {
     "@nestjs/common": "catalog:",
     "@nestjs/core": "catalog:",
+    "@repo/agent-drivers": "workspace:*",
     "@repo/app-bootstrap": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/ip-address": "workspace:*",
+    "@repo/local-turns": "workspace:*",
     "@repo/observability": "workspace:*",
-    "@repo/runner-engine": "workspace:*",
     "@repo/sandbox-providers": "workspace:*",
+    "@repo/snapshots": "workspace:*",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "zod": "catalog:"

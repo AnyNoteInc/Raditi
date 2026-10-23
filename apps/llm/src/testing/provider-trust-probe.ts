@@ -6,7 +6,7 @@ import { connect } from 'node:tls'
 
 import { zaiCodingBackend } from '@repo/llm-backends'
 
-import { createEgressTransport } from '../gateway/egress.ts'
+import { createEgressTransport } from '../egress/egress.ts'
 
 const port = Number(process.argv[2])
 const standCaFile = process.argv[3]!

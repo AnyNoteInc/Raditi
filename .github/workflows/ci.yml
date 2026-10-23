@@ -130,7 +130,8 @@ jobs:
         run: pnpm build
 
   # The opt-in suites of the subscription gateway, turn keys, pool health, operator login and
-  # retirement, and MCP admission: money, key revocation and access checks on real PostgreSQL.
+  # retirement, MCP admission and the entry to previews: money, key revocation and access checks
+  # on real PostgreSQL.
   # Their collectors scan shared tables, so they own this database and run one file at a time
   # (vitest.config.ts); the gates job above keeps them skipped.
   gateway-db:
@@ -189,6 +190,9 @@ jobs:
 
       - name: MCP gateway access, undo and preview tests with PostgreSQL
         run: pnpm --filter mcp test:db --testTimeout=30000
+
+      - name: Preview gateway access and entry tests with PostgreSQL
+        run: pnpm --filter preview test:db --testTimeout=30000
 
       # The approval of the credit rate reads the whole catalogue — every enabled model, every
       # tariff on sale — and locks `credit_rates`, so its PostgreSQL cases are opt-in as well and

@@ -26,7 +26,7 @@ import { sealDeployEnvelope } from '../deploy-step/envelope.ts'
 // operation or one release does not open as another's.
 
 /**
- * What a release reads the plan's values with (`DbPlanValueReader` of previews/db-plan-values.ts).
+ * What a release reads the plan's values with (`DbPlanValueReader` of site-content/db-plan-values.ts).
  * A value that is not what the plan names is a DomainError with HTTP status 409; anything else
  * may pass on a retry.
  */

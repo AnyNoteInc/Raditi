@@ -6,7 +6,8 @@ import { MAX_SANDBOX_TURN_MS, type TurnPlan } from '@repo/domain'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { parseRunnerTokens } from '../config/runner-tokens.ts'
-import { CORE_CONFIG, SITE_LEASES, TURN_ASSIGNMENTS } from '../infra/tokens.ts'
+import { CORE_CONFIG } from '../config/config.tokens.ts'
+import { SITE_LEASES, TURN_ASSIGNMENTS } from '../leases/leases.tokens.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { RemoteTurnExecutor } from './remote-turn-executor.ts'
 import { RunnerApiModule } from './runner-api.module.ts'
@@ -27,15 +28,16 @@ async function runnerApi(entries: string) {
   const assignments = new MemoryTurnAssignments()
   @Global()
   @Module({
-    providers: [
-      { provide: CORE_CONFIG, useValue: { runnerApi: { port: 0, tokens: hashes } } },
-      { provide: TURN_ASSIGNMENTS, useValue: assignments },
-      { provide: SITE_LEASES, useValue: { assert: async () => true } },
-    ],
-    exports: [CORE_CONFIG, TURN_ASSIGNMENTS, SITE_LEASES],
+    providers: [{ provide: CORE_CONFIG, useValue: { runnerApi: { port: 0, tokens: hashes } } }],
+    exports: [CORE_CONFIG],
   })
   class Infra {}
-  app = await Test.createTestingModule({ imports: [Infra, RunnerApiModule] }).compile()
+  app = await Test.createTestingModule({ imports: [Infra, RunnerApiModule] })
+    .overrideProvider(TURN_ASSIGNMENTS)
+    .useValue(assignments)
+    .overrideProvider(SITE_LEASES)
+    .useValue({ assert: async () => true })
+    .compile()
   const hub = app.get(RunnerHub)
   const executor = app.get(RemoteTurnExecutor)
   /** The address a turn's key is bound to once `runnerId` reserved the turn. */

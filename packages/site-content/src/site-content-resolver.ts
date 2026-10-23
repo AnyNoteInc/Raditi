@@ -10,8 +10,6 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-export const MCP_CONTENT_RESOLVER = Symbol('MCP_CONTENT_RESOLVER')
-
 /** What it takes to reach a site: the resolver reads nothing else of a call's scope. */
 export interface SiteScope {
   workspaceId: string

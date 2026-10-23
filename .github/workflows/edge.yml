@@ -37,8 +37,10 @@ on:
       - packages/service-runtime/**
       - packages/app-bootstrap/**
       - apps/core/src/main.ts
+      - apps/core/src/app.module.ts
       - apps/core/src/config/**
       - apps/core/src/health/**
+      - apps/core/src/metrics/**
       - apps/core/src/start.ts
       - apps/core/src/runner-api/runner-auth.ts
       - apps/core/src/runner-api/runner-api.server.ts

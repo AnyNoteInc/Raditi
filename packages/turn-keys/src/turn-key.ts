@@ -27,11 +27,6 @@ export function turnKeyHash(secret: string): string {
   return createHash('sha256').update(secret).digest('hex')
 }
 
-/** Where the llm role keeps an account's subscription credential; `credential_refs` stores it. */
-export function subscriptionCredentialPath(backendId: string, accountId: string): string {
-  return `subs/${backendId}/${accountId}`
-}
-
 /**
  * The mutex of one provider's pool, held until the transaction ends. Key issue, account import,
  * retirement and the sweeper's final disable take it before any account row, and only through

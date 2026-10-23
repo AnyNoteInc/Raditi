@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
 import type { SecretStore, TurnCredentialRef } from '@repo/domain'
+import { LlmCallLedger, lockSubscriptionPool } from '@repo/turn-keys'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { PostgresGatewayStore, CredentialSweeper, lockSubscriptionPool } from '@repo/turn-keys'
+import { CredentialSweeper } from './credential-sweeper.ts'
 
 // Only verify:db's disposable, shared-user PostgreSQL; no working database or env-file is read.
 const databaseUrl = process.env.DATABASE_URL
@@ -255,7 +256,7 @@ describe.skipIf(!enabled)('core credential cleanup with PostgreSQL', () => {
     expect(usage.reasoningTokens).toBe(0)
     expect(usage.costRub.toFixed(10)).toBe('0.0104400000')
     await sweeper.tick()
-    const late = await new PostgresGatewayStore(db).finish(lost.id, {
+    const late = await new LlmCallLedger(db).finish(lost.id, {
       state: 'completed',
       usage: { input: 10, cacheRead: 0, cacheWrite: 0, output: 10, reasoning: 0 },
       estimated: false,

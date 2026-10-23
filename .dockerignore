@@ -17,6 +17,13 @@ infra
 # except the scripts the sandbox images copy (infra/sandbox/Dockerfile)
 !infra/sandbox/*.mjs
 
+# verification stands, their tests and fixtures never go into an image: they run from the
+# repository (docs/plan/56-nest-modules.md §6; infra/app/verify-images.mjs checks it); the
+# operator's commands next to them (billing-*, releases-resolve, subscription-*, runner-token) stay
+**/scripts/verify-*.mjs
+**/scripts/*.test.mjs
+apps/core/scripts/opencode-runner-fixture*.mjs
+
 # local environment and secrets
 **/.env
 **/.env.*

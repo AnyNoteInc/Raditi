@@ -25,7 +25,7 @@ import {
   type UnkeyedTurnRequest,
 } from '@repo/domain'
 
-import { llmGatewayBaseUrl } from '@repo/turn-keys'
+import { llmGatewayBaseUrl } from '../llm/backends.ts'
 import { ceilingQuestionOf } from './turn-outcome.ts'
 import { CONTINUE_PROMPT, turnInstructions, type PreviewFacts } from './turn-instructions.ts'
 

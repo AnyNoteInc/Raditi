@@ -3,15 +3,15 @@ import { NestFactory } from '@nestjs/core'
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import { appLogger, listen, SHUTDOWN_SIGNALS } from '@repo/app-bootstrap'
 
-import type { McpConfig } from './config.ts'
-import { McpAppModule } from './mcp-app.module.ts'
-import { mountMcp } from './mcp-server.ts'
+import { AppModule } from './app.module.ts'
+import type { McpConfig } from './config/config.ts'
+import { mountMcp } from './server/mount-mcp.ts'
 
 const logger = new Logger('mcp')
 
 /** The MCP gateway: its own port, reachable by the sandboxes through sandbox-gw. */
 export async function startMcp(config: McpConfig) {
-  const app = await NestFactory.create<NestExpressApplication>(McpAppModule.forRoot(config), {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule.forRoot(config), {
     abortOnError: false,
     logger: appLogger(config.appEnv, 'mcp'),
   })

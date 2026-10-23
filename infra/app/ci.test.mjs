@@ -1,7 +1,9 @@
 // The CI contract: what the workflows of .github/workflows run against the scripts they reach, and
 // which changes start them. Text only: GitHub itself runs them after the branch is pushed.
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -9,10 +11,13 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const read = (path) => readFileSync(join(root, path), 'utf8')
 const ci = read('.github/workflows/ci.yml')
+// The workspaces of pnpm-workspace.yaml: a directory under apps/ or packages/ with a package.json.
+// A folder left behind with only ignored build output (a deleted package's dist/) is not one.
 const workspaces = ['apps', 'packages'].flatMap((directory) =>
   readdirSync(join(root, directory), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => `${directory}/${entry.name}`),
+    .map((entry) => `${directory}/${entry.name}`)
+    .filter((workspace) => existsSync(join(root, workspace, 'package.json'))),
 )
 const scripts = (workspace) => JSON.parse(read(`${workspace}/package.json`)).scripts ?? {}
 // One job of the workflow, from its key to the next key of the same depth.
@@ -84,7 +89,7 @@ test('CI fails when schema.prisma and the deployed migrations differ', () => {
 })
 
 // The apps whose own opt-in database suites run in the one gateway-db job, in the order of its steps.
-const databaseApps = ['apps/core', 'apps/llm', 'apps/mcp']
+const databaseApps = ['apps/core', 'apps/llm', 'apps/mcp', 'apps/preview']
 
 test('CI runs every opt-in database test of the role apps on its own PostgreSQL', () => {
   const found = {}
@@ -103,6 +108,7 @@ test('CI runs every opt-in database test of the role apps on its own PostgreSQL'
   assert.ok(found['apps/core'] >= 3, 'the turn key, sweeper and release suites exist')
   assert.ok(found['apps/llm'] >= 5, 'the gateway, pool, lock, login and retire suites exist')
   assert.ok(found['apps/mcp'] >= 3, 'the access, undo and preview suites of the MCP gateway exist')
+  assert.ok(found['apps/preview'] >= 2, 'the access and entry suites of the preview gateway exist')
 
   const database = job('gateway-db')
   assert.ok(database, 'ci.yml has the gateway-db job')
@@ -173,6 +179,10 @@ test('the subscription gateway workflow starts on every source its stand runs', 
     ...readdirSync(join(root, 'apps/core/scripts'))
       .filter((name) => /^verify-llm-.+\.mjs$/.test(name))
       .map((name) => `apps/core/scripts/${name}`),
+    // The worker of the role llm lives with the app it hosts.
+    ...readdirSync(join(root, 'apps/llm/scripts'))
+      .filter((name) => /^verify-.+\.mjs$/.test(name))
+      .map((name) => `apps/llm/scripts/${name}`),
     ...readdirSync(join(root, 'infra/dev/llm-verify'))
       .filter((name) => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))
       .map((name) => `infra/dev/llm-verify/${name}`),
@@ -292,6 +302,54 @@ test('every package script a workflow runs exists', () => {
     }
   // A floor that only shows the loop read the workflows: a step removed is not a defect.
   assert.ok(checked >= 20, `only ${checked} scripts of the workflows were checked`)
+})
+
+test('every build module a stand loads has its source in that app', () => {
+  // Stands load classes from the build of an app (`../dist/<path>.js`, `../../<app>/dist/…`,
+  // `apps/<app>/dist/…` from the root). Several run by hand only, with no workflow behind them
+  // (verify:runner, verify:snapshots, verify:publication, verify:gitea): a source moved to another
+  // folder would break them silently, until someone runs them. dist/<path>.js is built from
+  // src/<path>.ts. Only what the repository tracks: a local file nobody committed decides nothing.
+  const stands = execFileSync(
+    'git',
+    ['ls-files', '-z', '--', ':(glob)apps/*/scripts/*.mjs', ':(glob)infra/dev/**/*.mjs'],
+    { cwd: root, encoding: 'utf8' },
+  )
+    .split('\0')
+    .filter(Boolean)
+  const loaded = new Map()
+  for (const file of stands) {
+    const text = read(file)
+    // A relative literal, from the directory of the script; a template part names no one file.
+    for (const [, , literal] of text.matchAll(
+      /(['"`])((?:\.\.\/)+(?:[^'"`\s]*\/)?dist\/[^'"`\s]+\.js)\1/g,
+    ))
+      if (!literal.includes('${'))
+        loaded.set(`${file}: ${literal}`, relative(root, join(root, dirname(file), literal)))
+    // A path from the root of the repository, wherever it stands (an image's /app/apps/… too).
+    for (const [path] of text.matchAll(/\bapps\/[a-z-]+\/dist\/[\w./-]+?\.js\b/g))
+      loaded.set(`${file}: ${path}`, path)
+  }
+  for (const [where, path] of loaded) {
+    const [, app, module] = /^apps\/([a-z-]+)\/dist\/(.+)\.js$/.exec(path) ?? []
+    assert.ok(app, `${where} is not a module of an app's build`)
+    assert.ok(
+      existsSync(join(root, 'apps', app, 'src', `${module}.ts`)),
+      `${where}: apps/${app}/src/${module}.ts does not exist`,
+    )
+  }
+  // The manual stands among them: the runner's core side, the publication, the snapshots, Gitea.
+  for (const stand of [
+    'apps/core/scripts/verify-runner-core.mjs',
+    'apps/core/scripts/verify-publication.mjs',
+    'apps/core/scripts/verify-snapshots.mjs',
+    'infra/dev/gitea-verify/scenario.mjs',
+  ])
+    assert.ok(
+      [...loaded.keys()].some((where) => where.startsWith(`${stand}: `)),
+      `${stand} was read`,
+    )
+  assert.ok(loaded.size >= 50, `only ${loaded.size} build modules of the stands were checked`)
 })
 
 test('the live mode of the stands never runs in CI: no workflow names it or the provider key', () => {
@@ -529,38 +587,46 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     'infra/dev/site-verify/**',
     'packages/site-adapters/**',
     'apps/mcp/**',
-    'apps/core/scripts/verify-content-*.mjs',
   ])
     assert.ok(filter.includes(pattern), `${pattern} is in the path filter`)
-  // The plugin, every script of the stand and the helpers it imports start the workflow.
+  // The plugin, every script of the stand and the helpers it imports start the workflow. The
+  // worker and its scenarios drive the mcp app alone and live in its scripts (plan 56).
+  const workers = readdirSync(join(root, 'apps/mcp/scripts'))
+    .filter((name) => name.startsWith('verify-content-'))
+    .map((name) => `apps/mcp/scripts/${name}`)
+  assert.ok(workers.includes('apps/mcp/scripts/verify-content-worker.mjs'))
   const stand = [
     'infra/wordpress/raditi-content.php',
     'apps/core/scripts/verify-agent-supervisor.mjs',
     ...readdirSync(join(root, 'infra/dev/site-verify')).map(
       (name) => `infra/dev/site-verify/${name}`,
     ),
-    ...readdirSync(join(root, 'apps/core/scripts'))
-      .filter((name) => name.startsWith('verify-content-'))
-      .map((name) => `apps/core/scripts/${name}`),
+    ...workers,
   ]
   assert.ok(stand.length >= 9)
   for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
   // As for the gateway stand: the packages its scripts import, by name or by a path into their
-  // sources, the orchestrator modules they load from the build and the orchestrator sources
-  // they load as they are. The journal tables, the snapshot storage and the turn undo are this
-  // path as much as the plugin is.
+  // sources, the modules of the apps they load from the builds and the app sources they load as
+  // they are. `../dist/` and `../src/` are the build and the sources of the script's own app.
+  // The journal tables, the snapshot storage and the turn undo are this path as much as the
+  // plugin is.
   const imported = new Set()
   for (const script of stand.filter((file) => file.endsWith('.mjs'))) {
+    const app = /^apps\/([a-z-]+)\/scripts\//.exec(script)?.[1]
     const text = read(script)
     for (const [, name] of text.matchAll(/'(?:@repo|(?:\.\.\/)+packages)\/([a-z-]+)[/']/g))
       imported.add(`packages/${name}/src/index.ts`)
-    for (const [, directory] of text.matchAll(/'\.\.\/dist\/([a-z-]+)\//g))
-      imported.add(`apps/core/src/${directory}/index.ts`)
-    // The builds of the other apps: apps/mcp/dist and apps/llm/dist.
-    for (const [, app] of text.matchAll(/'\.\.\/\.\.\/([a-z-]+)\/dist\//g))
-      imported.add(`apps/${app}/src/index.ts`)
+    if (!app) continue
+    // A module of the app's own build: its directory, or the app itself for one at the root.
+    for (const [, directory] of text.matchAll(/'\.\.\/dist\/(?:([a-z-]+)\/)?/g))
+      imported.add(`apps/${app}/src/${directory ? `${directory}/` : ''}index.ts`)
+    // The builds of the other apps, by directory: ../../core/dist/turns/ and the like.
+    for (const [, other, directory] of text.matchAll(
+      /'\.\.\/\.\.\/([a-z-]+)\/dist\/(?:([a-z-]+)\/)?/g,
+    ))
+      imported.add(`apps/${other}/src/${directory ? `${directory}/` : ''}index.ts`)
     for (const [, file] of text.matchAll(/'\.\.\/src\/([^']+\.ts)'/g))
-      imported.add(`apps/core/src/${file}`)
+      imported.add(`apps/${app}/src/${file}`)
   }
   for (const source of [
     'packages/db/src/index.ts',
@@ -568,9 +634,11 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     'packages/domain/src/index.ts',
     'packages/site-adapters/src/index.ts',
     'apps/mcp/src/index.ts',
+    'apps/mcp/src/content/index.ts',
+    // The turn supervisor of core's build drives the trusted rollback of the mcp app.
     'apps/core/src/turns/index.ts',
     // The sample ids of the turns the stand makes up.
-    'apps/core/src/testing/ids.ts',
+    'apps/mcp/src/testing/ids.ts',
   ])
     assert.ok(imported.has(source), `the stand loads ${source.replace('/index.ts', '')}`)
   for (const source of imported)
@@ -744,7 +812,7 @@ test('a cached test run sees a change of a file its tests read outside their pac
     // The LLM paths of sandbox-gw against the routes of the registry and the base URL of each.
     'infra/sandbox/gateway.mjs': [
       'apps/llm/src/gateway/sandbox-routes.contract.test.ts',
-      'packages/turn-keys/src/backends.test.ts',
+      'apps/core/src/llm/backends.test.ts',
     ],
     // The files a WordPress preview gets, embedded in the adapter, against their sources; the
     // policy of its database copy, against the file the copier is tested with (plan 53, R5b).
@@ -761,7 +829,7 @@ test('a cached test run sees a change of a file its tests read outside their pac
     // the RUNNER_TOKENS entries core accepts.
     'apps/runner/scripts/runner-token.mjs': ['apps/core/src/runner-api/runner-auth.test.ts'],
     // The llm service of the app VM's compose against the one extra CA the production role takes.
-    'infra/app/docker-compose.yml': ['apps/llm/src/llm-config.contract.test.ts'],
+    'infra/app/docker-compose.yml': ['apps/llm/src/config/llm-config.contract.test.ts'],
   }
   for (const [file, readers] of Object.entries(outside)) {
     assert.ok(inputs.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of test`)
@@ -780,6 +848,51 @@ test('a cached test run sees a change of a file its tests read outside their pac
       `${importer} no longer imports ${file}`,
     )
   }
+})
+
+test('a cached typecheck or test of core sees a change of the runner engine its tests drive', () => {
+  // core's cross-app tests compile and run the runner engine with core's sources through the one
+  // file of core that imports the runner app (plan 56, decision 1). The engine files may import
+  // each other (dependency-cruiser: runner-engine-speaks-the-protocol-only), so what the gateway
+  // reaches can grow among them without a new import of its own: core names every engine file.
+  const gateway = 'apps/core/src/testing/runner-side.ts'
+  const { forbidden } = createRequire(import.meta.url)('../../.dependency-cruiser.cjs')
+  const rule = forbidden.find(({ name }) => name === 'runner-engine-speaks-the-protocol-only')
+  const isEngine = new RegExp(rule.from.path)
+  const engine = readdirSync(join(root, 'apps/runner/src'), { recursive: true })
+    .map((file) => `apps/runner/src/${file}`)
+    .filter((file) => isEngine.test(file))
+    .toSorted()
+  assert.ok(engine.length > 0, 'dependency-cruiser names the engine files')
+  // The gateway's imports and, through theirs, every runner file core compiles.
+  const reached = new Set()
+  const pending = [gateway]
+  while (pending.length > 0) {
+    const file = pending.pop()
+    for (const [, specifier] of read(file).matchAll(/from '(\.{1,2}\/[^']+\.ts)'/g)) {
+      const target = relative(root, join(root, dirname(file), specifier))
+      if (!target.startsWith('apps/runner/') || reached.has(target)) continue
+      reached.add(target)
+      pending.push(target)
+    }
+  }
+  assert.ok(reached.size > 0, `${gateway} imports the runner engine`)
+  for (const file of reached) assert.ok(engine.includes(file), `${gateway} reaches ${file}`)
+  const runnerFiles = (inputs = []) =>
+    inputs
+      .filter((input) => input.startsWith('$TURBO_ROOT$/apps/runner/src/'))
+      .map((input) => input.slice('$TURBO_ROOT$/'.length))
+      .toSorted()
+  const shared = JSON.parse(read('turbo.json')).tasks
+  assert.deepEqual(runnerFiles(shared.test.inputs), engine, 'test names the engine files')
+  // Only core compiles them: its own configuration names them for typecheck, so a change of the
+  // engine leaves the cached typecheck of every other workspace alone.
+  assert.equal(shared.typecheck.inputs, undefined, 'the typecheck of every workspace names none')
+  const core = JSON.parse(read('apps/core/turbo.json'))
+  assert.deepEqual(core.extends, ['//'], 'core extends the configuration of the repository')
+  const { inputs } = core.tasks.typecheck
+  assert.ok(inputs.includes('$TURBO_DEFAULT$'), "core's typecheck keeps the files of its package")
+  assert.deepEqual(runnerFiles(inputs), engine, "core's typecheck names the engine files")
 })
 
 test('the llm profile of the app VM is verified on the engine of the VM, without the userland proxy', () => {

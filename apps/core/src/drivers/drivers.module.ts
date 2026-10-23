@@ -3,7 +3,8 @@ import { createAgentDriverRegistry, createAgentDrivers } from '@repo/agent-drive
 import type { AgentDriverId } from '@repo/domain'
 
 import type { CoreConfig } from '../config/config.ts'
-import { AGENT_DRIVERS, CORE_CONFIG } from '../infra/tokens.ts'
+import { CORE_CONFIG } from '../config/config.tokens.ts'
+import { AGENT_DRIVERS } from './drivers.tokens.ts'
 
 /**
  * The product runs one shell (spec §8). A turn of OpenCode needs, beside this, what the

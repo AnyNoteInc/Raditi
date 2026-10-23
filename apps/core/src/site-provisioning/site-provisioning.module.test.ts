@@ -1,20 +1,22 @@
 import type { DynamicModule, INestApplication, Type } from '@nestjs/common'
-import { testRunnerConfig } from '@repo/runner-engine/testing'
 import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
 import type { DatabaseEngine, DatabaseInspector, SiteRepositoryProvisioner } from '@repo/domain'
 import { afterEach, describe, expect, it } from 'vitest'
-import { METRICS_REGISTRY } from '@repo/service-runtime'
-import { RunnerModule } from '@repo/runner-engine'
 
+import { AppModule } from '../app.module.ts'
 import type { CoreConfig } from '../config/config.ts'
-import { CoreModule } from '../core/core.module.ts'
-import { SITE_DATABASES, SITE_REPOSITORY_PROVISIONER, SITE_SOURCES } from '../infra/tokens.ts'
+import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 import { fakeInfra, overrideCoreInfra, testCoreConfig } from '../testing/fakes.ts'
 import { SiteImportProcessor } from './site-import.processor.ts'
 import { siteImportOutcomes, SiteImportRunner } from './site-import.runner.ts'
 import { SiteImportSweeper } from './site-import.sweeper.ts'
 import { SiteProvisioningModule } from './site-provisioning.module.ts'
+import {
+  SITE_DATABASES,
+  SITE_REPOSITORY_PROVISIONER,
+  SITE_SOURCES,
+} from './site-provisioning.tokens.ts'
 
 const apps: INestApplication[] = []
 afterEach(async () => {
@@ -25,7 +27,7 @@ afterEach(async () => {
 async function core(config: CoreConfig = testCoreConfig()) {
   const infra = fakeInfra()
   const moduleRef = await overrideCoreInfra(
-    Test.createTestingModule({ imports: [CoreModule.forRoot({ config, background: false })] }),
+    Test.createTestingModule({ imports: [AppModule.forRoot({ config, background: false })] }),
     infra,
   ).compile()
   const app = moduleRef.createNestApplication({ logger: false })
@@ -100,11 +102,9 @@ describe('SiteProvisioningModule in the core role', () => {
     expect(new Set(labels)).toEqual(new Set(['outcome,app']))
   })
 
-  it('belongs to core alone: the runner import nothing', () => {
-    const coreModule = CoreModule.forRoot({ config: testCoreConfig(), background: false })
+  it('belongs to core: its root module imports it', () => {
+    // No other app can: apps-are-isolated keeps every app to its own modules.
+    const coreModule = AppModule.forRoot({ config: testCoreConfig(), background: false })
     expect(imports(coreModule, SiteProvisioningModule)).toBe(true)
-
-    for (const module of [RunnerModule.forRoot(testRunnerConfig())])
-      expect(imports(module, SiteProvisioningModule)).toBe(false)
   })
 })

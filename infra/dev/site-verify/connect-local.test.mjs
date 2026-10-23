@@ -1004,7 +1004,7 @@ test('the stand keeps its signal handlers through the cleanup and is started by 
   // The command defaults to the dev project: the stand must always name its own.
   assert.match(stand, /const project = `raditi-site-connect-\$\{run\}`/)
   assert.match(stand, /\n    CONNECT_COMPOSE_PROJECT: project,\n/)
-  assert.doesNotMatch(stand, /wrapResolver|McpAppModule/)
+  assert.doesNotMatch(stand, /wrapResolver|\bAppModule\b/)
   // What the command must do is never done by the stand itself: no access reference, no
   // repository row, no activation and no write of a site access.
   assert.doesNotMatch(stand, /gitRepository\.create|status: 'active'/)

@@ -5,7 +5,7 @@
 ## Что даёт
 
 - `./load-env` — загрузка `.env` для локальных запусков: загружается только ближайший `.env` вверх от запускаемого приложения, поэтому файл в каталоге приложения заменяет корневой целиком (`NODE_ENV=production` его не ищет). Первая строка `main.ts` каждого приложения.
-- Основной вход: `listen`, `listenHost`, `armShutdownTimeout` (жёсткая остановка через 30 с), `appLogger(appEnv, <имя контейнера>)` — вне production строки приложения начинаются с `[core]`, `[llm]`, `[mcp]`, `[preview]` или `[runner]`, в production — одна строка JSON на запись (имя приложения стоит в `context` записей запуска); отказ конфигурации до создания Nest печатает встроенный логгер Nest — текстом и в production; `ConfigError` (все проблемы конфигурации сразу, по именам переменных, без значений; тема — имя приложения), `readAppVersion`, `findEnvFile` и `loadRepoEnv`.
+- Основной вход: `listen`, `listenHost`, `armShutdownTimeout` (жёсткая остановка через 30 с), `appLogger(appEnv, <имя контейнера>)` — вне production строки приложения начинаются с `[core]`, `[llm]`, `[mcp]`, `[preview]` или `[runner]`, в production — одна строка JSON на запись (имя приложения стоит в `context` записей запуска); отказ конфигурации до создания Nest печатает встроенный логгер Nest — текстом и в production; `ConfigError` (все проблемы конфигурации сразу, по именам переменных, без значений; тема — имя приложения), `findEnvFile` и `loadRepoEnv`. Версию из своего `package.json` читает только `mcp` (`apps/mcp/src/version.ts`).
 - `./testing/network-guard` и `./testing/network-guard-setup` — сторож сети тестов: исходящее соединение и `dns.lookup` за пределы машины роняют тест. Его подключают `vitest.config` приложений и пакетов их общего кода; дочерние процессы Node получают его через `--import`.
 - `./testing/ids` — образцовые id драйвера, бэкенда и модели для тестов и стендов, которым всё равно, чей драйвер и чей бэкенд.
 
@@ -19,4 +19,4 @@
 
 ## Чего не должно достигать
 
-Только `domain` (`app-bootstrap-tier`): ни базы, ни Redis, ни Vault, ни S3, ни `observability`. Из пакетов каркаса раннер берёт только этот, а пакеты, которые он запускает (`runner-engine`, `snapshots`, `local-turns`), — ни одного (им `app-bootstrap` нужен лишь ради сторожа сети тестов): `service-runtime` и `db` им недоступны даже транзитивно (`runner-minimal-packages`).
+Только `domain` (`app-bootstrap-tier`): ни базы, ни Redis, ни Vault, ни S3, ни `observability`. Из пакетов каркаса раннер берёт только этот, а пакеты, которые он запускает (`snapshots`, `local-turns`), — ни одного (им `app-bootstrap` нужен лишь ради сторожа сети тестов): `service-runtime` и `db` им недоступны даже транзитивно (`runner-minimal-packages`).

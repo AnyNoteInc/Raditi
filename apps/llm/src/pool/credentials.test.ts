@@ -1,0 +1,151 @@
+import type { SecretStore } from '@repo/domain'
+import { zaiCodingBackend } from '@repo/llm-backends'
+import { describe, expect, it, vi } from 'vitest'
+
+import { sampleBackendId } from '../testing/ids.ts'
+import {
+  createCredentialSource,
+  encodeSubscriptionCredential,
+  subscriptionCredentialPath,
+} from './credentials.ts'
+
+const context = {
+  accountId: 'account_1',
+  credentialRef: `subs/${zaiCodingBackend.id}/account_1`,
+  credentialVersion: 1,
+}
+const credential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-key' }
+const stored = (version = 1) => ({ data: encodeSubscriptionCredential(credential), version })
+
+describe('subscription credential source', () => {
+  it('reads the versioned canonical envelope once and coalesces simultaneous reads', async () => {
+    const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(stored())
+    const source = createCredentialSource({ kvRead })
+    const result = await Promise.all([
+      source.get(context, zaiCodingBackend),
+      source.get(context, zaiCodingBackend),
+    ])
+    expect(result).toEqual([credential, credential])
+    expect(await source.get(context, zaiCodingBackend)).toEqual(credential)
+    expect(kvRead).toHaveBeenCalledExactlyOnceWith(context.credentialRef)
+    expect(Object.isFrozen(result[0])).toBe(true)
+  })
+
+  it('reads on a new version and after the short cache lifetime', async () => {
+    let time = 0
+    const kvRead = vi
+      .fn<SecretStore['kvRead']>()
+      .mockResolvedValueOnce(stored())
+      .mockResolvedValue(stored(2))
+    const source = createCredentialSource({ kvRead }, { ttlMs: 10, now: () => time })
+    await source.get(context, zaiCodingBackend)
+    await source.get({ ...context, credentialVersion: 2 }, zaiCodingBackend)
+    time = 11
+    await source.get({ ...context, credentialVersion: 2 }, zaiCodingBackend)
+    expect(kvRead).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    null,
+    { ...stored(), version: 2 },
+    { data: credential, version: 1 },
+    { data: { credential: '{private-secret' }, version: 1 },
+    { data: { credential: JSON.stringify({ ...credential, apiKey: '' }) }, version: 1 },
+    { data: { credential: JSON.stringify(credential), extra: 'secret' }, version: 1 },
+  ])('fails closed on missing, stale or malformed data', async (value) => {
+    const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(value)
+    const source = createCredentialSource({ kvRead })
+    await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
+      'Subscription credential unavailable',
+    )
+  })
+
+  it('never falls back to a cached old version or exposes Vault errors', async () => {
+    const kvRead = vi
+      .fn<SecretStore['kvRead']>()
+      .mockResolvedValueOnce(stored())
+      .mockRejectedValue(new Error('private-token'))
+    const source = createCredentialSource({ kvRead })
+    await source.get(context, zaiCodingBackend)
+    await expect(
+      source.get({ ...context, credentialVersion: 2 }, zaiCodingBackend),
+    ).rejects.toThrow(/^Subscription credential unavailable$/)
+  })
+
+  it('serves the current version from memory while Vault cannot be read, for a bounded time', async () => {
+    let time = 0
+    const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValueOnce(stored())
+    const source = createCredentialSource(
+      { kvRead },
+      { ttlMs: 10, staleIfErrorMs: 1_000, now: () => time },
+    )
+    await source.get(context, zaiCodingBackend)
+    kvRead.mockRejectedValue(new Error('private-token sealed'))
+    time = 999
+    expect(await source.get(context, zaiCodingBackend)).toEqual(credential)
+    expect(kvRead).toHaveBeenCalledTimes(2)
+    time = 1_000
+    await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
+      /^Subscription credential unavailable$/,
+    )
+  })
+
+  it('does not fall back to memory when Vault answers with another version', async () => {
+    let time = 0
+    const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValueOnce(stored())
+    const source = createCredentialSource({ kvRead }, { ttlMs: 10, now: () => time })
+    await source.get(context, zaiCodingBackend)
+    time = 11
+    kvRead.mockResolvedValue(stored(2))
+    await expect(source.get(context, zaiCodingBackend)).rejects.toThrow(
+      'Subscription credential unavailable',
+    )
+  })
+
+  it('keeps no more entries than its bound: an evicted account is read from Vault again', async () => {
+    const kvRead = vi.fn<SecretStore['kvRead']>().mockResolvedValue(stored())
+    const source = createCredentialSource({ kvRead }, { maxEntries: 1 })
+    const other = {
+      ...context,
+      accountId: 'account_2',
+      credentialRef: `subs/${zaiCodingBackend.id}/account_2`,
+    }
+    await source.get(context, zaiCodingBackend)
+    await source.get(other, zaiCodingBackend)
+    expect(kvRead).toHaveBeenCalledTimes(2)
+    await source.get(other, zaiCodingBackend)
+    expect(kvRead).toHaveBeenCalledTimes(2)
+    await source.get(context, zaiCodingBackend)
+    expect(kvRead).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    { ...context, credentialRef: 'kv/sites/account_1' },
+    { ...context, accountId: '../account_1' },
+    { ...context, credentialVersion: 0 },
+  ])('rejects untrusted paths or versions before Vault', async (value) => {
+    const kvRead = vi.fn<SecretStore['kvRead']>()
+    await expect(createCredentialSource({ kvRead }).get(value, zaiCodingBackend)).rejects.toThrow(
+      'Subscription credential unavailable',
+    )
+    expect(kvRead).not.toHaveBeenCalled()
+  })
+
+  it('bounds the serialized KV value and keeps nulls intact', () => {
+    expect(JSON.parse(encodeSubscriptionCredential({ expiry: null }).credential!)).toEqual({
+      expiry: null,
+    })
+    expect(() => encodeSubscriptionCredential({ token: 'x'.repeat(32_768) })).toThrow(
+      'Subscription credential unavailable',
+    )
+  })
+})
+
+describe('subscription pool conventions', () => {
+  it('names the Vault path of an account by its backend and id', () => {
+    const accountId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    expect(subscriptionCredentialPath(sampleBackendId, accountId)).toBe(
+      `subs/${sampleBackendId}/${accountId}`,
+    )
+  })
+})

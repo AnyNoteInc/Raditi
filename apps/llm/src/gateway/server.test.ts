@@ -6,20 +6,17 @@ import { setTimeout as realDelay } from 'node:timers/promises'
 
 import { badRequest, llmJsonLimits, type LlmBackend, type LlmBackendId } from '@repo/domain'
 import { zaiCodingBackend } from '@repo/llm-backends'
-import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   turnKeyHash,
   gatewayFinishSchema,
-  EgressNotDelivered,
   GatewayRecordRejected,
-  type GatewayCall,
   type GatewayFinish,
-  type GatewayKey,
-  type GatewayStore,
 } from '@repo/turn-keys'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { LlmConfig } from '../llm-config.ts'
-import type { StreamingEgress } from './egress.ts'
+import type { GatewayCall, GatewayKey, GatewayStore } from '../accounting/gateway-types.ts'
+import type { LlmConfig } from '../config/llm-config.ts'
+import { EgressNotDelivered, type StreamingEgress } from '../egress/egress.ts'
 import { createLlmGateway, type LlmGateway, type LlmGatewayOptions } from './server.ts'
 
 const turnKey = `sk-rdt-${Buffer.alloc(32, 7).toString('base64url')}`

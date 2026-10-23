@@ -7,12 +7,13 @@ import type { GitProvider } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CoreConfigModule } from '../core/core-config.module.ts'
-import { GIT_PROVIDER } from '../infra/tokens.ts'
+import { CoreConfigModule } from '../config/config.module.ts'
 import { testCoreConfig } from '../testing/fakes.ts'
 import { gitWorkspaceOptions } from './git-config.ts'
-import { GitCredentialRuntime, GitWorkspaceModule } from './git-workspace.module.ts'
+import { GitCredentialRuntime } from './git-credential-runtime.ts'
+import { GitWorkspaceModule } from './git-workspace.module.ts'
 import { GitWorkspaceService } from './git-workspace.service.ts'
+import { GIT_PROVIDER } from './git-workspace.tokens.ts'
 
 const roots: string[] = []
 afterEach(async () => {

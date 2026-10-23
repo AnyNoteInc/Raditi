@@ -1,76 +1,41 @@
 import { Module } from '@nestjs/common'
 import type { PrismaClient } from '@repo/db'
-import {
-  isProduction,
-  type GitProvider,
-  type ObjectStorage,
-  type SecretStore,
-  type SiteContentGateway,
-  type SiteLeaseStore,
-} from '@repo/domain'
+import type { GitProvider, ObjectStorage, SecretStore, SiteLeaseStore } from '@repo/domain'
 import { giteaOrgOwnerToken } from '@repo/git-providers'
 import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
-import { createHostLookup, createPinnedSiteTransport } from '@repo/site-connections/hosting'
-import { BACKGROUND_JOBS, OBJECT_STORAGE, PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
+import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { configuredGitProvider } from '../git-workspace/git-config.ts'
 import { GitWorkspaceModule } from '../git-workspace/git-workspace.module.ts'
 import { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
-import { CORE_CONFIG, SITE_LEASES } from '../infra/tokens.ts'
+import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
+import { LeasesModule } from '../leases/leases.module.ts'
+import { SITE_LEASES } from '../leases/leases.tokens.ts'
+import type { DbPlanValueReader } from '../site-content/db-plan-values.ts'
 import {
-  PreviewDbValueStorage,
-  createSiteContentResolver,
-  previewDbPlanValues,
-} from '@repo/site-content'
-import { ReleaseSkill, type ProductionContent } from './release-skill.ts'
+  productionContent,
+  type SiteContentResolvers,
+} from '../site-content/site-content-access.ts'
+import { SiteContentModule } from '../site-content/site-content.module.ts'
+import { PLAN_VALUES, SITE_CONTENT_RESOLVERS } from '../site-content/site-content.tokens.ts'
+import { ReleaseSkill } from './release-skill.ts'
 import { ReleaseSweep, ReleaseSweepRuntime } from './release-sweep.ts'
+import { RELEASE_GIT_PROVIDER } from './releases.tokens.ts'
 import { ReleasesProcessor } from './releases.processor.ts'
 import { UndoPlanner } from './undo-planner.ts'
-
-/**
- * The provider of site repositories acting as the release account — the owner of the
- * organization `sites`, whose token Vault keeps (plan 53, Р26, Р35; R8a): tags, their protection
- * and the secrets of a repository. null while git is not configured.
- */
-export const RELEASE_GIT_PROVIDER = Symbol('RELEASE_GIT_PROVIDER')
-
-/**
- * Production's plugin by the site's own access, at an address the site rule allows (spec §12):
- * what the readiness of a release and the plan of an undo read of a site's database.
- */
-function productionContent(
-  prisma: PrismaClient,
-  secrets: SecretStore,
-  config: CoreConfig,
-): ProductionContent {
-  const resolve = createSiteContentResolver({
-    prisma,
-    secrets,
-    adapters: getSiteContentAdapter,
-    transport: createPinnedSiteTransport({
-      lookup: createHostLookup(),
-      appEnv: config.appEnv,
-    }),
-    // A disposable local site of a stand: plain http on loopback, never in production.
-    allowLoopbackHttp: !isProduction(config.appEnv),
-  })
-  // The resolver builds the stack's gateway: it carries the plugin's database part.
-  return (scope) => resolve(scope) as Promise<SiteContentGateway>
-}
-
-/** The values the agent wrote into a preview, as the mcp role sealed them (R5c, R7). */
-const planValues = (prisma: PrismaClient, storage: ObjectStorage, secrets: SecretStore) =>
-  previewDbPlanValues({ prisma, values: new PreviewDbValueStorage(storage, secrets) })
 
 /**
  * Releases in the core role (docs/plan/53-chat-preview-release.md, R8b): the release skill, the
  * processor of `release.advance` on the `deploys` queue and its sweeper. The revert commit and
  * the end of a release are the skill's; `releases:resolve` is a command of the operator
- * (scripts/releases-resolve.mjs) that only hands an `unknown` release back to it.
+ * (scripts/releases-resolve.mjs) that only hands an `unknown` release back to it. What the
+ * readiness of a release and the plan of an undo read of a site's database is production's
+ * plugin (SiteContentModule), each with a resolver of its own.
  */
 @Module({
-  imports: [GitWorkspaceModule],
+  imports: [GitWorkspaceModule, LeasesModule, SiteContentModule],
   providers: [
     {
       provide: RELEASE_GIT_PROVIDER,
@@ -90,6 +55,8 @@ const planValues = (prisma: PrismaClient, storage: ObjectStorage, secrets: Secre
         secrets: SecretStore,
         storage: ObjectStorage,
         config: CoreConfig,
+        values: DbPlanValueReader,
+        production: SiteContentResolvers,
       ) => {
         return new ReleaseSkill({
           db: prisma,
@@ -103,9 +70,9 @@ const planValues = (prisma: PrismaClient, storage: ObjectStorage, secrets: Secre
           api: config.releaseApi
             ? { startTimeoutMs: config.releaseApi.startTimeoutMinutes * 60_000 }
             : null,
-          values: planValues(prisma, storage, secrets),
+          values,
           previewBaseDomain: config.previews?.address.baseDomain ?? null,
-          production: productionContent(prisma, secrets, config),
+          production: productionContent(production()),
         })
       },
       inject: [
@@ -116,6 +83,8 @@ const planValues = (prisma: PrismaClient, storage: ObjectStorage, secrets: Secre
         SECRET_STORE,
         OBJECT_STORAGE,
         CORE_CONFIG,
+        PLAN_VALUES,
+        SITE_CONTENT_RESOLVERS,
       ],
     },
     {
@@ -123,19 +92,19 @@ const planValues = (prisma: PrismaClient, storage: ObjectStorage, secrets: Secre
       useFactory: (
         prisma: PrismaClient,
         workspace: GitWorkspaceService | null,
-        secrets: SecretStore,
-        storage: ObjectStorage,
         config: CoreConfig,
+        values: DbPlanValueReader,
+        production: SiteContentResolvers,
       ) =>
         new UndoPlanner({
           db: prisma,
           git: workspace,
-          production: productionContent(prisma, secrets, config),
-          values: planValues(prisma, storage, secrets),
+          production: productionContent(production()),
+          values,
           adapter: getSiteAdapter,
           previewBaseDomain: config.previews?.address.baseDomain ?? null,
         }),
-      inject: [PRISMA, GitWorkspaceService, SECRET_STORE, OBJECT_STORAGE, CORE_CONFIG],
+      inject: [PRISMA, GitWorkspaceService, CORE_CONFIG, PLAN_VALUES, SITE_CONTENT_RESOLVERS],
     },
     ReleasesProcessor,
     {
@@ -150,6 +119,5 @@ const planValues = (prisma: PrismaClient, storage: ObjectStorage, secrets: Secre
       inject: [ReleaseSweep, BACKGROUND_JOBS],
     },
   ],
-  exports: [ReleaseSkill],
 })
 export class ReleasesModule {}

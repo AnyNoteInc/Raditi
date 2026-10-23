@@ -1,20 +1,15 @@
 import { Module } from '@nestjs/common'
-import {
-  MetricsController,
-  MetricsRegistryModule,
-  MetricsTokenGuard,
-  METRICS_TOKEN,
-} from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG } from '../infra/tokens.ts'
+import { CORE_CONFIG } from '../config/config.tokens.ts'
+import { MetricsController, MetricsTokenGuard } from './metrics.controller.ts'
+import { METRICS_TOKEN } from './metrics.tokens.ts'
 
-/** Its metrics carry `app="core"`, the name of the container. */
-const registry = MetricsRegistryModule.forApp('core')
-
-/** The registry of the core process and GET /metrics on the core port, with the core's token. */
+/**
+ * GET /metrics on the core port, with the core's token, over the registry of the process
+ * (MetricsRegistryModule, global).
+ */
 @Module({
-  imports: [registry],
   controllers: [MetricsController],
   providers: [
     {
@@ -24,6 +19,5 @@ const registry = MetricsRegistryModule.forApp('core')
     },
     MetricsTokenGuard,
   ],
-  exports: [registry],
 })
 export class MetricsModule {}

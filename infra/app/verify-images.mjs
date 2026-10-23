@@ -2,8 +2,9 @@
 // preview and the runner of the sandbox VMs. Each is built from this tree as production builds it
 // (`docker build --target runtime`) and checked from the outside: it starts its own app and
 // refuses an empty configuration in its own words, runs as uid 10001, carries no git, gitleaks or
-// .env, and the runner image carries no package of the platform's data (spec §8, §19: a sandbox VM
-// holds no platform credentials) and the operator's runner-token command. core and web are built
+// .env, no verification stand (plan 56 §6: they run from the repository), and the runner image
+// carries no package of the platform's data (spec §8, §19: a sandbox VM holds no platform
+// credentials) and the operator's runner-token command. core and web are built
 // by verify:edge, the llm image is run for real by verify:llm-app.
 //
 //   pnpm verify:images [-- --no-build] [--keep] [--only <app>[,<app>…]]
@@ -17,8 +18,6 @@ export const APPS = ['llm', 'mcp', 'preview', 'runner']
 /**
  * The workspace packages an image may not carry: what dependency-cruiser forbids the app to reach
  * (llm-, mcp- and preview-minimal-packages, runner-minimal-packages, runner-no-platform-access).
- * One exception is documented: llm-backends lands in the mcp image through the devDependencies of
- * turn-keys (turbo prune takes them), and no code of mcp imports it.
  */
 export const FORBIDDEN_PACKAGES = {
   llm: [
@@ -45,6 +44,7 @@ export const FORBIDDEN_PACKAGES = {
     'git-providers',
     'sandbox-providers',
     'agent-drivers',
+    'llm-backends',
     'site-connections',
     'local-turns',
     'yookassa',
@@ -70,7 +70,6 @@ export const FORBIDDEN_PACKAGES = {
     'site-content',
     'snapshots',
     'local-turns',
-    'runner-engine',
     'yookassa',
     'mail',
     'telegram',
@@ -102,6 +101,31 @@ export const FORBIDDEN_PACKAGES = {
  * the runner-no-platform-access rule).
  */
 export const RUNNER_FORBIDDEN_MODULES = /^(@prisma\+|prisma@|pg@|pg-pool@|@aws-sdk\+|bullmq@)/
+
+/**
+ * The verification stands, their tests and fixtures: they run from the repository, never from an
+ * image, and .dockerignore keeps them out of every build context (docs/plan/56-nest-modules.md §6).
+ */
+export const STAND_FILE =
+  /(^|\/)verify-[^/]*\.mjs$|\/scripts\/[^/]*\.test\.mjs$|(^|\/)opencode-runner-fixture[^/]*\.mjs$/
+
+/** The operator's commands an image keeps next to where the stands were (its scripts/). */
+export const OPERATOR_SCRIPTS = {
+  llm: ['subscription-login.mjs', 'subscription-retire.mjs', 'subscription-token.mjs'],
+  mcp: [],
+  preview: [],
+  runner: ['runner-token.mjs'],
+}
+
+/** The files of an image (outside node_modules) that are stands, their tests or fixtures. */
+export function standFilesOf(paths) {
+  return paths.filter((path) => STAND_FILE.test(path))
+}
+
+/** The operator's commands of the app that its image does not carry. */
+export function missingOperatorScriptsOf(app, scripts) {
+  return OPERATOR_SCRIPTS[app].filter((name) => !scripts.includes(name))
+}
 
 /** The names of the forbidden workspace packages an image carries. */
 export function forbiddenPackagesOf(app, packages) {
@@ -259,6 +283,20 @@ async function main() {
       `carries none of ${FORBIDDEN_PACKAGES[app].join(', ')}`,
       listed.code === 0 && packages.length > 0 && forbidden.length === 0,
       `packages: ${packages.join(' ')}`,
+    )
+    // .dockerignore drops the stands from the build context, never the operator's commands.
+    const files = await inside(
+      tag,
+      'find /app -name node_modules -prune -o -type f -name "*.mjs" -print',
+    )
+    const own = await inside(tag, 'ls scripts 2>/dev/null || true')
+    const stands = standFilesOf(files.stdout.split('\n').filter(Boolean))
+    const missing = missingOperatorScriptsOf(app, own.stdout.split('\n').filter(Boolean))
+    check(
+      app,
+      'carries no verification stand, stand test or fixture and keeps its operator commands',
+      files.code === 0 && own.code === 0 && stands.length === 0 && missing.length === 0,
+      `stands: ${stands.join(' ')}; missing: ${missing.join(' ')}`,
     )
     if (app !== 'runner') return
     const store = await inside(tag, 'ls /app/node_modules/.pnpm')

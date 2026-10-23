@@ -9,10 +9,9 @@ import {
 import { renewalJobs, type RenewalJob } from '@repo/billing'
 import { errorMessage } from '@repo/observability'
 import type { Queue } from 'bullmq'
-import { BACKGROUND_JOBS } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
-import { CORE_CONFIG } from '../infra/tokens.ts'
+import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { BILLING_QUEUE } from './billing-jobs.ts'
 
 /** The id of the job scheduler of a pass: one per pass for all core processes. */

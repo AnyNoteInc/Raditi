@@ -22,7 +22,9 @@ import {
   zaiApiBackend,
   zaiCodingBackend,
 } from '../../../packages/llm-backends/src/index.ts'
-import { llmGatewayBaseUrl } from '@repo/turn-keys'
+// From the source, as the adapters above: the unit tests of the stands load this module before
+// any build (node --test scripts/*.test.mjs).
+import { llmGatewayBaseUrl } from '../src/llm/backends.ts'
 
 /** The address of sandbox-gw in the network of the CLI container. */
 export const SANDBOX_GATEWAY = 'http://sandbox-gw:8080' // NOSONAR: sandbox-gw is reached over plain HTTP inside the isolated network of the sandbox (spec §8)

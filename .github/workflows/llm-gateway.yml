@@ -16,10 +16,8 @@ on:
       - pnpm-workspace.yaml
       - apps/core/**
       - apps/preview/**
-      - packages/preview-gateway/**
       - packages/ip-address/**
       - apps/runner/**
-      - packages/runner-engine/**
       - apps/mcp/**
       - apps/llm/**
       - packages/site-content/**
@@ -35,6 +33,8 @@ on:
       - packages/agent-drivers/**
       - packages/sandbox-providers/runtime/**
       - packages/vault/**
+      # The MCP tools check loads mcp's access, which reads its configuration (plan 56, S5).
+      - packages/storage/**
       - packages/observability/**
       - packages/typescript-config/**
       - infra/dev/llm-verify/**

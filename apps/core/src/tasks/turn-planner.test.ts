@@ -11,6 +11,7 @@ import {
 } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
+import { llmGatewayBaseUrl } from '../llm/backends.ts'
 import {
   sampleBackendId,
   sampleDriverId,
@@ -18,7 +19,6 @@ import {
   sampleProviderModelId,
   sampleRoutePath,
 } from '../testing/ids.ts'
-import { llmGatewayBaseUrl } from '@repo/turn-keys'
 import { CONTINUE_PROMPT } from './turn-instructions.ts'
 import {
   planTurn,

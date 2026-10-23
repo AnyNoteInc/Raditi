@@ -8,16 +8,17 @@ import {
   llmBackendIdSchema,
   type Env,
   type LlmBackend,
+  type TurnCredentialRef,
 } from '@repo/domain'
 import { llmBackends, zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
+import { revokeTurnCredentials } from '@repo/turn-keys'
 import { createDevSubscriptionToken, createVaultSecretStore } from '@repo/vault'
 import { z } from 'zod'
-import { backendCapacities, GatewayTurnCredentials } from '@repo/turn-keys'
 
-import { egressConfigFromEnv, type EgressConfig } from '../llm-config.ts'
-import { createEgressProbe } from '../gateway/egress-probe.ts'
-import { createControlEgress, createEgressTransport } from '../gateway/egress.ts'
-import { SessionSubscriptionLock } from '../gateway/session-lock.ts'
+import { egressConfigFromEnv, type EgressConfig } from '../config/llm-config.ts'
+import { createEgressProbe } from '../egress/egress-probe.ts'
+import { createControlEgress, createEgressTransport } from '../egress/egress.ts'
+import { SessionSubscriptionLock } from './session-lock.ts'
 import { authenticateSubscription } from './key-import.ts'
 import { subscriptionLabelSchema, SubscriptionLogin, SubscriptionLoginError } from './login.ts'
 import {
@@ -384,16 +385,18 @@ export async function runSubscriptionCommand(
                 throw new Error('Admin token required')
               },
             }
-        const credentials = value.turnsTokenFile
-          ? new GatewayTurnCredentials({
-              prisma,
-              secrets: createVaultSecretStore({
-                addr: address,
-                token: await readSecretFile(value.turnsTokenFile),
-              }),
-              // Only revoke is called here; the composition names the capacity all the same.
-              capacityOf: backendCapacities(backends),
+        const turns = value.turnsTokenFile
+          ? createVaultSecretStore({
+              addr: address,
+              token: await readSecretFile(value.turnsTokenFile),
             })
+          : null
+        // The fenced revocation core runs when a turn ends, with the turns/ capability.
+        const credentials = turns
+          ? {
+              revoke: (ref: TurnCredentialRef) =>
+                revokeTurnCredentials({ prisma, secrets: turns }, ref),
+            }
           : {
               revoke: async () => {
                 throw new Error('Turn token required')

@@ -5,7 +5,7 @@ import { queueNames, type QueueName } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 import type { Queue } from 'bullmq'
 
-import { BULL_QUEUES, JOB_QUEUE } from '../infra/tokens.ts'
+import { BULL_QUEUES, JOB_QUEUE } from './queue.tokens.ts'
 import { BullMqJobQueue } from './bullmq-job-queue.ts'
 import { BullMqShutdownService } from './bullmq-shutdown.service.ts'
 import { queueDeduplicationTtlMs, queueJobDefaults } from './queues.ts'

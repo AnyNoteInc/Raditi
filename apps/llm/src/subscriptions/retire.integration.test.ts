@@ -2,17 +2,19 @@ import { createHash, randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
-import type { LlmBackendId, SecretStore, TurnCredentialGrant } from '@repo/domain'
+import type { LlmBackendId, SecretStore, TurnCredentialRef } from '@repo/domain'
 import { llmBackends, zaiApiBackend } from '@repo/llm-backends'
+import {
+  lockSubscriptionPool,
+  newTurnKeys,
+  revokeTurnCredentials,
+  turnCredentialPath,
+  turnKeyHash,
+} from '@repo/turn-keys'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { SessionSubscriptionLock } from '../gateway/session-lock.ts'
-import {
-  PostgresGatewayStore,
-  CredentialSweeper,
-  backendCapacities,
-  GatewayTurnCredentials,
-} from '@repo/turn-keys'
+import { PostgresGatewayStore } from '../accounting/gateway-store.ts'
+import { SessionSubscriptionLock } from './session-lock.ts'
 import {
   sampleBackendCapacity,
   sampleBackendId,
@@ -25,8 +27,9 @@ import { retirementRefusals, SubscriptionRetirement } from './retire.ts'
 const databaseUrl = process.env.DATABASE_URL
 const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '1')
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
-// As core and the operator's command compose it: what each adapter of the registry declares.
-const capacityOf = backendCapacities(llmBackends)
+// What each adapter of the registry declares of its accounts' capacity.
+const capacityOf = (backend: LlmBackendId) =>
+  llmBackends.find((adapter) => adapter.id === backend)?.capacity
 
 function memoryVault() {
   const entries = new Map<
@@ -85,8 +88,8 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
   }[] = []
 
   beforeAll(async () => {
-    // A key is issued only to an enabled driver: the suite stands on the driver of the sample
-    // backend as the migrations and the seeds leave it, switched on.
+    // The keys of the suite name the driver of the sample backend as the migrations and the
+    // seeds leave it, switched on: core issues keys only to an enabled driver.
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
   })
   afterEach(async () => {
@@ -186,7 +189,11 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
       },
     })
     const vault = memoryVault()
-    const credentials = new GatewayTurnCredentials({ prisma: db, secrets: vault.port, capacityOf })
+    // As the operator's command composes it: the fenced revocation core runs as well.
+    const credentials = {
+      revoke: (ref: TurnCredentialRef) =>
+        revokeTurnCredentials({ prisma: db, secrets: vault.port }, ref),
+    }
     const locks = new SessionSubscriptionLock(databaseUrl ?? '')
     cleanups.push(() => locks.close())
     const options = {
@@ -197,8 +204,6 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
       backends: llmBackends,
     }
     const service = new SubscriptionRetirement(options)
-    const sweeper = new CredentialSweeper({ prisma: db, secrets: vault.port, credentials })
-    cleanups.push(() => sweeper.close())
     const store = new PostgresGatewayStore(db)
     async function task() {
       const site = await db.site.create({
@@ -226,20 +231,10 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
           expiresAt: new Date(Date.now() + 1_200_000),
         },
       })
-      return { task, ref: { taskId: task.id, sessionId: randomUUID(), turn: 1, epoch: 1 } }
+      const ref: TurnCredentialRef = { taskId: task.id, sessionId: randomUUID(), turn: 1, epoch: 1 }
+      return { task, ref }
     }
     const initial = await task()
-    const grant: TurnCredentialGrant = {
-      driverId,
-      backend,
-      modelSlug: model.slug,
-      modelClass: 'standard',
-      reasoningEffort: null,
-      ttlMs: 600_000,
-      deadlineAt: new Date(Date.now() + 1_200_000),
-      budgetRub: '100.00',
-      boundSource: null,
-    }
     async function key(overrides: Partial<Prisma.LlmKeyUncheckedCreateInput> = {}) {
       return db.llmKey.create({
         data: {
@@ -259,6 +254,43 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
         },
       })
     }
+    /**
+     * The key of a running turn as core's issue leaves it (apps/core/src/llm/turn-credentials.ts):
+     * the hashes of the pair in SQL, the pair itself in Vault `turns/`.
+     */
+    async function turnKey(turn: { task: { id: string }; ref: TurnCredentialRef } = initial) {
+      const values = newTurnKeys()
+      const row = await key({
+        keyHash: turnKeyHash(values.llmApiKey),
+        mcpTokenHash: turnKeyHash(values.mcpToken),
+        taskId: turn.task.id,
+        sessionId: turn.ref.sessionId,
+        turnNo: turn.ref.turn,
+        firstEpoch: turn.ref.epoch,
+      })
+      vault.entries.set(turnCredentialPath(turn.ref), {
+        data: { v: '1', ...values, sessionId: turn.ref.sessionId, accountId },
+        custom: {},
+        deleted: false,
+      })
+      return { row, values }
+    }
+    /**
+     * The retirement stage of core's credential sweeper (apps/core/src/llm/credential-sweeper.ts)
+     * as the SQL it runs: under the pool lock of issue, a retiring account leaves the pool once
+     * no live key and no open call of it is left.
+     */
+    function retireDrained() {
+      return db.$transaction(async (tx) => {
+        await lockSubscriptionPool(tx, backend)
+        await tx.$queryRaw`SELECT id FROM subscription_accounts WHERE id = ${accountId}::uuid FOR UPDATE`
+        await tx.$queryRaw`UPDATE subscription_accounts a SET enabled = false, updated_at = clock_timestamp()
+          WHERE a.id = ${accountId}::uuid AND a.retire_requested_at IS NOT NULL AND a.enabled
+          AND NOT EXISTS (SELECT 1 FROM llm_keys k WHERE k.subscription_account_id = a.id
+            AND k.revoke_requested_at IS NULL AND k.revoked_at IS NULL AND k.expires_at > clock_timestamp())
+          AND NOT EXISTS (SELECT 1 FROM llm_calls c WHERE c.subscription_account_id = a.id AND c.state = 'open') RETURNING a.id`
+      })
+    }
     const current = () => db.subscriptionAccount.findUniqueOrThrow({ where: { id: accountId } })
     const ready = () =>
       db.subscriptionAccount.update({
@@ -275,25 +307,23 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
       locks,
       options,
       service,
-      sweeper,
       store,
-      grant,
       taskFixture: task,
       key,
+      turnKey,
+      retireDrained,
       current,
       ready,
     }
   }
 
-  it('keeps the next gateway request and recovery valid while blocking a new turn on the retired binding', async () => {
+  it('keeps the next gateway request of a running key valid while the account drains', async () => {
     const f = await fixture()
-    const values = await f.credentials.issue(f.ref, f.grant)
+    const { values } = await f.turnKey()
     expect(await f.service.request({ accountId: f.accountId })).toMatchObject({ stage: 'draining' })
     expect((await f.current()).enabled).toBe(true)
-    expect(await f.credentials.recover(f.ref)).toEqual(values)
-    await expect(f.credentials.issue({ ...f.ref, turn: 2 }, f.grant)).rejects.toMatchObject({
-      code: 'SUBSCRIPTION_WAIT',
-    })
+    // Its recovery and the refusal of a new turn on the account are core's: issue refuses it
+    // with SUBSCRIPTION_WAIT (apps/core/src/llm/turn-credentials.integration.test.ts).
     const profile = await f.store.lookup(hash(values.llmApiKey), '127.0.0.1')
     expect(profile).not.toBeNull()
     const admission = await f.store.admit({
@@ -314,7 +344,7 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
 
   it('retires an account of the pay-per-token API on the same path: a key and a call drain first', async () => {
     const f = await fixture(zaiApiBackend.id)
-    const values = await f.credentials.issue(f.ref, f.grant)
+    const { values } = await f.turnKey()
     const profile = await f.store.lookup(hash(values.llmApiKey), '127.0.0.1')
     expect(profile).not.toBeNull()
     const admission = await f.store.admit({
@@ -329,18 +359,16 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     })
     expect(admission.kind).toBe('admitted')
     expect(await f.service.request({ accountId: f.accountId })).toMatchObject({ stage: 'draining' })
-    await expect(f.credentials.issue({ ...f.ref, turn: 2 }, f.grant)).rejects.toMatchObject({
-      code: 'SUBSCRIPTION_WAIT',
-    })
     await f.credentials.revoke(f.ref)
-    await f.sweeper.tick()
+    expect(f.vault.entries.has(turnCredentialPath(f.ref))).toBe(false)
+    await f.retireDrained()
     // The call of the key is still open: the account stays in the pool for it.
     expect((await f.current()).enabled).toBe(true)
     await db.llmCall.updateMany({
       where: { subscriptionAccountId: f.accountId, state: 'open' },
       data: { state: 'failed', finishedAt: new Date() },
     })
-    await f.sweeper.tick()
+    await f.retireDrained()
     expect(await f.current()).toMatchObject({ enabled: false, credentialsRevokedAt: null })
     expect(await f.service.finalize({ accountId: f.accountId })).toMatchObject({
       stage: 'console_revocation_required',
@@ -351,40 +379,10 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     expect(f.vault.kvDestroyAll).toHaveBeenLastCalledWith(`subs/zai-api/${f.accountId}`)
   })
 
-  it('rejects an abandoned Vault CAS between issuance phases after the account pool fence commits', async () => {
-    const f = await fixture()
-    let created!: () => void, release!: () => void
-    const written = new Promise<void>((resolve) => {
-      created = resolve
-    })
-    const resume = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const original = f.vault.kvCreateOnce.getMockImplementation()!
-    f.vault.kvCreateOnce.mockImplementationOnce(async (...args) => {
-      const result = await original(...args)
-      created()
-      await resume
-      return result
-    })
-    const issued = f.credentials.issue(f.ref, f.grant)
-    const outcome = issued.catch((error: unknown) => error)
-    try {
-      await written
-      await f.service.request({ accountId: f.accountId, compromised: true })
-    } finally {
-      release()
-    }
-    expect(await outcome).toMatchObject({ code: 'SUBSCRIPTION_WAIT' })
-    expect(await db.llmKey.count({ where: { subscriptionAccountId: f.accountId } })).toBe(0)
-    expect((await f.current()).enabled).toBe(false)
-  })
-
   it('durably closes every compromised key before a failed Vault revoke and resumes without the emergency flag', async () => {
     const f = await fixture()
-    const first = await f.credentials.issue(f.ref, f.grant)
-    const another = await f.taskFixture()
-    const second = await f.credentials.issue(another.ref, f.grant)
+    const first = (await f.turnKey()).values
+    const second = (await f.turnKey(await f.taskFixture())).values
     f.vault.kvDelete.mockRejectedValueOnce(new Error('synthetic outage private response'))
     expect(await f.service.request({ accountId: f.accountId, compromised: true })).toMatchObject({
       stage: 'turn_revocation_pending',
@@ -446,10 +444,9 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     expect(await retirementOutcome).toMatchObject({ stage: 'console_revocation_required' })
   })
 
-  it('finishes ordinary draining after a core restart only when both keys and open calls have drained', async () => {
+  it('finishes ordinary draining only when both the keys and the open calls have drained', async () => {
     const f = await fixture()
-    await f.credentials.issue(f.ref, f.grant)
-    const key = await db.llmKey.findFirstOrThrow({ where: { subscriptionAccountId: f.accountId } })
+    const { row: key } = await f.turnKey()
     const call = await db.llmCall.create({
       data: {
         keyId: key.id,
@@ -462,22 +459,13 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     })
     await f.service.request({ accountId: f.accountId })
     await f.credentials.revoke(f.ref)
-    await f.sweeper.tick()
+    await f.retireDrained()
     expect((await f.current()).enabled).toBe(true)
     await db.llmCall.update({
       where: { id: call.id },
       data: { state: 'failed', finishedAt: new Date() },
     })
-    const restarted = new CredentialSweeper({
-      prisma: db,
-      secrets: f.vault.port,
-      credentials: f.credentials,
-    })
-    try {
-      await restarted.tick()
-    } finally {
-      await restarted.close()
-    }
+    await f.retireDrained()
     expect(await f.current()).toMatchObject({
       enabled: false,
       status: 'active',
@@ -589,8 +577,9 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     expect(await f.service.request({ accountId: f.accountId })).toMatchObject({ stage: 'draining' })
     expect(await f.service.cancel({ accountId: f.accountId })).toMatchObject({ stage: 'cancelled' })
     expect(await f.current()).toMatchObject({ retireRequestedAt: null, enabled: true })
-    // The account serves new turns again.
-    await f.credentials.issue(f.ref, f.grant)
+    // The account serves new turns again (core's issue selects it:
+    // apps/core/src/llm/turn-credentials.integration.test.ts); one of them is running.
+    await f.turnKey()
     expect(await f.service.cancel({ accountId: f.accountId })).toMatchObject({ stage: 'cancelled' })
     await f.ready()
     await expect(f.service.cancel({ accountId: f.accountId })).rejects.toMatchObject({

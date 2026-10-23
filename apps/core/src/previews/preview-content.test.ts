@@ -12,14 +12,14 @@ import type {
 import { wordpressContentAdapter } from '@repo/site-adapters'
 import { describe, expect, it } from 'vitest'
 
+import type { DbPlanValueReader } from '../site-content/db-plan-values.ts'
+import { recordValues } from '../testing/previews.ts'
 import {
   previewContentAccess,
   previewContentObjects,
   replayDbPlan,
   seedMismatches,
-} from '@repo/site-content'
-import type { DbPlanValueReader } from '@repo/site-content'
-import { recordValues } from '../testing/previews.ts'
+} from './preview-content.ts'
 
 const signal = new AbortController().signal
 const previewId = '00000000-0000-4000-8000-0000000000a1'

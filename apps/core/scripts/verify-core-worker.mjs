@@ -7,13 +7,11 @@ import { llmBackends } from '@repo/llm-backends'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 import { z } from 'zod'
 
-import {
-  backendCapacities,
-  CredentialSweeper,
-  GatewayTurnCredentials,
-  turnCredentialRefSchema,
-} from '@repo/turn-keys'
+import { turnCredentialRefSchema } from '@repo/turn-keys'
+import { backendCapacities } from '../dist/llm/backends.js'
+import { CredentialSweeper } from '../dist/llm/credential-sweeper.js'
 import { createPoolProbeClient } from '../dist/llm/pool-probe-client.js'
+import { GatewayTurnCredentials } from '../dist/llm/turn-credentials.js'
 
 const initSchema = z.strictObject({
   type: z.literal('init'),

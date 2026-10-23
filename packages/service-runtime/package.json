@@ -10,6 +10,11 @@
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./tokens": {
+      "source": "./src/tokens.ts",
+      "types": "./src/tokens.ts",
+      "default": "./dist/tokens.js"
+    },
     "./testing/fakes": "./src/testing/fakes.ts"
   },
   "scripts": {
@@ -20,15 +25,14 @@
   },
   "dependencies": {
     "@nestjs/common": "catalog:",
-    "@prometheus-io/client": "catalog:",
     "@repo/db": "workspace:*",
-    "@repo/domain": "workspace:*",
     "@repo/observability": "workspace:*",
     "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
-    "zod": "catalog:"
+    "rxjs": "catalog:"
   },
   "devDependencies": {
+    "@nestjs/core": "catalog:",
+    "@nestjs/testing": "catalog:",
     "@repo/app-bootstrap": "workspace:*",
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",

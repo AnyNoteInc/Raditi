@@ -5,7 +5,8 @@ import type { QueueName } from '@repo/domain'
 import type { Queue, Worker } from 'bullmq'
 import type { Redis } from 'ioredis'
 
-import { BULL_QUEUES, REDIS } from '../infra/tokens.ts'
+import { REDIS } from '../infra/infra.tokens.ts'
+import { BULL_QUEUES } from './queue.tokens.ts'
 
 /** The host's worker; undefined when workers were not started (BACKGROUND_JOBS off). */
 function workerOf(host: WorkerHost): Worker | undefined {

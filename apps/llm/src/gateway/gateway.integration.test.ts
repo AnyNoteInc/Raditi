@@ -12,12 +12,12 @@ import { createPrismaClient, type PrismaClient } from '@repo/db'
 import type { SecretStore } from '@repo/domain'
 import { zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { PostgresGatewayStore } from '@repo/turn-keys'
 
-import { llmConfigFromEnv } from '../llm-config.ts'
+import { PostgresGatewayStore } from '../accounting/gateway-store.ts'
+import { llmConfigFromEnv } from '../config/llm-config.ts'
 import { createLlmTestCertificates } from '../testing/llm-certificates.ts'
-import { createCredentialSource, encodeSubscriptionCredential } from './credentials.ts'
-import { createEgressTransport } from './egress.ts'
+import { createCredentialSource, encodeSubscriptionCredential } from '../pool/credentials.ts'
+import { createEgressTransport } from '../egress/egress.ts'
 import { createLlmGateway, type LlmGateway } from './server.ts'
 
 const enabled = Boolean(process.env.DATABASE_URL && process.env.RADITI_GATEWAY_DB_TESTS === '1')

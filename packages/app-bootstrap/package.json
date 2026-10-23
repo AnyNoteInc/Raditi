@@ -20,8 +20,7 @@
     "@nestjs/common": "catalog:",
     "@repo/domain": "workspace:*",
     "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
-    "zod": "catalog:"
+    "rxjs": "catalog:"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",

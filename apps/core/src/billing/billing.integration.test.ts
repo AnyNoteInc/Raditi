@@ -16,12 +16,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { PRISMA } from '@repo/service-runtime'
 
 import type { BillingConfig } from '../config/config.ts'
-import { CoreConfigModule } from '../core/core-config.module.ts'
-import { YOOKASSA } from '../infra/tokens.ts'
+import { CoreConfigModule } from '../config/config.module.ts'
+import { MetricsRegistryModule } from '../metrics/metrics-registry.module.ts'
 import { testCoreConfig } from '../testing/fakes.ts'
 import { BILLING_QUEUE, BillingJobs } from './billing-jobs.ts'
 import { BillingModule } from './billing.module.ts'
 import { BillingProcessor } from './billing.processor.ts'
+import { YOOKASSA } from './billing.tokens.ts'
 
 // Only verify:db's disposable PostgreSQL (and the gateway-db job of CI): the passes look at
 // every due row of the database. The rows stand in 2021, where nothing else is due.
@@ -312,19 +313,22 @@ describe.skipIf(!enabled)('renewal passes of core with PostgreSQL', () => {
       @Module({
         providers: [
           { provide: PRISMA, useValue: db },
-          { provide: YOOKASSA, useValue: yookassa },
           { provide: getQueueToken(BILLING_QUEUE), useValue: queue },
         ],
-        exports: [PRISMA, YOOKASSA, getQueueToken(BILLING_QUEUE)],
+        exports: [PRISMA, getQueueToken(BILLING_QUEUE)],
       })
       class Connections {}
       const moduleRef = await Test.createTestingModule({
         imports: [
           CoreConfigModule.forRoot({ config: testCoreConfig(), background }),
           Connections,
+          MetricsRegistryModule,
           BillingModule,
         ],
-      }).compile()
+      })
+        .overrideProvider(YOOKASSA)
+        .useValue(yookassa)
+        .compile()
       const app = moduleRef.createNestApplication({ logger: false })
       apps.push(app)
       await app.init()

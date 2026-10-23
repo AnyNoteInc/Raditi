@@ -9,10 +9,11 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const read = (path) => readFileSync(join(root, path), 'utf8')
 const launcher = read('infra/dev/site-verify/verify-content.mjs')
-const workers = readdirSync(join(root, 'apps/core/scripts'))
+// The worker and its scenarios drive the mcp app alone: they live with it (plan 56, decision 2).
+const workers = readdirSync(join(root, 'apps/mcp/scripts'))
   .filter((name) => /^verify-content-.*\.mjs$/.test(name))
-  .map((name) => read(`apps/core/scripts/${name}`))
-const worker = read('apps/core/scripts/verify-content-worker.mjs')
+  .map((name) => read(`apps/mcp/scripts/${name}`))
+const worker = read('apps/mcp/scripts/verify-content-worker.mjs')
 
 test('the operator token stays in the launcher: the role logs in by AppRole mcp', () => {
   // Mounts and policies come from the bootstrap every stand and the dev OpenBao share.
@@ -64,11 +65,11 @@ test('the site access reaches the role through Vault and credential_refs only', 
 })
 
 test('the fixture resolver is only a wrapper around the regular one, for fault injection', () => {
-  assert.match(worker, /McpAppModule\.forRoot\(config, \{\n\s+wrapResolver: \(resolver\) => \{/)
+  assert.match(worker, /AppModule\.forRoot\(config, \{\n\s+wrapResolver: \(resolver\) => \{/)
   assert.match(worker, /const gateway = await regular\(scope\)/)
   assert.match(worker, /contentProfile: 'local-site'/)
   // The role composes its own S3 client and Vault client from the configuration.
-  assert.doesNotMatch(worker, /McpAppModule\.forRoot\(config, \{\n\s+storage/)
+  assert.doesNotMatch(worker, /AppModule\.forRoot\(config, \{\n\s+storage/)
 })
 
 test('a repeated signal cannot end the cleanup of the stand', () => {

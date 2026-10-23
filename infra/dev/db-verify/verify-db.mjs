@@ -611,6 +611,7 @@ async function main() {
   await suite('core', 'core')
   await suite('llm', 'llm')
   await suite('mcp', 'mcp')
+  await suite('preview', 'preview')
   // Their PostgreSQL suites (billing accounts, the ledger and its read models; project and
   // profile writes; the avatar upload limit) skip themselves without DATABASE_URL, in
   // `pnpm gates` too: this is their only local run. They create and remove their own rows.
@@ -618,7 +619,7 @@ async function main() {
   await suite('@repo/trpc', 'trpc')
   await suite('web', 'web')
   passed(
-    `${checks} shared-user and upgrade checks; database, core, llm, mcp, billing, tRPC and web suites`,
+    `${checks} shared-user and upgrade checks; database, core, llm, mcp, preview, billing, tRPC and web suites`,
   )
 }
 

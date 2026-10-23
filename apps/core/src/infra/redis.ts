@@ -4,7 +4,7 @@ import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/
 import { throttledLogger, type HealthCheck } from '@repo/observability'
 import { Redis } from 'ioredis'
 
-import { REDIS } from './tokens.ts'
+import { REDIS } from './infra.tokens.ts'
 
 /**
  * Client for health checks and pub/sub. Commands fail fast while Redis is away instead of

@@ -24,7 +24,6 @@ import { wordpressAdapter } from '@repo/site-adapters'
 import { createHostLookup, siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { previewRecordOf } from '@repo/site-content'
 
 import type { PreviewsConfig } from '../config/config.ts'
 import { sampleDriverId } from '../testing/ids.ts'
@@ -43,6 +42,7 @@ import {
   recordValues,
 } from '../testing/previews.ts'
 import { PreviewManager } from './preview-manager.ts'
+import { previewRecordOf } from './preview-record.ts'
 import { createPreviewSiteSources } from './site-sources.ts'
 
 // The manager of previews over PostgreSQL with its runtime, copier, git, storage and Vault faked

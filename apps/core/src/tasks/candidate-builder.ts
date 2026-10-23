@@ -31,7 +31,7 @@ import {
   type TurnResult,
 } from '@repo/domain'
 
-import type { DbPlanValueReader } from '@repo/site-content'
+import type { DbPlanValueReader } from '../site-content/db-plan-values.ts'
 import { candidateGitUnavailable, type CandidateGit } from './candidate-git.ts'
 import { siteFactsOf } from './pass-facts.ts'
 

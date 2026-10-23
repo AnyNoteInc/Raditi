@@ -1,3 +1,7 @@
+import { Buffer } from 'node:buffer'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
+
 import { getQueueToken } from '@nestjs/bullmq'
 import {
   Global,
@@ -6,27 +10,32 @@ import {
   type INestApplication,
   type Type,
 } from '@nestjs/common'
-import { testRunnerConfig } from '@repo/runner-engine/testing'
 import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
 import { renewalJobs, renewalOutcomes } from '@repo/billing'
+import type { YookassaClient } from '@repo/yookassa'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { METRICS_REGISTRY, PRISMA } from '@repo/service-runtime'
-import { RunnerModule } from '@repo/runner-engine'
+import { PRISMA } from '@repo/service-runtime'
 
+import { AppModule } from '../app.module.ts'
 import type { CoreConfig } from '../config/config.ts'
-import { CoreConfigModule } from '../core/core-config.module.ts'
-import { CoreModule } from '../core/core.module.ts'
-import { YOOKASSA } from '../infra/tokens.ts'
+import { CoreConfigModule } from '../config/config.module.ts'
+import { MetricsRegistryModule } from '../metrics/metrics-registry.module.ts'
+import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 import { fakeInfra, overrideCoreInfra, testCoreConfig } from '../testing/fakes.ts'
 import { BILLING_QUEUE, BillingJobs } from './billing-jobs.ts'
 import { BillingScheduler } from './billing-scheduler.ts'
 import { BillingModule } from './billing.module.ts'
 import { BillingProcessor } from './billing.processor.ts'
+import { YOOKASSA } from './billing.tokens.ts'
 
 const apps: INestApplication[] = []
+const servers: Server[] = []
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close()
+  await Promise.all(
+    servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))),
+  )
 })
 
 const fakeQueue = () => ({
@@ -44,7 +53,7 @@ async function core() {
   const queue = fakeQueue()
   const moduleRef = await overrideCoreInfra(
     Test.createTestingModule({
-      imports: [CoreModule.forRoot({ config: testCoreConfig(), background: false })],
+      imports: [AppModule.forRoot({ config: testCoreConfig(), background: false })],
     }),
     infra,
   )
@@ -63,27 +72,35 @@ async function core() {
  */
 async function billingWithBackground(config: CoreConfig) {
   const queue = fakeQueue()
-  @Global()
-  @Module({
-    providers: [
-      { provide: PRISMA, useValue: {} },
-      { provide: YOOKASSA, useValue: null },
-      { provide: getQueueToken(BILLING_QUEUE), useValue: queue },
-    ],
-    exports: [PRISMA, YOOKASSA, getQueueToken(BILLING_QUEUE)],
-  })
-  class FakeConnections {}
-  const moduleRef = await Test.createTestingModule({
-    imports: [
-      CoreConfigModule.forRoot({ config, background: true }),
-      FakeConnections,
-      BillingModule,
-    ],
-  }).compile()
+  const moduleRef = await billingModule(config, true, queue)
+    .overrideProvider(YOOKASSA)
+    .useValue(null)
+    .compile()
   const app = moduleRef.createNestApplication({ logger: false })
   apps.push(app)
   await app.init()
   return { app, queue }
+}
+
+/** The billing module beside a fake database and queue, with the registry of the process. */
+function billingModule(config: CoreConfig, background: boolean, queue = fakeQueue()) {
+  @Global()
+  @Module({
+    providers: [
+      { provide: PRISMA, useValue: {} },
+      { provide: getQueueToken(BILLING_QUEUE), useValue: queue },
+    ],
+    exports: [PRISMA, getQueueToken(BILLING_QUEUE)],
+  })
+  class FakeConnections {}
+  return Test.createTestingModule({
+    imports: [
+      CoreConfigModule.forRoot({ config, background }),
+      FakeConnections,
+      MetricsRegistryModule,
+      BillingModule,
+    ],
+  })
 }
 
 /** Whether `target` is among the modules a role module imports, however deep. */
@@ -152,11 +169,66 @@ describe('BillingModule in the core role', () => {
     expect(new Set(labels)).toEqual(new Set(['job,outcome,app']))
   })
 
-  it('belongs to core alone: the runner renew nothing', () => {
-    const coreModule = CoreModule.forRoot({ config: testCoreConfig(), background: false })
+  it('belongs to core: its root module imports it', () => {
+    // No other app can: apps-are-isolated, and the runner reaches no billing even transitively
+    // (runner-no-platform-access).
+    const coreModule = AppModule.forRoot({ config: testCoreConfig(), background: false })
     expect(imports(coreModule, BillingModule)).toBe(true)
+  })
+})
 
-    const others = [RunnerModule.forRoot(testRunnerConfig())]
-    for (const module of others) expect(imports(module, BillingModule)).toBe(false)
+describe('BillingModule: the ЮKassa client', () => {
+  it('provides none while payments are off', async () => {
+    expect(testCoreConfig().yookassa).toBeNull()
+    const moduleRef = await billingModule(testCoreConfig(), false).compile()
+
+    expect(moduleRef.get<YookassaClient | null>(YOOKASSA)).toBeNull()
+    await moduleRef.close()
+  })
+
+  it('provides a client of the configured shop that calls the configured address', async () => {
+    const requests: { url: string | undefined; authorization: string | undefined }[] = []
+    const server = createServer((req, res) => {
+      requests.push({ url: req.url, authorization: req.headers.authorization })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          id: 'pmt_1',
+          status: 'succeeded',
+          paid: true,
+          amount: { value: '4900.00', currency: 'RUB' },
+          created_at: '2026-10-04T00:00:00Z',
+        }),
+      )
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+
+    const moduleRef = await billingModule(
+      {
+        ...testCoreConfig(),
+        yookassa: {
+          shopId: '123456',
+          secretKey: 'test_shop-secret-key',
+          baseUrl: `http://127.0.0.1:${port}/v3`,
+          webhookAllowlist: ['127.0.0.1'],
+          autopayments: true,
+        },
+      },
+      false,
+    ).compile()
+    const client = moduleRef.get<YookassaClient>(YOOKASSA)
+
+    expect((await client.getPayment('pmt_1')).status).toBe('succeeded')
+    expect(requests).toEqual([
+      {
+        url: '/v3/payments/pmt_1',
+        authorization: `Basic ${Buffer.from('123456:test_shop-secret-key').toString('base64')}`,
+      },
+    ])
+    // The credentials stay inside the client: nothing of them shows on the provided object.
+    expect(JSON.stringify(client)).not.toContain('test_shop-secret-key')
+    await moduleRef.close()
   })
 })

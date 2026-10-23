@@ -7,11 +7,11 @@ import {
   type LlmBackend,
   type SecretStore,
 } from '@repo/domain'
+import { lockSubscriptionPool } from '@repo/turn-keys'
 import { z } from 'zod'
-import { lockSubscriptionPool, subscriptionCredentialPath } from '@repo/turn-keys'
 
-import { encodeSubscriptionCredential } from '../gateway/credentials.ts'
-import type { SubscriptionLockLease, SubscriptionLocks } from '../gateway/session-lock.ts'
+import { encodeSubscriptionCredential, subscriptionCredentialPath } from '../pool/credentials.ts'
+import type { SubscriptionLockLease, SubscriptionLocks } from './session-lock.ts'
 
 export type SubscriptionLoginErrorCode =
   | 'invalid_input'

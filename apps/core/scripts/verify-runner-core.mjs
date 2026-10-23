@@ -133,7 +133,7 @@ const driver = config.driverId
 const env = process.env
 const db = createPrismaClient({ databaseUrl: env.DATABASE_URL, log: [] })
 const leases = new PostgresSiteLeaseStore(db)
-// The store the core role wires (InfraModule): each turn is a TaskTurn of its task as well.
+// The store the core role wires (LeasesModule): each turn is a TaskTurn of its task as well.
 const assignments = new PostgresTaskTurnAssignmentStore(db)
 const journal = new TaskEventTurnJournal(db)
 // kill -9 of this core right after a phase of one task is journaled, before anything follows it;

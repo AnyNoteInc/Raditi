@@ -34,16 +34,12 @@ import { siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { createHostLookup } from '@repo/site-connections/hosting'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { previewContentGateway, previewRecordOf, previewRequest } from '@repo/site-content'
+import { previewContentGateway, previewRequest } from '@repo/site-content'
 
 import type { PreviewsConfig } from '../config/config.ts'
-import {
-  parsePreviewRelays,
-  PostgresPreviewAccess,
-  PreviewGatewayServer,
-} from '@repo/preview-gateway'
 import { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import { sampleDriverId } from '../testing/ids.ts'
+import { startPreviewApp, type PreviewApp } from '../testing/preview-app.ts'
 import {
   MemoryStorage,
   MemoryVault,
@@ -51,6 +47,7 @@ import {
   workingTreeArchive,
 } from '../testing/previews.ts'
 import { PreviewManager } from './preview-manager.ts'
+import { previewRecordOf } from './preview-record.ts'
 import { createPreviewSiteSources } from './site-sources.ts'
 
 // A preview end to end on this machine's Docker (docs/plan/53-chat-preview-release.md, R5c): a
@@ -58,11 +55,11 @@ import { createPreviewSiteSources } from './site-sources.ts'
 // with the full tree of the site, the real Docker runtime of previews (runc), the real copier,
 // PostgreSQL. The preview is built, opened through its entry forwarder, rebuilt to a candidate
 // with a database operation, synced from a turn, given a browser — which opens the preview through
-// the gateway of the `preview` role (R6) on PREVIEW_GATEWAY_PORT 18090 — and destroyed. Only
-// synthetic data. Needs the images below and the tools and browser images of infra/preview
-// (README); runs with RADITI_PREVIEW_DOCKER_TESTS=1, RADITI_GATEWAY_DB_TESTS=1 and a disposable
-// DATABASE_URL, with port 18090 free on loopback (Docker Desktop) or on the bridge of the host
-// (Linux).
+// the gateway of the `preview` app (R6), its build started as a process of its own on
+// PREVIEW_GATEWAY_PORT 18090 — and destroyed. Only synthetic data. Needs the images below, the
+// tools and browser images of infra/preview (README) and `pnpm --filter preview build`; runs with
+// RADITI_PREVIEW_DOCKER_TESTS=1, RADITI_GATEWAY_DB_TESTS=1 and a disposable DATABASE_URL, with
+// port 18090 free on loopback (Docker Desktop) or on the bridge of the host (Linux).
 
 const siteFacts: SiteFacts = {
   stack: 'wordpress',
@@ -109,7 +106,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
   let config: PreviewsConfig
   let manager: PreviewManager
   let vault: MemoryVault
-  let gateway: PreviewGatewayServer | undefined
+  let gateway: PreviewApp | undefined
   const docker_ = createDockerPreviewRuntime({ runtime: 'runc', gatewayPort: 18090 })
   /** What each write of files asked: the docroot is written as a difference whenever it can. */
   const writes: Array<Omit<PreviewFilesInput, 'archive' | 'platform'> & { bytes: number }> = []
@@ -457,15 +454,6 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       },
     })
 
-    // The gateway of previews (role `preview`), where the relay of the agent's browser goes.
-    gateway = new PreviewGatewayServer({
-      appEnv: 'test',
-      address: config.address,
-      sessionSecret: randomBytes(32).toString('base64url'),
-      appUrl: 'http://localhost:3000',
-      browserRelays: parsePreviewRelays(undefined, false).ranges,
-      store: new PostgresPreviewAccess(db),
-    })
     // Where the relay of the browser reaches this machine: `host-gateway` of the daemon. On Linux
     // that is the bridge of this host (docker0), where the gateway must listen — on every address,
     // as the network guard of the tests lets a server name no other; Docker Desktop's is another
@@ -486,30 +474,53 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
     const local = Object.values(networkInterfaces())
       .flat()
       .some((address) => address?.address === hostGateway)
-    await gateway.listen(18090, local ? '0.0.0.0' : '127.0.0.1')
+    // The gateway of previews (the `preview` app), where the relay of the agent's browser goes:
+    // the relays of its default PREVIEW_BROWSER_RELAYS outside production include the bridges.
+    gateway = await startPreviewApp({
+      databaseUrl: databaseUrl ?? '',
+      address: config.address,
+      port: 18090,
+      host: local ? '0.0.0.0' : '127.0.0.1',
+      appUrl: 'http://localhost:3000',
+      sessionSecret: randomBytes(32).toString('base64url'),
+    })
   }, 600_000)
 
   afterAll(async () => {
-    await gateway?.onApplicationShutdown()
+    // Every step runs even when one throws: stop() of the preview app throws when its network
+    // guard refused something or it did not end by SIGTERM, and the containers, the rows and the
+    // directory of the suite must not stay behind. The errors fail the run once all have run.
+    const errors: unknown[] = []
+    const step = async (cleanUp: () => unknown) => {
+      try {
+        await cleanUp()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    await step(() => gateway?.stop())
     if (ids.preview) await runtime.destroy(ids.preview).catch(() => {})
     await docker('rm', '--force', prod.db).catch(() => {})
     await docker('volume', 'rm', '--force', prod.volume).catch(() => {})
     await docker('network', 'rm', prod.network).catch(() => {})
-    if (ids.workspace) {
-      const of = { task: { workspaceId: ids.workspace } }
-      await db.outboxEvent.deleteMany({
-        where: { dedupeKey: { startsWith: `preview.sync:${ids.preview}:` } },
+    if (ids.workspace)
+      await step(async () => {
+        const of = { task: { workspaceId: ids.workspace } }
+        await db.outboxEvent.deleteMany({
+          where: { dedupeKey: { startsWith: `preview.sync:${ids.preview}:` } },
+        })
+        await db.previewEnvironment.deleteMany({ where: of })
+        await db.turnAssignment.deleteMany({ where: of })
+        await db.task.deleteMany({ where: { workspaceId: ids.workspace } })
+        await db.gitRepository.deleteMany({ where: { siteId: ids.site } })
+        await db.credentialRef.deleteMany({ where: { siteId: ids.site } })
+        await db.site.deleteMany({ where: { workspaceId: ids.workspace } })
+        await db.workspace.deleteMany({ where: { id: ids.workspace } })
       })
-      await db.previewEnvironment.deleteMany({ where: of })
-      await db.turnAssignment.deleteMany({ where: of })
-      await db.task.deleteMany({ where: { workspaceId: ids.workspace } })
-      await db.gitRepository.deleteMany({ where: { siteId: ids.site } })
-      await db.credentialRef.deleteMany({ where: { siteId: ids.site } })
-      await db.site.deleteMany({ where: { workspaceId: ids.workspace } })
-      await db.workspace.deleteMany({ where: { id: ids.workspace } })
-    }
-    await db?.$disconnect()
-    if (root) await rm(root, { recursive: true, force: true })
+    await step(() => db?.$disconnect())
+    if (root) await step(() => rm(root, { recursive: true, force: true }))
+    if (errors.length > 1) throw new AggregateError(errors, 'The cleanup of the suite failed')
+    if (errors.length === 1) throw errors[0]
   }, 120_000)
 
   it('builds the preview from the copy of production and the tree of main', async () => {

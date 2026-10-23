@@ -18,7 +18,6 @@ import {
   type TurnCredentialSource,
   type TurnExecutor,
 } from '@repo/domain'
-import { withSyncedPaths } from '@repo/site-content'
 
 import { untrackedFiles, type UntrackedFile } from '../git-workspace/archive.ts'
 import { TAR_END, tarFileHeader, tarPadding } from '../git-workspace/tree-tar.ts'
@@ -30,6 +29,7 @@ import {
 } from './preview-builder.ts'
 import { isBusyTask, type PreviewFacts } from './preview-facts.ts'
 import type { PreviewHold } from './preview-lease.ts'
+import { withSyncedPaths } from './preview-record.ts'
 
 // The agent's working tree on its preview during a turn (docs/plan/53-chat-preview-release.md,
 // Р23): before an action of the agent's browser the mcp role asks core for a sync

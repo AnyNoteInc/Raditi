@@ -6,7 +6,7 @@ import { deliverNotification, NOTIFICATIONS_QUEUE } from '@repo/notifications'
 import { errorMessage, throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
 
-import { MAILER } from '../infra/tokens.ts'
+import { MAILER } from './notifications.tokens.ts'
 
 /**
  * Delivers the notifications queue: job name = notification type, job data = payload.
