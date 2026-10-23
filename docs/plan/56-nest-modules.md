@@ -120,7 +120,7 @@ src/app.module.ts                     AppModule.forRoot(config, testing?): де�
 src/version.ts                        readAppVersion (из app-bootstrap) + MCP_VERSION
 src/config/                           config.ts, config.module.ts (MCP_CONFIG), allowed-hosts.ts (parseMcpHosts — разрыв
                                       цепочки config.ts → mcp-policy.ts → mcp-content.ts)
-src/infra/                            infra.module.ts (DatabaseModule, SECRET_STORE)
+src/infra/                            infra.module.ts (SECRET_STORE); DatabaseModule.forRoot(db) — в AppModule.forRoot рядом
 src/health/                           health.module.ts (HealthModule из service-runtime, проверка допуска)
 src/common/                           canonical-json.ts, one-line.ts, json-rpc.ts, mcp-http-error.ts
 src/access/                           mcp-access.ts, mcp-request.ts, mcp-auth.guard.ts, mcp-policy.ts, access.module.ts
@@ -170,8 +170,9 @@ scripts/                              subscription-*.mjs, verify-llm-worker.mjs
 src/app.module.ts                     AppModule.forRoot({ config, background }) (бывший core/core.module.ts)
 src/config/                           config.ts, runner-tokens.ts, config.module.ts (CoreConfigModule: CORE_CONFIG,
                                       BACKGROUND_JOBS), config.tokens.ts
-src/infra/                            infra.module.ts (глобальный: PRISMA через DatabaseModule, OBJECT_STORAGE, SECRET_STORE,
-                                      REDIS), redis.ts, infra.tokens.ts
+src/infra/                            infra.module.ts (глобальный: OBJECT_STORAGE, SECRET_STORE, REDIS), redis.ts,
+                                      infra.tokens.ts; PRISMA даёт DatabaseModule.forRoot(db) пакета (§5.2), его
+                                      AppModule.forRoot импортирует рядом с InfraModule, как mcp и preview
 src/leases/                           leases.module.ts: SITE_LEASES, TURN_ASSIGNMENTS
 src/metrics/                          metrics.module.ts, metrics.controller.ts, metrics-registry (из service-runtime)
 src/health/                           health.module.ts через HealthModule из service-runtime
