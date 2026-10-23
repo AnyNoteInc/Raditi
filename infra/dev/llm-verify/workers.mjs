@@ -6,11 +6,11 @@ import { clearTimeout, setTimeout } from 'node:timers'
 
 import { repository } from './stack.mjs'
 
-// The role mcp is not a worker: the agent-content stand starts the regular role from the build
-// (apps/core/scripts/verify-agent-content-role.mjs).
+// Each worker lives with the app it hosts. The role mcp is not a worker: the agent-content stand
+// starts the regular role from the build (apps/core/scripts/verify-agent-content-role.mjs).
 const WORKERS = Object.freeze({
-  core: 'verify-core-worker.mjs',
-  llm: 'verify-llm-worker.mjs',
+  core: 'apps/core/scripts/verify-core-worker.mjs',
+  llm: 'apps/llm/scripts/verify-llm-worker.mjs',
 })
 
 const ENV_FILE = /^--env-file(?:-if-exists)?(=|$)/
@@ -51,7 +51,7 @@ export async function startWorker(
   } = {},
 ) {
   if (!Object.hasOwn(WORKERS, role)) throw new Error('Invalid verification role')
-  const child = forkChild(join(repository, 'apps/core/scripts', WORKERS[role]), [], {
+  const child = forkChild(join(repository, WORKERS[role]), [], {
     env: { PATH: process.env.PATH, NODE_ENV: 'test' },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     execArgv: [...withoutEnvFiles(execArgv), ...imports.flatMap((url) => ['--import', url])],

@@ -6,8 +6,8 @@ import type { Duplex } from 'node:stream'
 import { zaiCodingBackend } from '@repo/llm-backends'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { llmConfigFromEnv } from '../llm-config.ts'
-import { createControlEgress, createEgressTransport } from '../gateway/egress.ts'
+import { llmConfigFromEnv } from '../config/llm-config.ts'
+import { createControlEgress, createEgressTransport } from '../egress/egress.ts'
 import { createLlmTestCertificates } from '../testing/llm-certificates.ts'
 import { authenticateSubscription } from './key-import.ts'
 

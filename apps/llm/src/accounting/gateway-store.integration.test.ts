@@ -5,8 +5,8 @@ import type { GatewayRefusal } from '@repo/domain'
 import { GatewayRecordRejected, type GatewayFinish } from '@repo/turn-keys'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
-import { PostgresGatewayStore } from '../accounting/gateway-store.ts'
-import type { GatewayAdmitInput, GatewayCall } from '../accounting/gateway-types.ts'
+import { PostgresGatewayStore } from './gateway-store.ts'
+import type { GatewayAdmitInput, GatewayCall } from './gateway-types.ts'
 import {
   sampleBackendCapacity,
   sampleBackendId,

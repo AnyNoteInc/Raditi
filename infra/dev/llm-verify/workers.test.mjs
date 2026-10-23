@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import { fork, spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { after, before, test } from 'node:test'
 
+import { repository } from './stack.mjs'
 import { startWorker } from './workers.mjs'
 
 let directory, fixture
@@ -124,12 +126,17 @@ test('concurrent close sends one shutdown and waits for output to drain', async 
 test('each role starts its own worker script; an unknown role starts nothing', async () => {
   const started = []
   const forkChild = (path, args, options) => {
-    started.push(path.slice(path.lastIndexOf('/') + 1))
+    started.push(relative(repository, path))
     return fork(fixture, args, { ...options, execArgv: [] })
   }
   for (const role of ['core', 'llm'])
     await (await startWorker(role, { mode: 'ready' }, { forkChild })).close()
-  assert.deepEqual(started, ['verify-core-worker.mjs', 'verify-llm-worker.mjs'])
+  // Each worker lives with the app whose build it hosts.
+  assert.deepEqual(started, [
+    'apps/core/scripts/verify-core-worker.mjs',
+    'apps/llm/scripts/verify-llm-worker.mjs',
+  ])
+  for (const script of started) assert.ok(existsSync(join(repository, script)), script)
   // The role mcp is the regular one, started from the build by the agent-content stand.
   for (const role of ['mcp', 'runner'])
     await assert.rejects(startWorker(role, {}, { forkChild }), /Invalid verification role/)

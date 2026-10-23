@@ -7,7 +7,7 @@ import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 
-import { SessionSubscriptionLock } from '../gateway/session-lock.ts'
+import { SessionSubscriptionLock } from './session-lock.ts'
 import { SubscriptionLogin } from './login.ts'
 import { SubscriptionRetirement } from './retire.ts'
 
