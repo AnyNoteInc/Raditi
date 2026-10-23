@@ -13,7 +13,7 @@
 - `src/maintenance` — фоновые задачи по имени (`MaintenanceJobs`), пробы канала и перепроверка региона (`ChannelMonitor`), проход пула раз в минуту (`PoolTicker`).
 - `src/gateway` — HTTP-сервер шлюза (`server.ts`, свой `node:http`: список допуска раньше маршрутизации, SSE, отказы в форме адаптера), готовность и здоровье (`readiness.ts`), `LlmRuntime` (`llm-runtime.ts`): порядок запуска — строка `llm_egress_path`, первый сбор и проверка канала, `listen`, таймеры — и остановки — HTTP до 30 с, пул и канал до 3 с, задачи 1 с, сборщик 1 с, база 2 с — в одном месте.
 - `src/subscriptions` — команды оператора вне Nest (из исходников, без декораторов; `session-lock.ts` нужен только им); правило `llm-operator-cli-no-nest` не даёт им достичь модулей Nest и пакетов `@nestjs/*`.
-- `scripts` — `subscription-*.mjs` (команды оператора) и `verify-llm-worker.mjs` — процесс роли стенда шлюза: собирает роль тем же `AppModule` из сборки.
+- `scripts` — `subscription-*.mjs` (команды оператора) и `verify-llm-worker.mjs` — процесс роли стенда шлюза: собирает роль тем же `AppModule` из сборки. В образ стенд не попадает (`.dockerignore`), команды оператора — попадают.
 
 ## Что читает
 

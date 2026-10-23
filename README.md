@@ -42,7 +42,8 @@ pnpm dev
 `pnpm dev` запускает по процессу на приложение: web (http://localhost:3000), `core` (http://localhost:8081/health),
 `mcp` (http://localhost:8082/health), шлюз подписок `llm` (http://127.0.0.1:8084/health) и шлюз предпросмотров
 `preview` (:8090); раннера (`apps/runner`) среди них нет — он работает на песочной ВМ или в стендах.
-У `llm`, `mcp`, `preview` и `runner` свой `src/config.ts` со своей схемой переменных, у `core` — `src/config/config.ts`; общего выбора ролей нет. Без прокси узла выхода
+Каждое приложение — Nest из модулей ([план 56](docs/plan/56-nest-modules.md)): корень `src/app.module.ts`, своя схема переменных
+в `src/config/config.ts`, разделы — каталоги со своими модулями; общего выбора ролей нет. Без прокси узла выхода
 (четыре `LLM_EGRESS_*` пусты) dev-шлюз идёт прямым путём: допуск открыт, к провайдеру он соединяется сам
 и только к Z.ai. С заданным mTLS-прокси через него идут все провайдеры, допуск открывает успешная проба
 канала, иначе шлюз отвечает `degraded`. Темп и потолок вызовов одного ключа хода задают
@@ -106,9 +107,9 @@ pnpm verify:site-connect
 `verify:mcp-content`, `verify:agent-content` — описаны ниже; стенды края app-ВМ и профиля `llm` — `verify:edge`,
 `verify:llm-app`, `verify:llm-firewall` — и образы `llm`, `mcp`, `preview` и раннера (`verify:images`) — в [инструкции app-ВМ](infra/app/README.md), «Проверки».
 Для тестов базы задавайте `DATABASE_URL` явно: без него тесты с базой пропускаются. Обычный путь для них —
-`pnpm verify:db` на одноразовой PostgreSQL; интеграционные наборы `core`, `llm` и `mcp`
-(`pnpm --filter core test:db`, `pnpm --filter llm test:db`, `pnpm --filter mcp test:db`,
-`RADITI_GATEWAY_DB_TESTS=1`) меняют общие строки справочников и идут только на такой базе.
+`pnpm verify:db` на одноразовой PostgreSQL; интеграционные наборы `core`, `llm`, `mcp` и `preview`
+(`pnpm --filter <приложение> test:db`, `RADITI_GATEWAY_DB_TESTS=1`) идут только на такой базе:
+наборы `core`, `llm` и `mcp` меняют общие строки справочников.
 Перед `pnpm e2e` остановите `pnpm dev`. Smoke-набор сам запускает web на 3100, `core` на 8181 и `mcp` на 8182,
 проверяет главную, юридическую страницу и health всех трёх приложений, затем останавливает процессы.
 Инфраструктура должна оставаться запущенной, миграции и сиды — применены (`pnpm db:deploy && pnpm db:seed`):
@@ -120,7 +121,7 @@ pnpm verify:site-connect
 `verify:db` применяет миграции на отдельной PostgreSQL, сверяет схему с `schema.prisma`, проверяет единого пользователя `raditi`,
 переход со старых ролей, переключение на OpenCode на базе прежних оболочек настоящими командами Prisma,
 сиды на этой базе и на новой — каталог одной оболочки, повторный запуск ничего не меняет, — затем запускает
-семь наборов тестов: базы, `core`, `llm`, `mcp`, биллинга, tRPC и web. [Подробности](infra/dev/db-verify/README.md).
+восемь наборов тестов: базы, `core`, `llm`, `mcp`, `preview`, биллинга, tRPC и web. [Подробности](infra/dev/db-verify/README.md).
 `verify:gitea` проверяет git хода на одноразовой Gitea 1.27.3 по HTTPS: доступы на чтение и запись со сроком,
 клон, push в `agent/<taskId>`, отказ диффу с `.gitea/`. Нужен `P2_GITLEAKS_BINARY`.
 [Подробности](infra/dev/gitea-verify/README.md), [отчёт](docs/plan/32-gitea-turn-git.md).
@@ -212,13 +213,13 @@ CLI через `sandbox-gw` и приложения `llm` и `mcp`, на син�
 | Путь | Содержимое |
 | --- | --- |
 | `apps/web` | Next.js: вход, кабинет, юридические страницы, API |
-| `apps/core` | NestJS: ядро — задачи и диалоги, очередь, outbox, уведомления, песочницы, git, выпуск, биллинг, предпросмотры; операторские команды и большинство стендов |
-| `apps/llm` | NestJS: шлюз подписок (единственный процесс с ключом провайдера) и команды `subscriptions:*` |
-| `apps/mcp` | NestJS: MCP-шлюз к сайтам (контент WordPress, браузер агента) |
-| `apps/runner` | Pull-раннер песочной ВМ: контейнеры ходов, без доступа к БД, Redis, Vault и S3 |
-| `apps/preview` | NestJS: шлюз предпросмотров диалогов |
+| `apps/core` | NestJS: ядро — задачи и диалоги, очередь, outbox, уведомления, песочницы, git, выпуск, биллинг, предпросмотры; операторские команды и стенды, которые ведут несколько приложений |
+| `apps/llm` | NestJS: шлюз подписок (единственный процесс с ключом провайдера), команды `subscriptions:*` и процесс роли стенда шлюза |
+| `apps/mcp` | NestJS: MCP-шлюз к сайтам (контент WordPress, браузер агента) и его стенды контента и отката |
+| `apps/runner` | NestJS: pull-раннер песочной ВМ с движком — контейнеры ходов, без доступа к БД, Redis, Vault и S3 |
+| `apps/preview` | NestJS: шлюз предпросмотров диалогов со своим сервером |
 | `apps/e2e` | Smoke-тесты Playwright |
-| `packages` | Domain, порты и адаптеры, Prisma, auth, tRPC, UI; общее приложений — `app-bootstrap`, `service-runtime`, `runner-engine`, `turn-keys`, `site-content`, `snapshots`, `local-turns`, `preview-gateway`, `ip-address` |
+| `packages` | Domain, порты и адаптеры, Prisma, auth, tRPC, UI; общее приложений — `app-bootstrap`, `service-runtime`, `turn-keys`, `site-content`, `snapshots`, `local-turns`, `ip-address` |
 | `infra/dev` | Docker Compose, мониторинг и локальные стенды (`db-verify`, `site-verify`, `gitea-verify`, `pipeline-verify`, `llm-verify`) |
 | `ci` | Обязательные workflow сайтов для `platform/ci` в Gitea (пока подменные шаги) |
 | `infra/app`, `infra/sandbox`, `infra/egress` | app-ВМ, песочная ВМ и узел выхода к провайдерам моделей |

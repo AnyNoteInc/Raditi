@@ -20,7 +20,7 @@ MCP-шлюз к сайтам (spec §5, §8): единственное мест�
 
 - `pnpm --filter mcp dev`, `build` (сначала собирает `@repo/service-runtime`), `start`, `typecheck`, `lint`, `test`.
 - `pnpm --filter mcp test:db` — интеграционные тесты на PostgreSQL (`DATABASE_URL`, `RADITI_GATEWAY_DB_TESTS=1`), только на одноразовой базе; обычный путь — `pnpm verify:db`.
-- Стенды: `pnpm verify:agent-content` и `verify:site-connect` запускают `node dist/main.js` в этом каталоге; `pnpm verify:mcp-content` загружает модули из `dist` в своём рабочем процессе — `scripts/verify-content-worker.mjs` и его сценарии `scripts/verify-content-{turns,lifecycle,undo}.mjs` (супервизор хода — из `apps/core/dist/turns`). `scripts/verify-agent-content-undo.mjs` — доверенный откат живого режима `verify:agent-content`.
+- Стенды: `pnpm verify:agent-content` и `verify:site-connect` запускают `node dist/main.js` в этом каталоге; `pnpm verify:mcp-content` загружает модули из `dist` в своём рабочем процессе — `scripts/verify-content-worker.mjs` и его сценарии `scripts/verify-content-{turns,lifecycle,undo}.mjs` (супервизор хода — из `apps/core/dist/turns`). `scripts/verify-agent-content-undo.mjs` — доверенный откат живого режима `verify:agent-content`. В образ `mcp` стенды не попадают (`.dockerignore`; проверяет `pnpm verify:images`).
 - Образ — `apps/mcp/Dockerfile`, цель `runtime`, без `git` и `gitleaks`.
 
 ## Чего не должно достигать

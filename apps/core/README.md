@@ -20,7 +20,7 @@
 - `pnpm --filter core dev` (`nest start --watch`), `build` (сначала собирает `@repo/service-runtime`), `start`, `typecheck`, `lint`, `test` (скрипты `scripts/*.test.mjs` и Vitest).
 - `pnpm --filter core test:db` — интеграционные тесты на PostgreSQL (`DATABASE_URL`, `RADITI_GATEWAY_DB_TESTS=1`), только на одноразовой базе; обычный путь — `pnpm verify:db`.
 - Операторские команды: `billing:refund`, `billing:stop-renewal`, `billing:refunds-needed`, `billing:settle-payment`, `billing:rates`, `releases:resolve`; окружение им задаётся явно, `.env` не читается.
-- Стенды `verify:*`, которые ведут сразу несколько приложений (`llm`, `mcp`, `runner`) из их `dist`, живут в `scripts/` этого приложения; стенды одного приложения — в нём самом (стенд контента и доверенный откат живого режима — `apps/mcp/scripts`). Команда задания выкладки — `dist/deploy-step/cli.js` (образ `core`).
+- Стенды `verify:*`, которые ведут сразу несколько приложений (`llm`, `mcp`, `runner`) из их `dist`, живут в `scripts/` этого приложения; стенды одного приложения — в нём самом (стенд контента и доверенный откат живого режима — `apps/mcp/scripts`, процесс роли стенда шлюза — `apps/llm/scripts`). В образ стенды, их тесты и фикстура раннера стенда (`opencode-runner-fixture*.mjs`) не попадают (`.dockerignore`): в `scripts/` образа — только команды оператора `billing-*.mjs` и `releases-resolve.mjs`. Команда задания выкладки — `dist/deploy-step/cli.js` (образ `core`).
 - Образ — `apps/core/Dockerfile`, цели `runtime` и `migrate`; в нём `git` и `gitleaks`.
 
 ## Чего не должно достигать

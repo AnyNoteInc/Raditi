@@ -24,7 +24,7 @@ Pull-раннер песочной ВМ (spec §8, §19): сам забирае�
 
 - `pnpm --filter runner build` (`nest build`), `start`, `typecheck`, `lint`, `test`. Скрипта `dev` нет: в `pnpm dev` раннер не стартует.
 - Тесты приложения ведут поддельный `core`. Связку с настоящим `core` — ход целиком по HTTP, перезапуск `core`, перехват контейнера перезапущенным раннером — проверяют тесты `core`: `apps/core/src/runner-api/runner-protocol.cross.test.ts` и тесты супервизора хода, восстановления и дедлайнов в `apps/core/src/turns`.
-- Стенды: `pnpm --filter core verify:runner`, `pnpm verify:opencode-supervisor` (раннер под gVisor в Linux-ВМ); образ проверяет `pnpm verify:images` (в нём нет пакетов `db` и `service-runtime`, Prisma, `pg`, S3 SDK и BullMQ, есть `scripts/runner-token.mjs`).
+- Стенды: `pnpm --filter core verify:runner`, `pnpm verify:opencode-supervisor` (раннер под gVisor в Linux-ВМ); образ проверяет `pnpm verify:images` (в нём нет пакетов `db` и `service-runtime`, Prisma, `pg`, S3 SDK, BullMQ и стендов, есть `scripts/runner-token.mjs`).
 - Образ — `apps/runner/Dockerfile`, цель `runtime`, без `git` и `gitleaks` (git хода работает внутри песочницы); compose песочной ВМ берёт его как `RUNNER_IMAGE` (`infra/sandbox`). Токен ВМ выпускает `scripts/runner-token.mjs` этого приложения (`pnpm --filter runner runner-token`, на песочной ВМ — из образа раннера) (`infra/app/README.md`, «Токены раннеров»).
 
 ## Чего не должно достигать
