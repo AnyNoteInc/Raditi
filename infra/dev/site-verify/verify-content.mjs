@@ -304,7 +304,7 @@ try {
       // nor the password of the site is in their environment or files.
       const { VAULT_DEV_ROOT_TOKEN: _operator, ...roleEnv } = env
       const result = await command(process.execPath, ['scripts/verify-content-worker.mjs'], {
-        cwd: join(repository, 'apps/core'),
+        cwd: join(repository, 'apps/mcp'),
         env: {
           ...roleEnv,
           VAULT_ROLE_ID: appRole.roleId,

@@ -27,6 +27,10 @@ const starts = (file) =>
 const scripts = readdirSync(join(root, 'apps/core/scripts'))
   .filter((name) => /^verify-agent-content.*\.mjs$/.test(name) && !name.endsWith('.test.mjs'))
   .map((name) => `apps/core/scripts/${name}`)
+// The trusted return of the live turns drives the mcp app alone, so it lives with that app.
+const undo = 'apps/mcp/scripts/verify-agent-content-undo.mjs'
+// The app whose scripts a path names: what `../dist/` and `../src/` of a script point into.
+const ownerOf = (script) => /^apps\/([a-z-]+)\/scripts\//.exec(script)?.[1]
 
 test('the stand is one command over its own scripts', () => {
   assert.deepEqual(scripts.sort(), [
@@ -34,7 +38,6 @@ test('the stand is one command over its own scripts', () => {
     'apps/core/scripts/verify-agent-content-live.mjs',
     'apps/core/scripts/verify-agent-content-role.mjs',
     'apps/core/scripts/verify-agent-content-turns.mjs',
-    'apps/core/scripts/verify-agent-content-undo.mjs',
     'apps/core/scripts/verify-agent-content.mjs',
   ])
   // `exec`: a signal sent to the command reaches the stand itself, which then removes its
@@ -51,7 +54,7 @@ test('the stand is one command over its own scripts', () => {
   assert.match(main, /const mode = standMode\(process\.argv\.slice\(2\), \{ stand: 'content' \}\)/)
   assert.doesNotMatch(main, /process\.argv\.slice\(2\)(?!, \{ stand: 'content' \}\))/)
   assert.doesNotMatch(
-    scripts.map(read).join('\n'),
+    [...scripts, undo].map(read).join('\n'),
     /--env-file|auth\.json|key-file|readFile[^\n]*ZAI/,
   )
 })
@@ -132,20 +135,17 @@ test('a repeated signal cannot end the cleanup and a silent role cannot pass the
 test('the role mcp is the regular one: the entry point of the build under its own AppRole', () => {
   const main = read('apps/core/scripts/verify-agent-content.mjs')
   const role = read('apps/core/scripts/verify-agent-content-role.mjs')
-  // The trusted return of the live mode is the one script that puts the role's module
-  // together: the product has no network channel to the role's trusted side yet (N8).
-  const undo = 'apps/core/scripts/verify-agent-content-undo.mjs'
-  const all = scripts
-    .filter((name) => name !== undo)
-    .map(read)
-    .join('\n')
+  // The trusted return of the live mode (apps/mcp/scripts) is the one script that puts the
+  // role's module together: the product has no network channel to the role's trusted side yet
+  // (N8).
+  const all = scripts.map(read).join('\n')
   // Not a composition of the stand: no module of the role is put together by its scripts.
   assert.match(role, /entry = \['dist\/main\.js'\],/)
-  assert.doesNotMatch(all, /McpAppModule|mountMcp|NestFactory|wrapResolver/)
+  assert.doesNotMatch(all, /\bAppModule\b|mountMcp|NestFactory|wrapResolver/)
   // That one script serves no MCP: an application context that listens on nothing, the
   // regular resolver, and one call — the return by the fence of the turn lease.
   const helper = read(undo)
-  assert.match(helper, /NestFactory\.createApplicationContext\(\n\s+McpAppModule\.forRoot\(\{/)
+  assert.match(helper, /NestFactory\.createApplicationContext\(\n\s+AppModule\.forRoot\(\{/)
   assert.doesNotMatch(helper, /mountMcp|wrapResolver|\.listen\(|wpRest|authenticate/)
   assert.match(
     helper,
@@ -207,25 +207,28 @@ test('the workflow starts on every source the stand runs', () => {
   const packages = new Set()
   const builds = new Set()
   const apps = new Set()
-  // The stand's scripts and what they import from beside them: the Z.ai setup of the gateway
-  // stand, shared by both.
-  const beside = scripts.flatMap((script) =>
+  // The stand's scripts, the trusted return and what they import from beside them: the Z.ai
+  // setup of the gateway stand, shared by both.
+  const beside = [...scripts, undo].flatMap((script) =>
     [...read(script).matchAll(/'\.\/(verify-[a-z-]+\.mjs)'/g)].map(
-      ([, name]) => `apps/core/scripts/${name}`,
+      ([, name]) => `apps/${ownerOf(script)}/scripts/${name}`,
     ),
   )
   assert.ok(beside.includes('apps/core/scripts/verify-llm-zai-setup.mjs'))
-  for (const script of new Set([...scripts, ...beside])) {
+  for (const script of new Set([...scripts, undo, ...beside])) {
     sources.add(script)
     const text = read(script)
     for (const [, path] of text.matchAll(/'(?:\.\.\/)+(infra\/[A-Za-z0-9/_.-]+)'/g))
       sources.add(path)
     for (const [, name] of text.matchAll(/'(?:@repo|(?:\.\.\/)+packages)\/([a-z-]+)[/']/g))
       packages.add(name)
+    // The build and the sources of the script's own app, by directory: ../dist/<directory>/.
     for (const [, directory] of text.matchAll(/'\.\.\/(?:dist|src)\/([a-z-]+)\//g))
-      builds.add(directory)
-    // The builds of the apps beside the orchestrator: ../../mcp/dist and ../../llm/dist.
+      builds.add(`apps/${ownerOf(script)}/src/${directory}/index.ts`)
+    // The builds of the other apps: ../../mcp/dist, ../../llm/dist and ../../core/dist.
     for (const [, app] of text.matchAll(/'\.\.\/\.\.\/([a-z-]+)\/dist\//g)) apps.add(app)
+    // A module at the root of the script's own build (../dist/app.module.js): the whole app.
+    if (/'\.\.\/dist\/[a-z.-]+\.js'/.test(text)) apps.add(ownerOf(script))
   }
   for (const path of [
     'infra/dev/llm-verify/stack.mjs',
@@ -263,7 +266,7 @@ test('the workflow starts on every source the stand runs', () => {
   apps.add('llm')
   // The roles llm and mcp and the operator command of the plan key are processes of their own,
   // started from the build.
-  for (const directory of builds) assert.ok(starts(`apps/core/src/${directory}/index.ts`))
+  for (const directory of builds) assert.ok(starts(directory), `${directory} does not start it`)
   for (const app of apps) assert.ok(starts(`apps/${app}/src/index.ts`))
 })
 
