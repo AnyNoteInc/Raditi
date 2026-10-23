@@ -20,6 +20,8 @@ const fakes = vi.hoisted(() => ({
   createControlEgress: vi.fn(),
   createProbe: vi.fn(),
   probe: vi.fn(),
+  createPool: vi.fn(),
+  poolRecheck: vi.fn(),
   poolTick: vi.fn(),
   poolClose: vi.fn(),
 }))
@@ -43,7 +45,10 @@ vi.mock('./egress/egress-probe.ts', async (importOriginal) => ({
 }))
 vi.mock('./pool/pool-health.ts', () => ({
   SubscriptionPoolHealth: class {
-    recheckRegion = vi.fn().mockResolvedValue(false)
+    constructor(options: unknown) {
+      fakes.createPool(options)
+    }
+    recheckRegion = fakes.poolRecheck
     tick = fakes.poolTick
     close = fakes.poolClose
   },
@@ -52,6 +57,7 @@ vi.mock('./pool/pool-health.ts', () => ({
 import { AppModule } from './app.module.ts'
 import { LlmRuntime } from './gateway/llm-runtime.ts'
 import type { LlmGatewayOptions } from './gateway/server.ts'
+import type { SubscriptionPoolHealthOptions } from './pool/pool-health.ts'
 
 const role = (
   roleConfig: LlmRoleConfig,
@@ -87,6 +93,7 @@ describe('llm role lifecycle', () => {
         egress.proxyUrl ? fakes.probe(signal) : Promise.resolve(true),
     }))
     fakes.probe.mockResolvedValue(true)
+    fakes.poolRecheck.mockResolvedValue(false)
     fakes.poolTick.mockResolvedValue(undefined)
     fakes.poolClose.mockResolvedValue(undefined)
   })
@@ -212,6 +219,34 @@ describe('llm role lifecycle', () => {
     expect(options.ready?.()).toBe(false)
     await vi.advanceTimersByTimeAsync(15_000)
     expect(fakes.probe).toHaveBeenCalledTimes(4)
+    expect(options.ready?.()).toBe(true)
+    warn.mockRestore()
+    await app.close()
+  })
+
+  it('keeps a confirmed region closed through channel probes until an account recheck lifts it', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const app = await role(config(true))
+    await app.get(LlmRuntime).listen()
+    const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
+    const pool = fakes.createPool.mock.calls[0]![0] as SubscriptionPoolHealthOptions
+    expect(options.ready?.()).toBe(true)
+    // An account probe of the pool confirmed that the provider refuses the region: the channel
+    // still works, but admission closes (pool.module.test.ts: only the recheck may use it).
+    pool.onRegion('synthetic-account')
+    expect(options.ready?.()).toBe(false)
+    // Healthy byte probes of the channel never reopen it.
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(fakes.probe).toHaveBeenCalledTimes(2)
+    expect(options.ready?.()).toBe(false)
+    expect(fakes.poolRecheck).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(fakes.poolRecheck).toHaveBeenCalledExactlyOnceWith('synthetic-account')
+    expect(options.ready?.()).toBe(false)
+    fakes.poolRecheck.mockResolvedValueOnce(true)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(fakes.poolRecheck).toHaveBeenCalledTimes(2)
     expect(options.ready?.()).toBe(true)
     warn.mockRestore()
     await app.close()
