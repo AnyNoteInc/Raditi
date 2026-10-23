@@ -12,8 +12,7 @@ import {
 
 import type { PreviewRoute } from '../access/preview-access.ts'
 import { PreviewSessions } from '../access/preview-sessions.ts'
-import { PREVIEW_CONFIG } from '../config/config.tokens.ts'
-import type { PreviewGatewayConfig } from '../config/config.ts'
+import { PREVIEW_CONFIG, type PreviewGatewayConfig } from '../config/config.tokens.ts'
 import {
   hasPreviewRetry,
   previewRetrySetCookie,

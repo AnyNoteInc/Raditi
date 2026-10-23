@@ -344,12 +344,17 @@ module.exports = {
     {
       name: 'preview-request-path',
       comment:
-        'A request through the preview gateway (its server, the access checks, the cookie) is served from the database alone: domain, db, the address helpers and the Prisma token of service-runtime.',
+        'A request through the preview gateway (its server, the access checks, the cookie) is served from the database alone: domain, db, the address helpers and the Prisma token of service-runtime (its subpath ./tokens), not even transitively — no runtime, observability or app-bootstrap.',
       severity: 'error',
       from: { path: '^apps/preview/src/(gateway|access|cookie)/', pathNot: '\\.test\\.ts$' },
       to: {
         path: '^packages/',
-        pathNot: ['^packages/(domain|db|ip-address|service-runtime)/', TOOLING],
+        pathNot: [
+          '^packages/(domain|db|ip-address)/',
+          '^packages/service-runtime/src/tokens\\.ts$',
+          TOOLING,
+        ],
+        reachable: true,
       },
     },
     {

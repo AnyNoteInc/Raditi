@@ -13,8 +13,7 @@ import {
 import { ipLiteral, isLoopbackAddress, isPrivateAddress } from '@repo/ip-address'
 
 import type { PreviewRoute } from '../access/preview-access.ts'
-import { PREVIEW_CONFIG } from '../config/config.tokens.ts'
-import type { PreviewGatewayConfig } from '../config/config.ts'
+import { PREVIEW_CONFIG, type PreviewGatewayConfig } from '../config/config.tokens.ts'
 import { browserResponseHeaders, upstreamRequestHeaders } from './headers.ts'
 import { previewGatewayLimits } from './limits.ts'
 import { gatewayPages, type PagesContext } from './pages.ts'

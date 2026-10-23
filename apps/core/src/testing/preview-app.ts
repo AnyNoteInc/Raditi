@@ -30,11 +30,18 @@ export interface PreviewAppOptions {
 }
 
 export interface PreviewApp {
-  /** SIGTERM, as compose stops it, then its exit; fails when the guard refused a connection. */
+  /**
+   * SIGTERM, as compose stops it, then its exit; fails when the guard refused a connection or the
+   * app did not stop by that SIGTERM or with code 0.
+   */
   stop(): Promise<void>
 }
 
-/** Starts the preview app and waits for its /__raditi/health. */
+/**
+ * Starts the preview app and waits for its own start line and its /__raditi/health: another
+ * server on the port (an app a killed test worker left behind) answers the health check too, while
+ * this one dies of EADDRINUSE.
+ */
 export async function startPreviewApp(options: PreviewAppOptions): Promise<PreviewApp> {
   if (!existsSync(main))
     throw new Error(`${main} is missing: build the preview app first (pnpm --filter preview build)`)
@@ -71,14 +78,19 @@ export async function startPreviewApp(options: PreviewAppOptions): Promise<Previ
   exited.catch(() => undefined)
   const running = () => child.exitCode === null && child.signalCode === null
 
+  // What start.ts logs once its server listens (preview role listening on <host>:<port>).
+  const listening = `preview role listening on ${options.host}:${options.port}`
   const health = `http://${options.host === '0.0.0.0' ? '127.0.0.1' : options.host}:${options.port}/__raditi/health`
   const deadline = Date.now() + STARTUP_MS
   for (;;) {
     if (!running()) throw new Error(`The preview app exited before it answered:\n${output}`)
-    const ready = await fetch(health).then(
-      (answer) => answer.ok,
-      () => false,
-    )
+    const ready =
+      output.includes(listening) &&
+      (await fetch(health).then(
+        (answer) => answer.ok,
+        () => false,
+      )) &&
+      running()
     if (ready) break
     if (Date.now() > deadline) {
       child.kill('SIGKILL')
@@ -98,6 +110,12 @@ export async function startPreviewApp(options: PreviewAppOptions): Promise<Previ
       if (refused !== '')
         throw new Error(
           `The preview app tried to connect or to resolve a name outside this machine: ${refused}`,
+        )
+      // Nest closes the app on SIGTERM and raises the signal again; anything else is a failure.
+      const { exitCode, signalCode } = child
+      if (signalCode !== 'SIGTERM' && exitCode !== 0)
+        throw new Error(
+          `The preview app stopped with ${signalCode ?? `code ${String(exitCode)}`}:\n${output}`,
         )
     },
   }

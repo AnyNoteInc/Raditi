@@ -6,7 +6,7 @@ import {
   type PreviewSessionKind,
   type PreviewStatus,
 } from '@repo/domain'
-import { PRISMA } from '@repo/service-runtime'
+import { PRISMA } from '@repo/service-runtime/tokens'
 
 import {
   CLOSED_SITE_STATUSES,

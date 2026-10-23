@@ -7,7 +7,7 @@
 Приложение Nest из модулей (план 56, §4.2); свой сервер `node:http` — провайдер, а не контроллер Nest: предел заголовков в 32 КиБ, `upgrade`, `CONNECT` и принудительное закрытие соединений задаются только своим сервером.
 
 - `src/main.ts` разбирает окружение до Nest, `src/start.ts` создаёт контекст `AppModule.forRoot(config)` и открывает порт; строка запуска — `preview role listening on …`.
-- `src/config/` — разбор окружения (`config.ts`, `loadPreviewConfig`), источники браузера агента (`browser-relays.ts`, `PREVIEW_BROWSER_RELAYS`) и глобальный `PreviewConfigModule` с токенами `PREVIEW_CONFIG` и `PREVIEW_CLOCK`.
+- `src/config/` — разбор окружения (`config.ts`, `loadPreviewConfig`), источники браузера агента (`browser-relays.ts`, `PREVIEW_BROWSER_RELAYS`) и глобальный `PreviewConfigModule` с токенами `PREVIEW_CONFIG` и `PREVIEW_CLOCK` (`config.tokens.ts`, там же тип конфигурации).
 - База — глобальный `DatabaseModule` из `@repo/service-runtime`: Nest закрывает пул после того, как шлюз закрылся.
 - `src/access/` — кто может открыть предпросмотр: порт хранилища (`preview-access.ts`), его реализация на PostgreSQL (`PostgresPreviewAccess`) и `PreviewSessions` — строки хоста и сессии, которые шлюз помнит 5 секунд, и повторная проверка членства и сайта не чаще раза в минуту.
 - `src/cookie/` — собственная cookie шлюза, её подпись и хеш билета кабинета; общая для `access` и `gateway`.
@@ -28,6 +28,6 @@
 ## Чего не должно достигать
 
 - Адреса upstream из запроса: он берётся только из строки `preview_environments`.
-- Путь запроса (`src/gateway`, `src/access`, `src/cookie`) берёт из пакетов только `domain`, `db`, `ip-address` и токен Prisma из `service-runtime` (`preview-request-path`).
+- Путь запроса (`src/gateway`, `src/access`, `src/cookie`) берёт из пакетов только `domain`, `db`, `ip-address` и токен Prisma из подпути `@repo/service-runtime/tokens` — и транзитивно тоже: ни обвязки `service-runtime`, ни `observability`, ни `app-bootstrap` (`preview-request-path`). Поэтому тип `PreviewGatewayConfig` лежит рядом со своим токеном в `src/config/config.tokens.ts`, а `config.ts` его переэкспортирует.
 - Хранилищ, Vault, git, песочниц, платежей, почты и кода содержимого сайта (`preview-minimal-packages`, даже транзитивно через пакеты репозитория), `@repo/trpc` и `@repo/ui` (`llm-no-trpc-ui`), других приложений (`apps-are-isolated`). Приложение подключает только базу; Redis есть лишь у `core`.
 - Cookie общего домена с кабинетом: домен предпросмотров отдельный регистрируемый (`raditi-preview.ru`), в production конфигурация отклоняет домен, у которого регистрируемый домен тот же, что у `APP_URL` или `GITEA_URL`.

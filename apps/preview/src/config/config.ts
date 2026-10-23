@@ -8,9 +8,7 @@ import {
   previewAddressProblems,
   previewDefaults,
   previewSessionSecretProblem,
-  type AppEnv,
   type Env,
-  type PreviewAddress,
 } from '@repo/domain'
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
 import { ipLiteral } from '@repo/ip-address'
@@ -18,9 +16,11 @@ import { ConfigError } from '@repo/app-bootstrap'
 import { getDomain } from 'tldts'
 import { z } from 'zod'
 
-import { parsePreviewRelays, type PreviewRelayRange } from './browser-relays.ts'
+import { parsePreviewRelays } from './browser-relays.ts'
+import type { PreviewGatewayConfig } from './config.tokens.ts'
 
 export { ConfigError }
+export type { PreviewGatewayConfig }
 
 export const DEFAULT_PREVIEW_GATEWAY_PORT = previewDefaults.gatewayPort
 /**
@@ -28,32 +28,6 @@ export const DEFAULT_PREVIEW_GATEWAY_PORT = previewDefaults.gatewayPort
  * it. Production refuses to start the role without a secret of its own.
  */
 export const DEV_PREVIEW_SESSION_SECRET = 'raditi-dev-preview-session-secret-not-for-production'
-
-/**
- * The gateway of previews (docs/plan/53-chat-preview-release.md, Р19): the exact Host to the
- * upstream of its preview, one-time tickets and its own session cookie. Holds the session
- * secret: never log it.
- */
-export interface PreviewGatewayConfig {
-  appEnv: AppEnv
-  port: number
-  address: PreviewAddress
-  sessionSecret: string
-  /** APP_URL: `frame-ancestors` and the way back to the cabinet. */
-  appUrl: string
-  db: DbConfig
-  /**
-   * PREVIEW_BROWSER_RELAYS: the sources that may use the gateway as a forward proxy (the relays
-   * of the agent's browser, Р21); empty — the forward proxy is off.
-   */
-  browserRelays: readonly PreviewRelayRange[]
-  /**
-   * PREVIEW_GATEWAY_HOST: the address it listens on; undefined — every address (production, in
-   * its container). Loopback elsewhere unless set: a Linux stand names the Docker bridge's
-   * gateway, where the relay of the agent's browser reaches the host (host.docker.internal).
-   */
-  host: string | undefined
-}
 
 const ownEnvSchema = z.object({
   // Required, never defaulted: a missing APP_ENV must not switch the production checks off.

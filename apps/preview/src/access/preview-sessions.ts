@@ -1,8 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { previewTimings } from '@repo/domain'
 
-import { PREVIEW_CLOCK, PREVIEW_CONFIG, type PreviewClock } from '../config/config.tokens.ts'
-import type { PreviewGatewayConfig } from '../config/config.ts'
+import {
+  PREVIEW_CLOCK,
+  PREVIEW_CONFIG,
+  type PreviewClock,
+  type PreviewGatewayConfig,
+} from '../config/config.tokens.ts'
 import { previewCookieClaims, verifyPreviewCookie } from '../cookie/preview-cookie.ts'
 import { previewGatewayLimits } from '../gateway/limits.ts'
 import { PREVIEW_ACCESS_STORE } from './access.tokens.ts'
