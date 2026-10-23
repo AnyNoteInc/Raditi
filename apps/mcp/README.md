@@ -4,7 +4,7 @@ MCP-шлюз к сайтам (spec §5, §8): единственное мест�
 
 ## Устройство
 
-Приложение Nest из модулей (план 56, §4.3). Корень — `src/app.module.ts`: `AppModule.forRoot(config, testing?)` отказывает в составе, который пропустила конфигурация (профиль в production, профиль без S3 или без предпросмотров, швы стендов без профиля), и подключает модули по профилям: `site_info` есть всегда, контент — с `MCP_CONTENT_PROFILE`, браузер — с `MCP_BROWSER_PROFILE`; в этом порядке идут и инструменты. Каталоги `src`:
+Приложение Nest из модулей (план 56, §4.3). Корень — `src/app.module.ts`: `AppModule.forRoot(config, testing?)` отказывает в составе, который пропустила конфигурация (профиль в production, профиль без S3 или без предпросмотров, швы стендов без профиля), затем — ещё до создания Nest — проверяет, что mcp-nest держит службу авторизации инструментов там, где её подменяет `server/mcp-runtime.ts`, и подключает модули по профилям: `site_info` есть всегда, контент — с `MCP_CONTENT_PROFILE`, браузер — с `MCP_BROWSER_PROFILE`; в этом порядке идут и инструменты. Свои настройки модули читают через `MCP_CONFIG`, аргумент `forRoot` у модулей профилей — только шов стендов. Каталоги `src`:
 
 - `config` — разбор окружения (`loadMcpConfig`, `parseMcpHosts`) и глобальный `McpConfigModule` (`MCP_CONFIG`); `infra` — Vault роли (`SECRET_STORE`), база — `DatabaseModule` из `@repo/service-runtime`; `health` — `/health` (`HealthModule` из `@repo/service-runtime` и проверка запроса допуска);
 - `common` — канонический JSON, проверка одной строки, id JSON-RPC и ошибки `/mcp`; `access` — допуск токена хода (`PostgresMcpAccess`), `McpAuthGuard` и политика запроса; `server` — среда mcp-nest, `/mcp` и `mountMcp` (вызывается до `listen`); `site-info` — `site_info`;

@@ -8,6 +8,7 @@ import { McpConfigModule } from './config/config.module.ts'
 import { ContentModule, type ContentTesting } from './content/content.module.ts'
 import { McpHealthModule } from './health/health.module.ts'
 import { InfraModule } from './infra/infra.module.ts'
+import { assertMcpNestToolAuthorization } from './server/mcp-runtime.ts'
 import { ServerModule } from './server/server.module.ts'
 import { SiteInfoModule } from './site-info/site-info.module.ts'
 import { StorageModule } from './storage/storage.module.ts'
@@ -54,16 +55,20 @@ export class AppModule {
       throw new Error('MCP content profile local writes into previews (PREVIEW_BASE_DOMAIN)')
     if (siteContent && previews)
       throw new Error('MCP content profile local-site is refused beside previews')
-    const storage = config.storage
-    if (content && !storage) throw new Error('MCP content profile needs its S3 settings')
-    if (browser && !storage) throw new Error('MCP browser profile needs its S3 settings')
+    if (content && !config.storage) throw new Error('MCP content profile needs its S3 settings')
+    if (browser && !config.storage) throw new Error('MCP browser profile needs its S3 settings')
+    // Before Nest exists, so this refusal is main.ts's line alone; ServerModule makes the
+    // runtime itself.
+    assertMcpNestToolAuthorization()
     return {
       module: AppModule,
       imports: [
         McpConfigModule.forRoot(config),
         DatabaseModule.forRoot(config.db),
         InfraModule,
-        ...((content || browser) && storage ? [StorageModule.forRoot(storage)] : []),
+        // The modules of a profile read their settings through MCP_CONFIG; the refusals above
+        // are why the settings are there whenever the module is.
+        ...(content || browser ? [StorageModule] : []),
         McpHealthModule,
         ServerModule,
         SiteInfoModule,
@@ -75,9 +80,7 @@ export class AppModule {
               }),
             ]
           : []),
-        ...(browser && previews
-          ? [BrowserModule.forRoot({ address: previews, browserFactory: testing?.browserFactory })]
-          : []),
+        ...(browser ? [BrowserModule.forRoot({ browserFactory: testing?.browserFactory })] : []),
       ],
     }
   }

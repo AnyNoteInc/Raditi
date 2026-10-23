@@ -50,6 +50,23 @@ export function createMcpRuntime(security: McpSecurity) {
 export const MCP_TOOL_SECURITY_SCHEMES = [{ type: 'noauth' }] as const
 
 /**
+ * Fails before Nest exists when mcp-nest no longer has the service createMcpRuntime replaces.
+ * AppModule.forRoot calls it after its refusals, so the refusal reaches main.ts alone: thrown
+ * from ServerModule's factory inside NestFactory.create, it would be logged by Nest's
+ * ExceptionHandler first. The strategy it looks into has no transport and is never started.
+ */
+export function assertMcpNestToolAuthorization(): void {
+  toolAuthorizationOf(
+    new McpStrategy({
+      name: MCP_SERVER_NAME,
+      version: MCP_VERSION,
+      transports: [],
+      logging: false,
+    }),
+  )
+}
+
+/**
  * mcp-nest describes a tool of `@ToolScopes` to the client as OAuth 2 with those scopes
  * (`_meta.securitySchemes`). A family is this role's own split of what one turn token may call,
  * not an OAuth scope a client could ask for, and a client that reads such a scheme could start
@@ -58,9 +75,15 @@ export const MCP_TOOL_SECURITY_SCHEMES = [{ type: 'noauth' }] as const
  * when mcp-nest no longer has the service this replaces.
  */
 function describeToolsWithoutSchemes(strategy: McpStrategy): void {
-  const service = (strategy as unknown as { authService?: { generateSecuritySchemes?: unknown } })
-    .authService
+  toolAuthorizationOf(strategy).generateSecuritySchemes = () =>
+    MCP_TOOL_SECURITY_SCHEMES.map((scheme) => ({ ...scheme }))
+}
+
+type ToolAuthorization = { generateSecuritySchemes?: unknown }
+
+function toolAuthorizationOf(strategy: McpStrategy): ToolAuthorization {
+  const service = (strategy as unknown as { authService?: ToolAuthorization }).authService
   if (!service || typeof service.generateSecuritySchemes !== 'function')
     throw new Error('mcp-nest: the tool authorization service is not where it was')
-  service.generateSecuritySchemes = () => MCP_TOOL_SECURITY_SCHEMES.map((scheme) => ({ ...scheme }))
+  return service
 }
