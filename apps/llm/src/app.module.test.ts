@@ -15,6 +15,7 @@ const fakes = vi.hoisted(() => ({
   listen: vi.fn(),
   close: vi.fn(),
   createGateway: vi.fn(),
+  createTransport: vi.fn(),
   transportRequest: vi.fn(),
   createControlEgress: vi.fn(),
   createProbe: vi.fn(),
@@ -30,7 +31,10 @@ vi.mock('./accounting/gateway-store.ts', () => ({
 vi.mock('./gateway/server.ts', () => ({ createLlmGateway: fakes.createGateway }))
 vi.mock('./egress/egress.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof EgressModule>()),
-  createEgressTransport: () => ({ request: fakes.transportRequest }),
+  createEgressTransport: (...args: unknown[]) => {
+    fakes.createTransport(...args)
+    return { request: fakes.transportRequest }
+  },
   createControlEgress: fakes.createControlEgress,
 }))
 vi.mock('./egress/egress-probe.ts', async (importOriginal) => ({
@@ -55,6 +59,14 @@ const role = (
   secrets: Partial<SecretStore> = {},
 ): Promise<TestingModule> =>
   testRole([AppModule.forRoot(roleConfig)], { prisma, secrets }).compile()
+
+// A database and a Vault that answer the health probe of the role.
+const answering = () => ({
+  prisma: { $disconnect: vi.fn(), $queryRaw: vi.fn().mockResolvedValue([]) },
+  secrets: {
+    health: vi.fn().mockResolvedValue({ initialized: true, sealed: false }),
+  } as Partial<SecretStore>,
+})
 
 describe('llm role lifecycle', () => {
   afterEach(() => {
@@ -134,6 +146,94 @@ describe('llm role lifecycle', () => {
     )
     // One for provider traffic, one for the region recheck over the channel alone.
     expect(fakes.createControlEgress).toHaveBeenCalledTimes(2)
+    await app.close()
+  })
+
+  it('starts with admission closed and answers degraded when the first scan for lost calls fails', async () => {
+    fakes.collectLost.mockRejectedValue(new Error('private-database-error'))
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const { prisma, secrets } = answering()
+    const app = await role(config(), prisma, secrets)
+    await app.get(LlmRuntime).listen()
+    const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
+    // The database and Vault answer the probe: the collector alone closes both.
+    expect(options.ready?.()).toBe(false)
+    expect(await options.health?.()).toBe(false)
+    expect(warn).toHaveBeenCalledWith(JSON.stringify({ event: 'llm_collector_failed' }))
+    warn.mockRestore()
+    await app.close()
+  })
+
+  it('scans for lost calls every 30 s once listening and reopens admission only after a fresh scan in time', async () => {
+    vi.useFakeTimers()
+    let resolveScan: () => void = () => {}
+    fakes.collectLost.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveScan = resolve
+        }),
+    )
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const app = await role(config(true))
+    const listening = app.get(LlmRuntime).listen()
+    // The first scan is bounded: the role listens with admission closed.
+    await vi.advanceTimersByTimeAsync(10_000)
+    await listening
+    const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
+    expect(options.ready?.()).toBe(false)
+    expect(warn).toHaveBeenCalledWith(JSON.stringify({ event: 'llm_collector_timeout' }))
+    // The runtime's own interval finds the hung scan still running and starts no second one.
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(fakes.collectLost).toHaveBeenCalledOnce()
+    resolveScan()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(options.ready?.()).toBe(false)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(fakes.collectLost).toHaveBeenCalledTimes(2)
+    expect(options.ready?.()).toBe(true)
+    warn.mockRestore()
+    await app.close()
+  })
+
+  it('probes the channel on its own schedule once listening and again within seconds after a failure', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const app = await role(config(true))
+    await app.get(LlmRuntime).listen()
+    const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
+    expect(fakes.probe).toHaveBeenCalledOnce()
+    fakes.probe.mockResolvedValueOnce(false).mockResolvedValueOnce(false)
+    // One failed probe does not close admission; the next comes in seconds, not in five minutes.
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(fakes.probe).toHaveBeenCalledTimes(2)
+    expect(options.ready?.()).toBe(true)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(fakes.probe).toHaveBeenCalledTimes(3)
+    expect(options.ready?.()).toBe(false)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(fakes.probe).toHaveBeenCalledTimes(4)
+    expect(options.ready?.()).toBe(true)
+    warn.mockRestore()
+    await app.close()
+  })
+
+  it('answers /health from the transport of the role: degraded, with admission left open, while its own connections to a provider fail', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    const { prisma, secrets } = answering()
+    const app = await role(config(), prisma, secrets)
+    await app.get(LlmRuntime).listen()
+    const options = fakes.createGateway.mock.calls[0]![0] as LlmGatewayOptions
+    const { onDirectConnection } = fakes.createTransport.mock.calls[0]![2] as {
+      onDirectConnection: (established: boolean) => void
+    }
+    expect(await options.health?.()).toBe(true)
+    // Without a proxy nothing probes a provider: the transport's own word is the one sign.
+    for (let failure = 0; failure < 3; failure++) onDirectConnection(false)
+    expect(await options.health?.()).toBe(false)
+    expect(options.ready?.()).toBe(true)
+    onDirectConnection(true)
+    expect(await options.health?.()).toBe(true)
+    warn.mockRestore()
     await app.close()
   })
 
