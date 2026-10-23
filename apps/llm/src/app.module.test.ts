@@ -55,6 +55,7 @@ vi.mock('./pool/pool-health.ts', () => ({
 }))
 
 import { AppModule } from './app.module.ts'
+import { GatewayModule } from './gateway/gateway.module.ts'
 import { LlmRuntime } from './gateway/llm-runtime.ts'
 import type { LlmGatewayOptions } from './gateway/server.ts'
 import type { SubscriptionPoolHealthOptions } from './pool/pool-health.ts'
@@ -335,5 +336,15 @@ describe('llm role lifecycle', () => {
     await vi.advanceTimersByTimeAsync(10 * 60_000)
     expect(fakes.poolTick).toHaveBeenCalledOnce()
     expect(disconnect).toHaveBeenCalledOnce()
+  })
+
+  it('gives startLlm the runtime of the gateway, which no module exports', async () => {
+    // No module injects the runtime (plan 56, §3, item 4); app.get looks in every module.
+    expect(Reflect.getMetadata('exports', GatewayModule)).toBeUndefined()
+    const app = await role(config())
+    const runtime = app.get(LlmRuntime)
+    expect(runtime).toBeInstanceOf(LlmRuntime)
+    expect(app.select(GatewayModule).get(LlmRuntime, { strict: true })).toBe(runtime)
+    await app.close()
   })
 })

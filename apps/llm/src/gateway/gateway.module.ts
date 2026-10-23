@@ -20,7 +20,12 @@ import { LlmRuntime } from './llm-runtime.ts'
 import { GatewayReadiness } from './readiness.ts'
 import { createLlmGateway } from './server.ts'
 
-/** The HTTP server of the role over the store, the pool and the gate of generations. */
+/**
+ * The HTTP server of the role over the store, the pool and the gate of generations, and the
+ * runtime (LlmRuntime) that starts and stops it. No module injects the runtime, so the module
+ * exports nothing (plan 56, §3, item 4): startLlm and the stand's worker take it with app.get,
+ * which looks in every module.
+ */
 @Module({
   imports: [AccountingModule, EgressModule, PoolModule, MaintenanceModule],
   providers: [
@@ -75,6 +80,5 @@ import { createLlmGateway } from './server.ts'
     },
     LlmRuntime,
   ],
-  exports: [LlmRuntime],
 })
 export class GatewayModule {}
