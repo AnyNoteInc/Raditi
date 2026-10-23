@@ -1,6 +1,6 @@
 // Test doubles for the mcp role: its configuration as a test env gives it, and the infra fakes
 // every role app shares. Only for *.test.ts files (excluded from the build).
-import { loadMcpConfig, type McpConfig } from '../config.ts'
+import { loadMcpConfig, type McpConfig } from '../config/config.ts'
 
 export { fakeInfra, TEST_METRICS_TOKEN, type FakeInfra } from '@repo/service-runtime/testing/fakes'
 

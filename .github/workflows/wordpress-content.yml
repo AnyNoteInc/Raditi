@@ -16,17 +16,16 @@ on:
       - infra/wordpress/**
       - infra/dev/site-verify/**
       - packages/site-adapters/**
+      # The mcp app with the stand's worker and scenarios (apps/mcp/scripts) and the sample ids
+      # of the turns they make up (apps/mcp/src/testing).
       - apps/mcp/**
-      - apps/core/scripts/verify-content-*.mjs
       # Containers, clean environment and data services of the stand.
       - apps/core/scripts/verify-agent-supervisor.mjs
       # What the stand's scripts load besides the MCP modules: the turn supervisor and DI tokens
-      # of the orchestrator build, the journal tables and migrations, snapshot storage, the diff
-      # path policy.
+      # of core's build, the journal tables and migrations, snapshot storage, the diff path
+      # policy.
       - apps/core/src/turns/**
       - apps/core/src/infra/**
-      # The sample ids of the turns the stand's scripts make up, loaded from the sources.
-      - apps/core/src/testing/**
       - packages/db/**
       - packages/storage/**
       - packages/snapshots/**

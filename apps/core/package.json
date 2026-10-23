@@ -26,13 +26,11 @@
     "verify:opencode-supervisor": "pnpm build && pnpm --filter runner build && exec node scripts/verify-opencode-supervisor.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/core": "catalog:",
     "@nestjs/bullmq": "catalog:",
     "@nestjs/common": "catalog:",
     "@nestjs/core": "catalog:",
     "@nestjs/platform-express": "catalog:",
     "@prometheus-io/client": "catalog:",
-    "@rekog/mcp-nest": "catalog:",
     "@repo/agent-drivers": "workspace:*",
     "@repo/app-bootstrap": "workspace:*",
     "@repo/billing": "workspace:*",
@@ -71,6 +69,7 @@
   "devDependencies": {
     "@nestjs/cli": "catalog:",
     "@nestjs/testing": "catalog:",
+    "@rekog/mcp-nest": "catalog:",
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@swc/core": "catalog:",

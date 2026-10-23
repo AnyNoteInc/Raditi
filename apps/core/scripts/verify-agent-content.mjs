@@ -515,7 +515,7 @@ async function stand(site) {
   const { llmBackends } = await import('@repo/llm-backends')
   const { createPoolProbeClient } = await import('../dist/llm/pool-probe-client.js')
   const { ContentSnapshotStorage, contentSnapshotKey } =
-    await import('../../mcp/dist/content-snapshots.js')
+    await import('../../mcp/dist/content/content-snapshots.js')
   const credentials = new GatewayTurnCredentials({
     prisma: db,
     secrets: createVaultSecretStore({ addr: stack.vaultAddress, appRole: stack.roles.core }),
@@ -577,7 +577,7 @@ async function stand(site) {
     const { fence } = request
     const result = await run(
       process.execPath,
-      [join(repository, 'apps/core/scripts/verify-agent-content-undo.mjs')],
+      [join(repository, 'apps/mcp/scripts/verify-agent-content-undo.mjs')],
       {
         input: `${JSON.stringify({
           fence: {

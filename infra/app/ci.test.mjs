@@ -529,38 +529,46 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     'infra/dev/site-verify/**',
     'packages/site-adapters/**',
     'apps/mcp/**',
-    'apps/core/scripts/verify-content-*.mjs',
   ])
     assert.ok(filter.includes(pattern), `${pattern} is in the path filter`)
-  // The plugin, every script of the stand and the helpers it imports start the workflow.
+  // The plugin, every script of the stand and the helpers it imports start the workflow. The
+  // worker and its scenarios drive the mcp app alone and live in its scripts (plan 56).
+  const workers = readdirSync(join(root, 'apps/mcp/scripts'))
+    .filter((name) => name.startsWith('verify-content-'))
+    .map((name) => `apps/mcp/scripts/${name}`)
+  assert.ok(workers.includes('apps/mcp/scripts/verify-content-worker.mjs'))
   const stand = [
     'infra/wordpress/raditi-content.php',
     'apps/core/scripts/verify-agent-supervisor.mjs',
     ...readdirSync(join(root, 'infra/dev/site-verify')).map(
       (name) => `infra/dev/site-verify/${name}`,
     ),
-    ...readdirSync(join(root, 'apps/core/scripts'))
-      .filter((name) => name.startsWith('verify-content-'))
-      .map((name) => `apps/core/scripts/${name}`),
+    ...workers,
   ]
   assert.ok(stand.length >= 9)
   for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
   // As for the gateway stand: the packages its scripts import, by name or by a path into their
-  // sources, the orchestrator modules they load from the build and the orchestrator sources
-  // they load as they are. The journal tables, the snapshot storage and the turn undo are this
-  // path as much as the plugin is.
+  // sources, the modules of the apps they load from the builds and the app sources they load as
+  // they are. `../dist/` and `../src/` are the build and the sources of the script's own app.
+  // The journal tables, the snapshot storage and the turn undo are this path as much as the
+  // plugin is.
   const imported = new Set()
   for (const script of stand.filter((file) => file.endsWith('.mjs'))) {
+    const app = /^apps\/([a-z-]+)\/scripts\//.exec(script)?.[1]
     const text = read(script)
     for (const [, name] of text.matchAll(/'(?:@repo|(?:\.\.\/)+packages)\/([a-z-]+)[/']/g))
       imported.add(`packages/${name}/src/index.ts`)
-    for (const [, directory] of text.matchAll(/'\.\.\/dist\/([a-z-]+)\//g))
-      imported.add(`apps/core/src/${directory}/index.ts`)
-    // The builds of the other apps: apps/mcp/dist and apps/llm/dist.
-    for (const [, app] of text.matchAll(/'\.\.\/\.\.\/([a-z-]+)\/dist\//g))
-      imported.add(`apps/${app}/src/index.ts`)
+    if (!app) continue
+    // A module of the app's own build: its directory, or the app itself for one at the root.
+    for (const [, directory] of text.matchAll(/'\.\.\/dist\/(?:([a-z-]+)\/)?/g))
+      imported.add(`apps/${app}/src/${directory ? `${directory}/` : ''}index.ts`)
+    // The builds of the other apps, by directory: ../../core/dist/turns/ and the like.
+    for (const [, other, directory] of text.matchAll(
+      /'\.\.\/\.\.\/([a-z-]+)\/dist\/(?:([a-z-]+)\/)?/g,
+    ))
+      imported.add(`apps/${other}/src/${directory ? `${directory}/` : ''}index.ts`)
     for (const [, file] of text.matchAll(/'\.\.\/src\/([^']+\.ts)'/g))
-      imported.add(`apps/core/src/${file}`)
+      imported.add(`apps/${app}/src/${file}`)
   }
   for (const source of [
     'packages/db/src/index.ts',
@@ -568,9 +576,11 @@ test('the WordPress content path runs on a real WordPress in CI', () => {
     'packages/domain/src/index.ts',
     'packages/site-adapters/src/index.ts',
     'apps/mcp/src/index.ts',
+    'apps/mcp/src/content/index.ts',
+    // The turn supervisor of core's build drives the trusted rollback of the mcp app.
     'apps/core/src/turns/index.ts',
     // The sample ids of the turns the stand makes up.
-    'apps/core/src/testing/ids.ts',
+    'apps/mcp/src/testing/ids.ts',
   ])
     assert.ok(imported.has(source), `the stand loads ${source.replace('/index.ts', '')}`)
   for (const source of imported)

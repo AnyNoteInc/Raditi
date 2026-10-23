@@ -8,7 +8,7 @@ import { z } from 'zod'
 export async function productionMcpTools() {
   await import('reflect-metadata')
   const { default: mcpNest } = await import('@rekog/mcp-nest')
-  const { McpToolsController } = await import('../../mcp/dist/mcp-tools.controller.js')
+  const { McpToolsController } = await import('../../mcp/dist/site-info/mcp-tools.controller.js')
   const tools = Object.getOwnPropertyNames(McpToolsController.prototype).flatMap((name) => {
     const meta = Reflect.getMetadata(
       mcpNest.MCP_TOOL_METADATA_KEY,

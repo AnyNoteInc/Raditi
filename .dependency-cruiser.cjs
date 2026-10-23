@@ -335,6 +335,42 @@ module.exports = {
       },
     },
     {
+      name: 'mcp-profiles-apart',
+      comment:
+        'The content and the browser tools of the mcp app are two profiles, each its own module: neither folder imports the other (plan 56, §4.3).',
+      severity: 'error',
+      from: { path: '^apps/mcp/src/(content|browser)/', pathNot: '\\.test\\.ts$' },
+      to: { path: '^apps/mcp/src/(content|browser)/', pathNot: '^apps/mcp/src/$1/' },
+    },
+    {
+      name: 'mcp-base-no-profiles',
+      comment:
+        'What the profiles of the mcp app build on (access, server, common, config, infra, health, storage, privacy, site-info) imports no profile, only the argument schemas of its tools, which the request policy checks.',
+      severity: 'error',
+      from: {
+        path: '^apps/mcp/src/(access|server|common|config|infra|health|storage|privacy|site-info)/',
+        pathNot: '\\.test\\.ts$',
+      },
+      to: {
+        path: '^apps/mcp/src/(content|browser)/',
+        pathNot: '^apps/mcp/src/(content/content-arguments|browser/browser-arguments)\\.ts$',
+      },
+    },
+    {
+      name: 'mcp-common-and-arguments-are-leaves',
+      comment:
+        'The helpers of the mcp app (common) and the argument schemas of its tools import nothing of the app but common: the request policy loads them without a service.',
+      severity: 'error',
+      from: {
+        path: [
+          '^apps/mcp/src/common/',
+          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments)\\.ts$',
+        ],
+        pathNot: '\\.test\\.ts$',
+      },
+      to: { path: '^apps/mcp/src/', pathNot: '^apps/mcp/src/common/' },
+    },
+    {
       name: 'llm-minimal-packages',
       comment:
         'The llm app is the one process that holds a provider key (rule 1, 2): it composes the database, Vault, the backend registry, the turn keys and the runtime — no storage, git, sandbox, browser, payments, mail or content code, not even transitively.',
