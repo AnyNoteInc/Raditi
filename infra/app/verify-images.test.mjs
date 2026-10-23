@@ -2,6 +2,7 @@
 // not carry, and which operator's commands it keeps.
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { matchesGlob } from 'node:path'
 import { test } from 'node:test'
 
 import {
@@ -12,6 +13,35 @@ import {
   OPERATOR_SCRIPTS,
   standFilesOf,
 } from './verify-images.mjs'
+
+/** The patterns of the repository's .dockerignore, the build context of every app image. */
+const DOCKER_IGNORE = readFileSync(new URL('../../.dockerignore', import.meta.url), 'utf8')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter((line) => line !== '' && !line.startsWith('#'))
+
+/**
+ * Whether Docker leaves a path of the repository out of the build context: a pattern decides when
+ * it matches the path or one of its parent directories, the last such pattern wins, and `!` takes
+ * the path back.
+ */
+function ignoredByDocker(file) {
+  const parts = file.split('/')
+  const paths = parts.map((_, index) => parts.slice(0, index + 1).join('/'))
+  let ignored = false
+  for (const line of DOCKER_IGNORE) {
+    const kept = line.startsWith('!')
+    const pattern = kept ? line.slice(1) : line
+    if (paths.some((path) => matchesGlob(path, pattern))) ignored = !kept
+  }
+  return ignored
+}
+
+/** The files of `<directory>/scripts` of the repository, as paths from its root. */
+function scriptsOf(directory) {
+  const url = new URL(`../../${directory}/scripts/`, import.meta.url)
+  return existsSync(url) ? readdirSync(url).map((name) => `${directory}/scripts/${name}`) : []
+}
 
 test('every app the stand builds has its own Dockerfile and a list of what it may not carry', () => {
   for (const app of APPS)
@@ -84,26 +114,23 @@ test('an image carries no stand, stand test or fixture, and keeps the operator c
     'subscription-token.mjs',
   ])
   assert.deepEqual(missingOperatorScriptsOf('mcp', []), [])
-  // Every command the list names lies next to the stands of its app, and .dockerignore keeps it.
-  const ignored = readFileSync(new URL('../../.dockerignore', import.meta.url), 'utf8')
-    .split('\n')
-    .filter((line) => line !== '' && !line.startsWith('#'))
-  for (const app of APPS)
-    for (const name of OPERATOR_SCRIPTS[app]) {
-      assert.ok(readFileSync(new URL(`../../apps/${app}/scripts/${name}`, import.meta.url), 'utf8'))
-      assert.deepEqual(standFilesOf([`/app/apps/${app}/scripts/${name}`]), [])
-    }
-  for (const pattern of [
-    '**/scripts/verify-*.mjs',
-    '**/scripts/*.test.mjs',
-    'apps/core/scripts/opencode-runner-fixture*.mjs',
-  ])
-    assert.ok(ignored.includes(pattern), `.dockerignore has no ${pattern}`)
 })
 
-test('what is left of the scripts of every app in its image is exactly its operator commands', () => {
-  // core is built by verify:edge and verify:release; its operator commands run in its image on the
-  // app VM (`docker compose run --entrypoint node core scripts/billing-refund.mjs …`).
+test('the .dockerignore matcher of these tests reads the file as Docker does', () => {
+  assert.equal(ignoredByDocker('apps/core/src/main.ts'), false)
+  // A pattern that matches a parent directory leaves out everything under it.
+  assert.equal(ignoredByDocker('apps/core/dist/main.js'), true)
+  assert.equal(ignoredByDocker('infra/app/verify-images.mjs'), true)
+  // The last pattern that matches decides, and `!` takes the path back.
+  assert.equal(ignoredByDocker('infra/sandbox/watchdog.mjs'), false)
+  assert.equal(ignoredByDocker('apps/web/.env.local'), true)
+  assert.equal(ignoredByDocker('.env.example'), false)
+})
+
+test('.dockerignore leaves out exactly the stands, never an operator command of an app', () => {
+  // core is built by verify:edge and verify:release, not by verify:images; its operator commands
+  // run in its image on the app VM
+  // (`docker compose run --entrypoint node core scripts/billing-refund.mjs …`).
   const kept = {
     ...OPERATOR_SCRIPTS,
     core: [
@@ -115,16 +142,21 @@ test('what is left of the scripts of every app in its image is exactly its opera
       'releases-resolve.mjs',
     ],
   }
-  for (const [app, names] of Object.entries(kept)) {
-    const directory = new URL(`../../apps/${app}/scripts/`, import.meta.url)
-    const files = existsSync(directory)
-      ? readdirSync(directory).filter((name) => name.endsWith('.mjs'))
-      : []
-    const stands = new Set(standFilesOf(files.map((name) => `/app/apps/${app}/scripts/${name}`)))
+  // The stands of the packages the images carry go too (the runner image holds agent-drivers and
+  // sandbox-providers); the image check of verify:images knows a stand by STAND_FILE alone.
+  const packages = readdirSync(new URL('../../packages/', import.meta.url)).map(
+    (name) => `packages/${name}`,
+  )
+  for (const directory of [...Object.keys(kept).map((app) => `apps/${app}`), ...packages]) {
+    const files = scriptsOf(directory)
+    assert.deepEqual(files.filter(ignoredByDocker), standFilesOf(files), `${directory}/scripts`)
+  }
+  for (const [app, names] of Object.entries(kept))
     assert.deepEqual(
-      files.filter((name) => !stands.has(`/app/apps/${app}/scripts/${name}`)).sort(),
-      [...names].sort(),
+      scriptsOf(`apps/${app}`)
+        .filter((file) => !ignoredByDocker(file))
+        .sort(),
+      names.map((name) => `apps/${app}/scripts/${name}`).sort(),
       `apps/${app}/scripts`,
     )
-  }
 })

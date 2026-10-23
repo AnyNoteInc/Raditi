@@ -1,6 +1,6 @@
 # @repo/service-runtime
 
-Общая Nest-обвязка приложений с базой — `core`, `llm`, `mcp` и `preview` (план 55): клиент и жизненный цикл Prisma, `/health` и токены внедрения. Запуск и остановка процесса, логгер и `.env` — в `@repo/app-bootstrap`; Redis, очереди и `/metrics` — только у `core` (`apps/core/src/infra/redis.ts`, `apps/core/src/metrics`; план 56). В отличие от остальных пакетов, которые отдают TypeScript-исходники, этот собирается в `dist` (`tsc`): в нём декораторы Nest, а Node их не вычищает. Типы и тесты читают исходники по условию `source`/`types`.
+Общая Nest-обвязка приложений с базой — `core`, `llm`, `mcp` и `preview` (план 55): клиент и жизненный цикл Prisma, `/health` и токены внедрения. Запуск и остановка процесса, логгер и `.env` — в `@repo/app-bootstrap`; Redis, очереди и модуль метрик Nest (`MetricsController`, `MetricsTokenGuard`, `MetricsRegistryModule`) — только у `core` (`apps/core/src/infra/redis.ts`, `apps/core/src/metrics`; план 56); свой `/metrics` у `llm` отдаёт сервер шлюза (`apps/llm/src/gateway/server.ts`), а не модули этого пакета. В отличие от остальных пакетов, которые отдают TypeScript-исходники, этот собирается в `dist` (`tsc`): в нём декораторы Nest, а Node их не вычищает. Типы и тесты читают исходники по условию `source`/`types`.
 
 ## Что даёт
 
