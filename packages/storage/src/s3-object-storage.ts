@@ -54,9 +54,9 @@ export function createS3Client(config: StorageConfig): S3Client {
 }
 
 /**
- * ObjectStorage port (spec §14) over any S3-compatible store.
- * TODO(M2): presigned URLs and multipart upload for the browser; streams already go through
- * lib-storage multipart on the server side.
+ * ObjectStorage port (spec §14) over any S3-compatible store. Streams go through lib-storage
+ * multipart on the server side; a customer's file reaches the inbox through web, never by a
+ * presigned URL (docs/plan/57-browser-tasks.md, Б26).
  */
 export function createS3ObjectStorage(
   config: StorageConfig,
@@ -145,6 +145,28 @@ export function createS3ObjectStorage(
         if (isMissingObject(err)) return false
         throw err
       }
+    },
+
+    async stat(bucket, key) {
+      assertKey(key)
+      try {
+        const head = await client.send(
+          new HeadObjectCommand({ Bucket: bucketOf(bucket), Key: key }),
+        )
+        if (head.ContentLength === undefined)
+          throw new Error('[@repo/storage] S3 answered HEAD without the size of the object')
+        return {
+          sizeBytes: head.ContentLength,
+          ...(head.ContentType ? { contentType: head.ContentType } : {}),
+          ...(head.ETag ? { etag: head.ETag } : {}),
+        }
+      } catch (err) {
+        if (!isMissingObject(err)) throw err
+      }
+      // A HEAD has no body, so a missing key and a missing bucket both come as a bare 404: the
+      // bucket is asked, and its absence is an error, as for get().
+      await client.send(new HeadBucketCommand({ Bucket: bucketOf(bucket) }))
+      return null
     },
 
     async delete(bucket, key) {

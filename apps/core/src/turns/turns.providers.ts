@@ -53,8 +53,9 @@ export const localTurnExecutor: Provider = {
 
 /**
  * The turn supervisor and its recovery as the stands compose them (scripts/verify-runner-core.mjs)
- * over TURN_EXECUTOR, with the background side of turns (TurnRuntime). Both are null without git
- * (CoreConfig.git), the supervisor also without a driver.
+ * over TURN_EXECUTOR, with the background side of turns (TurnRuntime). The supervisor is null
+ * without a driver. Without git (CoreConfig.git) both still run turns without a repository — in
+ * the cloud browser — and refuse the rest (docs/plan/57-browser-tasks.md, Б7).
  */
 export const turnEngineProviders: Provider[] = [
   // One per process, shared by the supervisor and recovery: a turn driven here is never taken over.
@@ -79,7 +80,7 @@ export const turnEngineProviders: Provider[] = [
       prisma: PrismaClient,
     ): TurnSupervisor | null => {
       const [driver] = drivers.list()
-      if (!workspace || !driver) return null
+      if (!driver) return null
       return new TurnSupervisor({
         leases,
         assignments,
@@ -118,20 +119,18 @@ export const turnEngineProviders: Provider[] = [
       drivers: AgentDriverRegistry,
       live: LiveTurns,
       credentials: TurnCredentialSource,
-    ): TurnExecRecovery | null =>
-      workspace
-        ? new TurnExecRecovery({
-            leases,
-            assignments,
-            executor,
-            journal,
-            driver: (id) => drivers.get(id),
-            workspace,
-            snapshots,
-            credentials,
-            live,
-          })
-        : null,
+    ): TurnExecRecovery =>
+      new TurnExecRecovery({
+        leases,
+        assignments,
+        executor,
+        journal,
+        driver: (id) => drivers.get(id),
+        workspace,
+        snapshots,
+        credentials,
+        live,
+      }),
     inject: [
       GitWorkspaceService,
       SITE_LEASES,

@@ -257,4 +257,82 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
       records: { returned: 2, kept: 1 },
     },
   },
+  // docs/plan/57-browser-tasks.md: a task done in the browser of the task.
+  {
+    name: 'request v1 resume',
+    type: 'feed.request',
+    payload: { v: 1, kind: 'resume', authorId: author, requestId: request },
+  },
+  {
+    name: 'question v1 browser login',
+    type: 'feed.question',
+    payload: {
+      v: 1,
+      kind: 'browser',
+      turn: 1,
+      reason: 'login',
+      message: 'Войдите, пожалуйста, в админку сайта — дальше я продолжу сам.',
+    },
+  },
+  {
+    name: 'question v1 browser unconfirmed',
+    type: 'feed.question',
+    payload: { v: 1, kind: 'browser', turn: 2, reason: 'unconfirmed' },
+  },
+  {
+    name: 'result v1 with objects',
+    type: 'feed.result',
+    payload: {
+      v: 1,
+      turn: 2,
+      message: 'Новость добавлена и опубликована.',
+      site: 'changed',
+      next: 'done',
+      filesChanged: null,
+      changeType: 'content',
+      needsApproval: false,
+      risk: 'low',
+      objects: [
+        {
+          kind: 'post',
+          title: 'Выставка 12 ноября',
+          status: 'published',
+          url: 'https://example.ru/2026/10/vystavka/',
+          editUrl: 'https://example.ru/wp-admin/post.php?post=42&action=edit',
+        },
+      ],
+    },
+  },
+  {
+    name: 'cancelled v1 with objects',
+    type: 'feed.cancelled',
+    payload: {
+      v: 1,
+      turn: 1,
+      by: 'customer',
+      authorId: author,
+      site: 'check',
+      credits: 'returned',
+      objects: [
+        {
+          kind: 'post',
+          title: null,
+          status: 'draft',
+          editUrl: 'https://example.ru/wp-admin/post.php?post=43&action=edit',
+        },
+      ],
+    },
+  },
+  {
+    name: 'failure v1 with objects',
+    type: 'feed.failure',
+    payload: {
+      v: 1,
+      turn: 3,
+      code: 'timeout',
+      site: 'check',
+      credits: 'returned',
+      objects: [{ kind: 'page', title: 'Контакты', status: 'missing' }],
+    },
+  },
 ])

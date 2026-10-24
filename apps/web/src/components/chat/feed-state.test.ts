@@ -153,6 +153,20 @@ describe('pollDelay', () => {
     expect(pollDelay(at({ status: 'awaiting_approval', preview }))).toBe(2_000)
   })
 
+  it('counts an open browser of the task as work while the task waits', () => {
+    const browser = {
+      sessionId: '0199a3f2-0000-7000-8000-0000000000e1',
+      status: 'ready' as const,
+      controller: 'user' as const,
+      help: null,
+      closeReason: null,
+    }
+    expect(pollDelay(at({ status: 'awaiting_user', browser }))).toBe(feedPolling.working)
+    expect(
+      pollDelay(at({ status: 'awaiting_user', browser: { ...browser, status: 'closed' } })),
+    ).toBe(feedPolling.waiting)
+  })
+
   it('stops at the end of a dialog', () => {
     for (const status of ['done', 'failed', 'cancelled', 'rolled_back'] as const)
       expect(pollDelay(at({ status }))).toBeNull()

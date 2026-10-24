@@ -462,7 +462,7 @@ describe('LocalTurnExecutor', () => {
     const sandboxBaseSha = 'd'.repeat(40)
     const input = f.input()
     const execution = await f.executor.prepare(
-      { ...input, bundle: { ...input.bundle, sandboxBaseSha } },
+      { ...input, bundle: { ...input.bundle!, sandboxBaseSha } },
       f.signal,
     )
     expect(f.importBundle).toHaveBeenCalledWith(
@@ -515,8 +515,8 @@ describe('LocalTurnExecutor', () => {
     }
     const sealed = await f.snapshots.seal(metadata, {
       home: { sizeBytes: captured.homeBytes },
-      untracked: captured.untracked,
-      patch: captured.patch,
+      untracked: captured.untracked!,
+      patch: captured.patch!,
     })
     await f.snapshots.reserve(sealed)
     const put = await f.snapshots.presignPart(sealed, 'home', 60_000)

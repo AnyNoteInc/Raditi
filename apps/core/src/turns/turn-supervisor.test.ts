@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { Logger } from '@nestjs/common'
 import {
   badRequest,
+  BROWSER_ONLY,
   conflict,
   DomainError,
   leaseLost,
@@ -25,6 +26,7 @@ import {
   type ExecHandle,
   type ObjectStorage,
   type PreparedRun,
+  type PublicationSource,
   type Sandbox,
   type SandboxInfo,
   type SecretStore,
@@ -168,7 +170,8 @@ const executorKinds = Object.keys(executors)
 function turnFixture(kind: string) {
   const order: string[] = []
   const evidence: TurnEvidence[] = []
-  const request: TurnRequest = {
+  // A turn with a repository, as every turn was before plan 57: tests narrow its workspace.
+  const request: TurnRequest & { workspace: PublicationSource } = {
     sandbox: {
       image,
       labels,
@@ -1338,7 +1341,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(finished.manifest).toEqual(loaded.manifest)
     expect(loaded.manifest.git).toMatchObject({ baseSha, headSha })
     expect(Buffer.from(loaded.archives.home)).toEqual(Buffer.from(captured.home))
-    expect(Buffer.from(loaded.archives.patch)).toEqual(Buffer.from(f.publication.patch))
+    expect(Buffer.from(loaded.archives.patch!)).toEqual(Buffer.from(f.publication.patch))
     // The home part went only through the create-only PUT, never through core's own writes.
     expect(f.transfer.put).toHaveBeenCalledOnce()
     expect(memory.storage.put.mock.calls.map(([, key]) => key)).not.toContain(
@@ -1565,7 +1568,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.sandboxes.create).not.toHaveBeenCalled()
   })
 
-  it('requires the previous checkpoint for every resumed turn', async () => {
+  it('requires the previous checkpoint for every resumed turn with a repository', async () => {
     const f = fixture()
     f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
     f.request.context = { ...f.request.context, turn: 2 }
@@ -2285,14 +2288,216 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
   })
 })
 
+/**
+ * The turn of a task in the cloud browser (docs/plan/57-browser-tasks.md, Б4, Б7): no
+ * repository, on a core without git. The commands that make its empty working directory print
+ * nothing; only the agent prints its events.
+ */
+function withoutRepository(f: Fixture): void {
+  const request = f.request as TurnRequest
+  delete request.workspace
+  request.requirements = { ...BROWSER_ONLY }
+  f.deps.workspace = null
+  const agent = vi.mocked(f.sandbox.exec).getMockImplementation()!
+  vi.mocked(f.sandbox.exec).mockImplementation(async (spec) => {
+    const command = spec.argv[0]!
+    if (!['test', 'mkdir', 'find'].includes(command)) return agent(spec)
+    f.order.push(`workdir:${command}`)
+    return {
+      id: `setup-${command}`,
+      output: async function* () {},
+      wait: async () => ({ code: 0, reason: 'exited' as const }),
+      kill: async () => {},
+    }
+  })
+}
+
+describe.each(executorKinds)('TurnSupervisor without a repository (%s executor)', (kind) => {
+  const fixture = () => turnFixture(kind)
+
+  /** A real SnapshotService over memory storage: what a turn saves is loaded back. */
+  function realSnapshots(f: Fixture, shared?: ReturnType<typeof snapshotStore>) {
+    const store = shared ?? snapshotStore()
+    f.transfer.put.mockImplementation(store.memory.transfer.put)
+    f.transfer.get.mockImplementation(store.memory.transfer.get)
+    f.snapshots.save.mockImplementation((metadata, parts, signal) =>
+      store.service.save(metadata, parts, signal),
+    )
+    f.snapshots.restoreSource.mockImplementation((reference, ttlMs) =>
+      store.service.restoreSource(reference, ttlMs),
+    )
+    return store
+  }
+  function snapshotStore() {
+    const memory = memoryStorage()
+    const transit = memoryTransit()
+    return { memory, transit, service: new SnapshotService(memory.storage, transit.secrets) }
+  }
+  /** What the sandbox side captures of a turn without a repository: its home alone. */
+  async function capturesHome(f: Fixture, text: string) {
+    f.transport.capture.mockResolvedValue({
+      home: await tarZst({ [home.include[0]!]: text }),
+    } as never)
+  }
+
+  it('runs on a core without git: empty working directory, home-only checkpoint, no publication', async () => {
+    const f = fixture()
+    withoutRepository(f)
+    const { service, transit } = realSnapshots(f)
+    await capturesHome(f, 'native session')
+    const finished = await f.run()
+    expect(finished.result).toEqual(result)
+    expect(finished.manifest.git).toBeUndefined()
+    expect(finished.manifest.parts.map((part) => part.name)).toEqual(['home'])
+    // No clone, no candidate, no push: the working directory is made empty instead.
+    expect(f.workspace.buildBaseBundle).not.toHaveBeenCalled()
+    expect(f.importBundle).not.toHaveBeenCalled()
+    expect(f.workspace.preparePublication).not.toHaveBeenCalled()
+    expect(f.publication.publish).not.toHaveBeenCalled()
+    expect(f.order).toContain('workdir:mkdir')
+    expect(f.order.indexOf('workdir:mkdir')).toBeLessThan(f.order.indexOf('exec'))
+    // Capture reads no working copy: no base reaches the transport.
+    expect((f.transport.capture.mock.calls[0] as unknown[])[2]).toBeUndefined()
+    expect(f.evidence.map((entry) => entry.phase)).not.toContain('publishing')
+    expect(f.evidence.at(-1)).toMatchObject({ phase: 'completed', result })
+    for (const entry of f.evidence) expect(entry).not.toHaveProperty('baseSha')
+    const plan = [...f.assignments.rows.values()][0]!.plan
+    expect(plan.requirements).toEqual(BROWSER_ONLY)
+    expect(plan).not.toHaveProperty('workspace')
+    expect([...f.assignments.rows.values()][0]!.outcome).toBe('completed')
+    expect(f.leases.release).toHaveBeenCalledOnce()
+    // The checkpoint core committed opens again, home alone.
+    const loaded = await service.load({
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    })
+    expect(loaded.manifest).toEqual(finished.manifest)
+    expect(Object.keys(loaded.archives)).toEqual(['home'])
+    expect(transit.allZeroed()).toBe(true)
+  })
+
+  it('continues from the home-only checkpoint of turn n−1, restoring nothing into the workdir', async () => {
+    const first = fixture()
+    withoutRepository(first)
+    const store = realSnapshots(first)
+    await capturesHome(first, 'native session')
+    await first.run()
+    const f = fixture()
+    withoutRepository(f)
+    realSnapshots(f, store)
+    await capturesHome(f, 'second session')
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    const finished = await f.run()
+    expect(finished.manifest.git).toBeUndefined()
+    const [, , archives] = f.transport.restore.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      Record<string, Uint8Array>,
+    ]
+    expect(Object.keys(archives)).toEqual(['home'])
+    expect(f.workspace.buildBaseBundle).not.toHaveBeenCalled()
+  })
+
+  it('refuses a checkpoint with a repository as turn n−1 before creating a container', async () => {
+    const f = fixture()
+    // The checkpoint of a turn with a repository, read before the task loses its workspace.
+    const { manifest } = await f.snapshots.load()
+    withoutRepository(f)
+    f.snapshots.restoreSource.mockResolvedValue({
+      manifest,
+      parts: {} as TurnRestoreSource['parts'],
+      dataKey: vi.fn(),
+    })
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    await expect(f.run()).rejects.toThrow('holds a repository')
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
+  it('starts a new session after an unsuccessful turn n−1, with no checkpoint to restore', async () => {
+    // «Продолжить» after a turn the key's money ended: the planner and the assignment store
+    // want a new session, neither replaced nor rebased (plan 57, Б3, Б4).
+    const f = fixture()
+    withoutRepository(f)
+    await capturesHome(f, 'new session')
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    const finished = await f.run()
+    expect(finished.manifest.git).toBeUndefined()
+    expect(f.snapshots.restoreSource).not.toHaveBeenCalled()
+    expect(f.transport.restore).not.toHaveBeenCalled()
+    expect(f.driver.prepare).toHaveBeenCalledWith(
+      expect.not.objectContaining({ nativeSessionId: expect.anything() }),
+    )
+    expect(f.evidence.at(-1)?.phase).toBe('completed')
+  })
+
+  it('refuses a new session that names a driver session to resume, before the lease', async () => {
+    const f = fixture()
+    withoutRepository(f)
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2, nativeSessionId: 'prior-native' }
+    await expect(f.run()).rejects.toThrow('must start fresh')
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+  })
+
+  it('refuses a replacement or a rebased start before the lease', async () => {
+    for (const patch of [{ replacesTurn: 1 }, { rebased: true }] as const) {
+      const f = fixture()
+      withoutRepository(f)
+      f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+      f.request.context = { ...f.request.context, turn: 2 }
+      Object.assign(f.request, patch)
+      await expect(f.run()).rejects.toThrow('neither replaces nor rebases')
+      expect(f.leases.acquire).not.toHaveBeenCalled()
+    }
+  })
+
+  it('refuses a turn with a repository before the lease while git is not configured', async () => {
+    const f = fixture()
+    f.deps.workspace = null
+    await expect(f.run()).rejects.toMatchObject({ code: 'GIT_NOT_CONFIGURED' })
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+  })
+
+  it('refuses a plan whose workspace contradicts its requirements', async () => {
+    const f = fixture()
+    ;(f.request as TurnRequest).requirements = { ...BROWSER_ONLY }
+    await expect(f.run()).rejects.toThrow('exactly when it has a repository')
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+  })
+})
+
 // On runner VMs the containers of a held turn are adopted through its assignment, which this
 // recovery moves to the new epoch first; turn-exec-recovery.test.ts runs it on both executors.
 describe.each(['local'])('committed checkpoint publication recovery (%s executor)', (kind) => {
   async function recoveryFixture() {
     const f = turnFixture(kind)
     const loaded = await f.snapshots.load()
-    loaded.manifest.git.headSha = headSha
-    loaded.manifest.git.publication = { taskId: labels.taskId, committedAt: f.request.committedAt }
+    loaded.manifest.git!.headSha = headSha
+    loaded.manifest.git!.publication = { taskId: labels.taskId, committedAt: f.request.committedAt }
     loaded.archives.patch = f.publication.patch
     loaded.archives.untracked = f.publication.untracked
     f.snapshots.load.mockResolvedValue(loaded)
@@ -2461,7 +2666,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
 
   it('refuses a checkpoint of another publication as missing', async () => {
     const f = await recoveryFixture()
-    f.loaded.manifest.git.branch = 'agent/another'
+    f.loaded.manifest.git!.branch = 'agent/another'
     const refused = await f.recover().catch((caught: unknown) => caught)
     expect(isMissingCheckpoint(refused)).toBe(true)
     expect(f.takeOver).not.toHaveBeenCalled()
@@ -2494,7 +2699,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
 
   it('holds the site again when replay derives another working set than the checkpoint', async () => {
     const f = await recoveryFixture()
-    f.loaded.manifest.git.sandboxBaseSha = 'd'.repeat(40)
+    f.loaded.manifest.git!.sandboxBaseSha = 'd'.repeat(40)
     await expect(f.recover()).rejects.toThrow('candidate differs')
     expect(f.publication.publish).not.toHaveBeenCalled()
     expect(f.leases.holdForRecovery).toHaveBeenCalledWith(expect.objectContaining({ epoch: 2 }))
@@ -2502,7 +2707,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
 
   it('publishes a checkpoint of a working set when replay derives the same one', async () => {
     const f = await recoveryFixture()
-    f.loaded.manifest.git.sandboxBaseSha = 'd'.repeat(40)
+    f.loaded.manifest.git!.sandboxBaseSha = 'd'.repeat(40)
     Object.assign(f.publication, { sandboxBaseSha: 'd'.repeat(40) })
     await expect(f.recover()).resolves.toMatchObject({ headSha })
     expect(f.evidence.at(-1)).toMatchObject({

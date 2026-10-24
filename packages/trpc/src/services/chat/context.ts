@@ -22,21 +22,31 @@ export interface ChatContext {
    * here: a dialog gets no preview row, and `/preview` answers that there is none.
    */
   preview: { address: PreviewAddress; ttlHours: number } | null
+  /**
+   * The cloud browser of tasks (docs/plan/57-browser-tasks.md, Б9, Б12): `streamUrl` is where the
+   * cabinet opens the stream of a session (BROWSER_STREAM_PUBLIC_URL, `ws(s)://…`). Absent or
+   * null — the platform has no browser here: no site offers tasks in it, and no ticket is issued.
+   */
+  browser?: { streamUrl: string } | null
   /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
   releaseConfirmKey: Uint8Array
   /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */
   storage: () => ObjectStorage
   /**
-   * Vault under the policy `sites-writer`: the values of the client's variables are written and
-   * never read back (`siteEnv.*`). Two methods, not the store, as the wizard's (spec §15): web
-   * shares its AppRole with `core` at MVP (П9), so nothing that holds this object can call
-   * `kvRead`.
+   * Vault under the policies `sites-writer` and `workspace-provisioner`: the values of the
+   * client's variables are written and never read back (`siteEnv.*`), and the Transit key of a
+   * workspace is made before its first task (`task.create`; docs/plan/57-browser-tasks.md, Б32).
+   * Three methods, not the store, as the wizard's (spec §15): web shares its AppRole with `core`
+   * at MVP (П9), so nothing that holds this object can call `kvRead`.
    */
   secrets: () => SiteSecretWriter
 }
 
-/** What a procedure may do with Vault: write a value by CAS and read a key's versions. */
-export type SiteSecretWriter = Pick<SecretStore, 'kvWrite' | 'kvMetadata'>
+/**
+ * What a procedure may do with Vault: write a value by CAS, read a key's versions, and create
+ * the Transit key of a workspace when it is missing — never read, export or remove one.
+ */
+export type SiteSecretWriter = Pick<SecretStore, 'kvWrite' | 'kvMetadata' | 'transitEnsureKey'>
 
 /** The `info` of HKDF: a key of its own, never the secret of the sessions itself. */
 export const RELEASE_CONFIRM_KEY_INFO = 'raditi-release-confirm-v1'
@@ -57,4 +67,17 @@ export function chatContextOf(context: { chat?: ChatContext | null }): ChatConte
     throw new DomainError('CHAT_NOT_CONFIGURED', 'Dialogs are not set up in this process', 503)
   }
   return context.chat
+}
+
+export const browserUnavailable = () =>
+  new DomainError('BROWSER_UNAVAILABLE', 'The cloud browser is not set up in this process', 503)
+
+/** Whether the cabinet of this process can show a browser of the platform (Б9). */
+export const browserConfigured = (context: { chat?: ChatContext | null }): boolean =>
+  context.chat?.browser != null
+
+/** Where the cabinet opens the stream of a browser, or the refusal that there is none. */
+export function browserStreamUrlOf(chat: ChatContext): string {
+  if (chat.browser == null) throw browserUnavailable()
+  return chat.browser.streamUrl
 }

@@ -47,6 +47,10 @@ const errorCodes: Readonly<Record<string, FeedFailureCode>> = Object.freeze({
   REPOSITORY_UNSUPPORTED: 'site_files',
   SITE_HELD: 'site_held',
   LLM_GATEWAY_UNAVAILABLE: 'unavailable',
+  // A turn with a repository while git is not configured (spec §20 «Транспорт git»).
+  GIT_NOT_CONFIGURED: 'unavailable',
+  // The browser of a task could not be opened before its turn (docs/plan/57, Б18).
+  BROWSER_SESSION_UNAVAILABLE: 'unavailable',
   // The rate is being updated: a later pass may be taken.
   BILLING_CREDIT_RATE_MISSING: 'unavailable',
   CROSS_BORDER_NOT_CLEARED: 'not_accepted',

@@ -45,7 +45,7 @@ export const FILES_ROOT = '/files'
 export const PREVIEW_DATABASE = Object.freeze({ name: 'preview', user: 'preview', port: 3306 })
 /** The official MariaDB image runs as `mysql`; its data folder is that user's on first mount. */
 export const DATABASE_USER = '999:999'
-const SERVICE_USER = '10001:10001'
+export const SERVICE_USER = '10001:10001'
 /** Names on the preview's network, from /etc/hosts: no DNS is needed under gVisor. */
 export const previewHosts = Object.freeze({ db: 'db', egress: 'egress' })
 export const CONFIG_LABEL = `${PREVIEW_LABEL}config`
@@ -54,11 +54,11 @@ export const HOSTNAME_LABEL = `${PREVIEW_LABEL}hostname`
 
 /** Never the image's content in a preview's volume: dockerode types ask for more than Docker. */
 const noCopy = { NoCopy: true } as unknown as NonNullable<Docker.MountSettings['VolumeOptions']>
-const logConfig = {
+export const logConfig = {
   Type: 'local',
   Config: { 'max-size': '1m', 'max-file': '1', compress: 'false' },
 }
-const node = (script: string) => [
+export const node = (script: string) => [
   '/usr/bin/tini',
   '--',
   '/usr/local/bin/node',
@@ -97,17 +97,17 @@ export function hardened(limits: Limits, runtime?: PreviewRuntimeKind): Docker.H
   }
 }
 
-const tmpfs = (user: string, size: string) => {
+export const tmpfs = (user: string, size: string) => {
   const [uid, gid] = user.split(':')
   return `rw,noexec,nosuid,nodev,size=${size},uid=${uid},gid=${gid},mode=0700`
 }
 /** The platform's own forwarders: a hop of bytes, never a router. */
-const serviceSysctls = {
+export const serviceSysctls = {
   'net.ipv4.ip_forward': '0',
   'net.ipv6.conf.all.disable_ipv6': '1',
   'net.ipv6.conf.default.disable_ipv6': '1',
 }
-const fixedAddress = (networkId: string, address: string): Docker.EndpointsConfig => ({
+export const fixedAddress = (networkId: string, address: string): Docker.EndpointsConfig => ({
   [networkId]: { IPAMConfig: { IPv4Address: address } },
 })
 
@@ -615,13 +615,28 @@ export function firewallContainer(input: {
   args: string[]
   suffix: string
 }): Docker.ContainerCreateOptions {
-  return {
+  return hostFirewallOptions({
     name: previewNames(input.identity.previewId).container('firewall', input.suffix),
+    image: input.image,
+    args: input.args,
+    labels: previewLabels(input.identity, 'firewall', Date.now() + 60_000),
+  })
+}
+
+/** The host firewall helper under any name and labels: the browser sessions run it too. */
+export function hostFirewallOptions(input: {
+  name: string
+  image: string
+  args: string[]
+  labels: Record<string, string>
+}): Docker.ContainerCreateOptions {
+  return {
+    name: input.name,
     Image: input.image,
     User: '0:0',
     Entrypoint: ['tini', '--', '/usr/local/bin/node', `${TOOLS}/host-firewall.mjs`],
     Cmd: input.args,
-    Labels: previewLabels(input.identity, 'firewall', Date.now() + 60_000),
+    Labels: input.labels,
     HostConfig: {
       Runtime: 'runc',
       NetworkMode: 'host',

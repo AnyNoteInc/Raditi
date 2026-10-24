@@ -1,4 +1,4 @@
-// The platform images (apps/{web,core,llm,mcp,preview,runner}/Dockerfile): pinned bases, pnpm from its version and turbo from the
+// The platform images (apps/{web,core,llm,mcp,preview,runner,browser}/Dockerfile): pinned bases, pnpm from its version and turbo from the
 // lockfile, a non-root runtime, and the git that publication needs. The third-party images of the
 // app VM: verify:edge runs exactly the digests that env.example deploys.
 import assert from 'node:assert/strict'
@@ -13,6 +13,7 @@ const dockerfiles = {
   mcp: readFileSync(new URL('apps/mcp/Dockerfile', root), 'utf8'),
   preview: readFileSync(new URL('apps/preview/Dockerfile', root), 'utf8'),
   runner: readFileSync(new URL('apps/runner/Dockerfile', root), 'utf8'),
+  browser: readFileSync(new URL('apps/browser/Dockerfile', root), 'utf8'),
 }
 const DIGEST = /@sha256:[0-9a-f]{64}$/
 
@@ -70,7 +71,7 @@ for (const [app, text] of Object.entries(dockerfiles)) {
   })
 }
 
-for (const app of ['llm', 'mcp', 'preview', 'runner']) {
+for (const app of ['llm', 'mcp', 'preview', 'runner', 'browser']) {
   test(`${app}: its own image prunes and builds its own app, and carries no git or gitleaks`, () => {
     const code = instructions(dockerfiles[app]).join('\n')
     assert.match(code, new RegExp(`turbo prune ${app} --docker`))

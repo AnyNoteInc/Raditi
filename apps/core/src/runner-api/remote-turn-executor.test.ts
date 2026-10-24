@@ -6,10 +6,12 @@ import {
   runnerReportSchema,
   runnerTimings,
   SANDBOX_SECRETS_DIR,
+  type PresignedRequest,
   type RunnerCommand,
   type TurnExecution,
   type TurnPlan,
   type TurnPrepareInput,
+  type TurnRestoreSource,
 } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -730,8 +732,8 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     await upload('untracked', untracked)
     await vm.report(assignment.id, captured)
     const result = await capturing
-    expect(Buffer.from(result.patch)).toEqual(patch)
-    expect(Buffer.from(result.untracked)).toEqual(untracked)
+    expect(Buffer.from(result.patch!)).toEqual(patch)
+    expect(Buffer.from(result.untracked!)).toEqual(untracked)
     expect(result.homeBytes).toBe(321)
 
     const key = new Uint8Array(32).fill(7)
@@ -1461,5 +1463,214 @@ describe('RemoteTurnExecutor: a prepare the wire lost', () => {
       containerId: 'container2',
     })
     await expect(next).resolves.toMatchObject({ containerId: 'container2' })
+  })
+})
+
+describe('RemoteTurnExecutor: a turn without a repository (docs/plan/57-browser-tasks.md, Б5)', () => {
+  const home = {
+    root: `/agent-home/${sampleDriverId}`,
+    include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+    exclude: [],
+  }
+  const snapshotBase = {
+    workspaceId: 'ws1',
+    sessionId: labels.sessionId,
+    turn: 1,
+    image,
+    driver: { id: sampleDriverId, version: '1.0.0' },
+    home,
+    schemaVersion: 1 as const,
+    createdAt: '2026-10-22T00:00:00.000Z',
+  }
+  const git = {
+    provider: 'gitea' as const,
+    branch: `agent/${taskId}`,
+    baseSha,
+    headSha: 'c'.repeat(40),
+  }
+  const homePart = {
+    name: 'home' as const,
+    key: 'sessions/session1/turns/0001/home.tar.zst',
+    sha256: 'd'.repeat(64),
+    sizeBytes: 321,
+    encryption: {
+      algorithm: 'aes-256-gcm' as const,
+      keyId: 'ws-ws1',
+      wrappedKey: 'vault:v1:wrapped',
+      iv: 'e'.repeat(24),
+      tag: 'f'.repeat(32),
+    },
+  }
+  const presigned = (method: 'GET' | 'PUT', key: string): PresignedRequest => ({
+    method,
+    url: `https://s3.invalid/raditi-sessions/${key}?X-Amz-Signature=synthetic`,
+    headers: method === 'PUT' ? { 'if-none-match': '*' } : {},
+    expiresAt: new Date(Date.now() + 60_000),
+  })
+  const homeOnlyRestore: TurnRestoreSource = {
+    manifest: { ...snapshotBase, parts: [homePart] },
+    parts: { home: presigned('GET', homePart.key) },
+    dataKey: async () => new Uint8Array(32).fill(7),
+  }
+
+  /** A turn prepared without a bundle: its prepare answered with created and prepared. */
+  async function preparedWithoutRepository(
+    f: ReturnType<typeof fixture>,
+    extra: Partial<TurnPrepareInput> = {},
+  ) {
+    const vm = f.runner()
+    const assignment = await f.open()
+    const preparing = f.executor.prepare(
+      f.input(assignment.id, { bundle: undefined, ...extra }),
+      new AbortController().signal,
+    )
+    const [command] = await vm.poll()
+    return {
+      vm,
+      assignment,
+      command: command!,
+      finish: async () => {
+        for (const type of ['created', 'prepared'])
+          await vm.report(assignment.id, {
+            type,
+            commandId: command!.commandId,
+            containerId: 'container1',
+          })
+        return preparing
+      },
+    }
+  }
+
+  it('sends a prepare without a bundle, whose bundle path stays closed, and the home part alone', async () => {
+    const f = fixture()
+    const turn = await preparedWithoutRepository(f, { restore: homeOnlyRestore })
+    expect(turn.command).toMatchObject({
+      type: 'prepare',
+      restore: { manifest: { parts: [{ name: 'home' }] } },
+    })
+    expect(turn.command).not.toHaveProperty('bundle')
+    if (turn.command.type !== 'prepare') throw new Error('expected a prepare')
+    expect(Object.keys(turn.command.restore!.parts)).toEqual(['home'])
+    expect(turn.command.restore!.manifest).not.toHaveProperty('git')
+    expect(
+      await refusal(f.hub.bundle('sandbox-1', turn.assignment.id, turn.vm.headers(turn.command))),
+    ).toEqual({ error: 'COMMAND_CLOSED' })
+    // The data key of the restore is served as for any other turn.
+    expect(
+      await f.hub.key('sandbox-1', turn.assignment.id, 'restore', turn.vm.headers(turn.command)),
+    ).toHaveLength(32)
+    await expect(turn.finish()).resolves.toMatchObject({ containerId: 'container1' })
+  })
+
+  it('refuses a restore and a bundle that disagree on the repository before a runner is reserved', async () => {
+    const f = fixture()
+    const reserve = vi.spyOn(f.hub, 'reserve')
+    const vm = f.runner()
+    const assignment = await f.open()
+    const withGit: TurnRestoreSource = {
+      ...homeOnlyRestore,
+      manifest: {
+        ...snapshotBase,
+        git,
+        parts: (['home', 'untracked', 'patch'] as const).map((name) => ({
+          ...homePart,
+          name,
+          key: `sessions/session1/turns/0001/${{ home: 'home.tar.zst', untracked: 'untracked.tar.zst', patch: 'patch.diff' }[name]}`,
+        })),
+      },
+    }
+    const disagreeing: Partial<TurnPrepareInput>[] = [
+      { bundle: undefined, restore: withGit },
+      { restore: homeOnlyRestore },
+    ]
+    for (const extra of disagreeing)
+      await expect(
+        f.executor.prepare(f.input(assignment.id, extra), new AbortController().signal),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(reserve).not.toHaveBeenCalled()
+    expect(await vm.poll()).toEqual([])
+  })
+
+  it('captures home alone: no candidate is uploaded or reported, and seals a base without git', async () => {
+    const f = fixture()
+    const turn = await preparedWithoutRepository(f)
+    const execution = await turn.finish()
+    const capturing = execution.capture({ home })
+    const [capture] = await turn.vm.poll()
+    expect(capture).toMatchObject({ type: 'capture', home })
+    expect(capture).not.toHaveProperty('baseSha')
+    expect(capture).not.toHaveProperty('addOnlyPaths')
+    for (const part of ['patch', 'untracked'] as const)
+      expect(
+        await refusal(
+          f.hub.candidate('sandbox-1', turn.assignment.id, part, turn.vm.headers(capture!)),
+        ),
+      ).toEqual({ error: 'COMMAND_CLOSED' })
+    const part = { sha256: 'a'.repeat(64), sizeBytes: 1 }
+    const report = { type: 'captured', commandId: capture!.commandId, homeBytes: 321 }
+    expect(
+      await refusal(
+        turn.vm.report(turn.assignment.id, { ...report, patch: part, untracked: part }),
+      ),
+    ).toEqual({ error: 'BAD_REQUEST' })
+    await turn.vm.report(turn.assignment.id, report)
+    await expect(capturing).resolves.toEqual({ homeBytes: 321 })
+
+    const put = presigned('PUT', homePart.key)
+    const dataKey = vi.fn(async () => new Uint8Array(32).fill(7))
+    // A base of the other kind never reaches the runner.
+    await expect(
+      execution.seal({ base: { ...snapshotBase, git }, dataKey, put }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(await turn.vm.poll()).toEqual([])
+    const sealing = execution.seal({ base: snapshotBase, dataKey, put })
+    const [seal] = await turn.vm.poll()
+    expect(seal).toMatchObject({ type: 'seal', sizeBytes: 321 })
+    if (seal?.type !== 'seal') throw new Error('expected a seal')
+    expect(seal.base).not.toHaveProperty('git')
+    const sealed = {
+      sha256: 'd'.repeat(64),
+      sizeBytes: 321,
+      iv: 'e'.repeat(24),
+      tag: 'f'.repeat(32),
+    }
+    await turn.vm.report(turn.assignment.id, {
+      type: 'sealed',
+      commandId: seal.commandId,
+      ...sealed,
+    })
+    await expect(sealing).resolves.toEqual(sealed)
+  })
+
+  it('refuses a capture of the other kind, or a working set without a base, before the runner is asked', async () => {
+    const f = fixture()
+    const turn = await preparedWithoutRepository(f)
+    const withoutRepository = await turn.finish()
+    await expect(withoutRepository.capture({ home, baseSha })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    })
+    for (const extra of [{ sandboxBaseSha: 'd'.repeat(40) }, { addOnlyPaths: [] }])
+      await expect(withoutRepository.capture({ home, ...extra })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      })
+    expect(await turn.vm.poll()).toEqual([])
+
+    const other = fixture()
+    const { execution, vm } = await other.prepared()
+    await expect(execution.capture({ home })).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(await vm.poll()).toEqual([])
+  })
+
+  it('still requires both uploaded parts in the report of a capture with a base', async () => {
+    const f = fixture()
+    const { assignment, execution, vm } = await f.prepared()
+    const capturing = execution.capture({ home, baseSha })
+    capturing.catch(() => {})
+    const [capture] = await vm.poll()
+    expect(
+      await refusal(
+        vm.report(assignment.id, { type: 'captured', commandId: capture!.commandId, homeBytes: 1 }),
+      ),
+    ).toEqual({ error: 'BAD_REQUEST' })
   })
 })

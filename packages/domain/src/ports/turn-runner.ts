@@ -210,6 +210,12 @@ export const turnPhases = [
   'publishing',
   'completed',
   'publication_recovered',
+  /**
+   * Recovery finished the checkpoint of a turn without a repository
+   * (docs/plan/57-browser-tasks.md, Б6): its containers are removed and its manifest is the one
+   * stored. Such a turn has no candidate and no publication; it ends `completed`.
+   */
+  'checkpoint_recovered',
   'failed',
   'recovery',
   /**

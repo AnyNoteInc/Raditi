@@ -13,6 +13,7 @@ import {
   snapshotMetadataSchema,
   snapshotPartFiles,
   snapshotPartNames,
+  snapshotPartNamesOf,
   snapshotReferenceSchema,
   snapshotTooLarge,
   turnSnapshotPrefix,
@@ -37,11 +38,13 @@ import {
   openSnapshotParts,
   sealSnapshotPart,
   type SnapshotSealBase,
+  type TurnArchives,
 } from '@repo/snapshots'
 
 export interface LoadedSnapshot {
   manifest: SnapshotManifest
-  archives: SnapshotArchives
+  /** All three parts, or `home` alone when the manifest has no `git` (plan 57, Б4). */
+  archives: TurnArchives
 }
 
 /** A part a TurnExecution seals with the snapshot's data key: its size, known before sealing. */
@@ -56,10 +59,14 @@ export interface SealedElsewhere extends PendingSnapshotPart {
   seal(input: TurnSealInput): Promise<SealedTurnPart>
 }
 
-/** Each part as bytes core seals, or as a part sealed elsewhere with the same data key. */
-export type SnapshotParts<P = PendingSnapshotPart> = {
-  [N in SnapshotPartName]: Uint8Array | P
-}
+/**
+ * Each part as bytes core seals, or as a part sealed elsewhere with the same data key: all three
+ * for a turn with a repository, `home` alone for one without (docs/plan/57-browser-tasks.md,
+ * Б4) — as the metadata's `git` says; the other shape is refused.
+ */
+export type SnapshotParts<P = PendingSnapshotPart> =
+  | { [N in SnapshotPartName]: Uint8Array | P }
+  | { home: Uint8Array | P; untracked?: undefined; patch?: undefined }
 
 /** Sealed in memory: nothing is written before reserve(). */
 export interface SealedSnapshot {
@@ -114,9 +121,9 @@ export class SnapshotService {
   ): Promise<SnapshotManifest> {
     let sealed = await this.seal(metadata, parts)
     await this.reserve(sealed, signal)
-    for (const name of snapshotPartNames) {
+    for (const name of snapshotPartNamesOf(sealed.base)) {
       const part = parts[name]
-      if (part instanceof Uint8Array) continue
+      if (part === undefined || part instanceof Uint8Array) continue
       try {
         if (signal?.aborted) throw interrupted()
         const put = await this.presignPart(sealed, name, part.ttlMs())
@@ -135,7 +142,9 @@ export class SnapshotService {
 
   /**
    * No side effects: one data key per snapshot, zeroed as soon as core's parts are sealed. A
-   * part given by size is sealed elsewhere with the same key (dataKey()).
+   * part given by size is sealed elsewhere with the same key (dataKey()). The parts are exactly
+   * those the metadata's shape holds (snapshotPartNamesOf): a patch is never kept for a turn
+   * without a repository, nor a snapshot with one stored without it.
    */
   async seal(input: SnapshotMetadata, parts: SnapshotParts): Promise<SealedSnapshot> {
     let metadata: SnapshotMetadata
@@ -143,10 +152,18 @@ export class SnapshotService {
     const pending: Partial<Record<SnapshotPartName, number>> = {}
     try {
       metadata = parseMetadata(input)
-      for (const name of snapshotPartNames) {
+      const names = snapshotPartNamesOf(metadata)
+      for (const name of snapshotPartNames)
+        if (!names.includes(name) && parts?.[name] !== undefined)
+          throw badRequest('A snapshot without a repository holds the home part alone')
+      for (const name of names) {
         const part = parts?.[name]
         if (part instanceof Uint8Array) archives[name] = part
-        else if (Number.isSafeInteger(part?.sizeBytes) && part.sizeBytes >= 0) {
+        else if (
+          part !== undefined &&
+          Number.isSafeInteger(part.sizeBytes) &&
+          part.sizeBytes >= 0
+        ) {
           assertSnapshotPartSize(name, part.sizeBytes)
           pending[name] = part.sizeBytes
         } else throw badRequest('Invalid snapshot part')
@@ -175,7 +192,7 @@ export class SnapshotService {
       }
       const bodies: Partial<Record<SnapshotPartName, Uint8Array>> = {}
       const sealedParts: Partial<Record<SnapshotPartName, SnapshotPart>> = {}
-      for (const name of snapshotPartNames) {
+      for (const name of snapshotPartNamesOf(base)) {
         const plaintext = archives[name]
         if (!plaintext) continue
         const { body, sealed } = sealSnapshotPart(base, name, plaintext, dataKey)
@@ -314,7 +331,8 @@ export class SnapshotService {
         const body = await this.read(`${prefix}${snapshotPartFiles[part.name]}`, part.sizeBytes)
         stored.push({ part, body })
       }
-      const archives = await openSnapshotParts(manifest, stored, expected.home, () =>
+      // The schema holds the parts to snapshotPartNamesOf(manifest): all three, or home alone.
+      const archives: TurnArchives = await openSnapshotParts(manifest, stored, expected.home, () =>
         this.unwrap(manifest),
       )
       return { manifest, archives }
@@ -324,22 +342,25 @@ export class SnapshotService {
   }
 
   /**
-   * Turn n−1 for a TurnExecution: the checked manifest, presigned GETs of its three parts and
-   * its data key on demand. No part is read here; the executor checks each before any write.
+   * Turn n−1 for a TurnExecution: the checked manifest, presigned GETs of its parts — all three,
+   * or `home` alone for a turn without a repository — and its data key on demand. No part is
+   * read here; the executor checks each before any write.
    */
   async restoreSource(input: SnapshotReference, ttlMs: number): Promise<TurnRestoreSource> {
     const expected = parseReference(input)
     const prefix = turnSnapshotPrefix(expected.sessionId, expected.turn)
     try {
       const manifest = await this.readManifest(expected)
-      const parts = {} as Record<SnapshotPartName, PresignedRequest>
-      for (const name of snapshotPartNames)
-        parts[name] = await this.storage.presign({
+      const presign = (name: SnapshotPartName) =>
+        this.storage.presign({
           bucket: 'sessions',
           key: `${prefix}${snapshotPartFiles[name]}`,
           method: 'GET',
           ttlMs,
         })
+      const parts: TurnRestoreSource['parts'] = { home: await presign('home') }
+      for (const name of snapshotPartNamesOf(manifest))
+        if (name !== 'home') parts[name] = await presign(name)
       return { manifest, parts, dataKey: () => this.unwrap(manifest) }
     } catch (error) {
       throw loadFailed(error)
@@ -404,7 +425,7 @@ function snapshotPart(
  * size and the longest hash, IV and tag, so seal() checks the final schema and size limit.
  */
 function encodeManifest(sealed: SealedSnapshot): { manifest: SnapshotManifest; encoded: Buffer } {
-  const parts = snapshotPartNames.map((name) => {
+  const parts = snapshotPartNamesOf(sealed.base).map((name) => {
     const part = sealed.parts[name]
     if (part) return part
     const sizeBytes = sealed.pending[name]

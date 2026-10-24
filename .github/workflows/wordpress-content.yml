@@ -44,6 +44,8 @@ on:
       # the role composes (plan 53, R7; the latter is core's own, R5c).
       - packages/browser-providers/**
       - packages/site-content/**
+      # The client of the browser worker the role's web tools call (plan 57, Б20).
+      - packages/browser-link/**
       # The stand configures its OpenBao with the real bootstrap and runs the role `mcp` under the
       # real policies (mcp-content, sites-writer, workspace-provisioner).
       - infra/vault/**

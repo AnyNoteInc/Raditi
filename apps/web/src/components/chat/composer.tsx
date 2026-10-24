@@ -1,17 +1,28 @@
 'use client'
 
+import { attachmentAcceptAttribute } from '@repo/domain/attachments/rules'
+import { attachmentHintText } from '@repo/domain/attachments/labels'
 import { parseChatCommand, type ChatCommandId } from '@repo/domain/release/chat-commands'
 import { feedInputText, feedTooLongText } from '@repo/domain/tasks/client-feed-labels'
 import { FEED_REQUEST_TEXT_LIMIT, hasVisibleText } from '@repo/domain/tasks/client-feed-text'
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
 import Typography from '@mui/material/Typography'
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import {
+  useId,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { plural } from '@/lib/plural'
 
-import { composerText, paletteText } from './chat-texts'
+import { AttachmentChips } from './attachment-chips'
+import { attachmentText, composerText, paletteText } from './chat-texts'
 import type { CommandVerdict } from './chat-types'
 import {
   CommandList,
@@ -20,6 +31,7 @@ import {
   paletteOptions,
   type PaletteOption,
 } from './command-palette'
+import type { AttachmentsControl } from './use-attachments'
 
 /** A native control that stays in the accessibility tree and off the screen. */
 export const offScreen = {
@@ -40,6 +52,11 @@ export interface ComposerCommands {
   onRun: (id: ChatCommandId) => void
   /** The list was opened: the verdicts are read again. */
   onOpen?: () => void
+  /**
+   * The commands this dialog has at all; absent — every command of the chat. A task in the
+   * browser has only `/cancel` (docs/plan/57-browser-tasks.md): no preview, release or undo.
+   */
+  listed?: readonly ChatCommandId[]
 }
 
 /**
@@ -58,6 +75,8 @@ export function Composer({
   onSend,
   commands,
   modes,
+  attachments,
+  noSecrets = feedInputText.noSecrets,
   fieldRef,
 }: {
   label?: string
@@ -68,11 +87,18 @@ export function Composer({
   /** Why the server refused the last try, as a sentence. */
   error?: string | null
   busy?: boolean
-  /** Sends the text; resolves true when the server took it and the field is cleared. */
-  onSend: (text: string) => Promise<boolean>
+  /**
+   * Sends the text and the ids of the attached files that are ready; resolves true when the
+   * server took them, and the field and the files are cleared.
+   */
+  onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
   /** The switch of the mode, on a new dialog. */
   modes?: ReactNode
+  /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
+  attachments?: AttachmentsControl
+  /** The standing reminder about passwords under the field. */
+  noSecrets?: string
   fieldRef?: RefObject<HTMLTextAreaElement | null>
 }) {
   const fieldId = useId()
@@ -80,6 +106,8 @@ export function Composer({
   const errorId = useId()
   const limitId = useId()
   const listId = useId()
+  const filesWaitId = useId()
+  const filesHintId = useId()
   const [text, setText] = useState('')
   // The list closed by Escape stays closed until the field starts anew.
   const [dismissed, setDismissed] = useState(false)
@@ -93,19 +121,26 @@ export function Composer({
   const shownError = notice ?? error
   const listRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
   const ownField = useRef<HTMLTextAreaElement>(null)
   const field = fieldRef ?? ownField
 
   const disabled = disabledReason !== null
   const tooLong = text.trim().length > FEED_REQUEST_TEXT_LIMIT
+  // The message waits for its files: one on its way, or one that failed and is not dealt with.
+  const filesWait = attachments?.uploading
+    ? attachmentText.wait
+    : attachments?.failed
+      ? attachmentText.fix
+      : null
   const typed = commands !== undefined && !dismissed && !forced && text.startsWith('/')
   const options: PaletteOption[] =
     commands === undefined
       ? []
       : forced
-        ? paletteOptions(null, commands.verdicts)
+        ? paletteOptions(null, commands.verdicts, commands.listed)
         : typed && !disabled
-          ? paletteOptions(text, commands.verdicts)
+          ? paletteOptions(text, commands.verdicts, commands.listed)
           : []
   const open = options.length > 0
   const activeIndex = Math.min(active, Math.max(0, options.length - 1))
@@ -147,13 +182,13 @@ export function Composer({
     if (!next.startsWith('/')) setDismissed(false)
     setActive(0)
     if (commands && wasClosed && !disabled && next.startsWith('/') && !dismissed) {
-      const count = paletteOptions(next, commands.verdicts).length
+      const count = paletteOptions(next, commands.verdicts, commands.listed).length
       if (count > 0) announceOpened(count)
     }
   }
 
   async function send() {
-    if (busy || disabled || tooLong || !hasVisibleText(text)) return
+    if (busy || disabled || tooLong || filesWait !== null || !hasVisibleText(text)) return
     // The words of a command are never sent: not to the agent, not as a message.
     const command = parseChatCommand(text)
     if (command !== null) {
@@ -161,12 +196,17 @@ export function Composer({
         setNotice(composerText.commandsInDialog)
         return
       }
-      const option = paletteOptions(null, commands.verdicts).find((item) => item.id === command)
+      const option = paletteOptions(null, commands.verdicts, commands.listed).find(
+        (item) => item.id === command,
+      )
       if (option?.available) choose(option)
       else setNotice(option?.reason ?? composerText.commandUnavailable)
       return
     }
-    if (await onSend(text)) setText('')
+    if (await onSend(text, attachments?.readyIds ?? [])) {
+      setText('')
+      attachments?.clear()
+    }
   }
 
   function keyDown(event: KeyboardEvent<HTMLElement>) {
@@ -197,7 +237,7 @@ export function Composer({
     }
     setForced(true)
     setActive(0)
-    announceOpened(paletteOptions(null, commands.verdicts).length)
+    announceOpened(paletteOptions(null, commands.verdicts, commands.listed).length)
     // The list is in the document after this render: then it takes the focus.
     window.setTimeout(
       () => listRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus(),
@@ -212,7 +252,10 @@ export function Composer({
   ]
     .filter((id) => id !== null)
     .join(' ')
-  const canSend = !busy && !disabled && !tooLong && hasVisibleText(text)
+  const sendDescribedBy = [describedBy, filesWait !== null ? filesWaitId : null]
+    .filter((id) => id !== null && id !== '')
+    .join(' ')
+  const canSend = !busy && !disabled && !tooLong && filesWait === null && hasVisibleText(text)
   const current = options[activeIndex]
 
   return (
@@ -257,6 +300,13 @@ export function Composer({
           },
         }}
       >
+        {attachments ? (
+          <AttachmentChips
+            items={attachments.items}
+            onRetry={attachments.retry}
+            onRemove={attachments.remove}
+          />
+        ) : null}
         <Box component="label" htmlFor={fieldId} sx={offScreen}>
           {label}
         </Box>
@@ -298,7 +348,37 @@ export function Composer({
         <Box
           sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+          <Box
+            sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, minWidth: 0 }}
+          >
+            {attachments ? (
+              <>
+                <IconButton
+                  aria-label={attachmentText.attach}
+                  aria-describedby={filesHintId}
+                  disabled={disabled}
+                  onClick={() => fileInput.current?.click()}
+                  sx={{ width: 44, height: 44, flex: 'none', border: 1, borderColor: 'divider' }}
+                >
+                  <AppIcon name="attach" />
+                </IconButton>
+                {/* The dialog of the system opens by the button above: the input itself is hidden. */}
+                <input
+                  ref={fileInput}
+                  type="file"
+                  multiple
+                  hidden
+                  accept={attachmentAcceptAttribute}
+                  data-testid="composer-files"
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    const chosen = event.target.files
+                    if (chosen && chosen.length > 0) attachments.add(Array.from(chosen))
+                    // The same file can be chosen again after it was taken out.
+                    event.target.value = ''
+                  }}
+                />
+              </>
+            ) : null}
             {modes}
             {commands ? (
               <IconButton
@@ -314,9 +394,19 @@ export function Composer({
               </IconButton>
             ) : null}
           </Box>
+          {filesWait !== null ? (
+            <Typography
+              id={filesWaitId}
+              variant="body2"
+              color="text.secondary"
+              sx={{ ml: 'auto', textAlign: 'right', fontSize: 13 }}
+            >
+              {filesWait}
+            </Typography>
+          ) : null}
           <IconButton
             aria-label={sendLabel}
-            aria-describedby={describedBy || undefined}
+            aria-describedby={sendDescribedBy || undefined}
             disabled={!canSend}
             onClick={() => void send()}
             sx={{
@@ -355,6 +445,25 @@ export function Composer({
           {shownError}
         </Typography>
       ) : null}
+      {attachments?.notice ? (
+        <Typography role="alert" variant="body2" color="error.main">
+          {attachments.notice}
+        </Typography>
+      ) : null}
+      {attachments ? (
+        <Typography
+          id={filesHintId}
+          variant="body2"
+          color="text.secondary"
+          sx={
+            attachments.items.length > 0
+              ? { textAlign: 'center', fontSize: 12.5 }
+              : (offScreen as Record<string, unknown>)
+          }
+        >
+          {attachmentHintText}
+        </Typography>
+      ) : null}
       <Box role="status" aria-live="polite" sx={offScreen}>
         {announcement}
       </Box>
@@ -363,7 +472,7 @@ export function Composer({
           {feedInputText.mistakes}
         </Box>
         <Box component="p" sx={{ m: 0 }}>
-          {feedInputText.noSecrets}.
+          {noSecrets}.
         </Box>
       </Box>
     </Box>

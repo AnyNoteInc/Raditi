@@ -1,17 +1,23 @@
 import {
+  BROWSER_ONLY,
   DomainError,
   siteWorkspaceRules,
+  toTurnPlan,
   type PublicationSource,
   type SiteFacts,
 } from '@repo/domain'
 import { wordpressAdapter } from '@repo/site-adapters'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
+import { sampleDriverId } from '../testing/ids.ts'
+import type { PreviewFacts } from './preview-facts.ts'
+import type { PreviewHold } from './preview-lease.ts'
 import {
   checkSyncChange,
   previewSyncErrorCode,
   PreviewSyncRefused,
   syncHasCredential,
+  syncWorkingTree,
 } from './preview-sync.ts'
 
 const site: SiteFacts = {
@@ -106,5 +112,80 @@ describe('a sync of the agent working tree checked as a candidate', () => {
     expect(previewSyncErrorCode(new DomainError('SNAPSHOT_TOO_LARGE', 'x', 413))).toBe('too_large')
     expect(previewSyncErrorCode(new DomainError('NOT_SUPPORTED', 'x', 501))).toBe('not_supported')
     expect(previewSyncErrorCode(new Error('boom /secret/path'))).toBe('failed')
+  })
+})
+
+describe('a sync of a turn without a repository (docs/plan/57-browser-tasks.md, Б4)', () => {
+  it('is refused before anything reads a working tree: there is none', async () => {
+    const TASK = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60'
+    const labels = {
+      workspaceId: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a62',
+      siteId: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61',
+      taskId: TASK,
+      sessionId: TASK,
+      turn: 1,
+    }
+    const plan = toTurnPlan(
+      {
+        sandbox: {
+          image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
+          labels,
+          runtime: 'runc',
+          resources: { cpu: 2, memoryMiB: 4096, pids: 512 },
+          user: { uid: 10001, gid: 10001 },
+          env: {},
+          secrets: [],
+          network: { mode: 'gateway', routes: ['llm', 'mcp'] },
+          hardTimeoutMs: 1_200_000,
+        },
+        context: {
+          taskId: TASK,
+          sessionId: TASK,
+          turn: 1,
+          llm: { baseUrl: 'http://sandbox-gw:8080/llm', model: 'm' },
+          mcp: { url: 'http://sandbox-gw:8080/mcp' },
+          instructions: 'rules',
+        },
+        input: { prompt: 'words', attachments: [] },
+        driverVersion: '1.0.0',
+        requirements: BROWSER_ONLY,
+        committedAt: '2026-10-23T10:00:00.000Z',
+      },
+      sampleDriverId,
+    )
+    const db = {
+      turnAssignment: {
+        findUnique: vi.fn(async () => ({
+          id: 'assignment-1',
+          taskId: TASK,
+          sessionId: TASK,
+          turnNo: 1,
+          firstEpoch: 1,
+          finishedAt: null,
+          containerId: 'container1',
+          plan,
+        })),
+      },
+    }
+    const exportWorkingTree = vi.fn()
+    const facts = {
+      preview: { status: 'ready', upstream: { host: '127.0.0.1', port: 8080 }, taskId: TASK },
+      task: { status: 'running' },
+      repo: { provider: 'gitea', owner: 'sites', name: 'site-1', defaultBranch: 'main' },
+    } as unknown as PreviewFacts
+    const refusal = await syncWorkingTree(
+      {
+        db: db as never,
+        runtime: {} as never,
+        git: {} as never,
+        executor: { exportWorkingTree },
+        credentials: { recover: vi.fn() },
+      },
+      {} as PreviewHold,
+      facts,
+      { requestId: 'request-1', assignmentId: 'assignment-1', recipe: {} as never },
+    ).catch((error: unknown) => error)
+    expect(previewSyncErrorCode(refusal)).toBe('not_supported')
+    expect(exportWorkingTree).not.toHaveBeenCalled()
   })
 })

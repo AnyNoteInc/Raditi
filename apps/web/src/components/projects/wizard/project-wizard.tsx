@@ -61,6 +61,22 @@ const steps: readonly { title: string; note: string }[] = [
   },
 ]
 
+/** «Доступ к файлам» where the wizard also offers the browser alone (docs/plan/57, Б8). */
+const SOURCE_NOTE_WITH_BROWSER =
+  'Выберите, как агент будет работать с сайтом. По доступу SSH или FTP мы скопируем файлы сайта и сохраним его первоначальную версию. На сервер мы ничего не записываем.'
+
+/** What a site without access to its files can and cannot get, in the owner's words. */
+const BROWSER_ACCESS_POINTS = [
+  'Агент меняет записи, страницы и медиафайлы в админке сайта — через браузер, и вы видите каждый шаг.',
+  'В админку входите вы сами, прямо в окне задачи. Пароль от админки нам сообщать не нужно.',
+  // The settings stay closed with access to the files too (docs/plan/57-browser-tasks.md, Б21):
+  // only the code, the theme and the plugins need it.
+  'Настройки сайта и пользователей агент менять не сможет. Код, тему и плагины — тоже: для них нужен доступ по SSH или FTP.',
+  'Изменения появляются на сайте сразу, без предпросмотра и выпуска версии. Первоначальную версию сайта мы не сохраним.',
+] as const
+
+const NOTES_FIELD = 'wizard-agent-notes'
+
 const busyTexts = {
   basics: 'Проверяем данные…',
   source: 'Проверяем подключение…',
@@ -73,6 +89,7 @@ type Busy = keyof typeof busyTexts
 const basicsCodes = new Set([
   'PROJECT_ALREADY_EXISTS',
   'SITE_ADDRESS_NOT_PUBLIC',
+  'SITE_ADDRESS_NOT_SECURE',
   'SITE_STACK_NOT_CONNECTABLE',
 ])
 
@@ -113,7 +130,14 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
  * nothing comes back from the server to fill a field. «Назад» keeps what was typed; an edit
  * makes the check of its step count no longer.
  */
-export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
+export function ProjectWizard({
+  stacks,
+  browserAccess = false,
+}: {
+  stacks: readonly ProjectStack[]
+  /** The platform has a browser for tasks: a site may be added without access to its files. */
+  browserAccess?: boolean
+}) {
   const trpc = useTRPC()
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -130,6 +154,10 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
   const [keyPrompt, setKeyPrompt] = useState<HostKeyPrompt | null>(null)
   const [sourcePassed, setSourcePassed] = useState(false)
   const [database, setDatabase] = useState<DatabaseDraft>(emptyDatabase)
+  /** No access to the files: the agent works through the browser (Б8). */
+  const [browserOnly, setBrowserOnly] = useState(false)
+  /** Hints for the agent of a site in the browser: where to sign in, never a secret. */
+  const [agentNotes, setAgentNotes] = useState('')
   /** Field problems show after the first «Далее» of their step and follow the edits after it. */
   const [shown, setShown] = useState<Record<StepIndex, boolean>>({ 0: false, 1: false, 2: false })
   const [problem, setProblem] = useState<Problem | null>(null)
@@ -250,6 +278,8 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
     setHostKey(null)
     setSourcePassed(false)
     setDatabase(emptyDatabase())
+    setBrowserOnly(false)
+    setAgentNotes('')
     setShown({ 0: false, 1: false, 2: false })
     goTo(0)
   }
@@ -323,6 +353,7 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
   }
 
   function submitSource() {
+    if (browserAccess && browserOnly) return void submitCreate()
     setShown((previous) => ({ ...previous, 1: true }))
     const field = firstProblem(sourceFieldOrder, sourceErrors(source))
     if (field) {
@@ -341,25 +372,41 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
   }
 
   async function submitCreate() {
-    setShown((previous) => ({ ...previous, 2: true }))
-    const field = firstProblem(databaseFieldOrder, databaseErrors(database))
-    if (field) {
-      focusNext.current = databaseFieldId(DATABASE, field)
-      setProblem(null)
-      return
+    // Without access to the files there is nothing to check on a server and no database step.
+    const viaBrowser = browserAccess && browserOnly
+    // The step the refusals of this creation are told on.
+    const at: StepIndex = viaBrowser ? 1 : 2
+    if (!viaBrowser) {
+      setShown((previous) => ({ ...previous, 2: true }))
+      const field = firstProblem(databaseFieldOrder, databaseErrors(database))
+      if (field) {
+        focusNext.current = databaseFieldId(DATABASE, field)
+        setProblem(null)
+        return
+      }
     }
     if (!checkedBasics) return goTo(0)
-    if (!sourcePassed) return goTo(1)
+    if (!viaBrowser && !sourcePassed) return goTo(1)
     if (!begin('create')) return
     setProblem(null)
-    const input = {
-      requestKey,
-      name: checkedBasics.name,
-      url: checkedBasics.url,
-      stack: checkedBasics.stack,
-      source: sourceInput(source, hostKey),
-      database: databaseInput(database),
-    }
+    const notes = agentNotes.trim()
+    const input = viaBrowser
+      ? {
+          requestKey,
+          name: checkedBasics.name,
+          url: checkedBasics.url,
+          stack: checkedBasics.stack,
+          access: 'browser' as const,
+          ...(notes === '' ? {} : { agentNotes: notes }),
+        }
+      : {
+          requestKey,
+          name: checkedBasics.name,
+          url: checkedBasics.url,
+          stack: checkedBasics.stack,
+          source: sourceInput(source, hostKey),
+          database: databaseInput(database),
+        }
     let created = false
     try {
       for (let resent = 0; ; resent += 1) {
@@ -376,7 +423,7 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
             goTo(1)
             refuseSource(outcome)
           } else {
-            showProblem({ step: 2, text: databaseReasonText(outcome.reason) })
+            showProblem({ step: at, text: databaseReasonText(outcome.reason) })
           }
           return
         } catch (error) {
@@ -398,12 +445,14 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
       })
       const code = domainCodeOf(error)
       if (code === 'PROJECT_REQUEST_CONFLICT') {
-        showProblem({ step: 2, text, startOver: true })
+        showProblem({ step: at, text, startOver: true })
       } else if (code !== null && basicsCodes.has(code)) {
         setCheckedBasics(null)
         goTo(0, { step: 0, text })
       } else {
-        showProblem({ step: 2, text })
+        showProblem({ step: at, text })
+        // A hint the server refused: the field is where it is cured.
+        if (code?.startsWith('PROJECT_NOTES_')) focusNext.current = NOTES_FIELD
       }
     } finally {
       createProject.reset()
@@ -422,6 +471,8 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
 
   const disabled = busy !== null
   const current = steps[step]!
+  const viaBrowser = browserAccess && browserOnly
+  const stepNote = step === 1 && browserAccess ? SOURCE_NOTE_WITH_BROWSER : current.note
 
   return (
     <Box sx={{ maxWidth: 760, mx: 'auto' }}>
@@ -490,7 +541,7 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
               color="text.secondary"
               sx={{ mt: 0.75, lineHeight: 1.6, textWrap: 'pretty' }}
             >
-              {current.note}
+              {stepNote}
             </Typography>
           </Box>
 
@@ -567,6 +618,28 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
               onChange={editSource}
               errors={sourceShown}
               disabled={disabled}
+              browser={
+                browserAccess
+                  ? {
+                      selected: browserOnly,
+                      onSelect: (selected) => {
+                        setBrowserOnly(selected)
+                        setProblem(null)
+                        setKeyPrompt(null)
+                      },
+                      panel: (
+                        <BrowserAccessPanel
+                          notes={agentNotes}
+                          onNotes={(next) => {
+                            setAgentNotes(next)
+                            setProblem(null)
+                          }}
+                          disabled={disabled}
+                        />
+                      ),
+                    }
+                  : undefined
+              }
             />
           ) : (
             <DatabaseFields
@@ -578,7 +651,7 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
             />
           )}
 
-          {step === 1 && keyPrompt ? (
+          {step === 1 && keyPrompt && !viaBrowser ? (
             <HostKeyPanel
               titleId={HOST_KEY_TITLE}
               prompt={keyPrompt}
@@ -651,11 +724,74 @@ export function ProjectWizard({ stacks }: { stacks: readonly ProjectStack[] }) {
               {busy ? busyTexts[busy] : ''}
             </Typography>
             <Button type="submit" variant="contained" loading={disabled} loadingPosition="end">
-              {step === 2 ? 'Добавить проект' : 'Далее'}
+              {step === 2 || (step === 1 && viaBrowser) ? 'Добавить проект' : 'Далее'}
             </Button>
           </Box>
         </Box>
       </Box>
     </Box>
+  )
+}
+
+/**
+ * «Без доступа к файлам» (docs/plan/57-browser-tasks.md, Б8): what the site gets and what it
+ * does not, and hints for the agent — where to sign in, never a password.
+ */
+function BrowserAccessPanel({
+  notes,
+  onNotes,
+  disabled,
+}: {
+  notes: string
+  onNotes: (next: string) => void
+  disabled: boolean
+}) {
+  return (
+    <>
+      <Typography variant="body2" color="text.secondary" sx={{ textWrap: 'pretty' }}>
+        Агент работает только через браузер — в админке сайта.
+      </Typography>
+      <Box
+        component="section"
+        aria-labelledby="wizard-browser-title"
+        sx={{
+          p: { xs: 2, sm: 2.5 },
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: '12px',
+          bgcolor: 'background.paper',
+        }}
+      >
+        <Typography
+          id="wizard-browser-title"
+          component="h3"
+          sx={{ fontSize: 16, fontWeight: 600, mb: 1 }}
+        >
+          Что будет без доступа к файлам
+        </Typography>
+        <Box component="ul" sx={{ m: 0, pl: 2.5, display: 'grid', gap: 0.75 }}>
+          {BROWSER_ACCESS_POINTS.map((point) => (
+            <Typography component="li" variant="body2" key={point} sx={{ lineHeight: 1.6 }}>
+              {point}
+            </Typography>
+          ))}
+        </Box>
+      </Box>
+      <TextField
+        id={NOTES_FIELD}
+        label="Подсказки для агента (необязательно)"
+        placeholder="Например: вход в админку — по адресу /login"
+        value={notes}
+        onChange={(event) => onNotes(event.target.value)}
+        disabled={disabled}
+        multiline
+        minRows={3}
+        maxRows={8}
+        fullWidth
+        autoComplete="off"
+        helperText="Где страница входа, как устроен сайт. Не пишите сюда пароли и коды — в админку вы войдёте сами."
+        slotProps={{ htmlInput: { maxLength: 2000 } }}
+      />
+    </>
   )
 }

@@ -17,6 +17,8 @@ type OverviewSite = {
   state: 'free' | 'busy' | 'held'
   setup?: SiteSetup
   initialVersion?: InitialVersion | null
+  /** What the site can be worked on with now (docs/plan/57-browser-tasks.md, Б9). */
+  capabilities?: { repository: string; browser: string }
 }
 
 /** What is going on at the site right now, by its state. */
@@ -41,6 +43,10 @@ const statusNotes: Readonly<Partial<Record<OverviewSite['status'], string>>> = {
  */
 const IMPORTED_ONBOARDING_NOTE =
   'Файлы сайта сохранены, но агент пока не может менять сайт: остальную часть подключения мы ещё делаем.'
+
+/** A site added without access to its files (docs/plan/57-browser-tasks.md, Б8). */
+const BROWSER_ONLY_NOTE =
+  'Сайт добавлен без доступа к файлам: агент работает в админке сайта через браузер. Начните задачу в разделе «Чат».'
 
 /** The saved first version: its tag and when it was saved, by the Moscow clock. */
 function InitialVersionCard({ version }: { version: InitialVersion | null }) {
@@ -72,8 +78,15 @@ function InitialVersionCard({ version }: { version: InitialVersion | null }) {
 /** «Обзор» while it has only what the platform already knows: connection and whether it is busy. */
 export function SiteOverview({ site }: { site: OverviewSite }) {
   const imported = site.setup === 'done' || Boolean(site.initialVersion)
-  const note =
-    imported && site.status === 'onboarding' ? IMPORTED_ONBOARDING_NOTE : statusNotes[site.status]
+  const browserOnly =
+    site.status === 'onboarding' &&
+    site.capabilities?.browser === 'ready' &&
+    site.capabilities.repository === 'absent'
+  const note = browserOnly
+    ? BROWSER_ONLY_NOTE
+    : imported && site.status === 'onboarding'
+      ? IMPORTED_ONBOARDING_NOTE
+      : statusNotes[site.status]
   // A paused, a disconnected and an archived site keep this section alone open.
   const closed = closedSectionsNote(site.status)
   return (

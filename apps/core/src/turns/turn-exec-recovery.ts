@@ -46,6 +46,7 @@ import {
   isAmbiguousContainer,
   isBrokenCheckpoint,
   isMissingCheckpoint,
+  TurnCheckpointRecovery,
   TurnPublicationRecovery,
   type PublicationRemoval,
 } from './turn-recovery.ts'
@@ -65,7 +66,12 @@ const publicationSteps: readonly TurnPhase[] = [
   'destroyed',
   'publishing',
 ]
-const doneSteps: readonly TurnPhase[] = ['completed', 'publication_recovered']
+/** A turn without a repository ends `checkpoint_recovered` when recovery finished it (Б6). */
+const doneSteps: readonly TurnPhase[] = [
+  'completed',
+  'publication_recovered',
+  'checkpoint_recovered',
+]
 
 /** Only a code: messages of storage and database errors stay out of the log. */
 const logged = (error: unknown) =>
@@ -89,7 +95,12 @@ export interface TurnExecRecoveryDependencies {
   journal: TurnJournal & { replay(range: TurnJournalRange): Promise<JournaledEvidence[]> }
   /** The driver a turn's plan names. */
   driver(id: AgentDriverId): AgentDriver
-  workspace: TurnWorkspace
+  /**
+   * null while git is not configured: turns without a repository are recovered all the same
+   * (docs/plan/57-browser-tasks.md, Б7), those with one are left as they are to a core that has
+   * git.
+   */
+  workspace: TurnWorkspace | null
   snapshots: TurnSnapshotStore
   /** The subscription gateway key and MCP token of a turn whose executor lost them (P3, P6). */
   credentials: TurnCredentialSource
@@ -134,6 +145,7 @@ export class TurnExecRecovery {
   /** The parked turns a pass still asks the lease store about, and nothing else (#end). */
   readonly #unfreed = new Map<string, Unfreed>()
   readonly #publication: TurnPublicationRecovery
+  readonly #checkpoint: TurnCheckpointRecovery
   readonly #logger: { warn(message: string): void; error(message: string): void }
   readonly #warn: ThrottledLog
   #timer: NodeJS.Timeout | undefined
@@ -141,6 +153,7 @@ export class TurnExecRecovery {
 
   constructor(private readonly deps: TurnExecRecoveryDependencies) {
     this.#publication = new TurnPublicationRecovery(deps)
+    this.#checkpoint = new TurnCheckpointRecovery(deps)
     this.#logger = deps.logger ?? new Logger('TurnRecovery')
     this.#warn = throttledLogger((line) => this.#logger.warn(line))
   }
@@ -273,9 +286,18 @@ export class TurnExecRecovery {
     } catch {
       return this.#park(assignment, step, 'driver unavailable')
     }
+    // Captured and published with git: a core without it leaves the turn as it is — its site
+    // held or not — to one that has it (spec §20 «Транспорт git»).
+    if (assignment.plan.workspace && !this.deps.workspace) {
+      this.#warn('turn recovery', new Error('GIT_NOT_CONFIGURED'))
+      return
+    }
     const takeover = this.deps.executor.takeover(assignment)
+    // Without a repository nothing is published: the checkpoint is finished instead (Б6).
     if (publicationSteps.includes(step))
-      return this.#publish(assignment, turn, driver, takeover, remainingMs())
+      return assignment.plan.workspace
+        ? this.#publish(assignment, turn, driver, takeover, remainingMs())
+        : this.#finishCheckpoint(assignment, turn, driver, takeover, remainingMs())
     if (!takeover) return this.#expireAfterGrace(assignment, turn, remainingMs())
     const owner = await this.#takeOver(assignment, turn, driver, takeover, remainingMs())
     if (!owner) return
@@ -619,25 +641,12 @@ export class TurnExecRecovery {
     remainingMs: number,
   ): Promise<void> {
     await this.#revoke(assignment)
-    const removal: PublicationRemoval | null =
-      turn.step === 'destroyed' || turn.step === 'publishing'
-        ? 'confirmed'
-        : takeover
-          ? 'adopt'
-          : remainingMs + TURN_PUBLICATION_GRACE_MS <= 0
-            ? 'expired'
-            : null
+    const removal = removalOf(turn, takeover, remainingMs)
     if (removal === null) return this.#awaitRunnerToPublish(assignment, turn)
     const { plan } = assignment
-    const labels = plan.sandbox.labels
-    const snapshot: SnapshotReference = {
-      workspaceId: labels.workspaceId,
-      sessionId: assignment.sessionId,
-      turn: assignment.turn,
-      image: plan.sandbox.image,
-      driver: { id: driver.id, version: plan.driverVersion },
-      home: driver.sessionState((await recoveredRun(driver, plan, turn, null)).prepared),
-    }
+    // Routed here only with one (#recover).
+    if (!plan.workspace) return this.#park(assignment, turn.step, 'journal mismatch')
+    const snapshot = await snapshotOf(assignment, turn, driver)
     if (!(await this.deps.leases.holdForRecovery(assignment.fence))) {
       this.#logger.error(
         `Turn recovery cannot publish a checkpoint whose site lease moved on (epoch ${assignment.fence.epoch}, phase ${turn.step})`,
@@ -668,6 +677,56 @@ export class TurnExecRecovery {
       if (isBrokenCheckpoint(error)) return this.#park(assignment, turn.step, 'broken checkpoint')
       // Another identity where the turn's container should be. Any other failed removal left
       // the new epoch held, and the next pass tries again without counting an attempt.
+      if (isAmbiguousContainer(error))
+        return this.#park(now ?? assignment, turn.step, 'ambiguous container')
+      throw error
+    }
+  }
+
+  /**
+   * The checkpoint of a turn without a repository (docs/plan/57-browser-tasks.md, Б6): never
+   * published. Once the turn's container is known to be gone — as for a publication — its
+   * manifest is proven and the turn completes, or it has none and closes `lost`
+   * (TurnCheckpointRecovery). A checkpoint that fails its own checks waits for an operator, as
+   * does a container of another identity; a read that failed otherwise is tried again.
+   */
+  async #finishCheckpoint(
+    assignment: TurnAssignment,
+    turn: ReplayedTurn,
+    driver: AgentDriver,
+    takeover: TurnTakeover | null,
+    remainingMs: number,
+  ): Promise<void> {
+    // Such a turn journals no `publishing`: its journal is not this turn's.
+    if (turn.step === 'publishing') return this.#park(assignment, turn.step, 'journal mismatch')
+    await this.#revoke(assignment)
+    const removal = removalOf(turn, takeover, remainingMs)
+    if (removal === null) return this.#awaitRunnerToPublish(assignment, turn)
+    const snapshot = await snapshotOf(assignment, turn, driver)
+    if (!(await this.deps.leases.holdForRecovery(assignment.fence))) {
+      this.#logger.error(
+        `Turn recovery cannot finish a checkpoint whose site lease moved on (epoch ${assignment.fence.epoch}, phase ${turn.step})`,
+      )
+      return this.#close(assignment, 'lost')
+    }
+    const containerId = turn.containerId ?? assignment.containerId ?? undefined
+    try {
+      await this.#checkpoint.recover({
+        assignmentId: assignment.id,
+        heldFence: assignment.fence,
+        ...(takeover?.runnerSession ? { runnerSession: takeover.runnerSession } : {}),
+        snapshot,
+        removal,
+        remainingMs,
+        ...(containerId ? { containerId } : {}),
+        labels: containerLabels(assignment),
+        step: turn.step!,
+      })
+    } catch (error) {
+      // Refused or unanswered takeovers leave the site held where the assignment is.
+      const now = await this.#afterTakeOver(assignment, turn.step!)
+      if (isBrokenCheckpoint(error))
+        return this.#park(now ?? assignment, turn.step, 'broken checkpoint')
       if (isAmbiguousContainer(error))
         return this.#park(now ?? assignment, turn.step, 'ambiguous container')
       throw error
@@ -867,4 +926,36 @@ async function recoveredRun(
   if (!values) return { prepared: { context, files: [], env: {}, secrets: [] }, credentials: [] }
   const prepared = await driver.prepare(context)
   return { prepared, credentials: checkPreparedRun(context, prepared, []).credentials }
+}
+
+/**
+ * How the turn's container is known to be gone before its checkpoint is published or finished:
+ * its owner journaled the removal, recovery removes it through the executor, or the deadline and
+ * grace passed and the VM's watchdog removed it. null — its runner is away: wait for it.
+ */
+function removalOf(
+  turn: ReplayedTurn,
+  takeover: TurnTakeover | null,
+  remainingMs: number,
+): PublicationRemoval | null {
+  if (turn.step === 'destroyed' || turn.step === 'publishing') return 'confirmed'
+  if (takeover) return 'adopt'
+  return remainingMs + TURN_PUBLICATION_GRACE_MS <= 0 ? 'expired' : null
+}
+
+/** The checkpoint the turn saved, as its plan and journal name it: git-free. */
+async function snapshotOf(
+  assignment: TurnAssignment,
+  turn: ReplayedTurn,
+  driver: AgentDriver,
+): Promise<SnapshotReference> {
+  const { plan } = assignment
+  return {
+    workspaceId: plan.sandbox.labels.workspaceId,
+    sessionId: assignment.sessionId,
+    turn: assignment.turn,
+    image: plan.sandbox.image,
+    driver: { id: driver.id, version: plan.driverVersion },
+    home: driver.sessionState((await recoveredRun(driver, plan, turn, null)).prepared),
+  }
 }

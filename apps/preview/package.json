@@ -17,6 +17,7 @@
     "@nestjs/common": "catalog:",
     "@nestjs/core": "catalog:",
     "@repo/app-bootstrap": "workspace:*",
+    "@repo/browser-link": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/ip-address": "workspace:*",

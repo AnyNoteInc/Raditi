@@ -23,8 +23,13 @@ export interface PutOptions {
  * home.tar.zst of turn n. So is the encrypted backup of a release (plan 53, Р30, Р31), with no
  * S3 credential of the deploy job's own: the job uploads it by a presigned PUT, and an attempt
  * «только возврат» reads the backup of the attempt that wrote by a presigned GET. The values of
- * a database plan never come from S3: the job reads them from the release API. Browser uploads
- * (M2) and runner logs (P12) come later.
+ * a database plan never come from S3: the job reads them from the release API. Runner logs (P12)
+ * come later.
+ *
+ * The inbox is never presigned (docs/plan/57-browser-tasks.md, Б26): a customer's file goes
+ * through web, which checks the session, the consents, the size and the first bytes before it
+ * writes, and confirms the stored object with stat(); the browser worker reads it with its own
+ * key. No URL of an attachment reaches a browser, a sandbox or the model.
  */
 export const presignableBuckets = ['sessions', 'backups'] as const
 export type PresignableBucket = (typeof presignableBuckets)[number]
@@ -54,6 +59,15 @@ export interface PresignedRequest {
   expiresAt: Date
 }
 
+/** What S3 tells of one stored object without reading it (HeadObject). */
+export interface ObjectStat {
+  sizeBytes: number
+  /** As stored with the object; absent when the store keeps none. */
+  contentType?: string
+  /** As the store gives it, quotes included; absent when it gives none. */
+  etag?: string
+}
+
 export interface ObjectStorage {
   /** Atomic create for small markers (at most 64 KiB); false means the key already exists. */
   putIfAbsent(
@@ -71,6 +85,12 @@ export interface ObjectStorage {
   /** null when the object does not exist. */
   get(bucket: BucketKind, key: string): Promise<AsyncIterable<Uint8Array> | null>
   exists(bucket: BucketKind, key: string): Promise<boolean>
+  /**
+   * The size of a stored object, and its type and ETag: how web confirms an upload it streamed
+   * into the inbox. null when the object does not exist; a missing bucket is an error, as for
+   * get().
+   */
+  stat(bucket: BucketKind, key: string): Promise<ObjectStat | null>
   delete(bucket: BucketKind, key: string): Promise<void>
   /**
    * Health: which of the given buckets are reachable (all kinds by default). Each service
@@ -79,7 +99,7 @@ export interface ObjectStorage {
   checkBuckets(kinds?: readonly BucketKind[]): Promise<Partial<Record<BucketKind, boolean>>>
   /**
    * A scoped URL for one object, for a runner host and never a sandbox. Signing sends nothing
-   * to S3. Browser uploads (M2) will widen presignableBuckets.
+   * to S3.
    */
   presign(request: PresignRequest): Promise<PresignedRequest>
 }

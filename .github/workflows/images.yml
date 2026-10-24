@@ -1,9 +1,10 @@
 name: Images
 
 # The production images of the apps no other workflow builds (docs/plan/55-split-orchestrator.md):
-# llm, mcp, preview and the runner of the sandbox VMs, each built from its own Dockerfile and
-# checked from the outside (pnpm verify:images): its own app starts and refuses an empty
-# configuration, no git, gitleaks or .env, and nothing of the platform's data in the runner.
+# llm, mcp, preview, the runner of the sandbox VMs and the browser worker
+# (docs/plan/57-browser-tasks.md), each built from its own Dockerfile and checked from the outside
+# (pnpm verify:images): its own app starts and refuses an empty configuration, no git, gitleaks,
+# .env or stand, and nothing of the platform's data in the runner.
 # core and web are built by edge.yml, the llm image also runs for real in llm-app.yml.
 on:
   pull_request:
@@ -20,6 +21,7 @@ on:
       - apps/mcp/**
       - apps/preview/**
       - apps/runner/**
+      - apps/browser/**
       - packages/**
       - infra/app/verify-images.mjs
   workflow_dispatch:
@@ -39,7 +41,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Four images, each with a pruned workspace install in its layers, plus the build cache:
+      # Five images, each with a pruned workspace install in its layers, plus the build cache:
       # drop preinstalled toolchains this job never uses (as edge.yml does).
       - name: Free disk space
         run: |
@@ -52,5 +54,5 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-      - name: Build and check the images of llm, mcp, preview and runner
+      - name: Build and check the images of llm, mcp, preview, runner and browser
         run: node infra/app/verify-images.mjs

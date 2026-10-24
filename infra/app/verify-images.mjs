@@ -1,11 +1,11 @@
 // The images of the apps no other stand builds (docs/plan/55-split-orchestrator.md): llm, mcp,
-// preview and the runner of the sandbox VMs. Each is built from this tree as production builds it
-// (`docker build --target runtime`) and checked from the outside: it starts its own app and
-// refuses an empty configuration in its own words, runs as uid 10001, carries no git, gitleaks or
-// .env, no verification stand (plan 56 §6: they run from the repository), and the runner image
-// carries no package of the platform's data (spec §8, §19: a sandbox VM holds no platform
-// credentials) and the operator's runner-token command. core and web are built
-// by verify:edge, the llm image is run for real by verify:llm-app.
+// preview, the runner of the sandbox VMs and the browser worker (docs/plan/57-browser-tasks.md).
+// Each is built from this tree as production builds it (`docker build --target runtime`) and
+// checked from the outside: it starts its own app and refuses an empty configuration in its own
+// words, runs as uid 10001, carries no git, gitleaks or .env, no verification stand (plan 56 §6:
+// they run from the repository), and the runner image carries no package of the platform's data
+// (spec §8, §19: a sandbox VM holds no platform credentials) and the operator's runner-token
+// command. core and web are built by verify:edge, the llm image is run for real by verify:llm-app.
 //
 //   pnpm verify:images [-- --no-build] [--keep] [--only <app>[,<app>…]]
 import { spawn } from 'node:child_process'
@@ -13,11 +13,14 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
-export const APPS = ['llm', 'mcp', 'preview', 'runner']
+export const APPS = ['llm', 'mcp', 'preview', 'runner', 'browser']
 
 /**
  * The workspace packages an image may not carry: what dependency-cruiser forbids the app to reach
- * (llm-, mcp- and preview-minimal-packages, runner-minimal-packages, runner-no-platform-access).
+ * (llm-, mcp-, preview- and browser-minimal-packages, runner-minimal-packages,
+ * runner-no-platform-access). One exception is documented: browser-link lands in the browser image
+ * through the browser app's own devDependencies (its contract tests run the client of core and mcp
+ * against it) — turbo prune takes it, and no code of the app imports it.
  */
 export const FORBIDDEN_PACKAGES = {
   llm: [
@@ -25,6 +28,7 @@ export const FORBIDDEN_PACKAGES = {
     'git-providers',
     'sandbox-providers',
     'browser-providers',
+    'browser-link',
     'agent-drivers',
     'site-adapters',
     'site-connections',
@@ -79,6 +83,25 @@ export const FORBIDDEN_PACKAGES = {
     'trpc',
     'ui',
   ],
+  browser: [
+    'vault',
+    'git-providers',
+    'agent-drivers',
+    'llm-backends',
+    'site-connections',
+    'snapshots',
+    'local-turns',
+    'turn-keys',
+    'site-content',
+    'yookassa',
+    'mail',
+    'telegram',
+    'auth',
+    'notifications',
+    'billing',
+    'trpc',
+    'ui',
+  ],
   runner: [
     'db',
     'service-runtime',
@@ -88,6 +111,7 @@ export const FORBIDDEN_PACKAGES = {
     'yookassa',
     'billing',
     'turn-keys',
+    'browser-link',
     'trpc',
     'ui',
   ],
@@ -115,6 +139,7 @@ export const OPERATOR_SCRIPTS = {
   mcp: [],
   preview: [],
   runner: ['runner-token.mjs'],
+  browser: [],
 }
 
 /** The files of an image (outside node_modules) that are stands, their tests or fixtures. */
@@ -194,7 +219,9 @@ async function main() {
     },
   })
   if (options.help) {
-    process.stdout.write('Usage: pnpm verify:images [-- --no-build] [--keep] [--only llm,runner]\n')
+    process.stdout.write(
+      'Usage: pnpm verify:images [-- --no-build] [--keep] [--only llm,runner,browser]\n',
+    )
     return
   }
   const apps = options.only === undefined ? APPS : options.only.split(',')
@@ -212,7 +239,7 @@ async function main() {
       process.stdout.write(`FAIL ${app}: ${name}${detail ? `\n  ${detail}` : ''}\n`)
     }
   }
-  // Each image goes as soon as its checks are done, and in CI the build cache with it: four
+  // Each image goes as soon as its checks are done, and in CI the build cache with it: five
   // images with a pruned workspace install in their layers do not fit a runner's disk at once.
   const drop = async (app) => {
     if (options.keep || options['no-build']) return

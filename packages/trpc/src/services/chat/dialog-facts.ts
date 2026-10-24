@@ -150,6 +150,16 @@ export async function dialogFacts(
   })
   const undo = await undoFacts(db, task, now)
   const retry = await dialogRetry(db, task)
+  // A task without the repository works in the browser of the site (docs/plan/57, Б1): it has no
+  // candidate, no preview, no release and no «Попробовать ещё» (Б25), whatever rows say — only
+  // `/cancel` is ever offered.
+  const withRepository =
+    (
+      await db.task.findUnique({
+        where: { id: task.id },
+        select: { needsRepository: true },
+      })
+    )?.needsRepository ?? true
 
   let candidate: DialogCandidate | null = null
   if (candidateRow !== null) {
@@ -178,17 +188,17 @@ export async function dialogFacts(
       taskStatus: task.status,
       role: role ?? 'member',
       candidate:
-        candidate === null
+        candidate === null || !withRepository
           ? null
           : {
               status: candidate.status,
               baseIsMain: candidate.status === 'current',
               checksFailed: candidate.checks.failed > 0,
             },
-      preview: previewRow === null ? null : { status: previewRow.status },
+      preview: previewRow === null || !withRepository ? null : { status: previewRow.status },
       releaseInProgress: release !== null && !isTerminalReleaseStatus(release.status),
-      undo: undo?.command ?? null,
-      retry: retryCommandRefusal(retry),
+      undo: withRepository ? (undo?.command ?? null) : null,
+      retry: withRepository ? retryCommandRefusal(retry) : 'nothing_to_retry',
     },
   }
 }

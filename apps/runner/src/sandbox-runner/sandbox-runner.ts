@@ -13,6 +13,7 @@ import {
   runnerPollRequestSchema,
   runnerPollResponseSchema,
   runnerReportSchema,
+  snapshotHasRepository,
   snapshotPartFiles,
   TURN_PUBLICATION_GRACE_MS,
   turnOutputTooLarge,
@@ -30,6 +31,7 @@ import {
   type SiteLeaseFence,
   type SnapshotPartName,
   type TurnAgentExec,
+  type TurnBundleSource,
   type TurnExecution,
   type TurnExecutor,
   type TurnRestoreSource,
@@ -508,10 +510,9 @@ export class SandboxRunner {
           fence: command.fence,
           sandbox: command.sandbox,
           remainingMs: Math.max(1, Math.floor(held.deadline - performance.now())),
-          bundle: {
-            ...command.bundle,
-            read: () => this.#bundle(held, fence, command.bundle.sizeBytes),
-          },
+          // Without a bundle the turn has no repository (plan 57, Б5): nothing is fetched and
+          // the working directory is made empty.
+          ...(command.bundle ? { bundle: this.#bundleSource(held, fence, command.bundle) } : {}),
           ...(restore ? { restore } : {}),
           driverId: command.driverId,
           prepared: command.prepared,
@@ -562,10 +563,20 @@ export class SandboxRunner {
     }
   }
 
+  /** The base bundle of a turn with a repository, fetched from core as the import reads it. */
+  #bundleSource(
+    held: Held,
+    fence: RunnerCommandFence,
+    bundle: NonNullable<Command<'prepare'>['bundle']>,
+  ): TurnBundleSource {
+    return { ...bundle, read: () => this.#bundle(held, fence, bundle.sizeBytes) }
+  }
+
   /**
-   * The checkpoint core names: only the three parts of one earlier turn of this session. A
-   * continuation restores turn n−1; a replacement restores what the turn it replaces started
-   * from, which is older (TurnRequest.replacesTurn).
+   * The checkpoint core names: only the parts of one earlier turn of this session — all three,
+   * or `home` alone for a turn without a repository (plan 57, Б5). A continuation restores turn
+   * n−1; a replacement restores what the turn it replaces started from, which is older
+   * (TurnRequest.replacesTurn).
    */
   #restoreSource(
     held: Held,
@@ -576,16 +587,12 @@ export class SandboxRunner {
     const labels = command.sandbox.labels
     const expiresAt = new Date(Date.now() + MAX_PRESIGN_TTL_MS)
     const part = (name: SnapshotPartName): PresignedRequest => {
+      const request = parts[name]
       if (
+        !request ||
         manifest.sessionId !== labels.sessionId ||
         manifest.turn >= labels.turn ||
-        !isTurnSnapshotUrl(
-          parts[name].url,
-          manifest.sessionId,
-          manifest.turn,
-          name,
-          this.deps.s3Origin,
-        )
+        !isTurnSnapshotUrl(request.url, manifest.sessionId, manifest.turn, name, this.deps.s3Origin)
       )
         throw new DomainError(
           'SNAPSHOT_LOAD_FAILED',
@@ -593,11 +600,13 @@ export class SandboxRunner {
           502,
         )
       // The URL signs its own expiry; the runner only knows an upper bound.
-      return { ...parts[name], expiresAt }
+      return { ...request, expiresAt }
     }
     return {
       manifest,
-      parts: { home: part('home'), untracked: part('untracked'), patch: part('patch') },
+      parts: snapshotHasRepository(manifest)
+        ? { home: part('home'), untracked: part('untracked'), patch: part('patch') }
+        : { home: part('home') },
       dataKey: () => this.#key(held, 'restore', fence),
     }
   }
@@ -741,7 +750,11 @@ export class SandboxRunner {
     await answer({ type: 'quiesced' })
   }
 
-  /** The candidate parts go to core as untrusted data; home stays here until seal. */
+  /**
+   * The candidate parts go to core as untrusted data; home stays here until seal. A capture
+   * without `baseSha` — a turn without a repository (plan 57, Б5) — takes home alone: nothing
+   * is uploaded and the report names no part.
+   */
   async #capture(held: Held, command: Command<'capture'>): Promise<void> {
     const answer = this.#answer(held, command)
     const fence = this.#fence(command)
@@ -749,13 +762,25 @@ export class SandboxRunner {
       if (!held.execution) throw new Error('No container')
       const captured = await held.execution.capture({
         home: command.home,
-        baseSha: command.baseSha,
+        ...(command.baseSha ? { baseSha: command.baseSha } : {}),
         ...(command.sandboxBaseSha ? { sandboxBaseSha: command.sandboxBaseSha } : {}),
         ...(command.addOnlyPaths ? { addOnlyPaths: command.addOnlyPaths } : {}),
       })
-      for (const part of ['patch', 'untracked'] as const) {
+      if (command.baseSha === undefined) {
+        if (captured.patch !== undefined || captured.untracked !== undefined)
+          throw new Error('A capture without a base returned candidate parts')
+        held.phase = 'captured'
+        await answer({ type: 'captured', homeBytes: captured.homeBytes })
+        return
+      }
+      const { patch, untracked } = captured
+      if (!patch || !untracked) throw new Error('A capture with a base returned no candidate')
+      for (const [part, bytes] of [
+        ['patch', patch],
+        ['untracked', untracked],
+      ] as const) {
         const uploaded = await this.#call(held, () =>
-          this.deps.transport.candidate(held.id, part, fence, captured[part]),
+          this.deps.transport.candidate(held.id, part, fence, bytes),
         )
         if (uploaded.ok) continue
         if (uploaded.reason === 'refused') throw new Error('Core refused a candidate part')
@@ -765,8 +790,8 @@ export class SandboxRunner {
       await answer({
         type: 'captured',
         homeBytes: captured.homeBytes,
-        patch: digest(captured.patch),
-        untracked: digest(captured.untracked),
+        patch: digest(patch),
+        untracked: digest(untracked),
       })
     } catch (error) {
       await answer({

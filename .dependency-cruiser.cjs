@@ -11,7 +11,7 @@ const ADAPTERS =
 // A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
 // allows it.
 const LEAVES = 'ip-address'
-const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|site-content'
+const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|site-content|browser-link'
 // The frame and runtime of the apps (process start and stop, Nest wiring, health):
 // app-side code that lives in a package, so it may use observability, which no library package may.
 const RUNTIME = 'app-bootstrap|service-runtime'
@@ -204,6 +204,32 @@ module.exports = {
       },
     },
     {
+      name: 'browser-link-tier',
+      comment:
+        'browser-link is the network link to the browser worker (docs/plan/57-browser-tasks.md): its client for core and mcp and the stream gateway of preview build on the contracts of domain alone (the network guard of its tests is test support).',
+      severity: 'error',
+      from: { path: '^packages/browser-link/' },
+      to: {
+        path: '^packages/',
+        pathNot: [
+          '^packages/(domain|browser-link)/',
+          '^packages/app-bootstrap/src/testing/',
+          TOOLING,
+        ],
+      },
+    },
+    {
+      name: 'browser-link-npm',
+      comment:
+        'browser-link speaks HTTP and WebSocket with Node built-ins, ws and zod: no Playwright, database, Redis or S3 client reaches the apps that carry it.',
+      severity: 'error',
+      from: { path: '^packages/browser-link/src/', pathNot: '\\.test\\.ts$' },
+      to: {
+        dependencyTypesNot: ['local', 'core'],
+        pathNot: ['^packages/(domain|browser-link)/', ...npm('ws|zod|@types/ws')],
+      },
+    },
+    {
       name: 'package-testing-only-in-tests',
       comment:
         'The testing part of a package (sample ids, the network guard, scripted fakes, the sandbox side of a runner in @repo/local-turns/testing) is test support: only tests, the testing modules of the apps and the stand scripts import it.',
@@ -232,7 +258,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^(apps/web|packages/(trpc|ui|auth|billing|notifications))/' },
       to: {
-        path: '^packages/(app-bootstrap|service-runtime|turn-keys|local-turns|snapshots|site-content)/',
+        path: '^packages/(app-bootstrap|service-runtime|turn-keys|local-turns|snapshots|site-content|browser-link)/',
         reachable: true,
       },
     },
@@ -335,9 +361,9 @@ module.exports = {
     {
       name: 'llm-no-trpc-ui',
       comment:
-        'The llm, mcp, runner and preview apps reach business logic via domain, never via trpc or ui.',
+        'The llm, mcp, runner, preview and browser apps reach business logic via domain, never via trpc or ui.',
       severity: 'error',
-      from: { path: '^apps/(llm|mcp|runner|preview)/' },
+      from: { path: '^apps/(llm|mcp|runner|preview|browser)/' },
       to: { path: '^packages/(trpc|ui)/' },
     },
     {
@@ -354,22 +380,22 @@ module.exports = {
     {
       name: 'mcp-profiles-apart',
       comment:
-        'The content and the browser tools of the mcp app are two profiles, each its own module: neither folder imports the other (plan 56, §4.3).',
+        'The content and the browser tools of the mcp app are two profiles, and the web tools of a browser task the module of the browser worker (docs/plan/57-browser-tasks.md, Б20), each its own module: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
-      from: { path: '^apps/mcp/src/(content|browser)/', pathNot: '\\.test\\.ts$' },
-      to: { path: '^apps/mcp/src/(content|browser)/', pathNot: '^apps/mcp/src/$1/' },
+      from: { path: '^apps/mcp/src/(content|browser|web)/', pathNot: '\\.test\\.ts$' },
+      to: { path: '^apps/mcp/src/(content|browser|web)/', pathNot: '^apps/mcp/src/$1/' },
     },
     {
       name: 'mcp-base-no-profiles',
       comment:
-        'What the profiles of the mcp app build on (access, server, common, config, infra, health, storage, privacy, site-info) imports no profile, only the argument schemas of its tools, which the request policy checks.',
+        'What the profiles of the mcp app and its web tools build on (access, server, common, config, infra, health, storage, privacy, site-info) imports none of them, only the argument schemas of the profiles’ tools, which the request policy checks.',
       severity: 'error',
       from: {
         path: '^apps/mcp/src/(access|server|common|config|infra|health|storage|privacy|site-info)/',
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(content|browser)/',
+        path: '^apps/mcp/src/(content|browser|web)/',
         pathNot: '^apps/mcp/src/(content/content-arguments|browser/browser-arguments)\\.ts$',
       },
     },
@@ -394,7 +420,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/llm/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|agent-drivers|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|site-content)/',
+        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|site-content)/',
         reachable: true,
       },
     },
@@ -412,7 +438,7 @@ module.exports = {
     {
       name: 'preview-minimal-packages',
       comment:
-        'The preview app serves the iframe of the cabinet from the database: no storage, Vault, git, sandbox, agent, payments, mail or content code, not even transitively.',
+        'The preview app serves the iframe of the cabinet from the database and relays the stream of a task’s browser (browser-link): no storage, Vault, git, sandbox, agent, payments, mail or content code, not even transitively.',
       severity: 'error',
       from: { path: '^apps/preview/', pathNot: '\\.test\\.ts$' },
       to: {
@@ -437,20 +463,50 @@ module.exports = {
       },
     },
     {
+      name: 'browser-minimal-packages',
+      comment:
+        'The browser worker (docs/plan/57-browser-tasks.md, Б10) holds the sessions’ Chromium, where the client signs in: it composes the database, the inbox bucket, the containers, the browser and the stacks’ policies — no Vault, git, agent, model, payments, mail or turn code, not even transitively.',
+      severity: 'error',
+      from: { path: '^apps/browser/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|site-connections|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|site-content|browser-link|trpc|ui)/',
+        reachable: true,
+      },
+    },
+    {
+      name: 'browser-npm',
+      comment:
+        'The browser worker’s own code imports Nest, express types, ws, zod and the Prometheus client besides its packages: Playwright and Docker come only through their adapters.',
+      severity: 'error',
+      from: {
+        path: '^apps/browser/src/',
+        pathNot: ['\\.test\\.ts$', '^apps/browser/src/testing/'],
+      },
+      to: {
+        dependencyTypesNot: ['local', 'core'],
+        pathNot: [
+          '^packages/(domain|app-bootstrap|service-runtime|db|observability|browser-providers|sandbox-providers|site-adapters|storage|ip-address)/',
+          ...npm(
+            '@nestjs/[^/]+|express|@types/express|reflect-metadata|rxjs|ws|@types/ws|zod|@prometheus-io/client',
+          ),
+        ],
+      },
+    },
+    {
       name: 'core-product-no-testing',
       comment:
         'src/testing of an app holds the fakes and the sample ids of tests and stands: no product module imports it.',
       severity: 'error',
       from: {
-        path: '^apps/(core|llm|mcp|runner|preview)/src/',
+        path: '^apps/(core|llm|mcp|runner|preview|browser)/src/',
         pathNot: ['\\.test\\.ts$', '^apps/[^/]+/src/testing/'],
       },
-      to: { path: '^apps/(core|llm|mcp|runner|preview)/src/testing/' },
+      to: { path: '^apps/(core|llm|mcp|runner|preview|browser)/src/testing/' },
     },
     {
       name: 'runner-no-platform-access',
       comment:
-        'The runner role and the local executor it drives never reach PostgreSQL, Redis, Vault, S3, the payment shop or core’s runner API, not even transitively: a sandbox VM holds no platform credentials (spec §8, §19).',
+        'The runner role and the local executor it drives never reach PostgreSQL, Redis, Vault, S3, the payment shop, the browser worker or core’s runner API, not even transitively: a sandbox VM holds no platform credentials (spec §8, §19).',
       severity: 'error',
       from: {
         path: '^(apps/runner/|packages/(snapshots|local-turns)/)',
@@ -458,7 +514,7 @@ module.exports = {
       },
       to: {
         path: [
-          '^packages/(db|vault|storage|llm-backends|yookassa|billing)/',
+          '^packages/(db|vault|storage|llm-backends|yookassa|billing|browser-link)/',
           '^apps/core/src/runner-api/',
           ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+'),
         ],

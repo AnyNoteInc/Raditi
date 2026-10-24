@@ -23,6 +23,8 @@ function fixture(
     account?: Record<string, unknown>
     /** The data class of the site's workspace. */
     dataClass?: 'synthetic' | 'client'
+    /** `tasks.needs_browser` of the task: one that works in the browser (plan 57). */
+    needsBrowser?: boolean
     /** Rows of `site_env_vars` of the site, as the query would return them. */
     variables?: SiteVariable[]
     /** Vault keys of the site's variables by name: their data and version. */
@@ -69,6 +71,7 @@ function fixture(
                 attempt: 1,
                 siteId,
                 dataClass: options.dataClass ?? 'synthetic',
+                needsBrowser: options.needsBrowser ?? false,
                 now,
               },
             ]
@@ -498,6 +501,29 @@ describe('the client variables of a turn (plan 53, Р13)', () => {
     const bare = await none.credentials.issue(none.ref, none.grant)
     expect(bare).not.toHaveProperty('envValues')
     expect(none.vault()).not.toHaveProperty('env')
+  })
+
+  it('gives a task in the browser no variable: its `web` tools reach the live site unchecked (plan 57)', async () => {
+    const variables = [row('PAYMENT_KEY', 1)]
+    const values = { PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 } }
+    // The same consented variable of a synthetic workspace reaches a repository task's commands.
+    const repository = fixture({ variables, values })
+    expect(
+      (await repository.credentials.issue(repository.ref, repository.grant)).envValues,
+    ).toEqual({ PAYMENT_KEY: 'pay-secret-0001' })
+    // A task in the browser would type it onto the site through `web_fill` with no candidate or
+    // release to refuse it: its turn gets none, and none is even read.
+    const browser = fixture({ variables, values, needsBrowser: true })
+    const issued = await browser.credentials.issue(browser.ref, browser.grant)
+    expect(issued).not.toHaveProperty('envValues')
+    expect(browser.vault()).not.toHaveProperty('env')
+    expect(browser.tx.siteEnvVar.findMany).not.toHaveBeenCalled()
+    expect(
+      browser.secrets.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
+    ).toEqual([])
+    // A retry and a recovery return the same record, still without values.
+    expect(await browser.credentials.issue(browser.ref, browser.grant)).toEqual(issued)
+    expect(await browser.credentials.recover(browser.ref)).toEqual(issued)
   })
 
   it('carries every set of variables a site may have, and refuses more than that', async () => {

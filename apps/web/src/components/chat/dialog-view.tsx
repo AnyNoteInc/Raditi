@@ -20,18 +20,22 @@ import Tabs from '@mui/material/Tabs'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { SITE_PANE_WIDTH, siteHref } from '@/components/site/site-nav'
+import { SITE_PANE_WIDTH, SITE_RAIL_WIDTH, siteHref } from '@/components/site/site-nav'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
+import type { SentFile } from './attachment-chips'
+import { BrowserPane } from './browser-pane'
+import { sessionLive } from './browser-pane-model'
 import { callErrorText } from './call-error'
 import {
+  browserText,
   cancelText,
   composerText,
   dialogText,
@@ -39,6 +43,7 @@ import {
   paneText,
   releaseStatusText,
   releaseText,
+  taskWayText,
   undoText,
   viewSwitchText,
 } from './chat-texts'
@@ -55,22 +60,29 @@ import {
   stopRequested,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
+import { PaneResizer } from './pane-resizer'
 import { PreviewPane, paneTabId, type PaneTab } from './preview-pane'
 import { ReleaseDialog } from './release-dialog'
 import { StatusMark } from './status-mark'
 import { UndoDialog } from './undo-dialog'
+import { useAttachments } from './use-attachments'
+import { useBrowserStream } from './use-browser-stream'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
 
 // One dialog (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
 // макетах»): its head, its rows, the live block and the field, with the panel of its changes
-// beside it from `lg` and behind the switch «Диалог | Предпросмотр» below.
+// beside it from `lg` and behind the switch «Диалог | Предпросмотр» below. A task in the browser
+// (docs/plan/57-browser-tasks.md, Б29) has its browser in that place: «Диалог | Браузер».
 
 type View = 'dialog' | 'preview'
 const viewId = (view: View) => `dialog-view-${view}`
 
+/** The one command of a task in the browser: stopping it (docs/plan/57-browser-tasks.md, Б24). */
+const BROWSER_COMMANDS: readonly ChatCommandId[] = ['cancel']
+
 /** What a press of the client sends: one id per press, kept for its repeats. */
-type Press = 'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update'
+type Press = 'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume'
 
 /** A release or an undo of it that is under way: its words in the head of the dialog. */
 function releaseProgress(head: FeedHeadState): string | null {
@@ -120,6 +132,26 @@ function DialogHead({ title, head }: { title: string; head: FeedHeadState | null
             </Box>
             {taskModeLabel[head.task.mode]}
           </Box>
+          {head.task.requirements.browser ? (
+            <Box
+              component="span"
+              sx={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 0.5,
+                px: 1.25,
+                py: '2px',
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: '999px',
+                fontSize: 13,
+                color: 'text.secondary',
+              }}
+            >
+              <AppIcon name="globe" size={14} />
+              {taskWayText.browser}
+            </Box>
+          ) : null}
           {progress ? (
             <Typography component="span" variant="body2" color="text.secondary">
               {nbsp(progress)}
@@ -140,11 +172,17 @@ export function DialogView({
   siteUrl,
   taskId,
   title,
+  browserStreamUrl = null,
 }: {
   siteId: string
   siteUrl: string
   taskId: string
   title: string | null
+  /**
+   * Where the cabinet opens the stream of a task's browser (`BROWSER_STREAM_PUBLIC_URL`,
+   * docs/plan/57-browser-tasks.md, Б12); null — the platform has no browser here.
+   */
+  browserStreamUrl?: string | null
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -162,6 +200,10 @@ export function DialogView({
   // Why the server refused the last thing written or pressed: one sentence under the field.
   const [fieldError, setFieldError] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  // The browser of the task over the whole area of the content (the rail stays).
+  const [fullscreen, setFullscreen] = useState(false)
+  const pane = useRef<HTMLElement | null>(null)
+  const root = useRef<HTMLDivElement | null>(null)
 
   const message = useMutation(trpc.task.message.mutationOptions())
   const proceed = useMutation(trpc.task.continue.mutationOptions())
@@ -169,8 +211,49 @@ export function DialogView({
   const reset = useMutation(trpc.preview.reset.mutationOptions())
   const update = useMutation(trpc.candidate.update.mutationOptions())
   const retry = useMutation(trpc.task.retry.mutationOptions())
+  const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
   const busy =
-    proceed.isPending || retry.isPending || cancel.isPending || reset.isPending || update.isPending
+    proceed.isPending ||
+    retry.isPending ||
+    cancel.isPending ||
+    reset.isPending ||
+    update.isPending ||
+    resumeAgent.isPending
+
+  // A task in the browser (docs/plan/57-browser-tasks.md): the browser instead of the preview,
+  // files with its messages, the stream while its panel is shown.
+  const inBrowser = head?.task.requirements.browser === true
+  const browserLive = inBrowser && sessionLive(head?.browser ?? null)
+  const paneVisible = wide || view === 'preview'
+  const stream = useBrowserStream({
+    taskId,
+    streamUrl: browserStreamUrl,
+    live: browserLive,
+    visible: paneVisible,
+  })
+  const attachments = useAttachments(siteId)
+  // The names of the files the messages sent: read once a message has one.
+  const sentIds = rows.flatMap((row) =>
+    row.type === 'feed.request' && 'attachments' in row && Array.isArray(row.attachments)
+      ? row.attachments
+      : [],
+  )
+  const sentFiles = useQuery({
+    ...trpc.attachment.list.queryOptions({ taskId }),
+    enabled: sentIds.length > 0,
+  })
+  // A message sent since the list was read names files it does not have yet — this tab's own or
+  // one from another tab: the list is read again. Once for the same missing files: one still
+  // missing after it does not loop (a file bound to a message never leaves the list).
+  const listed = sentFiles.data
+  const unlisted =
+    listed === undefined
+      ? ''
+      : sentIds.filter((id) => !listed.some((file) => file.id === id)).join()
+  const refetchSent = sentFiles.refetch
+  useEffect(() => {
+    if (unlisted !== '') void refetchSent()
+  }, [unlisted, refetchSent])
 
   // One id per press, kept for its repeats while nothing says the server has taken it: a repeat
   // after a lost answer writes nothing. Words get an id of their own: other words are another
@@ -197,12 +280,16 @@ export function DialogView({
   const retryRow = retryFailure(rows, head)
   const terminal = status !== undefined && terminalTaskStatuses.includes(status)
   // `/cancel` was taken while the agent works: core stops it, and it is not asked twice — the
-  // agent is still at work until then, as the list says of the command.
-  const stopping = !terminal && (stopRequested(rows, status) || cancel.data?.state === 'stopping')
+  // agent is still at work until then, as the list says of the command. A task in the browser is
+  // stopped by core while it waits for the client too: it takes no words or presses meanwhile.
+  const stopping =
+    !terminal && (stopRequested(rows, status, inBrowser) || cancel.data?.state === 'stopping')
   // «Отменить выпуск» is listed only in a dialog that installed a version, «Попробовать ещё» only
   // while it is offered (critique of the plan: a refusal in every other dialog would be noise).
+  // A task in the browser has one command: stopping it (no preview, release or undo).
   const verdicts = (head?.commands ?? []).filter(
     (command) =>
+      (!inBrowser || command.id === 'cancel') &&
       (command.id !== 'undo' || command.refusal !== 'no_release') &&
       (command.id !== 'retry' || (command.available && retryRow !== null)),
   )
@@ -280,10 +367,17 @@ export function DialogView({
 
   // A repeat that the server answers `repeated` is the same words written before (the id is of
   // these very words): they are in the dialog, and the field is cleared like after a first send.
-  async function send(text: string): Promise<boolean> {
+  async function send(text: string, attachmentIds: readonly string[] = []): Promise<boolean> {
     setFieldError(null)
+    const files = inBrowser ? [...attachmentIds] : []
     try {
-      await message.mutateAsync({ taskId, requestId: pressId('message', text), text })
+      await message.mutateAsync({
+        taskId,
+        // Other files with the same words are another message.
+        requestId: pressId('message', `${text}\u0000${files.join(',')}`),
+        text,
+        ...(files.length > 0 ? { attachments: files } : {}),
+      })
       pressed('message')
       refresh()
       return true
@@ -342,6 +436,46 @@ export function DialogView({
     refresh()
   }
 
+  /** «Взять управление»: the browser is shown, and the stream asks for the control. */
+  function takeControl() {
+    setFieldError(null)
+    if (!wide) setView('preview')
+    stream.take()
+  }
+
+  /**
+   * «Продолжить работу агента» (Б16): a turn that runs gets the browser back on the stream; a
+   * task that waits goes on with the same attempt (`task.resumeAgent`).
+   */
+  function resumeWork() {
+    if (status === 'awaiting_user') void press('resume', resumeAgent.mutateAsync)
+    else stream.release()
+  }
+
+  // Esc leaves the browser over the content — unless the page itself is being typed into.
+  useEffect(() => {
+    if (!fullscreen) return
+    // The bar of the shell and the list of dialogs are under the browser too: out of the tab
+    // order while it covers them (WCAG 2.4.11), as the dialog's own column is.
+    const covered = [
+      ...(pane.current
+        ?.closest('[data-site-shell]')
+        ?.querySelectorAll('header, [data-site-list]') ?? []),
+    ].filter((element) => !root.current?.contains(element))
+    for (const element of covered) element.setAttribute('inert', '')
+    const leave = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (event.key !== 'Escape' || target?.tagName === 'TEXTAREA' || target?.tagName === 'INPUT')
+        return
+      setFullscreen(false)
+    }
+    window.addEventListener('keydown', leave)
+    return () => {
+      window.removeEventListener('keydown', leave)
+      for (const element of covered) element.removeAttribute('inert')
+    }
+  }, [fullscreen])
+
   function runCommand(id: ChatCommandId) {
     setFieldError(null)
     switch (id) {
@@ -378,8 +512,23 @@ export function DialogView({
     onUpdate: () => runCommand('update'),
     onUndo: () => runCommand('undo'),
     onShowChanges: () => focusPaneTab('files'),
+    onTakeControl: takeControl,
+    onResumeAgent: resumeWork,
+    controlling: head?.browser?.controller === 'user',
+    browserLive,
     busy,
+    stopping,
   }
+  const sentFilesOf = (ids: readonly string[]): SentFile[] =>
+    ids.map((id) => {
+      const known = sentFiles.data?.find((file) => file.id === id)
+      return {
+        id,
+        name: known?.name ?? null,
+        size: known?.size ?? null,
+        kind: known?.kind ?? 'document',
+      }
+    })
 
   if (state.missing) {
     return (
@@ -420,7 +569,12 @@ export function DialogView({
               error={fieldError}
               busy={false}
               onSend={send}
-              commands={{ verdicts: commands, onRun: runCommand, onOpen: refresh }}
+              commands={{
+                verdicts: commands,
+                onRun: runCommand,
+                onOpen: refresh,
+                listed: inBrowser ? BROWSER_COMMANDS : undefined,
+              }}
             />
           </Box>
         ) : (
@@ -439,11 +593,14 @@ export function DialogView({
       </Box>
     )
   } else {
-    const answering = status === 'awaiting_user' && question?.kind === 'agent'
+    // A question of the browser is answered in words too: they resume the agent (Б16).
+    const answering =
+      status === 'awaiting_user' && (question?.kind === 'agent' || question?.kind === 'browser')
     const revising = status === 'awaiting_approval' && question === null
     const releasing = status === 'deploying' || status === 'verifying'
-    const disabledReason =
-      question?.kind === 'ceiling'
+    const disabledReason = stopping
+      ? composerText.stopping
+      : question?.kind === 'ceiling'
         ? composerText.ceiling
         : answering || revising
           ? null
@@ -464,18 +621,30 @@ export function DialogView({
         error={fieldError}
         busy={message.isPending}
         onSend={send}
-        commands={{ verdicts: commands, onRun: runCommand, onOpen: refresh }}
+        commands={{
+          verdicts: commands,
+          onRun: runCommand,
+          onOpen: refresh,
+          listed: inBrowser ? BROWSER_COMMANDS : undefined,
+        }}
+        attachments={inBrowser ? attachments : undefined}
+        noSecrets={inBrowser ? taskWayText.noSecrets : undefined}
       />
     )
   }
 
   return (
-    <Box sx={{ flex: '1 0 auto', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <Box
+      ref={root}
+      sx={{ flex: '1 0 auto', display: 'flex', flexDirection: 'column', minWidth: 0 }}
+    >
+      {/* The browser over the whole area covers the switch and the dialog: neither takes focus. */}
       <Tabs
         value={view}
         onChange={(_event, next: View) => setView(next)}
         aria-label={viewSwitchText.label}
         variant="fullWidth"
+        inert={fullscreen}
         sx={{
           display: { lg: 'none' },
           mb: 2,
@@ -488,7 +657,30 @@ export function DialogView({
           <Tab
             key={value}
             value={value}
-            label={viewSwitchText[value]}
+            label={
+              value === 'preview' && inBrowser ? (
+                <Box
+                  component="span"
+                  sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}
+                >
+                  {browserText.view}
+                  {browserLive ? (
+                    <>
+                      <Box
+                        component="span"
+                        aria-hidden="true"
+                        sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main' }}
+                      />
+                      <Box component="span" sx={offScreen}>
+                        {`, ${browserText.status.agent.toLocaleLowerCase('ru')}`}
+                      </Box>
+                    </>
+                  ) : null}
+                </Box>
+              ) : (
+                viewSwitchText[value]
+              )
+            }
             aria-controls={viewId(value)}
             sx={{ minHeight: 48, textTransform: 'none', fontSize: 15 }}
           />
@@ -497,6 +689,7 @@ export function DialogView({
 
       <Box
         id={viewId('dialog')}
+        inert={fullscreen}
         sx={{
           display: { xs: view === 'dialog' ? 'flex' : 'none', lg: 'flex' },
           flex: '1 0 auto',
@@ -526,9 +719,26 @@ export function DialogView({
             liveCandidateId={candidateRow?.id ?? null}
             retryId={retryRow?.id ?? null}
             actions={actions}
+            filesOf={sentFilesOf}
           />
         )}
-        {head ? <LiveBlock head={head} steps={liveSteps(rows, head)} stopping={stopping} /> : null}
+        {head ? (
+          <LiveBlock
+            head={head}
+            steps={liveSteps(rows, head)}
+            stopping={stopping}
+            browser={
+              inBrowser
+                ? {
+                    controlling: head.browser?.controller === 'user' && browserLive,
+                    onResume: resumeWork,
+                    onWatch: wide ? null : () => setView('preview'),
+                    busy,
+                  }
+                : undefined
+            }
+          />
+        ) : null}
         {state.failures > 0 ? (
           <Box
             role="status"
@@ -558,15 +768,17 @@ export function DialogView({
         >
           {composer}
         </Box>
-        <Box role="status" aria-live="polite" sx={offScreen}>
-          {announcement}
-        </Box>
+      </Box>
+      {/* Outside the column: it speaks while the browser covers the dialog too. */}
+      <Box role="status" aria-live="polite" sx={offScreen}>
+        {announcement}
       </Box>
 
       <Box
         component="aside"
+        ref={pane}
         id={viewId('preview')}
-        aria-label={paneText.label}
+        aria-label={inBrowser ? browserText.label : paneText.label}
         // The shell leaves this panel its room at the right edge only while it is drawn.
         data-site-pane=""
         sx={{
@@ -584,21 +796,73 @@ export function DialogView({
           borderLeft: { lg: 1 },
           borderColor: { xs: 'divider', lg: 'divider' },
           borderRadius: { xs: '14px', lg: 0 },
-          overflow: 'hidden',
+          // The panel holds its edge outside itself: the edge is not cut off.
+          overflow: { xs: 'hidden', lg: 'visible' },
           bgcolor: 'background.paper',
+          // Over the whole area of the content, the rail beside it; under the windows of MUI.
+          ...(fullscreen && {
+            position: 'fixed',
+            display: 'flex',
+            top: 0,
+            bottom: 0,
+            right: 0,
+            left: { xs: 0, sm: `calc(${SITE_RAIL_WIDTH}px + env(safe-area-inset-left))` },
+            width: 'auto',
+            height: 'auto',
+            minHeight: 0,
+            border: 0,
+            borderRadius: 0,
+            zIndex: 1200,
+          }),
         }}
       >
-        <PreviewPane
-          taskId={taskId}
-          preview={head?.preview ?? null}
-          candidate={head?.candidate ?? null}
-          tab={paneTab}
-          onTab={setPaneTab}
-          visible={wide || view === 'preview'}
-          canReset={resetVerdict?.available === true}
-          onReset={() => runCommand('reset')}
-          resetting={reset.isPending}
-        />
+        {fullscreen ? null : (
+          <PaneResizer pane={pane} label={inBrowser ? browserText.separator : paneText.separator} />
+        )}
+        <Box
+          sx={{
+            flex: '1 1 auto',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          {inBrowser ? (
+            <BrowserPane
+              taskId={taskId}
+              siteId={siteId}
+              head={head}
+              stream={stream}
+              configured={browserStreamUrl !== null}
+              visible={paneVisible}
+              fullscreen={fullscreen}
+              onFullscreen={setFullscreen}
+              onTake={takeControl}
+              onResume={resumeWork}
+              onStop={() => runCommand('cancel')}
+              stopping={stopping}
+              canStop={
+                !terminal &&
+                !stopping &&
+                commands.some((command) => command.id === 'cancel' && command.available)
+              }
+              busy={busy}
+            />
+          ) : (
+            <PreviewPane
+              taskId={taskId}
+              preview={head?.preview ?? null}
+              candidate={head?.candidate ?? null}
+              tab={paneTab}
+              onTab={setPaneTab}
+              visible={paneVisible}
+              canReset={resetVerdict?.available === true}
+              onReset={() => runCommand('reset')}
+              resetting={reset.isPending}
+            />
+          )}
+        </Box>
       </Box>
 
       <ReleaseDialog

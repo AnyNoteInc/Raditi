@@ -4,6 +4,11 @@
  */
 import type { z } from 'zod'
 
+import type {
+  BrowserCheckpointRef,
+  BrowserCommitAction,
+  BrowserVerificationPlan,
+} from '../browser/checkpoint.ts'
 import { badRequest } from '../errors.ts'
 import type {
   DatabaseCopyPolicy,
@@ -237,6 +242,53 @@ export interface SiteAdapter {
    * request a page makes; true for anything the adapter cannot read. Pure, no I/O.
    */
   browserRequestDenied(request: SiteBrowserRequest): boolean
+  /**
+   * The policy of a task's browser on the site itself (docs/plan/57-browser-tasks.md, Б21): not
+   * the preview's — the agent works in the stack's own admin pages there, and uploads media. The
+   * stack's users, plugins, themes, settings, tools, comments, orders, forms and deletions stay
+   * closed (CLAUDE.md rule 4, spec §11), for the agent and for the client's input alike. Pure.
+   */
+  browserTaskPolicy(site: BrowserTaskSite): BrowserTaskPolicy
+  /**
+   * The object an address of the stack's editor edits (`/wp-admin/post.php?post=12&action=edit`),
+   * with the address that opens it again on the same origin; null for any other address (Б22).
+   */
+  browserCheckpointOf(url: string): BrowserCheckpointRef | null
+  /**
+   * What a click on the element of this role and accessible name does in the stack's editor:
+   * publishes or saves the object it edits, or neither (null). The agent's click is judged by
+   * the element its observation names (Б22).
+   */
+  browserCommitAction(role: string, name: string): BrowserCommitAction | null
+  /**
+   * The trusted read of an object through the session's own sign-in (Б22): GET requests only,
+   * checked with `isBrowserVerificationPlan`, and their pure reading.
+   */
+  browserVerification(ref: BrowserCheckpointRef): BrowserVerificationPlan
+  /**
+   * What the agent is told about working in the stack's admin pages through the `web` tools:
+   * Markdown in English, list items, nothing of a particular site (Б20).
+   */
+  browserGuide(): string
+}
+
+/** What the policy of a task's browser knows of the site: its address. */
+export interface BrowserTaskSite {
+  url: string
+}
+
+/**
+ * Where a task's browser starts and what of the site it may not open or send (Б21). `pageDenied`
+ * is checked on every navigation of a page, `requestDenied` on every request it makes (a form, an
+ * XHR of the editor); both answer true for anything the adapter cannot read.
+ */
+export interface BrowserTaskPolicy {
+  /** Below the site's origin, with one leading `/`: `/wp-admin/`. */
+  startPath: string
+  /** Hosts the stack's admin pages load from besides the site: `host` or `host:port`. */
+  extraHosts: readonly string[]
+  requestDenied(request: SiteBrowserRequest): boolean
+  pageDenied(path: string): boolean
 }
 
 /** One request of the agent's browser to its preview, as the stack's policy sees it. */

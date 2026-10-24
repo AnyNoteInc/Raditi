@@ -128,6 +128,8 @@ interface OwnedTask {
   attempt: number
   siteId: string
   dataClass: 'synthetic' | 'client'
+  /** `tasks.needs_browser`: the task drives the live site through the `web` tools (plan 57, Б2). */
+  needsBrowser: boolean
   now: Date
   modelClass?: string | null
 }
@@ -675,7 +677,8 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
   // the site's workspace. A task row that names another workspace owns nothing, as in MCP access.
   const rows = await tx.$queryRaw<OwnedTask[]>`
     SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
-      w.data_class::text AS "dataClass", clock_timestamp() AS now
+      t.needs_browser AS "needsBrowser", w.data_class::text AS "dataClass",
+      clock_timestamp() AS now
     FROM tasks t
     JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
     JOIN workspaces w ON w.id = s.workspace_id
@@ -695,6 +698,10 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
  * (`envVarReachesAgent`; until the gate of 152-FZ, rule 1).
  */
 async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnvVarVersion[]> {
+  // A task that works in the browser drives the live site through the `web` tools, and no
+  // candidate or release refuses a value written there: its commands get no client variable
+  // (plan 57, Б20; rule 2). A task without a repository is always one (`tasks_requirements_check`).
+  if (task.needsBrowser) return []
   const rows = await tx.siteEnvVar.findMany({
     where: { siteId: task.siteId, toAgent: true, agentConsentAt: { not: null } },
     orderBy: { name: 'asc' },

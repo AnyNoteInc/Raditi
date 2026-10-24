@@ -252,7 +252,8 @@ export async function startOpenbao(rt, names, port) {
     ['core', ['core-turns', 'core-transit', 'core-site-import', 'core-release']],
     ['mcp', ['mcp-content']],
     ['llm', ['llm-subscriptions']],
-    ['web', ['sites-writer']],
+    // As in production: web makes the Transit key of a workspace before its first task.
+    ['web', ['sites-writer', 'workspace-provisioner']],
   ]) {
     await request(`auth/approle/role/${name}`, {
       method: 'POST',

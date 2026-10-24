@@ -6,6 +6,7 @@ import { llmBackends } from '@repo/llm-backends'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
+import { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { CoreConfig } from '../config/config.ts'
 import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { AGENT_DRIVERS } from '../drivers/drivers.tokens.ts'
@@ -62,9 +63,12 @@ export const taskProviders: Provider[] = [
   },
   {
     provide: PassSettlement,
-    useFactory: (prisma: PrismaClient, candidates: CandidateBuilder | null) =>
-      new PassSettlement({ db: prisma, candidates }),
-    inject: [PRISMA, CandidateBuilder],
+    useFactory: (
+      prisma: PrismaClient,
+      candidates: CandidateBuilder | null,
+      browser: BrowserSessions | null,
+    ) => new PassSettlement({ db: prisma, candidates, browser }),
+    inject: [PRISMA, CandidateBuilder, BrowserSessions],
   },
   {
     provide: PassRunner,
@@ -78,11 +82,13 @@ export const taskProviders: Provider[] = [
       settlement: PassSettlement,
       live: LivePasses,
       queue: JobQueue,
+      browser: BrowserSessions | null,
     ) =>
       new PassRunner({
         db: prisma,
         supervisor,
         git,
+        browser,
         drivers,
         backends: llmBackends,
         adapter: getSiteAdapter,
@@ -103,6 +109,7 @@ export const taskProviders: Provider[] = [
       PassSettlement,
       LivePasses,
       JOB_QUEUE,
+      BrowserSessions,
     ],
   },
   {
@@ -134,8 +141,19 @@ export const taskProviders: Provider[] = [
       journal: TaskEventTurnJournal,
       drivers: AgentDriverRegistry,
       queue: JobQueue,
-    ) => new TaskSweep({ db: prisma, settlement, live, journal, drivers, queue }),
-    inject: [PRISMA, PassSettlement, LivePasses, TaskEventTurnJournal, AGENT_DRIVERS, JOB_QUEUE],
+      browser: BrowserSessions | null,
+      inbox: ObjectStorage,
+    ) => new TaskSweep({ db: prisma, settlement, live, journal, drivers, queue, browser, inbox }),
+    inject: [
+      PRISMA,
+      PassSettlement,
+      LivePasses,
+      TaskEventTurnJournal,
+      AGENT_DRIVERS,
+      JOB_QUEUE,
+      BrowserSessions,
+      OBJECT_STORAGE,
+    ],
   },
   {
     provide: TaskSweepRuntime,

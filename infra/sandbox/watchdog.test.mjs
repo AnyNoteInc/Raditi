@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { dockerClient, reapExpired, reapExpiredPreviews } from './watchdog.mjs'
+import { dockerClient, reapExpired, reapExpiredBrowsers, reapExpiredPreviews } from './watchdog.mjs'
 
 const main = 'io.raditi.sandbox.'
 const gateway = 'io.raditi.gateway.'
@@ -254,6 +254,152 @@ test('a container that stays keeps the networks and volumes of its preview', asy
     fail: (path) => path.includes('a'.repeat(64)),
   })
   await assert.rejects(reapExpiredPreviews(daemon.client, 100))
+  assert.deepEqual(daemon.calls, [
+    `/containers/${'a'.repeat(64)}?force=1&v=1`,
+    `/containers/${'b'.repeat(64)}?force=1&v=1`,
+    `/networks/${'d'.repeat(64)}`,
+  ])
+})
+
+const browser = 'io.raditi.browser.'
+const sessionA = '0196abcd-0000-7000-8000-0000000000a1'
+const sessionB = '0196abcd-0000-7000-8000-0000000000b2'
+const ofSession = (id, deadline, role, extra = {}) => ({
+  [`${browser}owner`]: 'raditi',
+  [`${browser}protocol`]: '1',
+  [`${browser}session`]: id,
+  [`${browser}task`]: '0196abcd-0000-7000-8000-0000000000c3',
+  [`${browser}site`]: '0196abcd-0000-7000-8000-0000000000d4',
+  [`${browser}deadline`]: String(deadline),
+  [`${browser}role`]: role,
+  ...extra,
+})
+/** A daemon of browser sessions: lists by kind, records deletions, can fail one of them. */
+function browserDaemon({ containers = [], networks = [], fail = () => false }) {
+  const calls = []
+  const client = async (method, path) => {
+    if (method === 'DELETE') {
+      calls.push(path)
+      if (fail(path)) throw new Error('unavailable')
+      return null
+    }
+    assert.match(path, /io\.raditi\.browser\.owner%3Draditi/)
+    if (path.startsWith('/containers')) return containers
+    if (path.startsWith('/networks')) return networks
+    assert.fail(`unexpected ${path}`)
+  }
+  return { client, calls }
+}
+const sessionContainer = (id, letter, role, deadline, name = `/raditi-browser-${id}-${role}`) => ({
+  Id: letter.repeat(64),
+  Names: [name],
+  Labels: ofSession(id, deadline, role),
+})
+
+test('an expired browser session goes whole: its containers, then its network', async () => {
+  const daemon = browserDaemon({
+    containers: [
+      sessionContainer(sessionA, 'a', 'browser', 99),
+      sessionContainer(sessionA, 'b', 'egress', 99),
+      sessionContainer(sessionA, 'c', 'forwarder', 99),
+      // Alive: another session, ahead of its deadline.
+      sessionContainer(sessionB, 'd', 'browser', 500),
+    ],
+    networks: [
+      {
+        Id: 'e'.repeat(64),
+        Name: `raditi-browser-${sessionA}`,
+        Labels: ofSession(sessionA, 99, 'network'),
+      },
+      {
+        Id: 'f'.repeat(64),
+        Name: `raditi-browser-${sessionB}`,
+        Labels: ofSession(sessionB, 500, 'network'),
+      },
+    ],
+  })
+  assert.equal(await reapExpiredBrowsers(daemon.client, 100), 4)
+  assert.deepEqual(daemon.calls, [
+    `/containers/${'a'.repeat(64)}?force=1&v=1`,
+    `/containers/${'b'.repeat(64)}?force=1&v=1`,
+    `/containers/${'c'.repeat(64)}?force=1&v=1`,
+    `/networks/${'e'.repeat(64)}`,
+  ])
+})
+
+test('a browser session lives until the latest deadline of any of its resources', async () => {
+  const daemon = browserDaemon({
+    containers: [
+      sessionContainer(sessionA, 'a', 'browser', 50),
+      // A host firewall helper of a moment ago: its own deadline is later than the session's.
+      sessionContainer(sessionA, 'b', 'firewall', 150, `/raditi-browser-${sessionA}-firewall-x`),
+    ],
+    networks: [
+      {
+        Id: 'c'.repeat(64),
+        Name: `raditi-browser-${sessionA}`,
+        Labels: ofSession(sessionA, 50, 'network'),
+      },
+    ],
+  })
+  assert.equal(await reapExpiredBrowsers(daemon.client, 100), 0)
+  assert.equal(await reapExpiredBrowsers(daemon.client, 150), 3)
+})
+
+test('foreign names, owners and bad labels of browser sessions are never removed', async () => {
+  const daemon = browserDaemon({
+    containers: [
+      sessionContainer(sessionA, 'a', 'browser', 99, '/someone-else'),
+      sessionContainer(sessionA, 'b', 'browser', 99, `/raditi-browser-${sessionB}-browser`),
+      sessionContainer(sessionA, 'c', 'browser', 99, `/raditi-preview-${sessionA}-browser`),
+      {
+        ...sessionContainer(sessionA, 'd', 'browser', 99),
+        Labels: { ...ofSession(sessionA, 99, 'browser'), [`${browser}owner`]: 'other' },
+      },
+      {
+        Id: 'e'.repeat(64),
+        Names: ['/raditi-browser-not-a-uuid-browser'],
+        Labels: ofSession('not-a-uuid', 99, 'browser'),
+      },
+      {
+        ...sessionContainer(sessionB, 'f', 'browser', 99),
+        Labels: ofSession(sessionB, 'never', 'browser'),
+      },
+    ],
+    networks: [
+      { Id: '1'.repeat(64), Name: 'bridge', Labels: ofSession(sessionA, 99, 'network') },
+      {
+        Id: '2'.repeat(64),
+        Name: `raditi-preview-${sessionA}-browser`,
+        Labels: ofSession(sessionA, 99, 'network'),
+      },
+    ],
+  })
+  assert.equal(await reapExpiredBrowsers(daemon.client, 100), 0)
+  assert.deepEqual(daemon.calls, [])
+})
+
+test('a browser container that stays keeps its network; other sessions still go', async () => {
+  const daemon = browserDaemon({
+    containers: [
+      sessionContainer(sessionA, 'a', 'browser', 99),
+      sessionContainer(sessionB, 'b', 'browser', 99),
+    ],
+    networks: [
+      {
+        Id: 'c'.repeat(64),
+        Name: `raditi-browser-${sessionA}`,
+        Labels: ofSession(sessionA, 99, 'network'),
+      },
+      {
+        Id: 'd'.repeat(64),
+        Name: `raditi-browser-${sessionB}`,
+        Labels: ofSession(sessionB, 99, 'network'),
+      },
+    ],
+    fail: (path) => path.includes('a'.repeat(64)),
+  })
+  await assert.rejects(reapExpiredBrowsers(daemon.client, 100))
   assert.deepEqual(daemon.calls, [
     `/containers/${'a'.repeat(64)}?force=1&v=1`,
     `/containers/${'b'.repeat(64)}?force=1&v=1`,

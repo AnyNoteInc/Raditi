@@ -31,6 +31,33 @@ export async function requestOf(
   return row?.id ?? null
 }
 
+/** How far back a pending `/cancel` is looked for: as far as core's `pressedCancel` looks. */
+const PRESSES_READ = 50
+
+/**
+ * A `/cancel` press core has not acted on yet: the newest request, skipping other commands, is
+ * `cancel` — the same rows core's `pressedCancel` reads. Words or a press after it would hide it
+ * from core, so a task in the browser takes none (docs/plan/57, Б24).
+ */
+export async function cancelPending(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  taskId: string,
+): Promise<boolean> {
+  const rows = await db.taskEvent.findMany({
+    where: { taskId, type: 'feed.request' },
+    orderBy: { id: 'desc' },
+    take: PRESSES_READ,
+    select: { payload: true },
+  })
+  for (const row of rows) {
+    const event = readFeedRow('feed.request', row.payload)
+    if (event.type !== 'feed.request') continue
+    if (event.kind !== 'command') return false
+    if (event.command === 'cancel') return true
+  }
+  return false
+}
+
 /**
  * The `feed.request` rows that move a dialog on: the client's words and «Продолжить». A
  * command — `/cancel`, `/reset`, `/update` — is a press: it answers no question and starts no
@@ -41,10 +68,14 @@ export const movingRequest = {
   NOT: { payload: { path: ['kind'], equals: 'command' } },
 } as const satisfies Prisma.TaskEventWhereInput
 
-/** The last question of a dialog and whether words or «Продолжить» came after it. */
+/**
+ * The last question of a dialog and whether words, «Продолжить» or «Продолжить работу агента»
+ * came after it. `browser` — a task in the browser waits for the client to act there (docs/plan/57,
+ * Б23).
+ */
 export interface DialogQuestion {
   id: bigint
-  kind: 'agent' | 'ceiling'
+  kind: 'agent' | 'ceiling' | 'browser'
   /** Of a question of the platform. */
   reason: FeedCeilingReason | null
   answered: boolean

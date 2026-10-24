@@ -282,6 +282,7 @@ describe('project input and access', () => {
         status: 'active',
         createdAt: now,
         provisioningStages: [],
+        gitRepositories: [],
       },
     ])
     const [project] = await createCaller(context(prisma)).project.list()
@@ -1491,6 +1492,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     })
   })
 
+  /** A site the list shows while its first import waits: no repository yet, no browser here. */
+  const importing = {
+    setup: 'pending',
+    capabilities: { repository: 'importing', browser: 'not_configured' },
+  } as const
+
   it('isolates other users sites and does not disclose their duplicate URLs', async () => {
     const first = await account()
     const second = await account()
@@ -1498,8 +1505,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     expect(await second.caller.project.list()).toEqual([])
     const projectB = await createdProject(second.caller.project.create(input()))
     expect(projectB.id).not.toBe(projectA.id)
-    expect(await first.caller.project.list()).toEqual([{ ...projectA, setup: 'pending' }])
-    expect(await second.caller.project.list()).toEqual([{ ...projectB, setup: 'pending' }])
+    expect(await first.caller.project.list()).toEqual([{ ...projectA, ...importing }])
+    expect(await second.caller.project.list()).toEqual([{ ...projectB, ...importing }])
   })
 
   it('lists shared sites only while membership exists and never creates into that workspace', async () => {
@@ -1510,7 +1517,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     const member = await db.member.create({
       data: { workspaceId: workspace.id, userId: second.user.id, role: 'member' },
     })
-    expect(await second.caller.project.list()).toEqual([{ ...shared, setup: 'pending' }])
+    expect(await second.caller.project.list()).toEqual([{ ...shared, ...importing }])
     await expect(second.caller.project.create(input())).rejects.toMatchObject({
       code: 'CONFLICT',
       cause: { code: 'PROJECT_ALREADY_EXISTS' },
@@ -1522,7 +1529,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
       workspaceId: workspace.id,
     })
     await db.member.delete({ where: { id: member.id } })
-    expect(await second.caller.project.list()).toEqual([{ ...own, setup: 'pending' }])
+    expect(await second.caller.project.list()).toEqual([{ ...own, ...importing }])
   })
 
   it('does not treat a shared owner workspace or revoked owner membership as personal', async () => {

@@ -69,10 +69,39 @@ export function siteItemOpen(pathname: string, siteId: string): boolean {
 
 /**
  * The panel beside an open dialog (docs/plan/53-chat-preview-release.md, Р20): the preview, the
- * files, the database and the checks. From `lg` it stands at the right edge, the full height
- * of the window, and the content leaves it this much room.
+ * files, the database and the checks, or the browser of a task (docs/plan/57, Б29). From `lg` it
+ * stands at the right edge, the full height of the window, and the content leaves it this much
+ * room. The viewer may drag its edge: the width is a CSS variable the shell sets for both.
  */
-export const SITE_PANE_WIDTH = 'clamp(440px, 46vw, 760px)'
+export const SITE_PANE_DEFAULT_WIDTH = 'clamp(440px, 46vw, 760px)'
+export const SITE_PANE_WIDTH_VAR = '--site-pane-width'
+export const SITE_PANE_WIDTH = `var(${SITE_PANE_WIDTH_VAR}, ${SITE_PANE_DEFAULT_WIDTH})`
+
+/** The narrowest panel, and the narrowest the dialog beside it may become. */
+export const SITE_PANE_MIN = 440
+export const SITE_DIALOG_MIN = 360
+/** The rail, the paddings of the content (32 px each side from `md`) and the dialog column. */
+const PANE_RESERVED = SITE_RAIL_WIDTH + 2 * 32 + SITE_DIALOG_MIN
+
+/** The cookie a viewer's width of the panel is kept in: the page is drawn with it at once. */
+export const SITE_PANE_COOKIE = 'raditi-pane-width'
+
+/** A width from the cookie, in whole pixels; null for anything that is not one. */
+export function parsePaneWidth(value: string | undefined | null): number | null {
+  if (value === undefined || value === null || !/^\d{3,4}$/.test(value)) return null
+  const width = Number(value)
+  return width >= SITE_PANE_MIN && width <= 4000 ? width : null
+}
+
+/** The panel's width for a window: never narrower than its minimum, nor the dialog than its. */
+export function clampPaneWidth(width: number, windowWidth: number): number {
+  const max = Math.max(SITE_PANE_MIN, windowWidth - PANE_RESERVED)
+  return Math.round(Math.min(Math.max(width, SITE_PANE_MIN), max))
+}
+
+/** The CSS of a chosen width: kept within the same bounds by the browser on any window. */
+export const paneWidthCss = (width: number): string =>
+  `clamp(${SITE_PANE_MIN}px, ${Math.round(width)}px, max(${SITE_PANE_MIN}px, calc(100vw - ${PANE_RESERVED}px)))`
 
 /** Sections whose open item has the panel beside it. */
 const panedSections: readonly SiteSection[] = ['chat']
@@ -133,7 +162,15 @@ export const siteSectionAvailable = (
 
 /**
  * Where the address of a site itself leads: a site being set up shows how that goes, a site that
- * is not connected yet has no dialogs, and a site whose chat is closed has only the overview.
+ * is not connected yet has no dialogs — unless it takes tasks in the browser (docs/plan/57, Б9),
+ * which needs no connection — and a site whose chat is closed has only the overview.
  */
-export const siteLanding = (status: string, setup?: SiteSetup): SiteSection =>
-  status === 'onboarding' || !siteSectionAvailable(status, 'chat', setup) ? 'overview' : 'chat'
+export const siteLanding = (
+  status: string,
+  setup?: SiteSetup,
+  capabilities?: { browser: string },
+): SiteSection =>
+  !siteSectionAvailable(status, 'chat', setup) ||
+  (status === 'onboarding' && capabilities?.browser !== 'ready')
+    ? 'overview'
+    : 'chat'

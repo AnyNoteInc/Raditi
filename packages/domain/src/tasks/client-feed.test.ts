@@ -9,8 +9,13 @@ import {
   feedCursorSchema,
   feedDecisionKinds,
   feedEventIdSchema,
+  feedBrowserReasons,
   feedEventTypes,
   feedLimits,
+  feedObjectKinds,
+  feedObjectOf,
+  feedObjectSchema,
+  feedObjectStatuses,
   feedPayloadBytes,
   feedPayloadSchemas,
   feedQuestionKinds,
@@ -116,6 +121,23 @@ const release = {
   credits: null,
 }
 
+const resume = { v: 1, kind: 'resume', authorId: author, requestId: request }
+const browserQuestion = {
+  v: 1,
+  kind: 'browser',
+  turn: 2,
+  reason: 'login',
+  message: 'Войдите, пожалуйста, в админку сайта.',
+}
+const post = {
+  kind: 'post',
+  title: 'Выставка 12 ноября',
+  status: 'published',
+  url: 'https://example.ru/2026/10/vystavka/',
+  editUrl: 'https://example.ru/wp-admin/post.php?post=42&action=edit',
+}
+const draft = { kind: 'page', title: null, status: 'draft' }
+
 const undoId = '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d91'
 const undoConfirmed = {
   v: 1,
@@ -150,12 +172,19 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     command,
     { ...command, command: 'cancel' },
     continued,
+    resume,
   ],
   'feed.step': [step],
-  'feed.question': [agentQuestion, ceiling],
-  'feed.result': [result],
-  'feed.failure': [failure],
-  'feed.cancelled': [cancelled],
+  'feed.question': [
+    agentQuestion,
+    ceiling,
+    browserQuestion,
+    { v: 1, kind: 'browser', turn: 3, reason: 'control' },
+    { v: 1, kind: 'browser', turn: 3, reason: 'unconfirmed' },
+  ],
+  'feed.result': [result, { ...result, objects: [post, draft] }, { ...result, objects: [] }],
+  'feed.failure': [failure, { ...failure, site: 'check', objects: [draft] }],
+  'feed.cancelled': [cancelled, { ...cancelled, site: 'check', objects: [post] }],
   'feed.candidate': [
     candidate,
     { ...candidate, bump: 'patch', files: { added: 0, modified: 0, deleted: 0 } },
@@ -259,7 +288,7 @@ describe('round trip', () => {
   })
 })
 
-describe('free text is allowed in exactly four fields', () => {
+describe('free text is allowed in four fields, the agent words of a browser question and object titles', () => {
   type Node = Record<string, unknown>
   const isNode = (value: unknown): value is Node => typeof value === 'object' && value !== null
 
@@ -292,11 +321,21 @@ describe('free text is allowed in exactly four fields', () => {
     for (const type of feedEventTypes)
       freeStrings(z.toJSONSchema(feedPayloadSchemas[type]), type, found)
     expect([...found].sort()).toEqual([
+      'feed.cancelled.objects[].title',
+      'feed.failure.objects[].title',
       'feed.question.intro',
+      'feed.question.message',
       'feed.question.questions[].options[]',
       'feed.question.questions[].text',
       'feed.request.text',
       'feed.result.message',
+      'feed.result.objects[].title',
+    ])
+  })
+
+  it('finds only the title free in an object: its kind, state and addresses are closed', () => {
+    expect([...freeStrings(z.toJSONSchema(feedObjectSchema), 'object', new Set())]).toEqual([
+      'object.title',
     ])
   })
 
@@ -653,7 +692,7 @@ describe('feed.request', () => {
     expect(accepts('feed.request', { ...retry, attachments: [] })).toBe(false)
   })
 
-  it('lists the six kinds written today', () => {
+  it('lists the seven kinds written today', () => {
     expect(feedRequestKinds).toEqual([
       'first',
       'answer',
@@ -661,6 +700,7 @@ describe('feed.request', () => {
       'revision',
       'command',
       'continue',
+      'resume',
     ])
   })
 
@@ -762,7 +802,7 @@ describe('feed.question', () => {
 
   it('refuses an unknown kind', () => {
     expect(accepts('feed.question', { ...agentQuestion, kind: 'approval' })).toBe(false)
-    expect(feedQuestionKinds).toEqual(['agent', 'ceiling'])
+    expect(feedQuestionKinds).toEqual(['agent', 'ceiling', 'browser'])
     expect(feedCeilingReasons).toEqual(['step', 'credits', 'gift', 'attempts'])
   })
 })
@@ -1063,12 +1103,12 @@ describe('reading stored rows', () => {
         text: first.text,
         authorId: author,
       })
-      expect(read('feed.request', { v: 1, kind: 'resume', authorId: author })).toEqual({
+      expect(read('feed.request', { v: 1, kind: 'pause', authorId: author })).toEqual({
         type: 'feed.request',
         kind: 'other',
         authorId: author,
       })
-      expect(read('feed.request', { v: 1, kind: 'resume', text: 7, authorId: 'x' })).toEqual({
+      expect(read('feed.request', { v: 1, kind: 'pause', text: 7, authorId: 'x' })).toEqual({
         type: 'feed.request',
         kind: 'other',
       })
@@ -1244,7 +1284,10 @@ describe('task head', () => {
   }
 
   it('accepts the head of the design and every status of spec §7', () => {
-    expect(feedTaskHeadSchema.parse(head)).toEqual(head)
+    expect(feedTaskHeadSchema.parse(head)).toEqual({
+      ...head,
+      requirements: { repository: true, browser: false },
+    })
     for (const status of taskStatuses)
       expect(feedTaskHeadSchema.safeParse({ ...head, status }).success).toBe(true)
     expect(
@@ -1393,5 +1436,273 @@ describe('rows of a candidate and a release', () => {
     expect(accepts('feed.release', { ...release, step: 'files' })).toBe(false)
     for (const outcome of feedReleaseOutcomes)
       expect(accepts('feed.release', { ...release, outcome })).toBe(true)
+  })
+})
+
+// docs/plan/57-browser-tasks.md: a task done in the browser of the task.
+describe('rows of a task in the browser', () => {
+  it('takes «Продолжить работу агента» as a press that carries nothing else', () => {
+    expect(accepts('feed.request', resume)).toBe(true)
+    expect(accepts('feed.request', { ...resume, text: 'Продолжайте' })).toBe(false)
+    expect(accepts('feed.request', { ...resume, attachments: [author] })).toBe(false)
+    expect(accepts('feed.request', { ...resume, questionEventId: '21' })).toBe(false)
+    const { requestId: _request, ...noRequest } = resume
+    expect(accepts('feed.request', noRequest)).toBe(false)
+    expect(readFeedRow('feed.request', resume)).toEqual(shown('feed.request', resume))
+  })
+
+  it('asks for help with the reasons of the agent and of the platform', () => {
+    expect(feedBrowserReasons).toEqual([
+      'login',
+      'captcha',
+      'confirm',
+      'other',
+      'control',
+      'unconfirmed',
+    ])
+    for (const reason of feedBrowserReasons)
+      expect(accepts('feed.question', { v: 1, kind: 'browser', turn: 1, reason })).toBe(true)
+    expect(accepts('feed.question', { ...browserQuestion, reason: 'password' })).toBe(false)
+    expect(accepts('feed.question', { ...browserQuestion, turn: null })).toBe(false)
+    expect(accepts('feed.question', { ...browserQuestion, intro: 'Войдите.' })).toBe(false)
+    expect(accepts('feed.question', { ...browserQuestion, spent: 1 })).toBe(false)
+  })
+
+  it('takes the agent words with every reason, bounded and through feedText()', () => {
+    // Under a question of the platform they are the agent's `client_message`: why it saved
+    // nothing, or what it did before the customer took the browser.
+    for (const reason of feedBrowserReasons)
+      expect(accepts('feed.question', { ...browserQuestion, reason })).toBe(true)
+    expect(accepts('feed.question', { ...browserQuestion, message: 'я'.repeat(2000) })).toBe(true)
+    expect(accepts('feed.question', { ...browserQuestion, message: 'я'.repeat(2001) })).toBe(false)
+    expect(accepts('feed.question', { ...browserQuestion, message: `Позвоните ${marker}` })).toBe(
+      false,
+    )
+    expect(accepts('feed.question', { ...browserQuestion, message: ' ​ ' })).toBe(false)
+  })
+
+  it('reads the agent words as they are shown, and the question without words it cannot show', () => {
+    expect(
+      readFeedRow('feed.question', { ...browserQuestion, message: `Позвоните ${marker}` }),
+    ).toMatchObject({ kind: 'browser', message: 'Позвоните (телефон скрыт)' })
+    const refused = 'Менять настройки сайта мне нельзя: это делаете вы сами.'
+    expect(
+      readFeedRow('feed.question', { ...browserQuestion, reason: 'unconfirmed', message: refused }),
+    ).toEqual({
+      type: 'feed.question',
+      kind: 'browser',
+      turn: 2,
+      reason: 'unconfirmed',
+      message: refused,
+    })
+    expect(
+      readFeedRow('feed.question', { ...browserQuestion, message: 'я'.repeat(2000) }),
+    ).toMatchObject({ message: 'я'.repeat(2000) })
+    for (const message of [7, '​', 'я'.repeat(2001)])
+      expect(readFeedRow('feed.question', { ...browserQuestion, message })).toEqual({
+        type: 'feed.question',
+        kind: 'browser',
+        turn: 2,
+        reason: 'login',
+      })
+  })
+
+  it('reads a reason added later as «newer» and a broken one as «unreadable»', () => {
+    expect(readFeedRow('feed.question', { ...browserQuestion, reason: 'payment' })).toEqual({
+      type: 'newer',
+    })
+    for (const payload of [
+      { ...browserQuestion, reason: undefined },
+      { ...browserQuestion, reason: 7 },
+      { ...browserQuestion, turn: 0 },
+    ])
+      expect(readFeedRow('feed.question', payload)).toEqual({ type: 'unreadable' })
+  })
+
+  it('closes the kinds and the states of objects', () => {
+    expect(feedObjectKinds).toEqual(['post', 'page'])
+    expect(feedObjectStatuses).toEqual([
+      'published',
+      'scheduled',
+      'draft',
+      'pending',
+      'private',
+      'trashed',
+      'missing',
+      'unconfirmed',
+    ])
+    const object = (patch: Record<string, unknown>) =>
+      accepts('feed.result', { ...result, objects: [{ ...post, ...patch }] })
+    expect(object({ kind: 'product' })).toBe(false)
+    expect(object({ status: 'publish' })).toBe(false)
+    expect(object({ id: 42 })).toBe(false)
+    expect(object({ title: undefined })).toBe(false)
+    const { url: _url, editUrl: _edit, ...bare } = post
+    expect(accepts('feed.result', { ...result, objects: [bare] })).toBe(true)
+  })
+
+  it('takes up to twenty objects', () => {
+    const many = (count: number) => Array.from({ length: count }, () => post)
+    for (const type of ['feed.result', 'feed.failure', 'feed.cancelled'] as const) {
+      const base = type === 'feed.result' ? result : type === 'feed.failure' ? failure : cancelled
+      expect(accepts(type, { ...base, objects: many(20) })).toBe(true)
+      expect(accepts(type, { ...base, objects: many(21) })).toBe(false)
+    }
+  })
+
+  it('takes a title as the site has it, on one line and through feedText()', () => {
+    const title = (value: unknown) =>
+      accepts('feed.result', { ...result, objects: [{ ...post, title: value }] })
+    expect(title('я'.repeat(120))).toBe(true)
+    expect(title('я'.repeat(121))).toBe(false)
+    expect(title('')).toBe(false)
+    expect(title('   ')).toBe(false)
+    expect(title('две\nстроки')).toBe(false)
+    expect(title(`Звоните ${marker}`)).toBe(false)
+    expect(title('нуль\u0000')).toBe(false)
+    expect(title(null)).toBe(true)
+  })
+
+  it('takes an address only as http(s) URL.href writes it, short and without credentials', () => {
+    const url = (value: string) =>
+      accepts('feed.result', { ...result, objects: [{ ...post, url: value }] })
+    expect(url('http://example.ru/a')).toBe(true)
+    expect(url(`https://example.ru/${'a'.repeat(400 - 'https://example.ru/'.length)}`)).toBe(true)
+    expect(url(`https://example.ru/${'a'.repeat(401 - 'https://example.ru/'.length)}`)).toBe(false)
+    for (const refused of [
+      'javascript:alert(1)',
+      'data:text/html,<b>x</b>',
+      'ftp://example.ru/a',
+      '/wp-admin/post.php?post=42',
+      'https://admin:secret@example.ru/',
+      'https://пример.рф/новость',
+      'https://example.ru/a b',
+      '',
+    ])
+      expect(url(refused), refused).toBe(false)
+  })
+
+  it('reads rows without objects as before, and what it cannot read of an object as nothing', () => {
+    // Rows of before 22.10.2026 have no objects at all.
+    for (const [type, payload] of [
+      ['feed.result', result],
+      ['feed.failure', failure],
+      ['feed.cancelled', cancelled],
+    ] as const) {
+      const read = readFeedRow(type, payload)
+      expect(read).toEqual(shown(type, payload))
+      expect(read).not.toHaveProperty('objects')
+    }
+    const read = (objects: unknown) => readFeedRow('feed.result', { ...result, objects })
+    expect(read('много')).toEqual(shown('feed.result', result))
+    expect(
+      read([
+        { ...post, kind: 'product', status: 'archived', title: `Звоните ${marker}` },
+        { ...post, url: 'javascript:alert(1)', editUrl: 7, title: '​' },
+        { ...post, kind: undefined },
+        { ...post, status: 7 },
+        'post',
+        null,
+      ]),
+    ).toMatchObject({
+      type: 'feed.result',
+      objects: [
+        { kind: null, status: null, title: 'Звоните (телефон скрыт)', url: post.url },
+        { kind: 'post', status: 'published', title: null, editUrl: undefined, url: undefined },
+      ],
+    })
+    // A list longer than a row may hold is read up to its limit.
+    const longer = Array.from({ length: 25 }, () => post)
+    const event = read(longer)
+    expect(event.type === 'feed.result' && event.objects?.length).toBe(20)
+  })
+
+  it('makes an object read on the site fit for a row', () => {
+    expect(
+      feedObjectOf({
+        kind: 'post',
+        status: 'draft',
+        title: `  Новость\u202e о\n\nвыставке ${marker} `,
+        url: 'https://Example.ru/новость',
+        editUrl: 'https://admin:secret@example.ru/wp-admin/post.php?post=1',
+      }),
+    ).toEqual({
+      kind: 'post',
+      status: 'draft',
+      title: 'Новость о выставке (телефон скрыт)',
+      url: 'https://example.ru/%D0%BD%D0%BE%D0%B2%D0%BE%D1%81%D1%82%D1%8C',
+    })
+    const long = feedObjectOf({ kind: 'page', status: 'published', title: '😀'.repeat(200) })
+    expect(long.title).toBe('😀'.repeat(60))
+    expect(feedObjectSchema.safeParse(long).success).toBe(true)
+    for (const title of [null, '', ' ​\n', '\u0000'])
+      expect(feedObjectOf({ kind: 'post', status: 'missing', title }).title).toBeNull()
+    expect(
+      feedObjectOf({ kind: 'post', status: 'missing', title: 'x', url: 'не адрес', editUrl: null }),
+    ).toEqual({ kind: 'post', status: 'missing', title: 'x' })
+    const started = performance.now()
+    const marks = feedObjectOf({
+      kind: 'post',
+      status: 'draft',
+      title: `a${'̣́'.repeat(64_000)}`,
+    })
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(feedObjectSchema.safeParse(marks).success).toBe(true)
+  })
+
+  it('keeps the largest result with twenty objects under the payload limit', () => {
+    const wide = (length: number) => '€'.repeat(length)
+    const address = `https://example.ru/${'a'.repeat(400 - 'https://example.ru/'.length)}`
+    const largest = {
+      ...result,
+      turn: 999_999,
+      message: wide(2000),
+      next: 'awaiting_approval',
+      filesChanged: 10_000,
+      objects: Array.from({ length: 20 }, () => ({
+        kind: 'post',
+        title: wide(120),
+        status: 'published',
+        url: address,
+        editUrl: address,
+      })),
+    }
+    expect(feedPayloadBytes(largest)).toBeLessThanOrEqual(feedLimits.payloadBytes)
+    expect(accepts('feed.result', largest)).toBe(true)
+  })
+})
+
+describe('the requirements of a task in its head', () => {
+  const head = {
+    id: author,
+    title: null,
+    mode: 'work',
+    status: 'awaiting_user',
+    attempt: 1,
+    turnNo: 2,
+    waiting: null,
+    held: false,
+    canRetry: false,
+    workingSince: null,
+    runningSince: null,
+  }
+
+  it('reads a head without them as a task with the repository alone', () => {
+    expect(feedTaskHeadSchema.parse(head).requirements).toEqual({
+      repository: true,
+      browser: false,
+    })
+  })
+
+  it('carries a browser task, and both together, but never neither', () => {
+    const parse = (requirements: unknown) => feedTaskHeadSchema.safeParse({ ...head, requirements })
+    expect(parse({ repository: false, browser: true }).data?.requirements).toEqual({
+      repository: false,
+      browser: true,
+    })
+    expect(parse({ repository: true, browser: true }).success).toBe(true)
+    expect(parse({ repository: false, browser: false }).success).toBe(false)
+    expect(parse({ repository: true }).success).toBe(false)
+    expect(parse({ repository: true, browser: false, preview: true }).success).toBe(false)
   })
 })

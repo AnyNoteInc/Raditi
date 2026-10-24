@@ -1,5 +1,11 @@
 import { attemptCreditBudget } from '@repo/billing'
-import { classProfile, type PrismaClient } from '@repo/db'
+import {
+  classProfile,
+  taskAttachments,
+  taskBrowserCheckpoints,
+  type BrowserCheckpointRecord,
+  type PrismaClient,
+} from '@repo/db'
 import {
   egressHostListSchema,
   egressHostsOf,
@@ -20,10 +26,12 @@ import {
 import type { PreviewFacts } from './turn-instructions.ts'
 import {
   savedPlanOf,
+  type BrowserPassFacts,
   type ClientRequest,
   type FinishedTurn,
   type PassBudget,
   type PassFacts,
+  type SavedObjectFacts,
   type WorkspaceRules,
 } from './turn-planner.ts'
 
@@ -108,10 +116,20 @@ export async function readPassFacts(
       siteId: true,
       modelClass: true,
       billable: true,
-      site: { select: { stack: true, url: true, workspace: { select: { dataClass: true } } } },
+      needsRepository: true,
+      needsBrowser: true,
+      site: {
+        select: {
+          stack: true,
+          url: true,
+          agentNotes: true,
+          workspace: { select: { dataClass: true } },
+        },
+      },
     },
   })
   if (!task) return null
+  const requirements = { repository: task.needsRepository, browser: task.needsBrowser }
   const rows = await db.taskEvent.findMany({
     where: { taskId: task.id, type: 'feed.request' },
     orderBy: { id: 'asc' },
@@ -243,9 +261,18 @@ export async function readPassFacts(
     }),
   )
 
-  const adapter = deps.adapter(task.site.stack)
   const site = siteFactsOf(task.site)
-  const rules = workspaceRulesOf(adapter, site)
+  // The repository's rules and the database guide are of a repository task; a task in the
+  // browser takes the stack's guide to its admin pages instead (docs/plan/57, Б20, Б21).
+  const adapter = requirements.repository ? deps.adapter(task.site.stack) : null
+  const rules: WorkspaceRules = adapter ? workspaceRulesOf(adapter, site) : { protectedPaths: [] }
+  const browser = requirements.browser
+    ? await browserFactsOf(deps, task.id, {
+        stack: task.site.stack,
+        url: task.site.url,
+        agentNotes: task.site.agentNotes,
+      })
+    : undefined
   return {
     task: {
       id: task.id,
@@ -255,6 +282,8 @@ export async function readPassFacts(
       turnNo: input.turnNo,
       modelClass: modelClass.data,
     },
+    requirements,
+    ...(browser ? { browser } : {}),
     repo: repository
       ? {
           provider: repository.provider,
@@ -272,9 +301,74 @@ export async function readPassFacts(
     preview: previewFactsOf(preview, deps.previews),
     egress,
     variables: agentVariables.map((variable) => variable.name),
-    databaseGuide: adapter.dbPlanGuide(site),
+    ...(adapter ? { databaseGuide: adapter.dbPlanGuide(site) } : {}),
     profile: profile ?? null,
     budget,
     now: input.now,
+  }
+}
+
+/**
+ * A title that may hold an e-mail address or a phone number. The agent meets contacts only as
+ * the markers of the `mcp` role's privacy map, which core does not hold; the title the site
+ * keeps has the real ones, so such a title is not told at all (the editor shows it masked).
+ */
+const MAY_HOLD_CONTACT = /@|\d(?:[\s().+-]*\d){6}/u
+
+/**
+ * An object the task saved, as a pass tells the agent of it (Б22): one it only looked at
+ * (`seen`) is none. Its editor goes by its path alone: a query string is left out whatever it
+ * holds. `verified` without what a read found is not trusted (browserFeedObjectOf): the agent
+ * verifies it again.
+ */
+export function savedObjectOf(checkpoint: BrowserCheckpointRecord): SavedObjectFacts | null {
+  if (checkpoint.state === 'seen') return null
+  const found = checkpoint.state === 'verified' ? checkpoint.verified : null
+  return {
+    kind: checkpoint.ref.kind,
+    objectId: checkpoint.ref.objectId,
+    state: checkpoint.state === 'verified' && !found ? 'unverified' : checkpoint.state,
+    ...(found
+      ? {
+          ...(MAY_HOLD_CONTACT.test(found.title) ? {} : { title: found.title }),
+          status: found.status,
+        }
+      : {}),
+    editPath: new URL(checkpoint.ref.editUrl).pathname,
+  }
+}
+
+/**
+ * What a pass in the cloud browser needs of its site: the address, the client's notes, the files
+ * bound to the task, what the task saved there and the stack's guide to its admin pages — null
+ * when the stack has no adapter or no browser support yet (the planner refuses the task then).
+ */
+async function browserFactsOf(
+  deps: PassFactsDependencies,
+  taskId: string,
+  site: { stack: SiteStack; url: string; agentNotes: string | null },
+): Promise<BrowserPassFacts> {
+  const [attachments, checkpoints] = await Promise.all([
+    taskAttachments(deps.db, taskId),
+    taskBrowserCheckpoints(deps.db, taskId),
+  ])
+  let guide: string | null
+  try {
+    guide = deps.adapter(site.stack).browserGuide()
+  } catch (error) {
+    if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
+    guide = null
+  }
+  return {
+    siteUrl: site.url,
+    agentNotes: site.agentNotes,
+    attachments: attachments.map((file) => ({
+      id: file.id,
+      fileName: file.fileName,
+      contentType: file.contentType,
+      sizeBytes: file.sizeBytes,
+    })),
+    saved: checkpoints.flatMap((checkpoint) => savedObjectOf(checkpoint) ?? []),
+    guide,
   }
 }

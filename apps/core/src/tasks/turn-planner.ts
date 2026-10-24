@@ -10,6 +10,9 @@ import {
   withTurnCredentials,
   type AgentDriver,
   type AgentWorkingSet,
+  type BrowserCheckpointKind,
+  type BrowserCheckpointState,
+  type BrowserObjectStatus,
   type FeedFailureCode,
   type FeedQuestionPayload,
   type LlmBackend,
@@ -20,6 +23,7 @@ import {
   type RepoRef,
   type SandboxRuntime,
   type SnapshotReference,
+  type TaskRequirements,
   type TurnCredentialPolicy,
   type TurnPlan,
   type UnkeyedTurnRequest,
@@ -27,7 +31,12 @@ import {
 
 import { llmGatewayBaseUrl } from '../llm/backends.ts'
 import { ceilingQuestionOf } from './turn-outcome.ts'
-import { CONTINUE_PROMPT, turnInstructions, type PreviewFacts } from './turn-instructions.ts'
+import {
+  browserTaskInstructions,
+  CONTINUE_PROMPT,
+  turnInstructions,
+  type PreviewFacts,
+} from './turn-instructions.ts'
 
 // The planner of a pass (roadmap N11; docs/plan/53-chat-preview-release.md, R3): what the turn
 // supervisor is asked to run and under which key policy, from the facts of the dialog read in
@@ -102,6 +111,51 @@ export interface FinishedTurn {
   plan: TurnPlan | null
 }
 
+/** A file the client sent with the task, as the agent is told of it: never its key or address. */
+export interface TaskAttachmentFacts {
+  id: string
+  fileName: string
+  contentType: string
+  sizeBytes: number
+}
+
+/**
+ * An object the task saved on the site through its browser (`browser_checkpoints`, Б22), as the
+ * agent is told of it: a new session of the agent — after a failed turn, «Продолжить» — does not
+ * remember it, and must continue it instead of making another one.
+ */
+export interface SavedObjectFacts {
+  kind: BrowserCheckpointKind
+  objectId: string
+  /**
+   * `verified` — a trusted read found it; `unverified` — saved, the site has not confirmed it;
+   * `missing` — the last read did not find it.
+   */
+  state: Exclude<BrowserCheckpointState, 'seen'>
+  /**
+   * What the last read found: present only while `verified`; the title is left out when it may
+   * hold a contact (savedObjectOf).
+   */
+  title?: string
+  status?: BrowserObjectStatus
+  /** The path of its editor: no origin and no query, which may carry what a page put there. */
+  editPath: string
+}
+
+/** What a pass of a task in the cloud browser needs of its site (docs/plan/57, Б8, Б20, Б26). */
+export interface BrowserPassFacts {
+  /** `sites.url`: where the agent's browser starts. */
+  siteUrl: string
+  /** `sites.agent_notes`: the client's hints for the agent («вход по адресу /login»). */
+  agentNotes: string | null
+  /** The files bound to the task, in the order they were sent. */
+  attachments: readonly TaskAttachmentFacts[]
+  /** What the task saved on the site, in all its sessions and turns, oldest first (Б22). */
+  saved: readonly SavedObjectFacts[]
+  /** What the stack's adapter tells the agent of its admin pages; null — it has no browser. */
+  guide: string | null
+}
+
 export type PassBudget =
   | { kind: 'credits'; budget: AttemptCreditBudget }
   /** A task that holds no reserve by design (`billable = false`): the class ceiling. */
@@ -117,6 +171,13 @@ export interface PassFacts {
     turnNo: number
     modelClass: ModelClass
   }
+  /**
+   * What the task works with (`tasks.needs_repository`, `tasks.needs_browser`, docs/plan/57, Б2):
+   * every layer of the pass branches on it, never on the stack or the driver.
+   */
+  requirements: TaskRequirements
+  /** Present for a task that needs the cloud browser. */
+  browser?: BrowserPassFacts
   /** The site's repository; null — the site has none yet. */
   repo: (RepoRef & { defaultBranch: string }) | null
   /** What the turn's workspace takes from the site's adapter (`siteWorkspaceRules`, R4). */
@@ -174,6 +235,8 @@ export type PassPlan =
       policy: TurnCredentialPolicy
       /** The turn the pass opens: `tasks.turn_no + 1`. */
       turn: number
+      /** The task's own: a pass that needs a browser opens it before the turn (Б18). */
+      requirements: TaskRequirements
     }
   /** The key cannot cover a first call: the platform asks «Продолжить?» (Р8). */
   | { kind: 'ceiling'; question: Extract<FeedQuestionPayload, { kind: 'ceiling' }> }
@@ -186,8 +249,15 @@ export type PassPlan =
    */
   | { kind: 'branch_moved'; update: string | null }
 
-/** The words the client wrote after `since` (all of them for a new session), oldest first. */
-export function promptOf(requests: readonly ClientRequest[], since: Date | null): string {
+/**
+ * The words the client wrote after `since` (all of them for a new session), oldest first, in at
+ * most `limit` characters.
+ */
+export function promptOf(
+  requests: readonly ClientRequest[],
+  since: Date | null,
+  limit: number = turnPlanLimits.prompt,
+): string {
   const words = requests
     .filter((request) => request.text !== null)
     .filter((request) => since === null || request.createdAt.getTime() > since.getTime())
@@ -198,7 +268,7 @@ export function promptOf(requests: readonly ClientRequest[], since: Date | null)
   let length = 0
   for (const text of words.reverse()) {
     const added = text.length + (kept.length > 0 ? 2 : 0)
-    if (length + added > turnPlanLimits.prompt) break
+    if (length + added > limit) break
     kept.unshift(text)
     length += added
   }
@@ -215,6 +285,9 @@ interface Start {
   /** The words before this time were seen by the session the pass restores. */
   since: Date | null
 }
+
+/** Where a pass without a repository starts: its checkpoint chain only (startWithoutRepository). */
+type StartWithoutRepository = Pick<Start, 'previous' | 'since'>
 
 function snapshotOf(
   facts: PassFacts,
@@ -286,7 +359,8 @@ async function startOf(facts: PassFacts, env: PlannerEnvironment): Promise<Start
   // is pinned where the platform last wrote it, a candidate «Обновить» moved included, and a
   // replaced new session after «Обновить» is a new session again.
   const replaced = last.plan
-  if (!replaced) return null
+  // A task keeps its requirements (Б2): a replaced plan without a workspace is not this task's.
+  if (!replaced?.workspace) return null
   const restored = replaced.previous ? facts.turns.get(replaced.previous.turn) : undefined
   return {
     expectedBaseSha: replaced.workspace.expectedBaseSha,
@@ -305,13 +379,110 @@ function pendingUpdate(facts: PassFacts): string | null {
   return update.id.toString()
 }
 
+/** At most this many files are listed to the agent: the rest are older than the turn needs. */
+const PROMPT_ATTACHMENTS = 50
+
+const sizeOf = (bytes: number): string =>
+  bytes < 1024
+    ? `${bytes} B`
+    : bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(1)} KiB`
+      : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+
+/** At most this many saved objects are listed: a task changes up to 20 (Б34), its client more. */
+const PROMPT_SAVED_OBJECTS = 40
+/** A title as the agent is told of it: one line, this long at most. */
+const PROMPT_TITLE_CHARS = 120
+
+function promptTitle(title: string | undefined): string {
+  if (title === undefined) return 'title not shown'
+  // Line breaks and invisible or direction marks would break the list's shape.
+  const line = [...title.replace(/[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ').trim()]
+    .slice(0, PROMPT_TITLE_CHARS)
+    .join('')
+  return line ? `title ${JSON.stringify(line)}` : 'no title'
+}
+
+/** One saved object of the list: its state says what the agent does with it first. */
+function savedObjectLine(object: SavedObjectFacts): string {
+  const name = `${object.kind} ${object.objectId}`
+  const editor = `editor ${object.editPath}`
+  switch (object.state) {
+    case 'verified':
+      return `${name}: verified, ${promptTitle(object.title)}, status ${object.status ?? 'unknown'}; ${editor}`
+    case 'unverified':
+      return `${name}: saved, the site has not confirmed it yet — call web_verify before anything else; ${editor}`
+    case 'missing':
+      return `${name}: the last check did not find it on the site — do not make it again, ask the client with web_help; ${editor}`
+  }
+}
+
+/**
+ * What the platform adds to the client's words in a task in the cloud browser (docs/plan/57,
+ * Б8, Б22, Б26): the site's address and the client's notes about it, what the task already
+ * saved there — so that a new session continues those objects and makes no duplicate —, and the
+ * files sent with the task — id, name, type and size, never a key or an address of the file:
+ * the agent puts them on a page with `web_upload` by id, and only the browser worker reads them.
+ */
+function browserContextOf(browser: BrowserPassFacts): string {
+  const lines = ['---', `The site of this task: ${browser.siteUrl}`]
+  const notes = browser.agentNotes?.trim()
+  if (notes) lines.push('', "The client's notes about the site:", notes)
+  const saved = browser.saved.slice(-PROMPT_SAVED_OBJECTS)
+  if (saved.length > 0) {
+    lines.push(
+      '',
+      'Already saved on the site by this task (continue with these objects; never create another one for the same request; call web_verify first when one is not verified):',
+    )
+    const unlisted = browser.saved.length - saved.length
+    if (unlisted > 0) lines.push(`- ${unlisted} earlier objects are not listed`)
+    for (const object of saved) lines.push(`- ${savedObjectLine(object)}`)
+  }
+  const files = browser.attachments.slice(-PROMPT_ATTACHMENTS)
+  if (files.length > 0) {
+    lines.push('', 'Files the client sent with this task (upload them with web_upload by id):')
+    for (const file of files)
+      lines.push(`- ${file.id}: ${file.fileName}, ${file.contentType}, ${sizeOf(file.sizeBytes)}`)
+  }
+  return lines.join('\n')
+}
+
+/** The prompt of a pass in the cloud browser: the client's words, then what the platform adds. */
+function browserPromptOf(facts: PassFacts, browser: BrowserPassFacts, since: Date | null): string {
+  const context = browserContextOf(browser)
+  const words = promptOf(facts.requests, since, turnPlanLimits.prompt - context.length - 2)
+  return `${words}\n\n${context}`
+}
+
+/**
+ * Where a pass without a repository starts (docs/plan/57, Б3, Б4): there is no branch to read,
+ * so turns are chained by their checkpoints — a completed turn is continued from its snapshot,
+ * as the product store requires; after an unsuccessful one a new session starts.
+ */
+function startWithoutRepository(
+  facts: PassFacts,
+  driver: AgentDriver,
+): StartWithoutRepository | null {
+  const last = facts.turns.get(facts.task.turnNo)
+  if (!last) return facts.task.turnNo === 0 ? { since: null } : null
+  if (last.status !== 'completed') return { since: null }
+  const previous = snapshotOf(facts, driver, last)
+  return previous ? { previous, since: last.startedAt } : null
+}
+
 /**
  * The plan of one pass, or why there is none. The budget comes first: a key that cannot
  * cover a first call is a question to the client, not a turn (Р8).
  */
 export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promise<PassPlan> {
-  const { task } = facts
-  if (!facts.repo) return { kind: 'refused', code: 'not_accepted' }
+  const { task, requirements } = facts
+  // The product takes a task with the repository or with the browser, not both yet (Б3).
+  if (requirements.repository && requirements.browser)
+    return { kind: 'refused', code: 'not_accepted' }
+  if (requirements.repository && !facts.repo) return { kind: 'refused', code: 'not_accepted' }
+  // A stack whose adapter has no browser support takes no task in the browser.
+  const browser = requirements.browser ? facts.browser : undefined
+  if (requirements.browser && !browser?.guide) return { kind: 'refused', code: 'not_accepted' }
   if (!facts.profile) return { kind: 'refused', code: 'unavailable' }
   const backend = env.backends.find((candidate) => candidate.id === facts.profile!.backend)
   if (!backend) return { kind: 'refused', code: 'unavailable' }
@@ -344,36 +515,49 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     })
   }
 
-  const egress = facts.egress ?? []
+  // The client's variables reach the commands of a repository turn; a turn in the browser works
+  // through the `web` tools alone, and its commands reach nothing (Б20).
+  const egress = requirements.repository ? (facts.egress ?? []) : []
   // One gateway variable holds them: more than it takes is no turn.
   if (egress.length > MAX_SANDBOX_EGRESS_HOSTS) return { kind: 'refused', code: 'technical' }
 
-  const start = await startOf(facts, env)
-  if (!start) return { kind: 'refused', code: 'technical' }
-  // A later turn publishes by CAS against the branch: one that stands elsewhere would fail the
-  // turn at its end, after its money was spent. The first turn creates the branch.
-  if (task.turnNo > 0) {
-    const expected =
-      start.expectedBranchSha === undefined ? start.expectedBaseSha : start.expectedBranchSha
-    if ((await env.branchHead()) !== expected)
-      return { kind: 'branch_moved', update: pendingUpdate(facts) }
+  let start: Start | StartWithoutRepository
+  let workspace: PublicationSource | undefined
+  if (requirements.repository && facts.repo) {
+    const started = await startOf(facts, env)
+    if (!started) return { kind: 'refused', code: 'technical' }
+    // A later turn publishes by CAS against the branch: one that stands elsewhere would fail the
+    // turn at its end, after its money was spent. The first turn creates the branch.
+    if (task.turnNo > 0) {
+      const expected =
+        started.expectedBranchSha === undefined
+          ? started.expectedBaseSha
+          : started.expectedBranchSha
+      if ((await env.branchHead()) !== expected)
+        return { kind: 'branch_moved', update: pendingUpdate(facts) }
+    }
+    start = started
+    workspace = {
+      repo: { provider: facts.repo.provider, owner: facts.repo.owner, name: facts.repo.name },
+      branch: `agent/${task.id}`,
+      expectedBaseSha: started.expectedBaseSha,
+      ...(started.expectedBranchSha !== undefined
+        ? { expectedBranchSha: started.expectedBranchSha }
+        : {}),
+      protectedPaths: [...facts.rules.protectedPaths],
+      ...(facts.rules.workingSet ? { workingSet: facts.rules.workingSet } : {}),
+      ...(facts.rules.addOnlyPaths?.length && facts.rules.media
+        ? { addOnlyPaths: [...facts.rules.addOnlyPaths], media: facts.rules.media }
+        : {}),
+    }
+  } else {
+    const started = startWithoutRepository(facts, env.driver)
+    if (!started) return { kind: 'refused', code: 'technical' }
+    start = started
   }
   const turn = task.turnNo + 1
   const sessionId = task.id
   const reasoningEffort = reasoningEffortByClass[task.modelClass]
-  const workspace: PublicationSource = {
-    repo: { provider: facts.repo.provider, owner: facts.repo.owner, name: facts.repo.name },
-    branch: `agent/${task.id}`,
-    expectedBaseSha: start.expectedBaseSha,
-    ...(start.expectedBranchSha !== undefined
-      ? { expectedBranchSha: start.expectedBranchSha }
-      : {}),
-    protectedPaths: [...facts.rules.protectedPaths],
-    ...(facts.rules.workingSet ? { workingSet: facts.rules.workingSet } : {}),
-    ...(facts.rules.addOnlyPaths?.length && facts.rules.media
-      ? { addOnlyPaths: [...facts.rules.addOnlyPaths], media: facts.rules.media }
-      : {}),
-  }
   const request: UnkeyedTurnRequest = {
     sandbox: {
       image: env.driver.image,
@@ -406,21 +590,33 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         reasoningEffort,
       },
       mcp: { url: `${SANDBOX_GATEWAY_URL}/mcp` },
-      instructions: turnInstructions(
-        facts.preview,
-        { names: facts.variables ?? [], hosts: egress },
-        facts.databaseGuide,
-        facts.rules,
-      ),
+      // Rule 8: by what the task needs, never by its stack — the adapter's guide says the rest.
+      instructions: browser?.guide
+        ? browserTaskInstructions(browser.guide)
+        : turnInstructions(
+            facts.preview,
+            { names: facts.variables ?? [], hosts: egress },
+            facts.databaseGuide,
+            facts.rules,
+          ),
       ...(egress.length ? { egressProxy: SANDBOX_EGRESS_PROXY_URL } : {}),
     },
-    input: { prompt: promptOf(facts.requests, start.since), attachments: [] },
+    input: {
+      prompt: browser
+        ? browserPromptOf(facts, browser, start.since)
+        : promptOf(facts.requests, start.since),
+      // The files go to the browser worker, never into the sandbox (Б26).
+      attachments: [],
+    },
     driverVersion: env.driver.cliVersion,
-    workspace,
+    // A plan of a repository task keeps the shape it had before the requirements (Б3).
+    ...(workspace ? { workspace } : { requirements: { ...requirements } }),
     committedAt: facts.committedAt.toISOString(),
     ...(start.previous ? { previous: start.previous } : {}),
-    ...(start.replacesTurn !== undefined ? { replacesTurn: start.replacesTurn } : {}),
-    ...(start.rebased ? { rebased: true } : {}),
+    ...('replacesTurn' in start && start.replacesTurn !== undefined
+      ? { replacesTurn: start.replacesTurn }
+      : {}),
+    ...('rebased' in start && start.rebased ? { rebased: true } : {}),
   }
   const policy: TurnCredentialPolicy = {
     driverId: env.driver.id,
@@ -431,7 +627,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     ttlMs: MAX_SANDBOX_TURN_MS,
     budgetRub,
   }
-  return { kind: 'turn', request, policy, turn }
+  return { kind: 'turn', request, policy, turn, requirements: { ...requirements } }
 }
 
 /** A plan saved by an assignment, or null when it no longer passes its schema (history). */

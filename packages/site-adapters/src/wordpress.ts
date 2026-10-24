@@ -2,6 +2,13 @@ import type { McpToolDescriptor, SiteAdapter } from '@repo/domain'
 import { notImplemented } from '@repo/domain'
 import { phpConfigStrings, secretValues } from './php-config.ts'
 import { wordpressBrowserRequestDenied } from './wordpress-browser.ts'
+import {
+  wordpressBrowserCheckpointOf,
+  wordpressBrowserCommitAction,
+  wordpressBrowserGuide,
+  wordpressBrowserTaskPolicy,
+  wordpressBrowserVerification,
+} from './wordpress-browser-task.ts'
 import { wordpressDatabaseCopyPolicy, wordpressDatabaseSettings } from './wordpress-db-copy.ts'
 import {
   wordpressDbOperationKinds,
@@ -308,4 +315,9 @@ export const wordpressAdapter: SiteAdapter = {
   dbSettings: wordpressDbSettings,
   dbPlanGuide: wordpressDbPlanGuide,
   browserRequestDenied: wordpressBrowserRequestDenied,
+  browserTaskPolicy: wordpressBrowserTaskPolicy,
+  browserCheckpointOf: wordpressBrowserCheckpointOf,
+  browserCommitAction: wordpressBrowserCommitAction,
+  browserVerification: wordpressBrowserVerification,
+  browserGuide: wordpressBrowserGuide,
 }

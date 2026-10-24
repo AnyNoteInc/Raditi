@@ -9,6 +9,9 @@ import {
 import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
 import {
   feedApprovalSiteText,
+  feedBrowserButtons,
+  feedBrowserQuestionText,
+  feedBrowserQuestionTitle,
   feedCancelledSentence,
   feedCandidateText,
   feedCandidateVersionText,
@@ -24,6 +27,9 @@ import {
   feedFilesChangedText,
   feedLiveText,
   feedMediaAddedText,
+  feedObjectKindLabel,
+  feedObjectStatusLabel,
+  feedObjectText,
   feedQuestionText,
   FEED_QUEUE_TIMEOUT_CLOSING,
   feedQueuedText,
@@ -60,8 +66,17 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
+import { SentFiles, type SentFile } from './attachment-chips'
 import { dayTime, feedTime } from './chat-format'
-import { dialogText, ownText, releaseStatusText, releaseStepText, undoText } from './chat-texts'
+import {
+  browserText,
+  dialogText,
+  objectLinkText,
+  ownText,
+  releaseStatusText,
+  releaseStepText,
+  undoText,
+} from './chat-texts'
 import type { CommandVerdict, FeedRow, UndoHead } from './chat-types'
 import {
   feedEntries,
@@ -92,8 +107,21 @@ export interface FeedActions {
   onUndo: () => void
   /** «Посмотреть изменения»: the panel beside the dialog. */
   onShowChanges: () => void
+  /** «Взять управление» of the task's browser (docs/plan/57-browser-tasks.md, Б15). */
+  onTakeControl?: () => void
+  /** «Продолжить работу агента» (Б16). */
+  onResumeAgent?: () => void
+  /** The client controls the task's browser now. */
+  controlling?: boolean
+  /** The task's browser is open: the control can be taken. */
+  browserLive?: boolean
   /** A press of a row is on its way. */
   busy: boolean
+  /**
+   * «Остановить» was taken and core has not ended the task yet: nothing that would carry the work
+   * on is offered meanwhile (docs/plan/57-browser-tasks.md, Б24).
+   */
+  stopping?: boolean
 }
 
 const PLANS_PATH = '/settings/plans'
@@ -157,10 +185,30 @@ function Card({
   )
 }
 
-/** The client's own words, on the right. */
-function Bubble({ text, at, now }: { text: string; at: string; now: Date }) {
+/** The client's own words, on the right, with the files they sent. */
+function Bubble({
+  text,
+  at,
+  now,
+  files = [],
+}: {
+  text: string
+  at: string
+  now: Date
+  files?: readonly SentFile[]
+}) {
   return (
-    <Box sx={{ alignSelf: 'flex-end', maxWidth: '85%', display: 'flex', flexDirection: 'column' }}>
+    <Box
+      sx={{
+        alignSelf: 'flex-end',
+        maxWidth: '85%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        gap: 0.75,
+      }}
+    >
+      <SentFiles files={files} />
       <Box
         sx={{
           px: 2,
@@ -297,12 +345,23 @@ function ceilingButtons(
 ): ReactNode {
   const words = feedCeilingButtons[question.reason]
   const stop = (
-    <Button key="stop" variant="outlined" onClick={actions.onStop} disabled={actions.busy}>
+    <Button
+      key="stop"
+      variant="outlined"
+      onClick={actions.onStop}
+      disabled={actions.busy || actions.stopping}
+    >
       {words.stop}
     </Button>
   )
   const next = (
-    <Button key="next" variant="contained" onClick={actions.onContinue} loading={actions.busy}>
+    <Button
+      key="next"
+      variant="contained"
+      onClick={actions.onContinue}
+      loading={actions.busy}
+      disabled={actions.stopping}
+    >
       {feedCeilingButtons.step.next}
     </Button>
   )
@@ -345,6 +404,7 @@ function QuestionCard({
       </Card>
     )
   }
+  if (row.kind === 'browser') return <BrowserQuestionCard row={row} open={open} actions={actions} />
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
       <Card
@@ -375,6 +435,141 @@ function QuestionCard({
           {row.questions.length > 1 ? ` ${feedQuestionText.oneMessage}` : ''}
         </Typography>
       ) : null}
+    </Box>
+  )
+}
+
+/**
+ * A question of a task in the browser (docs/plan/57-browser-tasks.md, Б23): the agent asks the
+ * client to sign in, pass a check or confirm something there, or the platform stops the work.
+ * While it is open the card offers the control of the browser, or gives it back.
+ */
+function BrowserQuestionCard({
+  row,
+  open,
+  actions,
+}: {
+  row: Extract<QuestionRow, { kind: 'browser' }>
+  open: boolean
+  actions: FeedActions
+}) {
+  const help = row.reason !== 'unconfirmed'
+  let button: ReactNode = null
+  if (open && help && actions.controlling && actions.onResumeAgent) {
+    button = (
+      <Button
+        variant="contained"
+        onClick={actions.onResumeAgent}
+        loading={actions.busy}
+        disabled={actions.stopping}
+      >
+        {feedBrowserButtons.resume}
+      </Button>
+    )
+  } else if (
+    open &&
+    help &&
+    row.reason !== 'control' &&
+    actions.browserLive &&
+    actions.onTakeControl
+  ) {
+    button = (
+      <Button
+        variant="contained"
+        onClick={actions.onTakeControl}
+        disabled={actions.busy || actions.stopping}
+      >
+        {feedBrowserButtons.take}
+      </Button>
+    )
+  }
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      <Card
+        icon={row.reason === 'unconfirmed' ? 'warning' : 'globe'}
+        title={feedBrowserQuestionTitle[row.reason]}
+        tone={open ? 'primary.main' : 'text.primary'}
+        actions={button ?? undefined}
+      >
+        <Paragraph>{nbsp(feedBrowserQuestionText[row.reason])}</Paragraph>
+        {row.message ? <Paragraph>{row.message}</Paragraph> : null}
+      </Card>
+      {open && row.reason === 'login' ? (
+        <Typography variant="body2" color="text.secondary">
+          {nbsp(browserText.helpSecret)}
+        </Typography>
+      ) : null}
+    </Box>
+  )
+}
+
+/** A feed object as the row read it: its kind and state may be ones this page does not know. */
+type ShownObject = {
+  kind: 'post' | 'page' | null
+  title: string | null
+  status: keyof typeof feedObjectStatusLabel | null
+  url?: string
+  editUrl?: string
+}
+
+/**
+ * What a task in the browser left on the site, as the platform read it there (Б23, Б24): the
+ * kind, the title and the state of each object, with links to it and to its editor.
+ */
+function SiteObjects({ objects, heading }: { objects: readonly ShownObject[]; heading: string }) {
+  if (objects.length === 0) return null
+  const linkSx = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 0.5,
+    minHeight: 44,
+  } as const
+  return (
+    <Box component="section" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+      <Typography component="h3" sx={{ fontSize: 14, fontWeight: 600, color: 'text.secondary' }}>
+        {heading}
+      </Typography>
+      <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 1 }}>
+        {objects.map((object, index) => (
+          <Box
+            component="li"
+            key={index}
+            sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}
+          >
+            <Typography sx={{ overflowWrap: 'anywhere' }}>
+              {object.kind === null ? feedObjectText.otherKind : feedObjectKindLabel[object.kind]} «
+              {object.title ?? feedObjectText.untitled}»
+              {object.status === null ? null : (
+                <Box component="span" sx={{ color: 'text.secondary' }}>
+                  {' — '}
+                  {feedObjectStatusLabel[object.status].toLocaleLowerCase('ru')}
+                </Box>
+              )}
+            </Typography>
+            {object.url || object.editUrl ? (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '0 16px' }}>
+                {object.url ? (
+                  <MuiLink href={object.url} target="_blank" rel="noopener noreferrer" sx={linkSx}>
+                    {objectLinkText.open(object.kind)}
+                    <AppIcon name="arrow" size={16} />
+                  </MuiLink>
+                ) : null}
+                {object.editUrl ? (
+                  <MuiLink
+                    href={object.editUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    sx={linkSx}
+                  >
+                    {objectLinkText.edit}
+                    <AppIcon name="arrow" size={16} />
+                  </MuiLink>
+                ) : null}
+              </Box>
+            ) : null}
+          </Box>
+        ))}
+      </Box>
     </Box>
   )
 }
@@ -511,6 +706,7 @@ function RowView({
   commands,
   undo,
   actions,
+  filesOf,
 }: {
   row: FeedRow
   now: Date
@@ -522,6 +718,7 @@ function RowView({
   commands: readonly CommandVerdict[]
   undo: UndoHead | null
   actions: FeedActions
+  filesOf: (ids: readonly string[]) => SentFile[]
 }) {
   switch (row.type) {
     case 'feed.request':
@@ -529,11 +726,15 @@ function RowView({
         case 'first':
         case 'answer':
         case 'revision':
-          return <Bubble text={row.text} at={row.at} now={now} />
+          return (
+            <Bubble text={row.text} at={row.at} now={now} files={filesOf(row.attachments ?? [])} />
+          )
         case 'retry':
           return <Press text={feedRowText.retry} icon="back" />
         case 'continue':
           return <Press text={feedRowText.continue} icon="back" />
+        case 'resume':
+          return <Press text={feedRowText.resume} icon="back" />
         case 'command':
           return (
             <Press
@@ -565,6 +766,7 @@ function RowView({
               row.filesChanged === null ? null : feedFilesChangedText(row.filesChanged),
             ]}
           />
+          <SiteObjects objects={row.objects ?? []} heading={feedObjectText.result} />
           {!approval && row.site !== 'unchanged' ? (
             <MuiLink
               href={siteUrl}
@@ -619,6 +821,7 @@ function RowView({
               row.next === 'awaiting_approval' ? feedFailureKeptText : null,
             ]}
           />
+          <SiteObjects objects={row.objects ?? []} heading={feedObjectText.ended} />
         </Card>
       )
     case 'feed.cancelled':
@@ -632,6 +835,7 @@ function RowView({
               row.by === 'queue_timeout' ? FEED_QUEUE_TIMEOUT_CLOSING : null,
             ]}
           />
+          <SiteObjects objects={row.objects ?? []} heading={feedObjectText.ended} />
         </Card>
       )
     case 'feed.candidate':
@@ -736,6 +940,7 @@ export function FeedList({
   liveCandidateId,
   retryId = null,
   actions,
+  filesOf = noFiles,
 }: {
   head: FeedHeadState | null
   rows: readonly FeedRow[]
@@ -745,6 +950,8 @@ export function FeedList({
   /** The failure row «Попробовать ещё» is offered on (`retryFailure`). */
   retryId?: string | null
   actions: FeedActions
+  /** The files a message sent, by their ids, as their chips name them. */
+  filesOf?: (ids: readonly string[]) => SentFile[]
 }) {
   const now = new Date()
   const entries: FeedEntry[] = feedEntries(rows, head)
@@ -775,6 +982,7 @@ export function FeedList({
               commands={commands}
               undo={undo}
               actions={actions}
+              filesOf={filesOf}
             />
           )}
         </Box>
@@ -782,6 +990,10 @@ export function FeedList({
     </Box>
   )
 }
+
+/** Files of a message whose names are not read: a chip each, nameless. */
+const noFiles = (ids: readonly string[]): SentFile[] =>
+  ids.map((id) => ({ id, name: null, size: null, kind: 'document' as const }))
 
 /** Seconds since a moment, counted on the client while `on`. */
 function useSecondsSince(since: string | null, on: boolean): number {
@@ -805,10 +1017,20 @@ export function LiveBlock({
   head,
   steps,
   stopping = false,
+  browser,
 }: {
   head: FeedHeadState
   steps: readonly StepRow[]
   stopping?: boolean
+  /** A task in the browser (docs/plan/57-browser-tasks.md): who drives it, and the way to it. */
+  browser?: {
+    /** The client controls the browser: the agent waits for «Продолжить работу агента». */
+    controlling: boolean
+    onResume: () => void
+    /** Shows the browser where it is behind the switch; null — it is beside the dialog. */
+    onWatch: (() => void) | null
+    busy: boolean
+  }
 }) {
   const { task, release } = head
   const running = task.status === 'running'
@@ -836,9 +1058,36 @@ export function LiveBlock({
       case 'running':
         if (stopping) text = dialogText.stoppedHint
         else if (task.held) text = feedLiveText.held
-        else {
-          text = feedLiveText.running
-          body = steps.length > 0 ? <StepList steps={steps} running /> : null
+        else if (browser?.controlling) {
+          title = browserText.status.user
+          text = browserText.controlPlate
+          body = (
+            <Button
+              variant="contained"
+              onClick={browser.onResume}
+              disabled={browser.busy}
+              sx={{ alignSelf: 'flex-start' }}
+            >
+              {feedBrowserButtons.resume}
+            </Button>
+          )
+        } else {
+          text = browser ? feedLiveText.browser : feedLiveText.running
+          body = (
+            <>
+              {steps.length > 0 ? <StepList steps={steps} running /> : null}
+              {browser?.onWatch ? (
+                <Button
+                  variant="outlined"
+                  onClick={browser.onWatch}
+                  startIcon={<AppIcon name="eye" size={18} />}
+                  sx={{ alignSelf: 'flex-start' }}
+                >
+                  {browserText.watch}
+                </Button>
+              ) : null}
+            </>
+          )
         }
         break
       case 'deploying':

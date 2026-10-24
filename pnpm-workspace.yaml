@@ -106,6 +106,9 @@ catalog:
   sendsay-api: ^2.4.0
   # The registrable domain of a preview base, by the Public Suffix List (plan 53, Р19)
   tldts: ^7.4.15
+  # The browser worker's screencast link: worker ↔ gateway ↔ cabinet (plan 57)
+  ws: ^8.22.0
+  '@types/ws': ^8.18.1
 
   # Orchestrator (NestJS 12, ESM)
   '@nestjs/core': ^12.1.0

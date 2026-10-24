@@ -36,8 +36,12 @@ export interface PaletteOption {
 export function paletteOptions(
   typed: string | null,
   verdicts: readonly CommandVerdict[],
+  /** The commands this dialog has at all; absent — every command of the chat. */
+  listed?: readonly ChatCommandId[],
 ): PaletteOption[] {
-  const ids = typed === null ? [...chatCommandIds] : matchChatCommands(typed)
+  const ids = (typed === null ? [...chatCommandIds] : matchChatCommands(typed)).filter(
+    (id) => listed === undefined || listed.includes(id),
+  )
   return ids.flatMap((id) => {
     // «Отменить выпуск» and «Попробовать ещё» are listed only with the server's verdict on them:
     // a dialog that installed nothing, or has no failure to retry, does not list them

@@ -7,11 +7,11 @@ import { loadSite } from '@/lib/site'
 
 /**
  * The address of a site leads to a new dialog of its chat; a site being set up, a site that is
- * not connected yet and a site whose other sections are closed — paused, disconnected,
- * archived — to the overview.
+ * not connected yet and takes no task in the browser, and a site whose other sections are closed
+ * — paused, disconnected, archived — to the overview.
  */
 export default async function SitePage({ params }: { params: Promise<{ projectId: string }> }) {
   const site = await loadSite((await params).projectId)
   if (site === UNAVAILABLE) return <ServiceUnavailable />
-  redirect(siteEntryHref(site.id, siteLanding(site.status, site.setup)))
+  redirect(siteEntryHref(site.id, siteLanding(site.status, site.setup, site.capabilities)))
 }

@@ -418,6 +418,13 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   const provisioner = scopedTokens['workspace-provisioner']
   await expect(provisioner, `transit/keys/${key}`, 200, post(keyType))
   await expect(provisioner, `transit/keys/${key}`, 200, post(keyType))
+  // Nothing under a key (docs/plan/57-browser-tasks.md, Б32): no rotation, configuration, trim or
+  // undoing of a soft deletion — without parameters, and with the one parameter it may send.
+  for (const action of ['rotate', 'config', 'trim', 'soft-delete-restore']) {
+    for (const body of [undefined, keyType]) {
+      await expect(provisioner, `transit/keys/${key}/${action}`, 403, post(body))
+    }
+  }
   const made = await expect(rootToken, `transit/keys/${key}`, 200)
   assert.equal(made?.data?.type, 'aes256-gcm96', 'Workspace key type')
   assert.equal(made?.data?.latest_version, 1, 'A repeated creation rotated the workspace key')
@@ -428,7 +435,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     [`ws-${randomUUID()}`, { ...keyType, exportable: true }],
     [`ws-${randomUUID()}`, { ...keyType, derived: true }],
     [`ws-${randomUUID()}`, { ...keyType, allow_plaintext_backup: true }],
-    [foreignKey, keyType],
+    [foreignKey, { type: 'rsa-2048' }],
   ]) {
     await expect(provisioner, `transit/keys/${name}`, 403, post(body))
   }
@@ -465,7 +472,11 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   ]) {
     await expect(provisioner, path, 403, options)
   }
-  await expect(rootToken, `transit/keys/${foreignKey}`, 200, post(keyType))
+  // `+` leaves the name to the client (`transitEnsureKey` takes `ws-<uuid>` only): a key of
+  // another name can be made, and neither core nor mcp may use it (their refusals below).
+  await expect(provisioner, `transit/keys/${foreignKey}`, 200, post(keyType))
+  const foreign = await expect(rootToken, `transit/keys/${foreignKey}`, 200)
+  assert.equal(foreign?.data?.exportable, false, 'A key of another name is exportable')
 
   // sites-writer: stores site access with CAS and cannot read it back.
   const sitesWriter = scopedTokens['sites-writer']
@@ -783,14 +794,21 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   )
   assert.ok(crossedBack?.data?.plaintext === issued.data.plaintext, 'Data key differs')
 
-  // What the glob of the provisioner leaves reachable under a key: rotation and the undoing
-  // of a soft deletion, both without parameters. Rotation keeps earlier wrapped keys readable.
-  await expect(provisioner, `transit/keys/${key}/rotate`, 200, post())
-  // The undoing is real: a key an operator has switched off serves the roles again.
+  // A key an operator has switched off stays off for the provisioner: the undoing is refused, and
+  // a repeated creation answers with the key as it is.
   await expect(rootToken, `transit/keys/${key}/soft-delete`, 200, { method: 'DELETE' })
   await expect(mcp, `transit/datakey/plaintext/${key}`, 400, post(dataKey))
   await expect(mcp, `transit/decrypt/${key}`, 400, post({ ciphertext: wrapped }))
-  await expect(provisioner, `transit/keys/${key}/soft-delete-restore`, 200, post())
+  await expect(provisioner, `transit/keys/${key}/soft-delete-restore`, 403, post())
+  await expect(provisioner, `transit/keys/${key}/rotate`, 403, post())
+  await expect(provisioner, `transit/keys/${key}`, 200, post(keyType))
+  const switchedOff = await expect(rootToken, `transit/keys/${key}`, 200)
+  assert.equal(switchedOff?.data?.soft_deleted, true, 'A repeated creation restored the key')
+  assert.equal(switchedOff?.data?.latest_version, 1, 'A repeated creation rotated the key')
+  await expect(mcp, `transit/datakey/plaintext/${key}`, 400, post(dataKey))
+  // The operator's rotation and undoing: earlier wrapped keys stay readable.
+  await expect(rootToken, `transit/keys/${key}/soft-delete-restore`, 200, post())
+  await expect(rootToken, `transit/keys/${key}/rotate`, 200, post())
   const rotated = await expect(rootToken, `transit/keys/${key}`, 200)
   assert.equal(rotated?.data?.soft_deleted, false, 'Workspace key stayed switched off')
   assert.equal(rotated?.data?.latest_version, 2)
@@ -1673,6 +1691,98 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     () => web.kvDestroyAll(second),
     403,
   )
+  // Web holds `workspace-provisioner` next to `sites-writer` (docs/plan/57-browser-tasks.md, Б32):
+  // it makes the Transit key of a workspace before the first task, and nothing else with it.
+  const webToken = (
+    await localVaultRequest({ address, token: rootToken }, 'auth/token/create', {
+      method: 'POST',
+      body: {
+        policies: ['sites-writer', 'workspace-provisioner'],
+        no_default_policy: true,
+        ttl: '15m',
+        explicit_max_ttl: '15m',
+        renewable: false,
+      },
+    })
+  ).body?.auth?.client_token
+  assert.ok(typeof webToken === 'string', 'The token of web was not created')
+  const webKeys = createVaultSecretStore({ addr: address, token: webToken })
+  const workspaceKey = `ws-${randomUUID()}`
+  await checked('web makes the key of a workspace, and a repeat leaves it as it is', async () => {
+    await webKeys.transitEnsureKey(workspaceKey)
+    await webKeys.transitEnsureKey(workspaceKey)
+    const made = await localVaultRequest(
+      { address, token: rootToken },
+      `transit/keys/${workspaceKey}`,
+    )
+    assert.equal(made.status, 200)
+    assert.equal(made.body?.data?.type, 'aes256-gcm96')
+    assert.equal(made.body?.data?.latest_version, 1)
+    assert.equal(made.body?.data?.exportable, false)
+    assert.equal(made.body?.data?.deletion_allowed, false)
+  })
+  await checked('core role seals and opens a data key with the key web made', async () => {
+    const issued = await role.transitDataKey(workspaceKey)
+    assert.ok(
+      sameBytes(
+        await role.transitDecryptDataKey(workspaceKey, issued.ciphertext),
+        issued.plaintext,
+      ),
+    )
+    assert.equal(logins.core, 1)
+  })
+  await expectRejected(
+    'web cannot take a data key of the key it made',
+    () => webKeys.transitDataKey(workspaceKey),
+    403,
+  )
+  await checked(
+    'web cannot read, export, list, configure, rotate, trim, restore or delete a key',
+    async () => {
+      for (const [path, options] of [
+        [`transit/keys/${workspaceKey}`, {}],
+        [`transit/export/encryption-key/${workspaceKey}`, {}],
+        ['transit/keys', { method: 'LIST' }],
+        [`transit/keys/${workspaceKey}`, { method: 'DELETE' }],
+        [`transit/keys/${workspaceKey}/soft-delete`, { method: 'DELETE' }],
+        [
+          `transit/keys/${workspaceKey}/config`,
+          { method: 'POST', body: { deletion_allowed: true } },
+        ],
+        [`transit/keys/${workspaceKey}/config`, { method: 'POST' }],
+        [`transit/keys/${workspaceKey}/rotate`, { method: 'POST' }],
+        [
+          `transit/keys/${workspaceKey}/trim`,
+          { method: 'POST', body: { min_available_version: 1 } },
+        ],
+        [`transit/keys/${workspaceKey}/soft-delete-restore`, { method: 'POST' }],
+      ]) {
+        const result = await localVaultRequest({ address, token: webToken }, path, options)
+        assert.equal(result.status, 403, path)
+      }
+    },
+  )
+  await checked(
+    'the adapter makes the key of a workspace id only, before any request',
+    async () => {
+      for (const name of [
+        `other-${randomUUID()}`,
+        'ws-not-a-workspace-id',
+        `ws-${randomUUID().toUpperCase()}`,
+        `ws-${randomUUID()}/rotate`,
+      ])
+        await assert.rejects(
+          webKeys.transitEnsureKey(name),
+          (error) => error.message === 'Invalid Vault workspace key name',
+        )
+    },
+  )
+  await expectRejected(
+    'sites-writer alone cannot make the key of a workspace',
+    () => web.transitEnsureKey(`ws-${randomUUID()}`),
+    403,
+  )
+
   const contentOnly = createVaultSecretStore({ addr: address, token: scopedTokens['mcp-content'] })
   await expectRejected(
     'the content policy is refused the variables of a site',

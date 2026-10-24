@@ -2,9 +2,11 @@ import { isAbsolute } from 'node:path'
 
 import { agentDriverConfigFromEnv, type AgentDriverConfig } from '@repo/agent-drivers'
 import { ConfigError } from '@repo/app-bootstrap'
+import { browserWorkerOrigin } from '@repo/browser-link'
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
 import {
   appEnvSchema,
+  browserWorkerTokenSchema,
   envProblems,
   envVar,
   isProduction,
@@ -16,6 +18,8 @@ import {
   previewExecutorKinds,
   previewImageRoles,
   previewImageSchema,
+  browserSessionTimings,
+  browserSettingBounds,
   previewRuntimes,
   sandboxRuntimes,
   turnExecutorKinds,
@@ -114,6 +118,24 @@ export interface CoreConfig {
   previews: PreviewsConfig | null
   /** The release API listener; null — RELEASE_API_HOST is unset and releases are off here. */
   releaseApi: ReleaseApiConfig | null
+  /**
+   * The browser worker of tasks in the cloud browser (docs/plan/57-browser-tasks.md, Б10, Б18);
+   * null — BROWSER_WORKER_URL is unset: such tasks are refused `unavailable`, the rest runs.
+   */
+  browser: BrowserWorkerConfig | null
+}
+
+/** Where core reaches the browser worker's internal API. Holds its token: never log it. */
+export interface BrowserWorkerConfig {
+  /** The worker's origin, `http://127.0.0.1:8086`. */
+  url: string
+  /** `Authorization: Bearer` of every call. */
+  token: string
+  /**
+   * BROWSER_SESSION_MAX_HOURS, the worker's own setting: the hard deadline core writes on the
+   * session it opens — the worker closes it then, and so does core's collector.
+   */
+  sessionMaxHours: number
 }
 
 /** Where and how previews of dialogs run (docs/plan/53-chat-preview-release.md, Р17, Р18). */
@@ -272,6 +294,22 @@ const ownEnvSchema = z.object({
   RELEASE_START_TIMEOUT_MINUTES: envVar(
     z.coerce.number().int().min(1).max(60).default(previewDefaults.releaseStartTimeoutMinutes),
   ),
+  // The browser worker (docs/plan/57-browser-tasks.md, Б10): its internal origin and the bearer
+  // token of its API, one visible ASCII word.
+  BROWSER_WORKER_URL: envVar(
+    z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional(),
+  ),
+  // The rule every app reads the worker's token by (32 to 4096 visible ASCII characters): one
+  // token opens every session of the worker.
+  BROWSER_WORKER_TOKEN: envVar(browserWorkerTokenSchema.optional()),
+  BROWSER_SESSION_MAX_HOURS: envVar(
+    z.coerce
+      .number()
+      .int()
+      .min(browserSettingBounds.maxHours.min)
+      .max(browserSettingBounds.maxHours.max)
+      .default(browserSessionTimings.maxHours),
+  ),
 })
 
 /** The PREVIEW_*_IMAGE variable of each image role. */
@@ -327,7 +365,13 @@ export function loadConfig(env: Env): CoreConfig {
         'RELEASE_API_HOST',
         'RELEASE_API_PUBLIC_URL',
         'RELEASE_START_TIMEOUT_MINUTES',
+        'BROWSER_WORKER_URL',
       ],
+    ],
+    // The token only with the worker it opens: the shared .env holds it for the worker too.
+    [
+      Boolean(env.BROWSER_WORKER_URL?.trim()),
+      ['BROWSER_WORKER_TOKEN', 'BROWSER_SESSION_MAX_HOURS'],
     ],
     // The address of a preview: core builds hostnames, the gateway routes by them.
     [true, ['PREVIEW_BASE_DOMAIN', 'PREVIEW_SCHEME', 'PREVIEW_PUBLIC_PORT']],
@@ -556,6 +600,38 @@ export function loadConfig(env: Env): CoreConfig {
       problems.push('RELEASE_API_HOST: required with RELEASE_API_PUBLIC_URL')
   }
 
+  let browser: BrowserWorkerConfig | null = null
+  if (own.BROWSER_WORKER_URL !== undefined) {
+    let origin: string | null = null
+    try {
+      origin = browserWorkerOrigin(own.BROWSER_WORKER_URL)
+    } catch {
+      problems.push(
+        'BROWSER_WORKER_URL: expected an http(s) origin (no path, credentials or query)',
+      )
+    }
+    // Inside the perimeter plain http goes to a private address only (spec §19).
+    const url = origin ? new URL(origin) : null
+    if (
+      url &&
+      production &&
+      url.protocol === 'http:' &&
+      !isPrivateAddress(url.hostname) &&
+      !isLoopbackAddress(url.hostname)
+    )
+      problems.push(
+        'BROWSER_WORKER_URL: plain http only to a private or loopback IP address in production (spec §19)',
+      )
+    if (own.BROWSER_WORKER_TOKEN === undefined)
+      problems.push('BROWSER_WORKER_TOKEN: required with BROWSER_WORKER_URL')
+    else if (origin)
+      browser = {
+        url: origin,
+        token: own.BROWSER_WORKER_TOKEN,
+        sessionMaxHours: own.BROWSER_SESSION_MAX_HOURS,
+      }
+  }
+
   if (problems.length > 0) throw new ConfigError(problems, 'core')
 
   return {
@@ -585,6 +661,7 @@ export function loadConfig(env: Env): CoreConfig {
     },
     previews,
     releaseApi,
+    browser,
   }
 }
 

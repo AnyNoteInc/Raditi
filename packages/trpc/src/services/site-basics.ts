@@ -147,6 +147,17 @@ export const alreadyExists = () =>
   new DomainError('PROJECT_ALREADY_EXISTS', 'The user already has access to this site', 409)
 
 /**
+ * A site for the browser alone at an address that is not https, in production (docs/plan/57, Б33):
+ * the browser of the platform would never open it, and the address of a site is not changed later.
+ */
+export const siteAddressNotSecure = () =>
+  new DomainError(
+    'SITE_ADDRESS_NOT_SECURE',
+    'A site for the browser alone needs an https address in production',
+    400,
+  )
+
+/**
  * A technical ceiling on the sites one user creates, well above the largest tariff (15 sites).
  * It is all that limits a user without a tariff; with one, or with one being paid for, the
  * personal workspace also holds no more sites than its plan allows (`plans.max_sites`) — and no

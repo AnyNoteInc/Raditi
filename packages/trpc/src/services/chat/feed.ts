@@ -13,6 +13,7 @@ import {
 } from '@repo/domain'
 
 import { accessibleTask, taskNotFound } from './access.ts'
+import { feedBrowser, type FeedBrowser } from './browser.ts'
 import { candidateCountsOf, dialogCommands, dialogFacts, type DialogFacts } from './dialog-facts.ts'
 import { dialogRetry, movingRequest } from './dialog-state.ts'
 
@@ -40,6 +41,8 @@ export interface FeedCandidate {
 
 export interface DialogFeed {
   task: FeedTaskHead
+  /** The cloud browser of a task in the browser (docs/plan/57, Б12–Б18); null for any other. */
+  browser: FeedBrowser | null
   preview: FeedPreview | null
   candidate: FeedCandidate | null
   release: DialogFacts['release']
@@ -55,7 +58,8 @@ export interface DialogFeed {
  * `task.feed` (feed design, «Чтение по идентификатору»): the head of the dialog and the rows
  * after the cursor from one snapshot of the database — REPEATABLE READ, read only — so an
  * answer never holds a new status without its row. Beside the head: the preview, the candidate
- * the dialog waits with, its latest release and the verdict on each command (Р20, Р34). Rows are
+ * the dialog waits with, its latest release and the verdict on each command (Р20, Р34) — or, for
+ * a task in the browser, the session of its browser (docs/plan/57, Б12). Rows are
  * read with `readFeedRow` and never thrown away, except a stage the reader does not know and a
  * second row of the same stage of a turn.
  */
@@ -84,14 +88,18 @@ export async function readDialogFeed(
           attempt: true,
           turnNo: true,
           waiting: true,
+          needsRepository: true,
+          needsBrowser: true,
         },
       })
       if (task === null) throw taskNotFound()
       const facts = await dialogFacts(tx, task, input.userId)
       const head = await feedHead(tx, task)
+      const browser = await feedBrowser(tx, task)
       const page = await feedPage(tx, task.id, input.after)
       return {
         task: head,
+        browser,
         preview:
           facts.preview === null
             ? null
@@ -138,6 +146,8 @@ export async function feedHead(
     attempt: number
     turnNo: number
     waiting: 'agents' | 'site' | null
+    needsRepository: boolean
+    needsBrowser: boolean
   },
 ): Promise<FeedTaskHead> {
   const lease = await tx.siteLease.findUnique({
@@ -179,6 +189,7 @@ export async function feedHead(
     canRetry: (await dialogRetry(tx, task)).allowed,
     workingSince: request?.createdAt.toISOString() ?? null,
     runningSince: work?.createdAt.toISOString() ?? null,
+    requirements: { repository: task.needsRepository, browser: task.needsBrowser },
   })
 }
 
@@ -231,6 +242,8 @@ export async function readDialogHead(
           attempt: true,
           turnNo: true,
           waiting: true,
+          needsRepository: true,
+          needsBrowser: true,
           createdAt: true,
           updatedAt: true,
         },

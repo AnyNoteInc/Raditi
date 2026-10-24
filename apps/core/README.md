@@ -6,6 +6,7 @@
 
 - `src/app.module.ts` — `AppModule.forRoot({ config, background })`. Глобальные модули — только инфраструктура: `CoreConfigModule` (`src/config/config.module.ts`; токены `CORE_CONFIG` и `BACKGROUND_JOBS` — `config.tokens.ts`), `DatabaseModule` из `@repo/service-runtime`, `InfraModule` (S3, Vault, Redis), `QueueModule.forRoot({ redisUrl, background })` (очереди BullMQ; `background` включает воркеры — `manualRegistration`, его `@nestjs/bullmq` принимает только параметром модуля) и `MetricsRegistryModule` — один реестр метрик процесса. Остальные модули разделов импортирует тот, кто их использует.
 - `src/turns` — движок хода: `TurnsModule.forRoot(executor)` даёт `TURN_EXECUTOR` (раннеры через API раннеров или Docker самого `core`), супервизор, восстановление, журнал ходов и `TurnRuntime`. `AppModule.forRoot` строит его один раз и передаёт тот же объект в `TasksModule.forRoot` и `PreviewsModule.forRoot`: Nest различает динамические модули по ссылке, второй вызов дал бы второй `LiveTurns`.
+- `src/browser` — облачный браузер задач без репозитория (план 57, Б10, Б18): `BrowserModule` даёт `BrowserSessions` — открытие сессии перед проходом, проверку сохранённого на сайте, закрытие с задачей и сверку с процессом `browser`; без `BROWSER_WORKER_URL` — `null`, и такая задача получает отказ `unavailable`. Его импортирует `TasksModule`: проход, итог прохода и сборщик диалогов (он же убирает из `raditi-inbox` файлы, которые так и не отправили, — Б26).
 - `src/leases` — аренда сайта и назначения ходов (`SITE_LEASES`, `TURN_ASSIGNMENTS`). `src/site-content` — значения плана БД (`PLAN_VALUES`), DNS адреса сайта (`HOST_LOOKUP`) и фабрика доступа к контенту сайта (`SITE_CONTENT_RESOLVERS`): у каждого потребителя свой экземпляр и свой кеш доступа на 60 с.
 - Токены раздела лежат в `<раздел>.tokens.ts`, фабрики разделов, где их много, — в `<раздел>.providers.ts` (`turns`, `tasks`, `previews`). Классы, которые строят тесты и стенды (`new X(...)`), сохраняют конструкторы и подключаются фабриками.
 - Порядок запуска и остановки фоновых частей задаёт Nest по графу модулей, тест `src/app.module.test.ts` (`lifecycleOf`) закрепляет его для обоих исполнителей.
@@ -16,7 +17,7 @@
 
 ## Что читает
 
-Окружение читает `loadConfig`; полный перечень — `.env.example`. Группы: `APP_ENV`, `APP_URL`, `METRICS_TOKEN`; `DATABASE_URL`, `REDIS_URL`; `VAULT_*`; `S3_*`; `SANDBOX_*` и `TURN_EXECUTOR`, `RUNNER_TOKENS`; `GITEA_*`, `GIT_CA_FILE`, `GIT_MIRROR_DIR`; `LLM_CONTROL_URL`; `PREVIEW_*`; `RELEASE_API_*`; `BILLING_*`, `YOOKASSA_*`, почта. Вне production загружает корневой `.env` (`@repo/app-bootstrap/load-env`).
+Окружение читает `loadConfig`; полный перечень — `.env.example`. Группы: `APP_ENV`, `APP_URL`, `METRICS_TOKEN`; `DATABASE_URL`, `REDIS_URL`; `VAULT_*`; `S3_*`; `SANDBOX_*` и `TURN_EXECUTOR`, `RUNNER_TOKENS`; `GITEA_*`, `GIT_CA_FILE`, `GIT_MIRROR_DIR`; `LLM_CONTROL_URL`; `PREVIEW_*`; `RELEASE_API_*`; `BROWSER_WORKER_URL`, `BROWSER_WORKER_TOKEN`, `BROWSER_SESSION_MAX_HOURS`; `BILLING_*`, `YOOKASSA_*`, почта. Вне production загружает корневой `.env` (`@repo/app-bootstrap/load-env`).
 
 ## Команды
 

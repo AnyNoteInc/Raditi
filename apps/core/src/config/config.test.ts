@@ -983,3 +983,87 @@ describe('loadConfig — previews and releases', () => {
     ])
   })
 })
+
+describe('loadConfig — the browser worker (docs/plan/57-browser-tasks.md, Б10)', () => {
+  const TOKEN = 'browser-worker-token-'.padEnd(40, 'x')
+
+  it('leaves tasks in the browser unavailable, and core starting, without BROWSER_WORKER_URL', () => {
+    expect(loadConfig(devEnv).browser).toBeNull()
+    // The token alone belongs to the worker in the shared .env: core reads nothing of it.
+    expect(loadConfig({ ...devEnv, BROWSER_WORKER_TOKEN: 'short' }).browser).toBeNull()
+  })
+
+  it('reads the origin of the worker, its token and the deadline of its sessions', () => {
+    expect(
+      loadConfig({
+        ...devEnv,
+        BROWSER_WORKER_URL: 'http://127.0.0.1:8086/',
+        BROWSER_WORKER_TOKEN: TOKEN,
+      }).browser,
+    ).toEqual({ url: 'http://127.0.0.1:8086', token: TOKEN, sessionMaxHours: 4 })
+    // The worker's own BROWSER_SESSION_MAX_HOURS: the deadline core writes is the worker's.
+    const worker = { BROWSER_WORKER_URL: 'http://127.0.0.1:8086', BROWSER_WORKER_TOKEN: TOKEN }
+    expect(
+      loadConfig({ ...devEnv, ...worker, BROWSER_SESSION_MAX_HOURS: '8' }).browser,
+    ).toMatchObject({ sessionMaxHours: 8 })
+    expect(problemsOf({ ...devEnv, ...worker, BROWSER_SESSION_MAX_HOURS: '25' })).toEqual([
+      expect.stringMatching(/^BROWSER_SESSION_MAX_HOURS: /),
+    ])
+    // Without the worker core reads none of it.
+    expect(loadConfig({ ...devEnv, BROWSER_SESSION_MAX_HOURS: '25' }).browser).toBeNull()
+  })
+
+  it('names what is wrong with the worker settings, never their values', () => {
+    const problems = problemsOf({
+      ...devEnv,
+      BROWSER_WORKER_URL: 'http://user:secret-pass@127.0.0.1:8086/api',
+      BROWSER_WORKER_TOKEN: 'short token',
+    })
+    expect(problems).toEqual([
+      'BROWSER_WORKER_TOKEN: must be 32 to 4096 visible ASCII characters without spaces',
+    ])
+    // The rule of mcp, preview and the worker too: a token one of them refuses, core refuses.
+    const long = 't'.repeat(4097)
+    const tooLong = problemsOf({
+      ...devEnv,
+      BROWSER_WORKER_URL: 'http://127.0.0.1:8086',
+      BROWSER_WORKER_TOKEN: long,
+    })
+    expect(tooLong).toEqual([
+      'BROWSER_WORKER_TOKEN: must be 32 to 4096 visible ASCII characters without spaces',
+    ])
+    expect(tooLong.join('\n')).not.toContain(long)
+    expect(problemsOf({ ...devEnv, BROWSER_WORKER_URL: 'http://127.0.0.1:8086' })).toEqual([
+      'BROWSER_WORKER_TOKEN: required with BROWSER_WORKER_URL',
+    ])
+    const bad = problemsOf({
+      ...devEnv,
+      BROWSER_WORKER_URL: 'http://user:secret-pass@127.0.0.1:8086/api',
+      BROWSER_WORKER_TOKEN: TOKEN,
+    })
+    expect(bad).toEqual([
+      'BROWSER_WORKER_URL: expected an http(s) origin (no path, credentials or query)',
+    ])
+    expect(JSON.stringify(bad)).not.toContain('secret-pass')
+  })
+
+  it('reaches the worker in production over plain http only on a private address', () => {
+    expect(
+      loadConfig(
+        prodEnv({ BROWSER_WORKER_URL: 'http://10.20.0.30:8086', BROWSER_WORKER_TOKEN: TOKEN }),
+      ).browser,
+    ).toEqual({ url: 'http://10.20.0.30:8086', token: TOKEN, sessionMaxHours: 4 })
+    expect(
+      problemsOf(
+        prodEnv({ BROWSER_WORKER_URL: 'http://browser:8086', BROWSER_WORKER_TOKEN: TOKEN }),
+      ),
+    ).toEqual([
+      'BROWSER_WORKER_URL: plain http only to a private or loopback IP address in production (spec §19)',
+    ])
+    expect(
+      loadConfig(
+        prodEnv({ BROWSER_WORKER_URL: 'https://browser.internal', BROWSER_WORKER_TOKEN: TOKEN }),
+      ).browser,
+    ).toMatchObject({ url: 'https://browser.internal' })
+  })
+})

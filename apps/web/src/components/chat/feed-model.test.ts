@@ -123,5 +123,22 @@ describe('stopRequested', () => {
     expect(stopRequested(rows, 'cancelled')).toBe(false)
     expect(stopRequested(rows, undefined)).toBe(false)
     expect(stopRequested([requestRow('1'), commandRow('3', 'reset')], 'running')).toBe(false)
+    // A dialog that waits was closed by the press itself.
+    expect(stopRequested(rows, 'awaiting_user')).toBe(false)
+  })
+
+  it('is, for a task in the browser, a `/cancel` core has not acted on yet, in any status', () => {
+    const question = agentQuestionRow('2', 1)
+    const rows = [requestRow('1'), question, commandRow('3', 'cancel')]
+    for (const status of ['queued', 'running', 'awaiting_user', 'awaiting_approval'] as const)
+      expect(stopRequested(rows, status, true), status).toBe(true)
+    expect(stopRequested(rows, 'cancelled', true)).toBe(false)
+    expect(stopRequested(rows, undefined, true)).toBe(false)
+    // Other commands after it hide nothing; words after it are what core reads instead.
+    expect(stopRequested([...rows, commandRow('4', 'reset')], 'awaiting_user', true)).toBe(true)
+    expect(
+      stopRequested([...rows, requestRow('4', 'Всё же продолжайте')], 'awaiting_user', true),
+    ).toBe(false)
+    expect(stopRequested([requestRow('1'), question], 'awaiting_user', true)).toBe(false)
   })
 })

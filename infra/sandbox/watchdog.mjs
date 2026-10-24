@@ -4,6 +4,7 @@ import { request } from 'node:http'
 const mainPrefix = 'io.raditi.sandbox.'
 const gatewayPrefix = 'io.raditi.gateway.'
 const previewPrefix = 'io.raditi.preview.'
+const browserPrefix = 'io.raditi.browser.'
 const idPattern = /^[a-f0-9]{64}$/
 const resourcePattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 
@@ -199,16 +200,76 @@ export async function reapExpiredPreviews(client, now = Date.now()) {
   return removed
 }
 
+/** The session of a browser resource and its deadline; null for anything that is not ours. */
+function browserSessionOf(labels) {
+  if (labels?.[`${browserPrefix}owner`] !== 'raditi' || labels[`${browserPrefix}protocol`] !== '1')
+    return null
+  const id = labels[`${browserPrefix}session`]
+  const deadline = Number(labels[`${browserPrefix}deadline`])
+  if (!resourcePattern.test(id ?? '') || !Number.isSafeInteger(deadline) || deadline <= 0)
+    return null
+  return { id, deadline }
+}
+
+/**
+ * Browser sessions of tasks (docs/plan/57-browser-tasks.md, Б18): the browser worker closes a
+ * session itself; one it left behind — the worker died, or lost its daemon — goes here once the
+ * latest deadline of any of its resources has passed: containers, then the network, and only by
+ * the names the runtime gives them (`raditi-browser-<session>-<role>`, `raditi-browser-<session>`).
+ */
+export async function reapExpiredBrowsers(client, now = Date.now()) {
+  const containers = await client('GET', listPath('containers/json', browserPrefix))
+  const networks = await client('GET', listPath('networks', browserPrefix))
+  const latest = new Map()
+  for (const item of [...containers, ...networks]) {
+    const session = browserSessionOf(item.Labels)
+    if (session) latest.set(session.id, Math.max(latest.get(session.id) ?? 0, session.deadline))
+  }
+  const expiredSession = (labels) => {
+    const session = browserSessionOf(labels)
+    return session && latest.get(session.id) <= now ? session.id : null
+  }
+  let removed = 0
+  let failed = false
+  const blocked = new Set()
+  for (const item of containers) {
+    const id = expiredSession(item.Labels)
+    if (!id || !idPattern.test(item.Id)) continue
+    if (!item.Names?.some((name) => name.startsWith(`/raditi-browser-${id}-`))) continue
+    try {
+      await client('DELETE', `/containers/${item.Id}?force=1&v=1`)
+      removed++
+    } catch {
+      failed = true
+      blocked.add(id)
+    }
+  }
+  for (const item of networks) {
+    const id = expiredSession(item.Labels)
+    if (!id || blocked.has(id) || !idPattern.test(item.Id)) continue
+    if (item.Name !== `raditi-browser-${id}`) continue
+    try {
+      await client('DELETE', `/networks/${item.Id}`)
+      removed++
+    } catch {
+      failed = true
+    }
+  }
+  if (failed) throw new Error('Some expired browser session resources could not be removed')
+  return removed
+}
+
 if (process.argv[1]?.endsWith('/watchdog.mjs')) {
   const client = dockerClient(process.env.SANDBOX_DOCKER_SOCKET ?? '/var/run/docker.sock')
   let busy = false
   const tick = async () => {
     if (busy) return
     busy = true
-    // One kind failing must not hold back the other.
+    // One kind failing must not hold back the others.
     for (const [reap, name] of [
       [reapExpired, 'Sandbox'],
       [reapExpiredPreviews, 'Preview'],
+      [reapExpiredBrowsers, 'Browser session'],
     ])
       try {
         await reap(client)

@@ -23,6 +23,9 @@ on:
       - packages/site-connections/**
       # The agent's browser on a preview (R7): the Playwright adapter against the browser image.
       - packages/browser-providers/**
+      # The browser worker of tasks (docs/plan/57-browser-tasks.md) and the client it is checked with.
+      - apps/browser/**
+      - packages/browser-link/**
       - infra/preview/**
       - infra/dev/preview-verify/**
       - infra/sandbox/watchdog.mjs
@@ -140,6 +143,32 @@ jobs:
           pnpm --filter @repo/site-adapters exec vitest run src/wordpress-preview.integration.test.ts
           pnpm --filter @repo/site-connections exec vitest run src/database-copy/mysql-copier.integration.test.ts
           pnpm --filter @repo/browser-providers exec vitest run src/playwright.integration.test.ts
+      # The containers of a task's browser session (docs/plan/57-browser-tasks.md, Б10, Б11):
+      # Chromium behind its egress proxy, a local site of the host and the refusals around it.
+      - name: Browser session runtime against the real daemon
+        env:
+          RADITI_BROWSER_DOCKER_TESTS: '1'
+        run: |
+          pnpm --filter @repo/sandbox-providers exec vitest run \
+            src/browser-session/runtime.integration.test.ts
+      # The browser worker (apps/browser, Б10–Б17) with that runtime and Playwright: a local site
+      # through the stream, a click of the client, the agent's observation, a clean close. The worker
+      # imports @repo/db, whose client is generated here (offline, no database).
+      - name: Browser worker against the real daemon
+        env:
+          RADITI_BROWSER_DOCKER_TESTS: '1'
+        run: |
+          pnpm db:generate
+          pnpm --filter browser exec vitest run src/browser-worker.docker.test.ts
+      # The cloud browser of a task (docs/plan/57-browser-tasks.md, Б13–Б22) on a Chromium of the
+      # runner itself, no Docker: tabs, screencast, secret fields, uploads, dialogs, the policy.
+      - name: Cloud browser session on a local Chromium
+        env:
+          RADITI_BROWSER_LOCAL_TESTS: '1'
+        run: |
+          pnpm --filter e2e exec playwright install --with-deps chromium
+          pnpm --filter @repo/browser-providers exec vitest run \
+            src/cloud/cloud-browser.integration.test.ts
       # The preview manager's suite keeps its previews, tasks and sites in PostgreSQL. Started here,
       # not as a service container: the switch to the containerd image store above would hide one.
       - name: Database of the preview manager

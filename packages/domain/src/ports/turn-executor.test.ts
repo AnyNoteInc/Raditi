@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { isDomainError } from '../errors.ts'
+import type { PublicationSource } from '../git/publication.ts'
+import { BROWSER_ONLY, REPOSITORY_ONLY, requirementsOf } from '../tasks/task-requirements.ts'
 import {
   toTurnPlan,
   turnInputSchema,
@@ -13,6 +15,13 @@ import {
 const digest = 'a'.repeat(64)
 const taskId = '11111111-1111-4111-8111-111111111111'
 const siteId = '22222222-2222-4222-8222-222222222222'
+
+const workspace = (): PublicationSource => ({
+  repo: { provider: 'gitea', owner: 'sites', name: 'shop' },
+  branch: `agent/${taskId}`,
+  expectedBaseSha: 'b'.repeat(40),
+  protectedPaths: ['wp-config.php'],
+})
 
 const request = (): TurnRequest => ({
   sandbox: {
@@ -37,12 +46,7 @@ const request = (): TurnRequest => ({
   },
   input: { prompt: 'Поменяйте цену на главной', attachments: ['/workspace/inbox/price.pdf'] },
   driverVersion: '1.18.34',
-  workspace: {
-    repo: { provider: 'gitea', owner: 'sites', name: 'shop' },
-    branch: `agent/${taskId}`,
-    expectedBaseSha: 'b'.repeat(40),
-    protectedPaths: ['wp-config.php'],
-  },
+  workspace: workspace(),
   committedAt: '2026-09-27T10:00:00.000Z',
   previous: {
     workspaceId: 'ws-1',
@@ -220,7 +224,7 @@ describe('turn plan', () => {
     expect(stored).not.toHaveProperty('rebased')
     const withWorkingSet = request()
     withWorkingSet.workspace = {
-      ...withWorkingSet.workspace,
+      ...workspace(),
       sandboxBaseSha: 'c'.repeat(40),
       addOnlyPaths: ['wp-content/uploads/raditi/'],
     }
@@ -232,12 +236,88 @@ describe('turn plan', () => {
     })
     expect(plan.rebased).toBe(true)
     expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' }).rebased).toBe(true)
-    for (const workspace of [
+    for (const invalid of [
       { ...withWorkingSet.workspace, sandboxBaseSha: 'C'.repeat(40) },
       { ...withWorkingSet.workspace, addOnlyPaths: ['wp-content/uploads/raditi'] },
       { ...withWorkingSet.workspace, addOnlyPaths: ['../uploads/'] },
     ])
-      expect(turnPlanSchema.safeParse({ ...plan, workspace }).success).toBe(false)
+      expect(turnPlanSchema.safeParse({ ...plan, workspace: invalid }).success).toBe(false)
+  })
+
+  it('reads a plan stored before the requirements as a turn with a repository (plan 57, Б3)', () => {
+    // The JSON a turn_assignments row holds today: a workspace and no requirements.
+    const stored = JSON.parse(JSON.stringify(toTurnPlan(request(), 'opencode')))
+    expect(stored).not.toHaveProperty('requirements')
+    const plan = turnPlanSchema.parse(stored)
+    expect(plan).toEqual(stored)
+    expect(requirementsOf(plan)).toEqual(REPOSITORY_ONLY)
+    expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' })).not.toHaveProperty(
+      'requirements',
+    )
+    // Naming them changes nothing for such a turn, and both needs together are expressible.
+    for (const requirements of [REPOSITORY_ONLY, { repository: true, browser: true }]) {
+      const named = toTurnPlan({ ...request(), requirements }, 'opencode')
+      expect(named.requirements).toEqual(requirements)
+      expect(named.workspace).toEqual(workspace())
+    }
+  })
+
+  it('keeps a turn without a repository: no workspace, its requirements carried both ways', () => {
+    const { workspace: _workspace, ...rest } = request()
+    const browser: TurnRequest = { ...rest, requirements: BROWSER_ONLY }
+    const unkeyed = withoutTurnCredentials(browser)
+    expect(unkeyed.requirements).toEqual(BROWSER_ONLY)
+    const plan = toTurnPlan(unkeyed, 'opencode')
+    expect(plan).not.toHaveProperty('workspace')
+    expect(plan.requirements).toEqual({ repository: false, browser: true })
+    expect(JSON.stringify(plan)).not.toMatch(/sk-turn-llm-key|mcp-turn-token/)
+    const restored = turnPlanSchema.parse(JSON.parse(JSON.stringify(plan)))
+    expect(requirementsOf(restored)).toEqual(BROWSER_ONLY)
+    // The previous turn's snapshot chains the session as before.
+    expect(restored.previous).toEqual(browser.previous)
+    expect(
+      withTurnCredentials(restored, { llmApiKey: 'sk-turn-llm-key', mcpToken: 'mcp-turn-token' }),
+    ).toEqual(browser)
+  })
+
+  it.each([
+    ['a workspace without a repository', { requirements: BROWSER_ONLY }, ['workspace']],
+    [
+      'a repository without its workspace',
+      { requirements: REPOSITORY_ONLY, workspace: undefined },
+      ['workspace'],
+    ],
+    ['no requirements and no workspace', { workspace: undefined }, ['workspace']],
+    [
+      'a replacement without a repository',
+      { requirements: BROWSER_ONLY, workspace: undefined, replacesTurn: 1 },
+      ['replacesTurn'],
+    ],
+    [
+      'a rebased start without a repository',
+      { requirements: BROWSER_ONLY, workspace: undefined, rebased: true },
+      ['rebased'],
+    ],
+    [
+      '«rebased» even false without a repository',
+      { requirements: BROWSER_ONLY, workspace: undefined, rebased: false },
+      ['rebased'],
+    ],
+    [
+      'no need at all',
+      { requirements: { repository: false, browser: false }, workspace: undefined },
+      ['requirements'],
+    ],
+    ['an unknown need', { requirements: { ...REPOSITORY_ONLY, database: true } }, ['requirements']],
+  ])('refuses %s', (_label, change, path) => {
+    const plan = { ...toTurnPlan(request(), 'opencode'), ...change }
+    const stored = JSON.parse(JSON.stringify(plan))
+    const result = turnPlanSchema.safeParse(stored)
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([path])
+    expect(() => toTurnPlan({ ...request(), ...change } as TurnRequest, 'opencode')).toThrow(
+      'Invalid turn plan',
+    )
   })
 
   it('refuses turn secrets in the sandbox spec and an invalid request without echoing it', () => {

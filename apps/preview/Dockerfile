@@ -1,5 +1,7 @@
 # The image of the preview app (the gateway of previews, docs/plan/53-chat-preview-release.md,
-# Р19): routes the exact Host of a preview to its upstream. Has the database, no git, no gitleaks.
+# Р19): routes the exact Host of a preview to its upstream; with the browser worker configured,
+# also relays the stream of a task's browser on 8091 (docs/plan/57-browser-tasks.md, Б12). Has
+# the database, no git, no gitleaks.
 # The user comes from compose (preview: 10009).
 #   docker build -f apps/preview/Dockerfile --target runtime .
 # No `# syntax=` line: Docker's built-in frontend already has cache mounts, and it pulls nothing
@@ -43,6 +45,6 @@ COPY --from=prod /repo /app
 ENV NODE_ENV=production
 WORKDIR /app/apps/preview
 USER 10001:10001
-EXPOSE 8090
+EXPOSE 8090 8091
 ENTRYPOINT ["node"]
 CMD ["dist/main.js"]

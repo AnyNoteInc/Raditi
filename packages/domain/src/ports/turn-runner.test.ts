@@ -21,6 +21,7 @@ import {
   snapshotHasCredential,
   snapshotSaveWroteNothing,
   turnEvidenceSchema,
+  turnPhases,
 } from './turn-runner.ts'
 
 describe('turn failure codes', () => {
@@ -120,6 +121,20 @@ describe('turn evidence', () => {
     const waiting = { ...evidence, phase: 'recovery', reason: 'awaiting_runner' } as const
     expect(turnEvidenceSchema.safeParse(waiting).success).toBe(true)
     expect(turnEvidenceSchema.safeParse({ ...waiting, reason: 'runner_away' }).success).toBe(false)
+  })
+
+  it('records the recovered checkpoint of a turn without a repository, without git (plan 57)', () => {
+    const recovered = {
+      fence: evidence.fence,
+      sessionId: evidence.sessionId,
+      turn: evidence.turn,
+      sequence: 9,
+      phase: 'checkpoint_recovered',
+      snapshotPrefix: 'sessions/session-1/turns/0001/',
+      recoveredFromEpoch: 2,
+    } as const
+    expect(turnEvidenceSchema.parse(recovered)).toEqual(recovered)
+    expect(turnPhases).toContain('checkpoint_recovered')
   })
 
   it('keeps only the fence of a lease grant', () => {

@@ -162,6 +162,9 @@ describe('API routes', () => {
     // avatar.ts reads the file after the session, the origin and the upload limit: 5 MiB.
     'profile/avatar': /uploadAvatar\(request, avatarDependencies\)/,
     'webhooks/yookassa': /handleYookassaWebhook\(request,/,
+    // attachment-upload.ts streams the file to the inbox after the session, the origin, the
+    // consents and the announced size, never more than announced: 20 MiB at most.
+    'attachments/[id]': /uploadAttachment\(request, await params, attachmentUploadDependencies\)/,
   }
 
   // Every way a route file exports a method that carries a body.

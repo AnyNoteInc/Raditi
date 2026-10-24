@@ -42,6 +42,7 @@ export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
     canRetry: false,
     workingSince: '2026-10-17T09:00:00.000Z',
     runningSince: null,
+    requirements: { repository: true, browser: false },
     ...patch,
   }
 }
@@ -52,6 +53,7 @@ export function feedAnswer(
   const { status, task, ...rest } = patch
   return {
     task: taskHead({ ...(status ? { status } : {}), ...task }),
+    browser: null,
     preview: null,
     candidate: null,
     release: null,
@@ -249,4 +251,104 @@ export const databaseView: NonNullable<CandidateView['databaseView']> = {
   ],
   truncated: true,
   oversize: false,
+}
+
+// A task in the browser (docs/plan/57-browser-tasks.md): the agent adds a news post on the site of
+// the kofeinya through its admin pages, and the client signs in there when asked.
+
+export const SESSION_ID = '0199a3f2-0000-7000-8000-0000000000e1'
+export const ATTACHMENT_ID = '0199a3f2-0000-7000-8000-0000000000f1'
+
+/** The head of a task in the browser with its open session, under the agent. */
+export function browserAnswer(
+  patch: Omit<NonNullable<Parameters<typeof feedAnswer>[0]>, 'browser'> & {
+    browser?: Partial<FeedBrowserHead> | null
+  } = {},
+): DialogFeed {
+  const { browser, task, ...rest } = patch
+  return feedAnswer({
+    status: 'running',
+    commands: verdicts(
+      Object.fromEntries(
+        chatCommandIds
+          .filter((id) => id !== 'cancel' && id !== 'undo' && id !== 'retry')
+          .map((id) => [id, 'not_allowed' as const]),
+      ),
+    ),
+    ...rest,
+    task: {
+      title: 'Новость о летней веранде',
+      turnNo: 1,
+      runningSince: '2026-10-17T09:01:00.000Z',
+      requirements: { repository: false, browser: true },
+      ...task,
+    },
+    browser:
+      browser === null
+        ? null
+        : {
+            sessionId: SESSION_ID,
+            status: 'ready',
+            controller: 'agent',
+            help: null,
+            closeReason: null,
+            ...browser,
+          },
+  })
+}
+
+export type FeedBrowserHead = NonNullable<DialogFeed['browser']>
+
+export function browserQuestionRow(
+  id: string,
+  turn: number,
+  reason: 'login' | 'captcha' | 'confirm' | 'other' | 'control' | 'unconfirmed' = 'login',
+  message?: string,
+): FeedRow {
+  return {
+    id,
+    at: nextAt(),
+    type: 'feed.question',
+    kind: 'browser',
+    turn,
+    reason,
+    ...(message === undefined ? {} : { message }),
+  }
+}
+
+export function resumeRow(id: string): FeedRow {
+  return {
+    id,
+    at: nextAt(),
+    type: 'feed.request',
+    kind: 'resume',
+    authorId: AUTHOR_ID,
+    requestId: REQUEST_ID,
+  }
+}
+
+/** The result of a task in the browser: one post the platform read on the site. */
+export function browserResultRow(id: string, turn: number): FeedRow {
+  return {
+    id,
+    at: nextAt(),
+    type: 'feed.result',
+    turn,
+    message: 'Опубликовал новость о летней веранде.',
+    site: 'changed',
+    next: 'done',
+    filesChanged: null,
+    changeType: 'content',
+    needsApproval: false,
+    risk: 'low',
+    objects: [
+      {
+        kind: 'post',
+        title: 'Открыли летнюю веранду',
+        status: 'published',
+        url: 'https://kroshka.example/novosti/veranda/',
+        editUrl: 'https://kroshka.example/wp-admin/post.php?post=128&action=edit',
+      },
+    ],
+  }
 }

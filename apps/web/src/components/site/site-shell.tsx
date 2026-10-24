@@ -5,7 +5,7 @@ import Drawer from '@mui/material/Drawer'
 import MuiLink from '@mui/material/Link'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useState, type ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { applicationSurface } from '@/components/application/application-surface'
@@ -20,7 +20,9 @@ import {
   hasSiteList,
   inSiteSetup,
   SITE_LIST_WIDTH,
+  paneWidthCss,
   SITE_PANE_WIDTH,
+  SITE_PANE_WIDTH_VAR,
   SITE_RAIL_WIDTH,
   siteEntryHref,
   siteItemOpen,
@@ -211,10 +213,13 @@ function SectionLink({
 export function SiteShell({
   user,
   site,
+  paneWidth = null,
   children,
 }: {
   user: ApplicationUser
   site: ShellSite
+  /** The viewer's width of the panel beside a dialog, from its cookie; null — the default. */
+  paneWidth?: number | null
   children: ReactNode
 }) {
   const pathname = usePathname()
@@ -276,7 +281,16 @@ export function SiteShell({
   }
 
   return (
-    <Box sx={{ ...applicationSurface, bgcolor: 'background.paper' }}>
+    <Box
+      data-site-shell=""
+      // The panel beside a dialog and the room the content leaves it read the same width.
+      style={
+        paneWidth === null
+          ? undefined
+          : ({ [SITE_PANE_WIDTH_VAR]: paneWidthCss(paneWidth) } as CSSProperties)
+      }
+      sx={{ ...applicationSurface, bgcolor: 'background.paper' }}
+    >
       <SkipLink target="site-content" left={{ xs: 8, sm: RAIL + 12 }} />
       {closedNote ? (
         <span id={CLOSED_NOTE} hidden>

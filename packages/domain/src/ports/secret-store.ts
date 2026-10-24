@@ -100,6 +100,14 @@ export interface SecretStore {
   /** Transit: per-workspace keys transit/keys/ws-<workspaceId> for sessions, logs and backups. */
   transitDataKey(key: string): Promise<{ plaintext: Uint8Array; ciphertext: string }>
   transitDecryptDataKey(key: string, ciphertext: string): Promise<Uint8Array>
+  /**
+   * Creates the Transit key of a workspace (`workspaceTransitKey`, aes256-gcm96) when it is
+   * missing; one that exists stays as it is — Transit takes a creation as an upsert, so a repeat
+   * neither rotates nor reconfigures it. Only `ws-<uuid>` names. The policy
+   * `workspace-provisioner` allows this and nothing else about the key: web calls it before it
+   * creates a task (docs/plan/57-browser-tasks.md, Б32).
+   */
+  transitEnsureKey(key: string): Promise<void>
 
   /** SSH CA: short-lived certificates for client servers (ssh/sign/deploy). */
   sshSign(role: string, publicKey: string, ttlSeconds: number): Promise<string>

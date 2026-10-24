@@ -1,4 +1,7 @@
 import {
+  attachmentRefusalText,
+  attachmentRefusals,
+  BROWSER_AGENT_NOTES_MAX_CHARS,
   chatCommandRefusals,
   chatCommandRefusalText,
   FEED_REQUEST_TEXT_LIMIT,
@@ -6,6 +9,7 @@ import {
   feedTooLongText,
   isDomainError,
   taskRefusalDetailsSchema,
+  type AttachmentRefusal,
   type ChatCommandRefusal,
   type DomainError,
   type TaskRefusalDetails,
@@ -63,6 +67,9 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   PROJECT_ALREADY_EXISTS: 'Сайт с таким адресом уже добавлен',
   PROJECT_LIMIT_REACHED: 'Вы добавили максимальное число сайтов. Напишите нам, если нужно больше',
   SITE_ADDRESS_NOT_PUBLIC: 'Укажите адрес сайта, который открывается из интернета',
+  // A site for the browser alone at an http address in production (docs/plan/57, Б33).
+  SITE_ADDRESS_NOT_SECURE:
+    'Без доступа к файлам агент работает только с сайтами, которые открываются по защищённому адресу. Укажите адрес, который начинается с https://',
   // The wizard «Добавить проект» and the screen «Настраиваем сайт» (docs/plan/39-site-connection-wizard.md).
   // Why a check of the files or the database failed is told by its reason, not by these.
   SITE_CONNECTION_UNAVAILABLE:
@@ -166,6 +173,9 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
     'Не удалось получить или сохранить файлы сайта. Попробуйте ещё раз немного позже',
   // A dialog, its preview and the release of its changes (docs/plan/53-chat-preview-release.md).
   CHAT_NOT_CONFIGURED: 'Диалоги сейчас недоступны. Попробуйте ещё раз немного позже',
+  // The Transit key of the workspace was not made before the task (docs/plan/57, Б32).
+  WORKSPACE_KEY_UNAVAILABLE:
+    'Не удалось начать задание из-за технического сбоя. Попробуйте ещё раз немного позже',
   TASK_NOT_ACCEPTED: 'Задания для этого сайта сейчас не принимаются',
   TASK_TEXT_EMPTY: 'Напишите, что нужно сделать на сайте',
   TASK_TEXT_TOO_LONG: feedTooLongText(FEED_REQUEST_TEXT_LIMIT),
@@ -202,6 +212,21 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   RELEASE_UNDO_VERSION_TAKEN:
     'Этот номер версии уже занят. Откройте «Отменить выпуск» ещё раз — мы предложим следующий',
   PREVIEW_NOT_READY: 'Предпросмотр ещё готовится. Откройте его через минуту',
+  // A task in the cloud browser and the files of messages (docs/plan/57-browser-tasks.md).
+  TASK_NOTHING_TO_RESUME:
+    'Продолжать нечего: задание не ждёт ваших действий. Обновите страницу, чтобы увидеть, что изменилось',
+  BROWSER_UNAVAILABLE: 'Работа в браузере сейчас недоступна. Попробуйте ещё раз немного позже',
+  ATTACHMENT_NOT_READY:
+    'Не все файлы готовы к отправке. Дождитесь, пока они загрузятся, или прикрепите их заново',
+  ATTACHMENT_REFUSED: 'Этот файл прикрепить нельзя',
+  ATTACHMENT_SENT: 'Этот файл уже отправлен в диалог, удалить его нельзя',
+  ATTACHMENTS_LIMIT:
+    'Слишком много файлов ждут отправки. Отправьте или удалите их и попробуйте снова',
+  PROJECT_NOTES_TOO_LONG: `Подсказка для агента слишком длинная — сократите её до ${BROWSER_AGENT_NOTES_MAX_CHARS} знаков`,
+  PROJECT_NOTES_HAS_SECRET:
+    'Похоже, в подсказке для агента есть пароль или ключ. Уберите его: в админку вы входите сами, в окне браузера',
+  PROJECT_NOTES_INVALID:
+    'В подсказке для агента есть символы, которые мы не можем сохранить. Уберите их и попробуйте снова',
   SITE_ENV_NOT_ALLOWED: 'Переменные сайта могут видеть и менять только владелец и администраторы',
   SITE_ENV_NAME_INVALID:
     'Имя переменной может состоять только из заглавных латинских букв, цифр и знака подчёркивания и должно начинаться с буквы. Исправьте его и сохраните снова',
@@ -386,7 +411,20 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
       return 'Это тестовая среда: здесь принимаются задания только для проверочных сайтов. Настоящие данные в неё не передаются'
     if (reason === 'class_unavailable')
       return 'Сейчас мы не можем повторить работу. Попробуйте ещё раз немного позже или напишите агенту, что сделать'
+    if (reason === 'browser_unavailable')
+      return 'Задания в браузере сейчас не принимаются. Попробуйте ещё раз немного позже'
+    if (reason === 'browser_insecure')
+      return 'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://'
+    if (reason === 'environment_unsupported')
+      return 'Такое задание пока не принимается. Выберите один способ работы: в браузере или через копию сайта'
     return MESSAGE_BY_DOMAIN_CODE.TASK_NOT_ACCEPTED!
+  },
+  // Why a file is not attached (attachment.start): `details.reason`, in the words of the domain.
+  ATTACHMENT_REFUSED: (details) => {
+    const reason = reasonOf(details)
+    return reason !== null && (attachmentRefusals as readonly string[]).includes(reason)
+      ? attachmentRefusalText[reason as AttachmentRefusal].replace(/\.$/, '')
+      : MESSAGE_BY_DOMAIN_CODE.ATTACHMENT_REFUSED!
   },
   // A command of the chat the server refused: the words `task.commands` shows for it.
   CHAT_COMMAND_UNAVAILABLE: (details) => {

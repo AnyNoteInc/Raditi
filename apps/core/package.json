@@ -34,6 +34,7 @@
     "@repo/agent-drivers": "workspace:*",
     "@repo/app-bootstrap": "workspace:*",
     "@repo/billing": "workspace:*",
+    "@repo/browser-link": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/git-providers": "workspace:*",

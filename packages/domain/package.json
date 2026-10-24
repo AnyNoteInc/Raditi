@@ -15,7 +15,14 @@
     "./release/db-objects": "./src/release/db-objects.ts",
     "./preview/hostname": "./src/preview/hostname.ts",
     "./release/env-vars": "./src/release/env-vars.ts",
-    "./release/release-state": "./src/release/release-state.ts"
+    "./release/release-state": "./src/release/release-state.ts",
+    "./attachments/rules": "./src/attachments/rules.ts",
+    "./attachments/labels": "./src/attachments/labels.ts",
+    "./browser/checkpoint": "./src/browser/checkpoint.ts",
+    "./browser/coordinates": "./src/browser/coordinates.ts",
+    "./browser/session": "./src/browser/session.ts",
+    "./browser/stream-codec": "./src/browser/stream-codec.ts",
+    "./browser/stream-messages": "./src/browser/stream-messages.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

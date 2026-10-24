@@ -1,7 +1,9 @@
 import type { Viewport } from 'next'
+import { cookies } from 'next/headers'
 import type { ReactNode } from 'react'
 
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
+import { parsePaneWidth, SITE_PANE_COOKIE } from '@/components/site/site-nav'
 import { SiteShell } from '@/components/site/site-shell'
 import { requireSession, UNAVAILABLE } from '@/lib/access'
 import { loadSite } from '@/lib/site'
@@ -24,9 +26,12 @@ export default async function SiteLayout({
   if (session === UNAVAILABLE) return <ServiceUnavailable />
   const site = await loadSite((await params).projectId)
   if (site === UNAVAILABLE) return <ServiceUnavailable />
+  // The width of the panel beside a dialog the viewer chose (docs/plan/57, Б29): drawn at once.
+  const paneWidth = parsePaneWidth((await cookies()).get(SITE_PANE_COOKIE)?.value)
   return (
     <SiteShell
       user={session.user}
+      paneWidth={paneWidth}
       site={{
         id: site.id,
         name: site.name,

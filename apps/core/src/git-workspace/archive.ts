@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { createZstdDecompress, zstdCompressSync } from 'node:zlib'
+import { createZstdDecompress } from 'node:zlib'
 
 import {
   isTooLarge,
@@ -12,7 +12,9 @@ import { extract } from 'tar-stream'
 
 import { validateUntrackedArchive } from '@repo/snapshots'
 
-export const emptyUntrackedArchive = (): Uint8Array => zstdCompressSync(Buffer.alloc(1024))
+// The builder lives in @repo/snapshots: a runner makes the same bytes without core's code.
+export { emptyUntrackedArchive } from '@repo/snapshots'
+
 export interface UntrackedFile {
   path: string
   mode: string

@@ -21,6 +21,7 @@ import {
 } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { releaseConfirmKey, type ChatContext } from '../services/chat/context.ts'
 import { resetSiteConnectionGate } from '../services/site-connection-gate.ts'
 import { siteIdForRequest } from '../services/site-request-id.ts'
 import {
@@ -727,6 +728,189 @@ describe('project.create, the last step of the wizard', () => {
   })
 })
 
+/** The dialogs of a process with the browser of the platform: what a site for the browser needs. */
+const withBrowser: ChatContext = {
+  appEnv: 'test',
+  preview: null,
+  browser: { streamUrl: 'ws://localhost:8091/v1/browser/stream' },
+  releaseConfirmKey: releaseConfirmKey('project create test secret'),
+  storage: () => {
+    throw new Error('no storage is expected')
+  },
+  secrets: () => {
+    throw new Error('no Vault is expected')
+  },
+}
+
+/** `project.create` of a site for tasks in the browser alone (docs/plan/57, Б8). */
+const browserSiteInput = (overrides: Record<string, unknown> = {}) => ({
+  requestKey: randomUUID(),
+  name: 'Мой сайт',
+  url: 'https://example.ru',
+  stack: 'wordpress' as const,
+  access: 'browser' as const,
+  ...overrides,
+})
+
+describe('project.create of a site for the browser alone', () => {
+  it('asks no server and no Vault: the claim, the lock, the site with its hints and its audit row', async () => {
+    const { prisma, order, tx } = fakeDb()
+    const fake = connections(order)
+    const input = browserSiteInput({ agentNotes: '  Вход по адресу /login, раздел «Новости»  ' })
+    const siteId = siteIdForRequest(user.id, input.requestKey)
+
+    const outcome = await createCaller({
+      ...context(prisma, fake.services),
+      chat: withBrowser,
+    }).project.create(input)
+
+    expect(outcome).toEqual({
+      outcome: 'created',
+      project: {
+        id: siteId,
+        name: 'Мой сайт',
+        url: 'https://example.ru',
+        host: 'example.ru',
+        stack: 'wordpress',
+        status: 'onboarding',
+        createdAt: now,
+      },
+    })
+    const steps = order.filter((step, index) => step !== order[index - 1])
+    expect(steps).toEqual(['claim', 'transaction', 'lock', 'site'])
+    expect(fake.sourceChecks).toEqual([])
+    expect(fake.databaseChecks).toEqual([])
+    expect(fake.lookup).not.toHaveBeenCalled()
+    expect(fake.secrets.writes).toEqual([])
+    expect(tx.site.create.mock.calls[0]![0].data).toMatchObject({
+      id: siteId,
+      status: 'onboarding',
+      agentNotes: 'Вход по адресу /login, раздел «Новости»',
+    })
+    expect(tx.credentialRef.create).not.toHaveBeenCalled()
+    expect(tx.siteCodeSource.create).not.toHaveBeenCalled()
+    expect(tx.siteDatabase.create).not.toHaveBeenCalled()
+    expect(tx.siteProvisioningStage.create).not.toHaveBeenCalled()
+    expect(tx.outboxEvent.createMany).not.toHaveBeenCalled()
+    // Kinds only: never the hints.
+    expect(tx.auditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        action: 'site.create',
+        targetId: siteId,
+        meta: { access: 'browser', source: null, database: null },
+      }),
+    })
+  })
+
+  it('stores no hints when nothing is written in them', async () => {
+    const { prisma, order, tx } = fakeDb()
+    await createCaller({
+      ...context(prisma, connections(order).services),
+      chat: withBrowser,
+    }).project.create(browserSiteInput({ agentNotes: ' \n ' }))
+    expect(tx.site.create.mock.calls[0]![0].data).toMatchObject({ agentNotes: null })
+  })
+
+  it.each([
+    [
+      'Пароль от админки: Qwerty123456',
+      'PROJECT_NOTES_HAS_SECRET',
+      'Похоже, в подсказке для агента есть пароль или ключ. Уберите его: в админку вы входите сами, в окне браузера',
+    ],
+    [
+      'я'.repeat(2001),
+      'PROJECT_NOTES_TOO_LONG',
+      'Подсказка для агента слишком длинная — сократите её до 2000 знаков',
+    ],
+    [
+      'Вход\u0007 по адресу /login',
+      'PROJECT_NOTES_INVALID',
+      'В подсказке для агента есть символы, которые мы не можем сохранить. Уберите их и попробуйте снова',
+    ],
+  ])('refuses hints before anything is read: %j', async (agentNotes, domainCode, message) => {
+    const { prisma, order, db } = fakeDb()
+    await expect(
+      createCaller({
+        ...context(prisma, connections(order).services),
+        chat: withBrowser,
+      }).project.create(browserSiteInput({ agentNotes })),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message, cause: { code: domainCode } })
+    expect(db.site.findUnique).not.toHaveBeenCalled()
+    expect(order).toEqual([])
+  })
+
+  it('refuses a site for the browser where the platform has none, before the claim', async () => {
+    const { prisma, order } = fakeDb()
+    for (const chat of [null, { ...withBrowser, browser: null }]) {
+      await expect(
+        createCaller({
+          ...context(prisma, connections(order).services),
+          chat,
+        }).project.create(browserSiteInput()),
+      ).rejects.toMatchObject({
+        code: 'SERVICE_UNAVAILABLE',
+        message: 'Работа в браузере сейчас недоступна. Попробуйте ещё раз немного позже',
+        cause: { code: 'BROWSER_UNAVAILABLE' },
+      })
+    }
+    expect(order).toEqual([])
+  })
+
+  it('refuses a request that gives an access to a site for the browser', async () => {
+    const { prisma, order } = fakeDb()
+    await expect(
+      createCaller({
+        ...context(prisma, connections(order).services),
+        chat: withBrowser,
+      }).project.create({ ...browserSiteInput(), source: sftpSource(), database: null } as never),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(order).toEqual([])
+  })
+
+  it('takes no address but https in production, before the claim: it would take no task (Б33)', async () => {
+    const production = { appEnv: 'production', address: '203.0.113.10' } as const
+    const { prisma, order, tx } = fakeDb()
+    await expect(
+      createCaller({
+        ...context(prisma, connections(order, production).services),
+        chat: withBrowser,
+      }).project.create(browserSiteInput({ url: 'http://example.ru' })),
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message:
+        'Без доступа к файлам агент работает только с сайтами, которые открываются по защищённому адресу. Укажите адрес, который начинается с https://',
+      cause: { code: 'SITE_ADDRESS_NOT_SECURE' },
+    })
+    expect(order).toEqual([])
+    expect(tx.site.create).not.toHaveBeenCalled()
+
+    // An https address in production, and any address outside it, still make the site.
+    for (const [options, url] of [
+      [production, 'https://example.ru'],
+      [{}, 'http://example.ru'],
+    ] as const) {
+      const allowed = fakeDb()
+      const outcome = await createCaller({
+        ...context(allowed.prisma, connections(allowed.order, options).services),
+        chat: withBrowser,
+      }).project.create(browserSiteInput({ url }))
+      expect(outcome).toMatchObject({ outcome: 'created', project: { url } })
+      expect(allowed.tx.site.create).toHaveBeenCalledOnce()
+    }
+  })
+
+  it('keeps the rules of the first step: a platform the wizard does not connect is refused', async () => {
+    const { prisma, order } = fakeDb()
+    await expect(
+      createCaller({
+        ...context(prisma, connections(order).services),
+        chat: withBrowser,
+      }).project.create(browserSiteInput({ stack: 'bitrix' })),
+    ).rejects.toMatchObject({ cause: { code: 'SITE_STACK_NOT_CONNECTABLE' } })
+    expect(order).toEqual([])
+  })
+})
+
 const databaseUrl = process.env.DATABASE_URL
 
 describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected site', () => {
@@ -786,6 +970,53 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
     ])
     return { site, refs, source, database, stages, outbox, audit, claims }
   }
+
+  it('writes a site for the browser alone: the site with its hints, the audit row and the gift', async () => {
+    const { owner, fake } = await account()
+    const caller = createCaller({ ...context(db, fake.services, owner), chat: withBrowser })
+    const input = browserSiteInput({
+      url: 'https://browser.example.ru',
+      agentNotes: 'Вход по адресу /login',
+    })
+    const siteId = siteIdForRequest(owner.id, input.requestKey)
+
+    const project = await createdProject(caller.project.create(input))
+
+    expect(project.id).toBe(siteId)
+    const rows = await rowsOf(siteId)
+    expect(rows.site).toMatchObject({
+      status: 'onboarding',
+      url: 'https://browser.example.ru',
+      agentNotes: 'Вход по адресу /login',
+    })
+    expect(rows).toMatchObject({
+      refs: [],
+      source: null,
+      database: null,
+      stages: [],
+      outbox: [],
+      claims: [],
+    })
+    expect(rows.audit.map((row) => row.meta)).toEqual([
+      { access: 'browser', source: null, database: null },
+    ])
+    expect(fake.sourceChecks).toEqual([])
+    expect(fake.secrets.writes).toEqual([])
+    const gift = await db.creditLedger.findMany({
+      where: { idempotencyKey: `user:${owner.id}:signup-gift` },
+      select: { amount: true },
+    })
+    expect(gift.map((row) => row.amount.toFixed(2))).toEqual(['35.00'])
+
+    // The same request again: the same site, nothing written.
+    await expect(caller.project.create(input)).resolves.toEqual({ outcome: 'created', project })
+    expect(await db.site.count({ where: { workspace: { createdById: owner.id } } })).toBe(1)
+    // Nothing to import: the page of the site opens, and offers the browser alone.
+    await expect(caller.project.get({ id: siteId })).resolves.toMatchObject({
+      setup: null,
+      capabilities: { repository: 'absent', browser: 'ready' },
+    })
+  })
 
   it('writes the site, its references, its source and database, the queued import and one event', async () => {
     const { owner, fake, caller } = await account()

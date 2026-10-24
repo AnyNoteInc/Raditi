@@ -5,11 +5,16 @@ import { billingFixtures } from '@repo/billing/testing'
 import {
   createPrismaClient,
   insertFeedEvent,
+  markBrowserSessionWrote,
+  openBrowserSession,
+  recordBrowserControl,
+  recordBrowserHelp,
   recordCandidate,
+  upsertBrowserCheckpoint,
   type CandidateRecordInput,
   type PrismaClient,
 } from '@repo/db'
-import type { CandidateFacts, TurnResult } from '@repo/domain'
+import type { BrowserVerifiedObject, CandidateFacts, TurnResult } from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -789,6 +794,300 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           next: 'failed',
         },
       ])
+    })
+  })
+
+  describe('of a task in the cloud browser (docs/plan/57-browser-tasks.md, Б23–Б25, Б28)', () => {
+    const editUrl = 'https://example.ru/wp-admin/post.php?post=12&action=edit'
+    const verified: BrowserVerifiedObject = {
+      kind: 'post',
+      objectId: '12',
+      title: 'Скидки в октябре',
+      status: 'publish',
+      url: 'https://example.ru/skidki/',
+      editUrl,
+      images: 2,
+      files: 1,
+      featuredImage: true,
+    }
+
+    /** A task in the browser in its first turn, its session open, the gift set aside for it. */
+    async function browserTask(status: 'running' | 'awaiting_user' = 'running') {
+      const { userId } = await fixtures.user()
+      const workspace = await db.$transaction((tx) =>
+        ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
+      )
+      const { taskId } = await fixtures.task(workspace.id, {
+        status,
+        turnNo: 1,
+        needsRepository: false,
+        needsBrowser: true,
+      })
+      await db.taskTurn.create({
+        data: { taskId, turnNo: 1, status: 'completed', driverId: sampleDriverId, image },
+      })
+      await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'first',
+            authorId: userId,
+            requestId: randomUUID(),
+            text: 'Добавьте новость о скидках',
+          },
+        },
+      })
+      await fixtures.reserve({
+        workspaceId: workspace.id,
+        taskId,
+        attempt: 1,
+        now: NOW,
+        expiresAt: new Date(NOW.getTime() + 3_600_000),
+      })
+      const session = await openBrowserSession(db, { taskId })
+      return { userId, workspaceId: workspace.id, taskId, turnNo: 1, sessionId: session.id }
+    }
+    const saved = (task: { taskId: string; sessionId: string }, read = true) =>
+      upsertBrowserCheckpoint(db, {
+        taskId: task.taskId,
+        sessionId: task.sessionId,
+        ref: { kind: 'post', objectId: '12', editUrl },
+        ...(read ? { state: 'verified' as const, verified } : { state: 'unverified' as const }),
+      })
+    const done = (patch: Partial<TurnResult> = {}): PassEnding => ({
+      kind: 'completed',
+      turn: 1,
+      result: result({
+        change_type: 'content',
+        client_message: 'Новость опубликована.',
+        files_changed: [],
+        ...patch,
+      }),
+    })
+    /** The settlement with a closer of browsers that records what it was asked. */
+    const ends = () => {
+      const close = vi.fn(async () => {})
+      return {
+        close,
+        settlement: new PassSettlement({
+          db,
+          candidates: null,
+          browser: { close },
+          logger: quiet,
+          now: () => NOW,
+        }),
+      }
+    }
+
+    it('ends done on an object the site confirmed: its facts in the result, charged, browser closed', async () => {
+      const task = await browserTask()
+      await saved(task)
+      await markBrowserSessionWrote(db, { sessionId: task.sessionId })
+      const { settlement: browser, close } = ends()
+
+      expect(await browser.settle(ref(task), done())).toBe('moved')
+
+      expect(await status(task.taskId)).toBe('done')
+      expect(await feed(task.taskId)).toEqual([
+        [
+          'feed.result',
+          {
+            v: 1,
+            turn: 1,
+            message: 'Новость опубликована.',
+            site: 'changed',
+            next: 'done',
+            filesChanged: 0,
+            changeType: 'content',
+            needsApproval: false,
+            risk: 'low',
+            objects: [
+              {
+                kind: 'post',
+                title: 'Скидки в октябре',
+                status: 'published',
+                url: 'https://example.ru/skidki/',
+                editUrl,
+              },
+            ],
+          },
+        ],
+      ])
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+      expect(close).toHaveBeenCalledExactlyOnceWith(task.taskId, 'task_done')
+    })
+
+    it('asks the client to act when the agent asked for help, in the same attempt', async () => {
+      const task = await browserTask()
+      await saved(task)
+      await recordBrowserHelp(db, {
+        sessionId: task.sessionId,
+        reason: 'login',
+        message: 'Войдите, пожалуйста, в админку сайта.',
+      })
+      const { settlement: browser, close } = ends()
+
+      expect(await browser.settle(ref(task), done())).toBe('moved')
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect(await feed(task.taskId)).toEqual([
+        [
+          'feed.question',
+          {
+            v: 1,
+            kind: 'browser',
+            turn: 1,
+            reason: 'login',
+            message: 'Войдите, пожалуйста, в админку сайта.',
+          },
+        ],
+      ])
+      // The reserve waits with the task; the browser lives on for the client.
+      for (const hold of await holds(task.taskId)) {
+        expect(hold.status).toBe('active')
+        expect(hold.expiresAt.getTime()).toBe(NOW.getTime() + 72 * 3_600_000)
+      }
+      expect(close).not.toHaveBeenCalled()
+    })
+
+    it('waits for the client who holds the browser, and for an answer to the agent', async () => {
+      const held = await browserTask()
+      await recordBrowserControl(db, {
+        sessionId: held.sessionId,
+        controller: 'user',
+        controlEpoch: 1,
+      })
+      const asked = await browserTask()
+      const { settlement: browser } = ends()
+
+      await browser.settle(ref(held), done())
+      await browser.settle(ref(asked), done({ questions: ['Опубликовать сразу или черновиком?'] }))
+
+      expect(await feed(held.taskId)).toEqual([
+        [
+          'feed.question',
+          { v: 1, kind: 'browser', turn: 1, reason: 'control', message: 'Новость опубликована.' },
+        ],
+      ])
+      expect(
+        (await feed(asked.taskId)).map(([type, payload]) => [
+          type,
+          (payload as { kind: string }).kind,
+        ]),
+      ).toEqual([['feed.question', 'agent']])
+      expect(await status(held.taskId)).toBe('awaiting_user')
+      expect(await status(asked.taskId)).toBe('awaiting_user')
+    })
+
+    it('asks the client to look when nothing the task saved is confirmed on the site', async () => {
+      const task = await browserTask()
+      await saved(task, false)
+      const { settlement: browser, close } = ends()
+
+      await browser.settle(ref(task), done())
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect(await feed(task.taskId)).toEqual([
+        [
+          'feed.question',
+          {
+            v: 1,
+            kind: 'browser',
+            turn: 1,
+            reason: 'unconfirmed',
+            message: 'Новость опубликована.',
+          },
+        ],
+      ])
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'active')).toBe(true)
+      expect(close).not.toHaveBeenCalled()
+    })
+
+    it('shows the client why the agent saved nothing, under the question of the platform', async () => {
+      // The page refused a setting: the guide tells the agent to say so, not to look for a way
+      // around it — and its words are all the client has to learn why.
+      const task = await browserTask()
+      const refused =
+        'Менять настройки сайта мне нельзя: это раздел, который платформа закрывает. Поменяйте его сами в браузере задачи.'
+      const { settlement: browser } = ends()
+
+      await browser.settle(ref(task), done({ change_type: 'none', client_message: refused }))
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect(await feed(task.taskId)).toEqual([
+        [
+          'feed.question',
+          { v: 1, kind: 'browser', turn: 1, reason: 'unconfirmed', message: refused },
+        ],
+      ])
+    })
+
+    it('fails with what the site holds, tells the client to check it and closes the browser', async () => {
+      const task = await browserTask()
+      await saved(task, false)
+      await markBrowserSessionWrote(db, { sessionId: task.sessionId })
+      const { settlement: browser, close } = ends()
+
+      await browser.settle(ref(task), { kind: 'failed', turn: 1, journalReason: 'run_failed' })
+
+      expect(await status(task.taskId)).toBe('failed')
+      expect(await feed(task.taskId)).toEqual([
+        [
+          'feed.failure',
+          {
+            v: 1,
+            turn: 1,
+            code: 'technical',
+            site: 'check',
+            credits: 'returned',
+            next: 'failed',
+            objects: [{ kind: 'post', title: null, status: 'unconfirmed', editUrl }],
+          },
+        ],
+      ])
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
+      expect(close).toHaveBeenCalledExactlyOnceWith(task.taskId, 'task_failed')
+    })
+
+    it('cancels a running and a waiting task with what the site holds; nothing is deleted', async () => {
+      const running = await browserTask()
+      await saved(running)
+      const waiting = await browserTask('awaiting_user')
+      await saved(waiting)
+      await markBrowserSessionWrote(db, { sessionId: waiting.sessionId })
+      await cancelPress(waiting)
+      const { settlement: browser, close } = ends()
+
+      await browser.settle(ref(running), { kind: 'cancelled', turn: 1 })
+      expect(await browser.cancelWaiting(waiting.taskId)).toBe('moved')
+
+      for (const task of [running, waiting]) {
+        expect(await status(task.taskId)).toBe('cancelled')
+        const [row] = await feed(task.taskId)
+        expect(row).toEqual([
+          'feed.cancelled',
+          expect.objectContaining({
+            by: 'customer',
+            credits: 'returned',
+            objects: [expect.objectContaining({ status: 'published', title: 'Скидки в октябре' })],
+          }),
+        ])
+        expect(close).toHaveBeenCalledWith(task.taskId, 'task_cancelled')
+      }
+      expect((await feed(running.taskId))[0]![1]).toMatchObject({ site: 'unchanged' })
+      expect((await feed(waiting.taskId))[0]![1]).toMatchObject({ site: 'check' })
+      expect(await db.browserCheckpoint.count({ where: { taskId: running.taskId } })).toBe(1)
+    })
+
+    it('fails a completed pass of a task with a repository that names no head', async () => {
+      const task = await dialog()
+
+      await settlement().settle(ref(task), { kind: 'completed', turn: 1, result: result() })
+
+      expect(await status(task.taskId)).toBe('failed')
+      expect((await feed(task.taskId))[0]![1]).toMatchObject({ code: 'technical' })
     })
   })
 })

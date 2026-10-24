@@ -53,4 +53,41 @@ describe('AppModule', () => {
     expect(app.select(GatewayModule).get(PreviewGatewayServer, { strict: true })).toBe(gateway)
     await app.close()
   })
+
+  it('composes the stream of a task browser only with the worker, and closes it before the database', async () => {
+    const { BrowserStreamModule } = await import('./browser-stream/browser-stream.module.ts')
+    const { BrowserStreamListener } = await import('./browser-stream/browser-stream.ts')
+    const imports = (config: ReturnType<typeof testPreviewConfig>) =>
+      AppModule.forRoot(config).imports ?? []
+    expect(imports(testPreviewConfig())).not.toContain(BrowserStreamModule)
+    // No module injects the listener either: startPreview takes it with app.get.
+    expect(Reflect.getMetadata('exports', BrowserStreamModule)).toBeUndefined()
+
+    const config = {
+      ...testPreviewConfig(),
+      browserStream: {
+        port: 0,
+        host: '127.0.0.1',
+        workerUrl: 'http://127.0.0.1:8086',
+        workerToken: 'worker-token-0123456789abcdef0123456789abcdef',
+      },
+    }
+    expect(imports(config)).toContain(BrowserStreamModule)
+    events.length = 0
+    const app = await NestFactory.createApplicationContext(AppModule.forRoot(config), {
+      logger: false,
+    })
+    const listener = app.get(BrowserStreamListener)
+    await listener.listen(0, '127.0.0.1')
+    const close = listener.close.bind(listener)
+    vi.spyOn(listener, 'close').mockImplementation(async () => {
+      await close()
+      events.push('stream')
+    })
+
+    await app.close()
+
+    expect(events).toEqual(['stream', 'database'])
+    expect(listener.address()).toBeNull()
+  })
 })

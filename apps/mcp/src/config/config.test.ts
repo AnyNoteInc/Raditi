@@ -217,6 +217,89 @@ describe('the content profile of the mcp role', () => {
   })
 })
 
+describe('the browser worker of the mcp role (plan 57, Б20)', () => {
+  const token = 'w'.repeat(48)
+  const worker = { BROWSER_WORKER_URL: 'http://127.0.0.1:8086', BROWSER_WORKER_TOKEN: token }
+
+  it('has none by default, the .env.example setup included', () => {
+    expect(loadMcpConfig(devEnv).browserWorker).toBeNull()
+    expect(loadMcpConfig(exampleEnv).browserWorker).toBeNull()
+    expect(
+      loadMcpConfig({ ...devEnv, BROWSER_WORKER_URL: '', BROWSER_WORKER_TOKEN: '' }).browserWorker,
+    ).toBeNull()
+  })
+
+  it('reads the worker and its token together, outside production and in it', () => {
+    expect(loadMcpConfig({ ...devEnv, ...worker }).browserWorker).toEqual({
+      url: 'http://127.0.0.1:8086',
+      token,
+    })
+    // A product path, not a profile: production takes it, without any S3 setting.
+    expect(
+      loadMcpConfig(
+        prodEnv({ BROWSER_WORKER_URL: 'http://10.0.0.7:8086/', BROWSER_WORKER_TOKEN: token }),
+      ),
+    ).toMatchObject({ browserWorker: { url: 'http://10.0.0.7:8086', token }, storage: null })
+    expect(
+      loadMcpConfig(
+        prodEnv({
+          BROWSER_WORKER_URL: 'https://browser.raditi.internal',
+          BROWSER_WORKER_TOKEN: token,
+        }),
+      ).browserWorker,
+    ).toEqual({ url: 'https://browser.raditi.internal', token })
+    expect(problemsOf({ ...devEnv, BROWSER_WORKER_URL: worker.BROWSER_WORKER_URL })).toEqual([
+      'BROWSER_WORKER_TOKEN: required with BROWSER_WORKER_URL',
+    ])
+    // The token alone is the worker's in the shared .env: mcp has no worker then.
+    expect(loadMcpConfig(prodEnv({ BROWSER_WORKER_TOKEN: token })).browserWorker).toBeNull()
+  })
+
+  it('sends the token over plain http in production only to a private or loopback address', () => {
+    for (const url of ['http://browser:8086', 'http://203.0.113.7:8086'])
+      expect(problemsOf(prodEnv({ BROWSER_WORKER_URL: url, BROWSER_WORKER_TOKEN: token }))).toEqual(
+        [
+          'BROWSER_WORKER_URL: plain http only to a private or loopback IP address in production (spec §19)',
+        ],
+      )
+    expect(
+      loadMcpConfig({
+        ...devEnv,
+        BROWSER_WORKER_URL: 'http://browser:8086',
+        BROWSER_WORKER_TOKEN: token,
+      }).browserWorker,
+    ).toEqual({ url: 'http://browser:8086', token })
+  })
+
+  it('refuses an address that is not an origin and a weak token, never printing either', () => {
+    for (const url of [
+      'ftp://127.0.0.1:8086',
+      'http://user:pass@127.0.0.1:8086',
+      'http://127.0.0.1:8086/v1',
+      'http://127.0.0.1:8086?x=1',
+      'not a url',
+    ]) {
+      const problems = problemsOf({ ...devEnv, ...worker, BROWSER_WORKER_URL: url })
+      expect(problems).toEqual([
+        'BROWSER_WORKER_URL: must be an http(s) origin without credentials or a path',
+      ])
+      expect(problems.join('\n')).not.toContain('127.0.0.1')
+    }
+    for (const weak of [
+      'short',
+      `${'w'.repeat(40)} space`,
+      `${'w'.repeat(40)}\u00e9`,
+      'w'.repeat(4097),
+    ]) {
+      const problems = problemsOf({ ...devEnv, ...worker, BROWSER_WORKER_TOKEN: weak })
+      expect(problems).toEqual([
+        'BROWSER_WORKER_TOKEN: must be 32 to 4096 visible ASCII characters without spaces',
+      ])
+      expect(problems.join('\n')).not.toContain(weak)
+    }
+  })
+})
+
 describe('loadMcpConfig — production', () => {
   it('does not ask the MCP gateway for a metrics token: it serves no /metrics', () => {
     expect(loadMcpConfig(prodEnv({ METRICS_TOKEN: '' })).port).toBe(8082)

@@ -43,6 +43,10 @@ export function memoryStorage() {
       })()
     }),
     exists: vi.fn(async (_bucket, key) => objects.has(key)),
+    stat: vi.fn(async (_bucket, key) => {
+      const bytes = objects.get(key)
+      return bytes ? { sizeBytes: bytes.byteLength } : null
+    }),
     delete: vi.fn(async (_bucket, key) => {
       objects.delete(key)
     }),

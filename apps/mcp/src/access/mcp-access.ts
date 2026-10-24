@@ -5,6 +5,7 @@ import {
   DomainError,
   previewStatuses,
   siteStacks,
+  taskRequirementsSchema,
   terminalTaskStatuses,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -54,6 +55,12 @@ export const mcpAccessSchema = z.strictObject({
   }),
   /** null — the dialog has no preview row (previews are not configured where it was made). */
   preview: mcpPreviewSchema.nullable(),
+  /**
+   * What the task needs (`tasks.needs_repository`, `tasks.needs_browser`, docs/plan/57-browser-
+   * tasks.md, Б2): the `web` tools go to a task that needs a browser. Absent — a scope made
+   * before the field, which is a repository task (`requirementsOf`).
+   */
+  requirements: taskRequirementsSchema.optional(),
 })
 export type McpAccess = z.infer<typeof mcpAccessSchema>
 
@@ -84,7 +91,16 @@ export const MCP_ACCESS = Symbol('MCP_ACCESS')
 /** Never issued (tokens are 32 random bytes): health runs the real admission query with it. */
 export const MCP_ACCESS_PROBE_TOKEN = `mcp_${'0'.repeat(64)}`
 
-/** MCP needs only the paired hash, not Vault turns/ or any subscription credential. */
+/**
+ * MCP needs only the paired hash, not Vault turns/ or any subscription credential.
+ *
+ * The site of an admitted turn is active, or — for a task that needs the browser alone — still
+ * being connected: such a task works in the site's own admin pages and never touches its code or
+ * database (docs/plan/57-browser-tasks.md, Б9). Paused, disconnected and archived sites stay
+ * closed to every task. Every other admission of this role repeats the condition it needs:
+ * the `web` tools this one, content and the preview's browser `active` alone (they are offered
+ * to repository tasks only, `mcpToolFamiliesOf`).
+ */
 export class PostgresMcpAccess implements McpAccessStore {
   constructor(private readonly prisma: Pick<PrismaClient, '$queryRaw'>) {}
 
@@ -95,6 +111,7 @@ export class PostgresMcpAccess implements McpAccessStore {
       SELECT k.id AS "keyId", t.id AS "taskId", t.workspace_id AS "workspaceId",
         s.id AS "siteId", k.session_id AS "sessionId", k.turn_no AS turn,
         k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, s.stack::text AS stack, s.url,
+        t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
         p.id AS "previewId", p.status::text AS "previewStatus",
         p.db_mode = 'copy' AS "previewDatabase", p.hostname AS "previewHostname",
         CASE WHEN jsonb_typeof(p.runtime->'db'->'kinds') = 'array'
@@ -111,7 +128,9 @@ export class PostgresMcpAccess implements McpAccessStore {
         AND k.valid_until > clock_timestamp() AND a.deadline_at > clock_timestamp()
         AND a.finished_at IS NULL AND a.outcome IS NULL
         AND l.operation = 'turn' AND NOT l.held_for_operator AND l.expires_at > clock_timestamp()
-        AND s.status = 'active' AND t.content_retired_at IS NULL
+        AND (s.status = 'active' OR (t.needs_browser AND NOT t.needs_repository
+          AND s.status = 'onboarding'))
+        AND t.content_retired_at IS NULL
         AND t.status <> ALL(${[...terminalTaskStatuses]}::"TaskStatus"[])
     `
     if (rows.length === 0) return null
@@ -124,13 +143,25 @@ export class PostgresMcpAccess implements McpAccessStore {
   }
 }
 
-/** The admission row with its preview columns folded into one object, or null without one. */
+/**
+ * The admission row with its preview columns folded into one object, or null without one, and
+ * the task's needs into its requirements.
+ */
 function accessOf(row: unknown): unknown {
   if (!row || typeof row !== 'object') return row
-  const { previewId, previewStatus, previewDatabase, previewHostname, previewDbKinds, ...access } =
-    row as Record<string, unknown>
+  const {
+    previewId,
+    previewStatus,
+    previewDatabase,
+    previewHostname,
+    previewDbKinds,
+    needsRepository,
+    needsBrowser,
+    ...access
+  } = row as Record<string, unknown>
   return {
     ...access,
+    requirements: { repository: needsRepository, browser: needsBrowser },
     preview:
       previewId === null
         ? null

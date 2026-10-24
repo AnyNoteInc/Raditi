@@ -283,4 +283,17 @@ describe('bitrixAdapter', () => {
       expect(call).toThrow('(stage 3)')
     }
   })
+
+  it('leaves tasks in the browser to stage 3', () => {
+    const ref = { kind: 'post', objectId: '1', editUrl: 'https://shop.example.ru/' } as const
+    for (const call of [
+      () => bitrixAdapter.browserTaskPolicy({ url: site.url }),
+      () => bitrixAdapter.browserCheckpointOf(`${site.url}/bitrix/admin/`),
+      () => bitrixAdapter.browserCommitAction('button', 'Сохранить'),
+      () => bitrixAdapter.browserVerification(ref),
+      () => bitrixAdapter.browserGuide(),
+    ]) {
+      expect(call).toThrow(expect.objectContaining({ code: 'NOT_IMPLEMENTED' }))
+    }
+  })
 })

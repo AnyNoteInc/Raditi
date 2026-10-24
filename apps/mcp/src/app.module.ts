@@ -12,6 +12,7 @@ import { assertMcpNestToolAuthorization } from './server/mcp-runtime.ts'
 import { ServerModule } from './server/server.module.ts'
 import { SiteInfoModule } from './site-info/site-info.module.ts'
 import { StorageModule } from './storage/storage.module.ts'
+import { WebModule } from './web/web.module.ts'
 
 /**
  * A seam for the stands, never for the regular role: wraps the gateway resolvers of the content
@@ -30,13 +31,18 @@ export interface McpContentTesting extends ContentTesting {
  *
  * Every composition serves site_info; the content profile (MCP_CONTENT_PROFILE, ContentModule)
  * adds published content and the browser profile (MCP_BROWSER_PROFILE, BrowserModule) the
- * agent's browser on the preview, both over the one artifacts bucket (StorageModule). The
- * modules of the tools come in this order — site_info, content, browser — and so do their tools.
+ * agent's browser on the preview, both over the one artifacts bucket (StorageModule).
+ *
+ * The cloud browser of a browser task (web_*, WebModule, docs/plan/57-browser-tasks.md, Б20) is
+ * no profile: a product path wherever the browser worker is configured (BROWSER_WORKER_URL),
+ * production too. The role passes the agent's actions to the worker; the worker holds the
+ * browser. The modules of the tools come in this order — site_info, content, browser, web — and
+ * so do their tools.
  */
 @Module({})
 export class AppModule {
   static forRoot(config: McpConfig, testing?: McpContentTesting): DynamicModule {
-    const { content, siteContent, browser, previews } = mcpProfilesOf(config)
+    const { content, siteContent, browser, previews, worker } = mcpProfilesOf(config)
     // Customer onboarding and the gate for real data are not in place (spec §20). loadConfig
     // refuses the settings in production; this refuses a composition that got past it.
     if ((content || testing) && isProduction(config.appEnv))
@@ -81,6 +87,7 @@ export class AppModule {
             ]
           : []),
         ...(browser ? [BrowserModule.forRoot({ browserFactory: testing?.browserFactory })] : []),
+        ...(worker ? [WebModule] : []),
       ],
     }
   }

@@ -1,5 +1,6 @@
 import {
   appEnvSchema,
+  BROWSER_STREAM_PATH,
   envVar,
   isProduction,
   parseEnv,
@@ -33,7 +34,30 @@ export interface WebEnv {
    * The same variables as core and the `preview` role read.
    */
   preview: PreviewAddress | null
+  /**
+   * BROWSER_STREAM_PUBLIC_URL (docs/plan/57-browser-tasks.md, Б12): where the cabinet opens the
+   * stream of a task's browser — the gateway of the `preview` role, `ws(s)://host[:port]/path`.
+   * null — the platform has no browser here: no site offers tasks in it. `wss://` in production.
+   */
+  browserStreamUrl: string | null
 }
+
+// The address of the stream gateway: a WebSocket URL with nothing a browser would send elsewhere —
+// no credentials, no query, no fragment — and the one path the gateway opens a stream on.
+const browserStreamUrl = z
+  .url({ protocol: /^wss?$/, error: 'must be a ws:// or wss:// URL' })
+  // Checks after a failed one still run: what is not a URL is refused above.
+  .refine((value) => {
+    const url = URL.parse(value)
+    return (
+      url === null ||
+      (url.username === '' && url.password === '' && url.search === '' && url.hash === '')
+    )
+  }, 'must not carry credentials, a query or a fragment')
+  .refine((value) => {
+    const url = URL.parse(value)
+    return url === null || url.pathname === BROWSER_STREAM_PATH
+  }, `must have the path ${BROWSER_STREAM_PATH} of the stream gateway`)
 
 const webEnvSchema = z
   .object({
@@ -54,6 +78,7 @@ const webEnvSchema = z
     // The bounds and the default of the core role (apps/core/src/config/config.ts).
     BILLING_PAST_DUE_DAYS: envVar(z.coerce.number().int().min(1).max(90).default(7)),
     ...previewAddressEnvShape,
+    BROWSER_STREAM_PUBLIC_URL: envVar(browserStreamUrl.optional()),
     // Read for the check of the preview domain only.
     GITEA_URL: envVar(z.string().optional()),
   })
@@ -63,6 +88,17 @@ const webEnvSchema = z
       ctx.addIssue({ code: 'custom', path: ['METRICS_TOKEN'], message: tokenProblem })
     if (isProduction(env.APP_ENV) && !env.APP_URL.startsWith('https://')) {
       ctx.addIssue({ code: 'custom', path: ['APP_URL'], message: 'must use https in production' })
+    }
+    if (
+      isProduction(env.APP_ENV) &&
+      env.BROWSER_STREAM_PUBLIC_URL !== undefined &&
+      !env.BROWSER_STREAM_PUBLIC_URL.startsWith('wss://')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['BROWSER_STREAM_PUBLIC_URL'],
+        message: 'must use wss in production',
+      })
     }
     // Production refuses http previews and a base under the domain of the cabinet or Gitea (Р19).
     const problems = previewAddressProblems(
@@ -90,5 +126,6 @@ export function webEnvFromEnv(env: Env): WebEnv {
     redisUrl: e.REDIS_URL,
     pastDueDays: e.BILLING_PAST_DUE_DAYS,
     preview: previewAddressFromEnv(e, e.APP_ENV),
+    browserStreamUrl: e.BROWSER_STREAM_PUBLIC_URL ?? null,
   }
 }

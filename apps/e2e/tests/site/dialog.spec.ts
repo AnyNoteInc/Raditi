@@ -4,7 +4,7 @@ import type { Locator, Page } from '@playwright/test'
 import { baseURL } from '../../fixtures/billing-stand.ts'
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import { addConnectedSite, hideDevIndicator } from './site.ts'
+import { addBrowserTask, addConnectedSite, hideDevIndicator } from './site.ts'
 
 // A dialog in a real browser (docs/plan/53-chat-preview-release.md, R9): the first words start
 // it on a connected site, the screen moves to it, and it waits in the queue — no core works on
@@ -206,4 +206,117 @@ test('a dialog on a phone: the switch of the dialog and its changes', async ({
   await expectNoSidewaysScroll(page)
   expect(await violations(page)).toEqual([])
   expect(await lowTargets(pane(page))).toEqual([])
+})
+
+// A task in the browser (docs/plan/57-browser-tasks.md, Б29): the browser stands where the panel
+// of the changes stands, with its toolbar, its edge and its full-screen mode, and behind the
+// switch «Диалог | Браузер» on a phone. No worker runs in this stand: the picture is covered by
+// what the panel says instead — the stream itself is proven by `pnpm verify:browser-task`.
+
+const browserPane = (page: Page) => page.getByRole('complementary', { name: 'Браузер задачи' })
+const browserBar = (page: Page) => page.getByRole('toolbar', { name: 'Управление браузером' })
+const picture = (page: Page) => page.getByRole('img', { name: 'Страница сайта в браузере задачи' })
+
+test('a task in the browser: its window on a desktop', async ({ page, context, signedInUser }) => {
+  const { siteId, taskId, title } = await addBrowserTask(signedInUser.id)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+
+  await test.step('the question to sign in, the browser beside the dialog', async () => {
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+    // The head of the dialog is a header inside `main`, not a landmark: found by its heading.
+    const head = page.locator('header', { has: page.getByRole('heading', { level: 1 }) })
+    await expect(head).toContainText('В браузере')
+    await expect(feed(page).getByRole('heading', { name: 'Нужно войти на сайт' })).toBeVisible()
+    await expect(browserPane(page)).toBeVisible()
+    await expect(pane(page)).toHaveCount(0)
+    await expect(browserBar(page)).toBeVisible()
+    await expect(browserBar(page).getByRole('status')).not.toHaveText('')
+    await expect(picture(page)).toHaveCount(1)
+    // Without a worker the picture is covered by what the panel says instead.
+    await expect(
+      browserPane(page).getByText(/Не удалось показать браузер|Подключаемся к браузеру/),
+    ).toBeVisible()
+    await expect(page.getByRole('separator', { name: 'Ширина панели браузера' })).toBeVisible()
+    const paneBox = await box(browserPane(page))
+    const fieldBox = await box(message(page))
+    expect(paneBox.x + paneBox.width).toBeLessThanOrEqual(1280)
+    expect(fieldBox.x + fieldBox.width).toBeLessThanOrEqual(paneBox.x)
+    // The words of the client answer the question too.
+    await expect(message(page)).toBeEnabled()
+    await expectNoSidewaysScroll(page)
+    expect(await lowTargets(page.getByRole('main'))).toEqual([])
+  })
+
+  for (const scheme of ['light', 'dark'] as const) {
+    await test.step(`the rules of axe in the ${scheme} scheme`, async () => {
+      await context.addCookies([{ name: 'theme', value: scheme, url: baseURL }])
+      await page.reload()
+      await expect(browserBar(page)).toBeVisible()
+      expect(await violations(page)).toEqual([])
+    })
+  }
+
+  await test.step('the edge of the panel moves with the arrows and is kept', async () => {
+    const edge = page.getByRole('separator', { name: 'Ширина панели браузера' })
+    const before = (await box(browserPane(page))).width
+    await edge.focus()
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    await expect.poll(async () => (await box(browserPane(page))).width).toBeGreaterThan(before)
+    const wider = (await box(browserPane(page))).width
+    await page.reload()
+    await expect(browserBar(page)).toBeVisible()
+    expect(Math.abs((await box(browserPane(page))).width - wider)).toBeLessThanOrEqual(1)
+    const fieldBox = await box(message(page))
+    expect(fieldBox.x + fieldBox.width).toBeLessThanOrEqual((await box(browserPane(page))).x)
+  })
+
+  await test.step('the whole area for the browser, and Esc gives it back', async () => {
+    await browserBar(page).getByRole('button', { name: 'Во весь экран' }).click()
+    const full = await box(browserPane(page))
+    expect(full.x).toBeLessThanOrEqual(89)
+    expect(full.x + full.width).toBeGreaterThanOrEqual(1279)
+    // The rail stays beside it.
+    await expect(page.getByRole('navigation', { name: 'Разделы сайта' }).first()).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(browserBar(page).getByRole('button', { name: 'Во весь экран' })).toBeVisible()
+    expect((await box(browserPane(page))).x).toBeGreaterThan(400)
+  })
+
+  await test.step('the window of commands has only «Отменить диалог»', async () => {
+    await page.getByRole('button', { name: 'Команды' }).click()
+    await expect(commands(page).getByRole('option')).toHaveCount(1)
+    await expect(commands(page).getByRole('option', { name: /Отменить диалог/ })).toBeVisible()
+    await page.keyboard.press('Escape')
+  })
+})
+
+test('a task in the browser on a phone: the switch «Диалог | Браузер»', async ({
+  page,
+  signedInUser,
+}) => {
+  const { siteId, taskId } = await addBrowserTask(signedInUser.id)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+
+  const views = page.getByRole('tablist', { name: 'Что показать' })
+  await expect(views.getByRole('tab')).toHaveCount(2)
+  await expect(views.getByRole('tab', { name: 'Диалог' })).toHaveAttribute('aria-selected', 'true')
+  await expect(feed(page).getByRole('heading', { name: 'Нужно войти на сайт' })).toBeVisible()
+  await expect(browserPane(page)).toBeHidden()
+  await expectNoSidewaysScroll(page)
+  expect(await violations(page)).toEqual([])
+  expect(await lowTargets(page.getByRole('main'))).toEqual([])
+
+  await views.getByRole('tab', { name: /^Браузер/ }).click()
+  await expect(browserPane(page)).toBeVisible()
+  await expect(browserBar(page)).toBeVisible()
+  await expect(feed(page)).toBeHidden()
+  await expect(browserPane(page).getByRole('button', { name: 'Остановить' })).toBeVisible()
+  await expectNoSidewaysScroll(page)
+  expect(await violations(page)).toEqual([])
+  expect(await lowTargets(browserPane(page))).toEqual([])
 })

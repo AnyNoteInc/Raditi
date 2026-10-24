@@ -32,6 +32,8 @@ export const paneText = Object.freeze({
   retry: 'Повторить',
   /** A candidate that the site moved on under. */
   stale: 'Сайт изменился после того, как эти изменения были готовы. Обновите рабочую копию.',
+  /** The edge of the panel that is dragged (docs/plan/57-browser-tasks.md, Б29). */
+  separator: 'Ширина панели изменений',
 })
 
 export const filesText = Object.freeze({
@@ -302,6 +304,8 @@ export const composerText = Object.freeze({
   notConnected: `${feedRetryText.siteNotConnected}.`,
   /** The field while a release is installed on the site. */
   releasing: 'Написать можно будет, когда установка закончится.',
+  /** The field after «Остановить», until core has ended the task. */
+  stopping: 'Останавливаем задачу…',
   chatLater: 'Режим «Чат» появится позже.',
   modes: 'Режим диалога',
   /** A command typed on «Новый диалог»: there is no dialog to run it in yet. */
@@ -332,4 +336,150 @@ export const dialogText = Object.freeze({
   /** The steps of a finished turn, unfolded. */
   stages: 'Этапы работы',
   mode: 'Режим',
+})
+
+/** Files attached to a message (docs/plan/57-browser-tasks.md, Б26). */
+export const attachmentText = Object.freeze({
+  attach: 'Прикрепить файлы',
+  list: 'Файлы к сообщению',
+  sent: 'Файлы сообщения',
+  uploading: (percent: number) => `Загружаем… ${percent} %`,
+  progress: (name: string) => `Загрузка ${name}`,
+  failed: 'Не загрузилось.',
+  retry: 'Повторить',
+  retryNamed: (name: string) => `Повторить загрузку ${name}`,
+  removeNamed: (name: string) => `Убрать ${name}`,
+  cancelNamed: (name: string) => `Отменить загрузку ${name}`,
+  /** The send button waits for the files. */
+  wait: 'Дождитесь загрузки файлов',
+  /** A file failed: the message waits until it is sent again or taken out. */
+  fix: 'Повторите или уберите файлы, которые не загрузились',
+  unnamed: 'Файл',
+})
+
+/** The way a new dialog works on the site (docs/plan/57-browser-tasks.md, Б9). */
+export const taskWayText = Object.freeze({
+  label: 'Как агент будет работать',
+  browser: 'В браузере',
+  repository: 'Через копию сайта',
+  browserNote:
+    'Агент работает в админке сайта, а вы видите каждый его шаг и можете помочь — например, войти сами. Изменения появляются на сайте сразу.',
+  repositoryNote:
+    'Агент меняет копию сайта, вы смотрите результат в предпросмотре и сами выпускаете новую версию на сайт.',
+  /** A site added without access to its files. */
+  browserOnly:
+    'Сайт добавлен без доступа к файлам: агент работает в админке сайта через браузер. Изменения появляются на сайте сразу.',
+  /** The site's address is not https in production: the words of TASK_NOT_ACCEPTED browser_insecure. */
+  insecure:
+    'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://.',
+  /** The reminder under the field of a task in the browser. */
+  noSecrets: 'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера',
+})
+
+/** The browser of a task beside its dialog (docs/plan/57-browser-tasks.md, Б12–Б17, Б27, Б29). */
+export const browserText = Object.freeze({
+  /** The accessible name of the panel beside the dialog. */
+  label: 'Браузер задачи',
+  view: 'Браузер',
+  toolbar: 'Управление браузером',
+  canvas: 'Страница сайта в браузере задачи',
+  status: {
+    connecting: 'Подключение',
+    agent: 'Работает агент',
+    waiting: 'Ждём вас',
+    user: 'Управляете вы',
+    reconnecting: 'Переподключение',
+    error: 'Ошибка',
+    closed: 'Сессия закрыта',
+    finished: 'Агент закончил',
+  },
+  viewOnly: 'Только просмотр',
+  otherTab: 'Управление в другой вкладке',
+  /** Beside the buttons of the control after «Остановить», until core has ended the task. */
+  stopping: composerText.stopping,
+  fullscreen: 'Во весь экран',
+  exitFullscreen: 'Свернуть',
+  fullscreenHint: 'Нажмите Esc, чтобы выйти из полноэкранного режима',
+  more: 'Ещё',
+  windowSize: 'Размер окна браузера',
+  windowSizeLocked: 'Размер окна можно изменить, когда управляете вы.',
+  size: (width: number, height: number) => `${width} × ${height}`,
+  tabs: 'Вкладки',
+  tabOf: (index: number, count: number) => `Вкладка ${index} из ${count}`,
+  untitledTab: 'Без названия',
+  address: 'Адрес страницы',
+  go: 'Перейти',
+  reload: 'Обновить страницу',
+  manualHint:
+    'Агент не видит страницу, пока управляете вы. Пароль вводите прямо здесь. Чтобы вернуться к кнопкам, дважды нажмите Esc.',
+  keyboard: 'Клавиатура',
+  keyboardInput: 'Ввод на страницу',
+  connecting: 'Подключаемся к браузеру…',
+  starting: 'Браузер откроется, когда агент начнёт работу.',
+  reconnecting: 'Связь прервалась. Переподключаемся…',
+  reconnectingNote:
+    'Агент продолжает работу — прервался только показ страницы. Пока что на экране последний кадр.',
+  failed: 'Не удалось показать браузер',
+  failedNote: 'Работа агента от этого не останавливается: результат появится в диалоге.',
+  retry: 'Повторить',
+  closed: 'Браузер закрыт',
+  closedIdle: 'Браузер закрыт: 30 минут без действий',
+  closedExpired: 'Браузер закрыт по времени',
+  closedCrashed: 'Браузер закрылся из-за сбоя',
+  closedNote:
+    'Чтобы продолжить, напишите агенту в диалоге — браузер откроется заново. Войти на сайт, возможно, придётся снова.',
+  finishedNote: 'Агент закончил работу в браузере. Результат — в диалоге.',
+  help: {
+    login: 'Войдите на сайт',
+    captcha: 'Пройдите проверку',
+    confirm: 'Подтвердите действие',
+    other: 'Агенту нужна ваша помощь',
+  },
+  helpNote: 'Нажмите «Взять управление» и сделайте это сами — прямо на этой странице.',
+  helpSecret:
+    'Пока управляете вы, агент не видит страницу и то, что вы вводите. Пароль не пишите в чат.',
+  /** While the client controls: the plate in the feed and the live block. */
+  controlPlate:
+    'Управляете вы. Агент ждёт. Когда закончите, нажмите «Продолжить работу агента» — справа или здесь.',
+  watch: 'Смотреть, что делает агент',
+  refused: {
+    agent_in_control: 'Сейчас браузером управляет агент.',
+    not_holder:
+      'Браузером управляют в другой вкладке. Нажмите «Взять управление», чтобы управлять здесь.',
+    not_ready: 'Агент заканчивает действие на странице. Подождите несколько секунд.',
+    address_denied: 'На эту страницу агенту и вам переходить нельзя.',
+    busy: 'Слишком много действий сразу. Подождите немного.',
+    other: 'Это действие сейчас не выполнить.',
+  },
+  dialog: {
+    title: 'Страница спрашивает',
+    note: 'Сейчас управляете вы, поэтому отвечаете вы. Пока работает агент, на такие вопросы отвечает он.',
+    stay: 'Остаться',
+    leave: 'Покинуть',
+    ok: 'ОК',
+    cancel: 'Отмена',
+    answer: 'Ответ странице',
+    leaveQuestion: 'Покинуть страницу? Изменения могут не сохраниться.',
+  },
+  chooser: {
+    title: 'Выберите файл для загрузки на сайт',
+    note: 'Страница просит файл. Выберите из вложений задачи или загрузите новый.',
+    files: 'Вложения задачи',
+    none: 'У задачи пока нет вложений.',
+    newNote: 'Новый файл тоже сохранится во вложениях задачи.',
+    upload: 'Загрузить новый',
+    cancel: 'Отмена',
+    confirm: 'Загрузить на сайт',
+    loading: 'Загружаем вложения…',
+    loadFailed: 'Не удалось загрузить вложения задачи.',
+    meta: (type: string, size: string) => `${type} · ${size}`,
+  },
+  separator: 'Ширина панели браузера',
+})
+
+/** The links of an object a task in the browser left on the site (Б23, Б24). */
+export const objectLinkText = Object.freeze({
+  open: (kind: 'post' | 'page' | null) =>
+    kind === 'page' ? 'Открыть страницу' : kind === 'post' ? 'Открыть запись' : 'Открыть на сайте',
+  edit: 'Изменить в админке',
 })

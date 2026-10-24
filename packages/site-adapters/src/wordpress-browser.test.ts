@@ -38,6 +38,9 @@ describe('wordpressAdapter.browserRequestDenied', () => {
       '--b\r\nContent-Disposition: form-data; name="action"\r\n\r\nupdate-theme\r\n--b--\r\n'
     expect(denied('/wp-admin/admin-ajax.php', 'POST', multipart)).toBe(true)
     expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=heartbeat')).toBe(false)
+    // PHP runs admin-ajax.php with the rest of the path as PATH_INFO.
+    expect(denied('/wp-admin/admin-ajax.php/x', 'POST', 'action=delete-plugin')).toBe(true)
+    expect(denied('/wp-admin/Admin-Ajax.php?action=install-plugin', 'POST')).toBe(true)
   })
 
   it('refuses the REST routes of the policy by path and by rest_route', () => {

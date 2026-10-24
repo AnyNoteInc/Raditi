@@ -26,7 +26,7 @@ const startsWith = (segments: readonly string[], prefix: readonly string[]) =>
   prefix.every((part, index) => segments[index] === part)
 
 /** The decoded, lower-case segments of a path; null for one that cannot be read plainly. */
-function segmentsOf(path: string): string[] | null {
+export function segmentsOf(path: string): string[] | null {
   let decoded: string
   try {
     decoded = decodeURIComponent(path)
@@ -41,8 +41,8 @@ function segmentsOf(path: string): string[] | null {
   return segments.includes('..') ? null : segments
 }
 
-/** A path of the media library the agent's browser may not open. */
-function isUploadDenied(segments: readonly string[]): boolean {
+/** A path of the media library (segments from `wp-content`) the agent's browser may not open. */
+export function isUploadDenied(segments: readonly string[]): boolean {
   if (!startsWith(segments, uploadsDir)) return false
   if (startsWith(segments, mediaDir) && segments.length > mediaDir.length) return false
   return !pageAsset.test(segments.at(-1) ?? '')
@@ -93,7 +93,9 @@ export function wordpressBrowserRequestDenied(request: SiteBrowserRequest): bool
   const segments = segmentsOf(url.pathname)
   if (segments === null || isUploadDenied(segments)) return true
   const path = url.pathname.toLowerCase()
-  if (path.endsWith('/wp-admin/admin-ajax.php')) {
+  // By segments, not the end of the path: `admin-ajax.php/x` runs admin-ajax.php (PATH_INFO).
+  const adminIndex = segments.indexOf('wp-admin')
+  if (adminIndex !== -1 && segments[adminIndex + 1] === 'admin-ajax.php') {
     const actions = ajaxActions(url, request.postData)
     if (actions.some((action) => isAdminAjaxActionDenied(action))) return true
   }

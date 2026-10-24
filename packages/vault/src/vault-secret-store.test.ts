@@ -240,6 +240,7 @@ describe('createVaultSecretStore().health with Transit in use', () => {
       if (path.startsWith('transit/datakey/plaintext/'))
         return json(200, { data: { plaintext, ciphertext } })
       if (path.startsWith('transit/decrypt/')) return json(200, { data: { plaintext } })
+      if (path.startsWith('transit/keys/')) return json(200, { data: { type: 'aes256-gcm96' } })
       return json(404, { errors: [] })
     })
     return { fetchMock, store: storeWith(fetchMock) }
@@ -258,6 +259,11 @@ describe('createVaultSecretStore().health with Transit in use', () => {
     [
       'an unwrapped key',
       (store: ReturnType<typeof storeWith>) => store.transitDecryptDataKey('ws-a', ciphertext),
+    ],
+    [
+      'a new workspace key',
+      (store: ReturnType<typeof storeWith>) =>
+        store.transitEnsureKey('ws-01960000-0000-7000-8000-000000000003'),
     ],
   ])('fails while Transit is gone after %s and recovers when it is back', async (_name, use) => {
     const visible = new Set(['transit'])

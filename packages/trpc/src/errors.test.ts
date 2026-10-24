@@ -1,4 +1,6 @@
 import {
+  attachmentRefusals,
+  attachmentRefusalText,
   badRequest,
   billingAlreadyOnPlan,
   billingAutoRenewalUnavailable,
@@ -835,6 +837,15 @@ describe('the refusals of a dialog, its preview and its release', () => {
     ['SITE_ENV_LIMIT', 409],
     ['SITE_ENV_HOSTS_LIMIT', 409],
     ['SITE_ENV_CHANGED', 409],
+    ['TASK_NOTHING_TO_RESUME', 409],
+    ['BROWSER_UNAVAILABLE', 503],
+    ['ATTACHMENT_NOT_READY', 409],
+    ['ATTACHMENT_REFUSED', 400],
+    ['ATTACHMENT_SENT', 409],
+    ['ATTACHMENTS_LIMIT', 429],
+    ['PROJECT_NOTES_TOO_LONG', 400],
+    ['PROJECT_NOTES_HAS_SECRET', 400],
+    ['PROJECT_NOTES_INVALID', 400],
   ] as const
 
   it.each(codes)('gives %s its own Russian text on «вы», without English', (domainCode, status) => {
@@ -862,8 +873,22 @@ describe('the refusals of a dialog, its preview and its release', () => {
     expect(text('site_not_active')).toContain('сайт ещё не подключён')
     expect(text('not_synthetic')).toContain('тестовая среда')
     expect(text('class_unavailable')).toContain('не можем повторить работу')
+    expect(text('browser_unavailable')).toBe(
+      'Задания в браузере сейчас не принимаются. Попробуйте ещё раз немного позже',
+    )
+    expect(text('environment_unsupported')).toContain('в браузере или через копию сайта')
     expect(text('other')).toBe('Задания для этого сайта сейчас не принимаются')
     expect(text()).toBe('Задания для этого сайта сейчас не принимаются')
+  })
+
+  it('tells why a file is not attached in the words of the domain, without a full stop', () => {
+    const text = (details?: unknown) =>
+      toTRPCError(new DomainError('ATTACHMENT_REFUSED', 'Refused', 400, details)).message
+    for (const reason of attachmentRefusals) {
+      expect(text({ reason })).toBe(attachmentRefusalText[reason].replace(/\.$/, ''))
+    }
+    expect(text({ reason: 'virus' })).toBe('Этот файл прикрепить нельзя')
+    expect(text()).toBe('Этот файл прикрепить нельзя')
   })
 
   it('says of a refused command what the list of commands says of it', () => {

@@ -287,7 +287,13 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
               sourceUrl: 'https://synthetic.invalid/rates',
             },
           })
-    async function task() {
+    /** `requirements`: what the task needs, over a repository alone (plan 57, Б2). */
+    async function task(
+      requirements: { needsRepository: boolean; needsBrowser: boolean } = {
+        needsRepository: true,
+        needsBrowser: false,
+      },
+    ) {
       const site = await db.site.create({
         data: {
           workspaceId: workspace.id,
@@ -302,6 +308,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
           siteId: site.id,
           status: 'running',
           modelClass: 'standard',
+          ...requirements,
         },
       })
       await db.siteLease.create({
@@ -459,6 +466,35 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(
       client.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
     ).toEqual([])
+  })
+
+  it('gives a task in the browser no variable, while a repository task of the same workspace gets it (plan 57)', async () => {
+    const f = await fixture({ slots: 2 })
+    const consented = { toAgent: true, agentConsentAt: new Date() }
+    const browser = await f.taskFixture({ needsRepository: false, needsBrowser: true })
+    for (const site of [f.site, browser.site]) {
+      await db.siteEnvVar.create({
+        data: { siteId: site.id, name: 'MAIL_API_KEY', hosts: [], ...consented },
+      })
+      f.vault.entries.set(siteEnvVarPath(site.id, 'MAIL_API_KEY'), {
+        data: { value: `mail-key-${site.id.slice(0, 8)}` },
+        custom: {},
+        deleted: false,
+      })
+    }
+    expect((await f.credentials.issue(f.ref, f.grant)).envValues).toEqual({
+      MAIL_API_KEY: `mail-key-${f.site.id.slice(0, 8)}`,
+    })
+    // Its `web` tools write onto the live site, where no candidate or release refuses a value:
+    // the browser turn's commands get none, and its site's value is not even read.
+    f.vault.kvRead.mockClear()
+    const issued = await f.credentials.issue(browser.ref, f.grant)
+    expect(issued).not.toHaveProperty('envValues')
+    expect(
+      f.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
+    ).toEqual([])
+    expect(f.vault.entries.get(turnCredentialPath(browser.ref))?.data).not.toHaveProperty('env')
+    expect(await f.credentials.recover(browser.ref)).toEqual(issued)
   })
 
   it('persists the selected binding and secret hash, and retry preserves the first budget and expiry', async () => {

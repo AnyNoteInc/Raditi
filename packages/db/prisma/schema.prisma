@@ -48,10 +48,11 @@ model User {
   siteCreationClaims SiteCreationClaim[]
   previewTickets     PreviewTicket[]
   previewSessions    PreviewSession[]
+  browserTickets     BrowserStreamTicket[]
   releasesApproved   SiteRelease[]
   undoPlansAsked     ReleaseUndoPlan[]
-  envVarsConsented   SiteEnvVar[]        @relation("SiteEnvVarConsent")
-  envVarsCreated     SiteEnvVar[]        @relation("SiteEnvVarCreator")
+  envVarsConsented   SiteEnvVar[]          @relation("SiteEnvVarConsent")
+  envVarsCreated     SiteEnvVar[]          @relation("SiteEnvVarCreator")
 
   @@map("users")
 }
@@ -177,6 +178,8 @@ model Workspace {
   billingAccounts BillingAccount[]
   orders          Order[]
   giftSiteClaims  GiftSiteClaim[]
+  attachments     Attachment[]
+  browserSessions BrowserSession[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -251,6 +254,9 @@ model Site {
   operatorReview     Boolean     @default(true) @map("operator_review")
   /// What the site is about, in the owner's words (wizard, step 1). Not given to an agent.
   description        String?     @db.VarChar(2000)
+  /// Hints the owner writes for the agent («вход по адресу /login», docs/plan/57, Б8): they go
+  /// to the model, so they pass the checks of a task's words. Never a secret.
+  agentNotes         String?     @map("agent_notes") @db.VarChar(2000)
   /// A page on the site's own origin that shows the site works. Stored, never requested; whoever
   /// requests it later must resolve and check the address again (spec §12).
   healthcheckUrl     String?     @map("healthcheck_url") @db.VarChar(1024)
@@ -287,6 +293,8 @@ model Site {
   databaseSchema     SiteDatabaseSchema?
   provisioningStages SiteProvisioningStage[]
   initialVersion     SiteInitialVersion?
+  attachments        Attachment[]
+  browserSessions    BrowserSession[]
 
   @@unique([workspaceId, url])
   @@index([installedReleaseId])
@@ -494,48 +502,54 @@ model ChatSession {
 /// One client request: one logical agent session and one task branch (spec §7). The status
 /// changes only by a conditional UPDATE in the same transaction as its credit_ledger entry.
 model Task {
-  id            String       @id @default(uuid(7)) @db.Uuid
-  workspaceId   String       @map("workspace_id") @db.Uuid
-  siteId        String       @map("site_id") @db.Uuid
-  chatSessionId String?      @map("chat_session_id") @db.Uuid
-  createdById   String?      @map("created_by_id") @db.Uuid
+  id              String       @id @default(uuid(7)) @db.Uuid
+  workspaceId     String       @map("workspace_id") @db.Uuid
+  siteId          String       @map("site_id") @db.Uuid
+  chatSessionId   String?      @map("chat_session_id") @db.Uuid
+  createdById     String?      @map("created_by_id") @db.Uuid
   /// «Отменить» of a done task: this task reverts that one and is never billed.
-  revertsTaskId String?      @map("reverts_task_id") @db.Uuid
-  status        TaskStatus   @default(queued)
+  revertsTaskId   String?      @map("reverts_task_id") @db.Uuid
+  status          TaskStatus   @default(queued)
   /// From the turn result (turnResultSchema.change_type); NULL until the first turn ends.
-  changeType    ChangeType?  @map("change_type")
+  changeType      ChangeType?  @map("change_type")
   /// Class profile selected before queueing; selects the pricing rule.
-  modelClass    ModelClass?  @map("model_class")
+  modelClass      ModelClass?  @map("model_class")
   /// Summary of the latest turn result.
-  summary       String?      @db.VarChar(500)
+  summary         String?      @db.VarChar(500)
   /// Number of the latest turn; 0 before the first one.
-  turnNo        Int          @default(0) @map("turn_no")
+  turnNo          Int          @default(0) @map("turn_no")
   /// «Попробовать ещё» (failed → queued) starts a new attempt with a new hold.
-  attempt       Int          @default(1)
-  prNumber      Int?         @map("pr_number")
-  prUrl         String?      @map("pr_url") @db.VarChar(1024)
+  attempt         Int          @default(1)
+  prNumber        Int?         @map("pr_number")
+  prUrl           String?      @map("pr_url") @db.VarChar(1024)
   /// The deployment that shipped (or last tried to ship) this task.
-  deploymentId  String?      @unique @map("deployment_id") @db.Uuid
+  deploymentId    String?      @unique @map("deployment_id") @db.Uuid
   /// Pinned when queued on the pay-per-action plan (spec §17).
-  pricingRuleId String?      @map("pricing_rule_id") @db.Uuid
+  pricingRuleId   String?      @map("pricing_rule_id") @db.Uuid
   /// Σ token_usage.cost_rub plus sandbox cost, full precision, never rounded.
-  costRub       Decimal      @default(0) @map("cost_rub") @db.Decimal(18, 10)
+  costRub         Decimal      @default(0) @map("cost_rub") @db.Decimal(18, 10)
   /// Charged to the wallet on done, rounded HALF_UP once; NULL on quota plans or until charged.
-  billedRub     Decimal?     @map("billed_rub") @db.Decimal(12, 2)
+  billedRub       Decimal?     @map("billed_rub") @db.Decimal(12, 2)
   /// false for «Отменить» and operator retries: no hold, no charge.
-  billable      Boolean      @default(true)
+  billable        Boolean      @default(true)
   /// The second label of the dialog's preview address (plan 53, Р17): six hex characters drawn
   /// by the database, unique within the site; an insert whose alias is taken draws again
   /// (trigger tasks_free_alias). CHECK tasks_alias_check.
-  alias         String       @default(dbgenerated("substr(md5((gen_random_uuid())::text), 1, 6)")) @db.VarChar(12)
+  alias           String       @default(dbgenerated("substr(md5((gen_random_uuid())::text), 1, 6)")) @db.VarChar(12)
   /// Set once from the first request (feed design, «Ограничения в базе»).
-  title         String?      @db.VarChar(120)
-  mode          TaskMode     @default(work)
+  title           String?      @db.VarChar(120)
+  mode            TaskMode     @default(work)
   /// Why a queued task waits; cleared when it leaves `queued` (CHECK tasks_waiting_check).
-  waiting       TaskWaiting?
-  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
-  finishedAt    DateTime?    @map("finished_at") @db.Timestamptz(6)
+  waiting         TaskWaiting?
+  /// What the task's environment needs (docs/plan/57-browser-tasks.md, Б2): the site's
+  /// repository, the cloud browser or both — at least one (CHECK tasks_requirements_check), fixed
+  /// when the task is created (trigger tasks_requirements_fixed). TaskRequirements in @repo/domain;
+  /// tasks older than the columns need the repository alone.
+  needsRepository Boolean      @default(true) @map("needs_repository")
+  needsBrowser    Boolean      @default(false) @map("needs_browser")
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  finishedAt      DateTime?    @map("finished_at") @db.Timestamptz(6)
 
   /// First bounded content access, including GET-only privacy maps.
   contentAccessedAt    DateTime? @map("content_accessed_at") @db.Timestamptz(6)
@@ -543,32 +557,34 @@ model Task {
   contentRetiredAt     DateTime? @map("content_retired_at") @db.Timestamptz(6)
   contentMasksPurgedAt DateTime? @map("content_masks_purged_at") @db.Timestamptz(6)
 
-  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  site            Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  chatSession     ChatSession?         @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
-  createdBy       User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  revertsTask     Task?                @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
-  revertedBy      Task[]               @relation("TaskReverts")
-  deployment      Deployment?          @relation("TaskCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
-  pricingRule     PricingRule?         @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
-  deployments     Deployment[]         @relation("TaskDeployments")
-  turns           TaskTurn[]
-  events          TaskEvent[]
-  attachments     Attachment[]
-  snapshots       Snapshot[]
-  tokenUsage      TokenUsage[]
-  creditHolds     CreditHold[]
-  ledgerEntries   CreditLedger[]
-  leases          SiteLease[]
-  turnAssignments TurnAssignment[]
-  llmKeys         LlmKey[]
-  accountBinding  TaskAccountBinding?
+  workspace          Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  site               Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  chatSession        ChatSession?         @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
+  createdBy          User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  revertsTask        Task?                @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
+  revertedBy         Task[]               @relation("TaskReverts")
+  deployment         Deployment?          @relation("TaskCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
+  pricingRule        PricingRule?         @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  deployments        Deployment[]         @relation("TaskDeployments")
+  turns              TaskTurn[]
+  events             TaskEvent[]
+  attachments        Attachment[]
+  snapshots          Snapshot[]
+  tokenUsage         TokenUsage[]
+  creditHolds        CreditHold[]
+  ledgerEntries      CreditLedger[]
+  leases             SiteLease[]
+  turnAssignments    TurnAssignment[]
+  llmKeys            LlmKey[]
+  accountBinding     TaskAccountBinding?
   /// Content restores the trusted host made while this task held the site lease.
-  hostMcpCalls    McpCall[]            @relation("McpHostTask")
-  preview         PreviewEnvironment?
-  candidates      TaskCandidate[]
-  releases        SiteRelease[]
-  dbOperations    PreviewDbOperation[]
+  hostMcpCalls       McpCall[]            @relation("McpHostTask")
+  preview            PreviewEnvironment?
+  candidates         TaskCandidate[]
+  releases           SiteRelease[]
+  dbOperations       PreviewDbOperation[]
+  browserSessions    BrowserSession[]
+  browserCheckpoints BrowserCheckpoint[]
 
   @@unique([siteId, alias])
   @@index([siteId, updatedAt(sort: Desc)], map: "tasks_site_updated_idx")
@@ -820,24 +836,49 @@ enum McpCallResult {
   denied
 }
 
-/// A client file from the chat in raditi-inbox (inbox/<wsId>/<taskId>/<fileId>).
+/// A file the client attached to a message (docs/plan/57-browser-tasks.md, Б26), in raditi-inbox
+/// under inbox/<workspaceId>/<id> (attachmentKey in @repo/domain; CHECK attachments_key_check).
+/// Announced `uploading`, `ready` once web checked the stored object, `bound` with the message of
+/// the task that sent it, `deleted` when removed before that (CHECK attachments_bound_check). The
+/// model never gets its key or a link to it; the browser worker reads it for a page of the site.
 model Attachment {
-  id           String   @id @default(uuid(7)) @db.Uuid
-  taskId       String   @map("task_id") @db.Uuid
-  uploadedById String?  @map("uploaded_by_id") @db.Uuid
+  id           String           @id @default(uuid(7)) @db.Uuid
+  workspaceId  String           @map("workspace_id") @db.Uuid
+  siteId       String           @map("site_id") @db.Uuid
+  /// The task that sent it: set exactly while `bound`, together with bound_at.
+  taskId       String?          @map("task_id") @db.Uuid
+  uploadedById String?          @map("uploaded_by_id") @db.Uuid
   source       Channel
-  s3Key        String   @unique @map("s3_key") @db.VarChar(1024)
-  fileName     String   @map("file_name") @db.VarChar(255)
-  contentType  String   @map("content_type") @db.VarChar(255)
-  sizeBytes    Int      @map("size_bytes")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Must equal attachmentStatuses in @repo/domain (checked by a test).
+  status       AttachmentStatus @default(uploading)
+  s3Key        String           @unique @map("s3_key") @db.VarChar(1024)
+  fileName     String           @map("file_name") @db.VarChar(255)
+  contentType  String           @map("content_type") @db.VarChar(255)
+  sizeBytes    Int              @map("size_bytes")
+  /// Until when a file nobody sent is kept; nothing reads it once the file is bound.
+  expiresAt    DateTime         @map("expires_at") @db.Timestamptz(6)
+  boundAt      DateTime?        @map("bound_at") @db.Timestamptz(6)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  task       Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  uploadedBy User? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  site       Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  task       Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy User?     @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
 
   @@index([taskId])
-  @@index([uploadedById])
+  @@index([uploadedById, status])
+  @@index([status, expiresAt])
+  @@index([workspaceId])
+  @@index([siteId])
   @@map("attachments")
+}
+
+/// Must equal attachmentStatuses in @repo/domain (checked by a test).
+enum AttachmentStatus {
+  uploading
+  ready
+  bound
+  deleted
 }
 
 /// Content snapshot taken before an edit (spec §11) in raditi-artifacts (snapshots/<siteId>/…);
@@ -2422,4 +2463,118 @@ model SiteEnvVar {
   @@index([agentConsentBy])
   @@index([createdBy])
   @@map("site_env_vars")
+}
+
+// ─── The cloud browser of a task (docs/plan/57-browser-tasks.md) ──────────────────────────────
+
+/// Must equal browserSessionStatuses in @repo/domain (checked by a test).
+enum BrowserSessionStatus {
+  starting
+  ready
+  closed
+  failed
+  lost
+}
+
+/// Must equal browserControllers in @repo/domain (checked by a test).
+enum BrowserController {
+  agent
+  user
+}
+
+/// Must equal browserCheckpointStates in @repo/domain (checked by a test).
+enum BrowserCheckpointState {
+  seen
+  unverified
+  verified
+  missing
+}
+
+/// The cloud browser of a task as its worker holds it (Б10–Б18): one per task while it holds a
+/// browser (`starting`, `ready`), across the turns of the task and its waits for the client. The
+/// sign-in lives only in the browser (Б19): nothing here is a secret.
+model BrowserSession {
+  id              String               @id @default(uuid(7)) @db.Uuid
+  taskId          String               @map("task_id") @db.Uuid
+  siteId          String               @map("site_id") @db.Uuid
+  workspaceId     String               @map("workspace_id") @db.Uuid
+  status          BrowserSessionStatus @default(starting)
+  /// Who drives it now; every hand-over moves control_epoch on (Б15).
+  controller      BrowserController    @default(agent)
+  controlEpoch    Int                  @default(0) @map("control_epoch")
+  viewportVersion Int                  @default(1) @map("viewport_version")
+  /// What the agent asked the client to do (`web_help`): one of browserHelpReasons and its words,
+  /// together or neither (CHECK browser_sessions_help_check).
+  helpReason      String?              @map("help_reason") @db.VarChar(16)
+  helpMessage     String?              @map("help_message") @db.VarChar(500)
+  /// The first click, input or upload in it, the agent's or the client's (Б28): the site may
+  /// have changed.
+  wroteAt         DateTime?            @map("wrote_at") @db.Timestamptz(6)
+  lastActivityAt  DateTime             @default(now()) @map("last_activity_at") @db.Timestamptz(6)
+  /// Its hard deadline, whatever happens in it (BROWSER_SESSION_MAX_HOURS).
+  expiresAt       DateTime             @map("expires_at") @db.Timestamptz(6)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  readyAt         DateTime?            @map("ready_at") @db.Timestamptz(6)
+  /// Set exactly when it holds no browser any more, with one of browserCloseReasons.
+  closedAt        DateTime?            @map("closed_at") @db.Timestamptz(6)
+  closeReason     String?              @map("close_reason") @db.VarChar(32)
+  errorCode       String?              @map("error_code") @db.VarChar(48)
+
+  task        Task                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  site        Site                  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  tickets     BrowserStreamTicket[]
+  checkpoints BrowserCheckpoint[]
+
+  @@unique([taskId], map: "browser_sessions_open_task_key", where: raw("status = ANY (ARRAY['starting'::\"BrowserSessionStatus\", 'ready'::\"BrowserSessionStatus\"])"))
+  @@index([taskId])
+  @@index([siteId])
+  @@index([workspaceId])
+  @@index([status, expiresAt])
+  @@map("browser_sessions")
+}
+
+/// A one-time way into the stream of a session (Б12): 60 seconds, one connection, sent as the
+/// first message. Only the SHA-256 of the ticket is kept.
+model BrowserStreamTicket {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  sessionId String    @map("session_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session BrowserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("browser_stream_tickets")
+}
+
+/// An object the task opened in the editor of the site (Б22): seen, saved and not yet confirmed
+/// (`unverified`), confirmed by a trusted read (`verified`, with what it found) or not found.
+model BrowserCheckpoint {
+  id        String                 @id @default(uuid(7)) @db.Uuid
+  taskId    String                 @map("task_id") @db.Uuid
+  /// The session that last saw it.
+  sessionId String                 @map("session_id") @db.Uuid
+  /// browserCheckpointKinds and browserObjectIdSchema (CHECK browser_checkpoints_object_check).
+  kind      String                 @db.VarChar(16)
+  objectId  String                 @map("object_id") @db.VarChar(64)
+  editUrl   String                 @map("edit_url") @db.VarChar(2048)
+  state     BrowserCheckpointState @default(seen)
+  /// browserVerifiedObjectSchema; set exactly while `verified`.
+  verified  Json?
+  createdAt DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  task    Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  session BrowserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, kind, objectId])
+  @@index([sessionId])
+  @@map("browser_checkpoints")
 }

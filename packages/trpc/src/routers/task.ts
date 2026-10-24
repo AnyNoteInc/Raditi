@@ -9,11 +9,14 @@ import {
   releaseOutcomes,
   releaseStatuses,
   taskModes,
+  taskRequirementsSchema,
   taskStatuses,
   type FeedItem,
 } from '@repo/domain'
 import { z } from 'zod'
 
+import { attachmentIdsSchema } from '../services/chat/attachments.ts'
+import { feedBrowserOutput } from '../services/chat/browser.ts'
 import { chatContextOf } from '../services/chat/context.ts'
 import { DIALOG_CURSOR_PATTERN, listDialogs } from '../services/chat/dialog-list.ts'
 import { readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
@@ -24,6 +27,7 @@ import {
   continueDialog,
   createDialog,
   postDialogMessage,
+  resumeDialog,
   retryDialog,
 } from '../services/chat/tasks.ts'
 import { consentedProcedure, router } from '../trpc.ts'
@@ -77,6 +81,12 @@ const releaseOutput = z.strictObject({
 
 const feedOutput = z.strictObject({
   task: feedTaskHeadSchema,
+  /**
+   * The cloud browser of a task in the browser (docs/plan/57-browser-tasks.md, Б12–Б18): its
+   * latest session — who drives it, what the agent asked the client to do there, why it closed;
+   * null for a task with the repository, or before the first pass opened one.
+   */
+  browser: feedBrowserOutput,
   preview: z
     .strictObject({
       status: z.enum(previewStatuses),
@@ -124,11 +134,21 @@ const feedOutput = z.strictObject({
 
 export const taskRouter = router({
   /**
-   * A new dialog with the client's first words: the task, its reserve, the row, the pass and the
-   * preview in one transaction. `taskId` comes from the browser; a repeat returns the same task.
+   * A new dialog with the client's first words: the task, its reserve, the files, the row, the
+   * pass and the preview in one transaction. `taskId` comes from the browser; a repeat returns the
+   * same task. `requirements` — with the repository or in the browser (docs/plan/57, Б2, Б9);
+   * absent, the server takes what the site offers (`project.get`, `capabilities`).
    */
   create: consentedProcedure
-    .input(z.strictObject({ siteId: z.uuid(), taskId: browserId, text: words }))
+    .input(
+      z.strictObject({
+        siteId: z.uuid(),
+        taskId: browserId,
+        text: words,
+        requirements: taskRequirementsSchema.optional(),
+        attachments: attachmentIdsSchema.optional(),
+      }),
+    )
     .output(z.strictObject({ taskId: z.uuid(), alias: z.string(), created: z.boolean() }))
     .mutation(({ ctx, input }) =>
       createDialog(ctx.prisma, chatContextOf(ctx), {
@@ -136,16 +156,43 @@ export const taskRouter = router({
         siteId: input.siteId,
         taskId: input.taskId,
         text: input.text,
+        ...(input.requirements === undefined ? {} : { requirements: input.requirements }),
+        ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
         now: new Date(),
       }),
     ),
 
   /** Words to a dialog that waits: an answer to the agent, or a new pass on top of the candidate. */
   message: consentedProcedure
-    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId, text: words }))
+    .input(
+      z.strictObject({
+        taskId: z.uuid(),
+        requestId: browserId,
+        text: words,
+        attachments: attachmentIdsSchema.optional(),
+      }),
+    )
     .output(postedOutput)
     .mutation(({ ctx, input }) =>
-      postDialogMessage(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
+      postDialogMessage(ctx.prisma, {
+        userId: ctx.user.id,
+        taskId: input.taskId,
+        requestId: input.requestId,
+        text: input.text,
+        ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
+        now: new Date(),
+      }),
+    ),
+
+  /**
+   * «Продолжить работу агента» of a task in the browser that waits for the client (docs/plan/57,
+   * Б16): the same attempt goes on, and its pass takes the browser back.
+   */
+  resumeAgent: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput)
+    .mutation(({ ctx, input }) =>
+      resumeDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
     ),
 
   /** «Продолжить» after a question of the platform about credits: the next attempt. */
@@ -174,7 +221,10 @@ export const taskRouter = router({
       }),
     ),
 
-  /** `/cancel`: closes a dialog that waits, or asks core to stop the pass that runs. */
+  /**
+   * `/cancel`: closes a dialog that waits, or asks core to stop the pass that runs — and, for a
+   * task in the browser, to stop it in any status and close its browser (docs/plan/57, Б24).
+   */
   cancel: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
     .output(postedOutput.extend({ state: z.enum(['cancelled', 'stopping']) }))

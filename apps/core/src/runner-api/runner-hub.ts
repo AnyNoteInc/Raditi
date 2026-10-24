@@ -171,6 +171,9 @@ export class LiveAssignment {
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const clampMs = (ms: number) => Math.max(1, Math.min(MAX_SANDBOX_TURN_MS, Math.floor(ms)))
 const superseded = () => conflict('The turn was taken over under a newer fence')
+/** A capture with a base: its turn has a repository, and the runner uploads its candidate. */
+const capturesCandidate = (command: RunnerCommand): boolean =>
+  command.type === 'capture' && command.baseSha !== undefined
 
 /** Ends the session's waiting poll: it looks at the waiting turns and its queue again. */
 function wakeSession(session: RunnerSession): void {
@@ -661,12 +664,22 @@ export class RunnerHub implements OnApplicationShutdown {
       case 'captured': {
         const open = this.#answering(live, report.commandId, ['capture'])
         if (!open) return
+        // Parts exactly when the capture named a base: a turn without a repository (plan 57,
+        // Б5) answers with home alone, and one with a repository with both uploads.
+        if (!capturesCandidate(open.command)) {
+          if (report.patch !== undefined || report.untracked !== undefined)
+            throw RunnerApiError.of('BAD_REQUEST')
+          this.#settle(live, open, report)
+          return
+        }
         for (const part of ['patch', 'untracked'] as const) {
           const uploaded = open.candidates?.[part]
+          const reported = report[part]
           if (
             !uploaded ||
-            uploaded.sha256 !== report[part].sha256 ||
-            uploaded.bytes.byteLength !== report[part].sizeBytes
+            !reported ||
+            uploaded.sha256 !== reported.sha256 ||
+            uploaded.bytes.byteLength !== reported.sizeBytes
           )
             throw RunnerApiError.of('BAD_REQUEST')
         }
@@ -806,7 +819,8 @@ export class RunnerHub implements OnApplicationShutdown {
   ): Promise<(bytes: Uint8Array) => void> {
     const { open } = await this.#binary(runnerId, assignmentId, headers, 'capture')
     const parts = open.candidates
-    if (!parts) throw RunnerApiError.of('COMMAND_CLOSED')
+    // A capture without a base takes no candidate: its turn has no repository (plan 57, Б5).
+    if (!parts || !capturesCandidate(open.command)) throw RunnerApiError.of('COMMAND_CLOSED')
     return (bytes) => {
       if (!open.settled) parts[part] = { bytes, sha256: sha256(bytes) }
     }

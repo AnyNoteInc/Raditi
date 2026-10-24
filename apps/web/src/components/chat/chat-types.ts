@@ -35,3 +35,10 @@ export type ReleaseChoice = PreparedRelease['choices'][number]
 
 /** A variable of a site as its settings show it: never the value. */
 export type SiteEnvVar = Outputs['siteEnv']['list']['variables'][number]
+
+/** What a site can be worked on with now, as the server decides it (docs/plan/57, Б9). */
+export type SiteCapabilities = Outputs['project']['get']['capabilities']
+/** A file sent with the messages of a task, as `attachment.list` names it. */
+export type TaskAttachment = Outputs['attachment']['list'][number]
+/** The cloud browser of a task in the head of its feed (docs/plan/57, Б12–Б18). */
+export type BrowserHead = NonNullable<DialogFeed['browser']>

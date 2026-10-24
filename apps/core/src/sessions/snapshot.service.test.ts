@@ -18,7 +18,7 @@ import { sealSnapshotPart } from '@repo/snapshots'
 import { sampleDriverId } from '../testing/ids.ts'
 import { SnapshotService, type SealedElsewhere } from './snapshot.service.ts'
 
-const metadata: SnapshotMetadata = {
+const metadata: SnapshotMetadata & { git: NonNullable<SnapshotMetadata['git']> } = {
   workspaceId: 'ws1',
   sessionId: 's1',
   turn: 1,
@@ -82,6 +82,10 @@ function fixture() {
       })()
     }),
     exists: vi.fn(async (_bucket, key) => objects.has(key)),
+    stat: vi.fn(async (_bucket, key) => {
+      const bytes = objects.get(key)
+      return bytes ? { sizeBytes: bytes.byteLength } : null
+    }),
     delete: vi.fn(async (_bucket, key) => {
       objects.delete(key)
     }),
@@ -167,7 +171,7 @@ describe('host snapshot lifecycle', () => {
     expect(new Set(manifest.parts.map((p) => p.encryption.wrappedKey)).size).toBe(1)
     const loaded = await f.service.load(reference)
     for (const name of ['home', 'untracked', 'patch'] as const)
-      expect(Buffer.from(loaded.archives[name])).toEqual(Buffer.from(original[name]))
+      expect(Buffer.from(loaded.archives[name]!)).toEqual(Buffer.from(original[name]))
     // One data key per snapshot: a single Vault round-trip per load.
     expect(f.secrets.transitDecryptDataKey).toHaveBeenCalledOnce()
     expect(f.issued).toHaveLength(2)
@@ -375,7 +379,7 @@ describe('host snapshot lifecycle', () => {
         },
         await parts(),
       )
-      expect((await f.service.load(reference)).manifest.git.publication?.taskId).toBe('task-1')
+      expect((await f.service.load(reference)).manifest.git?.publication?.taskId).toBe('task-1')
       changeManifest(f, (m) => {
         const git = m.git as Record<string, unknown>
         if (kind === 'removed') delete git.publication
@@ -499,7 +503,7 @@ describe('home part sealed by a turn executor', () => {
     expect(new Set(manifest.parts.map((p) => p.encryption.wrappedKey)).size).toBe(1)
     const loaded = await f.service.load(reference)
     for (const name of ['home', 'untracked', 'patch'] as const)
-      expect(Buffer.from(loaded.archives[name])).toEqual(Buffer.from(original[name]))
+      expect(Buffer.from(loaded.archives[name]!)).toEqual(Buffer.from(original[name]))
     expect(f.issued.every((key) => key.every((byte) => byte === 0))).toBe(true)
   })
 
@@ -608,5 +612,81 @@ describe('restore source for a turn executor', () => {
       code: 'NOT_FOUND',
     })
     expect(f.storage.presign).not.toHaveBeenCalled()
+  })
+})
+
+describe('a snapshot without a repository (docs/plan/57-browser-tasks.md, Б4)', () => {
+  const { git: _git, ...homeOnly } = metadata
+
+  it('stores the home part alone and a manifest without git, and gives back only that part', async () => {
+    const f = fixture()
+    const original = await parts()
+    const home = sealedHome(f, original.home)
+    const manifest = await f.service.save(homeOnly, { home })
+    expect(f.writes).toEqual([`${prefix}home.tar.zst`, manifestKey])
+    expect(manifest.git).toBeUndefined()
+    expect(manifest.parts.map((part) => part.name)).toEqual(['home'])
+    expect(home.seal.mock.calls[0]![0].base).not.toHaveProperty('git')
+    const stored = JSON.parse(Buffer.from(f.objects.get(manifestKey)!).toString()) as object
+    expect(stored).not.toHaveProperty('git')
+
+    const loaded = await f.service.load(reference)
+    expect(Object.keys(loaded.archives)).toEqual(['home'])
+    expect(Buffer.from(loaded.archives.home)).toEqual(Buffer.from(original.home))
+    expect(f.issued.every((key) => key.every((byte) => byte === 0))).toBe(true)
+
+    vi.mocked(f.storage.presign).mockClear()
+    const source = await f.service.restoreSource(reference, 30_000)
+    expect(Object.keys(source.parts)).toEqual(['home'])
+    expect(vi.mocked(f.storage.presign).mock.calls.map(([request]) => request)).toEqual([
+      { bucket: 'sessions', key: `${prefix}home.tar.zst`, method: 'GET', ttlMs: 30_000 },
+    ])
+  })
+
+  it('seals bytes core holds for it the same way', async () => {
+    const f = fixture()
+    const original = await parts()
+    await f.service.save(homeOnly, { home: original.home })
+    expect(f.writes).toEqual([`${prefix}home.tar.zst`, manifestKey])
+    const loaded = await f.service.load(reference)
+    expect(Buffer.from(loaded.archives.home)).toEqual(Buffer.from(original.home))
+  })
+
+  it('never mixes the shapes: refused before Vault is asked or anything is written', async () => {
+    const original = await parts()
+    for (const [shape, given] of [
+      [homeOnly, original],
+      [homeOnly, { home: original.home, patch: original.patch }],
+      [metadata, { home: original.home }],
+    ] as const) {
+      const f = fixture()
+      await expect(
+        f.service.save(shape, given as Parameters<SnapshotService['save']>[1]),
+      ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+      expect(f.secrets.transitDataKey).not.toHaveBeenCalled()
+      expect(f.writes).toEqual([])
+    }
+  })
+
+  it('cannot be read as the other shape: a git block added or removed fails the load', async () => {
+    const original = await parts()
+    const withGit = fixture()
+    await withGit.service.save(homeOnly, { home: original.home })
+    changeManifest(withGit, (m) => {
+      m.git = metadata.git
+    })
+    await expect(withGit.service.load(reference)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+
+    // A manifest of a turn with a repository loses its git block and two of its parts: the home
+    // part was sealed with the git fields in its AAD and does not open.
+    const withoutGit = fixture()
+    await withoutGit.service.save(metadata, original)
+    changeManifest(withoutGit, (m) => {
+      delete m.git
+      m.parts = (m.parts as Array<{ name: string }>).filter((part) => part.name === 'home')
+    })
+    await expect(withoutGit.service.load(reference)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
   })
 })

@@ -6,10 +6,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { serverRefusal } from '@/components/billing/testing'
 import { SITE_ID } from '@/components/chat/testing'
 
-import { NewDialog } from './new-dialog'
+import { NewDialog, newDialogWays } from './new-dialog'
 
 type Created = { taskId: string; alias: string; created: boolean }
-type CreateInput = { siteId: string; taskId: string; text: string }
+type CreateInput = {
+  siteId: string
+  taskId: string
+  text: string
+  requirements?: { repository: boolean; browser: boolean }
+  attachments?: string[]
+}
 
 const { create, push } = vi.hoisted(() => ({
   create: vi.fn<(input: CreateInput) => Promise<Created>>(),
@@ -30,7 +36,20 @@ vi.mock('@/trpc/client', () => ({
     },
     billing: { usage: { queryKey: () => ['billing', 'usage'] } },
   }),
+  useTRPCClient: () => ({
+    attachment: {
+      start: { mutate: vi.fn(async () => ({ attachmentId: ATTACHMENT, uploadPath: '/x' })) },
+      remove: { mutate: vi.fn() },
+    },
+  }),
 }))
+
+const ATTACHMENT = '0199a3f2-0000-7000-8000-0000000000f1'
+type Capabilities = Parameters<typeof NewDialog>[0]['capabilities']
+const COPY_ONLY: Capabilities = { repository: 'ready', browser: 'not_configured' }
+const BOTH: Capabilities = { repository: 'ready', browser: 'ready' }
+const BROWSER_ONLY: Capabilities = { repository: 'absent', browser: 'ready' }
+const NONE: Capabilities = { repository: 'inactive', browser: 'not_configured' }
 
 const NOT_CONNECTED = 'Сайт ещё не подключён. Задачи можно будет ставить после подключения.'
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -41,13 +60,17 @@ const described = (element: HTMLElement) =>
     .map((id) => document.getElementById(id)?.textContent ?? '')
     .join(' ')
 
-function showDialog(props: { accepting?: boolean; heading?: 'h1' | 'h2' } = {}) {
+function showDialog(props: { capabilities?: Capabilities; heading?: 'h1' | 'h2' } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   render(
     <QueryClientProvider client={queryClient}>
-      <NewDialog siteId={SITE_ID} accepting={props.accepting ?? true} heading={props.heading} />
+      <NewDialog
+        siteId={SITE_ID}
+        capabilities={props.capabilities ?? COPY_ONLY}
+        heading={props.heading}
+      />
     </QueryClientProvider>,
   )
   return queryClient
@@ -142,7 +165,7 @@ describe('new dialog', () => {
   })
 
   it('says on the field why a site that is not connected takes no task', () => {
-    showDialog({ accepting: false })
+    showDialog({ capabilities: NONE })
     expect(field().disabled).toBe(true)
     expect(send().disabled).toBe(true)
     expect(described(field())).toBe(NOT_CONNECTED)
@@ -172,9 +195,95 @@ describe('new dialog', () => {
     ).toBeNull()
   })
 
-  it('keeps the reminders under the field and no attachments', () => {
+  it('keeps the reminders under the field, and no files for the copy of the site', () => {
     showDialog()
     expect(screen.getAllByRole('button')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Прикрепить файлы' })).toBeNull()
+    expect(screen.queryByRole('radiogroup', { name: 'Как агент будет работать' })).toBeNull()
     expect(screen.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeTruthy()
+  })
+})
+
+describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
+  it('lets the client choose the browser or the copy where the site offers both', async () => {
+    showDialog({ capabilities: BOTH })
+    const ways = screen.getByRole('radiogroup', { name: 'Как агент будет работать' })
+    const browser = within(ways).getByRole<HTMLInputElement>('radio', { name: 'В браузере' })
+    const copy = within(ways).getByRole<HTMLInputElement>('radio', { name: 'Через копию сайта' })
+    // The server's own default: the copy of the site where it is ready.
+    expect(copy.checked).toBe(true)
+    expect(described(ways)).toContain('сами выпускаете новую версию')
+    expect(screen.queryByRole('button', { name: 'Прикрепить файлы' })).toBeNull()
+    fireEvent.click(browser)
+    expect(browser.checked).toBe(true)
+    expect(described(ways)).toContain('Изменения появляются на сайте сразу')
+    expect(screen.getByRole('button', { name: 'Прикрепить файлы' })).toBeTruthy()
+    expect(
+      screen.getByText(
+        'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
+      ),
+    ).toBeTruthy()
+    write('Добавьте новость о веранде')
+    fireEvent.click(send())
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0]![0]).toMatchObject({
+      requirements: { repository: false, browser: true },
+    })
+  })
+
+  it('sends the copy of the site when it is chosen', async () => {
+    showDialog({ capabilities: BOTH })
+    write('Поменяйте телефон в шапке')
+    fireEvent.click(send())
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0]![0]).toMatchObject({
+      requirements: { repository: true, browser: false },
+    })
+  })
+
+  it('works through the browser alone on a site without access to its files, and says so', async () => {
+    showDialog({ capabilities: BROWSER_ONLY })
+    expect(screen.queryByRole('radiogroup', { name: 'Как агент будет работать' })).toBeNull()
+    expect(
+      screen.getByText(
+        'Сайт добавлен без доступа к файлам: агент работает в админке сайта через браузер. Изменения появляются на сайте сразу.',
+      ),
+    ).toBeTruthy()
+    expect(field().disabled).toBe(false)
+    write('Добавьте новость')
+    fireEvent.click(send())
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0]![0].requirements).toEqual({ repository: false, browser: true })
+  })
+
+  it('says why a site whose address is not https takes no task in the browser', () => {
+    showDialog({ capabilities: { repository: 'absent', browser: 'insecure' } })
+    expect(field().disabled).toBe(true)
+    expect(described(field())).toBe(
+      'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://.',
+    )
+  })
+})
+
+describe('newDialogWays', () => {
+  it('offers what the site takes, the copy first as the server does', () => {
+    expect(newDialogWays(BOTH)).toEqual({
+      ways: ['browser', 'repository'],
+      initial: 'repository',
+      blocked: null,
+    })
+    expect(newDialogWays(COPY_ONLY)).toEqual({
+      ways: ['repository'],
+      initial: 'repository',
+      blocked: null,
+    })
+    expect(newDialogWays(BROWSER_ONLY)).toEqual({
+      ways: ['browser'],
+      initial: 'browser',
+      blocked: null,
+    })
+    expect(newDialogWays({ repository: 'importing', browser: 'closed' }).blocked).toBe(
+      NOT_CONNECTED,
+    )
   })
 })
