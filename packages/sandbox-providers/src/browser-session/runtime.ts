@@ -61,10 +61,20 @@ type Listed = { Id: string; Names?: string[]; Labels?: Record<string, string>; S
 /** A write of the secret path: a fixed script of /bin/sh, the path as $1. */
 const WRITE_FILE = ['/bin/sh', '-c', 'umask 077 && cat > "$1.tmp" && mv -f "$1.tmp" "$1"', 'raditi']
 const WS_PATH = /^\/[A-Za-z0-9_-]{43,128}$/
-/** A name of a local site as BROWSER_LOCAL_SITES gives it: never an address. */
-const LOCAL_NAME =
-  /^(?=.*[a-z][a-z0-9-]*$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/
-const TARGET_NAME = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/
+/**
+ * A host name of lowercase labels whose last label holds a letter, so that no resolver reads it as
+ * an address: a local site's name in BROWSER_LOCAL_SITES, or its target's name.
+ */
+function isHostName(name: string) {
+  const labels = name.split('.')
+  return (
+    name.length <= 253 &&
+    labels.every(
+      (label) => /^[a-z0-9-]{1,63}$/.test(label) && !label.startsWith('-') && !label.endsWith('-'),
+    ) &&
+    /[a-z]/.test(labels.at(-1)!)
+  )
+}
 const suffix = () => randomBytes(4).toString('hex')
 const addressOn = (info: Docker.ContainerInspectInfo, network: NetworkPlace) =>
   Object.values(info.NetworkSettings?.Networks ?? {}).find(
@@ -78,7 +88,7 @@ export function localSiteRoute(site: BrowserLocalSite): [string, string] | null 
   const url = new URL(site.origin)
   // Plain http only: the proxy reads what goes to a local site — a request, or the first one in a
   // tunnel of the request API — and TLS it could not read.
-  if (url.protocol !== 'http:' || !LOCAL_NAME.test(url.hostname)) return null
+  if (url.protocol !== 'http:' || !isHostName(url.hostname)) return null
   const at = site.target.lastIndexOf(':')
   const host = site.target.slice(0, at)
   const port = Number(site.target.slice(at + 1))
@@ -87,7 +97,7 @@ export function localSiteRoute(site: BrowserLocalSite): [string, string] | null 
     !/^[1-9]\d{0,4}$/.test(site.target.slice(at + 1)) ||
     port > 65_535 ||
     // An address, or a name the proxy's container resolves: never one a resolver reads as one.
-    !(isIPv4(host) || (TARGET_NAME.test(host) && /[a-z]/.test(host.split('.').at(-1)!)))
+    !(isIPv4(host) || isHostName(host))
   )
     return null
   return [`${url.hostname}:${url.port === '' ? 80 : url.port}`, site.target]
@@ -569,7 +579,7 @@ export function createDockerBrowserSessionRuntime(
         const owned = ownedBrowserResource(row.Labels)
         if (owned) ids.add(owned.sessionId)
       }
-      return [...ids].sort()
+      return [...ids].sort((a, b) => a.localeCompare(b))
     },
   }
 }

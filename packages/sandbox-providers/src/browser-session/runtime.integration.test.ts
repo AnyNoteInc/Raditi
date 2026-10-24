@@ -63,6 +63,7 @@ interface Page {
     headers(): Record<string, string>
     text(): Promise<string>
   } | null>
+  close(): Promise<void>
 }
 interface Browser {
   newContext(): Promise<{

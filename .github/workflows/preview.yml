@@ -152,11 +152,14 @@ jobs:
           pnpm --filter @repo/sandbox-providers exec vitest run \
             src/browser-session/runtime.integration.test.ts
       # The browser worker (apps/browser, Б10–Б17) with that runtime and Playwright: a local site
-      # through the stream, a click of the client, the agent's observation, a clean close.
+      # through the stream, a click of the client, the agent's observation, a clean close. The worker
+      # imports @repo/db, whose client is generated here (offline, no database).
       - name: Browser worker against the real daemon
         env:
           RADITI_BROWSER_DOCKER_TESTS: '1'
-        run: pnpm --filter browser exec vitest run src/browser-worker.docker.test.ts
+        run: |
+          pnpm db:generate
+          pnpm --filter browser exec vitest run src/browser-worker.docker.test.ts
       # The cloud browser of a task (docs/plan/57-browser-tasks.md, Б13–Б22) on a Chromium of the
       # runner itself, no Docker: tabs, screencast, secret fields, uploads, dialogs, the policy.
       - name: Cloud browser session on a local Chromium

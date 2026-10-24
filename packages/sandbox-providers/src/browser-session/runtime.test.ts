@@ -464,6 +464,9 @@ describe('Docker browser session runtime', () => {
       { origin: 'http://wp.localhost:8080', target: '127.0.0.1' },
       { origin: 'http://wp.localhost:8080', target: 'http://127.0.0.1:8080' },
       { origin: 'http://wp.localhost:8080', target: '999.1.1.1:8080' },
+      { origin: 'http://wp.localhost:8080', target: 'wp..internal:8080' },
+      { origin: 'http://wp.localhost:8080', target: '-wp.internal:8080' },
+      { origin: 'http://wp.10:8080', target: '127.0.0.1:8080' },
     ])
       await expect(
         runtime.start(spec({ allowedHosts: [], localSites: [site] })),

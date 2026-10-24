@@ -1622,7 +1622,7 @@ describe('rows of a task in the browser', () => {
       feedObjectOf({
         kind: 'post',
         status: 'draft',
-        title: `  Новость‮ о\n\nвыставке ${marker} `,
+        title: `  Новость\u202e о\n\nвыставке ${marker} `,
         url: 'https://Example.ru/новость',
         editUrl: 'https://admin:secret@example.ru/wp-admin/post.php?post=1',
       }),
