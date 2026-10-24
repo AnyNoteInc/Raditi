@@ -1,5 +1,11 @@
 import { z } from 'zod'
 
+import { attachmentLimits } from '../attachments/rules.ts'
+import {
+  browserHelpReasons,
+  browserPlatformQuestionReasons,
+  browserSessionLimits,
+} from '../browser/session.ts'
 import { agentOutputLimits } from '../ports/agent-driver.ts'
 import { chatCommandIds } from '../release/chat-commands.ts'
 import { releaseOutcomes } from '../release/release-state.ts'
@@ -12,6 +18,7 @@ import {
   isFeedText,
   looksLikeSecret,
 } from './client-feed-text.ts'
+import { REPOSITORY_ONLY, taskRequirementsSchema } from './task-requirements.ts'
 import { taskStatuses } from './task-status.ts'
 
 /**
@@ -22,9 +29,11 @@ import { taskStatuses } from './task-status.ts'
  *
  * Two schemas per type. Writing is strict: closed enums, no extra keys, free text in exactly
  * four fields (`request.text`, `question.intro`, `question.questions[].text` with its
- * `options[]`, `result.message`) — everything else is a number, an enum or an id, so nothing
- * raw (a failure reason, a path, a command) can reach the customer. Reading is tolerant: rows
- * are immutable and outlive the code that wrote them.
+ * `options[]`, `result.message`), the agent's words of a `browser` question (`question.message`)
+ * and the titles of objects the platform read on the site (`objects[].title`) — everything else
+ * is a number, an enum, an id or an address, so nothing raw (a failure reason, a path, a
+ * command) can reach the customer. Reading is tolerant: rows are immutable and outlive the code
+ * that wrote them.
  *
  * The vocabulary names no agent shell, CMS or provider (CLAUDE.md, rule 8).
  */
@@ -55,7 +64,7 @@ export const feedLimits = Object.freeze({
   /** A payload as UTF-8 JSON. */
   payloadBytes: 32 * 1024,
   requestText: FEED_REQUEST_TEXT_LIMIT,
-  attachments: 10,
+  attachments: attachmentLimits.perMessage,
   turn: 999_999,
   intro: agentOutputLimits.clientMessage,
   message: agentOutputLimits.clientMessage,
@@ -67,13 +76,25 @@ export const feedLimits = Object.freeze({
   /** Rows of one `task.feed` answer. */
   page: 200,
   title: 120,
+  /** The agent's words of its `web_help` request; a `browser` question holds up to `message`. */
+  helpMessage: browserSessionLimits.helpChars,
+  /**
+   * Objects of the site a result, a failure or a cancellation names (docs/plan/57, Б23, Б24).
+   * With the titles and the addresses below, twenty of them and the longest message still keep
+   * a payload under 32 KiB.
+   */
+  objects: 20,
+  objectTitle: 120,
+  /** An address of an object: ASCII, as `URL.href` writes it. */
+  objectUrl: 400,
 })
 const limits = feedLimits
 
 // Kinds a row may be written with today. `revision` — words to a dialog that waits with a
 // candidate; `command` — a command of the chat (docs/plan/53-chat-preview-release.md, Р6, Р34);
 // `continue` — «Продолжить» after a question of the platform about credits (Р8), the kind the
-// design reserved for it.
+// design reserved for it; `resume` — «Продолжить работу агента» of a task in the browser
+// (docs/plan/57-browser-tasks.md, Б16).
 export const feedRequestKinds = [
   'first',
   'answer',
@@ -81,6 +102,7 @@ export const feedRequestKinds = [
   'revision',
   'command',
   'continue',
+  'resume',
 ] as const
 export type FeedRequestKind = (typeof feedRequestKinds)[number]
 
@@ -89,10 +111,44 @@ export const feedSteps = ['work', 'save', 'site', 'files'] as const
 export const feedStepSchema = z.enum(feedSteps)
 export type FeedStep = z.infer<typeof feedStepSchema>
 
-export const feedQuestionKinds = ['agent', 'ceiling'] as const
+export const feedQuestionKinds = ['agent', 'ceiling', 'browser'] as const
 export type FeedQuestionKind = (typeof feedQuestionKinds)[number]
 export const feedCeilingReasons = ['step', 'credits', 'gift', 'attempts'] as const
 export type FeedCeilingReason = (typeof feedCeilingReasons)[number]
+
+/**
+ * Why a `browser` question stops the work (docs/plan/57-browser-tasks.md, Б23): the agent asked
+ * the customer to act in the browser of the task — sign in, pass a check, confirm, something
+ * else it names (`web_help`) —, or the platform found the customer in control of the browser, or
+ * nothing the task saved was confirmed on the site.
+ */
+export const feedBrowserReasons = [
+  ...browserHelpReasons,
+  ...browserPlatformQuestionReasons,
+] as const
+export type FeedBrowserReason = (typeof feedBrowserReasons)[number]
+
+/**
+ * An object of the site the platform names in a result, a failure or a cancellation of a task in
+ * the browser (Б23, Б24): a post or a page, as its check read it there.
+ */
+export const feedObjectKinds = ['post', 'page'] as const
+export type FeedObjectKind = (typeof feedObjectKinds)[number]
+/**
+ * The state read on the site, never the agent's word; `missing` — the site has no such object;
+ * `unconfirmed` — the task saved it, but its state could not be read there or has no name here.
+ */
+export const feedObjectStatuses = [
+  'published',
+  'scheduled',
+  'draft',
+  'pending',
+  'private',
+  'trashed',
+  'missing',
+  'unconfirmed',
+] as const
+export type FeedObjectStatus = (typeof feedObjectStatuses)[number]
 
 /**
  * What the platform knows about the site. Trusted: written from the platform's own records,
@@ -175,6 +231,83 @@ const agentText = (max: number) =>
     .refine(isFeedText, 'expected text passed through feedText()')
     .refine(hasVisibleText, 'the text has no visible characters')
 
+// An address of an object: http(s) as `URL.href` writes it — ASCII, so its bytes are its length —
+// and without a name or a password in it.
+const objectUrl = z
+  .url({ protocol: /^https?$/ })
+  .max(limits.objectUrl)
+  .regex(/^[!-~]+$/, 'expected an address as URL.href writes it')
+  // Checks after a failed one still run: what is not an address is refused above.
+  .refine((url) => {
+    if (!URL.canParse(url)) return true
+    const parsed = new URL(url)
+    return parsed.username === '' && parsed.password === ''
+  }, 'an address carries no credentials')
+
+/** A title as the site holds it, on one line: what feedObjectOf() leaves. */
+const objectTitle = agentText(limits.objectTitle).refine(
+  (title) => !title.includes('\n'),
+  'expected one line',
+)
+
+/** `objects[]` of a result, a failure or a cancellation: trusted, read by the platform. */
+export const feedObjectSchema = z.strictObject({
+  kind: z.enum(feedObjectKinds),
+  /** null — the object has no title to show. */
+  title: objectTitle.nullable(),
+  status: z.enum(feedObjectStatuses),
+  /** Where a visitor sees it; absent when it has no public address, as a draft. */
+  url: objectUrl.optional(),
+  /** Where it is edited on the site. */
+  editUrl: objectUrl.optional(),
+})
+export type FeedObject = z.infer<typeof feedObjectSchema>
+const objects = z.array(feedObjectSchema).max(limits.objects).optional()
+
+const urlOf = (raw: string | null | undefined): string | undefined => {
+  if (typeof raw !== 'string' || !URL.canParse(raw)) return undefined
+  const href = new URL(raw).href
+  return objectUrl.safeParse(href).success ? href : undefined
+}
+
+/**
+ * An object as the platform read it on the site, made fit for a row: the title through
+ * feedText() on one line, cut to its limit by whole characters (null when nothing is left to
+ * read); an address as `URL.href` writes it, left out when it is not http(s), carries
+ * credentials or is too long.
+ */
+export function feedObjectOf(read: {
+  kind: FeedObjectKind
+  status: FeedObjectStatus
+  title: string | null
+  url?: string | null
+  editUrl?: string | null
+}): FeedObject {
+  let title: string | null = null
+  if (typeof read.title === 'string') {
+    // Cut before feedText(): NFC of an unbounded text takes time.
+    const shown = feedText(read.title.slice(0, limits.objectTitle * 4))
+      .replace(/\s+/gu, ' ')
+      .trim()
+    let cut = ''
+    for (const char of shown) {
+      if (cut.length + char.length > limits.objectTitle) break
+      cut += char
+    }
+    cut = cut.trim()
+    title = objectTitle.safeParse(cut).success ? cut : null
+  }
+  const url = urlOf(read.url)
+  const editUrl = urlOf(read.editUrl)
+  return {
+    kind: read.kind,
+    title,
+    status: read.status,
+    ...(url === undefined ? {} : { url }),
+    ...(editUrl === undefined ? {} : { editUrl }),
+  }
+}
+
 /**
  * The commands a `feed.request` of the kind `command` is written with: every command of the chat
  * but «Попробовать ещё», whose press is a row of its own kind (`retry`).
@@ -233,6 +366,9 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     /** The `feed.question` of the kind `ceiling` this answers. */
     questionEventId: feedEventIdSchema,
   }),
+  // «Продолжить работу агента» (docs/plan/57, Б16): the customer gave the browser back to the
+  // agent. A press: no words, nothing else.
+  z.strictObject({ ...requestBase, kind: z.literal('resume') }),
 ])
 export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
 
@@ -277,6 +413,19 @@ export const feedQuestionPayloadSchema = z.discriminatedUnion('kind', [
     held: count,
     left: count,
   }),
+  // A task in the browser waits for the customer (docs/plan/57, Б23); the text comes from the
+  // catalogue by the reason.
+  z.strictObject({
+    v: version,
+    kind: z.literal('browser'),
+    turn: turnNo,
+    reason: z.enum(feedBrowserReasons),
+    /**
+     * The agent's own words: its `web_help` request, or its `client_message` under a question of
+     * the platform; shown under the catalogue text.
+     */
+    message: agentText(limits.message).optional(),
+  }),
 ])
 export type FeedQuestionPayload = z.infer<typeof feedQuestionPayloadSchema>
 
@@ -294,6 +443,8 @@ export const feedResultPayloadSchema = z.strictObject({
   changeType: z.enum(changeTypes),
   needsApproval: z.boolean(),
   risk: z.enum(risks),
+  /** What a task in the browser left on the site, as the platform confirmed it there (Б23). */
+  objects,
 })
 export type FeedResultPayload = z.infer<typeof feedResultPayloadSchema>
 
@@ -307,6 +458,8 @@ export const feedFailurePayloadSchema = z.strictObject({
   credits: z.enum(feedCreditsStates).nullable(),
   /** The status the failure moved the task to; absent in rows of before 18.10.2026 — `failed`. */
   next: z.enum(feedFailureNexts).optional(),
+  /** What a task in the browser had saved on the site, as the platform found it there (Б24). */
+  objects,
 })
 export type FeedFailurePayload = z.infer<typeof feedFailurePayloadSchema>
 
@@ -319,6 +472,8 @@ export const feedCancelledPayloadSchema = z.strictObject({
   authorId: z.uuid().optional(),
   site: z.enum(endedSites),
   credits: z.enum(feedCreditsStates).nullable(),
+  /** What a task in the browser had saved on the site, as the platform found it there (Б24). */
+  objects,
 })
 export type FeedCancelledPayload = z.infer<typeof feedCancelledPayloadSchema>
 
@@ -522,6 +677,29 @@ const shownText = (max: number) =>
 const readCredits = z.union([z.null(), known(feedCreditsStates, null)])
 const readEndedSite = known(endedSites, 'check' as const)
 
+// An object is a fact next to the row's own: what cannot be read of it is left out, never the
+// row. A kind or a state added later reads as null, a broken title as none, a broken address as
+// absent; an object without a kind or a state at all is dropped, and so is the list past its
+// limit.
+const readObject = z.object({
+  kind: known(feedObjectKinds, null),
+  title: shownText(limits.objectTitle).nullable().catch(null),
+  status: known(feedObjectStatuses, null),
+  url: objectUrl.optional().catch(undefined),
+  editUrl: objectUrl.optional().catch(undefined),
+})
+export type FeedObjectRead = z.infer<typeof readObject>
+const readObjects = z
+  .array(z.unknown())
+  .transform((items) =>
+    items.slice(0, limits.objects).flatMap((item) => {
+      const read = readObject.safeParse(item)
+      return read.success ? [read.data] : []
+    }),
+  )
+  .optional()
+  .catch(undefined)
+
 const readRequest = {
   first: z.object({
     kind: z.literal('first'),
@@ -565,6 +743,11 @@ const readRequest = {
     requestId: z.uuid(),
     questionEventId: feedEventIdSchema,
   }),
+  resume: z.object({
+    kind: z.literal('resume'),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+  }),
 } satisfies Record<FeedRequestKind, z.ZodType>
 // A kind added later: the text is shown when there is one.
 const readOtherRequest = z.object({
@@ -601,6 +784,15 @@ const readCeilingQuestion = z.object({
   held: count,
   left: count,
 })
+const readBrowserQuestion = z.object({
+  kind: z.literal('browser'),
+  turn: turnNo,
+  // No fallback: a question needs an action, an unknown reason is shown as a newer row.
+  reason: z.enum(feedBrowserReasons),
+  // The text of the question comes from the catalogue by the reason: the agent's words only add
+  // to it, so words that cannot be shown are left out, not the question.
+  message: shownText(limits.message).optional().catch(undefined),
+})
 
 const readResult = z.object({
   turn: turnNo,
@@ -612,6 +804,7 @@ const readResult = z.object({
   changeType: known(changeTypes, null),
   needsApproval: z.boolean(),
   risk: known(risks, null),
+  objects: readObjects,
 })
 
 const readFailure = z.object({
@@ -622,6 +815,7 @@ const readFailure = z.object({
   // Absent, or a value this code does not know: read as `failed` — nothing is promised about
   // the candidate.
   next: z.enum(feedFailureNexts).optional().catch(undefined),
+  objects: readObjects,
 })
 
 const readCandidate = z.object({
@@ -685,6 +879,7 @@ const readCancelled = z.object({
   authorId: z.uuid().optional(),
   site: readEndedSite,
   credits: readCredits,
+  objects: readObjects,
 })
 
 /**
@@ -704,11 +899,14 @@ export type FeedEvent =
       | z.infer<typeof readRequest.revision>
       | z.infer<typeof readRequest.command>
       | z.infer<typeof readRequest.continue>
+      | z.infer<typeof readRequest.resume>
       | ({ kind: 'other' } & z.infer<typeof readOtherRequest>)
     ))
   | { type: 'feed.step'; turn: number; attempt: number; step: FeedStep }
   | ({ type: 'feed.question' } & (
-      z.infer<typeof readAgentQuestion> | z.infer<typeof readCeilingQuestion>
+      | z.infer<typeof readAgentQuestion>
+      | z.infer<typeof readCeilingQuestion>
+      | z.infer<typeof readBrowserQuestion>
     ))
   | ({ type: 'feed.result' } & z.infer<typeof readResult>)
   | ({ type: 'feed.failure' } & z.infer<typeof readFailure>)
@@ -773,6 +971,14 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
       if (!includes(feedQuestionKinds, payload.kind)) return NEWER
       if (payload.kind === 'agent')
         return readWith(readAgentQuestion, payload, (data) => ({ type: 'feed.question', ...data }))
+      if (payload.kind === 'browser') {
+        if (typeof payload.reason === 'string' && !includes(feedBrowserReasons, payload.reason))
+          return NEWER
+        return readWith(readBrowserQuestion, payload, (data) => ({
+          type: 'feed.question',
+          ...data,
+        }))
+      }
       if (typeof payload.reason === 'string' && !includes(feedCeilingReasons, payload.reason))
         return NEWER
       return readWith(readCeilingQuestion, payload, (data) => ({ type: 'feed.question', ...data }))
@@ -881,5 +1087,10 @@ export const feedTaskHeadSchema = z.strictObject({
   workingSince: z.iso.datetime().nullable(),
   /** When the `work` stage of the current turn was written. */
   runningSince: z.iso.datetime().nullable(),
+  /**
+   * What the task works with (docs/plan/57, Б2): its site's repository, the browser of the task
+   * or both. A head built without it is of a task that has the repository alone.
+   */
+  requirements: taskRequirementsSchema.default(() => ({ ...REPOSITORY_ONLY })),
 })
 export type FeedTaskHead = z.infer<typeof feedTaskHeadSchema>

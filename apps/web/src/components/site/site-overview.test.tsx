@@ -41,6 +41,20 @@ describe('site overview', () => {
     expect(container.textContent).not.toMatch(/Настройк/)
   })
 
+  it('says a site added without access to its files works through the browser', () => {
+    render(
+      <SiteOverview
+        site={{
+          status: 'onboarding',
+          state: 'free',
+          capabilities: { repository: 'absent', browser: 'ready' },
+        }}
+      />,
+    )
+    expect(screen.getByText(/Сайт добавлен без доступа к файлам/)).toBeTruthy()
+    expect(screen.queryByText(/ещё не подключён/)).toBeNull()
+  })
+
   it.each([
     ['free', /ничего не выполняется/],
     ['busy', /идёт работа/],

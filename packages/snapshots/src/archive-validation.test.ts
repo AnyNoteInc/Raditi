@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest'
 
 const sampleDriverId = 'opencode' as const
 import {
+  archivedPartNames,
+  emptyUntrackedArchive,
   validateSnapshotArchives,
   validateUntrackedArchive,
   type SnapshotArchives,
@@ -443,5 +445,45 @@ describe('turn credentials in a captured snapshot', () => {
     await expect(
       validateSnapshotArchives(state, await parts(await archive([]), site), [], forms),
     ).resolves.toBeDefined()
+  })
+})
+
+describe('the archives of a snapshot without a repository (docs/plan/57-browser-tasks.md, Б4)', () => {
+  it('validates the home archive alone and returns only the copy it checked', async () => {
+    const home = await archive([{ name: 'sessions/run.jsonl', body: '{}' }])
+    const checked = await validateSnapshotArchives(state, { home })
+    expect(checked).toEqual({ home })
+    expect(checked.home).not.toBe(home)
+    await expect(
+      validateSnapshotArchives(state, {
+        home: await archive([{ name: 'sessions/link', type: 'symlink', linkname: '/' }]),
+      }),
+    ).rejects.toThrow(/archive/)
+  })
+
+  it('names all three parts or home alone, and refuses a mixture', async () => {
+    const home = Buffer.alloc(0)
+    expect(archivedPartNames({ home })).toEqual(['home'])
+    expect(archivedPartNames({ home, untracked: home, patch: home })).toEqual([
+      'home',
+      'untracked',
+      'patch',
+    ])
+    // As a caller without types could pass them.
+    for (const mixed of [
+      { home, untracked: home },
+      { home, patch: home },
+    ] as unknown as SnapshotArchives[]) {
+      expect(() => archivedPartNames(mixed)).toThrow(/both repository parts or neither/)
+      await expect(validateSnapshotArchives(state, mixed)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      })
+    }
+  })
+
+  it('makes the same empty untracked part core always built', async () => {
+    const empty = emptyUntrackedArchive()
+    expect(Buffer.from(empty).equals(zstdCompressSync(Buffer.alloc(1024)))).toBe(true)
+    await expect(validateUntrackedArchive(empty)).resolves.toEqual(empty)
   })
 })

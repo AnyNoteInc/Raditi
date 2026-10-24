@@ -260,4 +260,119 @@ describe('MCP request policy', () => {
       mcpBodyAllowed(call('wp_rest', { method: 'GET', route: '/wp/v2/pages/42' }), ['content']),
     ).toBe(true)
   })
+
+  it('offers web tools to a task that needs a browser where the worker is configured', () => {
+    const access = (
+      requirements: McpAccess['requirements'],
+      preview: McpAccess['preview'] = null,
+    ): McpAccess => ({
+      keyId: '01960000-0000-7000-8000-000000000001',
+      taskId: '01960000-0000-7000-8000-000000000002',
+      workspaceId: '01960000-0000-7000-8000-000000000003',
+      siteId: '01960000-0000-7000-8000-000000000004',
+      sessionId: 'synthetic',
+      turn: 1,
+      firstEpoch: 1,
+      epoch: 1,
+      stack: 'wordpress',
+      url: 'https://site.example.test',
+      preview,
+      ...(requirements === undefined ? {} : { requirements }),
+    })
+    const browserOnly = { repository: false, browser: true }
+    const repositoryOnly = { repository: true, browser: false }
+    const base = { allowedHosts: ['mcp'], allowLocalOrigin: false }
+    const all: McpSecurity = {
+      ...base,
+      contentTools: true,
+      siteContent: true,
+      browserTools: true,
+      webTools: true,
+    }
+    // Б20: the cloud browser of the task, on the site itself.
+    expect(mcpToolFamiliesOf(access(browserOnly), all)).toEqual(['web'])
+    expect(mcpToolFamiliesOf(access(browserOnly), { ...all, webTools: false })).toEqual([])
+    // Б1: a task without a repository never writes content, even on the P6 path of the stands.
+    expect(mcpToolFamiliesOf(access(repositoryOnly), all)).toEqual(['content'])
+    // A scope made before requirements is a repository task: no web tools.
+    expect(mcpToolFamiliesOf(access(undefined), all)).toEqual(['content'])
+    // Both needs, as schemas allow: each family by its own rule.
+    expect(
+      mcpToolFamiliesOf(
+        access(
+          { repository: true, browser: true },
+          {
+            id: '01960000-0000-7000-8000-000000000005',
+            status: 'ready',
+            database: true,
+            hostname: 'site-0a1b2c3d-chat-0a1b2c.localhost',
+            dbKinds: ['content_update'],
+          },
+        ),
+        all,
+      ),
+    ).toEqual(['content', 'browser', 'web'])
+  })
+
+  it('admits web calls only to the web family, by the arguments of the domain', () => {
+    const call = (name: string, args?: unknown) => ({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name, ...(args === undefined ? {} : { arguments: args }) },
+    })
+    const id = '01960000-0000-7000-8000-00000000000a'
+    const allowed = [
+      call('web_open', { url: '/wp-admin/post-new.php' }),
+      call('web_observe'),
+      call('web_observe', { maxChars: 8000, ref: 'f1e5' }),
+      call('web_click', { observation: 'o3', ref: 'e12' }),
+      call('web_click', { observation: 'o3', ref: 'e12', button: 'right', double: true }),
+      call('web_fill', { observation: 'o3', ref: 'e12', text: 'Новость дня' }),
+      call('web_type', { text: 'Первый абзац.' }),
+      call('web_press', { key: 'Control+A' }),
+      call('web_press', { key: 'Enter', observation: 'o3', ref: 'e2' }),
+      call('web_scroll', { direction: 'down' }),
+      call('web_tab', { action: 'list' }),
+      call('web_tab', { action: 'select', pageId: 2 }),
+      call('web_upload', { attachmentIds: [id] }),
+      call('web_upload', { observation: 'o3', ref: 'e7', attachmentIds: [id] }),
+      call('web_dialog', { accept: true }),
+      call('web_wait', { ms: 2000, until: 'load' }),
+      call('web_help', { reason: 'login', message: 'Пожалуйста, войдите в админку сайта.' }),
+      call('web_verify'),
+      call('web_verify', { expect: 'publish' }),
+    ]
+    for (const body of allowed) {
+      expect(mcpBodyAllowed(body, ['web'])).toBe(true)
+      // The preview's browser and content families name no web tool.
+      expect(mcpBodyAllowed(body, ['browser', 'content', 'schema'])).toBe(false)
+      expect(mcpBodyAllowed(body)).toBe(false)
+    }
+    const refused = [
+      // A session, a task or a site are never arguments.
+      call('web_open', { url: '/', sessionId: id }),
+      call('web_open', {}),
+      call('web_open', { url: 'x'.repeat(2049) }),
+      call('web_click', { ref: 'e12' }),
+      call('web_click', { observation: 'o3', ref: 'button' }),
+      call('web_fill', { observation: 'o3', ref: 'e1', text: 'a\u0000b' }),
+      call('web_type', { text: '' }),
+      call('web_press', { key: 'Control+Control+A' }),
+      call('web_press', { key: 'Enter', ref: 'e2' }),
+      call('web_scroll', { direction: 'down', amount: 10_001 }),
+      call('web_tab', { action: 'list', pageId: 1 }),
+      call('web_tab', { action: 'close' }),
+      call('web_upload', { attachmentIds: [] }),
+      call('web_upload', { attachmentIds: [id, id] }),
+      call('web_upload', { attachmentIds: ['inbox/key'] }),
+      call('web_wait', { ms: 15_001 }),
+      call('web_help', { reason: 'password', message: 'x' }),
+      call('web_verify', { expect: 'trash' }),
+      // No scripts, cookies or pixels for the model.
+      call('web_evaluate', { expression: 'document.cookie' }),
+      call('web_screenshot', {}),
+    ]
+    for (const body of refused) expect(mcpBodyAllowed(body, ['web', 'browser'])).toBe(false)
+  })
 })

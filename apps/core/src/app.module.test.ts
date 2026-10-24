@@ -7,6 +7,7 @@ import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BillingScheduler } from './billing/billing-scheduler.ts'
+import { BrowserSessions } from './browser/browser-sessions.ts'
 import { OutboxRelayService } from './outbox/outbox-relay.service.ts'
 import type { CoreConfig } from './config/config.ts'
 import { GitCredentialRuntime } from './git-workspace/git-credential-runtime.ts'
@@ -26,7 +27,9 @@ import { SiteImportProcessor } from './site-provisioning/site-import.processor.t
 import { SiteImportSweeper } from './site-provisioning/site-import.sweeper.ts'
 import { TaskSweepRuntime } from './tasks/task-sweep.ts'
 import { LiveTurns } from './turns/live-turns.ts'
+import { TurnExecRecovery } from './turns/turn-exec-recovery.ts'
 import { TurnRuntime } from './turns/turn-runtime.ts'
+import { TurnSupervisor } from './turns/turn-supervisor.ts'
 import { TURN_EXECUTOR } from './turns/turns.tokens.ts'
 import { RunnerApiServer } from './runner-api/runner-api.server.ts'
 import { RunnerHub } from './runner-api/runner-hub.ts'
@@ -334,6 +337,27 @@ describe('AppModule', () => {
       await core.close()
       app = undefined
     }
+  })
+
+  it('drives turns without git, and gives the passes one cloud browser only with its worker', async () => {
+    // Without git a task in the cloud browser still runs and is recovered: it has no repository
+    // (docs/plan/57-browser-tasks.md, Б7).
+    const plain = testCoreConfig()
+    expect(plain.git).toBeNull()
+    expect(plain.browser).toBeNull()
+    const core = await startCore(fakeInfra(), false, plain)
+    expect(core.get(TurnSupervisor, { strict: false })).toBeInstanceOf(TurnSupervisor)
+    expect(core.get(TurnExecRecovery, { strict: false })).toBeInstanceOf(TurnExecRecovery)
+    // Without BROWSER_WORKER_URL a task that needs a browser is refused; the rest runs.
+    expect(core.get(BrowserSessions, { strict: false })).toBeNull()
+    await core.close()
+    app = undefined
+
+    const browser = { url: 'http://127.0.0.1:8086', token: 'b'.repeat(43), sessionMaxHours: 4 }
+    const withBrowser = await startCore(fakeInfra(), false, { ...plain, browser })
+    expect(withBrowser.get(BrowserSessions, { strict: false })).toBeInstanceOf(BrowserSessions)
+    // One for the passes, their settlement and the sweep of dialogs alike.
+    expect(withBrowser.get(BrowserSessions, { strict: false, each: true })).toHaveLength(1)
   })
 
   it.each([false, true])(

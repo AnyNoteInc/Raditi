@@ -1,4 +1,5 @@
 import type { TaskStatus } from '@repo/domain'
+import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
 
 import type { FeedHeadState } from './feed-state'
 import type { FeedRow } from './chat-types'
@@ -39,8 +40,26 @@ export function requestShown(rows: readonly FeedRow[], requestId: string): boole
  * The client asked to stop a pass that is under way: `/cancel` was taken while the agent works,
  * and core has not ended the dialog yet. A dialog that waits is closed at once, so a press of
  * `/cancel` in a dialog that has not ended is a pass being stopped.
+ *
+ * A task in the browser (`browser`, docs/plan/57-browser-tasks.md, Б24) is stopped by core in any
+ * status — waiting for the client too: until then the newest press, other commands aside, is
+ * `/cancel`, as the server reads it (`cancelPending`), and the task takes nothing else.
  */
-export function stopRequested(rows: readonly FeedRow[], status: TaskStatus | undefined): boolean {
+export function stopRequested(
+  rows: readonly FeedRow[],
+  status: TaskStatus | undefined,
+  browser = false,
+): boolean {
+  if (status === undefined || terminalTaskStatuses.includes(status)) return false
+  if (browser) {
+    for (let index = rows.length - 1; index >= 0; index--) {
+      const row = rows[index]!
+      if (row.type !== 'feed.request') continue
+      if (row.kind !== 'command') return false
+      if (row.command === 'cancel') return true
+    }
+    return false
+  }
   if (status !== 'queued' && status !== 'preparing' && status !== 'running') return false
   return rows.some(
     (row) => row.type === 'feed.request' && row.kind === 'command' && row.command === 'cancel',

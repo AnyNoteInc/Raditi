@@ -319,14 +319,26 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
         expect(row.alias).toMatch(/^[0-9a-f]{6}$/)
         expect(String(row.alias)).toMatch(pattern)
       }
+      // The requirements of a task (20261022100000_browser_tasks) come later, with their defaults.
       expect(
-        tasks.map(({ alias: _a, title, mode, waiting, ...rest }) => ({
-          ...rest,
-          title,
-          mode,
-          waiting,
+        tasks.map(
+          ({ alias: _a, title, mode, waiting, needs_repository, needs_browser, ...rest }) => ({
+            ...rest,
+            title,
+            mode,
+            waiting,
+            needs: [needs_repository, needs_browser],
+          }),
+        ),
+      ).toEqual(
+        before_.tasks.map((row) => ({
+          ...row,
+          title: null,
+          mode: 'work',
+          waiting: null,
+          needs: [true, false],
         })),
-      ).toEqual(before_.tasks.map((row) => ({ ...row, title: null, mode: 'work', waiting: null })))
+      )
       expect(
         sites.map(
           ({
@@ -335,13 +347,21 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
             installed_sha,
             installed_at,
             installed_release_id,
+            agent_notes,
             ...rest
           }) => ({
             ...rest,
             installed: [installed_version, installed_sha, installed_at, installed_release_id],
+            agent_notes,
           }),
         ),
-      ).toEqual(before_.sites.map((row) => ({ ...row, installed: [null, null, null, null] })))
+      ).toEqual(
+        before_.sites.map((row) => ({
+          ...row,
+          installed: [null, null, null, null],
+          agent_notes: null,
+        })),
+      )
     })
 
     it('keep the journal hidden and its calls bound to the production site', async () => {

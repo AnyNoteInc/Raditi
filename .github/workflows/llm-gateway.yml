@@ -16,6 +16,7 @@ on:
       - pnpm-workspace.yaml
       - apps/core/**
       - apps/preview/**
+      - packages/browser-link/**
       - packages/ip-address/**
       - apps/runner/**
       - apps/mcp/**

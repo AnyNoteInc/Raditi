@@ -45,6 +45,16 @@ const paths = {
   /** The key of a server. */
   key: 'M12 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM10.8 10.8 20 20M17 17l2-2M14.5 14.5l2-2',
   retry: 'M20.5 12a8.5 8.5 0 1 1-2.6-6.1M21 4v4h-4',
+  // A task in the browser (docs/plan/57-browser-tasks.md): files, the browser and its controls.
+  attach:
+    'm21.4 11-9.2 9.2a6 6 0 0 1-8.5-8.5l8.6-8.6a4 4 0 0 1 5.7 5.7l-8.6 8.6a2 2 0 0 1-2.8-2.8l8.5-8.5',
+  image:
+    'M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM3 16l5-5 4 4 3-3 6 6M15.5 8.5h.01',
+  fullscreen: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
+  shrink: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5',
+  keyboard:
+    'M4 6h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1ZM7 10h.01M11 10h.01M15 10h.01M8 14h8',
+  pointer: 'M5 3l14 7-6 2-2 6L5 3Z',
 } as const
 
 export type AppIconName = keyof typeof paths

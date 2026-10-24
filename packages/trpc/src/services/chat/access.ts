@@ -1,5 +1,5 @@
 import type { MemberRole, Prisma } from '@repo/db'
-import type { TaskStatus } from '@repo/domain'
+import type { TaskRequirements, TaskStatus } from '@repo/domain'
 
 import { siteNotFound } from '../site-basics.ts'
 
@@ -37,6 +37,8 @@ export interface LockedTask {
   status: TaskStatus
   attempt: number
   turnNo: number
+  /** What the task works with (docs/plan/57, Б2): fixed when it was created. */
+  requirements: TaskRequirements
 }
 
 /**
@@ -58,9 +60,12 @@ export async function lockTask(
       status: TaskStatus
       attempt: number
       turn_no: number
+      needs_repository: boolean
+      needs_browser: boolean
     }>
   >`
-    SELECT id, workspace_id, site_id, status::text AS status, attempt, turn_no
+    SELECT id, workspace_id, site_id, status::text AS status, attempt, turn_no,
+           needs_repository, needs_browser
     FROM tasks WHERE id = ${taskId}::uuid FOR UPDATE`
   const row = rows[0]
   if (row === undefined) return null
@@ -71,5 +76,6 @@ export async function lockTask(
     status: row.status,
     attempt: row.attempt,
     turnNo: row.turn_no,
+    requirements: { repository: row.needs_repository, browser: row.needs_browser },
   }
 }

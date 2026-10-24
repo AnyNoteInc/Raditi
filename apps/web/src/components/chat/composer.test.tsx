@@ -195,7 +195,7 @@ describe('a field without commands', () => {
     expect(described(field())).toContain('Команды работают внутри диалога.')
     type('/release и поменяйте цену')
     press('Enter', field(), { ctrlKey: true })
-    expect(onSend).toHaveBeenCalledWith('/release и поменяйте цену')
+    expect(onSend).toHaveBeenCalledWith('/release и поменяйте цену', [])
   })
 })
 
@@ -206,7 +206,7 @@ describe('the field', () => {
     press('Enter')
     expect(onSend).not.toHaveBeenCalled()
     press('Enter', field(), { ctrlKey: true })
-    expect(onSend).toHaveBeenCalledWith('Поменяйте цену')
+    expect(onSend).toHaveBeenCalledWith('Поменяйте цену', [])
     await vi.waitFor(() => expect(field().value).toBe(''))
   })
 

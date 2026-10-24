@@ -2,11 +2,17 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 
 import { badRequest, type SnapshotManifest, type SnapshotPartName } from '@repo/domain'
 
-/** Bind every piece of resume metadata, not just the object name, to the authentication tag. */
+/**
+ * Bind every piece of resume metadata, not just the object name, to the authentication tag.
+ * A snapshot with a repository keeps the exact bytes it was sealed with. One without
+ * (docs/plan/57-browser-tasks.md, Б4) has null in the four git positions and the tag
+ * `'workspace', 'none'` last: a git manifest cannot hold null there, so the shapes never meet.
+ */
 export function snapshotAad(
   manifest: Omit<SnapshotManifest, 'parts'>,
   part: SnapshotPartName,
 ): Uint8Array {
+  const { git } = manifest
   return Buffer.from(
     JSON.stringify([
       manifest.schemaVersion,
@@ -18,19 +24,19 @@ export function snapshotAad(
       manifest.driver.id,
       manifest.driver.version,
       manifest.driver.nativeSessionId ?? null,
-      manifest.git.provider,
-      manifest.git.branch,
-      manifest.git.baseSha,
-      manifest.git.headSha,
+      git?.provider ?? null,
+      git?.branch ?? null,
+      git?.baseSha ?? null,
+      git?.headSha ?? null,
       manifest.home.root,
       [...manifest.home.include].sort(),
       [...manifest.home.exclude].sort(),
       part,
-      ...(manifest.git.publication
-        ? [manifest.git.publication.taskId, manifest.git.publication.committedAt]
-        : []),
+      ...(git?.publication ? [git.publication.taskId, git.publication.committedAt] : []),
       // Tagged and last: a snapshot of the full tree keeps the AAD it was sealed with.
-      ...(manifest.git.sandboxBaseSha ? ['sandboxBaseSha', manifest.git.sandboxBaseSha] : []),
+      ...(git?.sandboxBaseSha ? ['sandboxBaseSha', git.sandboxBaseSha] : []),
+      // Tagged and last too: every snapshot with a repository keeps its AAD.
+      ...(git ? [] : ['workspace', 'none']),
     ]),
   )
 }

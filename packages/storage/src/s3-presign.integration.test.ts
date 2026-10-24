@@ -102,3 +102,36 @@ describe.skipIf(!local)('presigned URLs on the local S3', () => {
     expect((await send(get)).status).toBe(403)
   })
 })
+
+describe.skipIf(!local)('stat on the local S3', () => {
+  let storage: ObjectStorage
+  beforeAll(() => {
+    storage = createS3ObjectStorage(storageConfigFromEnv(process.env))
+  })
+  const key = `sessions/stat-${randomUUID()}/object`
+  afterAll(async () => {
+    await storage.delete('sessions', key)
+  })
+
+  it('gives the size and the ETag of a stored object, and null for a missing key', async () => {
+    const body = Buffer.from('twelve bytes')
+    await storage.put('sessions', key, body, { contentType: 'text/plain' })
+
+    expect(await storage.stat('sessions', key)).toMatchObject({
+      sizeBytes: body.byteLength,
+      contentType: 'text/plain',
+      etag: expect.any(String),
+    })
+    expect(await storage.stat('sessions', `${key}-absent`)).toBeNull()
+  })
+
+  it('does not take a missing bucket for a missing key', async () => {
+    const config = storageConfigFromEnv(process.env)
+    const missing = createS3ObjectStorage({
+      ...config,
+      buckets: { ...config.buckets, sessions: `raditi-missing-${randomUUID()}` },
+    })
+
+    await expect(missing.stat('sessions', key)).rejects.toBeDefined()
+  })
+})

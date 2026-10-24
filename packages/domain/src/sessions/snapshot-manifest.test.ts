@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { publicationLimits } from '../git/publication.ts'
 import { sessionStateSchema, snapshotLimits } from './session-state.ts'
 import {
+  snapshotHasRepository,
   snapshotManifestSchema,
+  snapshotMetadataSchema,
   snapshotPartFiles,
   snapshotPartNames,
+  snapshotPartNamesOf,
   snapshotPlanSchema,
   turnSnapshotPrefix,
 } from './snapshot-manifest.ts'
@@ -97,6 +100,74 @@ describe('snapshot scope and compatibility metadata', () => {
     const value = manifest()
     value.parts[0]!.encryption.algorithm = 'aes-128-cbc'
     expect(snapshotManifestSchema.safeParse(value).success).toBe(false)
+  })
+})
+
+describe('snapshot of a turn without a repository (plan 57, Б4)', () => {
+  /** The same snapshot without `git` and with its home part alone. */
+  const homeOnly = () => {
+    const { git: _git, ...value } = manifest()
+    return { ...value, parts: value.parts.filter((part) => part.name === 'home') }
+  }
+
+  it('reads a snapshot written before it, with git and three parts, as before', () => {
+    const stored = JSON.parse(JSON.stringify(manifest()))
+    const parsed = snapshotManifestSchema.parse(stored)
+    expect(parsed).toEqual(stored)
+    expect(snapshotHasRepository(parsed)).toBe(true)
+    expect(snapshotPartNamesOf(parsed)).toEqual(['home', 'untracked', 'patch'])
+    expect(parsed.schemaVersion).toBe(1)
+  })
+
+  it('accepts a manifest without git that holds the home part alone', () => {
+    const parsed = snapshotManifestSchema.parse(homeOnly())
+    expect(parsed).not.toHaveProperty('git')
+    expect(parsed.parts.map((part) => part.name)).toEqual(['home'])
+    expect(snapshotHasRepository(parsed)).toBe(false)
+    expect(snapshotPartNamesOf(parsed)).toEqual(['home'])
+    expect(parsed.schemaVersion).toBe(1)
+  })
+
+  it.each([
+    ['git with the home part alone', () => ({ ...homeOnly(), git: manifest().git })],
+    ['git with two parts', () => ({ ...manifest(), parts: manifest().parts.slice(0, 2) })],
+    ['no git with all three parts', () => ({ ...homeOnly(), parts: manifest().parts })],
+    [
+      'no git with another part instead of home',
+      () => ({ ...homeOnly(), parts: manifest().parts.filter((part) => part.name === 'patch') }),
+    ],
+    [
+      'no git with home twice',
+      () => ({ ...homeOnly(), parts: [homeOnly().parts[0]!, homeOnly().parts[0]!] }),
+    ],
+    ['no git and no parts', () => ({ ...homeOnly(), parts: [] })],
+    ['an empty git', () => ({ ...homeOnly(), git: {} })],
+    ['a null git', () => ({ ...homeOnly(), git: null })],
+  ])('refuses %s', (_label, value) => {
+    expect(snapshotManifestSchema.safeParse(value()).success).toBe(false)
+  })
+
+  it('keeps every other check of a part without git', () => {
+    for (const change of [
+      (value: ReturnType<typeof homeOnly>) => {
+        value.parts[0]!.key = 'sessions/other/turns/0001/home.tar.zst'
+      },
+      (value: ReturnType<typeof homeOnly>) => {
+        value.parts[0]!.encryption.keyId = 'ws-other'
+      },
+    ]) {
+      const value = homeOnly()
+      change(value)
+      expect(snapshotManifestSchema.safeParse(value).success).toBe(false)
+    }
+  })
+
+  it('takes metadata and a plan without git', () => {
+    const { schemaVersion: _v, createdAt: _c, parts: _p, git: _g, ...metadata } = manifest()
+    expect(snapshotMetadataSchema.parse(metadata)).not.toHaveProperty('git')
+    const { home: _h, ...plan } = metadata
+    const parsed = snapshotPlanSchema.parse({ ...plan, driver: { id: 'opencode', version: '1' } })
+    expect(snapshotHasRepository(parsed)).toBe(false)
   })
 })
 

@@ -322,7 +322,8 @@ function normalizeUrlPath(path: string): string[] | null {
 
 const routeMatchers = policy.rest.deniedRoutes.map((route) => route.split('/').filter(Boolean))
 
-function isRouteDenied(route: string): boolean {
+/** A REST route (relative to /wp-json, or with it) of the denied list, by its segments. */
+export function isRestRouteDenied(route: string): boolean {
   const segments = normalizeUrlPath(route)
   if (segments === null) return true
   // /index.php/wp-json/… (PATH_INFO) and /wp-json/… both lead to the REST route.
@@ -347,7 +348,7 @@ export function isRestRequestDenied(method: string, route: string): boolean {
   for (const key of params.keys()) {
     if (policy.rest.deniedParams.includes(lower(key))) return true
   }
-  return [path, ...params.getAll('rest_route')].some(isRouteDenied)
+  return [path, ...params.getAll('rest_route')].some(isRestRouteDenied)
 }
 
 const adminPages = policy.admin.deniedPages.map((entry) => {
@@ -357,6 +358,15 @@ const adminPages = policy.admin.deniedPages.map((entry) => {
     params: [...new URLSearchParams(query)].map(([key, value]) => [key, wildcard(value)] as const),
   }
 })
+
+/**
+ * The page of segments below /wp-admin/ as PHP runs it: up to the first `.php` script, whose rest
+ * is PATH_INFO — `users.php/x` runs users.php (and WordPress reads its `$pagenow` the same way).
+ */
+export function adminScriptPath(segments: readonly string[]): string {
+  const script = segments.findIndex((segment) => segment.endsWith('.php'))
+  return (script === -1 ? segments : segments.slice(0, script + 1)).join('/')
+}
 
 /** A URL the browser tools would open or submit to, absolute or relative to the site. */
 export function isAdminUrlDenied(url: string): boolean {
@@ -370,7 +380,7 @@ export function isAdminUrlDenied(url: string): boolean {
   if (segments === null) return true
   const adminIndex = segments.indexOf('wp-admin')
   if (adminIndex === -1) return false
-  const rest = segments.slice(adminIndex + 1).join('/')
+  const rest = adminScriptPath(segments.slice(adminIndex + 1))
 
   return adminPages.some(({ page, params }) => {
     const pageMatches = page.endsWith('/')

@@ -184,7 +184,7 @@ async function checkVault(stand) {
   })
   assert.ok([200, 204].includes(removed.status))
   passed(
-    'OpenBao: AppRole web (sites-writer) writes kv/sites/<id>/ssh with CAS 0 and cannot read it; AppRole core (core-turns, core-transit, core-site-import) reads it, cannot write it or read …/wp',
+    'OpenBao: AppRole web (sites-writer, workspace-provisioner) writes kv/sites/<id>/ssh with CAS 0 and cannot read it; AppRole core (core-turns, core-transit, core-site-import) reads it, cannot write it or read …/wp',
   )
 }
 

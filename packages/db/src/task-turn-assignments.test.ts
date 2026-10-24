@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto'
 
-import type { OpenTurnAssignment, TurnAssignmentStore, TurnPlan } from '@repo/domain'
+import {
+  BROWSER_ONLY,
+  REPOSITORY_ONLY,
+  type OpenTurnAssignment,
+  type TaskRequirements,
+  type TurnAssignmentStore,
+  type TurnPlan,
+} from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import {
@@ -59,7 +66,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     await schema?.drop()
   })
 
-  async function fixture() {
+  /** A task and the plan of its first turn; with `requirements` both are made for them. */
+  async function fixture(requirements?: TaskRequirements) {
     const workspace = await db.workspace.create({ data: { name: 'Synthetic product turn' } })
     workspaces.push(workspace.id)
     const site = await db.site.create({
@@ -70,7 +78,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         stack: 'wordpress',
       },
     })
-    const task = await db.task.create({ data: { workspaceId: workspace.id, siteId: site.id } })
+    const task = await db.task.create({
+      data: {
+        workspaceId: workspace.id,
+        siteId: site.id,
+        ...(requirements
+          ? { needsRepository: requirements.repository, needsBrowser: requirements.browser }
+          : {}),
+      },
+    })
     const sessionId = randomUUID()
     const leases = new PostgresSiteLeaseStore(db)
     const fence = (await leases.acquire({
@@ -102,12 +118,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       input: { prompt: 'Synthetic', attachments: [] },
       driverId: 'opencode',
       driverVersion: '1.0.0',
-      workspace: {
-        repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-        branch: `agent/${task.id}`,
-        expectedBaseSha: baseSha,
-        protectedPaths: [],
-      },
+      ...(requirements ? { requirements } : {}),
+      ...(requirements?.repository === false
+        ? {}
+        : {
+            workspace: {
+              repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
+              branch: `agent/${task.id}`,
+              expectedBaseSha: baseSha,
+              protectedPaths: [],
+            },
+          }),
       committedAt: '2026-10-01T00:00:00.000Z',
     }
     const input: OpenTurnAssignment = {
@@ -128,18 +149,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       plan: {
         ...plan,
         ...(replacesTurn ? { replacesTurn } : {}),
-        workspace: { ...plan.workspace, ...(replacesTurn ? { expectedBranchSha } : {}) },
+        ...(plan.workspace
+          ? { workspace: { ...plan.workspace, ...(replacesTurn ? { expectedBranchSha } : {}) } }
+          : {}),
         sandbox: { ...plan.sandbox, labels: { ...plan.sandbox.labels, turn } },
         context: { ...plan.context, turn },
       },
     })
     /**
      * A later turn as the planner builds it (plan 53, R3): a continuation names the checkpoint
-     * of turn `previous`, a rebased start or replacement names none.
+     * of turn `previous`, a rebased start or replacement names none. A turn without a
+     * repository has no base.
      */
     const step = (
       turn: number,
-      options: { base: string; previous?: number; rebased?: true; pin?: string | null },
+      options: { base?: string; previous?: number; rebased?: true; pin?: string | null },
     ): OpenTurnAssignment => {
       const opened = options.pin === undefined ? next(turn) : next(turn, turn - 1, options.pin)
       const previous = options.previous
@@ -158,7 +182,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
               },
             }),
         ...(options.rebased ? { rebased: true } : {}),
-        workspace: { ...opened.plan.workspace, expectedBaseSha: options.base },
+        ...(opened.plan.workspace && options.base
+          ? { workspace: { ...opened.plan.workspace, expectedBaseSha: options.base } }
+          : {}),
       }
       return opened
     }
@@ -313,6 +339,99 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     })
   })
 
+  describe('the requirements of the task (plan 57, Б2, Б3)', () => {
+    it('opens turns without a repository: no base, no branch, the snapshot of a completed turn', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      const first = (await store.open(f.input))!
+      expect(first.plan.requirements).toEqual(BROWSER_ONLY)
+      expect(first.plan.workspace).toBeUndefined()
+      expect(
+        await db.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId: f.task.id, turnNo: 1 } },
+        }),
+      ).toMatchObject({ status: 'running', baseSha: null })
+      // A completed turn without a repository published nothing: no head to look for.
+      await f.close(first, 'completed')
+
+      await expect(store.open(f.next(2))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'Continuation does not restore the completed product turn',
+      })
+      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(1)
+
+      const second = (await store.open(f.step(2, { previous: 1 })))!
+      expect(second.plan.previous?.turn).toBe(1)
+      expect(
+        await db.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId: f.task.id, turnNo: 2 } },
+        }),
+      ).toMatchObject({ status: 'running', baseSha: null })
+      expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).turnNo).toBe(2)
+    })
+
+    it('starts a new session after an unsuccessful turn without a repository, never a replacement', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      await f.close((await store.open(f.input))!, 'failed')
+
+      await expect(store.open(f.step(2, { previous: 1 }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'A turn after an unsuccessful one starts a new session',
+      })
+      // What a turn without a repository did on the site is not undone: the plan has no
+      // replacement to offer, and the schema refuses one.
+      await expect(store.open(f.next(2, 1))).rejects.toThrow()
+      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(1)
+
+      const second = (await store.open(f.next(2)))!
+      expect(second.plan.previous).toBeUndefined()
+      await f.close(second, 'completed')
+      expect(await store.open(f.step(3, { previous: 2 }))).not.toBeNull()
+    })
+
+    it('refuses a plan whose requirements differ from its task, without creating a row', async () => {
+      const repository = await fixture()
+      const withoutRepository: TurnPlan = { ...repository.plan, requirements: BROWSER_ONLY }
+      delete withoutRepository.workspace
+      await expect(
+        store.open({ ...repository.input, plan: withoutRepository }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'The turn plan does not meet the requirements of its task',
+      })
+
+      // A plan saved before the requirements is a repository plan: refused for a browser task.
+      const browser = await fixture(BROWSER_ONLY)
+      const saved: TurnPlan = {
+        ...repository.plan,
+        sandbox: browser.plan.sandbox,
+        context: browser.plan.context,
+      }
+      await expect(store.open({ ...browser.input, plan: saved })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'The turn plan does not meet the requirements of its task',
+      })
+      for (const taskId of [repository.task.id, browser.task.id]) {
+        expect(await db.turnAssignment.count({ where: { taskId } })).toBe(0)
+        expect(await db.taskTurn.count({ where: { taskId } })).toBe(0)
+      }
+
+      // The same task takes the old plan and one that names its requirements alike.
+      const named = { ...repository.plan, requirements: REPOSITORY_ONLY }
+      expect(await store.open({ ...repository.input, plan: named })).not.toBeNull()
+    })
+
+    it('keeps the requirements of a task as they were written', async () => {
+      const f = await fixture()
+      expect(await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).toMatchObject({
+        needsRepository: true,
+        needsBrowser: false,
+      })
+      await expect(
+        db.task.update({ where: { id: f.task.id }, data: { needsBrowser: true } }),
+      ).rejects.toThrow('the requirements of a task are fixed when it is created')
+    })
+  })
+
   it('atomically admits one running TaskTurn and never reuses its number', async () => {
     const f = await fixture()
     const contenders = await Promise.all([store.open(f.input), store.open(f.input)])
@@ -382,7 +501,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     await expect(store.open(f.next(2))).rejects.toThrow('completed product turn')
     await expect(store.open(f.next(2, 1))).rejects.toThrow('published task branch')
     const wrong = f.next(2, 1, headSha)
-    wrong.plan.workspace = { ...wrong.plan.workspace, expectedBaseSha: headSha }
+    wrong.plan.workspace = { ...wrong.plan.workspace!, expectedBaseSha: headSha }
     await expect(store.open(wrong)).rejects.toThrow('replaced turn input')
     const second = await store.open(f.next(2, 1, headSha))
     expect(second?.plan.replacesTurn).toBe(1)

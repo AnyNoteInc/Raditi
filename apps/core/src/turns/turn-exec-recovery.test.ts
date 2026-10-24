@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   badRequest,
+  BROWSER_ONLY,
   DomainError,
   MAX_SANDBOX_TURN_MS,
   notFound,
@@ -14,6 +15,7 @@ import {
   type AgentEvent,
   type ExecCursor,
   type ExecHandle,
+  type ExecSpec,
   type RemovableSandbox,
   type Sandbox,
   type SandboxInfo,
@@ -75,7 +77,16 @@ const rest = Buffer.from(line(events[2]!))
 /** The first epoch's credentials, as P3 would keep them. */
 const reference = { taskId: labels.taskId, sessionId: labels.sessionId, turn: 1, epoch: 1 }
 
-const request = (): TurnRequest => ({
+/**
+ * The request of the turn; without `repository` it is a turn of a task in the cloud browser
+ * (docs/plan/57-browser-tasks.md, Б4): no workspace.
+ */
+const request = ({ repository = true } = {}): TurnRequest => {
+  const { workspace, ...rest } = repositoryRequest()
+  return repository ? { ...rest, workspace } : { ...rest, requirements: { ...BROWSER_ONLY } }
+}
+
+const repositoryRequest = (): TurnRequest => ({
   sandbox: {
     image,
     labels,
@@ -135,10 +146,19 @@ function docker() {
     },
     kill,
   })
+  const quiet: ExecHandle = {
+    id: 'setup',
+    output: async function* () {},
+    wait: async () => ({ code: 0, reason: 'exited' as const }),
+    kill: async () => {},
+  }
   const sandbox: Sandbox = {
     id: 'container1',
     labels: { ...labels, leaseEpoch: 1 },
-    exec: vi.fn(async () => handle(0)),
+    // The commands that make an empty working directory print nothing (plan 57, Б4).
+    exec: vi.fn(async (spec: ExecSpec) =>
+      ['test', 'mkdir', 'find'].includes(spec.argv[0]!) ? quiet : handle(0),
+    ),
     attach: vi.fn(async (_execId: string, cursor?: ExecCursor) => handle(cursor?.stdout ?? 0)),
     fs: { write: vi.fn(async () => {}), read: vi.fn(), list: vi.fn(), remove: vi.fn() },
     quiesce: vi.fn(async () => {}),
@@ -186,8 +206,11 @@ function docker() {
   }
 }
 
-/** What survives a restart of core: the database, S3, Git and the sandbox side. */
-function world(kind: string) {
+/**
+ * What survives a restart of core: the database, S3, Git and the sandbox side. Without
+ * `repository` the turn is of a task in the cloud browser, on a core without git (Б4, Б7).
+ */
+function world(kind: string, { repository = true } = {}) {
   const leases = new MemorySiteLeases()
   const journal = new MemoryTurnJournal(leases)
   const assignments = new MemoryTurnAssignments(leases)
@@ -220,7 +243,7 @@ function world(kind: string) {
     extractResult: (list) =>
       JSON.parse(list.findLast((event) => event.type === 'message')?.text ?? 'null') as unknown,
   }
-  const committed = new Map<string, { manifest: SnapshotManifest; patch: Uint8Array }>()
+  const committed = new Map<string, { manifest: SnapshotManifest; patch: Uint8Array | null }>()
   const snapshots = {
     save: vi.fn(
       async (
@@ -236,7 +259,7 @@ function world(kind: string) {
         }
         committed.set(`${metadata.sessionId}/${metadata.turn}`, {
           manifest,
-          patch: Buffer.from(parts.patch as Uint8Array),
+          patch: parts.patch ? Buffer.from(parts.patch as Uint8Array) : null,
         })
         return manifest
       },
@@ -249,7 +272,10 @@ function world(kind: string) {
         throw new DomainError('CONFLICT', 'Snapshot is incompatible', 409)
       return {
         manifest: structuredClone(found.manifest),
-        archives: { home: Buffer.alloc(0), patch: found.patch, untracked: emptyUntrackedArchive() },
+        // A checkpoint without a repository holds its home alone.
+        archives: found.patch
+          ? { home: Buffer.alloc(0), patch: found.patch, untracked: emptyUntrackedArchive() }
+          : { home: Buffer.alloc(0) },
       }
     }),
     restoreSource: vi.fn(async () => {
@@ -290,7 +316,7 @@ function world(kind: string) {
       leases: wrap(leases),
       assignments: wrap(assignments),
       journal: wrap(journal),
-      workspace: wrap(workspace),
+      workspace: repository ? wrap(workspace) : null,
       snapshots: wrap(snapshots),
       credentials: wrap(credentials),
       logger,
@@ -379,7 +405,7 @@ function world(kind: string) {
     }
     options.arm?.(kill)
     const zombie = before.supervisor
-      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy)
+      .run(withoutTurnCredentials(request({ repository })), testTurnCredentialPolicy)
       .then(
         () => 'completed',
         (error: unknown) => error,
@@ -410,7 +436,7 @@ function world(kind: string) {
       before.hub!.close()
     }
     const ended = await before.supervisor
-      .run(withoutTurnCredentials(request()), testTurnCredentialPolicy)
+      .run(withoutTurnCredentials(request({ repository })), testTurnCredentialPolicy)
       .then(
         () => 'completed',
         (error: unknown) => error,
@@ -1286,6 +1312,191 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
 })
 
 /** The turn's deadline passed long enough ago that the VM's watchdog removed its container. */
+describe.each(['local', 'runner'])(
+  'turn exec recovery without a repository (%s executor, docs/plan/57-browser-tasks.md, Б6)',
+  (kind) => {
+    const gitless = () => world(kind, { repository: false })
+
+    /** Saves the checkpoint, then kills core: the journal ends on `checkpointing`. */
+    const crashAfterSave = (w: ReturnType<typeof world>) => {
+      const save = w.snapshots.save.getMockImplementation()!
+      return w.crashAt(undefined, {
+        arm: (kill) =>
+          w.snapshots.save.mockImplementationOnce(async (...args) => {
+            const manifest = await save(...args)
+            kill()
+            return manifest
+          }),
+      })
+    }
+
+    /** Recovery took the checkpoint as the turn's under epoch 2: nothing was published. */
+    const expectRecovered = (w: ReturnType<typeof world>) => {
+      expect(w.journal.phases(2).at(-1)).toBe('checkpoint_recovered')
+      expect(w.journal.phases(2)).not.toContain('publishing')
+      expect(w.publish).not.toHaveBeenCalled()
+      expect(w.workspace.preparePublication).not.toHaveBeenCalled()
+      expect(w.vm.exists()).toBe(false)
+      expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+      expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+      expect(w.credentials.revoked).toEqual([reference])
+      expect(w.logger.error).not.toHaveBeenCalled()
+      for (const entry of w.journal.entries) expect(entry).not.toHaveProperty('baseSha')
+    }
+
+    it('resumes the agent and completes the turn without publishing, on a core without git', async () => {
+      const w = gitless()
+      w.credentials.keep(reference, values)
+      const { after } = await w.crashAt('output')
+      const recovering = after.recovery.tick().then(() => after.recovery.settled())
+      await vi.waitFor(() => expect(w.journal.phases(2)).toContain('resumed'))
+      w.vm.finish()
+      await recovering
+
+      expect(w.journal.phases(2).slice(-4)).toEqual([
+        'checkpointing',
+        'checkpointed',
+        'destroyed',
+        'completed',
+      ])
+      expect(w.publish).not.toHaveBeenCalled()
+      expect(w.snapshots.save.mock.calls.at(-1)![0]).not.toHaveProperty('git')
+      expect(Object.keys(w.snapshots.save.mock.calls.at(-1)![1])).toEqual(['home'])
+      expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 2 } })
+      expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+    })
+
+    it.each(['checkpointed', 'destroyed'])(
+      'finishes a checkpoint left %s: containers gone, manifest proven, completed',
+      async (phase) => {
+        const w = gitless()
+        w.vm.finish()
+        const { after } = await w.crashAt(phase)
+        await w.recover(after.recovery)
+        expectRecovered(w)
+        expect(w.snapshots.load).toHaveBeenCalledOnce()
+      },
+    )
+
+    it('finishes a checkpoint whose manifest was committed before core died at `checkpointing`', async () => {
+      const w = gitless()
+      w.vm.finish()
+      const { after } = await crashAfterSave(w)
+      expect(w.journal.phases(1).at(-1)).toBe('checkpointing')
+      await w.recover(after.recovery)
+      expectRecovered(w)
+      expect(w.journal.phases(2)[0]).toBe('checkpointing')
+      expect(w.vm.sandbox.destroy).toHaveBeenCalledExactlyOnceWith('failed')
+    })
+
+    it('closes the turn lost and frees the site when no manifest was committed', async () => {
+      const w = gitless()
+      w.vm.finish()
+      const { after } = await w.crashAt(undefined, {
+        arm: (kill) =>
+          w.snapshots.save.mockImplementationOnce(async () => {
+            kill()
+            return new Promise<never>(() => {})
+          }),
+      })
+      await w.recover(after.recovery)
+
+      // Never billed, never left to an operator: nothing of the turn can be taken.
+      expect(w.journal.entries.at(-1)).toMatchObject({
+        phase: 'failed',
+        outcome: 'lost',
+        fence: { epoch: 2 },
+        recoveredFromEpoch: 1,
+      })
+      expect(w.vm.exists()).toBe(false)
+      expect(w.lease()).toMatchObject({ taskId: null, held: false, epoch: 2 })
+      expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 2 } })
+      expect(w.publish).not.toHaveBeenCalled()
+      expect(w.logger.error).not.toHaveBeenCalled()
+    })
+
+    it('tries the checkpoint again when reading it failed', async () => {
+      const w = gitless()
+      w.vm.finish()
+      const { after } = await crashAfterSave(w)
+      w.snapshots.load.mockRejectedValueOnce(
+        new DomainError('SNAPSHOT_LOAD_FAILED', 'Could not load the turn snapshot', 502),
+      )
+      await w.recover(after.recovery)
+      // Held at the newer epoch, the containers already gone.
+      expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true, epoch: 2 })
+      expect(w.assignment()).toMatchObject({ outcome: null })
+      expect(w.journal.entries.at(-1)).toMatchObject({
+        phase: 'recovery',
+        reason: 'snapshot_ambiguous',
+      })
+
+      await w.recover(after.recovery)
+      expect(w.journal.phases(3).at(-1)).toBe('checkpoint_recovered')
+      expect(w.assignment()).toMatchObject({ outcome: 'completed', fence: { epoch: 3 } })
+      expect(w.publish).not.toHaveBeenCalled()
+    })
+
+    it('leaves a checkpoint that fails its own checks to an operator', async () => {
+      const w = gitless()
+      w.vm.finish()
+      const { after } = await crashAfterSave(w)
+      w.snapshots.load.mockRejectedValue(badRequest('Snapshot part failed its size or hash check'))
+      await w.recover(after.recovery)
+      await w.recover(after.recovery)
+
+      expect(w.snapshots.load).toHaveBeenCalledOnce()
+      expect(w.lease()).toMatchObject({ taskId: labels.taskId, held: true })
+      expect(w.assignment()).toMatchObject({ outcome: null })
+      expect(w.logger.error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('Turn recovery left a turn to an operator: broken checkpoint'),
+      )
+    })
+
+    it('frees the site of a turn journaled checkpoint_recovered before its release', async () => {
+      const w = gitless()
+      w.vm.finish()
+      const { after } = await w.crashAt('checkpointed')
+      const release = vi.spyOn(w.leases, 'release').mockResolvedValueOnce(false)
+      await w.recover(after.recovery)
+      expect(release).toHaveBeenCalled()
+      expect(w.journal.phases(2)).toContain('checkpoint_recovered')
+
+      await w.recover(after.recovery)
+      expect(w.lease()).toMatchObject({ taskId: null, held: false })
+      expect(w.assignment()).toMatchObject({ outcome: 'completed' })
+      expect(w.publish).not.toHaveBeenCalled()
+    })
+  },
+)
+
+describe('turn exec recovery of a turn with a repository on a core without git', () => {
+  it('leaves the turn as it is to a core that has git', async () => {
+    const w = world('local')
+    w.vm.finish()
+    const { after } = await w.crashAt('checkpointed')
+    const recovery = new TurnExecRecovery({
+      leases: w.leases,
+      assignments: w.assignments,
+      executor: after.executor,
+      journal: w.journal,
+      driver: () => w.driver,
+      workspace: null,
+      snapshots: w.snapshots,
+      credentials: w.credentials,
+      live: new LiveTurns(),
+      logger: w.logger,
+    })
+    const journaled = w.journal.entries.length
+    await w.recover(recovery)
+    expect(w.journal.entries).toHaveLength(journaled)
+    expect(w.assignment()).toMatchObject({ outcome: null, fence: { epoch: 1 } })
+    expect(w.snapshots.load).not.toHaveBeenCalled()
+    expect(w.publish).not.toHaveBeenCalled()
+    expect(w.logger.warn).toHaveBeenCalled()
+  })
+})
+
 const pastGrace = (w: ReturnType<typeof world>) => {
   w.assignments.rows.get(w.assignment().id)!.deadlineAt = new Date(
     Date.now() - TURN_PUBLICATION_GRACE_MS - 1_000,

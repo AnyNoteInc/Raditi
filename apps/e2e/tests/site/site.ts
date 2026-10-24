@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { Page } from '@playwright/test'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
-import { createPrismaClient, type SiteStatus } from '@repo/db'
+import { createPrismaClient, insertFeedEvent, type SiteStatus } from '@repo/db'
 
 import { authEnv, databaseUrl } from '../../fixtures/billing-stand.ts'
 
@@ -39,8 +39,11 @@ export async function addSite(userId: string, status: SiteStatus = 'onboarding')
 /**
  * A connected site of the signed-in user in the personal workspace, as the product makes it:
  * the workspace comes with the gift of the registration, so the first dialog of the site is
- * taken on gift credits. Nothing of a real connection exists: no core works on the dialog, so
- * it waits in the queue. The workspace, its credits and its tasks go with the user.
+ * taken on gift credits, and the site has the row of its repository — `activateSite` connects
+ * no site without one, and the cabinet offers a dialog with the copy of the site only where it
+ * is (`capabilities.repository`, docs/plan/57-browser-tasks.md, Б9). Nothing of a real
+ * connection exists: no core works on the dialog, so it waits in the queue. The workspace, its
+ * credits, its tasks and the repository row go with the user.
  */
 export async function addConnectedSite(userId: string): Promise<string> {
   const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
@@ -59,7 +62,84 @@ export async function addConnectedSite(userId: string): Promise<string> {
       },
       select: { id: true },
     })
+    await prisma.gitRepository.create({
+      data: {
+        siteId: site.id,
+        provider: 'gitea',
+        owner: 'sites',
+        name: `site-${site.id}`,
+        url: `https://gitea.raditi.test/sites/site-${site.id}`,
+      },
+    })
     return site.id
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * A task in the browser on a connected site of the signed-in user (docs/plan/57-browser-tasks.md),
+ * as a first pass leaves it when the agent asks the client to sign in: waiting for the client,
+ * its browser open and asking for a login, the request and the question in its feed. No worker
+ * and no core run here: the window of the task is drawn from these rows alone. Everything goes
+ * with the user (its workspace, tasks and their sessions).
+ */
+export async function addBrowserTask(
+  userId: string,
+): Promise<{ siteId: string; taskId: string; title: string }> {
+  const siteId = await addConnectedSite(userId)
+  const title = 'Новость о летней веранде'
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const site = await prisma.site.findUniqueOrThrow({
+      where: { id: siteId },
+      select: { workspaceId: true },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: site.workspaceId,
+        siteId,
+        createdById: userId,
+        status: 'awaiting_user',
+        title,
+        turnNo: 1,
+        needsRepository: false,
+        needsBrowser: true,
+      },
+      select: { id: true },
+    })
+    await prisma.browserSession.create({
+      data: {
+        taskId: task.id,
+        siteId,
+        workspaceId: site.workspaceId,
+        status: 'ready',
+        // The reason and the words of the agent's request come together (browser_sessions_help_check).
+        helpReason: 'login',
+        helpMessage: 'Войдите, пожалуйста, в админку сайта: без входа я не могу добавить новость.',
+        expiresAt: new Date(Date.now() + 4 * 3_600_000),
+        readyAt: new Date(),
+      },
+    })
+    const requestId = randomUUID()
+    await insertFeedEvent(prisma, {
+      taskId: task.id,
+      row: {
+        type: 'feed.request',
+        payload: {
+          v: 1,
+          kind: 'first',
+          authorId: userId,
+          requestId,
+          text: 'Добавьте новость: с 1 июня открываем летнюю веранду.',
+        },
+      },
+    })
+    await insertFeedEvent(prisma, {
+      taskId: task.id,
+      row: { type: 'feed.question', payload: { v: 1, kind: 'browser', turn: 1, reason: 'login' } },
+    })
+    return { siteId, taskId: task.id, title }
   } finally {
     await prisma.$disconnect()
   }

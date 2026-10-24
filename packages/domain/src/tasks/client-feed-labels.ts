@@ -3,10 +3,13 @@ import type { PreviewUnavailableReason } from '../preview/preview-state.ts'
 import type { ChatCommandId } from '../release/chat-commands.ts'
 import type { VersionBump } from '../release/semver.ts'
 import type {
+  FeedBrowserReason,
   FeedCancelledBy,
   FeedCeilingReason,
   FeedCreditsState,
   FeedFailurePayload,
+  FeedObjectKind,
+  FeedObjectStatus,
   FeedReleaseOutcome,
   FeedReleaseReason,
   FeedResultPayload,
@@ -119,6 +122,11 @@ export const feedLiveText = Object.freeze({
     'Агент работает в своём изолированном облаке. Обычно это занимает до 20 минут. Страницу можно закрыть — результат появится в этом диалоге.',
   /** `held` of the head while the task is `running`: in place of the stages and the timer. */
   held: 'При работе с сайтом произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом диалоге.',
+  /** A task in the browser while the agent works in it (docs/plan/57-browser-tasks.md). */
+  browser:
+    'Агент работает в браузере задачи — за ним можно наблюдать. Страницу можно закрыть — результат появится в этом диалоге.',
+  /** A task in the browser while the customer controls it. */
+  browserControl: 'Вы управляете браузером, агент ждёт.',
 })
 
 /** Time of work as the timer shows it: «2 мин 14 с»; under a minute — «14 с». */
@@ -351,6 +359,8 @@ export const feedRowText = Object.freeze({
   retry: 'Вы попросили попробовать ещё раз',
   /** `feed.request` of the kind `continue`: «Продолжить» after a question about credits. */
   continue: 'Вы попросили продолжить работу',
+  /** `feed.request` of the kind `resume`: «Продолжить работу агента» in the browser. */
+  resume: 'Вы вернули управление агенту',
   /** `feed.request` of a kind added later, when it carries no text. */
   otherRequest: 'Вы продолжили задачу.',
 })
@@ -676,3 +686,72 @@ export const previewUnavailableText: Readonly<Record<PreviewUnavailableReason, s
     no_core: 'Предпросмотр недоступен: в копии сайта нет файлов, без которых он не запускается.',
     not_supported: 'Для сайтов этого типа предпросмотр пока не работает.',
   })
+
+// ---------------------------------------------------------------------------------------------
+// A task in the browser (docs/plan/57-browser-tasks.md, Б15–Б24)
+// ---------------------------------------------------------------------------------------------
+
+/** The buttons of the browser of a task; the texts below name them. */
+export const feedBrowserButtons = Object.freeze({
+  take: 'Взять управление',
+  resume: 'Продолжить работу агента',
+  stop: 'Остановить',
+})
+
+const RESUME = `«${feedBrowserButtons.resume}»`
+
+/** The title of a `browser` question by its reason. */
+export const feedBrowserQuestionTitle: Readonly<Record<FeedBrowserReason, string>> = Object.freeze({
+  login: 'Нужно войти на сайт',
+  captcha: 'Нужно пройти проверку',
+  confirm: 'Нужно ваше подтверждение',
+  other: 'Нужна ваша помощь',
+  control: 'Вы управляете браузером',
+  unconfirmed: 'Результат не подтверждён',
+})
+
+/**
+ * What the customer is asked to do, by the reason. The agent's own words of the request, when
+ * the row has them, are shown under this text.
+ */
+export const feedBrowserQuestionText: Readonly<Record<FeedBrowserReason, string>> = Object.freeze({
+  login: `Агенту нужно, чтобы вы вошли в админку сайта. Войдите в браузере задачи и нажмите ${RESUME}. Пароль агент не увидит.`,
+  captcha: `Сайт просит подтвердить, что вы не робот. Пройдите проверку в браузере задачи и нажмите ${RESUME}.`,
+  confirm: `Сайт просит подтверждения — например, код из письма или сообщения. Подтвердите в браузере задачи и нажмите ${RESUME}.`,
+  other: `Агенту нужна ваша помощь в браузере задачи. Когда закончите, нажмите ${RESUME}.`,
+  control: `Пока браузером управляете вы, агент не работает. Когда закончите, нажмите ${RESUME} или напишите, что сделать дальше.`,
+  unconfirmed:
+    'Агент закончил, но мы не нашли на сайте сохранённого результата. Проверьте сайт в браузере задачи и напишите агенту, что сделать дальше.',
+})
+
+/** An object of the site in a result, a failure or a cancellation, by its kind. */
+export const feedObjectKindLabel: Readonly<Record<FeedObjectKind, string>> = Object.freeze({
+  post: 'Запись',
+  page: 'Страница',
+})
+
+/** The state the platform read on the site. */
+export const feedObjectStatusLabel: Readonly<Record<FeedObjectStatus, string>> = Object.freeze({
+  published: 'Опубликовано',
+  scheduled: 'Запланировано',
+  draft: 'Черновик',
+  pending: 'Ждёт проверки',
+  private: 'Скрыто от посетителей',
+  trashed: 'В корзине',
+  missing: 'Нет на сайте',
+  unconfirmed: 'Состояние не подтверждено',
+})
+
+/** The lines around the objects of a row. */
+export const feedObjectText = Object.freeze({
+  /** Above the objects of a result. */
+  result: 'Что на сайте',
+  /** Above the objects of a failure or a cancellation: what the platform found there. */
+  ended: 'Что сейчас на сайте',
+  /** An object without a title. */
+  untitled: 'Без названия',
+  /** A kind this page does not know. */
+  otherKind: 'Объект',
+  open: 'Открыть на сайте',
+  edit: 'Открыть в редакторе',
+})

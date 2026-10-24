@@ -12,7 +12,7 @@ pnpm verify:release -- --keep       # оставить стенд подняты
 
 Всё одноразовое, со своим именем `raditi-release-verify-<run>-…` и меткой `io.raditi.release-verify=<run>`:
 
-- PostgreSQL 17 (данные в памяти), Redis 8, SeaweedFS с бакетами `raditi-*`, OpenBao (инициализация через API, mounts и политики `infra/vault/bootstrap.mjs`, AppRole на каждый процесс: `core` — `core-turns`, `core-transit`, `core-site-import`, `core-release`; `mcp` — `mcp-content`; `llm` — `llm-subscriptions`; web — `sites-writer`).
+- PostgreSQL 17 (данные в памяти), Redis 8, SeaweedFS с бакетами `raditi-*`, OpenBao (инициализация через API, mounts и политики `infra/vault/bootstrap.mjs`, AppRole на каждый процесс: `core` — `core-turns`, `core-transit`, `core-site-import`, `core-release`; `mcp` — `mcp-content`; `llm` — `llm-subscriptions`; web — `sites-writer` и `workspace-provisioner`).
 - Gitea 1.27.3 по HTTPS с CA стенда и `[actions] WORKFLOW_DIRS`; администратор экземпляра, бот платформы (`GITEA_TOKEN`) и учётная запись выпуска — владелец организации `sites`, чей токен лежит в OpenBao `kv/platform/gitea-org-owner`; `platform/ci` с `check.yml` и `deploy.yml` из `ci/` — источник scoped workflows.
 - gitea/runner 4.0.0 — раннер выкладки, метка `deploy` — образ `core` из этого дерева (`raditi-release-verify/core:local`).
 - Синтетический «прод»: MariaDB с базой WordPress, WordPress 7.1.2 (тема стенда, страница «Контакты», запись, плагин «Радити» в `mu-plugins`, одна картинка медиатеки, `WP_ENVIRONMENT_TYPE=local` — иначе WordPress не даёт паролей приложений по http), SFTP-хостинг (`linuxserver/openssh-server` по digest) над тем же томом документов. Адрес сайта — `http://localhost:<порт>`, база — на loopback для копии.

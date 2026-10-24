@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
   PingRequestSchema,
 } from '@modelcontextprotocol/core'
+import { browserToolArgumentSchemas, browserToolNames, requirementsOf } from '@repo/domain'
 import { z } from 'zod'
 
 import {
@@ -67,6 +68,21 @@ const browserCall = z.discriminatedUnion('name', [
   call('browser_network', browserNoArgumentsSchema.optional()),
   call('browser_run_checks', browserRunChecksArgumentsSchema),
 ])
+/**
+ * The `web` tools of a browser task (docs/plan/57-browser-tasks.md, Б20, §3.7), each with the
+ * domain's own arguments: the worker checks the same schemas again. Absent arguments are `{}`,
+ * as mcp-nest passes them on: a tool whose arguments are all optional may go without them.
+ */
+const webCall = z
+  .strictObject({
+    name: z.enum(browserToolNames),
+    arguments: z.record(z.string(), z.unknown()).optional(),
+    _meta: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine(
+    (request) =>
+      browserToolArgumentSchemas[request.name].safeParse(request.arguments ?? {}).success,
+  )
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),
   id: rpcId.optional(),
@@ -101,16 +117,23 @@ export interface McpSecurity {
   siteContent?: boolean
   /** The browser profile is on: browser_* on the preview of the dialog. */
   browserTools?: boolean
+  /**
+   * The browser worker is configured (BROWSER_WORKER_URL): web_* for a task that needs a
+   * browser, on the site itself (docs/plan/57-browser-tasks.md, Б20). A product path, open in
+   * production too.
+   */
+  webTools?: boolean
 }
 
 /** The security of the role's MCP endpoint, as the profiles of its configuration make it. */
 export function mcpSecurityOf(config: McpConfig): McpSecurity {
-  const { content, siteContent, browser } = mcpProfilesOf(config)
+  const { content, siteContent, browser, worker } = mcpProfilesOf(config)
   return {
     allowedHosts: config.allowedHosts,
     allowLocalOrigin: config.appEnv !== 'production',
     ...(content ? { contentTools: true, siteContent } : {}),
     ...(browser ? { browserTools: true } : {}),
+    ...(worker ? { webTools: true } : {}),
   }
 }
 
@@ -119,9 +142,10 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
  * `db_schema`, where the preview's last build found tables of the platform writable, or where
  * no build has said yet: the CLI asks for its tools once, when its turn starts, and the first
  * turn of a dialog starts while its preview is still being built. Each call checks the kinds of
- * the preview as built then (`DB_OPERATION_NOT_ALLOWED`).
+ * the preview as built then (`DB_OPERATION_NOT_ALLOWED`). `web` — the cloud browser of a task
+ * on the site itself (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's.
  */
-export const mcpToolFamilies = ['content', 'browser', 'schema'] as const
+export const mcpToolFamilies = ['content', 'browser', 'schema', 'web'] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
 /** A preview that is gone for the dialog, or never was there to work on (Р4, Р16). */
@@ -131,12 +155,20 @@ const closedPreview = new Set(['unavailable', 'destroyed'])
  * What a request of this scope is offered (Р3, Р4, Р21): content tools only for a preview with
  * its own database — or, where previews are not configured, the P6 path of a dialog without
  * one; the browser only on a preview. Each call checks the preview again under its own lock.
+ * A task without a repository changes its site through the browser alone (docs/plan/57, Б1):
+ * no content tools, whatever the profile; the `web` tools go to a task that needs a browser
+ * where the worker is configured, each call admitted again with its session (Б20).
  */
 export function mcpToolFamiliesOf(access: McpAccess, security: McpSecurity): McpToolFamily[] {
   const preview = access.preview
   const open = preview !== null && !closedPreview.has(preview.status)
+  const requirements = requirementsOf(access)
   const families: McpToolFamily[] = []
-  if (security.contentTools && (preview === null ? security.siteContent : open && preview.database))
+  if (
+    security.contentTools &&
+    requirements.repository &&
+    (preview === null ? security.siteContent : open && preview.database)
+  )
     families.push('content')
   if (
     families.includes('content') &&
@@ -145,6 +177,7 @@ export function mcpToolFamiliesOf(access: McpAccess, security: McpSecurity): Mcp
   )
     families.push('schema')
   if (security.browserTools && open) families.push('browser')
+  if (security.webTools && requirements.browser) families.push('web')
   return families
 }
 
@@ -200,7 +233,8 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       siteInfoCall.safeParse(request.params).success ||
       (families.includes('content') && contentCall.safeParse(request.params).success) ||
       (families.includes('schema') && schemaCall.safeParse(request.params).success) ||
-      (families.includes('browser') && browserCall.safeParse(request.params).success)
+      (families.includes('browser') && browserCall.safeParse(request.params).success) ||
+      (families.includes('web') && webCall.safeParse(request.params).success)
     )
   return true
 }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  attachmentStatuses,
+  browserCheckpointStates,
+  browserControllers,
+  browserSessionStatuses,
   candidateCheckStatuses,
   candidateStatuses,
   connectionTlsModes,
@@ -31,7 +35,11 @@ import {
   versionBumps,
 } from '@repo/domain'
 import {
+  AttachmentStatus,
   BillingUnit,
+  BrowserCheckpointState,
+  BrowserController,
+  BrowserSessionStatus,
   CandidateCheckStatus,
   CandidateStatus,
   ChangeType,
@@ -155,5 +163,15 @@ describe('database enums match the domain', () => {
 
   it('DeployMethod has the methods of a deploy, sftp and ftp last', () => {
     expect(Object.values(DeployMethod)).toEqual([...deployMethods])
+  })
+
+  it('AttachmentStatus has exactly the statuses of an attachment', () => {
+    expect(Object.values(AttachmentStatus)).toEqual([...attachmentStatuses])
+  })
+
+  it('BrowserSessionStatus, BrowserController and BrowserCheckpointState match the browser of a task', () => {
+    expect(Object.values(BrowserSessionStatus)).toEqual([...browserSessionStatuses])
+    expect(Object.values(BrowserController)).toEqual([...browserControllers])
+    expect(Object.values(BrowserCheckpointState)).toEqual([...browserCheckpointStates])
   })
 })

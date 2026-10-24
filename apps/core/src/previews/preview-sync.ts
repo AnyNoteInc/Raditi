@@ -10,6 +10,7 @@ import {
   isDomainError,
   isTooLarge,
   normalizeRepoPath,
+  requirementsOf,
   turnPlanSchema,
   type PreviewRecipe,
   type PreviewRuntime,
@@ -194,11 +195,14 @@ export async function syncWorkingTree(
   if (preview.status !== 'ready' || !preview.upstream || !input.recipe) throw refused('not_ready')
   if (!isBusyTask(facts.task.status)) throw refused('no_turn')
   const turn = await openTurn(deps.db, input.assignmentId, preview.taskId)
+  // A turn without a repository has no working tree to show (docs/plan/57-browser-tasks.md,
+  // Б4): refused before anything reads one — after a restart the executor no longer knows it.
+  const source = turn.plan.workspace
+  if (!requirementsOf(turn.plan).repository || !source) throw refused('not_supported')
   const runtime = deps.runtime
   const git = deps.git
   if (!runtime || !git || !facts.repo) throw refused('not_supported')
   if (!deps.executor.exportWorkingTree) throw refused('not_supported')
-  const source = turn.plan.workspace
   const signal = hold.signal
   const base = source.expectedBaseSha
   const sandboxBase =

@@ -3,10 +3,13 @@ import { previewUnavailableReasons } from '../preview/preview-state.ts'
 import { chatCommandIds } from '../release/chat-commands.ts'
 import { versionBumps } from '../release/semver.ts'
 import {
+  feedBrowserReasons,
   feedCancelledBys,
   feedCeilingReasons,
   feedCreditsStates,
   feedLimits,
+  feedObjectKinds,
+  feedObjectStatuses,
   feedReleaseOutcomes,
   feedReleaseReasons,
   feedSteps,
@@ -19,6 +22,12 @@ import {
   FEED_QUEUE_TIMEOUT_CLOSING,
   FEED_REMOVED_AUTHOR,
   feedApprovalSiteText,
+  feedBrowserButtons,
+  feedBrowserQuestionText,
+  feedBrowserQuestionTitle,
+  feedObjectKindLabel,
+  feedObjectStatusLabel,
+  feedObjectText,
   feedCandidateText,
   feedCandidateVersionText,
   feedCommandText,
@@ -536,6 +545,7 @@ describe('the neutral lines of the reader and of the input area', () => {
   it('reads the customer’s presses', () => {
     expect(feedRowText.retry).toBe('Вы попросили попробовать ещё раз')
     expect(feedRowText.continue).toBe('Вы попросили продолжить работу')
+    expect(feedRowText.resume).toBe('Вы вернули управление агенту')
     expect(feedRowText.otherRequest).toBe('Вы продолжили задачу.')
   })
 
@@ -585,5 +595,33 @@ describe('the neutral lines of the reader and of the input area', () => {
       toProjects: 'К проектам',
       openSite: 'Открыть сайт',
     })
+  })
+})
+
+describe('a task in the browser', () => {
+  it('has a title and a text for every reason of a browser question', () => {
+    expect(sorted(Object.keys(feedBrowserQuestionTitle))).toEqual(sorted(feedBrowserReasons))
+    expect(sorted(Object.keys(feedBrowserQuestionText))).toEqual(sorted(feedBrowserReasons))
+  })
+
+  it('names the buttons of the owner and asks to press the one that gives control back', () => {
+    expect(feedBrowserButtons).toEqual({
+      take: 'Взять управление',
+      resume: 'Продолжить работу агента',
+      stop: 'Остановить',
+    })
+    for (const reason of ['login', 'captcha', 'confirm', 'other', 'control'] as const)
+      expect(feedBrowserQuestionText[reason]).toContain('«Продолжить работу агента»')
+  })
+
+  it('promises nothing about the site it did not read there', () => {
+    expect(feedBrowserQuestionText.unconfirmed).toMatch(/не нашли на сайте/u)
+    expect(feedBrowserQuestionText.unconfirmed).not.toMatch(/вернули|отменили|откат/iu)
+  })
+
+  it('has a label for every kind and state of an object of the site', () => {
+    expect(sorted(Object.keys(feedObjectKindLabel))).toEqual(sorted(feedObjectKinds))
+    expect(sorted(Object.keys(feedObjectStatusLabel))).toEqual(sorted(feedObjectStatuses))
+    expect(feedObjectText.untitled).toBe('Без названия')
   })
 })

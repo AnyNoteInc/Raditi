@@ -91,6 +91,17 @@ test('a body sent to the API is limited at the edge; pages and GET are never buf
   // and the 5 MiB avatar upload, which web reads only after the session check, stays off it
   assert.ok(bytes('maxRequestBodyBytes') <= 1024 * 1024)
   assert.match(api, /!Path\(`\/api\/profile\/avatar`\)/)
+  // So does the upload of an attached file (20 MiB, Б26): web streams it to the inbox after its
+  // own checks; nothing else under the prefix takes a body
+  assert.match(api, /!PathPrefix\(`\/api\/attachments\/`\)/)
+  const route = readFileSync(
+    new URL('../../apps/web/src/app/api/attachments/[id]/route.ts', import.meta.url),
+    'utf8',
+  )
+  assert.deepEqual(
+    [...route.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]),
+    ['PUT'],
+  )
 })
 
 test('TLS 1.2 at least, and only for the names the edge serves', () => {

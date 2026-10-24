@@ -31,10 +31,12 @@ http:
     # Every request that can carry a body to the API: a body over the limit gets 413 here and web
     # never sees the request. The middleware also holds the whole answer back, so pages and GET
     # (the task's SSE stream) stay on `web`. The avatar upload stays there too: web reads its
-    # 5 MiB only after the session check, here they would sit in memory for any sender.
+    # 5 MiB only after the session check, here they would sit in memory for any sender. So do the
+    # files attached to messages (up to 20 MiB, docs/plan/57-browser-tasks.md, Б26): web streams
+    # them to the inbox after the session, Origin, consent and size checks, never whole in memory.
     web-api-body:
       entryPoints: [websecure]
-      rule: 'Host(`{{ env "APP_DOMAIN" }}`) && PathPrefix(`/api/`) && !Path(`/api/profile/avatar`) && !Method(`GET`) && !Method(`HEAD`)'
+      rule: 'Host(`{{ env "APP_DOMAIN" }}`) && PathPrefix(`/api/`) && !Path(`/api/profile/avatar`) && !PathPrefix(`/api/attachments/`) && !Method(`GET`) && !Method(`HEAD`)'
       priority: 900
       middlewares: [api-body-limit]
       service: web

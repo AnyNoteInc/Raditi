@@ -1,4 +1,9 @@
-import { DomainError, type ChatCommandId, type ChatCommandRefusal } from '@repo/domain'
+import {
+  DomainError,
+  type AttachmentRefusal,
+  type ChatCommandId,
+  type ChatCommandRefusal,
+} from '@repo/domain'
 
 // Refusals of the procedures of a dialog (docs/plan/53-chat-preview-release.md). The English
 // message is for the logs; the client reads the Russian text of the code in errors.ts.
@@ -6,9 +11,19 @@ import { DomainError, type ChatCommandId, type ChatCommandRefusal } from '@repo/
 /**
  * Why a new dialog, or a retry of one, is not taken; the text is chosen by it (errors.ts,
  * MESSAGE_FROM_DETAILS). `class_unavailable` — «Попробовать ещё» runs in the class `heavy`, and no
- * enabled model of it has a price in force.
+ * enabled model of it has a price in force. `browser_unavailable` — a task in the browser, and the
+ * platform has no browser here (docs/plan/57-browser-tasks.md, Б9); `environment_unsupported` — a
+ * task that asks for the repository and the browser at once, which is not taken yet (Б3);
+ * `browser_insecure` — a task in the browser for a site that does not open over https in
+ * production (Б11).
  */
-export type TaskNotAcceptedReason = 'site_not_active' | 'not_synthetic' | 'class_unavailable'
+export type TaskNotAcceptedReason =
+  | 'site_not_active'
+  | 'not_synthetic'
+  | 'class_unavailable'
+  | 'browser_unavailable'
+  | 'environment_unsupported'
+  | 'browser_insecure'
 
 export const taskNotAccepted = (reason: TaskNotAcceptedReason) =>
   new DomainError('TASK_NOT_ACCEPTED', `A dialog is not accepted: ${reason}`, 409, { reason })
@@ -23,6 +38,13 @@ export const taskTextHasSecret = () =>
 export const taskTextInvalid = () =>
   new DomainError('TASK_TEXT_INVALID', 'The request has characters the feed does not store', 400)
 
+/**
+ * The Transit key of the workspace could not be made (docs/plan/57-browser-tasks.md, Б32): Vault
+ * did not answer or refused. Nothing of the task is written; the client tries again a bit later.
+ */
+export const workspaceKeyUnavailable = () =>
+  new DomainError('WORKSPACE_KEY_UNAVAILABLE', 'The key of the workspace is not available', 503)
+
 /** The agent is at work: words wait until it finishes or asks. */
 export const taskBusy = () => new DomainError('TASK_BUSY', 'The agent is at work', 409)
 export const taskFinished = () => new DomainError('TASK_FINISHED', 'The dialog has ended', 409)
@@ -36,6 +58,12 @@ export const taskNothingToContinue = () =>
   new DomainError('TASK_NOTHING_TO_CONTINUE', 'The dialog does not wait for «Продолжить»', 409)
 export const taskAttemptsExhausted = () =>
   new DomainError('TASK_ATTEMPTS_EXHAUSTED', 'The dialog has used all of its attempts', 409)
+/**
+ * «Продолжить работу агента» (docs/plan/57, Б16): the task is not in the browser, or does not wait
+ * for the client — no open question to go on from.
+ */
+export const taskNothingToResume = () =>
+  new DomainError('TASK_NOTHING_TO_RESUME', 'The task does not wait for the client', 409)
 /** «Попробовать ещё»: no failure of the dialog waits for a retry, or not the one pressed on. */
 export const taskNothingToRetry = () =>
   new DomainError('TASK_NOTHING_TO_RETRY', 'The dialog has no failure to retry', 409)
@@ -98,3 +126,21 @@ export const siteEnvHostsLimit = () =>
   )
 export const siteEnvChanged = () =>
   new DomainError('SITE_ENV_CHANGED', 'The variable was changed meanwhile', 409)
+
+// Files attached to a message (docs/plan/57-browser-tasks.md, Б26).
+
+/**
+ * A file of the message is not one that may be sent: not stored yet, sent already, removed,
+ * expired, of another site or of another person. Nothing of the message is written.
+ */
+export const attachmentNotReady = () =>
+  new DomainError('ATTACHMENT_NOT_READY', 'An attachment is not ready to be sent', 409)
+/** A file refused before anything is written, by a rule of `attachmentRefusals`. */
+export const attachmentRefused = (reason: AttachmentRefusal) =>
+  new DomainError('ATTACHMENT_REFUSED', `The file is refused: ${reason}`, 400, { reason })
+/** The file was sent with a message: the task keeps it. */
+export const attachmentSent = () =>
+  new DomainError('ATTACHMENT_SENT', 'The file was sent with a message', 409)
+/** Too many files announced and not sent yet. */
+export const attachmentsLimit = () =>
+  new DomainError('ATTACHMENTS_LIMIT', 'Too many files wait to be sent', 429)

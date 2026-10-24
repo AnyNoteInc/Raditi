@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 
 import { ConfigError, DEV_PREVIEW_SESSION_SECRET, loadPreviewConfig } from './config.ts'
 
+const WORKER_TOKEN = 'worker-token-0123456789abcdef0123456789abcdef'
+
 const devEnv = (overrides: Env = {}): Env => ({
   APP_ENV: 'development',
   APP_URL: 'http://localhost:3000',
@@ -47,6 +49,7 @@ describe('loadPreviewConfig', () => {
         { address: '172.16.0.0', prefix: 12, family: 'ipv4' },
       ],
       host: '127.0.0.1',
+      browserStream: null,
     })
     expect(problemsOf(devEnv({ PREVIEW_BASE_DOMAIN: '' }))).toEqual([
       'PREVIEW_BASE_DOMAIN: required for the preview role',
@@ -93,6 +96,87 @@ describe('loadPreviewConfig', () => {
   it('requires the address of the cabinet it frames', () => {
     expect(problemsOf(devEnv({ APP_URL: '' }))).toEqual([
       'APP_URL: required for the preview role (the cabinet that frames a preview)',
+    ])
+  })
+
+  it('opens the stream of a task browser only with the worker and its token', () => {
+    const worker = {
+      BROWSER_WORKER_URL: 'http://127.0.0.1:8086',
+      BROWSER_WORKER_TOKEN: WORKER_TOKEN,
+    }
+    expect(loadPreviewConfig(devEnv(worker)).browserStream).toEqual({
+      port: 8091,
+      host: '127.0.0.1',
+      workerUrl: 'http://127.0.0.1:8086',
+      workerToken: WORKER_TOKEN,
+    })
+    // BROWSER_STREAM_PORT alone, as .env.example has it, opens nothing.
+    expect(loadPreviewConfig(devEnv({ BROWSER_STREAM_PORT: '8091' })).browserStream).toBeNull()
+    expect(
+      loadPreviewConfig(
+        devEnv({ ...worker, BROWSER_STREAM_PORT: '9091', BROWSER_STREAM_HOST: '::1' }),
+      ).browserStream,
+    ).toMatchObject({ port: 9091, host: '::1' })
+    expect(
+      loadPreviewConfig(
+        prodEnv({ BROWSER_WORKER_URL: 'http://10.0.0.7:8086', BROWSER_WORKER_TOKEN: WORKER_TOKEN }),
+      ).browserStream,
+    ).toEqual({
+      port: 8091,
+      host: undefined,
+      workerUrl: 'http://10.0.0.7:8086',
+      workerToken: WORKER_TOKEN,
+    })
+  })
+
+  it('refuses an address without its token, a weak token, an address with a path, one port twice', () => {
+    expect(problemsOf(devEnv({ BROWSER_WORKER_URL: 'http://127.0.0.1:8086' }))).toEqual([
+      'BROWSER_WORKER_TOKEN: required with BROWSER_WORKER_URL',
+    ])
+    // The token alone is the worker's in the shared .env: no listener then.
+    expect(
+      loadPreviewConfig(devEnv({ BROWSER_WORKER_TOKEN: WORKER_TOKEN })).browserStream,
+    ).toBeNull()
+    // The token goes with every stream: plain http in production only inside the perimeter.
+    for (const url of ['http://browser:8086', 'http://203.0.113.7:8086'])
+      expect(
+        problemsOf(prodEnv({ BROWSER_WORKER_URL: url, BROWSER_WORKER_TOKEN: WORKER_TOKEN })),
+      ).toEqual([
+        'BROWSER_WORKER_URL: plain http only to a private or loopback IP address in production (spec §19)',
+      ])
+    const weak = problemsOf(
+      devEnv({ BROWSER_WORKER_URL: 'http://127.0.0.1:8086', BROWSER_WORKER_TOKEN: 'short-token' }),
+    )
+    expect(weak[0]).toMatch(/^BROWSER_WORKER_TOKEN: must be 32 to 4096 visible ASCII/)
+    expect(weak.join('\n')).not.toContain('short-token')
+    // The rule of core, mcp and the worker too: over the bound is refused here as there.
+    const long = 'w'.repeat(4097)
+    const tooLong = problemsOf(
+      devEnv({ BROWSER_WORKER_URL: 'http://127.0.0.1:8086', BROWSER_WORKER_TOKEN: long }),
+    )
+    expect(tooLong).toEqual([
+      'BROWSER_WORKER_TOKEN: must be 32 to 4096 visible ASCII characters without spaces',
+    ])
+    expect(tooLong.join('\n')).not.toContain(long)
+    const withPath = problemsOf(
+      devEnv({
+        BROWSER_WORKER_URL: 'http://user:pass@127.0.0.1:8086/v1',
+        BROWSER_WORKER_TOKEN: WORKER_TOKEN,
+      }),
+    )
+    expect(withPath[0]).toMatch(/^BROWSER_WORKER_URL: must be an http\(s\) origin/)
+    expect(withPath.join('\n')).not.toContain('pass')
+    expect(
+      problemsOf(
+        devEnv({
+          BROWSER_WORKER_URL: 'http://127.0.0.1:8086',
+          BROWSER_WORKER_TOKEN: WORKER_TOKEN,
+          BROWSER_STREAM_PORT: '8090',
+        }),
+      ),
+    ).toEqual(['BROWSER_STREAM_PORT: must differ from PREVIEW_GATEWAY_PORT'])
+    expect(problemsOf(devEnv({ BROWSER_STREAM_HOST: 'localhost' }))).toEqual([
+      'BROWSER_STREAM_HOST: must be an IP address',
     ])
   })
 

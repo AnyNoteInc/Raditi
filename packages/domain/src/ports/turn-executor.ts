@@ -9,6 +9,11 @@ import type {
   SnapshotReference,
 } from '../sessions/snapshot-manifest.ts'
 import {
+  requirementsOf,
+  taskRequirementsSchema,
+  type TaskRequirements,
+} from '../tasks/task-requirements.ts'
+import {
   agentDriverIds,
   nativeSessionIdSchema,
   SANDBOX_INBOX,
@@ -49,7 +54,10 @@ export interface TurnExecutor {
   credentialAddress?(assignmentId: string, signal: AbortSignal): Promise<string>
   /** Clear any local claim cache when issuance or prepare ends. Does not release the site. */
   forgetCredentialAddress?(assignmentId: string): void
-  /** Create the container, import the base bundle, restore turn n−1, write the driver files. */
+  /**
+   * Create the container, import the base bundle — without one an empty working directory
+   * (docs/plan/57-browser-tasks.md, Б4) — restore turn n−1, write the driver files.
+   */
   prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution>
   /**
    * Take over the container of an unfinished turn after a restart, under the recovered fence.
@@ -124,7 +132,12 @@ export interface TurnPrepareInput {
   sandbox: SandboxSpec
   /** What remains of the whole turn when the step is issued; the container never outlives it. */
   remainingMs: number
-  bundle: TurnBundleSource
+  /**
+   * The repository of the turn. Absent for a turn without one (plan 57, Б4): the executor makes
+   * SANDBOX_WORKDIR an empty directory — no clone, no `git init`, no commit — and the turn's
+   * capture takes `home` alone.
+   */
+  bundle?: TurnBundleSource
   restore?: TurnRestoreSource
   /** Selects the stateless event parser on the executor side. */
   driverId: AgentDriverId
@@ -153,7 +166,11 @@ export interface TurnPrepareInput {
 /** Turn n−1: the manifest is already checked by core; parts are verified before any write. */
 export interface TurnRestoreSource {
   manifest: SnapshotManifest
-  parts: Record<SnapshotPartName, PresignedRequest>
+  /**
+   * Exactly the parts of the manifest (snapshotPartNamesOf): `home` alone in a snapshot without
+   * a repository, which restores nothing into the working directory (plan 57, Б4).
+   */
+  parts: { home: PresignedRequest } & Partial<Record<SnapshotPartName, PresignedRequest>>
   /** The unwrapped data key; the executor zeroes it right after use. */
   dataKey(): Promise<Uint8Array>
 }
@@ -196,10 +213,15 @@ export interface TurnExecution {
    * Idempotent; the home archive stays with the executor until seal(). The patch is taken
    * against `sandboxBaseSha` when the sandbox got a working set (plan 53, Р11), else `baseSha`.
    * New files below `addOnlyPaths` (Р12) are taken even when an ignore file hides them.
+   * Without `baseSha` — a turn without a repository (plan 57, Б4) — only `home` is taken: the
+   * working directory is not read, and the result has neither `patch` nor `untracked`.
+   * `sandboxBaseSha` and `addOnlyPaths` come only with `baseSha`. An executor refuses a capture
+   * whose `baseSha` disagrees with its prepare: with one after a prepare without a bundle, or
+   * without one after a prepare with a bundle.
    */
   capture(input: {
     home: SessionState
-    baseSha: string
+    baseSha?: string
     sandboxBaseSha?: string
     addOnlyPaths?: readonly string[]
   }): Promise<CapturedTurn>
@@ -233,10 +255,14 @@ export interface TurnAgentExec {
   kill(): Promise<void>
 }
 
+/**
+ * `patch` and `untracked` are there exactly when the capture had a `baseSha`: a turn without a
+ * repository (plan 57, Б4) has neither, and its snapshot is the home part alone.
+ */
 export interface CapturedTurn {
   /** Untrusted until core builds the candidate: the patch against baseSha and new files. */
-  patch: Uint8Array
-  untracked: Uint8Array
+  patch?: Uint8Array
+  untracked?: Uint8Array
   /** The sealed home part has exactly this size: AES-GCM adds no padding. */
   homeBytes: number
 }
@@ -301,16 +327,25 @@ export interface TurnRequest {
   context: RunContext
   input: TurnInput
   driverVersion: string
-  workspace: PublicationSource
+  /**
+   * What the turn's environment needs (docs/plan/57-browser-tasks.md, Б3). Absent in requests
+   * and plans written before it: a repository alone (requirementsOf).
+   */
+  requirements?: TaskRequirements
+  /** Present exactly when the turn has a repository. */
+  workspace?: PublicationSource
   /** Trusted persisted time; retries use the identical value for deterministic publication. */
   committedAt: string
   previous?: SnapshotReference
-  /** Trusted user action: replace the latest run, restoring its input checkpoint after undo. */
+  /**
+   * Trusted user action: replace the latest run, restoring its input checkpoint after undo.
+   * Only with a repository: what a turn without one did on the site is not undone (plan 57, Б1).
+   */
   replacesTurn?: number
   /**
    * The first turn after «Обновить» moved the dialog onto a new `main`
    * (docs/plan/53-chat-preview-release.md, Р27): a new session of the agent, no previous
-   * snapshot is restored; the feed keeps its history.
+   * snapshot is restored; the feed keeps its history. Only with a repository.
    */
   rebased?: boolean
 }
@@ -372,7 +407,8 @@ export const turnInputSchema = z
 
 /**
  * A TurnRequest without its credentials, as turn_assignments.plan keeps it for recovery.
- * Strict objects refuse an LLM key or an MCP token instead of silently storing them.
+ * Strict objects refuse an LLM key or an MCP token instead of silently storing them. A plan
+ * stored before the requirements has a workspace and no `requirements`: a repository turn.
  */
 export const turnPlanSchema = z
   .object({
@@ -403,13 +439,31 @@ export const turnPlanSchema = z
     /** Recovery picks the driver of the turn by it: extractResult, sessionState, the parser. */
     driverId: z.enum(agentDriverIds),
     driverVersion: snapshotReferenceSchema.shape.driver.shape.version,
-    workspace: publicationSourceSchema,
+    requirements: taskRequirementsSchema.optional(),
+    workspace: publicationSourceSchema.optional(),
     committedAt: z.iso.datetime(),
     previous: snapshotReferenceSchema.optional(),
     replacesTurn: z.number().int().positive().max(999_999).optional(),
     rebased: z.boolean().optional(),
   })
   .strict()
+  .superRefine((plan, ctx) => {
+    const { repository } = requirementsOf(plan)
+    if (repository !== (plan.workspace !== undefined))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['workspace'],
+        message: repository
+          ? 'a turn with a repository needs its workspace'
+          : 'a turn without a repository has no workspace',
+      })
+    // Both are git notions: a replacement undoes content of the previous turn, a rebased start
+    // follows «Обновить» onto a new `main`.
+    if (!repository)
+      for (const key of ['replacesTurn', 'rebased'] as const)
+        if (plan[key] !== undefined)
+          ctx.addIssue({ code: 'custom', path: [key], message: 'only a turn with a repository' })
+  })
 export type TurnPlan = z.infer<typeof turnPlanSchema>
 
 /** The request without the LLM key and MCP token; refuses anything the plan cannot hold. */

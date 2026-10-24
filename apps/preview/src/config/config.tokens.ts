@@ -39,4 +39,21 @@ export interface PreviewGatewayConfig {
    * gateway, where the relay of the agent's browser reaches the host (host.docker.internal).
    */
   host: string | undefined
+  /**
+   * The gateway of the stream of a task's browser (docs/plan/57-browser-tasks.md, Б12) on its
+   * own listener; null — BROWSER_WORKER_URL and BROWSER_WORKER_TOKEN are unset: no listener.
+   */
+  browserStream: BrowserStreamConfig | null
+}
+
+/** The stream gateway's listener and the worker it relays to. Holds the worker's token. */
+export interface BrowserStreamConfig {
+  /** BROWSER_STREAM_PORT. */
+  port: number
+  /** BROWSER_STREAM_HOST, like PREVIEW_GATEWAY_HOST: loopback outside production unless set. */
+  host: string | undefined
+  /** BROWSER_WORKER_URL: the worker's internal origin. */
+  workerUrl: string
+  /** BROWSER_WORKER_TOKEN: the bearer token of its stream. */
+  workerToken: string
 }

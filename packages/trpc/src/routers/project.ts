@@ -11,6 +11,7 @@ import {
   DomainError,
   siteConnectionLimits,
   siteSetupState,
+  type AppEnv,
   type CodeSourceTarget,
   type DatabaseTarget,
 } from '@repo/domain'
@@ -36,18 +37,26 @@ import {
   assertRoomForSite,
   assertRoomForSiteSnapshot,
   assertSiteAccepted,
+  siteAddressNotSecure,
   siteNotFound,
   siteOrigin,
   withHost,
 } from '../services/site-basics.ts'
 import { siteIdForRequest } from '../services/site-request-id.ts'
+import { browserConfigured, browserUnavailable } from '../services/chat/context.ts'
+import {
+  browserAddressSecure,
+  siteCapabilities,
+  siteCapabilitiesOutput,
+} from '../services/site-capabilities.ts'
 import {
   codeImportOnly,
   confirmedInitialVersion,
   initialVersionOutput,
   siteSetupStates,
 } from '../services/site-setup.ts'
-import { consentedProcedure, router } from '../trpc.ts'
+import { agentNotesOf, agentNotesInput } from '../services/site-notes.ts'
+import { consentedProcedure, router, type Context } from '../trpc.ts'
 import { sourceRefusalFields } from './site-connection.ts'
 
 export { MAX_SITES_PER_USER } from '../services/site-basics.ts'
@@ -74,7 +83,30 @@ const projectOutput = z.object({
 /** Whether the page of the site shows «Настраиваем сайт» (siteSetupState); null for a site from before it. */
 const setupField = z.enum(siteSetupStates).nullable()
 
-const listOutput = projectOutput.extend({ setup: setupField })
+/**
+ * What the site can be worked on with now (docs/plan/57-browser-tasks.md, Б9): its repository and
+ * the browser of the platform, each decided by the server.
+ */
+const listOutput = projectOutput.extend({ setup: setupField, capabilities: siteCapabilitiesOutput })
+
+/** What `siteCapabilities` reads of a site besides its status and its import. */
+const capabilitySelect = {
+  gitRepositories: { select: { id: true }, take: 1 },
+} satisfies Prisma.SiteSelect
+
+/** The capabilities of a site read with `capabilitySelect` and its first import. */
+const capabilitiesOf = (
+  context: Pick<Context, 'chat'>,
+  site: { status: SiteStatus; url: string; gitRepositories: unknown[] },
+  setup: ReturnType<typeof siteSetupState>,
+) =>
+  siteCapabilities({
+    status: site.status,
+    setup,
+    hasRepository: site.gitRepositories.length > 0,
+    browserConfigured: browserConfigured(context),
+    secureAddress: browserAddressSecure(site.url, context.chat?.appEnv ?? null),
+  })
 
 /** The kinds of access a site itself has; a row of any other kind is not shown on its page. */
 const SITE_ACCESS_KINDS = [
@@ -111,6 +143,7 @@ const siteOutput = projectOutput.extend({
   state: z.enum(['free', 'busy', 'held']),
   setup: setupField,
   initialVersion: initialVersionOutput,
+  capabilities: siteCapabilitiesOutput,
 })
 
 /** A saved access of the site as its owner may see it: never the Vault path, never a value. */
@@ -196,6 +229,132 @@ async function releaseCreation(
     .catch(() => undefined)
 }
 
+/** What every way of adding a site gives: the step «Основные данные» of the wizard. */
+const projectBasics = {
+  /** One per opening of the wizard: the same key again is the same request. */
+  requestKey: z.uuid(),
+  // A one-line name, by the rule of every other name a user types (`sites.name`, VarChar 255).
+  name: profileNameSchema,
+  url: siteOrigin,
+  stack: z.enum(SiteStack),
+}
+
+/**
+ * `files` — the access to the files of the site and, if it has one, to its database: the site gets
+ * a repository by its first import. `browser` (docs/plan/57-browser-tasks.md, Б8) — no access at
+ * all: the agent works in the site's own admin pages in the browser of the platform, and the owner
+ * may leave it hints. A request without `access` is of the files, as before there was a choice.
+ */
+const createInput = z.union([
+  z.strictObject({
+    ...projectBasics,
+    access: z.literal('browser'),
+    agentNotes: agentNotesInput.optional(),
+  }),
+  z.strictObject({
+    ...projectBasics,
+    access: z.literal('files').optional(),
+    source: codeSourceInputSchema,
+    database: databaseInputSchema.nullable(),
+  }),
+])
+
+/** A request of `project.create`: the user, the id of the site it makes and its address. */
+interface CreationRequest {
+  userId: string
+  siteId: string
+  url: string
+}
+
+/**
+ * The start of the transaction that writes a site: the lock of the user's row — the duplicate, the
+ * ceiling, the tariff and the imports in progress are counted under it, across web replicas — and
+ * the claim of the id still ours: one that expired and was taken over belongs to the request that
+ * took it.
+ */
+async function lockCreation(
+  tx: Prisma.TransactionClient,
+  claim: { siteId: string; userId: string; token: string },
+): Promise<void> {
+  if (!(await lockUserRow(tx, claim.userId))) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Войдите, чтобы продолжить' })
+  }
+  const { count } = await tx.siteCreationClaim.deleteMany({
+    where: { siteId: claim.siteId, token: claim.token },
+  })
+  if (count !== 1) throw creationInProgress()
+}
+
+/**
+ * A site for tasks in the browser alone (Б8): no access, no check on a server, no Vault, no source
+ * and no import — the site (`onboarding`, with the owner's hints) and the audit row, under the same
+ * claim, lock and room as a site with files, with the gift of the registration for a first site.
+ */
+async function createForBrowser(
+  ctx: Pick<Context, 'prisma' | 'headers'>,
+  input: {
+    request: CreationRequest
+    owner: { userId: string; appEnv: AppEnv }
+    site: { name: string; url: string; stack: SiteStack }
+    notes: string | null
+  },
+): Promise<CreateOutcome> {
+  const { request, owner } = input
+  const claim = { siteId: request.siteId, userId: request.userId, token: randomUUID() }
+  let committed = false
+  try {
+    if (!(await claimCreation(ctx.prisma, claim))) throw creationInProgress()
+    // An identical request may have committed between the replay and the claim.
+    const raced = await replayOf(ctx.prisma, request)
+    if (raced) return raced
+    const outcome = await ctx.prisma.$transaction(
+      async (tx): Promise<CreateOutcome> => {
+        await lockCreation(tx, claim)
+        const earlier = await replayOf(tx, request)
+        if (earlier) return earlier
+        const workspace = await assertRoomForSite(tx, request, () =>
+          ensurePersonalWorkspaceWithGift(tx, owner),
+        )
+        const site = await tx.site.create({
+          data: {
+            id: request.siteId,
+            ...input.site,
+            workspaceId: workspace.id,
+            status: 'onboarding',
+            agentNotes: input.notes,
+          },
+          select: projectSelect,
+        })
+        // Kinds only, as for a site with files: never the hints.
+        await tx.auditLog.create({
+          data: {
+            actorType: 'user',
+            actorId: request.userId,
+            workspaceId: workspace.id,
+            action: 'site.create',
+            targetType: 'site',
+            targetId: request.siteId,
+            meta: { access: 'browser', source: null, database: null },
+            ip: clientIp(ctx.headers),
+          },
+        })
+        return { outcome: 'created', project: withHost(site) }
+      },
+      { isolationLevel: 'ReadCommitted', timeout: 10_000 },
+    )
+    committed = true
+    return outcome
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw alreadyExists()
+    }
+    throw error
+  } finally {
+    // The transaction deleted the claim with the site; every other way out gives it back.
+    if (!committed) await releaseCreation(ctx.prisma, claim)
+  }
+}
+
 export const projectRouter = router({
   list: consentedProcedure.output(z.array(listOutput)).query(async ({ ctx }) => {
     const sites = await ctx.prisma.site.findMany({
@@ -203,13 +362,22 @@ export const projectRouter = router({
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: {
         ...projectSelect,
+        ...capabilitySelect,
         provisioningStages: { ...codeImportOnly, select: { status: true } },
       },
     })
-    return sites.map(({ provisioningStages, ...site }) => ({
-      ...withHost(site),
-      setup: siteSetupState(provisioningStages[0]),
-    }))
+    return sites.map(({ provisioningStages, gitRepositories, ...site }) => {
+      const setup = siteSetupState(provisioningStages[0])
+      return {
+        ...withHost(site),
+        setup,
+        capabilities: capabilitiesOf(
+          ctx,
+          { status: site.status, url: site.url, gitRepositories },
+          setup,
+        ),
+      }
+    })
   }),
 
   /** One site of the user, for its page in the cabinet. */
@@ -229,17 +397,24 @@ export const projectRouter = router({
               inflightMcpCallId: true,
             },
           },
+          ...capabilitySelect,
           provisioningStages: { ...codeImportOnly, select: { status: true } },
           initialVersion: { select: { tag: true, commitSha: true, importedAt: true } },
         },
       })
       if (!site) throw siteNotFound()
-      const { lease, provisioningStages, initialVersion, ...row } = site
+      const { lease, provisioningStages, initialVersion, gitRepositories, ...row } = site
+      const setup = siteSetupState(provisioningStages[0])
       return {
         ...withHost(row),
         state: siteState(lease),
-        setup: siteSetupState(provisioningStages[0]),
+        setup,
         initialVersion: confirmedInitialVersion(initialVersion),
+        capabilities: capabilitiesOf(
+          ctx,
+          { status: row.status, url: row.url, gitRepositories },
+          setup,
+        ),
       }
     }),
 
@@ -276,25 +451,20 @@ export const projectRouter = router({
    * Vault before the transaction, then one transaction that checks the rules again under the lock of the
    * user's row and writes everything. A refused check answers `source_refused` or `database_refused`, with
    * nothing written anywhere.
+   *
+   * A site for the browser alone (`access: 'browser'`, docs/plan/57, Б8) skips the accesses: the same
+   * request key, rules, claim, lock and room, then the site and its audit row (`createForBrowser`). It
+   * needs the browser of the platform, and its hints for the agent pass the checks of a task's words.
    */
   create: consentedProcedure
-    .input(
-      z.strictObject({
-        /** One per opening of the wizard: the same key again is the same request. */
-        requestKey: z.uuid(),
-        // A one-line name, by the rule of every other name a user types (`sites.name`, VarChar 255).
-        name: profileNameSchema,
-        url: siteOrigin,
-        stack: z.enum(SiteStack),
-        source: codeSourceInputSchema,
-        database: databaseInputSchema.nullable(),
-      }),
-    )
+    .input(createInput)
     .output(createOutput)
     .mutation(async ({ ctx, input }): Promise<CreateOutcome> => {
       const services = requireSiteConnections(ctx.siteConnections)
       const userId = ctx.user.id
       const { appEnv } = services
+      // Refused before anything is read, in the client's words.
+      const notes = input.access === 'browser' ? agentNotesOf(input.agentNotes) : null
       const siteId = siteIdForRequest(userId, input.requestKey)
       const request = { userId, siteId, url: input.url }
 
@@ -303,6 +473,10 @@ export const projectRouter = router({
 
       // Fail fast, before any connection to a server: the transaction asks all of this again.
       assertSiteAccepted(services, input)
+      // The browser of the platform opens https sites only in production, and the address of a
+      // site is never changed: a site at any other would take no task at all (Б33).
+      if (input.access === 'browser' && !browserAddressSecure(input.url, appEnv))
+        throw siteAddressNotSecure()
       const owner = { userId, appEnv }
       try {
         await assertRoomForSiteSnapshot(ctx.prisma, owner, input.url)
@@ -312,6 +486,15 @@ export const projectRouter = router({
         const raced = await replayOf(ctx.prisma, request)
         if (raced) return raced
         throw error
+      }
+      if (input.access === 'browser') {
+        if (!browserConfigured(ctx)) throw browserUnavailable()
+        return createForBrowser(ctx, {
+          request,
+          owner,
+          site: { name: input.name, url: input.url, stack: input.stack },
+          notes,
+        })
       }
       const { source, database } = input
       if (!offersSource(services, source.kind))
@@ -373,16 +556,7 @@ export const projectRouter = router({
 
         const outcome = await ctx.prisma.$transaction(
           async (tx): Promise<CreateOutcome> => {
-            // Serialize this user's first and subsequent projects across web replicas: the
-            // duplicate, the ceiling, the tariff and the imports in progress are checked under it.
-            if (!(await lockUserRow(tx, userId))) {
-              throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Войдите, чтобы продолжить' })
-            }
-            // Still ours: a claim that expired and was taken over belongs to the request that took it.
-            const { count } = await tx.siteCreationClaim.deleteMany({
-              where: { siteId, token: claim.token },
-            })
-            if (count !== 1) throw creationInProgress()
+            await lockCreation(tx, claim)
             // Only after a claim that expired under an earlier identical request, which then committed:
             // its site is the answer, and the versions written above are newer than its references.
             const earlier = await replayOf(tx, request)

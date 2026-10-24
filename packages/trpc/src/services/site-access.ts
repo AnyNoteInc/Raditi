@@ -47,7 +47,7 @@ export function offersSource(services: SiteConnectionServices, kind: SiteSourceK
 }
 
 /** The class of a failure and its HTTP status when it has one: never its message. */
-function failureLabel(error: unknown): string {
+export function failureLabel(error: unknown): string {
   const name = error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name) ? error.name : 'Error'
   const status = (error as { status?: unknown } | null)?.status
   return typeof status === 'number' && Number.isSafeInteger(status)

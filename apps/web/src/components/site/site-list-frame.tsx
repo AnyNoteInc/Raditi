@@ -69,6 +69,8 @@ export function SiteListFrame({
       <Box
         component="nav"
         aria-label={label}
+        // The browser of a task over the content covers this column: it leaves the tab order then.
+        data-site-list=""
         sx={{
           // A column on a phone, so the pinned action has the whole list to stick within.
           display: {

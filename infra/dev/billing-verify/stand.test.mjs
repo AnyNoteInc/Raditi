@@ -43,7 +43,7 @@ import {
   moscowDate,
   rubles,
 } from './scenario-kit.mjs'
-import { SITES_WRITER, prepareSitesWriter } from './openbao.mjs'
+import { SITES_WRITER, WEB_POLICIES, prepareSitesWriter } from './openbao.mjs'
 import { scenarioIds } from './scenarios.mjs'
 import {
   BUILD_OUTPUT,
@@ -682,6 +682,8 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     pastDueDays: PAST_DUE_DAYS,
     // The stand gives web no preview settings: previews are off there.
     preview: null,
+    // Nor a browser stream: browser tasks are off there too.
+    browserStreamUrl: null,
   })
   // No captcha: a customer of the stand signs up over HTTP.
   assert.equal(authConfigFromEnv(env).captcha, null)
@@ -703,7 +705,7 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
   assert.equal('VAULT_DEV_ROOT_TOKEN' in env, false)
 })
 
-test('web’s AppRole holds the one policy `sites-writer`, on the mounts and policies of infra/vault', async () => {
+test('web’s AppRole holds the policies `sites-writer` and `workspace-provisioner`, on the mounts and policies of infra/vault', async () => {
   const calls = []
   const fetchImpl = async (url, init) => {
     const path = new URL(url).pathname.slice('/v1/'.length)
@@ -719,7 +721,7 @@ test('web’s AppRole holds the one policy `sites-writer`, on the mounts and pol
     if (path === `auth/approle/role/${SITES_WRITER}/secret-id`)
       return reply(200, { data: { secret_id: 'made-secret-id' } })
     if (path === 'auth/approle/login')
-      return reply(200, { auth: { client_token: 'web', token_policies: [SITES_WRITER] } })
+      return reply(200, { auth: { client_token: 'web', token_policies: [...WEB_POLICIES] } })
     return reply(204)
   }
   const realFetch = globalThis.fetch
@@ -738,8 +740,9 @@ test('web’s AppRole holds the one policy `sites-writer`, on the mounts and pol
     written.some(({ path, body }) => path === 'sys/mounts/kv' && body?.options?.version === '2'),
   )
   assert.ok(written.some(({ path }) => path === `sys/policies/acl/${SITES_WRITER}`))
+  assert.ok(written.some(({ path }) => path === 'sys/policies/acl/workspace-provisioner'))
   const role = written.find(({ path }) => path === `auth/approle/role/${SITES_WRITER}`)
-  assert.deepEqual(role.body.token_policies, [SITES_WRITER])
+  assert.deepEqual(role.body.token_policies, [SITES_WRITER, 'workspace-provisioner'])
   assert.equal(role.body.token_no_default_policy, true)
   // The policy itself: write with CAS and read the metadata of sites, and keep one version of a
   // client's variable (docs/plan/53-chat-preview-release.md, Р13) — nothing else.
@@ -748,6 +751,13 @@ test('web’s AppRole holds the one policy `sites-writer`, on the mounts and pol
       ([, path]) => path,
     ),
     ['kv/data/sites/*', 'kv/metadata/sites/+/*', 'kv/metadata/sites/+/env/*'],
+  )
+  // And the Transit key of a workspace, made before its first task (docs/plan/57, Б32) — only.
+  assert.deepEqual(
+    [...read('infra/vault/policies/workspace-provisioner.hcl').matchAll(/^path "([^"]+)"/gm)].map(
+      ([, path]) => path,
+    ),
+    ['transit/keys/+'],
   )
 })
 

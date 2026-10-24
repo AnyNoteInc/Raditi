@@ -362,6 +362,98 @@ describe('runner commands', () => {
   })
 })
 
+describe('runner commands of a turn without a repository (plan 57, Б5)', () => {
+  const { git: _git, ...gitless } = manifest
+  /** The snapshot of turn 1 of such a turn: no `git`, the home part alone. */
+  const homeOnly = { ...gitless, parts: manifest.parts.filter((part) => part.name === 'home') }
+  const homeParts = { home: get('sessions/session-1/turns/0001/home.tar.zst') }
+  const withoutBundle = () => {
+    const { bundle: _bundle, restore: _restore, ...rest } = prepare()
+    return rest
+  }
+  const capture = (change: Record<string, unknown> = {}) => ({
+    ...envelope,
+    type: 'capture',
+    home: {
+      root: '/agent-home/opencode',
+      include: ['.local/share/opencode/opencode.db'],
+      exclude: [],
+    },
+    ...change,
+  })
+
+  it('prepares a first turn and restores a snapshot of the home part alone, without a bundle', () => {
+    const first = runnerCommandSchema.parse(withoutBundle())
+    expect(first).not.toHaveProperty('bundle')
+    const next = runnerCommandSchema.parse({
+      ...withoutBundle(),
+      restore: { manifest: homeOnly, parts: homeParts },
+    })
+    expect(next).toMatchObject({ restore: { parts: { home: homeParts.home } } })
+    expect(next).not.toHaveProperty('restore.parts.patch')
+  })
+
+  it.each([
+    [
+      'a snapshot with a repository restored without a bundle',
+      () => ({ ...withoutBundle(), restore: prepare().restore }),
+      ['restore', 'manifest'],
+    ],
+    [
+      'a snapshot without a repository restored with a bundle',
+      () => ({ ...prepare(), restore: { manifest: homeOnly, parts: homeParts } }),
+      ['restore', 'manifest'],
+    ],
+    [
+      'the three parts of a snapshot without a repository',
+      () => ({
+        ...withoutBundle(),
+        restore: { manifest: homeOnly, parts: prepare().restore.parts },
+      }),
+      ['restore', 'parts'],
+    ],
+    [
+      'the home part alone of a snapshot with a repository',
+      () => ({ ...prepare(), restore: { manifest, parts: homeParts } }),
+      ['restore', 'parts'],
+    ],
+    [
+      'a snapshot without a repository that keeps three parts',
+      () => ({
+        ...withoutBundle(),
+        restore: { manifest: gitless, parts: prepare().restore.parts },
+      }),
+      ['restore', 'manifest', 'parts'],
+    ],
+  ])('refuses %s', (_label, cmd, path) => {
+    const result = runnerCommandSchema.safeParse(cmd())
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toContainEqual(path)
+  })
+
+  it('captures home alone without a base, and a working set only with one', () => {
+    const parsed = runnerCommandSchema.parse(capture())
+    expect(parsed).not.toHaveProperty('baseSha')
+    for (const change of [
+      { sandboxBaseSha: 'd'.repeat(40) },
+      { addOnlyPaths: ['wp-content/uploads/raditi/'] },
+    ]) {
+      expect(runnerCommandSchema.safeParse(capture(change)).success).toBe(false)
+      expect(
+        runnerCommandSchema.safeParse(capture({ ...change, baseSha: 'b'.repeat(40) })).success,
+      ).toBe(true)
+    }
+  })
+
+  it('seals the home part of a snapshot without git', () => {
+    const { git: _sealGit, ...base } = sealCommand().base
+    expect(runnerCommandSchema.safeParse({ ...sealCommand(), base }).success).toBe(true)
+    expect(
+      runnerCommandSchema.safeParse({ ...sealCommand(), base: { ...base, git: null } }).success,
+    ).toBe(false)
+  })
+})
+
 describe('runner credentials', () => {
   it('carry every credential a checked prepared run can have, and no more', () => {
     const secrets = Array.from({ length: preparedRunLimits.secretFiles }, (_, i) => ({
@@ -480,6 +572,22 @@ describe('runner reports', () => {
       { ...base, type: 'failed', code: 'EXEC_LOST' },
     ])
       expect(runnerReportSchema.safeParse(value).success, value.type).toBe(true)
+  })
+
+  it('reports a capture of home alone without candidate parts, never with one of them', () => {
+    const captured = {
+      ...base,
+      type: 'captured',
+      commandId: ids.command,
+      homeBytes: 100,
+    }
+    expect(runnerReportSchema.parse(captured)).not.toHaveProperty('patch')
+    const patch = { sha256: digest, sizeBytes: 0 }
+    expect(runnerReportSchema.safeParse({ ...captured, patch }).success).toBe(false)
+    expect(runnerReportSchema.safeParse({ ...captured, untracked: patch }).success).toBe(false)
+    expect(runnerReportSchema.safeParse({ ...captured, patch, untracked: patch }).success).toBe(
+      true,
+    )
   })
 
   it('refuses a cursor that moves backwards, an oversized batch and invalid events', () => {

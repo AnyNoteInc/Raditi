@@ -3,8 +3,24 @@ import { randomUUID } from 'node:crypto'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
-import { createPrismaClient, insertFeedEvent, recordCandidate, type PrismaClient } from '@repo/db'
-import type { TurnEvidence } from '@repo/domain'
+import {
+  bindAttachments,
+  createAttachment,
+  createPrismaClient,
+  insertFeedEvent,
+  markAttachmentReady,
+  openBrowserSession,
+  recordCandidate,
+  upsertBrowserCheckpoint,
+  type PrismaClient,
+} from '@repo/db'
+import {
+  BROWSER_ONLY,
+  toTurnPlan,
+  type AgentDriver,
+  type AgentEvent,
+  type TurnEvidence,
+} from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { sampleDriverId } from '../testing/ids.ts'
@@ -70,12 +86,16 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     status: string,
     turnNo: number,
     expiresAt = new Date(Date.now() + 3_600_000),
+    { browser = false }: { browser?: boolean } = {},
   ) {
     const { userId } = await fixtures.user()
     const workspace = await db.$transaction((tx) =>
       ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
     )
-    const { taskId } = await fixtures.task(workspace.id, { status: 'queued' })
+    const { taskId } = await fixtures.task(workspace.id, {
+      status: 'queued',
+      ...(browser ? { needsRepository: false, needsBrowser: true } : {}),
+    })
     const placedAt = new Date(expiresAt.getTime() - 3_600_000)
     await fixtures.reserve({
       workspaceId: workspace.id,
@@ -92,7 +112,8 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
           status: 'completed',
           driverId: sampleDriverId,
           image,
-          headSha: HEAD,
+          // A turn without a repository publishes no head (plan 57, Б4).
+          headSha: browser ? null : HEAD,
         },
       })
     await db.$executeRaw`UPDATE tasks SET status = ${status}::"TaskStatus", turn_no = ${turnNo}
@@ -468,5 +489,289 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       { taskId, attempt: 1, requestEventId: request.toString() },
       { jobId: expect.stringContaining(':retry:sweep-') },
     )
+  })
+
+  describe('of tasks in the cloud browser (docs/plan/57-browser-tasks.md)', () => {
+    const turnResult = {
+      summary: 'Сохранил новость',
+      change_type: 'content' as const,
+      client_message: 'Новость сохранена черновиком.',
+      files_changed: [],
+      questions: [],
+      needs_approval: false,
+      risk: 'low' as const,
+    }
+    const driver = {
+      id: sampleDriverId,
+      extractResult: (events: readonly AgentEvent[]) =>
+        JSON.parse(events.findLast((event) => event.type === 'message')?.text ?? 'null') as unknown,
+    } as unknown as AgentDriver
+
+    /** The plan a turn without a repository was assigned with. */
+    const planOf = (task: { id: string; siteId: string; workspaceId: string }) =>
+      toTurnPlan(
+        {
+          sandbox: {
+            image,
+            labels: {
+              workspaceId: task.workspaceId,
+              siteId: task.siteId,
+              taskId: task.id,
+              sessionId: task.id,
+              turn: 1,
+            },
+            runtime: 'runc',
+            resources: { cpu: 2, memoryMiB: 4096, pids: 512 },
+            user: { uid: 10001, gid: 10001 },
+            env: {},
+            secrets: [],
+            network: { mode: 'gateway', routes: ['llm', 'mcp'] },
+            hardTimeoutMs: 1_200_000,
+          },
+          context: {
+            taskId: task.id,
+            sessionId: task.id,
+            turn: 1,
+            llm: { baseUrl: 'http://sandbox-gw:8080/llm', model: 'm' },
+            mcp: { url: 'http://sandbox-gw:8080/mcp' },
+            instructions: 'rules',
+          },
+          input: { prompt: 'Слова', attachments: [] },
+          driverVersion: '1.0.0',
+          requirements: BROWSER_ONLY,
+          committedAt: new Date().toISOString(),
+        },
+        sampleDriverId,
+      )
+
+    async function closedTurn(phases: Array<[TurnEvidence['phase'], object?]>) {
+      const created = await dialog('running', 1, undefined, { browser: true })
+      const { taskId, task } = created
+      await db.turnAssignment.create({
+        data: {
+          taskId,
+          siteId: task.siteId,
+          sessionId: taskId,
+          turnNo: 1,
+          executor: 'local',
+          plan: planOf(task),
+          firstEpoch: 1,
+          leaseEpoch: 2,
+          deadlineAt: new Date(Date.now() + 60_000),
+          finishedAt: new Date(),
+          outcome: 'completed',
+        },
+      })
+      let sequence = 0
+      for (const [phase, extra] of phases)
+        await db.taskEvent.create({
+          data: {
+            taskId,
+            type: phase === 'output' ? 'turn.output' : 'turn.lifecycle',
+            payload: {
+              fence: { siteId: task.siteId, taskId, operation: 'turn', epoch: 2 },
+              sessionId: taskId,
+              turn: 1,
+              sequence: ++sequence,
+              phase,
+              ...extra,
+            },
+          },
+        })
+      return created
+    }
+
+    const browserSweep = (
+      browser: { verify: ReturnType<typeof vi.fn>; sweep?: ReturnType<typeof vi.fn> },
+      live = new LivePasses(),
+    ) =>
+      new TaskSweep({
+        db,
+        settlement: new PassSettlement({ db, candidates: null, logger: quiet }),
+        live,
+        journal: new TaskEventTurnJournal(db),
+        drivers: { has: () => true, get: () => driver } as unknown as AgentDriverRegistry,
+        queue,
+        browser: { verify: browser.verify, sweep: browser.sweep ?? vi.fn() } as never,
+        logger: quiet,
+      })
+
+    it('ends a closed turn without a head: what the task saved is read on the site first', async () => {
+      const { taskId } = await closedTurn([['running'], ['completed', { result: turnResult }]])
+      const session = await openBrowserSession(db, { taskId })
+      const verify = vi.fn(async () => {
+        // The worker records what it found on the site.
+        const editUrl = 'https://example.ru/wp-admin/post.php?post=7&action=edit'
+        await upsertBrowserCheckpoint(db, {
+          taskId,
+          sessionId: session.id,
+          ref: { kind: 'post', objectId: '7', editUrl },
+          state: 'verified',
+          verified: {
+            kind: 'post',
+            objectId: '7',
+            title: 'Новость',
+            status: 'draft',
+            editUrl,
+            images: 0,
+            files: 0,
+            featuredImage: false,
+          },
+        })
+        return true
+      })
+
+      expect(await browserSweep({ verify }).settleOrphans()).toBe(1)
+
+      expect(verify).toHaveBeenCalledExactlyOnceWith(taskId)
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('done')
+      const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.result' } })
+      expect(row!.payload).toMatchObject({ objects: [{ status: 'draft', title: 'Новость' }] })
+    })
+
+    it('ends a turn whose checkpoint recovery finished, its result read from the output', async () => {
+      const events: AgentEvent[] = [
+        { type: 'started', nativeSessionId: 'native1' },
+        { type: 'message', text: JSON.stringify(turnResult) },
+        { type: 'completed' },
+      ]
+      const { taskId } = await closedTurn([
+        ['running'],
+        ['output', { cursor: { stdout: 10, stderr: 0 }, events }],
+        ['checkpointing'],
+        ['checkpoint_recovered'],
+      ])
+
+      expect(await browserSweep({ verify: vi.fn(async () => false) }).settleOrphans()).toBe(1)
+
+      // Nothing confirmed on the site: the client is asked to look, the attempt goes on.
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+        'awaiting_user',
+      )
+      const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.question' } })
+      expect(row!.payload).toMatchObject({ kind: 'browser', reason: 'unconfirmed' })
+    })
+
+    it('cancels a waiting task whose reserve ran out, naming what it had saved', async () => {
+      const past = new Date(Date.now() - 60_000)
+      const { taskId } = await dialog('awaiting_user', 1, past, { browser: true })
+      const session = await openBrowserSession(db, { taskId })
+      await upsertBrowserCheckpoint(db, {
+        taskId,
+        sessionId: session.id,
+        ref: {
+          kind: 'post',
+          objectId: '9',
+          editUrl: 'https://example.ru/wp-admin/post.php?post=9&action=edit',
+        },
+        state: 'unverified',
+      })
+
+      expect(await sweep().expireHolds()).toBe(1)
+
+      const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.cancelled' } })
+      expect(row!.payload).toMatchObject({
+        by: 'no_answer',
+        objects: [{ kind: 'post', status: 'unconfirmed', title: null }],
+      })
+    })
+
+    it('compares the browsers with the worker every tick, never taking a live pass for lost', async () => {
+      const live = new LivePasses()
+      live.enter('0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60')
+      const browser = {
+        verify: vi.fn(),
+        sweep: vi.fn(async (_options: { busy: (taskId: string) => boolean }) => ({
+          closed: 0,
+          lost: 0,
+          orphaned: 0,
+        })),
+      }
+
+      await browserSweep(browser, live).tick()
+
+      expect(browser.sweep).toHaveBeenCalledOnce()
+      const { busy } = browser.sweep.mock.calls[0]![0]
+      expect(busy('0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60')).toBe(true)
+      expect(busy('0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61')).toBe(false)
+    })
+  })
+
+  // docs/plan/57-browser-tasks.md, Б26: files nobody sent leave raditi-inbox, then the database.
+  it('removes the files nobody sent past their expiry, the object first, never a sent one', async () => {
+    const { taskId, task, userId } = await dialog('awaiting_user', 0, undefined, { browser: true })
+    const file = async (ready: boolean) => {
+      const created = (await createAttachment(db, {
+        workspaceId: task.workspaceId,
+        siteId: task.siteId,
+        uploadedById: userId,
+        fileName: 'news.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 10,
+      }))!
+      if (ready)
+        expect(
+          await markAttachmentReady(db, {
+            id: created.id,
+            sizeBytes: 10,
+            contentType: 'application/pdf',
+          }),
+        ).toBe(true)
+      return created
+    }
+    const [uploading, ready, sent, fresh] = [
+      await file(false),
+      await file(true),
+      await file(true),
+      await file(true),
+    ]
+    const binding = { taskId, userId, workspaceId: task.workspaceId, siteId: task.siteId }
+    expect(await bindAttachments(db, { ...binding, ids: [sent.id] })).toBe(true)
+    await db.$executeRaw`UPDATE attachments SET expires_at = clock_timestamp() - interval '2 hours'
+      WHERE id = ANY(${[uploading.id, ready.id, sent.id]}::uuid[])`
+    const mine = new Set([uploading, ready, sent, fresh].map((one) => one.s3Key))
+    const statusOf = async (key: string) =>
+      (await db.attachment.findUniqueOrThrow({ where: { s3Key: key } })).status
+    const collector = (inbox: { delete: (bucket: 'inbox', key: string) => Promise<void> }) =>
+      new TaskSweep({
+        db,
+        settlement: new PassSettlement({ db, candidates: null, logger: quiet }),
+        live: new LivePasses(),
+        journal: new TaskEventTurnJournal(db),
+        drivers: { has: () => false } as unknown as AgentDriverRegistry,
+        queue,
+        inbox,
+        logger: quiet,
+      })
+
+    // The storage refuses: the rows wait for the next tick.
+    const down = { delete: vi.fn(async () => Promise.reject(new Error('S3 is down'))) }
+    expect(await collector(down).collectAttachments()).toBe(0)
+    expect(quiet.warn).toHaveBeenCalledWith(expect.stringContaining('task sweep attachments'))
+    expect(await statusOf(ready.s3Key)).toBe('ready')
+
+    const removed: Array<{ bucket: string; key: string; status: string }> = []
+    const inbox = {
+      delete: vi.fn(async (bucket: 'inbox', key: string) => {
+        if (mine.has(key)) removed.push({ bucket, key, status: await statusOf(key) })
+      }),
+    }
+    expect(await collector(inbox).collectAttachments()).toBeGreaterThanOrEqual(2)
+    // The objects of the two files nobody sent, each while its row still names it.
+    expect(removed).toEqual(
+      expect.arrayContaining([
+        { bucket: 'inbox', key: uploading.s3Key, status: 'uploading' },
+        { bucket: 'inbox', key: ready.s3Key, status: 'ready' },
+      ]),
+    )
+    expect(removed).toHaveLength(2)
+    expect(
+      await Promise.all([uploading, ready, sent, fresh].map((one) => statusOf(one.s3Key))),
+    ).toEqual(['deleted', 'deleted', 'bound', 'ready'])
+
+    // Once: a next tick finds nothing of them.
+    removed.length = 0
+    await collector(inbox).collectAttachments()
+    expect(removed).toEqual([])
   })
 })

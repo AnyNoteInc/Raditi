@@ -7,7 +7,10 @@ import { DIGEST_PINNED_IMAGE } from '../ports/sandbox-provider.ts'
 import { sessionStateSchema, snapshotLimits } from './session-state.ts'
 import { workspaceTransitKey } from './workspace-transit-key.ts'
 
-/** First persisted format. Hashes and sizes describe stored ciphertext, not plaintext. */
+/**
+ * First persisted format. Hashes and sizes describe stored ciphertext, not plaintext. A snapshot
+ * of a turn without a repository keeps it: its manifest has no `git` and one part (plan 57, Б4).
+ */
 export const SNAPSHOT_SCHEMA_VERSION = 1
 export const snapshotPartNames = ['home', 'untracked', 'patch'] as const
 export type SnapshotPartName = (typeof snapshotPartNames)[number]
@@ -78,10 +81,31 @@ const snapshotGitSchema = z
 export const snapshotMetadataSchema = snapshotReferenceSchema
   .extend({
     driver: driverSchema.extend({ nativeSessionId: nativeSessionIdSchema.optional() }).strict(),
-    git: snapshotGitSchema,
+    /**
+     * The repository of the turn. Absent in the snapshot of a turn without one
+     * (docs/plan/57-browser-tasks.md, Б4): it holds the home part alone.
+     */
+    git: snapshotGitSchema.optional(),
   })
   .strict()
 export type SnapshotMetadata = z.infer<typeof snapshotMetadataSchema>
+
+/** Whether a snapshot, its metadata or its plan belongs to a turn with a repository. */
+export function snapshotHasRepository<T extends { git?: unknown }>(
+  snapshot: T,
+): snapshot is T & { git: NonNullable<T['git']> } {
+  return snapshot.git !== undefined
+}
+
+const homeOnly: readonly SnapshotPartName[] = Object.freeze(['home'] as const)
+
+/**
+ * The parts a snapshot holds: all three with a repository; without one only `home` — there is
+ * no patch and no new files of a working copy to keep (Б4).
+ */
+export function snapshotPartNamesOf(snapshot: { git?: unknown }): readonly SnapshotPartName[] {
+  return snapshotHasRepository(snapshot) ? snapshotPartNames : homeOnly
+}
 
 /**
  * The part of the snapshot metadata known before the agent runs, checked by the same rules as
@@ -90,7 +114,7 @@ export type SnapshotMetadata = z.infer<typeof snapshotMetadataSchema>
  */
 export const snapshotPlanSchema = snapshotMetadataSchema
   .omit({ home: true })
-  .extend({ git: snapshotGitSchema.omit({ headSha: true }) })
+  .extend({ git: snapshotGitSchema.omit({ headSha: true }).optional() })
   .strict()
 
 const snapshotPartSchema = z
@@ -116,15 +140,23 @@ export const snapshotManifestSchema = snapshotMetadataSchema
   .extend({
     schemaVersion: z.literal(SNAPSHOT_SCHEMA_VERSION),
     createdAt: z.iso.datetime(),
-    parts: z.array(snapshotPartSchema).length(3),
+    parts: z.array(snapshotPartSchema).min(1).max(snapshotPartNames.length),
   })
   .strict()
   .superRefine((manifest, ctx) => {
-    if (new Set(manifest.parts.map((p) => p.name)).size !== 3) {
+    const expected = snapshotPartNamesOf(manifest)
+    const names = new Set(manifest.parts.map((p) => p.name))
+    if (
+      manifest.parts.length !== expected.length ||
+      names.size !== expected.length ||
+      !expected.every((name) => names.has(name))
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['parts'],
-        message: 'expected exactly three unique parts',
+        message: snapshotHasRepository(manifest)
+          ? 'expected exactly three unique parts'
+          : 'expected the home part alone without a repository',
       })
     }
     // One data key per snapshot (spec §8): restore unwraps it with a single Vault call.

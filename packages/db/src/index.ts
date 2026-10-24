@@ -1,5 +1,5 @@
 // PostgreSQL adapter: Prisma client, generated types and enums, outbox, personal workspaces,
-// site leases and turn assignments.
+// site leases, turn assignments, browser sessions and attachments.
 // Explicit re-exports keep the public surface visible and avoid leaking internals.
 export {
   createPrismaClient,
@@ -19,6 +19,44 @@ export {
 } from './chat-outbox.ts'
 export { enqueueCandidateRebase, enqueueTurnCancel } from './task-commands-outbox.ts'
 export { taskHasProductionWrites } from './task-production-writes.ts'
+export {
+  browserClosedSiteStatuses,
+  clearBrowserHelp,
+  closeBrowserSession,
+  listOpenBrowserSessions,
+  markBrowserSessionReady,
+  markBrowserSessionWrote,
+  openBrowserSession,
+  openBrowserSessionOfTask,
+  recordBrowserControl,
+  recordBrowserHelp,
+  touchBrowserSession,
+} from './browser-sessions.ts'
+export {
+  browserViewerAllowed,
+  consumeBrowserStreamTicket,
+  issueBrowserStreamTicket,
+  type IssuedBrowserStreamTicket,
+  type SpentBrowserStreamTicket,
+} from './browser-stream-tickets.ts'
+export {
+  taskBrowserCheckpoints,
+  upsertBrowserCheckpoint,
+  type BrowserCheckpointRecord,
+} from './browser-checkpoints.ts'
+export {
+  ATTACHMENT_COLLECT_GRACE_MINUTES,
+  ATTACHMENT_UNSENT_HOURS,
+  bindAttachments,
+  createAttachment,
+  listExpiredAttachments,
+  markAttachmentReady,
+  markExpiredAttachmentDeleted,
+  removeAttachment,
+  taskAttachment,
+  taskAttachments,
+  type ExpiredAttachment,
+} from './attachments.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'
 export {
   BROWSER_CHECKS_EVENT,
@@ -111,8 +149,12 @@ export {
 
 export { Prisma, PrismaClient } from './generated/prisma/client.ts'
 export {
+  AttachmentStatus,
   AuditActorType,
   BillingUnit,
+  BrowserCheckpointState,
+  BrowserController,
+  BrowserSessionStatus,
   CandidateCheckStatus,
   CandidateStatus,
   ChangeType,
@@ -167,6 +209,9 @@ export type {
   Attachment,
   AuditLog,
   BillingAccount,
+  BrowserCheckpoint,
+  BrowserSession,
+  BrowserStreamTicket,
   CandidateCheck,
   ChannelIdentity,
   ChatSession,

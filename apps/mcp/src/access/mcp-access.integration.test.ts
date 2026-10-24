@@ -22,6 +22,7 @@ import {
 } from '@repo/domain'
 
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { memoryStorage, memoryTransit } from '@repo/snapshots/testing'
 import { fakeInfra, testMcpConfig } from '../testing/fakes.ts'
 import { PostgresMcpAccess } from './mcp-access.ts'
@@ -37,6 +38,8 @@ import { mountMcp } from '../server/mount-mcp.ts'
 import { contentMaskPath, ContentPrivacy } from '../privacy/content-privacy.ts'
 import { McpContentService } from '../content/mcp-content.ts'
 import { McpContentMaintenance } from '../content/mcp-content-maintenance.ts'
+import { mcpBrowserTasksOf } from '../site-info/browser-tasks.ts'
+import { PostgresMcpWebStore } from '../web/mcp-web-store.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '1')
@@ -1964,5 +1967,227 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
     })
     expect((await post({ jsonrpc: '2.0', id: 1, method: 'tools/list' })).status).toBe(401)
     expect(JSON.stringify(result.body)).not.toContain(fixture.token)
+  })
+
+  /**
+   * A turn of a task of its own on a site of its own in the fixture's workspace, under its own
+   * lease and key (docs/plan/57-browser-tasks.md, Б2, Б9): the needs of a task are fixed when it
+   * is written. Answers the token, the rows and their cleanup.
+   */
+  async function turnOf(input: {
+    siteStatus: 'onboarding' | 'active' | 'paused' | 'disconnected' | 'archived'
+    needsRepository: boolean
+    needsBrowser: boolean
+  }) {
+    const suffix = randomBytes(8).toString('hex')
+    const token = `mcp_${randomBytes(32).toString('hex')}`
+    const site = await db.site.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        name: 'Synthetic browser',
+        url: `https://${suffix}.example.test`,
+        stack: 'wordpress',
+        status: input.siteStatus,
+      },
+    })
+    const task = await db.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        siteId: site.id,
+        status: 'running',
+        needsRepository: input.needsRepository,
+        needsBrowser: input.needsBrowser,
+      },
+    })
+    const key = await db.llmKey.create({
+      data: {
+        keyHash: hash(randomUUID()),
+        mcpTokenHash: hash(token),
+        taskId: task.id,
+        taskAttempt: 1,
+        sessionId: suffix,
+        turnNo: 1,
+        firstEpoch: 1,
+        driverId: fixture.driverId,
+        modelId: fixture.modelId,
+        subscriptionAccountId: fixture.accountId,
+        budgetRub: '100',
+        issuedAt: new Date(Date.now() - 60_000),
+        expiresAt: new Date(Date.now() + 300_000),
+        validUntil: new Date(Date.now() + 600_000),
+      },
+    })
+    const assignment = await db.turnAssignment.create({
+      data: {
+        taskId: task.id,
+        siteId: site.id,
+        sessionId: suffix,
+        turnNo: 1,
+        executor: 'local',
+        plan: {},
+        firstEpoch: 1,
+        leaseEpoch: 1,
+        deadlineAt: new Date(Date.now() + 600_000),
+      },
+    })
+    await db.siteLease.create({
+      data: {
+        siteId: site.id,
+        holderTaskId: task.id,
+        epoch: 1,
+        operation: 'turn',
+        expiresAt: new Date(Date.now() + 600_000),
+      },
+    })
+    const cleanup = async () => {
+      await db.attachment.deleteMany({ where: { siteId: site.id } })
+      await db.browserSession.deleteMany({ where: { taskId: task.id } })
+      await db.llmKey.deleteMany({ where: { taskId: task.id } })
+      await db.siteLease.deleteMany({ where: { siteId: site.id } })
+      await db.turnAssignment.deleteMany({ where: { taskId: task.id } })
+      await db.task.delete({ where: { id: task.id } })
+      await db.site.delete({ where: { id: site.id } })
+    }
+    return { token, site, task, key, assignment, cleanup }
+  }
+
+  it.each([
+    ['onboarding', false, true, true],
+    ['active', false, true, true],
+    ['active', true, false, true],
+    // A site being connected takes no task with a repository: its code is not imported yet.
+    ['onboarding', true, false, false],
+    ['onboarding', true, true, false],
+    // Closed sites stay closed to every task.
+    ['paused', false, true, false],
+    ['disconnected', false, true, false],
+    ['archived', false, true, false],
+  ] as const)(
+    'admits a turn on a %s site for repository %s, browser %s: %s',
+    async (siteStatus, needsRepository, needsBrowser, admitted) => {
+      const turn = await turnOf({ siteStatus, needsRepository, needsBrowser })
+      try {
+        const scope = await store.authenticate(turn.token)
+        if (!admitted) expect(scope).toBeNull()
+        else
+          expect(scope).toMatchObject({
+            taskId: turn.task.id,
+            siteId: turn.site.id,
+            requirements: { repository: needsRepository, browser: needsBrowser },
+          })
+      } finally {
+        await turn.cleanup()
+      }
+    },
+  )
+
+  it('carries the needs of a repository task too', async () => {
+    expect(await store.authenticate(fixture.token)).toMatchObject({
+      requirements: { repository: true, browser: false },
+    })
+  })
+
+  it('admits a web call only with the open browser session of the task, and marks its content', async () => {
+    const turn = await turnOf({
+      siteStatus: 'onboarding',
+      needsRepository: false,
+      needsBrowser: true,
+    })
+    const web = new PostgresMcpWebStore(db)
+    // What site_info tells of the browser reads the same session.
+    const browserTasks = mcpBrowserTasksOf({ db, adapters: getSiteAdapter })
+    try {
+      const scope = (await store.authenticate(turn.token))!
+      // core opens the session before the turn (Б18): without one there is no browser to reach.
+      await expect(web.admit(scope)).rejects.toMatchObject({ code: 'BROWSER_SESSION_UNAVAILABLE' })
+      expect(await browserTasks.controller(turn.task.id)).toBeNull()
+      const session = await db.browserSession.create({
+        data: {
+          taskId: turn.task.id,
+          siteId: turn.site.id,
+          workspaceId: fixture.workspaceId,
+          status: 'ready',
+          readyAt: new Date(),
+          controller: 'user',
+          controlEpoch: 1,
+          expiresAt: new Date(Date.now() + 3_600_000),
+        },
+      })
+      const admission = await web.admit(scope)
+      expect(admission).toMatchObject({ assignmentId: turn.assignment.id, sessionId: session.id })
+      expect(admission.deadlineAt.getTime()).toBeGreaterThan(admission.now.getTime())
+      expect(await browserTasks.controller(turn.task.id)).toBe('user')
+      // What a page shows is content of the task: its contact map is swept with it.
+      expect(
+        (await db.task.findUniqueOrThrow({ where: { id: turn.task.id } })).contentAccessedAt,
+      ).not.toBeNull()
+      // The same conditions as the admission: a turn that ended, a closed site, a closed session.
+      await db.site.update({ where: { id: turn.site.id }, data: { status: 'paused' } })
+      await expect(web.admit(scope)).rejects.toMatchObject({ code: 'BROWSER_SESSION_UNAVAILABLE' })
+      await db.site.update({ where: { id: turn.site.id }, data: { status: 'active' } })
+      expect(await web.admit(scope)).toMatchObject({ sessionId: session.id })
+      await db.turnAssignment.update({
+        where: { id: turn.assignment.id },
+        data: { finishedAt: new Date(), outcome: 'completed' },
+      })
+      await expect(web.admit(scope)).rejects.toMatchObject({ code: 'BROWSER_SESSION_UNAVAILABLE' })
+      await db.turnAssignment.update({
+        where: { id: turn.assignment.id },
+        data: { finishedAt: null, outcome: null },
+      })
+      await db.browserSession.update({
+        where: { id: session.id },
+        data: { status: 'closed', closedAt: new Date(), closeReason: 'idle' },
+      })
+      await expect(web.admit(scope)).rejects.toMatchObject({ code: 'BROWSER_SESSION_UNAVAILABLE' })
+    } finally {
+      await turn.cleanup()
+    }
+  })
+
+  it('refuses a web call of a task that needs no browser, whatever its scope says', async () => {
+    const web = new PostgresMcpWebStore(db)
+    const scope = (await store.authenticate(fixture.token))!
+    await expect(
+      web.admit({ ...scope, requirements: { repository: false, browser: true } }),
+    ).rejects.toMatchObject({ code: 'BROWSER_SESSION_UNAVAILABLE' })
+  })
+
+  it("knows the files sent with the task's messages, and no other", async () => {
+    const turn = await turnOf({
+      siteStatus: 'onboarding',
+      needsRepository: false,
+      needsBrowser: true,
+    })
+    const web = new PostgresMcpWebStore(db)
+    try {
+      const file = (taskId: string | null) => {
+        const id = randomUUID()
+        return db.attachment.create({
+          data: {
+            id,
+            workspaceId: fixture.workspaceId,
+            siteId: turn.site.id,
+            taskId,
+            source: 'web',
+            status: taskId === null ? 'ready' : 'bound',
+            s3Key: `inbox/${fixture.workspaceId}/${id}`,
+            fileName: 'photo.jpg',
+            contentType: 'image/jpeg',
+            sizeBytes: 1024,
+            expiresAt: new Date(Date.now() + 3_600_000),
+            boundAt: taskId === null ? null : new Date(),
+          },
+        })
+      }
+      const sent = await file(turn.task.id)
+      const unsent = await file(null)
+      expect(await web.attachmentsOfTask(turn.task.id, [sent.id])).toBe(true)
+      expect(await web.attachmentsOfTask(turn.task.id, [sent.id, unsent.id])).toBe(false)
+      // A file of another task is not this one's, whoever names it.
+      expect(await web.attachmentsOfTask(fixture.taskId, [sent.id])).toBe(false)
+    } finally {
+      await turn.cleanup()
+    }
   })
 })

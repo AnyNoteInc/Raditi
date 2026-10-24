@@ -23,6 +23,7 @@
     "@nestjs/platform-express": "catalog:",
     "@rekog/mcp-nest": "catalog:",
     "@repo/app-bootstrap": "workspace:*",
+    "@repo/browser-link": "workspace:*",
     "@repo/browser-providers": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",

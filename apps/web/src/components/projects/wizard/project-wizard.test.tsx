@@ -47,13 +47,16 @@ const SITE_ID = '019f1a21-1800-7f00-8abc-111111111111'
 
 let queryClient: QueryClient
 
-function showWizard(stacks: readonly ('wordpress' | 'bitrix')[] = ['wordpress']) {
+function showWizard(
+  stacks: readonly ('wordpress' | 'bitrix')[] = ['wordpress'],
+  browserAccess = false,
+) {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <ProjectWizard stacks={stacks} />
+      <ProjectWizard stacks={stacks} browserAccess={browserAccess} />
     </QueryClientProvider>,
   )
 }
@@ -549,6 +552,97 @@ describe('adding the project', () => {
     await waitFor(() => expect(push).toHaveBeenCalled())
     const [first, second] = api.create.mock.calls.map(([input]) => input.requestKey)
     expect(second).toBe(first)
+  })
+})
+
+describe('a site without access to its files (docs/plan/57-browser-tasks.md, Б8)', () => {
+  it('is not offered where the platform has no browser', async () => {
+    showWizard()
+    await passBasics()
+    expect(screen.queryByRole('tab', { name: 'Без доступа к файлам' })).toBeNull()
+  })
+
+  it('skips the checks of the files and the database and adds the site with hints', async () => {
+    showWizard(['wordpress'], true)
+    await passBasics()
+    expect(screen.getByText(/Выберите, как агент будет работать с сайтом/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Без доступа к файлам' }))
+    expect(screen.getByRole('heading', { name: 'Что будет без доступа к файлам' })).toBeTruthy()
+    // What the agent can do there, and nothing the browser of a task closes to it (Б21).
+    expect(
+      screen.getByText(
+        'Агент меняет записи, страницы и медиафайлы в админке сайта — через браузер, и вы видите каждый шаг.',
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(
+        'Настройки сайта и пользователей агент менять не сможет. Код, тему и плагины — тоже: для них нужен доступ по SSH или FTP.',
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText(/меняет[^.]*настройки/)).toBeNull()
+    // No server, no password: only the hints.
+    expect(screen.queryByRole('textbox', { name: /^Сервер/ })).toBeNull()
+    type(
+      screen.getByRole('textbox', { name: /Подсказки для агента/ }),
+      '  Вход в админку — по адресу /login  ',
+    )
+    expect(next()).toHaveTextContent('Добавить проект')
+    fireEvent.click(next())
+    await waitFor(() => expect(push).toHaveBeenCalledWith(`/projects/${SITE_ID}`))
+    expect(api.checkSource).not.toHaveBeenCalled()
+    expect(api.create.mock.calls[0]![0]).toEqual({
+      requestKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      name: 'Кофейня',
+      url: 'https://example.ru',
+      stack: 'wordpress',
+      access: 'browser',
+      agentNotes: 'Вход в админку — по адресу /login',
+    })
+  })
+
+  it('sends no hints when there are none, and says a refused hint on its step', async () => {
+    api.create.mockRejectedValueOnce(
+      Object.assign(new Error('refused'), {
+        message: 'Похоже, в подсказке есть пароль или ключ',
+        data: { code: 'BAD_REQUEST', domainCode: 'PROJECT_NOTES_HAS_SECRET' },
+      }),
+    )
+    showWizard(['wordpress'], true)
+    await passBasics()
+    fireEvent.click(screen.getByRole('tab', { name: 'Без доступа к файлам' }))
+    fireEvent.click(next())
+    await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1))
+    expect(api.create.mock.calls[0]![0]).not.toHaveProperty('agentNotes')
+    expect(await screen.findByText(/в подсказке есть пароль или ключ/)).toBeTruthy()
+    expect(stepTitle()).toHaveTextContent('Доступ к файлам')
+  })
+
+  it('goes back to the address when the server takes no address but https (Б33)', async () => {
+    const text =
+      'Без доступа к файлам агент работает только с сайтами, которые открываются по защищённому адресу. Укажите адрес, который начинается с https://'
+    api.create.mockRejectedValueOnce(
+      Object.assign(new Error(text), {
+        data: { code: 'BAD_REQUEST', domainCode: 'SITE_ADDRESS_NOT_SECURE' },
+      }),
+    )
+    showWizard(['wordpress'], true)
+    await passBasics()
+    fireEvent.click(screen.getByRole('tab', { name: 'Без доступа к файлам' }))
+    fireEvent.click(next())
+
+    await waitFor(() => expect(stepTitle()).toHaveTextContent('Основные данные'))
+    expect(await screen.findByRole('alert')).toHaveTextContent(text)
+    expect(textbox(/Адрес сайта/)).toHaveValue('example.ru')
+  })
+
+  it('goes back to SSH with what was typed in it', async () => {
+    showWizard(['wordpress'], true)
+    await passBasics()
+    type(textbox(/^Сервер/), 'ssh.example.ru')
+    fireEvent.click(screen.getByRole('tab', { name: 'Без доступа к файлам' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'SSH' }))
+    expect(textbox(/^Сервер/)).toHaveValue('ssh.example.ru')
+    expect(next()).toHaveTextContent('Далее')
   })
 })
 

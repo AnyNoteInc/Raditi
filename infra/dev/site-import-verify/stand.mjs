@@ -574,8 +574,9 @@ export function coreEnvironment({
  * The environment of web for `next dev` against this stand (the browser half of W5). Next loads
  * the repository .env for every variable that is not set, so every name of .env.example is set,
  * blank where web needs nothing (blank counts as unset): no developer's key, shop or Vault comes
- * in. Vault is the stand's under the AppRole `web` (sites-writer); the CA lets the checks of the
- * wizard verify FTPS and the TLS of the site databases. NODE_ENV is left to Next.
+ * in. Vault is the stand's under the AppRole `web` (sites-writer, workspace-provisioner); the CA
+ * lets the checks of the wizard verify FTPS and the TLS of the site databases. NODE_ENV is left
+ * to Next.
  */
 export function webEnvironment({
   path,
@@ -1724,7 +1725,8 @@ export async function startStand({ signal = new AbortController().signal, log = 
     )
     const appRoles = {}
     for (const [role, policies] of [
-      ['web', ['sites-writer']],
+      // As in production: the Transit key of a workspace is made by web before its first task.
+      ['web', ['sites-writer', 'workspace-provisioner']],
       ['core', ['core-turns', 'core-transit', 'core-site-import']],
     ]) {
       expectStatus(

@@ -83,8 +83,11 @@ async function start(binding = '') {
     [runnerHeaders.command]: command.commandId,
   })
 
-  /** A turn prepared over HTTP; `restoreKey` is served for the prepare's restore. */
-  const prepare = async (restoreKey?: Uint8Array) => {
+  /**
+   * A turn prepared over HTTP; `restoreKey` is served for the prepare's restore. Without a
+   * repository (docs/plan/57-browser-tasks.md, Б5) the prepare carries no bundle.
+   */
+  const prepare = async (restoreKey?: Uint8Array, { repository = true } = {}) => {
     const assignment = (await assignments.open({
       fence,
       sessionId: labels.sessionId,
@@ -110,16 +113,20 @@ async function start(binding = '') {
           hardTimeoutMs: MAX_SANDBOX_TURN_MS,
         },
         remainingMs: MAX_SANDBOX_TURN_MS,
-        bundle: {
-          baseSha: 'b'.repeat(40),
-          branch: `agent/${taskId}`,
-          sha256: createHash('sha256').update(bundle).digest('hex'),
-          sizeBytes: bundle.byteLength,
-          read: async function* () {
-            yield bundle.subarray(0, 5)
-            yield bundle.subarray(5)
-          },
-        },
+        ...(repository
+          ? {
+              bundle: {
+                baseSha: 'b'.repeat(40),
+                branch: `agent/${taskId}`,
+                sha256: createHash('sha256').update(bundle).digest('hex'),
+                sizeBytes: bundle.byteLength,
+                read: async function* () {
+                  yield bundle.subarray(0, 5)
+                  yield bundle.subarray(5)
+                },
+              },
+            }
+          : {}),
         ...(restoreKey
           ? {
               restore: {
@@ -447,6 +454,47 @@ describe('RunnerApiServer', () => {
     expect(tooLarge.status).toBe(413)
     expect((await put('patch', Buffer.from('patch'))).status).toBe(200)
     expect((await put('untracked', new Uint8Array(snapshotLimits.patchBytes + 1))).status).toBe(200)
+  })
+
+  it('closes the bundle and candidate paths of a turn without a repository (plan 57, Б5)', async () => {
+    const f = await start()
+    const { assignment, preparing, command } = await f.prepare(undefined, { repository: false })
+    expect(command).not.toHaveProperty('bundle')
+    const bundle = await f.call(runnerBundlePath(assignment.id), { headers: f.binary(command) })
+    expect(bundle.status).toBe(410)
+    expect(await bundle.json()).toEqual({ error: 'COMMAND_CLOSED' })
+    await f.report(assignment.id, {
+      type: 'prepared',
+      commandId: command.commandId,
+      containerId: 'container1',
+    })
+    const execution = await preparing
+    const capturing = execution.capture({
+      home: {
+        root: `/agent-home/${sampleDriverId}`,
+        include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
+        exclude: [],
+      },
+    })
+    const [capture] = await f.poll()
+    expect(capture).toMatchObject({ type: 'capture' })
+    expect(capture).not.toHaveProperty('baseSha')
+    for (const part of ['patch', 'untracked'] as const) {
+      const put = await f.call(runnerCandidatePath(assignment.id, part), {
+        method: 'PUT',
+        headers: { ...f.binary(capture!), 'content-type': 'application/octet-stream' },
+        body: Buffer.from('untrusted'),
+      })
+      expect(put.status).toBe(410)
+      expect(await put.json()).toEqual({ error: 'COMMAND_CLOSED' })
+    }
+    const answered = await f.report(assignment.id, {
+      type: 'captured',
+      commandId: capture!.commandId,
+      homeBytes: 12,
+    })
+    expect(answered.status).toBe(200)
+    await expect(capturing).resolves.toEqual({ homeBytes: 12 })
   })
 
   it('logs a failed request by its code only: no URL, key or runner text', async () => {

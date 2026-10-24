@@ -105,7 +105,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'kv/metadata/sites/+/*': ['read'],
       'kv/metadata/sites/+/env/*': ['create', 'update', 'read'],
     },
-    'workspace-provisioner': { 'transit/keys/ws-*': ['update'] },
+    // The key itself, never a path under it (rotate, config, trim, soft-delete-restore).
+    'workspace-provisioner': { 'transit/keys/+': ['update'] },
     // The kinds a site is imported with, read-only: no wp or browser, no write, no metadata.
     'core-site-import': {
       'kv/data/sites/+/ftp': ['read'],
@@ -174,8 +175,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
   }
   const core = await readFile(new URL('./policies/core-turns.hcl', import.meta.url), 'utf8')
   assert.match(core, /allowed_parameters\s*=\s*{\s*"custom_metadata"\s*=\s*\[\]/)
-  // The glob also matches ws-<id>/config: only the key type may be sent, so a provisioner
-  // cannot make a key exportable or deletable.
+  // Only the key type may be sent, so a provisioner cannot make a key exportable or deletable.
   const provisioner = await readFile(
     new URL('./policies/workspace-provisioner.hcl', import.meta.url),
     'utf8',

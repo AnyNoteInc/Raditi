@@ -8,7 +8,9 @@ import { isIPv4 } from 'node:net'
 // secret the runtime writes into a tmpfs after start (Vault `kv/previews/<previewId>/browser`
 // keeps it for the mcp role). No remote debugging port: Playwright talks to Chromium over a pipe.
 // Every request of a page goes to the relay as an HTTP proxy, loopback names included; WebRTC
-// sends nothing around it.
+// sends nothing around it. The proxy is Playwright's launch option, not a bare Chromium flag, so
+// requests of a context's own request API (the trusted read of a task's browser,
+// docs/plan/57-browser-tasks.md, Б22) take the same way out as its pages.
 
 export const STATE_DIR = '/run/raditi/browser'
 export const SECRET_FILE = `${STATE_DIR}/ws-path`
@@ -36,12 +38,19 @@ export function parseArgs(argv) {
   return { host: values.host, port, proxy: values.proxy }
 }
 
-/** Chromium's flags: all traffic to the relay, loopback names too, and nothing in the background. */
-export function chromiumArgs(proxy) {
+/**
+ * The proxy as Playwright takes it: Chromium gets `--proxy-server` and `--proxy-bypass-list` from
+ * it, and a context's request API sends through it too (a bare flag reaches Chromium alone).
+ */
+export function proxyOption(proxy) {
+  // `<-loopback>`: without it Chromium sends *.localhost and 127.0.0.1 around the proxy, to
+  // itself; the request API bypasses nothing it names.
+  return { server: proxy, bypass: '<-loopback>' }
+}
+
+/** Chromium's other flags: no WebRTC around the proxy, nothing in the background. */
+export function chromiumArgs() {
   return [
-    `--proxy-server=${proxy}`,
-    // Without it Chromium sends *.localhost and 127.0.0.1 around the proxy, to itself.
-    '--proxy-bypass-list=<-loopback>',
     '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
     '--disable-background-networking',
     '--disable-component-update',
@@ -93,7 +102,8 @@ if (process.argv[1]?.endsWith('/server.mjs')) {
       port: options.port,
       wsPath,
       headless: true,
-      args: chromiumArgs(options.proxy),
+      proxy: proxyOption(options.proxy),
+      args: chromiumArgs(),
       timeout: 60_000,
     })
     server.on('close', () => process.exit(0))

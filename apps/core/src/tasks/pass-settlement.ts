@@ -25,6 +25,7 @@ import {
 } from '@repo/db'
 import {
   candidateFactsSchema,
+  feedLimits,
   isDomainError,
   isTooLarge,
   Money,
@@ -35,11 +36,14 @@ import {
   type FeedQuestionPayload,
   type FeedRow,
   type SiteStack,
+  type TaskRequirements,
   type TaskWaitingReason,
   type TurnEvidence,
   type TurnResult,
 } from '@repo/domain'
 
+import { readBrowserTaskFacts, type BrowserTaskFacts } from '../browser/browser-facts.ts'
+import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { CandidateBuild, CandidateBuilder, StandingCandidate } from './candidate-builder.ts'
 import { isComparisonMissing } from './candidate-git.ts'
 import { agentQuestionOf, agentWords, ceilingQuestionOf, feedFailureOf } from './turn-outcome.ts'
@@ -53,6 +57,7 @@ import { agentQuestionOf, agentWords, ceilingQuestionOf, feedFailureOf } from '.
 
 type JournalReason = NonNullable<TurnEvidence['reason']>
 type CeilingQuestion = Extract<FeedQuestionPayload, { kind: 'ceiling' }>
+type BrowserQuestion = Extract<FeedQuestionPayload, { kind: 'browser' }>
 
 /** A pass orphaned this many times in one attempt is failed instead of put again. */
 export const ORPHANED_PASS_LIMIT = 3
@@ -60,8 +65,11 @@ export const ORPHANED_PASS_LIMIT = 3
 export const ORPHANED_PASS_EVENT = 'pass.orphaned'
 
 export type PassEnding =
-  /** The turn completed: its result, and the head it published on `agent/<taskId>`. */
-  | { kind: 'completed'; turn: number; result: TurnResult; headSha: string }
+  /**
+   * The turn completed: its result, and with a repository the head it published on
+   * `agent/<taskId>` — a turn without one publishes nothing (docs/plan/57-browser-tasks.md, Б4).
+   */
+  | { kind: 'completed'; turn: number; result: TurnResult; headSha?: string }
   /** The turn, or the pass before its turn, failed. */
   | {
       kind: 'failed'
@@ -104,6 +112,11 @@ export interface SettlementDependencies {
   db: PrismaClient
   /** null while git is not configured: a completed pass then cannot become a candidate. */
   candidates: CandidateBuilder | null
+  /**
+   * Closes the cloud browser of a task that ended (docs/plan/57, Б18); null — no worker is
+   * configured, and the collector closes what is left.
+   */
+  browser?: Pick<BrowserSessions, 'close'> | null
   logger?: { warn(message: string): void; error(message: string): void }
   now?: () => Date
 }
@@ -138,16 +151,27 @@ interface SettleContext {
     billable: boolean
     site: { stack: SiteStack; url: string; installedVersion: string | null }
   }
+  /** What the task works with (docs/plan/57, Б2): a pass without a repository has no candidate. */
+  requirements: TaskRequirements
+  /** The facts of the task's cloud browser; null for a task without one. */
+  browser: BrowserTaskFacts | null
   /** The author of a `cancel` command written after the last request of the dialog. */
   cancel: { authorId: string } | null
   policyFlagged: boolean
-  /** The task wrote the production site and the write was not undone (legacy content path). */
+  /**
+   * The task wrote the production site and the write was not undone (legacy content path), or
+   * anyone acted in its cloud browser (Б28).
+   */
   productionWrites: boolean
   standing: StandingCandidate | null
 }
 
 const creditsOf = (returned: ReturnedTaskHolds): FeedCreditsState | null =>
   returned.applied ? (returned.expiries.length > 0 ? 'expired' : 'returned') : null
+
+/** What a task in the browser had saved on the site, for a row that ends it (Б23, Б24). */
+const objectsOf = (context: SettleContext) =>
+  context.browser?.objects.length ? { objects: context.browser.objects } : {}
 
 const chargeRefusal = (error: unknown): string | null => {
   if (!isDomainError(error) || error.code !== 'CONFLICT') return null
@@ -250,11 +274,12 @@ export class PassSettlement {
             authorId: cancel.authorId,
             site: context.productionWrites ? 'check' : 'unchanged',
             credits: creditsOf(returned),
+            ...objectsOf(context),
           },
         },
       })
       await requestPreviewSync(tx, { taskId, revision: 0 })
-    })
+    }).then((answer) => this.#closeBrowser(context, answer, 'task_cancelled'))
   }
 
   #end(
@@ -290,10 +315,16 @@ export class PassSettlement {
     options: SettleOptions,
   ): Promise<SettleAnswer> {
     const { result, turn } = ending
+    // Without a repository there is no candidate: the site itself is what the pass changed.
+    if (!context.requirements.repository)
+      return this.#completedWithoutRepository(pass, context, ending, options)
     const question = agentQuestionOf(result, turn)
     const message = agentWords(result.client_message, 2000)
     // Nothing readable is left of the agent's words: its result is as good as missing.
     if (!question && !message) return this.#failure(pass, context, turn, 'technical')
+    // A turn with a repository published its head: without one there is nothing to compare.
+    const headSha = ending.headSha
+    if (!headSha) return this.#failure(pass, context, turn, 'technical')
 
     let build: CandidateBuild
     try {
@@ -307,7 +338,7 @@ export class PassSettlement {
       if (!candidateContext) throw new Error('the dialog has no base')
       build = await this.deps.candidates.build(candidateContext, {
         turnNo: turn,
-        headSha: ending.headSha,
+        headSha,
         claims: result,
       })
     } catch (error) {
@@ -431,6 +462,103 @@ export class PassSettlement {
     })
   }
 
+  /**
+   * A completed pass of a task in the cloud browser (docs/plan/57-browser-tasks.md, Б23, Б25): no
+   * candidate — what the site holds now is the result, and only the platform's own check of it
+   * ends the task. In this order: the agent asked the client to act in the browser (`web_help`),
+   * the client holds the browser, the agent asked a question — each waits for the client
+   * (`awaiting_user`) within the same attempt; else an object the platform confirmed on the
+   * site makes the task `done`, charged, its browser closed; none — the platform asks the client
+   * to look (`unconfirmed`).
+   */
+  async #completedWithoutRepository(
+    pass: PassRef,
+    context: SettleContext,
+    ending: Extract<PassEnding, { kind: 'completed' }>,
+    options: SettleOptions,
+  ): Promise<SettleAnswer> {
+    const { result, turn } = ending
+    const browser = context.browser
+    const message = agentWords(result.client_message, feedLimits.message)
+    // Under a question of the platform the agent's message still reaches the client: why it
+    // saved nothing («менять настройки мне нельзя»), or what it did before the client took over.
+    const said = message ? { message } : {}
+    let question: FeedQuestionPayload | null
+    if (browser?.help) {
+      // The agent's words of its request; its message when they cannot be shown.
+      const words = agentWords(browser.help.message, feedLimits.helpMessage) ?? message
+      question = {
+        v: 1,
+        kind: 'browser',
+        turn,
+        reason: browser.help.reason,
+        ...(words ? { message: words } : {}),
+      } satisfies BrowserQuestion
+    } else if (browser?.controller === 'user')
+      question = {
+        v: 1,
+        kind: 'browser',
+        turn,
+        reason: 'control',
+        ...said,
+      } satisfies BrowserQuestion
+    else question = agentQuestionOf(result, turn)
+    // Nothing readable is left of the agent's words: its result is as good as missing.
+    if (!question && !message) return this.#failure(pass, context, turn, 'technical')
+    // `done` is what the site confirms, never the agent's word (Б23).
+    if (!question && !browser?.confirmed)
+      question = {
+        v: 1,
+        kind: 'browser',
+        turn,
+        reason: 'unconfirmed',
+        ...said,
+      } satisfies BrowserQuestion
+    const to: SettledTaskStatus = question ? 'awaiting_user' : 'done'
+    const row: FeedRow = question
+      ? { type: 'feed.question', payload: question }
+      : {
+          type: 'feed.result',
+          payload: {
+            v: 1,
+            turn,
+            message: message!,
+            site: 'changed',
+            next: 'done',
+            filesChanged: 0,
+            changeType: result.change_type,
+            needsApproval: result.needs_approval,
+            risk: result.risk,
+            ...objectsOf(context),
+          },
+        }
+    const answer = await this.#transaction(async (tx, now) => {
+      const moved = await settleTurn(tx, {
+        taskId: pass.taskId,
+        attempt: pass.attempt,
+        expectedTurnNo: pass.turnNo,
+        from: ['running'],
+        to,
+        turn,
+        feed: [row],
+        summary: result.summary,
+        changeType: result.change_type,
+      })
+      if (!moved.moved) throw new NotMoved()
+      await this.#assertNotCancelled(tx, pass.taskId)
+      if (to === 'done') {
+        if (context.task.billable) await this.#charge(tx, pass.taskId, now, options)
+      } else if (context.task.billable) {
+        // The help, the control and the answer are the same attempt (Б25): its reserve waits.
+        await extendTaskHolds(tx, {
+          taskId: pass.taskId,
+          expiresAt: taskHoldExpiry(now, 'waiting'),
+        })
+      }
+    })
+    return to === 'done' ? this.#closeBrowser(context, answer, 'task_done') : answer
+  }
+
   async #failed(
     pass: PassRef,
     context: SettleContext,
@@ -522,11 +650,19 @@ export class PassSettlement {
         turnId: moved.turnId,
         row: {
           type: 'feed.failure',
-          payload: { v: 1, turn, code, site, credits: creditsOf(returned), next: 'failed' },
+          payload: {
+            v: 1,
+            turn,
+            code,
+            site,
+            credits: creditsOf(returned),
+            next: 'failed',
+            ...objectsOf(context),
+          },
         },
       })
       await this.#closePreview(tx, pass.taskId, turn)
-    })
+    }).then((answer) => this.#closeBrowser(context, answer, 'task_failed'))
   }
 
   async #cancelled(
@@ -564,11 +700,12 @@ export class PassSettlement {
             ...(context.cancel ? { authorId: context.cancel.authorId } : {}),
             site: context.productionWrites ? 'check' : 'unchanged',
             credits: creditsOf(returned),
+            ...objectsOf(context),
           },
         },
       })
       await this.#closePreview(tx, pass.taskId, turn)
-    })
+    }).then((answer) => this.#closeBrowser(context, answer, 'task_cancelled'))
   }
 
   async #ceiling(
@@ -726,6 +863,20 @@ export class PassSettlement {
   }
 
   /**
+   * The task ended with this move: its cloud browser is closed (Б18) — after the commit, best
+   * effort; the collector closes what a failure here leaves. Answers the move as it was.
+   */
+  async #closeBrowser(
+    context: SettleContext,
+    answer: SettleAnswer,
+    reason: 'task_done' | 'task_failed' | 'task_cancelled',
+  ): Promise<SettleAnswer> {
+    if (answer === 'moved' && context.requirements.browser)
+      await this.deps.browser?.close(context.task.id, reason)
+    return answer
+  }
+
+  /**
    * The numbers of «Продолжить?» when a key of the turn was refused for money: what it had left
    * — its budget less its recorded work and the reserves of its open calls — could not cover a
    * next call, at least a first call of the class or as much as its last call reserved. null —
@@ -793,11 +944,14 @@ export class PassSettlement {
         workspaceId: true,
         siteId: true,
         billable: true,
+        needsRepository: true,
+        needsBrowser: true,
         site: { select: { stack: true, url: true, installedVersion: true } },
       },
     })
     if (!task) return null
-    const [cancel, flagged, writes, standing] = await Promise.all([
+    const { needsRepository, needsBrowser, ...settled } = task
+    const [cancel, flagged, writes, standing, browser] = await Promise.all([
       pressedCancel(db, taskId),
       db.taskEvent.count({ where: { taskId, type: 'llm.policy_flagged' } }),
       taskHasProductionWrites(db, taskId),
@@ -813,10 +967,13 @@ export class PassSettlement {
           facts: true,
         },
       }),
+      needsBrowser ? readBrowserTaskFacts(db, taskId) : null,
     ])
     const facts = standing ? candidateFactsSchema.safeParse(standing.facts) : null
     return {
-      task,
+      task: settled,
+      requirements: { repository: needsRepository, browser: needsBrowser },
+      browser,
       cancel,
       policyFlagged: flagged > 0,
       productionWrites: writes,

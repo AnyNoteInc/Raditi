@@ -10,6 +10,10 @@ import {
   siteHref,
   siteItemOpen,
   siteLanding,
+  clampPaneWidth,
+  paneWidthCss,
+  parsePaneWidth,
+  SITE_PANE_MIN,
   siteNav,
   sitePaneOpen,
   siteSectionAvailable,
@@ -104,6 +108,13 @@ describe('site navigation', () => {
     expect(siteLanding(status)).toBe(section)
   })
 
+  it('leads a site that takes tasks in the browser to its chat before it is connected', () => {
+    expect(siteLanding('onboarding', null, { browser: 'ready' })).toBe('chat')
+    expect(siteLanding('onboarding', null, { browser: 'not_configured' })).toBe('overview')
+    expect(siteLanding('onboarding', 'pending', { browser: 'ready' })).toBe('overview')
+    expect(siteLanding('paused', null, { browser: 'closed' })).toBe('overview')
+  })
+
   it.each(['paused', 'disconnected', 'archived'])(
     'opens only the overview of a %s site and says why',
     (status) => {
@@ -160,4 +171,22 @@ describe('site navigation', () => {
       expect(siteLanding('active', setup)).toBe('chat')
     },
   )
+})
+
+describe('the width of the panel beside a dialog', () => {
+  it('reads a width from the cookie only when it is a sane number of pixels', () => {
+    expect(parsePaneWidth('720')).toBe(720)
+    expect(parsePaneWidth('439')).toBeNull()
+    expect(parsePaneWidth('99999')).toBeNull()
+    expect(parsePaneWidth('720px')).toBeNull()
+    expect(parsePaneWidth(undefined)).toBeNull()
+  })
+
+  it('keeps the panel and the dialog beside it within their minimums', () => {
+    // 88 (rail) + 64 (paddings) + 360 (the dialog) = 512 px are left to the rest.
+    expect(clampPaneWidth(2000, 1440)).toBe(928)
+    expect(clampPaneWidth(100, 1440)).toBe(SITE_PANE_MIN)
+    expect(clampPaneWidth(700, 900)).toBe(SITE_PANE_MIN)
+    expect(paneWidthCss(700)).toBe('clamp(440px, 700px, max(440px, calc(100vw - 512px)))')
+  })
 })

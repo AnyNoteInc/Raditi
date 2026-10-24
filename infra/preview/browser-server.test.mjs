@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { chromiumArgs, parseArgs, readSecret, WS_PATH } from './browser-server.mjs'
+import { chromiumArgs, parseArgs, proxyOption, readSecret, WS_PATH } from './browser-server.mjs'
 
 test('arguments: the browser address, its port and the relay as an HTTP proxy, each once', () => {
   assert.deepEqual(
@@ -28,10 +28,16 @@ test('arguments: the browser address, its port and the relay as an HTTP proxy, e
 })
 
 test('Chromium: every request through the relay, loopback names too, no WebRTC around it', () => {
-  const args = chromiumArgs('http://172.25.0.2:3128')
-  assert.ok(args.includes('--proxy-server=http://172.25.0.2:3128'))
-  assert.ok(args.includes('--proxy-bypass-list=<-loopback>'))
+  // Playwright turns the option into `--proxy-server=<relay>` and, for exactly this bypass,
+  // `--proxy-bypass-list=<-loopback>`; its request API sends through the relay too.
+  assert.deepEqual(proxyOption('http://172.25.0.2:3128'), {
+    server: 'http://172.25.0.2:3128',
+    bypass: '<-loopback>',
+  })
+  const args = chromiumArgs()
   assert.ok(args.includes('--force-webrtc-ip-handling-policy=disable_non_proxied_udp'))
+  // The proxy only through the option: a second flag would leave the request API around it.
+  assert.ok(!args.some((arg) => arg.startsWith('--proxy-')))
   assert.ok(!args.some((arg) => arg.startsWith('--remote-debugging-port')))
 })
 

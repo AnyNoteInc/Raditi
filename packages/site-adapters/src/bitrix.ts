@@ -152,4 +152,20 @@ export const bitrixAdapter: SiteAdapter = {
   browserRequestDenied() {
     return true
   },
+  // Tasks in the browser on a Bitrix site come with stage 3 (docs/plan/57-browser-tasks.md).
+  browserTaskPolicy() {
+    throw todo('browserTaskPolicy')
+  },
+  browserCheckpointOf() {
+    throw todo('browserCheckpointOf')
+  },
+  browserCommitAction() {
+    throw todo('browserCommitAction')
+  },
+  browserVerification() {
+    throw todo('browserVerification')
+  },
+  browserGuide() {
+    throw todo('browserGuide')
+  },
 }

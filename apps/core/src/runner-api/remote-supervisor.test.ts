@@ -99,7 +99,7 @@ function scriptedRunner(
         const bundle = await hub.bundle(runnerId, command.assignmentId, headers)
         const chunks: Uint8Array[] = []
         for await (const chunk of bundle.read()) chunks.push(chunk)
-        expect(sha256(Buffer.concat(chunks))).toBe(command.bundle.sha256)
+        expect(sha256(Buffer.concat(chunks))).toBe(command.bundle!.sha256)
         await report({ type: 'created', commandId: command.commandId, containerId: 'container1' })
         await report({ type: 'prepared', commandId: command.commandId, containerId: 'container1' })
         return
@@ -262,7 +262,7 @@ describe('TurnSupervisor on a runner', () => {
     const bundleBytes = Buffer.from('synthetic bundle')
     const bundle: TurnBundleSource = {
       baseSha,
-      branch: request.workspace.branch,
+      branch: request.workspace!.branch,
       sha256: sha256(bundleBytes),
       sizeBytes: bundleBytes.byteLength,
       read: async function* () {

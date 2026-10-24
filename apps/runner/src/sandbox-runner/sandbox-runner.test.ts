@@ -828,3 +828,171 @@ describe('isTurnSnapshotUrl', () => {
       expect(isTurnSnapshotUrl(url, 'session1', 1, 'home', pinned)).toBe(false)
   })
 })
+
+describe('SandboxRunner: a turn without a repository (docs/plan/57-browser-tasks.md, Б5)', () => {
+  /** The sandbox side, whose commands for the working directory succeed without output. */
+  function quietWorkdir() {
+    const side = sandboxSide()
+    const agent = vi.mocked(side.sandbox.exec).getMockImplementation()!
+    vi.mocked(side.sandbox.exec).mockImplementation(async (spec) =>
+      ['test', 'mkdir', 'find'].includes(spec.argv[0]!)
+        ? {
+            id: 'exec-workdir',
+            output: async function* () {},
+            wait: async () => ({ code: 0, reason: 'exited' as const }),
+            kill: vi.fn(async () => {}),
+          }
+        : agent(spec),
+    )
+    return side
+  }
+  const withoutBundle = (body: Record<string, unknown> = {}) => {
+    const prepare: Record<string, unknown> = prepareCommand(body)
+    delete prepare.bundle
+    return prepare
+  }
+
+  it('fetches no bundle and makes the working directory empty, without git', async () => {
+    const side = quietWorkdir()
+    const core = scriptedCore()
+    const bundle = vi.spyOn(core.transport, 'bundle')
+    startRunner(core.transport, side.executor)
+    await core.send(withoutBundle())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    expect(bundle).not.toHaveBeenCalled()
+    expect(side.importBundle).not.toHaveBeenCalled()
+    const argvs = vi.mocked(side.sandbox.exec).mock.calls.map(([spec]) => spec.argv)
+    expect(argvs).toContainEqual(['mkdir', '-p', '--', '/workspace/repo'])
+    expect(argvs.some((argv) => argv[0] === 'git')).toBe(false)
+  })
+
+  /**
+   * Turn 1 of a task without a repository as core leaves it in S3: its home part alone, sealed
+   * under the AAD of a manifest without `git`, and a presigned GET of that part.
+   */
+  async function previousHomeTurn() {
+    const memory = memoryStorage()
+    const dataKey = async () => new Uint8Array(32).fill(7)
+    const base: SnapshotSealBase = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+      createdAt: new Date().toISOString(),
+    }
+    const archive = await tarZst({ [home.include[0]!]: 'prior conversation' })
+    const object = `${turnSnapshotPrefix(base.sessionId, base.turn)}${snapshotPartFiles.home}`
+    const { body, sealed } = sealSnapshotPart(base, 'home', archive, await dataKey())
+    memory.objects.set(object, body)
+    const manifest = snapshotManifestSchema.parse({
+      ...base,
+      parts: [
+        {
+          name: 'home',
+          key: object,
+          sha256: sealed.sha256,
+          sizeBytes: sealed.sizeBytes,
+          encryption: {
+            algorithm: 'aes-256-gcm',
+            keyId: workspaceTransitKey(base.workspaceId),
+            wrappedKey: 'vault:v1:wrapped',
+            iv: sealed.iv,
+            tag: sealed.tag,
+          },
+        },
+      ],
+    })
+    const { method, url, headers } = await memory.storage.presign({
+      bucket: 'sessions',
+      key: object,
+      method: 'GET',
+      ttlMs: 60_000,
+    })
+    return { memory, dataKey, restore: { manifest, parts: { home: { method, url, headers } } } }
+  }
+
+  it('restores the home part alone of the turn before', async () => {
+    const side = quietWorkdir()
+    const core = scriptedCore()
+    const prior = await previousHomeTurn()
+    side.transfer.get.mockImplementation(prior.memory.transfer.get)
+    core.transport.key.mockImplementation(prior.dataKey)
+    startRunner(core.transport, side.executor, { s3Origin: 'https://s3.invalid/raditi-sessions' })
+    await core.send(
+      withoutBundle({
+        sandbox: { ...sandboxSpec(), labels: { ...labels, turn: 2, leaseEpoch: 1 } },
+        restore: prior.restore,
+      }),
+    )
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    expect(side.transfer.get).toHaveBeenCalledTimes(1)
+    expect(side.snapshot.restore).toHaveBeenCalledWith(side.sandbox, home, {
+      home: expect.any(Uint8Array),
+    })
+  })
+
+  it('captures home alone: uploads no candidate part and reports none, then seals it', async () => {
+    const side = quietWorkdir()
+    const core = scriptedCore()
+    side.snapshot.capture.mockResolvedValueOnce({ home: side.archives.home } as never)
+    startRunner(core.transport, side.executor)
+    await core.send(withoutBundle())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    await core.send(command('capture', { home }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'captured']))
+    expect(side.snapshot.capture).toHaveBeenCalledWith(
+      side.sandbox,
+      home,
+      undefined,
+      expect.any(Array),
+      [],
+      [],
+    )
+    expect(core.transport.candidate).not.toHaveBeenCalled()
+    const captured = core.reports[2]!
+    expect(captured).toMatchObject({ type: 'captured', homeBytes: side.archives.home.byteLength })
+    expect(captured).not.toHaveProperty('patch')
+    expect(captured).not.toHaveProperty('untracked')
+
+    await core.send(
+      command('seal', {
+        base: {
+          workspaceId: labels.workspaceId,
+          sessionId: labels.sessionId,
+          turn: 1,
+          image,
+          driver: { id: sampleDriverId, version: '1.0.0' },
+          home,
+          schemaVersion: 1,
+          createdAt: '2026-10-22T00:00:00.000Z',
+        },
+        sizeBytes: side.archives.home.byteLength,
+        put: {
+          method: 'PUT',
+          url: 'https://s3.invalid/raditi-sessions/sessions/session1/turns/0001/home.tar.zst?X-Amz-Signature=synthetic',
+          headers: { 'if-none-match': '*' },
+        },
+      }),
+    )
+    await vi.waitFor(() => expect(core.types()).toHaveLength(4))
+    expect(core.reports[3]).toMatchObject({
+      type: 'sealed',
+      sizeBytes: side.archives.home.byteLength,
+    })
+  })
+
+  it('fails a capture with a base after a prepare without a bundle, uploading nothing', async () => {
+    const side = quietWorkdir()
+    const core = scriptedCore()
+    startRunner(core.transport, side.executor)
+    await core.send(withoutBundle())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    await core.send(command('capture', { home, baseSha }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'failed']))
+    expect(side.snapshot.capture).not.toHaveBeenCalled()
+    expect(core.transport.candidate).not.toHaveBeenCalled()
+  })
+})

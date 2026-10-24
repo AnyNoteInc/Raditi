@@ -366,6 +366,56 @@ describe('createS3ObjectStorage', () => {
     await expect(storage.exists('backups', 'sites/s1/d1/x')).rejects.toBeDefined()
   })
 
+  it('answers stat with HEAD: the size, the type and the ETag', async () => {
+    const { client, requests } = fakeS3(() => ({
+      status: 200,
+      headers: { 'content-length': '1234', 'content-type': 'image/png', etag: '"9b2cf5"' },
+    }))
+    const storage = createS3ObjectStorage(config, client)
+
+    expect(await storage.stat('inbox', 'inbox/w/a')).toEqual({
+      sizeBytes: 1234,
+      contentType: 'image/png',
+      etag: '"9b2cf5"',
+    })
+    expect(requests.map((r) => [r.method, r.path])).toEqual([['HEAD', '/raditi-inbox/inbox/w/a']])
+  })
+
+  it('leaves out of stat what the store does not give, and keeps an empty object', async () => {
+    const { client } = fakeS3(() => ({ status: 200, headers: { 'content-length': '0' } }))
+    const storage = createS3ObjectStorage(config, client)
+
+    expect(await storage.stat('inbox', 'inbox/w/empty')).toEqual({ sizeBytes: 0 })
+  })
+
+  it('answers stat null for a missing key once the bucket is known to exist', async () => {
+    const { client, requests } = fakeS3((req) =>
+      req.path === '/raditi-inbox' ? { status: 200 } : { status: 404 },
+    )
+    const storage = createS3ObjectStorage(config, client)
+
+    expect(await storage.stat('inbox', 'inbox/w/absent')).toBeNull()
+    expect(requests.map((r) => [r.method, r.path])).toEqual([
+      ['HEAD', '/raditi-inbox/inbox/w/absent'],
+      ['HEAD', '/raditi-inbox'],
+    ])
+  })
+
+  it('does not hide a missing bucket behind a null stat', async () => {
+    const { client } = fakeS3(() => ({ status: 404 }))
+    const storage = createS3ObjectStorage(config, client)
+
+    await expect(storage.stat('inbox', 'inbox/w/a')).rejects.toBeDefined()
+  })
+
+  it('throws from stat on errors other than not found, without asking the bucket', async () => {
+    const { client, requests } = fakeS3(() => ({ status: 403 }))
+    const storage = createS3ObjectStorage(config, client)
+
+    await expect(storage.stat('inbox', 'inbox/w/a')).rejects.toBeDefined()
+    expect(requests).toHaveLength(1)
+  })
+
   it('deletes with DELETE', async () => {
     const { client, requests } = fakeS3(() => ({ status: 204 }))
     const storage = createS3ObjectStorage(config, client)
@@ -398,6 +448,7 @@ describe('createS3ObjectStorage', () => {
 
     await expect(storage.get('inbox', key)).rejects.toSatisfy(isDomainError)
     await expect(storage.exists('inbox', key)).rejects.toSatisfy(isDomainError)
+    await expect(storage.stat('inbox', key)).rejects.toSatisfy(isDomainError)
     await expect(storage.delete('inbox', key)).rejects.toSatisfy(isDomainError)
     await expect(storage.put('inbox', key, Buffer.from('x'))).rejects.toSatisfy(isDomainError)
     await expect(storage.putIfAbsent('inbox', key, Buffer.from('x'))).rejects.toSatisfy(

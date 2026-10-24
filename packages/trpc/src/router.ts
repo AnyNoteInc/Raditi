@@ -1,4 +1,6 @@
+import { attachmentRouter } from './routers/attachment.ts'
 import { billingRouter } from './routers/billing.ts'
+import { browserRouter } from './routers/browser.ts'
 import { candidateRouter } from './routers/candidate.ts'
 import { consentRouter } from './routers/consent.ts'
 import { healthRouter } from './routers/health.ts'
@@ -24,6 +26,9 @@ export const appRouter = router({
   preview: previewRouter,
   release: releaseRouter,
   siteEnv: siteEnvRouter,
+  // A task in the cloud browser and the files of messages (docs/plan/57-browser-tasks.md).
+  browser: browserRouter,
+  attachment: attachmentRouter,
 })
 
 export type AppRouter = typeof appRouter

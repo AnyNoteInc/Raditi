@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { Readable, Transform, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { constants, createZstdDecompress } from 'node:zlib'
+import { constants, createZstdDecompress, zstdCompressSync } from 'node:zlib'
 
 import {
   badRequest,
@@ -19,11 +19,47 @@ import {
 } from '@repo/domain'
 import { extract, type Header } from 'tar-stream'
 
+/** The parts of the snapshot of a turn with a repository. */
 export interface SnapshotArchives {
   home: Uint8Array
   untracked: Uint8Array
   patch: Uint8Array
 }
+
+/**
+ * The one part of the snapshot of a turn without a repository (docs/plan/57-browser-tasks.md,
+ * Б4): the agent's session. Its working directory is never read or kept.
+ */
+export interface HomeOnlyArchives {
+  home: Uint8Array
+  untracked?: undefined
+  patch?: undefined
+}
+
+/** Either kind: all three parts, or `home` alone. */
+export type TurnArchives = SnapshotArchives | HomeOnlyArchives
+
+const homeOnlyNames: readonly SnapshotPartName[] = Object.freeze(['home'] as const)
+
+/**
+ * Which parts `archives` hold, as snapshotPartNamesOf() names them for a manifest: all three, or
+ * `home` alone. A patch without its new files, or the reverse, is refused.
+ */
+export function archivedPartNames(
+  archives: Partial<SnapshotArchives>,
+): readonly SnapshotPartName[] {
+  const untracked = archives.untracked !== undefined
+  if (untracked !== (archives.patch !== undefined))
+    throw badRequest('Snapshot archives must hold both repository parts or neither')
+  return untracked ? snapshotPartNames : homeOnlyNames
+}
+
+/**
+ * An untracked part that holds no file: two zero blocks of ustar in zstd. The candidate core
+ * builds carries it (GitWorkspaceService.preparePublication); kept here so that a host without
+ * the platform's code makes the same bytes.
+ */
+export const emptyUntrackedArchive = (): Uint8Array => zstdCompressSync(Buffer.alloc(1024))
 
 const BLOCK_BYTES = 512
 const VALIDATION_TIMEOUT_MS = 60_000
@@ -281,7 +317,8 @@ function ownedPart(name: SnapshotPartName, bytes: unknown): Buffer {
 }
 
 /**
- * Check both archives completely before the caller starts any restore or commits a manifest.
+ * Check every archive completely before the caller starts any restore or commits a manifest:
+ * all three parts, or `home` alone for a turn without a repository (archivedPartNames).
  * Callers must use only the returned copies, never their own input buffers. With the turn's
  * `credentials` (capture), a part that contains one verbatim — a file name or content in an
  * archive, or the patch text — is refused as snapshotHasCredential(). Binary changes to tracked
@@ -292,19 +329,20 @@ function ownedPart(name: SnapshotPartName, bytes: unknown): Buffer {
  * there would reach the agent of every later turn. A change of the site that holds one is the
  * publication's to refuse (envValueInChange).
  */
-export async function validateSnapshotArchives(
+export async function validateSnapshotArchives<P extends TurnArchives>(
   state: SessionState,
-  parts: SnapshotArchives,
+  parts: P,
   credentials: readonly string[] = [],
   homeRefused: readonly string[] = [],
-): Promise<SnapshotArchives> {
+): Promise<P> {
+  if (parts === null || typeof parts !== 'object') throw invalidArchive()
   return validateParts(
     state,
     parts,
-    snapshotPartNames,
+    archivedPartNames(parts),
     credentials,
     homeRefused,
-  ) as Promise<SnapshotArchives>
+  ) as Promise<P>
 }
 
 /** The same checks for only the given parts, such as the home part a sandbox sealed. */

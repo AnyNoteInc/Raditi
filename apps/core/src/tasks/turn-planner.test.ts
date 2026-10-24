@@ -1,6 +1,8 @@
 import type { AttemptCreditBudget } from '@repo/billing'
 import {
+  BROWSER_ONLY,
   Money,
+  REPOSITORY_ONLY,
   toCredits,
   toTurnPlan,
   turnCredentialPolicySchema,
@@ -98,6 +100,7 @@ function facts(patch: Partial<PassFacts> = {}): PassFacts {
       turnNo: 0,
       modelClass: 'standard',
     },
+    requirements: { ...REPOSITORY_ONLY },
     repo: { provider: 'gitea', owner: 'sites', name: `site-${SITE}`, defaultBranch: 'main' },
     rules: { protectedPaths: ['wp-config.php'] },
     requests: [
@@ -245,6 +248,9 @@ describe('planTurn', () => {
     expect(turn.previous).toBeUndefined()
     expect(turn.replacesTurn).toBeUndefined()
     expect(turn.rebased).toBeUndefined()
+    // A repository task's plan keeps the shape of before the requirements (plan 57, Б3).
+    expect(turn).not.toHaveProperty('requirements')
+    expect(plan.requirements).toEqual(REPOSITORY_ONLY)
   })
 
   it('gives the workspace the working set and the media rules of the stack', async () => {
@@ -344,7 +350,7 @@ describe('planTurn', () => {
     )
     if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
     expect(plan.turn).toBe(2)
-    expect(plan.request.workspace.expectedBaseSha).toBe(HEAD1)
+    expect(plan.request.workspace?.expectedBaseSha).toBe(HEAD1)
     expect(plan.request.previous).toEqual({
       workspaceId: WORKSPACE,
       sessionId: TASK,
@@ -445,7 +451,7 @@ describe('planTurn', () => {
     const continued = await planTurn(of(false), env({}, HEAD2))
     if (continued.kind !== 'turn') throw new Error(`expected a turn, got ${continued.kind}`)
     expect(continued.request.replacesTurn).toBeUndefined()
-    expect(continued.request.workspace.expectedBaseSha).toBe(HEAD2)
+    expect(continued.request.workspace?.expectedBaseSha).toBe(HEAD2)
   })
 
   it('starts a new session on the candidate «Обновить» moved onto a new main', async () => {
@@ -463,7 +469,7 @@ describe('planTurn', () => {
     if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
     expect(plan.request.rebased).toBe(true)
     expect(plan.request.previous).toBeUndefined()
-    expect(plan.request.workspace.expectedBaseSha).toBe(HEAD2)
+    expect(plan.request.workspace?.expectedBaseSha).toBe(HEAD2)
     // A new session hears the whole dialog.
     expect(plan.request.input.prompt).toBe('Первая\n\nВторая')
   })
@@ -606,6 +612,250 @@ describe('planTurn', () => {
     expect(
       await planTurn(
         facts({ task: { ...facts().task, turnNo: 1 }, turns: new Map([[1, unreadable]]) }),
+        env(),
+      ),
+    ).toEqual({ kind: 'refused', code: 'technical' })
+  })
+})
+
+describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md)', () => {
+  const ATTACHMENT = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a70'
+  const browser = {
+    siteUrl: 'https://example.ru/',
+    agentNotes: 'Вход по адресу /login',
+    attachments: [
+      { id: ATTACHMENT, fileName: 'фото.jpg', contentType: 'image/jpeg', sizeBytes: 250_000 },
+    ],
+    saved: [],
+    guide: '- Open the list of posts first.',
+  }
+  const browserFacts = (patch: Partial<PassFacts> = {}) =>
+    facts({
+      requirements: { ...BROWSER_ONLY },
+      browser,
+      repo: null,
+      rules: { protectedPaths: [] },
+      requests: [request(10, 'first', 'Добавьте новость о скидках', 0)],
+      egress: ['api.example.ru:443'],
+      variables: ['API_TOKEN'],
+      ...patch,
+    })
+
+  /** A finished turn of the task whose saved plan has no repository. */
+  function finishedInBrowser(turnNo: number, status: FinishedTurn['status']): FinishedTurn {
+    const { plan } = finished(turnNo, status, {})
+    const { workspace: _workspace, ...rest } = plan!
+    return {
+      ...finished(turnNo, status, {}),
+      headSha: null,
+      plan: { ...rest, requirements: { ...BROWSER_ONLY } },
+    }
+  }
+
+  it('plans a first turn without a repository: no git, the browser rules and the site', async () => {
+    const e = env()
+    const plan = await planTurn(browserFacts(), e)
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    const { request: turn } = plan
+    expect(() => toTurnPlan(turn, sampleDriverId)).not.toThrow()
+    expect(plan.requirements).toEqual(BROWSER_ONLY)
+    expect(turn.requirements).toEqual(BROWSER_ONLY)
+    expect(turn).not.toHaveProperty('workspace')
+    expect(turn.previous).toBeUndefined()
+    // No branch is read for a task that has none.
+    expect(e.mainHead).not.toHaveBeenCalled()
+    expect(e.branchHead).not.toHaveBeenCalled()
+    // The browser rules and the stack's guide, never the repository's.
+    expect(turn.context.instructions).toContain('cloud browser')
+    expect(turn.context.instructions).toContain('web_help')
+    expect(turn.context.instructions).toContain('- Open the list of posts first.')
+    expect(turn.context.instructions).not.toContain('repository working copy')
+    // The client's variables reach no command of a turn in the browser.
+    expect(turn.sandbox.network).toEqual({ mode: 'gateway', routes: ['llm', 'mcp'] })
+    expect(turn.context.egressProxy).toBeUndefined()
+    expect(turn.context.instructions).not.toContain('API_TOKEN')
+    expect(turn.input.attachments).toEqual([])
+    const prompt = turn.input.prompt
+    expect(prompt.startsWith('Добавьте новость о скидках\n\n---\n')).toBe(true)
+    expect(prompt).toContain('The site of this task: https://example.ru/')
+    expect(prompt).toContain('Вход по адресу /login')
+    expect(prompt).toContain(`- ${ATTACHMENT}: фото.jpg, image/jpeg, 244.1 KiB`)
+    // Never a key or an address of a file: only the worker reads it.
+    expect(prompt).not.toMatch(/inbox\/|s3|https?:\/\/(?!example\.ru)/)
+  })
+
+  it('continues a completed turn from its snapshot, with the words that came after it', async () => {
+    const last = finishedInBrowser(1, 'completed')
+    const e = env()
+    const plan = await planTurn(
+      browserFacts({
+        task: { ...facts().task, turnNo: 1 },
+        turns: new Map([[1, last]]),
+        requests: [
+          request(10, 'first', 'Добавьте новость', 0),
+          request(12, 'resume', null, 20),
+          request(13, 'answer', 'Опубликуйте её', 21),
+        ],
+      }),
+      e,
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.turn).toBe(2)
+    expect(plan.request.previous).toMatchObject({ sessionId: TASK, turn: 1 })
+    expect(plan.request.input.prompt.split('\n\n---\n')[0]).toBe('Опубликуйте её')
+    expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
+    expect(e.branchHead).not.toHaveBeenCalled()
+  })
+
+  it('asks to go on when the client only gave the browser back', async () => {
+    const plan = await planTurn(
+      browserFacts({
+        task: { ...facts().task, turnNo: 1 },
+        turns: new Map([[1, finishedInBrowser(1, 'completed')]]),
+        requests: [request(10, 'first', 'Добавьте новость', 0), request(12, 'resume', null, 20)],
+      }),
+      env(),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.input.prompt.startsWith(`${CONTINUE_PROMPT}\n\n---\n`)).toBe(true)
+  })
+
+  it('starts a new session after an unsuccessful turn: nothing is replaced', async () => {
+    const plan = await planTurn(
+      browserFacts({
+        task: { ...facts().task, turnNo: 1 },
+        turns: new Map([[1, finishedInBrowser(1, 'failed')]]),
+        requests: [request(10, 'first', 'Добавьте новость', 0), request(12, 'continue', null, 20)],
+      }),
+      env(),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.previous).toBeUndefined()
+    expect(plan.request.replacesTurn).toBeUndefined()
+    expect(plan.request.input.prompt.startsWith('Добавьте новость\n\n')).toBe(true)
+  })
+
+  // docs/plan/57, Б22: a new session does not remember what an earlier turn saved on the site.
+  it('lists what the task saved on the site to a new session after a failed turn', async () => {
+    const saved = [
+      {
+        kind: 'post' as const,
+        objectId: '41',
+        state: 'verified' as const,
+        title: 'Скидки\nна «зиму»\u202e',
+        status: 'draft' as const,
+        editPath: '/wp-admin/post.php',
+      },
+      { kind: 'post' as const, objectId: '42', state: 'unverified' as const, editPath: '/p' },
+      // A title left out: it may hold a contact (savedObjectOf).
+      {
+        kind: 'post' as const,
+        objectId: '44',
+        state: 'verified' as const,
+        status: 'publish' as const,
+        editPath: '/p',
+      },
+      { kind: 'post' as const, objectId: '43', state: 'missing' as const, editPath: '/p' },
+    ]
+    const plan = await planTurn(
+      browserFacts({
+        task: { ...facts().task, turnNo: 1 },
+        turns: new Map([[1, finishedInBrowser(1, 'failed')]]),
+        requests: [request(10, 'first', 'Добавьте новость', 0), request(12, 'continue', null, 20)],
+        browser: { ...browser, saved },
+      }),
+      env(),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.previous).toBeUndefined()
+    const prompt = plan.request.input.prompt
+    expect(prompt.startsWith('Добавьте новость\n\n---\n')).toBe(true)
+    const block = prompt.slice(prompt.indexOf('Already saved on the site by this task'))
+    expect(block).toContain('never create another one for the same request')
+    // One line per object, in the order the task saved them; a title stays on its line.
+    expect(block).toContain(
+      '- post 41: verified, title "Скидки на «зиму»", status draft; editor /wp-admin/post.php',
+    )
+    expect(block).toMatch(/- post 42: saved, the site has not confirmed it yet — call web_verify/)
+    expect(block).toContain('- post 44: verified, title not shown, status publish; editor /p')
+    expect(block).toMatch(
+      /- post 43: the last check did not find it .* ask the client with web_help/,
+    )
+    expect(block.indexOf('post 41')).toBeLessThan(block.indexOf('post 43'))
+    // The files still come after it.
+    expect(block).toContain(`- ${ATTACHMENT}: фото.jpg`)
+    expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
+
+    // A continued session is told of them too: what the site holds now is the platform's word.
+    const continued = await planTurn(
+      browserFacts({
+        task: { ...facts().task, turnNo: 1 },
+        turns: new Map([[1, finishedInBrowser(1, 'completed')]]),
+        requests: [request(10, 'first', 'Добавьте новость', 0), request(12, 'resume', null, 20)],
+        browser: { ...browser, saved },
+      }),
+      env(),
+    )
+    if (continued.kind !== 'turn') throw new Error(`expected a turn, got ${continued.kind}`)
+    expect(continued.request.previous).toBeDefined()
+    expect(continued.request.input.prompt).toContain('- post 42: saved')
+  })
+
+  it('lists at most the latest saved objects, and none when the task saved nothing', async () => {
+    const many = Array.from({ length: 45 }, (_, index) => ({
+      kind: 'post' as const,
+      objectId: String(100 + index),
+      state: 'verified' as const,
+      title: 'я'.repeat(500),
+      status: 'publish' as const,
+      editPath: '/wp-admin/post.php',
+    }))
+    const plan = await planTurn(browserFacts({ browser: { ...browser, saved: many } }), env())
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    const prompt = plan.request.input.prompt
+    expect(prompt).toContain('- 5 earlier objects are not listed')
+    expect(prompt).not.toContain('post 104:')
+    expect(prompt).toContain('post 105:')
+    expect(prompt).toContain('post 144:')
+    // A long title is cut to one short line.
+    expect(prompt).toContain(`title "${'я'.repeat(120)}", status publish`)
+
+    const none = await planTurn(browserFacts(), env())
+    if (none.kind !== 'turn') throw new Error(`expected a turn, got ${none.kind}`)
+    expect(none.request.input.prompt).not.toContain('Already saved')
+  })
+
+  it('keeps the latest words within the prompt limit next to the site', async () => {
+    const long = 'я'.repeat(turnPlanLimits.prompt - 10)
+    const plan = await planTurn(
+      browserFacts({
+        requests: [request(10, 'first', 'старое', 0), request(11, 'answer', long, 1)],
+      }),
+      env(),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.input.prompt.length).toBeLessThanOrEqual(turnPlanLimits.prompt)
+    expect(plan.request.input.prompt).toContain('The site of this task')
+    expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
+  })
+
+  it('refuses a task it cannot run in the browser', async () => {
+    // Both at once are not taken yet (Б3).
+    expect(
+      await planTurn(browserFacts({ requirements: { repository: true, browser: true } }), env()),
+    ).toEqual({ kind: 'refused', code: 'not_accepted' })
+    // A stack without browser support.
+    expect(await planTurn(browserFacts({ browser: { ...browser, guide: null } }), env())).toEqual({
+      kind: 'refused',
+      code: 'not_accepted',
+    })
+    // A completed turn whose plan no longer reads cannot be continued.
+    expect(
+      await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 1 },
+          turns: new Map([[1, { ...finishedInBrowser(1, 'completed'), plan: null }]]),
+        }),
         env(),
       ),
     ).toEqual({ kind: 'refused', code: 'technical' })

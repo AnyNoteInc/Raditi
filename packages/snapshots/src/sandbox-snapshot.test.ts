@@ -555,4 +555,140 @@ describe('SandboxSnapshotTransport', () => {
     ).rejects.toThrow(/command/)
     expect(fake.calls.some(({ spec }) => spec.argv.includes('--create'))).toBe(false)
   })
+
+  describe('a turn without a repository (docs/plan/57-browser-tasks.md, Б4)', () => {
+    const touchesWorkdir = (spec: ExecSpec) =>
+      spec.cwd === '/workspace/repo' || spec.argv.some((arg) => arg.includes('/workspace'))
+
+    it('captures the home archive alone, without any git command or a look at the working copy', async () => {
+      const parts = await fixture()
+      const fake = sandboxFixture(parts)
+      const result = await new SandboxSnapshotTransport().capture(fake.sandbox, state, undefined)
+      expect(result).toEqual({ home: parts.home })
+      expect(Object.keys(result)).toEqual(['home'])
+      expect(fake.calls.some(({ spec }) => spec.argv[0] === 'git')).toBe(false)
+      expect(fake.calls.some(({ spec }) => touchesWorkdir(spec))).toBe(false)
+      const tarCalls = fake.calls.filter(({ spec }) => spec.argv.includes('--create'))
+      expect(
+        tarCalls.map(({ spec }) => spec.argv.find((a) => a.startsWith('--directory='))),
+      ).toEqual([`--directory=/agent-home/${sampleDriverId}`])
+      expect(tarCalls[0]!.stdin.toString()).toBe('sessions\0')
+    })
+
+    it('refuses add-only paths without a base, and a base that is no commit, before any exec', async () => {
+      const fake = sandboxFixture(await fixture())
+      const transport = new SandboxSnapshotTransport()
+      await expect(
+        transport.capture(fake.sandbox, state, undefined, [], ['media/']),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+      await expect(transport.capture(fake.sandbox, state, 'main')).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      })
+      expect(fake.exec).not.toHaveBeenCalled()
+    })
+
+    it("refuses a home with a turn credential or a value of the client's variables", async () => {
+      const key = 'synthetic-mcp-token-0123456789'
+      const clean = await fixture()
+      for (const [home, credentials, envValues] of [
+        [await archive('sessions/run.jsonl', `{"token":"${key}"}\n`), [key], []],
+        [
+          await archive('sessions/run.jsonl', JSON.stringify({ output: 'pay-0001' })),
+          [],
+          ['pay-0001'],
+        ],
+      ] as const) {
+        const fake = sandboxFixture({ ...clean, home })
+        await expect(
+          new SandboxSnapshotTransport().capture(
+            fake.sandbox,
+            state,
+            undefined,
+            credentials,
+            [],
+            envValues,
+          ),
+        ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+      }
+      const link = await (async () => {
+        const writer = pack()
+        const packed = (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of writer) chunks.push(Buffer.from(chunk as Uint8Array))
+          return zstdCompressSync(Buffer.concat(chunks))
+        })()
+        writer.entry({ name: 'sessions/link', type: 'symlink', linkname: '/etc' }, '')
+        writer.finalize()
+        return packed
+      })()
+      await expect(
+        new SandboxSnapshotTransport().capture(
+          sandboxFixture({ ...clean, home: link }).sandbox,
+          state,
+          undefined,
+        ),
+      ).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
+    })
+
+    it('restores the session alone into an empty working directory it only makes', async () => {
+      const parts = await fixture()
+      const fake = sandboxFixture(parts)
+      await new SandboxSnapshotTransport().restore(fake.sandbox, state, { home: parts.home })
+      const writes = fake.calls.filter(({ spec }) => spec.argv.includes('--extract'))
+      expect(
+        writes.map(({ spec }) => spec.argv.find((arg) => arg.startsWith('--directory='))),
+      ).toEqual([`--directory=/agent-home/${sampleDriverId}`])
+      expect(writes[0]!.stdin).toEqual(Buffer.from(parts.home))
+      const argvs = fake.calls.map(({ spec }) => spec.argv)
+      expect(argvs).toContainEqual(['mkdir', '--parents', '--', '/workspace/repo'])
+      expect(argvs).toContainEqual([
+        'find',
+        '-P',
+        '/workspace/repo',
+        '-mindepth',
+        '1',
+        '-print',
+        '-quit',
+      ])
+      // The working directory is checked before anything is extracted.
+      const extract = fake.calls.findIndex(({ spec }) => spec.argv.includes('--extract'))
+      const empty = fake.calls.findIndex(({ spec }) => spec.argv.includes('-mindepth'))
+      expect(empty).toBeLessThan(extract)
+      expect(fake.calls.some(({ spec }) => spec.argv[0] === 'git')).toBe(false)
+    })
+
+    it('refuses a working directory that is not empty, or holds a link, before extracting', async () => {
+      const parts = await fixture()
+      for (const override of [
+        (spec: ExecSpec): Reply | undefined =>
+          spec.argv.includes('-mindepth')
+            ? { stdout: Buffer.from('/workspace/repo/x\n') }
+            : undefined,
+        (spec: ExecSpec): Reply | undefined =>
+          spec.argv[0] === 'test' && spec.argv[1] === '-L' && spec.argv[2] === '/workspace/repo'
+            ? { code: 0 }
+            : undefined,
+      ]) {
+        const fake = sandboxFixture(parts, override)
+        await expect(
+          new SandboxSnapshotTransport().restore(fake.sandbox, state, { home: parts.home }),
+        ).rejects.toThrow(/command/)
+        expect(fake.calls.some(({ spec }) => spec.argv.includes('--extract'))).toBe(false)
+      }
+    })
+
+    it('refuses archives that hold one repository part without the other', async () => {
+      const parts = await fixture()
+      const fake = sandboxFixture(parts)
+      // As a caller without types could pass them.
+      for (const mixed of [
+        { home: parts.home, untracked: parts.untracked },
+        { home: parts.home, patch: parts.patch },
+      ] as unknown as SnapshotArchives[])
+        await expect(
+          new SandboxSnapshotTransport().restore(fake.sandbox, state, mixed),
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+      expect(fake.exec).not.toHaveBeenCalled()
+    })
+  })
 })

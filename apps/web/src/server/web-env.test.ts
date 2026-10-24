@@ -28,6 +28,7 @@ describe('webEnvFromEnv', () => {
       redisUrl: 'redis://localhost:6379',
       pastDueDays: 7,
       preview: null,
+      browserStreamUrl: null,
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
@@ -148,5 +149,49 @@ describe('the address of previews', () => {
     expect(() => webEnvFromEnv({ ...prodEnv, PREVIEW_BASE_DOMAIN: 'localhost:8090' })).toThrow(
       /PREVIEW_BASE_DOMAIN/,
     )
+  })
+})
+
+describe('the stream of the browser of tasks', () => {
+  it('reads the address of the gateway as it is given, and nothing when it is not set', () => {
+    expect(
+      webEnvFromEnv({
+        ...devEnv,
+        BROWSER_STREAM_PUBLIC_URL: 'ws://localhost:8091/v1/browser/stream',
+      }).browserStreamUrl,
+    ).toBe('ws://localhost:8091/v1/browser/stream')
+    for (const blank of ['', ' ', undefined]) {
+      expect(
+        webEnvFromEnv({ ...devEnv, BROWSER_STREAM_PUBLIC_URL: blank }).browserStreamUrl,
+      ).toBeNull()
+    }
+  })
+
+  it('takes only a WebSocket address of the gateway’s path, without credentials, a query or a fragment', () => {
+    for (const broken of [
+      'https://stream.raditi.ru/v1/browser/stream',
+      'wss://user:pass@stream.raditi.ru/v1/browser/stream',
+      'wss://stream.raditi.ru/v1/browser/stream?ticket=1',
+      'wss://stream.raditi.ru/v1/browser/stream#x',
+      'stream.raditi.ru',
+      // The gateway opens a stream on its one path only.
+      'wss://stream.raditi.ru/',
+      'wss://stream.raditi.ru/v1/stream',
+      'wss://raditi.ru/v1/browser/stream/',
+    ]) {
+      expect(() => webEnvFromEnv({ ...devEnv, BROWSER_STREAM_PUBLIC_URL: broken })).toThrow(
+        /^\[web\] invalid configuration: BROWSER_STREAM_PUBLIC_URL: /,
+      )
+    }
+  })
+
+  it('takes wss in production and refuses ws there', () => {
+    expect(
+      webEnvFromEnv({ ...prodEnv, BROWSER_STREAM_PUBLIC_URL: 'wss://raditi.ru/v1/browser/stream' })
+        .browserStreamUrl,
+    ).toBe('wss://raditi.ru/v1/browser/stream')
+    expect(() =>
+      webEnvFromEnv({ ...prodEnv, BROWSER_STREAM_PUBLIC_URL: 'ws://raditi.ru/v1/browser/stream' }),
+    ).toThrow('[web] invalid configuration: BROWSER_STREAM_PUBLIC_URL: must use wss in production')
   })
 })

@@ -12,7 +12,13 @@ const stand = vi.hoisted(() => ({
   createS3ObjectStorage: vi.fn(),
   createVaultSecretStore: vi.fn(),
   storage: { name: 'artifacts' },
-  secrets: { kvRead: vi.fn(), kvWrite: vi.fn(), kvMetadata: vi.fn() },
+  secrets: {
+    kvRead: vi.fn(),
+    kvWrite: vi.fn(),
+    kvMetadata: vi.fn(),
+    transitEnsureKey: vi.fn(),
+    transitDataKey: vi.fn(),
+  },
 }))
 
 vi.mock('@/env', () => ({
@@ -41,7 +47,9 @@ describe('the dialog services of the process', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.unstubAllEnvs()
-    stand.webEnv.mockReset().mockReturnValue({ appEnv: 'development', preview: ADDRESS })
+    stand.webEnv
+      .mockReset()
+      .mockReturnValue({ appEnv: 'development', preview: ADDRESS, browserStreamUrl: null })
     stand.authEnv.mockReset().mockReturnValue({ secret: 'a'.repeat(48) })
     stand.storageEnv.mockReset().mockReturnValue({ name: 'storage settings' })
     stand.vaultEnv.mockReset().mockReturnValue({ name: 'vault settings' })
@@ -73,12 +81,28 @@ describe('the dialog services of the process', () => {
 
   it('takes the life of a preview of core when it is not set, and no previews when they are off', async () => {
     vi.stubEnv('PREVIEW_TTL_HOURS', '')
-    stand.webEnv.mockReturnValue({ appEnv: 'test', preview: null })
+    stand.webEnv.mockReturnValue({ appEnv: 'test', preview: null, browserStreamUrl: null })
     const { chatServices, previewTtlHours } = await import('./chat-services')
 
     expect(chatServices()?.preview).toBeNull()
     expect(previewTtlHours({})).toBe(72)
     expect(() => previewTtlHours({ PREVIEW_TTL_HOURS: '0' })).toThrow(/PREVIEW_TTL_HOURS/)
+  })
+
+  it("carries where the stream of a task's browser opens, and no browser when it is not set", async () => {
+    const { chatServices } = await import('./chat-services')
+    expect(chatServices()?.browser).toBeNull()
+
+    vi.resetModules()
+    stand.webEnv.mockReturnValue({
+      appEnv: 'development',
+      preview: ADDRESS,
+      browserStreamUrl: 'ws://localhost:8091/v1/browser/stream',
+    })
+    const fresh = await import('./chat-services')
+    expect(fresh.chatServices()?.browser).toEqual({
+      streamUrl: 'ws://localhost:8091/v1/browser/stream',
+    })
   })
 
   it('makes the clients of S3 and Vault only when a procedure needs them, once', async () => {
@@ -97,12 +121,13 @@ describe('the dialog services of the process', () => {
     expect(stand.createVaultSecretStore).toHaveBeenCalledExactlyOnceWith({ name: 'vault settings' })
   })
 
-  it('hands the procedures two methods of Vault, never the store that reads', async () => {
+  it('hands the procedures three methods of Vault, never the store that reads', async () => {
     const { chatServices } = await import('./chat-services')
     const secrets = chatServices()!.secrets()
 
-    // The values of the client's variables are written and never read back (spec §15, П9).
-    expect(Object.keys(secrets).sort()).toEqual(['kvMetadata', 'kvWrite'])
+    // The values of the client's variables are written and never read back (spec §15, П9); the
+    // key of a workspace is made, never used to encrypt or decrypt here.
+    expect(Object.keys(secrets).sort()).toEqual(['kvMetadata', 'kvWrite', 'transitEnsureKey'])
     expect(secrets).not.toBe(stand.secrets)
     await secrets.kvWrite('kv/sites/s/env/NAME', { value: 'x' }, { cas: 0, maxVersions: 1 })
     expect(stand.secrets.kvWrite).toHaveBeenCalledExactlyOnceWith(
@@ -112,7 +137,12 @@ describe('the dialog services of the process', () => {
     )
     await secrets.kvMetadata('kv/sites/s/env/NAME')
     expect(stand.secrets.kvMetadata).toHaveBeenCalledExactlyOnceWith('kv/sites/s/env/NAME')
+    await secrets.transitEnsureKey('ws-01960000-0000-7000-8000-000000000003')
+    expect(stand.secrets.transitEnsureKey).toHaveBeenCalledExactlyOnceWith(
+      'ws-01960000-0000-7000-8000-000000000003',
+    )
     expect(stand.secrets.kvRead).not.toHaveBeenCalled()
+    expect(stand.secrets.transitDataKey).not.toHaveBeenCalled()
   })
 
   it('is null while a section does not parse, logs it, and is read again on the next request', async () => {

@@ -22,8 +22,11 @@ import {
 import { sessionStateSchema, snapshotLimits } from '../sessions/session-state.ts'
 import {
   SNAPSHOT_SCHEMA_VERSION,
+  snapshotHasRepository,
   snapshotManifestSchema,
   snapshotMetadataSchema,
+  snapshotPartNames,
+  snapshotPartNamesOf,
 } from '../sessions/snapshot-manifest.ts'
 import {
   agentDriverIds,
@@ -58,12 +61,12 @@ export const runnerApiPaths = Object.freeze({
 })
 const assignmentPath = (assignmentId: string) =>
   `${RUNNER_API_PREFIX}/assignments/${z.uuid().parse(assignmentId)}`
-/** GET: the base bundle of a prepare command. */
+/** GET: the base bundle of a prepare command that has one (a turn with a repository). */
 export const runnerBundlePath = (assignmentId: string) => `${assignmentPath(assignmentId)}/bundle`
 /** GET: 32 bytes of the data key, `no-store`; only for an open restore or seal command. */
 export const runnerKeyPath = (assignmentId: string, purpose: 'restore' | 'seal') =>
   `${assignmentPath(assignmentId)}/keys/${purpose}`
-/** PUT: an untrusted captured part, before the captured report. */
+/** PUT: an untrusted captured part of a capture with `baseSha`, before the captured report. */
 export const runnerCandidatePath = (assignmentId: string, part: 'patch' | 'untracked') =>
   `${assignmentPath(assignmentId)}/candidate/${part}`
 
@@ -175,7 +178,10 @@ export const execExitSchema = z
   })
   .strict() satisfies z.ZodType<ExecExit>
 
-/** What the home part's AAD binds: the manifest without its parts (snapshotAad). */
+/**
+ * What the home part's AAD binds: the manifest without its parts (snapshotAad). Without `git`
+ * for a turn without a repository (docs/plan/57-browser-tasks.md, Б4).
+ */
 export const snapshotSealBaseSchema = snapshotMetadataSchema
   .extend({
     schemaVersion: z.literal(SNAPSHOT_SCHEMA_VERSION),
@@ -207,7 +213,10 @@ const prepareCommand = command('prepare', {
    * poll, so the container's deadline never outlives the turn's (spec §8).
    */
   remainingMs: turnMs,
-  /** Fetched from runnerBundlePath() and checked before the import. */
+  /**
+   * Fetched from runnerBundlePath() and checked before the import. Absent for a turn without a
+   * repository (plan 57, Б5): the runner makes the working directory empty and fetches nothing.
+   */
   bundle: z
     .object({
       /** Its single ref points here; the agent's branch starts from it. */
@@ -221,16 +230,18 @@ const prepareCommand = command('prepare', {
       sha256: sha256Hex,
       sizeBytes: z.number().int().positive().max(publicationLimits.bundleBytes),
     })
-    .strict(),
+    .strict()
+    .optional(),
   restore: z
     .object({
       /** Checked by core against the trusted snapshot reference. */
       manifest: snapshotManifestSchema,
+      /** Exactly the manifest's parts: `home` alone in a snapshot without a repository. */
       parts: z
         .object({
           home: presignedGetSchema,
-          untracked: presignedGetSchema,
-          patch: presignedGetSchema,
+          untracked: presignedGetSchema.optional(),
+          patch: presignedGetSchema.optional(),
         })
         .strict(),
     })
@@ -288,7 +299,11 @@ export const runnerCommandSchema = z
     command('quiesce', {}),
     command('capture', {
       home: sessionStateSchema,
-      baseSha: publicationShaSchema,
+      /**
+       * Absent for a turn without a repository (plan 57, Б5): the runner captures `home` alone,
+       * uploads no candidate part and reports neither.
+       */
+      baseSha: publicationShaSchema.optional(),
       /** The patch is taken against the working-set commit when there is one (plan 53, Р11). */
       sandboxBaseSha: publicationShaSchema.optional(),
       /** New files below these are taken even when an ignore file hides them (Р12). */
@@ -319,7 +334,32 @@ export const runnerCommandSchema = z
         ctx.addIssue({ code: 'custom', message: 'turn secrets are installed only after restore' })
       if (cmd.sandbox.hardTimeoutMs > cmd.remainingMs)
         ctx.addIssue({ code: 'custom', message: 'the container would outlive the turn' })
+      const restore = cmd.restore
+      if (restore) {
+        const sent = snapshotPartNames.filter((name) => restore.parts[name] !== undefined)
+        const expected = snapshotPartNamesOf(restore.manifest)
+        if (sent.length !== expected.length || !expected.every((name) => sent.includes(name)))
+          ctx.addIssue({
+            code: 'custom',
+            path: ['restore', 'parts'],
+            message: 'restore parts differ from the snapshot',
+          })
+        // A turn with a repository restores a snapshot with one, and a turn without one a
+        // snapshot without: a patch is never applied to an empty directory.
+        if ((cmd.bundle !== undefined) !== snapshotHasRepository(restore.manifest))
+          ctx.addIssue({
+            code: 'custom',
+            path: ['restore', 'manifest'],
+            message: 'the snapshot and the bundle disagree on the repository',
+          })
+      }
     }
+    if (
+      cmd.type === 'capture' &&
+      cmd.baseSha === undefined &&
+      (cmd.sandboxBaseSha !== undefined || cmd.addOnlyPaths !== undefined)
+    )
+      ctx.addIssue({ code: 'custom', message: 'a working set needs the base of the capture' })
     if (cmd.type === 'adopt' && (cmd.purpose === 'work') !== (cmd.work !== undefined))
       ctx.addIssue({ code: 'custom', message: 'adoption for work needs its turn state' })
   })
@@ -445,12 +485,15 @@ export const runnerReportSchema = z
     }),
     report('exited', { execId: sandboxRef, exit: execExitSchema }),
     report('quiesced', { commandId: uuid }),
-    /** Sent after both candidate parts were uploaded to core. */
+    /**
+     * Sent after both candidate parts were uploaded to core. A capture without `baseSha` (plan 57,
+     * Б5) uploads none and is answered with neither; core checks the parts against its command.
+     */
     report('captured', {
       commandId: uuid,
       homeBytes: z.number().int().nonnegative().max(snapshotLimits.archiveBytes),
-      patch: candidatePart(snapshotLimits.patchBytes),
-      untracked: candidatePart(snapshotLimits.archiveBytes),
+      patch: candidatePart(snapshotLimits.patchBytes).optional(),
+      untracked: candidatePart(snapshotLimits.archiveBytes).optional(),
     }),
     report('sealed', {
       commandId: uuid,
@@ -474,6 +517,11 @@ export const runnerReportSchema = z
   .superRefine((value, ctx) => {
     if (value.type === 'failed' && value.absent && value.commandId === undefined)
       ctx.addIssue({ code: 'custom', message: 'only the answer to a prepare can be absent' })
+    if (
+      value.type === 'captured' &&
+      (value.patch === undefined) !== (value.untracked === undefined)
+    )
+      ctx.addIssue({ code: 'custom', message: 'expected both candidate parts or neither' })
     if (value.type !== 'output') return
     if (value.to.stdout < value.from.stdout || value.to.stderr < value.from.stderr)
       ctx.addIssue({ code: 'custom', message: 'the output cursor moved backwards' })

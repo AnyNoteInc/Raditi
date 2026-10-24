@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
+import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { connect, createServer as createTcpServer } from 'node:net'
 import { after, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -17,7 +18,9 @@ import {
   clientEgressLimits,
   createClientEgressProxy,
   interfaceSubnets,
+  localTunnelHeadAllowed,
   parseAllowedHosts,
+  parseLocalRoutes,
   parseSubnets,
   parseTarget,
 } from './client-egress.mjs'
@@ -615,4 +618,386 @@ test('a client that resets its connection in the middle of a refusal or a lookup
   const answer = await tunnel(p.port, 'slow.example.ru:443')
   assert.equal(answer.status, 200)
   answer.socket.destroy()
+})
+
+// --- Local sites of a stand (LOCAL_HTTP_ROUTES) ------------------------------------------------
+
+/** A local site: answers what it was asked, and holds requests to `/slow` until released. */
+async function localSite() {
+  const seen = []
+  const held = []
+  const site = createHttpServer((req, res) => {
+    const chunks = []
+    req.on('data', (chunk) => chunks.push(chunk))
+    req.on('end', () => {
+      const entry = {
+        method: req.method,
+        url: req.url,
+        host: req.headers.host,
+        authorization: req.headers['proxy-authorization'] ?? null,
+        body: Buffer.concat(chunks).toString(),
+      }
+      seen.push(entry)
+      const answer = () => {
+        res.writeHead(201, { 'content-type': 'text/plain', 'x-site': 'local' })
+        res.end(`site ${req.method} ${req.url}`)
+      }
+      if (req.url === '/slow') held.push(answer)
+      else answer()
+    })
+  })
+  await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve))
+  servers.push(site)
+  return { port: site.address().port, seen, held }
+}
+
+/** A request in absolute form through the proxy, as Chromium sends one to its HTTP proxy. */
+const viaProxy = (port, url, { method = 'GET', host, body, headers = {} } = {}) =>
+  new Promise((resolve, reject) => {
+    const outgoing = httpRequest(
+      {
+        host: '127.0.0.1',
+        port,
+        method,
+        path: url,
+        headers: { host: host ?? new URL(url).host, ...headers },
+        agent: false,
+      },
+      (response) => {
+        const chunks = []
+        response.on('data', (chunk) => chunks.push(chunk))
+        response.on('end', () =>
+          resolve({
+            status: response.statusCode,
+            refusal: response.headers['raditi-egress'] ?? null,
+            connection: response.headers.connection,
+            site: response.headers['x-site'] ?? null,
+            body: Buffer.concat(chunks).toString(),
+          }),
+        )
+      },
+    )
+    outgoing.on('error', reject)
+    outgoing.end(body)
+  })
+
+test('a local route forwards plain HTTP of its exact host:port to its fixed target, Host kept', async () => {
+  const site = await localSite()
+  const p = await proxy({
+    localRoutes: parseLocalRoutes(
+      JSON.stringify({ 'wp.localhost:8080': `127.0.0.1:${site.port}` }),
+    ),
+  })
+  const page = await viaProxy(p.port, 'http://wp.localhost:8080/wp-admin/post-new.php?x=1', {
+    headers: {
+      'proxy-authorization': 'Basic c2VjcmV0',
+      connection: 'keep-alive, x-drop',
+      'x-drop': '1',
+    },
+  })
+  assert.equal(page.status, 201)
+  assert.equal(page.site, 'local')
+  assert.equal(page.connection, 'close')
+  assert.equal(page.body, 'site GET /wp-admin/post-new.php?x=1')
+  const posted = await viaProxy(p.port, 'http://wp.localhost:8080/wp-json/wp/v2/media', {
+    method: 'POST',
+    body: 'новость',
+  })
+  assert.equal(posted.status, 201)
+  // The site saw its own name, an origin-form path, the body, and nothing of the proxy's.
+  assert.deepEqual(
+    site.seen.map(({ method, url, host, authorization, body }) => ({
+      method,
+      url,
+      host,
+      authorization,
+      body,
+    })),
+    [
+      {
+        method: 'GET',
+        url: '/wp-admin/post-new.php?x=1',
+        host: 'wp.localhost:8080',
+        authorization: null,
+        body: '',
+      },
+      {
+        method: 'POST',
+        url: '/wp-json/wp/v2/media',
+        host: 'wp.localhost:8080',
+        authorization: null,
+        body: 'новость',
+      },
+    ],
+  )
+  // No name was resolved and nothing was dialed the way tunnels are.
+  assert.deepEqual(p.lookups, [])
+  assert.deepEqual(p.dialed, [])
+  for (let i = 0; i < 50 && p.logs.length < 2; i++) await delay(10)
+  assert.deepEqual(
+    p.logs.map(({ event, host, result, status }) => ({ event, host, result, status })),
+    [
+      { event: 'request', host: 'wp.localhost:8080', result: 'ok', status: 201 },
+      { event: 'request', host: 'wp.localhost:8080', result: 'ok', status: 201 },
+    ],
+  )
+  assert.doesNotMatch(JSON.stringify(p.logs), /wp-admin|media|новость/)
+})
+
+test('everything but a listed local route stays refused', async () => {
+  const site = await localSite()
+  const p = await proxy({
+    names: { 'api.example.ru': ['93.184.216.34'] },
+    localRoutes: parseLocalRoutes(
+      JSON.stringify({ 'wp.localhost:8080': `127.0.0.1:${site.port}` }),
+    ),
+  })
+  for (const url of [
+    'http://wp.localhost:8081/',
+    'http://wp.localhost/',
+    'http://other.localhost:8080/',
+    'http://host.docker.internal:8080/',
+    'http://169.254.169.254/latest/meta-data/',
+    'http://127.0.0.1:8080/',
+    'http://api.example.ru:443/',
+  ])
+    assert.deepEqual((await viaProxy(p.port, url)).refusal, 'method', url)
+  // Another method, credentials in the URL, a Host that names another site behind the route.
+  assert.equal(
+    (await viaProxy(p.port, 'http://wp.localhost:8080/', { method: 'PATCH' })).status,
+    405,
+  )
+  assert.equal(
+    (await viaProxy(p.port, 'http://user:pw@wp.localhost:8080/', { host: 'wp.localhost:8080' }))
+      .status,
+    405,
+  )
+  const misdirected = await viaProxy(p.port, 'http://wp.localhost:8080/', {
+    host: 'other.localhost:8080',
+  })
+  assert.equal(misdirected.status, 403)
+  assert.equal(misdirected.refusal, 'forbidden_host')
+  // A tunnel to another port of the route's name is no route and no listed public host.
+  assert.equal((await tunnel(p.port, 'wp.localhost:8081')).refusal, 'forbidden_host')
+  assert.deepEqual(site.seen, [])
+  assert.deepEqual(p.lookups, [])
+})
+
+/** Writes `text` into an open tunnel and reads what comes back until the far side closes. */
+const throughTunnel = (open, text) =>
+  new Promise((resolve) => {
+    const chunks = [open.rest]
+    open.socket.on('data', (chunk) => chunks.push(chunk))
+    open.socket.once('close', () => resolve(Buffer.concat(chunks).toString()))
+    open.socket.write(text)
+  })
+
+/** A proxy of one local route whose tunnels really reach the route's target. */
+async function localTunnelProxy(site, options = {}) {
+  const dialed = []
+  const p = await proxy({
+    localRoutes: parseLocalRoutes(
+      JSON.stringify({ 'wp.localhost:8080': `127.0.0.1:${site.port}` }),
+    ),
+    dial: ({ address, port }) => {
+      dialed.push({ address, port })
+      return connect({ host: address, port })
+    },
+    ...options,
+  })
+  return { ...p, dialed }
+}
+
+test('a CONNECT to a local route tunnels plain HTTP of that site to its fixed target', async () => {
+  const site = await localSite()
+  const p = await localTunnelProxy(site)
+  const open = await tunnel(p.port, 'wp.localhost:8080')
+  assert.equal(open.status, 200)
+  const answer = await throughTunnel(
+    open,
+    'GET /wp-json/wp/v2/posts/7?context=edit HTTP/1.1\r\nHost: wp.localhost:8080\r\n' +
+      'X-WP-Nonce: n0nce\r\nConnection: close\r\n\r\n',
+  )
+  assert.match(answer, /^HTTP\/1\.1 201/)
+  assert.match(answer, /\r\nsite GET \/wp-json\/wp\/v2\/posts\/7\?context=edit\r\n/)
+  assert.deepEqual(
+    site.seen.map(({ url, host }) => ({ url, host })),
+    [{ url: '/wp-json/wp/v2/posts/7?context=edit', host: 'wp.localhost:8080' }],
+  )
+  // The route's target was dialed; no name was resolved.
+  assert.deepEqual(p.dialed, [{ address: '127.0.0.1', port: site.port }])
+  assert.deepEqual(p.lookups, [])
+  for (let i = 0; i < 50 && p.logs.length < 1; i++) await delay(10)
+  assert.deepEqual(
+    p.logs.map(({ event, host, result }) => ({ event, host, result })),
+    [{ event: 'connect', host: 'wp.localhost:8080', result: 'ok' }],
+  )
+  assert.doesNotMatch(JSON.stringify(p.logs), /wp-json|n0nce/)
+})
+
+test('a local tunnel carries nothing but plain HTTP of its own site', async () => {
+  const site = await localSite()
+  const p = await localTunnelProxy(site)
+  for (const first of [
+    clientHello('wp.localhost'),
+    'GET / HTTP/1.1\r\nHost: other.localhost:8080\r\n\r\n',
+    'GET / HTTP/1.1\r\nHost: wp.localhost:8080\r\nHost: other.localhost:8080\r\n\r\n',
+    'GET / HTTP/1.1\r\n\r\n',
+    'GET http://other.localhost:8080/ HTTP/1.1\r\nHost: wp.localhost:8080\r\n\r\n',
+    'PATCH / HTTP/1.1\r\nHost: wp.localhost:8080\r\n\r\n',
+    `GET / HTTP/1.1\r\nHost: wp.localhost:8080\r\nX-Long: ${'a'.repeat(20_000)}`,
+  ]) {
+    const open = await tunnel(p.port, 'wp.localhost:8080')
+    assert.equal(open.status, 200)
+    assert.equal(await throughTunnel(open, first), '')
+  }
+  assert.deepEqual(site.seen, [])
+  for (let i = 0; i < 50 && p.logs.length < 7; i++) await delay(10)
+  assert.deepEqual(
+    p.logs.map(({ result }) => result),
+    Array(7).fill('forbidden_request'),
+  )
+
+  // Its target down is a refusal before the tunnel opens; the tunnels count together.
+  const closed = createTcpServer()
+  await new Promise((resolve) => closed.listen(0, '127.0.0.1', resolve))
+  const down = { port: closed.address().port }
+  await new Promise((resolve) => closed.close(resolve))
+  const refused = await localTunnelProxy(down)
+  assert.equal((await tunnel(refused.port, 'wp.localhost:8080')).refusal, 'connect_error')
+  const one = await localTunnelProxy(site, { maxTunnels: 1 })
+  const held = await tunnel(one.port, 'wp.localhost:8080')
+  assert.equal((await tunnel(one.port, 'wp.localhost:8080')).refusal, 'busy')
+  held.socket.destroy()
+  const stranger = await localTunnelProxy(site, { clientIp: '10.9.9.3' })
+  assert.equal((await tunnel(stranger.port, 'wp.localhost:8080')).refusal, 'forbidden_client')
+  assert.deepEqual(site.seen, [])
+})
+
+test('the head of a local tunnel is judged by its request line and its one Host', () => {
+  const key = 'wp.localhost:8080'
+  const ok = (head) => localTunnelHeadAllowed(Buffer.from(head, 'latin1'), key)
+  assert.equal(ok('GET /wp-admin/ HTTP/1.1\r\nHost: wp.localhost:8080'), true)
+  assert.equal(ok('HEAD / HTTP/1.0\r\nhost: WP.localhost:8080\r\nAccept: */*'), true)
+  assert.equal(ok('GET / HTTP/1.1\r\nHost: wp.localhost'), false)
+  assert.equal(ok('GET / HTTP/2\r\nHost: wp.localhost:8080'), false)
+  assert.equal(ok('get / HTTP/1.1\r\nHost: wp.localhost:8080'), false)
+  assert.equal(ok('GET * HTTP/1.1\r\nHost: wp.localhost:8080'), false)
+  assert.equal(ok(''), false)
+})
+
+test('local requests are the client’s own and count with the tunnels', async () => {
+  const site = await localSite()
+  const routes = parseLocalRoutes(JSON.stringify({ 'wp.localhost:8080': `127.0.0.1:${site.port}` }))
+  const stranger = await proxy({ localRoutes: routes, clientIp: '10.9.9.3' })
+  const refused = await viaProxy(stranger.port, 'http://wp.localhost:8080/')
+  assert.equal(refused.status, 403)
+  assert.equal(refused.refusal, 'forbidden_client')
+  assert.deepEqual(site.seen, [])
+
+  const p = await proxy({ localRoutes: routes, maxTunnels: 1 })
+  const slow = viaProxy(p.port, 'http://wp.localhost:8080/slow')
+  for (let i = 0; i < 100 && site.held.length === 0; i++) await delay(10)
+  const busy = await viaProxy(p.port, 'http://wp.localhost:8080/')
+  assert.equal(busy.status, 503)
+  assert.equal(busy.refusal, 'busy')
+  site.held.shift()()
+  assert.equal((await slow).status, 201)
+  for (let i = 0; i < 50 && !p.logs.some((entry) => entry.result === 'ok'); i++) await delay(10)
+  assert.equal((await viaProxy(p.port, 'http://wp.localhost:8080/')).status, 201)
+})
+
+test('a local route whose target does not answer is a refusal of the proxy', async () => {
+  const closed = createTcpServer()
+  await new Promise((resolve) => closed.listen(0, '127.0.0.1', resolve))
+  const port = closed.address().port
+  await new Promise((resolve) => closed.close(resolve))
+  const p = await proxy({
+    localRoutes: parseLocalRoutes(JSON.stringify({ 'wp.localhost:8080': `127.0.0.1:${port}` })),
+  })
+  const answer = await viaProxy(p.port, 'http://wp.localhost:8080/')
+  assert.equal(answer.status, 502)
+  assert.equal(answer.refusal, 'connect_error')
+})
+
+test('LOCAL_HTTP_ROUTES names local sites by name and port, targets by address or name', () => {
+  const routes = parseLocalRoutes(
+    JSON.stringify({
+      'wp.localhost:8080': 'host.docker.internal:18080',
+      'wordpress:80': '10.200.0.7:8080',
+    }),
+  )
+  assert.deepEqual(
+    [...routes],
+    [
+      ['wp.localhost:8080', { host: 'host.docker.internal', port: 18_080 }],
+      ['wordpress:80', { host: '10.200.0.7', port: 8080 }],
+    ],
+  )
+  for (const json of [
+    '',
+    'not json',
+    '[]',
+    '{}',
+    '["wp.localhost:8080"]',
+    '{"wp.localhost":"127.0.0.1:80"}',
+    '{"WP.localhost:8080":"127.0.0.1:80"}',
+    '{"127.0.0.1:8080":"127.0.0.1:80"}',
+    '{"10.0.0.1:80":"127.0.0.1:80"}',
+    '{"wp.localhost:0":"127.0.0.1:80"}',
+    '{"wp.localhost:70000":"127.0.0.1:80"}',
+    '{"wp.localhost:8080":"127.0.0.1"}',
+    '{"wp.localhost:8080":"127.0.0.1:80/path"}',
+    '{"wp.localhost:8080":"http://127.0.0.1:80"}',
+    '{"wp.localhost:8080":"999.1.1.1:80"}',
+    '{"wp.localhost:8080":80}',
+    JSON.stringify(
+      Object.fromEntries(
+        Array.from({ length: 17 }, (_, i) => [`s${i}.localhost:80`, '127.0.0.1:80']),
+      ),
+    ),
+  ])
+    assert.throws(() => parseLocalRoutes(json), json)
+})
+
+test('local routes need their guard and never run in production; MAX_TUNNELS is bounded', () => {
+  const base = {
+    LISTEN_HOST: '10.200.0.2',
+    LISTEN_PORT: '3128',
+    ALLOWED_HOSTS: '["news.example.ru:443"]',
+    CLIENT_IPV4: '10.200.0.3',
+  }
+  const routes = '{"wp.localhost:8080":"host.docker.internal:18080"}'
+  const plain = clientEgressConfig(base)
+  assert.equal(plain.maxTunnels, clientEgressLimits.tunnels)
+  assert.equal(plain.localRoutes.size, 0)
+  assert.throws(() => clientEgressConfig({ ...base, LOCAL_HTTP_ROUTES: routes }), /RADITI_EGRESS/)
+  assert.throws(
+    () =>
+      clientEgressConfig({
+        ...base,
+        LOCAL_HTTP_ROUTES: routes,
+        RADITI_EGRESS_LOCAL_ROUTES: '1',
+        APP_ENV: 'production',
+      }),
+    /production/,
+  )
+  const local = clientEgressConfig({
+    ...base,
+    ALLOWED_HOSTS: '[]',
+    LOCAL_HTTP_ROUTES: routes,
+    RADITI_EGRESS_LOCAL_ROUTES: '1',
+    APP_ENV: 'development',
+  })
+  assert.deepEqual([...local.allow], [])
+  assert.deepEqual(local.localRoutes.get('wp.localhost:8080'), {
+    host: 'host.docker.internal',
+    port: 18_080,
+  })
+  // An empty list is a stand's with local sites only, never a proxy that goes nowhere.
+  assert.throws(() => clientEgressConfig({ ...base, ALLOWED_HOSTS: '[]' }))
+  assert.equal(clientEgressConfig({ ...base, MAX_TUNNELS: '64' }).maxTunnels, 64)
+  assert.equal(clientEgressConfig({ ...base, MAX_TUNNELS: '256' }).maxTunnels, 256)
+  for (const bad of ['0', '257', '1e2', '-1', '32.5', ' 32', 'many'])
+    assert.throws(() => clientEgressConfig({ ...base, MAX_TUNNELS: bad }), bad)
 })

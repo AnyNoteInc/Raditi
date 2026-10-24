@@ -652,8 +652,9 @@ async function main(options, owned) {
   passed(
     `disposable PostgreSQL 17 on 127.0.0.1:${ports.postgres} and Redis 8 on 127.0.0.1:${ports.redis}`,
   )
-  // The Vault of web: the mounts and policies of infra/vault, and web's AppRole with the one
-  // policy `sites-writer`. The root token stays with the stand: it reads a version, never a value.
+  // The Vault of web: the mounts and policies of infra/vault, and web's AppRole with the policies
+  // `sites-writer` and `workspace-provisioner`. The root token stays with the stand: it reads a
+  // version, never a value.
   const vaultAddress = `http://127.0.0.1:${ports.vault}`
   await openbaoReady(vaultAddress, { signal: controller.signal })
   const sitesWriter = await prepareSitesWriter({ address: vaultAddress, token: secrets.vaultRoot })

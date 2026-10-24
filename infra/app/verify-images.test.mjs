@@ -71,9 +71,36 @@ test('the runner image may carry the frame of a process, never the data of the p
     'db',
     'service-runtime',
   ])
+  // Neither the provider's process nor a sandbox VM reaches the browser worker.
+  assert.deepEqual(forbiddenPackagesOf('runner', ['browser-link']), ['browser-link'])
+  assert.deepEqual(forbiddenPackagesOf('llm', ['browser-link']), ['browser-link'])
   // The apps with a database carry it.
   assert.deepEqual(forbiddenPackagesOf('llm', ['db', 'service-runtime', 'vault']), [])
   assert.deepEqual(forbiddenPackagesOf('preview', ['db', 'vault']), ['vault'])
+})
+
+test('the browser worker carries its adapters and the inbox, never Vault, git or the agent', () => {
+  assert.deepEqual(
+    forbiddenPackagesOf('browser', [
+      'app-bootstrap',
+      'browser-link',
+      'browser-providers',
+      'db',
+      'domain',
+      'ip-address',
+      'observability',
+      'sandbox-providers',
+      'service-runtime',
+      'site-adapters',
+      'storage',
+    ]),
+    [],
+  )
+  assert.deepEqual(forbiddenPackagesOf('browser', ['vault', 'agent-drivers', 'turn-keys']), [
+    'vault',
+    'agent-drivers',
+    'turn-keys',
+  ])
 })
 
 test('the installed modules of the runner hold no Prisma, pg, S3 SDK or BullMQ', () => {
@@ -125,6 +152,7 @@ test('an image carries no stand, stand test or fixture, and keeps the operator c
     'subscription-token.mjs',
   ])
   assert.deepEqual(missingOperatorScriptsOf('mcp', []), [])
+  assert.deepEqual(missingOperatorScriptsOf('browser', []), [])
 })
 
 test('the .dockerignore matcher of these tests reads the file as Docker does', () => {

@@ -1,6 +1,7 @@
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
 import {
   appEnvSchema,
+  browserWorkerTokenSchema,
   envProblems,
   envVar,
   isProduction,
@@ -12,6 +13,7 @@ import {
   type PreviewAddress,
 } from '@repo/domain'
 import { ConfigError } from '@repo/app-bootstrap'
+import { browserWorkerOrigin } from '@repo/browser-link'
 import { isLoopbackAddress, isPrivateAddress, ipLiteral } from '@repo/ip-address'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
@@ -41,6 +43,17 @@ export type McpContentProfile = (typeof mcpContentProfiles)[number]
 export const mcpBrowserProfiles = ['off', 'local'] as const
 export type McpBrowserProfile = (typeof mcpBrowserProfiles)[number]
 
+/**
+ * The browser worker (`apps/browser`, docs/plan/57-browser-tasks.md, Б10, Б20): where the `web`
+ * tools of a browser task go. A product path, not a local profile: allowed in production. Holds
+ * the worker's token: never log it.
+ */
+export interface McpBrowserWorkerConfig {
+  /** The worker's internal origin, `http://127.0.0.1:8086`. */
+  url: string
+  token: string
+}
+
 /** S3 of content snapshots: the connection and the artifacts bucket alone (spec §14). */
 export type McpStorageConfig = Omit<StorageConfig, 'buckets' | 'presignEndpoint'> & {
   buckets: Pick<StorageConfig['buckets'], 'artifacts'>
@@ -61,6 +74,8 @@ export interface McpConfig {
   browserProfile: McpBrowserProfile
   /** null while both profiles are off. Holds the S3 key: never log it. */
   storage: McpStorageConfig | null
+  /** null — the worker is not configured: browser tasks get no `web` tools here. */
+  browserWorker?: McpBrowserWorkerConfig | null
   /**
    * PREVIEW_UPSTREAM_HOST: the content of a preview is written over plain http to this address
    * in any environment (plan 53, Р24); the upstream itself comes from preview_environments.
@@ -76,7 +91,7 @@ export interface McpConfig {
 
 /**
  * What the profiles of a configuration turn on. A configuration a stand builds by hand may
- * leave out the browser profile and previews: both are then off.
+ * leave out the browser profile, previews and the browser worker: they are then off.
  */
 export function mcpProfilesOf(config: McpConfig) {
   return {
@@ -86,6 +101,9 @@ export function mcpProfilesOf(config: McpConfig) {
     // A configuration written before the browser profile has none: off.
     browser: (config.browserProfile ?? 'off') !== 'off',
     previews: config.preview ?? null,
+    // The worker is no profile — a product path, production too (Б20) — but it turns the `web`
+    // tools on the same way; a configuration written before it has none: no web tools.
+    worker: config.browserWorker ?? null,
   }
 }
 
@@ -114,6 +132,22 @@ const ownEnvSchema = z.object({
       .refine((host) => ipLiteral(host) === host, 'must be an IP address')
       .default(previewDefaults.upstreamHost),
   ),
+  // The worker's address is an internal one: its problems are said, never the value itself.
+  BROWSER_WORKER_URL: envVar(
+    z
+      .string()
+      .refine((url) => {
+        try {
+          browserWorkerOrigin(url)
+          return true
+        } catch {
+          return false
+        }
+      }, 'must be an http(s) origin without credentials or a path')
+      .optional(),
+  ),
+  // The rule every app reads the worker's token by (32 to 4096 visible ASCII characters).
+  BROWSER_WORKER_TOKEN: envVar(browserWorkerTokenSchema.optional()),
 })
 
 /** What the mcp role reads of the S3 settings: the connection and its one bucket. */
@@ -128,9 +162,9 @@ const MCP_STORAGE_VARIABLES = [
 
 /**
  * The settings of the MCP gateway (spec §5, §8) and nothing else: the database, Vault, its own
- * port and profiles, the address of previews and, with a content profile, the one S3 bucket of
- * snapshots. It reads none of the git, billing, Redis or runner settings. Lists every problem
- * at once.
+ * port and profiles, the address of previews, the browser worker and, with a content profile,
+ * the one S3 bucket of snapshots. It reads none of the git, billing, Redis or runner settings.
+ * Lists every problem at once.
  */
 export function loadMcpConfig(env: Env): McpConfig {
   const parsed = ownEnvSchema.safeParse(env)
@@ -200,6 +234,23 @@ export function loadMcpConfig(env: Env): McpConfig {
     problems.push(
       'MCP_CONTENT_PROFILE: local-site writes the connected site itself and is refused where previews are configured (PREVIEW_BASE_DOMAIN)',
     )
+  // The worker's address needs its token (Б10); the token alone is the worker's own in the one
+  // .env of the platform and is not read here — the same rule as core's.
+  if (own.BROWSER_WORKER_URL !== undefined) {
+    if (own.BROWSER_WORKER_TOKEN === undefined)
+      problems.push('BROWSER_WORKER_TOKEN: required with BROWSER_WORKER_URL')
+    // The token goes in every request: plain http only inside the perimeter (spec §19).
+    const worker = new URL(browserWorkerOrigin(own.BROWSER_WORKER_URL))
+    if (
+      production &&
+      worker.protocol === 'http:' &&
+      !isPrivateAddress(worker.hostname) &&
+      !isLoopbackAddress(worker.hostname)
+    )
+      problems.push(
+        'BROWSER_WORKER_URL: plain http only to a private or loopback IP address in production (spec §19)',
+      )
+  }
   if (problems.length > 0 || db === undefined || vault === undefined || allowedHosts === undefined)
     throw new ConfigError(problems, 'mcp')
 
@@ -212,6 +263,10 @@ export function loadMcpConfig(env: Env): McpConfig {
     contentProfile: own.MCP_CONTENT_PROFILE,
     browserProfile: own.MCP_BROWSER_PROFILE,
     storage,
+    browserWorker:
+      own.BROWSER_WORKER_URL !== undefined && own.BROWSER_WORKER_TOKEN !== undefined
+        ? { url: browserWorkerOrigin(own.BROWSER_WORKER_URL), token: own.BROWSER_WORKER_TOKEN }
+        : null,
     previewUpstreamHost: own.PREVIEW_UPSTREAM_HOST,
     preview,
   }

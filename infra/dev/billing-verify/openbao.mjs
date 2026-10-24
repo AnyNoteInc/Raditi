@@ -4,8 +4,10 @@
 // «Добавить проект» checks the files over the network and writes the secret of the access to Vault
 // before it creates anything (docs/plan/39-site-connection-wizard.md, «Создание»). So both runs
 // give web a disposable OpenBao: dev mode in a container on loopback, data in memory, the mounts
-// and the policies of infra/vault/bootstrap.mjs, and an AppRole with the one policy web has for
-// this, `sites-writer` — write with CAS, read the metadata, never read a secret back.
+// and the policies of infra/vault/bootstrap.mjs, and an AppRole with the two policies web has:
+// `sites-writer` — write with CAS, read the metadata, never read a secret back — and
+// `workspace-provisioner` — make the Transit key of a workspace before its first task
+// (docs/plan/57-browser-tasks.md, Б32), never read, use or remove one.
 //
 // As a process, for the browser run (the shop of the fake comes from the environment the same way):
 //   VAULT_ROLE_ID=… VAULT_SECRET_ID=… node infra/dev/billing-verify/openbao.mjs --port 4210
@@ -23,8 +25,10 @@ import { pathToFileURL } from 'node:url'
 import { bootstrapLocalVault, localVaultRequest } from '../../vault/bootstrap.mjs'
 import { OPENBAO_IMAGE } from './stand.mjs'
 
-/** The AppRole web logs in with: the policy of infra/vault/policies/sites-writer.hcl alone. */
+/** The AppRole web logs in with, named after its first policy (infra/vault/policies). */
 export const SITES_WRITER = 'sites-writer'
+/** The policies of that AppRole, as web has them in production, and no other. */
+export const WEB_POLICIES = Object.freeze([SITES_WRITER, 'workspace-provisioner'])
 
 const expect = (result, statuses, what) => {
   if (!statuses.includes(result.status)) throw new Error(`${what} failed (HTTP ${result.status})`)
@@ -43,9 +47,9 @@ export async function openbaoReady(address, { timeoutMs = 30_000, signal } = {})
 }
 
 /**
- * Makes the server what web expects of Vault: the mounts and the nine policies of
- * infra/vault/bootstrap.mjs (kv/ is KV v2), and the AppRole `sites-writer` with that policy and
- * no other, its tokens renewable for a day. `roleId` and `secretId` are taken as given (the
+ * Makes the server what web expects of Vault: the mounts and the policies of
+ * infra/vault/bootstrap.mjs (kv/ is KV v2), and the AppRole `sites-writer` with the policies of
+ * WEB_POLICIES and no other, its tokens renewable for a day. `roleId` and `secretId` are taken as given (the
  * browser run names them in the environment of web) or made by the server. Resolves to the pair
  * web logs in with, after one login has proved it.
  */
@@ -64,7 +68,7 @@ export async function prepareSitesWriter({ address, token, roleId, secretId }) {
       root,
       role,
       post({
-        token_policies: [SITES_WRITER],
+        token_policies: [...WEB_POLICIES],
         token_no_default_policy: true,
         token_ttl: '1h',
         token_max_ttl: '24h',
@@ -102,8 +106,9 @@ export async function prepareSitesWriter({ address, token, roleId, secretId }) {
     [200],
     'The login of web',
   )
-  if (JSON.stringify(login?.auth?.token_policies) !== JSON.stringify([SITES_WRITER]))
-    throw new Error('The login of web holds other policies than sites-writer')
+  const held = Array.isArray(login?.auth?.token_policies) ? [...login.auth.token_policies] : []
+  if (JSON.stringify(held.sort()) !== JSON.stringify([...WEB_POLICIES].sort()))
+    throw new Error(`The login of web holds other policies than ${WEB_POLICIES.join(' and ')}`)
   return { roleId: id, secretId: secret }
 }
 

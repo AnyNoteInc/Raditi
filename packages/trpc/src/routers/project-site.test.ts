@@ -33,8 +33,11 @@ const row = {
   createdAt: now,
 }
 
-/** A site from before the wizard: no stage of its first import, no first version. */
-const legacy = { provisioningStages: [], initialVersion: null }
+/**
+ * A site from before the wizard: no stage of its first import, no first version — and its
+ * repository, as a connected site has one.
+ */
+const legacy = { provisioningStages: [], initialVersion: null, gitRepositories: [{ id: 'repo' }] }
 
 const sessionOf = (userId: string) => ({
   id: randomUUID(),
@@ -80,6 +83,8 @@ describe('project.get', () => {
       // A site from before the wizard lives as it did.
       setup: null,
       initialVersion: null,
+      // No browser is set up in this context: the repository alone.
+      capabilities: { repository: 'ready', browser: 'not_configured' },
     })
   })
 
@@ -98,6 +103,7 @@ describe('project.get', () => {
         lease: null,
         provisioningStages: [{ status }],
         initialVersion: stored,
+        gitRepositories: [],
       })
       await expect(caller.project.get({ id: siteId })).resolves.toMatchObject({
         setup: setupState,

@@ -7,10 +7,15 @@ import {
 } from '@repo/billing'
 import { underPrivateCreditRate } from '@repo/billing/testing'
 import {
+  closeBrowserSession,
+  createAttachment,
   createPrismaClient,
   ensurePersonalWorkspace,
   insertFeedEvent,
+  markAttachmentReady,
+  openBrowserSession,
   Prisma,
+  recordBrowserHelp,
   type PrismaClient,
   type User,
 } from '@repo/db'
@@ -24,8 +29,9 @@ import {
   type KvWriteOptions,
   type ObjectStorage,
   type SecretStore,
+  type TaskRequirements,
 } from '@repo/domain'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
 import { readCheckScreenshot } from '../services/chat/candidates.ts'
@@ -46,15 +52,28 @@ const requiredConsents = legalDocuments.flatMap((document) =>
 )
 const ADDRESS = { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 } as const
 const KEY = releaseConfirmKey('a-secret-of-the-sessions-of-this-test-of-dialogs')
+const STREAM_URL = 'ws://localhost:8091/v1/browser/stream'
 const SHA = (digit: string) => digit.repeat(40)
 
 /**
  * Vault KV v2 in memory, with CAS and `max_versions`: what `sites-writer` may do, and what the
  * test may look at. Without `maxVersions` a key keeps its history, as the `kv/` mount does.
+ * `workspaceKeys` — every Transit key `workspace-provisioner` was asked to make, repeats included
+ * (docs/plan/57, Б32); while `transit.failing`, Vault refuses that.
  */
 function memoryVault() {
   const keys = new Map<string, { version: number; data: Record<string, string> }[]>()
+  const workspaceKeys: string[] = []
+  const transit = { failing: false }
   const store = {
+    async transitEnsureKey(key: string) {
+      if (transit.failing)
+        throw Object.assign(new Error('Vault request returned HTTP 503'), {
+          name: 'VaultError',
+          status: 503,
+        })
+      workspaceKeys.push(key)
+    },
     async kvMetadata(path: string): Promise<KvMetadata | null> {
       const versions = keys.get(path)
       if (versions === undefined) return null
@@ -76,7 +95,7 @@ function memoryVault() {
       return { version: current + 1 }
     },
   }
-  return { secrets: store as unknown as SecretStore, keys }
+  return { secrets: store as unknown as SecretStore, keys, workspaceKeys, transit }
 }
 
 /**
@@ -234,6 +253,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     await db.giftSiteClaim.deleteMany({ where: owned })
     // The journal of a content write, which a few tests write as core would.
     await db.mcpCall.deleteMany({ where: { turn: { task: owned } } })
+    // Files of messages: a file nobody sent holds its site and workspace.
+    await db.attachment.deleteMany({ where: owned })
+    await db.gitRepository.deleteMany({ where: { site: owned } })
     await db.snapshot.deleteMany({ where: { site: owned } })
     await db.turnAssignment.deleteMany({ where: { site: owned } })
     await db.task.deleteMany({ where: owned })
@@ -265,12 +287,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
   const vault = memoryVault()
   const storage = { get: async () => null } as unknown as ObjectStorage
 
-  function callerOf(user: User, options: { client?: PrismaClient; preview?: boolean } = {}) {
+  function callerOf(
+    user: User,
+    options: {
+      client?: PrismaClient
+      preview?: boolean
+      /** The cloud browser of the platform (docs/plan/57); off unless asked for. */
+      browser?: boolean
+      storage?: ObjectStorage
+    } = {},
+  ) {
     const chat: ChatContext = {
       appEnv: 'test',
       preview: options.preview === false ? null : { address: ADDRESS, ttlHours: 72 },
+      browser: options.browser === true ? { streamUrl: STREAM_URL } : null,
       releaseConfirmKey: KEY,
-      storage: () => storage,
+      storage: () => options.storage ?? storage,
       secrets: () => vault.secrets,
     }
     return createCaller({
@@ -683,6 +715,37 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(await db.creditHold.count({ where: { taskId } })).toBe(0)
       expect(await db.previewEnvironment.count({ where: { taskId } })).toBe(0)
       expect(await outboxOf(taskId)).toEqual([])
+    })
+
+    it('makes the Transit key of the workspace first, and writes nothing when Vault fails', async () => {
+      // docs/plan/57, Б32: every turn seals its snapshot with the key; no other step makes it.
+      const { owner, site, workspaceId } = await siteOwner({ database: true })
+      const key = `ws-${workspaceId}`
+      const taskId = randomUUID()
+      taskIds.push(taskId)
+      const input = { siteId: site.id, taskId, text: 'Добавьте отзывы' }
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+      vault.transit.failing = true
+      try {
+        await expect(callerOf(owner).task.create(input)).rejects.toMatchObject({
+          code: 'SERVICE_UNAVAILABLE',
+          cause: { code: 'WORKSPACE_KEY_UNAVAILABLE' },
+        })
+      } finally {
+        vault.transit.failing = false
+        warn.mockRestore()
+      }
+      expect(await db.task.count({ where: { id: taskId } })).toBe(0)
+      expect(await db.taskEvent.count({ where: { taskId } })).toBe(0)
+      expect(await db.creditHold.count({ where: { taskId } })).toBe(0)
+      expect(await db.previewEnvironment.count({ where: { taskId } })).toBe(0)
+      expect(await outboxOf(taskId)).toEqual([])
+      expect(vault.workspaceKeys).not.toContain(key)
+
+      // The same press again, Vault back: the key is made once and the task is taken.
+      await expect(callerOf(owner).task.create(input)).resolves.toMatchObject({ created: true })
+      await expect(callerOf(owner).task.create(input)).resolves.toMatchObject({ created: false })
+      expect(vault.workspaceKeys.filter((made) => made === key)).toEqual([key])
     })
 
     it('takes no dialog for a site that is not connected or a workspace of client data', async () => {
@@ -2387,6 +2450,489 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(feed.candidate?.proposedVersion).toBe('v0.1.0')
       expect(shown?.proposal).toMatchObject({ version: 'v0.1.0', bump: 'minor' })
       expect(prepared.proposal).toEqual({ version: 'v0.1.0', bump: 'minor' })
+    })
+  })
+  describe('tasks in the browser (docs/plan/57)', () => {
+    /** A site added for the browser alone: not connected, no files, no repository. */
+    async function browserSite(options: { gift?: boolean } = {}) {
+      const owned = await siteOwner(options)
+      const site = await db.site.update({
+        where: { id: owned.site.id },
+        data: { status: 'onboarding' },
+      })
+      return { ...owned, site }
+    }
+
+    /** The repository of a site, as its first import writes it. */
+    const withRepository = (siteId: string) =>
+      db.gitRepository.create({
+        data: {
+          siteId,
+          provider: 'gitea',
+          owner: 'sites',
+          name: `site-${siteId}`,
+          url: `https://git.example.ru/sites/site-${siteId}`,
+        },
+      })
+
+    /** A file announced and stored, as `PUT /api/attachments/<id>` leaves it. */
+    async function readyFile(owner: User, site: { id: string; workspaceId: string }, ready = true) {
+      const file = await createAttachment(db, {
+        workspaceId: site.workspaceId,
+        siteId: site.id,
+        uploadedById: owner.id,
+        fileName: 'Обложка.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 2048,
+      })
+      if (file === null) throw new Error('The file was not announced')
+      if (ready)
+        await markAttachmentReady(db, { id: file.id, sizeBytes: 2048, contentType: 'image/jpeg' })
+      return file
+    }
+
+    async function browserDialog(
+      caller: ReturnType<typeof callerOf>,
+      siteId: string,
+      extra: { attachments?: string[] } = {},
+    ) {
+      const taskId = randomUUID()
+      taskIds.push(taskId)
+      const created = await caller.task.create({
+        siteId,
+        taskId,
+        text: 'Добавьте новость о новом меню',
+        ...extra,
+      })
+      return { taskId, created }
+    }
+
+    it('takes a task in the browser on a site without files: no preview, only /cancel', async () => {
+      const { owner, site } = await browserSite()
+      const caller = callerOf(owner, { browser: true })
+
+      const { taskId } = await browserDialog(caller, site.id)
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 1,
+        needsRepository: false,
+        needsBrowser: true,
+      })
+      expect(await activeHolds(taskId)).toHaveLength(1)
+      expect(await db.previewEnvironment.count({ where: { taskId } })).toBe(0)
+      expect((await outboxOf(taskId)).map((row) => row.type)).toEqual(['turn.run'])
+      const feed = await caller.task.feed({ taskId })
+      expect(feed.task.requirements).toEqual({ repository: false, browser: true })
+      expect(feed.browser).toBeNull()
+      expect(feed.preview).toBeNull()
+      expect(
+        feed.commands.filter((command) => command.available).map((command) => command.id),
+      ).toEqual(['cancel'])
+      expect((await caller.task.get({ taskId })).requirements).toEqual({
+        repository: false,
+        browser: true,
+      })
+      expect(await caller.project.get({ id: site.id })).toMatchObject({
+        capabilities: { repository: 'absent', browser: 'ready' },
+      })
+    })
+
+    it('takes the repository where it is ready, and the browser on the same site when asked', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      // Two dialogs at once: more than the gift holds.
+      await paidTariff(workspaceId)
+      await withRepository(site.id)
+      const caller = callerOf(owner, { browser: true })
+      expect((await caller.project.list())[0]).toMatchObject({
+        capabilities: { repository: 'ready', browser: 'ready' },
+      })
+
+      // Without a choice: the repository, with its preview.
+      const repository = await newDialog(caller, site.id)
+      const asked = randomUUID()
+      taskIds.push(asked)
+      await caller.task.create({
+        siteId: site.id,
+        taskId: asked,
+        text: 'Добавьте новость',
+        requirements: { repository: false, browser: true },
+      })
+
+      expect(
+        await db.task.findMany({
+          where: { id: { in: [repository.taskId, asked] } },
+          select: { id: true, needsRepository: true, needsBrowser: true },
+          orderBy: { createdAt: 'asc' },
+        }),
+      ).toEqual([
+        { id: repository.taskId, needsRepository: true, needsBrowser: false },
+        { id: asked, needsRepository: false, needsBrowser: true },
+      ])
+      expect(await db.previewEnvironment.count({ where: { taskId: asked } })).toBe(0)
+      expect(await db.previewEnvironment.count({ where: { taskId: repository.taskId } })).toBe(1)
+    })
+
+    it('refuses the browser where the platform has none, both ways at once and a closed site', async () => {
+      const { owner, site } = await browserSite()
+      const refusal = (caller: ReturnType<typeof callerOf>, requirements?: TaskRequirements) =>
+        caller.task.create({
+          siteId: site.id,
+          taskId: randomUUID(),
+          text: 'Добавьте новость',
+          ...(requirements === undefined ? {} : { requirements }),
+        })
+      const reason = (value: string) => ({
+        code: 'CONFLICT',
+        cause: { code: 'TASK_NOT_ACCEPTED', details: { reason: value } },
+      })
+
+      await expect(
+        refusal(callerOf(owner), { repository: false, browser: true }),
+      ).rejects.toMatchObject(reason('browser_unavailable'))
+      // Neither way is offered: the repository is asked for, and refused as it always was.
+      await expect(refusal(callerOf(owner))).rejects.toMatchObject(reason('site_not_active'))
+      const withBrowser = callerOf(owner, { browser: true })
+      await expect(refusal(withBrowser, { repository: true, browser: true })).rejects.toMatchObject(
+        reason('environment_unsupported'),
+      )
+      await expect(
+        refusal(withBrowser, { repository: true, browser: false }),
+      ).rejects.toMatchObject(reason('site_not_active'))
+      await db.site.update({ where: { id: site.id }, data: { status: 'paused' } })
+      await expect(refusal(withBrowser)).rejects.toMatchObject(reason('site_not_active'))
+      expect(await withBrowser.project.get({ id: site.id })).toMatchObject({
+        capabilities: { repository: 'inactive', browser: 'closed' },
+      })
+      expect(await db.task.count({ where: { siteId: site.id } })).toBe(0)
+    })
+
+    it('binds the files of the first message with the task, or writes nothing at all', async () => {
+      const { owner, site } = await browserSite()
+      const caller = callerOf(owner, { browser: true })
+      const ready = await readyFile(owner, site)
+      const uploading = await readyFile(owner, site, false)
+
+      const refusedId = randomUUID()
+      await expect(
+        caller.task.create({
+          siteId: site.id,
+          taskId: refusedId,
+          text: 'Добавьте новость',
+          attachments: [ready.id, uploading.id],
+        }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message:
+          'Не все файлы готовы к отправке. Дождитесь, пока они загрузятся, или прикрепите их заново',
+        cause: { code: 'ATTACHMENT_NOT_READY' },
+      })
+      expect(await db.task.count({ where: { id: refusedId } })).toBe(0)
+      expect(await db.creditHold.count({ where: { taskId: refusedId } })).toBe(0)
+      expect((await db.attachment.findUniqueOrThrow({ where: { id: ready.id } })).status).toBe(
+        'ready',
+      )
+
+      const { taskId } = await browserDialog(caller, site.id, { attachments: [ready.id] })
+
+      expect(await db.attachment.findUniqueOrThrow({ where: { id: ready.id } })).toMatchObject({
+        status: 'bound',
+        taskId,
+      })
+      expect((await feedOf(taskId))[0]!.payload).toMatchObject({
+        kind: 'first',
+        attachments: [ready.id],
+      })
+      expect(await caller.attachment.list({ taskId })).toEqual([
+        {
+          id: ready.id,
+          name: 'Обложка.jpg',
+          type: 'image/jpeg',
+          size: 2048,
+          kind: 'image',
+          sentAt: expect.any(Date),
+        },
+      ])
+      // A sent file stays with its task.
+      await expect(caller.attachment.remove({ attachmentId: ready.id })).rejects.toMatchObject({
+        cause: { code: 'ATTACHMENT_SENT' },
+      })
+      // Nobody else sees the files of the task.
+      const stranger = await siteOwner()
+      await expect(callerOf(stranger.owner).attachment.list({ taskId })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('binds the files of an answer, and goes on by «Продолжить работу агента» once', async () => {
+      const { owner, site } = await browserSite()
+      const caller = callerOf(owner, { browser: true })
+      const { taskId } = await browserDialog(caller, site.id)
+      const question = await asked(taskId, {
+        kind: 'browser',
+        reason: 'login',
+        message: 'Войдите в админку сайта',
+      })
+      const file = await readyFile(owner, site)
+
+      const answer = await caller.task.message({
+        taskId,
+        requestId: randomUUID(),
+        text: 'Вошёл, вот фото',
+        attachments: [file.id],
+      })
+
+      expect((await feedOf(taskId)).at(-1)!.payload).toMatchObject({
+        kind: 'answer',
+        answersEventId: String(question),
+        attachments: [file.id],
+      })
+      expect(answer.repeated).toBe(false)
+      expect((await db.attachment.findUniqueOrThrow({ where: { id: file.id } })).taskId).toBe(
+        taskId,
+      )
+
+      // The agent asks again; the client signs in and presses «Продолжить работу агента».
+      await asked(taskId, { kind: 'browser', reason: 'captcha', message: 'Пройдите проверку' })
+      const [before] = await activeHolds(taskId)
+      const requestId = randomUUID()
+      const resumed = await caller.task.resumeAgent({ taskId, requestId })
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 1,
+      })
+      expect((await feedOf(taskId)).at(-1)!.payload).toEqual({
+        v: 1,
+        kind: 'resume',
+        authorId: owner.id,
+        requestId,
+      })
+      expect((await outboxOf(taskId)).map((row) => row.dedupeKey)).toContain(
+        `turn.run:${taskId}:1:${resumed.requestEventId}`,
+      )
+      const holds = await activeHolds(taskId)
+      expect(holds).toHaveLength(1)
+      expect(holds[0]!.expiresAt.getTime()).toBeGreaterThanOrEqual(before!.expiresAt.getTime())
+      expect(await caller.task.resumeAgent({ taskId, requestId })).toEqual({
+        requestEventId: resumed.requestEventId,
+        repeated: true,
+      })
+      // Nothing to go on from while the agent works.
+      await expect(
+        caller.task.resumeAgent({ taskId, requestId: randomUUID() }),
+      ).rejects.toMatchObject({ cause: { code: 'TASK_BUSY' } })
+      // A question about credits is answered by «Продолжить».
+      await asked(taskId, { kind: 'ceiling', reason: 'step', spent: 30, held: 35, left: 5 })
+      await expect(
+        caller.task.resumeAgent({ taskId, requestId: randomUUID() }),
+      ).rejects.toMatchObject({ cause: { code: 'TASK_CONTINUE_REQUIRED' } })
+    })
+
+    it('has nothing to resume in a dialog with the repository', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await asked(taskId, {
+        kind: 'agent',
+        intro: 'Нужно уточнить.',
+        questions: [{ text: 'Какой номер поставить?', options: [] }],
+      })
+      await expect(
+        caller.task.resumeAgent({ taskId, requestId: randomUUID() }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        cause: { code: 'TASK_NOTHING_TO_RESUME' },
+      })
+    })
+
+    it('asks core to stop a task in the browser in any status: core closes its browser', async () => {
+      const { owner, site } = await browserSite()
+      const caller = callerOf(owner, { browser: true })
+      const { taskId } = await browserDialog(caller, site.id)
+      await asked(taskId, { kind: 'browser', reason: 'login', message: 'Войдите в админку' })
+
+      const stopping = await caller.task.cancel({ taskId, requestId: randomUUID() })
+
+      expect(stopping).toMatchObject({ state: 'stopping', repeated: false })
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+        'awaiting_user',
+      )
+      expect(await activeHolds(taskId)).toHaveLength(1)
+      expect(await outboxOf(`turn.cancel:${taskId}`)).toEqual([
+        {
+          topic: 'agent-turns',
+          type: 'turn.cancel',
+          payload: { taskId, requestEventId: stopping.requestEventId },
+          dedupeKey: `turn.cancel:${taskId}:${stopping.requestEventId}`,
+        },
+      ])
+    })
+
+    it('takes nothing after «Остановить» until core closes the task: no row hides the press', async () => {
+      const { owner, site, workspaceId } = await browserSite()
+      // Two dialogs at once: more than the gift holds.
+      await paidTariff(workspaceId)
+      const caller = callerOf(owner, { browser: true })
+      const finished = { code: 'CONFLICT', cause: { code: 'TASK_FINISHED' } }
+
+      // Asked to act in the browser: neither words nor «Продолжить работу агента» undo the stop.
+      const { taskId } = await browserDialog(caller, site.id)
+      await asked(taskId, { kind: 'browser', reason: 'login', message: 'Войдите в админку' })
+      const before = randomUUID()
+      const words = await caller.task.message({ taskId, requestId: before, text: 'Сейчас войду' })
+      await asked(taskId, { kind: 'browser', reason: 'login', message: 'Войдите в админку' })
+      await caller.task.cancel({ taskId, requestId: randomUUID() })
+
+      await expect(
+        caller.task.message({ taskId, requestId: randomUUID(), text: 'Вошёл' }),
+      ).rejects.toMatchObject(finished)
+      await expect(
+        caller.task.resumeAgent({ taskId, requestId: randomUUID() }),
+      ).rejects.toMatchObject(finished)
+      // Words delivered before the press are still recognised when they come again.
+      expect(
+        await caller.task.message({ taskId, requestId: before, text: 'Сейчас войду' }),
+      ).toEqual({ ...words, repeated: true })
+
+      // A question about credits: «Продолжить» does not undo it either.
+      const { taskId: ceiling } = await browserDialog(caller, site.id)
+      await asked(ceiling, { kind: 'ceiling', reason: 'step', spent: 30, held: 35, left: 5 })
+      await caller.task.cancel({ taskId: ceiling, requestId: randomUUID() })
+      await expect(
+        caller.task.continue({ taskId: ceiling, requestId: randomUUID() }),
+      ).rejects.toMatchObject(finished)
+
+      for (const id of [taskId, ceiling]) {
+        expect(await db.task.findUniqueOrThrow({ where: { id } })).toMatchObject({
+          status: 'awaiting_user',
+          attempt: 1,
+        })
+        // The press is the newest request core reads, and no pass was queued after it.
+        expect(
+          (await feedOf(id)).filter((row) => row.type === 'feed.request').at(-1)!.payload,
+        ).toMatchObject({ kind: 'command', command: 'cancel' })
+        expect((await outboxOf(id)).map((row) => row.type).at(-1)).toBe('turn.cancel')
+      }
+      expect((await activeHolds(ceiling)).map((hold) => hold.attempt)).toEqual([1])
+    })
+
+    it('shows the browser of a task and opens its stream by a one-time ticket', async () => {
+      const { owner, site } = await browserSite()
+      const caller = callerOf(owner, { browser: true })
+      const { taskId } = await browserDialog(caller, site.id)
+      await expect(caller.browser.streamTicket({ taskId })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+      const session = await openBrowserSession(db, { taskId })
+      await recordBrowserHelp(db, {
+        sessionId: session.id,
+        reason: 'login',
+        message: 'Войдите в админку сайта',
+      })
+
+      expect((await caller.task.feed({ taskId })).browser).toEqual({
+        sessionId: session.id,
+        status: 'starting',
+        controller: 'agent',
+        help: { reason: 'login', message: 'Войдите в админку сайта' },
+        closeReason: null,
+      })
+      const issued = await caller.browser.streamTicket({ taskId })
+      expect(issued).toEqual({
+        url: STREAM_URL,
+        ticket: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+        sessionId: session.id,
+      })
+      const stored = await db.browserStreamTicket.findFirstOrThrow({
+        where: { sessionId: session.id },
+      })
+      expect(stored).toMatchObject({
+        userId: owner.id,
+        tokenHash: createHash('sha256').update(issued.ticket).digest('hex'),
+        usedAt: null,
+      })
+      expect(JSON.stringify(stored)).not.toContain(issued.ticket)
+
+      // Someone else, and a dialog with the repository, answer as nothing.
+      const stranger = await siteOwner()
+      await expect(
+        callerOf(stranger.owner, { browser: true }).browser.streamTicket({ taskId }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      const repository = await newDialog(callerOf(stranger.owner), stranger.site.id)
+      await expect(
+        callerOf(stranger.owner, { browser: true }).browser.streamTicket({
+          taskId: repository.taskId,
+        }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+      await closeBrowserSession(db, { sessionId: session.id, status: 'closed', reason: 'idle' })
+      expect((await caller.task.feed({ taskId })).browser).toMatchObject({
+        status: 'closed',
+        closeReason: 'idle',
+      })
+      await expect(caller.browser.streamTicket({ taskId })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('announces a file of a site, removes it before it is sent and gives one to the chooser', async () => {
+      const { owner, site, workspaceId } = await browserSite()
+      const deleted: Array<[string, string]> = []
+      const inbox = {
+        delete: async (bucket: string, key: string) => {
+          deleted.push([bucket, key])
+        },
+      } as unknown as ObjectStorage
+      const caller = callerOf(owner, { browser: true, storage: inbox })
+
+      const started = await caller.attachment.start({
+        siteId: site.id,
+        name: 'C:\\Users\\anna\\Меню на осень.pdf',
+        size: 4096,
+        type: 'application/pdf',
+      })
+
+      expect(started.uploadPath).toBe(`/api/attachments/${started.attachmentId}`)
+      expect(
+        await db.attachment.findUniqueOrThrow({ where: { id: started.attachmentId } }),
+      ).toMatchObject({
+        status: 'uploading',
+        fileName: 'Меню на осень.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 4096,
+        s3Key: `inbox/${workspaceId}/${started.attachmentId}`,
+        uploadedById: owner.id,
+        siteId: site.id,
+      })
+      await expect(
+        callerOf((await siteOwner()).owner).attachment.start({
+          siteId: site.id,
+          name: 'photo.jpg',
+          size: 10,
+          type: 'image/jpeg',
+        }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+      await caller.attachment.remove({ attachmentId: started.attachmentId })
+      expect(
+        (await db.attachment.findUniqueOrThrow({ where: { id: started.attachmentId } })).status,
+      ).toBe('deleted')
+      expect(deleted).toEqual([['inbox', `inbox/${workspaceId}/${started.attachmentId}`]])
+      // A delete of the object that failed is repeated by the same call.
+      await caller.attachment.remove({ attachmentId: started.attachmentId })
+      expect(deleted).toHaveLength(2)
+
+      // «Загрузить новый» in the file chooser of the browser: the file is given to the task.
+      const { taskId } = await browserDialog(caller, site.id)
+      const file = await readyFile(owner, site)
+      await expect(caller.attachment.bind({ taskId, attachmentIds: [file.id] })).resolves.toEqual({
+        bound: 1,
+      })
+      expect((await caller.attachment.list({ taskId })).map((item) => item.id)).toEqual([file.id])
+      await expect(
+        caller.attachment.bind({ taskId, attachmentIds: [file.id] }),
+      ).rejects.toMatchObject({ cause: { code: 'ATTACHMENT_NOT_READY' } })
     })
   })
 })

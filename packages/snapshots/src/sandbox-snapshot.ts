@@ -22,10 +22,10 @@ import { execBounded, SANDBOX_EXEC_TIMEOUT_MS } from './exec.ts'
 import {
   snapshotEntryPath,
   validateSnapshotArchives,
-  type SnapshotArchives,
+  type TurnArchives,
 } from './archive-validation.ts'
 
-export type { SnapshotArchives } from './archive-validation.ts'
+export type { HomeOnlyArchives, SnapshotArchives, TurnArchives } from './archive-validation.ts'
 
 const LIST_BYTES = snapshotLimits.entries * (snapshotLimits.path + 1)
 const commandFailed = () =>
@@ -63,43 +63,30 @@ export class SandboxSnapshotTransport {
    * `addOnlyPaths` (plan 53, Р12) are taken even when an ignore file of the site hides them:
    * the media the agent adds there are part of its change, never in its working set. A home
    * archive that holds a value of the client's variables of the turn (`envValues`, Р13) in any
-   * spelling the driver masks is refused the same way.
+   * spelling the driver masks is refused the same way. Without `baseSha` — a turn without a
+   * repository (docs/plan/57-browser-tasks.md, Б4) — only the home archive is taken: no git
+   * command runs and the working directory is not read.
    */
   async capture(
     sandbox: Sandbox,
     state: SessionState,
-    baseSha: string,
+    baseSha: string | undefined,
     credentials: readonly string[] = [],
     addOnlyPaths: readonly string[] = [],
     envValues: readonly string[] = [],
-  ): Promise<SnapshotArchives> {
-    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha))
+  ): Promise<TurnArchives> {
+    if (baseSha !== undefined && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha))
       throw badRequest('Snapshot capture requires the trusted base commit')
+    if (baseSha === undefined && addOnlyPaths.length > 0)
+      throw badRequest('Add-only paths need the base commit of a capture')
     if (
       addOnlyPaths.length > 8 ||
       !addOnlyPaths.every((p) => addOnlyPathSchema.safeParse(p).success)
     )
       throw badRequest('Invalid add-only paths of a capture')
     const homeState = this.#state(state)
-    const paths: string[] = []
-    const checkedAncestors = new Set<string>()
-    await this.#checkNoSymlinkAncestors(sandbox, homeState.root, checkedAncestors)
-    for (const path of homeState.include) {
-      if (homeState.include.some((parent) => parent !== path && path.startsWith(`${parent}/`)))
-        continue
-      const exists = await this.#exec(sandbox, ['test', '-e', `${homeState.root}/${path}`], 0, {
-        allowedCodes: [0, 1],
-      })
-      if (exists.code === 0) {
-        // tar does not follow a final symlink, but it would traverse a symlink parent of a
-        // literal file in --files-from. Reject those before the archive command sees it.
-        await this.#checkNoSymlinkAncestors(sandbox, `${homeState.root}/${path}`, checkedAncestors)
-        paths.push(path)
-      }
-    }
-    const home = await this.#archive(sandbox, homeState.root, paths, homeState.exclude, {
-      tooLarge: homeTooLarge,
-    })
+    const home = await this.#home(sandbox, homeState)
+    if (baseSha === undefined) return this.#validated(homeState, { home }, credentials, envValues)
     await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
     const names = await this.#untracked(sandbox, [
       'git',
@@ -148,13 +135,45 @@ export class SandboxSnapshotTransport {
       snapshotLimits.patchBytes,
       { cwd: SANDBOX_WORKDIR, tooLarge: changesTooLarge },
     )
+    return this.#validated(
+      homeState,
+      { home, untracked, patch: patch.stdout },
+      credentials,
+      envValues,
+    )
+  }
+
+  /** The agent's session: the includes that exist, without a symlink on the way to any. */
+  async #home(sandbox: Sandbox, homeState: SessionState): Promise<Uint8Array> {
+    const paths: string[] = []
+    const checkedAncestors = new Set<string>()
+    await this.#checkNoSymlinkAncestors(sandbox, homeState.root, checkedAncestors)
+    for (const path of homeState.include) {
+      if (homeState.include.some((parent) => parent !== path && path.startsWith(`${parent}/`)))
+        continue
+      const exists = await this.#exec(sandbox, ['test', '-e', `${homeState.root}/${path}`], 0, {
+        allowedCodes: [0, 1],
+      })
+      if (exists.code === 0) {
+        // tar does not follow a final symlink, but it would traverse a symlink parent of a
+        // literal file in --files-from. Reject those before the archive command sees it.
+        await this.#checkNoSymlinkAncestors(sandbox, `${homeState.root}/${path}`, checkedAncestors)
+        paths.push(path)
+      }
+    }
+    return this.#archive(sandbox, homeState.root, paths, homeState.exclude, {
+      tooLarge: homeTooLarge,
+    })
+  }
+
+  async #validated<P extends TurnArchives>(
+    homeState: SessionState,
+    parts: P,
+    credentials: readonly string[],
+    envValues: readonly string[],
+  ): Promise<P> {
     try {
-      return await validateSnapshotArchives(
-        homeState,
-        { home, untracked, patch: patch.stdout },
-        credentials,
-        envValueForms(envValues),
-      )
+      return await validateSnapshotArchives(homeState, parts, credentials, envValueForms(envValues))
     } catch (error) {
       if (isTooLarge(error) || isSnapshotCredential(error)) throw error
       // A link, special file or setuid bit in the agent's files: its output, not client input.
@@ -180,17 +199,30 @@ export class SandboxSnapshotTransport {
     }
   }
 
-  async restore(sandbox: Sandbox, state: SessionState, parts: SnapshotArchives): Promise<void> {
+  /**
+   * The parts of turn n−1 into a fresh, quiescent sandbox. A snapshot without a repository
+   * (Б4) restores its session alone: the working directory is only made, and must be empty.
+   */
+  async restore(sandbox: Sandbox, state: SessionState, parts: TurnArchives): Promise<void> {
     const homeState = this.#state(state)
     // Only the owned, checked copies reach the sandbox.
-    const checked = await validateSnapshotArchives(homeState, parts)
+    const checked: TurnArchives = await validateSnapshotArchives(homeState, parts)
     // Existing symlink ancestors are dangerous even when every archive entry is a regular file.
     await this.#checkDestination(sandbox, homeState.root)
     await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
-    for (const [root, archive] of [
-      [homeState.root, checked.home],
-      [SANDBOX_WORKDIR, checked.untracked],
-    ] as const) {
+    const writes: Array<readonly [string, Uint8Array]> = [[homeState.root, checked.home]]
+    if (checked.untracked !== undefined) writes.push([SANDBOX_WORKDIR, checked.untracked])
+    else {
+      await this.#exec(sandbox, ['mkdir', '--parents', '--', SANDBOX_WORKDIR], 0)
+      // Nothing of the working directory is restored: whatever is there was not the turn's.
+      const entries = await this.#exec(
+        sandbox,
+        ['find', '-P', SANDBOX_WORKDIR, '-mindepth', '1', '-print', '-quit'],
+        snapshotLimits.path + 1,
+      )
+      if (entries.stdout.byteLength > 0) throw commandFailed()
+    }
+    for (const [root, archive] of writes) {
       await this.#exec(sandbox, ['mkdir', '--parents', '--', root], 0)
       await this.#exec(
         sandbox,

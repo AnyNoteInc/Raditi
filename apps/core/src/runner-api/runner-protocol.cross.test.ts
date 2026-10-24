@@ -302,8 +302,8 @@ describe('HttpRunnerTransport', () => {
 
     expect(Buffer.concat(imported)).toEqual(bundleBytes)
     expect(journal.flatMap((batch) => batch.events)).toEqual(events)
-    expect(Buffer.from(captured.patch)).toEqual(side.archives.patch)
-    expect(Buffer.from(captured.untracked)).toEqual(Buffer.from(side.archives.untracked))
+    expect(Buffer.from(captured.patch!)).toEqual(side.archives.patch)
+    expect(Buffer.from(captured.untracked!)).toEqual(Buffer.from(side.archives.untracked))
     expect(captured.homeBytes).toBe(side.archives.home.byteLength)
     const [put, body] = side.transfer.put.mock.calls[0]!
     expect(put.url).toContain('/turns/0001/home.tar.zst')

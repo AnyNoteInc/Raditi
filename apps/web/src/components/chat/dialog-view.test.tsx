@@ -13,14 +13,20 @@ import { plain, serverRefusal } from '@/components/billing/testing'
 import type { CandidateView, DialogFeed, FeedRow, PreparedRelease } from './chat-types'
 import { DialogView } from './dialog-view'
 import {
+  ATTACHMENT_ID,
   AUTHOR_ID,
+  browserAnswer,
+  browserQuestionRow,
+  browserResultRow,
   CANDIDATE_ID,
   candidateHead,
   candidateRow,
   ceilingRow,
+  commandRow,
   feedAnswer,
   requestRow,
   resultRow,
+  resumeRow,
   SITE_ID,
   TASK_ID,
   verdicts,
@@ -42,6 +48,8 @@ const calls = vi.hoisted(() => ({
     vi.fn<(input: { taskId: string; revision?: number }) => Promise<CandidateView | null>>(),
   undoPrepare:
     vi.fn<(input: { taskId: string; releaseId: string }) => Promise<{ planId: string }>>(),
+  resumeAgent: vi.fn<(input: Press) => Promise<Posted>>(),
+  attachments: vi.fn(async (_input: { taskId: string }) => [] as unknown[]),
 }))
 
 const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
@@ -59,7 +67,9 @@ vi.mock('@/trpc/client', () => ({
       continue: mutation(calls.proceed),
       retry: mutation(calls.retry),
       cancel: mutation(calls.cancel),
+      resumeAgent: mutation(calls.resumeAgent),
     },
+    attachment: { list: query('attachment.list', calls.attachments) },
     preview: { reset: mutation(calls.reset) },
     candidate: {
       update: mutation(calls.update),
@@ -79,6 +89,8 @@ vi.mock('@/trpc/client', () => ({
       undoPrepare: { mutate: calls.undoPrepare },
       undoPlan: { query: async () => ({ state: 'pending' }) },
     },
+    browser: { streamTicket: { mutate: vi.fn() } },
+    attachment: { start: { mutate: vi.fn() }, remove: { mutate: vi.fn() } },
   }),
 }))
 
@@ -95,7 +107,7 @@ const waiting = (patch: Parameters<typeof feedAnswer>[0] = {}) =>
 
 const posted: Posted = { requestEventId: '9', repeated: false }
 
-function showDialog(answer: DialogFeed = waiting()) {
+function showDialog(answer: DialogFeed = waiting(), browserStreamUrl: string | null = null) {
   calls.feed.mockResolvedValue(answer)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -107,6 +119,7 @@ function showDialog(answer: DialogFeed = waiting()) {
         siteUrl="https://kroshka.example"
         taskId={TASK_ID}
         title="Поменять цену капучино"
+        browserStreamUrl={browserStreamUrl}
       />
     </QueryClientProvider>,
   )
@@ -134,6 +147,7 @@ beforeEach(() => {
   calls.update.mockResolvedValue(posted)
   calls.prepare.mockReturnValue(new Promise(() => undefined))
   calls.candidate.mockResolvedValue(null)
+  calls.resumeAgent.mockResolvedValue(posted)
 })
 
 /** The words of the client on top of the changes, as the feed shows them once taken. */
@@ -611,5 +625,263 @@ describe('a dialog', () => {
       expect(screen.getByRole('tab', { name: 'Предпросмотр', selected: true })).toBeTruthy(),
     )
     expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
+  })
+})
+
+describe('a task in the browser', () => {
+  const pane = () => screen.getByRole('complementary', { name: 'Браузер задачи' })
+
+  it('shows the browser instead of the preview, behind «Диалог | Браузер», and only /cancel', async () => {
+    showDialog(
+      browserAnswer({ events: [requestRow('1', 'Добавьте новость о веранде')], cursor: '1' }),
+    )
+    expect(await screen.findByText('Добавьте новость о веранде')).toBeTruthy()
+    expect(plain(screen.getByRole('banner').textContent)).toContain('В браузере')
+    expect(pane()).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: 'Изменения диалога' })).toBeNull()
+    const views = screen.getByRole('tablist', { name: 'Что показать' })
+    expect(
+      within(views)
+        .getAllByRole('tab')
+        .map((tab) => plain(tab.textContent)),
+    ).toEqual(['Диалог', 'Браузер, работает агент'])
+    // The agent works: the field waits, and the window of commands has only «Отменить диалог».
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    const options = within(screen.getByRole('listbox', { name: 'Команды' })).getAllByRole('option')
+    expect(options.map((option) => plain(option.textContent))).toEqual([
+      expect.stringContaining('Отменить диалог'),
+    ])
+    expect(
+      screen.getByText(
+        'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('says it cannot show the browser where the platform has none, and keeps the dialog', async () => {
+    showDialog(browserAnswer())
+    await screen.findByRole('heading', { level: 1, name: 'Новость о летней веранде' })
+    expect(within(pane()).getByText('Не удалось показать браузер')).toBeTruthy()
+  })
+
+  it('offers «Взять управление» on the question to sign in, and shows the browser', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        browser: { help: { reason: 'login', message: null } },
+        events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+        cursor: '2',
+      }),
+    )
+    expect(await screen.findByText('Нужно войти на сайт')).toBeTruthy()
+    // Words in the field answer the question too.
+    expect(field().disabled).toBe(false)
+    const card = screen.getByText('Нужно войти на сайт').closest('div')!.parentElement!
+    fireEvent.click(within(card).getByRole('button', { name: 'Взять управление' }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Браузер/, selected: true })).toBeTruthy(),
+    )
+  })
+
+  it('gives the browser back with «Продолжить работу агента» while the task waits', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        browser: { controller: 'user' },
+        events: [requestRow('1'), browserQuestionRow('2', 1, 'control')],
+        cursor: '2',
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Продолжить работу агента' }))
+    await waitFor(() => expect(calls.resumeAgent).toHaveBeenCalledTimes(1))
+    expect(calls.resumeAgent.mock.calls[0]![0]).toEqual({
+      taskId: TASK_ID,
+      requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    })
+  })
+
+  it('takes no words and offers no control while «Остановить» of a waiting task is under way', async () => {
+    calls.cancel.mockResolvedValue({ ...posted, state: 'stopping' })
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        browser: { help: { reason: 'login', message: null } },
+        events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+        cursor: '2',
+      }),
+    )
+    expect(await screen.findByText('Нужно войти на сайт')).toBeTruthy()
+    const card = screen.getByText('Нужно войти на сайт').closest('div')!.parentElement!
+    const take = () =>
+      within(card).getByRole<HTMLButtonElement>('button', { name: 'Взять управление' })
+    expect(field().disabled).toBe(false)
+    expect(take().disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    fireEvent.click(option(/Отменить диалог/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    // core closes the task: until then the field and the control wait, and say why.
+    await waitFor(() => expect(field().disabled).toBe(true))
+    expect(screen.getAllByText('Останавливаем задачу…')).toHaveLength(2)
+    expect(within(pane()).getByText('Останавливаем задачу…')).toBeTruthy()
+    expect(take().disabled).toBe(true)
+    expect(calls.cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads a press of «Остановить» from the feed: «Продолжить работу агента» waits too', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        browser: { controller: 'user' },
+        events: [requestRow('1'), browserQuestionRow('2', 1, 'control'), commandRow('3', 'cancel')],
+        cursor: '3',
+      }),
+    )
+    const resume = await screen.findByRole<HTMLButtonElement>('button', {
+      name: 'Продолжить работу агента',
+    })
+    expect(resume.disabled).toBe(true)
+    fireEvent.click(resume)
+    expect(field().disabled).toBe(true)
+    expect(within(pane()).getByText('Останавливаем задачу…')).toBeTruthy()
+    // «Остановить» is not offered twice.
+    expect(
+      within(pane())
+        .getAllByRole<HTMLButtonElement>('button', { name: 'Остановить' })
+        .every((button) => button.disabled),
+    ).toBe(true)
+    expect(calls.resumeAgent).not.toHaveBeenCalled()
+  })
+
+  it('names the files of a later message too: the list is read again for them', async () => {
+    const menu = {
+      id: ATTACHMENT_ID,
+      name: 'menu-leto.pdf',
+      type: 'application/pdf',
+      size: 312_000,
+      kind: 'document',
+      sentAt: new Date(),
+    }
+    const photo = {
+      id: '0199a3f2-0000-7000-8000-0000000000f2',
+      name: 'veranda-2.jpg',
+      type: 'image/jpeg',
+      size: 2_400_000,
+      kind: 'image',
+      sentAt: new Date(),
+    }
+    calls.attachments.mockResolvedValueOnce([menu]).mockResolvedValue([menu, photo])
+    const first = { ...requestRow('1', 'Добавьте новость'), attachments: [menu.id] } as FeedRow
+    const answer = {
+      ...requestRow('2', 'Вот ещё фото'),
+      kind: 'answer',
+      attachments: [photo.id],
+    } as FeedRow
+    calls.feed
+      .mockResolvedValueOnce(browserAnswer({ events: [first], cursor: '1', more: true }))
+      .mockResolvedValue(browserAnswer({ events: [answer], cursor: '2' }))
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DialogView
+          siteId={SITE_ID}
+          siteUrl="https://kroshka.example"
+          taskId={TASK_ID}
+          title={null}
+        />
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByText('menu-leto.pdf')).toBeTruthy()
+    expect(await screen.findByText('veranda-2.jpg')).toBeTruthy()
+    expect(calls.attachments).toHaveBeenCalledTimes(2)
+  })
+
+  it('takes the covered dialog, the bar and the list out of the tab order in full screen', async () => {
+    calls.feed.mockResolvedValue(browserAnswer({ events: [requestRow('1')], cursor: '1' }))
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <div data-site-shell="">
+        <header aria-label="Панель сайта">
+          <button type="button">Проекты</button>
+        </header>
+        <nav data-site-list="" aria-label="Диалоги">
+          <button type="button">Новый диалог</button>
+        </nav>
+        <main>
+          <QueryClientProvider client={queryClient}>
+            <DialogView
+              siteId={SITE_ID}
+              siteUrl="https://kroshka.example"
+              taskId={TASK_ID}
+              title={null}
+            />
+          </QueryClientProvider>
+        </main>
+      </div>,
+    )
+    await screen.findByRole('heading', { level: 1, name: 'Новость о летней веранде' })
+    const column = document.getElementById('dialog-view-dialog')!
+    const bar = screen.getByRole('banner', { name: 'Панель сайта' })
+    const list = screen.getByRole('navigation', { name: 'Диалоги' })
+    expect(column.hasAttribute('inert')).toBe(false)
+    fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
+    await waitFor(() => expect(column.hasAttribute('inert')).toBe(true))
+    expect(screen.getByRole('tablist', { name: 'Что показать' }).closest('[inert]')).not.toBeNull()
+    expect(bar.hasAttribute('inert')).toBe(true)
+    expect(list.hasAttribute('inert')).toBe(true)
+    expect(pane().closest('[inert]')).toBeNull()
+    // The status of the dialog is still said: its live region is outside the covered column.
+    const live = screen
+      .getAllByRole('status')
+      .find(
+        (region) =>
+          region.getAttribute('aria-live') === 'polite' &&
+          plain(region.textContent) === 'Агент работает',
+      )
+    expect(live).toBeTruthy()
+    expect(live!.closest('[inert]')).toBeNull()
+    fireEvent.click(within(pane()).getByRole('button', { name: 'Свернуть' }))
+    await waitFor(() => expect(column.hasAttribute('inert')).toBe(false))
+    expect(bar.hasAttribute('inert')).toBe(false)
+    expect(list.hasAttribute('inert')).toBe(false)
+  })
+
+  it('shows the press that gave the browser back and what the task left on the site', async () => {
+    calls.attachments.mockResolvedValue([
+      {
+        id: ATTACHMENT_ID,
+        name: 'menu-leto.pdf',
+        type: 'application/pdf',
+        size: 312_000,
+        kind: 'document',
+        sentAt: new Date(),
+      },
+    ])
+    const first = {
+      ...requestRow('1', 'Добавьте новость'),
+      attachments: [ATTACHMENT_ID],
+    } as FeedRow
+    showDialog(
+      browserAnswer({
+        status: 'done',
+        browser: { status: 'closed', closeReason: 'task_done' },
+        events: [first, resumeRow('2'), browserResultRow('3', 2)],
+        cursor: '3',
+      }),
+    )
+    expect(await screen.findByText('Вы вернули управление агенту')).toBeTruthy()
+    expect(await screen.findByText('menu-leto.pdf')).toBeTruthy()
+    const open = screen.getByRole('link', { name: 'Открыть запись' })
+    expect(open.getAttribute('href')).toBe('https://kroshka.example/novosti/veranda/')
+    expect(open.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(open.getAttribute('target')).toBe('_blank')
+    expect(screen.getByRole('link', { name: 'Изменить в админке' }).getAttribute('href')).toBe(
+      'https://kroshka.example/wp-admin/post.php?post=128&action=edit',
+    )
+    expect(plain(screen.getByText(/Открыли летнюю веранду/).textContent)).toContain('опубликовано')
   })
 })

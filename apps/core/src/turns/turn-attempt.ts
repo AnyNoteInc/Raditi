@@ -17,6 +17,7 @@ import {
   type AgentEvent,
   type DestroyReason,
   type PreparedRun,
+  type SessionState,
   type SiteLeaseGrant,
   type SiteLeaseStore,
   type SnapshotManifest,
@@ -64,7 +65,12 @@ export interface TurnAttemptDependencies {
   leases: SiteLeaseStore
   /** Where the turn is held for recovery: its plan without credentials, epochs and deadline. */
   assignments: TurnAssignmentStore
-  workspace: TurnWorkspace
+  /**
+   * The site's git, for a turn with a repository; null while git is not configured — a turn
+   * without a repository runs all the same (docs/plan/57-browser-tasks.md, Б7), one with a
+   * repository is refused (gitNotConfigured).
+   */
+  workspace: TurnWorkspace | null
   snapshots: TurnSnapshotStore
   journal: TurnJournal
   credentials: TurnCredentialSource
@@ -73,8 +79,17 @@ export interface TurnAttemptDependencies {
 
 export interface CompletedTurn {
   result: TurnResult
+  /** Without `git` for a turn without a repository: it published nothing (plan 57, Б4). */
   manifest: SnapshotManifest
 }
+
+/**
+ * A turn with a repository asked of a core whose git is not configured (spec §20 «Транспорт
+ * git»): nothing of the site can be cloned, captured or published. The client reads
+ * `unavailable`.
+ */
+export const gitNotConfigured = (): DomainError =>
+  new DomainError('GIT_NOT_CONFIGURED', 'Git is not configured for a turn with a repository', 503)
 
 export interface TurnAttemptInit {
   lease: SiteLeaseGrant
@@ -92,6 +107,13 @@ export interface TurnAttemptInit {
 
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
 const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.leaseRemainingMs)
+
+/** What a turn's capture leaves for its checkpoint: its home, with a repository its candidate. */
+interface Captured {
+  homeBytes: number
+  publication?: TurnPublication
+  git?: NonNullable<SnapshotMetadata['git']>
+}
 
 /**
  * One owner's run of a turn under one fence: the supervisor's from the lease on, recovery's from
@@ -195,7 +217,8 @@ export class TurnAttempt {
       ...(this.execution ? { containerId: this.execution.containerId } : {}),
       ...(this.execId ? { execId: this.execId } : {}),
       ...(this.#candidateHeadSha ? { candidateHeadSha: this.#candidateHeadSha } : {}),
-      baseSha: plan.workspace.expectedBaseSha,
+      // A turn without a repository has no base: its entries name none (plan 57, Б4).
+      ...(plan.workspace ? { baseSha: plan.workspace.expectedBaseSha } : {}),
       ...(this.sandboxBaseSha ? { sandboxBaseSha: this.sandboxBaseSha } : {}),
       committedAt: plan.committedAt,
       ...(this.#checkpointStarted
@@ -342,14 +365,20 @@ export class TurnAttempt {
   /**
    * Quiesce, capture, candidate, checkpoint, removal and publication of a turn whose agent
    * finished. `run` is the driver's run of the turn; its session state names the home to save.
+   * A turn without a repository (docs/plan/57-browser-tasks.md, Б4) takes its home alone and
+   * saves it as a checkpoint without `git`: no candidate, no publication — it completes once its
+   * container is removed.
    */
   async complete(events: readonly AgentEvent[], run: PreparedRun): Promise<CompletedTurn> {
     const { guard, plan, driver, lease } = this.init
-    const { workspace, snapshots } = this.deps
+    const { snapshots } = this.deps
     const labels = plan.sandbox.labels
     const ready = this.execution
     if (!ready) throw conflict('The turn has no container')
     if (!driver) throw conflict('The turn has no driver')
+    // Checked before the agent's work is captured: without git nothing of it could be published.
+    const git = this.deps.workspace
+    if (plan.workspace && !git) throw gitNotConfigured()
     await guard.assertFence()
     await ready.quiesce()
     await this.record('quiesced')
@@ -359,82 +388,51 @@ export class TurnAttempt {
         run.context.nativeSessionId = event.nativeSessionId
     }
     const home = driver.sessionState(run)
-    const sandboxBaseSha = await this.#sandboxBase()
-    await guard.assertFence()
-    // Refused when the agent copied a turn credential into its home or the site. The patch is
-    // against the commit the sandbox holds: the working set's when it got one.
-    const captured = await ready.capture({
-      home,
-      baseSha: plan.workspace.expectedBaseSha,
-      ...(sandboxBaseSha ? { sandboxBaseSha } : {}),
-      ...(plan.workspace.addOnlyPaths?.length ? { addOnlyPaths: plan.workspace.addOnlyPaths } : {}),
-    })
-    const refusedValues = await this.#refusedValues()
-    await guard.assertFence()
-    const publication = await guard.interruptibleResource(
-      workspace.preparePublication({
-        ...plan.workspace,
-        taskId: labels.taskId,
-        turn: labels.turn,
-        createdAt: plan.committedAt,
-        patch: captured.patch,
-        untracked: captured.untracked,
-        // Binary edits of tracked files are compressed in the patch: checked there in full.
-        credentials: this.credentials,
-        ...(refusedValues.length ? { refusedValues } : {}),
-      }),
-      (late) => late.dispose(),
-    )
-    this.#publication = publication
-    // Publication cut the working set again from the full base: the same commit, or the patch
-    // was taken against something else.
-    if (publication.sandboxBaseSha !== sandboxBaseSha)
-      throw conflict('The candidate stands on another working set than the sandbox')
-    this.#candidateHeadSha = publication.headSha
+    const published =
+      plan.workspace && git
+        ? await this.#candidate(ready, home, plan.workspace, git)
+        : await this.#homeOnly(ready, home)
     await guard.assertFence()
     await this.record('checkpointing')
     this.#checkpointStarted = true
-    const saving = snapshots.save(
-      {
-        workspaceId: labels.workspaceId,
-        sessionId: labels.sessionId,
-        turn: labels.turn,
-        image: plan.sandbox.image,
-        driver: {
-          id: driver.id,
-          version: plan.driverVersion,
-          ...(run.context.nativeSessionId ? { nativeSessionId: run.context.nativeSessionId } : {}),
-        },
-        home,
-        git: {
-          provider: plan.workspace.repo.provider,
-          branch: plan.workspace.branch,
-          baseSha: publication.baseSha,
-          ...(sandboxBaseSha ? { sandboxBaseSha } : {}),
-          headSha: publication.headSha,
-          publication: { taskId: labels.taskId, committedAt: plan.committedAt },
-        },
-      },
-      {
-        // Sealed where the archive stayed; its AAD binds the candidate's headSha.
-        home: {
-          sizeBytes: captured.homeBytes,
-          ttlMs: () => presignTtlMs(guard),
-          // The PUT and the data key leave core only while this owner still holds the site.
-          seal: async (input) => {
+    // Sealed where the archive stayed; with a repository its AAD binds the candidate's headSha.
+    const sealedHome: SealedElsewhere = {
+      sizeBytes: published.homeBytes,
+      ttlMs: () => presignTtlMs(guard),
+      // The PUT and the data key leave core only while this owner still holds the site.
+      seal: async (input) => {
+        await guard.assertFence()
+        return ready.seal({
+          ...input,
+          dataKey: async () => {
             await guard.assertFence()
-            return ready.seal({
-              ...input,
-              dataKey: async () => {
-                await guard.assertFence()
-                return input.dataKey()
-              },
-            })
+            return input.dataKey()
           },
-        },
-        patch: publication.patch,
-        untracked: publication.untracked,
+        })
       },
+    }
+    const metadata: SnapshotMetadata = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: labels.turn,
+      image: plan.sandbox.image,
+      driver: {
+        id: driver.id,
+        version: plan.driverVersion,
+        ...(run.context.nativeSessionId ? { nativeSessionId: run.context.nativeSessionId } : {}),
+      },
+      home,
+      ...(published.git ? { git: published.git } : {}),
+    }
+    const saving = snapshots.save(
+      metadata,
+      published.publication
+        ? {
+            home: sealedHome,
+            patch: published.publication.patch,
+            untracked: published.publication.untracked,
+          }
+        : { home: sealedHome },
       // Stops a save still pending on Vault from writing after the attempt gave up on it.
       guard.signal,
     )
@@ -460,16 +458,90 @@ export class TurnAttempt {
     await this.#destroy(true)
     await this.record('destroyed')
     await this.#revoke()
-    await guard.assertFence()
-    await this.record('publishing')
-    this.#publishStarted = true
-    await guard.interruptible(publication.publish(() => guard.assertFence()))
+    if (published.publication) {
+      await guard.assertFence()
+      await this.record('publishing')
+      this.#publishStarted = true
+      const publication = published.publication
+      await guard.interruptible(publication.publish(() => guard.assertFence()))
+    }
     await guard.assertFence()
     await this.record('completed', { result })
     if (!(await this.deps.leases.release(lease)))
       throw leaseLost('Lease was lost before turn completion')
     this.#completed = true
     return { result, manifest }
+  }
+
+  /**
+   * The candidate of a turn with a repository: the patch against the commit the sandbox holds —
+   * the working set's when it got one —, checked and committed by the workspace, and the `git`
+   * of its checkpoint. Refused when the agent copied a turn credential into its home or the site.
+   */
+  async #candidate(
+    ready: TurnExecution,
+    home: SessionState,
+    workspace: NonNullable<TurnPlan['workspace']>,
+    git: TurnWorkspace,
+  ): Promise<Captured> {
+    const { guard, plan } = this.init
+    const labels = plan.sandbox.labels
+    const sandboxBaseSha = await this.#sandboxBase()
+    await guard.assertFence()
+    const captured = await ready.capture({
+      home,
+      baseSha: workspace.expectedBaseSha,
+      ...(sandboxBaseSha ? { sandboxBaseSha } : {}),
+      ...(workspace.addOnlyPaths?.length ? { addOnlyPaths: workspace.addOnlyPaths } : {}),
+    })
+    if (!captured.patch || !captured.untracked)
+      throw conflict('The capture of a turn with a repository has no candidate parts')
+    const refusedValues = await this.#refusedValues()
+    await guard.assertFence()
+    const publication = await guard.interruptibleResource(
+      git.preparePublication({
+        ...workspace,
+        taskId: labels.taskId,
+        turn: labels.turn,
+        createdAt: plan.committedAt,
+        patch: captured.patch,
+        untracked: captured.untracked,
+        // Binary edits of tracked files are compressed in the patch: checked there in full.
+        credentials: this.credentials,
+        ...(refusedValues.length ? { refusedValues } : {}),
+      }),
+      (late) => late.dispose(),
+    )
+    this.#publication = publication
+    // Publication cut the working set again from the full base: the same commit, or the patch
+    // was taken against something else.
+    if (publication.sandboxBaseSha !== sandboxBaseSha)
+      throw conflict('The candidate stands on another working set than the sandbox')
+    this.#candidateHeadSha = publication.headSha
+    return {
+      homeBytes: captured.homeBytes,
+      publication,
+      git: {
+        provider: workspace.repo.provider,
+        branch: workspace.branch,
+        baseSha: publication.baseSha,
+        ...(sandboxBaseSha ? { sandboxBaseSha } : {}),
+        headSha: publication.headSha,
+        publication: { taskId: labels.taskId, committedAt: plan.committedAt },
+      },
+    }
+  }
+
+  /**
+   * A turn without a repository (plan 57, Б4): its home alone. The executor reads no working
+   * directory and answers no candidate parts; one that does is refused.
+   */
+  async #homeOnly(ready: TurnExecution, home: SessionState): Promise<Captured> {
+    await this.init.guard.assertFence()
+    const captured = await ready.capture({ home })
+    if (captured.patch !== undefined || captured.untracked !== undefined)
+      throw conflict('The capture of a turn without a repository has candidate parts')
+    return { homeBytes: captured.homeBytes }
   }
 
   /**
@@ -492,11 +564,12 @@ export class TurnAttempt {
    */
   async #sandboxBase(): Promise<string | undefined> {
     const { plan, guard } = this.init
-    if (this.sandboxBaseSha || !plan.workspace.workingSet) return this.sandboxBaseSha
-    if (!this.deps.workspace.sandboxBase)
+    const workspace = plan.workspace
+    if (this.sandboxBaseSha || !workspace?.workingSet) return this.sandboxBaseSha
+    if (!this.deps.workspace?.sandboxBase)
       throw conflict('The workspace cannot derive a working set')
     const derived = await guard.interruptible(
-      this.deps.workspace.sandboxBase(plan.workspace, plan.committedAt),
+      this.deps.workspace.sandboxBase(workspace, plan.committedAt),
     )
     if (!derived) throw conflict('The workspace derived no working set')
     this.sandboxBaseSha = derived

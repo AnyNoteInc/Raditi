@@ -14,17 +14,22 @@ import {
   AGENT_TURN_QUEUE,
   agentTurnRetryJobId,
   isDomainError,
+  requirementsOf,
   type FeedCreditsState,
   type JobQueue,
+  type ObjectStorage,
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 
+import { readBrowserTaskFacts } from '../browser/browser-facts.ts'
+import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import { readTurnResult } from '../turns/turn-result.ts'
 import {
   replayedTurn,
   type JournaledEvidence,
   type TurnJournalRange,
 } from '../turns/turn-journal.ts'
+import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-collector.ts'
 import type { LivePasses } from './live-passes.ts'
 import type { PassEnding, PassSettlement, SettleAnswer } from './pass-settlement.ts'
 import { savedPlanOf } from './turn-planner.ts'
@@ -55,6 +60,17 @@ export interface TaskSweepDependencies {
   journal: { replay(range: TurnJournalRange): Promise<JournaledEvidence[]> }
   drivers: AgentDriverRegistry
   queue: JobQueue
+  /**
+   * The cloud browser of tasks (docs/plan/57-browser-tasks.md, Б18): what a task saved is read
+   * on the site before its pass is ended, and the sessions are compared with the worker every
+   * tick. null — no worker is configured.
+   */
+  browser?: Pick<BrowserSessions, 'verify' | 'sweep'> | null
+  /**
+   * The object storage of raditi-inbox: files nobody sent are collected there every tick
+   * (docs/plan/57, Б26). Absent — they are not collected.
+   */
+  inbox?: Pick<ObjectStorage, 'delete'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -63,8 +79,9 @@ export interface TaskSweepDependencies {
  * The sweep of dialogs (docs/plan/53-chat-preview-release.md, R3, Р8; feed-design.md
  * «Сверка»): every minute it ends the passes whose turn recovery closed or whose handler died,
  * keeps the reserves of dialogs that wait with a candidate while their preview lives, cancels
- * those whose reserve ran out — never one with a release in work — and puts again a pass whose
- * retry got lost. Every write is a conditional move in PostgreSQL, so a pass is idempotent and
+ * those whose reserve ran out — never one with a release in work —, puts again a pass whose
+ * retry got lost, compares the browsers of tasks with the worker and removes the files nobody
+ * sent. Every write is a conditional move in PostgreSQL, so a pass is idempotent and
  * may race the live handler.
  */
 export class TaskSweep {
@@ -86,6 +103,8 @@ export class TaskSweep {
       ['holds', () => this.extendHolds()],
       ['expiry', () => this.expireHolds()],
       ['retries', () => this.requeueLost()],
+      ['browsers', () => this.sweepBrowsers()],
+      ['attachments', () => this.collectAttachments()],
     ] as const) {
       try {
         await pass()
@@ -106,9 +125,17 @@ export class TaskSweep {
     for (const [taskId, until] of this.#paused)
       if (until <= now.getTime()) this.#paused.delete(taskId)
     const tasks = await db.$queryRaw<
-      Array<{ id: string; attempt: number; turn_no: number; status: string; updated_at: Date }>
+      Array<{
+        id: string
+        attempt: number
+        turn_no: number
+        status: string
+        updated_at: Date
+        needs_browser: boolean
+      }>
     >`
-      SELECT t.id, t.attempt, t.turn_no, t.status::text AS status, t.updated_at FROM tasks t
+      SELECT t.id, t.attempt, t.turn_no, t.status::text AS status, t.updated_at, t.needs_browser
+      FROM tasks t
       WHERE t.status IN ('preparing', 'running')
         AND NOT (t.id = ANY(${[...this.#paused.keys()]}::uuid[]))
         AND NOT EXISTS (
@@ -130,7 +157,14 @@ export class TaskSweep {
   }
 
   async #settleOrphan(
-    task: { id: string; attempt: number; turn_no: number; status: string; updated_at: Date },
+    task: {
+      id: string
+      attempt: number
+      turn_no: number
+      status: string
+      updated_at: Date
+      needs_browser: boolean
+    },
     now: Date,
   ): Promise<SettleAnswer | null> {
     const { db } = this.deps
@@ -162,6 +196,8 @@ export class TaskSweep {
     if (!assignment?.finishedAt) return null
     const ending = await this.#endingOf(assignment)
     const giveUp = now.getTime() - assignment.finishedAt.getTime() >= SETTLE_GIVE_UP_MS
+    // As the live handler: what a task in the browser saved is read on the site first (Б23).
+    if (task.needs_browser) await this.deps.browser?.verify(task.id)
     return this.deps.settlement.settle(ref, ending, { giveUp })
   }
 
@@ -202,18 +238,24 @@ export class TaskSweep {
       select: { headSha: true },
     })
     const headSha = head?.headSha ?? replayed.candidateHeadSha
+    const plan = savedPlanOf(assignment.plan)
+    // A turn without a repository publishes no head (docs/plan/57-browser-tasks.md, Б4); a plan
+    // that no longer reads is taken for one with a repository, as every plan before it was.
+    const repository = plan ? requirementsOf(plan).repository : true
+    const published = repository ? (headSha ? { headSha } : null) : {}
     if (replayed.lastPhase === 'completed') {
       const result = entries.findLast((entry) => entry.phase === 'completed')?.result
-      if (!result || !headSha) return technical
-      return { kind: 'completed', turn, result, headSha }
+      if (!result || !published) return technical
+      return { kind: 'completed', turn, result, ...published }
     }
-    if (replayed.lastPhase === 'publication_recovered') {
-      // Recovery published the turn but does not keep its result: it is read from the output.
-      const plan = savedPlanOf(assignment.plan)
-      if (!plan || !headSha || !this.deps.drivers.has(plan.driverId)) return technical
+    // Recovery published the turn, or finished the checkpoint of one without a repository (Б6),
+    // but does not keep its result: it is read from the output.
+    const recovered = repository ? 'publication_recovered' : 'checkpoint_recovered'
+    if (replayed.lastPhase === recovered) {
+      if (!plan || !published || !this.deps.drivers.has(plan.driverId)) return technical
       try {
         const result = readTurnResult(this.deps.drivers.get(plan.driverId), replayed.events)
-        return { kind: 'completed', turn, result, headSha }
+        return { kind: 'completed', turn, result, ...published }
       } catch {
         return { kind: 'failed', turn, errorCode: 'TURN_OUTPUT_REJECTED' }
       }
@@ -271,8 +313,10 @@ export class TaskSweep {
    */
   async expireHolds(): Promise<number> {
     const { db } = this.deps
-    const rows = await db.$queryRaw<Array<{ id: string; status: Waiting; attempt: number }>>`
-      SELECT t.id, t.status::text AS status, t.attempt FROM tasks t
+    const rows = await db.$queryRaw<
+      Array<{ id: string; status: Waiting; attempt: number; needs_browser: boolean }>
+    >`
+      SELECT t.id, t.status::text AS status, t.attempt, t.needs_browser FROM tasks t
       WHERE t.status IN ('queued', 'awaiting_user', 'awaiting_approval')
         AND EXISTS (SELECT 1 FROM credit_holds h WHERE h.task_id = t.id AND h.status = 'active')
         AND NOT EXISTS (SELECT 1 FROM credit_holds h
@@ -295,7 +339,12 @@ export class TaskSweep {
     return cancelled
   }
 
-  #expire(row: { id: string; status: Waiting; attempt: number }): Promise<boolean> {
+  #expire(row: {
+    id: string
+    status: Waiting
+    attempt: number
+    needs_browser: boolean
+  }): Promise<boolean> {
     return this.deps.db.$transaction(
       async (tx) => {
         // The database's clock, as the selection above read it: never before it.
@@ -319,6 +368,9 @@ export class TaskSweep {
           where: { id: row.id },
           select: { turnNo: true },
         })
+        // What a task in the browser had saved, as last read there (Б24); its session is
+        // closed by the browser pass of this tick.
+        const objects = row.needs_browser ? (await readBrowserTaskFacts(tx, row.id)).objects : []
         await insertFeedEvent(tx, {
           taskId: row.id,
           turnId: settled.turnId,
@@ -330,6 +382,7 @@ export class TaskSweep {
               by: row.status === 'queued' ? 'queue_timeout' : 'no_answer',
               site: writes ? 'check' : 'unchanged',
               credits,
+              ...(objects.length ? { objects } : {}),
             },
           },
         })
@@ -339,6 +392,33 @@ export class TaskSweep {
       },
       { isolationLevel: 'ReadCommitted', timeout: 30_000 },
     )
+  }
+
+  /**
+   * The browsers of tasks against the worker (Б18): those of ended tasks and past their deadline
+   * are closed, those the worker lost are marked so, its orphans closed. A task whose pass is at
+   * work in this process is never taken for lost.
+   */
+  async sweepBrowsers(): Promise<void> {
+    await this.deps.browser?.sweep({ busy: (taskId) => this.deps.live.has(taskId) })
+  }
+
+  /**
+   * Files nobody sent past their expiry leave raditi-inbox, then the database: a batch a tick,
+   * a file that fails is tried again on the next one (Б26).
+   */
+  async collectAttachments(): Promise<number> {
+    const { inbox } = this.deps
+    if (!inbox) return 0
+    const removed = await collectExpiredAttachments({
+      files: expiredAttachmentsIn(this.deps.db),
+      storage: inbox,
+      limit: BATCH,
+      // One line a minute for all of them: a storage that is down fails every file.
+      onFailure: (_id, error) => this.#warn('task sweep attachments', logged(error)),
+    })
+    if (removed > 0) this.#logger.log(`task_sweep_attachments count=${removed}`)
+    return removed
   }
 
   /**

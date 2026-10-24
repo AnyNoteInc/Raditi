@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { turnInstructions } from './turn-instructions.ts'
+import { browserTaskInstructions, turnInstructions } from './turn-instructions.ts'
 
 describe('turnInstructions', () => {
   it('names the preview the browser tools open, or why there is none', () => {
@@ -63,5 +63,47 @@ describe('turnInstructions', () => {
     const guide = '- On this site: a stack of a test — `wp_rest` POST /x.\n'
     const told = turnInstructions({ state: 'absent' }, { names: [], hosts: [] }, guide)
     expect(told).toContain(`table of the platform created or extended.\n${guide}- A new page`)
+  })
+})
+
+describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)', () => {
+  const guide = '- Open the list of posts first.\n- Save a draft before you publish.'
+
+  it('tells the agent the rules of a task in the browser and the stack’s guide', () => {
+    const text = browserTaskInstructions(`${guide}\n\n`)
+    // The client is answered as in every task.
+    expect(text).toContain('addressing the client politely as «вы»')
+    // No repository, the platform's tools only.
+    expect(text).toContain('no repository and no working copy')
+    expect(text).toContain('`web_*`')
+    // Secrets are never asked for: the client signs in in the same browser.
+    expect(text).toContain('Never ask for a password')
+    expect(text).toContain('`web_help`')
+    // Nothing on the site is undone, and saved objects are verified before going on.
+    expect(text).toContain('the platform does not undo it')
+    expect(text).toContain('`web_verify`')
+    expect(text).toContain('never create the object again')
+    // What the task saved is listed in the request, for a new session too (Б22).
+    expect(text).toContain('The request lists what this task already saved on the site')
+    // Irreversible and wide changes wait for the client's explicit request.
+    expect(text).toContain("need the client's explicit")
+    // Б34: a mass edit is refused, and the agent says so instead of looking for a way around.
+    expect(text).toContain('at most 20 different objects')
+    expect(text).toContain('do not look for another way')
+    expect(text.endsWith(`## The admin pages of this site\n${guide}\n`)).toBe(true)
+  })
+
+  it('names no stack, no repository rule and no preview', () => {
+    const text = browserTaskInstructions('')
+    expect(text).not.toMatch(/wordpress|bitrix|wp-admin/i)
+    expect(text).not.toContain('The admin pages of this site')
+    expect(text).not.toContain('Work only in the repository working copy')
+    expect(text).not.toContain('## Preview')
+  })
+
+  it('leaves the rules of a task with a repository as they were', () => {
+    const text = turnInstructions({ state: 'absent' })
+    expect(text).toContain('Work only in the repository working copy')
+    expect(text).not.toContain('web_help')
   })
 })

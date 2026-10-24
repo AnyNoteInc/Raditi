@@ -6,12 +6,16 @@ import { billingFixtures } from '@repo/billing/testing'
 import {
   createPrismaClient,
   insertFeedEvent,
+  openBrowserSession,
   PostgresSiteLeaseStore,
   PostgresTaskTurnAssignmentStore,
   recordCandidate,
+  upsertBrowserCheckpoint,
   type PrismaClient,
 } from '@repo/db'
 import {
+  BROWSER_ONLY,
+  browserTaskError,
   siteBusy,
   toTurnPlan,
   type AgentDriver,
@@ -105,23 +109,35 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     await db.$disconnect()
   })
 
-  /** A queued dialog of a client with the gift of the registration, and its first words. */
-  async function queued({ reserve }: { reserve: boolean }) {
+  /**
+   * A queued dialog of a client with the gift of the registration, and its first words; with
+   * `browser`, a task in the cloud browser on a site without a repository (plan 57, Б2, Б8).
+   */
+  async function queued({ reserve, browser = false }: { reserve: boolean; browser?: boolean }) {
     const { userId } = await fixtures.user()
     const workspace = await db.$transaction((tx) =>
       ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
     )
-    const { taskId } = await fixtures.task(workspace.id, { status: 'queued' })
-    const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-    await db.gitRepository.create({
-      data: {
-        siteId: task.siteId,
-        provider: 'gitea',
-        owner: 'sites-r3-test',
-        name: `site-${task.siteId}`,
-        url: `https://git.invalid/sites/site-${task.siteId}.git`,
-      },
+    const { taskId } = await fixtures.task(workspace.id, {
+      status: 'queued',
+      ...(browser ? { needsRepository: false, needsBrowser: true } : {}),
     })
+    const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+    if (browser)
+      await db.site.update({
+        where: { id: task.siteId },
+        data: { agentNotes: 'Вход по адресу /login' },
+      })
+    else
+      await db.gitRepository.create({
+        data: {
+          siteId: task.siteId,
+          provider: 'gitea',
+          owner: 'sites-r3-test',
+          name: `site-${task.siteId}`,
+          url: `https://git.invalid/sites/site-${task.siteId}.git`,
+        },
+      })
     const requestEventId = await insertFeedEvent(db, {
       taskId,
       row: {
@@ -151,14 +167,29 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     }
   }
 
-  function runner(run: Run | null, inspect: () => Promise<unknown> = async () => null) {
+  function runner(
+    run: Run | null,
+    inspect: () => Promise<unknown> = async () => null,
+    options: {
+      git?: CandidateGit | null
+      browser?: { ensure: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
+    } = {},
+  ) {
     const queue = { enqueue: vi.fn(async () => {}) }
-    const settlement = new PassSettlement({ db, candidates, logger: quiet, now: () => NOW })
+    const close = vi.fn(async () => {})
+    const settlement = new PassSettlement({
+      db,
+      candidates,
+      browser: { close },
+      logger: quiet,
+      now: () => NOW,
+    })
     const supervisor = run ? ({ run: vi.fn(run) } as unknown as TurnSupervisor) : null
     const passes = new PassRunner({
       db,
       supervisor,
-      git,
+      git: options.git === undefined ? git : options.git,
+      ...(options.browser !== undefined ? { browser: options.browser as never } : {}),
       drivers,
       backends: llmBackends,
       adapter: getSiteAdapter,
@@ -171,7 +202,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       logger: quiet,
       now: () => NOW,
     })
-    return { passes, queue, supervisor }
+    return { passes, queue, supervisor, close }
   }
 
   const failure = async (taskId: string) =>
@@ -350,7 +381,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       expect(planned).not.toBeNull()
       const { request, policy } = planned!
       expect(() => toTurnPlan(request, sampleDriverId)).not.toThrow()
-      expect(request.workspace.expectedBaseSha).toBe(MAIN)
+      expect(request.workspace?.expectedBaseSha).toBe(MAIN)
       expect(request.input.prompt).toBe('Поменяйте телефон в шапке')
       expect(policy).toMatchObject({ backend: sampleBackendId, modelSlug: sampleModelSlug })
       expect(Number(policy.budgetRub)).toBeGreaterThan(0)
@@ -361,6 +392,148 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           (hold) => hold.status === 'captured',
         ),
       ).toBe(true)
+    })
+
+    it('refuses a task with a repository while git is not configured, before its turn', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const run = vi.fn<Run>()
+      const { passes } = runner(run, undefined, { git: null })
+
+      await passes.run(dialog.job)
+
+      expect(run).not.toHaveBeenCalled()
+      expect(await failure(dialog.taskId)).toEqual([
+        expect.objectContaining({ code: 'unavailable', next: 'failed', credits: 'returned' }),
+      ])
+    })
+
+    describe('a task in the cloud browser (docs/plan/57-browser-tasks.md)', () => {
+      const editUrl = 'https://example.ru/wp-admin/post.php?post=12&action=edit'
+      const browserSessions = () => ({
+        ensure: vi.fn(async (_taskId: string, _signal: AbortSignal) => {}),
+        verify: vi.fn(async (_taskId: string) => true),
+      })
+
+      it('runs on a core without git: opens the browser, plans no repository, verifies, ends done', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, browser: true })
+        const browser = browserSessions()
+        const order: string[] = []
+        browser.ensure.mockImplementation(async () => {
+          order.push('ensure')
+        })
+        browser.verify.mockImplementation(async () => {
+          order.push('verify')
+          return true
+        })
+        let planned: UnkeyedTurnRequest | null = null
+        const { passes, close } = runner(
+          async (request) => {
+            order.push('run')
+            planned = request
+            await db.task.update({
+              where: { id: dialog.taskId },
+              data: { status: 'running', turnNo: 1 },
+            })
+            await db.taskTurn.create({
+              data: {
+                taskId: dialog.taskId,
+                turnNo: 1,
+                status: 'completed',
+                driverId: sampleDriverId,
+                image,
+              },
+            })
+            // What the worker records while the agent publishes and verifies (Б22).
+            const session = await openBrowserSession(db, { taskId: dialog.taskId })
+            await upsertBrowserCheckpoint(db, {
+              taskId: dialog.taskId,
+              sessionId: session.id,
+              ref: { kind: 'post', objectId: '12', editUrl },
+              state: 'verified',
+              verified: {
+                kind: 'post',
+                objectId: '12',
+                title: 'Скидки',
+                status: 'draft',
+                editUrl,
+                images: 0,
+                files: 0,
+                featuredImage: false,
+              },
+            })
+            return {
+              result: {
+                summary: 'Сохранил новость черновиком',
+                change_type: 'content',
+                client_message: 'Новость сохранена черновиком.',
+                files_changed: [],
+                questions: [],
+                needs_approval: false,
+                risk: 'low',
+              },
+              // No `git`: a turn without a repository published nothing.
+              manifest: {} as SnapshotManifest,
+            }
+          },
+          undefined,
+          { git: null, browser },
+        )
+
+        await passes.run(dialog.job)
+
+        expect(order).toEqual(['ensure', 'run', 'verify'])
+        expect(browser.ensure).toHaveBeenCalledWith(dialog.taskId, expect.any(AbortSignal))
+        const request = planned!
+        expect(() => toTurnPlan(request, sampleDriverId)).not.toThrow()
+        expect(request.requirements).toEqual(BROWSER_ONLY)
+        expect(request).not.toHaveProperty('workspace')
+        expect(request.input.prompt).toContain('Поменяйте телефон в шапке')
+        expect(request.input.prompt).toContain('Вход по адресу /login')
+        expect(request.context.instructions).toContain('cloud browser')
+        const task = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        expect(task.status).toBe('done')
+        const [result] = await db.taskEvent.findMany({
+          where: { taskId: dialog.taskId, type: 'feed.result' },
+        })
+        expect(result!.payload).toMatchObject({
+          site: 'changed',
+          objects: [{ kind: 'post', status: 'draft', title: 'Скидки', editUrl }],
+        })
+        expect(close).toHaveBeenCalledExactlyOnceWith(dialog.taskId, 'task_done')
+      })
+
+      it('refuses the task when no browser worker is configured, before its turn', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, browser: true })
+        const run = vi.fn<Run>()
+        const { passes } = runner(run, undefined, { git: null, browser: null })
+
+        await passes.run(dialog.job)
+
+        expect(run).not.toHaveBeenCalled()
+        expect(await failure(dialog.taskId)).toEqual([
+          expect.objectContaining({ code: 'unavailable', next: 'failed', credits: 'returned' }),
+        ])
+      })
+
+      it('refuses the task `unavailable` when its browser could not be opened', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, browser: true })
+        const browser = browserSessions()
+        browser.ensure.mockRejectedValue(browserTaskError('BROWSER_SESSION_UNAVAILABLE'))
+        const run = vi.fn<Run>()
+        const { passes } = runner(run, undefined, { git: null, browser })
+
+        await passes.run(dialog.job)
+
+        expect(run).not.toHaveBeenCalled()
+        expect(browser.verify).not.toHaveBeenCalled()
+        expect(await failure(dialog.taskId)).toEqual([
+          expect.objectContaining({ code: 'unavailable', next: 'failed' }),
+        ])
+      })
     })
 
     it('sends the pass back to the queue when the site is busy, and puts it again later', async () => {

@@ -7,6 +7,11 @@ import {
   schemaClient,
   type MigratedSchema,
 } from '../prisma/migrated-schema.ts'
+import {
+  closeBrowserSession,
+  markBrowserSessionWrote,
+  openBrowserSession,
+} from './browser-sessions.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import { taskHasProductionWrites } from './task-production-writes.ts'
 
@@ -119,6 +124,36 @@ describe.skipIf(!databaseUrl)(
       await db.mcpCall.update({ where: { id: callId }, data: { revertedAt: new Date() } })
       expect(await taskHasProductionWrites(db, taskId)).toBe(false)
       expect(await taskHasProductionWrites(db, taskId, { turnNo: 1 })).toBe(false)
+    })
+
+    it('counts a click, input or upload in the browser of the task, never as one turn’s', async () => {
+      const workspace = await db.workspace.create({ data: { name: 'Synthetic browser' } })
+      const site = await db.site.create({
+        data: {
+          workspaceId: workspace.id,
+          name: 'Synthetic',
+          url: `https://${randomUUID()}.example.test`,
+          stack: 'wordpress',
+        },
+      })
+      const task = await db.task.create({
+        data: {
+          workspaceId: workspace.id,
+          siteId: site.id,
+          needsRepository: false,
+          needsBrowser: true,
+        },
+      })
+      const session = await openBrowserSession(db, { taskId: task.id })
+      // Watched and closed without a write: the site was not touched.
+      await closeBrowserSession(db, { sessionId: session.id, status: 'closed', reason: 'idle' })
+      expect(await taskHasProductionWrites(db, task.id)).toBe(false)
+
+      const next = await openBrowserSession(db, { taskId: task.id })
+      await markBrowserSessionWrote(db, { sessionId: next.id })
+      expect(await taskHasProductionWrites(db, task.id)).toBe(true)
+      // What a browser did belongs to the task, not to a turn the undo could return.
+      expect(await taskHasProductionWrites(db, task.id, { turnNo: 1 })).toBe(false)
     })
 
     it('does not count a write into the preview of the dialog, nor a task without writes', async () => {

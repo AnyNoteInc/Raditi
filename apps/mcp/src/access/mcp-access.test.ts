@@ -26,9 +26,14 @@ const preview = {
   database: true,
   hostname: 'site-0a1b2c3d-chat-0a1b2c.localhost',
 }
-/** The admission row: the scope and the columns of the dialog's preview, NULL without one. */
-const row = (base = scope(), of: typeof preview | null = null) => ({
+/** The admission row: the scope, the task's needs and the columns of its preview, if any. */
+const row = (
+  base = scope(),
+  of: typeof preview | null = null,
+  needs = { needsRepository: true, needsBrowser: false },
+) => ({
   ...base,
+  ...needs,
   previewId: of?.id ?? null,
   previewStatus: of?.status ?? null,
   previewDatabase: of?.database ?? null,
@@ -40,7 +45,11 @@ describe('MCP token access', () => {
     const base = scope()
     const $queryRaw = vi.fn(async () => [row(base)])
     const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
-    expect(await store.authenticate(token)).toEqual({ ...base, preview: null })
+    expect(await store.authenticate(token)).toEqual({
+      ...base,
+      preview: null,
+      requirements: { repository: true, browser: false },
+    })
     expect(JSON.stringify($queryRaw.mock.calls)).not.toContain(token)
     expect(JSON.stringify($queryRaw.mock.calls)).toContain(
       createHash('sha256').update(token).digest('hex'),
@@ -51,7 +60,11 @@ describe('MCP token access', () => {
     const base = scope()
     const $queryRaw = vi.fn(async () => [row(base, preview)])
     const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
-    expect(await store.authenticate(token)).toEqual({ ...base, preview })
+    expect(await store.authenticate(token)).toEqual({
+      ...base,
+      preview,
+      requirements: { repository: true, browser: false },
+    })
     const sql = ($queryRaw.mock.calls[0] as unknown as [string[]])[0].join('$').replace(/\s+/g, ' ')
     expect(sql).toContain(
       'LEFT JOIN preview_environments p ON p.task_id = t.id AND p.site_id = s.id',
@@ -61,6 +74,29 @@ describe('MCP token access', () => {
     await expect(store.authenticate(token)).rejects.toMatchObject({
       code: 'MCP_ACCESS_SCOPE_INVALID',
     })
+  })
+
+  it("carries the task's needs: a browser task without a repository", async () => {
+    const base = scope()
+    const $queryRaw = vi.fn(async () => [
+      row(base, null, { needsRepository: false, needsBrowser: true }),
+    ])
+    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    expect(await store.authenticate(token)).toEqual({
+      ...base,
+      preview: null,
+      requirements: { repository: false, browser: true },
+    })
+    // Needs nobody has (a broken row) or columns the query no longer reads: closed, never guessed.
+    for (const needs of [
+      { needsRepository: false, needsBrowser: false },
+      { needsRepository: null, needsBrowser: true },
+    ]) {
+      $queryRaw.mockResolvedValueOnce([row(scope(), null, needs as never)])
+      await expect(store.authenticate(token)).rejects.toMatchObject({
+        code: 'MCP_ACCESS_SCOPE_INVALID',
+      })
+    }
   })
 
   it('looks up the token its issuer generates, by the hash its issuer stores', async () => {
@@ -99,12 +135,17 @@ describe('MCP token access', () => {
       "l.operation = 'turn'",
       'NOT l.held_for_operator',
       'l.expires_at > clock_timestamp()',
-      "s.status = 'active'",
       't.content_retired_at IS NULL',
       't.status <> ALL($::"TaskStatus"[])',
     ])
       expect(sql).toContain(condition)
-    expect(sql).not.toMatch(/\bOR\b/)
+    // The one alternative: an active site, or a site being connected for a browser task without
+    // a repository (docs/plan/57-browser-tasks.md, Б9). Paused and archived sites are never in it.
+    const site =
+      "AND (s.status = 'active' OR (t.needs_browser AND NOT t.needs_repository AND s.status = 'onboarding'))"
+    expect(sql).toContain(site)
+    expect(sql.replace(site, '')).not.toMatch(/\bOR\b/)
+    expect(sql).not.toMatch(/paused|disconnected|archived/)
     // The final statuses are the list of spec §7, not a copy of it in this query.
     expect($queryRaw.mock.calls[0]!.slice(1)).toEqual([
       createHash('sha256').update(token).digest('hex'),

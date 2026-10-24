@@ -638,6 +638,8 @@ export function billingFixtures(db: PrismaClient) {
       await db.llmCall.deleteMany({ where: { key: { task: workspaces } } })
       await db.llmKey.deleteMany({ where: { task: workspaces } })
       await db.task.deleteMany({ where: workspaces })
+      // Files no message sent hold their site; bound ones went with their tasks.
+      await db.attachment.deleteMany({ where: workspaces })
       await db.site.deleteMany({ where: workspaces })
       await db.order.deleteMany({ where: workspaces })
       await db.subscription.deleteMany({ where: workspaces })

@@ -157,6 +157,95 @@ describe('Vault Transit data keys', () => {
   })
 })
 
+describe('Vault Transit workspace keys', () => {
+  const workspaceKey = 'ws-01960000-0000-7000-8000-000000000003'
+  const keyReply = (type = 'aes256-gcm96') =>
+    reply({ data: { name: workspaceKey, type, latest_version: 1, exportable: false } })
+
+  it('creates the key with its type alone, as the provisioner policy allows', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(keyReply())
+    await expect(withFetch(fetch).transitEnsureKey(workspaceKey)).resolves.toBeUndefined()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const [url, init] = fetch.mock.calls[0]!
+    expect(url).toBe(`http://vault.test:8200/v1/transit/keys/${workspaceKey}`)
+    expect(init).toMatchObject({
+      method: 'POST',
+      redirect: 'error',
+      body: '{"type":"aes256-gcm96"}',
+    })
+    expect(new Headers(init?.headers).get('x-vault-token')).toBe(options.token)
+  })
+
+  it('takes an existing key as it is: a repeat sends the same creation and nothing else', async () => {
+    // Transit answers a creation of an existing key with that key, neither rotated nor changed.
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => keyReply())
+    const store = withFetch(fetch)
+    await store.transitEnsureKey(workspaceKey)
+    await store.transitEnsureKey(workspaceKey)
+    expect(fetch.mock.calls.map(([url, init]) => [String(url), init?.body])).toEqual([
+      [`http://vault.test:8200/v1/transit/keys/${workspaceKey}`, '{"type":"aes256-gcm96"}'],
+      [`http://vault.test:8200/v1/transit/keys/${workspaceKey}`, '{"type":"aes256-gcm96"}'],
+    ])
+  })
+
+  it('accepts an answer without a body, as an older Vault gives', async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await expect(withFetch(fetch).transitEnsureKey(workspaceKey)).resolves.toBeUndefined()
+  })
+
+  it.each([
+    'ws-project_1',
+    'ws-ws1',
+    'ws-01960000-0000-7000-8000-00000000000',
+    'ws-01960000-0000-7000-8000-00000000000A',
+    'WS-01960000-0000-7000-8000-000000000003',
+    'other-01960000-0000-7000-8000-000000000003',
+    'ws-01960000-0000-7000-8000-000000000003/rotate',
+    'ws-01960000-0000-7000-8000-000000000003/config',
+    `ws-01960000-0000-7000-8000-000000000003%2fconfig`,
+    '../ws-01960000-0000-7000-8000-000000000003',
+    'ws-',
+  ])('creates nothing but the key of a workspace id, before authenticating: %s', async (name) => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+    await expect(withFetch(fetch).transitEnsureKey(name)).rejects.toThrow(
+      'Invalid Vault workspace key name',
+    )
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('refuses a key of another type under the name of a workspace', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(keyReply('rsa-2048'))
+    await expect(withFetch(fetch).transitEnsureKey(workspaceKey)).rejects.toThrow(
+      'Vault workspace key has an unexpected type',
+    )
+  })
+
+  it('refuses an answer that does not describe a key, without echoing it', async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(reply({ data: { secret: options.token } }))
+    const error: unknown = await withFetch(fetch)
+      .transitEnsureKey(workspaceKey)
+      .catch((e: unknown) => e)
+    expect(error).toMatchObject({ name: 'VaultError', message: 'Unexpected Vault key response' })
+    expect(inspect(error)).not.toContain(options.token)
+  })
+
+  it.each([400, 403, 500, 503])('fails on HTTP %i with the status alone', async (status) => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(reply({ errors: [`permission denied ${options.token}`] }, status))
+    const error: unknown = await withFetch(fetch)
+      .transitEnsureKey(workspaceKey)
+      .catch((e: unknown) => e)
+    expect(error).toMatchObject({ name: 'VaultError', status })
+    expect(inspect(error)).not.toContain(options.token)
+    expect(error).not.toHaveProperty('cause')
+  })
+})
+
 describe('Vault AppRole sessions', () => {
   it('shares one login across concurrent calls and caches the service token', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async (url) =>

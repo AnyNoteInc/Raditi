@@ -21,11 +21,12 @@ import {
   type SiteStack,
 } from '@repo/domain'
 
+import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
-import type { PassEnding, PassRef, PassSettlement } from './pass-settlement.ts'
+import type { PassEnding, PassRef, PassSettlement, SettleAnswer } from './pass-settlement.ts'
 import { causeOf, failureFactsOf, feedFailureOf } from './turn-outcome.ts'
 import { planTurn, type PassPlan } from './turn-planner.ts'
 
@@ -51,9 +52,18 @@ const clamp = (value: number) =>
 
 export interface PassRunnerDependencies {
   db: PrismaClient
-  /** null while git is not configured: no turn can run (spec §20 «Транспорт git»). */
+  /** null while no agent driver is enabled: no turn can run. */
   supervisor: TurnSupervisor | null
+  /**
+   * null while git is not configured: a task with a repository is refused `unavailable` (spec §20
+   * «Транспорт git»), one without runs all the same (docs/plan/57-browser-tasks.md, Б7).
+   */
   git: CandidateGit | null
+  /**
+   * The cloud browser of tasks that need one (docs/plan/57, Б18); null while no worker is
+   * configured: such a task is refused `unavailable`.
+   */
+  browser?: Pick<BrowserSessions, 'ensure' | 'verify'> | null
   drivers: AgentDriverRegistry
   backends: readonly LlmBackend[]
   adapter: (stack: SiteStack) => SiteAdapter
@@ -122,9 +132,12 @@ export class PassRunner {
     if (this.deps.live.abort(job.taskId)) return
     const task = await this.deps.db.task.findUnique({
       where: { id: job.taskId },
-      select: { status: true, attempt: true, turnNo: true },
+      select: { status: true, attempt: true, turnNo: true, needsBrowser: true },
     })
     if (!task) return
+    // «Остановить» of a task in the browser: what it saved is read on the site first, and the
+    // feed tells the client what stays there — nothing on the site is deleted (Б24).
+    if (task.needsBrowser) await this.deps.browser?.verify(job.taskId)
     const answer =
       task.status === 'preparing' || task.status === 'running'
         ? await this.deps.settlement.settle(
@@ -150,15 +163,14 @@ export class PassRunner {
       return
     }
     const supervisor = this.deps.supervisor
-    const git = this.deps.git
-    if (!supervisor || !git) {
+    if (!supervisor) {
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
       return
     }
 
     let plan: PassPlan
     try {
-      plan = await this.#plan(job, ref, git)
+      plan = await this.#plan(job, ref)
     } catch (error) {
       const code = feedFailureOf({ ...failureFactsOf(error), policyFlagged: false })
       this.#logger.warn(`pass_unplanned task=${job.taskId} code=${code} cause=${causeOf(error)}`)
@@ -177,11 +189,14 @@ export class PassRunner {
       await this.#branchMoved(job, ref, plan.update)
       return
     }
+    const browser = plan.requirements.browser
     if (await this.#cancelRequested(job)) controller.abort()
     if (controller.signal.aborted) {
-      await settlement.settle(ref, { kind: 'cancelled', turn: null })
+      await this.#settle(ref, { kind: 'cancelled', turn: null }, browser)
       return
     }
+    // The browser lives with the task, not with the turn: opened or found before it (Б18).
+    if (browser && !(await this.#openBrowser(job, ref, controller))) return
 
     const watch = this.#watchCancel(job, controller)
     let ending: PassEnding | null
@@ -189,11 +204,13 @@ export class PassRunner {
     let cause: string | null = null
     try {
       const completed = await supervisor.run(plan.request, plan.policy, controller.signal)
+      const git = completed.manifest.git
       ending = {
         kind: 'completed',
         turn: plan.turn,
         result: completed.result,
-        headSha: completed.manifest.git.headSha,
+        // A turn without a repository published nothing (plan 57, Б4).
+        ...(git ? { headSha: git.headSha } : {}),
       }
     } catch (error) {
       cause = causeOf(error)
@@ -211,13 +228,54 @@ export class PassRunner {
     }
     const turnNo = await this.#turnNo(job.taskId)
     if (turnNo === null) return
-    const answer = await settlement.settle({ ...ref, turnNo }, ending)
+    const answer = await this.#settle({ ...ref, turnNo }, ending, browser)
     this.#logger.log(
       `pass_settled task=${job.taskId} ending=${ending.kind} answer=${answer}${cause ? ` cause=${cause}` : ''}`,
     )
     if (ending.kind === 'busy') {
       if (answer === 'moved' && retry) await this.#requeue(job, retry)
     } else await this.#wakeSite(job, turnNo)
+  }
+
+  /**
+   * Ends the pass. A task in the browser has what it saved on the site read again first (Б23,
+   * Б24): the ending reads the checkpoints as the worker recorded them — best effort, the last
+   * recorded state stands when the worker does not answer.
+   */
+  async #settle(ref: PassRef, ending: PassEnding, browser: boolean): Promise<SettleAnswer> {
+    if (browser && ['completed', 'failed', 'cancelled'].includes(ending.kind))
+      await this.deps.browser?.verify(ref.taskId)
+    return this.deps.settlement.settle(ref, ending)
+  }
+
+  /**
+   * The cloud browser of the task before its turn (Б16, Б18): opened, or found and given back to
+   * the agent. false — the pass was ended here: no worker, or it did not answer (`unavailable`),
+   * or the client cancelled meanwhile.
+   */
+  async #openBrowser(
+    job: AgentTurnJob,
+    ref: PassRef,
+    controller: AbortController,
+  ): Promise<boolean> {
+    const { browser, settlement } = this.deps
+    if (!browser) {
+      await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
+      return false
+    }
+    try {
+      await browser.ensure(job.taskId, controller.signal)
+      return true
+    } catch (error) {
+      if (controller.signal.aborted) {
+        await this.#settle(ref, { kind: 'cancelled', turn: null }, true)
+        return false
+      }
+      const code = feedFailureOf({ ...failureFactsOf(error), policyFlagged: false })
+      this.#logger.warn(`pass_browser_unavailable task=${job.taskId} cause=${causeOf(error)}`)
+      await settlement.settle(ref, { kind: 'refused', code })
+      return false
+    }
   }
 
   /**
@@ -240,7 +298,7 @@ export class PassRunner {
     }
   }
 
-  async #plan(job: AgentTurnJob, ref: PassRef, git: CandidateGit): Promise<PassPlan> {
+  async #plan(job: AgentTurnJob, ref: PassRef): Promise<PassPlan> {
     const facts = await readPassFacts(
       {
         db: this.deps.db,
@@ -259,15 +317,22 @@ export class PassRunner {
     if (!facts) return { kind: 'refused', code: 'technical' }
     const [driver] = this.deps.drivers.list()
     if (!driver) return { kind: 'refused', code: 'unavailable' }
+    // Only a task with a repository needs git (plan 57, Б7).
+    const git = this.deps.git
+    if (facts.requirements.repository && !git) return { kind: 'refused', code: 'unavailable' }
     const repo = facts.repo
     return planTurn(facts, {
       driver,
       backends: this.deps.backends,
       runtime: this.deps.runtime,
       mainHead: () =>
-        repo ? git.readBranchHead({ repo, branch: repo.defaultBranch }) : Promise.resolve(null),
+        repo && git
+          ? git.readBranchHead({ repo, branch: repo.defaultBranch })
+          : Promise.resolve(null),
       branchHead: () =>
-        repo ? git.readBranchHead({ repo, branch: `agent/${job.taskId}` }) : Promise.resolve(null),
+        repo && git
+          ? git.readBranchHead({ repo, branch: `agent/${job.taskId}` })
+          : Promise.resolve(null),
     })
   }
 

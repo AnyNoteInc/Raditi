@@ -37,6 +37,7 @@
     "verify:pipeline": "exec node infra/dev/pipeline-verify/verify-pipeline.mjs",
     "verify:preview-network": "exec node infra/dev/preview-verify/verify-preview-network.mjs",
     "verify:release": "exec node infra/dev/release-verify/verify-release.mjs",
+    "verify:browser-task": "exec node infra/dev/browser-task-verify/verify-browser-task.mjs",
     "verify:llm-gateway": "pnpm --filter core verify:llm-gateway",
     "verify:llm-app": "node infra/app/verify-llm-app.mjs",
     "verify:llm-firewall": "node infra/app/verify-llm-firewall.mjs",

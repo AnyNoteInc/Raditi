@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util'
 import {
   badRequest,
   conflict,
+  requirementsOf,
   terminalTaskStatuses,
   turnEvidenceSchema,
   turnAssignmentOutcomes,
@@ -32,6 +33,11 @@ const closureSchema = z.object({
  * Product runs are numbered once. Their assignment and TaskTurn are admitted and closed in
  * one transaction; task status, billing and queue dispatch are still owned by P12.
  * The operational adapter remains available to the isolated executor PoCs.
+ *
+ * A turn meets the requirements of its task (docs/plan/57-browser-tasks.md, Б2, Б3), fixed when
+ * the task was created. A turn without a repository has no branch, base or head: it continues the
+ * completed turn before it by its snapshot, and after an unsuccessful one starts a new session —
+ * nothing it did on the site is undone, so it is never replaced.
  */
 export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore {
   private readonly productDb: Database
@@ -44,6 +50,8 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
   override async open(input: OpenTurnAssignment): Promise<TurnAssignment | null> {
     const parsed = validateOpenTurnAssignment(input)
     const { plan, fence, sessionId, turn } = parsed
+    const requirements = requirementsOf(plan)
+    const workspace = plan.workspace
     const labels = plan.sandbox.labels
     if (
       labels.taskId !== fence.taskId ||
@@ -56,7 +64,7 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
       (plan.replacesTurn !== undefined && plan.replacesTurn !== turn - 1)
     )
       throw badRequest('Product turn identity differs from its assignment')
-    if (plan.replacesTurn === undefined && plan.workspace.expectedBranchSha !== undefined)
+    if (plan.replacesTurn === undefined && workspace?.expectedBranchSha !== undefined)
       throw badRequest('Only a replacement may pin the previous task branch')
     return this.productDb.$transaction(async (tx) => {
       // Same lock as MCP admission: no product run opens around an unresolved writer.
@@ -76,10 +84,27 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         terminalTaskStatuses.includes(task.status)
       )
         throw conflict('Product task is not available for a turn')
+      if (
+        task.needsRepository !== requirements.repository ||
+        task.needsBrowser !== requirements.browser
+      )
+        throw conflict('The turn plan does not meet the requirements of its task')
       if (turn !== task.turnNo + 1) return null
       if (await tx.turnAssignment.count({ where: { taskId: task.id, finishedAt: null } }))
         return null
-      if (turn > 1) {
+      if (turn > 1 && workspace === undefined) {
+        // Without a repository there is no branch to read: a completed turn is continued by its
+        // snapshot, an unsuccessful one is followed by a new session (plan 57, Б3, Б4).
+        const prior = await tx.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId: task.id, turnNo: turn - 1 } },
+        })
+        if (prior.status === 'completed') {
+          if (plan.previous?.turn !== turn - 1)
+            throw conflict('Continuation does not restore the completed product turn')
+        } else if (plan.previous) {
+          throw conflict('A turn after an unsuccessful one starts a new session')
+        }
+      } else if (turn > 1 && workspace !== undefined) {
         const prior = await tx.taskTurn.findUniqueOrThrow({
           where: { taskId_turnNo: { taskId: task.id, turnNo: turn - 1 } },
         })
@@ -92,20 +117,17 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
             if (
               branch.movedAfterLastTurn === null ||
               plan.previous ||
-              plan.workspace.expectedBaseSha !== branch.movedAfterLastTurn
+              workspace.expectedBaseSha !== branch.movedAfterLastTurn
             )
               throw conflict('A rebased turn does not start on the candidate «Обновить» moved')
           } else {
-            if (
-              plan.previous?.turn !== turn - 1 ||
-              plan.workspace.expectedBaseSha !== prior.headSha
-            )
+            if (plan.previous?.turn !== turn - 1 || workspace.expectedBaseSha !== prior.headSha)
               throw conflict('Continuation does not restore the completed product turn')
             if (branch.movedAfterLastTurn !== null)
               throw conflict('«Обновить» moved the task branch after the completed product turn')
           }
         } else {
-          if (plan.workspace.expectedBranchSha !== branch.written)
+          if (workspace.expectedBranchSha !== branch.written)
             throw conflict('Replacement does not pin the published task branch')
           const previous = await tx.turnAssignment.findMany({
             where: { taskId: task.id, turnNo: plan.replacesTurn },
@@ -124,13 +146,13 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
             if (
               !plan.rebased ||
               plan.previous ||
-              plan.workspace.expectedBaseSha !== branch.movedAfterLastTurn
+              workspace.expectedBaseSha !== branch.movedAfterLastTurn
             )
               throw conflict('Replacement does not start on the candidate «Обновить» moved')
           } else if (
             (plan.rebased === true) !== (replaced.rebased === true) ||
             !isDeepStrictEqual(plan.previous, replaced.previous) ||
-            plan.workspace.expectedBaseSha !== replaced.workspace.expectedBaseSha
+            workspace.expectedBaseSha !== replaced.workspace?.expectedBaseSha
           )
             throw conflict('Replacement does not restore the replaced turn input')
         }
@@ -147,7 +169,7 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
           driverId: plan.driverId,
           driverVersion: plan.driverVersion,
           image: plan.sandbox.image,
-          baseSha: plan.workspace.expectedBaseSha,
+          baseSha: workspace?.expectedBaseSha ?? null,
           startedAt: assignment.serverNow,
         },
       })

@@ -84,6 +84,7 @@ export const feedPolling = Object.freeze({ working: 2_000, waiting: 15_000, max:
 
 const WORKING = new Set(['queued', 'preparing', 'running', 'deploying', 'verifying'])
 const BUILDING = new Set(['pending', 'building'])
+const LIVE_BROWSER = new Set(['starting', 'ready'])
 
 /** The undo of the dialog's release goes on (docs/plan/53, «Отмена выпуска»). */
 export const undoing = (head: FeedHeadState): boolean =>
@@ -92,7 +93,7 @@ export const undoing = (head: FeedHeadState): boolean =>
 /**
  * Milliseconds until the next read; null — no more reads: the dialog has ended (and no undo of its
  * release goes on), or there is no such dialog. 2 s while the agent, a release, an undo or the
- * preview is at work, 15 s while the dialog waits for the client; after a failed read the pause
+ * preview is at work or the task's browser is open, 15 s while the dialog waits for the client; after a failed read the pause
  * doubles, up to 30 s. A hidden page is not read at all — the hook waits for it to be shown again.
  */
 export function pollDelay(state: FeedState): number | null {
@@ -105,7 +106,10 @@ export function pollDelay(state: FeedState): number | null {
     head === null ||
     WORKING.has(head.task.status) ||
     undoing(head) ||
-    (head.preview !== null && BUILDING.has(head.preview.status))
+    (head.preview !== null && BUILDING.has(head.preview.status)) ||
+    // An open browser (docs/plan/57-browser-tasks.md): who drives it and what the agent asks
+    // there change while the dialog waits.
+    (head.browser !== null && LIVE_BROWSER.has(head.browser.status))
   const base = busy ? feedPolling.working : feedPolling.waiting
   return Math.min(base * 2 ** state.failures, feedPolling.max)
 }

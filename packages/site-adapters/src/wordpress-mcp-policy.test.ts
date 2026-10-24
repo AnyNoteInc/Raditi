@@ -334,6 +334,10 @@ describe('isAdminUrlDenied', () => {
     '/wp-admin/./plugins.php',
     '/wp-admin/x/../plugins.php',
     '/wp-admin/plugin%73.php',
+    // PHP runs the first script of a path and passes the rest as PATH_INFO.
+    '/wp-admin/users.php/x',
+    '/wp-admin/plugins.php/',
+    '/wp-admin/network/users.php/x',
     '/wp-admin/admin.php?page=dashboard&page=wc-settings',
     '/wp-admin/admin.php?page=WC-Settings',
     '/wp-admin/%zz',

@@ -18,6 +18,7 @@ function inner() {
     put: vi.fn(async () => undefined),
     get: vi.fn(async () => null),
     exists: vi.fn(async () => false),
+    stat: vi.fn(async () => null),
     delete: vi.fn(async () => undefined),
     checkBuckets: vi.fn(async (kinds?: readonly string[]) =>
       Object.fromEntries((kinds ?? bucketKinds).map((kind) => [kind, true])),

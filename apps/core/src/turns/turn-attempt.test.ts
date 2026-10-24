@@ -12,6 +12,8 @@ import {
   SANDBOX_SECRETS_DIR,
   toTurnPlan,
   TURN_PUBLICATION_GRACE_MS,
+  BROWSER_ONLY,
+  type PublicationSource,
   type TurnExecution,
   type TurnRequest,
 } from '@repo/domain'
@@ -25,7 +27,7 @@ import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { MemoryTurnCredentials } from '../testing/turn-credentials.ts'
 import { MemoryTurnJournal } from '../testing/turn-journal.ts'
 import { LeaseGuard } from './lease-guard.ts'
-import { TurnAttempt } from './turn-attempt.ts'
+import { gitNotConfigured, TurnAttempt } from './turn-attempt.ts'
 
 const labels = {
   workspaceId: '00000000-0000-4000-8000-000000000001',
@@ -35,7 +37,8 @@ const labels = {
   turn: 1,
 }
 
-const request: TurnRequest = {
+// A turn with a repository, as every turn was before plan 57: tests narrow its workspace.
+const request: TurnRequest & { workspace: PublicationSource } = {
   sandbox: {
     image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
     labels,
@@ -795,5 +798,151 @@ describe('TurnAttempt with a working set (plan 53, Р11)', () => {
       code: 'CONFLICT',
     })
     expect(r.capture).not.toHaveBeenCalled()
+  })
+})
+
+describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)', () => {
+  const result = {
+    summary: 'Готово',
+    change_type: 'content',
+    client_message: 'Новость сохранена черновиком.',
+    files_changed: [],
+    questions: [],
+    needs_approval: false,
+    risk: 'low',
+  }
+  const home = { root: `/agent-home/${sampleDriverId}`, include: ['state.db'], exclude: [] }
+  const { workspace: _workspace, ...withoutWorkspace } = request
+
+  async function homeOnly(
+    captured: { homeBytes: number; patch?: Uint8Array; untracked?: Uint8Array } = {
+      homeBytes: 4,
+    },
+    workspace: { preparePublication: ReturnType<typeof vi.fn> } | null = null,
+  ) {
+    const leases = new MemorySiteLeases()
+    const journal = new MemoryTurnJournal(leases)
+    const record = vi.spyOn(journal, 'record')
+    const lease = (await leases.acquire({
+      siteId: labels.siteId,
+      taskId: labels.taskId,
+      operation: 'turn',
+      ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS,
+    }))!
+    const release = vi.spyOn(leases, 'release')
+    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_TURN_MS)
+    guards.push(guard)
+    const plan = toTurnPlan({ ...withoutWorkspace, requirements: BROWSER_ONLY }, sampleDriverId)
+    const save = vi.fn(async (metadata: object) => ({
+      ...metadata,
+      schemaVersion: 1,
+      createdAt: request.committedAt,
+      parts: [],
+    }))
+    const capture = vi.fn(async () => captured)
+    const destroy = vi.fn(async () => {})
+    const execution = {
+      containerId: 'container1',
+      quiesce: vi.fn(async () => {}),
+      capture,
+      seal: vi.fn(),
+      destroy,
+    } as unknown as TurnExecution
+    const driver = {
+      id: sampleDriverId,
+      sessionState: () => home,
+      extractResult: () => result,
+    }
+    const attempt = new TurnAttempt(
+      {
+        leases,
+        assignments: new MemoryTurnAssignments(leases),
+        journal,
+        credentials: new MemoryTurnCredentials(),
+        workspace: workspace as never,
+        snapshots: { save } as never,
+      },
+      { lease, guard, plan, driver: driver as never },
+    )
+    attempt.execution = execution
+    const run = { context: { ...request.context }, files: [], env: {}, secrets: [] }
+    const phases = () => record.mock.calls.map(([entry]) => entry.phase)
+    return { attempt, capture, save, destroy, release, record, phases, run }
+  }
+
+  it('saves its home alone without git, removes the container and completes unpublished', async () => {
+    const r = await homeOnly()
+    const done = await r.attempt.complete([], r.run as never)
+    expect(done.result).toEqual(result)
+    expect(r.capture).toHaveBeenCalledExactlyOnceWith({ home })
+    const [metadata, parts] = r.save.mock.calls[0]! as unknown as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ]
+    expect(metadata).not.toHaveProperty('git')
+    expect(Object.keys(parts)).toEqual(['home'])
+    expect(parts.home).toMatchObject({ sizeBytes: 4 })
+    expect(r.destroy).toHaveBeenCalledExactlyOnceWith('completed')
+    expect(r.phases()).toEqual([
+      'quiesced',
+      'checkpointing',
+      'checkpointed',
+      'destroyed',
+      'completed',
+    ])
+    // No base and no candidate: its journal names none.
+    for (const [entry] of r.record.mock.calls) {
+      expect(entry).not.toHaveProperty('baseSha')
+      expect(entry).not.toHaveProperty('candidateHeadSha')
+    }
+    expect(r.release).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a capture that answers parts of a working copy', async () => {
+    const r = await homeOnly({ homeBytes: 4, patch: Buffer.from('p'), untracked: Buffer.from('u') })
+    await expect(r.attempt.complete([], r.run as never)).rejects.toThrow('candidate parts')
+    expect(r.save).not.toHaveBeenCalled()
+    expect(r.phases()).not.toContain('checkpointing')
+  })
+
+  it('never asks the workspace, even when git is configured', async () => {
+    const preparePublication = vi.fn()
+    const r = await homeOnly(undefined, { preparePublication })
+    await r.attempt.complete([], r.run as never)
+    expect(preparePublication).not.toHaveBeenCalled()
+  })
+
+  it('refuses a turn with a repository before quiesce when git is not configured', async () => {
+    const leases = new MemorySiteLeases()
+    const lease = (await leases.acquire({
+      siteId: labels.siteId,
+      taskId: labels.taskId,
+      operation: 'turn',
+      ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS,
+    }))!
+    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_TURN_MS)
+    guards.push(guard)
+    const quiesce = vi.fn(async () => {})
+    const attempt = new TurnAttempt(
+      {
+        leases,
+        assignments: new MemoryTurnAssignments(leases),
+        journal: new MemoryTurnJournal(leases),
+        credentials: new MemoryTurnCredentials(),
+        workspace: null,
+        snapshots: {} as never,
+      },
+      {
+        lease,
+        guard,
+        plan: toTurnPlan(request, sampleDriverId),
+        driver: { id: sampleDriverId } as never,
+      },
+    )
+    attempt.execution = { containerId: 'container1', quiesce } as unknown as TurnExecution
+    await expect(attempt.complete([], {} as never)).rejects.toMatchObject({
+      code: gitNotConfigured().code,
+    })
+    expect(quiesce).not.toHaveBeenCalled()
   })
 })
