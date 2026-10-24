@@ -252,10 +252,19 @@ describe.skipIf(!enabled)('real Docker browser session runtime', () => {
         }),
       )
 
-      /** A page that did not open, or the proxy's own refusal of it. */
+      /**
+       * A page that did not open, or the proxy's own refusal of it. Each in a tab of its own:
+       * Chromium commits the error page of a failed navigation after `goto` has rejected, and
+       * in the same tab that late commit interrupts the next navigation.
+       */
       const refused = async (address: string) => {
-        const answer = await page.goto(address, { timeout: 20_000 }).catch(() => null)
-        return answer === null || answer.headers()['raditi-egress'] !== undefined
+        const probe = await context.newPage()
+        try {
+          const answer = await probe.goto(address, { timeout: 20_000 }).catch(() => null)
+          return answer === null || answer.headers()['raditi-egress'] !== undefined
+        } finally {
+          await probe.close()
+        }
       }
       // An https host the session does not list: its tunnel is refused.
       expect(await refused('https://example.org/')).toBe(true)
