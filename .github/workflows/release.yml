@@ -24,6 +24,8 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,8 +36,32 @@ jobs:
       - name: Setup toolchain
         uses: ./.github/actions/setup
 
-      # Deploying the platform to a VM (spec §19, roadmap M10) will hook in here later.
+      - name: Remember the tags of this commit
+        run: git tag --points-at HEAD --list 'v*' | sort > "$RUNNER_TEMP/tags-before"
+
       - name: Run semantic-release
         run: pnpm exec semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # semantic-release tags the commit locally before it pushes: a tag that was not here before
+      # is the new release. A rerun of the same commit publishes nothing and builds no images.
+      - name: Read the tag of the new release
+        id: tag
+        run: |
+          git tag --points-at HEAD --list 'v*' | sort > "$RUNNER_TEMP/tags-after"
+          tag=$(comm -13 "$RUNNER_TEMP/tags-before" "$RUNNER_TEMP/tags-after" | tail -n 1)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "New release: ${tag:-none}"
+
+  # The tag semantic-release pushed with GITHUB_TOKEN starts no workflow, so the images are built
+  # from here. Deploying the platform to a VM (spec §19, roadmap M10) will follow this job.
+  images:
+    needs: release
+    if: needs.release.outputs.tag != ''
+    uses: ./.github/workflows/publish-images.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+    permissions:
+      contents: write
+      packages: write

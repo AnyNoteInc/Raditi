@@ -949,3 +949,89 @@ test('the llm profile of the app VM is verified on the engine of the VM, without
   ])
     assert.ok(starts(filter, file), `${file} does not start the workflow`)
 })
+
+test('publish-images.yml builds every app image of a release and names its digest', () => {
+  const source = workflow('publish-images')
+  const matrix = [
+    ...source.matchAll(
+      /^ {10}- image: (\S+)\n {12}file: (\S+)\n {12}target: (\S+)\n {12}variable: (\S+)$/gm,
+    ),
+  ].map(([, image, file, target, variable]) => ({ image, file, target, variable }))
+  // Every app with a Dockerfile ships its runtime image; core ships its migrate image as well.
+  const apps = readdirSync(join(root, 'apps')).filter((app) =>
+    existsSync(join(root, 'apps', app, 'Dockerfile')),
+  )
+  assert.ok(apps.length >= 7, 'the Dockerfiles of the apps were read')
+  assert.deepEqual(
+    matrix
+      .filter(({ target }) => target === 'runtime')
+      .map(({ image, file }) => [image, file])
+      .sort(),
+    apps.map((app) => [app, `apps/${app}/Dockerfile`]).sort(),
+  )
+  assert.deepEqual(
+    matrix.filter(({ target }) => target !== 'runtime'),
+    [
+      {
+        image: 'migrate',
+        file: 'apps/core/Dockerfile',
+        target: 'migrate',
+        variable: 'MIGRATE_IMAGE',
+      },
+    ],
+  )
+  // images.env names what the matrix built, in its order, and the app VM reads the same names.
+  const pairs = /for pair in ((?:[^;]|\\\n)+); do/.exec(source)
+  assert.ok(pairs, 'the digests job lists the images')
+  assert.deepEqual(
+    pairs[1].split(/\s+|\\/).filter(Boolean),
+    matrix.map(({ image, variable }) => `${image}:${variable}`),
+  )
+  const deployed = read('infra/app/env.example')
+  for (const variable of [
+    'WEB_IMAGE',
+    'CORE_IMAGE',
+    'MIGRATE_IMAGE',
+    'LLM_IMAGE',
+    'PREVIEW_GATEWAY_IMAGE',
+  ]) {
+    assert.ok(
+      matrix.some((entry) => entry.variable === variable),
+      `${variable} is not built`,
+    )
+    assert.match(deployed, new RegExp(`^${variable}=`, 'm'), `env.example deploys no ${variable}`)
+  }
+  // BROWSER_IMAGE is the Chromium of a session, not the worker.
+  assert.ok(!matrix.some(({ variable }) => variable === 'BROWSER_IMAGE'))
+  assert.equal(new Set(matrix.map(({ variable }) => variable)).size, matrix.length)
+  // A release tag only, and the build uses the commit the version job resolved.
+  assert.match(source, /\^v\(0\|\[1-9\]\[0-9\]\*\)/)
+  assert.match(source, /^ {10}ref: \$\{\{ needs\.version\.outputs\.revision \}\}$/m)
+  assert.match(source, /^ {10}platforms: linux\/amd64$/m)
+  // The tag a person typed reaches a script only through env, after the check of its form.
+  assert.deepEqual(
+    source
+      .split('\n')
+      .filter((line) => /inputs\.tag|github\.ref_name/.test(line) && !/^ +(?:if|tag):/.test(line))
+      .map((line) => line.trim().split(':')[0]),
+    ['group', 'TAG'],
+  )
+})
+
+test('release.yml publishes the images of the release semantic-release made', () => {
+  const source = workflow('release')
+  const order = [
+    'run: git tag --points-at HEAD',
+    'run: pnpm exec semantic-release',
+    'comm -13 "$RUNNER_TEMP/tags-before" "$RUNNER_TEMP/tags-after"',
+    'uses: ./.github/workflows/publish-images.yml',
+  ].map((text) => source.indexOf(text))
+  assert.ok(order[0] >= 0, 'the release job remembers the tags first')
+  assert.deepEqual(
+    order,
+    order.toSorted((left, right) => left - right),
+  )
+  assert.match(source, /^ {4}if: needs\.release\.outputs\.tag != ''$/m)
+  assert.match(source, /^ {6}tag: \$\{\{ needs\.release\.outputs\.tag \}\}$/m)
+  assert.match(source, /^ {6}packages: write$/m)
+})

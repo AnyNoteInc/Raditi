@@ -1,0 +1,186 @@
+name: Publish images
+
+# The release images of every app (apps/*/Dockerfile, and the migrate target of core), built from
+# the tag of a release and pushed to the GitHub Container Registry as
+# ghcr.io/<owner>/raditi/<image>:<version>, linux/amd64 (the VMs are x86_64).
+# release.yml calls it after semantic-release: a tag pushed with GITHUB_TOKEN starts no workflow,
+# so `push: tags` covers only a tag pushed by hand, and workflow_dispatch rebuilds a tag that exists.
+# The digests go to the release as images.env, under the names infra/app/env.example deploys:
+# the deploy (M10) pins the images by digest from there, not by the version tag.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v1.7.0
+        type: string
+        required: true
+
+concurrency:
+  group: publish-images-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      revision: ${{ steps.revision.outputs.revision }}
+      registry: ${{ steps.version.outputs.registry }}
+    steps:
+      # The tag comes through env, never into the script text.
+      - name: Read the version from the tag
+        id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::$TAG is not a release tag vX.Y.Z" >&2
+            exit 1
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=${TAG#v}"
+            echo "registry=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/raditi"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.version.outputs.tag }}
+          persist-credentials: false
+      # Every image of one run is built from this commit, even if the tag moves meanwhile.
+      - name: Resolve the commit of the tag
+        id: revision
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: web
+            file: apps/web/Dockerfile
+            target: runtime
+            variable: WEB_IMAGE
+          - image: core
+            file: apps/core/Dockerfile
+            target: runtime
+            variable: CORE_IMAGE
+          - image: migrate
+            file: apps/core/Dockerfile
+            target: migrate
+            variable: MIGRATE_IMAGE
+          - image: llm
+            file: apps/llm/Dockerfile
+            target: runtime
+            variable: LLM_IMAGE
+          - image: mcp
+            file: apps/mcp/Dockerfile
+            target: runtime
+            variable: MCP_IMAGE
+          - image: preview
+            file: apps/preview/Dockerfile
+            target: runtime
+            variable: PREVIEW_GATEWAY_IMAGE
+          - image: runner
+            file: apps/runner/Dockerfile
+            target: runtime
+            variable: RUNNER_IMAGE
+          - image: browser
+            file: apps/browser/Dockerfile
+            target: runtime
+            variable: BROWSER_WORKER_IMAGE
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.revision }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to the GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.version.outputs.registry }}/${{ matrix.image }}:${{ needs.version.outputs.version }}
+          # The source label links the package to this repository and its access.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.version.outputs.revision }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.title=raditi-${{ matrix.image }}
+          cache-from: type=gha,scope=publish-${{ matrix.image }}
+          cache-to: type=gha,scope=publish-${{ matrix.image }},mode=max
+
+  digests:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Log in to the GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      # The digest of what the version tag names now: the concurrency group keeps a rebuild of the
+      # same tag out until this run ends. The names are the build matrix, in its order.
+      - name: Write images.env
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          REVISION: ${{ needs.version.outputs.revision }}
+          REGISTRY: ${{ needs.version.outputs.registry }}
+        run: |
+          {
+            echo "# Raditi $TAG ($REVISION)"
+            for pair in web:WEB_IMAGE core:CORE_IMAGE migrate:MIGRATE_IMAGE llm:LLM_IMAGE \
+              mcp:MCP_IMAGE preview:PREVIEW_GATEWAY_IMAGE runner:RUNNER_IMAGE \
+              browser:BROWSER_WORKER_IMAGE; do
+              image=${pair%%:*}
+              digest=$(docker buildx imagetools inspect "$REGISTRY/$image:$VERSION" \
+                --format '{{json .Manifest}}' | jq -er .digest)
+              echo "${pair#*:}=$REGISTRY/$image@$digest"
+            done
+          } > images.env
+          { echo '```'; cat images.env; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: images-${{ needs.version.outputs.tag }}
+          path: images.env
+          if-no-files-found: error
+      # semantic-release creates the release before this runs; a tag pushed by hand may have none.
+      - name: Attach images.env to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" images.env --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            echo "::notice::$TAG has no release: images.env is only in the artifact of this run"
+          fi
