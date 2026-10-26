@@ -8,8 +8,9 @@ const reader = (files: Record<string, string>) => async (path: string) =>
 
 const site = reader({
   'wp-content/plugins/kadence-blocks/kadence-blocks.php':
-    "<?php\n/**\n * Plugin Name: Kadence Blocks\n * Version: 3.7.8.2\n */",
-  'wp-content/themes/twentytwentyfive/style.css': '/*\nTheme Name: Twenty Twenty-Five\nVersion: 1.4\n*/',
+    '<?php\n/**\n * Plugin Name: Kadence Blocks\n * Version: 3.7.8.2\n */',
+  'wp-content/themes/twentytwentyfive/style.css':
+    '/*\nTheme Name: Twenty Twenty-Five\nVersion: 1.4\n*/',
   'wp-includes/version.php': "<?php\n$wp_version = '6.9';\n",
 })
 

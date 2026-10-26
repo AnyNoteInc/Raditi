@@ -177,7 +177,12 @@ export class InitialVersionGit {
     home: string,
     cwd: string,
     args: string[],
-    run: { input?: Uint8Array; maxBytes?: number; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+    run: {
+      input?: Uint8Array
+      maxBytes?: number
+      env?: NodeJS.ProcessEnv
+      timeoutMs?: number
+    } = {},
   ): Promise<ProcessResult> {
     try {
       return await runTrustedGit(this.context(home), args, { cwd, ...run })
@@ -190,7 +195,12 @@ export class InitialVersionGit {
     home: string,
     cwd: string,
     args: string[],
-    run: { input?: Uint8Array; maxBytes?: number; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+    run: {
+      input?: Uint8Array
+      maxBytes?: number
+      env?: NodeJS.ProcessEnv
+      timeoutMs?: number
+    } = {},
   ): Promise<ProcessResult> {
     const result = await this.#git(home, cwd, args, run)
     if (result.code !== 0) throw refuse('internal')

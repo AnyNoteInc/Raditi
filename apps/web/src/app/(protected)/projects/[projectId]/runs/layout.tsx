@@ -19,7 +19,9 @@ export default async function RunsLayout({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = await params
-  const runs = await loadSiteHistory('runs', (caller) => caller.siteHistory.runs({ siteId: projectId }))
+  const runs = await loadSiteHistory('runs', (caller) =>
+    caller.siteHistory.runs({ siteId: projectId }),
+  )
   const items = runs === UNAVAILABLE ? [] : runItems(runs)
   return (
     <SiteListFrame

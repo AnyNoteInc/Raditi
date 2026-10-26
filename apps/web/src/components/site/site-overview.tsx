@@ -98,10 +98,20 @@ function AllChanges({ siteId }: { siteId: string }) {
 function CurrentVersionCard({ siteId, version }: { siteId: string; version: VersionView }) {
   return (
     <SiteCard title="Сейчас на сайте">
-      <Box sx={{ px: { xs: 2, sm: 2.75 }, py: 2.25, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      <Box
+        sx={{
+          px: { xs: 2, sm: 2.75 },
+          py: 2.25,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 0.75,
+        }}
+      >
         <Typography sx={{ fontWeight: 600, fontSize: 18 }}>{versionTitle(version)}</Typography>
         <Typography color="text.secondary">
-          <time dateTime={version.installedAt.toISOString()}>{formatMoscowMoment(version.installedAt)}</time>
+          <time dateTime={version.installedAt.toISOString()}>
+            {formatMoscowMoment(version.installedAt)}
+          </time>
           {' · версия '}
           <Box component="span" translate="no" sx={{ fontFamily: fontFamilies.mono }}>
             {version.version}
@@ -160,10 +170,21 @@ export function SiteOverview({
       {current && current.kind !== 'initial' && site.id ? (
         <CurrentVersionCard siteId={site.id} version={current} />
       ) : imported ? (
-        <InitialVersionCard version={site.initialVersion ?? null} {...(site.id ? { siteId: site.id } : {})} />
+        <InitialVersionCard
+          version={site.initialVersion ?? null}
+          {...(site.id ? { siteId: site.id } : {})}
+        />
       ) : null}
       <SiteCard title="Что сейчас происходит">
-        <Box sx={{ px: { xs: 2, sm: 2.75 }, py: 2.25, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+        <Box
+          sx={{
+            px: { xs: 2, sm: 2.75 },
+            py: 2.25,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 0.5,
+          }}
+        >
           <Typography>{stateNotes[site.state]}</Typography>
           {lastRun && site.id ? (
             <Typography variant="body2" color="text.secondary">

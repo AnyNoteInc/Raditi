@@ -100,7 +100,9 @@ describe('the icon of a site', () => {
 
   it('has no icon for an answer larger than its limit', async () => {
     routes.set('/favicon.ico', (res) =>
-      res.writeHead(200).end(Buffer.concat([Buffer.from(ico), Buffer.alloc(faviconLimits.maxBytes)])),
+      res
+        .writeHead(200)
+        .end(Buffer.concat([Buffer.from(ico), Buffer.alloc(faviconLimits.maxBytes)])),
     )
     const d = deps()
     expect((await getSiteFavicon(request(), { projectId: siteId }, d)).status).toBe(404)
@@ -175,9 +177,9 @@ describe('faviconType', () => {
     expect(faviconType(png)).toBe('image/png')
     expect(faviconType(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))).toBe('image/gif')
     expect(faviconType(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg')
-    expect(
-      faviconType(new TextEncoder().encode('RIFF\u0000\u0000\u0000\u0000WEBPVP8 ')),
-    ).toBe('image/webp')
+    expect(faviconType(new TextEncoder().encode('RIFF\u0000\u0000\u0000\u0000WEBPVP8 '))).toBe(
+      'image/webp',
+    )
     expect(faviconType(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'))).toBe(
       null,
     )

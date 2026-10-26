@@ -65,7 +65,11 @@ export class PostgresInitialBackupStore implements InitialBackupStore {
       siteId,
       commitSha,
       repository: {
-        ref: { provider: gitRepository.provider, owner: gitRepository.owner, name: gitRepository.name },
+        ref: {
+          provider: gitRepository.provider,
+          owner: gitRepository.owner,
+          name: gitRepository.name,
+        },
         url: gitRepository.url,
       },
     }))

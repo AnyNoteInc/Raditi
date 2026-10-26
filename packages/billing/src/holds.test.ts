@@ -1613,9 +1613,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         reserved: 45,
       })
       await settle(taskId!, 6)
-      expect(await place(workspaceId, taskId!, { attempt: 3, follows: 'continue' })).toMatchObject(
-        { applied: true, reserved: 45 },
-      )
+      expect(await place(workspaceId, taskId!, { attempt: 3, follows: 'continue' })).toMatchObject({
+        applied: true,
+        reserved: 45,
+      })
       expect(await reserve(taskId!)).toEqual([
         '#1 tariff 45 captured',
         '#2 tariff 45 captured',

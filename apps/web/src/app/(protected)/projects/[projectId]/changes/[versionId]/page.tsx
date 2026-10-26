@@ -25,6 +25,11 @@ export default async function Page({
   const version = versions[index]
   if (!version) notFound()
   return (
-    <VersionDetail siteId={site.id} version={version} next={versions[index - 1] ?? null} now={new Date()} />
+    <VersionDetail
+      siteId={site.id}
+      version={version}
+      next={versions[index - 1] ?? null}
+      now={new Date()}
+    />
   )
 }

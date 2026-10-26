@@ -159,11 +159,23 @@ describe('the variables an access of a site becomes', () => {
       'FTP_USER',
       'FTP_PASSWORD',
     ])
-    expect(siteAccessVariables('ftp', ftp, ['site21.ru']).map(({ name }) => name)).toContain('FTP_PORT')
+    expect(siteAccessVariables('ftp', ftp, ['site21.ru']).map(({ name }) => name)).toContain(
+      'FTP_PORT',
+    )
   })
 
   it('names the key or the password of SFTP, and the database and git with SITE_', () => {
-    const key = { v: '1', host: 'h.example', port: '22', hostKey: 'k', rootPath: '/www', username: 'u-sftp', auth: 'key', privateKey: '-----BEGIN KEY-----\nabc\n-----END KEY-----', passphrase: 'phrase-123' }
+    const key = {
+      v: '1',
+      host: 'h.example',
+      port: '22',
+      hostKey: 'k',
+      rootPath: '/www',
+      username: 'u-sftp',
+      auth: 'key',
+      privateKey: '-----BEGIN KEY-----\nabc\n-----END KEY-----',
+      passphrase: 'phrase-123',
+    }
     expect(siteAccessVariables('ssh', key, []).map(({ name }) => name)).toEqual([
       'SFTP_HOST',
       'SFTP_PORT',
@@ -171,7 +183,16 @@ describe('the variables an access of a site becomes', () => {
       'SFTP_PRIVATE_KEY',
       'SFTP_PASSPHRASE',
     ])
-    const db = { v: '1', engine: 'mysql', host: 'db.example', port: '3306', tls: 'plain', database: 'wp', username: 'wp-user', password: 'db-password-1' }
+    const db = {
+      v: '1',
+      engine: 'mysql',
+      host: 'db.example',
+      port: '3306',
+      tls: 'plain',
+      database: 'wp',
+      username: 'wp-user',
+      password: 'db-password-1',
+    }
     expect(siteAccessVariables('db', db, []).map(({ name }) => name)).toEqual([
       'SITE_DB_HOST',
       'SITE_DB_PORT',
@@ -179,7 +200,11 @@ describe('the variables an access of a site becomes', () => {
       'SITE_DB_USER',
       'SITE_DB_PASSWORD',
     ])
-    expect(siteAccessVariableNames('git')).toEqual(['SITE_GIT_URL', 'SITE_GIT_USER', 'SITE_GIT_TOKEN'])
+    expect(siteAccessVariableNames('git')).toEqual([
+      'SITE_GIT_URL',
+      'SITE_GIT_USER',
+      'SITE_GIT_TOKEN',
+    ])
     expect(siteAccessVariables('browser', { password: 'x' }, [])).toEqual([])
   })
 

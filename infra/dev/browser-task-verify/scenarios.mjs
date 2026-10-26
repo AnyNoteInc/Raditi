@@ -1598,7 +1598,10 @@ async function scenarioM(stand) {
   })
   for (const { id } of open) {
     await state.owner.mutate('task.cancel', { taskId: id, requestId: randomUUID() })
-    await waitTask(stand, id, ['cancelled'], { what: 'the open dialog to close', timeoutMs: 120_000 })
+    await waitTask(stand, id, ['cancelled'], {
+      what: 'the open dialog to close',
+      timeoutMs: 120_000,
+    })
   }
   const sessions = await rt.until(
     'every session of the site to close',

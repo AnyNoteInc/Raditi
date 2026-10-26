@@ -718,7 +718,10 @@ async function sessionCall<T>(signal: AbortSignal, work: () => Promise<T>): Prom
 const TRANSFER_RETRY_DELAYS_MS: readonly number[] = [2_000, 10_000, 30_000, 60_000]
 
 /** What a call of a session may meet again after a pause: a broken transfer, a login not let in. */
-const RETRYABLE_REASONS: ReadonlySet<ConnectionCheckReason> = new Set(['transfer_failed', 'unreachable'])
+const RETRYABLE_REASONS: ReadonlySet<ConnectionCheckReason> = new Set([
+  'transfer_failed',
+  'unreachable',
+])
 
 /**
  * Runs `work` again after the pauses of `delays` while it fails with a reason of

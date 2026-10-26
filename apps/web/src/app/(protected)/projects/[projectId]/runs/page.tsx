@@ -12,7 +12,9 @@ export const metadata: Metadata = { title: 'Запуски' }
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
   const site = await loadSiteSection((await params).projectId, 'runs')
   if (site === UNAVAILABLE) return <ServiceUnavailable />
-  const runs = await loadSiteHistory('runs', (caller) => caller.siteHistory.runs({ siteId: site.id }))
+  const runs = await loadSiteHistory('runs', (caller) =>
+    caller.siteHistory.runs({ siteId: site.id }),
+  )
   if (runs === UNAVAILABLE) return <ServiceUnavailable />
   const newest = runs[0]
   if (!newest) return <NoRuns />

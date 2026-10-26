@@ -60,7 +60,11 @@ export async function wordpressPublicOriginals(
       if (slug === undefined || !SLUG.test(slug) || rest.length === 0) continue
       const version =
         kind === 'plugins'
-          ? await versionOf(`plugin:${slug}`, `wp-content/plugins/${slug}/${slug}.php`, headerVersion)
+          ? await versionOf(
+              `plugin:${slug}`,
+              `wp-content/plugins/${slug}/${slug}.php`,
+              headerVersion,
+            )
           : await versionOf(`theme:${slug}`, `wp-content/themes/${slug}/style.css`, headerVersion)
       if (version === null) continue
       answers.set(
@@ -77,7 +81,10 @@ export async function wordpressPublicOriginals(
     if (!core) continue
     const version = await versionOf('core', 'wp-includes/version.php', coreVersion)
     if (version === null) continue
-    answers.set(path, `https://core.svn.wordpress.org/tags/${encodeURIComponent(version)}/${encodePath(segments)}`)
+    answers.set(
+      path,
+      `https://core.svn.wordpress.org/tags/${encodeURIComponent(version)}/${encodePath(segments)}`,
+    )
   }
   return answers
 }

@@ -75,7 +75,11 @@ export function HistoryList({
                 font: 'inherit',
                 fontSize: 14,
                 cursor: 'pointer',
-                '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
+                '&:focus-visible': {
+                  outline: '2px solid',
+                  outlineColor: 'primary.main',
+                  outlineOffset: 2,
+                },
               }}
             >
               {runFilterText[key]}
@@ -88,7 +92,10 @@ export function HistoryList({
           {items.length === 0 ? emptyText : 'Таких запусков нет.'}
         </Typography>
       ) : (
-        <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+        <Box
+          component="ul"
+          sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 0.5 }}
+        >
           {shown.map((item) => {
             const current = item.segment === segment
             return (

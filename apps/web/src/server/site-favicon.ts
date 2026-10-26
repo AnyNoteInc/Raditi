@@ -100,7 +100,10 @@ export function faviconType(bytes: Uint8Array): string | null {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** /favicon.ico of the origin, following redirects of the same origin only; null when none. */
-async function fetchFavicon(transport: SiteHttpTransport, origin: string): Promise<FaviconImage | null> {
+async function fetchFavicon(
+  transport: SiteHttpTransport,
+  origin: string,
+): Promise<FaviconImage | null> {
   const started = Date.now()
   let url = new URL('/favicon.ico', origin)
   for (let redirects = 0; ; redirects += 1) {

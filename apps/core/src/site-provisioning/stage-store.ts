@@ -1,4 +1,9 @@
-import { activateSite, enqueueSiteProvisioningStage, type Prisma, type PrismaClient } from '@repo/db'
+import {
+  activateSite,
+  enqueueSiteProvisioningStage,
+  type Prisma,
+  type PrismaClient,
+} from '@repo/db'
 import {
   INITIAL_SITE_TAG,
   provisioningLimits,
@@ -450,14 +455,12 @@ export class PostgresSiteImportStore implements SiteImportStore {
       SET installed_version = ${INITIAL_SITE_TAG}, installed_sha = ${commitSha},
           installed_at = now(), installed_release_id = NULL, updated_at = now()
       WHERE id = ${siteId}::uuid AND status = 'onboarding' AND installed_version IS NULL`
-    const source = z
-      .array(z.object({ kind: z.enum(siteAccessKinds) }))
-      .parse(
-        await tx.$queryRaw`
+    const source = z.array(z.object({ kind: z.enum(siteAccessKinds) })).parse(
+      await tx.$queryRaw`
           SELECT c.kind::text AS kind FROM site_code_sources s
           JOIN credential_refs c ON c.id = s.credential_ref_id
           WHERE s.site_id = ${siteId}::uuid`,
-      )[0]
+    )[0]
     if (source) await activateSite(tx, { siteId, requiredAccess: [source.kind] })
   }
 

@@ -493,7 +493,11 @@ describe('looksLikeSecret', () => {
       'ю:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIx.dBjftJeZ4',
       true,
     ],
-    ['a signed token with a short third part in one word', 'юeyJhbGciOiJIUzI1NiJ9.eyJz.dBjf', false],
+    [
+      'a signed token with a short third part in one word',
+      'юeyJhbGciOiJIUzI1NiJ9.eyJz.dBjf',
+      false,
+    ],
     ['an unknown prefix in one case', 'myco_live_0123456789abcdef0123456789abcdef', false],
     ['the words of a key header without the dashes', 'BEGIN PRIVATE KEY', false],
   ])('keeps the bounds of the known key formats: %s', (_name, text, refused) => {

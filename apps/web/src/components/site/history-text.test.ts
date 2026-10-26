@@ -41,7 +41,9 @@ describe('history texts', () => {
 
   it('notes a run in the list with its state, day and installed version', () => {
     expect(runListNote(run)).toBe('Выполнен · 25 октября · версия 0.1.0')
-    expect(runListNote({ ...run, state: 'rolled_back' })).toBe('Ошибка · сайт возвращён · 25 октября')
+    expect(runListNote({ ...run, state: 'rolled_back' })).toBe(
+      'Ошибка · сайт возвращён · 25 октября',
+    )
   })
 
   it('filters runs that go on and runs that did not succeed', () => {
@@ -59,13 +61,15 @@ describe('history texts', () => {
 
   it('writes a journal line from the codes of a report, never from a message', () => {
     expect(runLineText({ step: 'verify', event: 'failed' })).toBe('Проверка сайта: не получилось')
-    expect(runLineText({ step: 'import', event: 'files', files: 8071, bytes: 2 * 1024 * 1024 })).toBe(
-      'Сохранено 8 071 файл, 2 МБ',
-    )
+    expect(
+      runLineText({ step: 'import', event: 'files', files: 8071, bytes: 2 * 1024 * 1024 }),
+    ).toBe('Сохранено 8 071 файл, 2 МБ')
   })
 
   it('says how the files reach Радити by the source kind and protection', () => {
     expect(sourceText({ kind: 'sftp', tls: null })).toBe('Копирование файлов по SFTP (SSH)')
-    expect(sourceText({ kind: 'ftp', tls: 'plain' })).toBe('Копирование файлов по FTP без шифрования')
+    expect(sourceText({ kind: 'ftp', tls: 'plain' })).toBe(
+      'Копирование файлов по FTP без шифрования',
+    )
   })
 })

@@ -49,7 +49,8 @@ export function runOutcomeText(run: Pick<RunView, 'kind' | 'state' | 'version'>)
   if (run.kind === 'import') {
     if (run.state === 'failed')
       return 'Копирование файлов остановилось. Что случилось и как продолжить — на странице «Обзор».'
-    if (run.state === 'running') return 'Копируем файлы сайта и сохраняем его первоначальную версию.'
+    if (run.state === 'running')
+      return 'Копируем файлы сайта и сохраняем его первоначальную версию.'
     return null
   }
   switch (run.state) {
@@ -119,7 +120,8 @@ export function durationText(from: Date, to: Date): string {
   const seconds = Math.max(0, Math.round((to.getTime() - from.getTime()) / 1000))
   if (seconds < 60) return `${seconds} с`
   const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return seconds % 60 === 0 ? `${minutes} мин` : `${minutes} мин ${seconds % 60} с`
+  if (minutes < 60)
+    return seconds % 60 === 0 ? `${minutes} мин` : `${minutes} мин ${seconds % 60} с`
   const hours = Math.floor(minutes / 60)
   return minutes % 60 === 0 ? `${hours} ч` : `${hours} ч ${minutes % 60} мин`
 }
