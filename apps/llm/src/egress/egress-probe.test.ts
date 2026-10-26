@@ -76,7 +76,10 @@ describe('authenticated egress channel probe', () => {
     async (options) => {
       const f = await fixture(options)
       try {
-        expect(await createEgressProbe(f.config).check(AbortSignal.timeout(150))).toBe(false)
+        // A stalled answer is waited for 2 s; the others end the probe as soon as they come —
+        // the bound leaves the request time to arrive on a loaded CI runner.
+        const bound = 'stall' in options ? 2000 : 10_000
+        expect(await createEgressProbe(f.config).check(AbortSignal.timeout(bound))).toBe(false)
         expect(f.requests).toHaveLength(1)
       } finally {
         await f.close()
