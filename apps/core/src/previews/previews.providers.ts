@@ -41,17 +41,21 @@ import { PREVIEW_RUNTIME } from './previews.tokens.ts'
 import { createPreviewSiteSources } from './site-sources.ts'
 
 /**
- * The runtime of core's own Docker for PREVIEW_EXECUTOR=local; null with runner VMs (M10). Its
- * egress proxy refuses the platform's subnets the sandbox gateway refuses (R10).
+ * The runtime of core's own Docker for PREVIEW_EXECUTOR=local; null with runner VMs (M10). The
+ * rules of a preview's bridge close the platform's subnets the sandbox gateway refuses (R10) and
+ * every address that is not public (docs/plan/58). Without their image
+ * (SANDBOX_NETWORK_GUARD_IMAGE) there is no runtime either: core starts, and its previews end
+ * `not_configured`, as without the images of previews.
  */
 export function previewRuntimeConfig(previews: PreviewsConfig | null): DockerPreviewConfig | null {
-  if (!previews?.docker) return null
+  if (!previews?.docker?.firewallImage) return null
   return {
     runtime: previews.runtime,
     socketPath: previews.docker.socketPath,
     gatewayPort: previews.gatewayPort,
-    egressRefusedSubnets: [...previews.egressRefusedSubnets],
-    ...(previews.docker.firewallImage ? { firewallImage: previews.docker.firewallImage } : {}),
+    firewallImage: previews.docker.firewallImage,
+    refusedSubnets: [...previews.refusedSubnets],
+    dnsServers: [...previews.dnsServers],
   }
 }
 

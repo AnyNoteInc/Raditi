@@ -7,8 +7,9 @@ import { networkInterfaces } from 'node:os'
 import { clearTimeout, setTimeout } from 'node:timers'
 
 // The client egress proxy (docs/plan/53-chat-preview-release.md, Р13): the only way from the
-// agent's shell commands (a listener of its own on sandbox-gw) and from a preview's PHP (its own
-// container, PREVIEW_EGRESS_IMAGE) to the hosts the client's variables lead to. Plain HTTP on an
+// agent's shell commands (a listener of its own on sandbox-gw) to the hosts the client's variables
+// lead to, and from the Chromium of a task's browser session (its own container) to the hosts of
+// its site (docs/plan/57-browser-tasks.md). A preview has none since docs/plan/58. Plain HTTP on an
 // internal network, CONNECT only: the client's own TLS goes through the tunnel untouched, and a
 // request in plain HTTP is never forwarded. A CONNECT target must be one `host:port` of the list,
 // a DNS name. The name is resolved at every connection, here; one address that is not public —

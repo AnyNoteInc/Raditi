@@ -139,29 +139,31 @@ describe('what a stack says about previews', () => {
 })
 
 describe('the runtime and the browser', () => {
-  it('takes a spec with images pinned by digest and egress as host:port', () => {
+  it('takes a spec of one container with its images pinned by digest (plan 58)', () => {
     const spec = {
       previewId: '0196abcd-0000-7000-8000-00000000000a',
       siteId: '0196abcd-0000-7000-8000-00000000000b',
       taskId: '0196abcd-0000-7000-8000-00000000000c',
       runtime: 'runsc',
-      images: {
-        web: image('php'),
-        db: image('mariadb'),
-        cli: image('cli'),
-        forwarder: image('fwd'),
-        egress: null,
-      },
+      images: { preview: image('site'), tools: image('tools') },
+      database: true,
       recipe,
-      limits: { cpu: 1, memoryMiB: 1024, pids: 256 },
-      egress: ['api.example.ru'],
+      limits: { cpu: 2, memoryMiB: 2048, pids: 512 },
       upstreamHost: '127.0.0.1',
       hostname: 'site-0f3a9c1b-chat-a1b2c3.localhost',
       origin: 'http://site-0f3a9c1b-chat-a1b2c3.localhost:8090',
       productionOrigin: 'https://shop.example.ru',
       expiresAt: Date.parse('2026-10-20T12:00:00Z'),
     }
-    expect(previewRuntimeSpecSchema.parse(spec).egress).toEqual(['api.example.ru:443'])
+    expect(previewRuntimeSpecSchema.parse(spec).images.preview).toBe(image('site'))
+    // A database needs the engine of the recipe; the preview's internet is open: no host list.
+    expect(
+      previewRuntimeSpecSchema.safeParse({ ...spec, recipe: { ...recipe, database: null } })
+        .success,
+    ).toBe(false)
+    expect(
+      previewRuntimeSpecSchema.safeParse({ ...spec, egress: ['api.example.ru'] }).success,
+    ).toBe(false)
     for (const expiresAt of [0, 1.5, new Date('2026-10-20T12:00:00Z')])
       expect(previewRuntimeSpecSchema.safeParse({ ...spec, expiresAt }).success).toBe(false)
     for (const broken of [
@@ -174,12 +176,11 @@ describe('the runtime and the browser', () => {
     ])
       expect(previewRuntimeSpecSchema.safeParse({ ...spec, ...broken }).success).toBe(false)
     expect(
-      previewRuntimeSpecSchema.safeParse({ ...spec, images: { ...spec.images, web: 'php:8.3' } })
-        .success,
+      previewRuntimeSpecSchema.safeParse({
+        ...spec,
+        images: { ...spec.images, preview: 'raditi-preview-site:8.3' },
+      }).success,
     ).toBe(false)
-    expect(previewRuntimeSpecSchema.safeParse({ ...spec, egress: ['10.0.0.1'] }).success).toBe(
-      false,
-    )
   })
 
   it('hands the variables and the database to the preview in its settings file only', () => {
@@ -202,29 +203,29 @@ describe('the runtime and the browser', () => {
         false,
       )
     const settings = {
-      v: 1,
+      v: 2,
       hostname: 'site-0f3a9c1b-chat-a1b2c3.localhost',
       origin: 'http://site-0f3a9c1b-chat-a1b2c3.localhost:8090',
       productionOrigin: 'https://shop.example.ru',
       database: {
         engine: 'mysql',
-        host: 'db',
+        host: '127.0.0.1',
         port: 3306,
         name: 'preview',
         user: 'preview',
         password: 'p'.repeat(32),
       },
-      egress: { proxy: { host: 'egress', port: 3128 }, hosts: ['api.example.ru:443'] },
       settings: { DISABLE_WP_CRON: true },
       env: { SHOP_API_KEY: 'k'.repeat(12) },
     }
     expect(previewSettingsSchema.parse(settings)).toEqual(settings)
     expect(previewSettingsSchema.safeParse({ ...settings, database: null }).success).toBe(true)
-    expect(previewSettingsSchema.safeParse({ ...settings, egress: null }).success).toBe(true)
+    // Version 2 (plan 58): no egress proxy — the preview's internet is open.
+    expect(previewSettingsSchema.safeParse({ ...settings, v: 1 }).success).toBe(false)
     expect(
       previewSettingsSchema.safeParse({
         ...settings,
-        egress: { ...settings.egress, hosts: ['10.0.0.1:443'] },
+        egress: { proxy: { host: 'egress', port: 3128 }, hosts: ['api.example.ru:443'] },
       }).success,
     ).toBe(false)
     expect(

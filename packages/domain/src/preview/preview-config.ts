@@ -27,6 +27,13 @@ export const previewDefaults = Object.freeze({
   idleMinutes: 30,
   /** PREVIEW_UPSTREAM_HOST: where the entry forwarders publish (loopback of core in dev). */
   upstreamHost: '127.0.0.1',
+  /**
+   * PREVIEW_DNS_SERVERS: the resolvers a preview's PHP asks (docs/plan/58, «Решение владельца»:
+   * its internet is open), public ones only. Under gVisor the forwarder of names inside the
+   * container asks them (infra/preview/dns.mjs); under runc Docker's resolver answers first and
+   * asks the same servers.
+   */
+  dnsServers: ['77.88.8.8', '77.88.8.1'] as readonly string[],
   /** RELEASE_API_PORT: the release API of core. */
   releaseApiPort: 8085,
   /** RELEASE_START_TIMEOUT_MINUTES: a deploy job silent this long is revoked (Р31). */
@@ -44,8 +51,13 @@ export type PreviewExecutorKind = (typeof previewExecutorKinds)[number]
 export const previewRuntimes = sandboxRuntimes
 export type PreviewRuntimeKind = (typeof previewRuntimes)[number]
 
-/** The roles of the containers whose images the platform pins (PREVIEW_*_IMAGE). */
-export const previewImageRoles = ['db', 'cli', 'forwarder', 'browser', 'egress'] as const
+/**
+ * The roles of the images the platform pins besides the preview's own (PREVIEW_*_IMAGE): the
+ * database of a dump's staging (`db`), the platform's tools (`forwarder` — the files helper, the
+ * lease, the browser relay) and the agent's browser. The preview itself is one image per runtime
+ * version (PREVIEW_SITE_IMAGES, docs/plan/58).
+ */
+export const previewImageRoles = ['db', 'forwarder', 'browser'] as const
 export type PreviewImageRole = (typeof previewImageRoles)[number]
 
 /** One image: a repository pinned by digest, no tag. */
@@ -154,8 +166,18 @@ export function previewSessionSecretProblem(
 
 const PHP_VERSION = /^\d{1,2}\.\d{1,2}$/
 
-/** `PREVIEW_WEB_IMAGES`: a web image per runtime version, e.g. `8.3=<image@sha256:…>,8.2=…`. */
-export function parsePreviewWebImages(raw: string | undefined): {
+/** PREVIEW_DNS_SERVERS: one to three IPv4 resolvers, comma-separated. */
+export const previewDnsServersSchema = z
+  .string()
+  .transform((raw) => raw.split(',').map((part) => part.trim()))
+  .pipe(z.array(z.ipv4()).min(1).max(3))
+
+/**
+ * `PREVIEW_SITE_IMAGES`: the image of a preview per runtime version (infra/preview/Dockerfile,
+ * target `site` — the site's server, its database and its gateway; docs/plan/58), e.g.
+ * `8.3=<image@sha256:…>,8.2=…`.
+ */
+export function parsePreviewSiteImages(raw: string | undefined): {
   images: Readonly<Record<string, string>>
   problems: string[]
 } {
@@ -167,11 +189,11 @@ export function parsePreviewWebImages(raw: string | undefined): {
     const version = entry.slice(0, at).trim()
     const image = entry.slice(at + 1).trim()
     if (at < 0 || !PHP_VERSION.test(version))
-      problems.push('PREVIEW_WEB_IMAGES: expected <version>=<image@sha256:…> entries, e.g. 8.3=…')
+      problems.push('PREVIEW_SITE_IMAGES: expected <version>=<image@sha256:…> entries, e.g. 8.3=…')
     else if (!previewImageSchema.safeParse(image).success)
-      problems.push(`PREVIEW_WEB_IMAGES: the image of ${version} must be pinned by digest`)
+      problems.push(`PREVIEW_SITE_IMAGES: the image of ${version} must be pinned by digest`)
     else if (Object.hasOwn(images, version))
-      problems.push(`PREVIEW_WEB_IMAGES: ${version} is listed twice`)
+      problems.push(`PREVIEW_SITE_IMAGES: ${version} is listed twice`)
     else images[version] = image
   }
   return { images: Object.freeze(images), problems }

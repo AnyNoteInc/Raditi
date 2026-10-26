@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
 import {
-  parsePreviewWebImages,
+  parsePreviewSiteImages,
   previewAddressEnvShape,
   previewAddressFromEnv,
   previewAddressProblems,
@@ -109,19 +109,19 @@ describe('the session secret and the images', () => {
   })
 
   it('reads web images by runtime version, each pinned by digest', () => {
-    expect(parsePreviewWebImages(undefined)).toEqual({ images: {}, problems: [] })
+    expect(parsePreviewSiteImages(undefined)).toEqual({ images: {}, problems: [] })
     expect(
-      parsePreviewWebImages(`8.3=registry.raditi.ru/preview-php@${digest}, 8.2=php@${digest}`),
+      parsePreviewSiteImages(`8.3=registry.raditi.ru/preview-php@${digest}, 8.2=php@${digest}`),
     ).toEqual({
       images: { '8.3': `registry.raditi.ru/preview-php@${digest}`, '8.2': `php@${digest}` },
       problems: [],
     })
-    expect(parsePreviewWebImages('8.3=php:8.3-apache').problems).toEqual([
-      'PREVIEW_WEB_IMAGES: the image of 8.3 must be pinned by digest',
+    expect(parsePreviewSiteImages('8.3=php:8.3-apache').problems).toEqual([
+      'PREVIEW_SITE_IMAGES: the image of 8.3 must be pinned by digest',
     ])
-    expect(parsePreviewWebImages(`php@${digest}`).problems).toHaveLength(1)
-    expect(parsePreviewWebImages(`8.3=php@${digest},8.3=php@${digest}`).problems).toEqual([
-      'PREVIEW_WEB_IMAGES: 8.3 is listed twice',
+    expect(parsePreviewSiteImages(`php@${digest}`).problems).toHaveLength(1)
+    expect(parsePreviewSiteImages(`8.3=php@${digest},8.3=php@${digest}`).problems).toEqual([
+      'PREVIEW_SITE_IMAGES: 8.3 is listed twice',
     ])
   })
 

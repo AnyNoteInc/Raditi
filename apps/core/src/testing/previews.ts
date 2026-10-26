@@ -66,6 +66,7 @@ export class FakeRuntime implements PreviewRuntime {
     this.secrets.push(secrets)
     this.running.set(spec.previewId, this.upstream)
     this.stopped.delete(spec.previewId)
+    this.brokenBoundaries.delete(spec.previewId)
     return this.upstream
   }
 
@@ -82,6 +83,15 @@ export class FakeRuntime implements PreviewRuntime {
     return this.stopped.has(previewId)
       ? { previewId, runtime: 'runc' as const, running: false, upstream: null }
       : null
+  }
+
+  /** Previews whose rules `checkBoundary` finds not whole until their next `ensure`. */
+  readonly brokenBoundaries = new Set<string>()
+
+  async checkBoundary(previewId: string) {
+    this.calls.push('checkBoundary')
+    if (this.running.has(previewId) && this.brokenBoundaries.has(previewId))
+      throw new Error('The rules of the preview bridge are not whole')
   }
 
   async writeFiles(_previewId: string, input: PreviewFilesInput) {

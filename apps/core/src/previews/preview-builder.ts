@@ -6,7 +6,6 @@ import {
   assertPreviewTransition,
   DB_CREATED_ID_BASE,
   DomainError,
-  egressHostListSchema,
   envVarReachesPreview,
   isDatabaseCopyError,
   isDomainError,
@@ -120,7 +119,11 @@ export interface PreviewBuildDeps {
 }
 
 /** The resources of each container of a preview (Р18). */
-export const previewContainerLimits = Object.freeze({ cpu: 1, memoryMiB: 1024, pids: 256 })
+/**
+ * The preview's container (docs/plan/58): its server and its database together, as the two
+ * containers had before it.
+ */
+export const previewContainerLimits = Object.freeze({ cpu: 2, memoryMiB: 2048, pids: 512 })
 /** Files a rebuild writes as a difference; more and the whole tree is written. */
 export const DIFF_REBUILD_FILES = 2_000
 /** The longest a write of the mcp role into the preview may still land (R7: 15 s). */
@@ -302,17 +305,19 @@ async function databaseAccess(deps: PreviewBuildDeps, siteId: string): Promise<D
   return found.access
 }
 
-/** The client's variables the preview gets (Р13, `envVarReachesPreview`) and their hosts. */
+/**
+ * The client's variables the preview gets (Р13, `envVarReachesPreview`). Their hosts no longer
+ * matter to it: its internet is open (docs/plan/58).
+ */
 async function previewVariables(
   deps: PreviewBuildDeps,
   siteId: string,
   dataClass: 'synthetic' | 'client',
-): Promise<{ env: Record<string, string>; hosts: string[] }> {
+): Promise<{ env: Record<string, string> }> {
   const rows = await deps.db.siteEnvVar.findMany({
     where: { siteId },
     select: {
       name: true,
-      hosts: true,
       toAgent: true,
       toPreview: true,
       agentConsentAt: true,
@@ -321,7 +326,6 @@ async function previewVariables(
     orderBy: { name: 'asc' },
   })
   const env: Record<string, string> = {}
-  const hosts = new Set<string>()
   for (const row of rows) {
     if (!envVarReachesPreview(row, dataClass)) continue
     const stored = await deps.secrets.kvRead(siteEnvVarPath(siteId, row.name))
@@ -330,19 +334,17 @@ async function previewVariables(
     const value = siteEnvVarValueOf(stored.data)
     if (value === null) continue
     env[row.name] = value
-    const listed = egressHostListSchema.safeParse(row.hosts)
-    if (listed.success) for (const host of listed.data) hosts.add(host)
   }
-  return { env, hosts: [...hosts].sort() }
+  return { env }
 }
 
-/** The web image of the first runtime version the recipe takes that this host has (Р18). */
-function webImage(config: PreviewsConfig, recipe: PreviewRecipe): string {
+/** The image of the first runtime version the recipe takes that this host has (Р18, plan 58). */
+function siteImage(config: PreviewsConfig, recipe: PreviewRecipe): string {
   for (const version of recipe.runtimeVersions) {
-    const image = config.webImages[version]
+    const image = config.siteImages[version]
     if (image) return image
   }
-  if (Object.keys(config.webImages).length === 0) throw previewFailure('not_configured')
+  if (Object.keys(config.siteImages).length === 0) throw previewFailure('not_configured')
   throw new PreviewUnavailable('not_supported')
 }
 
@@ -617,10 +619,9 @@ async function buildPreviewOn(
   }
   const missing = await git.missingPaths({ repo, sha: headSha, paths: recipe.requiredPaths })
   if (missing.length) throw new PreviewUnavailable('no_core')
-  const web = webImage(deps.config, recipe)
+  const web = siteImage(deps.config, recipe)
   const images = deps.config.images
-  if (!images.cli || !images.forwarder || (recipe.database !== null && !images.db))
-    throw previewFailure('not_configured')
+  if (!images.forwarder) throw previewFailure('not_configured')
 
   // The seed: a copy of the site's database, filtered at the source (Р15). The objects that
   // differ from production are written with the outcome of the build.
@@ -679,25 +680,18 @@ async function buildPreviewOn(
   await staging.release()
   if (!seed) throw previewFailure('seed_missing')
 
-  // The containers (Р18) with the variables of the client that reach a preview (Р13).
+  // The container (Р18, plan 58) with the variables of the client that reach a preview (Р13).
   const variables = await previewVariables(deps, site.id, task.dataClass)
-  const egress = variables.hosts.length > 0 && images.egress !== null
   const origin = previewOriginOf(deps.config, preview.hostname)
   const spec: PreviewRuntimeSpec = {
     previewId: preview.id,
     siteId: site.id,
     taskId: preview.taskId,
     runtime: deps.config.runtime,
-    images: {
-      web,
-      db: recipe.database === null ? null : images.db,
-      cli: images.cli,
-      forwarder: images.forwarder,
-      egress: egress ? images.egress : null,
-    },
+    images: { preview: web, tools: images.forwarder },
+    database: recipe.database !== null,
     recipe,
     limits: previewContainerLimits,
-    egress: egress ? variables.hosts : [],
     upstreamHost: deps.config.upstreamHost,
     hostname: preview.hostname,
     origin,

@@ -115,9 +115,9 @@ test('only absolute Unix socket paths are accepted', () => {
 const preview = 'io.raditi.preview.'
 const previewA = '0196abcd-0000-7000-8000-00000000000a'
 const previewB = '0196abcd-0000-7000-8000-00000000000b'
-const ofPreview = (id, deadline, extra = {}) => ({
+const ofPreview = (id, deadline, extra = {}, protocol = '1') => ({
   [`${preview}owner`]: 'raditi',
-  [`${preview}protocol`]: '1',
+  [`${preview}protocol`]: protocol,
   [`${preview}id`]: id,
   [`${preview}deadline`]: String(deadline),
   ...extra,
@@ -132,6 +132,8 @@ function previewDaemon({ containers = [], networks = [], volumes = [], fail = ()
       return null
     }
     assert.match(path, /io\.raditi\.preview\.owner%3Draditi/)
+    // Every protocol is listed: the watchdog tells them apart itself.
+    assert.doesNotMatch(path, /protocol/)
     if (path.startsWith('/containers')) return containers
     if (path.startsWith('/networks')) return networks
     return { Volumes: volumes }
@@ -258,6 +260,56 @@ test('a container that stays keeps the networks and volumes of its preview', asy
     `/containers/${'a'.repeat(64)}?force=1&v=1`,
     `/containers/${'b'.repeat(64)}?force=1&v=1`,
     `/networks/${'d'.repeat(64)}`,
+  ])
+})
+
+test('a preview of plan 58 — one container `preview` — goes like one of plan 53', async () => {
+  const two = (id, deadline) => ofPreview(id, deadline, {}, '2')
+  const daemon = previewDaemon({
+    containers: [
+      {
+        Id: 'a'.repeat(64),
+        Names: [`/raditi-preview-${previewA}-preview`],
+        Labels: two(previewA, 99),
+      },
+      {
+        Id: 'b'.repeat(64),
+        Names: [`/raditi-preview-${previewA}-lease-99`],
+        Labels: two(previewA, 99),
+      },
+      // A preview of protocol 1 still on the host, and one of protocol 2 ahead of its deadline.
+      {
+        Id: 'c'.repeat(64),
+        Names: [`/raditi-preview-${previewB}-web`],
+        Labels: ofPreview(previewB, 99),
+      },
+      {
+        Id: 'd'.repeat(64),
+        Names: [`/raditi-preview-${previewB}-preview`],
+        Labels: ofPreview(previewB, 500, {}, '2'),
+      },
+      // An unknown protocol is never ours to remove.
+      {
+        Id: 'e'.repeat(64),
+        Names: [`/raditi-preview-${previewA}-other`],
+        Labels: ofPreview(previewA, 99, {}, '3'),
+      },
+    ],
+    networks: [
+      { Id: 'f'.repeat(64), Name: `raditi-preview-${previewA}`, Labels: two(previewA, 99) },
+    ],
+    volumes: [
+      { Name: `rpv-${previewA}-files`, Labels: two(previewA, 99) },
+      { Name: `rpv-${previewA}-db`, Labels: two(previewA, 99) },
+    ],
+  })
+  assert.equal(await reapExpiredPreviews(daemon.client, 100), 5)
+  assert.deepEqual(daemon.calls, [
+    `/containers/${'a'.repeat(64)}?force=1&v=1`,
+    `/containers/${'b'.repeat(64)}?force=1&v=1`,
+    `/networks/${'f'.repeat(64)}`,
+    `/volumes/rpv-${previewA}-files`,
+    `/volumes/rpv-${previewA}-db`,
   ])
 })
 

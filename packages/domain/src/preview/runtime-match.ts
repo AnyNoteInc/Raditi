@@ -4,7 +4,7 @@ import type { SiteRuntime } from '../ports/published-content.ts'
 
 // How the runtime of a preview stands to the site's (docs/plan/53-chat-preview-release.md, Р2,
 // Р18): the host of previews runs the closest version of the site's language runtime it has an
-// image of (`PREVIEW_WEB_IMAGES`), with the extensions of that image. What differs is told in
+// image of (`PREVIEW_SITE_IMAGES`), with the extensions of that image. What differs is told in
 // «Проверки»: a check of the preview may pass where the site would fail, and the reverse.
 
 const runtimeVersion = z.string().regex(/^\d{1,2}\.\d{1,2}$/)

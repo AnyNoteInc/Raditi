@@ -43,11 +43,10 @@ export function dockerClient(socketPath) {
     })
 }
 
-function listPath(kind, prefix) {
-  const query = new URLSearchParams({
-    all: '1',
-    filters: JSON.stringify({ label: [`${prefix}owner=raditi`, `${prefix}protocol=1`] }),
-  })
+/** `protocol` null — every protocol of the owner (Docker ANDs label filters): the caller checks. */
+function listPath(kind, prefix, protocol = '1') {
+  const label = [`${prefix}owner=raditi`, ...(protocol ? [`${prefix}protocol=${protocol}`] : [])]
+  const query = new URLSearchParams({ all: '1', filters: JSON.stringify({ label }) })
   return `/${kind}?${query}`
 }
 
@@ -128,9 +127,19 @@ export async function reapExpired(client, now = Date.now()) {
   return removed
 }
 
+/**
+ * The protocols of previews: 1 — the containers `web`, `db`, `forwarder`, `egress`, `cli` of plan
+ * 53; 2 — the one container `preview` of plan 58 (docs/plan/58-preview-single-container.md). Both
+ * name their resources the same way, and a host may hold both while core rebuilds old previews.
+ */
+const previewProtocols = ['1', '2']
+
 /** The preview of a resource and its deadline; null for anything that is not ours. */
 function previewOf(labels) {
-  if (labels?.[`${previewPrefix}owner`] !== 'raditi' || labels[`${previewPrefix}protocol`] !== '1')
+  if (
+    labels?.[`${previewPrefix}owner`] !== 'raditi' ||
+    !previewProtocols.includes(labels[`${previewPrefix}protocol`])
+  )
     return null
   const id = labels[`${previewPrefix}id`]
   const deadline = Number(labels[`${previewPrefix}deadline`])
@@ -143,12 +152,14 @@ function previewOf(labels) {
  * Previews of dialogs (docs/plan/53-chat-preview-release.md, Р18) live until the latest deadline
  * of any of their resources: labels cannot change, so core extends a preview with a new lease
  * container. Past it, everything of the preview goes — containers, then networks, then volumes —
- * and only by the names the runtime gives them.
+ * and only by the names the runtime gives them: `raditi-preview-<id>-<role>` (the one `preview` of
+ * protocol 2 among them), `raditi-preview-<id>[-browser]`, `rpv-<id>-files|db`. The host rules of
+ * a removed bridge go with the next sweep of infra/sandbox/host-firewall.mjs.
  */
 export async function reapExpiredPreviews(client, now = Date.now()) {
-  const containers = await client('GET', listPath('containers/json', previewPrefix))
-  const networks = await client('GET', listPath('networks', previewPrefix))
-  const volumes = (await client('GET', listPath('volumes', previewPrefix)))?.Volumes ?? []
+  const containers = await client('GET', listPath('containers/json', previewPrefix, null))
+  const networks = await client('GET', listPath('networks', previewPrefix, null))
+  const volumes = (await client('GET', listPath('volumes', previewPrefix, null)))?.Volumes ?? []
   const latest = new Map()
   for (const item of [...containers, ...networks, ...volumes]) {
     const preview = previewOf(item.Labels)

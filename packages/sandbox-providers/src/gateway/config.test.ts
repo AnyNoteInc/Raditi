@@ -59,10 +59,17 @@ describe('trusted gateway config', () => {
       expect(() => gatewayConfigFromEnv({ ...env, SANDBOX_EGRESS_REFUSED_SUBNETS: bad })).toThrow(
         /SANDBOX_EGRESS_REFUSED_SUBNETS/,
       )
-    // Alone it is no gateway: the group stays complete or absent.
-    expect(() =>
+    // Alone it is no gateway: the subnets and the image of the host rules serve the previews and
+    // the browser sessions too (docs/plan/58), the gateway's own variables turn it on.
+    expect(
       gatewayConfigFromEnv({ SANDBOX_EGRESS_REFUSED_SUBNETS: '84.201.128.0/18' }),
-    ).toThrow(/SANDBOX_GATEWAY_IMAGE/)
+    ).toBeUndefined()
+    expect(
+      gatewayConfigFromEnv({ SANDBOX_NETWORK_GUARD_IMAGE: env.SANDBOX_NETWORK_GUARD_IMAGE }),
+    ).toBeUndefined()
+    expect(() =>
+      gatewayConfigFromEnv({ SANDBOX_GATEWAY_IMAGE: env.SANDBOX_GATEWAY_IMAGE }),
+    ).toThrow(/SANDBOX_NETWORK_GUARD_IMAGE/)
   })
   it('requires the platform subnets in production, where every sandbox VM runs a gateway', () => {
     const production = { ...env, APP_ENV: 'production' }

@@ -46,30 +46,26 @@ import {
   BROWSER_READY_FILE,
   BROWSER_SECRET_FILE,
   browserContainer,
-  CLI_IMAGE_LABEL,
-  cliContainer,
   CONFIG_LABEL,
+  DATABASE_READY_FILE,
   DATABASE_SECRET_FILES,
   DATABASE_SECRET_LABEL,
   DATABASE_USER,
-  databaseContainer,
   databaseSecretMark,
-  EGRESS_PORT,
-  egressContainer,
   filesHelperContainer,
   firewallContainer,
   FORWARD_PORT,
   FORWARD_READY_FILE,
-  forwarderContainer,
   identityOf,
   leaseContainer,
-  relayContainer,
   PREVIEW_DATABASE,
-  previewExtraHosts,
-  previewHosts,
+  previewContainer,
+  relayContainer,
+  RUN_AS,
   SETTINGS_DIR,
   TOOLS,
-  webContainer,
+  TOOLS_IMAGE_LABEL,
+  WEB_USER_LABEL,
   type NetworkPlace,
 } from './containers.ts'
 import { execChecked, execIn } from './exec.ts'
@@ -78,14 +74,17 @@ import {
   browserBridge,
   hostlessBridge,
   isHostlessBridge,
+  isPreviewBridge,
   isPreviewId,
+  legacyPreviewRoles,
   ownedIdentity,
-  previewAddresses,
   previewBridge,
+  previewBridgeOptions,
   previewFilter,
   previewLabels,
   previewNames,
   PREVIEW_LABEL,
+  PREVIEW_PROTOCOL,
   subnetAddress,
   type PreviewIdentity,
   type PreviewRole,
@@ -203,14 +202,14 @@ export function createDockerPreviewRuntime(
     }
   }
 
-  // --- host firewall (runsc) ------------------------------------------------------------------
+  // --- host firewall ----------------------------------------------------------------------------
 
   const hostFirewall = async (identity: PreviewIdentity, args: string[], signal?: AbortSignal) => {
     const helper = await createOwned(
       docker.createContainer(
         firewallContainer({
           identity,
-          image: config.firewallImage!,
+          image: config.firewallImage,
           args,
           suffix: `${args[0]}-${suffix()}`,
         }),
@@ -231,11 +230,30 @@ export function createDockerPreviewRuntime(
 
   // --- networks and volumes -------------------------------------------------------------------
 
+  /**
+   * The preview's own bridge (docs/plan/58) and the bridge of its agent's browser. The first is
+   * not internal and takes its host rules under any runtime before its container starts; the
+   * second has no host address and takes the INPUT rule under runsc, as before.
+   */
+  /** host-firewall.mjs on the preview's own bridge: the same subnets on install and on check. */
+  const previewBridgeRules = (command: 'install' | 'check', previewId: string) => [
+    command,
+    previewBridge(previewId),
+    ...(config.refusedSubnets.length ? ['--refuse', config.refusedSubnets.join(',')] : []),
+  ]
+
   const networkKinds = {
-    network: { name: (id: string) => previewNames(id).network, bridge: previewBridge },
+    network: {
+      name: (id: string) => previewNames(id).network,
+      bridge: previewBridge,
+      create: previewBridgeOptions,
+      valid: isPreviewBridge,
+    },
     'browser-network': {
       name: (id: string) => previewNames(id).browserNetwork,
       bridge: browserBridge,
+      create: hostlessBridge,
+      valid: isHostlessBridge,
     },
   } as const
 
@@ -247,10 +265,8 @@ export function createDockerPreviewRuntime(
     if (owned.length > 1) throw commandError()
     if (!owned[0]) return null
     const info = await bounded(docker.getNetwork(owned[0].Id).inspect())
-    if (
-      info.Name !== networkKinds[role].name(previewId) ||
-      !isHostlessBridge(info, networkKinds[role].bridge(previewId))
-    )
+    const kind = networkKinds[role]
+    if (info.Name !== kind.name(previewId) || !kind.valid(info, kind.bridge(previewId)))
       throw commandError()
     return info
   }
@@ -262,13 +278,14 @@ export function createDockerPreviewRuntime(
     signal?: AbortSignal,
   ): Promise<NetworkPlace> => {
     const kind = networkKinds[role]
+    const bridge = kind.bridge(identity.previewId)
     let info = await findNetwork(identity.previewId, role)
     if (!info) {
       const network = await createOwned(
         docker.createNetwork(
-          hostlessBridge(
+          kind.create(
             kind.name(identity.previewId),
-            kind.bridge(identity.previewId),
+            bridge,
             previewLabels(identity, role, deadline),
           ),
         ),
@@ -276,25 +293,38 @@ export function createDockerPreviewRuntime(
         signal,
       )
       info = await bounded(network.inspect(), 10_000, signal)
-      if (!isHostlessBridge(info, kind.bridge(identity.previewId))) {
+      if (!kind.valid(info, bridge)) {
         await bounded(network.remove()).catch(() => {})
         throw commandError()
       }
     }
-    // Before anything that runs code joins the bridge; idempotent, so a lost rule comes back.
-    if (runsc) await hostFirewall(identity, ['install', kind.bridge(identity.previewId)], signal)
+    // Before anything that runs code joins the bridge; idempotent, so a lost rule comes back,
+    // and checked by the helper itself: without its rules a preview does not start.
+    if (role === 'network')
+      await hostFirewall(identity, previewBridgeRules('install', identity.previewId), signal)
+    else if (runsc) await hostFirewall(identity, ['install', bridge], signal)
     const subnet = info.IPAM?.Config?.[0]?.Subnet
     if (!subnet) throw commandError()
     return { id: info.Id, subnet }
   }
 
+  /**
+   * Removes the network of the role by its labels and its name, whatever its shape: a bridge of
+   * protocol 1 (internal) goes as the preview's does. Another network under the name is not ours.
+   */
   const removeNetwork = async (previewId: string, role: keyof typeof networkKinds) => {
-    const info = await findNetwork(previewId, role).catch(() => null)
-    if (!info) return
-    try {
-      await bounded(docker.getNetwork(info.Id).remove())
-    } catch (error) {
-      if (!isMissing(error)) throw commandError()
+    const rows = (await bounded(
+      docker.listNetworks({ filters: previewFilter(previewId, role) }),
+    )) as Listed[]
+    for (const row of rows) {
+      if (ownedIdentity(row.Labels)?.previewId !== previewId) continue
+      const info = await bounded(docker.getNetwork(row.Id).inspect()).catch(() => null)
+      if (info?.Name !== networkKinds[role].name(previewId)) continue
+      try {
+        await bounded(docker.getNetwork(row.Id).remove())
+      } catch (error) {
+        if (!isMissing(error)) throw commandError()
+      }
     }
   }
 
@@ -479,19 +509,6 @@ export function createDockerPreviewRuntime(
     ],
   })
 
-  const databaseReady = (info: Docker.ContainerInspectInfo, password: string) => async () => {
-    const client = databaseClient(password)
-    const outcome = await execIn(docker.getContainer(info.Id), {
-      argv: [...client.argv, `--database=${PREVIEW_DATABASE.name}`, '--execute=SELECT 1'],
-      user: info.Config.User,
-      env: client.env,
-      stdoutBytes: 4096,
-      stderrBytes: 4096,
-      timeoutMs: 5_000,
-    })
-    return outcome.code === 0
-  }
-
   // --- the files helper -----------------------------------------------------------------------
 
   const withFilesHelper = async <T>(
@@ -544,21 +561,54 @@ export function createDockerPreviewRuntime(
 
   // --- the parts of a running preview ---------------------------------------------------------
 
-  const webOf = async (previewId: string) => {
+  const previewOf = async (previewId: string) => {
     if (!isPreviewId(previewId)) throw badRequest('Invalid preview id')
-    const web = await containerOf(previewId, 'web')
-    if (!web) throw conflict('The preview is not built here')
-    return web
+    const preview = await containerOf(previewId, 'preview')
+    if (!preview) throw conflict('The preview is not built here')
+    return preview
   }
 
-  const settingsOf = async (web: Docker.ContainerInspectInfo) =>
-    execChecked(docker.getContainer(web.Id), {
-      argv: ['cat', PREVIEW_SETTINGS_PATH],
-      user: web.Config.User,
-      stdoutBytes: previewRuntimeLimits.settingsBytes,
-      stderrBytes: 4096,
-      timeoutMs: 10_000,
-    })
+  /** What the container was made with: the PHP user and the image of the platform's tools. */
+  const madeWith = (preview: Docker.ContainerInspectInfo) => {
+    const user = preview.Config.Labels?.[WEB_USER_LABEL]
+    const tools = preview.Config.Labels?.[TOOLS_IMAGE_LABEL]
+    if (!user || !/^\d+:\d+$/.test(user) || !tools) throw commandError()
+    return { user, tools }
+  }
+
+  /** Anything of protocol 1 (several containers on an internal bridge) left of this preview. */
+  const legacyOf = async (previewId: string) => {
+    const old = (labels: Record<string, string> | undefined) => {
+      const owned = ownedIdentity(labels)
+      return (
+        owned !== null &&
+        (owned.protocol !== PREVIEW_PROTOCOL || legacyPreviewRoles.includes(owned.role))
+      )
+    }
+    if ((await listContainers(previewId)).some((row) => old(row.Labels))) return true
+    const networks = (await bounded(
+      docker.listNetworks({ filters: previewFilter(previewId) }),
+    )) as Listed[]
+    if (networks.some((row) => old(row.Labels))) return true
+    const volumes = await bounded(docker.listVolumes({ filters: previewFilter(previewId) }))
+    return (volumes.Volumes ?? []).some((volume) => old(volume.Labels ?? undefined))
+  }
+
+  /** Containers first: a network or a volume goes only once nothing is attached to it. */
+  const destroyPreview = async (previewId: string) => {
+    const results = await Promise.allSettled(
+      (await listContainers(previewId)).map((row) => removeContainer(row.Id)),
+    )
+    if (results.some((result) => result.status === 'rejected')) throw commandError()
+    await removeNetwork(previewId, 'browser-network')
+    await removeNetwork(previewId, 'network')
+    await sweepFirewall(previewId)
+    const names = previewNames(previewId)
+    for (const name of [names.filesVolume, names.databaseVolume])
+      await bounded(docker.getVolume(name).remove()).catch((error: unknown) => {
+        if (!isMissing(error)) throw commandError()
+      })
+  }
 
   const removeRole = async (previewId: string, role: PreviewRole) => {
     for (const row of await listContainers(previewId, role)) await removeContainer(row.Id)
@@ -574,27 +624,29 @@ export function createDockerPreviewRuntime(
       if (spec.runtime !== config.runtime)
         throw badRequest(`Preview runtime ${spec.runtime} differs from PREVIEW_RUNTIME`)
       const identity = identityOf(spec)
-      const hasDatabase = spec.recipe.database !== null && spec.images.db !== null
-      // PREVIEW_DB_IMAGE is a MariaDB image: it serves the MySQL protocol and nothing else.
+      const hasDatabase = spec.database
+      // The image's database is MariaDB: it serves the MySQL protocol and nothing else.
       if (hasDatabase && spec.recipe.database !== 'mysql')
         throw badRequest(`Preview databases of ${spec.recipe.database} are not supported here`)
-      const hasEgress = spec.images.egress !== null
+      const passwords = hasDatabase ? parsedSecrets.data.database : null
+      if (hasDatabase && !passwords)
+        throw badRequest('The passwords of the preview database are missing')
       const docroot = spec.recipe.web.docroot
       // Built past its deadline, the watchdog would take it before anyone saw it.
       if (spec.expiresAt <= Date.now()) throw badRequest('The preview has expired already')
       await checkRuntime(signal)
-      await checkImage(spec.images.web, [docroot], signal)
-      await checkImage(spec.images.cli, [docroot], signal)
-      await checkImage(spec.images.forwarder, [], signal)
-      if (hasDatabase) await checkImage(spec.images.db!, ['/var/lib/mysql'], signal)
-      if (hasEgress) await checkImage(spec.images.egress!, [], signal)
+      await checkImage(spec.images.preview, [docroot, '/var/lib/mysql'], signal)
+      await checkImage(spec.images.tools, [], signal)
       await assertIdentity(identity)
+      // A preview of protocol 1 — several containers on an internal bridge — is built anew: its
+      // copy comes back from the seed and the candidate (docs/plan/58, «Переход»).
+      if (await legacyOf(spec.previewId)) await destroyPreview(spec.previewId)
 
       // The labels carry the deadline of the watchdog: past core's own, never at it.
       const deadline = await extendLease(
         identity,
         spec.expiresAt + previewRuntimeLimits.deadlineGraceMs,
-        spec.images.forwarder,
+        spec.images.tools,
       )
       spec = { ...spec, expiresAt: deadline }
       const network = await ensureNetwork(identity, 'network', deadline, signal)
@@ -607,12 +659,7 @@ export function createDockerPreviewRuntime(
       const filesCreated = await ensureVolume(identity, names.filesVolume, 'files', deadline)
       await withFilesHelper(
         identity,
-        {
-          image: spec.images.forwarder,
-          user: spec.recipe.web.user,
-          root: true,
-          timeoutMs: 30_000,
-        },
+        { image: spec.images.tools, user: spec.recipe.web.user, root: true, timeoutMs: 30_000 },
         async (helper) =>
           filesOutcome(
             await execIn(helper, {
@@ -631,11 +678,9 @@ export function createDockerPreviewRuntime(
         throw error
       })
 
-      let database: PreviewSettings['database'] = null
+      let databaseCreated = false
       if (hasDatabase) {
-        const passwords = parsedSecrets.data.database
-        if (!passwords) throw badRequest('The passwords of the preview database are missing')
-        const existing = await containerOf(spec.previewId, 'db')
+        const existing = await containerOf(spec.previewId, 'preview')
         const volumeWasThere = await volumeExists(names.databaseVolume)
         // The users of a database live in its volume: without the container that tells which
         // passwords made them the volume is of no use, and a silently empty database is not a
@@ -644,123 +689,99 @@ export function createDockerPreviewRuntime(
         if (
           (!existing && volumeWasThere) ||
           (existing &&
-            existing.Config.Labels?.[DATABASE_SECRET_LABEL] !== databaseSecretMark(passwords))
+            existing.Config.Labels?.[DATABASE_SECRET_LABEL] !== databaseSecretMark(passwords!))
         )
           throw conflict(
             'The database of this preview was lost: destroy the preview and build it again',
           )
-        const created = await ensureVolume(identity, names.databaseVolume, 'database', deadline)
-        try {
-          const db = await ensureContainer(
-            databaseContainer(spec, network, passwords),
-            null,
-            signal,
-          )
-          // Its entrypoint waits for these (WAIT_FOR_DATABASE_SECRETS); after a restart, again.
-          for (const [file, value] of [
-            [DATABASE_SECRET_FILES.user, passwords.user],
-            [DATABASE_SECRET_FILES.root, passwords.root],
-          ] as const)
-            await writeInto(db, DATABASE_USER, file, value, signal)
-          await waitFor(db, databaseReady(db, passwords.user), signal)
-        } catch (error) {
-          // A database that never started is not kept: its volume would outlive its passwords.
-          if (created) {
-            await removeRole(spec.previewId, 'db').catch(() => {})
-            await bounded(docker.getVolume(names.databaseVolume).remove()).catch(() => {})
-          }
-          throw error
-        }
-        database = {
-          engine: spec.recipe.database!,
-          host: previewHosts.db,
-          port: PREVIEW_DATABASE.port,
-          name: PREVIEW_DATABASE.name,
-          user: PREVIEW_DATABASE.user,
-          password: passwords.user,
-        }
-      } else {
-        await removeRole(spec.previewId, 'db')
-        await bounded(docker.getVolume(names.databaseVolume).remove()).catch((error: unknown) => {
-          if (!isMissing(error)) throw commandError()
-        })
+        databaseCreated = await ensureVolume(identity, names.databaseVolume, 'database', deadline)
       }
 
-      if (hasEgress)
-        await ensureContainer(
-          egressContainer(spec, network, config.egressRefusedSubnets),
-          { network, address: subnetAddress(network.subnet, previewAddresses.egress) },
+      try {
+        const preview = await ensureContainer(
+          previewContainer({ spec, network, dnsServers: config.dnsServers, passwords }),
+          null,
           signal,
         )
-      else await removeRole(spec.previewId, 'egress')
+        // A preview that no longer has a database: its volume goes once the container that
+        // mounted it was replaced by this one.
+        if (!passwords)
+          await bounded(docker.getVolume(names.databaseVolume).remove()).catch((error: unknown) => {
+            if (!isMissing(error)) throw commandError()
+          })
+        // init waits for these in its tmpfs — at the first start and after any restart.
+        if (passwords) {
+          await writeInto(
+            preview,
+            DATABASE_USER,
+            DATABASE_SECRET_FILES.user,
+            passwords.user,
+            signal,
+          )
+          await writeInto(
+            preview,
+            DATABASE_USER,
+            DATABASE_SECRET_FILES.root,
+            passwords.root,
+            signal,
+          )
+        }
+        const settings = previewSettingsSchema.parse({
+          v: 2,
+          hostname: spec.hostname,
+          origin: spec.origin,
+          productionOrigin: spec.productionOrigin,
+          database: passwords
+            ? {
+                engine: spec.recipe.database!,
+                host: PREVIEW_DATABASE.host,
+                port: PREVIEW_DATABASE.port,
+                name: PREVIEW_DATABASE.name,
+                user: PREVIEW_DATABASE.user,
+                password: passwords.user,
+              }
+            : null,
+          settings: spec.recipe.settings,
+          env: parsedSecrets.data.env,
+        } satisfies PreviewSettings)
+        // The configuration first: the settings file is what init waits for.
+        const webUser = spec.recipe.web.user
+        for (const file of spec.recipe.web.configFiles)
+          await writeInto(preview, webUser, `${SETTINGS_DIR}/${file.name}`, file.content, signal)
+        await writeInto(preview, webUser, PREVIEW_SETTINGS_PATH, JSON.stringify(settings), signal)
 
-      const web = await ensureContainer(
-        webContainer(
-          spec,
-          network,
-          previewExtraHosts(network, { db: hasDatabase, egress: hasEgress }),
-        ),
-        null,
-        signal,
-      )
-      const settings = previewSettingsSchema.parse({
-        v: 1,
-        hostname: spec.hostname,
-        origin: spec.origin,
-        productionOrigin: spec.productionOrigin,
-        database,
-        egress: hasEgress
-          ? { proxy: { host: previewHosts.egress, port: EGRESS_PORT }, hosts: spec.egress }
-          : null,
-        settings: spec.recipe.settings,
-        env: parsedSecrets.data.env,
-      } satisfies PreviewSettings)
-      // The configuration first: the settings file is what the server waits for (WAIT_FOR_SETTINGS).
-      for (const file of spec.recipe.web.configFiles)
-        await writeInto(
-          web,
-          spec.recipe.web.user,
-          `${SETTINGS_DIR}/${file.name}`,
-          file.content,
+        if (passwords)
+          await waitFor(preview, fileExists(preview, DATABASE_READY_FILE, SERVICE_USER), signal)
+        await waitFor(preview, fileExists(preview, FORWARD_READY_FILE, SERVICE_USER), signal)
+        // The server answers on its port of the loopback, as the gateway inside sees it.
+        await waitFor(
+          preview,
+          () =>
+            execIn(docker.getContainer(preview.Id), {
+              argv: [
+                '/usr/local/bin/node',
+                '-e',
+                'require("net").connect(+process.argv[1],"127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))',
+                String(spec.recipe.web.port),
+              ],
+              user: SERVICE_USER,
+              stdoutBytes: 1024,
+              stderrBytes: 1024,
+              timeoutMs: 5_000,
+            }).then((outcome) => outcome.code === 0),
           signal,
         )
-      await writeInto(
-        web,
-        spec.recipe.web.user,
-        PREVIEW_SETTINGS_PATH,
-        JSON.stringify(settings),
-        signal,
-      )
-
-      const forwarder = await ensureContainer(
-        forwarderContainer(spec, network),
-        { network, address: subnetAddress(network.subnet, previewAddresses.forwarder) },
-        signal,
-      )
-      await waitFor(forwarder, fileExists(forwarder, FORWARD_READY_FILE, SERVICE_USER), signal)
-      // The server answers on its port, as the entry forwarder sees it.
-      const target = subnetAddress(network.subnet, previewAddresses.web)
-      await waitFor(
-        web,
-        () =>
-          execIn(docker.getContainer(forwarder.Id), {
-            argv: [
-              '/usr/local/bin/node',
-              '-e',
-              'require("net").connect(+process.argv[2],process.argv[1]).on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))',
-              target,
-              String(spec.recipe.web.port),
-            ],
-            user: SERVICE_USER,
-            stdoutBytes: 1024,
-            stderrBytes: 1024,
-            timeoutMs: 5_000,
-          }).then((outcome) => outcome.code === 0),
-        signal,
-      )
-      const port = portOf((await inspectContainer(forwarder.Id))!, FORWARD_PORT)
-      if (!port) throw commandError()
-      return { host: spec.upstreamHost, port }
+        const port = portOf((await inspectContainer(preview.Id))!, FORWARD_PORT)
+        if (!port) throw commandError()
+        return { host: spec.upstreamHost, port }
+      } catch (error) {
+        // A database that never started is not kept: its volume would outlive its passwords.
+        if (databaseCreated) {
+          await removeRole(spec.previewId, 'preview').catch(() => {})
+          await bounded(docker.getVolume(names.databaseVolume).remove()).catch(() => {})
+        }
+        throw error
+      }
     },
 
     async extend(previewId, expiresAt) {
@@ -780,20 +801,15 @@ export function createDockerPreviewRuntime(
 
     async inspect(previewId) {
       if (!isPreviewId(previewId)) throw badRequest('Invalid preview id')
-      const rows = await listContainers(previewId)
-      if (!rows.length) return null
-      const services = rows.filter((row) =>
-        (['web', 'db', 'forwarder', 'egress'] as PreviewRole[]).includes(
-          ownedIdentity(row.Labels)!.role,
-        ),
+      // Only its container tells what the docroot holds. Leftovers of protocol 1, or volumes
+      // whose container is gone, are no preview here: `ensure` builds it anew and the caller
+      // writes the whole tree, never a difference over an empty volume.
+      const preview = (await listContainers(previewId, 'preview')).find(
+        (row) => ownedIdentity(row.Labels)?.protocol === PREVIEW_PROTOCOL,
       )
-      const roles = services.map((row) => ownedIdentity(row.Labels)!.role)
-      const running =
-        roles.includes('web') &&
-        roles.includes('forwarder') &&
-        services.every((row) => row.State === 'running')
-      const forwarder = services.find((row) => ownedIdentity(row.Labels)!.role === 'forwarder')
-      const info = running && forwarder ? await inspectContainer(forwarder.Id) : null
+      if (!preview) return null
+      const running = preview.State === 'running'
+      const info = running ? await inspectContainer(preview.Id) : null
       const port = info ? portOf(info, FORWARD_PORT) : null
       const binding = info?.NetworkSettings?.Ports?.[`${FORWARD_PORT}/tcp`]?.[0]?.HostIp
       const state: PreviewRuntimeState = {
@@ -805,10 +821,21 @@ export function createDockerPreviewRuntime(
       return state
     },
 
+    async checkBoundary(previewId) {
+      if (!isPreviewId(previewId)) throw badRequest('Invalid preview id')
+      const preview = await containerOf(previewId, 'preview')
+      if (!preview?.State.Running) return
+      const owned = ownedIdentity(preview.Config.Labels)
+      if (!owned) throw commandError()
+      const identity = { previewId, siteId: owned.siteId, taskId: owned.taskId }
+      await hostFirewall(identity, previewBridgeRules('check', previewId))
+      // The agent's browser, under runsc: the INPUT rule of its own bridge.
+      if (runsc && (await containerOf(previewId, 'browser'))?.State.Running)
+        await hostFirewall(identity, ['check', browserBridge(previewId)])
+    },
+
     async writeFiles(previewId, input: PreviewFilesInput, signal) {
-      const web = await webOf(previewId)
-      const forwarder = await containerOf(previewId, 'forwarder')
-      if (!forwarder) throw conflict('The preview is not built here')
+      const made = madeWith(await previewOf(previewId))
       const platform =
         input.platform === undefined
           ? null
@@ -822,12 +849,12 @@ export function createDockerPreviewRuntime(
       )
         throw badRequest('Invalid preview files input')
       const identity = await identityFromLabels(previewId)
-      const user = web.Config.User
+      const user = made.user
       /** The platform's own steps (R5c): root with CAP_CHOWN alone, the docroot volume only. */
       const asRoot = (args: string[], stdin?: Buffer) =>
         withFilesHelper(
           identity,
-          { image: forwarder.Config.Image, user, root: true, timeoutMs: 60_000 },
+          { image: made.tools, user, root: true, timeoutMs: 60_000 },
           async (helper) =>
             filesOutcome(
               await execIn(helper, {
@@ -861,8 +888,8 @@ export function createDockerPreviewRuntime(
       await withFilesHelper(
         identity,
         {
-          image: forwarder.Config.Image,
-          user: web.Config.User,
+          image: made.tools,
+          user,
           root: false,
           timeoutMs: previewRuntimeLimits.writeFilesMs,
         },
@@ -870,7 +897,7 @@ export function createDockerPreviewRuntime(
           filesOutcome(
             await execIn(helper, {
               argv: filesCommand(['write']),
-              user: web.Config.User,
+              user,
               stdin,
               stdinBytes: previewRuntimeLimits.writeFilesBytes,
               stdoutBytes: 64 * 1024,
@@ -893,17 +920,18 @@ export function createDockerPreviewRuntime(
       if (!isPreviewId(previewId)) throw badRequest('Invalid preview id')
       const passwords = previewDatabasePasswordsSchema.safeParse(passwordsValue)
       if (!passwords.success) throw badRequest('Invalid preview database passwords')
-      const db = await containerOf(previewId, 'db')
-      if (!db?.State.Running) throw conflict('The preview has no running database here')
+      const preview = await containerOf(previewId, 'preview')
+      if (!preview?.State.Running || !preview.Config.Labels?.[DATABASE_SECRET_LABEL])
+        throw conflict('The preview has no running database here')
       const client = databaseClient(passwords.data.user)
-      const container = docker.getContainer(db.Id)
+      const container = docker.getContainer(preview.Id)
       const name = PREVIEW_DATABASE.name
       await execChecked(container, {
         argv: [
           ...client.argv,
           `--execute=DROP DATABASE IF EXISTS \`${name}\`; CREATE DATABASE \`${name}\``,
         ],
-        user: db.Config.User,
+        user: DATABASE_USER,
         env: client.env,
         stdoutBytes: 4096,
         stderrBytes: 4096,
@@ -919,7 +947,7 @@ export function createDockerPreviewRuntime(
           '--max-allowed-packet=64M',
           `--database=${name}`,
         ],
-        user: db.Config.User,
+        user: DATABASE_USER,
         env: client.env,
         stdin: seed,
         stdinBytes: previewRuntimeLimits.loadDatabaseBytes,
@@ -936,60 +964,34 @@ export function createDockerPreviewRuntime(
         timeoutMs: value.timeoutMs,
       })
       if (!parsed.success) throw badRequest('Invalid preview command')
-      const web = await webOf(previewId)
-      if (!web.State.Running) throw conflict('The preview is not running here')
-      const image = web.Config.Labels?.[CLI_IMAGE_LABEL]
-      if (!image) throw commandError()
-      const settings = await settingsOf(web)
-      const identity = await identityFromLabels(previewId)
-      const cli = await createOwned(
-        docker.createContainer(
-          cliContainer({
-            web,
-            identity,
-            deadline: await currentDeadline(previewId),
-            image,
-            seconds: parsed.data.timeoutMs / 1000 + 60,
-            suffix: suffix(),
-          }),
-        ),
-        (created) => created.remove({ force: true, v: true }),
-        signal,
-      )
-      try {
-        await bounded(cli.start(), 10_000, signal)
-        const info = (await inspectContainer(cli.id))!
-        await writeInto(
-          info,
-          web.Config.User,
-          PREVIEW_SETTINGS_PATH,
-          settings.toString('utf8'),
-          signal,
-        )
-        const outcome = await execIn(cli, {
-          argv: parsed.data.argv,
-          user: web.Config.User,
-          workingDir: info.Config.WorkingDir,
-          ...(value.stdin ? { stdin: value.stdin } : {}),
-          stdinBytes: previewRuntimeLimits.execStdinBytes,
-          stdoutBytes: previewRuntimeLimits.execStdoutBytes,
-          stderrBytes: previewRuntimeLimits.execStderrBytes,
-          timeoutMs: parsed.data.timeoutMs,
-          ...(signal ? { signal } : {}),
-        })
-        return { code: outcome.code, stdout: outcome.stdout, stderr: outcome.stderr }
-      } finally {
-        // The container goes with whatever its command left running.
-        await removeContainer(cli.id)
-      }
+      const preview = await previewOf(previewId)
+      if (!preview.State.Running) throw conflict('The preview is not running here')
+      const { user } = madeWith(preview)
+      const seconds = Math.ceil(parsed.data.timeoutMs / 1000)
+      // Inside the preview, as its PHP user with no capability, in a session of its own: run-as.sh
+      // kills whatever the command left running once it ends or its time is up (docs/plan/58).
+      const outcome = await execIn(docker.getContainer(preview.Id), {
+        argv: [RUN_AS, user, String(seconds), '--', ...parsed.data.argv],
+        user: '0:0',
+        // No home: /tmp is the PHP user's too, and a tool's configuration or packages planted
+        // there by the site's code would be read by the platform's command.
+        env: ['HOME=/nonexistent'],
+        workingDir: preview.Config.WorkingDir,
+        ...(value.stdin ? { stdin: value.stdin } : {}),
+        stdinBytes: previewRuntimeLimits.execStdinBytes,
+        stdoutBytes: previewRuntimeLimits.execStdoutBytes,
+        stderrBytes: previewRuntimeLimits.execStderrBytes,
+        timeoutMs: parsed.data.timeoutMs + 10_000,
+        ...(signal ? { signal } : {}),
+      })
+      return { code: outcome.code, stdout: outcome.stdout, stderr: outcome.stderr }
     },
 
     async startBrowser(previewId, value): Promise<PreviewBrowserEndpoint> {
       const parsed = previewBrowserInputSchema.safeParse(value)
       if (!parsed.success) throw badRequest('Invalid preview browser input')
       if (!isPreviewId(previewId)) throw badRequest('Invalid preview id')
-      const forwarder = await containerOf(previewId, 'forwarder')
-      if (!forwarder) throw conflict('The preview is not built here')
+      const made = madeWith(await previewOf(previewId))
       await checkRuntime()
       await checkImage(parsed.data.image, [])
       const identity = await identityFromLabels(previewId)
@@ -999,7 +1001,7 @@ export function createDockerPreviewRuntime(
         relayContainer({
           identity,
           deadline,
-          image: forwarder.Config.Image,
+          image: made.tools,
           network,
           gatewayHost: config.gatewayHost,
           gatewayPort: config.gatewayPort,
@@ -1048,7 +1050,7 @@ export function createDockerPreviewRuntime(
       await removeRole(previewId, 'browser')
       await removeRole(previewId, 'relay')
       await removeNetwork(previewId, 'browser-network')
-      if (runsc) await sweepFirewall(previewId)
+      await sweepFirewall(previewId)
     },
 
     async stop(previewId) {
@@ -1066,19 +1068,7 @@ export function createDockerPreviewRuntime(
 
     async destroy(previewId) {
       if (!isPreviewId(previewId)) throw badRequest('Invalid preview id')
-      // Containers first: a network or a volume goes only once nothing is attached to it.
-      const results = await Promise.allSettled(
-        (await listContainers(previewId)).map((row) => removeContainer(row.Id)),
-      )
-      if (results.some((result) => result.status === 'rejected')) throw commandError()
-      await removeNetwork(previewId, 'browser-network')
-      await removeNetwork(previewId, 'network')
-      if (runsc) await sweepFirewall(previewId)
-      const names = previewNames(previewId)
-      for (const name of [names.filesVolume, names.databaseVolume])
-        await bounded(docker.getVolume(name).remove()).catch((error: unknown) => {
-          if (!isMissing(error)) throw commandError()
-        })
+      await destroyPreview(previewId)
     },
 
     async list() {

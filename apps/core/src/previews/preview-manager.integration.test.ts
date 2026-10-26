@@ -72,18 +72,20 @@ const config: PreviewsConfig = {
   idleMinutes: 30,
   executor: 'local',
   runtime: 'runc',
-  webImages: { '8.3': `registry.invalid/web@sha256:${'1'.repeat(64)}` },
+  siteImages: { '8.3': `registry.invalid/site@sha256:${'1'.repeat(64)}` },
   images: {
     db: `registry.invalid/db@sha256:${'2'.repeat(64)}`,
-    cli: `registry.invalid/cli@sha256:${'3'.repeat(64)}`,
     forwarder: `registry.invalid/tools@sha256:${'4'.repeat(64)}`,
     browser: `registry.invalid/browser@sha256:${'5'.repeat(64)}`,
-    egress: null,
   },
   upstreamHost: '127.0.0.1',
+  dnsServers: ['77.88.8.8'],
   gatewayPort: 8090,
-  egressRefusedSubnets: [],
-  docker: { socketPath: '/var/run/docker.sock', firewallImage: null },
+  refusedSubnets: [],
+  docker: {
+    socketPath: '/var/run/docker.sock',
+    firewallImage: `registry.invalid/guard@sha256:${'6'.repeat(64)}`,
+  },
 }
 
 /** A gateway whose plugin tells what its server runs; without `runtime` it cannot tell. */
@@ -313,7 +315,12 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       hostname: preview.hostname,
       origin: `http://${preview.hostname}:8090`,
       productionOrigin: site.url,
-      images: { egress: null },
+      // One container (docs/plan/58): the site image of the PHP of production, and the tools.
+      images: {
+        preview: 'registry.invalid/site@sha256:' + '1'.repeat(64),
+        tools: 'registry.invalid/tools@sha256:' + '4'.repeat(64),
+      },
+      database: true,
     })
     expect(f.runtime.writes[0]).toMatchObject({ replace: true, deletes: [] })
     expect(f.runtime.writes[0]!.platform!.map((file) => file.path)).toEqual([
@@ -1088,6 +1095,35 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     expect(
       await db.previewEnvironment.findUniqueOrThrow({ where: { id: pending.preview.id } }),
     ).toMatchObject({ status: 'destroyed' })
+  })
+
+  it('stops a served preview whose network rules are not whole and builds it again (plan 58)', async () => {
+    const { site, preview } = await dialog()
+    const f = manager()
+    await databaseAccess(f, site.id)
+    await f.m.refresh(preview.id, { requested: true })
+    const builds = f.runtime.calls.filter((call) => call === 'ensure').length
+    // A reload of the host's firewall took the rules of its bridge.
+    f.runtime.brokenBoundaries.add(preview.id)
+    f.runtime.calls.length = 0
+    await f.m.sweep()
+    await f.m.idle()
+    const calls = f.runtime.calls
+    expect(calls.indexOf('checkBoundary')).toBeLessThan(calls.indexOf('stop'))
+    // Built again as lost: the build puts the rules back before its container starts; the
+    // stopped container kept its docroot, so the files are written as a difference.
+    expect(calls.indexOf('stop')).toBeLessThan(calls.indexOf('ensure'))
+    expect(f.runtime.running.has(preview.id)).toBe(true)
+    expect(
+      await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+    ).toMatchObject({ status: 'ready' })
+    expect(builds).toBeGreaterThan(0)
+    // Whole now, and checked again only after a while: one helper per preview, not per pass.
+    f.runtime.calls.length = 0
+    await f.m.sweep()
+    await f.m.sweep()
+    expect(f.runtime.calls.filter((call) => call === 'checkBoundary').length).toBeLessThanOrEqual(1)
+    expect(f.runtime.calls).not.toContain('stop')
   })
 
   it('moves the time to live of a preview on with its last view', async () => {

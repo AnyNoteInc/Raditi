@@ -5,8 +5,10 @@ import {
   browserBridge,
   hostlessBridge,
   isHostlessBridge,
+  isPreviewBridge,
   ownedIdentity,
   previewBridge,
+  previewBridgeOptions,
   previewFilter,
   previewLabels,
   previewNames,
@@ -36,31 +38,68 @@ describe('preview resources', () => {
     })
   })
 
-  it('labels every resource and reads back only its own labels', () => {
-    const labels = previewLabels(identity, 'web', 1_800_000_000_000)
+  it('labels every resource and reads back only its own labels, of either protocol', () => {
+    const labels = previewLabels(identity, 'preview', 1_800_000_000_000)
     expect(labels).toEqual({
       'io.raditi.preview.owner': 'raditi',
-      'io.raditi.preview.protocol': '1',
+      'io.raditi.preview.protocol': '2',
       'io.raditi.preview.id': identity.previewId,
       'io.raditi.preview.site': identity.siteId,
       'io.raditi.preview.task': identity.taskId,
       'io.raditi.preview.deadline': '1800000000000',
-      'io.raditi.preview.role': 'web',
+      'io.raditi.preview.role': 'preview',
     })
-    expect(ownedIdentity(labels)).toEqual({ ...identity, role: 'web', deadline: 1_800_000_000_000 })
+    expect(ownedIdentity(labels)).toEqual({
+      ...identity,
+      role: 'preview',
+      deadline: 1_800_000_000_000,
+      protocol: '2',
+    })
+    // A preview of protocol 1 is still read: the runtime destroys it and builds it anew.
+    expect(
+      ownedIdentity({
+        ...labels,
+        'io.raditi.preview.protocol': '1',
+        'io.raditi.preview.role': 'web',
+      }),
+    ).toMatchObject({ role: 'web', protocol: '1' })
     for (const broken of [
       { 'io.raditi.preview.owner': 'someone' },
+      { 'io.raditi.preview.protocol': '3' },
       { 'io.raditi.preview.role': 'shell' },
       { 'io.raditi.preview.deadline': 'soon' },
       { 'io.raditi.preview.id': 'not-a-uuid' },
     ] as Record<string, string>[])
       expect(ownedIdentity({ ...labels, ...broken })).toBeNull()
-    expect(previewFilter(identity.previewId, 'db').label).toEqual([
+    // The filter finds both protocols; ownedIdentity tells them apart.
+    expect(previewFilter(identity.previewId, 'preview').label).toEqual([
       'io.raditi.preview.owner=raditi',
-      'io.raditi.preview.protocol=1',
       `io.raditi.preview.id=${identity.previewId}`,
-      'io.raditi.preview.role=db',
+      'io.raditi.preview.role=preview',
     ])
+  })
+
+  it("accepts as the preview's own bridge only one that is not internal, without IPv6 and ICC", () => {
+    const asked = previewBridgeOptions('raditi-preview-x', 'rpv0196abcd0000', {})
+    expect(asked).toMatchObject({ Internal: false, EnableIPv6: false })
+    const built = {
+      Driver: 'bridge',
+      Internal: false,
+      EnableIPv6: false,
+      Options: asked.Options,
+      IPAM: { Config: [{ Subnet: '172.30.0.0/16', Gateway: '172.30.0.1' }] },
+    } as unknown as Docker.NetworkInspectInfo
+    expect(isPreviewBridge(built, 'rpv0196abcd0000')).toBe(true)
+    for (const broken of [
+      { Internal: true },
+      { EnableIPv6: true },
+      { Driver: 'overlay' },
+      { Options: { ...asked.Options, 'com.docker.network.bridge.enable_icc': 'true' } },
+      { Options: { 'com.docker.network.bridge.name': 'rpv0196abcd0001' } },
+    ])
+      expect(
+        isPreviewBridge({ ...built, ...broken } as Docker.NetworkInspectInfo, 'rpv0196abcd0000'),
+      ).toBe(false)
   })
 
   it('accepts only an internal, isolated, IPv4 bridge without a gateway on the host', () => {

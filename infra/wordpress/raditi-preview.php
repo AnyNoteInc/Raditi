@@ -3,8 +3,8 @@
  * Plugin Name: Raditi preview
  * Description: Written by the platform into every preview of a dialog (docs/plan/53-chat-preview-release.md, Р14, Р15).
  * A preview sends no mail, runs no cron and answers with its own address where the database
- * keeps the production one. HTTP requests to hosts the preview may not reach are refused here
- * as a second line: the network of the preview is the boundary. Inert outside a preview.
+ * keeps the production one. Its internet is open (docs/plan/58): requests leave as WordPress makes
+ * them, the rules of its bridge close the host and the platform. Inert outside a preview.
  */
 if (!defined('ABSPATH')) { exit; }
 // The generated wp-config.php of a preview defines these from its settings file.
@@ -26,19 +26,6 @@ function raditi_preview_no_mail() {
 add_filter('pre_get_ready_cron_jobs', 'raditi_preview_no_cron_jobs', PHP_INT_MAX);
 function raditi_preview_no_cron_jobs() {
     return array();
-}
-
-// Only the hosts of the client's variables, at their ports (RADITI_PREVIEW_EGRESS, `host:port`).
-add_filter('pre_http_request', 'raditi_preview_http_request', PHP_INT_MAX, 3);
-function raditi_preview_http_request($preempt, $args, $url) {
-    $parts = is_string($url) ? parse_url($url) : false;
-    $scheme = is_array($parts) && isset($parts['scheme']) ? strtolower($parts['scheme']) : '';
-    $host = is_array($parts) && isset($parts['host']) ? strtolower($parts['host']) : '';
-    $port = is_array($parts) && isset($parts['port']) ? (int) $parts['port']
-        : ($scheme === 'https' ? 443 : ($scheme === 'http' ? 80 : 0));
-    $allowed = defined('RADITI_PREVIEW_EGRESS') ? (array) RADITI_PREVIEW_EGRESS : array();
-    if ($host !== '' && in_array($host . ':' . $port, $allowed, true)) { return $preempt; }
-    return new WP_Error('raditi_preview_blocked', 'Предпросмотр не обращается к этому адресу.');
 }
 
 // A preview is never indexed, never asks to confirm the admin email and never loads a second

@@ -126,7 +126,7 @@ export type PreviewGeneratedFile = z.infer<typeof previewGeneratedFileSchema>
 
 /**
  * How to run the full tree of a site of this stack. The platform picks the images by
- * `runtimeVersions` (PREVIEW_WEB_IMAGES) and writes `generatedFiles` over the tree every time it
+ * `runtimeVersions` (PREVIEW_SITE_IMAGES) and writes `generatedFiles` over the tree every time it
  * writes the tree (`PreviewRuntime.writeFiles`); the agent's diff never touches them.
  */
 export const previewRecipeSchema = z.strictObject({
