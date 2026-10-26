@@ -102,6 +102,7 @@ describe('the environments of the apps', () => {
     assert.equal(core.BROWSER_WORKER_URL, 'http://127.0.0.1:41010')
     assert.equal(core.BROWSER_WORKER_TOKEN, context.secrets.workerToken)
     assert.equal(core.TURN_EXECUTOR, 'local')
+    assert.equal(core.SANDBOX_WARM_MINUTES, '0')
     assert.equal(core.NODE_ENV, 'production')
   })
 

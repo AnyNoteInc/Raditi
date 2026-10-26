@@ -28,7 +28,8 @@ describe('agent CLI lockfile', () => {
     .find((stage) => stage.startsWith('base AS runtime\n'))!
 
   it('pins every CLI to an exact version', () => {
-    expect(Object.keys(manifest.dependencies)).toEqual(['opencode-ai'])
+    // The agent CLI and the browser skill's MCP server (owner's request of 26.10.2026).
+    expect(Object.keys(manifest.dependencies)).toEqual(['@playwright/mcp', 'opencode-ai'])
     for (const [name, version] of Object.entries(manifest.dependencies)) {
       expect(version).toMatch(/^\d+\.\d+\.\d+$/)
       expect(lock.packages[`node_modules/${name}`]?.version).toBe(version)
@@ -86,5 +87,21 @@ describe('agent CLI lockfile', () => {
       'ln -s "/usr/local/lib/raditi/agent-clis/node_modules/${opencode}/bin/opencode" /usr/local/bin/opencode',
     )
     expect(runtime).not.toMatch(/opencode\.exe|node_modules\/opencode-ai\/bin/)
+  })
+
+  it('installs the Chromium of the browser skill while building, where the driver looks for it', () => {
+    // The Playwright of the locked MCP server downloads its own Chromium build: a turn, which has
+    // no way to download, finds it in place.
+    expect(lock.packages['node_modules/@playwright/mcp']?.dependencies).toMatchObject({
+      'playwright-core': lock.packages['node_modules/playwright-core']?.version,
+    })
+    expect(runtime).toContain(
+      'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \\\n      node node_modules/@playwright/mcp/cli.js install-browser --with-deps --no-shell chromium',
+    )
+    const driver = read('./opencode.ts')
+    expect(driver).toContain("const playwrightBrowsers = '/opt/ms-playwright'")
+    expect(driver).toContain(
+      "const playwrightMcp = '/usr/local/lib/raditi/agent-clis/node_modules/@playwright/mcp/cli.js'",
+    )
   })
 })

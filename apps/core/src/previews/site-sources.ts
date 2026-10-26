@@ -1,5 +1,12 @@
+import { once } from 'node:events'
+import { PassThrough, pipeline } from 'node:stream'
+import { createGunzip } from 'node:zlib'
+
 import type { PrismaClient } from '@repo/db'
 import {
+  databaseDumpLimits,
+  databaseDumpLocation,
+  databaseDumpPathSchema,
   dbAccessSchema,
   resolvePinnedAddress,
   siteAccessPath,
@@ -9,6 +16,7 @@ import {
   type DatabaseInspector,
   type DatabaseTarget,
   type DbAccess,
+  type FileSourceEntry,
   type FileSourceSession,
   type HostLookup,
   type SecretStore,
@@ -34,6 +42,19 @@ export type SiteDatabaseAccess =
   /** `access_missing`: no reference or no secret; `access_mismatch`: they do not agree. */
   | { ok: false; code: 'access_missing' | 'access_mismatch' }
 
+/** A dump read over the site's file source: the answer of `use`, or why there was none. */
+export type SiteDumpRead<T> =
+  | { ok: true; value: T }
+  | {
+      ok: false
+      /**
+       * `dump_source_missing`: no file source to read it through, or its access does not agree;
+       * `dump_not_found`: no such file there; `dump_too_large`: the file is over
+       * databaseDumpLimits.fileBytes; `dump_unreadable`: the server could not be reached or read.
+       */
+      code: 'dump_source_missing' | 'dump_not_found' | 'dump_too_large' | 'dump_unreadable'
+    }
+
 export interface PreviewSiteSources {
   /**
    * The access to the site's database: by its `site_databases` row and that row's reference, or —
@@ -50,6 +71,17 @@ export interface PreviewSiteSources {
     signal: AbortSignal,
     use: (read: SiteRootRead) => Promise<T>,
   ): Promise<T | null>
+  /**
+   * `use` with the SQL dump at `path` (relative to the login folder of the site's file source,
+   * databaseDumpPathSchema) as it streams from the server — gunzipped for `.sql.gz` —, the
+   * session closed after. A failure of `use` itself is thrown as it is.
+   */
+  withDump<T>(
+    siteId: string,
+    path: string,
+    signal: AbortSignal,
+    use: (dump: AsyncIterable<Uint8Array>) => Promise<T>,
+  ): Promise<SiteDumpRead<T>>
 }
 
 export interface PreviewSiteSourcesDeps {
@@ -171,62 +203,13 @@ export function createPreviewSiteSources(deps: PreviewSiteSourcesDeps): PreviewS
     },
 
     async withRoot(siteId, signal, use) {
-      const site = await deps.db.site.findUnique({
-        where: { id: siteId },
-        select: {
-          id: true,
-          workspaceId: true,
-          codeSource: {
-            select: {
-              kind: true,
-              host: true,
-              port: true,
-              rootPath: true,
-              repositoryUrl: true,
-              branch: true,
-              tls: true,
-              hostKey: true,
-              credentialRef: { select: referenceSelect },
-            },
-          },
-        },
-      })
-      const source = site?.codeSource
-      if (!site || !source) return null
-      let adapter: SiteSourceAdapter
-      try {
-        adapter = deps.sources(source.kind)
-      } catch {
-        return null
-      }
-      // The adapter says how its tree is obtained: only a file source has a document root to read.
-      if (adapter.transfer !== 'files') return null
-      const read = await readReferenced(deps, site, source.credentialRef, adapter.accessKind)
-      if (!read.ok) return null
-      const access = adapter.accessSchema.safeParse(read.data)
-      const target: CodeSourceTarget = {
-        kind: source.kind,
-        host: source.host,
-        port: source.port,
-        rootPath: source.rootPath,
-        repositoryUrl: source.repositoryUrl,
-        branch: source.branch,
-        tls: source.tls,
-        hostKey: source.hostKey,
-      }
-      if (!access.success || !adapter.matchesTarget(access.data, target)) return null
-
+      const source = await fileSource(deps, siteId)
+      if (!source) return null
       const bounded = AbortSignal.any([signal, AbortSignal.timeout(deps.readMs ?? ROOT_READ_MS)])
       let session: FileSourceSession | null = null
       try {
-        // The address the secret names, by the rule of the wizard: the one literal every socket dials.
-        const pinned = await resolvePinnedAddress(
-          { lookup: deps.lookup, appEnv: deps.appEnv },
-          adapter.endpointOf(access.data).host,
-          bounded,
-        )
-        if (!pinned.ok) return null
-        const opened = await adapter.open(access.data, { address: pinned.address, signal: bounded })
+        const opened = await openSource(deps, source, source.access, bounded)
+        if (!opened) return null
         session = opened
         return await use((path) => readRootFile(opened, path, bounded))
       } catch {
@@ -236,5 +219,162 @@ export function createPreviewSiteSources(deps: PreviewSiteSourcesDeps): PreviewS
         await session?.close().catch(() => {})
       }
     },
+
+    async withDump(siteId, path, signal, use) {
+      const parsed = databaseDumpPathSchema.safeParse(path)
+      if (!parsed.success) return { ok: false, code: 'dump_not_found' }
+      const location = databaseDumpLocation(parsed.data)
+      const source = await fileSource(deps, siteId)
+      if (!source) return { ok: false, code: 'dump_source_missing' }
+      // The same access, opened at the dump's folder instead of the site's: below the login folder.
+      const moved = source.adapter.accessSchema.safeParse({
+        ...source.raw,
+        rootPath: location.folder,
+      })
+      if (!moved.success) return { ok: false, code: 'dump_source_missing' }
+      const bounded = AbortSignal.any([signal, AbortSignal.timeout(databaseDumpLimits.loadMs)])
+      let session: FileSourceSession | null = null
+      let entry: FileSourceEntry | undefined
+      try {
+        session = await openSource(deps, source, moved.data, bounded)
+        if (!session) return { ok: false, code: 'dump_unreadable' }
+        const entries = await session.list([], DUMP_FOLDER_ENTRIES)
+        entry = entries.find((item) => item.type === 'file' && item.name === location.file)
+      } catch {
+        signal.throwIfAborted()
+        await session?.close().catch(() => {})
+        // A folder that does not open is not there; the login folder always is.
+        return { ok: false, code: location.folder === '.' ? 'dump_unreadable' : 'dump_not_found' }
+      }
+      const opened = session
+      if (!entry || entry.size > databaseDumpLimits.fileBytes) {
+        await opened.close().catch(() => {})
+        return { ok: false, code: entry ? 'dump_too_large' : 'dump_not_found' }
+      }
+      const { ref } = entry
+      try {
+        const value = await streamDump(
+          (sink) => opened.read([ref], sink, databaseDumpLimits.fileBytes),
+          location.gzip,
+          use,
+        )
+        return { ok: true, value }
+      } finally {
+        await opened.close().catch(() => {})
+      }
+    },
+  }
+}
+
+/** Entries of the folder of a dump that are looked through for its name. */
+const DUMP_FOLDER_ENTRIES = 10_000
+
+interface FileSource {
+  adapter: Extract<SiteSourceAdapter, { transfer: 'files' }>
+  /** The secret as Vault holds it: what a moved root is made of. */
+  raw: Record<string, string>
+  access: unknown
+}
+
+/** The site's file source with its access, checked against the row; null — none to read. */
+async function fileSource(
+  deps: PreviewSiteSourcesDeps,
+  siteId: string,
+): Promise<FileSource | null> {
+  const site = await deps.db.site.findUnique({
+    where: { id: siteId },
+    select: {
+      id: true,
+      workspaceId: true,
+      codeSource: {
+        select: {
+          kind: true,
+          host: true,
+          port: true,
+          rootPath: true,
+          repositoryUrl: true,
+          branch: true,
+          tls: true,
+          hostKey: true,
+          credentialRef: { select: referenceSelect },
+        },
+      },
+    },
+  })
+  const source = site?.codeSource
+  if (!site || !source) return null
+  let adapter: SiteSourceAdapter
+  try {
+    adapter = deps.sources(source.kind)
+  } catch {
+    return null
+  }
+  // The adapter says how its tree is obtained: only a file source has a document root to read.
+  if (adapter.transfer !== 'files') return null
+  const read = await readReferenced(deps, site, source.credentialRef, adapter.accessKind)
+  if (!read.ok) return null
+  const access = adapter.accessSchema.safeParse(read.data)
+  const target: CodeSourceTarget = {
+    kind: source.kind,
+    host: source.host,
+    port: source.port,
+    rootPath: source.rootPath,
+    repositoryUrl: source.repositoryUrl,
+    branch: source.branch,
+    tls: source.tls,
+    hostKey: source.hostKey,
+  }
+  if (!access.success || !adapter.matchesTarget(access.data, target)) return null
+  return { adapter, raw: read.data, access: access.data }
+}
+
+/** A session of the source at `access`, dialled at the pinned address; null — not allowed. */
+async function openSource(
+  deps: PreviewSiteSourcesDeps,
+  source: FileSource,
+  access: unknown,
+  signal: AbortSignal,
+): Promise<FileSourceSession | null> {
+  // The address the secret names, by the rule of the wizard: the one literal every socket dials.
+  const pinned = await resolvePinnedAddress(
+    { lookup: deps.lookup, appEnv: deps.appEnv },
+    source.adapter.endpointOf(access).host,
+    signal,
+  )
+  if (!pinned.ok) return null
+  return source.adapter.open(access, { address: pinned.address, signal })
+}
+
+/**
+ * `use` with the bytes `read` pushes as they come, gunzipped when asked: the read waits while
+ * `use` is behind (backpressure), and stops when `use` is done or failed. A failed read is the
+ * failure of the stream `use` reads.
+ */
+export async function streamDump<T>(
+  read: (sink: (chunk: Uint8Array) => Promise<void>) => Promise<number>,
+  gzip: boolean,
+  use: (dump: AsyncIterable<Uint8Array>) => Promise<T>,
+): Promise<T> {
+  const raw = new PassThrough({ highWaterMark: 1024 * 1024 })
+  const out = gzip ? createGunzip() : raw
+  if (gzip) pipeline(raw, out, () => {})
+  const sink = async (chunk: Uint8Array) => {
+    if (raw.destroyed) throw new Error('The dump is no longer read')
+    if (!raw.write(chunk)) await Promise.race([once(raw, 'drain'), once(raw, 'close')])
+  }
+  const reading = read(sink).then(
+    () => {
+      raw.end()
+    },
+    (error: unknown) => {
+      raw.destroy(error instanceof Error ? error : new Error('The dump could not be read'))
+    },
+  )
+  try {
+    return await use(out)
+  } finally {
+    raw.destroy()
+    out.destroy()
+    await reading
   }
 }

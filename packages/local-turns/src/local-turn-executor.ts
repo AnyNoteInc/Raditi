@@ -44,6 +44,7 @@ import { openSnapshotParts, sealSnapshotPart } from '@repo/snapshots'
 import { bundleBase, importBaseBundle } from './base-bundle.ts'
 import { makeEmptyWorkdir } from './empty-workdir.ts'
 import { readTurnOutput, type TurnOutputStart } from './turn-output.ts'
+import { WARM_MIN_LEFT_MS, type WarmSandboxes } from './warm-sandboxes.ts'
 import { exportSandboxWorkingTree } from './working-tree-export.ts'
 
 export interface LocalTurnExecutorDependencies {
@@ -54,6 +55,11 @@ export interface LocalTurnExecutorDependencies {
   /** Snapshot parts of the restored checkpoint in, the sealed home part out. */
   transfer: PresignedTransfer
   importBundle?: typeof importBaseBundle
+  /**
+   * The warm containers of completed turns (spec §8, «Тёплая песочница»): absent — every turn
+   * gets a new container and every removal removes it.
+   */
+  warm?: Pick<WarmSandboxes, 'take' | 'park' | 'forget'>
 }
 
 /** A prepared turn launches its agent; an adopted one only re-attaches to it. */
@@ -98,21 +104,33 @@ export class LocalTurnExecutor implements TurnExecutor {
       throw badRequest('The snapshot and the bundle disagree on the repository')
     const { files, env, secrets } = parsed.data
     const parser = this.deps.parser(input.driverId)
-    let sandbox: Sandbox
     input.dispatched()
-    try {
-      sandbox = await this.deps.sandboxes.create(
-        {
-          ...input.sandbox,
-          hardTimeoutMs: Math.min(input.sandbox.hardTimeoutMs, input.remainingMs),
-          secrets: [],
-        },
-        signal,
-      )
-    } catch (error) {
-      // The provider proved nothing is left: the site need not wait for its lease to expire.
-      if (createLeftNothing(error)) input.vacated()
-      throw error
+    // Counted from before the container, as its provider counts its deadline (spec §8).
+    const startedAt = Date.now()
+    const hardTimeoutMs = Math.min(input.sandbox.hardTimeoutMs, input.remainingMs)
+    const { warm } = this.deps
+    const key = warm ? warmKeyOf(input) : undefined
+    // The container an earlier turn of this task left (spec §8, «Тёплая песочница»), if it is
+    // still there and leaves this turn enough of its own deadline.
+    const taken =
+      warm && key && !signal.aborted
+        ? await warm.take(key, Math.min(hardTimeoutMs, WARM_MIN_LEFT_MS))
+        : null
+    let sandbox: Sandbox
+    let deadline: number
+    if (taken) ({ sandbox, deadline } = taken)
+    else {
+      try {
+        sandbox = await this.deps.sandboxes.create(
+          { ...input.sandbox, hardTimeoutMs, secrets: [] },
+          signal,
+        )
+      } catch (error) {
+        // The provider proved nothing is left: the site need not wait for its lease to expire.
+        if (createLeftNothing(error)) input.vacated()
+        throw error
+      }
+      deadline = startedAt + hardTimeoutMs
     }
     const execution = new LocalTurnExecution(
       sandbox,
@@ -126,6 +144,14 @@ export class LocalTurnExecutor implements TurnExecutor {
         env,
       },
     )
+    if (warm && key)
+      execution.warm = {
+        pool: warm,
+        key,
+        deadline,
+        // A taken container may end before the turn would: the agent ends that much earlier.
+        shortfall: Math.max(0, startedAt + hardTimeoutMs - deadline),
+      }
     await input.created(execution)
     signal.throwIfAborted()
     if (input.bundle) {
@@ -165,7 +191,10 @@ export class LocalTurnExecutor implements TurnExecutor {
       const removable = await this.deps.sandboxes.getForRemoval(input.containerId)
       if (!removable) return null
       assertIdentity(removable, input)
-      return new RemovalExecution(removable, () => this.#withoutRepository.delete(removable.id))
+      return new RemovalExecution(removable, () => {
+        this.#withoutRepository.delete(removable.id)
+        this.deps.warm?.forget(removable.id)
+      })
     }
     // Without the turn's credentials its output cannot be filtered: the turn is given up.
     if (!input.credentials.length)
@@ -208,12 +237,7 @@ export class LocalTurnExecutor implements TurnExecutor {
     signal.throwIfAborted()
     const sandbox = await this.deps.sandboxes.get(input.containerId)
     if (!sandbox) throw conflict('The turn container is gone')
-    if (
-      sandbox.id !== input.containerId ||
-      (Object.entries(input.labels) as [keyof SandboxLabels, unknown][]).some(
-        ([key, value]) => sandbox.labels[key] !== value,
-      )
-    )
+    if (!sameContainer(sandbox, input.containerId, input.labels))
       throw conflict('The turn container has other labels')
     if (this.#withoutRepository.has(sandbox.id))
       throw conflict('The turn has no repository to export')
@@ -251,15 +275,61 @@ export class LocalTurnExecutor implements TurnExecutor {
   }
 }
 
-/** The provider must return the exact immutable container id, never a reused name. */
+/**
+ * The provider must return the exact immutable container id, never a reused name, with the
+ * labels the caller names. A warm container (spec §8, «Тёплая песочница») that an earlier turn
+ * of the session left keeps the labels it was created with — an earlier turn, an earlier epoch —
+ * and is this turn's because this turn's assignment names its id.
+ */
+function sameContainer(
+  found: Pick<RemovableSandbox, 'id' | 'labels'>,
+  containerId: string,
+  labels: Partial<SandboxLabels>,
+): boolean {
+  if (found.id !== containerId) return false
+  const left = labels.turn !== undefined && found.labels.turn < labels.turn
+  return (Object.entries(labels) as [keyof SandboxLabels, unknown][]).every(([key, value]) => {
+    if (!left || (key !== 'turn' && key !== 'leaseEpoch')) return found.labels[key] === value
+    if (key === 'turn') return true
+    const epoch = found.labels.leaseEpoch
+    return epoch !== undefined && typeof value === 'number' && epoch < value
+  })
+}
+
 function assertIdentity(found: RemovableSandbox, input: TurnAdoptInput): void {
-  if (
-    found.id !== input.containerId ||
-    (Object.entries(input.labels) as [keyof SandboxLabels, unknown][]).some(
-      ([key, value]) => found.labels[key] !== value,
-    )
-  )
+  if (!sameContainer(found, input.containerId, input.labels))
     throw conflict('Recovery container identity changed')
+}
+
+/**
+ * The turns that may share a container: one task, one session, one driver, and the same
+ * container — image, runtime, resources, user, network and env — with or without a repository.
+ */
+function warmKeyOf({ sandbox, driverId, bundle }: TurnPrepareInput): string {
+  const { workspaceId, siteId, taskId, sessionId } = sandbox.labels
+  return canonicalJson([
+    workspaceId,
+    siteId,
+    taskId,
+    sessionId,
+    driverId,
+    sandbox.image,
+    sandbox.runtime,
+    sandbox.resources,
+    sandbox.user,
+    sandbox.network,
+    sandbox.env,
+    bundle !== undefined,
+  ])
+}
+
+/** JSON with the keys of every object in order: two equal specs give one text. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : item,
+  )
 }
 
 const removalOnly = () => conflict('The container was adopted only for removal')
@@ -316,6 +386,17 @@ class LocalTurnExecution implements TurnExecution {
   importedBase: string | null | undefined
   /** Called once the container is removed. */
   removed: (() => void) | undefined
+  /** Where a completed turn leaves its container, and that container's deadline. */
+  warm:
+    | {
+        pool: Pick<WarmSandboxes, 'park' | 'forget'>
+        key: string
+        deadline: number
+        shortfall: number
+      }
+    | undefined
+  /** Left to the next turn of the task: nothing of this execution may touch it any more. */
+  #handedOver = false
 
   private readonly sandbox: Sandbox
   private readonly deps: Pick<LocalTurnExecutorDependencies, 'transport' | 'transfer'>
@@ -357,7 +438,7 @@ class LocalTurnExecution implements TurnExecution {
       cwd: SANDBOX_WORKDIR,
       env: this.command.env,
       // The turn limit includes publication: the agent's exec ends before the container does.
-      timeoutMs,
+      timeoutMs: Math.max(1, timeoutMs - (this.warm?.shortfall ?? 0)),
     })
     return new LocalAgentExec(handle, this.parser, this.credentials, this.envValues, {
       cursor: { stdout: 0, stderr: 0 },
@@ -454,11 +535,31 @@ class LocalTurnExecution implements TurnExecution {
   }
 
   async destroy(reason: DestroyReason): Promise<void> {
-    await this.sandbox.destroy(reason)
+    if (this.#handedOver) return
+    const { warm } = this
+    // A completed turn leaves its container to the next turn of its task, reset (spec §8,
+    // «Тёплая песочница»); otherwise, or when it cannot wait, it is removed as before. An
+    // adopted container is always removed: this process does not know its deadline.
+    if (
+      warm &&
+      reason === 'completed' &&
+      this.purpose === 'turn' &&
+      (await warm.pool.park(this.sandbox, warm.key, warm.deadline))
+    ) {
+      this.#handedOver = true
+      this.removed?.()
+      return
+    }
+    try {
+      await this.sandbox.destroy(reason)
+    } finally {
+      warm?.pool.forget(this.sandbox.id)
+    }
     this.removed?.()
   }
 
   #allow(...purposes: Purpose[]): void {
+    if (this.#handedOver) throw conflict('The container was left to the next turn')
     if (!purposes.includes(this.purpose)) throw conflict('An adopted turn re-attaches to its agent')
   }
 }

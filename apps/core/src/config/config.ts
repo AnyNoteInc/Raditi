@@ -89,6 +89,18 @@ export interface CoreConfig {
   /** Where turns run: core's own Docker (local, not in production) or runner VMs. */
   turnExecutor: TurnExecutorKind
   /**
+   * SANDBOX_INTERNET: the open internet of the agent of a repository turn (owner's decision of
+   * 26.10.2026) — every public host through the egress proxy of sandbox-gw, and the site's
+   * skills; false (`off`) — only the hosts of the client's variables, no skills.
+   */
+  sandboxInternet: boolean
+  /**
+   * SANDBOX_WARM_MINUTES with the local executor: how long the container of a completed turn
+   * waits for the next turn of its task (owner's decision of 26.10.2026; spec §8, «Тёплая
+   * песочница»). 0 — every turn gets a new container, as always with runner VMs.
+   */
+  sandboxWarmMs: number
+  /**
    * With runner VMs: the runtime they run turns under (SANDBOX_RUNTIME, one set of variables
    * with the runners at MVP; only runsc in production). A runner refuses a turn spec of another
    * runtime. Absent with the local executor, whose `sandbox` names it.
@@ -281,6 +293,11 @@ const ownEnvSchema = z.object({
   ),
   // The platform's own subnets the egress proxy of a preview never connects to (R10, Р13).
   SANDBOX_EGRESS_REFUSED_SUBNETS: egressRefusedSubnetsVar,
+  // The open internet of the agent (owner's decision of 26.10.2026); `off` — as before it.
+  SANDBOX_INTERNET: envVar(z.enum(['open', 'off']).default('open')),
+  // A container never outlives the deadline of its first turn, and waits only while it leaves
+  // the next turn half of one (WARM_MIN_LEFT_MS): more than 10 minutes would never be waited.
+  SANDBOX_WARM_MINUTES: envVar(z.coerce.number().int().min(0).max(10).default(10)),
   RELEASE_API_PORT: port(DEFAULT_RELEASE_API_PORT),
   RELEASE_API_HOST: envVar(
     z
@@ -361,6 +378,8 @@ export function loadConfig(env: Env): CoreConfig {
         'PREVIEW_WEB_IMAGES',
         ...Object.values(previewImageVariables),
         'SANDBOX_EGRESS_REFUSED_SUBNETS',
+        'SANDBOX_INTERNET',
+        'SANDBOX_WARM_MINUTES',
         'RELEASE_API_PORT',
         'RELEASE_API_HOST',
         'RELEASE_API_PUBLIC_URL',
@@ -648,6 +667,8 @@ export function loadConfig(env: Env): CoreConfig {
     agentDrivers: present(agentDrivers),
     mailer: present(mailer),
     turnExecutor,
+    sandboxInternet: own.SANDBOX_INTERNET === 'open',
+    sandboxWarmMs: turnExecutor === 'local' ? own.SANDBOX_WARM_MINUTES * 60_000 : 0,
     ...(runnerRuntime ? { runnerRuntime } : {}),
     runnerApi,
     git,

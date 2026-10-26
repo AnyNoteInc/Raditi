@@ -14,6 +14,7 @@ import { getSiteAdapter } from '@repo/site-adapters'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { AttachmentFiles } from '../attachments/attachments.ts'
+import { TaskScreenshots } from '../attachments/screenshots.ts'
 import { SessionManager, sessionTimingDefaults } from './session-manager.ts'
 import { countingMetrics, FakeBrowsers, FakeInbox, FakeStore } from '../testing/fakes.ts'
 import { sessionHarness, TEST_SITE as SITE } from '../testing/harness.ts'
@@ -231,6 +232,7 @@ describe('SessionManager.ensure', () => {
       browsers: new FakeBrowsers(),
       store,
       files: new AttachmentFiles(store, new FakeInbox()),
+      screenshots: new TaskScreenshots(store, new FakeInbox()),
       adapters: getSiteAdapter,
       metrics: countingMetrics().metrics,
       now: Date.now,
@@ -1138,5 +1140,70 @@ describe('frames', () => {
     })
     await settle()
     expect(viewer.refusals).toEqual(['stale_viewport'])
+  })
+})
+
+describe('a snapshot for the client (web_screenshot)', () => {
+  it('stores a JPEG of the shown page under its task and answers only its number', async () => {
+    const { store, inbox, ensured, act } = setup()
+    const { row, browser } = await ensured()
+    const first = await act(row, { tool: 'web_screenshot' })
+    expect(first).toEqual({
+      tool: 'web_screenshot',
+      page: expect.any(Object),
+      attached: true,
+      number: 1,
+    })
+    // Б20: no byte, no address of the image in the answer the agent reads.
+    expect(JSON.stringify(first)).not.toMatch(/screenshots\/|jpeg|base64/)
+    expect(browser.screenshots).toEqual([{ qualities: [80, 60, 40], maxBytes: 1024 * 1024 }])
+    const [key, written] = [...inbox.written.entries()][0]!
+    expect(key).toMatch(new RegExp(`^screenshots/${row.taskId}/[0-9a-f-]{36}\\.jpg$`))
+    expect(written.contentType).toBe('image/jpeg')
+    expect(store.screenshotRows).toEqual([
+      expect.objectContaining({ taskId: row.taskId, sessionId: row.id, number: 1, width: 1280 }),
+    ])
+    expect(key).toContain(store.screenshotRows[0]!.screenshotId)
+    expect(await act(row, { tool: 'web_screenshot' })).toMatchObject({ number: 2 })
+    // Not a change of the site: no checkpoint, no first write of the session.
+    expect(store.checkpointRows.size).toBe(0)
+    expect(store.wrote).toBe(0)
+  })
+
+  it('is refused while the client controls the browser, and when the client takes it meanwhile', async () => {
+    const { store, inbox, ensured, act } = setup()
+    const { row, session, browser } = await ensured()
+    const viewer = new ViewerProbe()
+    session.attach(viewer)
+    session.message(viewer, { t: 'take' })
+    expect(await codeOf(act(row, { tool: 'web_screenshot' }))).toBe('BROWSER_USER_IN_CONTROL')
+    expect(browser.screenshots).toEqual([])
+    session.message(viewer, { t: 'release' })
+    await settle()
+
+    // The client takes the browser while the snapshot is being taken: it is not kept.
+    browser.onScreenshot = async () => {
+      session.message(viewer, { t: 'take' })
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    expect(await codeOf(act(row, { tool: 'web_screenshot' }))).toBe('BROWSER_USER_IN_CONTROL')
+    expect(inbox.written.size).toBe(0)
+    expect(store.screenshotRows).toEqual([])
+  })
+
+  it('keeps at most fifty snapshots of a task', async () => {
+    const { store, inbox, ensured, act } = setup()
+    const { row } = await ensured()
+    for (let index = 0; index < 50; index += 1)
+      store.screenshotRows.push({
+        taskId: row.taskId,
+        sessionId: row.id,
+        screenshotId: randomUUID(),
+        width: 1,
+        height: 1,
+        number: index + 1,
+      })
+    expect(await codeOf(act(row, { tool: 'web_screenshot' }))).toBe('BROWSER_ACTION_DENIED')
+    expect(inbox.written.size).toBe(0)
   })
 })

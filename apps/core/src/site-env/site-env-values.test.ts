@@ -13,7 +13,7 @@ describe('the values of a site’s variables (plan 53, Р13)', () => {
         data: { removed: '2026-10-17T10:00:00.000Z' },
         version: 4,
       },
-      [`kv/sites/${SITE}/env/SHORT_KEY`]: { data: { value: 'short' }, version: 1 },
+      [`kv/sites/${SITE}/env/EMPTY_KEY`]: { data: { value: '' }, version: 1 },
     }
     const kvRead = vi.fn(async (path: string) => stored[path] ?? null)
     expect(
@@ -22,7 +22,7 @@ describe('the values of a site’s variables (plan 53, Р13)', () => {
         // Written after the row: the row's version is not there any more.
         { name: 'NEWER_KEY', keyVersion: 2 },
         { name: 'REMOVED_KEY', keyVersion: 4 },
-        { name: 'SHORT_KEY', keyVersion: 1 },
+        { name: 'EMPTY_KEY', keyVersion: 1 },
         { name: 'MISSING_KEY', keyVersion: 1 },
         // A name the platform reserves is never read, whatever a row says.
         { name: 'LD_PRELOAD', keyVersion: 1 },

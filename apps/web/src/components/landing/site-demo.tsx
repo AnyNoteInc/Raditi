@@ -1,6 +1,6 @@
 'use client'
 
-import { BrandSymbol } from '@repo/ui/brand-symbol'
+import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
 import { useEffect, useId, useReducer, type CSSProperties } from 'react'
 
 import { nbsp } from '@/lib/nbsp'
@@ -225,7 +225,7 @@ export function SiteDemo() {
 
         <div className={styles.chat} role="group" aria-label="Демонстрационный чат">
           <div className={styles.chatHeader}>
-            <BrandSymbol size={30} />
+            <AnimatedBrandSymbol size={30} />
             <div className={styles.agentTitle}>
               <strong>Радити</strong>
               <span>{nbsp('ИИ-помощник для вашего сайта')}</span>

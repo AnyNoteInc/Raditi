@@ -14,8 +14,14 @@ import { createS3ObjectStorage, type StorageConfig } from '@repo/storage'
 import type { BrowserInboxStorageConfig } from '../config/config.ts'
 import type { BrowserWorkerStore } from '../store/worker-store.ts'
 
-/** All the worker does with S3: read attachments of tasks from the inbox, and its health. */
-export type InboxStorage = Pick<ObjectStorage, 'get' | 'checkBuckets'>
+/**
+ * All the worker does with S3: read attachments of tasks from the inbox, write the snapshots its
+ * agent takes for the client there (`web_screenshot`, under `screenshots/`), and its health.
+ */
+export type InboxStorage = Pick<ObjectStorage, 'get' | 'put' | 'checkBuckets'>
+
+/** Where in the inbox the worker may write: the snapshots of tasks (`browserTaskScreenshotKey`). */
+const SCREENSHOT_PREFIX = 'screenshots/'
 
 /**
  * The S3 adapter addresses buckets by kind. The worker has one bucket, so every kind names it:
@@ -35,12 +41,22 @@ export function inboxStorageConfig(config: BrowserInboxStorageConfig): StorageCo
   }
 }
 
-/** The S3 key of the worker reads the inbox alone (Б26, spec §14); so does this. */
-export function inboxOnly(storage: Pick<ObjectStorage, 'get' | 'checkBuckets'>): InboxStorage {
+/**
+ * The S3 key of the worker reaches the inbox alone (Б26, spec §14); so does this — and of the
+ * inbox it writes the snapshots of tasks alone, never an attachment of a client.
+ */
+export function inboxOnly(
+  storage: Pick<ObjectStorage, 'get' | 'put' | 'checkBuckets'>,
+): InboxStorage {
   return {
     async get(bucket, key) {
       if (bucket !== 'inbox') throw forbidden('The browser worker reads the inbox bucket only')
       return storage.get(bucket, key)
+    },
+    async put(bucket, key, body, opts) {
+      if (bucket !== 'inbox' || !key.startsWith(SCREENSHOT_PREFIX) || key.includes('..'))
+        throw forbidden('The browser worker writes snapshots of tasks only')
+      return storage.put(bucket, key, body, opts)
     },
     async checkBuckets() {
       const checked = await storage.checkBuckets(['inbox'])

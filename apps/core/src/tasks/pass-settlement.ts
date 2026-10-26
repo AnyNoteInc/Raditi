@@ -358,11 +358,10 @@ export class PassSettlement {
 
     const hasCandidate =
       build.kind === 'candidate' || (build.kind === 'unchanged' && !!context.standing)
-    const to: SettledTaskStatus = question
-      ? 'awaiting_user'
-      : hasCandidate
-        ? 'awaiting_approval'
-        : 'done'
+    // Nothing to release and nothing asked: the dialog stays open for the client's next words, in
+    // the same attempt (owner's decision of 26.10.2026, «не закрывай чат»). A dialog the client
+    // leaves so is free, as any abandoned dialog (answer of 18.10.2026).
+    const to: SettledTaskStatus = question || !hasCandidate ? 'awaiting_user' : 'awaiting_approval'
     // The trusted count of what the dialog would release now; none once the pass undid it all.
     const facts =
       build.kind === 'candidate'
@@ -404,7 +403,7 @@ export class PassSettlement {
               turn,
               message: message!,
               site: context.productionWrites ? 'changed' : 'unchanged',
-              next: to === 'done' ? 'done' : 'awaiting_approval',
+              next: hasCandidate ? 'awaiting_approval' : 'awaiting_user',
               filesChanged: Math.min(filesChanged, 10_000),
               changeType: result.change_type,
               needsApproval: result.needs_approval,
@@ -445,15 +444,14 @@ export class PassSettlement {
           turnNo: pass.turnNo,
         })
       } else if (build.kind === 'empty' && context.standing) {
-        // The pass undid every change of the dialog: nothing stands to release.
+        // The pass undid every change of the dialog: nothing stands to release, and the preview
+        // shows the site as it is.
         await supersedeStandingCandidate(tx, pass.taskId)
-        if (to !== 'done') await requestPreviewSync(tx, { taskId: pass.taskId, revision: 0 })
-      }
-      if (to === 'done') {
-        // The dialog is closed: its manager takes the preview down (R5c).
         await requestPreviewSync(tx, { taskId: pass.taskId, revision: 0 })
-        if (context.task.billable) await this.#charge(tx, pass.taskId, now, options)
-      } else if (context.task.billable) {
+      }
+      // The dialog waits — for an answer, a decision on its changes or the next words — under
+      // the same reserve; it is charged once it ends (release), or never when left.
+      if (context.task.billable) {
         await extendTaskHolds(tx, {
           taskId: pass.taskId,
           expiresAt: taskHoldExpiry(now, 'waiting'),
@@ -468,8 +466,9 @@ export class PassSettlement {
    * ends the task. In this order: the agent asked the client to act in the browser (`web_help`),
    * the client holds the browser, the agent asked a question — each waits for the client
    * (`awaiting_user`) within the same attempt; else an object the platform confirmed on the
-   * site makes the task `done`, charged, its browser closed; none — the platform asks the client
-   * to look (`unconfirmed`).
+   * site, or a screenshot the agent sent the client with nothing saved left unconfirmed (owner's
+   * decision of 26.10.2026), makes the task `done`, charged, its browser closed; neither — the
+   * platform asks the client to look (`unconfirmed`).
    */
   async #completedWithoutRepository(
     pass: PassRef,
@@ -505,8 +504,9 @@ export class PassSettlement {
     else question = agentQuestionOf(result, turn)
     // Nothing readable is left of the agent's words: its result is as good as missing.
     if (!question && !message) return this.#failure(pass, context, turn, 'technical')
-    // `done` is what the site confirms, never the agent's word (Б23).
-    if (!question && !browser?.confirmed)
+    // `done` is what the site confirms or the screenshot the client got, never the agent's word
+    // (Б23; owner's decision of 26.10.2026).
+    if (!question && !browser?.confirmed && !browser?.screenshotted)
       question = {
         v: 1,
         kind: 'browser',
@@ -523,7 +523,8 @@ export class PassSettlement {
             v: 1,
             turn,
             message: message!,
-            site: 'changed',
+            // A screenshot alone changed nothing on the site.
+            site: browser?.confirmed ? 'changed' : 'unchanged',
             next: 'done',
             filesChanged: 0,
             changeType: result.change_type,

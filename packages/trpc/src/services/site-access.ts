@@ -252,15 +252,22 @@ export function boundedAccess<Target>(prepared: PreparedAccess<Target>): Prepare
  */
 export async function writeSiteSecret(
   secrets: SiteConnectionServices['secrets'],
-  request: { path: string; data: Record<string, string>; signal: AbortSignal },
+  request: {
+    path: string
+    data: Record<string, string>
+    signal: AbortSignal
+    /** A variable of a site keeps one version (`siteEnvVarPath`): the write deletes the one before. */
+    maxVersions?: number
+  },
 ): Promise<number> {
-  const { path, data, signal } = request
+  const { path, data, signal, maxVersions } = request
   const late = () => {
     throw siteConnectionUnavailable()
   }
   try {
     const current = (await settleBy(secrets.kvMetadata(path), signal, late))?.currentVersion ?? 0
-    const { version } = await settleBy(secrets.kvWrite(path, data, { cas: current }), signal, late)
+    const options = maxVersions === undefined ? { cas: current } : { cas: current, maxVersions }
+    const { version } = await settleBy(secrets.kvWrite(path, data, options), signal, late)
     if (version !== current + 1) throw new Error('Unexpected secret version')
     return version
   } catch (error) {

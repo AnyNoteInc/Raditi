@@ -90,6 +90,9 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
     // Б34: a mass edit is refused, and the agent says so instead of looking for a way around.
     expect(text).toContain('at most 20 different objects')
     expect(text).toContain('do not look for another way')
+    // A snapshot for the client: attached to the dialog, never seen by the agent (Б20).
+    expect(text).toContain('`web_screenshot`')
+    expect(text).toContain('you\n  never see it')
     expect(text.endsWith(`## The admin pages of this site\n${guide}\n`)).toBe(true)
   })
 

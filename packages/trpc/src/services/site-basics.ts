@@ -134,11 +134,16 @@ export const withHost = <Site extends { url: string }>(site: Site) => ({
 })
 
 /**
- * A site the user may open: one in a workspace they are a member of. A site of someone else
- * and a site that does not exist answer the same — the caller must not learn which it is.
+ * A site the user may open: one in a workspace they are a member of, not deleted. A site of
+ * someone else, a deleted one and one that does not exist answer the same — the caller must not
+ * learn which it is.
  */
 export const accessibleSite = (userId: string, id: string) =>
-  ({ id, workspace: { members: { some: { userId } } } }) satisfies Prisma.SiteWhereInput
+  ({
+    id,
+    deletedAt: null,
+    workspace: { members: { some: { userId } } },
+  }) satisfies Prisma.SiteWhereInput
 
 export const siteNotFound = () =>
   new DomainError('NOT_FOUND', 'No such site among the sites of the user', 404)
@@ -264,11 +269,12 @@ export async function assertRoomForSite<Workspace extends { id: string } | null>
   personalWorkspace: () => Promise<Workspace>,
 ): Promise<Workspace> {
   const duplicate = await db.site.findFirst({
-    where: { url, workspace: { members: { some: { userId } } } },
+    where: { url, deletedAt: null, workspace: { members: { some: { userId } } } },
     select: { id: true },
   })
   if (duplicate) throw alreadyExists()
 
+  // Deleted sites count too: each one left an import and a repository behind.
   const created = await db.site.count({ where: { workspace: { createdById: userId } } })
   if (created >= MAX_SITES_PER_USER) {
     throw new DomainError(
@@ -321,7 +327,8 @@ export async function assertRoomForSite<Workspace extends { id: string } | null>
     })
     if (
       limit !== null &&
-      (await db.site.count({ where: { workspaceId: workspace.id } })) >= limit.maxSites
+      (await db.site.count({ where: { workspaceId: workspace.id, deletedAt: null } })) >=
+        limit.maxSites
     ) {
       throw planLimitReached(limit.maxSites, limit.of)
     }

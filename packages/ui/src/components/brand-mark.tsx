@@ -3,7 +3,7 @@
 import Box from '@mui/material/Box'
 
 import { fontFamilies } from '../theme/tokens.ts'
-import { BrandSymbol } from './brand-symbol.tsx'
+import { AnimatedBrandSymbol } from './animated-brand-symbol.tsx'
 
 export type BrandMarkProps = {
   /** Diameter of the circular mark, px. */
@@ -27,7 +27,7 @@ export function BrandMark({ size = 32, withWordmark = true }: BrandMarkProps) {
         verticalAlign: 'middle',
       }}
     >
-      <BrandSymbol size={size} />
+      <AnimatedBrandSymbol size={size} />
       {withWordmark ? (
         <Box
           component="span"

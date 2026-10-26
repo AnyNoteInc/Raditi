@@ -190,7 +190,7 @@ describe('the runtime and the browser', () => {
         .success,
     ).toBe(true)
     expect(previewRuntimeSecretsSchema.safeParse({ env: {}, database: null }).success).toBe(true)
-    for (const env of [{ WP_HOME: 'k'.repeat(12) }, { SHOP_API_KEY: 'short' }])
+    for (const env of [{ WP_HOME: 'k'.repeat(12) }, { SHOP_API_KEY: '' }])
       expect(previewRuntimeSecretsSchema.safeParse({ env, database }).success).toBe(false)
     // The passwords of the database are Vault's (19.10.2026): named, random, never left out.
     for (const passwords of [

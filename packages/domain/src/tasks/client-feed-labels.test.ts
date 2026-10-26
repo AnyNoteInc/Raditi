@@ -68,6 +68,7 @@ import {
   taskListGroupLabel,
   taskModeLabel,
   taskStatusLabel,
+  feedResultOpenText,
   taskStatusListHint,
 } from './client-feed-labels.ts'
 import { isFeedText } from './client-feed-text.ts'
@@ -243,7 +244,8 @@ describe('status labels', () => {
       rolled_back: 'Вернули как было',
       cancelled: 'Отменено',
     })
-    expect(taskStatusListHint.awaiting_user).toBe('Ответьте на вопрос')
+    // A question of the agent, a request of the browser, or a dialog left open after an answer.
+    expect(taskStatusListHint.awaiting_user).toBe('Ответьте агенту')
     expect(taskStatusListHint.awaiting_approval).toBe('Посмотрите и примените')
   })
 
@@ -254,6 +256,10 @@ describe('status labels', () => {
     expect(feedCardTitle.rolledBack).toBe('Вернули как было')
     expect(feedCardTitle.approval).toBe('Что изменится')
     expect(feedCardTitle.question).toBe('Вопрос агента')
+    expect(feedCardTitle.answer).toBe('Ответ агента')
+    expect(feedResultOpenText).toBe(
+      'Если нужно что-то ещё, напишите — агент продолжит в этом диалоге.',
+    )
   })
 
   it('names the stages with nouns', () => {
@@ -574,9 +580,9 @@ describe('the neutral lines of the reader and of the input area', () => {
       finished: 'Диалог завершён. Чтобы попросить что-то ещё, начните новый.',
       newDialog: 'Новый диалог',
       mistakes: 'ИИ может допускать ошибки. Проверяйте важное.',
-      noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Настройки»',
+      noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Переменные»',
       secret:
-        'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Настройки»',
+        'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»',
     })
   })
 

@@ -103,6 +103,14 @@ class FakePage extends Emitter {
       this.#record('cast stop')
     },
   }
+  /** The JPEG a screenshot at a quality answers, and the options each one was taken with. */
+  shot: (quality: number) => Buffer = () => Buffer.alloc(0)
+  shots: Record<string, unknown>[] = []
+  async screenshot(options: Record<string, unknown>) {
+    this.shots.push(options)
+    this.#record(`screenshot ${String(options.quality)}`)
+    return this.shot(options.quality as number)
+  }
   url() {
     return this.main.address
   }
@@ -306,6 +314,33 @@ const jpeg = (width: number, height: number) =>
     0x11,
     0,
   ])
+
+describe('a snapshot of the shown page for the client', () => {
+  it('takes a JPEG of the viewport at the first quality that fits, and its size from its header', async () => {
+    const { session, page } = await opened()
+    const big = Buffer.concat([jpeg(1280, 800), Buffer.alloc(2_000)])
+    page.shot = (quality) => (quality === 80 ? big : jpeg(1280, 800))
+    const shot = await session.screenshot({ qualities: [80, 60, 40], maxBytes: 1_000 })
+    expect(shot).toMatchObject({ width: 1280, height: 800, page: { pageId: session.shown() } })
+    expect([...shot.bytes.slice(0, 2)]).toEqual([0xff, 0xd8])
+    expect(page.shots).toEqual([
+      expect.objectContaining({ type: 'jpeg', quality: 80, fullPage: false }),
+      expect.objectContaining({ type: 'jpeg', quality: 60, fullPage: false }),
+    ])
+  })
+
+  it('refuses when no quality fits, and when the bytes are no JPEG', async () => {
+    const { session, page } = await opened()
+    page.shot = () => Buffer.concat([jpeg(1280, 800), Buffer.alloc(5_000)])
+    await expect(session.screenshot({ qualities: [80, 40], maxBytes: 1_000 })).rejects.toSatisfy(
+      (error: unknown) => codeOf(error) === 'BROWSER_ACTION_FAILED',
+    )
+    page.shot = () => Buffer.from('not a jpeg')
+    await expect(session.screenshot({ qualities: [80], maxBytes: 1_000 })).rejects.toSatisfy(
+      (error: unknown) => codeOf(error) === 'BROWSER_ACTION_FAILED',
+    )
+  })
+})
 
 describe('the cloud browser session', () => {
   it('connects only to a control socket on loopback, for a start page of the session', async () => {

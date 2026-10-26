@@ -207,3 +207,16 @@ export const browserSessionStateSchema = z.strictObject({
   help: browserHelpSchema.optional(),
 })
 export type BrowserSessionState = z.infer<typeof browserSessionStateSchema>
+
+/**
+ * A snapshot of the shown page for the client (`web_screenshot`, owner's request of 26.10.2026):
+ * a JPEG of the viewport, kept in the inbox bucket under its task and shown in the dialog. The
+ * model never gets its pixels (Б20): the tool answers only that it is attached, and its number.
+ */
+export const browserScreenshotLimits = Object.freeze({
+  /** JPEG quality of the first try; a larger image is taken again at the lower ones. */
+  qualities: [80, 60, 40] as readonly number[],
+  bytes: 1024 * 1024,
+  /** Snapshots of one task; the next one is refused. */
+  perTask: 50,
+})

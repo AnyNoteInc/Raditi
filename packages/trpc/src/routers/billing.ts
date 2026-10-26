@@ -327,7 +327,7 @@ export const billingRouter = router({
       listPlans(ctx.prisma),
       getPlanOverview(ctx.prisma, workspaceId),
       // The count a checkout compares with the plan (startCheckout of @repo/billing).
-      workspaceId === null ? 0 : ctx.prisma.site.count({ where: { workspaceId } }),
+      workspaceId === null ? 0 : ctx.prisma.site.count({ where: { workspaceId, deletedAt: null } }),
       getCreditConversion(ctx.prisma, new Date()),
     ])
     return {

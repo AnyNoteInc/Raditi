@@ -1,14 +1,17 @@
 import { DomainError, isDomainError } from '../errors.ts'
+import { envVarLimits } from './env-vars.ts'
 
 /**
  * The values of a client's variables wherever text of a turn is kept
  * (docs/plan/53-chat-preview-release.md, Р13): the agent's commands may get them, but the
  * journal, the feed, the logs and the session the platform stores never hold one — each value is
  * replaced by ENV_VALUE_MASK — and what the platform publishes or writes to a site refuses them.
- * A value is never shorter than `envVarLimits.valueMinBytes`, so a mask never garbles ordinary
- * words.
+ * A value shorter than `envVarLimits.maskMinBytes` is neither masked nor refused, so a mask
+ * never garbles ordinary words (owner's decision of 25.10.2026: a value may be one character).
  */
 export const ENV_VALUE_MASK = '[скрыто]'
+
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
 
 /** A value inside a JSON string: what the text of a tool's output or a stored session holds. */
 const inJsonString = (value: string): string => JSON.stringify(value).slice(1, -1)
@@ -25,11 +28,11 @@ const inShellQuotes = (value: string): string =>
  * JSON string holds it once and twice (a session row is JSON, and the output of a tool it keeps
  * may be JSON again), and as the shell script of the turn quotes it. Each once, longest first: a
  * value inside another is masked as part of the longer one. Other encodings (base64, URL) are
- * not looked for.
+ * not looked for. A value shorter than `envVarLimits.maskMinBytes` has none.
  */
 export function envValueForms(values: readonly string[]): string[] {
   const forms = values
-    .filter((value) => value.length > 0)
+    .filter((value) => utf8Bytes(value) >= envVarLimits.maskMinBytes)
     .flatMap((value) => {
       const once = inJsonString(value)
       return [value, once, inJsonString(once), inShellQuotes(value)]
@@ -50,7 +53,7 @@ export function maskEnvValues(text: string, values: readonly string[]): string {
  * null stay as they are.
  */
 export function maskEnvValuesDeep<T>(value: T, values: readonly string[]): T {
-  if (!values.some((item) => item.length > 0)) return value
+  if (envValueForms(values).length === 0) return value
   const walk = (item: unknown): unknown => {
     if (typeof item === 'string') return maskEnvValues(item, values)
     if (Array.isArray(item)) return item.map(walk)

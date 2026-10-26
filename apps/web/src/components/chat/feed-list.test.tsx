@@ -84,6 +84,42 @@ describe('the rows of a dialog', () => {
     expect(text(within(feed).getByText(/Агент работал/))).toBe('Агент работал 2 мин 14 с')
   })
 
+  it('opens «Ход работы» of a finished turn only when the client unfolds it', () => {
+    const rows: FeedRow[] = [
+      requestRow('1'),
+      { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+      { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+    ]
+    const activityOf = vi.fn((turn: number) => <p>Ход хода {turn}</p>)
+    render(
+      <FeedList
+        head={headOf({ status: 'awaiting_approval', task: { turnNo: 1 } })}
+        rows={rows}
+        siteUrl="https://kroshka.example"
+        openQuestionId={null}
+        liveCandidateId={null}
+        actions={actions()}
+        activityOf={activityOf}
+      />,
+    )
+    expect(activityOf).not.toHaveBeenCalled()
+    const details = screen.getByText(/Агент работал/).closest('details')!
+    details.open = true
+    fireEvent(details, new Event('toggle'))
+    expect(activityOf).toHaveBeenCalledWith(1)
+    expect(screen.getByRole('heading', { name: 'Ход работы' })).toBeTruthy()
+    expect(screen.getByText('Ход хода 1')).toBeTruthy()
+  })
+
+  it('sets the agent answer on the page under a heading only a screen reader reads', () => {
+    const { feed } = showFeed(
+      [requestRow('1'), resultRow('3', 1)],
+      headOf({ status: 'done', task: { turnNo: 1 } }),
+    )
+    const heading = within(feed).getByRole('heading', { name: 'Что изменится' })
+    expect(heading.nextElementSibling?.textContent).toBe('Поменял цену капучино на 290 ₽.')
+  })
+
   it('asks the agent question and says how to answer while it is open', () => {
     const question = agentQuestionRow('2', 1, ['Какую цену поставить?', 'На все размеры?'])
     const { feed } = showFeed([requestRow('1'), question], headOf({ status: 'awaiting_user' }), {
@@ -124,6 +160,31 @@ describe('the rows of a dialog', () => {
     expect(within(feed).getByRole('heading', { name: 'Что изменится' })).toBeTruthy()
     expect(text(feed)).toContain('Поменял цену капучино на 290 ₽.')
     expect(text(feed)).toContain('На сайте пока ничего не изменилось.')
+  })
+
+  it('shows the answer of a pass that changed nothing as the agent’s, the dialog open', () => {
+    // The owner, 26.10.2026: «после того как в работе произошла какая-то работа, не закрывай чат».
+    const open: FeedRow = {
+      id: '3',
+      at: '2026-10-17T09:02:14.000Z',
+      type: 'feed.result',
+      turn: 1,
+      message: 'Это сайт учебного комбината на WordPress.',
+      site: 'unchanged',
+      next: 'awaiting_user',
+      filesChanged: 0,
+      changeType: 'none',
+      needsApproval: false,
+      risk: 'low',
+    }
+    const { feed } = showFeed([open], headOf({ status: 'awaiting_user' }))
+    expect(within(feed).getByRole('heading', { name: 'Ответ агента' })).toBeTruthy()
+    expect(within(feed).queryByRole('heading', { name: 'Готово' })).toBeNull()
+    expect(text(feed)).toContain('Это сайт учебного комбината на WordPress.')
+    expect(text(feed)).toContain(
+      'Если нужно что-то ещё, напишите — агент продолжит в этом диалоге.',
+    )
+    expect(text(feed)).not.toContain('Изменено файлов')
   })
 
   it('explains a failure and a cancellation by their codes', () => {
@@ -342,6 +403,30 @@ describe('the live block', () => {
     expect(screen.getByRole('heading', { name: 'Агент работает' })).toBeTruthy()
     expect(screen.getByText('Работа над задачей')).toBeTruthy()
     expect(screen.getByText('Сохранение работы')).toBeTruthy()
+  })
+
+  it('shows «Ход работы» of the turn at work open under its stages', () => {
+    const head = headOf({
+      status: 'running',
+      task: { turnNo: 2, runningSince: new Date().toISOString() },
+    })
+    render(
+      <LiveBlock head={head} steps={[stepRow('2', 2) as never]} activity={<p>Команды агента</p>} />,
+    )
+    const details = screen.getByText('Ход работы').closest('details')!
+    expect(details.open).toBe(true)
+    expect(within(details).getByText('Команды агента')).toBeTruthy()
+  })
+
+  it('shows no «Ход работы» while the client drives the browser or the site is held', () => {
+    render(
+      <LiveBlock
+        head={headOf({ status: 'running', task: { held: true } })}
+        steps={[stepRow('2', 1) as never]}
+        activity={<p>Команды агента</p>}
+      />,
+    )
+    expect(screen.queryByText('Команды агента')).toBeNull()
   })
 
   it('shows the site held instead of the stages', () => {

@@ -19,6 +19,7 @@ import {
   siteEnvVarPath,
   siteEnvVarValueOf,
   type DatabaseCopier,
+  type StagingDatabaseRuntime,
   type DbAccess,
   type ObjectStorage,
   type PreviewDatabasePasswords,
@@ -96,6 +97,11 @@ export interface PreviewBuildDeps {
   /** null — this core runs no preview (PREVIEW_EXECUTOR=runner until M10). */
   runtime: PreviewRuntime | null
   copier: DatabaseCopier
+  /**
+   * The temporary database a site's SQL dump is loaded into before its copy (owner's decision of
+   * 26.10.2026); null — this core loads none (PREVIEW_EXECUTOR=runner until M10).
+   */
+  staging?: StagingDatabaseRuntime | null
   /** The prefix and the encoding when the configuration on the hosting does not tell them. */
   catalog: PreviewDatabaseCatalog
   /** The file source and the database of the site as the connection wizard recorded them. */
@@ -508,6 +514,54 @@ export async function buildPreview(
   hold: PreviewHold,
   facts: PreviewFacts,
 ): Promise<BuiltPreview> {
+  const staging = dumpStaging(deps, facts, hold.signal)
+  try {
+    return await buildPreviewOn(deps, hold, facts, staging)
+  } finally {
+    await staging.release()
+  }
+}
+
+/**
+ * The database a site's dump is loaded into, made at the first call of `access` and removed by
+ * `release` — after the seed, and whatever the build ends with (owner's decision of 26.10.2026).
+ * The dump streams from the site's file source into the temporary database: no raw copy of it
+ * lands on a disk of core.
+ */
+export function dumpStaging(deps: PreviewBuildDeps, facts: PreviewFacts, signal: AbortSignal) {
+  const path = facts.databaseDump
+  const stagingId = facts.preview.id
+  let staged: Promise<DbAccess> | null = null
+  return {
+    fromDump: path !== null,
+    access(): Promise<DbAccess> {
+      if (path === null) return databaseAccess(deps, facts.site.id)
+      staged ??= (async () => {
+        const image = deps.config.images.db
+        if (!deps.staging || !image) throw previewFailure('not_configured')
+        const runtime = deps.staging
+        const read = await deps.sources.withDump(facts.site.id, path, signal, (dump) =>
+          runtime.load({ stagingId, image, dump, signal }),
+        )
+        if (!read.ok) throw previewFailure(read.code)
+        return read.value.access
+      })()
+      return staged
+    },
+    async release(): Promise<void> {
+      if (staged === null) return
+      staged = null
+      await deps.staging?.remove(stagingId).catch(() => {})
+    },
+  }
+}
+
+async function buildPreviewOn(
+  deps: PreviewBuildDeps,
+  hold: PreviewHold,
+  facts: PreviewFacts,
+  staging: ReturnType<typeof dumpStaging>,
+): Promise<BuiltPreview> {
   const { preview, site, task, candidate } = facts
   const freshSeed = !preview.seed || preview.seed.releaseId !== site.installedReleaseId
   const { writeEpoch, expiresAt, startedAt } = await startBuild(deps, hold, facts, freshSeed)
@@ -534,7 +588,8 @@ export async function buildPreview(
 
   const adapter = deps.adapters(site.stack)
   let access: DbAccess | null = null
-  const accessOf = async () => (access ??= await databaseAccess(deps, site.id))
+  // The site's database, or the temporary one its dump was loaded into.
+  const accessOf = async () => (access ??= await staging.access())
   const database =
     (!freshSeed && preview.record.database) ||
     (await databaseSettings(deps, adapter, site, preview.id, accessOf, signal))
@@ -620,6 +675,8 @@ export async function buildPreview(
       throw new PreviewLater('site_busy')
     }
   }
+  // The copy is taken: the temporary database of a dump is not kept for the rest of the build.
+  await staging.release()
   if (!seed) throw previewFailure('seed_missing')
 
   // The containers (Р18) with the variables of the client that reach a preview (Р13).

@@ -835,6 +835,37 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     }
   }
 
+  async screenshot(options: {
+    qualities: readonly number[]
+    maxBytes: number
+  }): Promise<{ page: BrowserTab; bytes: Uint8Array; width: number; height: number }> {
+    const entry = await this.#ensureShown()
+    await entry.dropping
+    // A page under a dialog draws nothing new until it is answered.
+    if (entry.dialog) throw browserTaskError('BROWSER_ACTION_FAILED')
+    const deadline = new Deadline(this.#settings.actionTimeoutMs)
+    try {
+      for (const quality of options.qualities) {
+        // The viewport only, as the client sees it in the stream; no animation is waited for.
+        const bytes = await entry.page.screenshot({
+          type: 'jpeg',
+          quality,
+          fullPage: false,
+          animations: 'disabled',
+          caret: 'hide',
+          timeout: deadline.left(),
+        })
+        if (bytes.byteLength > options.maxBytes) continue
+        const size = jpegSize(bytes)
+        if (size === null) break
+        return { page: this.#tabOf(entry), bytes: new Uint8Array(bytes), ...size }
+      }
+    } catch (error) {
+      throw failure(error, this.isConnected())
+    }
+    throw browserTaskError('BROWSER_ACTION_FAILED')
+  }
+
   async #result(
     entry: PageEntry,
     extra: { matched?: boolean; uploaded?: number } = {},

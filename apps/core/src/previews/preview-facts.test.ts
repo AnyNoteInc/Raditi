@@ -46,6 +46,7 @@ function facts(
       invalid: false,
     },
     hasDatabase: true,
+    databaseDump: null,
     ...rest,
   }
 }

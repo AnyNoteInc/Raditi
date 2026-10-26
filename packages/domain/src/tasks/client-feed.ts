@@ -4,6 +4,7 @@ import { attachmentLimits } from '../attachments/rules.ts'
 import {
   browserHelpReasons,
   browserPlatformQuestionReasons,
+  browserScreenshotLimits,
   browserSessionLimits,
 } from '../browser/session.ts'
 import { agentOutputLimits } from '../ports/agent-driver.ts'
@@ -52,6 +53,8 @@ export const feedEventTypes = [
   'feed.update',
   // «Отменить выпуск» (docs/plan/53, «Отмена выпуска»): the confirmation and the outcome.
   'feed.undo',
+  // A snapshot of the task's browser for the client (`web_screenshot`, docs/plan/57, Б20).
+  'feed.screenshot',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -163,7 +166,12 @@ const endedSites = ['unchanged', 'restored', 'check'] as const
 export const feedCreditsStates = ['returned', 'expired'] as const
 export type FeedCreditsState = (typeof feedCreditsStates)[number]
 
-export const feedResultNexts = ['done', 'awaiting_approval'] as const
+/**
+ * The status a result moved the task to: `awaiting_user` — a pass of a dialog with a repository
+ * that changed nothing and asked nothing: the dialog stays open for the client's next words
+ * (owner's decision of 26.10.2026, «не закрывай чат»).
+ */
+export const feedResultNexts = ['done', 'awaiting_approval', 'awaiting_user'] as const
 export type FeedResultNext = (typeof feedResultNexts)[number]
 /**
  * The status a failure moved the task to: `awaiting_approval` — the dialog kept its candidate
@@ -334,7 +342,10 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     kind: z.literal('answer'),
     text: requestText,
     attachments,
-    /** The `feed.question` row this answers. */
+    /**
+     * The `feed.question` row this answers, or the `feed.result` that left the dialog open
+     * (`next: 'awaiting_user'`, owner's decision of 26.10.2026).
+     */
     answersEventId: feedEventIdSchema,
   }),
   // «Попробовать ещё» is a press, not a message.
@@ -610,6 +621,22 @@ export const feedUndoPayloadSchema = z.discriminatedUnion('stage', [
 ])
 export type FeedUndoPayload = z.infer<typeof feedUndoPayloadSchema>
 
+/**
+ * `feed.screenshot` v1 — a snapshot of the shown page of the task's browser, which the agent took
+ * for the client (`web_screenshot`, owner's request of 26.10.2026). The image is in the inbox
+ * bucket under the task (`browserTaskScreenshotKey`); the row names it by id and its number among
+ * the task's snapshots, with its size in pixels. No address, no title: what the page showed is in
+ * the image alone, which only the client sees (Б20).
+ */
+export const feedScreenshotPayloadSchema = z.strictObject({
+  v: version,
+  screenshotId: z.uuid(),
+  number: z.number().int().min(1).max(browserScreenshotLimits.perTask),
+  width: z.number().int().min(1).max(10_000),
+  height: z.number().int().min(1).max(10_000),
+})
+export type FeedScreenshotPayload = z.infer<typeof feedScreenshotPayloadSchema>
+
 /** The writing schema of each type. */
 export const feedPayloadSchemas = Object.freeze({
   'feed.request': feedRequestPayloadSchema,
@@ -623,6 +650,7 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.release': feedReleasePayloadSchema,
   'feed.update': feedUpdatePayloadSchema,
   'feed.undo': feedUndoPayloadSchema,
+  'feed.screenshot': feedScreenshotPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -651,6 +679,7 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.release', feedReleasePayloadSchema),
       row('feed.update', feedUpdatePayloadSchema),
       row('feed.undo', feedUndoPayloadSchema),
+      row('feed.screenshot', feedScreenshotPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -872,6 +901,13 @@ const readUndoOutcome = z.object({
   records: z.object({ returned: count999, kept: count999 }),
 })
 
+const readScreenshot = z.object({
+  screenshotId: z.uuid(),
+  number: z.number().int().min(1),
+  width: z.number().int().min(1),
+  height: z.number().int().min(1),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -916,6 +952,7 @@ export type FeedEvent =
   | ({ type: 'feed.release' } & z.infer<typeof readRelease>)
   | ({ type: 'feed.update' } & z.infer<typeof readUpdate>)
   | ({ type: 'feed.undo' } & (z.infer<typeof readUndoConfirmed> | z.infer<typeof readUndoOutcome>))
+  | ({ type: 'feed.screenshot' } & z.infer<typeof readScreenshot>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1028,6 +1065,10 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
         return NEWER
       return readWith(readUndoOutcome, payload, (data) => ({ type: 'feed.undo', ...data }))
     },
+  },
+  'feed.screenshot': {
+    1: (payload) =>
+      readWith(readScreenshot, payload, (data) => ({ type: 'feed.screenshot', ...data })),
   },
 }
 

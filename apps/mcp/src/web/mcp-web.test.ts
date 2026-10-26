@@ -66,6 +66,8 @@ function resultOf(request: BrowserActionRequest): BrowserToolResult {
       return { tool: 'web_help', requested: true, reason: action.reason }
     case 'web_verify':
       return { tool: 'web_verify', objects: [], matched: true }
+    case 'web_screenshot':
+      return { tool: 'web_screenshot', page: PAGE, attached: true, number: 1 }
     default:
       return { tool: action.tool, page: PAGE }
   }
@@ -144,6 +146,13 @@ describe('the web tools of a browser task', () => {
       { signal: expect.any(AbortSignal) },
     )
     expect(answer).toEqual({ tool: 'web_click', page: PAGE })
+  })
+
+  it('asks the worker for a snapshot for the client and gives the model only its number', async () => {
+    const { scope, service, worker } = fixture()
+    const answer = await service.call(scope, 'web_screenshot', {})
+    expect(worker.action.mock.calls[0]?.[1].action).toEqual({ tool: 'web_screenshot' })
+    expect(answer).toEqual({ tool: 'web_screenshot', page: PAGE, attached: true, number: 1 })
   })
 
   it('refuses every call when the turn or the session is gone, before the worker', async () => {

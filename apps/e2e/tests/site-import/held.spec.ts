@@ -65,5 +65,5 @@ test('[b1] SSH with a password and MySQL: the key is compared, the setup screen 
   }
 
   await expectInitialVersion(page)
-  await expectProjectChip(page, 'Сайт B1', 'Ожидает подключения')
+  await expectProjectChip(page, 'Сайт B1', 'Подключён')
 })

@@ -149,7 +149,7 @@ export function AttachmentChips({
                         display: 'block',
                         width: `${percent}%`,
                         height: '100%',
-                        bgcolor: 'var(--raditi-accent)',
+                        bgcolor: 'var(--chat-text, var(--raditi-accent))',
                       }}
                     />
                   </Box>

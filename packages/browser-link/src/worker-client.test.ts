@@ -161,6 +161,27 @@ describe('the HTTP client of the browser worker', () => {
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual(click)
   })
 
+  it('passes a snapshot for the client as its number, and refuses one that carries more', async () => {
+    const shot = {
+      taskId: click.taskId,
+      assignmentId: click.assignmentId,
+      action: { tool: 'web_screenshot' },
+    }
+    const attached = {
+      tool: 'web_screenshot',
+      page: { pageId: 1, url: 'https://news.example.ru/', title: 'Новости' },
+      attached: true,
+      number: 2,
+    }
+    const { client } = workerWith(() => json({ ok: true, result: attached }))
+    await expect(client.action(sessionId, shot as typeof click)).resolves.toEqual(attached)
+    // A worker that answered pixels breaks the contract: the agent never gets them (Б20).
+    const { client: leaking } = workerWith(() =>
+      json({ ok: true, result: { ...attached, jpeg: 'AAAA' } }),
+    )
+    await expect(rejection(leaking.action(sessionId, shot as typeof click))).resolves.toBeTruthy()
+  })
+
   it('rejects a refusal of an action with the fixed code and its text', async () => {
     const { client } = workerWith(() => json({ ok: false, code: 'BROWSER_USER_IN_CONTROL' }))
     const error = await rejection(client.action(sessionId, click))

@@ -27,6 +27,7 @@ import {
   releaseKeyMaterial,
   type KvMetadata,
   type KvWriteOptions,
+  type ModelClass,
   type ObjectStorage,
   type SecretStore,
   type TaskRequirements,
@@ -101,20 +102,24 @@ function memoryVault() {
 /**
  * The process-wide client with every writing transaction (READ COMMITTED, as the writers of
  * @repo/billing require) run under a credit rate no other transaction sees
- * (`underPrivateCreditRate`): a reserve needs a usable rate, and this database may be shared
- * with suites that expect none. Reads in a snapshot of their own are left as they are.
+ * (`underPrivateCreditRate`) and with the class `standard` — that of a dialog the client starts
+ * with no reasoning chosen — priced the same way (`underPricedModel`): a reserve needs a usable
+ * rate, `task.create` a class a pass could run in, and this database may be shared with suites
+ * that expect neither. Reads in a snapshot of their own are left as they are. `rate: false` —
+ * the class priced without a rate, for a reserve refused for want of one.
  */
-function underRate(db: PrismaClient): PrismaClient {
+function underRate(db: PrismaClient, { rate = true }: { rate?: boolean } = {}): PrismaClient {
+  const priced = <T>(tx: Prisma.TransactionClient, work: () => Promise<T>): Promise<T> =>
+    rate
+      ? underPrivateCreditRate(tx, () => underPricedModel(tx, 'standard', work))
+      : underPricedModel(tx, 'standard', work)
   return new Proxy(db, {
     get(target, property) {
       if (property === '$transaction') {
         return (work: unknown, options?: { isolationLevel?: Prisma.TransactionIsolationLevel }) =>
           typeof work === 'function' && options?.isolationLevel === 'ReadCommitted'
             ? target.$transaction(
-                (tx) =>
-                  underPrivateCreditRate(tx, () =>
-                    (work as (client: typeof tx) => Promise<unknown>)(tx),
-                  ),
+                (tx) => priced(tx, () => (work as (client: typeof tx) => Promise<unknown>)(tx)),
                 options,
               )
             : target.$transaction(work as never, options as never)
@@ -125,8 +130,8 @@ function underRate(db: PrismaClient): PrismaClient {
   })
 }
 
-/** How the class `heavy` stands for a retry (`underHeavyModel`). */
-interface HeavyModel {
+/** How a class stands for a pass (`underPricedModel`). */
+interface PricedModel {
   /** When its price starts: before any private credit rate unless told otherwise. */
   priceFrom?: Date
   /** false — its provider is left as the seeds have it: switched off. */
@@ -134,24 +139,25 @@ interface HeavyModel {
 }
 
 /**
- * Runs `work` with the seeded model of the class `heavy` and its provider switched on and the
- * model priced, in the caller's transaction alone: the price row is written before the work and
+ * Runs `work` with the seeded model of `modelClass` and its provider switched on and the model
+ * priced, in the caller's transaction alone: the price row is written before the work and
  * deleted after it, and the switches are put back, so the database is left as every other suite
- * expects. «Попробовать ещё» moves a dialog to `heavy` and asks first whether a pass of it could
- * run: the profile the planner takes, with a price. The price starts before any private credit
- * rate (`underPrivateCreditRate`), which so stays usable, unless `priceFrom` says otherwise.
+ * expects. `task.create` and «Попробовать ещё» ask first whether a pass of the class could run:
+ * the profile the planner takes, with a price. The price starts before any private credit rate
+ * (`underPrivateCreditRate`), which so stays usable, unless `priceFrom` says otherwise.
  */
-async function underHeavyModel<T>(
+async function underPricedModel<T>(
   tx: Prisma.TransactionClient,
+  modelClass: ModelClass,
   work: () => Promise<T>,
-  options: HeavyModel = {},
+  options: PricedModel = {},
 ): Promise<T> {
   const model = await tx.llmModel.findFirst({
-    where: { modelClass: 'heavy', providerModelId: { not: null } },
+    where: { modelClass, providerModelId: { not: null } },
     orderBy: [{ slug: 'asc' }, { provider: { slug: 'asc' } }],
     select: { id: true, enabled: true, provider: { select: { id: true, enabled: true } } },
   })
-  if (model === null) throw new Error('The seeds have no model of the class heavy')
+  if (model === null) throw new Error(`The seeds have no model of the class ${modelClass}`)
   const price = await tx.llmModelPrice.create({
     data: {
       modelId: model.id,
@@ -176,8 +182,15 @@ async function underHeavyModel<T>(
   return result
 }
 
-/** `underRate` with the class `heavy` priced as well (`underHeavyModel`). */
-function underRateAndHeavy(db: PrismaClient, heavy: HeavyModel = {}): PrismaClient {
+/**
+ * `underRate` with the class `heavy` priced as well. A client whose `heavy` is under a provider
+ * left off only retries: pricing `standard` would switch that provider on, so it is not priced.
+ */
+function underRateAndHeavy(db: PrismaClient, heavy: PricedModel = {}): PrismaClient {
+  const priced = <T>(tx: Prisma.TransactionClient, work: () => Promise<T>): Promise<T> =>
+    heavy.provider === false
+      ? underPricedModel(tx, 'heavy', work, heavy)
+      : underPricedModel(tx, 'standard', () => underPricedModel(tx, 'heavy', work, heavy))
   return new Proxy(db, {
     get(target, property) {
       if (property === '$transaction') {
@@ -186,11 +199,7 @@ function underRateAndHeavy(db: PrismaClient, heavy: HeavyModel = {}): PrismaClie
             ? target.$transaction(
                 (tx) =>
                   underPrivateCreditRate(tx, () =>
-                    underHeavyModel(
-                      tx,
-                      () => (work as (client: typeof tx) => Promise<unknown>)(tx),
-                      heavy,
-                    ),
+                    priced(tx, () => (work as (client: typeof tx) => Promise<unknown>)(tx)),
                   ),
                 options,
               )
@@ -260,6 +269,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     await db.turnAssignment.deleteMany({ where: { site: owned } })
     await db.task.deleteMany({ where: owned })
     await db.siteEnvVar.deleteMany({ where: { site: owned } })
+    await db.siteDatabaseDump.deleteMany({ where: { site: owned } })
     await db.credentialRef.deleteMany({ where: owned })
     await db.site.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })
@@ -641,6 +651,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(await outboxOf(preview.id)).toEqual([])
     })
 
+    it('builds the copy of a site whose database comes from a dump on its file source', async () => {
+      const { owner, site } = await siteOwner()
+      await db.siteDatabaseDump.create({ data: { siteId: site.id, path: 'backup.sql' } })
+      const { taskId } = await newDialog(callerOf(owner), site.id)
+
+      const preview = await db.previewEnvironment.findUniqueOrThrow({ where: { taskId } })
+      expect(preview).toMatchObject({ status: 'pending', dbMode: 'copy', unavailableReason: null })
+      expect(await outboxOf(preview.id)).toHaveLength(1)
+    })
+
     it('opens no preview where previews are not set up', async () => {
       const { owner, site } = await siteOwner({ database: true })
       const { taskId } = await newDialog(callerOf(owner, { preview: false }), site.id)
@@ -698,9 +718,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const taskId = randomUUID()
       taskIds.push(taskId)
 
-      // Without the private credit rate: this database has none, and no task is taken.
+      // Without the private credit rate: this database has none, and no task is taken. The class
+      // is priced, so the refusal is the reserve's, not the class's.
       await expect(
-        callerOf(owner, { client: db }).task.create({
+        callerOf(owner, { client: underRate(db, { rate: false }) }).task.create({
           siteId: site.id,
           taskId,
           text: 'Добавьте отзывы',
@@ -811,6 +832,63 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const again = await caller.task.message({ taskId, requestId, text: '+7 900 000-00-00' })
       expect(again).toEqual({ requestEventId: posted.requestEventId, repeated: true })
       expect(await feedOf(taskId)).toHaveLength(3)
+    })
+
+    it('goes on in a dialog a pass left open without changes: the words answer its result', async () => {
+      // The owner, 26.10.2026: «после того как в работе произошла какая-то работа, не закрывай чат».
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      // An earlier question, answered: the words now answer the result after it.
+      await asked(taskId, {
+        kind: 'agent',
+        intro: 'Нужно уточнить.',
+        questions: [{ text: 'О чём рассказать?', options: [] }],
+      })
+      await caller.task.message({ taskId, requestId: randomUUID(), text: 'О сайте в целом' })
+      const resultId = await db.$transaction(async (tx) => {
+        await tx.task.update({
+          where: { id: taskId },
+          data: { status: 'awaiting_user', turnNo: 2 },
+        })
+        return insertFeedEvent(tx, {
+          taskId,
+          row: {
+            type: 'feed.result',
+            payload: {
+              v: 1,
+              turn: 2,
+              message: 'Это сайт учебного комбината.',
+              site: 'unchanged',
+              next: 'awaiting_user',
+              filesChanged: 0,
+              changeType: 'none',
+              needsApproval: false,
+              risk: 'low',
+            },
+          },
+        })
+      })
+
+      const posted = await caller.task.message({
+        taskId,
+        requestId: randomUUID(),
+        text: 'А какие плагины стоят?',
+      })
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 1,
+      })
+      expect((await feedOf(taskId)).at(-1)).toMatchObject({
+        id: BigInt(posted.requestEventId),
+        payload: { kind: 'answer', answersEventId: String(resultId) },
+      })
+      expect(await activeHolds(taskId)).toHaveLength(1)
+      // Answered once: while the next pass works, words wait for it.
+      await expect(
+        caller.task.message({ taskId, requestId: randomUUID(), text: 'И ещё' }),
+      ).rejects.toMatchObject({ cause: { code: 'TASK_BUSY' } })
     })
 
     it('starts a new pass on top of the candidate with the revision the words are about', async () => {

@@ -74,10 +74,20 @@ function showVariables() {
 }
 
 const card = () =>
-  screen.getByRole('heading', { level: 2, name: 'Переменные окружения' }).closest('section')!
+  screen.getByRole('heading', { level: 1, name: 'Переменные окружения' }).closest('section')!
+/** The panel a variable is added or changed in: it slides in over the page, outside the section. */
+const panel = (name: string | RegExp) => screen.getByRole('dialog', { name })
 const input = (name: string) => screen.getByLabelText<HTMLInputElement>(name, { exact: false })
 const type = (name: string, value: string) => fireEvent.change(input(name), { target: { value } })
 const save = () => fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+/** «Добавить переменную» once the list is read: until then it stands in its place, disabled. */
+async function addButton() {
+  const button = await screen.findByRole<HTMLButtonElement>('button', {
+    name: 'Добавить переменную',
+  })
+  await waitFor(() => expect(button.disabled).toBe(false))
+  return button
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -105,12 +115,16 @@ describe('the variables of a site', () => {
     expect(list).toHaveBeenCalledWith({ siteId: SITE_ID })
   })
 
-  it('adds a variable: the value goes once, and the form says the preview needs the agent', async () => {
+  it('adds a variable in a panel over the page: the value goes once, and the form says the preview needs the agent', async () => {
     showVariables()
-    fireEvent.click(await screen.findByRole('button', { name: 'Добавить переменную' }))
-    expect(plain(card().textContent)).toContain(
+    const add = await addButton()
+    // At the top of the section, beside its heading, not under the list.
+    expect(add.parentElement!.contains(screen.getByText('Переменные окружения'))).toBe(true)
+    fireEvent.click(add)
+    expect(plain(panel('Добавить переменную').textContent)).toContain(
       'переменная попадёт в предпросмотр, только если её передают и агенту',
     )
+    expect(document.activeElement).toBe(input('Имя'))
     expect(input('Значение').type).toBe('password')
     type('Имя', 'CRM_TOKEN')
     type('Значение', 'tok-1234567890')
@@ -127,13 +141,36 @@ describe('the variables of a site', () => {
       agentConsent: false,
     })
     expect(await screen.findByText('Переменная CRM_TOKEN сохранена.')).toBeTruthy()
+    // The panel slides out, and what was typed in it goes with it.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(screen.queryByDisplayValue('tok-1234567890')).toBeNull()
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
   })
 
+  it('keeps «Добавить переменную» in its place, disabled, while the list is read', async () => {
+    let answer: (value: { agentAllowed: boolean; variables: SiteEnvVar[] }) => void = () => {}
+    list.mockReturnValue(new Promise((resolve) => (answer = resolve)))
+    showVariables()
+    const button = screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить переменную' })
+    expect(button.disabled).toBe(true)
+    answer({ agentAllowed: true, variables: [] })
+    await waitFor(() => expect(button.disabled).toBe(false))
+  })
+
+  it('closes the panel by «Отмена» and leaves the list as it was', async () => {
+    showVariables()
+    fireEvent.click(await screen.findByRole('button', { name: 'Изменить DELIVERY_KEY' }))
+    expect(panel('Изменить DELIVERY_KEY')).toBeTruthy()
+    expect(document.activeElement).toBe(input('Значение'))
+    fireEvent.click(screen.getByRole('button', { name: 'Отмена' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(set).not.toHaveBeenCalled()
+    expect(card()).toBeTruthy()
+  })
+
   it('gives a variable to the agent only with the consent', async () => {
     showVariables()
-    fireEvent.click(await screen.findByRole('button', { name: 'Добавить переменную' }))
+    fireEvent.click(await addButton())
     type('Имя', 'CRM_TOKEN')
     type('Значение', 'tok-1234567890')
     fireEvent.click(screen.getByRole('switch', { name: 'Передавать агенту' }))
@@ -153,7 +190,7 @@ describe('the variables of a site', () => {
 
   it('checks the name and the value before sending', async () => {
     showVariables()
-    fireEvent.click(await screen.findByRole('button', { name: 'Добавить переменную' }))
+    fireEvent.click(await addButton())
     type('Имя', 'WP_HOME')
     type('Значение', 'short')
     save()
@@ -167,8 +204,9 @@ describe('the variables of a site', () => {
       ),
     ).toBeTruthy()
     type('Имя', 'SHOP_KEY')
+    type('Значение', '')
     save()
-    expect(await screen.findByText('Значение должно быть не короче 8 знаков.')).toBeTruthy()
+    expect(await screen.findByText('Введите значение.')).toBeTruthy()
     expect(document.activeElement).toBe(input('Значение'))
     expect(set).not.toHaveBeenCalled()
   })
@@ -211,7 +249,7 @@ describe('the variables of a site', () => {
     expect(agent.checked).toBe(false)
     expect(agent.disabled).toBe(true)
     expect(screen.queryByRole('checkbox', { name: /агент увидит/ })).toBeNull()
-    expect(plain(card().textContent)).toContain(closed)
+    expect(plain(panel('Изменить DELIVERY_KEY').textContent)).toContain(closed)
     type('Значение', 'new-value-123')
     save()
     await waitFor(() => expect(set).toHaveBeenCalledTimes(1))

@@ -15,6 +15,7 @@ import {
 } from '@repo/domain'
 
 import { accessibleSite, siteNotFound } from '../site-basics.ts'
+import { eraseSiteSecret } from '../site-delete.ts'
 import { isManagerRole, memberRole } from './access.ts'
 import type { SiteSecretWriter } from './context.ts'
 import {
@@ -190,7 +191,14 @@ export async function setSiteEnv(
   // revision takes (`recordCandidate` of @repo/db): a description recorded before is taken back
   // here, one recorded after finds this row and is recorded without its values.
   await db.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM sites WHERE id = ${site.id}::uuid FOR NO KEY UPDATE`
+    const locked = await tx.$queryRaw<{ deleted_at: Date | null }[]>`
+      SELECT deleted_at FROM sites WHERE id = ${site.id}::uuid FOR NO KEY UPDATE`
+    // Deleted meanwhile (`deleteSite`): the value written above came after its secrets were
+    // erased, and no row will name it — it is erased here.
+    if ((locked[0]?.deleted_at ?? null) !== null) {
+      await eraseSiteSecret(secrets(), siteEnvVarPath(site.id, input.name), input.now)
+      throw siteNotFound()
+    }
     const created = await tx.siteEnvVar.createMany({
       data: [{ siteId: site.id, name: input.name, createdBy: input.userId, ...fields }],
       skipDuplicates: true,
@@ -202,7 +210,7 @@ export async function setSiteEnv(
         data: fields,
       })
     }
-    await takeBackDescriptions(tx, site.id, input.value)
+    await takeBackDescriptions(tx, site.id, [input.value])
   })
   const row = await db.siteEnvVar.findUniqueOrThrow({
     where: { siteId_name: { siteId: site.id, name: input.name } },
@@ -215,21 +223,23 @@ export async function setSiteEnv(
  * The description of a database plan core keeps in the clear with an open candidate (docs/plan/
  * 53, «Операции БД и миграции») must not hold the value of a variable — a value the client
  * declares a variable after the description was made included: such a description is taken
- * back. Compared here, in this process: the value never travels in a query. The candidate is
- * then not released until a new revision describes its plan again (`values_unavailable`).
+ * back. Compared here, in this process: the values never travel in a query. The candidate is
+ * then not released until a new revision describes its plan again (`values_unavailable`). Also
+ * for the variables of an access changed on a working site (`replaceAccessVariables`).
  */
-async function takeBackDescriptions(
+export async function takeBackDescriptions(
   db: Pick<Prisma.TransactionClient, 'taskCandidate'>,
   siteId: string,
-  value: string,
+  values: readonly string[],
 ) {
+  if (values.length === 0) return
   const candidates = await db.taskCandidate.findMany({
     where: { task: { siteId }, status: { in: ['current', 'stale'] }, dbViewSha256: { not: null } },
     select: { id: true, dbView: true },
   })
   const holding = candidates
     .filter((candidate) =>
-      dbPlanViewTexts(candidate.dbView).some((text) => containsEnvValue(text, [value])),
+      dbPlanViewTexts(candidate.dbView).some((text) => containsEnvValue(text, values)),
     )
     .map((candidate) => candidate.id)
   if (holding.length > 0)

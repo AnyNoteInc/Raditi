@@ -146,7 +146,7 @@ export async function startCheckout(
           select: { id: true },
         })
         if (live !== null) throw billingSubscriptionExists()
-        if ((await tx.site.count({ where: { workspaceId } })) > maxSites) {
+        if ((await tx.site.count({ where: { workspaceId, deletedAt: null } })) > maxSites) {
           throw billingPlanSiteLimit()
         }
         if (unfinished !== null) return { order: unfinished, created: false }

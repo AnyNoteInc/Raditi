@@ -893,6 +893,60 @@ describe('Docker sandbox provider', () => {
     }
     await sandbox.destroy('completed')
   })
+
+  it('resets a container for the next turn: quiesce, one trusted command, then ready', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const before = fake.commands.length
+    await sandbox.reset!()
+    const commands = fake.commands.slice(before)
+    expect(commands[0]!.Cmd![2]).toBe('quiesce')
+    expect(commands.at(-1)!.Cmd![2]).toBe('ready')
+    const run = commands.find((options) => options.Cmd![2] === 'run')!
+    expect(run.User).toBe('10001:10001')
+    const id = run.Cmd![3]!
+    const staged = JSON.parse(fake.files.get(`stage:${id}`)!.subarray(4).toString('utf8')) as {
+      argv: string[]
+      cwd: string
+    }
+    // The script is fixed text; its only argument is the id of its own exec directory.
+    expect(staged).toMatchObject({
+      argv: ['/bin/sh', '-c', expect.any(String), 'raditi-reset', id],
+    })
+    expect(staged.cwd).toBe('/')
+    const script = staged.argv[2]!
+    for (const dir of [
+      '/workspace',
+      '/agent-home',
+      '/tmp',
+      SANDBOX_SECRETS_DIR,
+      '/run/raditi/exec',
+      '/dev/shm',
+      '/dev/mqueue',
+    ])
+      expect(script).toContain(dir)
+    expect(script).toContain('! -path "$own"')
+    expect(script).toContain('ipcrm --all')
+    expect(script).not.toContain('/run/raditi/control')
+    // The container goes on: the next turn works in it.
+    expect(fake.container.remove).not.toHaveBeenCalled()
+    await sandbox.fs.write('/workspace/inbox/file', Buffer.from('x'))
+    await sandbox.destroy('completed')
+  })
+
+  it('removes a container whose reset failed', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const set = fake.records.set.bind(fake.records)
+    fake.records.set = (key, value) => set(key, { ...value, exit: { code: 1, reason: 'exited' } })
+    await expect(sandbox.reset!()).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    expect(fake.container.remove).toHaveBeenCalledTimes(1)
+    await expect(sandbox.fs.write('/workspace/inbox/file', Buffer.from('x'))).rejects.toThrow()
+  })
 })
 
 describe('Docker stream framing', () => {

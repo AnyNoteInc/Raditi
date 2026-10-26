@@ -425,5 +425,49 @@ describe('Docker gateway manager', () => {
       guard.options.Env = [...guard.options.Env!, 'EGRESS_PORT=3128']
       expect(await check()).toBe(false)
     })
+
+    it.each(['runc', 'runsc'] as const)(
+      '%s: the open internet runs the listener without hosts, and only an attempt made so matches',
+      async (runtime) => {
+        const fake = daemon()
+        const manager = createDockerGatewayManager(
+          { ...config, egressRefusedSubnets: ['84.201.128.0/18'] },
+          fake.client,
+          runtime,
+        )
+        const open = { ...policy, internet: true as const }
+        const attachment = await manager.prepare({ ...input(), policy: open })
+        const proxyEnv = envOf(fake, 'proxy')
+        expect(proxyEnv).toMatchObject({
+          EGRESS_PORT: '3128',
+          EGRESS_OPEN: '1',
+          EGRESS_REFUSED_SUBNETS: '84.201.128.0/18',
+        })
+        expect(proxyEnv).not.toHaveProperty('EGRESS_ALLOWED_HOSTS')
+        if (runtime === 'runc')
+          expect(envOf(fake, 'guard')).toEqual({
+            GATEWAY_IPV4: '172.30.0.2',
+            GATEWAY_PORT: '8080',
+            EGRESS_PORT: '3128',
+          })
+        const sandbox = await fake.sandbox(attachment)
+        const [networkId] = fake.networks.keys()
+        const deadline = Number(
+          fake.networks.get(networkId!)!.options.Labels!['io.raditi.gateway.deadline'],
+        )
+        const check = async (policyValue: typeof open | typeof policy | typeof egressPolicy) =>
+          manager.validate({
+            resourceId: attachment.resourceId,
+            labels,
+            deadline,
+            policy: policyValue,
+            sandbox: await sandbox.info(),
+          })
+        expect(await check(open)).toBe(true)
+        // A closed internet is not this attempt, nor one with hosts instead.
+        expect(await check(policy)).toBe(false)
+        expect(await check(egressPolicy)).toBe(false)
+      },
+    )
   })
 })

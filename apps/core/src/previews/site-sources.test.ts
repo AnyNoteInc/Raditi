@@ -3,9 +3,15 @@ import { wordpressAdapter } from '@repo/site-adapters'
 import { siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { startTestSftpServer, type TestSftpServer } from '@repo/site-connections/testing'
+import { gzipSync } from 'node:zlib'
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { createPreviewSiteSources, type PreviewSiteSourcesDeps } from './site-sources.ts'
+import {
+  createPreviewSiteSources,
+  streamDump,
+  type PreviewSiteSourcesDeps,
+} from './site-sources.ts'
 
 // The site as the connection wizard recorded it, read by a preview: wp-config.php over a real SFTP
 // session to a server on loopback, and the database access by the row and its reference.
@@ -19,11 +25,19 @@ define( 'DB_COLLATE', '' );
 $table_prefix = 'shop_';
 `
 
+const DUMP = 'SET NAMES utf8mb4;\nCREATE TABLE `shop_options` (`option_id` int);\n'
+
 let server: TestSftpServer
 
 beforeAll(async () => {
   server = await startTestSftpServer({
-    files: { 'public_html/wp-config.php': WP_CONFIG, 'public_html/index.php': '<?php' },
+    files: {
+      'public_html/wp-config.php': WP_CONFIG,
+      'public_html/index.php': '<?php',
+      // Dumps next to the site folder, as a hosting keeps them (owner's decision of 26.10.2026).
+      'backup-2026-08-30.sql': DUMP,
+      'dumps/old.sql.gz': gzipSync(Buffer.from(DUMP)),
+    },
     users: [{ username: 'site', password: 'p@ss word' }],
   })
 })
@@ -248,5 +262,81 @@ describe('the access to the site’s database', () => {
       ok: false,
       code: 'access_missing',
     })
+  })
+})
+
+describe('a SQL dump on the site’s file source', () => {
+  const collect = async (dump: AsyncIterable<Uint8Array>) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of dump) chunks.push(Buffer.from(chunk))
+    return Buffer.concat(chunks).toString()
+  }
+  const dumpOf = (path: string, rows: Rows = { codeSource: sftpRow() }) => {
+    const vault = new VersionedVault()
+    vault.write(siteAccessPath(SITE, 'ssh'), sshAccess())
+    return sources(rows, vault).withDump(SITE, path, AbortSignal.timeout(20_000), collect)
+  }
+
+  it('streams the file of the login folder the owner named, through the site’s own access', async () => {
+    await expect(dumpOf('backup-2026-08-30.sql')).resolves.toEqual({ ok: true, value: DUMP })
+    expect(server.writeAttempts).toEqual([])
+  })
+
+  it('gunzips a .sql.gz dump of a folder below the login folder', async () => {
+    await expect(dumpOf('dumps/old.sql.gz')).resolves.toEqual({ ok: true, value: DUMP })
+  })
+
+  it('says a file is not there, and reads nothing for a path out of the login folder', async () => {
+    await expect(dumpOf('other.sql')).resolves.toEqual({ ok: false, code: 'dump_not_found' })
+    await expect(dumpOf('missing/other.sql')).resolves.toEqual({
+      ok: false,
+      code: 'dump_not_found',
+    })
+    await expect(dumpOf('../backup-2026-08-30.sql')).resolves.toEqual({
+      ok: false,
+      code: 'dump_not_found',
+    })
+  })
+
+  it('has no dump to read without a file source', async () => {
+    await expect(dumpOf('backup-2026-08-30.sql', { codeSource: null })).resolves.toEqual({
+      ok: false,
+      code: 'dump_source_missing',
+    })
+  })
+})
+
+describe('streaming a dump', () => {
+  it('fails the stream its reader reads when the read fails, and the read stops when the reader does', async () => {
+    const broken = streamDump(
+      async (sink) => {
+        await sink(Buffer.from('SET NAMES utf8mb4;'))
+        throw new Error('the server went away')
+      },
+      false,
+      async (dump) => {
+        for await (const _ of dump) void _
+      },
+    )
+    await expect(broken).rejects.toThrow()
+
+    let pushed = 0
+    const stopped = await streamDump(
+      async (sink) => {
+        for (let i = 0; i < 10_000; i += 1) {
+          await sink(Buffer.alloc(64 * 1024, 1))
+          pushed += 1
+        }
+        return pushed
+      },
+      false,
+      async (dump) => {
+        for await (const _ of dump) break
+        return 'done'
+      },
+    ).catch((error: unknown) => error)
+    expect(stopped === 'done' || stopped instanceof Error).toBe(true)
+    // Backpressure: far from all 10 000 chunks were pushed into a reader that stopped at one.
+    expect(pushed).toBeLessThan(100)
   })
 })

@@ -11,6 +11,7 @@ import type {
 import type { Registry } from '@prometheus-io/client'
 
 import { AttachmentFiles, type InboxStorage } from '../attachments/attachments.ts'
+import { TaskScreenshots } from '../attachments/screenshots.ts'
 import { errorName } from '../common/browser-codes.ts'
 import type { BrowserWorkerConfig } from '../config/config.ts'
 import { registerBrowserWorkerMetrics } from '../metrics/worker-metrics.ts'
@@ -61,6 +62,7 @@ export class BrowserWorker implements OnApplicationBootstrap, BeforeApplicationS
       browsers: parts.browsers,
       store: parts.store,
       files: new AttachmentFiles(parts.store, parts.inbox),
+      screenshots: new TaskScreenshots(parts.store, parts.inbox),
       adapters: parts.adapters,
       metrics,
       now,

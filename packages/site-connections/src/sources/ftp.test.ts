@@ -717,6 +717,85 @@ describe('ftpSource.open', () => {
     await aborted.close()
   })
 
+  it('makes a listing and a read again on a fresh login when a data connection is refused', async () => {
+    // Passive reply 1 lists the root; 2 (the root again) and 3 (a file) name closed ports.
+    const server = await start({ refusedPassive: [2, 3] })
+    const patient = createFtpSource({ retryDelaysMs: [20, 20] })
+    const session = await patient.open(access(server, 'plain'), {
+      address: loopback,
+      signal: AbortSignal.timeout(20_000),
+    })
+    try {
+      expect((await session.list([], 100)).length).toBe(6)
+      expect((await session.list([], 100)).length).toBe(6)
+      const chunks: Buffer[] = []
+      const bytes = await session.read(
+        ['wp-content', 'uploads', 'big.bin'],
+        async (chunk) => {
+          chunks.push(Buffer.from(chunk))
+        },
+        BIG.length,
+      )
+      expect(bytes).toBe(BIG.length)
+      expect(Buffer.concat(chunks).equals(BIG)).toBe(true)
+      expect(server.passiveReplies()).toBe(5)
+      // Each refused transfer broke its connection: the retry logged in anew, never past the limit.
+      expect(server.logins()).toBeGreaterThanOrEqual(2)
+      expect(server.peakConnections()).toBeLessThanOrEqual(2)
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('logs in again after a pause when the server shut the address out for a moment', async () => {
+    // Login 1 is the one of open; the refused transfer breaks it, and the next two logins are
+    // closed before the greeting: the read waits and logs in a third time.
+    const server = await start({ refusedPassive: [1], refusedLogins: [2, 3] })
+    const patient = createFtpSource({ retryDelaysMs: [20, 20, 20, 20] })
+    const session = await patient.open(access(server, 'plain'), {
+      address: loopback,
+      signal: AbortSignal.timeout(20_000),
+    })
+    try {
+      expect(await session.read(['index.php'], async () => {}, 1024)).toBe(
+        files['public_html/index.php'].length,
+      )
+      expect(server.logins()).toBe(4)
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('gives up after its retries, and never reads a file again once a byte reached the sink', async () => {
+    const server = await start({ refusedPassive: [1, 2, 3] })
+    const patient = createFtpSource({ retryDelaysMs: [20, 20] })
+    const session = await patient.open(access(server, 'plain'), {
+      address: loopback,
+      signal: AbortSignal.timeout(20_000),
+    })
+    try {
+      expect(await reasonOf(session.list([], 100))).toBe('connection:transfer_failed')
+      expect(server.passiveReplies()).toBe(3)
+    } finally {
+      await session.close()
+    }
+
+    const stalling = await start({ stallTransfersAfter: 10 })
+    const quick = createFtpSource({ idleMs: 300, retryDelaysMs: [20, 20] })
+    const cut = await quick.open(access(stalling, 'plain'), {
+      address: loopback,
+      signal: AbortSignal.timeout(20_000),
+    })
+    try {
+      expect(await reasonOf(cut.read(['index.php'], async () => {}, 1024))).toBe(
+        'connection:transfer_failed',
+      )
+      expect(stalling.passiveReplies()).toBe(1)
+    } finally {
+      await cut.close()
+    }
+  })
+
   it('refuses a wrong password at open', async () => {
     const server = await start()
     expect(

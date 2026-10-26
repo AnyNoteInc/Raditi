@@ -137,6 +137,71 @@ describe('turn reconciler', () => {
     },
   )
 
+  it('keeps a warm container this process holds, whatever its labels say', async () => {
+    const f = fixture()
+    f.inspect.mockResolvedValue(null)
+    let held = true
+    const reconcile = () =>
+      new TurnReconciler(
+        f.sandboxes,
+        { inspect: f.inspect } as unknown as SiteLeaseStore,
+        {
+          unfinished: f.unfinished,
+        },
+        () => held,
+      ).reconcile()
+    expect(await reconcile()).toEqual({ removed: [], preserved: [f.item.id], uncertain: [] })
+    // Taken by a turn between the two looks: checked again right before removal.
+    held = false
+    vi.mocked(f.sandboxes.getForRemoval).mockImplementationOnce(async () => {
+      held = true
+      return f.sandbox
+    })
+    expect((await reconcile()).preserved).toEqual([f.item.id])
+    expect(f.destroy).not.toHaveBeenCalled()
+    held = false
+    expect((await reconcile()).removed).toEqual([f.item.id])
+  })
+
+  /** Turn 2 of the session took the warm container of turn 1 under epoch 3. */
+  const takenBy = (containerId: string, patch: Partial<TurnAssignment> = {}) =>
+    ({
+      fence: { siteId: 'site', taskId: 'task', operation: 'turn', epoch: 3 },
+      firstEpoch: 3,
+      sessionId: 'session',
+      turn: 2,
+      containerId,
+      ...patch,
+    }) as TurnAssignment
+
+  it('keeps a warm container a later turn of its session took under the current epoch', async () => {
+    const f = fixture()
+    f.authority.epoch = 3
+    f.owners.push(takenBy(f.item.id))
+    expect((await f.reconcile()).preserved).toEqual([f.item.id])
+    expect(f.destroy).not.toHaveBeenCalled()
+  })
+
+  it.each(['another container', 'the same turn', 'another session', 'an expired lease'] as const)(
+    'removes an older container when the turn that holds the site names %s',
+    async (kind) => {
+      const f = fixture()
+      f.authority.epoch = 3
+      f.owners.push(
+        takenBy(
+          kind === 'another container' ? 'other-container' : f.item.id,
+          kind === 'the same turn'
+            ? { turn: 1 }
+            : kind === 'another session'
+              ? { sessionId: 'other-session' }
+              : {},
+        ),
+      )
+      if (kind === 'an expired lease') f.authority.expiresAt = new Date(0)
+      expect((await f.reconcile()).removed).toEqual([f.item.id])
+    },
+  )
+
   it('removes nothing while the owners are unknown', async () => {
     const f = fixture()
     f.inspect.mockResolvedValue(null)

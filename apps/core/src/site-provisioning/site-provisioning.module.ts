@@ -8,6 +8,7 @@ import {
   type GitProvider,
   type HostLookup,
   type JobQueue,
+  type ObjectStorage,
   type SecretStore,
   type SiteRepositoryProvisioner,
   type SiteSourceAdapter,
@@ -24,10 +25,12 @@ import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { gitWorkspaceOptions } from '../git-workspace/git-config.ts'
 import { GitWorkspaceModule } from '../git-workspace/git-workspace.module.ts'
 import { GIT_PROVIDER } from '../git-workspace/git-workspace.tokens.ts'
+import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
 import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 import { JOB_QUEUE } from '../queue/queue.tokens.ts'
 import { SiteContentModule } from '../site-content/site-content.module.ts'
 import { HOST_LOOKUP } from '../site-content/site-content.tokens.ts'
+import { InitialBackupWorker, PostgresInitialBackupStore } from './initial-backup.ts'
 import { InitialVersionGit } from './initial-version.ts'
 import { importSite, type SiteImportGit } from './site-import.ts'
 import { SiteImportProcessor } from './site-import.processor.ts'
@@ -92,6 +95,7 @@ const GITLEAKS_BINARY = 'gitleaks'
         provider: GitProvider | null,
         queue: JobQueue,
         registry: Registry,
+        backups: InitialBackupWorker,
       ) => {
         // Jobs by how they ended: no site, workspace or code in a label.
         const imports = new Counter({
@@ -129,6 +133,7 @@ const GITLEAKS_BINARY = 'gitleaks'
           queue,
           logger: new Logger('SiteImport'),
           count: (outcome) => imports.inc({ outcome }),
+          onSucceeded: () => void backups.kick(),
         })
       },
       inject: [
@@ -142,7 +147,31 @@ const GITLEAKS_BINARY = 'gitleaks'
         GIT_PROVIDER,
         JOB_QUEUE,
         METRICS_REGISTRY,
+        InitialBackupWorker,
       ],
+    },
+    {
+      provide: InitialBackupWorker,
+      useFactory: (
+        config: CoreConfig,
+        prisma: PrismaClient,
+        storage: ObjectStorage,
+        provider: GitProvider | null,
+        background: boolean,
+      ) =>
+        new InitialBackupWorker({
+          store: new PostgresInitialBackupStore(prisma),
+          storage,
+          git:
+            config.git && provider
+              ? new InitialVersionGit({
+                  provider,
+                  transport: gitWorkspaceOptions(config.git).transport,
+                })
+              : null,
+          background,
+        }),
+      inject: [CORE_CONFIG, PRISMA, OBJECT_STORAGE, GIT_PROVIDER, BACKGROUND_JOBS],
     },
     SiteImportProcessor,
     {

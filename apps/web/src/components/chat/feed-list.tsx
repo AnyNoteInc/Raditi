@@ -38,6 +38,7 @@ import {
   feedReleaseReasonText,
   feedReleaseText,
   feedReleaseTitle,
+  feedResultOpenText,
   feedRetryText,
   feedRowText,
   feedStateText,
@@ -57,7 +58,6 @@ import {
 } from '@repo/domain/tasks/client-feed-labels'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import CircularProgress from '@mui/material/CircularProgress'
 import MuiLink from '@mui/material/Link'
 import Typography from '@mui/material/Typography'
 import Link from 'next/link'
@@ -68,7 +68,9 @@ import { nbsp } from '@/lib/nbsp'
 
 import { SentFiles, type SentFile } from './attachment-chips'
 import { dayTime, feedTime } from './chat-format'
+import { pulsing, riseIn } from './chat-motion'
 import {
+  activityText,
   browserText,
   dialogText,
   objectLinkText,
@@ -85,6 +87,7 @@ import {
   type QuestionRow,
   type StepRow,
 } from './feed-model'
+import { FeedScreenshot } from './feed-screenshot'
 import type { FeedHeadState } from './feed-state'
 
 // The rows of a dialog and its live block (feed design, «Экраны, которых нет на макетах»; plan
@@ -128,13 +131,51 @@ const PLANS_PATH = '/settings/plans'
 
 function Paragraph({ children }: { children: ReactNode }) {
   return (
-    <Typography sx={{ m: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.55 }}>
+    <Typography
+      sx={{ m: 0, fontSize: 16, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.65 }}
+    >
       {children}
     </Typography>
   )
 }
 
-/** A card of the agent or of the platform: a sign and a title, then what it says. */
+/** Read by a screen reader, not shown: the answer of the agent stands as plain text. */
+const unseen = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  p: 0,
+  m: -1,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+} as const
+
+/** What the agent says: its words straight on the page, no mark and no frame around them. */
+function AgentMessage({
+  title,
+  children,
+  actions,
+}: {
+  title: string
+  children?: ReactNode
+  actions?: ReactNode
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
+      <Typography component="h2" sx={unseen}>
+        {title}
+      </Typography>
+      {children}
+      {actions ? (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>{actions}</Box>
+      ) : null}
+    </Box>
+  )
+}
+
+/** What the agent or the platform reports: a sign and a title, then the words — on the page too. */
 function Card({
   icon,
   title,
@@ -149,20 +190,7 @@ function Card({
   actions?: ReactNode
 }) {
   return (
-    <Box
-      sx={{
-        alignSelf: 'stretch',
-        maxWidth: 720,
-        p: { xs: 2, sm: 2.5 },
-        border: 1,
-        borderColor: 'divider',
-        borderRadius: '14px',
-        bgcolor: 'background.default',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 1,
-      }}
-    >
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
       <Typography
         component="h2"
         sx={{
@@ -170,6 +198,7 @@ function Card({
           alignItems: 'center',
           gap: 1,
           fontSize: 16,
+          lineHeight: 1.5,
           fontWeight: 600,
           color: tone,
         }}
@@ -185,7 +214,7 @@ function Card({
   )
 }
 
-/** The client's own words, on the right, with the files they sent. */
+/** The client's own words on the right, as wide as they are, with the files they sent. */
 function Bubble({
   text,
   at,
@@ -201,7 +230,8 @@ function Bubble({
     <Box
       sx={{
         alignSelf: 'flex-end',
-        maxWidth: '85%',
+        maxWidth: '80%',
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'flex-end',
@@ -211,16 +241,17 @@ function Bubble({
       <SentFiles files={files} />
       <Box
         sx={{
-          px: 2,
+          maxWidth: '100%',
+          px: 2.5,
           py: 1.25,
-          borderRadius: '14px 14px 4px 14px',
-          bgcolor: 'text.primary',
-          color: 'background.paper',
+          borderRadius: '24px',
+          bgcolor: 'var(--chat-fill, var(--mui-palette-action-selected))',
+          color: 'text.primary',
         }}
       >
         <Typography
           component="p"
-          sx={{ m: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.5 }}
+          sx={{ m: 0, fontSize: 16, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.65 }}
         >
           {text}
         </Typography>
@@ -230,7 +261,7 @@ function Bubble({
         dateTime={at}
         variant="caption"
         color="text.secondary"
-        sx={{ alignSelf: 'flex-end', mt: 0.5 }}
+        sx={{ fontSize: 12 }}
       >
         {feedTime(new Date(at), now)}
       </Typography>
@@ -238,7 +269,7 @@ function Bubble({
   )
 }
 
-/** A press of the client — a command, «Продолжить», a decision: a line on the right. */
+/** A press of the client — a command, «Продолжить», a decision: a quiet line on the right. */
 function Press({ text, icon = 'slash' }: { text: string; icon?: AppIconName }) {
   return (
     <Typography
@@ -247,7 +278,7 @@ function Press({ text, icon = 'slash' }: { text: string; icon?: AppIconName }) {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 0.75,
-        maxWidth: '85%',
+        maxWidth: '80%',
         color: 'text.secondary',
         fontSize: 14,
         textAlign: 'right',
@@ -262,18 +293,7 @@ function Press({ text, icon = 'slash' }: { text: string; icon?: AppIconName }) {
 /** A row the page cannot show as it is. */
 function Note({ text }: { text: string }) {
   return (
-    <Typography
-      variant="body2"
-      color="text.secondary"
-      sx={{
-        px: 2,
-        py: 1.25,
-        border: 1,
-        borderStyle: 'dashed',
-        borderColor: 'divider',
-        borderRadius: '12px',
-      }}
-    >
+    <Typography variant="body2" color="text.secondary">
       {text}
     </Typography>
   )
@@ -287,17 +307,36 @@ function Sentences({ parts }: { parts: readonly (string | null | undefined)[] })
 
 function StepList({ steps, running }: { steps: readonly StepRow[]; running: boolean }) {
   return (
-    <Box component="ol" sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 0.5 }}>
+    <Box component="ol" sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 0.75 }}>
       {steps.map((step, index) => {
         const current = running && index === steps.length - 1
         return (
           <Box
             component="li"
             key={step.id}
-            sx={{ display: 'flex', alignItems: 'center', gap: 1, fontSize: 14 }}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.25,
+              fontSize: 14,
+              color: current ? 'text.primary' : 'text.secondary',
+              ...riseIn,
+            }}
           >
             {current ? (
-              <CircularProgress size={14} aria-hidden="true" />
+              <Box
+                component="span"
+                aria-hidden="true"
+                sx={{
+                  width: 8,
+                  height: 8,
+                  mx: '4px',
+                  flex: 'none',
+                  borderRadius: '50%',
+                  bgcolor: 'text.primary',
+                  ...pulsing,
+                }}
+              />
             ) : (
               <AppIcon name="check" size={16} />
             )}
@@ -309,10 +348,26 @@ function StepList({ steps, running }: { steps: readonly StepRow[]; running: bool
   )
 }
 
-function Worked({ steps, seconds }: { steps: readonly StepRow[]; seconds: number }) {
+/** A line that opens what is under it: the turn's stages, «Ход работы». */
+function Disclosure({
+  summary,
+  open,
+  onOpen,
+  children,
+}: {
+  summary: ReactNode
+  /** Open from the start. */
+  open?: boolean
+  onOpen?: () => void
+  children: ReactNode
+}) {
   return (
     <Box
       component="details"
+      open={open}
+      onToggle={(event: { currentTarget: HTMLElement }) => {
+        if ((event.currentTarget as HTMLDetailsElement).open) onOpen?.()
+      }}
       sx={{
         color: 'text.secondary',
         fontSize: 14,
@@ -323,19 +378,55 @@ function Worked({ steps, seconds }: { steps: readonly StepRow[]; seconds: number
           minHeight: 44,
           cursor: 'pointer',
           listStyle: 'none',
+          borderRadius: '8px',
         },
         '& > summary::-webkit-details-marker': { display: 'none' },
+        '& > summary:hover': { color: 'text.primary' },
+        '& > summary svg': { transition: 'transform var(--raditi-motion-base) var(--raditi-ease-out)' },
         '&[open] > summary svg': { transform: 'rotate(90deg)' },
+        '&[open] > div': riseIn,
       }}
     >
       <summary>
         <AppIcon name="chevron" size={14} />
-        {feedWorkedText(seconds)}
+        {summary}
       </summary>
-      <Box sx={{ pl: 2.5, pb: 1 }} aria-label={dialogText.stages}>
-        <StepList steps={steps} running={false} />
-      </Box>
+      {children}
     </Box>
+  )
+}
+
+function Worked({
+  steps,
+  seconds,
+  activity,
+}: {
+  steps: readonly StepRow[]
+  seconds: number
+  /** «Ход работы» of the turn, drawn once the client opens the line. */
+  activity?: () => ReactNode
+}) {
+  const [opened, setOpened] = useState(false)
+  return (
+    <Disclosure summary={feedWorkedText(seconds)} onOpen={() => setOpened(true)}>
+      <Box
+        sx={{ ml: 0.75, pl: 2, pb: 1, borderLeft: 1, borderColor: 'divider', display: 'grid', gap: 1.5 }}
+        aria-label={dialogText.stages}
+      >
+        <StepList steps={steps} running={false} />
+        {opened && activity ? (
+          <Box sx={{ display: 'grid', gap: 0.75, minWidth: 0 }}>
+            <Typography
+              component="h3"
+              sx={{ fontSize: 13, fontWeight: 600, color: 'text.secondary' }}
+            >
+              {activityText.title}
+            </Typography>
+            {activity()}
+          </Box>
+        ) : null}
+      </Box>
+    </Disclosure>
   )
 }
 
@@ -753,17 +844,21 @@ function RowView({
       return <QuestionCard row={row} open={row.id === openQuestionId} actions={actions} />
     case 'feed.result': {
       const approval = row.next === 'awaiting_approval'
+      // A pass that changed nothing left the dialog open for the next words (26.10.2026).
+      const open = row.next === 'awaiting_user'
       const site = approval ? feedApprovalSiteText[row.site] : feedDoneSiteText[row.site]
       return (
-        <Card
-          icon={approval ? 'eye' : 'check'}
-          title={approval ? feedCardTitle.approval : feedCardTitle.result}
+        <AgentMessage
+          title={
+            approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
+          }
         >
           <Paragraph>{row.message}</Paragraph>
           <Sentences
             parts={[
               site,
-              row.filesChanged === null ? null : feedFilesChangedText(row.filesChanged),
+              open || row.filesChanged === null ? null : feedFilesChangedText(row.filesChanged),
+              open ? feedResultOpenText : null,
             ]}
           />
           <SiteObjects objects={row.objects ?? []} heading={feedObjectText.result} />
@@ -784,7 +879,7 @@ function RowView({
               <AppIcon name="arrow" size={16} />
             </MuiLink>
           ) : null}
-        </Card>
+        </AgentMessage>
       )
     }
     case 'feed.failure':
@@ -921,6 +1016,15 @@ function RowView({
           <Sentences parts={[feedUpdateText(row.outcome, row.conflicts)]} />
         </Card>
       )
+    case 'feed.screenshot':
+      return (
+        <FeedScreenshot
+          screenshotId={row.screenshotId}
+          number={row.number}
+          width={row.width}
+          height={row.height}
+        />
+      )
     case 'newer':
       return <Note text={feedRowText.newer} />
     case 'unreadable':
@@ -941,6 +1045,7 @@ export function FeedList({
   retryId = null,
   actions,
   filesOf = noFiles,
+  activityOf,
 }: {
   head: FeedHeadState | null
   rows: readonly FeedRow[]
@@ -952,25 +1057,46 @@ export function FeedList({
   actions: FeedActions
   /** The files a message sent, by their ids, as their chips name them. */
   filesOf?: (ids: readonly string[]) => SentFile[]
+  /** «Ход работы» of a finished turn (owner's decision of 26.10.2026). */
+  activityOf?: (turn: number) => ReactNode
 }) {
   const now = new Date()
   const entries: FeedEntry[] = feedEntries(rows, head)
   const commands = head?.commands ?? []
   const undo = head?.undo ?? null
+  // The rows of the first paint stay still; a row that arrives later rises into its place. The
+  // animation plays once, when its element mounts: later renders do not start it again.
+  const [initial] = useState(() => new Set(entries.map((entry) => entry.key)))
   return (
     <Box
       component="ol"
       aria-label="Сообщения диалога"
-      sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}
+      sx={{
+        m: 0,
+        p: 0,
+        listStyle: 'none',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: { xs: 3, md: 4 },
+      }}
     >
       {entries.map((entry) => (
         <Box
           component="li"
           key={entry.key}
-          sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+            ...(initial.has(entry.key) ? {} : riseIn),
+          }}
         >
           {entry.kind === 'worked' ? (
-            <Worked steps={entry.steps} seconds={entry.seconds} />
+            <Worked
+              steps={entry.steps}
+              seconds={entry.seconds}
+              activity={activityOf ? () => activityOf(entry.turn) : undefined}
+            />
           ) : (
             <RowView
               row={entry.row}
@@ -1018,10 +1144,13 @@ export function LiveBlock({
   steps,
   stopping = false,
   browser,
+  activity,
 }: {
   head: FeedHeadState
   steps: readonly StepRow[]
   stopping?: boolean
+  /** «Ход работы» of the turn at work, as it goes (owner's decision of 26.10.2026). */
+  activity?: ReactNode
   /** A task in the browser (docs/plan/57-browser-tasks.md): who drives it, and the way to it. */
   browser?: {
     /** The client controls the browser: the agent waits for «Продолжить работу агента». */
@@ -1076,6 +1205,11 @@ export function LiveBlock({
           body = (
             <>
               {steps.length > 0 ? <StepList steps={steps} running /> : null}
+              {activity ? (
+                <Disclosure summary={activityText.title} open>
+                  <Box sx={{ pt: 0.5 }}>{activity}</Box>
+                </Disclosure>
+              ) : null}
               {browser?.onWatch ? (
                 <Button
                   variant="outlined"
@@ -1101,23 +1235,26 @@ export function LiveBlock({
       default:
         return null
     }
+  // The agent at work has a pulsing dot before its status; a wait for the client stands still.
+  const working = !browser?.controlling && !task.held && !stopping
   return (
-    <Box
-      sx={{
-        p: { xs: 2, sm: 2.5 },
-        border: 1,
-        borderColor: 'divider',
-        borderRadius: '14px',
-        bgcolor: 'background.default',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 1.25,
-        maxWidth: 720,
-      }}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
-        <CircularProgress size={16} aria-hidden="true" />
-        <Typography component="h2" sx={{ fontSize: 16, fontWeight: 600 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0, ...riseIn }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>
+        {working ? (
+          <Box
+            component="span"
+            aria-hidden="true"
+            sx={{
+              width: 10,
+              height: 10,
+              flex: 'none',
+              borderRadius: '50%',
+              bgcolor: 'text.primary',
+              ...pulsing,
+            }}
+          />
+        ) : null}
+        <Typography component="h2" sx={{ fontSize: 16, fontWeight: 600, lineHeight: 1.5 }}>
           {title}
         </Typography>
         {running && !task.held && task.runningSince !== null ? (
@@ -1125,18 +1262,18 @@ export function LiveBlock({
           <Typography
             component="span"
             aria-hidden="true"
-            sx={{ ml: 'auto', color: 'text.secondary', fontSize: 14 }}
+            sx={{ color: 'text.secondary', fontSize: 13, fontVariantNumeric: 'tabular-nums' }}
           >
             {feedDurationText(seconds)}
           </Typography>
         ) : null}
       </Box>
-      {body}
       {text ? (
-        <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>
+        <Typography color="text.secondary" sx={{ fontSize: 15, lineHeight: 1.6 }}>
           {nbsp(text)}
         </Typography>
       ) : null}
+      {body}
     </Box>
   )
 }

@@ -95,7 +95,10 @@ export const candidateRouter = router({
       const candidate = await ctx.prisma.taskCandidate.findFirst({
         where: {
           id: input.candidateId,
-          task: { workspace: { members: { some: { userId: ctx.user.id } } } },
+          task: {
+            site: { deletedAt: null },
+            workspace: { members: { some: { userId: ctx.user.id } } },
+          },
         },
         select: { taskId: true, revision: true, files: true },
       })

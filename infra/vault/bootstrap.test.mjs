@@ -98,12 +98,11 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'transit/datakey/plaintext/ws-*': ['update'],
       'transit/decrypt/ws-*': ['update'],
     },
-    // Site access and the variables of a site; of the metadata only the version for CAS and,
-    // on a variable, its limit of one version (plan 53, Р13).
+    // Site access and the variables of a site; of the metadata only the version for CAS and
+    // the limit of one version (plan 53, Р13; «Удалить проект», 25.10.2026).
     'sites-writer': {
       'kv/data/sites/*': ['create', 'update'],
-      'kv/metadata/sites/+/*': ['read'],
-      'kv/metadata/sites/+/env/*': ['create', 'update', 'read'],
+      'kv/metadata/sites/+/*': ['create', 'update', 'read'],
     },
     // The key itself, never a path under it (rotate, config, trim, soft-delete-restore).
     'workspace-provisioner': { 'transit/keys/+': ['update'] },
@@ -182,12 +181,12 @@ test('every policy grants exactly its scoped privileges and only on its own moun
   )
   assert.match(provisioner, /allowed_parameters\s*=\s*{\s*"type"\s*=\s*\["aes256-gcm96"\]\s*}/)
   assert.equal([...provisioner.matchAll(/allowed_parameters/g)].length, 1)
-  // web may set one thing of the metadata of a variable: that it keeps one version. Any other
-  // value or parameter — a longer history, cas_required, a deletion delay — is refused.
+  // web may set one thing of the metadata of a key of a site: that it keeps one version. Any
+  // other value or parameter — a longer history, cas_required, a deletion delay — is refused.
   const writer = await readFile(new URL('./policies/sites-writer.hcl', import.meta.url), 'utf8')
   assert.match(
     writer,
-    /path "kv\/metadata\/sites\/\+\/env\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"max_versions"\s*=\s*\["1"\]\s*}/,
+    /path "kv\/metadata\/sites\/\+\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"max_versions"\s*=\s*\["1"\]\s*}/,
   )
   assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 1)
   // core may attach recovery metadata to a secret of a preview, never weaken its retention.

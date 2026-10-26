@@ -68,6 +68,8 @@ export const previewManagerTimings = Object.freeze({
 })
 
 const SWEEP_BATCH = 50
+/** A temporary database of a dump younger than this is left to the build that made it. */
+const STAGING_GRACE_MS = 10 * 60_000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 type Work =
@@ -393,6 +395,7 @@ export class PreviewManager {
       ['idle', () => this.#stopIdleBrowsers()],
       ['stale', () => markStaleCandidates(this.deps.db)],
       ['leftovers', () => this.#removeLeftovers()],
+      ['staging', () => this.#removeStaging()],
     ]
     for (const [name, step] of steps)
       try {
@@ -516,6 +519,32 @@ export class PreviewManager {
       if (!this.#working.has(id))
         await runtime.destroy(id).catch((error: unknown) => {
           this.#warn(`preview leftovers ${id}`, logged(error))
+        })
+  }
+
+  /**
+   * Temporary databases of dumps (named by their preview) that no build holds: a build removes
+   * its own, these outlived a core that stopped in the middle of one.
+   */
+  async #removeStaging(): Promise<void> {
+    const staging = this.deps.staging
+    if (!staging) return
+    // A load of a moment ago may not have marked its preview `building` yet anywhere it is read.
+    const before = this.#now().getTime() - STAGING_GRACE_MS
+    const ids = (await staging.list())
+      .filter((row) => UUID.test(row.stagingId) && row.createdAt < before)
+      .map((row) => row.stagingId)
+    if (!ids.length) return
+    // A build of another core holds its own: a preview in `building` keeps its staging.
+    const building = await this.deps.db.previewEnvironment.findMany({
+      where: { id: { in: ids }, status: 'building' },
+      select: { id: true },
+    })
+    const held = new Set(building.map((row) => row.id))
+    for (const id of ids)
+      if (!this.#working.has(id) && !held.has(id))
+        await staging.remove(id).catch((error: unknown) => {
+          this.#warn(`preview staging ${id}`, logged(error))
         })
   }
 }

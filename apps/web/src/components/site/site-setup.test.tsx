@@ -42,6 +42,10 @@ const trpc = {
     retry: { mutationOptions: mutation((input) => api.retry(input)) },
     checkSource: { mutationOptions: mutation((input) => api.checkSource(input)) },
     replaceAccess: { mutationOptions: mutation((input) => api.replaceAccess(input)) },
+    // The access of a working site («Переменные → Доступы»): never asked on the setup screen.
+    changeSource: {
+      mutationOptions: mutation(() => Promise.reject(new Error('Not a working site'))),
+    },
   },
 }
 

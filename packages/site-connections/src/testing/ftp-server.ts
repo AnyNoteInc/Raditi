@@ -43,6 +43,16 @@ export interface TestFtpServerOptions {
   deniedPaths?: string[]
   /** Transfers send this many bytes, then nothing more and never end. */
   stallTransfersAfter?: number
+  /**
+   * The numbers (from 1, over the whole server) of the passive replies that name a port nothing
+   * listens on: the data connection is refused, as by a hosting whose passive range is busy.
+   */
+  refusedPassive?: number[]
+  /**
+   * The numbers (from 1) of the control connections closed before the greeting, as by a
+   * firewall that shuts out an address that opened too many.
+   */
+  refusedLogins?: number[]
 }
 
 export interface TestFtpServer {
@@ -58,6 +68,8 @@ export interface TestFtpServer {
   logins(): number
   /** The most control connections that were open at the same time. */
   peakConnections(): number
+  /** Passive replies (EPSV, PASV) sent so far, the refused ones included. */
+  passiveReplies(): number
   close(): Promise<void>
 }
 
@@ -165,6 +177,16 @@ class ControlSession {
 
   private async openData(): Promise<number> {
     this.data?.close()
+    this.data = null
+    this.server.passiveReplies += 1
+    if (this.server.refusedPassive.has(this.server.passiveReplies)) {
+      // A port that was free a moment ago and is closed again: the client's connect is refused.
+      const closed: Server = createServer()
+      await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve))
+      const { port } = closed.address() as AddressInfo
+      await new Promise<void>((resolve) => closed.close(() => resolve()))
+      return port
+    }
     const listener: Server = createServer()
     const { context, requireSessionReuse } = this.server
     const protect = this.protect && this.secure
@@ -409,6 +431,8 @@ class FtpFake {
   readonly mlsd: boolean
   readonly pasvAddress: string
   readonly stallTransfersAfter: number | undefined
+  readonly refusedPassive: Set<number>
+  passiveReplies = 0
   readonly commands: string[] = []
   readonly writeAttempts: string[] = []
   readonly dataConnections: { protected: boolean; resumed: boolean }[] = []
@@ -439,6 +463,7 @@ class FtpFake {
     this.mlsd = options.mlsd !== false
     this.pasvAddress = options.pasvAddress ?? '127.0.0.1'
     this.stallTransfersAfter = options.stallTransfersAfter
+    this.refusedPassive = new Set(options.refusedPassive ?? [])
   }
 }
 
@@ -448,8 +473,13 @@ export async function startTestFtpServer(options: TestFtpServerOptions): Promise
   let logins = 0
   let open = 0
   let peak = 0
+  const refusedLogins = new Set(options.refusedLogins ?? [])
   const server = createServer((socket) => {
     logins += 1
+    if (refusedLogins.has(logins)) {
+      socket.destroy()
+      return
+    }
     open += 1
     peak = Math.max(peak, open)
     const session = new ControlSession(socket, fake)
@@ -469,6 +499,7 @@ export async function startTestFtpServer(options: TestFtpServerOptions): Promise
     dataConnections: fake.dataConnections,
     logins: () => logins,
     peakConnections: () => peak,
+    passiveReplies: () => fake.passiveReplies,
     close: () =>
       new Promise<void>((resolve) => {
         for (const session of sessions) session.close()

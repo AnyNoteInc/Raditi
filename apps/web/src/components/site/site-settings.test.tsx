@@ -2,28 +2,48 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { SiteSettings } from './site-settings'
+import { DangerBlock, settingsBlocks, SiteSettings } from './site-settings'
 
 const site = { name: 'Кофейня «Крошка»' }
 
 describe('site settings', () => {
   const settingsSite = { name: site.name, host: 'kroshka.example', stack: 'wordpress' as const }
 
-  it('shows what is saved about an access and never a value', () => {
-    render(
-      <SiteSettings
-        site={settingsSite}
-        accesses={[{ kind: 'wp', version: 2, updatedAt: new Date('2026-10-04T09:40:00Z') }]}
-      />,
+  it('says how the files of the site reach Радити, when it is known', () => {
+    const { rerender } = render(
+      <SiteSettings site={settingsSite} source={{ kind: 'ftp', tls: 'unverified' }} />,
     )
-    expect(screen.getByText('Вход в панель сайта')).toBeTruthy()
-    expect(screen.getByText(/^версия 2 · 4\sоктября 2026, 12:40 · значения скрыты$/u)).toBeTruthy()
+    expect(screen.getByText('Копирование файлов по FTP с шифрованием (FTPS)')).toBeTruthy()
+    rerender(<SiteSettings site={settingsSite} source={null} />)
+    expect(screen.getByText(/^Без доступа к файлам/)).toBeTruthy()
+    rerender(<SiteSettings site={settingsSite} />)
+    expect(screen.queryByText('Как Радити получает файлы сайта')).toBeNull()
   })
 
-  it('says so when no access is saved and when the list could not be read', () => {
-    const { rerender } = render(<SiteSettings site={settingsSite} accesses={[]} />)
-    expect(screen.getByText(/Доступов пока нет/)).toBeTruthy()
-    rerender(<SiteSettings site={settingsSite} accesses={null} />)
-    expect(screen.getByRole('alert').textContent).toMatch(/Не удалось загрузить список доступов/)
+  it('shows no accesses: they moved to «Переменные»', () => {
+    render(<SiteSettings site={settingsSite} />)
+    expect(screen.getByRole('heading', { level: 1, name: 'Сайт' })).toBeTruthy()
+    expect(screen.getByText('kroshka.example')).toBeTruthy()
+    expect(screen.queryByText(/Доступ/)).toBeNull()
+  })
+
+  it('is split by its cards: the site and its dangerous actions, beside the menu at the root', () => {
+    expect(
+      settingsBlocks({ host: 'kroshka.example' }).map(({ segment, title, note }) => ({
+        segment,
+        title,
+        note,
+      })),
+    ).toEqual([
+      { segment: 'site', title: 'Сайт', note: 'kroshka.example' },
+      { segment: 'danger', title: 'Опасная область', note: 'Удаление проекта' },
+    ])
+    render(
+      <DangerBlock nested>
+        <p>Удалить проект</p>
+      </DangerBlock>,
+    )
+    // At the root the menu holds the h1 of the section.
+    expect(screen.getByRole('heading', { level: 2, name: 'Опасная область' })).toBeTruthy()
   })
 })

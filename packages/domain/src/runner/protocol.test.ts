@@ -501,9 +501,9 @@ describe('runner credentials', () => {
     })
     for (const build of [withValues, adopt]) {
       expect(runnerCommandSchema.safeParse(build(values)).success).toBe(true)
-      // A value the form refuses never travels: too short, too long, a NUL, too many or none.
+      // A value the form refuses never travels: empty, too long, a NUL, too many or none.
       for (const bad of [
-        ['short'],
+        [''],
         ['x'.repeat(8193)],
         ['value\0-0001'],
         [...values, 'one-more-0001'],

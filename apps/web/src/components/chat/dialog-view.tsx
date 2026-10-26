@@ -26,7 +26,12 @@ import { useEffect, useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { SITE_PANE_WIDTH, SITE_RAIL_WIDTH, siteHref } from '@/components/site/site-nav'
+import {
+  SITE_PANE_WIDTH,
+  SITE_RAIL_WIDTH,
+  SITE_TOOLBAR_HEIGHT,
+  siteHref,
+} from '@/components/site/site-nav'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -61,9 +66,10 @@ import {
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
 import { PaneResizer } from './pane-resizer'
-import { PreviewPane, paneTabId, type PaneTab } from './preview-pane'
+import { PreviewPane, paneTabId, paneTabsOf, type PaneTab } from './preview-pane'
 import { ReleaseDialog } from './release-dialog'
 import { StatusMark } from './status-mark'
+import { TurnActivity } from './turn-activity'
 import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
 import { useBrowserStream } from './use-browser-stream'
@@ -100,54 +106,38 @@ function releaseProgress(head: FeedHeadState): string | null {
 function DialogHead({ title, head }: { title: string; head: FeedHeadState | null }) {
   const progress = head === null ? null : releaseProgress(head)
   return (
-    <Box component="header" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box component="header" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
       <Typography
         component="h1"
         sx={{
-          fontSize: { xs: 22, md: 26 },
+          fontSize: { xs: 17, md: 18 },
           fontWeight: 600,
-          lineHeight: 1.25,
+          lineHeight: 1.4,
           overflowWrap: 'anywhere',
         }}
       >
         {title}
       </Typography>
       {head ? (
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px' }}>
+        <Box
+          sx={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: '2px 12px',
+            fontSize: 13,
+            color: 'text.secondary',
+          }}
+        >
           <StatusMark status={head.task.status} size="medium" />
-          <Box
-            component="span"
-            sx={{
-              px: 1.25,
-              py: '2px',
-              border: 1,
-              borderColor: 'divider',
-              borderRadius: '999px',
-              fontSize: 13,
-              color: 'text.secondary',
-            }}
-          >
+          <Box component="span">
             <Box component="span" sx={offScreen}>
               {dialogText.mode}:{' '}
             </Box>
             {taskModeLabel[head.task.mode]}
           </Box>
           {head.task.requirements.browser ? (
-            <Box
-              component="span"
-              sx={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 0.5,
-                px: 1.25,
-                py: '2px',
-                border: 1,
-                borderColor: 'divider',
-                borderRadius: '999px',
-                fontSize: 13,
-                color: 'text.secondary',
-              }}
-            >
+            <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
               <AppIcon name="globe" size={14} />
               {taskWayText.browser}
             </Box>
@@ -224,7 +214,14 @@ export function DialogView({
   // files with its messages, the stream while its panel is shown.
   const inBrowser = head?.task.requirements.browser === true
   const browserLive = inBrowser && sessionLive(head?.browser ?? null)
-  const paneVisible = wide || view === 'preview'
+  // The panel beside the dialog only when it has something (owner's request of 26.10.2026): the
+  // browser of a task in the browser, or the tabs of the changes that hold anything — a preview in
+  // use, files or records of the site to change, checks.
+  const changeTabs = inBrowser ? [] : paneTabsOf(head?.preview ?? null, head?.candidate ?? null)
+  const hasPane = inBrowser || changeTabs.length > 0
+  // Without a panel the switch has nothing to show instead of the dialog.
+  const shownView: View = hasPane ? view : 'dialog'
+  const paneVisible = hasPane && (wide || shownView === 'preview')
   const stream = useBrowserStream({
     taskId,
     streamUrl: browserStreamUrl,
@@ -360,9 +357,12 @@ export function DialogView({
         : taskStatusLabel[status]
 
   function focusPaneTab(tab: PaneTab) {
-    setPaneTab(tab)
+    // A tab with nothing in it is not drawn: the first one that holds something takes its place.
+    const target = changeTabs.includes(tab) ? tab : changeTabs[0]
+    if (target === undefined) return
+    setPaneTab(target)
     if (!wide) setView('preview')
-    window.setTimeout(() => document.getElementById(paneTabId(tab))?.focus(), 0)
+    window.setTimeout(() => document.getElementById(paneTabId(target))?.focus(), 0)
   }
 
   // A repeat that the server answers `repeated` is the same words written before (the id is of
@@ -532,7 +532,7 @@ export function DialogView({
 
   if (state.missing) {
     return (
-      <Box sx={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Typography component="h1" sx={{ fontSize: 26, fontWeight: 600 }}>
           {dialogText.notFound}
         </Typography>
@@ -593,9 +593,11 @@ export function DialogView({
       </Box>
     )
   } else {
-    // A question of the browser is answered in words too: they resume the agent (Б16).
+    // A question of the browser is answered in words too: they resume the agent (Б16). Without a
+    // question the dialog waits after an answer of a pass that changed nothing (26.10.2026).
     const answering =
-      status === 'awaiting_user' && (question?.kind === 'agent' || question?.kind === 'browser')
+      status === 'awaiting_user' &&
+      (question === null || question.kind === 'agent' || question.kind === 'browser')
     const revising = status === 'awaiting_approval' && question === null
     const releasing = status === 'deploying' || status === 'verifying'
     const disabledReason = stopping
@@ -636,137 +638,180 @@ export function DialogView({
   return (
     <Box
       ref={root}
-      sx={{ flex: '1 0 auto', display: 'flex', flexDirection: 'column', minWidth: 0 }}
+      sx={{
+        flex: { xs: '1 0 auto', lg: '1 1 0' },
+        minHeight: { lg: 0 },
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
+      }}
     >
       {/* The browser over the whole area covers the switch and the dialog: neither takes focus. */}
-      <Tabs
-        value={view}
-        onChange={(_event, next: View) => setView(next)}
-        aria-label={viewSwitchText.label}
-        variant="fullWidth"
-        inert={fullscreen}
-        sx={{
-          display: { lg: 'none' },
-          mb: 2,
-          borderBottom: 1,
-          borderColor: 'divider',
-          flex: 'none',
-        }}
-      >
-        {(['dialog', 'preview'] as const).map((value) => (
-          <Tab
-            key={value}
-            value={value}
-            label={
-              value === 'preview' && inBrowser ? (
-                <Box
-                  component="span"
-                  sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}
-                >
-                  {browserText.view}
-                  {browserLive ? (
-                    <>
-                      <Box
-                        component="span"
-                        aria-hidden="true"
-                        sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main' }}
-                      />
-                      <Box component="span" sx={offScreen}>
-                        {`, ${browserText.status.agent.toLocaleLowerCase('ru')}`}
-                      </Box>
-                    </>
-                  ) : null}
-                </Box>
-              ) : (
-                viewSwitchText[value]
-              )
-            }
-            aria-controls={viewId(value)}
-            sx={{ minHeight: 48, textTransform: 'none', fontSize: 15 }}
-          />
-        ))}
-      </Tabs>
+      {hasPane ? (
+        <Tabs
+          value={shownView}
+          onChange={(_event, next: View) => setView(next)}
+          aria-label={viewSwitchText.label}
+          variant="fullWidth"
+          inert={fullscreen}
+          sx={{
+            display: { lg: 'none' },
+            mb: 2,
+            borderBottom: 1,
+            borderColor: 'divider',
+            flex: 'none',
+          }}
+        >
+          {(['dialog', 'preview'] as const).map((value) => (
+            <Tab
+              key={value}
+              value={value}
+              label={
+                value === 'preview' && inBrowser ? (
+                  <Box
+                    component="span"
+                    sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}
+                  >
+                    {browserText.view}
+                    {browserLive ? (
+                      <>
+                        <Box
+                          component="span"
+                          aria-hidden="true"
+                          sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main' }}
+                        />
+                        <Box component="span" sx={offScreen}>
+                          {`, ${browserText.status.agent.toLocaleLowerCase('ru')}`}
+                        </Box>
+                      </>
+                    ) : null}
+                  </Box>
+                ) : (
+                  viewSwitchText[value]
+                )
+              }
+              aria-controls={viewId(value)}
+              sx={{ minHeight: 48, textTransform: 'none', fontSize: 15 }}
+            />
+          ))}
+        </Tabs>
+      ) : null}
 
       <Box
         id={viewId('dialog')}
         inert={fullscreen}
         sx={{
-          display: { xs: view === 'dialog' ? 'flex' : 'none', lg: 'flex' },
-          flex: '1 0 auto',
+          display: { xs: shownView === 'dialog' ? 'flex' : 'none', lg: 'flex' },
           flexDirection: 'column',
-          gap: 2.5,
+          flex: { xs: '1 0 auto', lg: '1 1 0' },
           minWidth: 0,
-          width: '100%',
-          maxWidth: 860,
+          // From `lg` the page stands at the height of the window (owner's request of 26.10.2026):
+          // the feed scrolls in its own area and the field keeps to the bottom, so the page under
+          // the surface of the chat never shows. The area takes the paddings of the content of the
+          // shell back (32 px at the sides, 28 px below): its scrollbar stands at the edge, its
+          // field at the bottom of the window. Positioned: whatever the feed places is scrolled
+          // and clipped with it, never past the page.
+          minHeight: { lg: 0 },
+          overflowY: { lg: 'auto' },
+          position: { lg: 'relative' },
+          mx: { lg: -4 },
+          px: { lg: 4 },
+          mb: { lg: -3.5 },
         }}
       >
-        <DialogHead title={shownTitle} head={head} />
-        {head === null ? (
-          <Box role="status" aria-label={dialogText.loading} sx={{ display: 'grid', gap: 1.5 }}>
-            <Skeleton
-              variant="rounded"
-              height={64}
-              sx={{ borderRadius: '14px', width: '70%', justifySelf: 'end' }}
-            />
-            <Skeleton variant="rounded" height={120} sx={{ borderRadius: '14px' }} />
-          </Box>
-        ) : (
-          <FeedList
-            head={head}
-            rows={rows}
-            siteUrl={siteUrl}
-            openQuestionId={question?.id ?? null}
-            liveCandidateId={candidateRow?.id ?? null}
-            retryId={retryRow?.id ?? null}
-            actions={actions}
-            filesOf={sentFilesOf}
-          />
-        )}
-        {head ? (
-          <LiveBlock
-            head={head}
-            steps={liveSteps(rows, head)}
-            stopping={stopping}
-            browser={
-              inBrowser
-                ? {
-                    controlling: head.browser?.controller === 'user' && browserLive,
-                    onResume: resumeWork,
-                    onWatch: wide ? null : () => setView('preview'),
-                    busy,
-                  }
-                : undefined
-            }
-          />
-        ) : null}
-        {state.failures > 0 ? (
-          <Box
-            role="status"
-            sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5 }}
-          >
-            <Typography variant="body2" color="text.secondary">
-              {feedStateText.pollFailed}
-            </Typography>
-            {showsRefresh(state) ? (
-              <Button variant="outlined" size="small" onClick={refresh} sx={{ minHeight: 44 }}>
-                {feedStateText.refresh}
-              </Button>
-            ) : null}
-          </Box>
-        ) : null}
-
         <Box
           sx={{
-            position: 'sticky',
-            bottom: 0,
-            zIndex: 2,
-            mt: 'auto',
-            pt: 1.5,
-            pb: { xs: 'max(12px, env(safe-area-inset-bottom))', sm: 1 },
-            bgcolor: 'background.paper',
+            flex: '1 0 auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: { xs: 3, md: 4 },
+            minWidth: 0,
+            width: '100%',
+            // The feed and the field on one axis, a comfortable measure (owner's brief, 26.10.2026).
+            maxWidth: 780,
+            mx: 'auto',
           }}
         >
-          {composer}
+          <DialogHead title={shownTitle} head={head} />
+          {head === null ? (
+            <Box role="status" aria-label={dialogText.loading} sx={{ display: 'grid', gap: 1.5 }}>
+              <Skeleton
+                variant="rounded"
+                height={64}
+                sx={{ borderRadius: '14px', width: '70%', justifySelf: 'end' }}
+              />
+              <Skeleton variant="rounded" height={120} sx={{ borderRadius: '14px' }} />
+            </Box>
+          ) : (
+            <FeedList
+              head={head}
+              rows={rows}
+              siteUrl={siteUrl}
+              openQuestionId={question?.id ?? null}
+              liveCandidateId={candidateRow?.id ?? null}
+              retryId={retryRow?.id ?? null}
+              actions={actions}
+              filesOf={sentFilesOf}
+              activityOf={(turn) => <TurnActivity taskId={taskId} turn={turn} live={false} />}
+            />
+          )}
+          {head ? (
+            <LiveBlock
+              head={head}
+              steps={liveSteps(rows, head)}
+              stopping={stopping}
+              activity={
+                head.task.status === 'running' && head.task.turnNo > 0 ? (
+                  <TurnActivity
+                    key={`${head.task.id}:${head.task.turnNo}`}
+                    taskId={taskId}
+                    turn={head.task.turnNo}
+                    live
+                  />
+                ) : undefined
+              }
+              browser={
+                inBrowser
+                  ? {
+                      controlling: head.browser?.controller === 'user' && browserLive,
+                      onResume: resumeWork,
+                      onWatch: wide ? null : () => setView('preview'),
+                      busy,
+                    }
+                  : undefined
+              }
+            />
+          ) : null}
+          {state.failures > 0 ? (
+            <Box
+              role="status"
+              sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5 }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                {feedStateText.pollFailed}
+              </Typography>
+              {showsRefresh(state) ? (
+                <Button variant="outlined" size="small" onClick={refresh} sx={{ minHeight: 44 }}>
+                  {feedStateText.refresh}
+                </Button>
+              ) : null}
+            </Box>
+          ) : null}
+
+          <Box
+            sx={{
+              position: 'sticky',
+              bottom: 0,
+              zIndex: 2,
+              mt: 'auto',
+              pt: 1.5,
+              pb: { xs: 'max(12px, env(safe-area-inset-bottom))', sm: 2 },
+              // The field stands on the page itself: what scrolls under it is hidden, never faded.
+              bgcolor: 'var(--chat-page, var(--mui-palette-background-paper))',
+            }}
+          >
+            {composer}
+          </Box>
         </Box>
       </Box>
       {/* Outside the column: it speaks while the browser covers the dialog too. */}
@@ -774,96 +819,103 @@ export function DialogView({
         {announcement}
       </Box>
 
-      <Box
-        component="aside"
-        ref={pane}
-        id={viewId('preview')}
-        aria-label={inBrowser ? browserText.label : paneText.label}
-        // The shell leaves this panel its room at the right edge only while it is drawn.
-        data-site-pane=""
-        sx={{
-          display: { xs: view === 'preview' ? 'flex' : 'none', lg: 'flex' },
-          flexDirection: 'column',
-          minWidth: 0,
-          height: { xs: 'calc(100dvh - 160px)', lg: 'auto' },
-          minHeight: { xs: 480, lg: 0 },
-          position: { lg: 'fixed' },
-          top: { lg: 0 },
-          bottom: { lg: 0 },
-          right: { lg: 'env(safe-area-inset-right)' },
-          width: { lg: SITE_PANE_WIDTH },
-          border: { xs: 1, lg: 0 },
-          borderLeft: { lg: 1 },
-          borderColor: { xs: 'divider', lg: 'divider' },
-          borderRadius: { xs: '14px', lg: 0 },
-          // The panel holds its edge outside itself: the edge is not cut off.
-          overflow: { xs: 'hidden', lg: 'visible' },
-          bgcolor: 'background.paper',
-          // Over the whole area of the content, the rail beside it; under the windows of MUI.
-          ...(fullscreen && {
-            position: 'fixed',
-            display: 'flex',
-            top: 0,
-            bottom: 0,
-            right: 0,
-            left: { xs: 0, sm: `calc(${SITE_RAIL_WIDTH}px + env(safe-area-inset-left))` },
-            width: 'auto',
-            height: 'auto',
-            minHeight: 0,
-            border: 0,
-            borderRadius: 0,
-            zIndex: 1200,
-          }),
-        }}
-      >
-        {fullscreen ? null : (
-          <PaneResizer pane={pane} label={inBrowser ? browserText.separator : paneText.separator} />
-        )}
+      {hasPane ? (
         <Box
+          component="aside"
+          ref={pane}
+          id={viewId('preview')}
+          aria-label={inBrowser ? browserText.label : paneText.label}
+          // The shell leaves this panel its room at the right edge only while it is drawn.
+          data-site-pane=""
           sx={{
-            flex: '1 1 auto',
-            minHeight: 0,
-            display: 'flex',
+            display: { xs: shownView === 'preview' ? 'flex' : 'none', lg: 'flex' },
             flexDirection: 'column',
-            overflow: 'hidden',
+            minWidth: 0,
+            height: { xs: 'calc(100dvh - 160px)', lg: 'auto' },
+            minHeight: { xs: 480, lg: 0 },
+            position: { lg: 'fixed' },
+            // Under the bar of breadcrumbs, which runs over the panel to the right edge.
+            top: { lg: SITE_TOOLBAR_HEIGHT },
+            bottom: { lg: 0 },
+            right: { lg: 'env(safe-area-inset-right)' },
+            width: { lg: SITE_PANE_WIDTH },
+            border: { xs: 1, lg: 0 },
+            borderLeft: { lg: 1 },
+            borderColor: { xs: 'divider', lg: 'divider' },
+            borderRadius: { xs: '14px', lg: 0 },
+            // The panel holds its edge outside itself: the edge is not cut off.
+            overflow: { xs: 'hidden', lg: 'visible' },
+            bgcolor: 'background.paper',
+            // Over the whole area of the content, the rail beside it; under the windows of MUI.
+            ...(fullscreen && {
+              position: 'fixed',
+              display: 'flex',
+              top: 0,
+              bottom: 0,
+              right: 0,
+              left: { xs: 0, sm: `calc(${SITE_RAIL_WIDTH}px + env(safe-area-inset-left))` },
+              width: 'auto',
+              height: 'auto',
+              minHeight: 0,
+              border: 0,
+              borderRadius: 0,
+              zIndex: 1200,
+            }),
           }}
         >
-          {inBrowser ? (
-            <BrowserPane
-              taskId={taskId}
-              siteId={siteId}
-              head={head}
-              stream={stream}
-              configured={browserStreamUrl !== null}
-              visible={paneVisible}
-              fullscreen={fullscreen}
-              onFullscreen={setFullscreen}
-              onTake={takeControl}
-              onResume={resumeWork}
-              onStop={() => runCommand('cancel')}
-              stopping={stopping}
-              canStop={
-                !terminal &&
-                !stopping &&
-                commands.some((command) => command.id === 'cancel' && command.available)
-              }
-              busy={busy}
-            />
-          ) : (
-            <PreviewPane
-              taskId={taskId}
-              preview={head?.preview ?? null}
-              candidate={head?.candidate ?? null}
-              tab={paneTab}
-              onTab={setPaneTab}
-              visible={paneVisible}
-              canReset={resetVerdict?.available === true}
-              onReset={() => runCommand('reset')}
-              resetting={reset.isPending}
+          {fullscreen ? null : (
+            <PaneResizer
+              pane={pane}
+              label={inBrowser ? browserText.separator : paneText.separator}
             />
           )}
+          <Box
+            sx={{
+              flex: '1 1 auto',
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            {inBrowser ? (
+              <BrowserPane
+                taskId={taskId}
+                siteId={siteId}
+                head={head}
+                stream={stream}
+                configured={browserStreamUrl !== null}
+                visible={paneVisible}
+                fullscreen={fullscreen}
+                onFullscreen={setFullscreen}
+                onTake={takeControl}
+                onResume={resumeWork}
+                onStop={() => runCommand('cancel')}
+                stopping={stopping}
+                canStop={
+                  !terminal &&
+                  !stopping &&
+                  commands.some((command) => command.id === 'cancel' && command.available)
+                }
+                busy={busy}
+              />
+            ) : (
+              <PreviewPane
+                taskId={taskId}
+                preview={head?.preview ?? null}
+                candidate={head?.candidate ?? null}
+                tab={paneTab}
+                onTab={setPaneTab}
+                tabs={changeTabs}
+                visible={paneVisible}
+                canReset={resetVerdict?.available === true}
+                onReset={() => runCommand('reset')}
+                resetting={reset.isPending}
+              />
+            )}
+          </Box>
         </Box>
-      </Box>
+      ) : null}
 
       <ReleaseDialog
         taskId={taskId}

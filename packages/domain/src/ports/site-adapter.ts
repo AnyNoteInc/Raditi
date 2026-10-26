@@ -197,6 +197,19 @@ export interface SiteAdapter {
    */
   configSecrets(read: (path: string) => Promise<Uint8Array | null>): Promise<string[]>
   /**
+   * Where the published original of each of `paths` lives — files the secret scan of the import
+   * flagged (owner's decision of 26.10.2026). A file of a plugin, a theme or the core of the
+   * stack that is byte for byte its published release is public code, not a secret of the
+   * client: the import takes it when the original it downloads from the answer is the same
+   * bytes. `read` as for `configSecrets` (any path of the tree, at most
+   * `siteImportLimits.configFileBytes`), for the files that name a version. A path without an
+   * answer stays out as before. Absent — the stack publishes nothing to compare with.
+   */
+  publicOriginals?(
+    paths: readonly string[],
+    read: (path: string) => Promise<Uint8Array | null>,
+  ): Promise<ReadonlyMap<string, string>>
+  /**
    * The part of the full tree the agent works on (docs/plan/53-chat-preview-release.md, Р11);
    * checked with `agentWorkingSetSchema`.
    */

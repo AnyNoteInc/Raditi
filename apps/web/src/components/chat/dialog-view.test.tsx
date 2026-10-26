@@ -82,7 +82,10 @@ vi.mock('@/trpc/client', () => ({
     billing: { usage: query('billing.usage', async () => null) },
   }),
   useTRPCClient: () => ({
-    task: { feed: { query: calls.feed } },
+    task: {
+      feed: { query: calls.feed },
+      activity: { query: async () => ({ events: [], cursor: '0', more: false }) },
+    },
     preview: { ticket: { mutate: async () => ({ url: '', expiresAt: new Date() }) } },
     release: {
       prepare: { query: calls.prepare },
@@ -277,6 +280,27 @@ describe('a dialog', () => {
     expect(release.getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(release)
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('keeps the field open after an answer of a pass that changed nothing (26.10.2026)', async () => {
+    showDialog(
+      feedAnswer({
+        status: 'awaiting_user',
+        task: { turnNo: 1 },
+        events: [
+          requestRow('1'),
+          {
+            ...resultRow('2', 1, 'Это сайт учебного комбината.'),
+            next: 'awaiting_user',
+            changeType: 'none',
+            needsApproval: false,
+          } as FeedRow,
+        ],
+        cursor: '2',
+      }),
+    )
+    await screen.findByText('Это сайт учебного комбината.')
+    expect(field().disabled).toBe(false)
   })
 
   it('offers «Продолжить» on the question about credits and keeps the field closed', async () => {
@@ -615,6 +639,22 @@ describe('a dialog', () => {
     later(waiting({ candidate: checksOf('passed') }))
     expect(await screen.findByText('Пройдена')).toBeTruthy()
     expect(screen.queryByText('Идёт')).toBeNull()
+  })
+
+  it('has no panel and no switch while there is nothing to show in it', async () => {
+    showDialog(
+      feedAnswer({
+        status: 'awaiting_user',
+        task: { turnNo: 1 },
+        preview: null,
+        candidate: null,
+        events: [requestRow('1')],
+        cursor: '1',
+      }),
+    )
+    await screen.findByRole('textbox', { name: 'Сообщение' })
+    expect(screen.queryByRole('complementary', { name: 'Изменения диалога' })).toBeNull()
+    expect(screen.queryByRole('tablist', { name: 'Что показать' })).toBeNull()
   })
 
   it('shows the panel of the changes behind the switch below the wide layout', async () => {

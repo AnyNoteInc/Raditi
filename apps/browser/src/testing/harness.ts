@@ -6,6 +6,7 @@ import type { BrowserAction } from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 
 import { AttachmentFiles } from '../attachments/attachments.ts'
+import { TaskScreenshots } from '../attachments/screenshots.ts'
 import {
   SessionManager,
   sessionTimingDefaults,
@@ -29,6 +30,7 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
     browsers,
     store,
     files: new AttachmentFiles(store, inbox),
+    screenshots: new TaskScreenshots(store, inbox),
     adapters: getSiteAdapter,
     metrics,
     now: () => Date.now() + clock.skew,

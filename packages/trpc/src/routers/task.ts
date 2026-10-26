@@ -6,6 +6,7 @@ import {
   feedEventIdSchema,
   feedTaskHeadSchema,
   previewStatuses,
+  reasoningEffortSchema,
   releaseOutcomes,
   releaseStatuses,
   taskModes,
@@ -15,6 +16,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
+import { activityEventSchema, readTurnActivity } from '../services/chat/activity.ts'
 import { attachmentIdsSchema } from '../services/chat/attachments.ts'
 import { feedBrowserOutput } from '../services/chat/browser.ts'
 import { chatContextOf } from '../services/chat/context.ts'
@@ -147,6 +149,8 @@ export const taskRouter = router({
         text: words,
         requirements: taskRequirementsSchema.optional(),
         attachments: attachmentIdsSchema.optional(),
+        /** How hard the model thinks: `low`, `high` (the default) or `max`. */
+        effort: reasoningEffortSchema.optional(),
       }),
     )
     .output(z.strictObject({ taskId: z.uuid(), alias: z.string(), created: z.boolean() }))
@@ -158,6 +162,7 @@ export const taskRouter = router({
         text: input.text,
         ...(input.requirements === undefined ? {} : { requirements: input.requirements }),
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
+        ...(input.effort === undefined ? {} : { effort: input.effort }),
         now: new Date(),
       }),
     ),
@@ -242,6 +247,34 @@ export const taskRouter = router({
         taskId: input.taskId,
         after: input.after ?? '0',
         address: ctx.chat?.preview?.address ?? null,
+      }),
+    ),
+
+  /**
+   * The agent's work in one turn — its messages, commands, tool calls, changed files and
+   * questions — after the cursor (owner's decision of 26.10.2026; services/chat/activity.ts).
+   */
+  activity: consentedProcedure
+    .input(
+      z.strictObject({
+        taskId: z.uuid(),
+        turn: z.number().int().min(1).max(999_999),
+        after: feedCursorSchema.optional(),
+      }),
+    )
+    .output(
+      z.strictObject({
+        events: z.array(activityEventSchema),
+        cursor: feedCursorSchema,
+        more: z.boolean(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      readTurnActivity(ctx.prisma, {
+        userId: ctx.user.id,
+        taskId: input.taskId,
+        turn: input.turn,
+        after: input.after ?? '0',
       }),
     ),
 

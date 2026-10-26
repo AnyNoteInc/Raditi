@@ -1,21 +1,16 @@
+import Box from '@mui/material/Box'
 import type { Metadata } from 'next'
 
-import { SiteEnvVars } from '@/components/site/site-env-vars'
-import { SiteSettings } from '@/components/site/site-settings'
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
 import { UNAVAILABLE } from '@/lib/access'
-import { loadSiteCredentials, loadSiteSection } from '@/lib/site'
+
+import { siteBlock } from './blocks'
 
 export const metadata: Metadata = { title: 'Настройки сайта' }
 
+/** «Настройки» at its root: the first block beside the menu. On a phone the menu alone is shown. */
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
-  const { projectId } = await params
-  const site = await loadSiteSection(projectId, 'settings')
-  if (site === UNAVAILABLE) return <ServiceUnavailable />
-  const accesses = await loadSiteCredentials(projectId)
-  return (
-    <SiteSettings site={site} accesses={accesses === UNAVAILABLE ? null : accesses}>
-      <SiteEnvVars siteId={site.id} />
-    </SiteSettings>
-  )
+  const block = await siteBlock((await params).projectId, true)
+  if (block === UNAVAILABLE) return <ServiceUnavailable />
+  return <Box sx={{ display: { xs: 'none', md: 'block' } }}>{block}</Box>
 }

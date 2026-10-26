@@ -301,7 +301,10 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       await db.taskEvent.create({ data: { taskId, type: 'turn.lifecycle', payload } })
 
     expect(await sweep().settleOrphans()).toBe(1)
-    expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('done')
+    // A pass that changed nothing leaves the dialog open (owner's decision of 26.10.2026).
+    expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+      'awaiting_user',
+    )
     expect(await db.taskEvent.count({ where: { taskId, type: 'feed.result' } })).toBe(1)
   })
 

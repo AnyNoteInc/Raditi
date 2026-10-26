@@ -64,7 +64,7 @@ export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = O
   queued: null,
   preparing: null,
   running: null,
-  awaiting_user: 'Ответьте на вопрос',
+  awaiting_user: 'Ответьте агенту',
   awaiting_approval: 'Посмотрите и примените',
   deploying: null,
   verifying: null,
@@ -369,6 +369,8 @@ export const feedRowText = Object.freeze({
 export const feedCardTitle = Object.freeze({
   question: 'Вопрос агента',
   result: taskStatusLabel.done,
+  /** A result that left the dialog open (`next: 'awaiting_user'`): the task has not ended. */
+  answer: 'Ответ агента',
   approval: 'Что изменится',
   failure: taskStatusLabel.failed,
   cancelled: taskStatusLabel.cancelled,
@@ -393,6 +395,13 @@ export const feedQuestionText = Object.freeze({
  */
 export const feedFailureKeptText = 'Изменения, готовые до этого, мы сохранили.'
 
+/**
+ * The last sentence of a result that left the dialog open (`feed.result` with `next:
+ * 'awaiting_user'`, owner's decision of 26.10.2026): nothing to release, the client writes on.
+ */
+export const feedResultOpenText =
+  'Если нужно что-то ещё, напишите — агент продолжит в этом диалоге.'
+
 /** The lines next to «Попробовать ещё» on the failure card. */
 export const feedRetryText = Object.freeze({
   button: 'Попробовать ещё',
@@ -412,10 +421,10 @@ export const feedInputText = Object.freeze({
   newDialog: 'Новый диалог',
   /** The two standing lines under the field. */
   mistakes: 'ИИ может допускать ошибки. Проверяйте важное.',
-  noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Настройки»',
+  noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Переменные»',
   /** The refusal `TASK_TEXT_HAS_SECRET`: the text stays in the field. */
   secret:
-    'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Настройки»',
+    'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»',
 })
 
 /** The message is longer than `limit` characters (`feedLimits.requestText`). */

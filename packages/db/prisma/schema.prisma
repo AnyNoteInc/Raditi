@@ -272,6 +272,9 @@ model Site {
   installedReleaseId String?     @map("installed_release_id") @db.Uuid
   createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  /// «Удалить проект»: the row stays for its history; the cabinet no longer finds the site, and
+  /// its address may be added again (the unique address holds among the rows without it).
+  deletedAt          DateTime?   @map("deleted_at") @db.Timestamptz(6)
 
   workspace          Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   installedRelease   SiteRelease?            @relation("SiteInstalledRelease", fields: [installedReleaseId], references: [id], onDelete: SetNull)
@@ -279,6 +282,7 @@ model Site {
   undoPlans          ReleaseUndoPlan[]
   previews           PreviewEnvironment[]
   envVars            SiteEnvVar[]
+  agentSkills        SiteAgentSkill[]
   lease              SiteLease?
   gitRepositories    GitRepository[]
   environments       Environment[]
@@ -290,13 +294,14 @@ model Site {
   turnAssignments    TurnAssignment[]
   codeSource         SiteCodeSource?
   database           SiteDatabase?
+  databaseDump       SiteDatabaseDump?
   databaseSchema     SiteDatabaseSchema?
   provisioningStages SiteProvisioningStage[]
   initialVersion     SiteInitialVersion?
   attachments        Attachment[]
   browserSessions    BrowserSession[]
 
-  @@unique([workspaceId, url])
+  @@unique([workspaceId, url], map: "sites_workspace_id_url_key", where: raw("deleted_at IS NULL"))
   @@index([installedReleaseId])
   @@map("sites")
 }
@@ -1852,6 +1857,22 @@ model SiteDatabase {
   @@map("site_databases")
 }
 
+/// A SQL dump on the site's file source that a preview's database is copied from, for a site
+/// whose database answers only on the hosting (owner's decision of 26.10.2026). The owner names
+/// the file (databaseDumpPathSchema in @repo/domain, CHECK site_database_dumps_path_check); the
+/// access is the site's file access, read by core alone.
+model SiteDatabaseDump {
+  siteId    String   @id @map("site_id") @db.Uuid
+  /// Relative to the login folder of the file source.
+  path      String   @db.VarChar(512)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@map("site_database_dumps")
+}
+
 /// One stage that follows «Добавить сайт». A retry by the user is the next attempt of the same
 /// row; a resume after a restart of core is the same attempt with enqueues + 1.
 model SiteProvisioningStage {
@@ -1898,6 +1919,13 @@ model SiteInitialVersion {
   /// lease_epoch of the code_import stage whose holder wrote the commit.
   leaseEpoch      Int       @map("lease_epoch")
   importedAt      DateTime? @map("imported_at") @db.Timestamptz(6)
+  /// The copy of the files in raditi-backups: sites/<siteId>/initial/<commitSha>.tar.gz, made
+  /// by core after the import published (owner's request of 26.10.2026). All four or none
+  /// (CHECK site_initial_versions_backup_check).
+  backupObjectKey String?   @map("backup_object_key") @db.VarChar(1024)
+  backupBytes     BigInt?   @map("backup_bytes")
+  backupSha256    String?   @map("backup_sha256") @db.Char(64)
+  backupSavedAt   DateTime? @map("backup_saved_at") @db.Timestamptz(6)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -2463,6 +2491,26 @@ model SiteEnvVar {
   @@index([agentConsentBy])
   @@index([createdBy])
   @@map("site_env_vars")
+}
+
+/// The skills of the site's agent (owner's request of 26.10.2026): MCP servers its CLI connects to
+/// besides the platform's own, over the open internet of a turn. The platform's own skills
+/// (`builtinAgentSkillNames` of @repo/domain) are on without a row; a row of one of them turns it
+/// on or off and has no address. A row of any other name is a skill the owner added: an https
+/// address of a remote MCP server (`parseAgentSkillUrl`), nothing secret. CHECKs:
+/// site_agent_skills_name_check, site_agent_skills_url_check.
+model SiteAgentSkill {
+  siteId    String   @map("site_id") @db.Uuid
+  name      String   @db.VarChar(32)
+  url       String?  @db.VarChar(512)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@id([siteId, name])
+  @@map("site_agent_skills")
 }
 
 // ─── The cloud browser of a task (docs/plan/57-browser-tasks.md) ──────────────────────────────

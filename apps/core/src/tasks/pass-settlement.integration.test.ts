@@ -229,15 +229,16 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     }
   }
 
-  it('ends a pass that changed nothing in done and charges it in the same transaction', async () => {
+  it('keeps the dialog of a pass that changed nothing open: the preview, the reserve, no charge', async () => {
+    // The owner, 26.10.2026: «после того как в работе произошла какая-то работа, не закрывай чат».
     const task = await dialog()
     const watched = await preview(task.taskId)
 
     expect(await settlement().settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
 
-    expect(await status(task.taskId)).toBe('done')
-    // The dialog is closed: its manager takes the preview down.
-    expect(await watched.synced()).toEqual([0])
+    expect(await status(task.taskId)).toBe('awaiting_user')
+    // The dialog goes on: its preview stays as it is.
+    expect(await watched.synced()).toEqual([])
     expect(await feed(task.taskId)).toEqual([
       [
         'feed.result',
@@ -246,7 +247,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           turn: 1,
           message: 'Телефон в шапке заменён.',
           site: 'unchanged',
-          next: 'done',
+          next: 'awaiting_user',
           filesChanged: 0,
           changeType: 'none',
           needsApproval: false,
@@ -254,13 +255,12 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         },
       ],
     ])
-    expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
-    const charged = await db.creditLedger.aggregate({
-      where: { taskId: task.taskId, kind: 'charge' },
-      _sum: { amount: true },
-    })
-    // The minimum of a done task: no model call was recorded.
-    expect(charged._sum.amount?.toFixed(0)).toBe('-5')
+    // The same attempt waits for the next words under its reserve, moved on; nothing is charged.
+    for (const hold of await holds(task.taskId)) {
+      expect(hold.status).toBe('active')
+      expect(hold.expiresAt.getTime()).toBe(NOW.getTime() + 72 * 3_600_000)
+    }
+    expect(await db.creditLedger.count({ where: { taskId: task.taskId, kind: 'charge' } })).toBe(0)
     // Ended once: the second writer finds the task elsewhere.
     expect(await settlement().settle(ref(task), completed())).toBe('skipped')
   })
@@ -334,7 +334,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     expect((await holds(task.taskId)).every((hold) => hold.status === 'active')).toBe(true)
   })
 
-  it('leaves a done pass for later while a turn key still counts its usage', async () => {
+  it('keeps a dialog open while a turn key still counts its usage: nothing is charged yet', async () => {
     const task = await dialog()
     const pool = await fixtures.modelPool()
     const price = await fixtures.modelPrice(pool, {
@@ -349,9 +349,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       usageClosed: false,
     })
 
-    expect(await settlement().settle(ref(task), completed({ change_type: 'none' }))).toBe('later')
-    expect(await status(task.taskId)).toBe('running')
-    expect(await feed(task.taskId)).toEqual([])
+    expect(await settlement().settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
+    expect(await status(task.taskId)).toBe('awaiting_user')
   })
 
   it('fails a pass with the client code and gives the reserve back', async () => {
@@ -613,14 +612,14 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       await db.gitRepository.deleteMany({ where: { owner: 'sites-r3-settle' } })
     })
 
-    it('ends a pass that changed nothing by its trees alone', async () => {
+    it('keeps the dialog of a pass that changed nothing by its trees alone open', async () => {
       const task = await dialog()
       const candidates = await realBuilder(task.taskId, { [BASE]: T0, [HEAD]: T0 })
       const ends = new PassSettlement({ db, candidates, logger: quiet, now: () => NOW })
 
       expect(await ends.settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
-      expect(await status(task.taskId)).toBe('done')
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'active')).toBe(true)
     })
 
     it('asks the agent question of a pass that changed nothing', async () => {
@@ -919,6 +918,29 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(close).toHaveBeenCalledExactlyOnceWith(task.taskId, 'task_done')
     })
 
+    it('leaves a done task for later while a turn key still counts its usage', async () => {
+      const task = await browserTask()
+      await saved(task)
+      const pool = await fixtures.modelPool()
+      const price = await fixtures.modelPrice(pool, {
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      })
+      await fixtures.modelCall({
+        taskId: task.taskId,
+        pool,
+        priceId: price.id,
+        costRub: '1.00',
+        occurredAt: NOW,
+        usageClosed: false,
+      })
+      const { settlement: browser, close } = ends()
+
+      expect(await browser.settle(ref(task), done())).toBe('later')
+      expect(await status(task.taskId)).toBe('running')
+      expect(await feed(task.taskId)).toEqual([])
+      expect(close).not.toHaveBeenCalled()
+    })
+
     it('asks the client to act when the agent asked for help, in the same attempt', async () => {
       const task = await browserTask()
       await saved(task)
@@ -1002,6 +1024,67 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         ],
       ])
       expect((await holds(task.taskId)).every((hold) => hold.status === 'active')).toBe(true)
+      expect(close).not.toHaveBeenCalled()
+    })
+
+    /** A screenshot the agent sent the client, as the browser worker writes it. */
+    const screenshot = (taskId: string) =>
+      insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.screenshot',
+          payload: { v: 1, screenshotId: randomUUID(), number: 1, width: 1280, height: 800 },
+        },
+      })
+
+    it('ends done on a screenshot sent after the request: the site unchanged, charged, closed', async () => {
+      // The owner, 26.10.2026: «открыть сайт, сделать скрин сайта, прислать его — и только в
+      // этот момент задача будет завершена».
+      const task = await browserTask()
+      await screenshot(task.taskId)
+      const { settlement: browser, close } = ends()
+
+      expect(
+        await browser.settle(
+          ref(task),
+          done({ change_type: 'none', client_message: 'Скриншот главной страницы — выше.' }),
+        ),
+      ).toBe('moved')
+
+      expect(await status(task.taskId)).toBe('done')
+      expect((await feed(task.taskId)).slice(1)).toEqual([
+        [
+          'feed.result',
+          {
+            v: 1,
+            turn: 1,
+            message: 'Скриншот главной страницы — выше.',
+            site: 'unchanged',
+            next: 'done',
+            filesChanged: 0,
+            changeType: 'none',
+            needsApproval: false,
+            risk: 'low',
+          },
+        ],
+      ])
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+      expect(close).toHaveBeenCalledExactlyOnceWith(task.taskId, 'task_done')
+    })
+
+    it('does not take a screenshot for a result while a save stands unconfirmed', async () => {
+      const task = await browserTask()
+      await saved(task, false)
+      await screenshot(task.taskId)
+      const { settlement: browser, close } = ends()
+
+      await browser.settle(ref(task), done())
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect((await feed(task.taskId))[1]).toEqual([
+        'feed.question',
+        { v: 1, kind: 'browser', turn: 1, reason: 'unconfirmed', message: 'Новость опубликована.' },
+      ])
       expect(close).not.toHaveBeenCalled()
     })
 

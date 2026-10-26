@@ -22,11 +22,13 @@ import {
   isProduction,
   llmBackendIds,
   maxTaskAttempts,
+  modelClassOfEffort,
   siteSetupState,
   taskHoldExpiry,
   terminalTaskStatuses,
   workspaceTransitKey,
   type FeedRequestPayload,
+  type ReasoningEffort,
   type RetryRefusal,
   type TaskRequirements,
   type TaskStatus,
@@ -34,6 +36,7 @@ import {
 
 import { failureLabel } from '../site-access.ts'
 import { accessibleSite } from '../site-basics.ts'
+import { lockLiveSite } from '../site-delete.ts'
 import {
   browserAddressSecure,
   defaultRequirements,
@@ -53,6 +56,7 @@ import {
   lastQuestion,
   liveCandidate,
   openCeilingQuestion,
+  openResult,
   requestOf,
 } from './dialog-state.ts'
 import { insertDialogPreview, siteHasDatabase } from './previews.ts'
@@ -112,6 +116,8 @@ export interface CreateDialogInput {
   requirements?: TaskRequirements
   /** Files of the first message, announced and stored (`attachment.start`), lowercase. */
   attachments?: readonly string[]
+  /** How hard the model thinks (owner's request of 26.10.2026); absent — `high`, as before. */
+  effort?: ReasoningEffort
   now: Date
 }
 
@@ -224,8 +230,15 @@ export async function createDialog(
   const preview = requirements.repository ? chat.preview : null
   const hasDatabase = preview !== null && (await siteHasDatabase(db, site.id))
   await ensureWorkspaceKey(chat, site.workspaceId)
+  const modelClass = modelClassOfEffort(input.effort ?? 'high')
 
   return db.$transaction(async (tx) => {
+    // A site being deleted waits here, and a deleted one is not found (`deleteSite`).
+    await lockLiveSite(tx, site.id)
+    // The pass would fail `unavailable` without a profile of the chosen class or its price:
+    // refused before anything is written, as «Попробовать ещё» refuses it.
+    if (!(await modelClassPriced(tx, { modelClass, backends: llmBackendIds, now })))
+      throw taskNotAccepted('class_unavailable')
     // ON CONFLICT DO NOTHING: a repeat that raced the first delivery waits for it here and
     // writes nothing; an error would abort the transaction instead.
     const inserted = await tx.task.createMany({
@@ -236,10 +249,12 @@ export async function createDialog(
           siteId: site.id,
           createdById: userId,
           status: 'queued',
-          modelClass: 'standard',
+          modelClass,
           billable: true,
           title: dialogTitle(text),
-          mode: 'work',
+          // «Чат» is a dialog without the files of the site, «Работа» one on their copy (owner's
+          // request of 26.10.2026).
+          mode: requirements.repository ? 'work' : 'chat',
           needsRepository: requirements.repository,
           needsBrowser: requirements.browser,
         },
@@ -321,8 +336,9 @@ export interface DialogMessageInput {
 }
 
 /**
- * Words to a dialog that waits (Р6): the answer to the agent's question (`awaiting_user →
- * queued`, `feed.request` `answer`) or a new pass on top of the candidate (`awaiting_approval →
+ * Words to a dialog that waits (Р6): the answer to the agent's question or to a result that
+ * left the dialog open (`awaiting_user → queued`, `feed.request` `answer`; owner's decision of
+ * 26.10.2026) or a new pass on top of the candidate (`awaiting_approval →
  * queued`, `revision`). The same attempt goes on under the same reserve, which is moved on; the
  * pass goes into the outbox with the row. A question of the platform about credits is answered
  * by «Продолжить» (`task.continue`), never by words. A repeat with the same `requestId` returns
@@ -350,9 +366,13 @@ export async function postDialogMessage(
     let payload: FeedRequestPayload
     if (task.status === 'awaiting_user') {
       const question = await lastQuestion(tx, task.id)
-      if (question === null || question.answered)
+      if (question !== null && !question.answered && question.kind === 'ceiling')
+        throw taskContinueRequired()
+      // The words answer the open question, or the result that left the dialog open.
+      const answers =
+        question !== null && !question.answered ? question.id : await openResult(tx, task.id)
+      if (answers === null)
         throw conflict('The dialog waits for an answer without an open question')
-      if (question.kind === 'ceiling') throw taskContinueRequired()
       payload = {
         v: 1,
         kind: 'answer',
@@ -360,7 +380,7 @@ export async function postDialogMessage(
         requestId,
         text,
         ...attachments,
-        answersEventId: String(question.id),
+        answersEventId: String(answers),
       }
     } else if (task.status === 'awaiting_approval') {
       if ((await openCeilingQuestion(tx, task.id)) !== null) throw taskContinueRequired()

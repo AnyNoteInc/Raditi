@@ -4,7 +4,7 @@
 
 Пакет `opencode-ai` — пусковой: в нём заглушка `bin/opencode.exe`, которую `postinstall` заменяет исполняемым файлом пакета платформы. Скрипт не запускается, поэтому заглушку запускать нельзя: Dockerfile сам ставит ссылку `/usr/local/bin/opencode` на файл пакета платформы по архитектуре образа — `opencode-linux-arm64` либо `opencode-linux-x64-baseline` (сборка без AVX2; пакет `opencode-linux-x64`, который npm ставит рядом, из слоя удаляется). Целостность по lock-файлу: `opencode-ai` — `sha512-9WUS2T0t…QYnySA==`, `opencode-linux-arm64` — `sha512-ZSjqcH0M…JhouvA==`, `opencode-linux-x64-baseline` — `sha512-StWC81sq…92sHBA==`.
 
-Других пакетов в lock-файле нет: CLI прежних оболочек с их зависимостями удалены в G8 (`docs/plan/48-removal.md`), записи OpenCode при этом не менялись.
+Кроме OpenCode, в lock-файле — сервер MCP навыка «Playwright» (запрос владельца от 26.10.2026): `@playwright/mcp` 0.0.83 с его `playwright` и `playwright-core` той версии, которую он называет. Dockerfile ставит его тем же `npm ci --ignore-scripts`, сверяет `npm ls @playwright/mcp@…` и при сборке скачивает Chromium его Playwright с системными библиотеками (`cli.js install-browser --with-deps --no-shell chromium`, каталог `/opt/ms-playwright`): ход ничего не скачивает. Пути сервера и браузеров называет драйвер (`src/opencode.ts`), `src/cli-lock.test.ts` сверяет их с Dockerfile. CLI прежних оболочек с их зависимостями удалены в G8 (`docs/plan/48-removal.md`), записи OpenCode при этом не менялись.
 
 ## Смена версии
 

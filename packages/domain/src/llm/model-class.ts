@@ -11,3 +11,20 @@ export const quotaAttemptCeilingsRub = Object.freeze({
   standard: '285.00',
   heavy: '735.00',
 } satisfies Record<ModelClass, string>)
+
+/**
+ * How hard the model thinks, as the owner of a site picks it when a dialog starts (owner's
+ * request of 26.10.2026): the three profiles of the one model are its reasoning levels `low`,
+ * `high` and `max` (spec §20, П5), so the choice is the class of the dialog.
+ */
+export const reasoningEfforts = ['low', 'high', 'max'] as const
+export const reasoningEffortSchema = z.enum(reasoningEfforts)
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>
+
+const classOfEffort = Object.freeze({
+  low: 'light',
+  high: 'standard',
+  max: 'heavy',
+} satisfies Record<ReasoningEffort, ModelClass>)
+
+export const modelClassOfEffort = (effort: ReasoningEffort): ModelClass => classOfEffort[effort]

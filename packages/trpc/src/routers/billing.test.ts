@@ -830,8 +830,11 @@ describe('billing.plans', () => {
       // No enabled model has a price in force: there is no table to print.
       creditConversion: null,
     })
-    // Every site of the workspace, whatever its status: the count a checkout refuses by.
-    expect(db.site.count).toHaveBeenCalledExactlyOnceWith({ where: { workspaceId: WORKSPACE } })
+    // Every site of the workspace that is not deleted, whatever its status: the count a checkout
+    // refuses by.
+    expect(db.site.count).toHaveBeenCalledExactlyOnceWith({
+      where: { workspaceId: WORKSPACE, deletedAt: null },
+    })
   })
 
   it('counts no sites and marks no tariff for a user without a workspace', async () => {

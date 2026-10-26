@@ -14,7 +14,7 @@ import Typography from '@mui/material/Typography'
 import { useQuery } from '@tanstack/react-query'
 import { useState, useSyncExternalStore, type ReactNode } from 'react'
 
-import { AppIcon } from '@/components/application/app-icon'
+import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -37,6 +37,52 @@ const tabLabel: Readonly<Record<PaneTab, string>> = {
   files: previewPanelText.files,
   database: previewPanelText.database,
   checks: previewPanelText.checks,
+}
+
+/** The tabs are icons (owner's request of 26.10.2026); the name is their label and their hint. */
+const tabIcon: Readonly<Record<PaneTab, AppIconName>> = {
+  preview: 'eye',
+  files: 'file',
+  database: 'database',
+  checks: 'check',
+}
+
+/** A preview the client uses: being made, ready, stopped for its age or failed — not one that cannot be shown or is gone. */
+const usedPreviews: ReadonlySet<PreviewHead['status']> = new Set([
+  'pending',
+  'building',
+  'ready',
+  'failed',
+  'expired',
+])
+
+/** What a tab of the candidate holds: the files and media, the records of the site, the checks. */
+function candidateCount(tab: Exclude<PaneTab, 'preview'>, candidate: CandidateHead | null): number {
+  if (candidate === null) return 0
+  if (tab === 'checks') {
+    const { pending, passed, failed, stale } = candidate.checks
+    return pending + passed + failed + stale
+  }
+  const counts = candidate.counts
+  if (counts === null) return 0
+  if (tab === 'database') return counts.records
+  return counts.files.added + counts.files.modified + counts.files.deleted + counts.media
+}
+
+/**
+ * The tabs the panel has something for (owner's request of 26.10.2026: it opens only when it is
+ * really needed) — the preview while it is in use, the files and the records of the site the
+ * changes touch, their checks — in their order. None: the dialog has no panel at all.
+ */
+export function paneTabsOf(
+  preview: PreviewHead | null,
+  candidate: CandidateHead | null,
+): PaneTab[] {
+  return paneTabs.filter((tab) =>
+    tab === 'preview'
+      ? preview !== null && usedPreviews.has(preview.status)
+      : candidateCount(tab, candidate) > 0,
+  )
 }
 
 /** The id of a tab of the panel: `/preview` and «Посмотреть изменения» put the focus on it. */
@@ -232,6 +278,8 @@ function CandidateTab({
 /**
  * The panel of a dialog's changes. `visible` — it is on the screen (from `lg`, or chosen by the
  * switch): the frame of the preview is made only then, so no ticket is spent on a hidden one.
+ * `tabs` — the tabs it has something for (`paneTabsOf`); every tab when not given. A tab is an
+ * icon named by its label, a tab of the candidate shows how many things it holds.
  */
 export function PreviewPane({
   taskId,
@@ -239,6 +287,7 @@ export function PreviewPane({
   candidate,
   tab,
   onTab,
+  tabs = paneTabs,
   visible,
   canReset,
   onReset,
@@ -249,6 +298,7 @@ export function PreviewPane({
   candidate: CandidateHead | null
   tab: PaneTab
   onTab: (tab: PaneTab) => void
+  tabs?: readonly PaneTab[]
   visible: boolean
   canReset: boolean
   onReset: () => void
@@ -256,44 +306,67 @@ export function PreviewPane({
 }) {
   // The address of the cabinet is known in the browser only: the tab is drawn there.
   const cabinet = useSyncExternalStore(noSubscription, cabinetOrigin, noOrigin)
+  // A tab that has nothing now gives way to the first that has something.
+  const shown = tabs.includes(tab) ? tab : (tabs[0] ?? tab)
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
       <Tabs
-        value={tab}
+        value={shown}
         onChange={(_event, next: PaneTab) => onTab(next)}
         aria-label={paneText.tabs}
         variant="scrollable"
         scrollButtons={false}
         sx={{ flex: 'none', px: 1, borderBottom: 1, borderColor: 'divider' }}
       >
-        {paneTabs.map((value) => (
-          <Tab
-            key={value}
-            value={value}
-            label={tabLabel[value]}
-            id={tabId(value)}
-            aria-controls={panelId(value)}
-            sx={{ minHeight: 48, textTransform: 'none', fontSize: 14 }}
-          />
-        ))}
+        {tabs.map((value) => {
+          const count = value === 'preview' ? 0 : candidateCount(value, candidate)
+          return (
+            <Tab
+              key={value}
+              value={value}
+              icon={<AppIcon name={tabIcon[value]} size={20} />}
+              iconPosition="start"
+              label={
+                count > 0 ? (
+                  <Box component="span" aria-hidden="true">
+                    {count}
+                  </Box>
+                ) : undefined
+              }
+              aria-label={tabLabel[value]}
+              title={tabLabel[value]}
+              id={tabId(value)}
+              aria-controls={panelId(value)}
+              sx={{
+                minHeight: 48,
+                minWidth: 52,
+                px: 1.5,
+                textTransform: 'none',
+                fontSize: 13,
+                fontVariantNumeric: 'tabular-nums',
+                '& .MuiTab-iconWrapper': { mr: count > 0 ? 0.75 : 0 },
+              }}
+            />
+          )
+        })}
       </Tabs>
-      {paneTabs.map((value) => (
+      {tabs.map((value) => (
         <Box
           key={value}
           role="tabpanel"
           id={panelId(value)}
           aria-labelledby={tabId(value)}
-          hidden={value !== tab}
+          hidden={value !== shown}
           sx={{
             flex: '1 1 auto',
             minHeight: 0,
             overflowY: value === 'preview' ? 'hidden' : 'auto',
-            display: value === tab ? 'flex' : 'none',
+            display: value === shown ? 'flex' : 'none',
             flexDirection: 'column',
             ...(value === 'preview' ? {} : { p: { xs: 2, sm: 2.5 } }),
           }}
         >
-          {value !== tab ? null : value === 'preview' ? (
+          {value !== shown ? null : value === 'preview' ? (
             cabinet !== null ? (
               <PreviewTab
                 cabinet={cabinet}

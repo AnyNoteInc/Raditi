@@ -61,6 +61,13 @@ const steps: readonly { title: string; note: string }[] = [
   },
 ]
 
+/**
+ * The accesses are the site's variables too (owner's decision of 26.10.2026): said on the step
+ * that adds the project, where the user gives the last of them.
+ */
+export const VARIABLES_NOTE =
+  'Доступы к файлам и базе данных мы сохраним и как переменные сайта: их получат команды агента и предпросмотр. Это можно отключить в разделе «Переменные».'
+
 /** «Доступ к файлам» where the wizard also offers the browser alone (docs/plan/57, Б8). */
 const SOURCE_NOTE_WITH_BROWSER =
   'Выберите, как агент будет работать с сайтом. По доступу SSH или FTP мы скопируем файлы сайта и сохраним его первоначальную версию. На сервер мы ничего не записываем.'
@@ -690,6 +697,12 @@ export function ProjectWizard({
                 </Box>
               ) : null}
             </CheckProblem>
+          ) : null}
+
+          {step === 2 ? (
+            <Typography id="wizard-variables-note" variant="body2" color="text.secondary">
+              {VARIABLES_NOTE}
+            </Typography>
           ) : null}
 
           <Box

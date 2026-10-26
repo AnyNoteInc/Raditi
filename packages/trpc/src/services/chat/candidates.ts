@@ -158,7 +158,7 @@ export async function readCandidate(
   input: { userId: string; taskId: string; revision?: number | undefined },
 ): Promise<CandidateView | null> {
   const task = await db.task.findFirst({
-    where: { id: input.taskId, workspace: { members: { some: { userId: input.userId } } } },
+    where: accessibleTask(input.userId, input.taskId),
     select: { id: true, siteId: true },
   })
   if (task === null) throw taskNotFound()

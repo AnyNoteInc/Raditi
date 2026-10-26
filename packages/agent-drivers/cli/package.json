@@ -3,8 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Agent CLIs of the sandbox runtime image. Not a workspace package: infra/sandbox/Dockerfile installs it with npm ci, so every tarball is checked against package-lock.json.",
+  "description": "Agent CLIs and MCP servers of the sandbox runtime image. Not a workspace package: infra/sandbox/Dockerfile installs it with npm ci, so every tarball is checked against package-lock.json.",
   "dependencies": {
+    "@playwright/mcp": "0.0.83",
     "opencode-ai": "1.18.34"
   }
 }

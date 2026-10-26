@@ -57,8 +57,13 @@ export interface PreviewFacts {
     /** Its files or its plan do not read back: a build to it fails (`plan_invalid`). */
     invalid: boolean
   } | null
-  /** The site has an access to its database (Р4). */
+  /** The site has an access to its database (Р4), or a dump its copy is made from. */
   hasDatabase: boolean
+  /**
+   * The path of the SQL dump on the site's file source the copy is made from (owner's decision
+   * of 26.10.2026), relative to its login folder; null — none is named. A live database wins.
+   */
+  databaseDump: string | null
 }
 
 export async function loadPreviewFacts(
@@ -95,7 +100,7 @@ export async function loadPreviewFacts(
     },
   })
   if (!row) return null
-  const [repository, candidate, database, access, written] = await Promise.all([
+  const [repository, candidate, database, access, written, dump] = await Promise.all([
     db.gitRepository.findFirst({
       where: { siteId: row.siteId },
       orderBy: { createdAt: 'asc' },
@@ -112,7 +117,9 @@ export async function loadPreviewFacts(
       where: { previewId: row.id, mcpCall: { previewWriteEpoch: row.writeEpoch } },
       select: { id: true },
     }),
+    db.siteDatabaseDump.findUnique({ where: { siteId: row.siteId }, select: { path: true } }),
   ])
+  const live = database !== null || access !== null
   const files = candidate ? candidateFilesSchema.safeParse(candidate.files) : null
   const dbPlan = candidate ? dbPlanSchema.safeParse(candidate.dbPlan) : null
   return {
@@ -171,7 +178,8 @@ export async function loadPreviewFacts(
           invalid: !files?.success || !dbPlan?.success,
         }
       : null,
-    hasDatabase: database !== null || access !== null,
+    hasDatabase: live || dump !== null,
+    databaseDump: live ? null : (dump?.path ?? null),
   }
 }
 

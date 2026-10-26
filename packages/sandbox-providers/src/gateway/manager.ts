@@ -15,21 +15,31 @@ import type { DockerGatewayManager } from '../gateway-types.ts'
 import { gatewayConfigSchema, type GatewayConfig } from './config.ts'
 
 /** The variables of the client egress listener (infra/sandbox/client-egress.mjs, Р13). */
-const EGRESS_ENV = ['EGRESS_PORT', 'EGRESS_ALLOWED_HOSTS', 'EGRESS_REFUSED_SUBNETS'] as const
+const EGRESS_ENV = [
+  'EGRESS_PORT',
+  'EGRESS_ALLOWED_HOSTS',
+  'EGRESS_REFUSED_SUBNETS',
+  'EGRESS_OPEN',
+] as const
+
+type GatewayPolicy = Extract<NetworkPolicy, { mode: 'gateway' }>
+const hasEgress = (policy: GatewayPolicy) => Boolean(policy.egress?.length || policy.internet)
 
 /**
- * What the gateway proxy is told about the client egress of an attempt: its port and the
- * `host:port` of the policy, with the platform's own subnets; nothing without hosts — then no
- * egress listener runs at all.
+ * What the gateway proxy is told about the client egress of an attempt: its port, the
+ * `host:port` of the policy and whether the internet is open (owner's decision of 26.10.2026),
+ * with the platform's own subnets; nothing without hosts and internet — then no egress listener
+ * runs at all.
  */
 function egressEnv(
-  policy: Extract<NetworkPolicy, { mode: 'gateway' }>,
+  policy: GatewayPolicy,
   config: GatewayConfig,
 ): Partial<Record<(typeof EGRESS_ENV)[number], string>> {
-  if (!policy.egress?.length) return {}
+  if (!hasEgress(policy)) return {}
   return {
     EGRESS_PORT: String(SANDBOX_EGRESS_PORT),
-    EGRESS_ALLOWED_HOSTS: JSON.stringify(policy.egress),
+    ...(policy.egress?.length ? { EGRESS_ALLOWED_HOSTS: JSON.stringify(policy.egress) } : {}),
+    ...(policy.internet ? { EGRESS_OPEN: '1' } : {}),
     ...(config.egressRefusedSubnets?.length
       ? { EGRESS_REFUSED_SUBNETS: config.egressRefusedSubnets.join(',') }
       : {}),
@@ -37,10 +47,8 @@ function egressEnv(
 }
 
 /** The network guard opens the egress port next to the gateway's (runc). */
-const guardEgressEnv = (
-  policy: Extract<NetworkPolicy, { mode: 'gateway' }>,
-): Partial<Record<'EGRESS_PORT', string>> =>
-  policy.egress?.length ? { EGRESS_PORT: String(SANDBOX_EGRESS_PORT) } : {}
+const guardEgressEnv = (policy: GatewayPolicy): Partial<Record<'EGRESS_PORT', string>> =>
+  hasEgress(policy) ? { EGRESS_PORT: String(SANDBOX_EGRESS_PORT) } : {}
 
 const PREFIX = 'io.raditi.gateway.'
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/

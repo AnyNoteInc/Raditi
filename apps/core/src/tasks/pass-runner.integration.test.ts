@@ -385,11 +385,12 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       expect(request.input.prompt).toBe('Поменяйте телефон в шапке')
       expect(policy).toMatchObject({ backend: sampleBackendId, modelSlug: sampleModelSlug })
       expect(Number(policy.budgetRub)).toBeGreaterThan(0)
+      // Nothing changed and nothing asked: the dialog waits for the next words (26.10.2026).
       const task = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
-      expect(task.status).toBe('done')
+      expect(task.status).toBe('awaiting_user')
       expect(
         (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).every(
-          (hold) => hold.status === 'captured',
+          (hold) => hold.status === 'active',
         ),
       ).toBe(true)
     })

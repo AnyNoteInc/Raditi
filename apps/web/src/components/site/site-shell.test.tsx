@@ -37,20 +37,21 @@ const bar = () => navigation(1)
 afterEach(() => vi.restoreAllMocks())
 
 describe('site shell', () => {
-  it('lists the six sections in the rail, each leading to its own address', () => {
+  it('lists the seven sections in the rail, each leading to its own address', () => {
     showShell()
     const links = within(rail()).getAllByRole('link')
     expect(links.map((link) => link.textContent)).toEqual([
-      'Чат',
       'Обзор',
+      'Чат',
       'Изменения',
       'Запуски',
       'База и бэкап',
+      'Переменные',
       'Настройки',
     ])
     expect(links.map((link) => link.getAttribute('href'))).toEqual(
       // «Чат» opens on a new dialog, the rest on themselves.
-      ['chat/new', 'overview', 'changes', 'runs', 'database', 'settings'].map(
+      ['overview', 'chat/new', 'changes', 'runs', 'database', 'vault', 'settings'].map(
         (s) => `/projects/${id}/${s}`,
       ),
     )
@@ -89,14 +90,14 @@ describe('site shell', () => {
       within(bar())
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['Чат', 'Обзор', 'Изменения', 'Запуски'])
+    ).toEqual(['Обзор', 'Чат', 'Изменения', 'Запуски'])
     fireEvent.click(within(bar()).getByRole('button', { name: 'Ещё' }))
     const more = screen.getByRole('navigation', { name: 'Ещё разделы' })
     expect(
       within(more)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['База и бэкап', 'Настройки', 'К проектам'])
+    ).toEqual(['База и бэкап', 'Переменные', 'Настройки', 'К проектам'])
     expect(within(more).getByRole('link', { name: 'Настройки' }).getAttribute('aria-current')).toBe(
       'page',
     )
@@ -126,7 +127,7 @@ describe('site shell', () => {
     it('keeps «Обзор» the only link of the rail and of the phone bar', () => {
       showShell('overview', status)
       for (const [nav, closed] of [
-        [rail(), ['Чат', 'Изменения', 'Запуски', 'База и бэкап', 'Настройки']],
+        [rail(), ['Чат', 'Изменения', 'Запуски', 'База и бэкап', 'Переменные', 'Настройки']],
         [bar(), ['Чат', 'Изменения', 'Запуски']],
       ] as const) {
         const links = within(nav).getAllByRole('link')
@@ -159,7 +160,7 @@ describe('site shell', () => {
       const links = within(sheet).getAllByRole('link')
       expect(links.map((link) => link.textContent)).toEqual(['К проектам'])
       expect(links[0]!.getAttribute('href')).toBe('/projects')
-      expect(closedLabels(sheet)).toEqual(announced(['База и бэкап', 'Настройки']))
+      expect(closedLabels(sheet)).toEqual(announced(['База и бэкап', 'Переменные', 'Настройки']))
       for (const item of sheet.querySelectorAll('[aria-disabled="true"]')) {
         expect(item.querySelectorAll('svg')).toHaveLength(2)
         expect(document.getElementById(item.getAttribute('aria-describedby')!)?.textContent).toBe(
@@ -181,7 +182,7 @@ describe('site shell', () => {
       expect(links.map((link) => link.textContent)).toEqual(['Обзор'])
       expect(links[0]!.getAttribute('aria-current')).toBe('page')
       const closed = Array.from(railMarkup.querySelectorAll('[aria-disabled="true"]'))
-      expect(closed).toHaveLength(5)
+      expect(closed).toHaveLength(6)
       expect(closed[0]!.textContent).toBe('Чат, раздел недоступен')
       expect(page.querySelector('#site-closed-sections')?.textContent).toBe(note)
     })
@@ -189,7 +190,7 @@ describe('site shell', () => {
 
   it.each(['onboarding', 'active', 'something-new'])('closes nothing of a %s site', (status) => {
     showShell('overview', status)
-    expect(within(rail()).getAllByRole('link')).toHaveLength(6)
+    expect(within(rail()).getAllByRole('link')).toHaveLength(7)
     expect(document.body.textContent).not.toContain('недоступ')
     expect(document.querySelector('[aria-disabled="true"]')).toBeNull()
     expect(document.getElementById('site-closed-sections')).toBeNull()
@@ -235,6 +236,6 @@ describe('site shell', () => {
 
   it.each(['done', null] as const)('shows the sections of a site whose setup is %s', (setup) => {
     showShell('overview', 'onboarding', setup)
-    expect(within(rail()).getAllByRole('link')).toHaveLength(6)
+    expect(within(rail()).getAllByRole('link')).toHaveLength(7)
   })
 })

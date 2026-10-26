@@ -49,48 +49,58 @@ function DialogLink({
       href={`${siteHref(siteId, 'chat')}/${item.id}`}
       aria-current={current ? 'page' : undefined}
       sx={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) auto',
-        alignItems: 'baseline',
-        gap: '2px 12px',
-        minHeight: 44,
-        px: 1.5,
-        py: 1.25,
-        borderRadius: '12px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '1px',
+        minHeight: { xs: 44, md: 40 },
+        justifyContent: 'center',
+        px: 1.25,
+        py: 0.75,
+        borderRadius: '10px',
         textDecoration: 'none',
         color: 'text.primary',
         bgcolor: current ? 'action.selected' : 'transparent',
+        transition: 'background-color var(--raditi-motion-fast) var(--raditi-ease-out)',
         '&:hover': { bgcolor: current ? 'action.selected' : 'action.hover' },
         '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
       }}
     >
-      <Typography
-        component="span"
-        sx={{
-          minWidth: 0,
-          fontSize: 15,
-          fontWeight: current ? 600 : 500,
-          lineHeight: 1.35,
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow: 'hidden',
-          overflowWrap: 'anywhere',
-        }}
-      >
-        {item.title ?? listText.untitled}
-      </Typography>
-      <Typography
-        component="span"
-        variant="caption"
-        color="text.secondary"
-        sx={{ whiteSpace: 'nowrap' }}
-      >
-        {listTime(item.updatedAt, now)}
-      </Typography>
+      <Box component="span" sx={{ display: 'flex', alignItems: 'baseline', gap: 1, minWidth: 0 }}>
+        <Typography
+          component="span"
+          sx={{
+            flex: '1 1 auto',
+            minWidth: 0,
+            fontSize: 14,
+            fontWeight: current ? 500 : 400,
+            lineHeight: 1.45,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {item.title ?? listText.untitled}
+        </Typography>
+        <Typography
+          component="span"
+          variant="caption"
+          color="text.secondary"
+          sx={{ flex: 'none', whiteSpace: 'nowrap' }}
+        >
+          {listTime(item.updatedAt, now)}
+        </Typography>
+      </Box>
       <Box
         component="span"
-        sx={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: '0 8px', minWidth: 0 }}
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '0 6px',
+          minWidth: 0,
+          fontSize: 12,
+          color: 'text.secondary',
+          '& svg': { width: 13, height: 13 },
+        }}
       >
         <StatusMark status={item.status} />
         {hint ? (
@@ -123,14 +133,14 @@ function DialogGroup({
         id={labelId}
         variant="caption"
         color="text.secondary"
-        sx={{ px: 1.5, pt: 1, fontWeight: 600 }}
+        sx={{ px: 1.25, pt: 1, pb: 0.25, fontWeight: 500 }}
       >
         {label}
       </Typography>
       <Box
         component="ul"
         aria-labelledby={labelId}
-        sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 0.25 }}
+        sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}
       >
         {items.map((item) => (
           <li key={item.id}>

@@ -12,7 +12,7 @@ import {
 // The shell of the site page in a real browser: unit tests see the markup of both navigations,
 // only a browser shows which of them the width leaves on the screen.
 
-const sections = ['Чат', 'Обзор', 'Изменения', 'Запуски', 'База и бэкап', 'Настройки']
+const sections = ['Обзор', 'Чат', 'Изменения', 'Запуски', 'База и бэкап', 'Настройки']
 
 for (const [name, width, height] of [
   ['phone', 390, 844],
@@ -58,7 +58,7 @@ for (const [name, width, height] of [
       expect(overflow).toBeLessThanOrEqual(0)
     })
 
-    await test.step('the settings show the site and no accesses yet', async () => {
+    await test.step('the settings show the site; «Переменные → Доступы», no accesses yet', async () => {
       if (width < 600) {
         await page.getByRole('button', { name: 'Ещё' }).click()
         await page
@@ -73,6 +73,9 @@ for (const [name, width, height] of [
       }
       await expect(page).toHaveURL(`/projects/${siteId}/settings`)
       await expect(page.getByText('Кофейня «Крошка»').first()).toBeVisible()
+      // The accesses are a block of «Переменные» since 26.10.2026, not of the settings.
+      await page.goto(`/projects/${siteId}/vault/accesses`)
+      await expect(page.getByRole('heading', { level: 1, name: 'Доступы' })).toBeVisible()
       await expect(page.getByText(/Доступов пока нет/)).toBeVisible()
     })
 

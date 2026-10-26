@@ -8,6 +8,7 @@ import {
   SANDBOX_SECRET_FILES,
   SANDBOX_SECRETS_DIR,
   turnInputSchema,
+  turnSkillsSchema,
 } from '@repo/domain'
 import { z } from 'zod'
 
@@ -61,6 +62,8 @@ export const runContextSchema = <Effort extends z.ZodType>(effort: Effort) =>
       )
       .optional(),
     egressProxy: endpoint.optional(),
+    internet: z.literal(true).optional(),
+    skills: turnSkillsSchema.optional(),
   })
 
 /** Secret files the variables may take: the LLM key and the MCP token have one each. */

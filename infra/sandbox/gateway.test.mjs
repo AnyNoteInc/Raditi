@@ -1221,6 +1221,31 @@ test('the client egress of a turn is a listener of its own, configured only by i
         ...bad,
       }),
     )
+
+  // The open internet of the agent (owner's decision of 26.10.2026): a listener without hosts.
+  const open = gatewayEgressConfig({ ...env, EGRESS_PORT: '3128', EGRESS_OPEN: '1' })
+  assert.equal(open.anyPublic, true)
+  assert.deepEqual([...open.allow], [])
+  assert.equal(open.clientIp, '10.200.0.3')
+  const both = gatewayEgressConfig({
+    ...env,
+    EGRESS_PORT: '3128',
+    EGRESS_OPEN: '1',
+    EGRESS_ALLOWED_HOSTS: '["api.example.ru:443"]',
+  })
+  assert.equal(both.anyPublic, true)
+  assert.deepEqual([...both.allow], ['api.example.ru:443'])
+  assert.equal(gatewayEgressConfig({ ...env, EGRESS_PORT: '3128', EGRESS_OPEN: '0' }), null)
+  assert.equal(
+    gatewayEgressConfig({
+      ...env,
+      EGRESS_PORT: '3128',
+      EGRESS_ALLOWED_HOSTS: '["api.example.ru:443"]',
+    }).anyPublic,
+    false,
+  )
+  for (const bad of ['yes', 'true', ' 1'])
+    assert.throws(() => gatewayEgressConfig({ ...env, EGRESS_PORT: '3128', EGRESS_OPEN: bad }))
 })
 
 test('a failure of the egress listener after it started closes it alone, never the gateway', async (t) => {

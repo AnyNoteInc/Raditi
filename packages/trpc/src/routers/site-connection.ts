@@ -3,10 +3,13 @@ import { lockUserRow, SiteStack, type Prisma } from '@repo/db'
 import {
   codeSourceInputSchema,
   connectionCheckReasons,
+  connectionTlsModes,
+  databaseEngines,
+  databaseInputSchema,
   siteConnectionLimits,
-  type CodeSourceInput,
+  siteSourceKinds,
   type CodeSourceTarget,
-  type SiteConnectionServices,
+  type PreparedAccess,
 } from '@repo/domain'
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
@@ -22,6 +25,15 @@ import {
   storeSiteAccess,
   type StoredAccess,
 } from '../services/site-access.ts'
+import {
+  accessKindOf,
+  changeSiteDatabase,
+  changeSiteSource,
+  readEditableAccess,
+  unacceptedHostKey,
+  type PinnedSource,
+} from '../services/site-access-change.ts'
+import { replaceAccessVariables } from '../services/site-access-variables.ts'
 import {
   accessibleSite,
   assertConnectionsNotBusy,
@@ -44,10 +56,11 @@ import {
 } from '../services/site-setup.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
-// The wizard «Добавить проект» and the screen «Настраиваем сайт» (docs/plan/39-site-connection-wizard.md).
-// Every procedure is a mutation except `setup`: an access travels in the body of a POST, never in the
-// address of a GET. Creating the project is `project.create`; these check its steps beforehand and handle
-// a failed first import afterwards.
+// The wizard «Добавить проект» and the screen «Настраиваем сайт» (docs/plan/39-site-connection-wizard.md),
+// and «Переменные → Доступы» of a working site. Every procedure is a mutation except `setup` and
+// `editableAccess`: an access travels in the body of a POST, never in the address of a GET. Creating the
+// project is `project.create`; these check its steps beforehand, handle a failed first import afterwards
+// and change an access of a site that works.
 
 const reasonSchema = z.enum(connectionCheckReasons)
 
@@ -70,17 +83,10 @@ const retrySelect = {
   status: true,
   stack: true,
   workspaceId: true,
+  url: true,
   provisioningStages: { ...codeImportOnly, select: { status: true } },
   codeSource: { select: { kind: true, host: true, port: true, hostKey: true } },
 } as const
-
-/** The source a site is connected with, as far as «Изменить доступ» compares a new access with it. */
-interface PinnedSource {
-  kind: string
-  host: string
-  port: number
-  hostKey: string | null
-}
 
 const replaceOutput = z.discriminatedUnion('outcome', [
   z.object({ outcome: z.literal('replaced') }),
@@ -88,31 +94,29 @@ const replaceOutput = z.discriminatedUnion('outcome', [
 ])
 type ReplaceOutcome = z.infer<typeof replaceOutput>
 
-/**
- * An sftp access to the server the site is pinned to — the same host and port — with a key other than the
- * pinned one, which the user did not accept explicitly («Принять новый ключ»): refused as `host_key_changed`
- * with the key the client sent, before any connection or write. null when nothing stands against the input:
- * an accepted key, another server, an ftp access, or a source with no key pinned.
- */
-function unacceptedHostKey(
-  services: SiteConnectionServices,
-  pinned: PinnedSource | null | undefined,
-  source: CodeSourceInput,
-  accepted: boolean,
-): Extract<ReplaceOutcome, { outcome: 'source_refused' }> | null {
-  // Only a kind that pins a key has one in its row (site_code_sources_host_key_check); another kind
-  // of access to the same server is a new access, not a changed key.
-  if (accepted || !pinned || pinned.hostKey === null || pinned.kind !== source.kind) return null
-  const endpoint = services.sources(source.kind).endpoint(source)
-  if (pinned.host !== endpoint.host || pinned.port !== endpoint.port) return null
-  const presented = 'hostKey' in source ? source.hostKey : undefined
-  if (presented === pinned.hostKey) return null
-  return {
-    outcome: 'source_refused',
-    reason: 'host_key_changed',
-    ...(presented === undefined ? {} : { hostKey: presented }),
-  }
-}
+const editableAccessOutput = z.object({
+  canChange: z.boolean(),
+  busy: z.enum(['release', 'unresolved', 'setup']).nullable(),
+  source: z
+    .object({
+      kind: z.enum(siteSourceKinds),
+      host: z.string(),
+      port: z.number().int(),
+      rootPath: z.string().nullable(),
+      tls: z.enum(connectionTlsModes).nullable(),
+      hostKey: z.string().nullable(),
+    })
+    .nullable(),
+  database: z
+    .object({
+      engine: z.enum(databaseEngines),
+      host: z.string(),
+      port: z.number().int(),
+      databaseName: z.string(),
+      tls: z.enum(connectionTlsModes),
+    })
+    .nullable(),
+})
 
 /** The lock of the user's row, as `project.create` takes it: the imports in progress are counted under it. */
 async function lockUser(tx: Pick<Prisma.TransactionClient, '$queryRaw'>, userId: string) {
@@ -239,6 +243,7 @@ export const siteConnectionRouter = router({
 
       const budget = deadline(siteConnectionLimits.createBudgetMs)
       let stored: StoredAccess<CodeSourceTarget>
+      let prepared: PreparedAccess<CodeSourceTarget>
       try {
         const checked = await gatedChecks(services, {
           userId,
@@ -254,9 +259,10 @@ export const siteConnectionRouter = router({
           return { outcome: 'source_refused', ...sourceRefusal(checked.source) }
         }
         const { ok: _ok, ...passed } = checked.source
+        prepared = services.sources(source.kind).prepare(source, passed)
         stored = await storeSiteAccess(services.secrets, {
           siteId: site.id,
-          prepared: services.sources(source.kind).prepare(source, passed),
+          prepared,
           signal: budget.signal,
         })
       } finally {
@@ -265,6 +271,7 @@ export const siteConnectionRouter = router({
 
       const { accessKind, target, vaultPath, version } = stored
       let replacedKind = false
+      let previousSourceKind: string | null = null
       let outcome: ReplaceOutcome
       try {
         outcome = await ctx.prisma.$transaction(
@@ -289,6 +296,7 @@ export const siteConnectionRouter = router({
             `
             const refused = unacceptedHostKey(services, current, source, accepted)
             if (refused) return refused
+            previousSourceKind = current?.kind ?? null
             await assertConnectionsNotBusy(tx, userId)
             const ref = await tx.credentialRef.upsert({
               where: { vaultPath },
@@ -343,6 +351,73 @@ export const siteConnectionRouter = router({
       }
       // A key refused under the lock leaves the version just written without a reference too.
       if (outcome.outcome !== 'replaced' || replacedKind) logOrphanedSecrets(site.id)
+      if (outcome.outcome === 'replaced')
+        // The accesses are the site's variables too (owner's decision of 26.10.2026).
+        await replaceAccessVariables(ctx.prisma, services.secrets, {
+          siteId: site.id,
+          userId,
+          siteUrl: site.url,
+          prepared,
+          previousAccessKind: accessKindOf(services, previousSourceKind),
+          reference: { vaultPath: stored.vaultPath, version: stored.version },
+          now: new Date(),
+        })
       return outcome
     }),
+
+  /**
+   * «Переменные → Доступы»: whether the user may change the accesses of the site, why not now, and the
+   * public columns a form starts from — never a login or a secret. Reads PostgreSQL only.
+   */
+  editableAccess: consentedProcedure
+    .input(z.strictObject({ id: z.uuid() }))
+    .output(editableAccessOutput)
+    .query(({ ctx, input }) => readEditableAccess(ctx.prisma, ctx.user.id, input.id)),
+
+  /**
+   * «Изменить» the access to the files of a working site (owner's request of 26.10.2026): saved only once
+   * the check with it passed — as at creation, an sftp key required and compared with the pinned one, and
+   * `acceptNewHostKey` for a key the user saw change. Nothing is queued; refused while a release or the
+   * first import goes on (services/site-access-change.ts).
+   */
+  changeSource: consentedProcedure
+    .input(
+      z.strictObject({
+        id: z.uuid(),
+        source: codeSourceInputSchema,
+        acceptNewHostKey: z.boolean().optional(),
+      }),
+    )
+    .output(replaceOutput)
+    .mutation(({ ctx, input }) =>
+      changeSiteSource({
+        db: ctx.prisma,
+        services: requireSiteConnections(ctx.siteConnections),
+        userId: ctx.user.id,
+        headers: ctx.headers,
+        siteId: input.id,
+        source: input.source,
+        acceptNewHostKey: input.acceptNewHostKey === true,
+      }),
+    ),
+
+  /** «Изменить» the access to the database of a working site: saved only once `SELECT 1` passed with it. */
+  changeDatabase: consentedProcedure
+    .input(z.strictObject({ id: z.uuid(), database: databaseInputSchema }))
+    .output(
+      z.discriminatedUnion('outcome', [
+        z.object({ outcome: z.literal('replaced') }),
+        z.object({ outcome: z.literal('database_refused'), reason: reasonSchema }),
+      ]),
+    )
+    .mutation(({ ctx, input }) =>
+      changeSiteDatabase({
+        db: ctx.prisma,
+        services: requireSiteConnections(ctx.siteConnections),
+        userId: ctx.user.id,
+        headers: ctx.headers,
+        siteId: input.id,
+        database: input.database,
+      }),
+    ),
 })

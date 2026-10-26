@@ -39,8 +39,8 @@ describe('the setup screen', () => {
 
   it('names the ceilings of an import as the domain has them', () => {
     expect(siteImportLimits.files).toBe(100_000)
-    expect(siteImportLimits.treeBytes).toBe(128 * 1024 * 1024)
-    expect(setupErrorText('source_too_large', context)).toContain('100 000 файлов и до 128 МБ')
+    expect(siteImportLimits.treeBytes).toBe(1024 * 1024 * 1024)
+    expect(setupErrorText('source_too_large', context)).toContain('100 000 файлов и до 1 ГБ')
     expect(RETRIES_PER_HOUR).toBe(siteConnectionLimits.retriesPerHour)
   })
 
@@ -51,5 +51,11 @@ describe('the setup screen', () => {
     expect(setupErrorText('tls_required', { ...context, kind: 'ftp' })).toBe(
       'Сервер больше не принимает подключения без шифрования. Укажите доступ заново и выберите FTPS в поле «Защита соединения».',
     )
+  })
+
+  it('says that the copying broke, not that the listing failed, once the access was saved', () => {
+    expect(setupErrorText('transfer_failed', context)).toMatch(/пока мы копировали файлы/)
+    expect(setupErrorText('transfer_failed', context)).not.toMatch(/список файлов/)
+    expect(setupErrorText('unreachable', context)).toMatch(/перестал принимать подключения/)
   })
 })

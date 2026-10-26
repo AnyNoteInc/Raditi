@@ -28,7 +28,8 @@ import { TaskEventTurnJournal } from './turn-journal.ts'
 import { TurnReconciler } from './turn-reconciler.ts'
 import { TurnRuntime } from './turn-runtime.ts'
 import { TurnSupervisor } from './turn-supervisor.ts'
-import { TURN_EXECUTOR } from './turns.tokens.ts'
+import { TURN_EXECUTOR, WARM_SANDBOXES } from './turns.tokens.ts'
+import { CoreWarmSandboxes } from './warm-turn-sandboxes.ts'
 
 type RecoveryAssignments = ConstructorParameters<typeof TurnExecRecovery>[0]['assignments']
 
@@ -41,14 +42,19 @@ export const remoteTurnExecutor: Provider = {
 /** Core's own Docker (SandboxModule): the PoC and tests, never production. */
 export const localTurnExecutor: Provider = {
   provide: TURN_EXECUTOR,
-  useFactory: (sandboxes: SandboxProvider, drivers: AgentDriverRegistry) =>
+  useFactory: (
+    sandboxes: SandboxProvider,
+    drivers: AgentDriverRegistry,
+    warm: CoreWarmSandboxes | null,
+  ) =>
     new LocalTurnExecutor({
       sandboxes,
       parser: (id) => drivers.get(id),
       transport: new SandboxSnapshotTransport(),
       transfer: fetchPresignedTransfer(),
+      ...(warm ? { warm } : {}),
     }),
-  inject: [SANDBOX_PROVIDER, AGENT_DRIVERS],
+  inject: [SANDBOX_PROVIDER, AGENT_DRIVERS, { token: WARM_SANDBOXES, optional: true }],
 }
 
 /**
@@ -60,6 +66,19 @@ export const localTurnExecutor: Provider = {
 export const turnEngineProviders: Provider[] = [
   // One per process, shared by the supervisor and recovery: a turn driven here is never taken over.
   { provide: LiveTurns, useFactory: () => new LiveTurns() },
+  {
+    // Core's own Docker only (spec §8, «Тёплая песочница»): runner VMs remove every container.
+    provide: WARM_SANDBOXES,
+    useFactory: (
+      config: CoreConfig,
+      sandboxes: SandboxProvider | null,
+      prisma: PrismaClient,
+    ): CoreWarmSandboxes | null =>
+      config.turnExecutor === 'local' && sandboxes && config.sandboxWarmMs > 0
+        ? new CoreWarmSandboxes(sandboxes, prisma, config.sandboxWarmMs)
+        : null,
+    inject: [CORE_CONFIG, { token: SANDBOX_PROVIDER, optional: true }, PRISMA],
+  },
   {
     provide: TaskEventTurnJournal,
     useFactory: (prisma: PrismaClient) => new TaskEventTurnJournal(prisma),
@@ -152,12 +171,13 @@ export const turnEngineProviders: Provider[] = [
       leases: SiteLeaseStore,
       assignments: TurnAssignmentStore,
       background: boolean,
+      warm: CoreWarmSandboxes | null,
     ) =>
       new TurnRuntime(
         recovery,
         // Only core's own Docker: with runner VMs each runner removes what is its own.
         config.turnExecutor === 'local' && sandboxes
-          ? new TurnReconciler(sandboxes, leases, assignments)
+          ? new TurnReconciler(sandboxes, leases, assignments, (id) => warm?.holds(id) ?? false)
           : null,
         background,
       ),
@@ -168,6 +188,7 @@ export const turnEngineProviders: Provider[] = [
       SITE_LEASES,
       TURN_ASSIGNMENTS,
       BACKGROUND_JOBS,
+      { token: WARM_SANDBOXES, optional: true },
     ],
   },
 ]

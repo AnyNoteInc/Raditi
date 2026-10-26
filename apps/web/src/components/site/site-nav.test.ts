@@ -22,13 +22,14 @@ import {
 const id = '0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17'
 
 describe('site navigation', () => {
-  it('lists the six sections in rail order, four of them on the phone bar', () => {
+  it('lists the seven sections in rail order, four of them on the phone bar', () => {
     expect(siteNav.map((entry) => entry.section)).toEqual([
-      'chat',
       'overview',
+      'chat',
       'changes',
       'runs',
       'database',
+      'vault',
       'settings',
     ])
     expect(siteNav.filter((entry) => entry.primary)).toHaveLength(4)
@@ -38,6 +39,7 @@ describe('site navigation', () => {
     [`/projects/${id}/chat`, 'chat'],
     [`/projects/${id}/chat/new`, 'chat'],
     [`/projects/${id}/runs/42`, 'runs'],
+    [`/projects/${id}/vault`, 'vault'],
     [`/projects/${id}/settings`, 'settings'],
   ] as const)('lights the section of %s', (path, section) => {
     expect(activeSiteSection(path, id)).toBe(section)
@@ -78,8 +80,15 @@ describe('site navigation', () => {
     expect(siteEntryHref(id, 'settings')).toBe(`/projects/${id}/settings`)
   })
 
-  it('lays only the chat out as a list beside the content', () => {
-    expect(siteNav.map((entry) => entry.section).filter(hasSiteList)).toEqual(['chat'])
+  it('lays the chat, the changes and the runs out as a list beside the content', () => {
+    expect(siteNav.map((entry) => entry.section).filter(hasSiteList)).toEqual([
+      'chat',
+      'changes',
+      'runs',
+      'database',
+      'vault',
+      'settings',
+    ])
     expect(hasSiteList(undefined)).toBe(false)
   })
 
@@ -89,8 +98,13 @@ describe('site navigation', () => {
     [`/projects/${id}/chat/42`, true],
     [`/projects/${id}/chat`, false],
     [`/projects/${id}/chat/`, false],
-    [`/projects/${id}/runs/42`, false],
+    [`/projects/${id}/runs/42`, true],
+    [`/projects/${id}/runs`, false],
+    [`/projects/${id}/changes/initial`, true],
+    [`/projects/${id}/database/backups`, true],
+    [`/projects/${id}/vault`, false],
     [`/projects/${id}/settings`, false],
+    [`/projects/${id}/settings/danger`, true],
     [`/projects/${id}`, false],
   ] as const)('knows whether %s is an item opened from a list', (path, open) => {
     expect(siteItemOpen(path, id)).toBe(open)

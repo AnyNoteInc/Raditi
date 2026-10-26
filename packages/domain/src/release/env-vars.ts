@@ -49,8 +49,14 @@ export const refusedEnvVarNames = Object.freeze([
 const REFUSED_SUFFIX = '_PROXY'
 
 export const envVarLimits = Object.freeze({
-  /** Shorter values are too easy to find anywhere, and masking them would garble the text. */
-  valueMinBytes: 8,
+  /** Any value that is not empty (owner's decision of 25.10.2026). */
+  valueMinBytes: 1,
+  /**
+   * The shortest value that is masked and refused in kept and published text
+   * (`envValueForms`): a shorter one is too easy to find anywhere — masking it would garble the
+   * feed and refuse nearly every change — and it is no secret either.
+   */
+  maskMinBytes: 8,
   valueMaxBytes: 8 * 1024,
   perSite: 64,
 })
@@ -79,7 +85,7 @@ export const envVarNameSchema = z.string().superRefine((name, ctx) => {
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
 
-/** A value: 8 bytes to 8 KiB of well-formed text without NUL. Never logged or returned. */
+/** A value: 1 byte to 8 KiB of well-formed text without NUL. Never logged or returned. */
 export const envVarValueSchema = z
   .string()
   .refine((value) => value.isWellFormed() && !value.includes('\0'), 'expected text')
@@ -172,4 +178,71 @@ export function envVarReachesPreview(
   dataClass: 'synthetic' | 'client',
 ): boolean {
   return variable.toPreview && envVarReachesAgent(variable, dataClass)
+}
+
+/**
+ * The fields of each kind of site access and the variable each becomes (owner's decision of
+ * 26.10.2026: the accesses of a site are its variables too, given to the agent's commands and the
+ * preview like any other). The folder of the site is never one: it is often the site's own domain
+ * (`укк-жкх.рф`), and a value of `maskMinBytes` or more is masked in every kept text and refused
+ * in every publication — the domain would vanish from the feed and every change would be refused.
+ * The database and git names take `SITE_`: `DB_` and `GIT_` are what WordPress and git read
+ * (`refusedEnvVarPrefixes`).
+ */
+const accessVariableFields: Readonly<Record<string, readonly (readonly [string, string])[]>> = {
+  ftp: [
+    ['host', 'FTP_HOST'],
+    ['port', 'FTP_PORT'],
+    ['username', 'FTP_USER'],
+    ['password', 'FTP_PASSWORD'],
+  ],
+  ssh: [
+    ['host', 'SFTP_HOST'],
+    ['port', 'SFTP_PORT'],
+    ['username', 'SFTP_USER'],
+    ['password', 'SFTP_PASSWORD'],
+    ['privateKey', 'SFTP_PRIVATE_KEY'],
+    ['passphrase', 'SFTP_PASSPHRASE'],
+  ],
+  git: [
+    ['url', 'SITE_GIT_URL'],
+    ['username', 'SITE_GIT_USER'],
+    ['token', 'SITE_GIT_TOKEN'],
+  ],
+  db: [
+    ['host', 'SITE_DB_HOST'],
+    ['port', 'SITE_DB_PORT'],
+    ['database', 'SITE_DB_NAME'],
+    ['username', 'SITE_DB_USER'],
+    ['password', 'SITE_DB_PASSWORD'],
+  ],
+}
+
+/** Every name an access of this kind may become, whichever fields it has. */
+export const siteAccessVariableNames = (accessKind: string): string[] =>
+  (accessVariableFields[accessKind] ?? []).map(([, name]) => name)
+
+/**
+ * The variables of one access: its secret as the wizard stored it (`PreparedAccess.secret`), the
+ * fields of its kind that are set. A value of `maskMinBytes` or more that the site's own address
+ * holds (`siteHosts`: the host of its URL, as typed and as punycode) is left out for the reason the
+ * folder is: masking it would garble the feed and refuse publications. A value no variable may
+ * hold is left out too.
+ */
+export function siteAccessVariables(
+  accessKind: string,
+  secret: Readonly<Record<string, string>>,
+  siteHosts: readonly string[],
+): { name: string; value: string }[] {
+  const hosts = siteHosts.map((host) => host.toLowerCase()).filter((host) => host.length > 0)
+  return (accessVariableFields[accessKind] ?? []).flatMap(([field, name]) => {
+    const value = secret[field]
+    if (typeof value !== 'string' || value.length === 0) return []
+    if (!envVarValueSchema.safeParse(value).success || envVarNameProblem(name) !== null) return []
+    // A shorter value is never masked (`envValueForms`): it may stay even if the host holds it.
+    const lower = value.toLowerCase()
+    if (utf8Bytes(value) >= envVarLimits.maskMinBytes && hosts.some((host) => host.includes(lower)))
+      return []
+    return [{ name, value }]
+  })
 }

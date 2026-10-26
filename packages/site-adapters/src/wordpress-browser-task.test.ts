@@ -793,6 +793,7 @@ describe('wordpressAdapter.browserGuide', () => {
       'Submit for Review',
       'Never type or guess a login or',
       'never start a second one',
+      'web_screenshot',
     ])
       expect(guide).toContain(fact)
   })

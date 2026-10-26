@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { plain } from '@/components/billing/testing'
 
 import type { CandidateHead, CandidateView, FileDiffView, PreviewHead } from './chat-types'
-import { PreviewPane, type PaneTab } from './preview-pane'
+import { paneTabsOf, PreviewPane, type PaneTab } from './preview-pane'
 import { CANDIDATE_ID, candidateHead, TASK_ID } from './testing'
 
 const { ticket, candidate, fileDiff } = vi.hoisted(() => ({
@@ -121,6 +121,7 @@ function showPane(props: {
   preview?: PreviewHead | null
   candidate?: CandidateHead | null
   tab?: PaneTab
+  tabs?: readonly PaneTab[]
   canReset?: boolean
 }) {
   const onTab = vi.fn<(tab: PaneTab) => void>()
@@ -133,6 +134,7 @@ function showPane(props: {
         candidate={props.candidate === undefined ? candidateHead : props.candidate}
         tab={props.tab ?? 'preview'}
         onTab={onTab}
+        {...(props.tabs ? { tabs: props.tabs } : {})}
         visible
         canReset={props.canReset ?? true}
         onReset={onReset}
@@ -162,6 +164,45 @@ beforeEach(() => {
       '-  color: red;',
       '+  color: <script>alert(1)</script>;',
     ].join('\n'),
+  })
+})
+
+describe("the tabs it has something for (owner's request of 26.10.2026)", () => {
+  it('opens only for a preview in use, files or records to change, and checks', () => {
+    expect(paneTabsOf(previewOf(), candidateHead)).toEqual([
+      'preview',
+      'files',
+      'database',
+      'checks',
+    ])
+    expect(paneTabsOf(null, null)).toEqual([])
+    // A preview that cannot be shown, or is gone, is not in use.
+    expect(paneTabsOf(previewOf({ status: 'unavailable' }), null)).toEqual([])
+    expect(paneTabsOf(previewOf({ status: 'destroyed' }), null)).toEqual([])
+    expect(paneTabsOf(previewOf({ status: 'building' }), null)).toEqual(['preview'])
+    // Only the files change: no tab of the records, none of the checks yet.
+    expect(
+      paneTabsOf(null, {
+        ...candidateHead,
+        counts: { files: { added: 0, modified: 1, deleted: 0 }, media: 0, records: 0 },
+        checks: { pending: 0, passed: 0, failed: 0, stale: 0 },
+      }),
+    ).toEqual(['files'])
+    expect(paneTabsOf(null, { ...candidateHead, counts: null })).toEqual(['checks'])
+  })
+
+  it('draws the tabs as icons named by their labels, the changes with their numbers', () => {
+    showPane({ tabs: ['files', 'database'], tab: 'preview' })
+    const tabs = within(screen.getByRole('tablist', { name: 'Разделы изменений' })).getAllByRole(
+      'tab',
+    )
+    expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual(['Файлы', 'База данных'])
+    expect(tabs.map((tab) => tab.getAttribute('title'))).toEqual(['Файлы', 'База данных'])
+    // Two files changed and one added, a medium besides; three records.
+    expect(tabs.map((tab) => plain(tab.textContent))).toEqual(['4', '3'])
+    // The tab asked for has nothing now: the first that has something is shown.
+    expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: 'Предпросмотр' })).toBeNull()
   })
 })
 

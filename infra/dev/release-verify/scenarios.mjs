@@ -1071,7 +1071,8 @@ export async function runScenarios(stand) {
   rt.begin('S8a', 'a database plan of every kind: a table, a setting, a new page, a text')
   // The turn of dialog D (S5) runs once the release of B let the site go, on the script of a
   // question; the scripted model answers one turn at a time, so the next script waits for it.
-  await taskReaches(dialogD.taskId, 'done', { timeoutMs: 8 * MINUTE })
+  // Its answer changes nothing: the dialog stays open for the next words (owner, 26.10.2026).
+  await taskReaches(dialogD.taskId, 'awaiting_user', { timeoutMs: 8 * MINUTE })
   rt.note(
     'S8a scripts its turn once the waiting turn of dialog D is over: a precondition of the scripted model, which answers one turn at a time',
   )
@@ -2078,13 +2079,21 @@ export async function runScenarios(stand) {
     `the end of the release woke it: it left the queue ${watched.left === null || watched.freed === null ? '—' : Math.round((watched.left - watched.freed) / 1000)} s after the release let the site go (its own retry is at most 2 min away)`,
     { freed: watched.freed, left: watched.left, wake: wake?.dedupeKey },
   )
-  const doneD = await taskReaches(dialogD.taskId, 'done', { timeoutMs: 8 * MINUTE })
+  const answeredD = await taskReaches(dialogD.taskId, 'awaiting_user', { timeoutMs: 8 * MINUTE })
+  const resultD = await db.taskEvent.findFirst({
+    where: { taskId: dialogD.taskId, type: 'feed.result' },
+    orderBy: { id: 'desc' },
+  })
   rt.check(
-    doneD.status === 'done' && doneD.waiting === null,
-    'the waiting turn ran after the release let the site go: the dialog is done',
+    answeredD.status === 'awaiting_user' &&
+      answeredD.waiting === null &&
+      resultD?.payload?.next === 'awaiting_user',
+    'the waiting turn ran after the release let the site go: its answer changed nothing, and the dialog stays open for the next words (owner, 26.10.2026)',
+    { status: answeredD.status, next: resultD?.payload?.next },
   )
   for (const [label, dialog] of [
     ['C', dialogC],
+    ['D', dialogD],
     ['E', dialogE],
     ['F', dialogF],
     ['H', dialogH],

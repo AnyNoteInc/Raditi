@@ -266,10 +266,15 @@ function limit(max, exceeded) {
 /**
  * The client egress proxy of the turn (docs/plan/53-chat-preview-release.md, Р13) as the
  * gateway's environment names it: a listener of its own (client-egress.mjs) on EGRESS_PORT of
- * the gateway's address, for the sandbox's address only. null — the policy lists no host.
+ * the gateway's address, for the sandbox's address only. EGRESS_OPEN=1 — the open internet of
+ * the agent (owner's decision of 26.10.2026): every public host besides the listed ones. null —
+ * the policy lists no host and keeps the internet closed.
  */
 export function gatewayEgressConfig(env) {
-  if (!env.EGRESS_ALLOWED_HOSTS) return null
+  const open = env.EGRESS_OPEN === '1'
+  if (env.EGRESS_OPEN !== undefined && env.EGRESS_OPEN !== '' && !open && env.EGRESS_OPEN !== '0')
+    throw new Error('EGRESS_OPEN must be 1 or 0')
+  if (!env.EGRESS_ALLOWED_HOSTS && !open) return null
   if (env.EGRESS_PORT === '8080') throw new Error('The egress proxy needs a port of its own')
   return clientEgressConfig({
     LISTEN_HOST: env.LISTEN_HOST,
@@ -277,6 +282,7 @@ export function gatewayEgressConfig(env) {
     ALLOWED_HOSTS: env.EGRESS_ALLOWED_HOSTS,
     REFUSED_SUBNETS: env.EGRESS_REFUSED_SUBNETS,
     CLIENT_IPV4: env.CLIENT_IPV4,
+    ALLOW_PUBLIC: open ? '1' : '',
   })
 }
 

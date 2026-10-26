@@ -2,6 +2,7 @@
 // only on this package; apps compose them. Business logic moves here task by task.
 export * from './app-env.ts'
 export * from './async.ts'
+export * from './agent/skills.ts'
 export * from './billing/period.ts'
 export * from './billing/subscription.ts'
 export * from './billing/order.ts'

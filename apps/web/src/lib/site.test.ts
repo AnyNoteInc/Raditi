@@ -56,7 +56,7 @@ describe('the site of a section page', () => {
     'sends a %s site from every other section to the overview',
     async (status) => {
       mocks.get.mockResolvedValue(site(status))
-      for (const section of ['chat', 'changes', 'runs', 'database', 'settings'] as const) {
+      for (const section of ['chat', 'changes', 'runs', 'database', 'vault', 'settings'] as const) {
         await expect(loadSiteSection(id, section)).rejects.toThrow(
           `REDIRECT /projects/${id}/overview`,
         )
@@ -73,6 +73,7 @@ describe('the site of a section page', () => {
       'changes',
       'runs',
       'database',
+      'vault',
       'settings',
     ] as const) {
       await expect(loadSiteSection(id, section)).resolves.toMatchObject({ id, status })
@@ -83,7 +84,7 @@ describe('the site of a section page', () => {
     'sends every other section of a site whose setup is %s to the overview',
     async (setup) => {
       mocks.get.mockResolvedValue(site('onboarding', setup))
-      for (const section of ['chat', 'changes', 'runs', 'database', 'settings'] as const) {
+      for (const section of ['chat', 'changes', 'runs', 'database', 'vault', 'settings'] as const) {
         await expect(loadSiteSection(id, section)).rejects.toThrow(
           `REDIRECT /projects/${id}/overview`,
         )
@@ -94,7 +95,7 @@ describe('the site of a section page', () => {
 
   it('opens every section of a site whose setup is done', async () => {
     mocks.get.mockResolvedValue(site('onboarding', 'done'))
-    for (const section of ['chat', 'changes', 'runs', 'database', 'settings'] as const) {
+    for (const section of ['chat', 'changes', 'runs', 'database', 'vault', 'settings'] as const) {
       await expect(loadSiteSection(id, section)).resolves.toMatchObject({ setup: 'done' })
     }
   })

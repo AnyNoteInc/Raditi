@@ -118,7 +118,11 @@ describe('project.get', () => {
     await caller.project.get({ id: siteId })
     expect(db.site.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: siteId, workspace: { members: { some: { userId: user.id } } } },
+        where: {
+          id: siteId,
+          deletedAt: null,
+          workspace: { members: { some: { userId: user.id } } },
+        },
       }),
     )
   })
@@ -204,7 +208,11 @@ describe('project.credentials', () => {
     expect(query).toContain('"in":["ssh","ftp","wp","browser","db"]')
     expect(db.site.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: siteId, workspace: { members: { some: { userId: user.id } } } },
+        where: {
+          id: siteId,
+          deletedAt: null,
+          workspace: { members: { some: { userId: user.id } } },
+        },
       }),
     )
   })

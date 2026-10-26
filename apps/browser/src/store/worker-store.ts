@@ -1,6 +1,7 @@
 import {
   browserViewerAllowed,
   clearBrowserHelp,
+  insertFeedEvent,
   closeBrowserSession,
   markBrowserSessionReady,
   markBrowserSessionWrote,
@@ -88,6 +89,19 @@ export interface BrowserWorkerStore {
   }): Promise<BrowserCheckpointRecord>
   attachment(input: { id: string; taskId: string }): Promise<StoredAttachment | null>
   viewerAllowed(input: { sessionId: string; userId: string }): Promise<boolean>
+  /** Snapshots the dialog of a task shows so far (`feed.screenshot` rows). */
+  screenshotCount(taskId: string): Promise<number>
+  /**
+   * The row of the dialog that shows a snapshot stored in the inbox, while the session of the task
+   * still holds a browser; answers its number among the task's snapshots, null — no such session.
+   */
+  recordScreenshot(input: {
+    taskId: string
+    sessionId: string
+    screenshotId: string
+    width: number
+    height: number
+  }): Promise<number | null>
 }
 
 /** The store on the app's Prisma client, through the helpers of @repo/db. */
@@ -189,4 +203,46 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
   viewerAllowed(input: { sessionId: string; userId: string }): Promise<boolean> {
     return browserViewerAllowed(this.#db, input)
   }
+
+  screenshotCount(taskId: string): Promise<number> {
+    return this.#db.taskEvent.count({ where: { taskId, type: SCREENSHOT_ROW } })
+  }
+
+  recordScreenshot(input: {
+    taskId: string
+    sessionId: string
+    screenshotId: string
+    width: number
+    height: number
+  }): Promise<number | null> {
+    return this.#db.$transaction(async (tx) => {
+      // The row of the session locks it: a close that comes meanwhile waits, or came first.
+      const live = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM browser_sessions
+        WHERE id = ${input.sessionId}::uuid AND task_id = ${input.taskId}::uuid
+          AND status IN ('starting', 'ready')
+        FOR UPDATE`
+      if (live.length === 0) return null
+      const number =
+        (await tx.taskEvent.count({
+          where: { taskId: input.taskId, type: SCREENSHOT_ROW },
+        })) + 1
+      await insertFeedEvent(tx, {
+        taskId: input.taskId,
+        row: {
+          type: SCREENSHOT_ROW,
+          payload: {
+            v: 1,
+            screenshotId: input.screenshotId,
+            number,
+            width: input.width,
+            height: input.height,
+          },
+        },
+      })
+      return number
+    })
+  }
 }
+
+const SCREENSHOT_ROW = 'feed.screenshot'

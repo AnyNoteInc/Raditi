@@ -3,10 +3,20 @@ import Typography from '@mui/material/Typography'
 import type { ReactNode } from 'react'
 
 /** The heading every section of the site page starts with. */
-export function SectionTitle({ children }: { children: ReactNode }) {
+export function SectionTitle({
+  id,
+  level = 'h1',
+  children,
+}: {
+  id?: string
+  /** `h2` where the page's own heading is elsewhere: beside the list of a section. */
+  level?: 'h1' | 'h2'
+  children: ReactNode
+}) {
   return (
     <Typography
-      component="h1"
+      component={level}
+      id={id}
       sx={{ fontSize: { xs: 26, md: 30 }, fontWeight: 600, lineHeight: 1.25 }}
     >
       {children}
@@ -20,7 +30,7 @@ export function SectionTitle({ children }: { children: ReactNode }) {
  */
 export function SectionEmpty({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <Box sx={{ maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <SectionTitle>{title}</SectionTitle>
       <Typography color="text.secondary">{children}</Typography>
     </Box>

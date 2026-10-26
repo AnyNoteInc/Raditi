@@ -596,6 +596,8 @@ export function roleEnvironment(role, context) {
         REDIS_URL: context.redisUrl,
         LLM_CONTROL_URL: origin(ports.llm),
         TURN_EXECUTOR: 'local',
+        // Every turn in a container of its own, as the scenarios count them: no warm sandbox.
+        SANDBOX_WARM_MINUTES: '0',
         SANDBOX_RUNTIME: 'runc',
         SANDBOX_DOCKER_SOCKET: context.socket,
         SANDBOX_IMAGE: context.images.sandbox,
