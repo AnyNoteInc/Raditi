@@ -153,7 +153,13 @@ export interface BrowserWorkerConfig {
 /** Where and how previews of dialogs run (docs/plan/53-chat-preview-release.md, Р17, Р18). */
 export interface PreviewsConfig {
   address: PreviewAddress
+  /** PREVIEW_TTL_HOURS: the life of a waiting dialog's preview after its last view (Р8). */
   ttlHours: number
+  /**
+   * PREVIEW_IDLE_MINUTES: a served preview stops after this long without a view or a turn of its
+   * dialog (owner's answer of 26.10.2026).
+   */
+  idleMinutes: number
   /** core's own Docker (never in production until M10) or a runner VM. */
   executor: PreviewExecutorKind
   runtime: PreviewRuntimeKind
@@ -277,6 +283,9 @@ const ownEnvSchema = z.object({
   PREVIEW_TTL_HOURS: envVar(
     z.coerce.number().int().min(1).max(720).default(previewDefaults.ttlHours),
   ),
+  PREVIEW_IDLE_MINUTES: envVar(
+    z.coerce.number().int().min(1).max(1440).default(previewDefaults.idleMinutes),
+  ),
   PREVIEW_EXECUTOR: envVar(z.enum(previewExecutorKinds).optional()),
   PREVIEW_RUNTIME: envVar(z.enum(previewRuntimes).optional()),
   PREVIEW_WEB_IMAGES: envVar(z.string().optional()),
@@ -372,6 +381,7 @@ export function loadConfig(env: Env): CoreConfig {
         'BILLING_PAST_DUE_DAYS',
         'BILLING_TICK_SECONDS',
         'PREVIEW_TTL_HOURS',
+        'PREVIEW_IDLE_MINUTES',
         'PREVIEW_GATEWAY_PORT',
         'PREVIEW_EXECUTOR',
         'PREVIEW_RUNTIME',
@@ -563,6 +573,7 @@ export function loadConfig(env: Env): CoreConfig {
       previews = {
         address: previewAddress,
         ttlHours: own.PREVIEW_TTL_HOURS,
+        idleMinutes: own.PREVIEW_IDLE_MINUTES,
         executor,
         runtime,
         webImages: web.images,

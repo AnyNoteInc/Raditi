@@ -385,12 +385,13 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       expect(request.input.prompt).toBe('Поменяйте телефон в шапке')
       expect(policy).toMatchObject({ backend: sampleBackendId, modelSlug: sampleModelSlug })
       expect(Number(policy.budgetRub)).toBeGreaterThan(0)
-      // Nothing changed and nothing asked: the dialog waits for the next words (26.10.2026).
+      // Nothing changed and nothing asked: the dialog waits for the next words, and the pass is
+      // charged when it ends (owner's answers of 26.10.2026).
       const task = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
       expect(task.status).toBe('awaiting_user')
       expect(
         (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).every(
-          (hold) => hold.status === 'active',
+          (hold) => hold.status === 'captured',
         ),
       ).toBe(true)
     })
@@ -416,7 +417,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         verify: vi.fn(async (_taskId: string) => true),
       })
 
-      it('runs on a core without git: opens the browser, plans no repository, verifies, ends done', async () => {
+      it('runs on a core without git: opens the browser, plans no repository, verifies, answers', async () => {
         await rate()
         const dialog = await queued({ reserve: true, browser: true })
         const browser = browserSessions()
@@ -493,16 +494,19 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         expect(request.input.prompt).toContain('Поменяйте телефон в шапке')
         expect(request.input.prompt).toContain('Вход по адресу /login')
         expect(request.context.instructions).toContain('cloud browser')
+        // Like a dialog of «Работа» (owner's answer of 26.10.2026): the answer leaves the dialog
+        // open, the pass is charged, and the browser lives on for the next words.
         const task = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
-        expect(task.status).toBe('done')
+        expect(task.status).toBe('awaiting_user')
         const [result] = await db.taskEvent.findMany({
           where: { taskId: dialog.taskId, type: 'feed.result' },
         })
         expect(result!.payload).toMatchObject({
           site: 'changed',
+          next: 'awaiting_user',
           objects: [{ kind: 'post', status: 'draft', title: 'Скидки', editUrl }],
         })
-        expect(close).toHaveBeenCalledExactlyOnceWith(dialog.taskId, 'task_done')
+        expect(close).not.toHaveBeenCalled()
       })
 
       it('refuses the task when no browser worker is configured, before its turn', async () => {

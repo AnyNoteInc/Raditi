@@ -435,8 +435,10 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
       return 'Задания для этого сайта пока не принимаются: сайт ещё не подключён или его работа приостановлена. Подробности — в разделе «Обзор»'
     if (reason === 'not_synthetic')
       return 'Это тестовая среда: здесь принимаются задания только для проверочных сайтов. Настоящие данные в неё не передаются'
+    // A new dialog and «Попробовать ещё» alike: the model of the chosen reasoning has no profile
+    // with a price right now.
     if (reason === 'class_unavailable')
-      return 'Сейчас мы не можем повторить работу. Попробуйте ещё раз немного позже или напишите агенту, что сделать'
+      return 'Сейчас агент на этом уровне размышления недоступен. Попробуйте ещё раз немного позже'
     if (reason === 'browser_unavailable')
       return 'Задания в браузере сейчас не принимаются. Попробуйте ещё раз немного позже'
     if (reason === 'browser_insecure')

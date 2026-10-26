@@ -198,6 +198,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
     config = {
       address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
       ttlHours: 72,
+      idleMinutes: 30,
       executor: 'local',
       runtime: 'runc',
       webImages: { '8.3': await digest(WEB) },

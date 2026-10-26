@@ -42,6 +42,7 @@ import {
   recordValues,
 } from '../testing/previews.ts'
 import { PreviewManager } from './preview-manager.ts'
+import { wakeStoppedPreview } from './preview-wake.ts'
 import { previewRecordOf } from './preview-record.ts'
 import { createPreviewSiteSources } from './site-sources.ts'
 
@@ -68,6 +69,7 @@ const turnCredentials = {
 const config: PreviewsConfig = {
   address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
   ttlHours: 72,
+  idleMinutes: 30,
   executor: 'local',
   runtime: 'runc',
   webImages: { '8.3': `registry.invalid/web@sha256:${'1'.repeat(64)}` },
@@ -794,6 +796,70 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     expect(row.expiresAt.getTime()).toBeGreaterThan(Date.now() + 70 * 3_600_000)
     // The stopped containers kept their volume: only the difference is written.
     expect(f.runtime.writes.at(-1)).toMatchObject({ replace: false })
+  })
+
+  it('stops a served preview no one used and builds it again for the next pass of its dialog', async () => {
+    const { site, task, preview } = await dialog()
+    const f = manager()
+    await databaseAccess(f, site.id)
+    await f.m.refresh(preview.id, { requested: true })
+    const aside = async () =>
+      db.$executeRaw`UPDATE preview_environments SET updated_at = now() - interval '5 minutes'
+        WHERE id = ${preview.id}::uuid`
+    // Just made: used, it serves on.
+    await aside()
+    await f.m.sweep()
+    await f.m.idle()
+    expect(
+      await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+    ).toMatchObject({ status: 'ready' })
+
+    // Made, opened and viewed longer ago than PREVIEW_IDLE_MINUTES (30): stopped, its time to
+    // live untouched — the reserve and the copy still follow it.
+    const long = new Date(Date.now() - 31 * 60_000)
+    await db.previewTicket.create({
+      data: {
+        previewId: preview.id,
+        kind: 'browser',
+        tokenHash: hash('8'),
+        expiresAt: long,
+        createdAt: long,
+      },
+    })
+    await db.$executeRaw`UPDATE preview_environments
+      SET created_at = ${long}, last_viewed_at = ${long} WHERE id = ${preview.id}::uuid`
+    await aside()
+    const { expiresAt } = await db.previewEnvironment.findUniqueOrThrow({
+      where: { id: preview.id },
+    })
+    await f.m.sweep()
+    await f.m.idle()
+    const stopped = await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } })
+    expect(stopped).toMatchObject({ status: 'expired', upstreamHost: null, expiresAt })
+    expect(f.runtime.calls.at(-1)).toBe('stop')
+
+    // A waiting dialog leaves it stopped.
+    await aside()
+    await f.m.sweep()
+    await f.m.idle()
+    expect(f.runtime.calls.at(-1)).toBe('stop')
+
+    // The next pass asks for it at once, and the sweep would build it for a queued pass too.
+    await db.task.update({ where: { id: task.id }, data: { status: 'queued' } })
+    expect(await wakeStoppedPreview(db, task.id)).toBe(true)
+    expect(
+      await db.outboxEvent.count({
+        where: { dedupeKey: { startsWith: `preview.sync:${preview.id}:` } },
+      }),
+    ).toBeGreaterThan(0)
+    await aside()
+    await f.m.sweep()
+    await f.m.idle()
+    const woken = await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } })
+    expect(woken).toMatchObject({ status: 'ready', upstreamHost: upstream.host })
+    // Its volumes were kept: only the difference is written.
+    expect(f.runtime.writes.at(-1)).toMatchObject({ replace: false })
+    expect(await wakeStoppedPreview(db, task.id)).toBe(false)
   })
 
   describe('during a turn', () => {

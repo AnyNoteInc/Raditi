@@ -61,6 +61,7 @@ const chipTone: Readonly<Record<PaneStatus, { bg: string; fg: string; dot?: bool
   connecting: { bg: 'action.hover', fg: 'text.secondary' },
   agent: { bg: 'action.hover', fg: 'text.primary', dot: true },
   waiting: { bg: 'warning.main', fg: 'warning.contrastText' },
+  idle: { bg: 'action.hover', fg: 'text.primary' },
   user: { bg: 'primary.main', fg: 'primary.contrastText' },
   reconnecting: { bg: 'action.hover', fg: 'text.secondary' },
   error: { bg: 'error.main', fg: 'error.contrastText' },
@@ -342,7 +343,7 @@ function Address({
           display: 'flex',
           alignItems: 'center',
           gap: 0.75,
-          minHeight: 40,
+          minHeight: 44,
           px: 1.5,
           borderRadius: '999px',
           border: 1,
@@ -365,7 +366,7 @@ function Address({
           sx={{
             flex: '1 1 auto',
             minWidth: 0,
-            minHeight: 36,
+            minHeight: 42,
             border: 0,
             outline: 'none',
             bgcolor: 'transparent',
@@ -403,6 +404,8 @@ export interface BrowserPaneProps {
   /** «Остановить» was taken and core has not ended the task yet: the control is not offered. */
   stopping?: boolean
   busy: boolean
+  /** The agent answered and asked nothing (26.10.2026): the browser waits for no one. */
+  answered?: boolean
 }
 
 /** One input of the client, stamped with what the latest state says. */
@@ -423,6 +426,7 @@ export function BrowserPane({
   canStop,
   stopping = false,
   busy,
+  answered = false,
 }: BrowserPaneProps) {
   const chipId = useId()
   const hintId = useId()
@@ -443,7 +447,7 @@ export function BrowserPane({
   const [menu, setMenu] = useState<HTMLElement | null>(null)
   const [tabsMenu, setTabsMenu] = useState<HTMLElement | null>(null)
 
-  const facts = { session, taskStatus, connection: stream.connection, state, configured }
+  const facts = { session, taskStatus, connection: stream.connection, state, configured, answered }
   const status = paneStatus(facts)
   const overlay = paneOverlay({ ...facts, painted, endReason: stream.endReason })
 

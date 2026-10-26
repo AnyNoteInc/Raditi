@@ -123,6 +123,7 @@ function showPane(props: {
   tab?: PaneTab
   tabs?: readonly PaneTab[]
   canReset?: boolean
+  onClose?: () => void
 }) {
   const onTab = vi.fn<(tab: PaneTab) => void>()
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -139,6 +140,7 @@ function showPane(props: {
         canReset={props.canReset ?? true}
         onReset={onReset}
         resetting={false}
+        {...(props.onClose ? { onClose: props.onClose } : {})}
       />
     </QueryClientProvider>,
   )
@@ -168,7 +170,7 @@ beforeEach(() => {
 })
 
 describe("the tabs it has something for (owner's request of 26.10.2026)", () => {
-  it('opens only for a preview in use, files or records to change, and checks', () => {
+  it('opens only when something on the site changed, or the preview was asked for', () => {
     expect(paneTabsOf(previewOf(), candidateHead)).toEqual([
       'preview',
       'files',
@@ -176,10 +178,25 @@ describe("the tabs it has something for (owner's request of 26.10.2026)", () => 
       'checks',
     ])
     expect(paneTabsOf(null, null)).toEqual([])
-    // A preview that cannot be shown, or is gone, is not in use.
-    expect(paneTabsOf(previewOf({ status: 'unavailable' }), null)).toEqual([])
-    expect(paneTabsOf(previewOf({ status: 'destroyed' }), null)).toEqual([])
-    expect(paneTabsOf(previewOf({ status: 'building' }), null)).toEqual(['preview'])
+    // The owner, 26.10.2026: a preview of a dialog that has changed nothing is not opened by
+    // itself — only when the client asks for it (`/preview`).
+    expect(paneTabsOf(previewOf(), null)).toEqual([])
+    expect(paneTabsOf(previewOf({ status: 'building' }), null)).toEqual([])
+    expect(paneTabsOf(previewOf({ status: 'building' }), null, { previewAsked: true })).toEqual([
+      'preview',
+    ])
+    // A preview that cannot be shown, or is gone, is not in use even when asked for.
+    expect(paneTabsOf(previewOf({ status: 'unavailable' }), null, { previewAsked: true })).toEqual(
+      [],
+    )
+    expect(paneTabsOf(previewOf({ status: 'destroyed' }), null, { previewAsked: true })).toEqual([])
+    // Checks alone change nothing on the site: no preview for them.
+    expect(
+      paneTabsOf(previewOf(), {
+        ...candidateHead,
+        counts: { files: { added: 0, modified: 0, deleted: 0 }, media: 0, records: 0 },
+      }),
+    ).toEqual(['checks'])
     // Only the files change: no tab of the records, none of the checks yet.
     expect(
       paneTabsOf(null, {
@@ -203,6 +220,15 @@ describe("the tabs it has something for (owner's request of 26.10.2026)", () => 
     // The tab asked for has nothing now: the first that has something is shown.
     expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
     expect(screen.queryByRole('tab', { name: 'Предпросмотр' })).toBeNull()
+  })
+})
+
+describe('closing the panel', () => {
+  it('steps aside by «Скрыть изменения»', () => {
+    const onClose = vi.fn()
+    showPane({ tabs: ['files'], tab: 'files', onClose })
+    fireEvent.click(screen.getByRole('button', { name: 'Скрыть изменения' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
 

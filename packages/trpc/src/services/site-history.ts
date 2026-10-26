@@ -140,9 +140,13 @@ const releaseSelect = {
   backupVerifiedAt: true,
   backupBytes: true,
   approver: { select: { name: true, lastName: true } },
-  task: { select: { title: true } },
+  task: { select: { title: true, deletedAt: true } },
   deployment: { select: { finishedAt: true } },
 } as const
+
+/** The dialog of a release, when the cabinet still finds it («Удалить диалог»: no way to it). */
+const dialogOf = (release: { taskId: string; task: { deletedAt: Date | null } }) =>
+  release.task.deletedAt === null ? release.taskId : null
 
 async function siteRows(db: PrismaClient, userId: string, siteId: string) {
   const site = await db.site.findFirst({
@@ -211,7 +215,7 @@ function releaseRun(release: ReleaseRow, number: number): SiteRun {
     number,
     kind: release.kind,
     title: release.task.title,
-    taskId: release.taskId,
+    taskId: dialogOf(release),
     state: runState(outcome),
     step: outcome === null && isReleaseStep(release.step) ? release.step : null,
     version: release.version,
@@ -335,7 +339,7 @@ export async function listSiteVersions(
       version: release.version,
       tag: release.tag,
       title: release.task.title,
-      taskId: release.taskId,
+      taskId: dialogOf(release),
       run: run?.number ?? 0,
       approvedBy: nameOf(release.approver),
       installedAt: run?.finishedAt ?? release.updatedAt,

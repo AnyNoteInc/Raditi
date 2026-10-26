@@ -5,7 +5,7 @@ import {
   grantTariffCredits,
   tariffCreditsOfDay,
 } from '@repo/billing'
-import { underPrivateCreditRate } from '@repo/billing/testing'
+import { settleTaskCharge, underPrivateCreditRate } from '@repo/billing/testing'
 import {
   closeBrowserSession,
   createAttachment,
@@ -891,6 +891,61 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       ).rejects.toMatchObject({ cause: { code: 'TASK_BUSY' } })
     })
 
+    // Every completed pass is charged when it ends (owner's answer of 26.10.2026): the next
+    // words open a new chain, the next attempt with a reserve of its own.
+    it('opens the next attempt with a reserve of its own after a charged pass', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await db.$transaction(
+        async (tx) => {
+          await tx.task.update({
+            where: { id: taskId },
+            data: { status: 'awaiting_user', turnNo: 1 },
+          })
+          await insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.result',
+              payload: {
+                v: 1,
+                turn: 1,
+                message: 'Это сайт учебного комбината.',
+                site: 'unchanged',
+                next: 'awaiting_user',
+                filesChanged: 0,
+                changeType: 'none',
+                needsApproval: false,
+                risk: 'low',
+              },
+            },
+          })
+          // What core does at the end of the pass: the chain is charged.
+          await settleTaskCharge(tx, { taskId, credits: 5, now: new Date() })
+        },
+        { isolationLevel: 'ReadCommitted' },
+      )
+      expect(await activeHolds(taskId)).toEqual([])
+
+      const posted = await caller.task.message({
+        taskId,
+        requestId: randomUUID(),
+        text: 'А какие плагины стоят?',
+      })
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 2,
+      })
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([2])
+      expect(await outboxOf(taskId)).toContainEqual(
+        expect.objectContaining({
+          type: 'turn.run',
+          payload: { taskId, attempt: 2, requestEventId: posted.requestEventId },
+        }),
+      )
+    })
+
     it('starts a new pass on top of the candidate with the revision the words are about', async () => {
       const { owner, site } = await siteOwner()
       const caller = callerOf(owner)
@@ -1368,6 +1423,179 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         by: 'customer',
         site: 'check',
       })
+    })
+  })
+
+  // The owner's request of 26.10.2026: a dialog is renamed, deleted, and its level of thinking
+  // changed while it goes on; none of it moves the dialog in the list.
+  describe('task.rename, task.remove, task.setEffort', () => {
+    const updatedAt = async (taskId: string) =>
+      (await db.task.findUniqueOrThrow({ where: { id: taskId } })).updatedAt.getTime()
+
+    it('renames a dialog in its head and the list, and refuses a name it would not store', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      const before = await updatedAt(taskId)
+
+      expect(await caller.task.rename({ taskId, title: '  Телефон\n в шапке  ' })).toEqual({
+        title: 'Телефон в шапке',
+      })
+
+      expect((await caller.task.feed({ taskId })).task.title).toBe('Телефон в шапке')
+      const listed = await caller.task.list({ siteId: site.id })
+      expect(listed.items.find((item) => item.id === taskId)?.title).toBe('Телефон в шапке')
+      expect(await updatedAt(taskId)).toBe(before)
+      for (const [title, code] of [
+        [' \n ', 'TASK_TEXT_EMPTY'],
+        ['ы'.repeat(121), 'TASK_TEXT_TOO_LONG'],
+        ['пароль Qwerty12345', 'TASK_TEXT_HAS_SECRET'],
+      ] as const)
+        await expect(caller.task.rename({ taskId, title })).rejects.toMatchObject({
+          cause: { code },
+        })
+      await expect(
+        callerOf(await person()).task.rename({ taskId, title: 'Чужой' }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    it('deletes a dialog that waits: it is cancelled first, then gone from the cabinet', async () => {
+      const { owner, site } = await siteOwner({ database: true })
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+
+      expect(await caller.task.remove({ taskId })).toEqual({ removed: true })
+
+      const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('cancelled')
+      expect(task.deletedAt).not.toBeNull()
+      expect(await activeHolds(taskId)).toEqual([])
+      expect((await feedOf(taskId)).at(-1)?.type).toBe('feed.cancelled')
+      // The preview is sent to be taken down with the cancel.
+      const preview = await db.previewEnvironment.findUniqueOrThrow({ where: { taskId } })
+      expect(preview.enqueues).toBe(2)
+      expect(
+        (await caller.task.list({ siteId: site.id })).items.map((item) => item.id),
+      ).not.toContain(taskId)
+      await expect(caller.task.feed({ taskId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      await expect(caller.task.rename({ taskId, title: 'Снова' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+      // A repeat after a lost answer: the same answer, nothing written again.
+      const rows = (await feedOf(taskId)).length
+      expect(await caller.task.remove({ taskId })).toEqual({ removed: true })
+      expect(await feedOf(taskId)).toHaveLength(rows)
+    })
+
+    it('deletes a dialog at work by asking core to stop it, and refuses one being released', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await db.task.update({ where: { id: taskId }, data: { status: 'running', turnNo: 1 } })
+
+      await caller.task.remove({ taskId })
+
+      const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('running')
+      expect(task.deletedAt).not.toBeNull()
+      expect((await outboxOf(`turn.cancel:${taskId}`)).map((row) => row.type)).toEqual([
+        'turn.cancel',
+      ])
+
+      // Another owner: the first dialog still holds the whole gift while core stops it.
+      const second = await siteOwner()
+      const releasing = await newDialog(callerOf(second.owner), second.site.id)
+      await db.task.update({ where: { id: releasing.taskId }, data: { status: 'deploying' } })
+      await expect(
+        callerOf(second.owner).task.remove({ taskId: releasing.taskId }),
+      ).rejects.toMatchObject({
+        cause: { code: 'RELEASE_IN_PROGRESS' },
+      })
+      expect(
+        (await db.task.findUniqueOrThrow({ where: { id: releasing.taskId } })).deletedAt,
+      ).toBeNull()
+    })
+
+    it('changes the level of thinking of a dialog that waits, from its next turn', async () => {
+      const { owner, site } = await siteOwner()
+      const { taskId } = await newDialog(callerOf(owner), site.id)
+      // Core plans the turn of a queued or running pass with the class it read: no change then.
+      await expect(
+        callerOf(owner, { client: underRateAndHeavy(db) }).task.setEffort({
+          taskId,
+          effort: 'max',
+        }),
+      ).rejects.toMatchObject({ cause: { code: 'TASK_BUSY' } })
+      await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_user' } })
+      const before = await updatedAt(taskId)
+      expect((await callerOf(owner).task.feed({ taskId })).task.effort).toBe('high')
+
+      // No priced model of heavy: the next pass would fail, so the change is refused.
+      await expect(callerOf(owner).task.setEffort({ taskId, effort: 'max' })).rejects.toMatchObject(
+        {
+          cause: { code: 'TASK_NOT_ACCEPTED', details: { reason: 'class_unavailable' } },
+        },
+      )
+      const heavy = callerOf(owner, { client: underRateAndHeavy(db) })
+      expect(await heavy.task.setEffort({ taskId, effort: 'max' })).toEqual({ effort: 'max' })
+
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).modelClass).toBe('heavy')
+      expect((await heavy.task.feed({ taskId })).task.effort).toBe('max')
+      expect(await updatedAt(taskId)).toBe(before)
+      // The credits set aside for the attempt stay as they were.
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([1])
+
+      await db.task.update({ where: { id: taskId }, data: { status: 'deploying' } })
+      await expect(heavy.task.setEffort({ taskId, effort: 'high' })).rejects.toMatchObject({
+        cause: { code: 'RELEASE_IN_PROGRESS' },
+      })
+      await db.task.update({ where: { id: taskId }, data: { status: 'done' } })
+      await expect(heavy.task.setEffort({ taskId, effort: 'high' })).rejects.toMatchObject({
+        cause: { code: 'TASK_FINISHED' },
+      })
+      // Someone else's dialog is not found, to change or to delete.
+      const stranger = callerOf(await person(), { client: underRateAndHeavy(db) })
+      await expect(stranger.task.setEffort({ taskId, effort: 'low' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+      await expect(stranger.task.remove({ taskId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).deletedAt).toBeNull()
+    })
+
+    it('keeps a dialog whose release, or its undo, the operator has still to settle', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      const candidate = await withCandidate(taskId)
+      const at = new Date()
+      await db.siteRelease.create({
+        data: {
+          siteId: site.id,
+          taskId,
+          candidateId: candidate.id,
+          candidateRevision: 1,
+          attempt: 1,
+          releaseKey: createHash('sha256').update(randomUUID()).digest('hex'),
+          version: 'v0.1.0',
+          tag: 'v0.1.0',
+          bump: 'minor',
+          mainBeforeSha: SHA('a'),
+          installedBeforeSha: SHA('a'),
+          approvedSha: SHA('d'),
+          mainPushedAt: at,
+          status: 'unknown',
+          committedAt: at,
+          approvedAt: at,
+          approvedBy: owner.id,
+        },
+      })
+      // The dialog has ended; the outcome of its release waits for the operator in its feed.
+      await db.task.update({ where: { id: taskId }, data: { status: 'done' } })
+
+      await expect(caller.task.remove({ taskId })).rejects.toMatchObject({
+        cause: { code: 'RELEASE_IN_PROGRESS' },
+      })
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).deletedAt).toBeNull()
     })
   })
 

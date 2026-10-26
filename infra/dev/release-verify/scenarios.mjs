@@ -416,11 +416,27 @@ export async function runScenarios(stand) {
     'the agent ran its 3 browser checks on the preview (browser_navigate, browser_run_checks) and all passed: the footer it edited was compiled at revision 0 before',
     browserRun.summary,
   )
+  // Every completed pass is charged when it ends (owner's answer of 26.10.2026); a charge whose
+  // usage was still open is made by the sweep a moment later.
+  const chargedA1 = await rt.until(
+    'the charge of the first pass of dialog A',
+    async () => {
+      const holds = await holdsOf(dialogA.taskId)
+      return holds.length > 0 && holds.every((hold) => hold.status === 'captured')
+        ? chargesOf(dialogA.taskId)
+        : null
+    },
+    { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+  )
   const heldA = await holdsOf(dialogA.taskId)
+  const callsA1 = await db.tokenUsage.findMany({
+    where: { taskId: dialogA.taskId, taskAttempt: 1, billable: true },
+  })
+  const expectedA1 = expectedCharge(callsA1, sum(heldA))
   rt.check(
-    heldA.every((hold) => hold.status === 'active') &&
-      (await chargesOf(dialogA.taskId)).length === 0,
-    `credits still held (${sum(heldA)}), nothing charged`,
+    -sum(chargedA1) === expectedA1.credits,
+    `the first pass is charged when it ends, by its token usage: ${-sum(chargedA1)} credits = ${expectedA1.costRub.toFixed(4)} ₽ ÷ 6 ₽, the minimum of 5 at least, from the ${sum(heldA)} it held`,
+    { charged: -sum(chargedA1), expected: expectedA1 },
   )
   rt.check(
     sameText(await productionFile(FOOTER_PATH), footer0),
@@ -526,13 +542,15 @@ export async function runScenarios(stand) {
   }).then(async (row) =>
     row.turnNo === 2 ? row : taskReaches(dialogA.taskId, 'awaiting_approval'),
   )
-  rt.check(taskA2.turnNo === 2 && taskA2.attempt === 1, 'the same task and attempt: turn 2', taskA2)
-  const heldA2 = await holdsOf(dialogA.taskId)
   rt.check(
-    heldA2.length === heldA.length &&
-      sum(heldA2) === sum(heldA) &&
-      heldA2.every((hold) => hold.attempt === 1),
-    `the reserve is not doubled: ${sum(heldA2)} credits of attempt 1`,
+    taskA2.turnNo === 2 && taskA2.attempt === 2,
+    'the same task, turn 2 in the next attempt: the words after a charged pass open a chain of their own',
+    taskA2,
+  )
+  const heldA2 = (await holdsOf(dialogA.taskId)).filter((hold) => hold.attempt === 2)
+  rt.check(
+    heldA2.length > 0 && sum(heldA2) === sum(heldA),
+    `the next attempt set aside the step of its class again: ${sum(heldA2)} credits of attempt 2`,
     heldA2,
   )
   const candidateA2 = await currentCandidate(dialogA.taskId)
@@ -696,19 +714,19 @@ export async function runScenarios(stand) {
   )
   await wayInClosed(installed.id, 'the release v0.1.0')
   const doneA = await taskReaches(dialogA.taskId, 'done', { timeoutMs: 5 * MINUTE })
-  const chargedA = await rt.until('the charge of dialog A', async () => {
-    const rows = await chargesOf(dialogA.taskId)
-    return rows.length > 0 ? rows : null
+  const chargedA = await rt.until('the charges of dialog A', async () => {
+    const holds = await holdsOf(dialogA.taskId)
+    return holds.every((hold) => hold.status === 'captured') ? chargesOf(dialogA.taskId) : null
   })
   const charge = -sum(chargedA)
-  const calls = await db.tokenUsage.findMany({
-    where: { taskId: dialogA.taskId, taskAttempt: 1, billable: true },
+  const callsA2 = await db.tokenUsage.findMany({
+    where: { taskId: dialogA.taskId, taskAttempt: 2, billable: true },
   })
-  const expected = expectedCharge(calls, sum(heldA2))
+  const expectedA2 = expectedCharge(callsA2, sum(heldA2), { minimum: false })
   rt.check(
-    doneA.status === 'done' && charge === expected.credits && charge > 5,
-    `the dialog is done and charged by its token usage: ${charge} credits = ${expected.costRub.toFixed(4)} ₽ of ${calls.length} calls at the stand rates ÷ 6 ₽, above the minimum of 5 and within the ${sum(heldA2)} held`,
-    { charge, expected },
+    doneA.status === 'done' && charge === expectedA1.credits + expectedA2.credits && charge > 5,
+    `the dialog is done; it was charged pass by pass by its token usage — ${expectedA1.credits} + ${expectedA2.credits} = ${charge} credits (${callsA1.length} + ${callsA2.length} calls at the stand rates ÷ 6 ₽) —, and the release charged nothing more`,
+    { charge, first: expectedA1, second: expectedA2 },
   )
   const prodAfter = await productionPage('/')
   rt.check(
@@ -993,9 +1011,9 @@ export async function runScenarios(stand) {
   const holdsB = await holdsOf(dialogB.taskId)
   rt.check(
     taskB.status === 'rolled_back' &&
-      holdsB.every((hold) => hold.status === 'released') &&
-      (await chargesOf(dialogB.taskId)).length === 0,
-    'the dialog is rolled_back and its reserve returned, nothing charged',
+      holdsB.every((hold) => hold.status === 'captured') &&
+      (await chargesOf(dialogB.taskId)).length > 0,
+    'the dialog is rolled_back; the pass that made the candidate stays charged (26.10.2026), the release gave nothing back',
     holdsB.map((hold) => hold.status),
   )
   const prodB = await productionPage('/')
@@ -1057,8 +1075,8 @@ export async function runScenarios(stand) {
   const taskC = await taskReaches(dialogC.taskId, 'awaiting_approval', { timeoutMs: 3 * MINUTE })
   rt.check(
     taskC.status === 'awaiting_approval' &&
-      (await holdsOf(dialogC.taskId)).every((hold) => hold.status === 'active'),
-    'the dialog is back in awaiting_approval with its reserve',
+      (await holdsOf(dialogC.taskId)).every((hold) => hold.status === 'captured'),
+    'the dialog is back in awaiting_approval; its pass stays charged',
   )
   rt.check(
     (await productionTitle(site, content.contactsId)) === TEXT.contactsManual,
@@ -1308,10 +1326,10 @@ export async function runScenarios(stand) {
   ).map((row) => row.payload)
   rt.check(
     taskH.status === 'awaiting_approval' &&
-      (await holdsOf(dialogH.taskId)).every((hold) => hold.status === 'active') &&
+      (await holdsOf(dialogH.taskId)).every((hold) => hold.status === 'captured') &&
       feedH.at(-1)?.outcome === 'refused' &&
       feedH.at(-1)?.reason === 'slug_taken',
-    'the dialog waits again with its reserve; the feed names the taken address as the reason',
+    'the dialog waits again, its pass charged; the feed names the taken address as the reason',
     feedH,
   )
   rt.check(
@@ -1734,12 +1752,19 @@ export async function runScenarios(stand) {
   await taskReaches(dialogJ.taskId, 'awaiting_approval')
   const candidateJ1 = await currentCandidate(dialogJ.taskId)
   const previewJ1 = await previewReady(dialogJ.taskId, 1)
-  const heldJ1 = await holdsOf(dialogJ.taskId)
+  // The first pass is charged when it ends (26.10.2026); the sweep makes a charge whose usage
+  // was still open.
+  const heldJ1 = await rt.until(
+    'the charge of the first pass of dialog J',
+    async () => {
+      const holds = await holdsOf(dialogJ.taskId)
+      return holds.length > 0 && holds.every((hold) => hold.status === 'captured') ? holds : null
+    },
+    { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+  )
   rt.check(
-    candidateJ1?.revision === 1 &&
-      heldJ1.length > 0 &&
-      heldJ1.every((hold) => hold.attempt === 1 && hold.status === 'active'),
-    `dialog J waits with revision 1 of its first pass and the reserve of attempt 1 (${sum(heldJ1)} credits)`,
+    candidateJ1?.revision === 1 && heldJ1.every((hold) => hold.attempt === 1),
+    `dialog J waits with revision 1 of its first pass, which is charged from the reserve of attempt 1 (${sum(heldJ1)} credits)`,
     heldJ1.map((hold) => [hold.attempt, hold.status, Number(hold.amount)]),
   )
 
@@ -1797,7 +1822,7 @@ export async function runScenarios(stand) {
   )
   const failureJ = failedJ.row.payload
   rt.check(
-    failedJ.task.attempt === 1 &&
+    failedJ.task.attempt === 2 &&
       failedJ.task.turnNo === 2 &&
       failureJ.turn === 2 &&
       failureJ.code === 'technical' &&
@@ -1819,20 +1844,21 @@ export async function runScenarios(stand) {
     'the candidate of revision 1 stays current, and the same preview is ready at revision 1 and serves its mark',
     { candidates: candidatesJ.map((row) => [row.revision, row.status]), preview: previewJ2.status },
   )
-  const heldJ2 = await holdsOf(dialogJ.taskId)
+  // The words after the charged first pass opened attempt 2, with a reserve of its own.
+  const heldJ2 = (await holdsOf(dialogJ.taskId)).filter((hold) => hold.attempt === 2)
   const turnJ2 = await db.taskTurn.findUnique({
     where: { taskId_turnNo: { taskId: dialogJ.taskId, turnNo: 2 } },
   })
   rt.check(
-    heldJ2.every(
-      (hold) =>
-        hold.attempt === 1 &&
-        hold.status === 'active' &&
-        hold.expiresAt.getTime() >= failureAt + 72 * 3_600_000 - 5 * MINUTE,
-    ) &&
+    heldJ2.length > 0 &&
+      heldJ2.every(
+        (hold) =>
+          hold.status === 'active' &&
+          hold.expiresAt.getTime() >= failureAt + 72 * 3_600_000 - 5 * MINUTE,
+      ) &&
       sum(heldJ2) === sum(heldJ1) &&
       turnJ2?.rejectedAt !== null,
-    'the reserve of attempt 1 stays held and lives as long as a waiting dialog; turn 2 is marked refused (task_turns.rejected_at)',
+    'the reserve of attempt 2, whose pass failed, stays held and lives as long as a waiting dialog; turn 2 is marked refused (task_turns.rejected_at)',
     heldJ2.map((hold) => [hold.attempt, hold.status, hold.expiresAt]),
   )
   const headJ = await owner.query('task.feed', { taskId: dialogJ.taskId })
@@ -1871,25 +1897,26 @@ export async function runScenarios(stand) {
   const taskJ = await db.task.findUniqueOrThrow({ where: { id: dialogJ.taskId } })
   const holdsJ = await holdsOf(dialogJ.taskId)
   const jobJ = await db.outboxEvent.findUnique({
-    where: { dedupeKey: `turn.run:${dialogJ.taskId}:2:${pressJ.id}` },
+    where: { dedupeKey: `turn.run:${dialogJ.taskId}:3:${pressJ.id}` },
   })
   rt.check(
     pressJ.payload.failureEventId === failureJId &&
-      taskJ.attempt === 2 &&
+      taskJ.attempt === 3 &&
       taskJ.modelClass === 'heavy' &&
       jobJ?.topic === 'agent-turns',
-    'task.retry wrote the press for that failure, attempt 2 in the class heavy, and the job of its pass',
+    'task.retry wrote the press for that failure, attempt 3 in the class heavy, and the job of its pass',
     { press: pressJ.payload, attempt: taskJ.attempt, modelClass: taskJ.modelClass },
   )
-  const releasedJ = holdsJ.filter((hold) => hold.attempt === 1)
-  const placedJ = holdsJ.filter((hold) => hold.attempt === 2)
+  const releasedJ = holdsJ.filter((hold) => hold.attempt === 2)
+  const placedJ = holdsJ.filter((hold) => hold.attempt === 3)
   rt.check(
     releasedJ.length > 0 &&
       releasedJ.every((hold) => hold.status === 'released') &&
+      holdsJ.filter((hold) => hold.attempt === 1).every((hold) => hold.status === 'captured') &&
       placedJ.length > 0 &&
       placedJ.every((hold) => hold.status === 'active') &&
       sum(placedJ) === 120,
-    'the reserve of the failed attempt came back, and attempt 2 holds the step of heavy: 120 credits',
+    'the reserve of the failed attempt 2 came back, the charge of the first pass stays, and attempt 3 holds the step of heavy: 120 credits',
     holdsJ.map((hold) => [hold.attempt, hold.status, Number(hold.amount)]),
   )
   const repeatJ = await owner.mutate('task.retry', {
@@ -1926,7 +1953,7 @@ export async function runScenarios(stand) {
   })
   const planJ3 = assignmentJ3?.plan ?? {}
   rt.check(
-    retriedJ.attempt === 2 &&
+    retriedJ.attempt === 3 &&
       planJ3.replacesTurn === 2 &&
       planJ3.previous?.turn === 1 &&
       planJ3.workspace?.expectedBaseSha === candidateJ1.headSha,
@@ -1944,7 +1971,7 @@ export async function runScenarios(stand) {
     )
   rt.check(
     keyJ3?.model.slug === 'glm-5.3-heavy' &&
-      keyJ3.taskAttempt === 2 &&
+      keyJ3.taskAttempt === 3 &&
       retryChats.length >= 1 &&
       retryChats.every((chat) => chat.body?.reasoning_effort === 'max') &&
       lastWords(retryChats[0]).includes(TEXT.retryWords),
@@ -1986,45 +2013,54 @@ export async function runScenarios(stand) {
   )
   await wayInClosed(installedJ.id, `the release ${installedJ.version}`)
   const doneJ = await taskReaches(dialogJ.taskId, 'done', { timeoutMs: 5 * MINUTE })
-  const chargedJ = await rt.until('the charge of dialog J', async () => {
-    const rows = await chargesOf(dialogJ.taskId)
-    return rows.length > 0 ? rows : null
+  const chargedJ = await rt.until('the charges of dialog J', async () => {
+    const holds = await holdsOf(dialogJ.taskId)
+    return holds.filter((hold) => hold.attempt === 3).every((hold) => hold.status === 'captured')
+      ? chargesOf(dialogJ.taskId)
+      : null
   })
   const chargeJ = -sum(chargedJ)
   const usageJ = await db.tokenUsage.findMany({
     where: { taskId: dialogJ.taskId, billable: true },
     include: { key: { select: { turnNo: true } } },
   })
-  // The calls of turn 1 (attempt 1, the candidate the retry built on) and of turn 3 (attempt 2);
-  // turn 2 — the pass that failed — is not the client's to pay.
-  const callsJ = usageJ.filter((call) => [1, 3].includes(call.key.turnNo))
+  // Turn 1 (attempt 1, the candidate the retry built on) was charged when it ended, turn 3
+  // (attempt 3) when it ended; turn 2 — the pass that failed — is not the client's to pay.
+  const callsJ1 = usageJ.filter((call) => call.key.turnNo === 1)
+  const callsJ3 = usageJ.filter((call) => call.key.turnNo === 3)
   const failedCallsJ = usageJ.filter((call) => call.key.turnNo === 2)
-  const expectedJ = expectedCharge(callsJ, sum(placedJ))
+  const expectedJ1 = expectedCharge(callsJ1, sum(heldJ1))
+  const expectedJ3 = expectedCharge(callsJ3, sum(placedJ), { minimum: false })
   const auditJ = await db.auditLog.findFirst({
     where: { action: 'billing.task.charge', targetId: dialogJ.taskId },
+    orderBy: { createdAt: 'desc' },
   })
   rt.check(
     doneJ.status === 'done' &&
-      chargeJ === expectedJ.credits &&
-      usageJ.length === callsJ.length + failedCallsJ.length &&
-      callsJ.some((call) => call.taskAttempt === 1) &&
-      callsJ.some((call) => call.taskAttempt === 2) &&
-      auditJ?.meta?.attempts === 2 &&
+      chargeJ === expectedJ1.credits + expectedJ3.credits &&
+      usageJ.length === callsJ1.length + callsJ3.length + failedCallsJ.length &&
+      callsJ1.every((call) => call.taskAttempt === 1) &&
+      callsJ3.every((call) => call.taskAttempt === 3) &&
+      auditJ?.meta?.first === false &&
+      auditJ.meta.attempts === 2 &&
       auditJ.meta.givenBack === 1 &&
-      auditJ.meta.firstAttempt === 1 &&
-      auditJ.meta.lastAttempt === 2 &&
+      auditJ.meta.firstAttempt === 2 &&
+      auditJ.meta.lastAttempt === 3 &&
       Math.abs(
         Number(auditJ.meta.costRub) -
-          callsJ.reduce((total, call) => total + Number(call.costRub), 0),
+          callsJ3.reduce((total, call) => total + Number(call.costRub), 0),
       ) < 1e-6,
-    `the dialog is done and charged ${chargeJ} credits for the token usage of turns 1 and 3 (${callsJ.length} calls, ${expectedJ.costRub.toFixed(4)} ₽) from the reserve of the retry: the work of the kept candidate is in the charge, the ${failedCallsJ.length} calls of the failed turn 2 are not`,
-    { charge: chargeJ, expected: expectedJ, audit: auditJ?.meta },
+    `the dialog is done and charged pass by pass: ${expectedJ1.credits} credits for turn 1 when it ended, ${expectedJ3.credits} for turn 3 from the reserve of the retry (${callsJ3.length} calls, ${expectedJ3.costRub.toFixed(4)} ₽); the ${failedCallsJ.length} calls of the failed turn 2 are in no charge`,
+    { charge: chargeJ, first: expectedJ1, retried: expectedJ3, audit: auditJ?.meta },
   )
   const holdsAfterJ = await holdsOf(dialogJ.taskId)
+  const statusesOf = (attempt) =>
+    holdsAfterJ.filter((hold) => hold.attempt === attempt).map((hold) => hold.status)
   rt.check(
-    holdsAfterJ.filter((hold) => hold.attempt === 1).every((hold) => hold.status === 'released') &&
-      holdsAfterJ.filter((hold) => hold.attempt === 2).every((hold) => hold.status === 'captured'),
-    'the rows of attempt 1 stay released; those of attempt 2 are captured by the charge',
+    statusesOf(1).every((status) => status === 'captured') &&
+      statusesOf(2).every((status) => status === 'released') &&
+      statusesOf(3).every((status) => status === 'captured'),
+    'attempt 1 is captured by its charge, attempt 2 of the failed pass is released, attempt 3 is captured by its charge',
     holdsAfterJ.map((hold) => [hold.attempt, hold.status]),
   )
   rt.end()

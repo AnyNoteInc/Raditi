@@ -12,7 +12,8 @@ import {
 // The shell of the site page in a real browser: unit tests see the markup of both navigations,
 // only a browser shows which of them the width leaves on the screen.
 
-const sections = ['Обзор', 'Чат', 'Изменения', 'Запуски', 'База и бэкап', 'Настройки']
+// «Переменные» is a section of its own since 26.10.2026 (the variables and the accesses).
+const sections = ['Обзор', 'Чат', 'Изменения', 'Запуски', 'База и бэкап', 'Переменные', 'Настройки']
 
 for (const [name, width, height] of [
   ['phone', 390, 844],
@@ -76,7 +77,7 @@ for (const [name, width, height] of [
       // The accesses are a block of «Переменные» since 26.10.2026, not of the settings.
       await page.goto(`/projects/${siteId}/vault/accesses`)
       await expect(page.getByRole('heading', { level: 1, name: 'Доступы' })).toBeVisible()
-      await expect(page.getByText(/Доступов пока нет/)).toBeVisible()
+      await expect(page.getByText(/^Доступов пока нет\. Они появятся/)).toBeVisible()
     })
 
     await test.step('breadcrumbs lead back to the projects', async () => {
@@ -112,7 +113,7 @@ test('the address of a connected site opens a new dialog of its chat', async ({
 })
 
 // Every address under a site besides the overview: «Чат» has two of them.
-const otherAddresses = ['chat', 'chat/new', 'changes', 'runs', 'database', 'settings']
+const otherAddresses = ['chat', 'chat/new', 'changes', 'runs', 'database', 'vault', 'settings']
 
 // A paused, a disconnected and an archived site keep «Обзор» alone: the address of the site and
 // every other section lead to it, and the navigation shows the other sections closed.
@@ -239,7 +240,7 @@ test('every section of a site that is not connected yet still opens', async ({
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   }
   const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
-  await expect(navigation.getByRole('link')).toHaveCount(6)
+  await expect(navigation.getByRole('link')).toHaveCount(sections.length)
   await expect(navigation.locator('[aria-disabled="true"]')).toHaveCount(0)
   await expect(page.locator(`#${CLOSED_NOTE_ID}`)).toHaveCount(0)
 })

@@ -22,6 +22,7 @@ import {
 } from '@repo/domain'
 
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
+import { wakeStoppedPreview } from '../previews/preview-wake.ts'
 import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import type { LivePasses } from './live-passes.ts'
@@ -117,6 +118,7 @@ export class PassRunner {
     // should it ever, that pass ends the task, never a second one.
     if (!controller) return
     try {
+      await this.#wakePreview(job.taskId)
       await this.#pass(job, ref, claimed.billable, controller)
     } finally {
       this.deps.live.leave(job.taskId, controller)
@@ -277,6 +279,20 @@ export class PassRunner {
       this.#logger.warn(`pass_browser_unavailable task=${job.taskId} cause=${causeOf(error)}`)
       await settlement.settle(ref, { kind: 'refused', code })
       return false
+    }
+  }
+
+  /**
+   * The dialog's preview, stopped while no one used it (owner's answer of 26.10.2026), is built
+   * again for this pass: asked here, before the turn is planned, so the build runs beside the
+   * preparation of the sandbox. A wake that is not written leaves it to the sweep of previews.
+   */
+  async #wakePreview(taskId: string): Promise<void> {
+    try {
+      if (await wakeStoppedPreview(this.deps.db, taskId))
+        this.#logger.log(`pass_preview_woken task=${taskId}`)
+    } catch {
+      this.#logger.warn(`pass_preview_wake_failed task=${taskId}`)
     }
   }
 

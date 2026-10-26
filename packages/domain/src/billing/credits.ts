@@ -423,6 +423,7 @@ export interface TaskCharge {
 const chargedWorkSchema = z.strictObject({
   used: unroundedCreditsSchema,
   reserved: positiveCreditsSchema,
+  minimum: z.boolean().optional(),
 })
 
 /** The work of a task's chain of attempts and what its reserves hold. */
@@ -431,23 +432,35 @@ export interface ChargedWork {
   used: Decimal
   /** Σ amount of the task's active reserve rows. */
   reserved: Credits
+  /**
+   * The minimum of a task applies (default): the first charge of a task. Its later charges — a
+   * pass of an open dialog is charged when it completes (owner's answer of 26.10.2026, «любой
+   * успешный запрос от LLM должен тарифицироваться») — are their work rounded, and any work at
+   * all costs at least one credit: a request that was answered is never free.
+   */
+  minimum?: boolean
 }
 
 /**
- * What a done task costs: min(reserved, max(minTaskChargeCredits, round(used))). The work is
- * rounded once per task, HALF_UP, to a whole credit; then the minimum, then the cap of the
- * reserve — a task never costs more than was set aside for it, and an overrun of calls already
- * admitted is the platform's.
+ * What the work of a chain of attempts costs: min(reserved, max(minTaskChargeCredits,
+ * round(used))) for the first charge of a task, min(reserved, max(1, round(used))) for a later
+ * one with any work (0 without work). The work is rounded once per charge, HALF_UP, to a whole
+ * credit; then the minimum, then the cap of the reserve — a chain never costs more than was set
+ * aside for it, and an overrun of calls already admitted is the platform's.
  */
 export function taskCharge(work: ChargedWork): TaskCharge {
   const result = chargedWorkSchema.safeParse(work)
   if (!result.success) throw badRequest('Invalid work of a task')
-  const { used, reserved } = result.data
+  const { used, reserved, minimum = true } = result.data
   const rounded = new Money(used).toDecimalPlaces(0, Money.ROUND_HALF_UP)
-  const due = Money.max(minTaskChargeCredits, rounded)
+  const due = minimum
+    ? Money.max(minTaskChargeCredits, rounded)
+    : new Money(used).gt(0)
+      ? Money.max(1, rounded)
+      : rounded
   return {
     credits: toCredits(Money.min(reserved, due).toNumber()),
-    minimumApplied: rounded.lt(minTaskChargeCredits),
+    minimumApplied: minimum && rounded.lt(minTaskChargeCredits),
     capped: due.gt(reserved),
   }
 }
@@ -767,19 +780,22 @@ export function unpaidWork(input: UnpaidWorkInput): Decimal {
 /**
  * What asks for a reserve. `new`: the first attempt of a task. `continuation`: «Продолжить» —
  * the next attempt of a task whose earlier reserves are active. `retry`: «Попробовать ещё» —
- * a later attempt after a failure released every reserve.
+ * a later attempt after a failure released every reserve. `next`: the client's next words in an
+ * open dialog whose last pass was charged (owner's answer of 26.10.2026: every completed pass is
+ * charged), a new chain like a new task. `resume`: «Продолжить» or «Продолжить работу агента»
+ * after such a pass — a new chain that goes on with the work, like a continuation.
  *
  * Each places reserve rows stamped with the moment they are placed (`credit_holds.placed_at`),
  * and what their tariff part holds and pays counts on the day it is placed on
  * (`tariffCreditsOfDay` of @repo/billing). Which of them the day also bounds says
  * `placementTariffRoom`.
  */
-export const taskPlacements = ['new', 'continuation', 'retry'] as const
+export const taskPlacements = ['new', 'continuation', 'retry', 'next', 'resume'] as const
 export type TaskPlacement = (typeof taskPlacements)[number]
 
 // Which placements the daily limit bounds — the one place that says it.
-// - new, continuation: the tariff part takes no more than is left of the day (decision D7 of
-//   17.10.2026), and the placement is refused by the day (`daily_limit`).
+// - new, continuation, next, resume: the tariff part takes no more than is left of the day
+//   (decision D7 of 17.10.2026), and the placement is refused by the day (`daily_limit`).
 // - retry: the daily limit does not apply to «Попробовать ещё» (the owner, 19.10.2026): the
 //   tariff part is bounded by the tariff credits that are free, as before the day was counted,
 //   and the retry is never refused by the day. What it holds and pays still counts on the day
@@ -788,6 +804,8 @@ const dayBoundPlacements = Object.freeze({
   new: true,
   continuation: true,
   retry: false,
+  next: true,
+  resume: true,
 } as const satisfies Record<TaskPlacement, boolean>)
 
 /**
@@ -964,17 +982,18 @@ export type NewTaskVerdict = {
  *
  * The checks come in one order, and the first that fails is the reason:
  * 1. a usable credit rate — `rate_missing`;
- * 2. credits on the accounts, the limit a payment lifts. A new task and a retry need
- *    `minStartCredits` that can be spent, a continuation `minContinueCredits`. Below that:
+ * 2. credits on the accounts, the limit a payment lifts. A new task, a retry and the next words
+ *    after a charged pass need `minStartCredits` that can be spent, a continuation and a resume
+ *    `minContinueCredits`. Below that:
  *    `held` when the accounts hold that much and other tasks in work have it set aside; with a
  *    paid tariff `empty` or, with a few credits left, `below_start`; without one `past_due` for
  *    an overdue tariff, `ended` when credits of a pack wait for a tariff, otherwise `gift_spent`
  *    or `gift_below_start`;
- * 3. the day, for a new task and a continuation: the tariff credits free within what is left of
+ * 3. the day, for every placement but a retry: the tariff credits free within what is left of
  *    the day, with the gift and pack credits, cannot cover what the placement needs although the
  *    accounts can — `daily_limit`. Only a paid tariff whose plan has a daily limit gets here; a
  *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`);
- * 4. unpaid work, for a new task and a retry: against the monthly credits of the plan —
+ * 4. unpaid work, for a new task, a retry and the next words: against the monthly credits of the plan —
  *    `unpaid_limit` — or `trialUnpaidWorkCredits` — `trial_unpaid_limit`;
  * 5. without a paid tariff, the gift of the site: `gift_site_used` when another workspace has
  *    spent gift credits on it.
@@ -1014,7 +1033,7 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
     held: toCredits(
       heldByOthers('gift') + (paid ? heldByOthers('tariff') + heldByOthers('pack') : 0),
     ),
-    needed: toCredits(placement === 'continuation' ? minContinueCredits : minStartCredits),
+    needed: toCredits(goesOn(placement) ? minContinueCredits : minStartCredits),
     today,
   }
   const refused = (reason: TaskRefusalReason): NewTaskVerdict => ({
@@ -1036,7 +1055,7 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
 
   if (numbers.spendableNow < numbers.needed) return refused('daily_limit')
 
-  if (placement !== 'continuation') {
+  if (!goesOn(placement)) {
     const unpaidLimit = paid ? subscription.creditsPerMonth : trialUnpaidWorkCredits
     if (new Money(result.data.unpaidWork).gte(unpaidLimit)) {
       return refused(paid ? 'unpaid_limit' : 'trial_unpaid_limit')
@@ -1046,6 +1065,13 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   if (!paid && result.data.giftSiteClaimedElsewhere) return refused('gift_site_used')
   return { ...numbers, allowed: true, reason: null }
 }
+
+/**
+ * A placement that goes on with work already under way — «Продолжить» with its chain, or after
+ * a charged pass (`resume`): it needs `minContinueCredits` and is not asked about unpaid work.
+ */
+const goesOn = (placement: TaskPlacement): boolean =>
+  placement === 'continuation' || placement === 'resume'
 
 /** The day of a paid tariff: its limit, what the day took, and what is left of it. */
 function tariffDay(

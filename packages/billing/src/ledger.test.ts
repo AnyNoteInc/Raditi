@@ -31,8 +31,9 @@ describe('ledger keys', () => {
     expect(ledgerKeys.tariffExpiry(SUBSCRIPTION, new Date('2026-10-18T09:00:00.000Z'))).toBe(
       `sub:${SUBSCRIPTION}:1792314000000:expire`,
     )
-    // One charge per task and account, whatever attempts of the task reserved there.
-    expect(ledgerKeys.taskCharge(TASK, ACCOUNT)).toBe(`task:${TASK}:charge:${ACCOUNT}`)
+    // One charge per chain and account, whatever attempts of the chain reserved there: the chain
+    // is named by its first attempt (a task is charged pass by pass, 26.10.2026).
+    expect(ledgerKeys.taskCharge(TASK, 3, ACCOUNT)).toBe(`task:${TASK}:3:charge:${ACCOUNT}`)
     expect(ledgerKeys.holdCharge(HOLD)).toBe(`hold:${HOLD}:charge`)
     expect(ledgerKeys.holdExpiry(HOLD)).toBe(`hold:${HOLD}:expire`)
     expect(ledgerKeys.refundAdjust(ORDER)).toBe(`order:${ORDER}:refund:adjust`)
@@ -48,9 +49,10 @@ describe('ledger keys', () => {
       ledgerKeys.tariffGrant(ORDER),
       ledgerKeys.packGrant(ORDER),
       ledgerKeys.tariffExpiry(ORDER, new Date(0)),
-      ledgerKeys.taskCharge(ORDER, ORDER),
-      ledgerKeys.taskCharge(ORDER, ACCOUNT),
-      ledgerKeys.taskCharge(ACCOUNT, ORDER),
+      ledgerKeys.taskCharge(ORDER, 1, ORDER),
+      ledgerKeys.taskCharge(ORDER, 1, ACCOUNT),
+      ledgerKeys.taskCharge(ACCOUNT, 1, ORDER),
+      ledgerKeys.taskCharge(ORDER, 2, ACCOUNT),
       ledgerKeys.holdCharge(ORDER),
       ledgerKeys.holdExpiry(ORDER),
       ledgerKeys.refundAdjust(ORDER),

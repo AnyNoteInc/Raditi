@@ -28,3 +28,13 @@ const classOfEffort = Object.freeze({
 } satisfies Record<ReasoningEffort, ModelClass>)
 
 export const modelClassOfEffort = (effort: ReasoningEffort): ModelClass => classOfEffort[effort]
+
+const effortOfClass = Object.freeze({
+  light: 'low',
+  standard: 'high',
+  heavy: 'max',
+} satisfies Record<ModelClass, ReasoningEffort>)
+
+/** The level a dialog thinks at, from its class: the switch of a started dialog shows it. */
+export const effortOfModelClass = (modelClass: ModelClass): ReasoningEffort =>
+  effortOfClass[modelClass]

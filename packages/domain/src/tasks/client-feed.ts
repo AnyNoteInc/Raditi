@@ -7,6 +7,7 @@ import {
   browserScreenshotLimits,
   browserSessionLimits,
 } from '../browser/session.ts'
+import { reasoningEffortSchema } from '../llm/model-class.ts'
 import { agentOutputLimits } from '../ports/agent-driver.ts'
 import { chatCommandIds } from '../release/chat-commands.ts'
 import { releaseOutcomes } from '../release/release-state.ts'
@@ -1133,5 +1134,11 @@ export const feedTaskHeadSchema = z.strictObject({
    * or both. A head built without it is of a task that has the repository alone.
    */
   requirements: taskRequirementsSchema.default(() => ({ ...REPOSITORY_ONLY })),
+  /**
+   * How hard the model thinks from the next turn on (owner's request of 26.10.2026): the class of
+   * the task, which the client may change while the dialog goes on (`task.setEffort`). A head
+   * built without it thinks at `high`, the default of a new dialog.
+   */
+  effort: reasoningEffortSchema.default('high'),
 })
 export type FeedTaskHead = z.infer<typeof feedTaskHeadSchema>

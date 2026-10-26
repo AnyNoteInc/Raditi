@@ -27,7 +27,12 @@ import {
   stopPreviewBrowser,
 } from './preview-browser.ts'
 import { runCandidateChecks } from './preview-checks.ts'
-import { loadPreviewFacts, previewAction, type PreviewFacts } from './preview-facts.ts'
+import {
+  loadPreviewFacts,
+  previewAction,
+  previewLastUseSql,
+  type PreviewFacts,
+} from './preview-facts.ts'
 import { claimPreview, PreviewHold, previewLeaseTimings, releasePreview } from './preview-lease.ts'
 import {
   previewSyncErrorCode,
@@ -266,6 +271,7 @@ export class PreviewManager {
     const action = previewAction(facts, {
       requested: work.requested,
       now: this.#now(),
+      idleMs: this.deps.config.idleMinutes * 60_000,
       ...(work.lost ? { lost: true } : {}),
     })
     if (action === 'destroy') return destroyPreview(this.deps, hold, facts)
@@ -437,7 +443,9 @@ export class PreviewManager {
   /**
    * The time to live of a preview follows its dialog (Р8, R5a): the reserve of the dialog, moved
    * on while it waits, and the last view (a ticket) plus PREVIEW_TTL_HOURS. The containers'
-   * deadline moves with it.
+   * deadline moves with it. The life is not the time its containers run: a served preview no one
+   * used for PREVIEW_IDLE_MINUTES stops within it (`previewIdle`, #refreshDue) — the reserve keeps
+   * its copy and the dialog, never its containers running.
    */
   async #extendLives(): Promise<void> {
     const rows = await this.deps.db.$queryRaw<Array<{ id: string; status: string; horizon: Date }>>`
@@ -466,10 +474,15 @@ export class PreviewManager {
     }
   }
 
-  /** Previews that need their holder now and have none. */
+  /**
+   * Previews that need their holder now and have none — among them a served one no one used for
+   * PREVIEW_IDLE_MINUTES while its dialog waits (stopped), and a stopped one whose dialog has a
+   * pass queued or running (built again: the agent's browser and content tools need it).
+   */
   async #refreshDue(): Promise<void> {
     const settle = previewManagerTimings.settleSeconds
     const viewed = previewManagerTimings.viewedSeconds
+    const idle = this.deps.config.idleMinutes
     const rows = await this.deps.db.$queryRaw<Array<{ id: string; requested: boolean }>>`
       SELECT p.id,
         (p.status = 'expired' OR (p.status = 'ready' AND (p.dirty OR c.id IS DISTINCT FROM p.candidate_id
@@ -489,8 +502,11 @@ export class PreviewManager {
           OR (p.expires_at <= now() AND p.status IN ('ready', 'failed', 'unavailable')
             AND t.status NOT IN ('preparing', 'running'))
           OR (p.status = 'expired' AND p.last_viewed_at > now() - make_interval(secs => ${viewed}))
+          OR (p.status = 'expired' AND t.status IN ('queued', 'preparing', 'running'))
           OR (p.status = 'ready' AND t.status NOT IN ('preparing', 'running') AND (p.dirty
             OR c.id IS DISTINCT FROM p.candidate_id OR COALESCE(c.revision, 0) <> p.revision))
+          OR (p.status = 'ready' AND t.status NOT IN ('queued', 'preparing', 'running')
+            AND ${previewLastUseSql} <= now() - make_interval(mins => ${idle}))
         )
       ORDER BY p.updated_at LIMIT ${SWEEP_BATCH}`
     for (const row of rows) this.#detach(row.id, { requested: row.requested })

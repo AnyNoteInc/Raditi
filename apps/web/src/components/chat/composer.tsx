@@ -49,10 +49,9 @@ export const offScreen = {
 
 /** A quiet button of the field's own row: no frame until the pointer is on it. */
 const toolButton = {
-  width: 40,
-  height: 40,
-  // A finger gets the full 44 px.
-  '@media (pointer: coarse)': { width: 44, height: 44 },
+  // The pressing area of 44px everywhere (DESIGN.md, «область нажатия — не меньше 44px»).
+  width: 44,
+  height: 44,
   flex: 'none',
   color: 'text.secondary',
   transition: 'background-color var(--raditi-motion-fast) var(--raditi-ease-out)',
@@ -83,7 +82,6 @@ export function Composer({
   placeholder,
   sendLabel = composerText.send,
   disabledReason = null,
-  reasonShown = true,
   error = null,
   busy = false,
   onSend,
@@ -92,14 +90,16 @@ export function Composer({
   attachments,
   noSecrets = feedInputText.noSecrets,
   fieldRef,
+  stop,
 }: {
   label?: string
   placeholder: string
   sendLabel?: string
-  /** Set while nothing can be written: the field and the button say why. */
+  /**
+   * Set while nothing can be written: the field and the button say why — read aloud with them,
+   * not shown (owner's request of 26.10.2026: no standing words under the field).
+   */
   disabledReason?: string | null
-  /** false — the reason is read aloud with the field and the button, but not shown under them. */
-  reasonShown?: boolean
   /** Why the server refused the last try, as a sentence. */
   error?: string | null
   busy?: boolean
@@ -113,9 +113,14 @@ export function Composer({
   modes?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
   attachments?: AttachmentsControl
-  /** The standing reminder about passwords under the field. */
+  /** The reminder about passwords: read aloud with the field, not shown under it. */
   noSecrets?: string
   fieldRef?: RefObject<HTMLTextAreaElement | null>
+  /**
+   * While the agent works: «Остановить» stands in place of «Отправить», as `/cancel` does it.
+   * `available` false — the dialog cannot be stopped now (a release, a stop on its way).
+   */
+  stop?: { onStop: () => void; available: boolean }
 }) {
   const fieldId = useId()
   const reasonId = useId()
@@ -124,6 +129,7 @@ export function Composer({
   const listId = useId()
   const filesWaitId = useId()
   const filesHintId = useId()
+  const secretsId = useId()
   const [text, setText] = useState('')
   // The list closed by Escape stays closed until the field starts anew.
   const [dismissed, setDismissed] = useState(false)
@@ -276,6 +282,8 @@ export function Composer({
   ]
     .filter((id) => id !== null)
     .join(' ')
+  // The field carries the reminder about passwords too; the button does not repeat it.
+  const fieldDescribedBy = [describedBy, secretsId].filter((id) => id !== '').join(' ')
   const sendDescribedBy = [describedBy, filesWait !== null ? filesWaitId : null]
     .filter((id) => id !== null && id !== '')
     .join(' ')
@@ -340,7 +348,7 @@ export function Composer({
           value={text}
           placeholder={placeholder}
           disabled={disabled}
-          aria-describedby={describedBy || undefined}
+          aria-describedby={fieldDescribedBy}
           aria-invalid={tooLong || shownError !== null ? true : undefined}
           aria-autocomplete={commands ? 'list' : undefined}
           aria-controls={open && !forced ? listId : undefined}
@@ -432,14 +440,20 @@ export function Composer({
             </Typography>
           ) : null}
           <IconButton
-            aria-label={sendLabel}
-            aria-describedby={sendDescribedBy || undefined}
-            disabled={!canSend}
-            onClick={() => void send()}
+            aria-label={stop ? composerText.stop : sendLabel}
+            aria-describedby={
+              stop
+                ? stop.available
+                  ? undefined
+                  : describedBy || undefined
+                : sendDescribedBy || undefined
+            }
+            disabled={stop ? !stop.available : !canSend}
+            onClick={() => (stop ? stop.onStop() : void send())}
             sx={{
-              width: 40,
-              height: 40,
-              '@media (pointer: coarse)': { width: 44, height: 44 },
+              // The pressing area of 44px everywhere, as every control of the cabinet.
+              width: 44,
+              height: 44,
               flex: 'none',
               border: 0,
               // Round and in the contrast of the page: the text colour, the arrow in the page's.
@@ -457,20 +471,15 @@ export function Composer({
               '@media (prefers-reduced-motion: reduce)': { '&:active': { transform: 'none' } },
             }}
           >
-            <AppIcon name="send" />
+            <AppIcon name={stop ? 'square' : 'send'} />
           </IconButton>
         </Box>
       </Box>
 
       {disabled ? (
-        <Typography
-          id={reasonId}
-          variant="body2"
-          color="text.secondary"
-          sx={reasonShown ? { textAlign: 'center' } : offScreen}
-        >
+        <Box id={reasonId} sx={offScreen}>
           {disabledReason}
-        </Typography>
+        </Box>
       ) : null}
       {tooLong ? (
         <Typography id={limitId} role="alert" variant="body2" color="error.main">
@@ -488,29 +497,15 @@ export function Composer({
         </Typography>
       ) : null}
       {attachments ? (
-        <Typography
-          id={filesHintId}
-          variant="body2"
-          color="text.secondary"
-          sx={
-            attachments.items.length > 0
-              ? { textAlign: 'center', fontSize: 12.5 }
-              : (offScreen as Record<string, unknown>)
-          }
-        >
+        <Box id={filesHintId} sx={offScreen}>
           {attachmentHintText}
-        </Typography>
+        </Box>
       ) : null}
       <Box role="status" aria-live="polite" sx={offScreen}>
         {announcement}
       </Box>
-      <Box sx={{ fontSize: 12, color: 'text.secondary', textAlign: 'center', lineHeight: 1.5 }}>
-        <Box component="p" sx={{ m: 0 }}>
-          {feedInputText.mistakes}
-        </Box>
-        <Box component="p" sx={{ m: 0 }}>
-          {noSecrets}.
-        </Box>
+      <Box id={secretsId} sx={offScreen}>
+        {noSecrets}.
       </Box>
     </Box>
   )

@@ -23,6 +23,11 @@ export interface PaneFacts {
   state: BrowserState | null
   /** The cabinet knows where the stream is (`BROWSER_STREAM_PUBLIC_URL`). */
   configured: boolean
+  /**
+   * The task waits for nothing: the agent answered and asked no question (26.10.2026) — the
+   * browser is the agent's, idle, not waiting for the client.
+   */
+  answered?: boolean
 }
 
 const TERMINAL: readonly (TaskStatus | undefined)[] = ['done', 'failed', 'cancelled', 'rolled_back']
@@ -38,7 +43,7 @@ export function paneStatus(facts: PaneFacts): PaneStatus {
   if (connection === 'reconnecting') return 'reconnecting'
   if (connection !== 'open') return 'connecting'
   if ((facts.state?.controller ?? session!.controller) === 'user') return 'user'
-  if (taskStatus === 'awaiting_user') return 'waiting'
+  if (taskStatus === 'awaiting_user') return facts.answered ? 'idle' : 'waiting'
   return 'agent'
 }
 

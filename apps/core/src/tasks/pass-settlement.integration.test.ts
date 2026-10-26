@@ -25,7 +25,12 @@ import {
   type CandidateContext,
 } from './candidate-builder.ts'
 import { candidateGitOf } from './candidate-git.ts'
-import { ORPHANED_PASS_EVENT, PassSettlement, type PassEnding } from './pass-settlement.ts'
+import {
+  CHARGE_LATER_EVENT,
+  ORPHANED_PASS_EVENT,
+  PassSettlement,
+  type PassEnding,
+} from './pass-settlement.ts'
 
 // The end of a pass on PostgreSQL with the credits of @repo/billing: the move, its feed rows,
 // the candidate and the money in one transaction. Only on a disposable database
@@ -186,6 +191,17 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         orderBy: { id: 'asc' },
       })
     ).map((row) => [row.type, row.payload])
+  /** What the task was charged, in credits: the sum of its `charge` rows. */
+  const charged = async (taskId: string) =>
+    0 -
+    Number(
+      (
+        await db.creditLedger.aggregate({
+          where: { taskId, kind: 'charge' },
+          _sum: { amount: true },
+        })
+      )._sum.amount ?? 0,
+    )
   const holds = (taskId: string) =>
     db.creditHold.findMany({ where: { taskId }, select: { status: true, expiresAt: true } })
   const status = async (taskId: string) =>
@@ -229,7 +245,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     }
   }
 
-  it('keeps the dialog of a pass that changed nothing open: the preview, the reserve, no charge', async () => {
+  it('keeps the dialog of a pass that changed nothing open, its preview kept and the pass charged', async () => {
     // The owner, 26.10.2026: «после того как в работе произошла какая-то работа, не закрывай чат».
     const task = await dialog()
     const watched = await preview(task.taskId)
@@ -255,12 +271,11 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         },
       ],
     ])
-    // The same attempt waits for the next words under its reserve, moved on; nothing is charged.
-    for (const hold of await holds(task.taskId)) {
-      expect(hold.status).toBe('active')
-      expect(hold.expiresAt.getTime()).toBe(NOW.getTime() + 72 * 3_600_000)
-    }
-    expect(await db.creditLedger.count({ where: { taskId: task.taskId, kind: 'charge' } })).toBe(0)
+    // The pass is charged when it ends (owner's answer of 26.10.2026: «любой успешный запрос от
+    // LLM должен тарифицироваться»): the first charge of the task, its minimum; the next words
+    // open a new chain.
+    expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+    expect(await charged(task.taskId)).toBe(5)
     // Ended once: the second writer finds the task elsewhere.
     expect(await settlement().settle(ref(task), completed())).toBe('skipped')
   })
@@ -312,14 +327,12 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         where: { dedupeKey: { startsWith: `preview.sync:${preview.id}:1:` } },
       }),
     ).toBe(1)
-    // The reserve waits with the dialog; nothing is charged before a release.
-    for (const hold of await holds(task.taskId)) {
-      expect(hold.status).toBe('active')
-      expect(hold.expiresAt.getTime()).toBe(NOW.getTime() + 72 * 3_600_000)
-    }
+    // The pass that made the candidate is charged now; the release charges nothing more.
+    expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+    expect(await charged(task.taskId)).toBe(5)
   })
 
-  it('asks the agent question and keeps the reserve', async () => {
+  it('asks the agent question and charges the pass that asked', async () => {
     const task = await dialog()
 
     await settlement().settle(ref(task), completed({ questions: ['Какой номер поставить?'] }))
@@ -331,10 +344,10 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         (payload as { kind: string }).kind,
       ]),
     ).toEqual([['feed.question', 'agent']])
-    expect((await holds(task.taskId)).every((hold) => hold.status === 'active')).toBe(true)
+    expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
   })
 
-  it('keeps a dialog open while a turn key still counts its usage: nothing is charged yet', async () => {
+  it('keeps a dialog open while a turn key still counts its usage: the charge waits for the sweep', async () => {
     const task = await dialog()
     const pool = await fixtures.modelPool()
     const price = await fixtures.modelPrice(pool, {
@@ -351,6 +364,21 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
 
     expect(await settlement().settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
     expect(await status(task.taskId)).toBe('awaiting_user')
+    // The client is not held back: the chain stays active, moved on, and a row names its attempt
+    // for the sweep (`TaskSweep.chargeLater`).
+    for (const hold of await holds(task.taskId)) {
+      expect(hold.status).toBe('active')
+      expect(hold.expiresAt.getTime()).toBe(NOW.getTime() + 72 * 3_600_000)
+    }
+    expect(await charged(task.taskId)).toBe(0)
+    expect(
+      (
+        await db.taskEvent.findMany({
+          where: { taskId: task.taskId, type: CHARGE_LATER_EVENT },
+          select: { payload: true, clientVisible: true },
+        })
+      ).map((row) => [row.payload, row.clientVisible]),
+    ).toEqual([[{ v: 1, attempt: 1 }, false]])
   })
 
   it('fails a pass with the client code and gives the reserve back', async () => {
@@ -619,7 +647,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
 
       expect(await ends.settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
       expect(await status(task.taskId)).toBe('awaiting_user')
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'active')).toBe(true)
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
     })
 
     it('asks the agent question of a pass that changed nothing', async () => {
@@ -880,7 +908,9 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       }
     }
 
-    it('ends done on an object the site confirmed: its facts in the result, charged, browser closed', async () => {
+    // The owner, 26.10.2026: «сделай также как в работе, результат не должен быть подтвержден, мы
+    // тарифицируем работу с LLM» — the pass answers, the dialog stays open, the pass is charged.
+    it('answers with what the site confirmed, keeps the dialog and the browser, charges the pass', async () => {
       const task = await browserTask()
       await saved(task)
       await markBrowserSessionWrote(db, { sessionId: task.sessionId })
@@ -888,7 +918,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
 
       expect(await browser.settle(ref(task), done())).toBe('moved')
 
-      expect(await status(task.taskId)).toBe('done')
+      expect(await status(task.taskId)).toBe('awaiting_user')
       expect(await feed(task.taskId)).toEqual([
         [
           'feed.result',
@@ -897,7 +927,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
             turn: 1,
             message: 'Новость опубликована.',
             site: 'changed',
-            next: 'done',
+            next: 'awaiting_user',
             filesChanged: 0,
             changeType: 'content',
             needsApproval: false,
@@ -915,10 +945,11 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         ],
       ])
       expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
-      expect(close).toHaveBeenCalledExactlyOnceWith(task.taskId, 'task_done')
+      // The browser lives on for the next words, until its idle time ends.
+      expect(close).not.toHaveBeenCalled()
     })
 
-    it('leaves a done task for later while a turn key still counts its usage', async () => {
+    it('keeps the dialog open while a turn key still counts its usage: the charge waits', async () => {
       const task = await browserTask()
       await saved(task)
       const pool = await fixtures.modelPool()
@@ -935,13 +966,16 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       })
       const { settlement: browser, close } = ends()
 
-      expect(await browser.settle(ref(task), done())).toBe('later')
-      expect(await status(task.taskId)).toBe('running')
-      expect(await feed(task.taskId)).toEqual([])
+      expect(await browser.settle(ref(task), done())).toBe('moved')
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'active')).toBe(true)
+      expect(
+        await db.taskEvent.count({ where: { taskId: task.taskId, type: CHARGE_LATER_EVENT } }),
+      ).toBe(1)
       expect(close).not.toHaveBeenCalled()
     })
 
-    it('asks the client to act when the agent asked for help, in the same attempt', async () => {
+    it('asks the client to act when the agent asked for help, and charges the pass that asked', async () => {
       const task = await browserTask()
       await saved(task)
       await recordBrowserHelp(db, {
@@ -966,11 +1000,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           },
         ],
       ])
-      // The reserve waits with the task; the browser lives on for the client.
-      for (const hold of await holds(task.taskId)) {
-        expect(hold.status).toBe('active')
-        expect(hold.expiresAt.getTime()).toBe(NOW.getTime() + 72 * 3_600_000)
-      }
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
       expect(close).not.toHaveBeenCalled()
     })
 
@@ -1003,7 +1033,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(await status(asked.taskId)).toBe('awaiting_user')
     })
 
-    it('asks the client to look when nothing the task saved is confirmed on the site', async () => {
+    it('answers without a question when nothing the task saved is confirmed on the site', async () => {
       const task = await browserTask()
       await saved(task, false)
       const { settlement: browser, close } = ends()
@@ -1011,84 +1041,21 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       await browser.settle(ref(task), done())
 
       expect(await status(task.taskId)).toBe('awaiting_user')
-      expect(await feed(task.taskId)).toEqual([
-        [
-          'feed.question',
-          {
-            v: 1,
-            kind: 'browser',
-            turn: 1,
-            reason: 'unconfirmed',
-            message: 'Новость опубликована.',
-          },
-        ],
-      ])
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'active')).toBe(true)
-      expect(close).not.toHaveBeenCalled()
-    })
-
-    /** A screenshot the agent sent the client, as the browser worker writes it. */
-    const screenshot = (taskId: string) =>
-      insertFeedEvent(db, {
-        taskId,
-        row: {
-          type: 'feed.screenshot',
-          payload: { v: 1, screenshotId: randomUUID(), number: 1, width: 1280, height: 800 },
-        },
-      })
-
-    it('ends done on a screenshot sent after the request: the site unchanged, charged, closed', async () => {
-      // The owner, 26.10.2026: «открыть сайт, сделать скрин сайта, прислать его — и только в
-      // этот момент задача будет завершена».
-      const task = await browserTask()
-      await screenshot(task.taskId)
-      const { settlement: browser, close } = ends()
-
-      expect(
-        await browser.settle(
-          ref(task),
-          done({ change_type: 'none', client_message: 'Скриншот главной страницы — выше.' }),
-        ),
-      ).toBe('moved')
-
-      expect(await status(task.taskId)).toBe('done')
-      expect((await feed(task.taskId)).slice(1)).toEqual([
-        [
-          'feed.result',
-          {
-            v: 1,
-            turn: 1,
-            message: 'Скриншот главной страницы — выше.',
-            site: 'unchanged',
-            next: 'done',
-            filesChanged: 0,
-            changeType: 'none',
-            needsApproval: false,
-            risk: 'low',
-          },
-        ],
+      const [row] = await feed(task.taskId)
+      expect(row).toEqual([
+        'feed.result',
+        expect.objectContaining({
+          next: 'awaiting_user',
+          site: 'unchanged',
+          message: 'Новость опубликована.',
+          objects: [{ kind: 'post', title: null, status: 'unconfirmed', editUrl }],
+        }),
       ])
       expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
-      expect(close).toHaveBeenCalledExactlyOnceWith(task.taskId, 'task_done')
-    })
-
-    it('does not take a screenshot for a result while a save stands unconfirmed', async () => {
-      const task = await browserTask()
-      await saved(task, false)
-      await screenshot(task.taskId)
-      const { settlement: browser, close } = ends()
-
-      await browser.settle(ref(task), done())
-
-      expect(await status(task.taskId)).toBe('awaiting_user')
-      expect((await feed(task.taskId))[1]).toEqual([
-        'feed.question',
-        { v: 1, kind: 'browser', turn: 1, reason: 'unconfirmed', message: 'Новость опубликована.' },
-      ])
       expect(close).not.toHaveBeenCalled()
     })
 
-    it('shows the client why the agent saved nothing, under the question of the platform', async () => {
+    it('shows the client why the agent saved nothing, as its answer', async () => {
       // The page refused a setting: the guide tells the agent to say so, not to look for a way
       // around it — and its words are all the client has to learn why.
       const task = await browserTask()
@@ -1101,8 +1068,18 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(await status(task.taskId)).toBe('awaiting_user')
       expect(await feed(task.taskId)).toEqual([
         [
-          'feed.question',
-          { v: 1, kind: 'browser', turn: 1, reason: 'unconfirmed', message: refused },
+          'feed.result',
+          {
+            v: 1,
+            turn: 1,
+            message: refused,
+            site: 'unchanged',
+            next: 'awaiting_user',
+            filesChanged: 0,
+            changeType: 'none',
+            needsApproval: false,
+            risk: 'low',
+          },
         ],
       ])
     })

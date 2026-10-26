@@ -1303,6 +1303,8 @@ describe('task head', () => {
     expect(feedTaskHeadSchema.parse(head)).toEqual({
       ...head,
       requirements: { repository: true, browser: false },
+      // A head written before the choice of reasoning reads as «Высокое».
+      effort: 'high',
     })
     for (const status of taskStatuses)
       expect(feedTaskHeadSchema.safeParse({ ...head, status }).success).toBe(true)

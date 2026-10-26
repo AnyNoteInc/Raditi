@@ -7,6 +7,7 @@ import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
+import IconButton from '@mui/material/IconButton'
 import MuiLink from '@mui/material/Link'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
@@ -69,18 +70,28 @@ function candidateCount(tab: Exclude<PaneTab, 'preview'>, candidate: CandidateHe
   return counts.files.added + counts.files.modified + counts.files.deleted + counts.media
 }
 
+/** The changes of the candidate on the site itself: its files and media, the records of the site. */
+const siteChanges = (candidate: CandidateHead | null): number =>
+  candidateCount('files', candidate) + candidateCount('database', candidate)
+
 /**
- * The tabs the panel has something for (owner's request of 26.10.2026: it opens only when it is
- * really needed) — the preview while it is in use, the files and the records of the site the
- * changes touch, their checks — in their order. None: the dialog has no panel at all.
+ * The tabs the panel has something for (owner's requests of 26.10.2026: it opens only when it is
+ * really needed — when something on the site has changed) — the files and the records of the site
+ * the changes touch, their checks, and the preview of them — in their order. The preview of a
+ * dialog without changes is there only when the client asked for it (`/preview`): its first build
+ * is the site as it is. None: the dialog has no panel at all.
  */
 export function paneTabsOf(
   preview: PreviewHead | null,
   candidate: CandidateHead | null,
+  options: { previewAsked?: boolean } = {},
 ): PaneTab[] {
+  const changed = siteChanges(candidate) > 0
   return paneTabs.filter((tab) =>
     tab === 'preview'
-      ? preview !== null && usedPreviews.has(preview.status)
+      ? preview !== null &&
+        usedPreviews.has(preview.status) &&
+        (changed || options.previewAsked === true)
       : candidateCount(tab, candidate) > 0,
   )
 }
@@ -292,6 +303,7 @@ export function PreviewPane({
   canReset,
   onReset,
   resetting,
+  onClose,
 }: {
   taskId: string
   preview: PreviewHead | null
@@ -303,6 +315,8 @@ export function PreviewPane({
   canReset: boolean
   onReset: () => void
   resetting: boolean
+  /** «Скрыть изменения»: the panel steps aside, the dialog takes the width. */
+  onClose?: () => void
 }) {
   // The address of the cabinet is known in the browser only: the tab is drawn there.
   const cabinet = useSyncExternalStore(noSubscription, cabinetOrigin, noOrigin)
@@ -310,46 +324,67 @@ export function PreviewPane({
   const shown = tabs.includes(tab) ? tab : (tabs[0] ?? tab)
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
-      <Tabs
-        value={shown}
-        onChange={(_event, next: PaneTab) => onTab(next)}
-        aria-label={paneText.tabs}
-        variant="scrollable"
-        scrollButtons={false}
-        sx={{ flex: 'none', px: 1, borderBottom: 1, borderColor: 'divider' }}
+      <Box
+        sx={{
+          flex: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          pr: 1,
+          borderBottom: 1,
+          borderColor: 'divider',
+        }}
       >
-        {tabs.map((value) => {
-          const count = value === 'preview' ? 0 : candidateCount(value, candidate)
-          return (
-            <Tab
-              key={value}
-              value={value}
-              icon={<AppIcon name={tabIcon[value]} size={20} />}
-              iconPosition="start"
-              label={
-                count > 0 ? (
-                  <Box component="span" aria-hidden="true">
-                    {count}
-                  </Box>
-                ) : undefined
-              }
-              aria-label={tabLabel[value]}
-              title={tabLabel[value]}
-              id={tabId(value)}
-              aria-controls={panelId(value)}
-              sx={{
-                minHeight: 48,
-                minWidth: 52,
-                px: 1.5,
-                textTransform: 'none',
-                fontSize: 13,
-                fontVariantNumeric: 'tabular-nums',
-                '& .MuiTab-iconWrapper': { mr: count > 0 ? 0.75 : 0 },
-              }}
-            />
-          )
-        })}
-      </Tabs>
+        <Tabs
+          value={shown}
+          onChange={(_event, next: PaneTab) => onTab(next)}
+          aria-label={paneText.tabs}
+          variant="scrollable"
+          scrollButtons={false}
+          sx={{ flex: '1 1 auto', minWidth: 0, px: 1 }}
+        >
+          {tabs.map((value) => {
+            const count = value === 'preview' ? 0 : candidateCount(value, candidate)
+            return (
+              <Tab
+                key={value}
+                value={value}
+                icon={<AppIcon name={tabIcon[value]} size={20} />}
+                iconPosition="start"
+                label={
+                  count > 0 ? (
+                    <Box component="span" aria-hidden="true">
+                      {count}
+                    </Box>
+                  ) : undefined
+                }
+                aria-label={tabLabel[value]}
+                title={tabLabel[value]}
+                id={tabId(value)}
+                aria-controls={panelId(value)}
+                sx={{
+                  minHeight: 48,
+                  minWidth: 52,
+                  px: 1.5,
+                  textTransform: 'none',
+                  fontSize: 13,
+                  fontVariantNumeric: 'tabular-nums',
+                  '& .MuiTab-iconWrapper': { mr: count > 0 ? 0.75 : 0 },
+                }}
+              />
+            )
+          })}
+        </Tabs>
+        {onClose ? (
+          <IconButton
+            aria-label={paneText.hide}
+            title={paneText.hide}
+            onClick={onClose}
+            sx={{ flex: 'none', width: 44, height: 44, color: 'text.secondary' }}
+          >
+            <AppIcon name="close" size={20} />
+          </IconButton>
+        ) : null}
+      </Box>
       {tabs.map((value) => (
         <Box
           key={value}

@@ -23,7 +23,8 @@ const ticketHash = (ticket: string): string =>
 
 /**
  * Who may watch and drive a session (Б12): it still holds a browser and its deadline has not
- * passed, the user is a member of the task's workspace, and the site is not closed.
+ * passed, the user is a member of the task's workspace, the task is not deleted, and the site is not
+ * closed.
  */
 function viewerAllowed(sessionId: string, userId: string): Prisma.Sql {
   return Prisma.sql`EXISTS (
@@ -31,7 +32,7 @@ function viewerAllowed(sessionId: string, userId: string): Prisma.Sql {
       JOIN tasks t ON t.id = b.task_id
       JOIN sites s ON s.id = b.site_id
       JOIN members m ON m.workspace_id = t.workspace_id AND m.user_id = ${userId}::uuid
-     WHERE b.id = ${sessionId}::uuid
+     WHERE b.id = ${sessionId}::uuid AND t.deleted_at IS NULL
        AND b.status IN ('starting', 'ready') AND b.expires_at > clock_timestamp()
        AND s.status::text <> ALL (${[...browserClosedSiteStatuses]}::text[]))`
 }

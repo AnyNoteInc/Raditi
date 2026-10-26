@@ -120,7 +120,7 @@ describe('the rows of a dialog', () => {
     expect(heading.nextElementSibling?.textContent).toBe('Поменял цену капучино на 290 ₽.')
   })
 
-  it('asks the agent question and says how to answer while it is open', () => {
+  it('asks the agent question, with no standing words under it (owner, 26.10.2026)', () => {
     const question = agentQuestionRow('2', 1, ['Какую цену поставить?', 'На все размеры?'])
     const { feed } = showFeed([requestRow('1'), question], headOf({ status: 'awaiting_user' }), {
       question: question.id,
@@ -131,9 +131,7 @@ describe('the rows of a dialog', () => {
         .getAllByRole('listitem')
         .some((item) => item.textContent === 'На все размеры?'),
     ).toBe(true)
-    expect(
-      within(feed).getByText('Агент продолжит, когда вы ответите. Ответьте одним сообщением.'),
-    ).toBeTruthy()
+    expect(text(feed)).not.toContain('Агент продолжит, когда вы ответите.')
   })
 
   it('offers «Продолжить» and the way out on the open question about credits', () => {
@@ -181,9 +179,7 @@ describe('the rows of a dialog', () => {
     expect(within(feed).getByRole('heading', { name: 'Ответ агента' })).toBeTruthy()
     expect(within(feed).queryByRole('heading', { name: 'Готово' })).toBeNull()
     expect(text(feed)).toContain('Это сайт учебного комбината на WordPress.')
-    expect(text(feed)).toContain(
-      'Если нужно что-то ещё, напишите — агент продолжит в этом диалоге.',
-    )
+    expect(text(feed)).not.toContain('Если нужно что-то ещё')
     expect(text(feed)).not.toContain('Изменено файлов')
   })
 
@@ -210,7 +206,7 @@ describe('the rows of a dialog', () => {
     ]
     const { feed } = showFeed(rows, headOf({ status: 'cancelled' }))
     expect(text(feed)).toContain(
-      'Агент не уложился в 20 минут. Попробуйте разбить задачу на несколько небольших. На сайте ничего не изменилось. Кредиты за эту задачу не списаны.',
+      'Агент не уложился в 20 минут. Попробуйте разбить задачу на несколько небольших. На сайте ничего не изменилось. За этот запрос кредиты не списаны.',
     )
     expect(text(feed)).toContain('Вы остановили задачу. На сайте ничего не изменилось.')
   })
@@ -331,7 +327,7 @@ describe('the rows of a dialog', () => {
     expect(text(feed)).toContain('Вы решили выпустить версию 1.4.0.')
     expect(within(feed).getByRole('heading', { name: 'Вернули как было' })).toBeTruthy()
     expect(text(feed)).toContain(
-      'Версию 1.4.0 установить не удалось, и мы вернули сайт к прежнему состоянию. После установки сайт не прошёл проверку. Кредиты за эту задачу не списаны.',
+      'Версию 1.4.0 установить не удалось, и мы вернули сайт к прежнему состоянию. После установки сайт не прошёл проверку. За этот запрос кредиты не списаны.',
     )
     expect(within(feed).getByRole('heading', { name: 'Версия установлена' })).toBeTruthy()
     expect(text(feed)).toContain('Версия 1.4.1 установлена на сайт.')

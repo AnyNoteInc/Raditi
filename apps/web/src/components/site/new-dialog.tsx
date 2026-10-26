@@ -10,10 +10,11 @@ import { useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { callErrorText } from '@/components/chat/call-error'
-import { composerText, effortText, taskWayText } from '@/components/chat/chat-texts'
+import { composerText, taskWayText } from '@/components/chat/chat-texts'
 import type { SiteCapabilities } from '@/components/chat/chat-types'
 import { Composer, offScreen } from '@/components/chat/composer'
 import { riseIn } from '@/components/chat/chat-motion'
+import { EffortMenu } from '@/components/chat/effort-menu'
 import { dialogListKey } from '@/components/chat/dialog-list'
 import { useAttachments } from '@/components/chat/use-attachments'
 import { uuidv7 } from '@/components/chat/uuid'
@@ -64,7 +65,7 @@ interface PillOption<T extends string> {
   describedBy?: string
 }
 
-/** A switch of pills: «Чат | Работа», «Низкое | Высокое | Максимальное». */
+/** A switch of pills: «Чат | Работа». */
 function Pills<T extends string>({
   name,
   label,
@@ -98,7 +99,8 @@ function Pills<T extends string>({
               display: 'inline-flex',
               alignItems: 'center',
               gap: 0.75,
-              minHeight: { xs: 44, sm: 36 },
+              // The pressing area of 44px on every width (DESIGN.md).
+              minHeight: 44,
               px: 1.5,
               borderRadius: '999px',
               fontSize: 14,
@@ -143,8 +145,14 @@ function Pills<T extends string>({
 }
 
 /** The mode of a dialog is the way the agent works: «Чат» — without the files, «Работа» — on them. */
-const modeOfWay = { browser: 'chat', repository: 'work' } as const satisfies Record<TaskWay, TaskMode>
-const wayOfMode = { chat: 'browser', work: 'repository' } as const satisfies Record<TaskMode, TaskWay>
+const modeOfWay = { browser: 'chat', repository: 'work' } as const satisfies Record<
+  TaskWay,
+  TaskMode
+>
+const wayOfMode = { chat: 'browser', work: 'repository' } as const satisfies Record<
+  TaskMode,
+  TaskWay
+>
 
 /**
  * The screen a dialog starts from (docs/plan/53-chat-preview-release.md, R9). The first words
@@ -153,7 +161,7 @@ const wayOfMode = { chat: 'browser', work: 'repository' } as const satisfies Rec
  * works (owner's request of 26.10.2026): «Работа» on a copy of the site from `main`, «Чат» without
  * the files — in the cloud browser (docs/plan/57-browser-tasks.md, Б9); a mode the site does not
  * offer cannot be chosen, and why is read aloud. «Размышление» picks how hard the model thinks
- * (`low`, `high`, `max`). A site that takes no tasks says so on the field. Beside the list at the
+ * (`low`, `high`, `max`) — the same menu changes it later in the dialog. A site that takes no tasks says so on the field. Beside the list at the
  * root of the section the heading of the page is the list's, so the screen takes the level below.
  */
 export function NewDialog({
@@ -248,8 +256,6 @@ export function NewDialog({
         <Composer
           placeholder={composerText.newPlaceholder}
           disabledReason={offer.blocked}
-          // A site that is not connected yet: the field is closed without a phrase under it.
-          reasonShown={offer.blocked !== composerText.notConnected}
           error={error}
           busy={create.isPending}
           onSend={start}
@@ -276,34 +282,28 @@ export function NewDialog({
                   },
                 ]}
               />
-              <Pills
-                name="effort"
-                label={effortText.label}
-                value={effort}
-                onChange={setEffort}
-                options={(['low', 'high', 'max'] as const).map((value) => ({
-                  value,
-                  label: effortText[value],
-                }))}
-              />
+              <EffortMenu value={effort} onChange={setEffort} />
             </>
           }
         />
+        {/* The one reason a client can fix themselves — the address is not https — is shown: the
+            field would be closed with nothing to say why. */}
+        {offer.blocked === taskWayText.insecure ? (
+          <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+            {offer.blocked}
+          </Typography>
+        ) : null}
+        {/* Not shown (owner's request of 26.10.2026: no standing words under the field): what the
+            mode means is read aloud with it, and the clock on a mode says it cannot be chosen. */}
         {way !== null ? (
-          <Typography
-            id={WAY_NOTE}
-            variant="body2"
-            color="text.secondary"
-            sx={{ textAlign: 'center', maxWidth: 640, alignSelf: 'center' }}
-          >
+          <Box id={WAY_NOTE} sx={offScreen}>
             {way === 'repository'
               ? taskWayText.repositoryNote
               : offer.ways.includes('repository')
                 ? taskWayText.browserNote
                 : taskWayText.browserOnly}
-          </Typography>
+          </Box>
         ) : null}
-        {/* Not shown: the clock on a mode says it; the phrase is read aloud with the mode. */}
         <Box id={CHAT_OFF} sx={offScreen}>
           {composerText.chatOff}
         </Box>

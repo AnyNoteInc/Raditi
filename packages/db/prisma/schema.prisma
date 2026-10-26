@@ -541,7 +541,8 @@ model Task {
   /// by the database, unique within the site; an insert whose alias is taken draws again
   /// (trigger tasks_free_alias). CHECK tasks_alias_check.
   alias           String       @default(dbgenerated("substr(md5((gen_random_uuid())::text), 1, 6)")) @db.VarChar(12)
-  /// Set once from the first request (feed design, «Ограничения в базе»).
+  /// Set from the first request (feed design, «Ограничения в базе»); the client may rename the
+  /// dialog (`task.rename`, owner's request of 26.10.2026).
   title           String?      @db.VarChar(120)
   mode            TaskMode     @default(work)
   /// Why a queued task waits; cleared when it leaves `queued` (CHECK tasks_waiting_check).
@@ -555,6 +556,9 @@ model Task {
   createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   finishedAt      DateTime?    @map("finished_at") @db.Timestamptz(6)
+  /// «Удалить диалог» (`task.remove`, owner's request of 26.10.2026): the cabinet no longer finds
+  /// the dialog; the row and everything that points at it stay.
+  deletedAt       DateTime?    @map("deleted_at") @db.Timestamptz(6)
 
   /// First bounded content access, including GET-only privacy maps.
   contentAccessedAt    DateTime? @map("content_accessed_at") @db.Timestamptz(6)

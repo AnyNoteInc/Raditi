@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { plain, serverRefusal } from '@/components/billing/testing'
 
+import { composerText } from './chat-texts'
 import type { CandidateView, DialogFeed, FeedRow, PreparedRelease } from './chat-types'
 import { DialogView } from './dialog-view'
 import {
@@ -50,6 +51,15 @@ const calls = vi.hoisted(() => ({
     vi.fn<(input: { taskId: string; releaseId: string }) => Promise<{ planId: string }>>(),
   resumeAgent: vi.fn<(input: Press) => Promise<Posted>>(),
   attachments: vi.fn(async (_input: { taskId: string }) => [] as unknown[]),
+  setEffort: vi.fn<(input: { taskId: string; effort: string }) => Promise<{ effort: string }>>(),
+  rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
+  remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
+  replace: vi.fn<(href: string) => void>(),
+}))
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: calls.replace, push: vi.fn() }),
+  usePathname: () => `/projects/${SITE_ID}/chat/${TASK_ID}`,
 }))
 
 const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
@@ -68,6 +78,9 @@ vi.mock('@/trpc/client', () => ({
       retry: mutation(calls.retry),
       cancel: mutation(calls.cancel),
       resumeAgent: mutation(calls.resumeAgent),
+      setEffort: mutation(calls.setEffort),
+      rename: mutation(calls.rename),
+      remove: mutation(calls.remove),
     },
     attachment: { list: query('attachment.list', calls.attachments) },
     preview: { reset: mutation(calls.reset) },
@@ -200,14 +213,61 @@ const network = () => new TypeError('Failed to fetch')
 const NETWORK_TEXT = 'Не удалось связаться с сервером. Проверьте подключение и попробуйте ещё раз.'
 
 describe('a dialog', () => {
-  it('reads its head and rows, and names its status in a sign and a word', async () => {
+  it('reads its head and rows: one line of its name and its menu, the mode by the field', async () => {
     showDialog()
     expect(await screen.findByText('Изменения готовы')).toBeTruthy()
     expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBeTruthy()
     expect(calls.feed).toHaveBeenCalledWith({ taskId: TASK_ID, after: '0' })
-    const header = screen.getByRole('banner')
-    expect(plain(header.textContent)).toContain('Режим: Работа')
+    expect(
+      screen.getByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+    ).toBeTruthy()
+    // The mode the dialog started in is said by the field, not changed there.
+    expect(plain(screen.getByTitle('Режим выбирается в начале диалога').textContent)).toContain(
+      'Работа',
+    )
     expect(field().getAttribute('placeholder')).toBe('Что поправить?')
+    // No standing words under the field (owner, 26.10.2026): the reminder is read aloud only.
+    expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
+  })
+
+  it('changes how hard the model thinks from the agent’s next turn', async () => {
+    calls.setEffort.mockResolvedValueOnce({ effort: 'max' })
+    showDialog()
+    await screen.findByText('Изменения готовы')
+    fireEvent.click(screen.getByRole('button', { name: 'Размышление: Высокое' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Максимальное/ }))
+    await waitFor(() => expect(calls.setEffort).toHaveBeenCalledTimes(1))
+    expect(calls.setEffort.mock.calls[0]![0]).toEqual({ taskId: TASK_ID, effort: 'max' })
+    expect(screen.getByRole('button', { name: 'Размышление: Максимальное' })).toBeTruthy()
+  })
+
+  it('renames the dialog in place, and deletes it after asking', async () => {
+    calls.rename.mockResolvedValueOnce({ title: 'Цена латте' })
+    calls.remove.mockResolvedValueOnce({ removed: true })
+    showDialog()
+    await screen.findByText('Изменения готовы')
+    const menu = () =>
+      screen.getByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' })
+
+    fireEvent.click(menu())
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Переименовать' }))
+    const name = screen.getByRole('textbox', { name: 'Название диалога' })
+    fireEvent.change(name, { target: { value: '  Цена   латте ' } })
+    fireEvent.keyDown(name, { key: 'Enter' })
+    await waitFor(() => expect(calls.rename).toHaveBeenCalledTimes(1))
+    expect(calls.rename.mock.calls[0]![0]).toEqual({ taskId: TASK_ID, title: 'Цена латте' })
+
+    await waitFor(() =>
+      expect(screen.queryByRole('textbox', { name: 'Название диалога' })).toBeNull(),
+    )
+    fireEvent.click(menu())
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
+    const ask = await screen.findByRole('dialog', { name: 'Удалить диалог?' })
+    fireEvent.click(within(ask).getByRole('button', { name: 'Удалить' }))
+    await waitFor(() => expect(calls.remove).toHaveBeenCalledTimes(1))
+    expect(calls.remove.mock.calls[0]![0]).toEqual({ taskId: TASK_ID })
+    // The page of a deleted dialog leaves for the root of «Чат».
+    await waitFor(() => expect(calls.replace).toHaveBeenCalledWith(`/projects/${SITE_ID}/chat`))
   })
 
   it('sends words as a new pass on top of the changes and reads the dialog again', async () => {
@@ -301,6 +361,15 @@ describe('a dialog', () => {
     )
     await screen.findByText('Это сайт учебного комбината.')
     expect(field().disabled).toBe(false)
+    // Like a chat of Claude Code (owner's answer of 26.10.2026): an answer asks nothing — the
+    // field is that of a new message, not of an answer, and the status is said as such.
+    expect(field().getAttribute('placeholder')).toBe(composerText.newPlaceholder)
+    expect(screen.getByRole('button', { name: composerText.send })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Ответить' })).toBeNull()
+    expect(
+      screen.getAllByRole('status').some((node) => node.textContent?.includes('Агент ответил')),
+    ).toBe(true)
+    expect(screen.queryByText('Нужен ваш ответ')).toBeNull()
   })
 
   it('offers «Продолжить» on the question about credits and keeps the field closed', async () => {
@@ -461,13 +530,20 @@ describe('a dialog', () => {
         }),
       }),
     )
+    // The field stays, closed: it says the dialog has ended, read aloud with the reason.
+    const closed = await screen.findByRole('textbox', { name: 'Сообщение' })
+    expect((closed as HTMLTextAreaElement).disabled).toBe(true)
+    expect(closed.getAttribute('placeholder')).toBe('Диалог завершён')
     expect(
-      await screen.findByText('Диалог завершён. Чтобы попросить что-то ещё, начните новый.'),
+      screen.getByText('Диалог завершён. Чтобы попросить что-то ещё, начните новый.'),
     ).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Новый диалог' }).getAttribute('href')).toBe(
       `/projects/${SITE_ID}/chat/new`,
     )
-    expect(screen.queryByRole('textbox', { name: 'Сообщение' })).toBeNull()
+    // The level of a dialog that has ended is no longer changed.
+    expect(
+      (screen.getByRole('button', { name: 'Размышление: Высокое' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
   })
 
   it('says when there is no such dialog', async () => {
@@ -662,7 +738,7 @@ describe('a dialog', () => {
     await screen.findByText('Изменения готовы')
     fireEvent.click(screen.getByRole('button', { name: 'Посмотреть изменения' }))
     await waitFor(() =>
-      expect(screen.getByRole('tab', { name: 'Предпросмотр', selected: true })).toBeTruthy(),
+      expect(screen.getByRole('tab', { name: 'Изменения', selected: true })).toBeTruthy(),
     )
     expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
   })
@@ -671,12 +747,28 @@ describe('a dialog', () => {
 describe('a task in the browser', () => {
   const pane = () => screen.getByRole('complementary', { name: 'Браузер задачи' })
 
+  it('gives the browser of a task that has ended no half of the screen', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'done',
+        events: [requestRow('1', 'Добавьте новость о веранде')],
+        cursor: '1',
+        browser: null,
+      }),
+    )
+    expect(await screen.findByText('Добавьте новость о веранде')).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: 'Браузер задачи' })).toBeNull()
+    expect(screen.queryByRole('tablist', { name: 'Что показать' })).toBeNull()
+  })
+
   it('shows the browser instead of the preview, behind «Диалог | Браузер», and only /cancel', async () => {
     showDialog(
       browserAnswer({ events: [requestRow('1', 'Добавьте новость о веранде')], cursor: '1' }),
     )
     expect(await screen.findByText('Добавьте новость о веранде')).toBeTruthy()
-    expect(plain(screen.getByRole('banner').textContent)).toContain('В браузере')
+    expect(plain(screen.getByTitle('Режим выбирается в начале диалога').textContent)).toContain(
+      'Чат',
+    )
     expect(pane()).toBeTruthy()
     expect(screen.queryByRole('complementary', { name: 'Изменения диалога' })).toBeNull()
     const views = screen.getByRole('tablist', { name: 'Что показать' })

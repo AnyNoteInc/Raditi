@@ -13,7 +13,8 @@ import { plural } from '@/lib/plural'
 export const viewSwitchText = Object.freeze({
   label: 'Что показать',
   dialog: 'Диалог',
-  preview: 'Предпросмотр',
+  /** The panel of the changes: their files, records, checks and preview. */
+  preview: 'Изменения',
 })
 
 export const paneText = Object.freeze({
@@ -34,6 +35,9 @@ export const paneText = Object.freeze({
   stale: 'Сайт изменился после того, как эти изменения были готовы. Обновите рабочую копию.',
   /** The edge of the panel that is dragged (docs/plan/57-browser-tasks.md, Б29). */
   separator: 'Ширина панели изменений',
+  /** The panel opens by itself when the changes appear, and the client can close it. */
+  show: 'Показать изменения',
+  hide: 'Скрыть изменения',
 })
 
 export const filesText = Object.freeze({
@@ -315,6 +319,12 @@ export const composerText = Object.freeze({
   commandsInDialog: 'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
   /** A command typed in full that cannot be run now, and the server gave no reason. */
   commandUnavailable: 'Эта команда сейчас недоступна.',
+  /** The button in place of «Отправить» while the agent works: the same as `/cancel`. */
+  stop: 'Остановить',
+  /** The field of a dialog that has ended. */
+  finished: 'Диалог завершён',
+  /** The mode of a dialog that goes on: chosen when it started. */
+  modeFixed: 'Режим выбирается в начале диалога',
 })
 
 export const listText = Object.freeze({
@@ -392,6 +402,31 @@ export const effortText = Object.freeze({
   low: 'Низкое',
   high: 'Высокое',
   max: 'Максимальное',
+  /** What each level is for: under its name in the menu. */
+  lowHint: 'Быстрее и дешевле — для простых правок',
+  highHint: 'Для большинства задач',
+  maxHint: 'Дольше и дороже — для сложных задач',
+  /** The level of a dialog that goes on changes from the agent's next turn. */
+  changed: 'Уровень размышления изменится со следующего шага агента',
+})
+
+/**
+ * What is done with a dialog as a whole (owner's request of 26.10.2026): its menu in the list and
+ * in its head, the name written in place, the confirmation of «Удалить».
+ */
+export const dialogMenuText = Object.freeze({
+  open: 'Действия с диалогом',
+  rename: 'Переименовать',
+  remove: 'Удалить',
+  name: 'Название диалога',
+  removeTitle: 'Удалить диалог?',
+  removeBody:
+    'Диалог пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся. То, что уже выпущено на сайт, останется.',
+  /** The dialog's release can still be undone: the button goes with the dialog. */
+  removeUndo:
+    'Кнопка «Отменить выпуск» этого диалога тоже пропадёт: вернуть прежнюю версию можно будет только новым диалогом.',
+  removeConfirm: 'Удалить',
+  removeKeep: 'Оставить',
 })
 
 export const taskWayText = Object.freeze({
@@ -423,6 +458,8 @@ export const browserText = Object.freeze({
     connecting: 'Подключение',
     agent: 'Работает агент',
     waiting: 'Ждём вас',
+    /** The agent answered and asked nothing: the browser waits for no one (26.10.2026). */
+    idle: 'Агент ответил',
     user: 'Управляете вы',
     reconnecting: 'Переподключение',
     error: 'Ошибка',

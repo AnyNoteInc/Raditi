@@ -13,6 +13,8 @@ import { SITE_LIST_WIDTH, SITE_RAIL_WIDTH, SITE_TOOLBAR_HEIGHT } from './site-na
 
 /** The bottom bar of a phone, which the pinned action of the list stays above. */
 const BOTTOM_BAR = 64
+/** The page draws the panel beside a dialog: the list column gives the dialog its room. */
+const PANE_DRAWN = '[data-site-shell]:has([data-site-pane]) &'
 
 /**
  * A section of the site laid out as «list — content». From `md` the list is a column that runs
@@ -42,8 +44,9 @@ export function SiteListFrame({
   backLabel: string
   list: ReactNode
   /**
-   * From `lg` an item other than the action's gives the list column up: the item takes the
-   * width — a dialog with the panel of its changes beside it — and the way back is shown.
+   * An item other than the action's — a dialog — stands at the height of the window from `lg`,
+   * and gives the list column up while the panel of its changes is drawn beside it
+   * (`data-site-pane`): the item takes the width and the way back is shown.
    */
   collapseOnItem?: boolean
   children: ReactNode
@@ -87,8 +90,8 @@ export function SiteListFrame({
             xs: selected ? 'none' : 'flex',
             sm: selected ? 'none' : 'grid',
             md: 'grid',
-            ...(collapsed && { lg: 'none' }),
           },
+          ...(collapsed && { [PANE_DRAWN]: { display: { lg: 'none' } } }),
           flexDirection: 'column',
           flex: '1 0 auto',
           minWidth: 0,
@@ -181,11 +184,8 @@ export function SiteListFrame({
             component={Link}
             href={root}
             sx={{
-              display: {
-                xs: 'inline-flex',
-                md: 'none',
-                ...(collapsed && { lg: 'inline-flex' }),
-              },
+              display: { xs: 'inline-flex', md: 'none' },
+              ...(collapsed && { [PANE_DRAWN]: { display: { lg: 'inline-flex' } } }),
               alignSelf: 'flex-start',
               alignItems: 'center',
               gap: 1,

@@ -46,6 +46,7 @@
     "next": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "react-markdown": "catalog:",
     "remark-gfm": "catalog:",
     "server-only": "catalog:",
     "sharp": "catalog:",

@@ -22,6 +22,7 @@ import { feedBrowserOutput } from '../services/chat/browser.ts'
 import { chatContextOf } from '../services/chat/context.ts'
 import { DIALOG_CURSOR_PATTERN, listDialogs } from '../services/chat/dialog-list.ts'
 import { readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
+import { removeDialog, renameDialog, setDialogEffort } from '../services/chat/dialog-manage.ts'
 import { dialogCommands, dialogFacts } from '../services/chat/dialog-facts.ts'
 import { accessibleTask, taskNotFound } from '../services/chat/access.ts'
 import {
@@ -237,6 +238,31 @@ export const taskRouter = router({
       cancelDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
     ),
 
+  /** «Переименовать»: the name of the dialog in the list and its head (owner, 26.10.2026). */
+  rename: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), title: z.string().max(1000) }))
+    .output(z.strictObject({ title: z.string() }))
+    .mutation(({ ctx, input }) => renameDialog(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /**
+   * «Удалить»: the dialog leaves the cabinet; one that goes on is cancelled first, as `/cancel`
+   * does it. Refused while a release of it goes on.
+   */
+  remove: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(z.strictObject({ removed: z.literal(true) }))
+    .mutation(({ ctx, input }) =>
+      removeDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
+    ),
+
+  /** «Размышление» of a dialog that goes on: the level from its next turn (owner, 26.10.2026). */
+  setEffort: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), effort: reasoningEffortSchema }))
+    .output(z.strictObject({ effort: reasoningEffortSchema }))
+    .mutation(({ ctx, input }) =>
+      setDialogEffort(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
+    ),
+
   /** The head of the dialog and its rows after the cursor, from one snapshot. */
   feed: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid(), after: feedCursorSchema.optional() }))
@@ -296,6 +322,8 @@ export const taskRouter = router({
             mode: z.enum(taskModes),
             /** «Отменить выпуск» of the dialog's release: under way, or installed. */
             undo: z.enum(['running', 'installed']).nullable(),
+            /** The agent answered and asked nothing: the dialog waits for no one (26.10.2026). */
+            answered: z.boolean(),
             createdAt: z.date(),
             updatedAt: z.date(),
           }),

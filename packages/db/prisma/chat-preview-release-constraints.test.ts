@@ -319,15 +319,26 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
         expect(row.alias).toMatch(/^[0-9a-f]{6}$/)
         expect(String(row.alias)).toMatch(pattern)
       }
-      // The requirements of a task (20261022100000_browser_tasks) come later, with their defaults.
+      // The requirements of a task (20261022100000_browser_tasks) come later, with their defaults;
+      // so does the mark of «Удалить диалог» (20261026150000_task_deleted_at), empty for them.
       expect(
         tasks.map(
-          ({ alias: _a, title, mode, waiting, needs_repository, needs_browser, ...rest }) => ({
+          ({
+            alias: _a,
+            title,
+            mode,
+            waiting,
+            needs_repository,
+            needs_browser,
+            deleted_at,
+            ...rest
+          }) => ({
             ...rest,
             title,
             mode,
             waiting,
             needs: [needs_repository, needs_browser],
+            deleted: deleted_at,
           }),
         ),
       ).toEqual(
@@ -337,6 +348,7 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
           mode: 'work',
           waiting: null,
           needs: [true, false],
+          deleted: null,
         })),
       )
       expect(

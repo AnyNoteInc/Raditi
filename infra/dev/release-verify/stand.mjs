@@ -1190,7 +1190,7 @@ export function standRatesFile() {
  * reasoning), the sum in credits at the stand's rate, rounded half up once, at least 5, at most the
  * reserve (spec §17, «Правила списания»).
  */
-export function expectedCharge(calls, reservedCredits) {
+export function expectedCharge(calls, reservedCredits, { minimum = true } = {}) {
   const rate = (value) => Number(value)
   let costRub = 0
   for (const call of calls)
@@ -1201,7 +1201,10 @@ export function expectedCharge(calls, reservedCredits) {
         call.outputTokens * rate(STAND_RATES.outputPer1m)) /
       1_000_000
   const used = Math.round(costRub / rate(STAND_RUB_PER_CREDIT))
-  return { costRub, credits: Math.min(reservedCredits, Math.max(5, used)), used }
+  // The minimum is the first charge's of a task: a later pass pays its work, and any work at
+  // all costs a credit (26.10.2026).
+  const due = minimum ? Math.max(5, used) : costRub > 0 ? Math.max(1, used) : used
+  return { costRub, credits: Math.min(reservedCredits, due), used }
 }
 
 /** `vX.Y.Z` above `vA.B.C`. */

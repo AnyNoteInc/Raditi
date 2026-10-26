@@ -44,10 +44,10 @@ import {
   type SiteCapabilities,
 } from '../site-capabilities.ts'
 import { codeImportOnly } from '../site-setup.ts'
-import { taskNotFound } from './access.ts'
+import { taskNotFound, type LockedTask } from './access.ts'
 import { bindMessageAttachments, requestAttachments } from './attachments.ts'
 import { browserConfigured, type ChatContext } from './context.ts'
-import { assertCommandAvailable, dialogFacts } from './dialog-facts.ts'
+import { assertCommandAvailable, dialogFacts, type DialogFacts } from './dialog-facts.ts'
 import { moveTo, underDialogLock, WRITE, writeRequest } from './dialog-lock.ts'
 import {
   cancelPending,
@@ -313,10 +313,12 @@ async function sameDialog(
 ): Promise<CreatedDialog | null> {
   const task = await db.task.findUnique({
     where: { id: ids.taskId },
-    select: { siteId: true, createdById: true, alias: true },
+    select: { siteId: true, createdById: true, alias: true, deletedAt: true },
   })
   if (task === null) return null
-  if (task.siteId !== ids.siteId || task.createdById !== ids.userId) throw taskNotFound()
+  // A dialog deleted since is not found again by a late repeat of the request that made it.
+  if (task.siteId !== ids.siteId || task.createdById !== ids.userId || task.deletedAt !== null)
+    throw taskNotFound()
   return { taskId: ids.taskId, alias: task.alias, created: false }
 }
 
@@ -336,11 +338,48 @@ export interface DialogMessageInput {
 }
 
 /**
+ * The attempt the next pass of an open dialog runs in, and its reserve (owner's answer of
+ * 26.10.2026: every completed pass is charged when it ends). A chain that is still active — a
+ * pass failed and the dialog kept its candidate, or the charge of the last pass waits for its
+ * usage — goes on, and its reserve is moved on. A chain that was charged is followed by a new
+ * one: the next attempt, its reserve placed now (`follows` — the client's words or «Продолжить»),
+ * refused as a new task would be. A task that never held a reserve — one that is not billable —
+ * goes on in its attempt.
+ */
+async function nextPassAttempt(
+  tx: Tx,
+  task: LockedTask,
+  follows: 'message' | 'continue',
+  now: Date,
+): Promise<number> {
+  const holds = await tx.creditHold.findMany({
+    where: { taskId: task.id, status: { in: ['active', 'captured'] } },
+    select: { status: true },
+  })
+  if (holds.some((hold) => hold.status === 'active')) {
+    await extendTaskHolds(tx, { taskId: task.id, expiresAt: taskHoldExpiry(now, 'waiting') })
+    return task.attempt
+  }
+  if (holds.length === 0) return task.attempt
+  const attempt = task.attempt + 1
+  await placeCreditHold(tx, {
+    workspaceId: task.workspaceId,
+    taskId: task.id,
+    attempt,
+    now,
+    expiresAt: taskHoldExpiry(now, 'waiting'),
+    follows,
+  })
+  return attempt
+}
+
+/**
  * Words to a dialog that waits (Р6): the answer to the agent's question or to a result that
  * left the dialog open (`awaiting_user → queued`, `feed.request` `answer`; owner's decision of
  * 26.10.2026) or a new pass on top of the candidate (`awaiting_approval →
- * queued`, `revision`). The same attempt goes on under the same reserve, which is moved on; the
- * pass goes into the outbox with the row. A question of the platform about credits is answered
+ * queued`, `revision`). The pass that ended was charged, so the words open the next attempt with
+ * a reserve of its own (`nextPassAttempt`; refused for credits as a new task is); a chain still
+ * active goes on under its reserve. The pass goes into the outbox with the row. A question of the platform about credits is answered
  * by «Продолжить» (`task.continue`), never by words. A repeat with the same `requestId` returns
  * the row of the first delivery. The files of the message are bound to the task with it — all of
  * them or the message is refused. Words to a task in the browser that asked the client to act
@@ -399,8 +438,8 @@ export async function postDialogMessage(
       throw notWaiting(task.status)
     }
 
-    await moveTo(tx, task, 'queued')
-    await extendTaskHolds(tx, { taskId: task.id, expiresAt: taskHoldExpiry(now, 'waiting') })
+    const attempt = await nextPassAttempt(tx, task, 'message', now)
+    await moveTo(tx, task, 'queued', attempt === task.attempt ? {} : { attempt })
     await bindMessageAttachments(tx, {
       ids: attachments.attachments ?? [],
       taskId: task.id,
@@ -409,7 +448,7 @@ export async function postDialogMessage(
       siteId: task.siteId,
     })
     const requestEventId = await writeRequest(tx, task.id, payload)
-    await enqueueAgentTurn(tx, { taskId: task.id, attempt: task.attempt, requestEventId })
+    await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
     return { requestEventId, repeated: false }
   })
 }
@@ -417,7 +456,8 @@ export async function postDialogMessage(
 /**
  * «Продолжить» after a question of the platform about credits (Р8; spec §17, «Потолок
  * достигнут»): the next attempt of the same dialog with a reserve of its own — a continuation,
- * which keeps the reserve of the attempt before. The dialog waits in `awaiting_user`, or in
+ * which keeps the reserve of the attempt before, or, when the pass that ran out was charged
+ * (26.10.2026), a new chain (`follows: 'continue'`). The dialog waits in `awaiting_user`, or in
  * `awaiting_approval` when it has a candidate (so `/release` stays open meanwhile). A dialog
  * that used its three attempts is not continued.
  */
@@ -452,6 +492,8 @@ export async function continueDialog(
       attempt,
       now,
       expiresAt: taskHoldExpiry(now, 'waiting'),
+      // The pass that ran out was charged: «Продолжить» opens a new chain.
+      ...(chain.length === 0 ? { follows: 'continue' as const } : {}),
     })
     const requestEventId = await writeRequest(tx, task.id, {
       v: 1,
@@ -468,8 +510,9 @@ export async function continueDialog(
 /**
  * «Продолжить работу агента» (docs/plan/57-browser-tasks.md, Б16): a task in the browser waits for
  * the client — the agent asked them to act there, or asked a question — and the client gives the
- * work back without words. The same attempt goes on under the same reserve, which is moved on, as
- * an answer would (Б25); the pass takes the browser back from the client when it starts. A
+ * work back without words. The pass that asked was charged (26.10.2026): the work goes on in the
+ * next attempt with a reserve of its own (`nextPassAttempt`, as «Продолжить»), or under the chain
+ * that is still active; the pass takes the browser back from the client when it starts. A
  * question of the platform about credits is answered by «Продолжить». A repeat with the same
  * `requestId` returns the row of the first delivery.
  */
@@ -494,15 +537,15 @@ export async function resumeDialog(
     if (question === null || question.answered) throw taskNothingToResume()
     if (question.kind === 'ceiling') throw taskContinueRequired()
 
-    await moveTo(tx, task, 'queued')
-    await extendTaskHolds(tx, { taskId: task.id, expiresAt: taskHoldExpiry(now, 'waiting') })
+    const attempt = await nextPassAttempt(tx, task, 'continue', now)
+    await moveTo(tx, task, 'queued', attempt === task.attempt ? {} : { attempt })
     const requestEventId = await writeRequest(tx, task.id, {
       v: 1,
       kind: 'resume',
       authorId: userId,
       requestId,
     })
-    await enqueueAgentTurn(tx, { taskId: task.id, attempt: task.attempt, requestEventId })
+    await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
     return { requestEventId, repeated: false }
   })
 }
@@ -628,39 +671,55 @@ export async function cancelDialog(
 
     const facts = await dialogFacts(tx, task, userId)
     assertCommandAvailable(facts.commands, 'cancel')
-    const requestEventId = await writeRequest(tx, task.id, {
-      v: 1,
-      kind: 'command',
-      command: 'cancel',
-      authorId: userId,
-      requestId,
-    })
-
-    if (task.requirements.browser || task.status === 'preparing' || task.status === 'running') {
-      await enqueueTurnCancel(tx, { taskId: task.id, requestEventId })
-      return { requestEventId, repeated: false, state: 'stopping' }
-    }
-
-    await moveTo(tx, task, 'cancelled', { finishedAt: now })
-    const returned = await releaseTask(tx, { taskId: task.id, now })
-    await insertFeedEvent(tx, {
-      taskId: task.id,
-      row: {
-        type: 'feed.cancelled',
-        payload: {
-          v: 1,
-          turn: task.turnNo >= 1 ? task.turnNo : null,
-          by: 'customer',
-          authorId: userId,
-          site: (await taskHasProductionWrites(tx, task.id)) ? 'check' : 'unchanged',
-          credits: creditsAfterReturn(returned),
-        },
-      },
-    })
-    if (facts.preview !== null)
-      await requestPreviewSync(tx, { taskId: task.id, revision: facts.preview.revision })
-    return { requestEventId, repeated: false, state: 'cancelled' }
+    return { ...(await stopDialog(tx, task, facts, { userId, requestId, now })), repeated: false }
   })
+}
+
+/**
+ * `/cancel` of a locked dialog the verdicts allow it for: the command is written as the client's
+ * request, then the dialog that waits is closed at once — its reserve given back, its preview
+ * sent to be removed — while one that works, or a task in the browser, is stopped by core. Also
+ * the first step of «Удалить диалог» (`removeDialog`).
+ */
+export async function stopDialog(
+  tx: Tx,
+  task: LockedTask,
+  facts: DialogFacts,
+  input: { userId: string; requestId: string; now: Date },
+): Promise<{ requestEventId: string; state: 'cancelled' | 'stopping' }> {
+  const { userId, requestId, now } = input
+  const requestEventId = await writeRequest(tx, task.id, {
+    v: 1,
+    kind: 'command',
+    command: 'cancel',
+    authorId: userId,
+    requestId,
+  })
+
+  if (task.requirements.browser || task.status === 'preparing' || task.status === 'running') {
+    await enqueueTurnCancel(tx, { taskId: task.id, requestEventId })
+    return { requestEventId, state: 'stopping' }
+  }
+
+  await moveTo(tx, task, 'cancelled', { finishedAt: now })
+  const returned = await releaseTask(tx, { taskId: task.id, now })
+  await insertFeedEvent(tx, {
+    taskId: task.id,
+    row: {
+      type: 'feed.cancelled',
+      payload: {
+        v: 1,
+        turn: task.turnNo >= 1 ? task.turnNo : null,
+        by: 'customer',
+        authorId: userId,
+        site: (await taskHasProductionWrites(tx, task.id)) ? 'check' : 'unchanged',
+        credits: creditsAfterReturn(returned),
+      },
+    },
+  })
+  if (facts.preview !== null)
+    await requestPreviewSync(tx, { taskId: task.id, revision: facts.preview.revision })
+  return { requestEventId, state: 'cancelled' }
 }
 
 /**

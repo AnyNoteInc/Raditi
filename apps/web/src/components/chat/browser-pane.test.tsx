@@ -167,6 +167,13 @@ describe('the browser of a task', () => {
     expect(within(toolbar()).getByRole('status').textContent).toBe('Ждём вас')
   })
 
+  // Like a chat of Claude Code (owner's answer of 26.10.2026): the agent answered and asks
+  // nothing — the browser waits for no one.
+  it('says «Агент ответил», not «Ждём вас», when the agent only answered', () => {
+    show({ head: head({ status: 'awaiting_user' }), answered: true })
+    expect(within(toolbar()).getByRole('status').textContent).toBe('Агент ответил')
+  })
+
   it('while this tab controls: «Продолжить работу агента», the hint and the address to go by', () => {
     const stream = holding()
     const { onResume, onStop } = show({ stream })

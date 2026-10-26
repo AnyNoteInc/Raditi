@@ -252,11 +252,11 @@ export function SiteShell({
   const toolbarSx = {
     minHeight: { xs: 48, md: SITE_TOOLBAR_HEIGHT },
     px: SIDE_PADDING,
-    py: 0.25,
+    // In the bar of its own height a link keeps the pressing area of 44px (the breadcrumbs give it).
+    py: { xs: 0.25, md: 0 },
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     gap: '4px 16px',
-    '& .MuiLink-root': { minHeight: { md: 32 } },
   } as const
   // The bar of a section page: from the rail to the right edge, over the list column and the panel
   // of a dialog too (owner's request of 26.10.2026). From `md` it stays at the top in one line of
@@ -406,12 +406,11 @@ export function SiteShell({
             of a dialog from `lg` — the bar above runs over both. */}
         <Box
           sx={{
-            ml: {
-              ...(framed && { md: `${SITE_LIST_WIDTH}px` }),
-              ...(paned && { lg: 0 }),
-            },
+            ml: { ...(framed && { md: `${SITE_LIST_WIDTH}px` }) },
+            // The list stays beside an open dialog, like the chats of ChatGPT and Claude (owner's
+            // request of 26.10.2026); the panel of its changes, while it is drawn, takes its room.
             ...(paned && {
-              '&:has([data-site-pane])': { mr: { lg: SITE_PANE_WIDTH } },
+              '&:has([data-site-pane])': { ml: { lg: 0 }, mr: { lg: SITE_PANE_WIDTH } },
             }),
             minWidth: 0,
             ...(framed && { flex: '1 0 auto', display: 'flex', flexDirection: 'column' }),

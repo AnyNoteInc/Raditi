@@ -175,7 +175,7 @@ describe('new dialog', () => {
     showDialog({ capabilities: NONE })
     expect(field().disabled).toBe(true)
     expect(send().disabled).toBe(true)
-    expect(described(field())).toBe(NOT_CONNECTED)
+    expect(described(field())).toContain(NOT_CONNECTED)
     expect(described(send())).toBe(NOT_CONNECTED)
     expect(offScreenText(NOT_CONNECTED)).toBe(true)
   })
@@ -207,26 +207,34 @@ describe('new dialog', () => {
 
   it('lets the client pick how hard the model thinks, «Высокое» first', async () => {
     showDialog()
-    const efforts = within(screen.getByRole('radiogroup', { name: 'Размышление' }))
-    expect(efforts.getAllByRole('radio').map((item) => item.closest('label')?.textContent)).toEqual([
-      'Низкое',
-      'Высокое',
-      'Максимальное',
-    ])
-    expect(efforts.getByRole<HTMLInputElement>('radio', { name: 'Высокое' }).checked).toBe(true)
-    fireEvent.click(efforts.getByRole('radio', { name: 'Максимальное' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Размышление: Высокое' }))
+    const efforts = within(await screen.findByRole('menu', { name: 'Размышление' }))
+    expect(
+      efforts.getAllByRole('menuitemradio').map((item) => item.querySelector('span')?.textContent),
+    ).toEqual(['Низкое', 'Высокое', 'Максимальное'])
+    expect(
+      efforts.getByRole('menuitemradio', { name: /Высокое/ }).getAttribute('aria-checked'),
+    ).toBe('true')
+    fireEvent.click(efforts.getByRole('menuitemradio', { name: /Максимальное/ }))
+    expect(screen.getByRole('button', { name: 'Размышление: Максимальное' })).toBeTruthy()
     write('Расскажи про этот проект')
     fireEvent.click(send())
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
     expect(create.mock.calls[0]![0]).toMatchObject({ effort: 'max' })
   })
 
-  it('keeps the reminders under the field, and no files for the copy of the site', () => {
+  it('shows no words under the field, and no files for the copy of the site', () => {
     showDialog()
-    expect(screen.getAllByRole('button')).toHaveLength(1)
+    // The level of thinking and «Отправить».
+    expect(screen.getAllByRole('button')).toHaveLength(2)
     expect(screen.queryByRole('button', { name: 'Прикрепить файлы' })).toBeNull()
     expect(screen.queryByRole('radiogroup', { name: 'Как агент будет работать' })).toBeNull()
-    expect(screen.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeTruthy()
+    expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
+    expect(
+      offScreenText(
+        'В режиме «Работа» агент получает копию файлов сайта из последней версии, вы смотрите результат в предпросмотре и сами выпускаете новую версию на сайт.',
+      ),
+    ).toBe(true)
   })
 })
 
@@ -244,11 +252,9 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
     expect(chat.checked).toBe(true)
     expect(described(modes)).toContain('без копии файлов сайта')
     expect(screen.getByRole('button', { name: 'Прикрепить файлы' })).toBeTruthy()
-    expect(
-      screen.getByText(
-        'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
-      ),
-    ).toBeTruthy()
+    expect(described(field())).toContain(
+      'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
+    )
     write('Открой сайт и пришли скриншот')
     fireEvent.click(send())
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
@@ -285,7 +291,7 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
   it('says why a site whose address is not https takes no task in the browser', () => {
     showDialog({ capabilities: { repository: 'absent', browser: 'insecure' } })
     expect(field().disabled).toBe(true)
-    expect(described(field())).toBe(
+    expect(described(field())).toContain(
       'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://.',
     )
   })

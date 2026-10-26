@@ -96,6 +96,10 @@ function previewFactsOf(
   }
   if (preview.status === 'ready' && address)
     return { state: 'serving', origin: previewOrigin(preview.hostname, address) }
+  // Being built — the first build of the dialog, or one the start of this pass asked for after
+  // the preview stopped unused (owner's answer of 26.10.2026).
+  if (['pending', 'building', 'expired'].includes(preview.status) && address)
+    return { state: 'starting', origin: previewOrigin(preview.hostname, address) }
   return { state: 'absent' }
 }
 

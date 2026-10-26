@@ -736,6 +736,27 @@ describe('newTaskVerdict', () => {
       )
     })
 
+    // After a charged pass (owner's answer of 26.10.2026): the next words open a chain as a new
+    // task does, «Продолжить» goes on with the work as a continuation does — neither has a reserve.
+    it('asks the next words what a new task is asked, and a resume what a continuation is', () => {
+      const few = { accounts: three(account(3), empty, empty) }
+      expect(ask({ placement: 'next', ...few })).toEqual(refused('below_start', 3, 0, 5, 3))
+      expect(ask({ placement: 'resume', ...few })).toEqual(allowed(3, 0, 1, 3))
+      expect(ask({ placement: 'next', unpaidWork: credits('300') }).reason).toBe('unpaid_limit')
+      expect(ask({ placement: 'resume', unpaidWork: credits('300') }).allowed).toBe(true)
+      // The tariff alone, its day taken: the gift and the pack would cover a resume's one credit.
+      const dayTaken = {
+        accounts: three(account(5000), empty, empty),
+        subscription: tariff('active', { creditsPerMonth: 300, creditsPerDay: 50 }),
+        tariffCreditsToday: day(5000, 5000),
+      }
+      expect(ask({ placement: 'next', ...dayTaken }).reason).toBe('daily_limit')
+      expect(ask({ placement: 'resume', ...dayTaken }).reason).toBe('daily_limit')
+      // Neither names a reserve of the task: the chain before them was charged.
+      for (const placement of ['next', 'resume'] as const)
+        expect(() => ask({ placement, heldByTask: own(5) })).toThrow(badRequest)
+    })
+
     it('refuses by the day only a paid tariff whose plan has a daily limit', () => {
       const taken = day(5000, 5000)
       for (const status of subscriptionStatuses) {
@@ -819,8 +840,8 @@ describe('newTaskVerdict', () => {
   })
 
   describe('by what asks for the reserve', () => {
-    it('knows a new task, a continuation and a retry', () => {
-      expect(taskPlacements).toEqual(['new', 'continuation', 'retry'])
+    it('knows a new task, a continuation, a retry and the two after a charged pass', () => {
+      expect(taskPlacements).toEqual(['new', 'continuation', 'retry', 'next', 'resume'])
     })
 
     it('bounds the tariff part of a new task and a continuation by the day, never of a retry', () => {
@@ -830,6 +851,8 @@ describe('newTaskVerdict', () => {
       expect(placementTariffRoom('continuation', { room: toCredits(0) })).toBe(0)
       expect(placementTariffRoom('retry', left)).toBeNull()
       expect(placementTariffRoom('retry', { room: toCredits(0) })).toBeNull()
+      expect(placementTariffRoom('next', left)).toBe(7)
+      expect(placementTariffRoom('resume', left)).toBe(7)
       // no day: no paid tariff, or a plan without a daily limit
       for (const placement of taskPlacements) {
         expect(placementTariffRoom(placement, null)).toBeNull()

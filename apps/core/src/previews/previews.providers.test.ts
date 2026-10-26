@@ -7,6 +7,7 @@ import { previewRuntimeConfig } from './previews.providers.ts'
 const previews: PreviewsConfig = {
   address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
   ttlHours: 72,
+  idleMinutes: 30,
   executor: 'local',
   runtime: 'runc',
   webImages: {},

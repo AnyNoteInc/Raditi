@@ -30,7 +30,6 @@ import {
   feedObjectKindLabel,
   feedObjectStatusLabel,
   feedObjectText,
-  feedQuestionText,
   FEED_QUEUE_TIMEOUT_CLOSING,
   feedQueuedText,
   feedRecordsChangedText,
@@ -38,7 +37,6 @@ import {
   feedReleaseReasonText,
   feedReleaseText,
   feedReleaseTitle,
-  feedResultOpenText,
   feedRetryText,
   feedRowText,
   feedStateText,
@@ -66,6 +64,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
+import { AgentMarkdown } from './agent-markdown'
 import { SentFiles, type SentFile } from './attachment-chips'
 import { dayTime, feedTime } from './chat-format'
 import { pulsing, riseIn } from './chat-motion'
@@ -132,7 +131,13 @@ const PLANS_PATH = '/settings/plans'
 function Paragraph({ children }: { children: ReactNode }) {
   return (
     <Typography
-      sx={{ m: 0, fontSize: 16, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.65 }}
+      sx={{
+        m: 0,
+        fontSize: 16,
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
+        lineHeight: 1.65,
+      }}
     >
       {children}
     </Typography>
@@ -251,7 +256,13 @@ function Bubble({
       >
         <Typography
           component="p"
-          sx={{ m: 0, fontSize: 16, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.65 }}
+          sx={{
+            m: 0,
+            fontSize: 16,
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            lineHeight: 1.65,
+          }}
         >
           {text}
         </Typography>
@@ -382,7 +393,9 @@ function Disclosure({
         },
         '& > summary::-webkit-details-marker': { display: 'none' },
         '& > summary:hover': { color: 'text.primary' },
-        '& > summary svg': { transition: 'transform var(--raditi-motion-base) var(--raditi-ease-out)' },
+        '& > summary svg': {
+          transition: 'transform var(--raditi-motion-base) var(--raditi-ease-out)',
+        },
         '&[open] > summary svg': { transform: 'rotate(90deg)' },
         '&[open] > div': riseIn,
       }}
@@ -410,7 +423,15 @@ function Worked({
   return (
     <Disclosure summary={feedWorkedText(seconds)} onOpen={() => setOpened(true)}>
       <Box
-        sx={{ ml: 0.75, pl: 2, pb: 1, borderLeft: 1, borderColor: 'divider', display: 'grid', gap: 1.5 }}
+        sx={{
+          ml: 0.75,
+          pl: 2,
+          pb: 1,
+          borderLeft: 1,
+          borderColor: 'divider',
+          display: 'grid',
+          gap: 1.5,
+        }}
         aria-label={dialogText.stages}
       >
         <StepList steps={steps} running={false} />
@@ -520,12 +541,6 @@ function QuestionCard({
           </Box>
         )}
       </Card>
-      {open ? (
-        <Typography variant="body2" color="text.secondary">
-          {feedQuestionText.waiting}
-          {row.questions.length > 1 ? ` ${feedQuestionText.oneMessage}` : ''}
-        </Typography>
-      ) : null}
     </Box>
   )
 }
@@ -726,18 +741,12 @@ function CandidateCard({
           {row.media > 0 ? <li>{nbsp(feedMediaAddedText(row.media))}</li> : null}
           {row.records > 0 ? <li>{nbsp(feedRecordsChangedText(row.records))}</li> : null}
         </Box>
-        {live ? <Paragraph>{nbsp(feedCandidateText.hint)}</Paragraph> : null}
         {live && refusal !== null && RELEASE_HINTS.includes(refusal) ? (
           <Typography variant="body2" color="text.secondary">
             {chatCommandRefusalText[refusal]}
           </Typography>
         ) : null}
       </Card>
-      {live ? (
-        <Typography variant="body2" color="text.secondary">
-          {nbsp(feedCandidateText.revise)}
-        </Typography>
-      ) : null}
     </Box>
   )
 }
@@ -853,12 +862,11 @@ function RowView({
             approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
           }
         >
-          <Paragraph>{row.message}</Paragraph>
+          <AgentMarkdown text={row.message} />
           <Sentences
             parts={[
               site,
               open || row.filesChanged === null ? null : feedFilesChangedText(row.filesChanged),
-              open ? feedResultOpenText : null,
             ]}
           />
           <SiteObjects objects={row.objects ?? []} heading={feedObjectText.result} />
@@ -1182,7 +1190,7 @@ export function LiveBlock({
         text = stopping ? dialogText.stoppedHint : feedQueuedText(task.waiting)
         break
       case 'preparing':
-        text = stopping ? dialogText.stoppedHint : feedLiveText.preparing
+        text = stopping ? dialogText.stoppedHint : null
         break
       case 'running':
         if (stopping) text = dialogText.stoppedHint
@@ -1201,7 +1209,8 @@ export function LiveBlock({
             </Button>
           )
         } else {
-          text = browser ? feedLiveText.browser : feedLiveText.running
+          // The status and its timer say it all; no standing words (owner, 26.10.2026).
+          text = null
           body = (
             <>
               {steps.length > 0 ? <StepList steps={steps} running /> : null}

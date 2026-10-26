@@ -2,6 +2,7 @@
 
 import { chatCommands, type ChatCommandId } from '@repo/domain/release/chat-commands'
 import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
+import type { ReasoningEffort } from '@repo/domain/llm/model-class'
 import {
   feedFailureKeptText,
   feedInputText,
@@ -9,6 +10,7 @@ import {
   feedStateText,
   feedVersionText,
   taskModeLabel,
+  taskAnsweredLabel,
   taskStatusLabel,
 } from '@repo/domain/tasks/client-feed-labels'
 import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
@@ -44,6 +46,7 @@ import {
   cancelText,
   composerText,
   dialogText,
+  effortText,
   listText,
   paneText,
   releaseStatusText,
@@ -53,7 +56,9 @@ import {
   viewSwitchText,
 } from './chat-texts'
 import { Composer, offScreen } from './composer'
-import { dialogListKey } from './dialog-list'
+import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
+import { DialogNotFound } from './dialog-not-found'
+import { EffortMenu } from './effort-menu'
 import { FeedList, LiveBlock, type FeedActions } from './feed-list'
 import {
   candidateMessage,
@@ -68,7 +73,6 @@ import { showsRefresh, type FeedHeadState } from './feed-state'
 import { PaneResizer } from './pane-resizer'
 import { PreviewPane, paneTabId, paneTabsOf, type PaneTab } from './preview-pane'
 import { ReleaseDialog } from './release-dialog'
-import { StatusMark } from './status-mark'
 import { TurnActivity } from './turn-activity'
 import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
@@ -103,52 +107,143 @@ function releaseProgress(head: FeedHeadState): string | null {
   return words ? releaseText.progress(feedVersionText(release.version), words) : null
 }
 
-function DialogHead({ title, head }: { title: string; head: FeedHeadState | null }) {
+/** «Показать изменения» of the head: the focus goes there when the panel is closed. */
+const SHOW_PANE_ID = 'dialog-show-pane'
+
+/**
+ * The head of a dialog (owner's request of 26.10.2026): one quiet line — its name, a release under
+ * way beside it, the way to the panel of its changes when the client closed it, and its menu
+ * («Переименовать», «Удалить»). The name is written in place of itself.
+ */
+function DialogHead({
+  siteId,
+  taskId,
+  title,
+  head,
+  onRenamed,
+  pane,
+}: {
+  siteId: string
+  taskId: string
+  title: string
+  head: FeedHeadState | null
+  onRenamed: () => void
+  /** The panel of the changes is closed and can be opened again; null — nothing to open. */
+  pane: { label: string; onOpen: () => void } | null
+}) {
+  // «Отменить выпуск» is offered now: deleting the dialog takes it away too.
+  const undoable =
+    head?.commands.some((command) => command.id === 'undo' && command.available) === true
+  const [renaming, setRenaming] = useState(false)
+  const [removing, setRemoving] = useState(false)
   const progress = head === null ? null : releaseProgress(head)
   return (
-    <Box component="header" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-      <Typography
-        component="h1"
-        sx={{
-          fontSize: { xs: 17, md: 18 },
-          fontWeight: 600,
-          lineHeight: 1.4,
-          overflowWrap: 'anywhere',
-        }}
-      >
-        {title}
-      </Typography>
-      {head ? (
-        <Box
-          sx={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: '2px 12px',
-            fontSize: 13,
-            color: 'text.secondary',
+    <Box
+      component="header"
+      sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 44, minWidth: 0 }}
+    >
+      {renaming ? (
+        <RenameField
+          siteId={siteId}
+          taskId={taskId}
+          initial={head?.task.title ?? ''}
+          fontSize={15}
+          onDone={(saved) => {
+            setRenaming(false)
+            if (saved !== null) onRenamed()
           }}
+        />
+      ) : (
+        <Box
+          sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 1.5 }}
         >
-          <StatusMark status={head.task.status} size="medium" />
-          <Box component="span">
-            <Box component="span" sx={offScreen}>
-              {dialogText.mode}:{' '}
-            </Box>
-            {taskModeLabel[head.task.mode]}
-          </Box>
-          {head.task.requirements.browser ? (
-            <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-              <AppIcon name="globe" size={14} />
-              {taskWayText.browser}
-            </Box>
-          ) : null}
+          <Typography
+            component="h1"
+            title={title}
+            sx={{
+              minWidth: 0,
+              fontSize: 15,
+              fontWeight: 500,
+              lineHeight: 1.4,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {title}
+          </Typography>
           {progress ? (
-            <Typography component="span" variant="body2" color="text.secondary">
+            <Typography
+              component="span"
+              variant="body2"
+              color="text.secondary"
+              sx={{ flex: 'none', fontSize: 13 }}
+            >
               {nbsp(progress)}
             </Typography>
           ) : null}
         </Box>
+      )}
+      {pane ? (
+        <Button
+          id={SHOW_PANE_ID}
+          variant="text"
+          size="small"
+          onClick={pane.onOpen}
+          startIcon={<AppIcon name="panel" size={18} />}
+          sx={{
+            display: { xs: 'none', lg: 'inline-flex' },
+            flex: 'none',
+            minHeight: 44,
+            color: 'text.secondary',
+            '&:hover': { color: 'text.primary' },
+          }}
+        >
+          {pane.label}
+        </Button>
       ) : null}
+      {head !== null && !renaming ? (
+        <DialogMenuButton
+          title={title}
+          onRename={() => setRenaming(true)}
+          onRemove={() => setRemoving(true)}
+        />
+      ) : null}
+      {removing ? (
+        <RemoveDialogConfirm
+          siteId={siteId}
+          taskId={taskId}
+          undoable={undoable}
+          open
+          onClose={() => setRemoving(false)}
+        />
+      ) : null}
+    </Box>
+  )
+}
+
+/** The mode of a dialog that goes on: chosen when it started, said and not changed. */
+function ModeMark({ mode }: { mode: 'work' | 'chat' }) {
+  return (
+    <Box
+      component="span"
+      title={composerText.modeFixed}
+      sx={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 0.75,
+        minHeight: { xs: 44, sm: 36 },
+        px: 1.25,
+        fontSize: 14,
+        color: 'text.secondary',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <AppIcon name={mode === 'chat' ? 'globe' : 'file'} size={16} />
+      {taskModeLabel[mode]}
+      <Box component="span" sx={offScreen}>
+        {`. ${composerText.modeFixed}`}
+      </Box>
     </Box>
   )
 }
@@ -184,6 +279,18 @@ export function DialogView({
 
   const [view, setView] = useState<View>('dialog')
   const [paneTab, setPaneTab] = useState<PaneTab>('preview')
+  // The panel steps aside when the client closes it, and comes back with the next changes: what
+  // is kept is the changes it was closed on (`id:revision` of the candidate).
+  const [closedOn, setClosedOn] = useState<string | null>(null)
+  // `/preview` asked for the preview of a dialog without changes: its tab is drawn then too.
+  const [previewAsked, setPreviewAsked] = useState(false)
+  // Said to a screen reader once the server took a new level.
+  const [effortNote, setEffortNote] = useState('')
+  // The level chosen here, shown while the head still says the level it was chosen over.
+  const [effortChosen, setEffortChosen] = useState<{
+    effort: ReasoningEffort
+    over: ReasoningEffort | undefined
+  } | null>(null)
   const [releaseOpen, setReleaseOpen] = useState(false)
   const [undoOpen, setUndoOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
@@ -202,6 +309,7 @@ export function DialogView({
   const update = useMutation(trpc.candidate.update.mutationOptions())
   const retry = useMutation(trpc.task.retry.mutationOptions())
   const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
+  const setEffort = useMutation(trpc.task.setEffort.mutationOptions())
   const busy =
     proceed.isPending ||
     retry.isPending ||
@@ -214,14 +322,23 @@ export function DialogView({
   // files with its messages, the stream while its panel is shown.
   const inBrowser = head?.task.requirements.browser === true
   const browserLive = inBrowser && sessionLive(head?.browser ?? null)
-  // The panel beside the dialog only when it has something (owner's request of 26.10.2026): the
-  // browser of a task in the browser, or the tabs of the changes that hold anything — a preview in
-  // use, files or records of the site to change, checks.
-  const changeTabs = inBrowser ? [] : paneTabsOf(head?.preview ?? null, head?.candidate ?? null)
-  const hasPane = inBrowser || changeTabs.length > 0
+  // The panel beside the dialog only when it has something (owner's requests of 26.10.2026: open it
+  // when something on the site has changed, not at the start): the browser of a task in the
+  // browser while the task goes on, or the tabs of the changes that hold anything — files or
+  // records of the site to change, their preview, checks. From `lg` the client may close it; it
+  // comes back by the button of the head, and by itself with the next changes.
+  const ended = head !== null && terminalTaskStatuses.includes(head.task.status)
+  const changeTabs = inBrowser
+    ? []
+    : paneTabsOf(head?.preview ?? null, head?.candidate ?? null, { previewAsked })
+  const hasPane = (inBrowser && !ended) || changeTabs.length > 0
+  const candidateNow = head?.candidate ?? null
+  const changesMark = candidateNow === null ? '' : `${candidateNow.id}:${candidateNow.revision}`
+  const paneClosed = closedOn !== null && closedOn === changesMark
+  const paneShown = hasPane && (!wide || !paneClosed)
   // Without a panel the switch has nothing to show instead of the dialog.
   const shownView: View = hasPane ? view : 'dialog'
-  const paneVisible = hasPane && (wide || shownView === 'preview')
+  const paneVisible = paneShown && (wide || shownView === 'preview')
   const stream = useBrowserStream({
     taskId,
     streamUrl: browserStreamUrl,
@@ -349,20 +466,46 @@ export function DialogView({
     last.next === 'awaiting_approval'
       ? last
       : null
+  // The agent answered and asked nothing: the dialog waits for no one (26.10.2026).
+  const answered = status === 'awaiting_user' && question === null
   const announcement =
     status === undefined
       ? ''
       : keptFailure !== null
         ? `${feedFailureText[keptFailure.code]} ${feedFailureKeptText}`
-        : taskStatusLabel[status]
+        : answered
+          ? taskAnsweredLabel
+          : taskStatusLabel[status]
 
   function focusPaneTab(tab: PaneTab) {
     // A tab with nothing in it is not drawn: the first one that holds something takes its place.
-    const target = changeTabs.includes(tab) ? tab : changeTabs[0]
+    // The preview asked for by name is drawn even before the changes.
+    const asked = tab === 'preview' && head?.preview != null
+    const tabs = asked
+      ? paneTabsOf(head.preview, head.candidate, { previewAsked: true })
+      : changeTabs
+    const target = tabs.includes(tab) ? tab : tabs[0]
     if (target === undefined) return
+    if (asked) setPreviewAsked(true)
+    setClosedOn(null)
     setPaneTab(target)
     if (!wide) setView('preview')
     window.setTimeout(() => document.getElementById(paneTabId(target))?.focus(), 0)
+  }
+
+  /** «Размышление» of the dialog: from the agent's next turn (`task.setEffort`). */
+  async function changeEffort(effort: ReasoningEffort) {
+    setFieldError(null)
+    setEffortNote('')
+    setEffortChosen({ effort, over: head?.task.effort })
+    try {
+      await setEffort.mutateAsync({ taskId, effort })
+      setEffortNote(effortText.changed)
+    } catch (failure) {
+      setEffortChosen(null)
+      setFieldError(callErrorText(failure))
+    }
+    refresh()
   }
 
   // A repeat that the server answers `repeated` is the same words written before (the id is of
@@ -448,7 +591,10 @@ export function DialogView({
    * task that waits goes on with the same attempt (`task.resumeAgent`).
    */
   function resumeWork() {
-    if (status === 'awaiting_user') void press('resume', resumeAgent.mutateAsync)
+    // A question the client acted on goes back to the agent; without one — the agent answered
+    // and waits for nothing (26.10.2026) — the client only gives the browser back.
+    if (status === 'awaiting_user' && question !== null)
+      void press('resume', resumeAgent.mutateAsync)
     else stream.release()
   }
 
@@ -530,63 +676,60 @@ export function DialogView({
       }
     })
 
-  if (state.missing) {
-    return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-        <Typography component="h1" sx={{ fontSize: 26, fontWeight: 600 }}>
-          {dialogText.notFound}
-        </Typography>
-        <Typography color="text.secondary">{dialogText.notFoundHint}</Typography>
-        <Button
-          component={Link}
-          href={siteHref(siteId, 'chat')}
-          variant="outlined"
-          sx={{ alignSelf: 'flex-start' }}
-        >
-          {dialogText.toList}
-        </Button>
-      </Box>
-    )
-  }
+  if (state.missing) return <DialogNotFound listHref={siteHref(siteId, 'chat')} />
 
   const shownTitle = head?.task.title ?? title ?? listText.untitled
+  const releasing = status === 'deploying' || status === 'verifying'
+  const awaitingClient = status === 'awaiting_user' || status === 'awaiting_approval'
+  // Once the head says another level than the one chosen over, the head is right.
+  const effort =
+    effortChosen !== null && effortChosen.over === head?.task.effort
+      ? effortChosen.effort
+      : (head?.task.effort ?? 'high')
+  // The row of the field (owner's requests of 26.10.2026): the mode the dialog started in, and
+  // the level of thinking, which holds from the agent's next turn.
+  const settings =
+    head === null ? null : (
+      <>
+        <ModeMark mode={head.task.mode} />
+        <EffortMenu
+          value={effort}
+          onChange={(next) => void changeEffort(next)}
+          // The level holds from the agent's next turn: it is changed while the dialog waits.
+          disabled={!awaitingClient || setEffort.isPending}
+        />
+      </>
+    )
   let composer
   if (head === null) composer = null
   else if (terminal) {
     // A closed dialog keeps the commands it still has — «Отменить выпуск», the preview — behind
     // the button of the field, which takes no words (R9: commands work with the field closed).
-    const open = commands.some(
-      (command) => command.available && (command.id === 'undo' || command.id === 'preview'),
-    )
     composer = (
-      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 1 }}>
-        {open ? (
-          <Box sx={{ alignSelf: 'stretch' }}>
-            <Composer
-              placeholder={composerText.newPlaceholder}
-              sendLabel={composerText.send}
-              disabledReason={feedInputText.finished}
-              error={fieldError}
-              busy={false}
-              onSend={send}
-              commands={{
-                verdicts: commands,
-                onRun: runCommand,
-                onOpen: refresh,
-                listed: inBrowser ? BROWSER_COMMANDS : undefined,
-              }}
-            />
-          </Box>
-        ) : (
-          <Typography color="text.secondary" sx={{ textAlign: 'center' }}>
-            {feedInputText.finished}
-          </Typography>
-        )}
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5 }}>
+        <Box sx={{ alignSelf: 'stretch' }}>
+          <Composer
+            placeholder={composerText.finished}
+            sendLabel={composerText.send}
+            disabledReason={feedInputText.finished}
+            error={fieldError}
+            busy={false}
+            onSend={send}
+            modes={settings}
+            commands={{
+              verdicts: commands,
+              onRun: runCommand,
+              onOpen: refresh,
+              listed: inBrowser ? BROWSER_COMMANDS : undefined,
+            }}
+          />
+        </Box>
         <Button
           component={Link}
           href={`${siteHref(siteId, 'chat')}/new`}
-          variant="contained"
+          variant="outlined"
           startIcon={<AppIcon name="plus" size={18} />}
+          sx={{ borderRadius: '999px' }}
         >
           {feedInputText.newDialog}
         </Button>
@@ -599,7 +742,6 @@ export function DialogView({
       status === 'awaiting_user' &&
       (question === null || question.kind === 'agent' || question.kind === 'browser')
     const revising = status === 'awaiting_approval' && question === null
-    const releasing = status === 'deploying' || status === 'verifying'
     const disabledReason = stopping
       ? composerText.stopping
       : question?.kind === 'ceiling'
@@ -609,20 +751,25 @@ export function DialogView({
           : releasing
             ? composerText.releasing
             : feedInputText.disabled
+    // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`).
+    const working = status === 'queued' || status === 'preparing' || status === 'running'
+    const cancelVerdict = commands.find((command) => command.id === 'cancel')
     composer = (
       <Composer
         placeholder={
-          answering
+          answering && !answered
             ? feedQuestionText.placeholder
             : revising
               ? composerText.revisionPlaceholder
               : composerText.newPlaceholder
         }
-        sendLabel={answering ? feedQuestionText.send : composerText.send}
+        // An answer of the agent asks nothing: the field is the field of a new message.
+        sendLabel={answering && !answered ? feedQuestionText.send : composerText.send}
         disabledReason={disabledReason}
         error={fieldError}
         busy={message.isPending}
         onSend={send}
+        modes={settings}
         commands={{
           verdicts: commands,
           onRun: runCommand,
@@ -631,6 +778,14 @@ export function DialogView({
         }}
         attachments={inBrowser ? attachments : undefined}
         noSecrets={inBrowser ? taskWayText.noSecrets : undefined}
+        {...(working
+          ? {
+              stop: {
+                onStop: () => runCommand('cancel'),
+                available: cancelVerdict?.available === true && !stopping,
+              },
+            }
+          : {})}
       />
     )
   }
@@ -732,7 +887,21 @@ export function DialogView({
             mx: 'auto',
           }}
         >
-          <DialogHead title={shownTitle} head={head} />
+          <DialogHead
+            siteId={siteId}
+            taskId={taskId}
+            title={shownTitle}
+            head={head}
+            onRenamed={refresh}
+            pane={
+              hasPane && !paneShown
+                ? {
+                    label: inBrowser ? browserText.view : paneText.show,
+                    onOpen: () => setClosedOn(null),
+                  }
+                : null
+            }
+          />
           {head === null ? (
             <Box role="status" aria-label={dialogText.loading} sx={{ display: 'grid', gap: 1.5 }}>
               <Skeleton
@@ -818,8 +987,11 @@ export function DialogView({
       <Box role="status" aria-live="polite" sx={offScreen}>
         {announcement}
       </Box>
+      <Box role="status" aria-live="polite" sx={offScreen}>
+        {effortNote}
+      </Box>
 
-      {hasPane ? (
+      {paneShown ? (
         <Box
           component="aside"
           ref={pane}
@@ -898,6 +1070,7 @@ export function DialogView({
                   commands.some((command) => command.id === 'cancel' && command.available)
                 }
                 busy={busy}
+                answered={answered}
               />
             ) : (
               <PreviewPane
@@ -911,6 +1084,15 @@ export function DialogView({
                 canReset={resetVerdict?.available === true}
                 onReset={() => runCommand('reset')}
                 resetting={reset.isPending}
+                onClose={
+                  wide
+                    ? () => {
+                        setClosedOn(changesMark)
+                        // The button goes with the panel: the focus waits on the way back to it.
+                        window.setTimeout(() => document.getElementById(SHOW_PANE_ID)?.focus(), 0)
+                      }
+                    : () => setView('dialog')
+                }
               />
             )}
           </Box>

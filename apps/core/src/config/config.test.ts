@@ -857,6 +857,7 @@ describe('loadConfig — previews and releases', () => {
     expect(config.previews).toEqual({
       address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
       ttlHours: 24,
+      idleMinutes: 30,
       executor: 'local',
       runtime: 'runc',
       webImages: { '8.3': `registry.raditi.ru/preview-php${digest}` },
@@ -866,6 +867,14 @@ describe('loadConfig — previews and releases', () => {
       egressRefusedSubnets: [],
       docker: { socketPath: '/var/run/docker.sock', firewallImage: null },
     })
+  })
+
+  it('stops a preview no one used after PREVIEW_IDLE_MINUTES, from a minute to a day', () => {
+    expect(loadConfig(previewDev({ PREVIEW_IDLE_MINUTES: '5' })).previews?.idleMinutes).toBe(5)
+    for (const value of ['0', '1441', '2.5', 'soon'])
+      expect(problemsOf(previewDev({ PREVIEW_IDLE_MINUTES: value }))[0]).toMatch(
+        /^PREVIEW_IDLE_MINUTES\b/,
+      )
   })
 
   it("gives previews the platform's subnets the sandbox gateway refuses too (R10)", () => {

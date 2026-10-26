@@ -4,23 +4,33 @@ import type { Locator, Page } from '@playwright/test'
 import { baseURL } from '../../fixtures/billing-stand.ts'
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import { addBrowserTask, addConnectedSite, hideDevIndicator } from './site.ts'
+import { addBrowserTask, addConnectedSite, hideDevIndicator, priceDialogClass } from './site.ts'
 
 // A dialog in a real browser (docs/plan/53-chat-preview-release.md, R9): the first words start
 // it on a connected site, the screen moves to it, and it waits in the queue — no core works on
-// it in this run. The list, the panel of its changes beside it from 1200px and behind a switch
-// below, the window of commands with the server's verdicts, and `/cancel` that closes it. The
-// run blanks PREVIEW_BASE_DOMAIN (playwright.site.config.ts): the dialog has no preview, and the
-// panel says so.
+// it in this run. The list beside it, the window of commands with the server's verdicts, its
+// menu — «Переименовать», «Удалить» — and `/cancel` that closes it. The run blanks
+// PREVIEW_BASE_DOMAIN (playwright.site.config.ts), and the dialog has changed nothing: it has no
+// panel of changes and no switch to one (owner's request of 26.10.2026: the panel opens when
+// something on the site has changed).
 
 test.use({ reducedMotion: 'reduce' })
+
+// A dialog is taken only in a class whose profile has a price (26.10.2026): the class a dialog
+// starts in is priced while these tests run.
+let restorePrices: (() => Promise<void>) | undefined
+test.beforeAll(async () => {
+  restorePrices = await priceDialogClass()
+})
+test.afterAll(async () => {
+  await restorePrices?.()
+})
 
 const FIRST_WORDS = 'Поменяйте цену капучино на 290 ₽'
 const QUEUED = 'Приняли, начинаем'
 const QUEUED_TEXT =
   'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом диалоге.'
 const FIELD_OFF = 'Написать можно будет, когда агент закончит или задаст вопрос.'
-const NO_PREVIEW = 'У этого диалога пока нет предпросмотра.'
 
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
 const send = (page: Page) => page.getByRole('button', { name: 'Отправить' })
@@ -29,6 +39,12 @@ const pane = (page: Page) => page.getByRole('complementary', { name: 'Измен
 const dialogs = (page: Page) => page.getByRole('navigation', { name: 'Диалоги' })
 const back = (page: Page) => page.getByRole('link', { name: 'Назад к диалогам' })
 const commands = (page: Page) => page.getByRole('listbox', { name: 'Команды' })
+
+/** Read aloud, not shown: the box of the words is the 1px of `offScreen`. */
+async function expectOffScreen(target: Locator) {
+  const found = await target.boundingBox()
+  expect(found === null || (found.width <= 1 && found.height <= 1)).toBe(true)
+}
 
 async function box(target: Locator) {
   const found = await target.boundingBox()
@@ -94,29 +110,33 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
     await expect(page).toHaveTitle(new RegExp(FIRST_WORDS))
     await expect(feed(page).getByText(FIRST_WORDS)).toBeVisible()
-    // The status in the head, in the live block and in the live region that reads it out; the
-    // list beside them is folded away.
+    // The status in the line under the title of the dialog (26.10.2026), in the live block and in
+    // the live region that reads it out; the list of dialogs, which stays beside an open dialog
+    // (owner's request of 26.10.2026), shows it on the row of the dialog as well.
     await expect(page.getByRole('heading', { level: 2, name: QUEUED })).toBeVisible()
-    await expect(page.getByText(QUEUED).filter({ visible: true })).toHaveCount(3)
+    await expect(page.getByRole('main').getByText(QUEUED).filter({ visible: true })).toHaveCount(3)
+    await expect(
+      page.getByRole('navigation', { name: 'Диалоги' }).getByText(QUEUED).filter({ visible: true }),
+    ).toHaveCount(1)
     await expect(page.getByText(QUEUED_TEXT)).toBeVisible()
-    // The agent is at work: the field says why it is closed, on the field itself.
+    // The agent is at work: the field says why it is closed, read with the field, and nothing
+    // stands under it; «Остановить» stands in place of «Отправить».
     await expect(message(page)).toBeDisabled()
-    await expect(message(page)).toHaveAccessibleDescription(FIELD_OFF)
+    await expect(message(page)).toHaveAccessibleDescription(new RegExp(FIELD_OFF))
+    await expectOffScreen(page.getByText(FIELD_OFF))
+    await expect(page.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Остановить' })).toBeEnabled()
+    await expect(send(page)).toHaveCount(0)
+    // The mode it started in, and the level of thinking, by the field.
+    await expect(page.getByTitle('Режим выбирается в начале диалога')).toContainText('Работа')
+    // The level is changed while the dialog waits: core plans a running turn with the one it read.
+    await expect(page.getByRole('button', { name: 'Размышление: Высокое' })).toBeDisabled()
   })
 
-  await test.step('from 1200px the list gives way to the panel of the changes', async () => {
-    await expect(dialogs(page)).toBeHidden()
-    await expect(back(page)).toBeVisible()
-    await expect(pane(page)).toBeVisible()
-    await expect(pane(page).getByRole('tab', { name: 'Предпросмотр' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    )
-    await expect(pane(page).getByText(NO_PREVIEW)).toBeVisible()
-    const paneBox = await box(pane(page))
-    const fieldBox = await box(message(page))
-    expect(paneBox.x + paneBox.width).toBeLessThanOrEqual(1280)
-    expect(fieldBox.x + fieldBox.width).toBeLessThanOrEqual(paneBox.x)
+  await test.step('nothing changed yet: no panel, the list stays beside the dialog', async () => {
+    await expect(pane(page)).toHaveCount(0)
+    await expect(dialogs(page)).toBeVisible()
+    await expect(back(page)).toBeHidden()
     await expectNoSidewaysScroll(page)
     expect(await lowTargets(page.getByRole('main'))).toEqual([])
   })
@@ -146,8 +166,7 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
   })
 
   await test.step('the dialog stands in the list of the site', async () => {
-    await back(page).click()
-    await expect(page).toHaveURL(`/projects/${siteId}/chat`)
+    await page.goto(`/projects/${siteId}/chat`)
     const today = dialogs(page).getByRole('list', { name: 'Сегодня' })
     const link = today.getByRole('link', { name: new RegExp(FIRST_WORDS) })
     await expect(link).toHaveAttribute('href', `/projects/${siteId}/chat/${taskId}`)
@@ -169,43 +188,55 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await confirm.getByRole('button', { name: 'Отменить диалог' }).click()
     await expect(confirm).toBeHidden()
     await expect(feed(page).getByRole('heading', { name: 'Отменено' })).toBeVisible()
-    await expect(
-      page.getByText('Диалог завершён. Чтобы попросить что-то ещё, начните новый.'),
-    ).toBeVisible()
-    await expect(message(page)).toHaveCount(0)
-    await expect(
-      page.getByRole('main').getByRole('link', { name: 'Новый диалог' }),
-    ).toHaveAttribute('href', `/projects/${siteId}/chat/new`)
+    await expect(message(page)).toBeDisabled()
+    await expect(message(page)).toHaveAttribute('placeholder', 'Диалог завершён')
+    // Under the closed dialog, and above the list of dialogs that stays beside it (26.10.2026).
+    const newDialogs = page.getByRole('main').getByRole('link', { name: 'Новый диалог' })
+    await expect(newDialogs).toHaveCount(2)
+    for (const link of await newDialogs.all())
+      await expect(link).toHaveAttribute('href', `/projects/${siteId}/chat/new`)
     // The words of a command never become a message of the client.
     await expect(feed(page).getByText('/cancel')).toHaveCount(0)
   })
+
+  await test.step('the menu of the dialog renames it in place and deletes it after asking', async () => {
+    // The menu by the title of the dialog; its row in the list beside it has one too.
+    const menu = page
+      .getByRole('main')
+      .getByRole('button', { name: /^Действия с диалогом/ })
+      .and(page.locator(':not(nav[aria-label="Диалоги"] *)'))
+    await menu.click()
+    await page.getByRole('menuitem', { name: 'Переименовать' }).click()
+    const name = page.getByRole('textbox', { name: 'Название диалога' })
+    await name.fill('Цена капучино')
+    await name.press('Enter')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Цена капучино')
+    await expect(dialogs(page).getByRole('link', { name: /Цена капучино/ })).toBeVisible()
+
+    await menu.click()
+    await page.getByRole('menuitem', { name: 'Удалить' }).click()
+    const ask = page.getByRole('dialog', { name: 'Удалить диалог?' })
+    await ask.getByRole('button', { name: 'Удалить' }).click()
+    await expect(page).toHaveURL(`/projects/${siteId}/chat`)
+    await expect(dialogs(page).getByRole('link', { name: /Цена капучино/ })).toHaveCount(0)
+    await page.goto(`/projects/${siteId}/chat/${taskId}`)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Такого диалога нет')
+  })
 })
 
-test('a dialog on a phone: the switch of the dialog and its changes', async ({
-  page,
-  signedInUser,
-}) => {
+test('a dialog on a phone: no switch while nothing has changed', async ({ page, signedInUser }) => {
   const siteId = await addConnectedSite(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await startDialog(page, siteId)
 
-  const views = page.getByRole('tablist', { name: 'Что показать' })
-  await expect(views.getByRole('tab')).toHaveCount(2)
-  await expect(views.getByRole('tab', { name: 'Диалог' })).toHaveAttribute('aria-selected', 'true')
+  // The switch «Диалог | Изменения» comes with the first changes; until then the dialog is all.
+  await expect(page.getByRole('tablist', { name: 'Что показать' })).toHaveCount(0)
   await expect(feed(page).getByText(FIRST_WORDS)).toBeVisible()
-  await expect(pane(page)).toBeHidden()
+  await expect(pane(page)).toHaveCount(0)
   await expectNoSidewaysScroll(page)
   expect(await violations(page)).toEqual([])
   expect(await lowTargets(page.getByRole('main'))).toEqual([])
-
-  await views.getByRole('tab', { name: 'Предпросмотр' }).click()
-  await expect(pane(page)).toBeVisible()
-  await expect(pane(page).getByText(NO_PREVIEW)).toBeVisible()
-  await expect(feed(page)).toBeHidden()
-  await expectNoSidewaysScroll(page)
-  expect(await violations(page)).toEqual([])
-  expect(await lowTargets(pane(page))).toEqual([])
 })
 
 // A task in the browser (docs/plan/57-browser-tasks.md, Б29): the browser stands where the panel
@@ -225,9 +256,8 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
 
   await test.step('the question to sign in, the browser beside the dialog', async () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
-    // The head of the dialog is a header inside `main`, not a landmark: found by its heading.
-    const head = page.locator('header', { has: page.getByRole('heading', { level: 1 }) })
-    await expect(head).toContainText('В браузере')
+    // The mode it started in stands by the field: «Чат», the dialog in the browser.
+    await expect(page.getByTitle('Режим выбирается в начале диалога')).toContainText('Чат')
     await expect(feed(page).getByRole('heading', { name: 'Нужно войти на сайт' })).toBeVisible()
     await expect(browserPane(page)).toBeVisible()
     await expect(pane(page)).toHaveCount(0)

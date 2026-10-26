@@ -107,6 +107,23 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
       seconds: Number.isFinite(end - start) ? Math.max(0, (end - start) / 1000) : 0,
     })
   })
+  // The agent's answer first, then the card of the changes it made — as a chat shows an answer
+  // and what it produced (owner's request of 26.10.2026); the platform writes the candidate of a
+  // pass just before its result.
+  for (let index = 0; index + 1 < entries.length; index += 1) {
+    const card = entries[index]!
+    const answer = entries[index + 1]!
+    if (
+      card.kind === 'row' &&
+      answer.kind === 'row' &&
+      card.row.type === 'feed.candidate' &&
+      answer.row.type === 'feed.result'
+    ) {
+      entries[index] = answer
+      entries[index + 1] = card
+      index += 1
+    }
+  }
   return entries
 }
 

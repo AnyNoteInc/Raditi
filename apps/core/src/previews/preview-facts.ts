@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@repo/db'
+import { Prisma, type PrismaClient } from '@repo/db'
 import {
   candidateFilesSchema,
   dbPlanSchema,
@@ -18,6 +18,22 @@ import { previewRecordOf, type PreviewRecord } from './preview-record.ts'
 // its dialog, its site and the candidate it should show — read from PostgreSQL each time, never
 // from the payload of a job.
 
+/**
+ * The last moment a preview was used, of the row `p` (owner's answer of 26.10.2026: a preview no
+ * one used for PREVIEW_IDLE_MINUTES stops): its making, a view — a ticket, a session of the
+ * gateway (checked again at most every 60 s while pages are asked), an open of a stopped one —
+ * and a turn of its dialog, started or ended. A turn that runs now is not counted here: a pass
+ * of the dialog holds its preview by the status of the task.
+ */
+export const previewLastUseSql = Prisma.sql`GREATEST(
+  p.created_at,
+  p.last_viewed_at,
+  (SELECT max(k.created_at) FROM preview_tickets k WHERE k.preview_id = p.id),
+  (SELECT max(GREATEST(s.created_at, s.checked_at)) FROM preview_sessions s
+    WHERE s.preview_id = p.id),
+  (SELECT max(GREATEST(u.started_at, u.finished_at)) FROM task_turns u WHERE u.task_id = p.task_id)
+)`
+
 export interface PreviewFacts {
   preview: {
     id: string
@@ -36,6 +52,8 @@ export interface PreviewFacts {
     seed: { key: string; sha256: string; releaseId: string | null } | null
     expiresAt: Date
     lastViewedAt: Date | null
+    /** The last moment it was used (`previewLastUseSql`). */
+    lastUsedAt: Date
     record: PreviewRecord
     /**
      * A content write of the mcp role landed in the preview since it was built — at its current
@@ -100,7 +118,7 @@ export async function loadPreviewFacts(
     },
   })
   if (!row) return null
-  const [repository, candidate, database, access, written, dump] = await Promise.all([
+  const [repository, candidate, database, access, written, dump, used] = await Promise.all([
     db.gitRepository.findFirst({
       where: { siteId: row.siteId },
       orderBy: { createdAt: 'asc' },
@@ -118,6 +136,8 @@ export async function loadPreviewFacts(
       select: { id: true },
     }),
     db.siteDatabaseDump.findUnique({ where: { siteId: row.siteId }, select: { path: true } }),
+    db.$queryRaw<Array<{ at: Date }>>`
+      SELECT ${previewLastUseSql} AS at FROM preview_environments p WHERE p.id = ${row.id}::uuid`,
   ])
   const live = database !== null || access !== null
   const files = candidate ? candidateFilesSchema.safeParse(candidate.files) : null
@@ -146,6 +166,8 @@ export async function loadPreviewFacts(
           : null,
       expiresAt: row.expiresAt,
       lastViewedAt: row.lastViewedAt,
+      // The row was just read, so its moment is there; none would read as used now — never idle.
+      lastUsedAt: used[0]?.at ?? new Date(),
       record: previewRecordOf(row.runtime),
       written: written !== null,
     },
@@ -187,30 +209,55 @@ export async function loadPreviewFacts(
 export const isBusyTask = (status: TaskStatus): boolean =>
   status === 'preparing' || status === 'running'
 
+/** A dialog whose pass is queued or runs: its preview is in use, never stopped as idle. */
+export const holdsPreview = (status: TaskStatus): boolean =>
+  status === 'queued' || isBusyTask(status)
+
 export type PreviewAction = 'destroy' | 'build' | 'expire' | 'none'
 
 /**
+ * A served preview no one used for `idleMs` while its dialog waits (owner's answer of 26.10.2026):
+ * it is stopped like one whose time is up — its containers stop, its volumes, seed and secrets
+ * stay, so nothing the client can see or release is lost. What the dialog changed is in its
+ * candidate (files and the sealed plan of the database, replayed by a rebuild, Р22); content the
+ * agent wrote outside a candidate is what a rebuild takes out anyway. A view or the next pass
+ * starts it again. Only `ready`: a failed or unavailable preview keeps the words of its state.
+ */
+export function previewIdle(facts: PreviewFacts, now: Date, idleMs: number | undefined): boolean {
+  return (
+    idleMs !== undefined &&
+    facts.preview.status === 'ready' &&
+    !holdsPreview(facts.task.status) &&
+    now.getTime() - facts.preview.lastUsedAt.getTime() >= idleMs
+  )
+}
+
+/**
  * What a preview needs now. `requested` — a job asked for it (a new candidate, a reset, a view of
- * a stopped preview); without it — the sweep looks at it, and only finishes what was left.
- * `lost` — its containers are gone (a restart of the daemon): its upstream may be another
- * preview's now. A preview that serves is never rebuilt under a pass of its dialog: the agent's
- * own writes are in it, and the end of the pass asks again (Р23).
+ * a stopped preview, a new pass of its dialog); without it — the sweep looks at it, and only
+ * finishes what was left. `lost` — its containers are gone (a restart of the daemon): its
+ * upstream may be another preview's now. A preview that serves is never rebuilt under a pass of
+ * its dialog: the agent's own writes are in it, and the end of the pass asks again (Р23).
+ * `idleMs` — PREVIEW_IDLE_MINUTES: a served preview unused this long is stopped (`previewIdle`).
  */
 export function previewAction(
   facts: PreviewFacts,
-  options: { requested: boolean; now: Date; lost?: boolean },
+  options: { requested: boolean; now: Date; lost?: boolean; idleMs?: number },
 ): PreviewAction {
   const { preview, task } = facts
   if (preview.status === 'destroyed') return 'none'
   if (terminalTaskStatuses.includes(task.status)) return 'destroy'
   const busy = isBusyTask(task.status)
-  if (preview.status === 'ready' && options.lost) return 'build'
+  const idle = previewIdle(facts, options.now, options.idleMs)
+  // Lost and unused: nothing is built for no one — a view or the next pass builds it.
+  if (preview.status === 'ready' && options.lost) return idle ? 'expire' : 'build'
   if (busy && preview.status === 'ready') return 'none'
   const expired = preview.expiresAt.getTime() <= options.now.getTime()
   // Never built, or a build whose holder died: the holder of the preview now finishes it.
   if (preview.status === 'pending' || preview.status === 'building') return 'build'
   if (expired && !busy && ['ready', 'failed', 'unavailable'].includes(preview.status))
     return 'expire'
+  if (idle) return 'expire'
   if (!options.requested) return 'none'
   if (preview.status === 'unavailable')
     // Without an access to the database nothing changed; the other causes may have.

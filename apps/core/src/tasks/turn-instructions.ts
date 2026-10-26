@@ -58,6 +58,8 @@ ${ANSWERING}
 /** What the platform knows of the dialog's preview when the pass is planned. */
 export type PreviewFacts =
   | { state: 'serving'; origin: string }
+  /** Being built, or stopped while unused and asked to start again for this pass. */
+  | { state: 'starting'; origin: string }
   | { state: 'unavailable'; reason: PreviewUnavailableReason }
   | { state: 'absent' }
 
@@ -77,6 +79,13 @@ function previewSection(preview: PreviewFacts): string {
       return (
         `## Preview\nThe preview of this dialog is served at ${preview.origin}. The browser ` +
         'tools of the platform open only this address; use them to check your changes.\n'
+      )
+    case 'starting':
+      return (
+        `## Preview\nThe preview of this dialog is starting and will be served at ${preview.origin} ` +
+        'shortly. Until it is, the browser and content tools of the platform answer that it is ' +
+        'not ready: do the work that does not need them first, then try them again. "Not ready" ' +
+        'is never a failure of your change.\n'
       )
     case 'unavailable':
       return `## Preview\n${unavailable[preview.reason]}\n`

@@ -349,7 +349,7 @@ describe('what is known about the site and the credits', () => {
 
   it('has no sentence about credits when the row knows nothing', () => {
     expect(feedCreditsSentence(null)).toBeNull()
-    expect(feedCreditsSentence('returned')).toBe('Кредиты за эту задачу не списаны.')
+    expect(feedCreditsSentence('returned')).toBe('За этот запрос кредиты не списаны.')
     expect(feedCreditsSentence('expired')).toBe(
       'Отложенные кредиты были из прошлого периода тарифа и в новый не переносятся.',
     )

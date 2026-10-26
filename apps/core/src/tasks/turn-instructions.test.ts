@@ -10,6 +10,12 @@ describe('turnInstructions', () => {
     expect(turnInstructions({ state: 'unavailable', reason: 'no_database' })).toContain(
       'no database',
     )
+    const starting = turnInstructions({
+      state: 'starting',
+      origin: 'http://site-a-chat-b.localhost:8090',
+    })
+    expect(starting).toContain('starting and will be served at http://site-a-chat-b.localhost:8090')
+    expect(starting).toContain('try them again')
     const rules = turnInstructions({ state: 'absent' })
     expect(rules).toContain('«вы»')
     expect(rules).toContain('.gitea/')

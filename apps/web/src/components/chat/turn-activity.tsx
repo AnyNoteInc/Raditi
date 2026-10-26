@@ -72,7 +72,13 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
     case 'message':
       return (
         <Typography
-          sx={{ m: 0, fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+          sx={{
+            m: 0,
+            fontSize: 14,
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+          }}
         >
           {event.text}
         </Typography>
@@ -113,7 +119,13 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
         <Box sx={{ display: 'grid', gap: 0.5 }}>
           <Label icon="chat" text={activityText.question} />
           <Typography
-            sx={{ m: 0, fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+            sx={{
+              m: 0,
+              fontSize: 14,
+              lineHeight: 1.6,
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+            }}
           >
             {event.text}
           </Typography>

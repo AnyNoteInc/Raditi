@@ -79,7 +79,9 @@ export function VersionDetail({
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.25 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-        <SectionTitle {...(nested ? { level: 'h2' as const } : {})}>{versionTitle(version)}</SectionTitle>
+        <SectionTitle {...(nested ? { level: 'h2' as const } : {})}>
+          {versionTitle(version)}
+        </SectionTitle>
         <Typography color="text.secondary">
           {version.current
             ? 'Сейчас на сайте'
@@ -90,7 +92,15 @@ export function VersionDetail({
       </Box>
 
       <SiteCard>
-        <Box sx={{ px: { xs: 2, sm: 2.75 }, py: 2.25, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+        <Box
+          sx={{
+            px: { xs: 2, sm: 2.75 },
+            py: 2.25,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 0.75,
+          }}
+        >
           <Typography>
             Версия <Mono>{version.version}</Mono>
           </Typography>
@@ -124,7 +134,9 @@ export function VersionDetail({
             )}
             <Fact name="Копия перед обновлением">
               {version.backupAt ? (
-                <SiteLink href={siteHref(siteId, 'database')}>{formatMoscowMoment(version.backupAt)}</SiteLink>
+                <SiteLink href={siteHref(siteId, 'database')}>
+                  {formatMoscowMoment(version.backupAt)}
+                </SiteLink>
               ) : version.kind === 'initial' ? (
                 'не нужна: это первая версия'
               ) : (
@@ -143,9 +155,13 @@ export function VersionDetail({
           }}
         >
           {version.taskId ? (
-            <SiteLink href={`${siteHref(siteId, 'chat')}/${version.taskId}`}>Открыть диалог</SiteLink>
+            <SiteLink href={`${siteHref(siteId, 'chat')}/${version.taskId}`}>
+              Открыть диалог
+            </SiteLink>
           ) : null}
-          <SiteLink href={`${siteHref(siteId, 'runs')}/${version.kind === 'initial' ? 'import' : version.id}`}>
+          <SiteLink
+            href={`${siteHref(siteId, 'runs')}/${version.kind === 'initial' ? 'import' : version.id}`}
+          >
             Открыть запуск № {version.run}
           </SiteLink>
         </Box>
@@ -153,7 +169,15 @@ export function VersionDetail({
 
       {undoOpen && version.taskId ? (
         <SiteCard title="Если нужно вернуть как было">
-          <Box sx={{ px: { xs: 2, sm: 2.75 }, py: 2.25, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          <Box
+            sx={{
+              px: { xs: 2, sm: 2.75 },
+              py: 2.25,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1.5,
+            }}
+          >
             <Typography>
               Этот выпуск можно отменить до {formatMoscowDay(undoUntil)}: на сайт вернутся прежние
               файлы и записи. Что изменили на сайте после выпуска, останется.
@@ -168,14 +192,13 @@ export function VersionDetail({
   )
 }
 
-/** «Изменения» of a site with no version yet. */
+/** «Изменения» of a site with no version yet. The list beside it names the section — the
+ * heading of the page — and says it is empty on a phone, where the list is all that is shown.
+ */
 export function NoVersions() {
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <SectionTitle>Изменения</SectionTitle>
-      <Typography color="text.secondary">
-        Версий пока нет. Первая появится, когда Радити сохранит файлы сайта.
-      </Typography>
-    </Box>
+    <Typography color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
+      Версий пока нет. Первая появится, когда Радити сохранит файлы сайта.
+    </Typography>
   )
 }

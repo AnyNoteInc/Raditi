@@ -311,6 +311,7 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
       siteId: ids.siteId,
       createdById: user.id,
       alias: 'zakaz',
+      deletedAt: null,
     })
     await expect(
       callerOf(repeated.prisma, withVault(ensure)).task.create({

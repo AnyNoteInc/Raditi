@@ -1,7 +1,9 @@
 import type { Prisma, PrismaClient } from '@repo/db'
 import {
+  effortOfModelClass,
   feedLimits,
   feedTaskHeadSchema,
+  modelClassSchema,
   previewOrigin,
   readFeedRow,
   type ChatCommandAvailability,
@@ -90,6 +92,7 @@ export async function readDialogFeed(
           waiting: true,
           needsRepository: true,
           needsBrowser: true,
+          modelClass: true,
         },
       })
       if (task === null) throw taskNotFound()
@@ -148,6 +151,8 @@ export async function feedHead(
     waiting: 'agents' | 'site' | null
     needsRepository: boolean
     needsBrowser: boolean
+    /** The database's class; one the domain does not know (`service`) reads as the default. */
+    modelClass: string | null
   },
 ): Promise<FeedTaskHead> {
   const lease = await tx.siteLease.findUnique({
@@ -190,6 +195,8 @@ export async function feedHead(
     workingSince: request?.createdAt.toISOString() ?? null,
     runningSince: work?.createdAt.toISOString() ?? null,
     requirements: { repository: task.needsRepository, browser: task.needsBrowser },
+    // A task older than the classes thinks at the level of `standard` (`createDialog`'s default).
+    effort: effortOfModelClass(modelClassSchema.catch('standard').parse(task.modelClass)),
   })
 }
 
@@ -244,6 +251,7 @@ export async function readDialogHead(
           waiting: true,
           needsRepository: true,
           needsBrowser: true,
+          modelClass: true,
           createdAt: true,
           updatedAt: true,
         },

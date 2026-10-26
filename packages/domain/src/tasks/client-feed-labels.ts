@@ -59,6 +59,13 @@ export const taskStatusLabel: Readonly<Record<TaskStatus, string>> = Object.free
   cancelled: 'Отменено',
 })
 
+/**
+ * The word of a dialog that waits for nothing — the agent answered and asked no question
+ * (`awaiting_user` after a `feed.result`; owner's answer of 26.10.2026: «ожидает ввода также не
+ * нужно», a chat like Claude Code) — in place of «Нужен ваш ответ»; the list has no hint for it.
+ */
+export const taskAnsweredLabel = 'Агент ответил'
+
 /** The second line of a dialog in the list; null — the status has none. */
 export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = Object.freeze({
   queued: null,
@@ -177,9 +184,13 @@ export const feedApprovalSiteText: Readonly<Record<ResultSite, string>> = Object
 export const feedFilesChangedText = (count: number): string =>
   `Изменено файлов: ${groupDigits(count)}`
 
-/** The third sentence of a failure and of a cancellation, by the trusted `credits`. */
+/**
+ * The third sentence of a failure and of a cancellation, by the trusted `credits`: what the pass
+ * that ended so had set aside came back — the passes before it were charged when they ended
+ * (owner's answer of 26.10.2026), so the sentence is about this request, not the whole dialog.
+ */
 export const feedCreditsText: Readonly<Record<FeedCreditsState, string>> = Object.freeze({
-  returned: 'Кредиты за эту задачу не списаны.',
+  returned: 'За этот запрос кредиты не списаны.',
   expired: 'Отложенные кредиты были из прошлого периода тарифа и в новый не переносятся.',
 })
 

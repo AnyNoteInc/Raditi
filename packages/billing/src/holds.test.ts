@@ -270,6 +270,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     expiresAt?: Date
     /** «Попробовать ещё»: what the retry of a dialog says, after it gave the chain back. */
     retry?: true
+    /** A new chain after a charged pass: the client's next words or «Продолжить». */
+    follows?: 'message' | 'continue'
   }
   const placement = (
     workspaceId: string,
@@ -279,6 +281,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       attempt = 1,
       expiresAt = new Date(now.getTime() + DAY_MS),
       retry,
+      follows,
     }: PlacementOptions = {},
   ): CreditHoldPlacement => ({
     workspaceId,
@@ -287,6 +290,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     now,
     expiresAt,
     ...(retry === undefined ? {} : { retry }),
+    ...(follows === undefined ? {} : { follows }),
   })
 
   /** Places a reserve the way the queue will, under a credit rate nobody else sees. */
@@ -1068,7 +1072,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         await worked(model, taskId, '150', { occurredAt: minutesAfter(minute + 1, t.periodEnd) })
         await settle(taskId, 25, { now: minutesAfter(minute + 3, t.periodEnd) })
         // The stamp of the charge is of the period whose credits paid: before the next one.
-        expect((await entryOf(ledgerKeys.taskCharge(taskId, tariff))).createdAt).toEqual(
+        expect((await entryOf(ledgerKeys.taskCharge(taskId, 1, tariff))).createdAt).toEqual(
           new Date(t.periodEnd.getTime() - 1),
         )
       }
@@ -1584,6 +1588,53 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // Nor is a later attempt of a task that never had a reserve anything but a retry.
       expect(await refused(workspaceId, never!, { attempt: 2 })).toMatchObject(onlyARetry)
     })
+
+    // A task is charged pass by pass (owner's answer of 26.10.2026): after a charge, the next
+    // words or «Продолжить» open a new chain — what its caller says, and the rows agree with.
+    it('opens a new chain after a charged pass, and only then', async () => {
+      const { workspaceId } = await funded()
+      const [taskId, given] = await tasks(workspaceId, 2)
+      const notCharged = {
+        ...conflict,
+        message: 'A new chain of a task follows a charge of the one before',
+      }
+      const goesOn = {
+        ...conflict,
+        message: 'The chain of the task is not charged: its next words go on with it',
+      }
+      await place(workspaceId, taskId!)
+      // The chain is active: the words go on with it, no new chain.
+      expect(await refused(workspaceId, taskId!, { attempt: 2, follows: 'message' })).toMatchObject(
+        goesOn,
+      )
+      await settle(taskId!, 17)
+      expect(await place(workspaceId, taskId!, { attempt: 2, follows: 'message' })).toMatchObject({
+        applied: true,
+        reserved: 45,
+      })
+      await settle(taskId!, 6)
+      expect(await place(workspaceId, taskId!, { attempt: 3, follows: 'continue' })).toMatchObject(
+        { applied: true, reserved: 45 },
+      )
+      expect(await reserve(taskId!)).toEqual([
+        '#1 tariff 45 captured',
+        '#2 tariff 45 captured',
+        '#3 tariff 45 active',
+      ])
+      // A chain given back without a charge before it: a retry, not a new chain after a charge.
+      await place(workspaceId, given!)
+      await release(given!)
+      expect(await refused(workspaceId, given!, { attempt: 2, follows: 'message' })).toMatchObject(
+        notCharged,
+      )
+      // A retry and a new chain after a charge are not one call.
+      await expect(
+        fixtures.reserve({
+          ...placement(workspaceId, given!, { attempt: 2, retry: true }),
+          follows: 'message',
+        }),
+      ).rejects.toBeInstanceOf(ZodError)
+    })
   })
 
   // The daily limit in tariff credits (decision of 17.10.2026; docs/plan/37-billing-plan.md,
@@ -1954,6 +2005,24 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await day(workspaceId, morning)).toBe('25 + 0')
     })
 
+    // A task is charged pass by pass (owner's answer of 26.10.2026): what each charge took from
+    // free tariff credits counts on the day of that charge, never again on the day of the next.
+    it('counts each charge of a task on its own day, the transfer of the first not again', async () => {
+      const { workspaceId } = await funded({ tariff: 0, pack: 100 })
+      const taskId = await task(workspaceId)
+      await place(workspaceId, taskId)
+      await grant(workspaceId, 'tariff', 300)
+      // The pack row is charged from free tariff credits: 17 on the day of the charge.
+      await settle(taskId, 17, { now: morning })
+      const evening = new Date(morning.getTime() + DAY_MS)
+      await place(workspaceId, taskId, { attempt: 2, now: evening, follows: 'message' })
+      await settle(taskId, 9, { now: evening })
+
+      expect(await day(workspaceId, morning)).toBe('17 + 0')
+      // The next day: its own row placed and charged that day, nothing of the morning before.
+      expect(await day(workspaceId, evening)).toBe('9 + 0')
+    })
+
     it('counts a charge settled the day it was placed once: the row and the transfer together', async () => {
       const { workspaceId } = await funded({ tariff: 5, pack: 100 })
       const taskId = await task(workspaceId)
@@ -2162,8 +2231,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
       const [charged, released] = await Promise.allSettled([settle(taskId, 17), release(taskId)])
 
-      expect([charged.status, released.status].sort()).toEqual(['fulfilled', 'rejected'])
-      expect(rejected([charged, released])).toEqual([expect.objectContaining(conflict)])
+      // The charge first: the return after it finds no active chain and gives nothing back. The
+      // return first: the charge finds nothing to charge.
+      if (charged.status === 'fulfilled') {
+        expect(released).toMatchObject({ status: 'fulfilled', value: { applied: false } })
+      } else {
+        expect(released.status).toBe('fulfilled')
+        expect(rejected([charged])).toEqual([expect.objectContaining(conflict)])
+      }
       expect(await accounts(workspaceId)).toMatchObject({
         tariff: account(charged.status === 'fulfilled' ? 283 : 300),
       })
@@ -2551,7 +2626,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await written(workspaceId)).toEqual(before)
     })
 
-    it('does not give back the reserve of a charged task, nor charge one that was given back', async () => {
+    it('gives nothing back of a charged chain, nor charges one that was given back', async () => {
       const { workspaceId } = await funded()
       const [done, failed, lapsed] = await tasks(workspaceId, 3)
       await place(workspaceId, done!)
@@ -2562,8 +2637,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await expire(lapsed!)
       const before = await written(workspaceId)
 
-      await expect(release(done!)).rejects.toMatchObject(conflict)
-      await expect(expire(done!)).rejects.toMatchObject(conflict)
+      // A task is charged pass by pass: what was charged stays, and there is nothing to return.
+      expect(await release(done!)).toMatchObject({ holds: [], applied: false })
+      expect(await expire(done!)).toMatchObject({ holds: [], applied: false })
       await expect(settle(failed!, 17)).rejects.toMatchObject(conflict)
       await expect(settle(lapsed!, 17)).rejects.toMatchObject(conflict)
 
@@ -2594,8 +2670,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         charged.entries.map((entry) => [entry.idempotencyKey, entry.amount.toFixed(0)]).sort(),
       ).toEqual(
         [
-          [ledgerKeys.taskCharge(taskId, tariffAccount), '-5'],
-          [ledgerKeys.taskCharge(taskId, packAccount), '-12'],
+          [ledgerKeys.taskCharge(taskId, 1, tariffAccount), '-5'],
+          [ledgerKeys.taskCharge(taskId, 1, packAccount), '-12'],
         ].sort(),
       )
       for (const entry of charged.entries) {
@@ -2646,7 +2722,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
       expect(charged).toMatchObject({ credits: 17, from: { tariff: 17, gift: 0, pack: 0 } })
       expect(charged.entries.map((entry) => entry.idempotencyKey)).toEqual([
-        ledgerKeys.taskCharge(b!, await accountId(workspaceId, 'tariff')),
+        ledgerKeys.taskCharge(b!, 1, await accountId(workspaceId, 'tariff')),
       ])
       expect(await reserve(b!)).toEqual(['#1 pack 45 captured'])
       expect(await accounts(workspaceId)).toEqual({
@@ -2786,7 +2862,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       ).toEqual(
         [
           [ledgerKeys.holdCharge(row.id), '-10'],
-          [ledgerKeys.taskCharge(taskId, tariffAccount), '-20'],
+          [ledgerKeys.taskCharge(taskId, 1, tariffAccount), '-20'],
         ].sort(),
       )
       expect(await accounts(t.workspaceId)).toMatchObject({
@@ -2887,10 +2963,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await settle(taskId, 17, { now: late })
 
       const tariff = await entryOf(
-        ledgerKeys.taskCharge(taskId, await accountId(workspaceId, 'tariff')),
+        ledgerKeys.taskCharge(taskId, 1, await accountId(workspaceId, 'tariff')),
       )
       const pack = await entryOf(
-        ledgerKeys.taskCharge(taskId, await accountId(workspaceId, 'pack')),
+        ledgerKeys.taskCharge(taskId, 1, await accountId(workspaceId, 'pack')),
       )
       expect(tariff.createdAt).toEqual(new Date(PERIOD_END.getTime() - 1))
       // Pack credits belong to no period: the row keeps the moment.
@@ -2958,34 +3034,30 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await written(workspaceId)).toEqual(before)
     })
 
-    it('does not charge a task a second time, whatever reserve it is found with', async () => {
+    // A task is charged pass by pass (owner's answer of 26.10.2026): a chain placed after a
+    // charge is charged on its own, under keys of its own, and the first stays as it was.
+    it('charges the next chain of a charged task on its own, under keys of its own', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
       await place(workspaceId, taskId)
-      await settle(taskId, 17)
-      // A reserve row nothing here writes: an active one of a task that is charged.
+      const first = await settle(taskId, 17)
+      await place(workspaceId, taskId, { attempt: 2, follows: 'message' })
       const tariff = await accountId(workspaceId, 'tariff')
-      await db.$transaction([
-        db.creditHold.create({
-          data: {
-            accountId: tariff,
-            unit: 'credit_tariff',
-            taskId,
-            attempt: 2,
-            amount: 45,
-            expiresAt: new Date(NOW.getTime() + DAY_MS),
-          },
-        }),
-        db.billingAccount.update({ where: { id: tariff }, data: { held: { increment: 45 } } }),
+
+      const second = await settle(taskId, 9)
+
+      expect(first.entries.map((entry) => entry.idempotencyKey)).toEqual([
+        ledgerKeys.taskCharge(taskId, 1, tariff),
       ])
-      const before = await written(workspaceId)
-
-      await expect(settle(taskId, 17)).rejects.toMatchObject({
-        ...conflict,
-        message: 'The charge of this task is already in the ledger',
-      })
-
-      expect(await written(workspaceId)).toEqual(before)
+      expect(second).toMatchObject({ credits: 9, from: { tariff: 9, gift: 0, pack: 0 } })
+      expect(second.entries.map((entry) => entry.idempotencyKey)).toEqual([
+        ledgerKeys.taskCharge(taskId, 2, tariff),
+      ])
+      expect(await reserve(taskId)).toEqual(['#1 tariff 45 captured', '#2 tariff 45 captured'])
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300 - 17 - 9) })
+      // A call that finds nothing active answers what every charge so far did.
+      expect(await settle(taskId, 26)).toMatchObject({ credits: 26, applied: false })
+      await expect(settle(taskId, 17)).rejects.toMatchObject(conflict)
     })
 
     it('refuses a charge above the reserve of the task and takes one equal to it', async () => {

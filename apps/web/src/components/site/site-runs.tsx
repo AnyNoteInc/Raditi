@@ -40,12 +40,16 @@ export function runItems(runs: readonly RunView[]): HistoryItem[] {
     note: runListNote(run),
     ...(run.state === 'running' ? { badge: 'идёт' } : {}),
     tone: tone(run.state),
-    filters:
-      run.state === 'running' ? ['running'] : run.state === 'installed' ? [] : ['errors'],
+    filters: run.state === 'running' ? ['running'] : run.state === 'installed' ? [] : ['errors'],
   }))
 }
 
-const stepTone = { started: 'warning.main', succeeded: 'success.main', failed: 'error.main', unknown: 'text.disabled' } as const
+const stepTone = {
+  started: 'warning.main',
+  succeeded: 'success.main',
+  failed: 'error.main',
+  unknown: 'text.disabled',
+} as const
 
 /**
  * One run of «Запуски»: who started it and when, how it ended, its steps, and its journal across
@@ -73,7 +77,9 @@ export function RunDetail({
         </SectionTitle>
         <Typography sx={{ fontWeight: 600 }}>{runStateText[run.state]}</Typography>
         <Typography color="text.secondary">
-          {run.kind === 'import' ? 'Запуск: подключение сайта' : `Запуск: ${run.approvedBy ?? 'владелец сайта'}, после «Выпустить»`}
+          {run.kind === 'import'
+            ? 'Запуск: подключение сайта'
+            : `Запуск: ${run.approvedBy ?? 'владелец сайта'}, после «Выпустить»`}
           {' · '}
           <time dateTime={run.startedAt.toISOString()}>{formatMoscowMoment(run.startedAt)}</time>
           {' · '}
@@ -129,12 +135,18 @@ export function RunDetail({
                   <Box
                     component="span"
                     aria-hidden="true"
-                    sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: stepTone[step.state] }}
+                    sx={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      bgcolor: stepTone[step.state],
+                    }}
                   />
                   <Typography sx={{ fontWeight: 600 }}>{stepNameText[step.step]}</Typography>
                 </Box>
                 <Typography variant="body2" color="text.secondary">
-                  {stepStateText[step.state]} · {durationText(step.startedAt, step.finishedAt ?? now)}
+                  {stepStateText[step.state]} ·{' '}
+                  {durationText(step.startedAt, step.finishedAt ?? now)}
                 </Typography>
               </Box>
             ))}
@@ -162,7 +174,12 @@ export function RunDetail({
           >
             {run.lines.map((line, index) => (
               <Box component="li" key={index} sx={{ display: 'contents' }}>
-                <Typography component="span" variant="body2" color="text.secondary" sx={{ textAlign: 'right' }}>
+                <Typography
+                  component="span"
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ textAlign: 'right' }}
+                >
                   {index + 1}
                 </Typography>
                 <Typography component="span" variant="body2" color="text.secondary">
@@ -182,7 +199,13 @@ export function RunDetail({
         <Typography
           variant="caption"
           color="text.secondary"
-          sx={{ display: 'block', px: { xs: 2, sm: 2.75 }, py: 1.5, borderTop: 1, borderColor: 'divider' }}
+          sx={{
+            display: 'block',
+            px: { xs: 2, sm: 2.75 },
+            py: 1.5,
+            borderTop: 1,
+            borderColor: 'divider',
+          }}
         >
           Журнал составлен из сообщений Радити о шагах. Вывод служебных программ в него не попадает.
         </Typography>
@@ -191,14 +214,13 @@ export function RunDetail({
   )
 }
 
-/** «Запуски» of a site that has none yet. */
+/** «Запуски» of a site that has none yet. The list beside it names the section — the
+ * heading of the page — and says it is empty on a phone, where the list is all that is shown.
+ */
 export function NoRuns() {
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <SectionTitle>Запуски</SectionTitle>
-      <Typography color="text.secondary">
-        Запусков пока нет. Здесь появится каждое обновление сайта: его шаги и журнал.
-      </Typography>
-    </Box>
+    <Typography color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
+      Запусков пока нет. Здесь появится каждое обновление сайта: его шаги и журнал.
+    </Typography>
   )
 }
