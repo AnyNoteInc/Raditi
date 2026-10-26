@@ -319,6 +319,27 @@ describe('taskCharge', () => {
     }
   })
 
+  // A later charge of a task — the next pass of an open dialog (owner's answer of 26.10.2026) —
+  // is its work rounded: the minimum is the first charge's alone, but any work costs a credit.
+  it('is min(reserved, max(1, round half up)) without the minimum, and 0 without work', () => {
+    for (const reserved of [1, 5, 45]) {
+      for (let quarters = 0; quarters <= 200; quarters++) {
+        const rounded = Math.floor((quarters + 2) / 4)
+        const due = quarters === 0 ? 0 : Math.max(1, rounded)
+        const charge = taskCharge({
+          used: new Money(quarters).div(4),
+          reserved: toCredits(reserved),
+          minimum: false,
+        })
+        expect(charge).toEqual({
+          credits: Math.min(reserved, due),
+          minimumApplied: false,
+          capped: due > reserved,
+        })
+      }
+    }
+  })
+
   it('charges whole credits that pass for a count of credits', () => {
     const { credits } = taskCharge(work('16.895', 45))
     expect(Number.isInteger(credits)).toBe(true)

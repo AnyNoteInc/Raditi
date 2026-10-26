@@ -4,9 +4,9 @@ import { writeFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 
 // Runs in a trusted network namespace, separate from the agent's PID/filesystem namespaces.
-// The sandbox reaches the gateway's port and, when its policy lists client hosts, the port of the
-// client egress proxy on the same address (docs/plan/53-chat-preview-release.md, Р13): nothing
-// else, not even a name server.
+// The sandbox reaches the gateway's port and, when its policy lists client hosts or opens the
+// internet, the port of the client egress proxy on the same address
+// (docs/plan/53-chat-preview-release.md, Р13): nothing else, not even a name server.
 const ip = process.env.GATEWAY_IPV4
 const isPort = (value) => /^\d{1,5}$/.test(value ?? '') && +value >= 1 && +value <= 65535
 const ports = [

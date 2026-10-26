@@ -15,8 +15,13 @@ const pattern = z
   .max(1024)
   .refine((value) => pathPatternProblem(value) === null, 'invalid path pattern')
 
-/** The largest working set any stack may ask for: the sandbox limits stay as they are. */
-export const WORKING_SET_MAX_BYTES = 64 * 1024 * 1024
+/**
+ * The largest working set any stack may ask for. 256 MiB since 26.10.2026: a real WordPress site
+ * of the owner (two ready-made block and form plugins of 34 and 33 MB) had a working set of 84 MB
+ * and no turn could start. The bundle of the set keeps its own limit (`publicationLimits.bundleBytes`),
+ * the sandbox limits stay as they are.
+ */
+export const WORKING_SET_MAX_BYTES = 256 * 1024 * 1024
 
 /**
  * `SiteAdapter.agentWorkingSet()`: path patterns over the tree of `expectedBaseSha` in the

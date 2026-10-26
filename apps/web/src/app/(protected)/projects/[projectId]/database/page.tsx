@@ -1,18 +1,16 @@
+import Box from '@mui/material/Box'
 import type { Metadata } from 'next'
 
-import { SectionEmpty } from '@/components/site/section-empty'
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
 import { UNAVAILABLE } from '@/lib/access'
-import { loadSiteSection } from '@/lib/site'
+
+import { databaseConnectionBlock } from './blocks'
 
 export const metadata: Metadata = { title: 'База и бэкап' }
 
+/** «База и бэкап» at its root: the first block beside the menu. On a phone the menu alone is shown. */
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
-  const site = await loadSiteSection((await params).projectId, 'database')
-  if (site === UNAVAILABLE) return <ServiceUnavailable />
-  return (
-    <SectionEmpty title="База и бэкап">
-      Здесь появятся резервные копии базы и их расписание.
-    </SectionEmpty>
-  )
+  const block = await databaseConnectionBlock((await params).projectId, true)
+  if (block === UNAVAILABLE) return <ServiceUnavailable />
+  return <Box sx={{ display: { xs: 'none', md: 'block' } }}>{block}</Box>
 }

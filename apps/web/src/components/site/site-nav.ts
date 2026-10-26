@@ -2,7 +2,8 @@ import type { SiteStatus } from '@repo/db'
 
 import type { AppIconName } from '@/components/application/app-icon'
 
-export type SiteSection = 'chat' | 'overview' | 'changes' | 'runs' | 'database' | 'settings'
+export type SiteSection =
+  'chat' | 'overview' | 'changes' | 'runs' | 'database' | 'vault' | 'settings'
 
 export type SiteNavEntry = {
   section: SiteSection
@@ -15,14 +16,21 @@ export type SiteNavEntry = {
 /** The fixed columns of the site page: the rail of sections and the list beside it. */
 export const SITE_RAIL_WIDTH = 88
 export const SITE_LIST_WIDTH = 300
+/**
+ * The bar of breadcrumbs from `md` (owner's request of 26.10.2026): it runs from the rail to the
+ * right edge and stays at the top; the list column and the panel of a dialog stand under it.
+ */
+export const SITE_TOOLBAR_HEIGHT = 44
 
 /** The sections of a site page in rail order. */
 export const siteNav: readonly SiteNavEntry[] = [
-  { section: 'chat', label: 'Чат', icon: 'chat', primary: true },
   { section: 'overview', label: 'Обзор', icon: 'globe', primary: true },
+  { section: 'chat', label: 'Чат', icon: 'chat', primary: true },
   { section: 'changes', label: 'Изменения', icon: 'changes', primary: true },
   { section: 'runs', label: 'Запуски', icon: 'runs', primary: true },
   { section: 'database', label: 'База и бэкап', icon: 'database', primary: false },
+  // The client's environment variables (docs/plan/53, Р13): the values live in Vault.
+  { section: 'vault', label: 'Переменные', icon: 'key', primary: false },
   { section: 'settings', label: 'Настройки', icon: 'settings', primary: false },
 ]
 
@@ -40,8 +48,19 @@ export function activeSiteSection(pathname: string, siteId: string): SiteSection
   return siteNav.find((entry) => entry.section === segment)?.section
 }
 
-/** The sections laid out as «list — content»; the shell leaves room for their list column. */
-const listSections: readonly SiteSection[] = ['chat']
+/**
+ * The sections laid out as «list — content»: the dialogs, the versions, the runs, and the
+ * sections split by their cards — the database and its copies, the variables and the accesses,
+ * the site and its dangerous actions (owner's requests of 26.10.2026). The shell leaves room for their list column.
+ */
+const listSections: readonly SiteSection[] = [
+  'chat',
+  'changes',
+  'runs',
+  'database',
+  'vault',
+  'settings',
+]
 
 export const hasSiteList = (section: SiteSection | undefined) =>
   section !== undefined && listSections.includes(section)

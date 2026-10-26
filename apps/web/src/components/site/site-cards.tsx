@@ -2,28 +2,36 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import type { ReactNode } from 'react'
 
-/** A bordered block of the site page: no shadow, a divider under its title. */
+/**
+ * A bordered block of the site page: no shadow, a divider under its title. Without a title it is
+ * the block alone — the heading of the page names it.
+ */
 export function SiteCard({
   title,
   note,
   children,
 }: {
-  title: string
+  title?: string
   note?: ReactNode
   children: ReactNode
 }) {
   return (
-    <Box component="section" sx={{ border: 1, borderColor: 'divider', borderRadius: '14px' }}>
-      <Box sx={{ px: { xs: 2, sm: 2.75 }, py: 2, borderBottom: 1, borderColor: 'divider' }}>
-        <Typography component="h2" sx={{ fontSize: 17, fontWeight: 600 }}>
-          {title}
-        </Typography>
-        {note ? (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 720 }}>
-            {note}
+    <Box
+      component={title === undefined ? 'div' : 'section'}
+      sx={{ border: 1, borderColor: 'divider', borderRadius: '14px' }}
+    >
+      {title === undefined ? null : (
+        <Box sx={{ px: { xs: 2, sm: 2.75 }, py: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <Typography component="h2" sx={{ fontSize: 17, fontWeight: 600 }}>
+            {title}
           </Typography>
-        ) : null}
-      </Box>
+          {note ? (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 720 }}>
+              {note}
+            </Typography>
+          ) : null}
+        </Box>
+      )}
       {children}
     </Box>
   )

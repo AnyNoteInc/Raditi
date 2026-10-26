@@ -55,6 +55,10 @@ const paths = {
   keyboard:
     'M4 6h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1ZM7 10h.01M11 10h.01M15 10h.01M8 14h8',
   pointer: 'M5 3l14 7-6 2-2 6L5 3Z',
+  // What is done with a dialog (owner's request of 26.10.2026): its name, its deletion, stopping it.
+  pencil: 'M4 20h4L19 9l-4-4L4 16v4ZM13.5 6.5l4 4',
+  trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3',
+  square: 'M8 8h8v8H8Z',
 } as const
 
 export type AppIconName = keyof typeof paths

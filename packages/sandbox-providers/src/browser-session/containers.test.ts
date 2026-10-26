@@ -68,6 +68,8 @@ describe('browser session containers', () => {
       'LISTEN_PORT=3128',
       'CLIENT_IPV4=172.30.0.3',
       'ALLOWED_HOSTS=["news.example.ru:443","www.news.example.ru:443"]',
+      // Chromium's ECH with the listed host as its outer name passes (client-egress.mjs).
+      'ECH_OUTER_NAME=1',
       'MAX_TUNNELS=48',
       'REFUSED_SUBNETS=84.201.128.0/18',
     ])

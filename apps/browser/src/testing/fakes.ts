@@ -229,6 +229,17 @@ export class FakeCloudBrowser implements CloudBrowserSession {
     return this.onFocused()
   }
 
+  /** What a snapshot does before it answers; may throw or wait. */
+  onScreenshot: () => Promise<void> = async () => undefined
+  /** The options of every snapshot taken. */
+  readonly screenshots: { qualities: readonly number[]; maxBytes: number }[] = []
+
+  async screenshot(options: { qualities: readonly number[]; maxBytes: number }) {
+    this.screenshots.push(options)
+    await this.onScreenshot()
+    return { page: this.#current(), bytes: TINY_JPEG, width: 1280, height: 800 }
+  }
+
   async act(action: CloudBrowserAction): Promise<CloudBrowserActResult> {
     this.acted.push(action)
     const extra = (await this.onAct(action)) ?? {}
@@ -321,6 +332,15 @@ export class FakeStore implements BrowserWorkerStore {
   readonly controls: { controller: BrowserController; controlEpoch: number }[] = []
   readonly helps: BrowserHelp[] = []
   readonly members = new Set<string>()
+  /** Rows of snapshots the dialogs show, in the order they were recorded. */
+  readonly screenshotRows: {
+    taskId: string
+    sessionId: string
+    screenshotId: string
+    width: number
+    height: number
+    number: number
+  }[] = []
   wrote = 0
   touched = 0
   cleared = 0
@@ -440,6 +460,29 @@ export class FakeStore implements BrowserWorkerStore {
   async viewerAllowed(input: { sessionId: string; userId: string }) {
     return this.members.has(`${input.sessionId}:${input.userId}`)
   }
+
+  async screenshotCount(taskId: string) {
+    return this.screenshotRows.filter((row) => row.taskId === taskId).length
+  }
+
+  async recordScreenshot(input: {
+    taskId: string
+    sessionId: string
+    screenshotId: string
+    width: number
+    height: number
+  }) {
+    const session = this.sessions.get(input.sessionId)
+    if (
+      !session ||
+      session.taskId !== input.taskId ||
+      !['starting', 'ready'].includes(session.status)
+    )
+      return null
+    const number = (await this.screenshotCount(input.taskId)) + 1
+    this.screenshotRows.push({ ...input, number })
+    return number
+  }
 }
 
 export class FakeInbox implements InboxStorage {
@@ -453,6 +496,22 @@ export class FakeInbox implements InboxStorage {
     return (async function* () {
       yield bytes
     })()
+  }
+
+  /** Objects the worker wrote, by key. */
+  readonly written = new Map<string, { bytes: Uint8Array; contentType?: string }>()
+
+  async put(
+    _bucket: string,
+    key: string,
+    body: Uint8Array | AsyncIterable<Uint8Array>,
+    opts?: { contentType?: string },
+  ) {
+    const bytes = body instanceof Uint8Array ? body : new Uint8Array()
+    this.written.set(key, {
+      bytes,
+      ...(opts?.contentType ? { contentType: opts.contentType } : {}),
+    })
   }
 
   async checkBuckets() {

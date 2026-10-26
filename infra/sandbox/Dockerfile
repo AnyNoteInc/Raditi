@@ -12,6 +12,10 @@ FROM base AS runtime
 # itself, by its own architecture: arm64, or the x64 baseline build, which needs no AVX2 (the
 # other x64 package that npm installs next to it leaves the layer). `npm ls` fails the build if
 # the lockfile stops holding the verified version.
+# The browser skill of the agent (owner's request of 26.10.2026): Playwright MCP from the same
+# lockfile and the Chromium of its Playwright, with the system libraries Playwright names,
+# installed while building — a turn downloads nothing. The skill runs it headless, through the
+# egress proxy (packages/agent-drivers/src/opencode.ts).
 # Changing a version: packages/agent-drivers/cli/README.md.
 COPY packages/agent-drivers/cli/package.json packages/agent-drivers/cli/package-lock.json /usr/local/lib/raditi/agent-clis/
 RUN apt-get update \
@@ -22,6 +26,11 @@ RUN apt-get update \
     && cd /usr/local/lib/raditi/agent-clis \
     && npm ci --ignore-scripts --no-audit --no-fund \
     && npm ls opencode-ai@1.18.34 \
+    && npm ls @playwright/mcp@0.0.83 \
+    && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+      node node_modules/@playwright/mcp/cli.js install-browser --with-deps --no-shell chromium \
+    && rm -rf /var/lib/apt/lists/* \
+    && chmod -R a+rX /opt/ms-playwright \
     && npm cache clean --force \
     && case "$(dpkg --print-architecture)" in \
       arm64) opencode=opencode-linux-arm64 ;; \

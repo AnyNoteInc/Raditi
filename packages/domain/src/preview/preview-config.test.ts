@@ -129,6 +129,7 @@ describe('the session secret and the images', () => {
     expect(previewDefaults).toMatchObject({
       gatewayPort: 8090,
       ttlHours: 72,
+      idleMinutes: 30,
       upstreamHost: '127.0.0.1',
       releaseApiPort: 8085,
       releaseStartTimeoutMinutes: 10,

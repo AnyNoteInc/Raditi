@@ -862,7 +862,8 @@ async function verifyReleaseAccess({ rootToken, scopedTokens, expect, siteId, co
 
   // web (sites-writer): a variable of a site keeps one version — set on its metadata before the
   // first write — and is written with CAS and removed by a tombstone; never read back, never
-  // deleted: the policy is not widened for it.
+  // deleted: the policy is not widened for it. The same one version, and nothing else of the
+  // metadata, on any key of a site (below, «Удалить проект»).
   await expect(sitesWriter, `kv/metadata/${variable}`, 204, post({ max_versions: '1' }))
   await expect(sitesWriter, `kv/data/${variable}`, 200, write({ value: 'synthetic-1' }, 0))
   await expect(sitesWriter, `kv/data/${variable}`, 400, write({ value: 'stale' }, 0))
@@ -883,8 +884,8 @@ async function verifyReleaseAccess({ rootToken, scopedTokens, expect, siteId, co
     [`kv/metadata/${variable}`, post({ delete_version_after: '1h' })],
     [`kv/metadata/${variable}`, post({ custom_metadata: { kept: 'yes' } })],
     [`kv/metadata/${variable}`, { method: 'PATCH', body: { max_versions: '1' } }],
-    [`kv/metadata/sites/${siteId}/wp`, post({ max_versions: '1' })],
-    [`kv/metadata/sites/${siteId}/db`, post({ max_versions: '1' })],
+    [`kv/metadata/sites/${siteId}/wp`, post({ max_versions: '2' })],
+    [`kv/metadata/sites/${siteId}/db`, post({ max_versions: 1 })],
     [`kv/data/${variable}`, {}],
     [`kv/data/${variable}?version=1`, {}],
     [`kv/data/${variable}`, { method: 'DELETE' }],
@@ -898,6 +899,18 @@ async function verifyReleaseAccess({ rootToken, scopedTokens, expect, siteId, co
   ]) {
     await expect(sitesWriter, path, 403, options)
   }
+
+  // «Удалить проект» (25.10.2026): web overwrites an access of a site with a version without a
+  // value that alone is kept — the older versions with the password are gone, for root as well.
+  const deleted = `sites/${randomUUID()}/ssh`
+  await expect(sitesWriter, `kv/data/${deleted}`, 200, write({ password: 'synthetic-1' }, 0))
+  await expect(sitesWriter, `kv/data/${deleted}`, 200, write({ password: 'synthetic-2' }, 1))
+  await expect(sitesWriter, `kv/metadata/${deleted}`, 204, post({ max_versions: '1' }))
+  await expect(sitesWriter, `kv/data/${deleted}`, 200, write({ removed }, 2))
+  const erased = await expect(rootToken, `kv/metadata/${deleted}`, 200)
+  assert.deepEqual(Object.keys(erased?.data?.versions ?? {}), ['3'], 'Deleted site history')
+  await expect(rootToken, `kv/data/${deleted}?version=2`, 404)
+  await expect(sitesWriter, `kv/data/${deleted}`, 403)
 
   // The operator stores the token of the Gitea organization owner; no service writes it.
   await expect(rootToken, `kv/data/${owner}`, 200, write({ v: '1', token: 'synthetic-owner' }, 0))

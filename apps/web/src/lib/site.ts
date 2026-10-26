@@ -77,3 +77,23 @@ export const loadSiteSetup = cache(async (projectId: string) => {
     return null
   }
 })
+
+type ServerCaller = Awaited<ReturnType<typeof getServerCaller>>
+
+/**
+ * One read of the history of a site — its runs, versions, copies, where its files are — for a page
+ * that has found the site; UNAVAILABLE when it cannot be made. Access is the procedure's own check.
+ */
+export async function loadSiteHistory<T>(
+  what: string,
+  read: (caller: ServerCaller) => Promise<T>,
+): Promise<T | typeof UNAVAILABLE> {
+  try {
+    return await read(await getServerCaller())
+  } catch (error) {
+    unstable_rethrow(error)
+    if (isNotFound(error)) notFound()
+    console.error(`[web] site ${what} lookup failed: ${errorMessage(error)}`)
+    return UNAVAILABLE
+  }
+}

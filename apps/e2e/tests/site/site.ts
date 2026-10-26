@@ -103,6 +103,8 @@ export async function addBrowserTask(
         status: 'awaiting_user',
         title,
         turnNo: 1,
+        // «Чат» is the dialog in the browser, as `task.create` writes it.
+        mode: 'chat',
         needsRepository: false,
         needsBrowser: true,
       },
@@ -210,6 +212,54 @@ export async function addForeignSite(): Promise<{ siteId: string; remove: () => 
       },
     }
   } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * The class a dialog starts in priced for the time of a run: `task.create` takes a dialog only in
+ * a class whose profile has a price (26.10.2026), and no price is ever seeded — an operator
+ * approves them. The seeded model of `standard` (the reasoning «Высокое», what a dialog starts
+ * with) and its provider are switched on and priced from before the credit rate of the run, which
+ * so stays in force. The returned `restore` puts the switches back and removes the price.
+ */
+export async function priceDialogClass(): Promise<() => Promise<void>> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  const model = await prisma.llmModel.findFirst({
+    where: {
+      modelClass: 'standard',
+      providerModelId: { not: null },
+      // The seeded providers are the backends of Z.ai, both of the kind the planner takes.
+      provider: { kind: 'subscription' },
+    },
+    orderBy: [{ provider: { slug: 'asc' } }, { slug: 'asc' }],
+    select: { id: true, enabled: true, provider: { select: { id: true, enabled: true } } },
+  })
+  if (model === null) throw new Error('The seeds have no model of the class standard')
+  const price = await prisma.llmModelPrice.create({
+    data: {
+      modelId: model.id,
+      effectiveFrom: new Date('2025-12-31T00:00:00.000Z'),
+      inputPer1m: '100',
+      outputPer1m: '1000',
+      vatRate: '0.2200',
+      sourceUrl: 'https://rates.invalid/browser-run-of-the-site-page',
+    },
+    select: { id: true },
+  })
+  if (!model.enabled)
+    await prisma.llmModel.update({ where: { id: model.id }, data: { enabled: true } })
+  if (!model.provider.enabled)
+    await prisma.llmProvider.update({ where: { id: model.provider.id }, data: { enabled: true } })
+  return async () => {
+    await prisma.llmModelPrice.delete({ where: { id: price.id } })
+    if (!model.enabled)
+      await prisma.llmModel.update({ where: { id: model.id }, data: { enabled: false } })
+    if (!model.provider.enabled)
+      await prisma.llmProvider.update({
+        where: { id: model.provider.id },
+        data: { enabled: false },
+      })
     await prisma.$disconnect()
   }
 }

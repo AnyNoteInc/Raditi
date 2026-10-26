@@ -191,6 +191,18 @@ export class McpWebController {
     return this.#call(context, 'web_verify', args)
   }
 
+  @ToolScopes(['web'])
+  @Tool({
+    name: 'web_screenshot',
+    description:
+      'Take a snapshot of the shown page for the client: the platform attaches it to the dialog as an image, and you never see it — the answer is only its number. Call it when the client asks for a screenshot (open the page first and wait until it has loaded), then say in client_message that the screenshot is attached. It changes nothing on the site. Refused while the client controls the browser.',
+    parameters: schemas.web_screenshot,
+    annotations: reads,
+  })
+  screenshot(@Payload() args: BrowserToolArguments<'web_screenshot'>, @Ctx() context: McpContext) {
+    return this.#call(context, 'web_screenshot', args)
+  }
+
   async #call<T extends BrowserToolName>(
     context: McpContext,
     tool: T,

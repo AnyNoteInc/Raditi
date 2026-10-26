@@ -7,6 +7,7 @@ import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
+import IconButton from '@mui/material/IconButton'
 import MuiLink from '@mui/material/Link'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
@@ -14,7 +15,7 @@ import Typography from '@mui/material/Typography'
 import { useQuery } from '@tanstack/react-query'
 import { useState, useSyncExternalStore, type ReactNode } from 'react'
 
-import { AppIcon } from '@/components/application/app-icon'
+import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -37,6 +38,62 @@ const tabLabel: Readonly<Record<PaneTab, string>> = {
   files: previewPanelText.files,
   database: previewPanelText.database,
   checks: previewPanelText.checks,
+}
+
+/** The tabs are icons (owner's request of 26.10.2026); the name is their label and their hint. */
+const tabIcon: Readonly<Record<PaneTab, AppIconName>> = {
+  preview: 'eye',
+  files: 'file',
+  database: 'database',
+  checks: 'check',
+}
+
+/** A preview the client uses: being made, ready, stopped for its age or failed — not one that cannot be shown or is gone. */
+const usedPreviews: ReadonlySet<PreviewHead['status']> = new Set([
+  'pending',
+  'building',
+  'ready',
+  'failed',
+  'expired',
+])
+
+/** What a tab of the candidate holds: the files and media, the records of the site, the checks. */
+function candidateCount(tab: Exclude<PaneTab, 'preview'>, candidate: CandidateHead | null): number {
+  if (candidate === null) return 0
+  if (tab === 'checks') {
+    const { pending, passed, failed, stale } = candidate.checks
+    return pending + passed + failed + stale
+  }
+  const counts = candidate.counts
+  if (counts === null) return 0
+  if (tab === 'database') return counts.records
+  return counts.files.added + counts.files.modified + counts.files.deleted + counts.media
+}
+
+/** The changes of the candidate on the site itself: its files and media, the records of the site. */
+const siteChanges = (candidate: CandidateHead | null): number =>
+  candidateCount('files', candidate) + candidateCount('database', candidate)
+
+/**
+ * The tabs the panel has something for (owner's requests of 26.10.2026: it opens only when it is
+ * really needed — when something on the site has changed) — the files and the records of the site
+ * the changes touch, their checks, and the preview of them — in their order. The preview of a
+ * dialog without changes is there only when the client asked for it (`/preview`): its first build
+ * is the site as it is. None: the dialog has no panel at all.
+ */
+export function paneTabsOf(
+  preview: PreviewHead | null,
+  candidate: CandidateHead | null,
+  options: { previewAsked?: boolean } = {},
+): PaneTab[] {
+  const changed = siteChanges(candidate) > 0
+  return paneTabs.filter((tab) =>
+    tab === 'preview'
+      ? preview !== null &&
+        usedPreviews.has(preview.status) &&
+        (changed || options.previewAsked === true)
+      : candidateCount(tab, candidate) > 0,
+  )
 }
 
 /** The id of a tab of the panel: `/preview` and «Посмотреть изменения» put the focus on it. */
@@ -232,6 +289,8 @@ function CandidateTab({
 /**
  * The panel of a dialog's changes. `visible` — it is on the screen (from `lg`, or chosen by the
  * switch): the frame of the preview is made only then, so no ticket is spent on a hidden one.
+ * `tabs` — the tabs it has something for (`paneTabsOf`); every tab when not given. A tab is an
+ * icon named by its label, a tab of the candidate shows how many things it holds.
  */
 export function PreviewPane({
   taskId,
@@ -239,61 +298,110 @@ export function PreviewPane({
   candidate,
   tab,
   onTab,
+  tabs = paneTabs,
   visible,
   canReset,
   onReset,
   resetting,
+  onClose,
 }: {
   taskId: string
   preview: PreviewHead | null
   candidate: CandidateHead | null
   tab: PaneTab
   onTab: (tab: PaneTab) => void
+  tabs?: readonly PaneTab[]
   visible: boolean
   canReset: boolean
   onReset: () => void
   resetting: boolean
+  /** «Скрыть изменения»: the panel steps aside, the dialog takes the width. */
+  onClose?: () => void
 }) {
   // The address of the cabinet is known in the browser only: the tab is drawn there.
   const cabinet = useSyncExternalStore(noSubscription, cabinetOrigin, noOrigin)
+  // A tab that has nothing now gives way to the first that has something.
+  const shown = tabs.includes(tab) ? tab : (tabs[0] ?? tab)
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
-      <Tabs
-        value={tab}
-        onChange={(_event, next: PaneTab) => onTab(next)}
-        aria-label={paneText.tabs}
-        variant="scrollable"
-        scrollButtons={false}
-        sx={{ flex: 'none', px: 1, borderBottom: 1, borderColor: 'divider' }}
+      <Box
+        sx={{
+          flex: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          pr: 1,
+          borderBottom: 1,
+          borderColor: 'divider',
+        }}
       >
-        {paneTabs.map((value) => (
-          <Tab
-            key={value}
-            value={value}
-            label={tabLabel[value]}
-            id={tabId(value)}
-            aria-controls={panelId(value)}
-            sx={{ minHeight: 48, textTransform: 'none', fontSize: 14 }}
-          />
-        ))}
-      </Tabs>
-      {paneTabs.map((value) => (
+        <Tabs
+          value={shown}
+          onChange={(_event, next: PaneTab) => onTab(next)}
+          aria-label={paneText.tabs}
+          variant="scrollable"
+          scrollButtons={false}
+          sx={{ flex: '1 1 auto', minWidth: 0, px: 1 }}
+        >
+          {tabs.map((value) => {
+            const count = value === 'preview' ? 0 : candidateCount(value, candidate)
+            return (
+              <Tab
+                key={value}
+                value={value}
+                icon={<AppIcon name={tabIcon[value]} size={20} />}
+                iconPosition="start"
+                label={
+                  count > 0 ? (
+                    <Box component="span" aria-hidden="true">
+                      {count}
+                    </Box>
+                  ) : undefined
+                }
+                aria-label={tabLabel[value]}
+                title={tabLabel[value]}
+                id={tabId(value)}
+                aria-controls={panelId(value)}
+                sx={{
+                  minHeight: 48,
+                  minWidth: 52,
+                  px: 1.5,
+                  textTransform: 'none',
+                  fontSize: 13,
+                  fontVariantNumeric: 'tabular-nums',
+                  '& .MuiTab-iconWrapper': { mr: count > 0 ? 0.75 : 0 },
+                }}
+              />
+            )
+          })}
+        </Tabs>
+        {onClose ? (
+          <IconButton
+            aria-label={paneText.hide}
+            title={paneText.hide}
+            onClick={onClose}
+            sx={{ flex: 'none', width: 44, height: 44, color: 'text.secondary' }}
+          >
+            <AppIcon name="close" size={20} />
+          </IconButton>
+        ) : null}
+      </Box>
+      {tabs.map((value) => (
         <Box
           key={value}
           role="tabpanel"
           id={panelId(value)}
           aria-labelledby={tabId(value)}
-          hidden={value !== tab}
+          hidden={value !== shown}
           sx={{
             flex: '1 1 auto',
             minHeight: 0,
             overflowY: value === 'preview' ? 'hidden' : 'auto',
-            display: value === tab ? 'flex' : 'none',
+            display: value === shown ? 'flex' : 'none',
             flexDirection: 'column',
             ...(value === 'preview' ? {} : { p: { xs: 2, sm: 2.5 } }),
           }}
         >
-          {value !== tab ? null : value === 'preview' ? (
+          {value !== shown ? null : value === 'preview' ? (
             cabinet !== null ? (
               <PreviewTab
                 cabinet={cabinet}

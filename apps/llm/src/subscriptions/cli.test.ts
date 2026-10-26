@@ -60,7 +60,8 @@ function run(
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
     child.stdin.on('error', () => undefined)
-    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000)
+    // A Node process that loads the command from its sources: seconds on a loaded CI runner.
+    const timer = setTimeout(() => child.kill('SIGKILL'), 25_000)
     child.once('error', reject)
     child.once('close', (code) => {
       clearTimeout(timer)
@@ -116,7 +117,8 @@ async function fakeVault(auth: object) {
   return { requests, address: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }
 }
 
-describe('operator subscription commands', () => {
+// A test runs up to two commands as processes, each given 25 s (`run`).
+describe('operator subscription commands', { timeout: 90_000 }, () => {
   it('fails a command that tried to leave this machine, whatever the command made of it', async () => {
     // The process swallows the refusal of the guard and ends as if nothing had happened.
     const script = `

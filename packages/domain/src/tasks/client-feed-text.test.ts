@@ -302,6 +302,9 @@ describe('looksLikeSecret', () => {
     ['a label split by an invisible character', 'паро​ль: Qwerty123'],
     ['a label split by a soft hyphen', 'па­роль: Qwerty123'],
     ['an English label glued to a value in two cases', 'DB_PASSWORD=s3cretvalue'],
+    ['a Russian label glued to its value', 'пароль=Qwerty123'],
+    ['a value after a key label', 'ключ: Summer2026'],
+    ['a password of its own shape with no label', 'вот Qw3rty!x'],
     // Known key formats.
     ['a private key block', '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END'],
     ['a bare private key header', 'вот ключ -----BEGIN PRIVATE KEY----- MIIEv'],
@@ -320,8 +323,7 @@ describe('looksLikeSecret', () => {
   })
 
   it.each([
-    // The words around a value do not matter, and a word with a Cyrillic letter is no password.
-    ['a Russian label glued to its value', 'пароль=Qwerty123'],
+    // A word with a Cyrillic letter is no password.
     ['a value in Cyrillic', 'пароль: солнышко'],
     ['a label with a value in Cyrillic', 'ключ: зелёный'],
     // One case only.
@@ -368,41 +370,50 @@ describe('looksLikeSecret', () => {
   })
 
   it.each([
-    ['seven characters', 'Qwerty1', false],
-    ['eight characters', 'Qwerty12', true],
-    ['only lowercase letters', 'qwertyui', false],
-    ['only uppercase letters', 'QWERTYUI', false],
+    ['seven characters', 'Qw3rty!', false],
+    ['eight characters', 'Qw3rty!x', true],
+    ['only lowercase letters, a digit and a sign', 'qw3rty!x', false],
+    ['only uppercase letters, a digit and a sign', 'QW3RTY!X', false],
     ['only digits', '12345678', false],
     ['only special characters', '!@#$%^&*', false],
-    ['one lowercase letter among uppercase ones', 'QWERTYu1', true],
-    ['one uppercase letter among lowercase ones', 'qwertyU!', true],
-    ['letters only, no digit', 'Abcdefgh', true],
-    ['special characters with one letter of each case', '!!!!!!aA', true],
+    ['letters of both cases alone', 'Abcdefgh', false],
+    ['letters of both cases and a special character', 'Abc#defg', true],
+    ['letters of both cases with a digit inside', 'Qwe1rtyx', true],
+    ['one lowercase letter among uppercase ones', 'QWE#RTYu', true],
+    ['one uppercase letter among lowercase ones', 'qwe#rtyU', true],
     ['the last printable ASCII characters', 'Qwerty~{}|', true],
-    ['one Cyrillic letter inside', 'Qwertyя1', false],
-    ['one Cyrillic letter at the end', 'Qwerty12я', false],
-    ['a full-width Latin letter', 'Ｑwerty123', false],
-    // Punctuation stays with its word: ASCII punctuation counts, any other does not.
-    ['guillemets around the word', '«Qwerty123»', false],
-    ['a long dash after the word', 'Qwerty12—', false],
-    ['straight quotes around the word', '"Qwerty123"', true],
-    ['brackets around the word', '(Qwerty123)', true],
-    ['a full stop after the word', 'Qwerty123.', true],
-    ['a full stop that makes the eighth character', 'Qwerty1.', true],
+    // Letters then digits: a name with a number as much as a password.
+    ['letters then digits, alone', 'Qwerty12', false],
+    ['letters then digits after a word of a secret', 'пароль Qwerty12', true],
+    ['letters then digits after an English word of a secret', 'login: Qwerty12', true],
+    ['letters then digits after the name of an account', 'admin Qwerty12', true],
+    // A sign that joins the parts of a name makes no password.
+    ['a hyphen', 'Check-In-Out', false],
+    ['an underscore and an equals sign', 'utm_source=Yandex', false],
+    ['one Cyrillic letter inside', 'Qw3rtyя!', false],
+    ['one Cyrillic letter at the end', 'Qw3rty!xя', false],
+    ['a full-width Latin letter', 'Ｑw3rty!x', false],
+    // What stands around a word in a sentence is not a character of it.
+    ['guillemets around the word', '«Qw3rty!x»', true],
+    ['straight quotes around the word', '"Qw3rty!x"', true],
+    ['brackets around the word', '(Qw3rty!x)', true],
+    ['a full stop after the word', 'Qw3rty!x.', true],
+    ['a full stop that would make the eighth character', 'Qw3rty!.', false],
+    ['a hashtag', '#Qw3rty!x', true],
     // Invisible characters are removed before the split.
-    ['a zero-width space inside the word', 'Qwer​ty12', true],
-    ['a soft hyphen inside the word', 'Qwer­ty12', true],
-    ['a zero-width space inside a seven-character word', 'Qwer​ty1', false],
+    ['a zero-width space inside the word', 'Qw3r\u200bty!x', true],
+    ['a soft hyphen inside the word', 'Qw3r\u00adty!x', true],
+    ['a zero-width space inside a seven-character word', 'Qw3r\u200bty!', false],
     // What /\s/u matches separates words: tabs, line breaks and the no-break spaces as well.
-    ['a space inside', 'Qwer ty12', false],
-    ['a tab inside', 'Qwer\tty12', false],
-    ['a line break inside', 'Qwer\nty12', false],
-    ['a no-break space inside', 'Qwer ty12', false],
-    ['a narrow no-break space inside', 'Qwer ty12', false],
-    ['tabs around the word', 'a\tQwerty123\tb', true],
-    ['line breaks around the word', 'a\nQwerty123\r\nb', true],
-    ['a no-break space before the word', 'слово Qwerty123', true],
-    ['a no-break space after the word', 'Qwerty123 руб', true],
+    ['a space inside', 'Qw3r ty!x', false],
+    ['a tab inside', 'Qw3r\tty!x', false],
+    ['a line break inside', 'Qw3r\nty!x', false],
+    ['a no-break space inside', 'Qw3r\u00a0ty!x', false],
+    ['a narrow no-break space inside', 'Qw3r\u202fty!x', false],
+    ['tabs around the word', 'a\tQw3rty!x\tb', true],
+    ['line breaks around the word', 'a\nQw3rty!x\r\nb', true],
+    ['a no-break space before the word', 'слово\u00a0Qw3rty!x', true],
+    ['a no-break space after the word', 'Qw3rty!x\u00a0руб', true],
   ])('reads a password by the letter: %s', (_name, text, refused) => {
     expect(looksLikeSecret(text)).toBe(refused)
   })
@@ -437,11 +448,12 @@ describe('looksLikeSecret', () => {
 
   it.each([
     // An address is told narrowly: a scheme with `://` or `www.` at the start of the word.
-    ['a bare domain with a path', 'Example.ru/Page', true],
-    ['a Latin label glued to an address', 'Link:https://Example.ru/Page', true],
-    ['an assignment glued to an address', 'x=https://Example.ru/', true],
-    ['one slash after the scheme', 'http:/Example.ru', true],
-    ['www without the dot', 'wwwExample.ru', true],
+    ['a bare domain with a path', 'Example.ru/Page', false],
+    ['a Latin label glued to an address', 'Link:https://Example.ru/Page', false],
+    ['an assignment glued to an address', 'x=https://Example.ru/', false],
+    ['one slash after the scheme', 'http:/Example.ru', false],
+    ['www without the dot', 'wwwExample.ru', false],
+    ['a Latin label glued to a password', 'Link:Qw3rty!x', true],
     // A word with a Cyrillic letter is no address, and no password either.
     ['a Russian label glued to an address', 'ссылка:https://Example.ru/Page', false],
     ['a phone link', 'tel:+74951234567', false],
@@ -451,7 +463,7 @@ describe('looksLikeSecret', () => {
     ['guillemets and a Latin label before an address', `«Link:https://example.ru/?t=${key}»`, true],
     ['a name in guillemets', '«WordPress2024»', false],
     // An address does not cover the words next to it.
-    ['a password next to an address', 'https://example.ru Qwerty123', true],
+    ['a password next to an address', 'https://example.ru Qw3rty!x', true],
     [
       'a private key header next to an address',
       'https://example.ru -----BEGIN PRIVATE KEY-----',
@@ -475,9 +487,15 @@ describe('looksLikeSecret', () => {
     ['a signed token in lowercase', signed.toLowerCase(), false],
     ['a signed token after a Cyrillic letter', `я${signed}`, false],
     ['a signed token after a Russian label and a hyphen', `токен-${signed}`, true],
+    // No signed token, but a password by its shape after the label.
     [
       'a signed token with a short third part',
       'ю:eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIx.dBjftJeZ4',
+      true,
+    ],
+    [
+      'a signed token with a short third part in one word',
+      'юeyJhbGciOiJIUzI1NiJ9.eyJz.dBjf',
       false,
     ],
     ['an unknown prefix in one case', 'myco_live_0123456789abcdef0123456789abcdef', false],
@@ -486,33 +504,35 @@ describe('looksLikeSecret', () => {
     expect(looksLikeSecret(text)).toBe(refused)
   })
 
-  // The rule is applied literally. These outcomes are what the owner decided on 11.10.2026:
-  // none of them is softened here, and a change to any of them goes back to the owner.
-  describe('ordinary words the rule refuses, as the owner decided', () => {
+  // Words a customer writes about a site: names of products and services, addresses, files,
+  // headings. The literal rule of 11.10.2026 refused most of them; the owner's answer of
+  // 26.10.2026 «исправь как нужно» let them through. A word with a digit inside it among
+  // letters of both cases («iPhone15Pro») is still read as a password.
+  describe('ordinary words a customer writes', () => {
     it.each([
       // Names of products and services.
-      ['WordPress', true],
-      ['WordPress2024', true],
-      ['Обновите WordPress до 6.5', true],
-      ['WordPress,', true],
-      ['(WordPress)', true],
+      ['WordPress', false],
+      ['WordPress2024', false],
+      ['Обновите WordPress до 6.5', false],
+      ['WordPress,', false],
+      ['(WordPress)', false],
       ['«WordPress»', false],
-      ['JavaScript', true],
-      ['WooCommerce', true],
-      ['PhotoShop', true],
-      ['Photoshop', true],
-      ['VKontakte', true],
-      ['Bitrix24', true],
-      ['Telegram', true],
-      ['WhatsApp', true],
-      ['Instagram', true],
-      ['Facebook', true],
-      ['LinkedIn', true],
-      ['Elementor', true],
-      ['OpenCart', true],
-      ['Wildberries', true],
-      ['PlayStation', true],
-      ['Google Analytics', true],
+      ['JavaScript', false],
+      ['WooCommerce', false],
+      ['PhotoShop', false],
+      ['Photoshop', false],
+      ['VKontakte', false],
+      ['Bitrix24', false],
+      ['Telegram', false],
+      ['WhatsApp', false],
+      ['Instagram', false],
+      ['Facebook', false],
+      ['LinkedIn', false],
+      ['Elementor', false],
+      ['OpenCart', false],
+      ['Wildberries', false],
+      ['PlayStation', false],
+      ['Google Analytics', false],
       ['Tilda', false],
       ['MySQL', false],
       ['AirPods', false],
@@ -522,75 +542,75 @@ describe('looksLikeSecret', () => {
       ['Яндекс.Метрика', false],
       // Seven characters pass, and a punctuation mark makes the eighth.
       ['Смотрите нас на YouTube', false],
-      ['Смотрите нас на YouTube.', true],
+      ['Смотрите нас на YouTube.', false],
       // Goods with an article number.
       ['iPhone15Pro', true],
       ['iPhone 15 Pro', false],
       ['Samsung Galaxy S24', false],
       ['SM-A546EZKD', false],
-      ['Nike Air-Max270', true],
-      ['MacBookPro', true],
+      ['Nike Air-Max270', false],
+      ['MacBookPro', false],
       ['MacBook Pro', false],
-      ['PlayStation5', true],
+      ['PlayStation5', false],
       ['Xiaomi Redmi Note13', false],
       ['Note13Pro', true],
       ['Версия PHP8.3', false],
       // E-mail addresses, bare domains and links without a scheme.
       ['info@example.ru', false],
-      ['Ivan.Petrov@example.ru', true],
-      ['Info@Example.ru', true],
-      ['ivanov@Gmail.com', true],
+      ['Ivan.Petrov@example.ru', false],
+      ['Info@Example.ru', false],
+      ['ivanov@Gmail.com', false],
       ['mailto:info@example.ru', false],
-      ['mailto:Info@example.ru', true],
-      ['Example.ru', true],
-      ['Raditi.ru', true],
-      ['vk.com/MyShop', true],
-      ['t.me/RaditiSupport', true],
-      ['@Ivan_Petrov', true],
+      ['mailto:Info@example.ru', false],
+      ['Example.ru', false],
+      ['Raditi.ru', false],
+      ['vk.com/MyShop', false],
+      ['t.me/RaditiSupport', false],
+      ['@Ivan_Petrov', false],
       // Phones and numbers.
       ['+7 (495) 123-45-67', false],
       ['+74951234567', false],
       ['8-800-555-35-35', false],
       ['ИНН 7707083893', false],
       ['ID: GTM-ABC1234', false],
-      ['utm_source=Yandex', true],
+      ['utm_source=Yandex', false],
       // File names.
-      ['Price2026.pdf', true],
+      ['Price2026.pdf', false],
       ['price2026.pdf', false],
       ['Прайс2026.pdf', false],
-      ['IMG_2024.jpg', true],
-      ['Logo.png', true],
+      ['IMG_2024.jpg', false],
+      ['Logo.png', false],
       // Hashtags and promo codes.
-      ['#BlackFriday', true],
-      ['#Sale2026', true],
+      ['#BlackFriday', false],
+      ['#Sale2026', false],
       ['#СкидкиЛета', false],
-      ['Промокод Summer2026', true],
-      ['Sale2026', true],
+      ['Промокод Summer2026', false],
+      ['Sale2026', false],
       ['SALE2026', false],
       ['sale2026', false],
       // English sentences and headings a customer asks to put on the site.
       ['Welcome to our shop', false],
       ['Замените заголовок на Welcome to our Shop!', false],
-      ['Welcome!', true],
-      ['Welcome,', true],
+      ['Welcome!', false],
+      ['Welcome,', false],
       ['Hello, World!', false],
       ['Black Friday', false],
       ['Summer Sale 2026', false],
-      ['SummerSale', true],
-      ['Contacts', true],
+      ['SummerSale', false],
+      ['Contacts', false],
       ['Contact Us', false],
-      ['Services', true],
-      ['Portfolio', true],
-      ['Copyright', true],
-      ['Check-In', true],
-      ['Delivery & Payment', true],
+      ['Services', false],
+      ['Portfolio', false],
+      ['Copyright', false],
+      ['Check-In', false],
+      ['Delivery & Payment', false],
       ['About Company', false],
       ['AboutUs', false],
       ['Заголовок «AboutUs»', false],
-      ['Заголовок "AboutUs"', true],
-      ['OurServices', true],
-      ['FrequentlyAskedQuestions', true],
-      ['ООО "RomashkaPlus"', true],
+      ['Заголовок "AboutUs"', false],
+      ['OurServices', false],
+      ['FrequentlyAskedQuestions', false],
+      ['ООО "RomashkaPlus"', false],
     ])('%s', (text, refused) => {
       expect(looksLikeSecret(text)).toBe(refused)
     })
@@ -637,7 +657,8 @@ describe('looksLikeSecret', () => {
       expect(text.length, text.slice(0, 20)).toBe(limit)
       expect(looksLikeSecret(text), text.slice(0, 20)).toBe(false)
     }
-    expect(looksLikeSecret(`${'слово '.repeat(600)}Qwerty123`)).toBe(true)
+    expect(looksLikeSecret(`${'слово '.repeat(600)}Qw3rty!x`)).toBe(true)
+    expect(looksLikeSecret(`${'слово '.repeat(600)}Qwerty123`)).toBe(false)
     // Spaces around the text are not counted, as the schema does not count them.
     expect(looksLikeSecret(`  ${'я'.repeat(limit)}\n`)).toBe(false)
     expect(looksLikeSecret(`${' '.repeat(100_000)}пароль Qwerty123\n`)).toBe(true)

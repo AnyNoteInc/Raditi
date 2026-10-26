@@ -24,6 +24,7 @@ import {
   SITE_PANE_WIDTH,
   SITE_PANE_WIDTH_VAR,
   SITE_RAIL_WIDTH,
+  SITE_TOOLBAR_HEIGHT,
   siteEntryHref,
   siteItemOpen,
   siteNav,
@@ -32,6 +33,9 @@ import {
   type SiteNavEntry,
   type SiteSetup,
 } from './site-nav'
+import { chatSurface } from '@/components/chat/chat-surface'
+
+import { SiteMark } from './site-mark'
 
 export type ShellSite = {
   id: string
@@ -203,7 +207,7 @@ function SectionLink({
 }
 
 /**
- * The page of one site: a rail of its six sections with the site's mark on top, breadcrumbs
+ * The page of one site: a rail of its seven sections with the site's mark on top, breadcrumbs
  * that lead back to the projects, and on a phone a bottom bar instead of the rail. Which of
  * the two is shown is decided by styles alone, so the first paint is right on every width.
  *
@@ -227,6 +231,8 @@ export function SiteShell({
   // A «list — content» section: from `md` its list column stands beside the rail, and the
   // content fills the height so that the section can place its own areas.
   const framed = hasSiteList(active)
+  // «Чат» is its own surface: the neutral palette of the brief of 26.10.2026 (chat-surface.ts).
+  const chat = active === 'chat'
   // An open item takes the whole phone screen: its back arrow leads to the list and the bar.
   const itemOpen = siteItemOpen(pathname, site.id)
   // An open dialog: from `lg` the list column gives way, and the panel of its changes stands at
@@ -241,12 +247,38 @@ export function SiteShell({
   // The first character whole: a name may start with one that takes two UTF-16 units.
   const mark = Array.from(site.name.trim())[0]?.toLocaleLowerCase('ru') || '•'
   const crumbs = [{ label: 'Проекты', href: '/projects' }, { label: site.name }]
+  // As low as the bar can be: on a phone its links keep a target of 44 px for a finger, from
+  // `md` — where a pointer aims — they take 32 px and the bar 44.
   const toolbarSx = {
+    minHeight: { xs: 48, md: SITE_TOOLBAR_HEIGHT },
     px: SIDE_PADDING,
-    py: 1.25,
+    // In the bar of its own height a link keeps the pressing area of 44px (the breadcrumbs give it).
+    py: { xs: 0.25, md: 0 },
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    gap: '8px 16px',
+    gap: '4px 16px',
+  } as const
+  // The bar of a section page: from the rail to the right edge, over the list column and the panel
+  // of a dialog too (owner's request of 26.10.2026). From `md` it stays at the top in one line of
+  // its own height — the list column and the panel stand under it — and a long name of the site
+  // ends with an ellipsis instead of a second line.
+  const sectionToolbarSx = {
+    ...toolbarSx,
+    height: { md: SITE_TOOLBAR_HEIGHT },
+    flexWrap: { xs: 'wrap', md: 'nowrap' },
+    position: { md: 'sticky' },
+    top: { md: 0 },
+    zIndex: { md: 1050 },
+    bgcolor: 'background.paper',
+    '& .MuiBreadcrumbs-root': { minWidth: 0 },
+    '& .MuiBreadcrumbs-ol': { flexWrap: { md: 'nowrap' } },
+    '& .MuiBreadcrumbs-li:last-of-type': { minWidth: { md: 0 } },
+    '& [aria-current="page"]': {
+      whiteSpace: { md: 'nowrap' },
+      overflow: { md: 'hidden' },
+      textOverflow: { md: 'ellipsis' },
+    },
+    '& > :last-child': { flex: 'none' },
   } as const
 
   if (inSiteSetup(site.setup)) {
@@ -320,26 +352,7 @@ export function SiteShell({
           pb: 'max(12px, env(safe-area-inset-bottom))',
         }}
       >
-        <Box
-          role="img"
-          aria-label={`Сайт ${site.name}`}
-          sx={{
-            width: 44,
-            height: 44,
-            flex: 'none',
-            mb: 1,
-            borderRadius: '10px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            bgcolor: 'primary.main',
-            color: 'primary.contrastText',
-            fontWeight: 700,
-            fontSize: 20,
-          }}
-        >
-          {mark}
-        </Box>
+        <SiteMark siteId={site.id} name={site.name} mark={mark} />
         <Box
           component="nav"
           aria-label="Разделы сайта"
@@ -360,50 +373,65 @@ export function SiteShell({
       </Box>
 
       <Box
-        sx={{
-          ml: {
-            xs: 'env(safe-area-inset-left)',
-            sm: `calc(${RAIL}px + env(safe-area-inset-left))`,
-            ...(framed && {
-              md: `calc(${RAIL + SITE_LIST_WIDTH}px + env(safe-area-inset-left))`,
-            }),
-            ...(paned && { lg: `calc(${RAIL}px + env(safe-area-inset-left))` }),
-          },
-          mr: 'env(safe-area-inset-right)',
-          ...(paned && {
-            '&:has([data-site-pane])': {
-              mr: { lg: `calc(${SITE_PANE_WIDTH} + env(safe-area-inset-right))` },
+        sx={[
+          {
+            ml: {
+              xs: 'env(safe-area-inset-left)',
+              sm: `calc(${RAIL}px + env(safe-area-inset-left))`,
             },
-          }),
-          pb: {
-            xs: itemOpen
-              ? 'env(safe-area-inset-bottom)'
-              : `calc(${BOTTOM_BAR}px + env(safe-area-inset-bottom))`,
-            sm: 0,
+            mr: 'env(safe-area-inset-right)',
+            pb: {
+              xs: itemOpen
+                ? 'env(safe-area-inset-bottom)'
+                : `calc(${BOTTOM_BAR}px + env(safe-area-inset-bottom))`,
+              sm: 0,
+            },
+            minWidth: 0,
+            ...(framed && { minHeight: '100dvh', display: 'flex', flexDirection: 'column' }),
+            // An open dialog from `lg`: the page stands at the height of the window and the dialog
+            // scrolls inside itself (owner's request of 26.10.2026) — nothing below the surface.
+            ...(paned && { height: { lg: '100dvh' }, overflow: { lg: 'hidden' } }),
           },
-          minWidth: 0,
-          ...(framed && { minHeight: '100dvh', display: 'flex', flexDirection: 'column' }),
-        }}
+          chat ? chatSurface : null,
+        ]}
+        {...(chat ? { 'data-chat-surface': '' } : {})}
       >
         <ApplicationToolbar
           label="Панель сайта"
           crumbs={crumbs}
           end={<ToolbarEnd user={user} site={site} menuEverywhere={false} />}
-          sx={toolbarSx}
+          sx={sectionToolbarSx}
         />
+        {/* Under the bar: the content leaves room for the list column from `md` and for the panel
+            of a dialog from `lg` — the bar above runs over both. */}
         <Box
-          component="main"
-          id="site-content"
-          tabIndex={-1}
           sx={{
-            px: SIDE_PADDING,
-            py: { xs: 3, md: 3.5 },
+            ml: { ...(framed && { md: `${SITE_LIST_WIDTH}px` }) },
+            // The list stays beside an open dialog, like the chats of ChatGPT and Claude (owner's
+            // request of 26.10.2026); the panel of its changes, while it is drawn, takes its room.
+            ...(paned && {
+              '&:has([data-site-pane])': { ml: { lg: 0 }, mr: { lg: SITE_PANE_WIDTH } },
+            }),
             minWidth: 0,
-            outline: 'none',
             ...(framed && { flex: '1 0 auto', display: 'flex', flexDirection: 'column' }),
+            ...(paned && { flex: { lg: '1 1 0' }, minHeight: { lg: 0 } }),
           }}
         >
-          {children}
+          <Box
+            component="main"
+            id="site-content"
+            tabIndex={-1}
+            sx={{
+              px: SIDE_PADDING,
+              py: { xs: 3, md: 3.5 },
+              minWidth: 0,
+              outline: 'none',
+              ...(framed && { flex: '1 0 auto', display: 'flex', flexDirection: 'column' }),
+              ...(paned && { flex: { lg: '1 1 0' }, minHeight: { lg: 0 } }),
+            }}
+          >
+            {children}
+          </Box>
         </Box>
       </Box>
 

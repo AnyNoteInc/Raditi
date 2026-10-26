@@ -192,12 +192,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
     rate?: Partial<TestCreditRateData>
     /** «Попробовать ещё»: what the retry of a dialog says, after it gave the chain back. */
     retry?: true
+    /** A new chain after a charged pass: the client's next words or «Продолжить». */
+    follows?: 'message' | 'continue'
   }
   /** Places a reserve the way the queue will, under a credit rate nobody else sees. */
   async function place(
     workspaceId: string,
     taskId: string,
-    { now = NOW, attempt = 1, expiresAt, rate = {}, retry }: PlacementOptions = {},
+    { now = NOW, attempt = 1, expiresAt, rate = {}, retry, follows }: PlacementOptions = {},
   ) {
     const placement: CreditHoldPlacement = {
       workspaceId,
@@ -206,6 +208,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       now,
       expiresAt: expiresAt ?? new Date(now.getTime() + DAY_MS),
       ...(retry === undefined ? {} : { retry }),
+      ...(follows === undefined ? {} : { follows }),
     }
     const placed = await fixtures.reserve(placement, rate)
     await expectBooksToBalance(workspaceId)
@@ -305,10 +308,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
   const auditOf = (taskId: string) =>
     db.auditLog.findMany({ where: { targetType: 'task', targetId: taskId } })
   /** The details of the one audit row of the charge of a task. */
-  async function chargeMeta(taskId: string) {
+  /** The meta of the charge of a task; `index` — of its n-th charge, when it has several. */
+  async function chargeMeta(taskId: string, index?: number) {
     const rows = await auditOf(taskId)
-    expect(rows).toHaveLength(1)
-    return rows[0]?.meta as Record<string, unknown>
+    if (index === undefined) expect(rows).toHaveLength(1)
+    return rows[index ?? 0]?.meta as Record<string, unknown>
   }
 
   /** Everything a charge could write for a workspace, row by row. */
@@ -431,7 +435,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       })
       expect(
         charged.entries.map((entry) => [entry.idempotencyKey, entry.amount.toFixed(0)]),
-      ).toEqual([[ledgerKeys.taskCharge(taskId, await accountId(workspaceId, 'tariff')), '-17']])
+      ).toEqual([[ledgerKeys.taskCharge(taskId, 1, await accountId(workspaceId, 'tariff')), '-17']])
       // The charge and its rows carry the moment the caller named.
       expect(charged.holds.map((hold) => [hold.status, hold.settledAt])).toEqual([
         ['captured', LATER],
@@ -457,6 +461,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         },
       ])
       expect(await chargeMeta(taskId)).toEqual({
+        // The first charge of the task: its minimum applies.
+        first: true,
         attempts: 1,
         // No attempt of the task gave its reserve back to «Попробовать ещё».
         givenBack: 0,
@@ -1044,19 +1050,71 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
     })
   })
 
+  // The owner, 26.10.2026: «любой успешный запрос от LLM должен тарифицироваться» — a pass is
+  // charged when it ends, the dialog stays open, and its next words open a new chain.
+  describe('a task charged pass by pass', () => {
+    it('charges a pass of a task that waits, the first with the minimum and a later without', async () => {
+      const { model, workspaceId, taskId } = await taskInWork()
+      // 6 RUB ÷ 6.00 = 1 credit: the first charge of the task is its minimum.
+      await worked(model, taskId, '6')
+      await ended(taskId, 'awaiting_user')
+      expect(await charge(taskId)).toMatchObject({ credits: 5, applied: true })
+
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(20), follows: 'message' })
+      // 12.6 RUB = 2.1 credits: a later pass pays its work, rounded.
+      await worked(model, taskId, '12.6', { attempt: 2, occurredAt: minutesAfter(22) })
+      await ended(taskId, 'awaiting_approval')
+      expect(await charge(taskId)).toMatchObject({ credits: 2, applied: true })
+
+      expect(await reserve(taskId)).toEqual(['#1 tariff 45 captured', '#2 tariff 45 captured'])
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(293, 0) })
+      // The task is done later: nothing is active, and the call answers what was charged.
+      await ended(taskId, 'done')
+      expect(await charge(taskId)).toMatchObject({ credits: 7, applied: false })
+    })
+
+    it('charges a pass too small for a credit one credit: an answered request is never free', async () => {
+      // The owner, 26.10.2026: «любой успешный запрос от LLM должен тарифицироваться».
+      const { model, workspaceId, taskId } = await taskInWork()
+      await worked(model, taskId, '30')
+      await ended(taskId, 'awaiting_user')
+      expect(await charge(taskId)).toMatchObject({ credits: 5 })
+      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(20), follows: 'message' })
+      // 1.2 RUB = 0.2 of a credit: the pass costs one credit.
+      await worked(model, taskId, '1.2', { attempt: 2, occurredAt: minutesAfter(22) })
+      await ended(taskId, 'awaiting_user')
+      expect(await charge(taskId)).toMatchObject({ credits: 1, applied: true })
+      expect(await reserve(taskId)).toEqual(['#1 tariff 45 captured', '#2 tariff 45 captured'])
+      expect(await chargeMeta(taskId, 1)).toMatchObject({
+        first: false,
+        attempts: 1,
+        givenBack: 0,
+        firstAttempt: 2,
+        lastAttempt: 2,
+        charged: 1,
+        minimumApplied: false,
+      })
+      // The work charged before is not counted again: 6 RUB is one credit.
+      await place(workspaceId, taskId, { attempt: 3, now: minutesAfter(30), follows: 'message' })
+      await worked(model, taskId, '6', { attempt: 3, occurredAt: minutesAfter(32) })
+      await ended(taskId, 'awaiting_user')
+      expect(await charge(taskId)).toMatchObject({ credits: 1, applied: true })
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(293, 0) })
+    })
+  })
+
   describe('a charge that is refused', () => {
+    // A pass is charged when it ends: the task waits for the client or is done (26.10.2026).
     it.each([
       'queued',
       'preparing',
       'running',
-      'awaiting_user',
-      'awaiting_approval',
       'deploying',
       'verifying',
       'failed',
       'rolled_back',
       'cancelled',
-    ] as const)('charges no task that is %s: only a done one', async (status) => {
+    ] as const)('charges no task that is %s: only one that waits or is done', async (status) => {
       const { model, workspaceId, taskId } = await taskInWork()
       await worked(model, taskId, '101.37')
       await ended(taskId, status)
@@ -1065,7 +1123,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       expect(error).toMatchObject({
         ...conflict('not_done'),
-        message: 'Only a done task is charged',
+        message: 'A task at work is not charged',
       })
       expect(await reserve(taskId)).toEqual(['#1 tariff 45 active'])
       expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300, 45) })
@@ -1272,15 +1330,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       expect(await auditOf(taskId)).toHaveLength(1)
     })
 
-    it('does not give back the reserve of a task it charged', async () => {
-      const { model, taskId } = await taskInWork()
+    it('gives nothing back of a chain it charged: the charge stays', async () => {
+      const { model, workspaceId, taskId } = await taskInWork()
       await worked(model, taskId, '101.37')
       await ended(taskId)
       await charge(taskId)
 
-      await expect(
-        db.$transaction((tx) => releaseTask(tx, { taskId, now: minutesAfter(40) })),
-      ).rejects.toMatchObject({ code: 'CONFLICT' })
+      const returned = await db.$transaction((tx) =>
+        releaseTask(tx, { taskId, now: minutesAfter(40) }),
+      )
+
+      expect(returned).toMatchObject({ holds: [], expiries: [], applied: false })
+      expect(await reserve(taskId)).toEqual(['#1 tariff 45 captured'])
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(283, 0) })
     })
   })
 

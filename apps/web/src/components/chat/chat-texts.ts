@@ -13,7 +13,8 @@ import { plural } from '@/lib/plural'
 export const viewSwitchText = Object.freeze({
   label: 'Что показать',
   dialog: 'Диалог',
-  preview: 'Предпросмотр',
+  /** The panel of the changes: their files, records, checks and preview. */
+  preview: 'Изменения',
 })
 
 export const paneText = Object.freeze({
@@ -34,6 +35,9 @@ export const paneText = Object.freeze({
   stale: 'Сайт изменился после того, как эти изменения были готовы. Обновите рабочую копию.',
   /** The edge of the panel that is dragged (docs/plan/57-browser-tasks.md, Б29). */
   separator: 'Ширина панели изменений',
+  /** The panel opens by itself when the changes appear, and the client can close it. */
+  show: 'Показать изменения',
+  hide: 'Скрыть изменения',
 })
 
 export const filesText = Object.freeze({
@@ -306,12 +310,21 @@ export const composerText = Object.freeze({
   releasing: 'Написать можно будет, когда установка закончится.',
   /** The field after «Остановить», until core has ended the task. */
   stopping: 'Останавливаем задачу…',
-  chatLater: 'Режим «Чат» появится позже.',
+  /** «Чат» works in the cloud browser: a site or a platform without it cannot take one. */
+  chatOff: 'Режим «Чат» для этого сайта сейчас недоступен: облачный браузер не подключён.',
+  /** «Работа» works on a copy of the site: a site without its files cannot take one. */
+  workOff: 'Режим «Работа» недоступен: у сайта нет копии файлов.',
   modes: 'Режим диалога',
   /** A command typed on «Новый диалог»: there is no dialog to run it in yet. */
   commandsInDialog: 'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
   /** A command typed in full that cannot be run now, and the server gave no reason. */
   commandUnavailable: 'Эта команда сейчас недоступна.',
+  /** The button in place of «Отправить» while the agent works: the same as `/cancel`. */
+  stop: 'Остановить',
+  /** The field of a dialog that has ended. */
+  finished: 'Диалог завершён',
+  /** The mode of a dialog that goes on: chosen when it started. */
+  modeFixed: 'Режим выбирается в начале диалога',
 })
 
 export const listText = Object.freeze({
@@ -338,6 +351,31 @@ export const dialogText = Object.freeze({
   mode: 'Режим',
 })
 
+/**
+ * «Ход работы»: what the agent wrote, ran and changed in a turn, as it goes (owner's decision of
+ * 26.10.2026). The commands, the names of tools and the paths are the agent's own, shown as they
+ * are; the words around them are these.
+ */
+export const activityText = Object.freeze({
+  title: 'Ход работы',
+  loading: 'Загружаем ход работы…',
+  empty: 'Агент пока ничего не вывел.',
+  failed: 'Не удалось загрузить ход работы. Попробуем ещё раз.',
+  more: 'Загружаем дальше…',
+  command: 'Команда',
+  tool: 'Инструмент',
+  question: 'Вопрос',
+  /** How a command ended: its exit code, as the agent's CLI reported it. */
+  exit: (code: number | null): string | null =>
+    code === null ? null : code === 0 ? 'выполнена' : `ошибка, код ${code}`,
+  toolDone: (ok: boolean) => (ok ? 'выполнен' : 'ошибка'),
+  file: Object.freeze({
+    add: 'Добавлен файл',
+    update: 'Изменён файл',
+    delete: 'Удалён файл',
+  }),
+})
+
 /** Files attached to a message (docs/plan/57-browser-tasks.md, Б26). */
 export const attachmentText = Object.freeze({
   attach: 'Прикрепить файлы',
@@ -358,14 +396,47 @@ export const attachmentText = Object.freeze({
 })
 
 /** The way a new dialog works on the site (docs/plan/57-browser-tasks.md, Б9). */
+/** How hard the model thinks, chosen when a dialog starts (owner's request of 26.10.2026). */
+export const effortText = Object.freeze({
+  label: 'Размышление',
+  low: 'Низкое',
+  high: 'Высокое',
+  max: 'Максимальное',
+  /** What each level is for: under its name in the menu. */
+  lowHint: 'Быстрее и дешевле — для простых правок',
+  highHint: 'Для большинства задач',
+  maxHint: 'Дольше и дороже — для сложных задач',
+  /** The level of a dialog that goes on changes from the agent's next turn. */
+  changed: 'Уровень размышления изменится со следующего шага агента',
+})
+
+/**
+ * What is done with a dialog as a whole (owner's request of 26.10.2026): its menu in the list and
+ * in its head, the name written in place, the confirmation of «Удалить».
+ */
+export const dialogMenuText = Object.freeze({
+  open: 'Действия с диалогом',
+  rename: 'Переименовать',
+  remove: 'Удалить',
+  name: 'Название диалога',
+  removeTitle: 'Удалить диалог?',
+  removeBody:
+    'Диалог пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся. То, что уже выпущено на сайт, останется.',
+  /** The dialog's release can still be undone: the button goes with the dialog. */
+  removeUndo:
+    'Кнопка «Отменить выпуск» этого диалога тоже пропадёт: вернуть прежнюю версию можно будет только новым диалогом.',
+  removeConfirm: 'Удалить',
+  removeKeep: 'Оставить',
+})
+
 export const taskWayText = Object.freeze({
   label: 'Как агент будет работать',
   browser: 'В браузере',
   repository: 'Через копию сайта',
   browserNote:
-    'Агент работает в админке сайта, а вы видите каждый его шаг и можете помочь — например, войти сами. Изменения появляются на сайте сразу.',
+    'В режиме «Чат» агент работает без копии файлов сайта: открывает сайт в облачном браузере, а вы видите каждый его шаг и можете помочь — например, войти в админку сами. Изменения в админке появляются на сайте сразу.',
   repositoryNote:
-    'Агент меняет копию сайта, вы смотрите результат в предпросмотре и сами выпускаете новую версию на сайт.',
+    'В режиме «Работа» агент получает копию файлов сайта из последней версии, вы смотрите результат в предпросмотре и сами выпускаете новую версию на сайт.',
   /** A site added without access to its files. */
   browserOnly:
     'Сайт добавлен без доступа к файлам: агент работает в админке сайта через браузер. Изменения появляются на сайте сразу.',
@@ -387,6 +458,8 @@ export const browserText = Object.freeze({
     connecting: 'Подключение',
     agent: 'Работает агент',
     waiting: 'Ждём вас',
+    /** The agent answered and asked nothing: the browser waits for no one (26.10.2026). */
+    idle: 'Агент ответил',
     user: 'Управляете вы',
     reconnecting: 'Переподключение',
     error: 'Ошибка',

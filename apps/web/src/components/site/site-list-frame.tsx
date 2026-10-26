@@ -9,15 +9,17 @@ import { useEffect, useRef, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 
-import { SITE_LIST_WIDTH, SITE_RAIL_WIDTH } from './site-nav'
+import { SITE_LIST_WIDTH, SITE_RAIL_WIDTH, SITE_TOOLBAR_HEIGHT } from './site-nav'
 
 /** The bottom bar of a phone, which the pinned action of the list stays above. */
 const BOTTOM_BAR = 64
+/** The page draws the panel beside a dialog: the list column gives the dialog its room. */
+const PANE_DRAWN = '[data-site-shell]:has([data-site-pane]) &'
 
 /**
  * A section of the site laid out as «list — content». From `md` the list is a column that runs
- * the full height beside the rail and scrolls on its own, and the content keeps the page's
- * scroll. Below `md` there is one area: the list at the root of the section, the content with
+ * from under the bar of breadcrumbs to the bottom beside the rail and scrolls on its own, and the
+ * content keeps the page's scroll. Below `md` there is one area: the list at the root of the section, the content with
  * a back arrow on an item. Which of them is on the screen is decided by styles alone, so the
  * first paint is right on every width; whether an item is open comes from the route.
  */
@@ -42,8 +44,9 @@ export function SiteListFrame({
   backLabel: string
   list: ReactNode
   /**
-   * From `lg` an item other than the action's gives the list column up: the item takes the
-   * width — a dialog with the panel of its changes beside it — and the way back is shown.
+   * An item other than the action's — a dialog — stands at the height of the window from `lg`,
+   * and gives the list column up while the panel of its changes is drawn beside it
+   * (`data-site-pane`): the item takes the width and the way back is shown.
    */
   collapseOnItem?: boolean
   children: ReactNode
@@ -65,7 +68,17 @@ export function SiteListFrame({
   }, [segment])
 
   return (
-    <Box sx={{ flex: '1 0 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+    <Box
+      sx={{
+        flex: '1 0 auto',
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        // An item that takes the width from `lg` — a dialog — stands at the height of the window
+        // and scrolls inside itself (owner's request of 26.10.2026): the frame passes the height on.
+        ...(collapsed && { flex: { xs: '1 0 auto', lg: '1 1 0' }, minHeight: { lg: 0 } }),
+      }}
+    >
       <Box
         component="nav"
         aria-label={label}
@@ -77,8 +90,8 @@ export function SiteListFrame({
             xs: selected ? 'none' : 'flex',
             sm: selected ? 'none' : 'grid',
             md: 'grid',
-            ...(collapsed && { lg: 'none' }),
           },
+          ...(collapsed && { [PANE_DRAWN]: { display: { lg: 'none' } } }),
           flexDirection: 'column',
           flex: '1 0 auto',
           minWidth: 0,
@@ -87,7 +100,8 @@ export function SiteListFrame({
           alignItems: { xs: 'stretch', sm: 'start' },
           gap: '12px 8px',
           position: { md: 'fixed' },
-          top: { md: 0 },
+          // Under the bar of breadcrumbs, which runs over this column to the right edge.
+          top: { md: SITE_TOOLBAR_HEIGHT },
           bottom: { md: 0 },
           left: { md: `calc(${SITE_RAIL_WIDTH}px + env(safe-area-inset-left))` },
           width: { md: SITE_LIST_WIDTH },
@@ -95,7 +109,8 @@ export function SiteListFrame({
           px: { md: 1.5 },
           pt: { md: 2 },
           pb: { md: 'max(16px, env(safe-area-inset-bottom))' },
-          bgcolor: { md: 'background.paper' },
+          // The column of a section: on the surface of «Чат» its own neutral side colour.
+          bgcolor: { md: 'var(--chat-side, var(--mui-palette-background-paper))' },
           borderRight: { md: 1 },
           borderColor: { md: 'divider' },
         }}
@@ -154,8 +169,13 @@ export function SiteListFrame({
       <Box
         sx={{
           display: 'flex',
-          flex: { xs: selected ? '1 0 auto' : 'none', md: '1 0 auto' },
+          flex: {
+            xs: selected ? '1 0 auto' : 'none',
+            md: '1 0 auto',
+            ...(collapsed && { lg: '1 1 0' }),
+          },
           minWidth: 0,
+          ...(collapsed && { minHeight: { lg: 0 } }),
           flexDirection: 'column',
         }}
       >
@@ -164,11 +184,8 @@ export function SiteListFrame({
             component={Link}
             href={root}
             sx={{
-              display: {
-                xs: 'inline-flex',
-                md: 'none',
-                ...(collapsed && { lg: 'inline-flex' }),
-              },
+              display: { xs: 'inline-flex', md: 'none' },
+              ...(collapsed && { [PANE_DRAWN]: { display: { lg: 'inline-flex' } } }),
               alignSelf: 'flex-start',
               alignItems: 'center',
               gap: 1,

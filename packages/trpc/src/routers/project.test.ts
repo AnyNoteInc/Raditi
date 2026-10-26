@@ -140,6 +140,12 @@ function fakeDb() {
     },
     siteCodeSource: { create: vi.fn().mockResolvedValue({}) },
     siteDatabase: { create: vi.fn().mockResolvedValue({}) },
+    // The accesses are the site's variables too (site-access-variables.ts).
+    siteEnvVar: {
+      findMany: vi.fn().mockResolvedValue([]),
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     outboxEvent: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
   }
@@ -505,7 +511,7 @@ describe('project input and access', () => {
       // The ceiling counts what the user created, the tariff what its workspace holds.
       expect(tx.site.count.mock.calls).toEqual([
         [{ where: { workspace: { createdById: user.id } } }],
-        [{ where: { workspaceId: WORKSPACE } }],
+        [{ where: { workspaceId: WORKSPACE, deletedAt: null } }],
       ])
       expect(tx.site.create).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ data: expect.objectContaining({ workspaceId: WORKSPACE }) }),
@@ -609,7 +615,7 @@ describe('project input and access', () => {
         })
         expect(tx.site.count.mock.calls).toEqual([
           [{ where: { workspace: { createdById: user.id } } }],
-          [{ where: { workspaceId: WORKSPACE } }],
+          [{ where: { workspaceId: WORKSPACE, deletedAt: null } }],
         ])
       })
 

@@ -63,6 +63,11 @@ type BrowserQuestion = Extract<FeedQuestionPayload, { kind: 'browser' }>
 export const ORPHANED_PASS_LIMIT = 3
 /** The internal row of `task_events` an orphaned pass leaves (never shown to the client). */
 export const ORPHANED_PASS_EVENT = 'pass.orphaned'
+/**
+ * The internal row of `task_events` a pass leaves whose charge could not be made when it ended —
+ * the usage of a turn key was still open —: `{ v: 1, attempt }`; the sweep charges the chain.
+ */
+export const CHARGE_LATER_EVENT = 'billing.charge_later'
 
 export type PassEnding =
   /**
@@ -123,9 +128,8 @@ export interface SettlementDependencies {
 
 export interface SettleOptions {
   /**
-   * The sweep has waited long enough: a candidate that cannot be built fails the pass, and a
-   * charge refused for a reason other than open usage is left to the operator — the task is
-   * moved anyway, never kept forever.
+   * The sweep has waited long enough: a candidate that cannot be built fails the pass — the task
+   * is moved anyway, never kept forever.
    */
   giveUp?: boolean
 }
@@ -317,7 +321,7 @@ export class PassSettlement {
     const { result, turn } = ending
     // Without a repository there is no candidate: the site itself is what the pass changed.
     if (!context.requirements.repository)
-      return this.#completedWithoutRepository(pass, context, ending, options)
+      return this.#completedWithoutRepository(pass, context, ending)
     const question = agentQuestionOf(result, turn)
     const message = agentWords(result.client_message, 2000)
     // Nothing readable is left of the agent's words: its result is as good as missing.
@@ -358,11 +362,9 @@ export class PassSettlement {
 
     const hasCandidate =
       build.kind === 'candidate' || (build.kind === 'unchanged' && !!context.standing)
-    const to: SettledTaskStatus = question
-      ? 'awaiting_user'
-      : hasCandidate
-        ? 'awaiting_approval'
-        : 'done'
+    // Nothing to release and nothing asked: the dialog stays open for the client's next words
+    // (owner's decision of 26.10.2026, «не закрывай чат»).
+    const to: SettledTaskStatus = question || !hasCandidate ? 'awaiting_user' : 'awaiting_approval'
     // The trusted count of what the dialog would release now; none once the pass undid it all.
     const facts =
       build.kind === 'candidate'
@@ -404,7 +406,7 @@ export class PassSettlement {
               turn,
               message: message!,
               site: context.productionWrites ? 'changed' : 'unchanged',
-              next: to === 'done' ? 'done' : 'awaiting_approval',
+              next: hasCandidate ? 'awaiting_approval' : 'awaiting_user',
               filesChanged: Math.min(filesChanged, 10_000),
               changeType: result.change_type,
               needsApproval: result.needs_approval,
@@ -445,43 +447,39 @@ export class PassSettlement {
           turnNo: pass.turnNo,
         })
       } else if (build.kind === 'empty' && context.standing) {
-        // The pass undid every change of the dialog: nothing stands to release.
+        // The pass undid every change of the dialog: nothing stands to release, and the preview
+        // shows the site as it is.
         await supersedeStandingCandidate(tx, pass.taskId)
-        if (to !== 'done') await requestPreviewSync(tx, { taskId: pass.taskId, revision: 0 })
-      }
-      if (to === 'done') {
-        // The dialog is closed: its manager takes the preview down (R5c).
         await requestPreviewSync(tx, { taskId: pass.taskId, revision: 0 })
-        if (context.task.billable) await this.#charge(tx, pass.taskId, now, options)
-      } else if (context.task.billable) {
-        await extendTaskHolds(tx, {
-          taskId: pass.taskId,
-          expiresAt: taskHoldExpiry(now, 'waiting'),
-        })
       }
+      // The pass is charged now, whatever the dialog waits for — an answer, a decision on its
+      // changes or the next words (owner's answer of 26.10.2026, «любой успешный запрос от LLM
+      // должен тарифицироваться»): the next words open a new chain.
+      if (context.task.billable) await this.#chargePass(tx, pass, now)
     })
   }
 
   /**
-   * A completed pass of a task in the cloud browser (docs/plan/57-browser-tasks.md, Б23, Б25): no
-   * candidate — what the site holds now is the result, and only the platform's own check of it
-   * ends the task. In this order: the agent asked the client to act in the browser (`web_help`),
-   * the client holds the browser, the agent asked a question — each waits for the client
-   * (`awaiting_user`) within the same attempt; else an object the platform confirmed on the
-   * site makes the task `done`, charged, its browser closed; none — the platform asks the client
-   * to look (`unconfirmed`).
+   * A completed pass of a task in the cloud browser (docs/plan/57-browser-tasks.md, Б25; Б23
+   * changed by the owner's answer of 26.10.2026: «сделай также как в работе, результат не должен
+   * быть подтвержден, мы тарифицируем работу с LLM»): no candidate — what the site holds now is
+   * the result. In this order: the agent asked the client to act in the browser (`web_help`),
+   * the client holds the browser, the agent asked a question — each a question for the client;
+   * else the agent's answer, with what the task saved on the site as the platform found it there
+   * (confirmed or not), and the dialog stays open for the client's next words, as a dialog of
+   * «Работа» does. Every way the pass is charged (`#chargePass`), and the browser lives on until
+   * its idle time ends.
    */
   async #completedWithoutRepository(
     pass: PassRef,
     context: SettleContext,
     ending: Extract<PassEnding, { kind: 'completed' }>,
-    options: SettleOptions,
   ): Promise<SettleAnswer> {
     const { result, turn } = ending
     const browser = context.browser
     const message = agentWords(result.client_message, feedLimits.message)
-    // Under a question of the platform the agent's message still reaches the client: why it
-    // saved nothing («менять настройки мне нельзя»), or what it did before the client took over.
+    // Under a question of the client's browser the agent's message still reaches the client:
+    // what it did before the client took over.
     const said = message ? { message } : {}
     let question: FeedQuestionPayload | null
     if (browser?.help) {
@@ -505,16 +503,6 @@ export class PassSettlement {
     else question = agentQuestionOf(result, turn)
     // Nothing readable is left of the agent's words: its result is as good as missing.
     if (!question && !message) return this.#failure(pass, context, turn, 'technical')
-    // `done` is what the site confirms, never the agent's word (Б23).
-    if (!question && !browser?.confirmed)
-      question = {
-        v: 1,
-        kind: 'browser',
-        turn,
-        reason: 'unconfirmed',
-        ...said,
-      } satisfies BrowserQuestion
-    const to: SettledTaskStatus = question ? 'awaiting_user' : 'done'
     const row: FeedRow = question
       ? { type: 'feed.question', payload: question }
       : {
@@ -523,8 +511,9 @@ export class PassSettlement {
             v: 1,
             turn,
             message: message!,
-            site: 'changed',
-            next: 'done',
+            // Changed when the platform found a saved object there or anyone acted in the browser.
+            site: browser?.confirmed || context.productionWrites ? 'changed' : 'unchanged',
+            next: 'awaiting_user',
             filesChanged: 0,
             changeType: result.change_type,
             needsApproval: result.needs_approval,
@@ -532,13 +521,13 @@ export class PassSettlement {
             ...objectsOf(context),
           },
         }
-    const answer = await this.#transaction(async (tx, now) => {
+    return this.#transaction(async (tx, now) => {
       const moved = await settleTurn(tx, {
         taskId: pass.taskId,
         attempt: pass.attempt,
         expectedTurnNo: pass.turnNo,
         from: ['running'],
-        to,
+        to: 'awaiting_user',
         turn,
         feed: [row],
         summary: result.summary,
@@ -546,17 +535,9 @@ export class PassSettlement {
       })
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
-      if (to === 'done') {
-        if (context.task.billable) await this.#charge(tx, pass.taskId, now, options)
-      } else if (context.task.billable) {
-        // The help, the control and the answer are the same attempt (Б25): its reserve waits.
-        await extendTaskHolds(tx, {
-          taskId: pass.taskId,
-          expiresAt: taskHoldExpiry(now, 'waiting'),
-        })
-      }
+      // The help, the control, the answer and the next words all follow a charged pass (Б25).
+      if (context.task.billable) await this.#chargePass(tx, pass, now)
     })
-    return to === 'done' ? this.#closeBrowser(context, answer, 'task_done') : answer
   }
 
   async #failed(
@@ -736,7 +717,12 @@ export class PassSettlement {
           revision: context.standing?.revision ?? 0,
         })
       }
-      if (context.task.billable)
+      if (!context.task.billable) return
+      // The turn worked until the step ran out: that work is charged (26.10.2026), and
+      // «Продолжить» opens a new chain. A ceiling found before any turn charges nothing: the
+      // chain waits for «Продолжить» to go on with it.
+      if (turn !== null) await this.#chargePass(tx, pass, now)
+      else
         await extendTaskHolds(tx, {
           taskId: pass.taskId,
           expiresAt: taskHoldExpiry(now, 'waiting'),
@@ -825,26 +811,34 @@ export class PassSettlement {
   }
 
   /**
-   * `chargeTask` after the move to `done` (rule 7). Open usage of a turn key takes the move
-   * back: the sweep settles again once it closed. Any other refusal is the operator's; the
-   * sweep that gave up moves the task without the charge.
+   * The pass ended and the task waits for the client: the work of its chain is charged in the
+   * transaction of the move (rule 7; owner's answer of 26.10.2026, every completed pass is
+   * charged). A charge that cannot be made yet — the usage of a turn key is still open, or a
+   * call cannot be converted — never holds the client back: the move stands, the chain stays
+   * active and is moved on, and a row `billing.charge_later` names its attempt for the sweep,
+   * which charges it (`TaskSweep.chargeLater`); words that come first go on with the chain, and
+   * the end of their pass charges it all.
    */
-  async #charge(
-    tx: Prisma.TransactionClient,
-    taskId: string,
-    now: Date,
-    options: SettleOptions,
-  ): Promise<void> {
+  async #chargePass(tx: Prisma.TransactionClient, pass: PassRef, now: Date): Promise<void> {
     try {
-      await chargeTask(tx, { taskId, now })
+      await chargeTask(tx, { taskId: pass.taskId, now })
     } catch (error) {
       const refusal = chargeRefusal(error)
       if (refusal === null) throw error
-      if (refusal === 'usage_open' || !options.giveUp) {
-        this.#logger.warn(`pass_charge_later task=${taskId} reason=${refusal}`)
-        throw new Later()
-      }
-      this.#logger.error(`pass_charge_refused task=${taskId} reason=${refusal}`)
+      const line = `pass_charge_later task=${pass.taskId} reason=${refusal}`
+      if (refusal === 'usage_open') this.#logger.warn(line)
+      else this.#logger.error(line)
+      await tx.taskEvent.create({
+        data: {
+          taskId: pass.taskId,
+          type: CHARGE_LATER_EVENT,
+          payload: { v: 1, attempt: pass.attempt },
+        },
+      })
+      await extendTaskHolds(tx, {
+        taskId: pass.taskId,
+        expiresAt: taskHoldExpiry(now, 'waiting'),
+      })
     }
   }
 

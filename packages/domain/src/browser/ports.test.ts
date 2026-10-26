@@ -34,6 +34,12 @@ function fakeSession(events: CloudBrowserEvent[], connection: CloudBrowserConnec
       }
     },
     focused: async () => ({ role: 'button', name: 'Опубликовать' }),
+    screenshot: async () => ({
+      page: tab,
+      bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xd9),
+      width: 1280,
+      height: 800,
+    }),
     startFrames: async () => async () => undefined,
     input: async () => undefined,
     releaseInputs: async () => undefined,

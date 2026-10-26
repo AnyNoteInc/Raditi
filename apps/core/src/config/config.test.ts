@@ -138,6 +138,30 @@ describe('loadConfig — development', () => {
     expect(runner.sandbox).toBeNull()
   })
 
+  it('opens the internet of the agent by default and closes it with SANDBOX_INTERNET=off', () => {
+    expect(loadConfig(devEnv).sandboxInternet).toBe(true)
+    expect(loadConfig({ ...devEnv, SANDBOX_INTERNET: 'open' }).sandboxInternet).toBe(true)
+    expect(loadConfig({ ...devEnv, SANDBOX_INTERNET: 'off' }).sandboxInternet).toBe(false)
+    expect(() => loadConfig({ ...devEnv, SANDBOX_INTERNET: 'yes' })).toThrow(/SANDBOX_INTERNET/)
+  })
+
+  it('keeps the container of a completed turn warm for SANDBOX_WARM_MINUTES, only in core', () => {
+    expect(loadConfig(devEnv).sandboxWarmMs).toBe(10 * 60_000)
+    expect(loadConfig({ ...devEnv, SANDBOX_WARM_MINUTES: '3' }).sandboxWarmMs).toBe(3 * 60_000)
+    expect(loadConfig({ ...devEnv, SANDBOX_WARM_MINUTES: '0' }).sandboxWarmMs).toBe(0)
+    for (const value of ['11', '-1', '2.5', 'ten'])
+      expect(problemsOf({ ...devEnv, SANDBOX_WARM_MINUTES: value })[0]).toMatch(
+        /^SANDBOX_WARM_MINUTES:/,
+      )
+    // Runner VMs remove the container of every turn.
+    const runner = loadConfig({
+      ...devEnv,
+      TURN_EXECUTOR: 'runner',
+      RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
+    })
+    expect(runner.sandboxWarmMs).toBe(0)
+  })
+
   it('runs turns in core by default and on runners with their token hashes', () => {
     expect(loadConfig(devEnv)).toMatchObject({ turnExecutor: 'local', runnerApi: null })
     const runner = loadConfig({
@@ -833,6 +857,7 @@ describe('loadConfig — previews and releases', () => {
     expect(config.previews).toEqual({
       address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
       ttlHours: 24,
+      idleMinutes: 30,
       executor: 'local',
       runtime: 'runc',
       webImages: { '8.3': `registry.raditi.ru/preview-php${digest}` },
@@ -842,6 +867,14 @@ describe('loadConfig — previews and releases', () => {
       egressRefusedSubnets: [],
       docker: { socketPath: '/var/run/docker.sock', firewallImage: null },
     })
+  })
+
+  it('stops a preview no one used after PREVIEW_IDLE_MINUTES, from a minute to a day', () => {
+    expect(loadConfig(previewDev({ PREVIEW_IDLE_MINUTES: '5' })).previews?.idleMinutes).toBe(5)
+    for (const value of ['0', '1441', '2.5', 'soon'])
+      expect(problemsOf(previewDev({ PREVIEW_IDLE_MINUTES: value }))[0]).toMatch(
+        /^PREVIEW_IDLE_MINUTES\b/,
+      )
   })
 
   it("gives previews the platform's subnets the sandbox gateway refuses too (R10)", () => {

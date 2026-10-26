@@ -150,9 +150,10 @@ export function CommandList({
         overflowY: 'auto',
         bgcolor: 'background.paper',
         border: 1,
-        borderColor: 'var(--raditi-rule-strong)',
-        borderRadius: '14px',
-        boxShadow: 4,
+        borderColor: 'divider',
+        borderRadius: '16px',
+        // A list over the dialog: one soft shadow lifts it, no more.
+        boxShadow: '0 8px 24px -12px rgba(0, 0, 0, 0.18)',
         outline: 'none',
         '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
       }}

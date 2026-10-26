@@ -76,6 +76,28 @@ const fileListSchema = z
   )
   .max(10_000)
 const ROOTS = ['/workspace', '/agent-home', '/tmp', '/run/raditi/secrets']
+/**
+ * The trusted command of reset(): fixed text, its one argument the id of its own exec directory,
+ * which it keeps. `chmod -R` opens a tree the agent closed to itself; it ignores the links it
+ * meets, and no directory it is given is one: each is a mount.
+ */
+const RESET_SCRIPT = [
+  'set -eu',
+  'PATH=/usr/sbin:/usr/bin:/sbin:/bin',
+  'own=/run/raditi/exec/$1',
+  'for dir in /workspace /agent-home /tmp /run/raditi/secrets /run/raditi/exec; do',
+  '  chmod -R u+rwX -- "$dir"',
+  '  find -P "$dir" -mindepth 1 -maxdepth 1 ! -path "$own" -exec rm -rf -- {} +',
+  '  chmod 0700 -- "$dir"',
+  'done',
+  'for dir in /dev/shm /dev/mqueue; do',
+  '  [ -d "$dir" ] || continue',
+  '  find -P "$dir" -mindepth 1 -maxdepth 1 ! -type l -exec chmod -R u+rwX -- {} +',
+  '  find -P "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
+  'done',
+  'ipcrm --all',
+].join('\n')
+const RESET_MS = 60_000
 const IDLE_POLL_MS = 50
 const MAX_IDLE_POLL_MS = 1000
 const checkedPath = (path: string, root = false) => {
@@ -210,11 +232,13 @@ export class DockerSandbox implements Sandbox {
     if (this.#destroyed || this.#destroying || this.#quiescing || Date.now() >= this.deadline)
       throw commandError()
   }
-  async exec(value: ExecSpec): Promise<ExecHandle> {
+  exec(value: ExecSpec): Promise<ExecHandle> {
+    return this.#exec(value, randomBytes(16).toString('hex'))
+  }
+  async #exec(value: ExecSpec, id: string): Promise<DockerExecHandle> {
     this.#available()
     const spec = assertExecSpec(value)
     if (spec.signal?.aborted) throw commandError()
-    const id = randomBytes(16).toString('hex')
     const timeoutMs = Math.min(spec.timeoutMs, this.deadline - Date.now())
     const encoded = Buffer.from(
       JSON.stringify({ argv: spec.argv, cwd: spec.cwd, env: spec.env, timeoutMs }),
@@ -318,6 +342,35 @@ export class DockerSandbox implements Sandbox {
       throw commandError()
     } finally {
       this.#quiescing = false
+    }
+  }
+  /**
+   * For the next turn of the same task (spec §8, «Тёплая песочница»): quiesce, then one trusted
+   * command of the image empties every tmpfs the agent could write, the shared memory and the
+   * message queues of the container, and its System V IPC. The exec directory of that command
+   * is all that is left, then `ready` lays the directories out as at creation. Anything that
+   * fails removes the container.
+   */
+  async reset(): Promise<void> {
+    await this.quiesce()
+    try {
+      const id = randomBytes(16).toString('hex')
+      const handle = await this.#exec(
+        {
+          argv: ['/bin/sh', '-c', RESET_SCRIPT, 'raditi-reset', id],
+          cwd: '/',
+          timeoutMs: RESET_MS,
+        },
+        id,
+      )
+      const exit = await handle.wait()
+      this.#handles.delete(handle.id)
+      if (exit.code !== 0 || exit.reason !== 'exited') throw commandError()
+      const ready = await helperCommand(this.container, ['ready'], { timeoutMs: 10_000 })
+      if (ready.toString('utf8') !== '{"protocol":1}') throw commandError()
+    } catch {
+      await this.destroy('failed')
+      throw commandError()
     }
   }
   async destroy(_reason: DestroyReason): Promise<void> {

@@ -177,7 +177,12 @@ export class InitialVersionGit {
     home: string,
     cwd: string,
     args: string[],
-    run: { input?: Uint8Array; maxBytes?: number; env?: NodeJS.ProcessEnv } = {},
+    run: {
+      input?: Uint8Array
+      maxBytes?: number
+      env?: NodeJS.ProcessEnv
+      timeoutMs?: number
+    } = {},
   ): Promise<ProcessResult> {
     try {
       return await runTrustedGit(this.context(home), args, { cwd, ...run })
@@ -190,7 +195,12 @@ export class InitialVersionGit {
     home: string,
     cwd: string,
     args: string[],
-    run: { input?: Uint8Array; maxBytes?: number; env?: NodeJS.ProcessEnv } = {},
+    run: {
+      input?: Uint8Array
+      maxBytes?: number
+      env?: NodeJS.ProcessEnv
+      timeoutMs?: number
+    } = {},
   ): Promise<ProcessResult> {
     const result = await this.#git(home, cwd, args, run)
     if (result.code !== 0) throw refuse('internal')
@@ -312,7 +322,7 @@ export class InitialVersionGit {
       ).stdout,
     )
     await this.#local(root, repo, ['fsck', '--strict', '--no-reflogs', '--no-dangling', sha])
-    // What a turn takes as its base is the bundle of this ref: it has to fit the turn's limit.
+    // The bundle of this ref must fit the repository's limit; a turn takes only its working set.
     await this.#local(root, repo, ['update-ref', MAIN_REF, sha])
     const bundle = join(root, 'initial.bundle')
     await this.#local(root, repo, ['bundle', 'create', bundle, MAIN_REF])
@@ -384,6 +394,28 @@ export class InitialVersionGit {
       // Past its deadline the push may still have landed: the remote refs tell.
       return false
     }
+  }
+
+  /**
+   * The copy of the first version for raditi-backups (initial-backup.ts): `sha`, fetched alone
+   * into `<root>/repo` (fetchCommit), written as a tar.gz to `file` by `git archive` — the tree
+   * as the commit has it, without the history or the `.git` folder.
+   */
+  async archiveCommit(
+    root: string,
+    url: string,
+    ref: RepoRef,
+    sha: string,
+    file: string,
+  ): Promise<void> {
+    if (!publicationShaSchema.safeParse(sha).success) throw refuse('internal')
+    await this.fetchCommit(root, url, ref, sha)
+    await this.#local(
+      root,
+      join(root, 'repo'),
+      ['archive', '--format=tar.gz', `--output=${file}`, sha],
+      { timeoutMs: 60_000 },
+    )
   }
 
   #sha(output: Uint8Array): string {

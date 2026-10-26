@@ -73,9 +73,10 @@ function labelled(
  * The egress proxy (infra/sandbox/client-egress.mjs, the `client-egress` target of
  * infra/sandbox/Dockerfile): the browser's only way out. It listens on its address of the
  * session's network, takes requests of the browser's address alone, opens TLS tunnels to the
- * listed `host:port` only and never to an address that is not public or of the platform. Local
- * sites (outside production) are plain-http routes to a fixed target; `host.docker.internal`
- * names this host on Linux as on Docker Desktop.
+ * listed `host:port` only, with an ECH whose outer name is that host taken as its SNI, and never
+ * to an address that is not public or of the platform. Local sites (outside production) are
+ * plain-http routes to a fixed target; `host.docker.internal` names this host on Linux as on
+ * Docker Desktop.
  */
 export function egressContainer(input: {
   place: BrowserSessionPlace
@@ -102,6 +103,9 @@ export function egressContainer(input: {
         `LISTEN_PORT=${EGRESS_PORT}`,
         `CLIENT_IPV4=${addresses.browser}`,
         `ALLOWED_HOSTS=${JSON.stringify(input.allowedHosts)}`,
+        // Chromium sends ECH in every TLS handshake, with no flag to turn it off: a ClientHello
+        // whose outer name is the listed host passes (owner's decision of 26.10.2026).
+        'ECH_OUTER_NAME=1',
         `MAX_TUNNELS=${input.maxTunnels}`,
         ...(input.refusedSubnets.length
           ? [`REFUSED_SUBNETS=${input.refusedSubnets.join(',')}`]

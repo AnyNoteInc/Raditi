@@ -39,14 +39,20 @@ export const siteConnectionLimits = Object.freeze({
   connectionsInProgressPerUser: 3,
 })
 
-/** What an import may bring into a site repository: never more than a turn accepts as its base. */
+/**
+ * What an import may bring into a site repository. The repository holds the whole site — its
+ * core and its media library (plan 39, Р16) — while a turn gets only the working set of its stack
+ * (plan 53, Р11) with limits of its own: so the bytes of the tree and of the bundle of `main` are
+ * the site's, 1 GiB (owner's answer of 25.10.2026: a real WordPress site of 416 MB stopped at the
+ * 128 MB that had been the turn's). The files and a single file keep the turn's limits.
+ */
 export const siteImportLimits = Object.freeze({
   files: publicationLimits.repositoryFiles,
   /** A larger file is left out and counted, it does not fail the import. */
   fileBytes: publicationLimits.fileBytes,
-  treeBytes: publicationLimits.treeBytes,
-  /** A turn bundles the base tree. */
-  bundleBytes: publicationLimits.bundleBytes,
+  treeBytes: 1024 * 1024 * 1024,
+  /** The bundle of the first commit of `main`: the repository's, not a turn's. */
+  bundleBytes: 1024 * 1024 * 1024,
   depth: 32,
   /** Everything the walker may see, taken or not. */
   listedEntries: 300_000,

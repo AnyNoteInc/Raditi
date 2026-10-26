@@ -20,6 +20,10 @@ export type UndoHead = NonNullable<DialogFeed['undo']>
 export type CommandVerdict = DialogFeed['commands'][number]
 export type FeedRow = DialogFeed['events'][number]
 
+/** One answer of `task.activity`: the agent's events of a turn after the cursor. */
+export type TurnActivityPage = Outputs['task']['activity']
+export type ActivityEvent = TurnActivityPage['events'][number]
+
 export type DialogListPage = Outputs['task']['list']
 export type DialogListItem = DialogListPage['items'][number]
 

@@ -123,6 +123,34 @@ describe('turn plan', () => {
     ).toThrow('Invalid turn plan')
   })
 
+  it('keeps the open internet and the skills of a turn, only with the egress proxy (26.10.2026)', () => {
+    const original = request()
+    original.sandbox.network = { mode: 'gateway', routes: ['llm', 'mcp'], internet: true }
+    original.context.egressProxy = 'http://sandbox-gw:3128'
+    original.context.internet = true
+    original.context.skills = [
+      { name: 'context7', kind: 'remote', url: 'https://mcp.context7.com/mcp' },
+      { name: 'playwright', kind: 'local' },
+    ]
+    const plan = toTurnPlan(withoutTurnCredentials(original), 'opencode')
+    expect(plan.context).toMatchObject({ internet: true, skills: original.context.skills })
+    expect(plan.sandbox.network).toEqual(original.sandbox.network)
+    const restored = turnPlanSchema.parse(JSON.parse(JSON.stringify(plan)))
+    expect(
+      withTurnCredentials(restored, { llmApiKey: 'sk-turn-llm-key', mcpToken: 'mcp-turn-token' }),
+    ).toEqual(original)
+    const unkeyed = withoutTurnCredentials(original)
+    const refused = (context: Partial<typeof unkeyed.context>) =>
+      expect(() =>
+        toTurnPlan({ ...unkeyed, context: { ...unkeyed.context, ...context } }, 'opencode'),
+      ).toThrow('Invalid turn plan')
+    refused({ egressProxy: undefined })
+    refused({ internet: undefined })
+    refused({ skills: [{ name: 'docs', kind: 'remote', url: 'http://docs.example.org/mcp' }] })
+    refused({ skills: [{ name: 'raditi', kind: 'remote', url: 'https://docs.example.org/mcp' }] })
+    refused({ skills: [{ name: 'selenium', kind: 'local' } as never] })
+  })
+
   it.each(['medium', 'provider-specific-effort', null, undefined])(
     'preserves reasoning effort %s through persistence and credential recovery',
     (reasoningEffort) => {

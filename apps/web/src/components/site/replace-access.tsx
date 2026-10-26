@@ -27,25 +27,36 @@ import {
 } from '@/components/projects/wizard/wizard-model'
 import { useTRPC } from '@/trpc/client'
 
+/**
+ * A changed access of a working site becomes the site's variables again, as at creation (owner's
+ * decision of 26.10.2026): the panel says so, as the last step of the wizard does.
+ */
+export const ACCESS_VARIABLES_NOTE =
+  'Новый доступ мы сохраним и как переменные сайта, как при добавлении проекта: их получат команды агента и предпросмотр. Это можно отключить в списке переменных.'
+
 const FIELDS = 'replace-access'
 const PROBLEM = 'replace-access-problem'
 const HOST_KEY_TITLE = 'replace-access-host-key-title'
 export const REPLACE_ACCESS_TITLE = 'replace-access-title'
 
 /**
- * «Изменить доступ» on a failed setup: the fields of the wizard's second step, started from the
+ * «Изменить доступ» on a failed setup, and «Изменить» of the access to the files of a working site
+ * (`working`, «Переменные → Доступы»): the fields of the wizard's second step, started from the
  * public part of the saved source — kind, server, port, folder, protection — and never from a
  * secret. The same SSH server and port must present the key confirmed for it before: the
  * replacement goes with that key, so a server that presents another answers «Ключ сервера
  * изменился», and the new key is taken only by its own button (`acceptNewHostKey`). Another
  * server or port is a first check: a check without a key learns its key and logs in nowhere.
- * The server checks the key once more before it writes the new access.
+ * The server checks the access once more and writes it only if the connection with it passed.
  */
 export function ReplaceAccessForm({
   siteId,
   stack,
   platform,
   saved,
+  working = false,
+  titleId,
+  onBusyChange,
   onCancel,
   onReplaced,
 }: {
@@ -53,6 +64,12 @@ export function ReplaceAccessForm({
   stack: ProjectStack
   platform: string
   saved: PublicSource | null
+  /** A site that works: the access is changed by `changeSource`, and no import is queued. */
+  working?: boolean
+  /** Inside a panel whose heading has this id: the form has no heading of its own. */
+  titleId?: string
+  /** A check or a save is on its way, or no longer: a panel holds still meanwhile. */
+  onBusyChange?: (busy: boolean) => void
   onCancel: () => void
   onReplaced: () => void
 }) {
@@ -70,7 +87,8 @@ export function ReplaceAccessForm({
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const alive = useRef(true)
-  const focusNext = useRef<string | null>(REPLACE_ACCESS_TITLE)
+  const heading = titleId ?? REPLACE_ACCESS_TITLE
+  const focusNext = useRef<string | null>(heading)
 
   useEffect(() => {
     alive.current = true
@@ -88,6 +106,14 @@ export function ReplaceAccessForm({
   const gcTime = { gcTime: 0 }
   const checkSource = useMutation(trpc.siteConnection.checkSource.mutationOptions(gcTime))
   const replaceAccess = useMutation(trpc.siteConnection.replaceAccess.mutationOptions(gcTime))
+  const changeSource = useMutation(trpc.siteConnection.changeSource.mutationOptions(gcTime))
+  const save = working ? changeSource : replaceAccess
+
+  function markBusy(value: boolean) {
+    busyRef.current = value
+    if (alive.current) setBusy(value)
+    onBusyChange?.(value)
+  }
 
   function edit(next: SourceDraft) {
     // Another server is another key: the saved one belongs to the saved server and port only.
@@ -123,8 +149,7 @@ export function ReplaceAccessForm({
 
   async function run(key: string | null, acceptNewHostKey: boolean) {
     if (busyRef.current) return
-    busyRef.current = true
-    setBusy(true)
+    markBusy(true)
     setProblem(null)
     setKeyPrompt(null)
     try {
@@ -138,7 +163,7 @@ export function ReplaceAccessForm({
         key = outcome.hostKey
         setHostKey(key)
       }
-      const outcome = await replaceAccess.mutateAsync({
+      const outcome = await save.mutateAsync({
         id: siteId,
         source: sourceInput(source, key),
         ...(acceptNewHostKey ? { acceptNewHostKey: true } : {}),
@@ -157,9 +182,8 @@ export function ReplaceAccessForm({
       focusNext.current = PROBLEM
     } finally {
       checkSource.reset()
-      replaceAccess.reset()
-      busyRef.current = false
-      if (alive.current) setBusy(false)
+      save.reset()
+      markBusy(false)
     }
   }
 
@@ -185,21 +209,30 @@ export function ReplaceAccessForm({
       component="form"
       noValidate
       onSubmit={submit}
-      aria-labelledby={REPLACE_ACCESS_TITLE}
+      aria-labelledby={heading}
       sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}
     >
       <Box>
-        <Typography
-          component="h3"
-          id={REPLACE_ACCESS_TITLE}
-          tabIndex={-1}
-          sx={{ fontSize: 17, fontWeight: 600, outline: 'none' }}
-        >
-          Новый доступ к файлам
+        {titleId === undefined ? (
+          <Typography
+            component="h3"
+            id={REPLACE_ACCESS_TITLE}
+            tabIndex={-1}
+            sx={{ fontSize: 17, fontWeight: 600, outline: 'none', mb: 0.5 }}
+          >
+            Новый доступ к файлам
+          </Typography>
+        ) : null}
+        <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+          {working
+            ? 'Пароли и ключи мы не показываем: введите их заново. Сначала мы подключимся с новым доступом и сохраним его, только если подключение пройдёт, — тогда он заменит прежний.'
+            : 'Пароли и ключи мы не показываем: введите их заново. Новый доступ заменит прежний.'}
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, lineHeight: 1.6 }}>
-          Пароли и ключи мы не показываем: введите их заново. Новый доступ заменит прежний.
-        </Typography>
+        {working ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.6 }}>
+            {ACCESS_VARIABLES_NOTE}
+          </Typography>
+        ) : null}
       </Box>
       <SourceFields
         idPrefix={FIELDS}

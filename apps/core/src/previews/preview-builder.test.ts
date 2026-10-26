@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { MemoryVault } from '../testing/previews.ts'
 import {
   DIFF_REBUILD_FILES,
+  dumpStaging,
   previewDatabasePasswords,
   previewErrorCode,
   previewFailure,
@@ -214,5 +215,81 @@ describe('the passwords of a preview database (owner, 19.10.2026: in Vault)', ()
     await vault.kvWrite(path, { v: '1', user: 'short' })
     const made = await previewDatabasePasswords({ secrets: vault }, previewId)
     expect(vault.kv.get(path)).toEqual({ version: 2, data: { v: '1', ...made } })
+  })
+})
+
+describe('the temporary database of a site’s dump', () => {
+  const access = {
+    v: '1' as const,
+    engine: 'mysql' as const,
+    host: '127.0.0.1',
+    port: '49153',
+    tls: 'plain' as const,
+    database: 'staging',
+    username: 'loader',
+    password: 'p'.repeat(32),
+  }
+  const previewId = '0199a3f2-0000-7000-8000-0000000000e1'
+  const siteId = '0199a3f2-0000-7000-8000-0000000000e2'
+  const image = 'mariadb@sha256:' + 'a'.repeat(64)
+
+  function setup(dump: string | null, read: { ok: boolean; code?: string } = { ok: true }) {
+    const calls: string[] = []
+    const staging = {
+      async load(input: { stagingId: string; image: string; dump: AsyncIterable<Uint8Array> }) {
+        for await (const _ of input.dump) void _
+        calls.push(`load:${input.stagingId}:${input.image}`)
+        return { access }
+      },
+      async remove(stagingId: string) {
+        calls.push(`remove:${stagingId}`)
+      },
+      list: async () => [] as Array<{ stagingId: string; createdAt: number }>,
+    }
+    const sources = {
+      databaseAccess: async () => ({ ok: true as const, access: { ...access, host: 'db.site' } }),
+      withRoot: async () => null,
+      async withDump<T>(
+        _site: string,
+        path: string,
+        _signal: AbortSignal,
+        use: (dump: AsyncIterable<Uint8Array>) => Promise<T>,
+      ) {
+        calls.push(`read:${path}`)
+        if (!read.ok) return { ok: false as const, code: read.code as 'dump_not_found' }
+        return { ok: true as const, value: await use((async function* () {})()) }
+      },
+    }
+    const deps = { staging, sources, config: { images: { db: image } } } as never
+    const facts = { preview: { id: previewId }, site: { id: siteId }, databaseDump: dump } as never
+    return { calls, staging: dumpStaging(deps, facts, signal) }
+  }
+
+  it('loads the named dump once, gives its access to the copy and removes it after', async () => {
+    const { calls, staging } = setup('backup.sql')
+    expect(staging.fromDump).toBe(true)
+    await expect(staging.access()).resolves.toEqual(access)
+    await expect(staging.access()).resolves.toEqual(access)
+    await staging.release()
+    await staging.release()
+    expect(calls).toEqual(['read:backup.sql', `load:${previewId}:${image}`, `remove:${previewId}`])
+  })
+
+  it('takes the live database of a site without a dump and removes nothing', async () => {
+    const { calls, staging } = setup(null)
+    await expect(staging.access()).resolves.toMatchObject({ host: 'db.site' })
+    await staging.release()
+    expect(calls).toEqual([])
+  })
+
+  it('fails the build with the reason the dump could not be read', async () => {
+    const { staging } = setup('backup.sql', { ok: false, code: 'dump_not_found' })
+    await expect(staging.access()).rejects.toMatchObject({
+      code: 'PREVIEW_BUILD_FAILED',
+      details: { code: 'dump_not_found' },
+    })
+    expect(previewErrorCode(await staging.access().catch((error: unknown) => error))).toBe(
+      'dump_not_found',
+    )
   })
 })

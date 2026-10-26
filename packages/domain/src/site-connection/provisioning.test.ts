@@ -231,16 +231,17 @@ describe('provisioningStageSummarySchema', () => {
 })
 
 describe('limits', () => {
-  it('imports no more than a turn accepts as its base tree', () => {
+  it('imports the files a turn accepts, and the bytes of a whole site with its media', () => {
     expect(siteImportLimits.files).toBe(publicationLimits.repositoryFiles)
     expect(siteImportLimits.fileBytes).toBe(publicationLimits.fileBytes)
-    expect(siteImportLimits.treeBytes).toBe(publicationLimits.treeBytes)
-    expect(siteImportLimits.bundleBytes).toBe(publicationLimits.bundleBytes)
+    // The repository holds the site; a turn gets its working set with limits of its own.
+    expect(siteImportLimits.treeBytes).toBeGreaterThan(publicationLimits.treeBytes)
+    expect(siteImportLimits.bundleBytes).toBeGreaterThan(publicationLimits.bundleBytes)
     expect(siteImportLimits).toMatchObject({
       files: 100_000,
       fileBytes: 32 * 1024 * 1024,
-      treeBytes: 128 * 1024 * 1024,
-      bundleBytes: 64 * 1024 * 1024,
+      treeBytes: 1024 * 1024 * 1024,
+      bundleBytes: 1024 * 1024 * 1024,
       depth: 32,
     })
     // A hash or scan batch never holds more than the tree, and one file always fits a batch.

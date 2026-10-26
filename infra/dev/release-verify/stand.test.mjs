@@ -205,6 +205,7 @@ test('each process of the platform is its own role with its own AppRole, and nev
   assert.equal(mcp.PREVIEW_BASE_DOMAIN, 'localhost')
   const [, core] = roles.find(([role]) => role === 'core')
   assert.equal(core.TURN_EXECUTOR, 'local')
+  assert.equal(core.SANDBOX_WARM_MINUTES, '0')
   assert.equal(core.SANDBOX_RUNTIME, 'runc')
   assert.equal(core.PREVIEW_EXECUTOR, 'local')
   for (const name of [

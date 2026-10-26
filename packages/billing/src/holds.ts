@@ -64,14 +64,14 @@ import { ledgerKeys, post } from './ledger.ts'
 // continued or tried again, its attempt sets credits aside — the step of its class, or what can
 // be spent when that is less — on the accounts in the order credits are spent: the tariff, the
 // gift, the pack; one `credit_holds` row per account the reserve touches. The active rows of a
-// task are one pool: they are charged together when the task is done, and returned together
-// when it failed, was cancelled, was rolled back or got stuck past their expiry. The queue
-// itself is P12: until then nothing calls these.
+// task are one pool, a chain: they are charged together when a pass of the task ends (since
+// 26.10.2026 pass by pass: the next words open a new chain), and returned together when the pass
+// failed, was cancelled, was rolled back or got stuck past their expiry.
 //
 // A reserve says that the task can be paid for. Which credits pay is decided when the task is
 // charged (`distributeCharge` of @repo/domain), over what each account then has for the task.
-// What a done task costs comes from the model calls its attempts recorded: `chargeTask` reads
-// them itself, so a caller cannot pass a wrong sum. `attemptCreditBudget` gives the numbers the
+// What a chain costs comes from the model calls its attempts recorded: `chargeTask` reads them
+// itself, so a caller cannot pass a wrong sum. `attemptCreditBudget` gives the numbers the
 // next turn key of an attempt is bounded by.
 //
 // Every function joins the caller's transaction and changes `balance` and `held` in SQL, in
@@ -111,8 +111,18 @@ const placementSchema = z
      * no active reserve before it is placed only so, and a retry only so.
      */
     retry: z.literal(true).optional(),
+    /**
+     * A new chain of a task whose last pass was charged (owner's answer of 26.10.2026: every
+     * completed pass is charged): `message` — the client's next words in the open dialog,
+     * `continue` — «Продолжить» or «Продолжить работу агента». Set by the server code that found
+     * no active reserve of the task, never by what a client sends.
+     */
+    follows: z.enum(['message', 'continue']).optional(),
   })
   .refine(({ now, expiresAt }) => expiresAt.getTime() > now.getTime(), { path: ['expiresAt'] })
+  .refine(({ retry, follows }) => retry === undefined || follows === undefined, {
+    path: ['follows'],
+  })
 export type CreditHoldPlacement = z.infer<typeof placementSchema>
 
 const extensionSchema = z.strictObject({
@@ -385,8 +395,20 @@ const chainOf = (rows: readonly { hold: { attempt: number } }[]): number[] =>
  * the failure free. A task whose rows were given back by its end — failed, cancelled, expired,
  * rolled back — is neither charged nor asked about a key again.
  */
-const workAttemptsOf = (rows: readonly { hold: Pick<CreditHold, 'attempt' | 'status'> }[]) =>
-  chainOf(rows.filter(({ hold }) => hold.status === 'active' || hold.status === 'released'))
+const workAttemptsOf = (rows: readonly { hold: Pick<CreditHold, 'attempt' | 'status'> }[]) => {
+  // A charge took the work of every attempt before it (26.10.2026: a task is charged pass by
+  // pass): what was given back before the last capture was counted then.
+  const charged = Math.max(
+    0,
+    ...rows.filter(({ hold }) => hold.status === 'captured').map(({ hold }) => hold.attempt),
+  )
+  return chainOf(
+    rows.filter(
+      ({ hold }) =>
+        hold.status === 'active' || (hold.status === 'released' && hold.attempt > charged),
+    ),
+  )
+}
 
 /**
  * The attempts of the chain of a task: those that hold an active reserve, in order. Read without
@@ -441,8 +463,9 @@ function creditsOfDay(printed: string): Credits {
  * (`credit_holds.charged`), nothing once it is given back. A task that waits for days takes only
  * the day it was placed, and a reserve placed late in the evening and charged after midnight
  * leaves the new day untouched. What a charge took from free tariff credits in place of the
- * task's gift or pack reserve — the tariff entry of the charge above what the task's own tariff
- * rows paid — counts on the day the charge was settled (`settled_at` of its rows). A tariff row of
+ * chain's gift or pack reserve — the tariff entry of the charge above what the chain's own tariff
+ * rows paid — counts on the day the charge was settled (`settled_at` of its rows); a task is
+ * charged pass by pass, each charge on its own day. A tariff row of
  * an ended period is charged under a key of its own, and its `charged` equals that entry: it
  * cancels out of the difference and stays on the day it was placed.
  *
@@ -468,7 +491,7 @@ export async function tariffCreditsOfDay(
         AND a.unit = ${creditAccountUnits.tariff}::"BillingUnit"
     ),
     settled AS (
-      SELECT DISTINCT h.task_id
+      SELECT h.id, h.task_id, h.attempt, h.settled_at, h.account_id, h.charged
       FROM credit_holds h
       JOIN billing_accounts a ON a.id = h.account_id
       WHERE a.workspace_id = ${workspaceId}::uuid
@@ -476,6 +499,18 @@ export async function tariffCreditsOfDay(
         AND h.status = 'captured'
         AND h.settled_at >= ${day.start}::timestamptz
         AND h.settled_at < ${day.end}::timestamptz
+    ),
+    -- The entries on the tariff account of the charges settled in the day: of a chain, named by
+    -- its first attempt — the rows of a chain settle together, so its first attempt is among
+    -- the rows of the day and no other attempt names a charge —, of a tariff row of an ended
+    -- period, and of a charge written before 26.10.2026, one per task.
+    entries AS (
+      SELECT DISTINCT 'task:' || s.task_id || ':' || s.attempt || ':charge:' || t.id AS key
+      FROM settled s CROSS JOIN tariff t
+      UNION ALL
+      SELECT DISTINCT 'task:' || s.task_id || ':charge:' || t.id FROM settled s CROSS JOIN tariff t
+      UNION ALL
+      SELECT 'hold:' || s.id || ':charge' FROM settled s
     )
     SELECT
       COALESCE((
@@ -492,12 +527,11 @@ export async function tariffCreditsOfDay(
         COALESCE((
           SELECT -SUM(l.amount) FROM credit_ledger l
           WHERE l.account_id IN (SELECT id FROM tariff) AND l.kind = 'charge'
-            AND l.task_id IN (SELECT task_id FROM settled)
+            AND l.idempotency_key IN (SELECT key FROM entries)
         ), 0)
         - COALESCE((
-          SELECT SUM(h.charged) FROM credit_holds h
-          WHERE h.account_id IN (SELECT id FROM tariff) AND h.status = 'captured'
-            AND h.task_id IN (SELECT task_id FROM settled)
+          SELECT SUM(s.charged) FROM settled s
+          WHERE s.account_id IN (SELECT id FROM tariff)
         ), 0)
       )::text AS transfer
   `
@@ -637,22 +671,26 @@ async function placementFacts(
  * is left of the Moscow day (`plans.credits_per_day`).
  *
  * The attempt is a new task (`attempt` 1), a continuation — an earlier attempt of the task
- * still has its reserve, which stays and from now on lives as long as the new one — or a retry
+ * still has its reserve, which stays and from now on lives as long as the new one —, a retry
  * («Попробовать ещё», `retry`: a later attempt of a task whose chain was given back, so it has
- * no active reserve). Whether it is taken is decided once, by `newTaskVerdict` of @repo/domain,
+ * no active reserve) or a new chain after a charged pass (`follows`, owner's answer of
+ * 26.10.2026: every completed pass is charged — `next` for the client's next words, `resume`
+ * for «Продолжить»). Whether it is taken is decided once, by `newTaskVerdict` of @repo/domain,
  * and a refusal is its error (`taskRefusal`) with the reason and the numbers in the details;
  * the checks come in this order:
  *
  * 1. a usable credit rate — BILLING_CREDIT_RATE_MISSING;
- * 2. credits: 5 that can be spent for a new task and a retry, 1 for a continuation —
+ * 2. credits: 5 that can be spent for a new task, a retry and the next words, 1 for a
+ *    continuation and a resume —
  *    BILLING_CREDITS_HELD when other tasks in work hold them, BILLING_NOT_ENOUGH_CREDITS on a
  *    paid tariff, BILLING_TASK_NEEDS_SUBSCRIPTION without one;
- * 3. the tariff credits of the Moscow day, for a new task and a continuation: what is left of
+ * 3. the tariff credits of the Moscow day, for every placement but a retry: what is left of
  *    the day on the tariff, with the gift and pack credits, cannot cover the start although the
  *    accounts can — BILLING_DAILY_LIMIT_REACHED. The daily limit does not apply to a retry (the
  *    owner, 19.10.2026): its tariff part is bounded by the free tariff credits alone, and what it
  *    holds counts on the day it is placed on for the placements after it;
- * 4. unpaid work, for a new task and a retry: what the workspace got without a charge since the
+ * 4. unpaid work, for a new task, a retry and the next words: what the workspace got without a
+ *    charge since the
  *    start of its paid period against the monthly credits of the plan —
  *    BILLING_UNPAID_WORK_LIMIT —, without a paid tariff since the end of its last tariff
  *    against `trialUnpaidWorkCredits` — BILLING_TASK_NEEDS_SUBSCRIPTION;
@@ -661,10 +699,11 @@ async function placementFacts(
  *
  * A task of another workspace is not found. A conflict, before any of the above: a task that
  * is not billable or has no class of its model takes no reserve, a chain has at most
- * `maxTaskAttempts` attempts — a continuation of a third is refused, a retry starts a new chain
- * —, a charged task takes no further reserve, an attempt is not placed below one that holds
- * a reserve, a retry is placed only after its chain was given back, and a later attempt without
- * an active reserve only as a retry. A refusal writes no reserve, no claim and moves no
+ * `maxTaskAttempts` attempts — a continuation of a third is refused, a retry and a charged pass
+ * start a new chain —, an attempt is not placed below one that has a reserve, a retry is placed
+ * only after its chain was given back, a new chain after a charge only when no chain is active
+ * and a charge stands, and a later attempt without an active reserve only as one of those two.
+ * A refusal writes no reserve, no claim and moves no
  * balance; a workspace that had no credit accounts is left with its three empty ones, which are
  * what a placement locks.
  *
@@ -675,7 +714,8 @@ export async function placeCreditHold(
   tx: BillingTx,
   input: CreditHoldPlacement,
 ): Promise<PlacedCreditHold> {
-  const { workspaceId, taskId, attempt, now, expiresAt, retry } = placementSchema.parse(input)
+  const { workspaceId, taskId, attempt, now, expiresAt, retry, follows } =
+    placementSchema.parse(input)
   // Credits are reserved on the accounts of the workspace the task belongs to, whatever ids the
   // caller holds.
   const task = await tx.task.findFirst({
@@ -704,27 +744,33 @@ export async function placeCreditHold(
   }
 
   // The kind of the placement, from the rows of the task itself.
-  if (rows.some((row) => row.hold.status === 'captured')) {
-    throw conflict('A task that is charged takes no further reserve')
-  }
   const active = rows.filter((row) => row.hold.status === 'active')
-  if (active.some((row) => row.hold.attempt > attempt)) {
+  if (rows.some((row) => row.hold.attempt >= attempt)) {
     throw conflict('A later attempt of the task already holds a reserve')
   }
-  let placement: TaskPlacement = 'retry'
+  const charged = rows.some((row) => row.hold.status === 'captured')
+  let placement: TaskPlacement
   if (active.length > 0) placement = 'continuation'
   else if (attempt === 1) placement = 'new'
-  // Only the caller knows a press of «Попробовать ещё», and the rows must agree with it: a retry
-  // follows a chain that was given back, and nothing else places a later attempt without one.
+  else if (retry === true) placement = 'retry'
+  else if (follows === 'message') placement = 'next'
+  else if (follows === 'continue') placement = 'resume'
+  else throw conflict('A later attempt without an active reserve is placed only by a retry')
+  // Only the caller knows a press of «Попробовать ещё» or that a pass was charged, and the rows
+  // must agree with it: a retry follows a chain that was given back, a new chain after a charge
+  // follows a charge, and nothing else places a later attempt without an active reserve.
   if (retry === true && placement !== 'retry') {
     throw conflict('A retry is a later attempt of a task whose chain was given back')
   }
-  if (retry !== true && placement === 'retry') {
-    throw conflict('A later attempt without an active reserve is placed only by a retry')
+  if (follows !== undefined && (placement === 'continuation' || placement === 'new')) {
+    throw conflict('The chain of the task is not charged: its next words go on with it')
+  }
+  if ((placement === 'next' || placement === 'resume') && !charged) {
+    throw conflict('A new chain of a task follows a charge of the one before')
   }
   const continues = placement === 'continuation'
   // The attempts of a chain are bounded; a retry after a failure gave its chain back and starts
-  // a new one (`maxTaskAttempts`).
+  // a new one, and so does every charged pass (`maxTaskAttempts`).
   if (continues && chainOf(active).length >= maxTaskAttempts) {
     throw conflict(`A chain of a task has at most ${maxTaskAttempts} attempts`)
   }
@@ -732,7 +778,13 @@ export async function placeCreditHold(
   const paid = subscription !== null && subscriptionAllowsTasks(subscription.status)
   // The moment the credits are taken (`placementMoment`).
   const placedAt = placementMoment(now, subscription)
-  const facts = await placementFacts(tx, { workspaceId, subscription, placedAt, continues })
+  const facts = await placementFacts(tx, {
+    workspaceId,
+    subscription,
+    placedAt,
+    // A resume goes on with work as a continuation does: it is not asked about unpaid work.
+    continues: continues || placement === 'resume',
+  })
   // Without a paid tariff a reserve stands on gift credits alone, and a site spends those in
   // one workspace only.
   const hostKey = paid ? null : siteHostKey(task.site.url)
@@ -928,10 +980,12 @@ const negated = (credits: Credits): Decimal => new Money(credits).negated()
  *
  * A tariff row of an ended period pays under `hold:<holdId>:charge` and expires what it did
  * not pay under `hold:<holdId>:expire`; both rows take their share off `held` with them. Then
- * each account pays from its credits of now under `task:<taskId>:charge:<accountId>`, and the
- * same statement takes the other rows of the task on that account off `held` — on every
+ * each account pays from its credits of now under `task:<taskId>:<attempt>:charge:<accountId>`,
+ * and the same statement takes the other rows of the chain on that account off `held` — on every
  * account `paid <= reserved + free`, so `held <= balance` stands after it. An account that
- * pays nothing only loses the rows from `held`.
+ * pays nothing only loses the rows from `held`. The key of an account's charge names the chain
+ * by its first attempt (`task:<taskId>:<attempt>:charge:<accountId>`): a task is charged pass
+ * by pass.
  *
  * The rows are stamped with `now`, the charge of the tariff account like a tariff reserve —
  * inside the period whose credits it takes (`tariffHoldCreatedAt`) —, so the period of every
@@ -941,12 +995,14 @@ async function postDistribution(
   tx: BillingTx,
   settlement: {
     taskId: string
+    /** The first attempt of the chain the rows are of: what names its charge in the ledger. */
+    attempt: number
     locked: LockedWorkspace
     distribution: ChargeDistribution
     now: Date
   },
 ): Promise<{ charges: CreditLedger[]; expiries: CreditLedger[] }> {
-  const { taskId, locked, distribution, now } = settlement
+  const { taskId, attempt, locked, distribution, now } = settlement
   const charges: CreditLedger[] = []
   const expiries: CreditLedger[] = []
   const entry = { orderId: null, taskId, createdAt: now }
@@ -990,7 +1046,7 @@ async function postDistribution(
         amount: negated(paid),
         // An account that pays from free credits alone has no row of the task to let go of.
         ...(reserved === 0 ? {} : { held: negated(reserved) }),
-        idempotencyKey: ledgerKeys.taskCharge(taskId, account.id),
+        idempotencyKey: ledgerKeys.taskCharge(taskId, attempt, account.id),
         createdAt,
       }),
     )
@@ -1078,9 +1134,9 @@ const expiriesOf = (tx: BillingTx, rows: readonly ReserveRow[]): Promise<CreditL
   })
 
 /**
- * The posting half of the charge of a done task: `credits` — what the task costs, the caller's
- * to compute (`chargeTask` reads the usage and calls this; tests of other packages reach it
- * through `@repo/billing/testing`) — are distributed over the accounts at this moment, not
+ * The posting half of the charge of a chain of a task: `credits` — what its work costs, the
+ * caller's to compute (`chargeTask` reads the usage and calls this; tests of other packages
+ * reach it through `@repo/billing/testing`) — are distributed over the accounts at this moment, not
  * copied from the reserve (`distributeCharge` of @repo/domain): a tariff row of an ended period
  * pays first and expires what it does not pay, then the tariff, the gift and the pack pay in
  * that order from the rows of the task and from what is free on them now — free tariff credits
@@ -1091,10 +1147,12 @@ const expiriesOf = (tx: BillingTx, rows: readonly ReserveRow[]): Promise<CreditL
  * row of the task becomes `captured` with what it paid; what the rows held above the charge
  * returns to its account — it simply stops being held.
  *
- * A repeated call finds no active row, finds the charge of the task in the ledger and returns
- * what the first call did; asked for another amount, it is a conflict. A task with no active
- * row and no charge is a conflict, never a silent zero. A charge above the reserve of the task
- * is refused.
+ * A task is charged pass by pass (owner's answer of 26.10.2026): each chain of active rows is
+ * charged on its own, under keys that name it (`ledgerKeys.taskCharge`), and its rows are then
+ * captured. A call that finds no active row finds the charges of the task in the ledger and
+ * returns them all — what every call so far did; asked for another sum, it is a conflict. A task
+ * with no active row and no charge is a conflict, never a silent zero. A charge above the reserve
+ * of the chain is refused.
  */
 export async function settleTaskCharge(
   tx: BillingTx,
@@ -1134,8 +1192,6 @@ export async function settleTaskCharge(
       applied: false,
     }
   }
-  if (before.length > 0) throw conflict('The charge of this task is already in the ledger')
-
   // After the locks: the reserves and the charges of the workspace are serialized under them.
   const tariffRoom = await tariffRoomNow(tx, {
     workspaceId,
@@ -1145,7 +1201,13 @@ export async function settleTaskCharge(
   const distribution = distributeCharge(
     distributionInput(locked, active, toCredits(credits), tariffRoom),
   )
-  await postDistribution(tx, { taskId, locked, distribution, now })
+  const { charges } = await postDistribution(tx, {
+    taskId,
+    attempt: Math.min(...chainOf(active)),
+    locked,
+    distribution,
+    now,
+  })
   const holds = await settleRows(
     tx,
     active,
@@ -1156,7 +1218,7 @@ export async function settleTaskCharge(
     credits: toCredits(credits),
     from: distribution.from,
     expired: distribution.expired,
-    entries: await charged(),
+    entries: charges,
     holds,
     applied: true,
   }
@@ -1174,9 +1236,20 @@ function freeTariffOf(charge: SettledTaskCharge): Credits {
   return toCredits(new Money(charge.from.tariff).minus(byRows))
 }
 
+/**
+ * The statuses a task is charged in: a pass ended and the task waits for the client — an answer,
+ * a question, a decision on its changes — or it is done (owner's answer of 26.10.2026: every
+ * completed pass is charged, not the done task alone).
+ */
+const chargedTaskStatuses: ReadonlySet<string> = new Set([
+  'awaiting_user',
+  'awaiting_approval',
+  'done',
+])
+
 /** audit_log actions of the charge of a task. */
 export const taskChargeAuditActions = {
-  /** A done task was charged: what its work came to and which accounts paid. */
+  /** A chain of a task was charged: what its work came to and which accounts paid. */
   charge: 'billing.task.charge',
 } as const
 
@@ -1255,25 +1328,29 @@ function absorbedCostRub(work: { credits: Decimal; costRub: string }, reserved: 
 }
 
 /**
- * Charges a done task: what its work came to is read here, from the recorded model calls of the
- * attempts it pays for — those of its chain, which hold an active reserve, and those of the
- * chains «Попробовать ещё» gave back before it (`workAttemptsOf`) —, so a caller cannot pass a
- * wrong sum. The billable calls are turned into credits at the rate of their own start
- * (`taskRawCredits`, which leaves out a lost turn and the turn of a pass that failed), rounded
- * once and bounded by the minimum of a task and by the reserve of the chain (`taskCharge`):
- * min(reserved, max(5, round(used))). The charge is then posted by `settleTaskCharge` — which
- * accounts pay is decided at this moment —, with one audit row `billing.task.charge` that keeps
- * how the number came about.
+ * Charges the active chain of a task whose pass ended (owner's answer of 26.10.2026: «любой
+ * успешный запрос от LLM должен тарифицироваться» — a task is charged pass by pass, not once it
+ * is done): what its work came to is read here, from the recorded model calls of the attempts it
+ * pays for — those of its chain, which hold an active reserve, and those of the chains given
+ * back since the last charge, by «Попробовать ещё» or as too small to charge (`workAttemptsOf`)
+ * —, so a caller cannot pass a wrong sum. The billable calls are turned into credits at the rate
+ * of their own start (`taskRawCredits`, which leaves out a lost turn and the turn of a pass that
+ * failed), rounded once and bounded by the reserve of the chain and, for the first charge of the
+ * task, by its minimum (`taskCharge`): min(reserved, max(5, round(used))) first, then
+ * min(reserved, round(used)). A later charge of nothing gives the chain back: its work goes
+ * with the next charge. The charge is then posted by `settleTaskCharge` — which accounts pay is
+ * decided at this moment —, with one audit row `billing.task.charge` that keeps how the number
+ * came about.
  *
- * Call it in the transaction that moves the task to `done`, after that move: only a done task
- * is charged, and a refusal here must take the move back with it. The charge is final only when
+ * Call it in the transaction that moves the task out of its pass — to wait for the client or to
+ * `done` —, after that move: a task at work is not charged. The charge is final only when
  * the usage is: while a turn key whose calls it counts has its accounting open
  * (`usage_closed_at`), or a counted call cannot be converted into credits, the task is not
  * charged and nothing is written. Every refusal is a conflict that names its reason in
  * `details.charge` (`TaskChargeRefusal`); the queue asks again when the usage is closed.
  *
- * A repeated call finds no active reserve, finds the charge of the task in the ledger and
- * returns what the first call did, writing nothing. A task with no active reserve and no
+ * A call that finds no active reserve finds the charges of the task in the ledger and returns
+ * their sum — what the calls so far did —, writing nothing. A task with no active reserve and no
  * charge — it never had one, as a task that is not billable, or gave it back — is a conflict,
  * never a silent zero. `tasks.cost_rub` is the queue's to write, not this function's.
  */
@@ -1284,7 +1361,9 @@ export async function chargeTask(tx: BillingTx, input: TaskHoldsEnding): Promise
     select: { workspaceId: true, status: true },
   })
   if (task === null) throw notFound('Task not found')
-  if (task.status !== 'done') throw chargeRefused('not_done', 'Only a done task is charged')
+  // A pass is charged once it ends: the task waits for the client or is done, never at work.
+  if (!chargedTaskStatuses.has(task.status))
+    throw chargeRefused('not_done', 'A task at work is not charged')
 
   // The locks `settleTaskCharge` takes again: the rows read here are the rows it settles.
   const locked = await lockWorkspace(tx, task.workspaceId, { create: false })
@@ -1315,7 +1394,23 @@ export async function chargeTask(tx: BillingTx, input: TaskHoldsEnding): Promise
   const work = await convertibleWork(tx, taskId, attempts)
 
   const reserved = sumCredits(active)
-  const charge = taskCharge({ used: work.credits, reserved })
+  // The minimum of a task is its first charge's: a later pass pays its work, rounded.
+  const first = rows.every((row) => row.hold.status !== 'captured')
+  const charge = taskCharge({ used: work.credits, reserved, minimum: first })
+  if (charge.credits === 0) {
+    // Less than half a credit of work: nothing is charged now, the chain is given back, and its
+    // work is counted with the next charge of the task (`workAttemptsOf`).
+    const returned = await giveBack(tx, { taskId, now }, 'released')
+    return {
+      credits: toCredits(0),
+      from: { tariff: toCredits(0), gift: toCredits(0), pack: toCredits(0) },
+      expired: toCredits(0),
+      entries: [],
+      holds: returned.holds,
+      applied: returned.applied,
+      reserved,
+    }
+  }
   // What is left of the day, for the audit: the charge reads the same under the same locks.
   const tariffRoom = await tariffRoomNow(tx, {
     workspaceId: task.workspaceId,
@@ -1330,7 +1425,9 @@ export async function chargeTask(tx: BillingTx, input: TaskHoldsEnding): Promise
     target: { type: 'task', id: taskId },
     meta: {
       // The attempts whose work is in the charge; `givenBack` of them returned their reserve
-      // to «Попробовать ещё», the rest are the chain whose reserve is captured.
+      // to «Попробовать ещё» or to a pass too small to charge, the rest are the chain whose
+      // reserve is captured. `first` — the first charge of the task, the one with its minimum.
+      first,
       attempts: attempts.length,
       givenBack: attempts.length - chainOf(active).length,
       firstAttempt: Math.min(...attempts),
@@ -1364,8 +1461,8 @@ export async function chargeTask(tx: BillingTx, input: TaskHoldsEnding): Promise
  * the ledger gets an `expire` row under the key `hold:<holdId>:expire`, linked to the task.
  *
  * A task whose reserve was already given back, either way, or that never had one, is answered
- * with what was given back before, and nothing changes. A charged task cannot be given back: a
- * conflict.
+ * with what was given back before, and nothing changes. What was charged stays charged: only
+ * the active chain is given back — the passes charged before it are the client's (26.10.2026).
  */
 async function giveBack(
   tx: BillingTx,
@@ -1374,10 +1471,10 @@ async function giveBack(
 ): Promise<ReturnedTaskHolds> {
   const { taskId, now } = endingSchema.parse(input)
   const locked = await lockWorkspace(tx, await workspaceOfTask(tx, taskId), { create: false })
-  const rows = await reserveRows(tx, taskId, locked.accounts)
-  if (rows.some((row) => row.hold.status === 'captured')) {
-    throw conflict(`The reserve of a charged task cannot be ${settled}`)
-  }
+  // The chains charged before — a task is charged pass by pass — stay as they are.
+  const rows = (await reserveRows(tx, taskId, locked.accounts)).filter(
+    (row) => row.hold.status !== 'captured',
+  )
   const active = rows.filter((row) => row.hold.status === 'active')
   if (active.length === 0) {
     return {
@@ -1394,7 +1491,13 @@ async function giveBack(
 
   // A charge of nothing moves nothing onto free tariff credits: the day is not asked.
   const distribution = distributeCharge(distributionInput(locked, active, toCredits(0), null))
-  const { expiries } = await postDistribution(tx, { taskId, locked, distribution, now })
+  const { expiries } = await postDistribution(tx, {
+    taskId,
+    attempt: Math.min(...chainOf(active)),
+    locked,
+    distribution,
+    now,
+  })
   // A charge of nothing: the shares of the rows are all zero, and a returned row records none.
   return { holds: await settleRows(tx, active, { status: settled }, now), expiries, applied: true }
 }
@@ -1407,8 +1510,8 @@ async function giveBack(
  * the task has written is the caller's to run first (P12).
  *
  * A repeated call changes nothing and returns what was given back, and so does a call for a
- * task that `expireTaskHolds` has expired or that never had a reserve. A charged task cannot
- * be given back: a conflict.
+ * task that `expireTaskHolds` has expired or that never had a reserve. The passes charged before
+ * stay charged.
  */
 export function releaseTask(tx: BillingTx, input: TaskHoldsEnding): Promise<ReturnedTaskHolds> {
   return giveBack(tx, input, 'released')
@@ -1424,7 +1527,7 @@ export function releaseTask(tx: BillingTx, input: TaskHoldsEnding): Promise<Retu
  * The rows of a task expire only together and only when all of them are past `expires_at` by
  * `now`: while one is not, a conflict — with several attempts in a chain the rows of the first
  * would otherwise expire while the second works. A repeated call and a call for a released
- * task change nothing; a charged task is a conflict.
+ * task change nothing; the passes charged before stay charged.
  */
 export function expireTaskHolds(tx: BillingTx, input: TaskHoldsEnding): Promise<ReturnedTaskHolds> {
   return giveBack(tx, input, 'expired')

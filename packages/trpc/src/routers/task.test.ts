@@ -94,7 +94,7 @@ describe('the words of a new dialog', () => {
     [
       'Пароль от админки: Qwerty123456',
       'TASK_TEXT_HAS_SECRET',
-      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Настройки»',
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»',
     ],
   ])('are refused before the database is read: %j', async (text, code, message) => {
     const { db, prisma } = emptyDb()
@@ -133,6 +133,7 @@ describe('a dialog of someone else', () => {
       caller.task.retry({ taskId: ids.taskId, requestId, failureEventId: '17' }),
       caller.task.cancel({ taskId: ids.taskId, requestId }),
       caller.task.commands({ taskId: ids.taskId }),
+      caller.task.activity({ taskId: ids.taskId, turn: 1 }),
       caller.task.list({ siteId: ids.siteId }),
       caller.candidate.get({ taskId: ids.taskId }),
       caller.candidate.update({ taskId: ids.taskId, requestId }),
@@ -310,6 +311,7 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
       siteId: ids.siteId,
       createdById: user.id,
       alias: 'zakaz',
+      deletedAt: null,
     })
     await expect(
       callerOf(repeated.prisma, withVault(ensure)).task.create({

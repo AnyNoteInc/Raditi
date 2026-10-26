@@ -1,6 +1,6 @@
 import { legalDocuments } from '@repo/domain'
 import { typicalTaskCredits } from '@repo/domain/billing/credit-numbers'
-import { BrandSymbol } from '@repo/ui/brand-symbol'
+import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
@@ -475,7 +475,7 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
         <div className={styles.footerTop}>
           <Link href="/" aria-label="Радити — на главную">
             <span className={styles.wordmark}>
-              <BrandSymbol size={35} className={styles.logoSymbol} />
+              <AnimatedBrandSymbol size={35} className={styles.logoSymbol} />
               Радити
             </span>
           </Link>
@@ -500,7 +500,7 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
         <div className={styles.footerWord} aria-hidden="true">
           радити
           {/* CSS sizes the sign from the word; the number is the fallback of the attribute. */}
-          <BrandSymbol size={156} />
+          <AnimatedBrandSymbol size={156} />
         </div>
       </footer>
     </div>

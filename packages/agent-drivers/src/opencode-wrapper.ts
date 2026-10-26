@@ -1,3 +1,5 @@
+import { envVarLimits } from '@repo/domain'
+
 /** Everything the launch wrapper of the OpenCode driver needs to know about one turn. */
 export interface OpencodeWrapperSettings {
   /** The CLI binary of the image architecture. */
@@ -64,6 +66,12 @@ export interface OpencodeWrapperSettings {
   shellEnv: string
   /** The client egress proxy of the sandbox for those commands; null — they have no way out. */
   egressProxy: string | null
+  /**
+   * The open internet of the turn (owner's decision of 26.10.2026): the commands get HTTP_PROXY
+   * as well, and the CLI itself — its fetch tool, the remote skills, the browser skill it starts
+   * — the same proxy variables, never a value of the client.
+   */
+  internet: boolean
   /** The hosts those commands reach without the proxy: the platform's gateway and loopback. */
   noProxy: readonly string[]
   /** The session database the turn leaves: every value in it is masked when the CLI ends. */
@@ -168,7 +176,8 @@ process.exit(accepted ? 0 : 1);
  * 7. The client's variables (plan 53, Р13) are read and removed with the credentials. The CLI
  *    gets only BASH_ENV, the path of a script in the tmpfs; its shell tool runs commands in
  *    bash, which sources that script first, so only the agent's commands hold the values and
- *    HTTPS_PROXY of the egress proxy — the CLI, the MCP check, export and import hold neither.
+ *    HTTPS_PROXY of the egress proxy — the CLI, the MCP check, export and import hold neither;
+ *    in the open internet of the turn the CLI alone gets the proxy variables, no value.
  *    The script goes with the CLI. When the CLI has ended, every value — as it is and as a JSON
  *    string holds it — is masked in each text column of the session database the snapshot
  *    takes; with secure_delete on and a VACUUM after it, no page keeps what a change freed, and
@@ -188,6 +197,8 @@ import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 const settings = ${JSON.stringify(settings)};
+// A shorter value is neither masked nor refused (\`envVarLimits.maskMinBytes\` of @repo/domain).
+const MASK_MIN_BYTES = ${envVarLimits.maskMinBytes};
 const mcpCheck = ${JSON.stringify(MCP_CHECK)};
 const MAX_EXPORT_BYTES = 128 * 1024 * 1024;
 const IO_TIMEOUT_MS = 120_000;
@@ -244,16 +255,25 @@ const shellScript = () => {
     const proxy = shellQuote(settings.egressProxy);
     const direct = shellQuote(settings.noProxy.join(','));
     lines.push('export HTTPS_PROXY=' + proxy + ' https_proxy=' + proxy + ' NO_PROXY=' + direct + ' no_proxy=' + direct + ' NODE_USE_ENV_PROXY=1');
+    if (settings.internet) lines.push('export HTTP_PROXY=' + proxy + ' http_proxy=' + proxy);
   }
   return lines.join('\\n') + '\\n';
+};
+/** What the CLI itself is given in the open internet: the proxy and what stays direct. */
+const internetEnv = () => {
+  if (!settings.internet || settings.egressProxy === null) return {};
+  const direct = settings.noProxy.join(',');
+  const proxy = settings.egressProxy;
+  return { HTTPS_PROXY: proxy, https_proxy: proxy, HTTP_PROXY: proxy, http_proxy: proxy, NO_PROXY: direct, no_proxy: direct };
 };
 const shellEnvNeeded = () => variables.length > 0 || settings.egressProxy !== null;
 const inJsonString = (value) => JSON.stringify(value).slice(1, -1);
 /**
  * Each value as it is, as a JSON string holds it once and twice and as the script quotes it,
- * longest first: the spellings \`envValueForms\` of @repo/domain masks in core.
+ * longest first: the spellings \`envValueForms\` of @repo/domain masks in core — none of a value
+ * shorter than MASK_MIN_BYTES.
  */
-const valueForms = () => [...new Set(variables.flatMap(([, value]) => {
+const valueForms = () => [...new Set(variables.filter(([, value]) => Buffer.byteLength(value, 'utf8') >= MASK_MIN_BYTES).flatMap(([, value]) => {
   const once = inJsonString(value);
   return [value, once, inJsonString(once), value.replaceAll('\\\\', '\\\\\\\\').replaceAll("'", "\\\\'")];
 }))].sort((left, right) => right.length - left.length);
@@ -290,8 +310,8 @@ const quoteName = (name) => '"' + name.replaceAll('"', '""') + '"';
  * byte: SQL saw only what a trigger let it change.
  */
 const scrub = () => {
-  if (variables.length === 0) return;
   const forms = valueForms();
+  if (forms.length === 0) return;
   if (present(settings.sessionDatabase)) mask(forms);
   const patterns = valueBytes();
   if (settings.sessionFiles.some((path) => holdsAny(path, patterns)))
@@ -459,7 +479,7 @@ try {
     } finally { closeSync(own); }
   }
   // Only for the commands of the CLI's shell tool: bash sources it, the CLI itself never reads it.
-  const env = { ...settings.env };
+  const env = { ...settings.env, ...internetEnv() };
   if (shellEnvNeeded()) {
     writeFileSync(settings.shellEnv, shellScript(), { mode: 0o400, flag: 'wx' });
     // bash whose stdin is a socket pair — what a runtime's pipe often is — takes itself for a

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { turnSkillsSchema } from '../agent/skills.ts'
 import { badRequest } from '../errors.ts'
 import { publicationSourceSchema, type PublicationSource } from '../git/publication.ts'
 import { snapshotIdSchema, snapshotReferenceSchema } from '../sessions/snapshot-manifest.ts'
@@ -433,8 +434,16 @@ export const turnPlanSchema = z
         nativeSessionId: nativeSessionIdSchema.optional(),
         /** The address only (plan 53, Р13); the values of the variables are never kept here. */
         egressProxy: httpUrl.optional(),
+        internet: z.literal(true).optional(),
+        skills: turnSkillsSchema.optional(),
       })
-      .strict(),
+      .strict()
+      .refine(
+        (context) =>
+          (context.internet === undefined || context.egressProxy !== undefined) &&
+          (context.skills === undefined || context.internet === true),
+        'the open internet goes through the egress proxy, and skills need it',
+      ),
     input: turnInputSchema,
     /** Recovery picks the driver of the turn by it: extractResult, sessionState, the parser. */
     driverId: z.enum(agentDriverIds),

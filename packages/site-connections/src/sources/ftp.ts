@@ -706,17 +706,71 @@ async function sessionCall<T>(signal: AbortSignal, work: () => Promise<T>): Prom
   }
 }
 
+/**
+ * The pauses before a call of an import session is made again after its transfer broke before a
+ * byte reached the caller, or its new login was not let in. A hosting may refuse a data connection
+ * among thousands — a busy passive port — or a firewall that counts new connections may shut our
+ * address out altogether for a minute (measured on a shared hosting, 25.10.2026: after about
+ * 270 s of an import even port 21 refused, and let us in again within a minute). Without a pause
+ * that outlasts it, one refusal fails the whole import, whose next attempt starts from nothing and
+ * meets the same. Together under the stall window of the import (siteImportLimits.stallWindowMs).
+ */
+const TRANSFER_RETRY_DELAYS_MS: readonly number[] = [2_000, 10_000, 30_000, 60_000]
+
+/** What a call of a session may meet again after a pause: a broken transfer, a login not let in. */
+const RETRYABLE_REASONS: ReadonlySet<ConnectionCheckReason> = new Set([
+  'transfer_failed',
+  'unreachable',
+])
+
+/**
+ * Runs `work` again after the pauses of `delays` while it fails with a reason of
+ * RETRYABLE_REASONS and `retryable` allows it; the call that needs a connection logs in anew.
+ * Any other failure — a guard, a refused folder, a refused password, the end of the session — is
+ * the answer at once, and so is the abort of the session during a pause.
+ */
+async function withTransferRetries<T>(
+  signal: AbortSignal,
+  delays: readonly number[],
+  retryable: () => boolean,
+  work: () => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await work()
+    } catch (error) {
+      const delay = delays[attempt]
+      if (
+        delay === undefined ||
+        !isSiteConnectionError(error) ||
+        !RETRYABLE_REASONS.has(error.reason) ||
+        signal.aborted ||
+        !retryable()
+      )
+        throw error
+      await abortable(
+        signal,
+        new Promise<void>((resolve) => setTimeout(resolve, delay).unref()),
+      ).catch(() => {
+        throw error
+      })
+    }
+  }
+}
+
 /** The limits of a session and the trust of `verified`, for the tests of this package only. */
 export interface FtpSourceOptions {
   trust?: TestTrust
   idleMs?: number
   listingBytes?: number
+  retryDelaysMs?: readonly number[]
 }
 
 export function createFtpSource(options: FtpSourceOptions = {}): FileSourceAdapter<FtpAccess> {
   const trust = options.trust ?? {}
   const idleMs = options.idleMs ?? siteImportLimits.idleMs
   const listingBytes = options.listingBytes ?? siteImportLimits.listingBytes
+  const retryDelays = options.retryDelaysMs ?? TRANSFER_RETRY_DELAYS_MS
 
   return {
     kind: 'ftp',
@@ -869,16 +923,38 @@ export function createFtpSource(options: FtpSourceOptions = {}): FileSourceAdapt
       return {
         // As many reads at once as there are connections: a listing takes one of the same.
         concurrency: siteImportLimits.ftpSessions,
+        // A listing is answered whole, so a broken one is simply listed again.
         list: (directory, maxEntries) =>
-          sessionCall(signal, async () => {
-            if (closed) throw new SiteConnectionError('transfer_failed')
-            return (await tree.listDirectory(directory, maxEntries, listingBytes)).entries
-          }),
-        read: (path, sink, maxBytes) =>
-          sessionCall(signal, () => {
-            if (closed) throw new SiteConnectionError('transfer_failed')
-            return tree.read(path, sink, maxBytes)
-          }),
+          sessionCall(signal, () =>
+            withTransferRetries(
+              signal,
+              retryDelays,
+              () => !closed,
+              async () => {
+                if (closed) throw new SiteConnectionError('transfer_failed')
+                return (await tree.listDirectory(directory, maxEntries, listingBytes)).entries
+              },
+            ),
+          ),
+        // A file is read again only while the sink has had no byte of it: what it got stays its.
+        read: (path, sink, maxBytes) => {
+          let delivered = false
+          const counted = (chunk: Uint8Array) => {
+            delivered = true
+            return sink(chunk)
+          }
+          return sessionCall(signal, () =>
+            withTransferRetries(
+              signal,
+              retryDelays,
+              () => !closed && !delivered,
+              () => {
+                if (closed) throw new SiteConnectionError('transfer_failed')
+                return tree.read(path, counted, maxBytes)
+              },
+            ),
+          )
+        },
         close: async () => close(),
       }
     },

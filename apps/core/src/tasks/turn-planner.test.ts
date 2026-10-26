@@ -10,6 +10,7 @@ import {
   type AgentDriver,
   type LlmBackend,
   type TurnPlan,
+  type TurnSkill,
 } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -25,6 +26,7 @@ import { CONTINUE_PROMPT } from './turn-instructions.ts'
 import {
   planTurn,
   promptOf,
+  SANDBOX_EGRESS_PROXY_URL,
   SANDBOX_GATEWAY_URL,
   type ClientRequest,
   type FinishedTurn,
@@ -130,6 +132,7 @@ const env = (
   driver,
   backends: [backend],
   runtime: 'runc',
+  internet: false,
   mainHead: vi.fn(async () => MAIN),
   branchHead: vi.fn(async () => branch),
   ...patch,
@@ -332,6 +335,50 @@ describe('planTurn', () => {
       kind: 'refused',
       code: 'technical',
     })
+  })
+
+  it('opens the internet of a repository turn through the egress proxy, with the skills (26.10.2026)', async () => {
+    const skills: TurnSkill[] = [
+      { name: 'context7', kind: 'remote', url: 'https://mcp.context7.com/mcp' },
+      { name: 'playwright', kind: 'local' },
+    ]
+    const plan = await planTurn(
+      facts({ skills, egress: ['api.example.ru:443'], variables: ['API_TOKEN'] }),
+      env({ internet: true }),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.sandbox.network).toEqual({
+      mode: 'gateway',
+      routes: ['llm', 'mcp'],
+      egress: ['api.example.ru:443'],
+      internet: true,
+    })
+    expect(plan.request.context).toMatchObject({
+      egressProxy: 'http://sandbox-gw:3128',
+      internet: true,
+      skills,
+    })
+    const { instructions } = plan.request.context
+    expect(instructions).toContain('## The internet')
+    expect(instructions).toContain('context7, playwright')
+    expect(instructions).toContain('Never send a secret')
+    expect(instructions).toContain('Those commands reach the internet as the section below says.')
+    expect(instructions).not.toContain('only to api.example.ru:443')
+    // The plan keeps the policy and the skills: recovery runs the turn as it was planned.
+    const kept = toTurnPlan(plan.request, sampleDriverId)
+    expect(kept.sandbox.network).toEqual(plan.request.sandbox.network)
+    expect(kept.context.skills).toEqual(skills)
+    // Without skills the internet is open all the same; `off` is the turn as before.
+    const bare = await planTurn(facts({ skills: [] }), env({ internet: true }))
+    if (bare.kind !== 'turn') throw new Error(`expected a turn, got ${bare.kind}`)
+    expect(bare.request.context).not.toHaveProperty('skills')
+    expect(bare.request.context.egressProxy).toBe('http://sandbox-gw:3128')
+    const off = await planTurn(facts({ skills }), env())
+    if (off.kind !== 'turn') throw new Error(`expected a turn, got ${off.kind}`)
+    expect(off.request.sandbox.network).toEqual({ mode: 'gateway', routes: ['llm', 'mcp'] })
+    expect(off.request.context).not.toHaveProperty('internet')
+    expect(off.request.context).not.toHaveProperty('skills')
+    expect(off.request.context.instructions).not.toContain('## The internet')
   })
 
   it('continues the session of a completed turn with the words written after it started', async () => {
@@ -673,6 +720,30 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
     // The client's variables reach no command of a turn in the browser.
     expect(turn.sandbox.network).toEqual({ mode: 'gateway', routes: ['llm', 'mcp'] })
     expect(turn.context.egressProxy).toBeUndefined()
+    expect(turn.context.instructions).not.toContain('## The internet')
+    // The internet is open to it too (owner's decision of 26.10.2026), with the skills, while
+    // the admin pages stay reachable through the `web` tools alone.
+    const open = await planTurn(
+      browserFacts({ skills: [{ name: 'playwright', kind: 'local' }] }),
+      env({ internet: true }),
+    )
+    if (open.kind !== 'turn') throw new Error(`expected a turn, got ${open.kind}`)
+    expect(() => toTurnPlan(open.request, sampleDriverId)).not.toThrow()
+    expect(open.request.sandbox.network).toEqual({
+      mode: 'gateway',
+      routes: ['llm', 'mcp'],
+      internet: true,
+    })
+    expect(open.request.context).toMatchObject({
+      internet: true,
+      egressProxy: SANDBOX_EGRESS_PROXY_URL,
+      skills: [{ name: 'playwright', kind: 'local' }],
+    })
+    expect(open.request.context.instructions).toContain('## The internet')
+    expect(open.request.context.instructions).toContain(
+      "The site's admin pages are reached through the browser tools alone",
+    )
+    expect(open.request.context.instructions).toContain('web_help')
     expect(turn.context.instructions).not.toContain('API_TOKEN')
     expect(turn.input.attachments).toEqual([])
     const prompt = turn.input.prompt

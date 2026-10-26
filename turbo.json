@@ -77,6 +77,7 @@
     "PREVIEW_FORWARDER_IMAGE",
     "PREVIEW_GATEWAY_HOST",
     "PREVIEW_GATEWAY_PORT",
+    "PREVIEW_IDLE_MINUTES",
     "PREVIEW_PUBLIC_PORT",
     "PREVIEW_RUNTIME",
     "PREVIEW_SCHEME",
@@ -121,10 +122,12 @@
     "SANDBOX_EGRESS_REFUSED_SUBNETS",
     "SANDBOX_GATEWAY_IMAGE",
     "SANDBOX_IMAGE",
+    "SANDBOX_INTERNET",
     "SANDBOX_LLM_UPSTREAM",
     "SANDBOX_MCP_UPSTREAM",
     "SANDBOX_NETWORK_GUARD_IMAGE",
     "SANDBOX_RUNTIME",
+    "SANDBOX_WARM_MINUTES",
     "SANDBOX_WATCHDOG_IMAGE",
     "SENDSAY_API_KEY",
     "SITE_PORT",
@@ -188,7 +191,8 @@
     "dev": {
       "dependsOn": ["^build", "^db:generate", "db:generate"],
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": ["NODE_EXTRA_CA_CERTS"]
     }
   },
   "globalPassThroughEnv": ["PATH"]

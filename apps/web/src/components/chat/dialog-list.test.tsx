@@ -9,14 +9,28 @@ import type { DialogListItem, DialogListPage } from './chat-types'
 import { DialogList } from './dialog-list'
 import { SITE_ID } from './testing'
 
-const { listPage, segment } = vi.hoisted(() => ({
+const { listPage, segment, rename, remove } = vi.hoisted(() => ({
   listPage: vi.fn<(input: { siteId: string; cursor?: string }) => Promise<DialogListPage>>(),
   segment: { current: null as string | null },
+  rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
+  remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
 }))
 
-vi.mock('next/navigation', () => ({ useSelectedLayoutSegment: () => segment.current }))
+const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
+  mutationOptions: () => ({ mutationFn: fn }),
+})
+
+vi.mock('next/navigation', () => ({
+  useSelectedLayoutSegment: () => segment.current,
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => '/projects',
+}))
 vi.mock('@/trpc/client', () => ({
   useTRPCClient: () => ({ task: { list: { query: listPage } } }),
+  useTRPC: () => ({
+    task: { rename: mutation(rename), remove: mutation(remove) },
+    billing: { usage: { queryKey: () => ['billing.usage'] } },
+  }),
 }))
 
 const now = new Date()
@@ -29,6 +43,7 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     status: 'done',
     mode: 'work',
     undo: null,
+    answered: false,
     createdAt: now,
     updatedAt: now,
     ...patch,
@@ -72,6 +87,61 @@ describe('the list of dialogs', () => {
     const link = within(waiting).getByRole('link')
     expect(link.getAttribute('href')).toBe(`/projects/${SITE_ID}/chat/${dialog('2').id}`)
     expect(listPage).toHaveBeenCalledWith({ siteId: SITE_ID })
+  })
+
+  // Like a chat of Claude Code (owner's answer of 26.10.2026): the agent answered and asks
+  // nothing — the dialog is not among those that wait, and says so.
+  it('says «Агент ответил» of a dialog that waits for nothing, with no hint and not as waiting', async () => {
+    listPage.mockResolvedValue({
+      items: [dialog('4', { title: 'Про сайт', status: 'awaiting_user', answered: true })],
+      nextCursor: null,
+    })
+    showList()
+    const today = await screen.findByRole('list', { name: 'Сегодня' })
+    expect(plain(today.textContent)).toContain('Агент ответил')
+    expect(plain(today.textContent)).not.toContain('Ответьте агенту')
+    expect(screen.queryByRole('list', { name: 'Ждёт вашего решения' })).toBeNull()
+  })
+
+  it('renames a dialog in place from the menu of its row, and deletes one after asking', async () => {
+    listPage.mockResolvedValue({
+      items: [dialog('1'), dialog('2', { title: 'Цена латте' })],
+      nextCursor: null,
+    })
+    rename.mockResolvedValueOnce({ title: 'Цена капучино' })
+    remove.mockResolvedValueOnce({ removed: true })
+    showList()
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+    )
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Переименовать' }))
+    const name = screen.getByRole('textbox', { name: 'Название диалога' })
+    expect((name as HTMLInputElement).value).toBe('Поменять цену капучино')
+    fireEvent.change(name, { target: { value: 'Цена капучино' } })
+    fireEvent.keyDown(name, { key: 'Enter' })
+    await waitFor(() => expect(rename).toHaveBeenCalledTimes(1))
+    expect(rename.mock.calls[0]![0]).toEqual({ taskId: dialog('1').id, title: 'Цена капучино' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Действия с диалогом: Цена латте' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
+    const ask = await screen.findByRole('dialog', { name: 'Удалить диалог?' })
+    fireEvent.click(within(ask).getByRole('button', { name: 'Удалить' }))
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1))
+    expect(remove.mock.calls[0]![0]).toEqual({ taskId: dialog('2').id })
+  })
+
+  it('keeps the old name on Escape', async () => {
+    listPage.mockResolvedValue({ items: [dialog('1')], nextCursor: null })
+    showList()
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+    )
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Переименовать' }))
+    const name = screen.getByRole('textbox', { name: 'Название диалога' })
+    fireEvent.change(name, { target: { value: 'Другое' } })
+    fireEvent.keyDown(name, { key: 'Escape' })
+    expect(screen.queryByRole('textbox', { name: 'Название диалога' })).toBeNull()
+    expect(rename).not.toHaveBeenCalled()
   })
 
   it('marks the open dialog as the current page', async () => {

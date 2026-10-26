@@ -32,6 +32,11 @@ import {
   type StoredAccess,
 } from '../services/site-access.ts'
 import {
+  accessVariablesOf,
+  recordAccessVariables,
+  writeAccessVariables,
+} from '../services/site-access-variables.ts'
+import {
   accessibleSite,
   alreadyExists,
   assertRoomForSite,
@@ -42,6 +47,7 @@ import {
   siteOrigin,
   withHost,
 } from '../services/site-basics.ts'
+import { deleteSite } from '../services/site-delete.ts'
 import { siteIdForRequest } from '../services/site-request-id.ts'
 import { browserConfigured, browserUnavailable } from '../services/chat/context.ts'
 import {
@@ -179,13 +185,15 @@ async function replayOf(
     where: { id: siteId },
     select: {
       ...projectSelect,
+      deletedAt: true,
       workspace: { select: { members: { where: { userId }, select: { userId: true }, take: 1 } } },
     },
   })
   if (!site) return null
-  const { workspace, ...row } = site
+  const { workspace, deletedAt, ...row } = site
   if (workspace.members.length === 0) throw siteNotFound()
-  if (row.url !== url) {
+  // A deleted site keeps its id: the key of its request cannot make another one.
+  if (row.url !== url || deletedAt) {
     throw new DomainError(
       'PROJECT_REQUEST_CONFLICT',
       'The request key was used for another project',
@@ -358,7 +366,7 @@ async function createForBrowser(
 export const projectRouter = router({
   list: consentedProcedure.output(z.array(listOutput)).query(async ({ ctx }) => {
     const sites = await ctx.prisma.site.findMany({
-      where: { workspace: { members: { some: { userId: ctx.user.id } } } },
+      where: { deletedAt: null, workspace: { members: { some: { userId: ctx.user.id } } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: {
         ...projectSelect,
@@ -440,6 +448,28 @@ export const projectRouter = router({
         version: ref.keyVersion,
         updatedAt: ref.updatedAt,
       }))
+    }),
+
+  /**
+   * «Удалить проект» (owner's decision of 25.10.2026): an owner or an admin types the name of the
+   * site again; the site is hidden with its history kept, its address freed and its secrets erased
+   * (`deleteSite`). Refused while anything goes on at the site.
+   */
+  delete: consentedProcedure
+    .input(z.strictObject({ id: z.uuid(), confirmName: z.string().max(255) }))
+    .output(z.strictObject({ deleted: z.literal(true) }))
+    .mutation(async ({ ctx, input }) => {
+      // The wizard's writer, or that of the dialogs: either writes by CAS and never reads back.
+      const { siteConnections, chat } = ctx
+      const secrets = siteConnections ? () => siteConnections.secrets : chat ? chat.secrets : null
+      await deleteSite(ctx.prisma, secrets, {
+        userId: ctx.user.id,
+        siteId: input.id,
+        confirmName: input.confirmName,
+        ip: clientIp(ctx.headers),
+        now: new Date(),
+      })
+      return { deleted: true as const }
     }),
 
   /**
@@ -551,8 +581,29 @@ export const projectRouter = router({
               })
             : null,
         }
+        // The accesses are the site's variables too (owner's decision of 26.10.2026), written
+        // before the transaction like their secrets: a failure leaves them without rows, logged.
+        const variables = await writeAccessVariables(services.secrets, {
+          siteId,
+          variables: accessVariablesOf(input.url, [sourceAccess, databaseAccess]),
+          signal: budget.signal,
+        })
         if (budget.signal.aborted) throw siteConnectionUnavailable()
         budget.end()
+        const variableRows = async (tx: Prisma.TransactionClient, workspaceId: string) => {
+          const workspace = await tx.workspace.findFirst({
+            where: { id: workspaceId },
+            select: { dataClass: true },
+          })
+          await recordAccessVariables(tx, {
+            siteId,
+            userId,
+            // Anything but a synthetic workspace is taken for one of real client data.
+            dataClass: workspace?.dataClass === 'synthetic' ? 'synthetic' : 'client',
+            written: variables,
+            now: new Date(),
+          })
+        }
 
         const outcome = await ctx.prisma.$transaction(
           async (tx): Promise<CreateOutcome> => {
@@ -562,6 +613,12 @@ export const projectRouter = router({
             const earlier = await replayOf(tx, request)
             if (earlier) {
               logOrphanedSecrets(siteId)
+              // The values just written replaced the ones its rows name (one version is kept).
+              const made = await tx.site.findUnique({
+                where: { id: siteId },
+                select: { workspaceId: true },
+              })
+              if (made) await variableRows(tx, made.workspaceId)
               return earlier
             }
 
@@ -608,6 +665,7 @@ export const projectRouter = router({
                 },
               })
             }
+            await variableRows(tx, workspace.id)
             await tx.siteProvisioningStage.create({
               data: {
                 siteId,

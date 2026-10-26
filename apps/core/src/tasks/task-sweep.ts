@@ -1,6 +1,6 @@
 import { Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
-import { expireTaskHolds, extendTaskHolds } from '@repo/billing'
+import { chargeTask, expireTaskHolds, extendTaskHolds } from '@repo/billing'
 import {
   cancelWaitingTask,
   insertFeedEvent,
@@ -31,7 +31,12 @@ import {
 } from '../turns/turn-journal.ts'
 import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-collector.ts'
 import type { LivePasses } from './live-passes.ts'
-import type { PassEnding, PassSettlement, SettleAnswer } from './pass-settlement.ts'
+import {
+  CHARGE_LATER_EVENT,
+  type PassEnding,
+  type PassSettlement,
+  type SettleAnswer,
+} from './pass-settlement.ts'
 import { savedPlanOf } from './turn-planner.ts'
 
 export const TASK_SWEEP_INTERVAL_MS = 60_000
@@ -100,6 +105,7 @@ export class TaskSweep {
   async tick(): Promise<void> {
     for (const [name, pass] of [
       ['orphans', () => this.settleOrphans()],
+      ['charges', () => this.chargeLater()],
       ['holds', () => this.extendHolds()],
       ['expiry', () => this.expireHolds()],
       ['retries', () => this.requeueLost()],
@@ -266,8 +272,49 @@ export class TaskSweep {
   }
 
   /**
+   * The charges a pass could not make when it ended (`CHARGE_LATER_EVENT`: the usage of a turn
+   * key was still open): a task that waits or is done, whose chain of that attempt is still
+   * active, is charged now (`chargeTask`). A refusal leaves it for the next tick; words of the
+   * client that came first went on with the chain, and the end of their pass charged it.
+   */
+  async chargeLater(): Promise<number> {
+    const { db } = this.deps
+    const rows = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT DISTINCT t.id FROM tasks t
+      JOIN task_events e ON e.task_id = t.id AND e.type = ${CHARGE_LATER_EVENT}
+      WHERE t.status IN ('awaiting_user', 'awaiting_approval', 'done') AND t.billable
+        AND EXISTS (SELECT 1 FROM credit_holds h
+          WHERE h.task_id = t.id AND h.status = 'active'
+            AND h.attempt = (e.payload->>'attempt')::int)
+      LIMIT ${BATCH}`
+    let charged = 0
+    for (const row of rows)
+      try {
+        const done = await db.$transaction(
+          async (tx) => {
+            // The task may have gone back to work since it was read: then its pass charges it.
+            const waiting = await tx.$queryRaw<Array<{ id: string }>>`
+              SELECT id FROM tasks
+              WHERE id = ${row.id}::uuid AND status IN ('awaiting_user', 'awaiting_approval', 'done')
+              FOR SHARE`
+            if (waiting.length === 0) return false
+            return (await chargeTask(tx, { taskId: row.id, now: this.#now() })).applied
+          },
+          { isolationLevel: 'ReadCommitted', timeout: 30_000 },
+        )
+        if (done) charged++
+      } catch (error) {
+        this.#warn(`task sweep charge task=${row.id}`, logged(error))
+      }
+    if (charged > 0) this.#logger.log(`task_sweep_charged count=${charged}`)
+    return charged
+  }
+
+  /**
    * A dialog that waits with a candidate keeps its reserve while its preview lives (Р8): the
-   * reserve rows are moved to the preview's expiry.
+   * reserve rows are moved to the preview's expiry. A preview stopped while no one used it
+   * (`expired` before its expiry, owner's answer of 26.10.2026) still lives: its copy waits for a
+   * view, and so does the dialog.
    */
   async extendHolds(): Promise<number> {
     const { db } = this.deps
@@ -275,7 +322,7 @@ export class TaskSweep {
       SELECT t.id, p.expires_at FROM tasks t
       JOIN preview_environments p ON p.task_id = t.id
       WHERE t.status IN ('awaiting_user', 'awaiting_approval') AND t.billable
-        AND p.status NOT IN ('expired', 'destroyed') AND p.expires_at > now()
+        AND p.status <> 'destroyed' AND p.expires_at > now()
         AND EXISTS (SELECT 1 FROM task_candidates c
           WHERE c.task_id = t.id AND c.status IN ('current', 'stale'))
         AND EXISTS (SELECT 1 FROM credit_holds h

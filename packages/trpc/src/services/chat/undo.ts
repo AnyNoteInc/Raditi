@@ -32,6 +32,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
+import { lockLiveSite } from '../site-delete.ts'
 import { accessibleTask, isManagerRole, memberRole, taskNotFound } from './access.ts'
 import { dbFieldText, dbObjectText } from './candidates.ts'
 import { assertCommandAvailable, commandRefusal, dialogFacts } from './dialog-facts.ts'
@@ -392,6 +393,8 @@ export async function confirmUndo(
           version: earlier.version,
           repeated: true,
         }
+      // A site being deleted waits here, and a deleted one is not found.
+      await lockLiveSite(tx, task.siteId)
       if (!isManagerRole(await memberRole(tx, task.workspaceId, userId)))
         throw commandUnavailable('undo', 'not_allowed')
       const release = await tx.siteRelease.findFirst({

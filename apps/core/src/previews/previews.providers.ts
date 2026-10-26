@@ -8,7 +8,11 @@ import type {
   TurnCredentialSource,
   TurnExecutor,
 } from '@repo/domain'
-import { createDockerPreviewRuntime, type DockerPreviewConfig } from '@repo/sandbox-providers'
+import {
+  createDockerPreviewRuntime,
+  createDockerStagingDatabaseRuntime,
+  type DockerPreviewConfig,
+} from '@repo/sandbox-providers'
 import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
 import { siteSource } from '@repo/site-connections'
 import {
@@ -84,6 +88,14 @@ export const previewProviders: Provider[] = [
         config: previews,
         runtime,
         copier: createMysqlDatabaseCopier(connections),
+        // A site's SQL dump is loaded here before its copy (26.10.2026): core's own Docker only.
+        staging: previews.docker
+          ? createDockerStagingDatabaseRuntime({
+              runtime: previews.runtime,
+              socketPath: previews.docker.socketPath,
+              upstreamHost: previews.upstreamHost,
+            })
+          : null,
         catalog: createMysqlDatabaseCatalog(connections),
         // Where the site's files and database are, as the connection wizard recorded them.
         sources: createPreviewSiteSources({

@@ -97,7 +97,11 @@ export async function waitStage(stand, siteId, ready, { timeoutMs = 180_000, wha
   }
 }
 
-/** What an operator does after looking at a stage: marks it failed (with a code) by hand. */
+/**
+ * What an operator does after looking at a stage: marks it failed (with a code) by hand. A
+ * succeeded import made the site `active` with `v0.0.0` installed (26.10.2026); a failed one
+ * leaves it `onboarding` with nothing installed — the site is put back there with the stage.
+ */
 export async function failStageBySql(stand, siteId, code) {
   const { rowCount } = await stand.db.query(
     `UPDATE site_provisioning_stages
@@ -107,6 +111,14 @@ export async function failStageBySql(stand, siteId, code) {
     [siteId, code],
   )
   assert.equal(rowCount, 1, 'The succeeded stage is set failed by the operator')
+  const site = await stand.db.query(
+    `UPDATE sites
+     SET status = 'onboarding', installed_version = NULL, installed_sha = NULL, installed_at = NULL,
+         updated_at = now()
+     WHERE id = $1::uuid AND status = 'active' AND installed_release_id IS NULL`,
+    [siteId],
+  )
+  assert.equal(site.rowCount, 1, 'The site is back to being connected, nothing installed')
 }
 
 /** The outbox events of a site's stage, oldest first. */
@@ -176,7 +188,13 @@ export async function verifySite(stand, siteId, expect) {
     `SELECT status::text AS status, stack::text AS stack, workspace_id FROM sites WHERE id = $1::uuid`,
   )
   assert.ok(site, 'The site exists')
-  assert.equal(site.status, 'onboarding', 'The site stays onboarding after the import')
+  // Owner's decision of 26.10.2026: after a successful import the first version is the installed
+  // one and the site takes tasks; a stopped import leaves it onboarding.
+  assert.equal(
+    site.status,
+    expect.failedWith ? 'onboarding' : 'active',
+    'The site is active after a successful import, onboarding after a stopped one',
+  )
 
   const stage = await stageOf(stand, siteId)
   if (expect.failedWith) {

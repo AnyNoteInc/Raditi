@@ -1001,3 +1001,215 @@ test('local routes need their guard and never run in production; MAX_TUNNELS is 
   for (const bad of ['0', '257', '1e2', '-1', '32.5', ' 32', 'many'])
     assert.throws(() => clientEgressConfig({ ...base, MAX_TUNNELS: bad }), bad)
 })
+
+// ─── The open internet of the agent (ALLOW_PUBLIC, owner's decision of 26.10.2026) ────────────
+
+test('the open internet tunnels TLS to any public name on a TLS port, never to anything else', async () => {
+  const p = await proxy({
+    allow: [],
+    anyPublic: true,
+    names: {
+      'docs.example.org': ['93.184.216.34'],
+      'inside.example.org': ['93.184.216.34', '10.0.0.7'],
+    },
+  })
+  for (const target of ['docs.example.org:443', 'docs.example.org:8443']) {
+    const answer = await tunnel(p.port, target)
+    assert.equal(answer.status, 200, target)
+    assert.equal(await roundTrip(answer.socket, 'ping', 'docs.example.org'), 'ping')
+    answer.socket.destroy()
+  }
+  const refused = {
+    'docs.example.org:22': 'forbidden_host',
+    'docs.example.org:80': 'forbidden_host',
+    '93.184.216.34:443': 'forbidden_host',
+    'localhost:443': 'forbidden_host',
+    'vault.internal:443': 'forbidden_host',
+    'inside.example.org:443': 'forbidden_address',
+    'nowhere.example.org:443': 'resolve',
+  }
+  for (const [target, result] of Object.entries(refused)) {
+    const answer = await tunnel(p.port, target)
+    assert.equal(answer.refusal, result, target)
+    answer.socket.destroy()
+  }
+  // The log names the public host asked for, never what a refused target said.
+  for (let i = 0; i < 50 && p.logs.length < 9; i++) await delay(10)
+  assert.ok(p.logs.some((entry) => entry.host === 'docs.example.org:443' && entry.result === 'ok'))
+  assert.ok(!JSON.stringify(p.logs).includes('93.184.216.34:443'))
+  assert.ok(!JSON.stringify(p.logs).includes('localhost'))
+  assert.deepEqual(
+    p.dialed.map(({ port }) => port),
+    [443, 8443],
+  )
+})
+
+test('the open internet keeps the SNI of the target and takes ECH with that outer name', async () => {
+  const p = await proxy({
+    allow: [],
+    anyPublic: true,
+    names: { 'docs.example.org': ['93.184.216.34'] },
+  })
+  const ech = extension(0xfe0d, Buffer.alloc(40, 1))
+  const answer = await tunnel(p.port, 'docs.example.org:443')
+  const hello = clientHello('docs.example.org', { extensions: [ech] })
+  const back = new Promise((resolve) => answer.socket.once('data', resolve))
+  answer.socket.write(hello)
+  assert.deepEqual(await back, hello)
+  answer.socket.destroy()
+  for (const bytes of [
+    clientHello('other.example.org', { extensions: [ech] }),
+    clientHello('docs.example.org', { extensions: [extension(0xffce, Buffer.alloc(40, 1))] }),
+    clientHello('other.example.org'),
+  ]) {
+    const refused = await tunnel(p.port, 'docs.example.org:443')
+    const closed = new Promise((resolve) => refused.socket.once('close', resolve))
+    refused.socket.on('error', () => {})
+    refused.socket.write(bytes)
+    await closed
+  }
+  for (let i = 0; i < 50 && p.logs.filter((e) => e.result === 'forbidden_sni').length < 3; i++)
+    await delay(10)
+  assert.equal(p.logs.filter((entry) => entry.result === 'forbidden_sni').length, 3)
+  // The parser itself: ECH gives its outer name only when asked to.
+  assert.deepEqual(clientHelloServerName(hello), { state: 'refused' })
+  assert.deepEqual(clientHelloServerName(hello, { echOuterName: true }), {
+    state: 'name',
+    name: 'docs.example.org',
+  })
+})
+
+// ─── ECH to a listed host (ECH_OUTER_NAME: the browser of a task, owner's decision of 26.10.2026)
+
+test('ECH_OUTER_NAME takes ECH whose outer name is the listed host, and nothing more', async () => {
+  const p = await proxy({
+    allow: ['site.example.ru:443'],
+    echOuterName: true,
+    names: { 'site.example.ru': ['93.184.216.34'], 'docs.example.org': ['93.184.216.34'] },
+  })
+  const ech = extension(0xfe0d, Buffer.alloc(40, 1))
+  const answer = await tunnel(p.port, 'site.example.ru:443')
+  const hello = clientHello('site.example.ru', { extensions: [ech] })
+  const back = new Promise((resolve) => answer.socket.once('data', resolve))
+  answer.socket.write(hello)
+  assert.deepEqual(await back, hello)
+  answer.socket.destroy()
+  // Another outer name, the draft ESNI: refused; an unlisted host is still no target.
+  for (const bytes of [
+    clientHello('other.example.org', { extensions: [ech] }),
+    clientHello('site.example.ru', { extensions: [extension(0xffce, Buffer.alloc(40, 1))] }),
+  ]) {
+    const refused = await tunnel(p.port, 'site.example.ru:443')
+    const closed = new Promise((resolve) => refused.socket.once('close', resolve))
+    refused.socket.on('error', () => {})
+    refused.socket.write(bytes)
+    await closed
+  }
+  for (let i = 0; i < 50 && p.logs.filter((e) => e.result === 'forbidden_sni').length < 2; i++)
+    await delay(10)
+  assert.equal(p.logs.filter((entry) => entry.result === 'forbidden_sni').length, 2)
+  const unlisted = await tunnel(p.port, 'docs.example.org:443')
+  assert.equal(unlisted.refusal, 'forbidden_host')
+  unlisted.socket.destroy()
+  // Plain HTTP of a public origin stays closed: the switch is about ECH only.
+  assert.equal((await viaProxy(p.port, 'http://docs.example.org/')).status, 405)
+})
+
+test('ECH_OUTER_NAME is a switch of the configuration, on with the open internet', () => {
+  const base = {
+    LISTEN_HOST: '10.200.0.5',
+    LISTEN_PORT: '3128',
+    ALLOWED_HOSTS: '["site.example.ru:443"]',
+  }
+  assert.equal(clientEgressConfig(base).echOuterName, false)
+  assert.equal(clientEgressConfig({ ...base, ECH_OUTER_NAME: '1' }).echOuterName, true)
+  assert.equal(clientEgressConfig({ ...base, ECH_OUTER_NAME: '1' }).anyPublic, false)
+  assert.equal(clientEgressConfig({ ...base, ALLOW_PUBLIC: '1' }).echOuterName, true)
+  for (const bad of ['yes', 'true', '2'])
+    assert.throws(() => clientEgressConfig({ ...base, ECH_OUTER_NAME: bad }), bad)
+})
+
+test('a list without the open internet still refuses an unlisted public host', async () => {
+  const p = await proxy({ names: { 'docs.example.org': ['93.184.216.34'] } })
+  const answer = await tunnel(p.port, 'docs.example.org:443')
+  assert.equal(answer.refusal, 'forbidden_host')
+  answer.socket.destroy()
+  const page = await viaProxy(p.port, 'http://docs.example.org/')
+  assert.equal(page.status, 405)
+})
+
+test('the open internet forwards plain HTTP of a public origin to the address it checked', async () => {
+  const site = await localSite()
+  const p = await proxy({
+    allow: [],
+    anyPublic: true,
+    names: {
+      'docs.example.org': ['2606:4700:4700::1111', '93.184.216.34'],
+      'inside.example.org': ['10.1.2.3'],
+    },
+    dial: ({ address, port }) => {
+      p.dialed.push({ address, port })
+      return connect({ host: '127.0.0.1', port: site.port })
+    },
+  })
+  const page = await viaProxy(p.port, 'http://docs.example.org/guide?x=1', {
+    method: 'POST',
+    body: 'hello',
+    headers: { 'proxy-authorization': 'Basic c2VjcmV0' },
+  })
+  assert.equal(page.status, 201)
+  assert.equal(page.connection, 'close')
+  assert.equal(page.body, 'site POST /guide?x=1')
+  // The Host of the request, the path in origin form, nothing for the proxy passed on.
+  assert.deepEqual(site.seen.at(-1), {
+    method: 'POST',
+    url: '/guide?x=1',
+    host: 'docs.example.org',
+    authorization: null,
+    body: 'hello',
+  })
+  // IPv4 first, the checked address itself.
+  assert.deepEqual(p.dialed.at(-1), { address: '93.184.216.34', port: 80 })
+  assert.equal((await viaProxy(p.port, 'http://docs.example.org:8080/')).status, 201)
+
+  const refusals = [
+    [await viaProxy(p.port, 'http://inside.example.org/'), 403, 'forbidden_address'],
+    [await viaProxy(p.port, 'http://nowhere.example.org/'), 502, 'resolve'],
+    [await viaProxy(p.port, 'http://docs.example.org:8081/'), 405, 'method'],
+    [await viaProxy(p.port, 'http://93.184.216.34/'), 405, 'method'],
+    [
+      await viaProxy(p.port, 'http://docs.example.org/', { host: 'other.example.org' }),
+      405,
+      'method',
+    ],
+    [await viaProxy(p.port, 'http://user:pw@docs.example.org/'), 405, 'method'],
+    [await viaProxy(p.port, 'http://docs.example.org/', { method: 'TRACE' }), 405, 'method'],
+  ]
+  for (const [answer, status, refusal] of refusals) {
+    assert.equal(answer.status, status, refusal)
+    assert.equal(answer.refusal, refusal)
+  }
+  assert.ok(
+    p.logs.some((entry) => entry.event === 'request' && entry.host === 'docs.example.org:80'),
+  )
+  assert.doesNotMatch(JSON.stringify(p.logs), /guide|hello|c2VjcmV0|other\.example/)
+})
+
+test('the open internet is a switch of the configuration, with or without listed hosts', () => {
+  const base = { LISTEN_HOST: '10.200.0.5', LISTEN_PORT: '3128' }
+  const open = clientEgressConfig({ ...base, ALLOW_PUBLIC: '1' })
+  assert.equal(open.anyPublic, true)
+  assert.deepEqual([...open.allow], [])
+  assert.equal(
+    clientEgressConfig({ ...base, ALLOW_PUBLIC: '1', ALLOWED_HOSTS: '["a.example.ru:443"]' }).allow
+      .size,
+    1,
+  )
+  assert.equal(
+    clientEgressConfig({ ...base, ALLOWED_HOSTS: '["a.example.ru:443"]', ALLOW_PUBLIC: '0' })
+      .anyPublic,
+    false,
+  )
+  for (const bad of [{ ALLOW_PUBLIC: 'yes' }, { ALLOW_PUBLIC: 'true' }, { ALLOW_PUBLIC: '0' }])
+    assert.throws(() => clientEgressConfig({ ...base, ...bad }), JSON.stringify(bad))
+})

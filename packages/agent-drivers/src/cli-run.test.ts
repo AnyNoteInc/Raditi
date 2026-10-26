@@ -177,7 +177,7 @@ describe('per-turn files of a CLI run', () => {
       Array.from({ length: 300 }, (_, index) => [`VAR_${index}`, 'x'.repeat(8000)]),
     )
     expect(() => envFiles(many)).toThrow(expect.objectContaining({ code: 'BAD_REQUEST' }))
-    expect(() => envFiles({ SHORT_ONE: 'short' })).toThrow(
+    expect(() => envFiles({ EMPTY_ONE: '' })).toThrow(
       expect.objectContaining({ code: 'BAD_REQUEST' }),
     )
   })

@@ -145,6 +145,38 @@ export interface DatabaseCopier {
   ): Promise<DatabaseCopySummary>
 }
 
+/**
+ * A temporary database a SQL dump of the site is loaded into before the copy (owner's decision of
+ * 26.10.2026: a dump on the site's file source when its database answers only on the hosting).
+ * The copy then reads it with `DatabaseCopier` like a live database. The runtime owns nothing of
+ * the platform's state: one database per `stagingId`, removed by `remove`.
+ */
+export interface StagingDatabaseRuntime {
+  /**
+   * Starts a database from `image` (the preview's database image, by digest), loads `dump` into
+   * it as a user without administrative rights — no client command of the dump runs, no file is
+   * read or written by the server for it — and answers the access the copier connects with.
+   * Fails with `SANDBOX_COMMAND_FAILED` when the dump does not load; what it started is removed.
+   */
+  load(input: StagingDatabaseInput): Promise<StagedDatabase>
+  /** Removes the container and its data. Idempotent. */
+  remove(stagingId: string): Promise<void>
+  /** Staging databases this runtime holds and when each was made, for the garbage collector. */
+  list(): Promise<Array<{ stagingId: string; createdAt: number }>>
+}
+
+export interface StagingDatabaseInput {
+  stagingId: string
+  image: string
+  dump: AsyncIterable<Uint8Array>
+  signal?: AbortSignal
+}
+
+export interface StagedDatabase {
+  /** Where the copier connects: a loopback address of the host, a password made for this load. */
+  access: DbAccess
+}
+
 // ---------------------------------------------------------------------------------------------
 // PreviewRuntime: containers, networks and volumes of one preview
 // ---------------------------------------------------------------------------------------------

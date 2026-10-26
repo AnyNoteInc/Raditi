@@ -26,6 +26,7 @@ import {
   type TaskRequirements,
   type TurnCredentialPolicy,
   type TurnPlan,
+  type TurnSkill,
   type UnkeyedTurnRequest,
 } from '@repo/domain'
 
@@ -207,6 +208,11 @@ export interface PassFacts {
   /** The names of the client's variables the agent's commands get (Р13): never a value. */
   variables?: readonly string[]
   /**
+   * The skills of the site's agent (`site_agent_skills`, owner's request of 26.10.2026): the
+   * platform's own unless turned off, then the added ones; a turn gets them with the internet.
+   */
+  skills?: readonly TurnSkill[]
+  /**
    * What the site's adapter tells the agent of the database changes of its stack
    * (`SiteAdapter.dbPlanGuide`); absent or empty — nothing.
    */
@@ -222,6 +228,12 @@ export interface PlannerEnvironment {
   driver: AgentDriver
   backends: readonly LlmBackend[]
   runtime: SandboxRuntime
+  /**
+   * SANDBOX_INTERNET=open (owner's decisions of 26.10.2026): the agent of a turn reaches the
+   * public internet through the egress proxy and gets the site's skills — a turn in the browser
+   * too, whose admin pages stay reachable through the `web` tools alone (Б20).
+   */
+  internet: boolean
   /** The head of the default branch, read on the trusted side only for a first turn. */
   mainHead: () => Promise<string | null>
   /** The head of the task branch `agent/<taskId>`, read on the trusted side for a later turn. */
@@ -520,6 +532,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   const egress = requirements.repository ? (facts.egress ?? []) : []
   // One gateway variable holds them: more than it takes is no turn.
   if (egress.length > MAX_SANDBOX_EGRESS_HOSTS) return { kind: 'refused', code: 'technical' }
+  const internet = env.internet
+  const skills = internet ? (facts.skills ?? []) : []
 
   let start: Start | StartWithoutRepository
   let workspace: PublicationSource | undefined
@@ -577,6 +591,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         mode: 'gateway',
         routes: ['llm', 'mcp'],
         ...(egress.length ? { egress: [...egress] } : {}),
+        ...(internet ? { internet: true as const } : {}),
       },
       hardTimeoutMs: MAX_SANDBOX_TURN_MS,
     },
@@ -592,14 +607,20 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       mcp: { url: `${SANDBOX_GATEWAY_URL}/mcp` },
       // Rule 8: by what the task needs, never by its stack — the adapter's guide says the rest.
       instructions: browser?.guide
-        ? browserTaskInstructions(browser.guide)
+        ? browserTaskInstructions(
+            browser.guide,
+            internet ? { skills: skills.map((skill) => skill.name) } : null,
+          )
         : turnInstructions(
             facts.preview,
             { names: facts.variables ?? [], hosts: egress },
             facts.databaseGuide,
             facts.rules,
+            internet ? { skills: skills.map((skill) => skill.name) } : null,
           ),
-      ...(egress.length ? { egressProxy: SANDBOX_EGRESS_PROXY_URL } : {}),
+      ...(egress.length || internet ? { egressProxy: SANDBOX_EGRESS_PROXY_URL } : {}),
+      ...(internet ? { internet: true as const } : {}),
+      ...(skills.length ? { skills: [...skills] } : {}),
     },
     input: {
       prompt: browser

@@ -23,19 +23,24 @@ const choices: readonly { value: DatabaseChoice; label: string; note: string }[]
 
 export const databaseFieldId = (prefix: string, field: DatabaseField) => `${prefix}-${field}`
 
-/** «База данных»: none by default; the fields appear only for a chosen provider. */
+/**
+ * «База данных»: none by default; the fields appear only for a chosen provider. `required` — the
+ * database of a working site changes its access: «Без базы данных» is not offered.
+ */
 export function DatabaseFields({
   idPrefix,
   value,
   onChange,
   errors,
   disabled,
+  required = false,
 }: {
   idPrefix: string
   value: DatabaseDraft
   onChange: (next: DatabaseDraft) => void
   errors: FieldErrors<DatabaseField>
   disabled: boolean
+  required?: boolean
 }) {
   const id = (field: DatabaseField) => databaseFieldId(idPrefix, field)
   const set = (patch: Partial<DatabaseDraft>) => onChange({ ...value, ...patch })
@@ -58,43 +63,45 @@ export function DatabaseFields({
             gap: 1.25,
           }}
         >
-          {choices.map((choice) => {
-            const selected = value.engine === choice.value
-            return (
-              <Box
-                component="label"
-                key={choice.value}
-                sx={{
-                  minWidth: 0,
-                  minHeight: 64,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 0.5,
-                  pr: 1.5,
-                  border: '2px solid',
-                  borderColor: selected ? 'primary.main' : 'divider',
-                  borderRadius: '12px',
-                  cursor: disabled ? 'default' : 'pointer',
-                  '&:hover': disabled ? undefined : { borderColor: 'primary.main' },
-                  '&:has(.Mui-focusVisible)': {
-                    outline: '2px solid',
-                    outlineColor: 'primary.main',
-                    outlineOffset: 3,
-                  },
-                }}
-              >
-                <Radio value={choice.value} />
-                <Box sx={{ minWidth: 0, py: 1 }}>
-                  <Typography component="span" sx={{ display: 'block', fontWeight: 600 }}>
-                    {choice.label}
-                  </Typography>
-                  <Typography component="span" variant="caption" color="text.secondary">
-                    {choice.note}
-                  </Typography>
+          {(required ? choices.filter((choice) => choice.value !== 'none') : choices).map(
+            (choice) => {
+              const selected = value.engine === choice.value
+              return (
+                <Box
+                  component="label"
+                  key={choice.value}
+                  sx={{
+                    minWidth: 0,
+                    minHeight: 64,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    pr: 1.5,
+                    border: '2px solid',
+                    borderColor: selected ? 'primary.main' : 'divider',
+                    borderRadius: '12px',
+                    cursor: disabled ? 'default' : 'pointer',
+                    '&:hover': disabled ? undefined : { borderColor: 'primary.main' },
+                    '&:has(.Mui-focusVisible)': {
+                      outline: '2px solid',
+                      outlineColor: 'primary.main',
+                      outlineOffset: 3,
+                    },
+                  }}
+                >
+                  <Radio value={choice.value} />
+                  <Box sx={{ minWidth: 0, py: 1 }}>
+                    <Typography component="span" sx={{ display: 'block', fontWeight: 600 }}>
+                      {choice.label}
+                    </Typography>
+                    <Typography component="span" variant="caption" color="text.secondary">
+                      {choice.note}
+                    </Typography>
+                  </Box>
                 </Box>
-              </Box>
-            )
-          })}
+              )
+            },
+          )}
         </RadioGroup>
       </FormControl>
 

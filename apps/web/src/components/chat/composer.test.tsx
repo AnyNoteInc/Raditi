@@ -213,7 +213,9 @@ describe('the field', () => {
   it('is off with its reason, which the field and the button both carry', () => {
     showComposer({}, 'Написать можно будет, когда агент закончит или задаст вопрос.')
     expect(field().disabled).toBe(true)
-    expect(described(field())).toBe('Написать можно будет, когда агент закончит или задаст вопрос.')
+    expect(described(field())).toContain(
+      'Написать можно будет, когда агент закончит или задаст вопрос.',
+    )
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Отправить' }).disabled).toBe(true)
     type('/')
     expect(screen.queryByRole('listbox')).toBeNull()
@@ -229,14 +231,27 @@ describe('the field', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 
-  it('keeps the reminders under the field', () => {
+  it('reads the reminder about passwords with the field and shows no words under it', () => {
     showComposer()
-    expect(screen.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeTruthy()
-    expect(
-      screen.getByText(
-        'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Настройки».',
-      ),
-    ).toBeTruthy()
+    expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
+    expect(described(field())).toContain(
+      'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Переменные».',
+    )
+  })
+
+  it('stands «Остановить» in place of «Отправить» while the agent works', () => {
+    const onStop = vi.fn()
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={vi.fn(async () => true)}
+        disabledReason="Написать можно будет, когда агент закончит или задаст вопрос."
+        stop={{ onStop, available: true }}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'Отправить' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Остановить' }))
+    expect(onStop).toHaveBeenCalledTimes(1)
   })
 })
 

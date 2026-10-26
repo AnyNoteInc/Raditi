@@ -59,12 +59,19 @@ export const taskStatusLabel: Readonly<Record<TaskStatus, string>> = Object.free
   cancelled: 'Отменено',
 })
 
+/**
+ * The word of a dialog that waits for nothing — the agent answered and asked no question
+ * (`awaiting_user` after a `feed.result`; owner's answer of 26.10.2026: «ожидает ввода также не
+ * нужно», a chat like Claude Code) — in place of «Нужен ваш ответ»; the list has no hint for it.
+ */
+export const taskAnsweredLabel = 'Агент ответил'
+
 /** The second line of a dialog in the list; null — the status has none. */
 export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = Object.freeze({
   queued: null,
   preparing: null,
   running: null,
-  awaiting_user: 'Ответьте на вопрос',
+  awaiting_user: 'Ответьте агенту',
   awaiting_approval: 'Посмотрите и примените',
   deploying: null,
   verifying: null,
@@ -177,9 +184,13 @@ export const feedApprovalSiteText: Readonly<Record<ResultSite, string>> = Object
 export const feedFilesChangedText = (count: number): string =>
   `Изменено файлов: ${groupDigits(count)}`
 
-/** The third sentence of a failure and of a cancellation, by the trusted `credits`. */
+/**
+ * The third sentence of a failure and of a cancellation, by the trusted `credits`: what the pass
+ * that ended so had set aside came back — the passes before it were charged when they ended
+ * (owner's answer of 26.10.2026), so the sentence is about this request, not the whole dialog.
+ */
 export const feedCreditsText: Readonly<Record<FeedCreditsState, string>> = Object.freeze({
-  returned: 'Кредиты за эту задачу не списаны.',
+  returned: 'За этот запрос кредиты не списаны.',
   expired: 'Отложенные кредиты были из прошлого периода тарифа и в новый не переносятся.',
 })
 
@@ -369,6 +380,8 @@ export const feedRowText = Object.freeze({
 export const feedCardTitle = Object.freeze({
   question: 'Вопрос агента',
   result: taskStatusLabel.done,
+  /** A result that left the dialog open (`next: 'awaiting_user'`): the task has not ended. */
+  answer: 'Ответ агента',
   approval: 'Что изменится',
   failure: taskStatusLabel.failed,
   cancelled: taskStatusLabel.cancelled,
@@ -393,6 +406,13 @@ export const feedQuestionText = Object.freeze({
  */
 export const feedFailureKeptText = 'Изменения, готовые до этого, мы сохранили.'
 
+/**
+ * The last sentence of a result that left the dialog open (`feed.result` with `next:
+ * 'awaiting_user'`, owner's decision of 26.10.2026): nothing to release, the client writes on.
+ */
+export const feedResultOpenText =
+  'Если нужно что-то ещё, напишите — агент продолжит в этом диалоге.'
+
 /** The lines next to «Попробовать ещё» on the failure card. */
 export const feedRetryText = Object.freeze({
   button: 'Попробовать ещё',
@@ -412,10 +432,10 @@ export const feedInputText = Object.freeze({
   newDialog: 'Новый диалог',
   /** The two standing lines under the field. */
   mistakes: 'ИИ может допускать ошибки. Проверяйте важное.',
-  noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Настройки»',
+  noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Переменные»',
   /** The refusal `TASK_TEXT_HAS_SECRET`: the text stays in the field. */
   secret:
-    'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Настройки»',
+    'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»',
 })
 
 /** The message is longer than `limit` characters (`feedLimits.requestText`). */

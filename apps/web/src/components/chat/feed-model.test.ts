@@ -50,6 +50,12 @@ describe('feedEntries', () => {
     expect(liveSteps(rows, headOf({ status: 'awaiting_user', task: { turnNo: 1 } }))).toEqual([])
   })
 
+  it('puts the agent’s answer before the card of the changes it made', () => {
+    // The platform writes the candidate of a pass just before its result.
+    const rows: FeedRow[] = [requestRow('1'), candidateRow('2', 1), resultRow('3', 1)]
+    expect(feedEntries(rows, null).map((entry) => entry.key)).toEqual(['1', '3', '2'])
+  })
+
   it('never shows a stage the page does not know', () => {
     const rows: FeedRow[] = [
       requestRow('1'),

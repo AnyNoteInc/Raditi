@@ -27,7 +27,7 @@ export interface BrowserTaskFacts {
    * `objects[]` (`browserFeedObjectOf`): confirmed, unconfirmed or missing; never one it only saw.
    */
   objects: FeedObject[]
-  /** Some object of the task is confirmed on the site: the only ground for `done` (Б23). */
+  /** Some object of the task is confirmed on the site: the site changed (Б23). */
   confirmed: boolean
 }
 

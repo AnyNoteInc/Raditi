@@ -1,3 +1,4 @@
+import { wordpressPublicOriginals } from './wordpress-public-code.ts'
 import type { McpToolDescriptor, SiteAdapter } from '@repo/domain'
 import { notImplemented } from '@repo/domain'
 import { phpConfigStrings, secretValues } from './php-config.ts'
@@ -306,6 +307,7 @@ export const wordpressAdapter: SiteAdapter = {
     const values = await phpConfigStrings(read, 'wp-config.php', secretDefine, defineEnd)
     return secretValues(values.filter((value) => value !== samplePhrase))
   },
+  publicOriginals: wordpressPublicOriginals,
   agentWorkingSet: wordpressAgentWorkingSet,
   mediaRules: wordpressMediaRules,
   databaseSettings: wordpressDatabaseSettings,

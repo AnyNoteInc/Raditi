@@ -15,8 +15,16 @@ import { previewBaseDomainSchema, previewSchemes, type PreviewAddress } from './
 export const previewDefaults = Object.freeze({
   /** PREVIEW_GATEWAY_PORT: the `preview` role. */
   gatewayPort: 8090,
-  /** PREVIEW_TTL_HOURS: an unviewed preview stops after this long. */
+  /**
+   * PREVIEW_TTL_HOURS: the life of an unviewed preview of a waiting dialog — its copy is kept for
+   * a rebuild, and the reserve of a dialog with a candidate follows it (Р8).
+   */
   ttlHours: 72,
+  /**
+   * PREVIEW_IDLE_MINUTES: a served preview no one looked at and no turn of its dialog used this
+   * long stops (owner's answer of 26.10.2026); a view or the next turn starts it again.
+   */
+  idleMinutes: 30,
   /** PREVIEW_UPSTREAM_HOST: where the entry forwarders publish (loopback of core in dev). */
   upstreamHost: '127.0.0.1',
   /** RELEASE_API_PORT: the release API of core. */

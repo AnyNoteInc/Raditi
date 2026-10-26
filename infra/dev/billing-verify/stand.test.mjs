@@ -744,13 +744,13 @@ test('web’s AppRole holds the policies `sites-writer` and `workspace-provision
   const role = written.find(({ path }) => path === `auth/approle/role/${SITES_WRITER}`)
   assert.deepEqual(role.body.token_policies, [SITES_WRITER, 'workspace-provisioner'])
   assert.equal(role.body.token_no_default_policy, true)
-  // The policy itself: write with CAS and read the metadata of sites, and keep one version of a
-  // client's variable (docs/plan/53-chat-preview-release.md, Р13) — nothing else.
+  // The policy itself: write with CAS, read the metadata of sites and keep one version of each of
+  // their keys (docs/plan/53-chat-preview-release.md, Р13; «Удалить проект») — nothing else.
   assert.deepEqual(
     [...read('infra/vault/policies/sites-writer.hcl').matchAll(/^path "([^"]+)"/gm)].map(
       ([, path]) => path,
     ),
-    ['kv/data/sites/*', 'kv/metadata/sites/+/*', 'kv/metadata/sites/+/env/*'],
+    ['kv/data/sites/*', 'kv/metadata/sites/+/*'],
   )
   // And the Transit key of a workspace, made before its first task (docs/plan/57, Б32) — only.
   assert.deepEqual(

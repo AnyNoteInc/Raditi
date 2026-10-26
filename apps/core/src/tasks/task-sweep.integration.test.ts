@@ -27,7 +27,7 @@ import { sampleDriverId } from '../testing/ids.ts'
 import { TaskEventTurnJournal } from '../turns/turn-journal.ts'
 import type { CandidateBuilder } from './candidate-builder.ts'
 import { LivePasses } from './live-passes.ts'
-import { PassSettlement } from './pass-settlement.ts'
+import { CHARGE_LATER_EVENT, PassSettlement } from './pass-settlement.ts'
 import { ORPHAN_PREPARING_MS, TaskSweep } from './task-sweep.ts'
 
 // The sweep reads every task of the database: only on a disposable one (RADITI_GATEWAY_DB_TESTS).
@@ -301,7 +301,10 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       await db.taskEvent.create({ data: { taskId, type: 'turn.lifecycle', payload } })
 
     expect(await sweep().settleOrphans()).toBe(1)
-    expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('done')
+    // A pass that changed nothing leaves the dialog open (owner's decision of 26.10.2026).
+    expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+      'awaiting_user',
+    )
     expect(await db.taskEvent.count({ where: { taskId, type: 'feed.result' } })).toBe(1)
   })
 
@@ -373,6 +376,26 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     expect((await db.task.findUniqueOrThrow({ where: { id: releasing.taskId } })).status).toBe(
       'awaiting_approval',
     )
+  })
+
+  // A task is charged pass by pass (owner's answer of 26.10.2026); a pass whose usage was open
+  // when it ended left its chain active and a row for the sweep.
+  it('charges the chain a pass could not charge when it ended, and leaves a task at work alone', async () => {
+    const waiting = await dialog('awaiting_user', 1)
+    const working = await dialog('running', 1)
+    for (const { taskId } of [waiting, working])
+      await db.taskEvent.create({
+        data: { taskId, type: CHARGE_LATER_EVENT, payload: { v: 1, attempt: 1 } },
+      })
+
+    expect(await sweep().chargeLater()).toBe(1)
+
+    const statuses = async (taskId: string) =>
+      (await db.creditHold.findMany({ where: { taskId } })).map((hold) => hold.status)
+    expect(new Set(await statuses(waiting.taskId))).toEqual(new Set(['captured']))
+    expect(new Set(await statuses(working.taskId))).toEqual(new Set(['active']))
+    // Charged: the next tick finds nothing more to do.
+    expect(await sweep().chargeLater()).toBe(0)
   })
 
   it('keeps the reserve of a dialog that waits with a candidate while its preview lives', async () => {
@@ -450,6 +473,23 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     expect(await raced.extendHolds()).toBe(0)
     for (const hold of await db.creditHold.findMany({ where: { taskId } }))
       expect(hold.expiresAt.getTime()).toBe(lives.getTime())
+
+    // Stopped while no one used it (owner's answer of 26.10.2026), the preview still lives: the
+    // reserve follows it as before; one past its life does not keep it.
+    await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
+    const later = new Date(lives.getTime() + 2 * 3_600_000)
+    await db.previewEnvironment.update({
+      where: { taskId },
+      data: { status: 'expired', expiresAt: later },
+    })
+    expect(await sweep().extendHolds()).toBe(1)
+    for (const hold of await db.creditHold.findMany({ where: { taskId } }))
+      expect(hold.expiresAt.getTime()).toBe(later.getTime())
+    await db.previewEnvironment.update({
+      where: { taskId },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    })
+    expect(await sweep().extendHolds()).toBe(0)
   })
 
   it('puts again the lost job of a queued pass that waits for nothing', async () => {
@@ -624,9 +664,15 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       expect(await browserSweep({ verify }).settleOrphans()).toBe(1)
 
       expect(verify).toHaveBeenCalledExactlyOnceWith(taskId)
-      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('done')
+      // The answer leaves the dialog open, as in «Работа» (owner's answer of 26.10.2026).
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+        'awaiting_user',
+      )
       const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.result' } })
-      expect(row!.payload).toMatchObject({ objects: [{ status: 'draft', title: 'Новость' }] })
+      expect(row!.payload).toMatchObject({
+        next: 'awaiting_user',
+        objects: [{ status: 'draft', title: 'Новость' }],
+      })
     })
 
     it('ends a turn whose checkpoint recovery finished, its result read from the output', async () => {
@@ -644,12 +690,13 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
 
       expect(await browserSweep({ verify: vi.fn(async () => false) }).settleOrphans()).toBe(1)
 
-      // Nothing confirmed on the site: the client is asked to look, the attempt goes on.
+      // Nothing confirmed on the site: the agent's answer stands all the same, and the dialog
+      // stays open (owner's answer of 26.10.2026: no result needs confirming).
       expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
         'awaiting_user',
       )
-      const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.question' } })
-      expect(row!.payload).toMatchObject({ kind: 'browser', reason: 'unconfirmed' })
+      const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.result' } })
+      expect(row!.payload).toMatchObject({ next: 'awaiting_user', site: 'unchanged' })
     })
 
     it('cancels a waiting task whose reserve ran out, naming what it had saved', async () => {

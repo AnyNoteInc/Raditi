@@ -471,7 +471,10 @@ export async function readRelease(
   const release = await db.siteRelease.findFirst({
     where: {
       id: input.releaseId,
-      task: { workspace: { members: { some: { userId: input.userId } } } },
+      task: {
+        site: { deletedAt: null },
+        workspace: { members: { some: { userId: input.userId } } },
+      },
     },
     select: {
       id: true,

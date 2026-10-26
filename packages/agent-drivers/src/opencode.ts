@@ -1,6 +1,6 @@
 import { posix } from 'node:path'
 
-import type { AgentDriver, AgentEvent, RunContext } from '@repo/domain'
+import type { AgentDriver, AgentEvent, RunContext, TurnSkill } from '@repo/domain'
 import {
   badRequest,
   ENV_VALUE_MASK,
@@ -122,27 +122,84 @@ const quiet = {
 }
 
 /**
+ * The Playwright MCP server of the sandbox image (infra/sandbox/Dockerfile): a headless Chromium
+ * with a profile in memory, through the egress proxy — the sandbox has no other way out and no
+ * name server. The Chromium sandbox needs namespaces a turn's container does not grant; the
+ * container is the boundary (gVisor). Screenshots reach no model: it reads no pixels (N22).
+ */
+const playwrightHome = `${home}/playwright`
+const playwrightOutput = `${playwrightHome}/output`
+const playwrightMcp = '/usr/local/lib/raditi/agent-clis/node_modules/@playwright/mcp/cli.js'
+const playwrightBrowsers = '/opt/ms-playwright'
+
+/**
  * Only `allow` and `deny`: in `run` mode a rule that asks is rejected automatically, and a
  * rejected request ends the run with exit code 0 and no answer. The order of the keys of a
- * pattern map matters: the last matching rule wins.
+ * pattern map matters: the last matching rule wins. The fetch tool and the tools of the skills
+ * are the open internet's (owner's decision of 26.10.2026); web search stays off — it sends the
+ * query to a search service of the CLI's vendor, which the platform did not choose.
  */
-const permission = {
-  read: 'allow',
-  edit: 'allow',
-  glob: 'allow',
-  grep: 'allow',
-  list: 'allow',
-  bash: 'allow',
-  todowrite: 'allow',
-  webfetch: 'deny',
-  websearch: 'deny',
-  task: 'deny',
-  skill: 'deny',
-  question: 'deny',
-  lsp: 'deny',
-  doom_loop: 'deny',
-  external_directory: { '*': 'deny', [`${SANDBOX_INBOX}/*`]: 'allow' },
-  [`${mcpToolPrefix}*`]: 'allow',
+function permissionOf(context: Pick<RunContext, 'internet' | 'skills'>) {
+  return {
+    read: 'allow',
+    edit: 'allow',
+    glob: 'allow',
+    grep: 'allow',
+    list: 'allow',
+    bash: 'allow',
+    todowrite: 'allow',
+    webfetch: context.internet ? 'allow' : 'deny',
+    websearch: 'deny',
+    task: 'deny',
+    skill: 'deny',
+    question: 'deny',
+    lsp: 'deny',
+    doom_loop: 'deny',
+    external_directory: {
+      '*': 'deny',
+      [`${SANDBOX_INBOX}/*`]: 'allow',
+      // The page snapshots the browser skill writes, which its answers name by path.
+      ...(context.skills?.some((skill) => skill.kind === 'local')
+        ? { [`${playwrightOutput}/*`]: 'allow' }
+        : {}),
+    },
+    [`${mcpToolPrefix}*`]: 'allow',
+    ...Object.fromEntries((context.skills ?? []).map((skill) => [`${skill.name}_*`, 'allow'])),
+  }
+}
+
+function skillServer(skill: TurnSkill, proxy: string, direct: readonly string[]) {
+  if (skill.kind === 'remote')
+    return { type: 'remote', url: skill.url, enabled: true, oauth: false, timeout: MCP_TIMEOUT_MS }
+  return {
+    type: 'local',
+    command: [
+      'node',
+      playwrightMcp,
+      '--headless',
+      '--browser',
+      'chromium',
+      '--no-sandbox',
+      '--isolated',
+      '--proxy-server',
+      proxy,
+      '--proxy-bypass',
+      direct.join(','),
+      '--output-dir',
+      playwrightOutput,
+      '--viewport-size',
+      '1280x800',
+      '--image-responses',
+      'omit',
+    ],
+    environment: {
+      HOME: playwrightHome,
+      TMPDIR: playwrightHome,
+      PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsers,
+    },
+    enabled: true,
+    timeout: MCP_TIMEOUT_MS,
+  }
 }
 
 const agentPrompt =
@@ -153,13 +210,28 @@ const agentPrompt =
 function validated(context: RunContext) {
   const parsed = contextSchema.safeParse(context)
   if (!parsed.success) throw badRequest('Invalid OpenCode run context or reasoning profile')
-  const { llm, mcp } = parsed.data
+  const { llm, mcp, egressProxy, internet, skills } = parsed.data
   // The CLI replaces {env:NAME} and {file:path} in the raw text of its configuration, before it
   // is parsed: a value from the context that held one would pull a variable or a file into it.
-  if ([llm.baseUrl, llm.model, mcp.url].some((value) => /[{}]/.test(value)))
+  const texts = [llm.baseUrl, llm.model, mcp.url, egressProxy ?? '']
+  for (const skill of skills ?? []) texts.push(skill.name, skill.kind === 'remote' ? skill.url : '')
+  if (texts.some((value) => /[{}]/.test(value)))
     throw badRequest('Invalid OpenCode run context: a brace in the model or an address')
+  // The open internet goes through the egress proxy, and skills need the open internet.
+  if ((internet && !egressProxy) || (skills?.length && !internet))
+    throw badRequest('Invalid OpenCode run context: skills or the internet without the proxy')
   return parsed.data
 }
+
+/** What the commands of the agent and the CLI reach without the proxy: the gateway, loopback. */
+const directHosts = (context: Pick<RunContext, 'llm' | 'mcp'>): string[] => [
+  ...new Set([
+    new URL(context.llm.baseUrl).hostname,
+    new URL(context.mcp.url).hostname,
+    'localhost',
+    '127.0.0.1',
+  ]),
+]
 
 /**
  * The configuration of the turn's CLI, serialized from fixed keys. The two credentials are
@@ -167,15 +239,16 @@ function validated(context: RunContext) {
  * The reasoning level is not here: the gateway sets it from the profile of the turn key.
  */
 function configuration(context: RunContext): string {
-  const { llm, mcp } = validated(context)
+  const { llm, mcp, egressProxy, internet, skills } = validated(context)
   const model = `${provider}/${llm.model}`
+  const direct = directHosts(context)
   return JSON.stringify({
     model,
     small_model: model,
     default_agent: agent,
     enabled_providers: [provider],
     ...quiet,
-    permission,
+    permission: permissionOf({ internet, skills }),
     provider: {
       [provider]: {
         // The only provider package built into the binary that needs no download.
@@ -202,6 +275,11 @@ function configuration(context: RunContext): string {
         timeout: MCP_TIMEOUT_MS,
         headers: { Authorization: `Bearer {file:${mcpKey}}` },
       },
+      ...(internet && egressProxy
+        ? Object.fromEntries(
+            (skills ?? []).map((skill) => [skill.name, skillServer(skill, egressProxy, direct)]),
+          )
+        : {}),
     },
     agent: {
       [agent]: { mode: 'primary', description: 'Raditi website changes', prompt: agentPrompt },
@@ -233,9 +311,11 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
     cliVersion: OPENCODE_CLI_VERSION,
     capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
     async prepare(context) {
-      const { llm, mcp, nativeSessionId, envValues, egressProxy } = validated(context)
+      const { llm, mcp, nativeSessionId, envValues, egressProxy, internet, skills } =
+        validated(context)
       const variables = Object.keys(envValues ?? {}).sort()
       const variableFiles = envFiles(envValues).map((_, index) => envKey(index))
+      const browser = internet && skills?.some((skill) => skill.kind === 'local')
       return {
         context,
         files: [
@@ -244,6 +324,9 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
             content: configuration(context),
             mode: 0o600,
           },
+          // The home of the skill's browser: its profile in memory, its temporary files and
+          // screenshots here, outside the snapshot of the session.
+          ...(browser ? [{ path: `${playwrightOutput}/.keep`, content: '', mode: 0o600 }] : []),
           // The CLI rebuilds its system prompt from this file on every request, so a resumed
           // session gets the instructions of the current turn.
           { path: instructionsPath, content: context.instructions, mode: 0o600 },
@@ -301,15 +384,9 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
               variables: variables.length ? { paths: variableFiles, names: variables } : null,
               shellEnv,
               egressProxy: egressProxy ?? null,
+              internet: internet === true,
               // The gateway of the sandbox stays direct for whatever the agent's commands call.
-              noProxy: [
-                ...new Set([
-                  new URL(llm.baseUrl).hostname,
-                  new URL(mcp.url).hostname,
-                  'localhost',
-                  '127.0.0.1',
-                ]),
-              ],
+              noProxy: directHosts(context),
               sessionDatabase: `${home}/${sessionFiles[0]}`,
               sessionFiles: sessionFiles.map((path) => `${home}/${path}`),
               mask: ENV_VALUE_MASK,

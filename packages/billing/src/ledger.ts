@@ -37,10 +37,13 @@ export const ledgerKeys = {
   tariffExpiry: (subscriptionId: string, periodEnd: Date) =>
     `sub:${subscriptionId}:${periodEnd.getTime()}:expire`,
   /**
-   * What a done task is charged on one account, from the credits the account has for it at the
-   * moment of the charge: one row per task and account, whatever attempts reserved there.
+   * What a chain of attempts of a task is charged on one account, from the credits the account
+   * has for it at the moment of the charge: one row per chain — named by its first attempt — and
+   * account, whatever attempts of the chain reserved there. A task is charged pass by pass since
+   * 26.10.2026; a charge before then is one row per task and account, `task:<taskId>:charge:<accountId>`.
    */
-  taskCharge: (taskId: string, accountId: string) => `task:${taskId}:charge:${accountId}`,
+  taskCharge: (taskId: string, attempt: number, accountId: string) =>
+    `task:${taskId}:${attempt}:charge:${accountId}`,
   /**
    * What a done task is charged from a tariff reserve whose period has ended, or whose tariff
    * no longer takes tasks: the task was started on those credits, and the row pays first.

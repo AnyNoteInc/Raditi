@@ -13,6 +13,7 @@ import {
   browserNavigationAllowed,
   browserObservationLimits,
   browserPageShown,
+  browserScreenshotLimits,
   browserTaskError,
   browserToolResultSchema,
   browserToolLimits,
@@ -99,6 +100,19 @@ export interface SessionContext {
       siteId: string
       attachmentIds: readonly string[]
     }): Promise<BrowserFile[]>
+  }
+  /**
+   * Snapshots for the client (`web_screenshot`): the bytes into the inbox under the task, then
+   * the row of the dialog that shows it; answers its number among the task's snapshots.
+   */
+  screenshots: {
+    save(input: {
+      taskId: string
+      sessionId: string
+      bytes: Uint8Array
+      width: number
+      height: number
+    }): Promise<{ number: number }>
   }
   metrics: BrowserWorkerMetrics
   settings: SessionSettings
@@ -1039,6 +1053,25 @@ export class WorkerSession {
         this.#help = help
         this.#publish()
         return this.#checked({ tool: 'web_help', requested: true, reason: action.reason })
+      }
+      case 'web_screenshot': {
+        // Taken only while the agent holds the browser, and kept only when it still does: a
+        // snapshot never shows what the client typed in their own turn (Б15–Б17).
+        const epoch = this.#control.controlEpoch
+        const shot = await browser.screenshot({
+          qualities: browserScreenshotLimits.qualities,
+          maxBytes: browserScreenshotLimits.bytes,
+        })
+        if (this.#control.controlEpoch !== epoch || this.#control.controller !== 'agent')
+          throw browserTaskError('BROWSER_USER_IN_CONTROL')
+        const { number } = await this.#context.screenshots.save({
+          taskId: this.taskId,
+          sessionId: this.id,
+          bytes: shot.bytes,
+          width: shot.width,
+          height: shot.height,
+        })
+        return this.#checked({ tool: 'web_screenshot', page: shot.page, attached: true, number })
       }
       case 'web_verify': {
         const objects = await this.#verifyAll(browser)

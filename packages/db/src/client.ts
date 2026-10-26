@@ -48,13 +48,30 @@ export function createPrismaClient({
   })
 }
 
-// Survives module reloads in dev (Next.js HMR) so connections are not leaked.
-const globalForPrisma = globalThis as typeof globalThis & { __raditiPrisma?: PrismaClient }
+// Survives module reloads in dev (Next.js HMR) so connections are not leaked. Outside production
+// a client is kept per generated class: `prisma generate` under a running `next dev` reloads the
+// generated client as a new class, and an instance of the old one would go on refusing the new
+// schema («Unknown argument») until the server is restarted. The layers of a Next bundle (RSC and
+// SSR) may each hold a class of their own, so no client is closed for another — a regenerated
+// schema leaves the old one idle until the process ends. Production has one client, as before.
+const globalForPrisma = globalThis as typeof globalThis & {
+  __raditiPrisma?: PrismaClient
+  __raditiPrismaByClass?: Map<typeof PrismaClient, PrismaClient>
+}
 
 /** The process-wide client; reads DATABASE_URL on first use, not on import. */
 export function getPrisma(): PrismaClient {
-  globalForPrisma.__raditiPrisma ??= createPrismaClient(dbConfigFromEnv(process.env))
-  return globalForPrisma.__raditiPrisma
+  if (process.env.NODE_ENV === 'production') {
+    globalForPrisma.__raditiPrisma ??= createPrismaClient(dbConfigFromEnv(process.env))
+    return globalForPrisma.__raditiPrisma
+  }
+  const clients = (globalForPrisma.__raditiPrismaByClass ??= new Map())
+  let client = clients.get(PrismaClient)
+  if (client === undefined) {
+    client = createPrismaClient(dbConfigFromEnv(process.env))
+    clients.set(PrismaClient, client)
+  }
+  return client
 }
 
 /**

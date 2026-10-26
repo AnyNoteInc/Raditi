@@ -160,6 +160,14 @@ const undoInstalled = {
   records: { returned: 2, kept: 1 },
 }
 
+const screenshot = {
+  v: 1,
+  screenshotId: '0199a3f2-0000-7000-8000-0000000000d1',
+  number: 1,
+  width: 1280,
+  height: 800,
+}
+
 const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.request': [
     first,
@@ -205,6 +213,7 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { ...undoInstalled, stage: 'rolled_back', reason: 'site_check' },
     { ...undoInstalled, stage: 'refused', reason: 'undo_outdated' },
   ],
+  'feed.screenshot': [screenshot, { ...screenshot, number: 50 }],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -216,7 +225,7 @@ const shown = (type: FeedEventType, { v: _v, ...fields }: Record<string, unknown
 })
 
 describe('feed vocabulary', () => {
-  it('lists the six types of the design and the four of a release, all under the feed prefix', () => {
+  it('lists the six types of the design, the four of a release and the snapshot, all under the feed prefix', () => {
     expect(feedEventTypes).toEqual([
       'feed.request',
       'feed.step',
@@ -229,6 +238,7 @@ describe('feed vocabulary', () => {
       'feed.release',
       'feed.update',
       'feed.undo',
+      'feed.screenshot',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -582,7 +592,7 @@ describe('feed.request', () => {
     expect(accepts('feed.request', { ...answer, text: marks })).toBe(false)
     expect(performance.now() - started).toBeLessThan(1000)
     // A text of exactly the limit is still read.
-    expect(text(`${'я'.repeat(3990)} Qwerty123`)).toBe(false)
+    expect(text(`${'я'.repeat(3990)} Qw3rty!x`)).toBe(false)
     expect(text(`a${'\u0301\u0323'.repeat(1999)}я`)).toBe(true)
   })
 
@@ -822,15 +832,16 @@ describe('feed.result', () => {
   })
 
   it('closes its enums', () => {
-    expect(feedResultNexts).toEqual(['done', 'awaiting_approval'])
-    for (const next of ['awaiting_user', 'failed', 'cancelled', 'deploying', 'queued'])
+    expect(feedResultNexts).toEqual(['done', 'awaiting_approval', 'awaiting_user'])
+    for (const next of ['failed', 'cancelled', 'deploying', 'queued'])
       expect(accepts('feed.result', { ...result, next })).toBe(false)
     for (const site of ['unchanged', 'changed', 'check'])
       expect(accepts('feed.result', { ...result, site })).toBe(true)
     // A result never claims a restore.
     expect(accepts('feed.result', { ...result, site: 'restored' })).toBe(false)
     expect(accepts('feed.result', { ...result, next: 'awaiting_approval' })).toBe(true)
-    expect(accepts('feed.result', { ...result, next: 'awaiting_user' })).toBe(false)
+    // A pass that changed nothing leaves the dialog open (owner's decision of 26.10.2026).
+    expect(accepts('feed.result', { ...result, next: 'awaiting_user' })).toBe(true)
     expect(accepts('feed.result', { ...result, changeType: 'deploy' })).toBe(false)
     expect(accepts('feed.result', { ...result, risk: 'none' })).toBe(false)
     expect(accepts('feed.result', { ...result, needsApproval: 'yes' })).toBe(false)
@@ -1038,6 +1049,11 @@ describe('reading stored rows', () => {
         { ...undoInstalled, stage: 7 },
         { ...undoInstalled, returnsTo: undefined },
         { ...undoInstalled, records: { returned: -1, kept: 0 } },
+      ],
+      'feed.screenshot': [
+        { ...screenshot, screenshotId: 'снимок' },
+        { ...screenshot, number: 0 },
+        { ...screenshot, width: undefined },
       ],
     }
     for (const type of feedEventTypes)
@@ -1287,6 +1303,8 @@ describe('task head', () => {
     expect(feedTaskHeadSchema.parse(head)).toEqual({
       ...head,
       requirements: { repository: true, browser: false },
+      // A head written before the choice of reasoning reads as «Высокое».
+      effort: 'high',
     })
     for (const status of taskStatuses)
       expect(feedTaskHeadSchema.safeParse({ ...head, status }).success).toBe(true)

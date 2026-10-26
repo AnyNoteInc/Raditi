@@ -193,7 +193,8 @@ for (const scheme of ['light', 'dark'] as const) {
           const current = navigation.locator('[aria-current="page"]')
           await expect(current).toHaveCount(1)
           await expect(current).toHaveText('Обзор')
-          await expect(navigation.locator(CLOSED)).toHaveCount(phone ? 3 : 5)
+          // Every section but «Обзор»: «Переменные» is one of them since 26.10.2026.
+          await expect(navigation.locator(CLOSED)).toHaveCount(phone ? 3 : 6)
 
           const overflow = await page.evaluate(
             () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -207,7 +208,7 @@ for (const scheme of ['light', 'dark'] as const) {
           await page.getByRole('button', { name: 'Ещё' }).click()
           const more = page.getByRole('navigation', { name: 'Ещё разделы' })
           await expect(more.getByRole('link', { name: 'К проектам' })).toBeVisible()
-          await expect(more.locator(CLOSED)).toHaveCount(2)
+          await expect(more.locator(CLOSED)).toHaveCount(3)
           await expect(more.locator('[aria-current]')).toHaveCount(0)
           expect(await lowTargets(more)).toEqual([])
           expect(await lowTargets(more, CLOSED)).toEqual([])

@@ -131,6 +131,14 @@ function fakeDb() {
     },
     siteCodeSource: { create: vi.fn().mockResolvedValue({}) },
     siteDatabase: { create: vi.fn().mockResolvedValue({}) },
+    siteEnvVar: {
+      findMany: vi.fn().mockResolvedValue([]),
+      createMany: vi.fn(async ({ data }: { data: unknown[] }) => {
+        order.push('variables')
+        return { count: data.length }
+      }),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     outboxEvent: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
   }
@@ -194,6 +202,12 @@ const sitePayload = (siteId: string, overrides: Record<string, unknown> = {}) =>
   ...overrides,
 })
 
+/** The writes of the accesses themselves, without the variables they also become. */
+const accessWrites = (fake: { secrets: { writes: { path: string }[] } }) =>
+  fake.secrets.writes.filter(({ path }) => !path.includes('/env/')) as ReturnType<
+    typeof fakeSiteConnections
+  >['secrets']['writes']
+
 describe('project.create, the last step of the wizard', () => {
   it('checks both accesses again with the confirmed key, writes Vault, then the transaction', async () => {
     const { prisma, order, tx } = fakeDb()
@@ -217,7 +231,24 @@ describe('project.create, the last step of the wizard', () => {
     })
     // The lock of the user's row is taken again by the personal workspace: the steps, not the calls.
     const steps = order.filter((step, index) => step !== order[index - 1])
-    expect(steps).toEqual(['claim', 'vault ssh', 'vault db', 'transaction', 'lock', 'site'])
+    expect(steps).toEqual([
+      'claim',
+      'vault ssh',
+      'vault db',
+      'vault SFTP_HOST',
+      'vault SFTP_PORT',
+      'vault SFTP_USER',
+      'vault SFTP_PASSWORD',
+      'vault SITE_DB_HOST',
+      'vault SITE_DB_PORT',
+      'vault SITE_DB_NAME',
+      'vault SITE_DB_USER',
+      'vault SITE_DB_PASSWORD',
+      'transaction',
+      'lock',
+      'site',
+      'variables',
+    ])
     // A passed step of the wizard proves nothing now: create requires the key it confirmed.
     expect(fake.sourceChecks).toHaveLength(1)
     expect(fake.sourceChecks[0]!.context).toMatchObject({
@@ -229,7 +260,11 @@ describe('project.create, the last step of the wizard', () => {
       address: '127.0.0.1',
     })
     expect(fake.databaseChecks).toHaveLength(1)
-    expect(fake.secrets.writes.map(({ path, cas, version }) => [path, cas, version])).toEqual([
+    expect(
+      fake.secrets.writes
+        .filter(({ path }) => !path.includes('/env/'))
+        .map(({ path, cas, version }) => [path, cas, version]),
+    ).toEqual([
       [`kv/sites/${siteId}/ssh`, 0, 1],
       [`kv/sites/${siteId}/db`, 0, 1],
     ])
@@ -249,7 +284,11 @@ describe('project.create, the last step of the wizard', () => {
 
     await createCaller(context(prisma, fake.services)).project.create(input)
 
-    expect(fake.secrets.writes.map(({ cas, version }) => [cas, version])).toEqual([
+    expect(
+      fake.secrets.writes
+        .filter(({ path }) => !path.includes('/env/'))
+        .map(({ cas, version }) => [cas, version]),
+    ).toEqual([
       [3, 4],
       [0, 1],
     ])
@@ -267,6 +306,92 @@ describe('project.create, the last step of the wizard', () => {
         keyVersion: 1,
       }),
     ])
+  })
+
+  it('makes the accesses variables of the site: one version each, rows for the agent and the preview, never the folder', async () => {
+    const { prisma, order, tx } = fakeDb()
+    const fake = connections(order)
+    tx.workspace.findFirst.mockImplementation(async ({ where }: { where: { id?: string } }) =>
+      where.id === undefined ? null : ({ id: where.id, dataClass: 'synthetic' } as never),
+    )
+    const input = siteCreateInput({ source: ftpSource(), database: mysqlDatabase() })
+    const siteId = siteIdForRequest(user.id, input.requestKey)
+
+    await createCaller(context(prisma, fake.services)).project.create(input)
+
+    const variables = fake.secrets.writes.filter(({ path }) => path.includes('/env/'))
+    expect(variables.map(({ path }) => path.split('/').at(-1))).toEqual([
+      'FTP_HOST',
+      'FTP_PORT',
+      'FTP_USER',
+      'FTP_PASSWORD',
+      'SITE_DB_HOST',
+      'SITE_DB_PORT',
+      'SITE_DB_NAME',
+      'SITE_DB_USER',
+      'SITE_DB_PASSWORD',
+    ])
+    expect(variables.every(({ path }) => path.startsWith(`kv/sites/${siteId}/env/`))).toBe(true)
+    expect(variables.find(({ path }) => path.endsWith('/FTP_PASSWORD'))!.data).toEqual({
+      value: SECRET_VALUES.sourcePassword,
+    })
+    // One version of each key is kept, as «Переменные» keep it.
+    const options = fake.secrets.kvWrite.mock.calls
+      .filter(([path]) => path.includes('/env/'))
+      .map(([, , options]) => options)
+    expect(options.every((option) => option?.maxVersions === 1)).toBe(true)
+    const rows = tx.siteEnvVar.createMany.mock.calls[0]![0].data as Record<string, unknown>[]
+    expect(rows).toHaveLength(9)
+    expect(rows[0]).toEqual({
+      siteId,
+      name: 'FTP_HOST',
+      hosts: [],
+      toAgent: true,
+      toPreview: true,
+      agentConsentAt: expect.any(Date),
+      agentConsentBy: user.id,
+      keyVersion: 1,
+      createdBy: user.id,
+    })
+    // No row holds a value.
+    expect(JSON.stringify(rows)).not.toContain(SECRET_VALUES.sourcePassword)
+  })
+
+  it('keeps the variables of a workspace of real client data from the agent', async () => {
+    const { prisma, order, tx } = fakeDb()
+    const fake = connections(order)
+    tx.workspace.findFirst.mockImplementation(async ({ where }: { where: { id?: string } }) =>
+      where.id === undefined ? null : ({ id: where.id, dataClass: 'client' } as never),
+    )
+
+    await createCaller(context(prisma, fake.services)).project.create(
+      siteCreateInput({ source: ftpSource() }),
+    )
+
+    const rows = tx.siteEnvVar.createMany.mock.calls[0]![0].data as Record<string, unknown>[]
+    expect(rows.map(({ toAgent, agentConsentAt }) => [toAgent, agentConsentAt])).toEqual(
+      rows.map(() => [false, null]),
+    )
+  })
+
+  it('writes no row of a site when a variable cannot be written, and logs the secrets left', async () => {
+    const { prisma, order, db } = fakeDb()
+    const fake = connections(order)
+    const write = fake.secrets.kvWrite.getMockImplementation()!
+    fake.secrets.kvWrite.mockImplementation(async (path, ...rest) => {
+      if (path.endsWith('/env/SFTP_PASSWORD')) throw vaultUnavailable()
+      return write(path, ...rest)
+    })
+    const input = siteCreateInput()
+
+    await expect(
+      createCaller(context(prisma, fake.services)).project.create(input),
+    ).rejects.toMatchObject({ cause: { code: 'SITE_CONNECTION_UNAVAILABLE' } })
+    expect(db.writeTransaction).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      `site_connection_orphan site=${siteIdForRequest(user.id, input.requestKey)}`,
+    )
+    expect(order.at(-1)).toBe('release')
   })
 
   it('queues the first import with an outbox event of ids only and audits kinds only', async () => {
@@ -1105,10 +1230,28 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
     // The transaction took the claim with it.
     expect(rows.claims).toEqual([])
     // Vault holds the values; the versions in the references are the ones it gave.
-    expect(fake.secrets.writes.map(({ path, version }) => [path, version])).toEqual([
+    expect(accessWrites(fake).map(({ path, version }) => [path, version])).toEqual([
       [`kv/sites/${siteId}/ssh`, 1],
       [`kv/sites/${siteId}/db`, 1],
     ])
+    // The accesses are the site's variables too: a row of each, no value in any.
+    expect(
+      (await db.siteEnvVar.findMany({ where: { siteId }, orderBy: { name: 'asc' } })).map(
+        ({ name, keyVersion, toPreview }) => [name, keyVersion, toPreview],
+      ),
+    ).toEqual(
+      [
+        'SFTP_HOST',
+        'SFTP_PASSWORD',
+        'SFTP_PORT',
+        'SFTP_USER',
+        'SITE_DB_HOST',
+        'SITE_DB_NAME',
+        'SITE_DB_PASSWORD',
+        'SITE_DB_PORT',
+        'SITE_DB_USER',
+      ].map((name) => [name, 1, true]),
+    )
     expect(fake.secrets.writes[0]!.data).toMatchObject({
       username: SECRET_VALUES.sourceUser,
       password: SECRET_VALUES.sourcePassword,
@@ -1155,7 +1298,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
     expect(rows.refs.map(({ kind }) => kind)).toEqual(['ftp'])
     expect(rows.source).toMatchObject({ kind: 'ftp', tls: 'verified', hostKey: null })
     expect(rows.audit[0]!.meta).toEqual({ source: 'ftp', database: null })
-    expect(fake.secrets.writes.map(({ path }) => path)).toEqual([`kv/sites/${siteId}/ftp`])
+    expect(accessWrites(fake).map(({ path }) => path)).toEqual([`kv/sites/${siteId}/ftp`])
   })
 
   it('answers the same request again with the same project, without checks or writes', async () => {
@@ -1164,12 +1307,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
     const first = await caller.project.create(input)
     const before = await rowsOf(siteIdForRequest(owner.id, input.requestKey))
     const checks = fake.sourceChecks.length
+    const writes = fake.secrets.writes.length
 
     const again = await caller.project.create(input)
 
     expect(again).toEqual(first)
     expect(fake.sourceChecks).toHaveLength(checks)
-    expect(fake.secrets.writes).toHaveLength(2)
+    expect(accessWrites(fake)).toHaveLength(2)
+    expect(fake.secrets.writes).toHaveLength(writes)
     expect(await rowsOf(siteIdForRequest(owner.id, input.requestKey))).toEqual(before)
     expect(await caller.project.list()).toHaveLength(1)
   })
@@ -1207,7 +1352,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
     await expect(first).resolves.toMatchObject({ outcome: 'created' })
 
     const siteId = siteIdForRequest(owner.id, input.requestKey)
-    expect(fake.secrets.writes.map(({ path }) => path)).toEqual([`kv/sites/${siteId}/ssh`])
+    expect(accessWrites(fake).map(({ path }) => path)).toEqual([`kv/sites/${siteId}/ssh`])
     expect((await rowsOf(siteId)).stages).toHaveLength(1)
     expect(await caller.project.list()).toHaveLength(1)
   })
@@ -1286,7 +1431,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
       cause: { code: 'PROJECT_ALREADY_EXISTS' },
     })
     expect(warn).toHaveBeenCalledWith(`site_connection_orphan site=${siteId}`)
-    expect(fake.secrets.writes.map(({ path, version }) => [path, version])).toEqual([
+    expect(accessWrites(fake).map(({ path, version }) => [path, version])).toEqual([
       [`kv/sites/${siteId}/ssh`, 1],
     ])
     const left = await rowsOf(siteId)
@@ -1297,7 +1442,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
     // The other user leaves; the same request goes through and writes version 2 over the orphan.
     await db.member.deleteMany({ where: { userId: owner.id } })
     await expect(caller.project.create(input)).resolves.toMatchObject({ outcome: 'created' })
-    expect(fake.secrets.writes.at(-1)).toMatchObject({ cas: 1, version: 2 })
+    expect(accessWrites(fake).at(-1)).toMatchObject({ cas: 1, version: 2 })
     expect((await rowsOf(siteId)).refs).toEqual([expect.objectContaining({ keyVersion: 2 })])
   })
 

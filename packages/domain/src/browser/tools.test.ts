@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { isDomainError } from '../errors.ts'
 import {
+  browserTaskScreenshotKey,
   BROWSER_TOOL_RESPONSE_MAX_BYTES,
   browserActionSchema,
   browserTaskCodeNames,
@@ -13,6 +14,7 @@ import {
   isBrowserKeyCombo,
   type BrowserToolResult,
 } from './tools.ts'
+import { browserScreenshotLimits } from './session.ts'
 
 const attachment = '0196abcd-0000-7000-8000-0000000000a1'
 const page = {
@@ -57,6 +59,7 @@ const valid: Record<(typeof browserToolNames)[number], Record<string, unknown>[]
   ],
   web_help: [{ reason: 'login', message: 'Войдите в админку сайта, пожалуйста.' }],
   web_verify: [{}, { expect: 'publish' }],
+  web_screenshot: [{}],
 }
 
 const invalid: Record<(typeof browserToolNames)[number], Record<string, unknown>[]> = {
@@ -118,11 +121,13 @@ const invalid: Record<(typeof browserToolNames)[number], Record<string, unknown>
     { reason: 'login', message: 'x'.repeat(501) },
   ],
   web_verify: [{ expect: 'trash' }, { objectId: '12' }],
+  // Nothing to choose: no element, no area, no full page.
+  web_screenshot: [{ fullPage: true }, { ref: 'e1' }],
 }
 
 describe('arguments of the web tools', () => {
-  it('names thirteen tools of the family', () => {
-    expect(browserToolNames).toHaveLength(13)
+  it('names fourteen tools of the family', () => {
+    expect(browserToolNames).toHaveLength(14)
     expect(Object.keys(browserToolArgumentSchemas).sort()).toEqual([...browserToolNames].sort())
   })
 
@@ -192,6 +197,7 @@ describe('results of the web tools', () => {
       { tool: 'web_dialog', page },
       { tool: 'web_wait', page, matched: false },
       { tool: 'web_help', requested: true, reason: 'captcha' },
+      { tool: 'web_screenshot', page, attached: true, number: 3 },
       {
         tool: 'web_verify',
         matched: true,
@@ -294,5 +300,28 @@ describe('browserTaskCodes', () => {
     expect(error.code).toBe('BROWSER_USER_IN_CONTROL')
     expect(error.httpStatus).toBe(409)
     expect(error.message).toBe(browserTaskCodes.BROWSER_USER_IN_CONTROL.message)
+  })
+})
+
+describe('a snapshot of a task for the client', () => {
+  it('lives in the inbox under its task, by two ids and nothing else', () => {
+    const task = '0199A3F2-0000-7000-8000-0000000000B1'
+    const shot = '0199a3f2-0000-7000-8000-0000000000c1'
+    expect(browserTaskScreenshotKey(task, shot)).toBe(
+      `screenshots/${task.toLowerCase()}/${shot}.jpg`,
+    )
+    for (const [taskId, screenshotId] of [
+      ['../inbox', shot],
+      [task, 'x.jpg'],
+    ] as const)
+      expect(() => browserTaskScreenshotKey(taskId, screenshotId)).toThrow()
+  })
+
+  it('is a JPEG of at most a mebibyte, at most fifty to a task', () => {
+    expect(browserScreenshotLimits).toEqual({
+      qualities: [80, 60, 40],
+      bytes: 1024 * 1024,
+      perTask: 50,
+    })
   })
 })

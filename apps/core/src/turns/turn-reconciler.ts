@@ -20,6 +20,11 @@ export class TurnReconciler {
     private readonly leases: SiteLeaseStore,
     /** Recovery moves a turn to a newer epoch; its container keeps the epoch it was created with. */
     private readonly assignments: Pick<TurnAssignmentStore, 'unfinished'>,
+    /**
+     * Containers this process holds whatever their labels say: a warm one waiting for the next
+     * turn of its task, or taken by that turn (spec §8, «Тёплая песочница»).
+     */
+    private readonly held: (containerId: string) => boolean = () => false,
   ) {}
 
   async reconcile(): Promise<ReconcileResult> {
@@ -33,6 +38,10 @@ export class TurnReconciler {
       return result
     }
     for (const candidate of candidates) {
+      if (this.held(candidate.id)) {
+        result.preserved.push(candidate.id)
+        continue
+      }
       try {
         const authority = await this.leases.inspect(candidate.labels.siteId)
         if (!this.stale(candidate, authority, owners)) {
@@ -52,7 +61,10 @@ export class TurnReconciler {
           result.uncertain.push(candidate.id)
           continue
         }
-        if (!this.stale(candidate, await this.leases.inspect(candidate.labels.siteId), owners)) {
+        if (
+          this.held(candidate.id) ||
+          !this.stale(candidate, await this.leases.inspect(candidate.labels.siteId), owners)
+        ) {
           result.preserved.push(candidate.id)
           continue
         }
@@ -92,6 +104,18 @@ export class TurnReconciler {
         epoch < owner.fence.epoch &&
         (owner.containerId === null || owner.containerId === candidate.id),
     )
-    return !(adopted && live)
+    // A warm container a later turn of the session took (spec §8, «Тёплая песочница»): it keeps
+    // the turn and epoch it was created with, and that turn's assignment names its id.
+    const taken = owners.some(
+      (owner) =>
+        owner.containerId === candidate.id &&
+        owner.fence.siteId === candidate.labels.siteId &&
+        owner.fence.taskId === candidate.labels.taskId &&
+        owner.sessionId === candidate.labels.sessionId &&
+        owner.turn > candidate.labels.turn &&
+        owner.fence.epoch === authority.epoch &&
+        epoch < owner.firstEpoch,
+    )
+    return !((adopted || taken) && live)
   }
 }

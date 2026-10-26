@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -69,5 +69,37 @@ describe('InitialVersionGit.buildCommit', () => {
     expect(built.files.map((file) => file.path)).toEqual(['index.php'])
     const tree = await fixtureGit(join(root, 'repo'), 'ls-tree', '-r', '--name-only', built.sha)
     expect(tree.trim().split('\n')).toEqual(['index.php'])
+  })
+})
+
+describe('InitialVersionGit.archiveCommit', () => {
+  it('writes the tree of the commit, fetched alone from the repository, as a tar.gz', async () => {
+    const { root, taken } = await copies({
+      'index.php': '<?php // synthetic\n',
+      'wp-content/themes/site/style.css': 'body {}\n',
+    })
+    const git = versions(root)
+    const built = await git.buildCommit(root, taken, 'site-1', new Date('2026-10-17T10:00:00Z'))
+    const remote = join(root, 'remote.git')
+    await fixtureGit(root, 'init', '--quiet', '--bare', '--initial-branch=main', remote)
+    const ref = { provider: 'gitea' as const, owner: 'sites', name: 'site-1' }
+    expect(await git.push(root, remote, ref, built.sha, 'refs/heads/main')).toBe(true)
+
+    const copy = join(root, 'copy')
+    await mkdir(copy)
+    const file = join(root, 'site.tar.gz')
+    await git.archiveCommit(copy, remote, ref, built.sha, file)
+    const listed = await runProcess('tar', ['-tzf', file], {
+      cwd: root,
+      env: { PATH: process.env.PATH },
+    })
+    expect(listed.code).toBe(0)
+    expect(Buffer.from(listed.stdout).toString().trim().split('\n').sort()).toEqual([
+      'index.php',
+      'wp-content/',
+      'wp-content/themes/',
+      'wp-content/themes/site/',
+      'wp-content/themes/site/style.css',
+    ])
   })
 })

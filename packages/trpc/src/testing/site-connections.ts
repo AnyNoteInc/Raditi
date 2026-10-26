@@ -129,7 +129,11 @@ export function fakeSecretStore() {
           }
     }),
     kvWrite: vi.fn(
-      async (path: string, data: Record<string, string>, options?: { cas?: number }) => {
+      async (
+        path: string,
+        data: Record<string, string>,
+        options?: { cas?: number; maxVersions?: number },
+      ) => {
         if (store.failure) throw store.failure
         const current = versions.get(path) ?? 0
         if (options?.cas !== undefined && options.cas !== current) {
@@ -435,5 +439,6 @@ export async function deleteSiteConnectionRows(
   await db.siteProvisioningStage.deleteMany({ where: ofSites })
   await db.siteCodeSource.deleteMany({ where: ofSites })
   await db.siteDatabase.deleteMany({ where: ofSites })
+  await db.siteEnvVar.deleteMany({ where: ofSites })
   await db.credentialRef.deleteMany({ where: ofSites })
 }

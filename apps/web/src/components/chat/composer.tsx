@@ -10,6 +10,7 @@ import IconButton from '@mui/material/IconButton'
 import Typography from '@mui/material/Typography'
 import {
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -46,6 +47,17 @@ export const offScreen = {
   whiteSpace: 'nowrap',
 } as const
 
+/** A quiet button of the field's own row: no frame until the pointer is on it. */
+const toolButton = {
+  // The pressing area of 44px everywhere (DESIGN.md, «область нажатия — не меньше 44px»).
+  width: 44,
+  height: 44,
+  flex: 'none',
+  color: 'text.secondary',
+  transition: 'background-color var(--raditi-motion-fast) var(--raditi-ease-out)',
+  '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+} as const
+
 export interface ComposerCommands {
   verdicts: readonly CommandVerdict[]
   /** A command was chosen: the server has said it can be run. */
@@ -78,11 +90,15 @@ export function Composer({
   attachments,
   noSecrets = feedInputText.noSecrets,
   fieldRef,
+  stop,
 }: {
   label?: string
   placeholder: string
   sendLabel?: string
-  /** Set while nothing can be written: the field and the button say why. */
+  /**
+   * Set while nothing can be written: the field and the button say why — read aloud with them,
+   * not shown (owner's request of 26.10.2026: no standing words under the field).
+   */
   disabledReason?: string | null
   /** Why the server refused the last try, as a sentence. */
   error?: string | null
@@ -97,9 +113,14 @@ export function Composer({
   modes?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
   attachments?: AttachmentsControl
-  /** The standing reminder about passwords under the field. */
+  /** The reminder about passwords: read aloud with the field, not shown under it. */
   noSecrets?: string
   fieldRef?: RefObject<HTMLTextAreaElement | null>
+  /**
+   * While the agent works: «Остановить» stands in place of «Отправить», as `/cancel` does it.
+   * `available` false — the dialog cannot be stopped now (a release, a stop on its way).
+   */
+  stop?: { onStop: () => void; available: boolean }
 }) {
   const fieldId = useId()
   const reasonId = useId()
@@ -108,6 +129,7 @@ export function Composer({
   const listId = useId()
   const filesWaitId = useId()
   const filesHintId = useId()
+  const secretsId = useId()
   const [text, setText] = useState('')
   // The list closed by Escape stays closed until the field starts anew.
   const [dismissed, setDismissed] = useState(false)
@@ -124,6 +146,14 @@ export function Composer({
   const fileInput = useRef<HTMLInputElement>(null)
   const ownField = useRef<HTMLTextAreaElement>(null)
   const field = fieldRef ?? ownField
+
+  // The field grows with its text, up to its own limit (`maxHeight`), then scrolls.
+  useLayoutEffect(() => {
+    const area = field.current
+    if (!area) return
+    area.style.height = 'auto'
+    if (area.scrollHeight > 0) area.style.height = `${area.scrollHeight}px`
+  }, [text, field])
 
   const disabled = disabledReason !== null
   const tooLong = text.trim().length > FEED_REQUEST_TEXT_LIMIT
@@ -252,6 +282,8 @@ export function Composer({
   ]
     .filter((id) => id !== null)
     .join(' ')
+  // The field carries the reminder about passwords too; the button does not repeat it.
+  const fieldDescribedBy = [describedBy, secretsId].filter((id) => id !== '').join(' ')
   const sendDescribedBy = [describedBy, filesWait !== null ? filesWaitId : null]
     .filter((id) => id !== null && id !== '')
     .join(' ')
@@ -287,16 +319,14 @@ export function Composer({
           display: 'flex',
           flexDirection: 'column',
           gap: 0.5,
-          p: 1,
-          border: 1,
-          // The edge of the field: the divider is too faint to mark a control.
-          borderColor: 'var(--raditi-rule-strong)',
-          borderRadius: '22px',
-          bgcolor: 'background.default',
+          p: 1.25,
+          // A soft fill and no frame (owner's brief of 26.10.2026).
+          borderRadius: '28px',
+          bgcolor: 'var(--chat-fill, var(--mui-palette-action-hover))',
+          transition: 'box-shadow var(--raditi-motion-fast) var(--raditi-ease-out)',
+          // One calm ring for the whole field while it is written in, none around the text.
           '&:has(textarea:focus-visible)': {
-            outline: '2px solid',
-            outlineColor: 'primary.main',
-            outlineOffset: 2,
+            boxShadow: 'inset 0 0 0 1px rgba(var(--mui-palette-text-primaryChannel) / 0.24)',
           },
         }}
       >
@@ -314,11 +344,11 @@ export function Composer({
           component="textarea"
           ref={field}
           id={fieldId}
-          rows={2}
+          rows={1}
           value={text}
           placeholder={placeholder}
           disabled={disabled}
-          aria-describedby={describedBy || undefined}
+          aria-describedby={fieldDescribedBy}
           aria-invalid={tooLong || shownError !== null ? true : undefined}
           aria-autocomplete={commands ? 'list' : undefined}
           aria-controls={open && !forced ? listId : undefined}
@@ -331,16 +361,21 @@ export function Composer({
             display: 'block',
             width: '100%',
             minHeight: 44,
-            maxHeight: '40dvh',
-            px: 1.5,
-            py: 1.25,
+            maxHeight: { xs: '30dvh', md: '40dvh' },
+            overflowY: 'auto',
+            px: 1.25,
+            py: 1,
             border: 0,
-            borderRadius: '14px',
+            borderRadius: 0,
             resize: 'none',
             bgcolor: 'transparent',
             color: 'text.primary',
             font: 'inherit',
+            fontSize: 16,
+            lineHeight: 1.65,
             outline: 'none',
+            // Stronger than the ring of the page: the field above draws the only one.
+            '&&:focus-visible': { outline: 'none' },
             '&::placeholder': { color: 'text.secondary', opacity: 1 },
             '&:disabled': { cursor: 'not-allowed' },
           }}
@@ -358,7 +393,7 @@ export function Composer({
                   aria-describedby={filesHintId}
                   disabled={disabled}
                   onClick={() => fileInput.current?.click()}
-                  sx={{ width: 44, height: 44, flex: 'none', border: 1, borderColor: 'divider' }}
+                  sx={toolButton}
                 >
                   <AppIcon name="attach" />
                 </IconButton>
@@ -388,7 +423,7 @@ export function Composer({
                 aria-expanded={forced}
                 aria-controls={forced ? listId : undefined}
                 onClick={openByButton}
-                sx={{ width: 44, height: 44, flex: 'none', border: 1, borderColor: 'divider' }}
+                sx={toolButton}
               >
                 <AppIcon name="slash" />
               </IconButton>
@@ -405,35 +440,46 @@ export function Composer({
             </Typography>
           ) : null}
           <IconButton
-            aria-label={sendLabel}
-            aria-describedby={sendDescribedBy || undefined}
-            disabled={!canSend}
-            onClick={() => void send()}
+            aria-label={stop ? composerText.stop : sendLabel}
+            aria-describedby={
+              stop
+                ? stop.available
+                  ? undefined
+                  : describedBy || undefined
+                : sendDescribedBy || undefined
+            }
+            disabled={stop ? !stop.available : !canSend}
+            onClick={() => (stop ? stop.onStop() : void send())}
             sx={{
+              // The pressing area of 44px everywhere, as every control of the cabinet.
               width: 44,
               height: 44,
               flex: 'none',
-              border: 1,
-              borderColor: canSend ? 'transparent' : 'divider',
-              bgcolor: canSend ? 'var(--raditi-accent)' : 'transparent',
-              color: canSend ? 'var(--raditi-on-accent)' : undefined,
-              '&:hover': { bgcolor: canSend ? 'var(--raditi-accent-hover)' : undefined },
+              border: 0,
+              // Round and in the contrast of the page: the text colour, the arrow in the page's.
+              bgcolor: 'var(--chat-text, var(--raditi-accent))',
+              color: 'var(--chat-page, var(--raditi-on-accent))',
+              transition:
+                'opacity var(--raditi-motion-fast) var(--raditi-ease-out), transform var(--raditi-motion-press) var(--raditi-ease-out)',
+              '&:hover': { bgcolor: 'var(--chat-text, var(--raditi-accent-hover))', opacity: 0.86 },
+              '&.Mui-disabled': {
+                bgcolor: 'var(--chat-text, var(--mui-palette-action-disabledBackground))',
+                color: 'var(--chat-page, var(--mui-palette-action-disabled))',
+                opacity: 0.22,
+              },
+              '&:active': { transform: 'scale(0.92)' },
+              '@media (prefers-reduced-motion: reduce)': { '&:active': { transform: 'none' } },
             }}
           >
-            <AppIcon name="send" />
+            <AppIcon name={stop ? 'square' : 'send'} />
           </IconButton>
         </Box>
       </Box>
 
       {disabled ? (
-        <Typography
-          id={reasonId}
-          variant="body2"
-          color="text.secondary"
-          sx={{ textAlign: 'center' }}
-        >
+        <Box id={reasonId} sx={offScreen}>
           {disabledReason}
-        </Typography>
+        </Box>
       ) : null}
       {tooLong ? (
         <Typography id={limitId} role="alert" variant="body2" color="error.main">
@@ -451,29 +497,15 @@ export function Composer({
         </Typography>
       ) : null}
       {attachments ? (
-        <Typography
-          id={filesHintId}
-          variant="body2"
-          color="text.secondary"
-          sx={
-            attachments.items.length > 0
-              ? { textAlign: 'center', fontSize: 12.5 }
-              : (offScreen as Record<string, unknown>)
-          }
-        >
+        <Box id={filesHintId} sx={offScreen}>
           {attachmentHintText}
-        </Typography>
+        </Box>
       ) : null}
       <Box role="status" aria-live="polite" sx={offScreen}>
         {announcement}
       </Box>
-      <Box sx={{ fontSize: 12.5, color: 'text.secondary', textAlign: 'center', lineHeight: 1.5 }}>
-        <Box component="p" sx={{ m: 0 }}>
-          {feedInputText.mistakes}
-        </Box>
-        <Box component="p" sx={{ m: 0 }}>
-          {noSecrets}.
-        </Box>
+      <Box id={secretsId} sx={offScreen}>
+        {noSecrets}.
       </Box>
     </Box>
   )

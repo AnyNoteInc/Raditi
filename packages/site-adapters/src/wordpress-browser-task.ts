@@ -762,5 +762,9 @@ export function wordpressBrowserGuide(): string {
   then repeat the click once if it is still needed.
 - Finish with \`web_verify\` (\`expect\` \`publish\` or \`draft\`, as the client asked) and give the
   client the title, the status and the address it reports.
+- A screenshot the client asks for: open the page — a public page of the site by its path (\`/\` is
+  the main page), or an admin page — wait until it has loaded (\`web_wait\` until \`load\`) and call
+  \`web_screenshot\`; tell the client the screenshot is attached. Asked only to look, you save
+  nothing and need no \`web_verify\`.
 `
 }

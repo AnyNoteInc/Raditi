@@ -43,8 +43,14 @@ export interface SandboxResources {
  * (CONNECT) to exactly these and to no address that is not public. Only the commands of the
  * agent's shell tool are pointed at it.
  */
+/**
+ * `egress` — the `host:port` of the client's variables the agent's commands reach (Р13);
+ * `internet` — the open internet of the agent besides them (owner's decision of 26.10.2026):
+ * every public host on the ports of the egress proxy, never an address that is not public.
+ */
 export type NetworkPolicy =
-  { mode: 'none' } | { mode: 'gateway'; routes: Array<'llm' | 'mcp'>; egress?: string[] }
+  | { mode: 'none' }
+  | { mode: 'gateway'; routes: Array<'llm' | 'mcp'>; egress?: string[]; internet?: true }
 
 /** The port of the client egress proxy on sandbox-gw (Р13). */
 export const SANDBOX_EGRESS_PORT = 3128
@@ -141,6 +147,13 @@ export interface Sandbox {
   attach(execId: string, cursor?: ExecCursor): Promise<ExecHandle>
   /** Stop managed process groups; fail closed if remaining agent processes cannot be stopped. */
   quiesce(): Promise<void>
+  /**
+   * Back to the state its provider created it in, for the next turn of the same task (spec §8,
+   * «Тёплая песочница»): every process but the keepalive stopped, every writable directory
+   * emptied. Removes the container and rejects when it cannot. A provider without it never has
+   * a container reused.
+   */
+  reset?(): Promise<void>
   readonly fs: SandboxFs
   destroy(reason: DestroyReason): Promise<void>
 }
@@ -388,6 +401,7 @@ export const networkPolicySchema = z.discriminatedUnion('mode', [
         .max(MAX_SANDBOX_EGRESS_HOSTS)
         .refine((hosts) => new Set(hosts).size === hosts.length, 'duplicate egress host')
         .optional(),
+      internet: z.literal(true).optional(),
     })
     .strict(),
 ]) satisfies z.ZodType<NetworkPolicy>

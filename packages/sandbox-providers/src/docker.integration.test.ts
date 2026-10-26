@@ -256,6 +256,64 @@ describe.skipIf(!image)('real Docker sandbox provider', () => {
     await sandbox.fs.write('/workspace/after-spoof', Buffer.from('ok'))
   }, 15_000)
 
+  it('resets a container for the next turn of its task: nothing runs, nothing of it is left', async () => {
+    const sandbox = await spawn()
+    const sh = async (script: string) => {
+      const exec = await sandbox.exec({ argv: ['/bin/sh', '-c', script], timeoutMs: 10_000 })
+      const output = await collect(exec.output())
+      expect(await exec.wait(), output.stderr.toString()).toEqual({ code: 0, reason: 'exited' })
+      return output.stdout.toString()
+    }
+    // What a turn may leave: files in every writable tmpfs, a tree it closed to itself, a link
+    // out of it, shared memory, System V IPC and a detached process.
+    await sh(
+      [
+        'set -e',
+        'mkdir -p /workspace/repo/closed/inner /agent-home/.cache /tmp/t',
+        'echo x > /workspace/repo/closed/inner/file',
+        'chmod 000 /workspace/repo/closed/inner /workspace/repo/closed',
+        'echo x > /workspace/.hidden; echo x > /agent-home/.cache/c; echo x > /tmp/t/f',
+        'echo x > /run/raditi/secrets/s; echo x > /dev/shm/leftover',
+        'ln -s /usr/local/lib/raditi /workspace/link',
+        'ipcmk -M 4096 >/dev/null; ipcmk -Q >/dev/null; ipcmk -S 1 >/dev/null',
+      ].join('\n'),
+    )
+    const spawned = await command(
+      sandbox,
+      "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});c.unref();process.stdout.write(String(c.pid))",
+    )
+    const pid = spawned.stdout.toString()
+    expect(pid).toMatch(/^\d+$/)
+    await sandbox.reset!()
+    const left = await sh(
+      [
+        'find /workspace /agent-home /tmp /run/raditi/secrets /dev/shm -mindepth 1 | sort',
+        'echo exec $(ls /run/raditi/exec | wc -l)',
+        'echo ipc $(ipcs -a | grep -c "^0x" || true)',
+        `test -e /proc/${pid} && echo alive || echo gone`,
+        'stat -c %a /workspace /agent-home /tmp /run/raditi/secrets /run/raditi/exec',
+        'test -e /usr/local/lib/raditi/runtime.mjs && echo kept',
+      ].join('\n'),
+    )
+    // The layout of a new container; in the exec directory, the reset and this check.
+    expect(left.trim().split('\n')).toEqual([
+      '/workspace/inbox',
+      '/workspace/out',
+      '/workspace/repo',
+      'exec 2',
+      'ipc 0',
+      'gone',
+      '700',
+      '700',
+      '700',
+      '700',
+      '700',
+      'kept',
+    ])
+    await sandbox.fs.write('/workspace/repo/next', Buffer.from('ok'))
+    expect(Buffer.from(await sandbox.fs.read('/workspace/repo/next')).toString()).toBe('ok')
+  }, 30_000)
+
   it('fails a noisy process at the bounded spool limit', async () => {
     const sandbox = await spawn()
     const exec = await sandbox.exec({

@@ -43,6 +43,7 @@ export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
     workingSince: '2026-10-17T09:00:00.000Z',
     runningSince: null,
     requirements: { repository: true, browser: false },
+    effort: 'high',
     ...patch,
   }
 }
@@ -278,6 +279,8 @@ export function browserAnswer(
     ...rest,
     task: {
       title: 'Новость о летней веранде',
+      // «Чат» is the dialog in the browser, as `task.create` writes it.
+      mode: 'chat',
       turnNo: 1,
       runningSince: '2026-10-17T09:01:00.000Z',
       requirements: { repository: false, browser: true },

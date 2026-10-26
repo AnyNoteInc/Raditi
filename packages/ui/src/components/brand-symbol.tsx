@@ -1,7 +1,17 @@
+import type { Ref } from 'react'
+
 import { brandColors } from '../theme/tokens.ts'
 
 /** The same amber circle and rounded six-ray asterisk on every surface and icon. */
-export function BrandSymbol({ size = 32, className }: { size?: number; className?: string }) {
+export function BrandSymbol({
+  size = 32,
+  className,
+  ref,
+}: {
+  size?: number
+  className?: string
+  ref?: Ref<SVGSVGElement>
+}) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -9,6 +19,7 @@ export function BrandSymbol({ size = 32, className }: { size?: number; className
       width={size}
       height={size}
       className={className}
+      ref={ref}
       aria-hidden="true"
       focusable="false"
       style={{ flex: 'none', display: 'block' }}

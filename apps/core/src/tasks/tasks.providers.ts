@@ -94,6 +94,7 @@ export const taskProviders: Provider[] = [
         adapter: getSiteAdapter,
         leases,
         runtime: turnRuntimeOf(config),
+        internet: config.sandboxInternet,
         previews: config.previews?.address ?? null,
         settlement,
         live,

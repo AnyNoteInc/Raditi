@@ -236,7 +236,7 @@ export function SiteSetup({
   const shownNotice = failed && notice?.attempt === data.attempt ? notice.text : null
 
   return (
-    <Box sx={{ maxWidth: 880, display: 'flex', flexDirection: 'column', gap: 2.25 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.25 }}>
       <Box>
         <SectionTitle>Настраиваем сайт</SectionTitle>
         <Typography color="text.secondary" sx={{ mt: 1, maxWidth: 720, textWrap: 'pretty' }}>

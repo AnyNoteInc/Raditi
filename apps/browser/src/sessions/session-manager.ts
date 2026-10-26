@@ -75,6 +75,7 @@ export class SessionManager {
       browsers: deps.browsers,
       store: deps.store,
       files: deps.files,
+      screenshots: deps.screenshots,
       metrics: deps.metrics,
       settings: deps.settings,
       now: deps.now,

@@ -53,6 +53,8 @@ export interface SiteImportRunnerOptions {
   queue: JobQueue
   logger: { log(message: string): void; warn(message: string): void }
   count?: (outcome: SiteImportOutcome) => void
+  /** After the first version is recorded: the copy of its files for raditi-backups. Never awaited. */
+  onSucceeded?: (siteId: string) => void
   timing?: Partial<SiteImportTiming>
 }
 
@@ -175,6 +177,7 @@ export class SiteImportRunner {
           throw error
         }
         logger.log(`site_import_succeeded site=${site}`)
+        this.#options.onSucceeded?.(site)
         return 'succeeded'
       }
       if (signals.shutdown.aborted) {

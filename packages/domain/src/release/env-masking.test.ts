@@ -35,6 +35,17 @@ describe('the values of client variables in kept text', () => {
     expect(maskEnvValues('nothing here', [])).toBe('nothing here')
   })
 
+  it('neither masks nor finds a value shorter than eight bytes', () => {
+    const text = 'pin 1234567, flag 1, ключ'
+    expect(maskEnvValues(text, ['1234567', '1'])).toBe(text)
+    expect(containsEnvValue(text, ['1234567', '1'])).toBe(false)
+    expect(envValueBytes(['1'])).toEqual([])
+    const event = { text }
+    expect(maskEnvValuesDeep(event, ['1'])).toBe(event)
+    // Four Cyrillic letters are eight bytes: masked.
+    expect(maskEnvValues(text, ['ключ'])).toBe(`pin 1234567, flag 1, ${ENV_VALUE_MASK}`)
+  })
+
   it('masks values with new lines and quotes as they are', () => {
     const pem = '-----BEGIN KEY-----\nAAAA"BBBB\n-----END KEY-----'
     expect(maskEnvValues(`cat: ${pem}!`, [pem])).toBe(`cat: ${ENV_VALUE_MASK}!`)

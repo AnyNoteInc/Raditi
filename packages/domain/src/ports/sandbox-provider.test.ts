@@ -130,6 +130,16 @@ describe('sandboxSpecSchema', () => {
     expect(SANDBOX_EGRESS_PORT).toBe(3128)
   })
 
+  it('opens the internet of the agent only as `internet: true` of the gateway mode', () => {
+    const open = { mode: 'gateway' as const, routes: ['llm' as const], internet: true as const }
+    expect(sandboxSpecSchema.parse({ ...valid(), network: open }).network).toEqual(open)
+    const both = { ...open, egress: ['api.example.ru:443'] }
+    expect(sandboxSpecSchema.parse({ ...valid(), network: both }).network).toEqual(both)
+    rejects({ network: { ...open, internet: false } as never })
+    rejects({ network: { ...open, internet: 'yes' } as never })
+    rejects({ network: { mode: 'none', internet: true } as never })
+  })
+
   it.each([
     'ZAI_API_KEY',
     'LLM_GATEWAY_KEY',

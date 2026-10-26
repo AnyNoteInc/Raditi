@@ -32,6 +32,25 @@ import { clearTimeout, setTimeout } from 'node:timers'
 // whole plain HTTP of that site before a byte of it goes on. Everything else is as above. The option is refused unless RADITI_EGRESS_LOCAL_ROUTES=1
 // is set next to it, and always when APP_ENV is `production`: whoever starts this proxy with it
 // says on purpose that it serves a stand.
+//
+// The open internet of the agent (ALLOW_PUBLIC=1, owner's decision of 26.10.2026, «полный доступ
+// к интернету»): a CONNECT may name any public DNS name on a TLS port (OPEN_TLS_PORTS), with TLS
+// whose ClientHello names it, and a request in absolute form may name any public `http://` origin
+// on an HTTP port (OPEN_HTTP_PORTS) — forwarded, one request a connection, to an address checked
+// as above. Addresses that are not public stay refused, an IP literal is never a target, and the
+// log has the host the client asked for, the result and the bytes. Off (no ALLOW_PUBLIC), the
+// proxy is exactly the list above.
+//
+// In the open internet an Encrypted ClientHello (ECH) passes when its outer server_name is
+// exactly the host of the CONNECT: every public host being allowed there, the name hides nothing
+// the proxy guards, and Chromium — the browser skill of the agent — sends ECH in every handshake,
+// GREASE when it knows no ECH key of the site (behind a proxy it never does, resolving nothing
+// itself), with no flag to turn it off. The browser of a task (docs/plan/57-browser-tasks.md) is
+// that Chromium too, on a list of the site's hosts: ECH_OUTER_NAME=1 lets the same ClientHello
+// through to a listed host (owner's decision of 26.10.2026) — its outer server_name is exactly
+// that host, the tunnel goes to an address of that host only, and the name a real ECH could hide
+// reaches no more than a Host header inside TLS already does. Everywhere else ECH is refused. The
+// draft ESNI, which names nothing, is always refused.
 
 export const clientEgressLimits = Object.freeze({
   /** `host:port` of one proxy (a preview's take up to 256, PreviewRuntimeSpec.egress). */
@@ -58,16 +77,21 @@ const TLS_HANDSHAKE = 22
 const CLIENT_HELLO = 1
 const EXTENSION_SERVER_NAME = 0x0000
 /** encrypted_client_hello (RFC 9849) and the draft ESNI: the real name would be hidden. */
-const EXTENSIONS_HIDING_NAME = new Set([0xfe0d, 0xffce])
+const EXTENSION_ECH = 0xfe0d
+const EXTENSIONS_HIDING_NAME = new Set([EXTENSION_ECH, 0xffce])
+/** The ports of the open internet (ALLOW_PUBLIC): TLS through CONNECT, plain HTTP forwarded. */
+export const OPEN_TLS_PORTS = new Set([443, 8443])
+export const OPEN_HTTP_PORTS = new Set([80, 8080])
 const SNI_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/
 
 /**
  * The server name of the TLS ClientHello at the start of `bytes`, the handshake reassembled from
  * as many records as it took: `{state: 'more'}` while it is not whole yet, `{state: 'name', name}`
  * (lower case), or `{state: 'refused'}` — not TLS, not a ClientHello, no server name, two of them,
- * a name hidden by ECH, or anything malformed or too large.
+ * a name hidden by ECH, or anything malformed or too large. `echOuterName` — a ClientHello with an
+ * ECH extension gives its outer server name; the draft ESNI, which carries none, never passes.
  */
-export function clientHelloServerName(bytes) {
+export function clientHelloServerName(bytes, { echOuterName = false } = {}) {
   const refused = { state: 'refused' }
   const fragments = []
   let length = 0
@@ -92,11 +116,11 @@ export function clientHelloServerName(bytes) {
     if (length > HELLO_MAX_BYTES) return refused
   }
   const hello = Buffer.concat(fragments).subarray(4, needed)
-  return serverNameOf(hello) ?? refused
+  return serverNameOf(hello, echOuterName) ?? refused
 }
 
 /** The name of a ClientHello body; null when it has none it may be let through with. */
-function serverNameOf(body) {
+function serverNameOf(body, echOuterName) {
   let at = 2 + 32
   const skip = (lengthBytes, check = () => true) => {
     if (body.length < at + lengthBytes) return false
@@ -123,7 +147,7 @@ function serverNameOf(body) {
     if (data.length !== size || types.has(type)) return null
     types.add(type)
     at += 4 + size
-    if (EXTENSIONS_HIDING_NAME.has(type)) return null
+    if (EXTENSIONS_HIDING_NAME.has(type) && !(echOuterName && type === EXTENSION_ECH)) return null
     if (type !== EXTENSION_SERVER_NAME) continue
     // ServerNameList: one host_name, nothing else.
     if (size < 5 || data.readUInt16BE(0) !== size - 2 || data[2] !== 0) return null
@@ -310,6 +334,8 @@ export function addressCheck(refused = []) {
 
 /** Methods a page of a local site sends in plain HTTP; anything else is answered 405. */
 const LOCAL_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
+/** Methods of a plain-http request of the open internet; anything else is answered 405. */
+const PUBLIC_METHODS = new Set([...LOCAL_METHODS, 'PATCH'])
 /** Of one connection or of the proxy: never passed on (RFC 9110, 7.6.1). */
 const HOP_BY_HOP = new Set([
   'connection',
@@ -356,6 +382,29 @@ function localRequestOf(req, routes) {
   return target ? { key, target, path: `${url.pathname}${url.search}` } : null
 }
 
+/**
+ * A plain-http request of the open internet (ALLOW_PUBLIC): its URL in absolute form names a
+ * public DNS name on an HTTP port (OPEN_HTTP_PORTS) and its Host the same origin. null for
+ * anything else — origin form, another scheme, credentials, an address, a local zone.
+ */
+export function publicRequestOf(req) {
+  if (!PUBLIC_METHODS.has(req.method)) return null
+  const raw = String(req.url ?? '')
+  if (!raw.startsWith('http://')) return null
+  let url
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  if (url.username !== '' || url.password !== '') return null
+  const key = `${url.hostname}:${url.port === '' ? 80 : url.port}`
+  const target = parseTarget(key)
+  if (target === null || !OPEN_HTTP_PORTS.has(target.port)) return null
+  if (hostKeyOf(req.headers.host) !== key) return null
+  return { key, target, path: `${url.pathname}${url.search}` }
+}
+
 /** `host:port` a Host header names, port 80 when none is written; null when malformed. */
 function hostKeyOf(header) {
   const match = /^([a-z0-9.-]+)(?::([1-9]\d{0,4}))?$/.exec(String(header ?? '').toLowerCase())
@@ -387,13 +436,17 @@ const logJson = (entry) => console.log(JSON.stringify(entry))
  * non-public ones; `clientIp` — the only address a request is taken from (sandbox-gw: the
  * sandbox's), or null on a network only the preview's own containers share; `localRoutes` — the
  * plain-http routes of local sites (parseLocalRoutes; a stand's only, the caller checked that).
- * `lookup` and `dial` are replaced only by tests.
+ * `anyPublic` — the open internet of the agent (ALLOW_PUBLIC, see the head of this file).
+ * `echOuterName` — an ECH ClientHello whose outer name is the listed host passes (ECH_OUTER_NAME;
+ * always so with `anyPublic`). `lookup` and `dial` are replaced only by tests.
  */
 export function createClientEgressProxy({
   allow,
   refused = [],
   clientIp = null,
   localRoutes = new Map(),
+  anyPublic = false,
+  echOuterName = false,
   maxTunnels = clientEgressLimits.tunnels,
   connectTimeoutMs = clientEgressLimits.connectMs,
   helloMs = clientEgressLimits.helloMs,
@@ -485,6 +538,82 @@ export function createClientEgressProxy({
   }
 
   /**
+   * A plain-http request of the open internet (ALLOW_PUBLIC): the name resolved here, every
+   * address checked, the request sent to a checked address, IPv4 first, one request a connection.
+   */
+  const forwardPublic = async (req, res, target) => {
+    const started = Date.now()
+    let finished = false
+    let upstream = null
+    const finish = (result, status) => {
+      if (finished) return
+      finished = true
+      clearTimeout(deadline)
+      tunnels -= 1
+      upstream?.destroy()
+      log({
+        event: 'request',
+        host: target.key,
+        result,
+        ms: Date.now() - started,
+        ...(status ? { status } : {}),
+      })
+    }
+    const fail = (status, result) => {
+      if (finished) return
+      if (res.headersSent) res.destroy()
+      else {
+        res.writeHead(status, { connection: 'close', 'content-length': 0, 'raditi-egress': result })
+        res.end()
+      }
+      finish(result)
+    }
+    tunnels += 1
+    const deadline = setTimeout(() => fail(504, 'connect_timeout'), connectTimeoutMs)
+    deadline.unref()
+    res.once('close', () => finish(res.writableFinished ? 'ok' : 'client_closed'))
+    req.on('error', () => finish('client_error'))
+
+    let addresses = null
+    try {
+      addresses = await lookup(target.target.host)
+    } catch {
+      // Reported below as a failed resolution.
+    }
+    if (finished) return
+    if (!Array.isArray(addresses) || addresses.length === 0) return fail(502, 'resolve')
+    if (!addresses.every((address) => allowed(address))) return fail(403, 'forbidden_address')
+    const address =
+      addresses.find((candidate) => isIP(candidate) === 4) ??
+      addresses.find((candidate) => isIP(candidate) === 6)
+    if (address === undefined) return fail(502, 'resolve')
+
+    upstream = httpRequest({
+      method: req.method,
+      path: target.path,
+      // The Host of the request: the far side serves the name it was asked for.
+      headers: endToEnd(req.headers),
+      setHost: false,
+      // No agent: the checked address itself, no pool and no second resolution between the check
+      // and the connection.
+      createConnection: () => dial({ address, port: target.target.port }),
+    })
+    upstream.once('socket', (socket) => socket.once('connect', () => clearTimeout(deadline)))
+    upstream.setTimeout(idleMs, () => fail(504, 'idle'))
+    upstream.on('error', () => fail(502, 'connect_error'))
+    upstream.once('response', (answer) => {
+      res.writeHead(answer.statusCode ?? 502, {
+        ...endToEnd(answer.headers, ['transfer-encoding']),
+        connection: 'close',
+      })
+      answer.on('error', () => fail(502, 'upstream_error'))
+      res.once('finish', () => finish('ok', answer.statusCode))
+      answer.pipe(res)
+    })
+    req.pipe(upstream)
+  }
+
+  /**
    * A CONNECT to a local route: a tunnel to its fixed target, the name never resolved nor checked.
    * Its first request must be whole plain HTTP of that site (`localTunnelHeadAllowed`) before a
    * byte of it reaches the target; the target being the operator's, nothing after it is read.
@@ -566,11 +695,24 @@ export function createClientEgressProxy({
   }
 
   // Nothing but CONNECT: a request in plain HTTP would carry the client's data in the clear and
-  // let a page of the preview reach whatever its URL names. A local site of a stand alone is
-  // the exception (LOCAL_HTTP_ROUTES).
+  // let a page of the preview reach whatever its URL names. A local site of a stand
+  // (LOCAL_HTTP_ROUTES) and a public origin of the open internet (ALLOW_PUBLIC) are the
+  // exceptions.
   const server = createServer({ maxHeaderSize: 8192 }, (req, res) => {
     const local = localRoutes.size > 0 ? localRequestOf(req, localRoutes) : null
     if (local) return forwardLocal(req, res, local)
+    const open = anyPublic ? publicRequestOf(req) : null
+    if (open) {
+      const deny = (status, result) => {
+        res.writeHead(status, { connection: 'close', 'content-length': 0, 'raditi-egress': result })
+        res.end()
+        log({ event: 'request', host: open.key, result })
+      }
+      if (clientIp !== null && req.socket.remoteAddress !== clientIp)
+        return deny(403, 'forbidden_client')
+      if (tunnels >= maxTunnels) return deny(503, 'busy')
+      return void forwardPublic(req, res, open)
+    }
     res.writeHead(405, {
       'content-type': 'text/plain',
       connection: 'close',
@@ -587,8 +729,14 @@ export function createClientEgressProxy({
     const started = Date.now()
     const target = String(req.url ?? '').toLowerCase()
     const local = localRoutes.get(target)
-    // Only a listed value reaches the log, never what the client wrote.
-    const entry = { event: 'connect', host: allow.has(target) || local ? target : null }
+    // Only a listed value — or, in the open internet, a public `host:port` parsed as a DNS name
+    // on a TLS port — reaches the log, never what the client wrote.
+    const opened = anyPublic && !local && !allow.has(target) ? parseTarget(target) : null
+    const listed =
+      allow.has(target) ||
+      local !== undefined ||
+      (opened !== null && OPEN_TLS_PORTS.has(opened.port))
+    const entry = { event: 'connect', host: listed ? target : null }
     const done = (result, bytes) =>
       log({ ...entry, result, ms: Date.now() - started, ...(bytes ?? {}) })
     const deny = (status, reason, result) => {
@@ -692,7 +840,7 @@ export function createClientEgressProxy({
           checkHello()
         }
         const checkHello = () => {
-          const seen = clientHelloServerName(hello)
+          const seen = clientHelloServerName(hello, { echOuterName: anyPublic || echOuterName })
           // Records of a byte or two would make a whole hello large: past this it is refused.
           if (seen.state === 'more' && hello.length <= HELLO_BUFFER_BYTES) return false
           socket.pause()
@@ -774,7 +922,7 @@ function maxTunnelsOf(text) {
  * The proxy as an environment describes it: LISTEN_HOST (an IPv4 address), LISTEN_PORT,
  * ALLOWED_HOSTS, REFUSED_SUBNETS, CLIENT_IPV4 and MAX_TUNNELS (optional), LOCAL_HTTP_ROUTES
  * (optional, outside production, with RADITI_EGRESS_LOCAL_ROUTES=1; ALLOWED_HOSTS may then be
- * `[]`). Throws on anything else.
+ * `[]`), ALLOW_PUBLIC and ECH_OUTER_NAME (optional switches). Throws on anything else.
  */
 export function clientEgressConfig(env) {
   const listenHost = env.LISTEN_HOST ?? ''
@@ -786,15 +934,28 @@ export function clientEgressConfig(env) {
   if (clientIp !== null && isIP(clientIp) !== 4)
     throw new Error('CLIENT_IPV4 must be an IPv4 address')
   const localRoutes = localRoutesOf(env)
+  const anyPublic = flagOf(env.ALLOW_PUBLIC, 'ALLOW_PUBLIC')
   return {
     listenHost,
     listenPort,
-    allow: parseAllowedHosts(env.ALLOWED_HOSTS, { empty: localRoutes.size > 0 }),
+    allow:
+      anyPublic && (env.ALLOWED_HOSTS ?? '') === ''
+        ? new Set()
+        : parseAllowedHosts(env.ALLOWED_HOSTS, { empty: anyPublic || localRoutes.size > 0 }),
     refused: [...parseSubnets(env.REFUSED_SUBNETS), ...interfaceSubnets()],
     clientIp,
     maxTunnels: maxTunnelsOf(env.MAX_TUNNELS),
     localRoutes,
+    anyPublic,
+    echOuterName: anyPublic || flagOf(env.ECH_OUTER_NAME, 'ECH_OUTER_NAME'),
   }
+}
+
+/** A switch of the configuration: unset, empty or `0` — off; `1` — on; anything else refused. */
+function flagOf(value, name) {
+  if (value === undefined || value === '' || value === '0') return false
+  if (value === '1') return true
+  throw new Error(`${name} must be 1 or 0`)
 }
 
 /** Starts the proxy of a configuration; resolves once it listens. */
@@ -805,6 +966,8 @@ export function listenClientEgress(config, options = {}) {
     clientIp: config.clientIp,
     maxTunnels: config.maxTunnels ?? clientEgressLimits.tunnels,
     localRoutes: config.localRoutes ?? new Map(),
+    anyPublic: config.anyPublic ?? false,
+    echOuterName: config.echOuterName ?? false,
     ...options,
   })
   return new Promise((resolve, reject) => {
@@ -824,6 +987,7 @@ if (process.argv[1]?.endsWith('/client-egress.mjs')) {
       event: 'listening',
       port: server.address().port,
       hosts: config.allow.size,
+      ...(config.anyPublic ? { open: true } : {}),
       ...(config.localRoutes.size ? { localRoutes: config.localRoutes.size } : {}),
     })
     server.on('error', () => {

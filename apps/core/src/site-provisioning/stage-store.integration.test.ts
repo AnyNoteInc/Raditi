@@ -334,6 +334,14 @@ describe.skipIf(!enabled)('the import stage store with PostgreSQL', () => {
     expect((await db.siteInitialVersion.findUniqueOrThrow({ where: { siteId: id } })).tag).toBe(
       'v0.0.0',
     )
+    // The first version is the installed one, and the site with its repository takes tasks.
+    expect(await db.site.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      status: 'active',
+      installedVersion: 'v0.0.0',
+      installedSha: SHA,
+      installedAt: expect.any(Date),
+      installedReleaseId: null,
+    })
   })
 
   it('requeues a hiccup with its outbox event and fails it at the limit of the attempt', async () => {

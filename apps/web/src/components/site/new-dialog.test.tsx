@@ -54,6 +54,11 @@ const NONE: Capabilities = { repository: 'inactive', browser: 'not_configured' }
 const NOT_CONNECTED = 'Сайт ещё не подключён. Задачи можно будет ставить после подключения.'
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
+/** The phrase is in the page for a screen reader and takes no room on the screen. */
+const offScreenText = (text: string) =>
+  getComputedStyle(screen.getByText(text)).position === 'absolute' &&
+  getComputedStyle(screen.getByText(text)).width === '1px'
+
 const described = (element: HTMLElement) =>
   (element.getAttribute('aria-describedby') ?? '')
     .split(' ')
@@ -112,6 +117,8 @@ describe('new dialog', () => {
       siteId: SITE_ID,
       taskId: expect.stringMatching(UUID_V7),
       text: 'Поменяйте телефон в шапке сайта',
+      // «Высокое» unless the client picks another.
+      effort: 'high',
     })
     expect(push).toHaveBeenCalledWith(`/projects/${SITE_ID}/chat/${input.taskId}`)
   })
@@ -134,7 +141,7 @@ describe('new dialog', () => {
   it('says a refusal of the server in its words', async () => {
     create.mockRejectedValueOnce(
       serverRefusal(
-        'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Настройки»',
+        'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»',
         'TASK_TEXT_HAS_SECRET',
       ),
     )
@@ -142,7 +149,7 @@ describe('new dialog', () => {
     write('пароль: hunter2')
     fireEvent.click(send())
     expect((await screen.findByRole('alert')).textContent).toBe(
-      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Настройки».',
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные».',
     )
     expect(push).not.toHaveBeenCalled()
   })
@@ -164,12 +171,13 @@ describe('new dialog', () => {
     )
   })
 
-  it('says on the field why a site that is not connected takes no task', () => {
+  it('tells a screen reader, not the screen, why a site that is not connected takes no task', () => {
     showDialog({ capabilities: NONE })
     expect(field().disabled).toBe(true)
     expect(send().disabled).toBe(true)
-    expect(described(field())).toBe(NOT_CONNECTED)
+    expect(described(field())).toContain(NOT_CONNECTED)
     expect(described(send())).toBe(NOT_CONNECTED)
+    expect(offScreenText(NOT_CONNECTED)).toBe(true)
   })
 
   it('offers two modes in two words, «Работа» chosen', () => {
@@ -182,12 +190,14 @@ describe('new dialog', () => {
     expect(modes.getByRole<HTMLInputElement>('radio', { name: 'Работа' }).checked).toBe(true)
   })
 
-  it('shows «Чат» as a mode that cannot be chosen and says so in words', () => {
+  it('shows «Чат» as a mode that cannot be chosen without the cloud browser, and says so', () => {
     showDialog()
     const chat = screen.getByRole<HTMLInputElement>('radio', { name: 'Чат' })
     expect(chat.disabled).toBe(true)
     expect(chat.checked).toBe(false)
-    expect(described(chat)).toBe('Режим «Чат» появится позже.')
+    const off = 'Режим «Чат» для этого сайта сейчас недоступен: облачный браузер не подключён.'
+    expect(described(chat)).toBe(off)
+    expect(offScreenText(off)).toBe(true)
     // Not by colour alone: the word carries a mark of its own.
     expect(chat.closest('label')?.querySelector('svg')).toBeTruthy()
     expect(
@@ -195,35 +205,57 @@ describe('new dialog', () => {
     ).toBeNull()
   })
 
-  it('keeps the reminders under the field, and no files for the copy of the site', () => {
+  it('lets the client pick how hard the model thinks, «Высокое» first', async () => {
     showDialog()
-    expect(screen.getAllByRole('button')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Размышление: Высокое' }))
+    const efforts = within(await screen.findByRole('menu', { name: 'Размышление' }))
+    expect(
+      efforts.getAllByRole('menuitemradio').map((item) => item.querySelector('span')?.textContent),
+    ).toEqual(['Низкое', 'Высокое', 'Максимальное'])
+    expect(
+      efforts.getByRole('menuitemradio', { name: /Высокое/ }).getAttribute('aria-checked'),
+    ).toBe('true')
+    fireEvent.click(efforts.getByRole('menuitemradio', { name: /Максимальное/ }))
+    expect(screen.getByRole('button', { name: 'Размышление: Максимальное' })).toBeTruthy()
+    write('Расскажи про этот проект')
+    fireEvent.click(send())
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0]![0]).toMatchObject({ effort: 'max' })
+  })
+
+  it('shows no words under the field, and no files for the copy of the site', () => {
+    showDialog()
+    // The level of thinking and «Отправить».
+    expect(screen.getAllByRole('button')).toHaveLength(2)
     expect(screen.queryByRole('button', { name: 'Прикрепить файлы' })).toBeNull()
     expect(screen.queryByRole('radiogroup', { name: 'Как агент будет работать' })).toBeNull()
-    expect(screen.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeTruthy()
+    expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
+    expect(
+      offScreenText(
+        'В режиме «Работа» агент получает копию файлов сайта из последней версии, вы смотрите результат в предпросмотре и сами выпускаете новую версию на сайт.',
+      ),
+    ).toBe(true)
   })
 })
 
 describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
-  it('lets the client choose the browser or the copy where the site offers both', async () => {
+  it('lets the client choose «Чат» in the browser or «Работа» on the copy where the site offers both', async () => {
     showDialog({ capabilities: BOTH })
-    const ways = screen.getByRole('radiogroup', { name: 'Как агент будет работать' })
-    const browser = within(ways).getByRole<HTMLInputElement>('radio', { name: 'В браузере' })
-    const copy = within(ways).getByRole<HTMLInputElement>('radio', { name: 'Через копию сайта' })
+    const modes = screen.getByRole('radiogroup', { name: 'Режим диалога' })
+    const chat = within(modes).getByRole<HTMLInputElement>('radio', { name: 'Чат' })
+    const work = within(modes).getByRole<HTMLInputElement>('radio', { name: 'Работа' })
     // The server's own default: the copy of the site where it is ready.
-    expect(copy.checked).toBe(true)
-    expect(described(ways)).toContain('сами выпускаете новую версию')
+    expect(work.checked).toBe(true)
+    expect(described(modes)).toContain('сами выпускаете новую версию')
     expect(screen.queryByRole('button', { name: 'Прикрепить файлы' })).toBeNull()
-    fireEvent.click(browser)
-    expect(browser.checked).toBe(true)
-    expect(described(ways)).toContain('Изменения появляются на сайте сразу')
+    fireEvent.click(chat)
+    expect(chat.checked).toBe(true)
+    expect(described(modes)).toContain('без копии файлов сайта')
     expect(screen.getByRole('button', { name: 'Прикрепить файлы' })).toBeTruthy()
-    expect(
-      screen.getByText(
-        'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
-      ),
-    ).toBeTruthy()
-    write('Добавьте новость о веранде')
+    expect(described(field())).toContain(
+      'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
+    )
+    write('Открой сайт и пришли скриншот')
     fireEvent.click(send())
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
     expect(create.mock.calls[0]![0]).toMatchObject({
@@ -259,7 +291,7 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
   it('says why a site whose address is not https takes no task in the browser', () => {
     showDialog({ capabilities: { repository: 'absent', browser: 'insecure' } })
     expect(field().disabled).toBe(true)
-    expect(described(field())).toBe(
+    expect(described(field())).toContain(
       'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://.',
     )
   })

@@ -20,7 +20,8 @@ const viewports = [
 const EMPTY_LIST = 'Диалогов пока нет. Опишите, что поменять на сайте, — диалог появится здесь.'
 // The site of the run is not connected: a new dialog says so on the field and sends nothing.
 const SEND_OFF = 'Сайт ещё не подключён. Задачи можно будет ставить после подключения.'
-const CHAT_OFF = 'Режим «Чат» появится позже.'
+const CHAT_OFF = 'Режим «Чат» для этого сайта сейчас недоступен: облачный браузер не подключён.'
+const WORK_OFF = 'Режим «Работа» недоступен: у сайта нет копии файлов.'
 
 const dialogs = (page: Page) => page.getByRole('navigation', { name: 'Диалоги' })
 const sections = (page: Page) => page.getByRole('navigation', { name: 'Разделы сайта' })
@@ -30,6 +31,12 @@ const newDialog = (page: Page) => dialogs(page).getByRole('link', { name: 'Но�
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
 const send = (page: Page) => page.getByRole('button', { name: 'Отправить' })
 const newDialogHeading = (page: Page) => page.getByRole('heading', { name: 'Новый диалог' })
+
+/** Read aloud, not shown: the box of the words is the 1px of `offScreen`. */
+async function expectOffScreen(target: Locator) {
+  const found = await target.boundingBox()
+  expect(found === null || (found.width <= 1 && found.height <= 1)).toBe(true)
+}
 
 async function box(target: Locator) {
   const found = await target.boundingBox()
@@ -77,8 +84,6 @@ async function expectDialogAboveBar(page: Page, siteId: string, height: number) 
     message(page),
     page.getByRole('radiogroup', { name: 'Режим диалога' }),
     send(page),
-    page.getByText(SEND_OFF),
-    page.getByText('ИИ может допускать ошибки. Проверяйте важное.'),
   ]) {
     const partBox = await box(part)
     expect(apart(partBox, barBox)).toBe(true)
@@ -124,16 +129,20 @@ for (const [name, width, height] of viewports) {
         const railEnd = railBox.x + railBox.width
         const listEnd = listBox.x + listBox.width
         expect(listBox.x).toBeGreaterThanOrEqual(railEnd)
-        expect(toolbarBox.x).toBeGreaterThanOrEqual(listEnd)
+        // The bar of breadcrumbs runs from the rail to the right edge, over the list column
+        // (owner's request of 26.10.2026); the column stands under it.
+        expect(toolbarBox.x).toBeGreaterThanOrEqual(railEnd)
+        expect(toolbarBox.x).toBeLessThan(listBox.x + 1)
+        expect(toolbarBox.x + toolbarBox.width).toBe(width)
         for (const part of [newDialogHeading(page), message(page), send(page)]) {
           const partBox = await box(part)
           expect(partBox.x).toBeGreaterThanOrEqual(listEnd)
           expect(partBox.x + partBox.width).toBeLessThanOrEqual(width)
           expect(partBox.y + partBox.height).toBeLessThanOrEqual(height)
         }
-        // The column runs the full height of the window beside the rail.
-        expect(listBox.y).toBe(0)
-        expect(listBox.height).toBe(height)
+        // The column runs from under the bar to the bottom of the window beside the rail.
+        expect(listBox.y).toBe(toolbarBox.y + toolbarBox.height)
+        expect(listBox.y + listBox.height).toBe(height)
       })
       return
     }
@@ -196,12 +205,18 @@ for (const [name, width, height] of viewports) {
       await expect(send(page)).toBeDisabled()
       await expect(send(page)).toHaveAccessibleDescription(SEND_OFF)
       // The field says it too: a screen reader lands on it first.
-      await expect(message(page)).toHaveAccessibleDescription(SEND_OFF)
+      await expect(message(page)).toHaveAccessibleDescription(new RegExp(SEND_OFF))
 
       const modes = page.getByRole('radiogroup', { name: 'Режим диалога' })
       await expect(modes.getByRole('radio')).toHaveCount(2)
+      // The switch follows what the server says the site can do (26.10.2026): a site that is not
+      // connected has neither the copy of its files nor the cloud browser, so neither mode can be
+      // chosen; «Работа», the default, stays checked and says why it is closed.
       await expect(modes.getByRole('radio', { name: 'Работа' })).toBeChecked()
-      await expect(modes.getByRole('radio', { name: 'Работа' })).toBeEnabled()
+      await expect(modes.getByRole('radio', { name: 'Работа' })).toBeDisabled()
+      await expect(modes.getByRole('radio', { name: 'Работа' })).toHaveAccessibleDescription(
+        WORK_OFF,
+      )
       await expect(modes.getByRole('radio', { name: 'Чат' })).toBeDisabled()
       await expect(modes.getByRole('radio', { name: 'Чат' })).not.toBeChecked()
       await expect(modes.getByRole('radio', { name: 'Чат' })).toHaveAccessibleDescription(CHAT_OFF)
@@ -211,9 +226,11 @@ for (const [name, width, height] of viewports) {
       const sendBox = await box(send(page))
       expect(Math.min(sendBox.width, sendBox.height)).toBeGreaterThanOrEqual(44)
 
-      await expect(page.getByText(SEND_OFF)).toBeVisible()
-      await expect(page.getByText(CHAT_OFF)).toBeVisible()
-      await expect(page.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeVisible()
+      // No standing words under the field (owner's request of 26.10.2026): the reasons are read
+      // with the field, the switch and the button, and not shown.
+      await expectOffScreen(page.getByText(SEND_OFF))
+      await expectOffScreen(page.getByText(CHAT_OFF))
+      await expect(page.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toHaveCount(0)
     })
 
     if (width >= 900) {

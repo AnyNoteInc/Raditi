@@ -259,6 +259,14 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     await stopAgain()
   }, 30_000)
 
+  it('takes a snapshot of the viewport for the client as a JPEG within its size', async () => {
+    const browser = await open('/editor')
+    const shot = await browser.screenshot({ qualities: [80, 60, 40], maxBytes: 1024 * 1024 })
+    expect([...shot.bytes.slice(0, 3)]).toEqual([0xff, 0xd8, 0xff])
+    expect(shot).toMatchObject({ width: 1280, height: 800, page: { pageId: browser.shown() } })
+    expect(shot.bytes.byteLength).toBeLessThanOrEqual(1024 * 1024)
+  }, 30_000)
+
   it('never shows the agent what a secret field holds, typed by the agent or the client', async () => {
     const browser = await open('/login')
     let tree = (await browser.observe({})).tree

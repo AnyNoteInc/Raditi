@@ -342,6 +342,8 @@ describe('MCP request policy', () => {
       call('web_help', { reason: 'login', message: 'Пожалуйста, войдите в админку сайта.' }),
       call('web_verify'),
       call('web_verify', { expect: 'publish' }),
+      // A snapshot for the client: the model gets its number, never its pixels (Б20).
+      call('web_screenshot'),
     ]
     for (const body of allowed) {
       expect(mcpBodyAllowed(body, ['web'])).toBe(true)
@@ -369,9 +371,10 @@ describe('MCP request policy', () => {
       call('web_wait', { ms: 15_001 }),
       call('web_help', { reason: 'password', message: 'x' }),
       call('web_verify', { expect: 'trash' }),
-      // No scripts, cookies or pixels for the model.
+      // No scripts or cookies for the model, and no area of the page to choose for a snapshot.
       call('web_evaluate', { expression: 'document.cookie' }),
-      call('web_screenshot', {}),
+      call('web_screenshot', { fullPage: true }),
+      call('web_screenshot', { ref: 'e1' }),
     ]
     for (const body of refused) expect(mcpBodyAllowed(body, ['web', 'browser'])).toBe(false)
   })

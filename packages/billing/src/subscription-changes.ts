@@ -338,7 +338,11 @@ export async function schedulePlanChange(
       if (plan.id === subscription.planId || plan.id === subscription.nextPlanId) {
         throw billingAlreadyOnPlan()
       }
-      if ((await tx.site.count({ where: { workspaceId: subscription.workspaceId } })) > maxSites) {
+      if (
+        (await tx.site.count({
+          where: { workspaceId: subscription.workspaceId, deletedAt: null },
+        })) > maxSites
+      ) {
         throw billingPlanSiteLimit()
       }
       if ((await renewalChargeUnderWay(tx, subscription)) !== 'none') {

@@ -31,10 +31,11 @@ const HOUR_MS = 60 * 60 * 1000
 
 /**
  * Whether a preview can have a copy of the site's database (Р4): the site has a connection to
- * its database from the wizard, or a saved access of the kind `db`.
+ * its database from the wizard, a saved access of the kind `db`, or a dump on its file source
+ * the copy is made from (`site_database_dumps`) — as core reads it (`loadPreviewFacts`).
  */
 export async function siteHasDatabase(
-  db: Pick<Tx, 'siteDatabase' | 'credentialRef'>,
+  db: Pick<Tx, 'siteDatabase' | 'credentialRef' | 'siteDatabaseDump'>,
   siteId: string,
 ): Promise<boolean> {
   const database = await db.siteDatabase.findUnique({
@@ -46,7 +47,9 @@ export async function siteHasDatabase(
     where: { siteId, kind: 'db' },
     select: { id: true },
   })
-  return access !== null
+  if (access !== null) return true
+  const dump = await db.siteDatabaseDump.findUnique({ where: { siteId }, select: { siteId: true } })
+  return dump !== null
 }
 
 export interface DialogPreviewInput {
@@ -186,7 +189,11 @@ export async function openPreview(
 ): Promise<{ url: string; expiresAt: Date }> {
   const to = input.to ?? '/'
   if (!isPreviewPath(to)) throw badRequest('Invalid preview path')
-  const member = { workspace: { members: { some: { userId: input.userId } } } }
+  // Not a task of a deleted site (`deleteSite`): its previews are being destroyed.
+  const member = {
+    site: { deletedAt: null },
+    workspace: { members: { some: { userId: input.userId } } },
+  }
   const where: Prisma.PreviewEnvironmentWhereInput =
     'taskId' in input.target
       ? { taskId: input.target.taskId, task: member }

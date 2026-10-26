@@ -85,6 +85,28 @@ async function waitTask(stand, taskId, statuses, { timeoutMs = 600_000, what } =
   )
 }
 
+/**
+ * The task answered: a pass ended with `feed.result` and the dialog stays open for the next
+ * words (owner's answer of 26.10.2026: «Чат» like «Работа» — no result needs confirming, no
+ * `done`). `results` — how many results the task had before the pass that is waited for.
+ */
+async function waitAnswered(stand, taskId, { results = 0, timeoutMs = 600_000, what } = {}) {
+  const { rt, db, model } = stand
+  return rt.until(
+    what ?? 'the task to answer',
+    async () => {
+      const broken = model.current()?.broken
+      if (broken) throw new CheckFailed(`the scripted model stopped: ${broken}`)
+      const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      if (ENDED.has(task.status)) throw new CheckFailed(`the task ended ${task.status}`)
+      if (task.status !== 'awaiting_user') return null
+      const answered = await db.taskEvent.count({ where: { taskId, type: 'feed.result' } })
+      return answered > results ? task : null
+    },
+    { timeoutMs, intervalMs: 1000, service: stand.processes.core },
+  )
+}
+
 // ─── Tasks and turns ──────────────────────────────────────────────────────────
 
 /** A task in the browser through `task.create`, its first turn scripted beforehand. */
@@ -828,8 +850,14 @@ async function scenarioE(stand) {
       )
     }
 
-    // «Продолжить работу агента» of the waiting task: the same attempt, the next turn takes control.
+    // «Продолжить работу агента» of the waiting task: the next turn takes control. The pass that
+    // asked for the sign-in completed and was charged (owner's answer of 26.10.2026: every
+    // completed pass is paid), so the press opens the next attempt with a reserve of its own;
+    // while that charge waits for the usage of the key, it continues the same attempt.
     const attempt = (await db.task.findUniqueOrThrow({ where: { id: state.taskF } })).attempt
+    const charged =
+      (await db.creditHold.count({ where: { taskId: state.taskF, attempt, status: 'active' } })) ===
+      0
     if (operator.kind === 'cabinet') {
       // The first tab takes the browser back and gives it to the agent with its own button.
       await operator.take()
@@ -846,8 +874,9 @@ async function scenarioE(stand) {
     const requests = await rowsOf(stand.db, state.taskF, 'feed.request')
     const resumed = await db.task.findUniqueOrThrow({ where: { id: state.taskF } })
     rt.check(
-      requests.some((row) => row.kind === 'resume') && resumed.attempt === attempt,
-      `«Продолжить работу агента» ${operator.kind === 'cabinet' ? 'pressed in the cabinet' : '(task.resumeAgent)'}: a \`resume\` request in the feed, the same attempt, and the next turn takes the browser back (Б16)`,
+      requests.some((row) => row.kind === 'resume') &&
+        resumed.attempt === (charged ? attempt + 1 : attempt),
+      `«Продолжить работу агента» ${operator.kind === 'cabinet' ? 'pressed in the cabinet' : '(task.resumeAgent)'}: a \`resume\` request in the feed, ${charged ? 'the next attempt after the charged pass' : 'the same attempt'}, and the next turn takes the browser back (Б16)`,
     )
     other.close()
   } finally {
@@ -865,8 +894,8 @@ async function scenarioF(stand) {
   const { rt, db, site, state } = stand
   rt.begin('F', 'новость с двумя картинками и PDF: публикация и проверка')
   const baseline = state.ownerDraft ?? 0
-  const task = await waitTask(stand, state.taskF, ['done'], {
-    what: 'the task to be done',
+  const task = await waitAnswered(stand, state.taskF, {
+    what: 'the task to answer',
     timeoutMs: 900_000,
   })
   const facts = stand.model.current().facts
@@ -883,13 +912,14 @@ async function scenarioF(stand) {
   const result = results.at(-1)
   const object = result?.objects?.find((item) => item.status === 'published')
   rt.check(
-    task.status === 'done' &&
+    task.status === 'awaiting_user' &&
+      result?.next === 'awaiting_user' &&
       object &&
       object.kind === 'post' &&
       object.title === TEXT_F.title &&
       typeof object.url === 'string' &&
       object.url.startsWith(SITE_ORIGIN),
-    `the task is done with feed.result naming the post as the site shows it: «${object?.title}», published, ${object?.url}`,
+    `the task answered with feed.result naming the post as the site shows it: «${object?.title}», published, ${object?.url}; the dialog stays open`,
     result,
   )
   rt.check(result.site === 'changed', 'the result says the site changed')
@@ -900,7 +930,7 @@ async function scenarioF(stand) {
   })
   rt.check(
     charged >= 5 && audit !== null && holds.every((hold) => hold.status !== 'active'),
-    `the task is charged from its token usage: ${charged} credits, the reserve settled (billing.task.charge)`,
+    `every pass is charged from its token usage when it ends: ${charged} credits, the reserves settled (billing.task.charge)`,
     holds.map((hold) => ({ status: hold.status, charged: hold.charged })),
   )
   const objects = await site.objects({ after: baseline })
@@ -935,14 +965,10 @@ async function scenarioF(stand) {
     `the post is public: /?p=${post.id} answers 200 with its title`,
   )
   const session = await db.browserSession.findUniqueOrThrow({ where: { id: state.sessionF } })
-  const left = await sessionResources(rt, state.sessionF)
   rt.check(
-    session.status === 'closed' &&
-      session.closeReason === 'task_done' &&
-      left.containers.length === 0 &&
-      left.networks.length === 0,
-    'done closes the session: browser_sessions closed (task_done), its containers and network are gone (Б18)',
-    { status: session.status, reason: session.closeReason, ...left },
+    session.closedAt === null && ['starting', 'ready'].includes(session.status),
+    'the session lives on after the answer for the next words: it closes on its idle time or with the dialog (Б18)',
+    { status: session.status, reason: session.closeReason },
   )
   rt.end()
 }
@@ -962,7 +988,7 @@ async function scenarioG(stand) {
     account: site.accounts.owner,
     program: 'keepDraft',
     ctx: { words, foreignAttachment: state.foreignAttachment },
-    until: ['done'],
+    until: ['awaiting_user'],
   })
   rt.check(
     facts.foreign === 'BROWSER_ATTACHMENT_UNKNOWN',
@@ -972,11 +998,12 @@ async function scenarioG(stand) {
   const result = (await rowsOf(db, taskId, 'feed.result')).at(-1)
   const object = result?.objects?.[0]
   rt.check(
-    task.status === 'done' &&
+    task.status === 'awaiting_user' &&
+      result?.next === 'awaiting_user' &&
       object?.status === 'draft' &&
       object.url === undefined &&
       object.title === words.title,
-    'done with the draft as the site shows it: status draft, no public address',
+    'the answer names the draft as the site shows it: status draft, no public address',
     result,
   )
   const objects = await site.objects({ after: baseline })
@@ -1007,7 +1034,7 @@ async function scenarioH(stand) {
     account: site.accounts.contributor,
     program: 'submitForReview',
     ctx: { words },
-    until: ['done', 'awaiting_user'],
+    until: ['awaiting_user'],
   })
   rt.check(
     facts.submitButton === true && facts.publishButton === false,
@@ -1016,7 +1043,7 @@ async function scenarioH(stand) {
   )
   const result = (await rowsOf(db, taskId, 'feed.result')).at(-1)
   rt.check(
-    task.status === 'done' &&
+    task.status === 'awaiting_user' &&
       result?.objects?.[0]?.status === 'pending' &&
       Boolean(facts.pending) &&
       /отправили «.+» на утверждение/.test(result.message),
@@ -1146,7 +1173,7 @@ async function scenarioJ(stand) {
     account: site.accounts.owner,
     program: 'publishAfterTimeout',
     ctx: { words },
-    until: ['done'],
+    until: ['awaiting_user'],
     before: () => site.switches.on(SWITCH.publishDelay),
   })
   rt.check(
@@ -1168,14 +1195,14 @@ async function scenarioJ(stand) {
   const objects = await site.objects({ after: baseline })
   const posts = objects.filter((row) => row.type === 'post' && row.title === words.title)
   rt.check(
-    task.status === 'done' && posts.length === 1 && posts[0].status === 'publish',
+    task.status === 'awaiting_user' && posts.length === 1 && posts[0].status === 'publish',
     'WordPress: exactly one post, published — no duplicate',
     objects,
   )
   const result = (await rowsOf(db, taskId, 'feed.result')).at(-1)
   rt.check(
     result?.objects?.some((item) => item.status === 'published'),
-    'the task is done with the published post in its result',
+    'the answer names the published post',
     result,
   )
   rt.end()
@@ -1563,15 +1590,35 @@ async function openHome(stand, client, GetObjectCommand, manifest) {
 async function scenarioM(stand) {
   const { rt, db, state } = stand
   rt.begin('M', 'уборка: сессии закрыты, контейнеры и сети удалены')
-  const sessions = await db.browserSession.findMany({ where: { siteId: state.siteId } })
+  // A dialog stays open after an answer (26.10.2026): the client closes what is left with
+  // «Остановить», and core closes the browser of each.
+  const open = await db.task.findMany({
+    where: { siteId: state.siteId, status: { in: ['awaiting_user', 'awaiting_approval'] } },
+    select: { id: true },
+  })
+  for (const { id } of open) {
+    await state.owner.mutate('task.cancel', { taskId: id, requestId: randomUUID() })
+    await waitTask(stand, id, ['cancelled'], {
+      what: 'the open dialog to close',
+      timeoutMs: 120_000,
+    })
+  }
+  const sessions = await rt.until(
+    'every session of the site to close',
+    async () => {
+      const rows = await db.browserSession.findMany({ where: { siteId: state.siteId } })
+      return rows.every((session) => session.closedAt !== null) ? rows : null
+    },
+    { timeoutMs: 120_000, intervalMs: 1000, service: stand.processes.core },
+  )
   const tasks = await db.task.findMany({ where: { siteId: state.siteId } })
   rt.check(
     tasks.every((task) => ENDED.has(task.status)),
     `every task of the site ended (${tasks.map((task) => task.status).join(', ')})`,
   )
-  const open = sessions.filter((session) => session.closedAt === null)
+  const unclosed = sessions.filter((session) => session.closedAt === null)
   rt.check(
-    open.length === 0,
+    unclosed.length === 0,
     `browser_sessions: all ${sessions.length} sessions closed (${[...new Set(sessions.map((session) => session.closeReason))].join(', ')})`,
   )
   const live = await workerSessions(stand)

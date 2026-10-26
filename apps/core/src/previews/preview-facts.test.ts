@@ -30,6 +30,7 @@ function facts(
       seed: { key: 'k', sha256: 'a'.repeat(64), releaseId: null },
       expiresAt: later,
       lastViewedAt: null,
+      lastUsedAt: now,
       record: emptyPreviewRecord(),
       written: false,
       ...preview,
@@ -46,6 +47,7 @@ function facts(
       invalid: false,
     },
     hasDatabase: true,
+    databaseDump: null,
     ...rest,
   }
 }
@@ -91,6 +93,55 @@ describe('what a preview needs now', () => {
         now,
       }),
     ).toBe('build')
+  })
+
+  it('stops a served preview no one used for PREVIEW_IDLE_MINUTES while its dialog waits', () => {
+    const idleMs = 30 * 60_000
+    const unused = new Date(now.getTime() - idleMs)
+    const used = new Date(now.getTime() - idleMs + 1000)
+    const waits = facts({ lastUsedAt: unused })
+    expect(previewAction(waits, { requested: false, now, idleMs })).toBe('expire')
+    // Whatever was asked: a stale candidate is shown again once someone looks.
+    expect(
+      previewAction(facts({ lastUsedAt: unused, dirty: true }), { requested: true, now, idleMs }),
+    ).toBe('expire')
+    expect(previewAction(facts({ lastUsedAt: used }), { requested: false, now, idleMs })).toBe(
+      'none',
+    )
+    // No idle limit given: as before.
+    expect(previewAction(waits, { requested: false, now })).toBe('none')
+    // A pass queued or running holds it.
+    for (const status of ['queued', 'preparing', 'running'] as const)
+      expect(
+        previewAction(facts({ lastUsedAt: unused }, { task: { ...waits.task, status } }), {
+          requested: false,
+          now,
+          idleMs,
+        }),
+      ).toBe('none')
+    // Only a served one: a failed or unavailable preview keeps the words of its state.
+    for (const status of ['failed', 'unavailable'] as const)
+      expect(
+        previewAction(facts({ status, lastUsedAt: unused }), { requested: false, now, idleMs }),
+      ).toBe('none')
+    // Its containers lost and no one using it: stopped, not built for no one.
+    expect(previewAction(waits, { requested: true, now, idleMs, lost: true })).toBe('expire')
+    expect(
+      previewAction(facts({ lastUsedAt: used }), { requested: true, now, idleMs, lost: true }),
+    ).toBe('build')
+  })
+
+  it('builds a stopped preview again for a pass of its dialog', () => {
+    for (const status of ['queued', 'preparing', 'running'] as const)
+      expect(
+        previewAction(
+          facts(
+            { status: 'expired', lastUsedAt: new Date(0) },
+            { task: { status, workspaceId: 'w', dataClass: 'synthetic' } },
+          ),
+          { requested: true, now, idleMs: 60_000 },
+        ),
+      ).toBe('build')
   })
 
   it('rebuilds on request what does not show its candidate', () => {

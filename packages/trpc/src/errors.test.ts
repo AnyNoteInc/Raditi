@@ -872,7 +872,7 @@ describe('the refusals of a dialog, its preview and its release', () => {
       ).message
     expect(text('site_not_active')).toContain('сайт ещё не подключён')
     expect(text('not_synthetic')).toContain('тестовая среда')
-    expect(text('class_unavailable')).toContain('не можем повторить работу')
+    expect(text('class_unavailable')).toContain('на этом уровне размышления недоступен')
     expect(text('browser_unavailable')).toBe(
       'Задания в браузере сейчас не принимаются. Попробуйте ещё раз немного позже',
     )

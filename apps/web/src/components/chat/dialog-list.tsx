@@ -9,7 +9,7 @@ import Typography from '@mui/material/Typography'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { useSelectedLayoutSegment } from 'next/navigation'
-import { useId } from 'react'
+import { useId, useState } from 'react'
 
 import { siteHref } from '@/components/site/site-nav'
 import { useTRPCClient } from '@/trpc/client'
@@ -17,10 +17,10 @@ import { useTRPCClient } from '@/trpc/client'
 import { dialogGroups, listTime } from './chat-format'
 import { listText, undoText } from './chat-texts'
 import type { DialogListItem } from './chat-types'
+import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
 import { StatusMark } from './status-mark'
 
-/** The key of the list of a site's dialogs: a new dialog makes it read again. */
-export const dialogListKey = (siteId: string) => ['chat', 'dialogs', siteId] as const
+export { dialogListKey }
 
 /** The list is read again this often while the page is shown, to follow the statuses. */
 const LIST_REFRESH_MS = 15_000
@@ -42,63 +42,142 @@ function DialogLink({
       ? undoText.running
       : item.undo === 'installed'
         ? undoText.installed
-        : taskStatusListHint[item.status]
+        : item.answered
+          ? null
+          : taskStatusListHint[item.status]
   return (
     <Box
       component={Link}
       href={`${siteHref(siteId, 'chat')}/${item.id}`}
       aria-current={current ? 'page' : undefined}
       sx={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) auto',
-        alignItems: 'baseline',
-        gap: '2px 12px',
-        minHeight: 44,
-        px: 1.5,
-        py: 1.25,
-        borderRadius: '12px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '1px',
+        minHeight: { xs: 44, md: 40 },
+        justifyContent: 'center',
+        px: 1.25,
+        // The menu of the row stands at its right end: under a finger always, so room is kept;
+        // where a pointer hovers it shows in place of the time.
+        '@media (hover: none)': { pr: 6 },
+        py: 0.75,
+        borderRadius: '10px',
         textDecoration: 'none',
         color: 'text.primary',
         bgcolor: current ? 'action.selected' : 'transparent',
+        transition: 'background-color var(--raditi-motion-fast) var(--raditi-ease-out)',
         '&:hover': { bgcolor: current ? 'action.selected' : 'action.hover' },
         '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
       }}
     >
-      <Typography
-        component="span"
-        sx={{
-          minWidth: 0,
-          fontSize: 15,
-          fontWeight: current ? 600 : 500,
-          lineHeight: 1.35,
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow: 'hidden',
-          overflowWrap: 'anywhere',
-        }}
-      >
-        {item.title ?? listText.untitled}
-      </Typography>
-      <Typography
-        component="span"
-        variant="caption"
-        color="text.secondary"
-        sx={{ whiteSpace: 'nowrap' }}
-      >
-        {listTime(item.updatedAt, now)}
-      </Typography>
+      <Box component="span" sx={{ display: 'flex', alignItems: 'baseline', gap: 1, minWidth: 0 }}>
+        <Typography
+          component="span"
+          sx={{
+            flex: '1 1 auto',
+            minWidth: 0,
+            fontSize: 14,
+            fontWeight: current ? 500 : 400,
+            lineHeight: 1.45,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {item.title ?? listText.untitled}
+        </Typography>
+        <Typography
+          component="span"
+          variant="caption"
+          color="text.secondary"
+          data-dialog-time=""
+          sx={{ flex: 'none', whiteSpace: 'nowrap' }}
+        >
+          {listTime(item.updatedAt, now)}
+        </Typography>
+      </Box>
       <Box
         component="span"
-        sx={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: '0 8px', minWidth: 0 }}
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '0 6px',
+          minWidth: 0,
+          fontSize: 12,
+          color: 'text.secondary',
+          '& svg': { width: 13, height: 13 },
+        }}
       >
-        <StatusMark status={item.status} />
+        <StatusMark status={item.status} answered={item.answered} />
         {hint ? (
           <Typography component="span" variant="caption" color="text.secondary">
             {hint}
           </Typography>
         ) : null}
       </Box>
+    </Box>
+  )
+}
+
+/**
+ * A row of the list: the link to the dialog and its menu (owner's request of 26.10.2026) —
+ * «Переименовать» writes the name in place of the link, «Удалить» asks first. Where a pointer
+ * hovers, the menu shows on hover and focus of the row, in place of its time.
+ */
+function DialogRow({
+  siteId,
+  item,
+  current,
+  now,
+}: {
+  siteId: string
+  item: DialogListItem
+  current: boolean
+  now: Date
+}) {
+  const [renaming, setRenaming] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const title = item.title ?? listText.untitled
+  return (
+    <Box
+      sx={{
+        position: 'relative',
+        '@media (hover: hover)': {
+          '&:hover [data-dialog-menu], &:focus-within [data-dialog-menu]': { opacity: 1 },
+          '&:hover [data-dialog-time], &:focus-within [data-dialog-time]': { visibility: 'hidden' },
+        },
+      }}
+    >
+      {renaming ? (
+        <Box sx={{ py: 0.5 }}>
+          <RenameField
+            siteId={siteId}
+            taskId={item.id}
+            initial={item.title ?? ''}
+            onDone={() => setRenaming(false)}
+          />
+        </Box>
+      ) : (
+        <>
+          <DialogLink siteId={siteId} item={item} current={current} now={now} />
+          <Box sx={{ position: 'absolute', right: 2, top: 2 }}>
+            <DialogMenuButton
+              quiet
+              title={title}
+              onRename={() => setRenaming(true)}
+              onRemove={() => setRemoving(true)}
+            />
+          </Box>
+        </>
+      )}
+      {removing ? (
+        <RemoveDialogConfirm
+          siteId={siteId}
+          taskId={item.id}
+          open
+          onClose={() => setRemoving(false)}
+        />
+      ) : null}
     </Box>
   )
 }
@@ -123,18 +202,18 @@ function DialogGroup({
         id={labelId}
         variant="caption"
         color="text.secondary"
-        sx={{ px: 1.5, pt: 1, fontWeight: 600 }}
+        sx={{ px: 1.25, pt: 1, pb: 0.25, fontWeight: 500 }}
       >
         {label}
       </Typography>
       <Box
         component="ul"
         aria-labelledby={labelId}
-        sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 0.25 }}
+        sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '2px' }}
       >
         {items.map((item) => (
           <li key={item.id}>
-            <DialogLink
+            <DialogRow
               siteId={siteId}
               item={item}
               current={item.id.toLowerCase() === currentId}

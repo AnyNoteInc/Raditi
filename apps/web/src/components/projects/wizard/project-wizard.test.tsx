@@ -8,7 +8,7 @@ import {
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CREATE_RESEND_MS, CREATE_RESENDS, ProjectWizard } from './project-wizard'
+import { CREATE_RESEND_MS, CREATE_RESENDS, ProjectWizard, VARIABLES_NOTE } from './project-wizard'
 
 type Call = Record<string, unknown>
 
@@ -210,6 +210,8 @@ describe('the access to the files', () => {
     fireEvent.click(within(panel).getByRole('button', { name: 'Ключ совпадает, продолжить' }))
     await waitFor(() => expect(stepTitle()).toHaveTextContent('База данных'))
     expect(sourceCalls()[1]).toMatchObject({ source: { hostKey: KEY } })
+    // The step that adds the project says the accesses become variables of the site.
+    expect(screen.getByText(VARIABLES_NOTE)).toBeVisible()
   })
 
   it('takes a changed key only by its own explicit button', async () => {

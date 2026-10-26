@@ -1,6 +1,6 @@
 'use client'
 
-import { BrandSymbol } from '@repo/ui/brand-symbol'
+import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 
@@ -82,7 +82,7 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
     <header ref={header} className={styles.header}>
       <div className={styles.headerInner}>
         <Link href="/" aria-label="Радити — на главную" className={styles.wordmark}>
-          <BrandSymbol size={35} className={styles.logoSymbol} />
+          <AnimatedBrandSymbol size={35} className={styles.logoSymbol} />
           Радити
         </Link>
         <nav className={styles.desktopNav} aria-label="Основная навигация">

@@ -35,8 +35,8 @@ type ByRef<T> = Omit<T, 'observation'>
  * An action of the agent as the browser performs it: the worker has checked the observation
  * (references are of the latest one of the shown page) and read the attachments, so a reference
  * comes alone and an upload carries the files — without a reference, into the file chooser that
- * waits. `web_observe`, `web_tab`, `web_help` and
- * `web_verify` are the worker's own (`observe`, the tab methods, its state, `verify`).
+ * waits. `web_observe`, `web_tab`, `web_help`, `web_verify` and `web_screenshot` are the
+ * worker's own (`observe`, the tab methods, its state, `verify`, `screenshot`).
  */
 export type CloudBrowserAction =
   | ActionOf<'web_open'>
@@ -130,6 +130,15 @@ export interface CloudBrowserSession {
    * it, or a dialog waits.
    */
   focused(): Promise<{ role: string; name: string } | null>
+  /**
+   * A JPEG of the viewport of the shown page for the client (`web_screenshot`): at the qualities
+   * given in order until one is at most `maxBytes`. Refused under a dialog that waits (the page
+   * draws nothing then) and when none fits. The pixels go to the client, never to the model.
+   */
+  screenshot(options: {
+    qualities: readonly number[]
+    maxBytes: number
+  }): Promise<{ page: BrowserTab; bytes: Uint8Array; width: number; height: number }>
   /**
    * Starts the screencast of the shown page (and of each page shown after it). `onFrame`'s promise
    * holds Chromium's acknowledgement of the frame, so a slow consumer slows the capture itself.

@@ -259,6 +259,17 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
   },
   // docs/plan/57-browser-tasks.md: a task done in the browser of the task.
   {
+    name: 'screenshot v1',
+    type: 'feed.screenshot',
+    payload: {
+      v: 1,
+      screenshotId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d95',
+      number: 1,
+      width: 1280,
+      height: 800,
+    },
+  },
+  {
     name: 'request v1 resume',
     type: 'feed.request',
     payload: { v: 1, kind: 'resume', authorId: author, requestId: request },

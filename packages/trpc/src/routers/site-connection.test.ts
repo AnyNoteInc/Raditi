@@ -110,6 +110,13 @@ function fakeDb() {
   return { db, prisma: db as unknown as PrismaClient }
 }
 
+/**
+ * The writes of the access secrets alone: since 26.10.2026 the accesses are also written as the
+ * site's variables (`kv/sites/<id>/env/…`), after them.
+ */
+const accessWrites = <T extends { path: string }>(who: { fake: { secrets: { writes: T[] } } }) =>
+  who.fake.secrets.writes.filter((write) => !write.path.includes('/env/'))
+
 describe('siteConnection.checkBasics', () => {
   it('answers the name and the address as they will be stored, reading only', async () => {
     const { prisma, db } = fakeDb()
@@ -192,7 +199,7 @@ describe('siteConnection.checkBasics', () => {
       code: 'FORBIDDEN',
       cause: { code: 'PROJECT_PLAN_LIMIT_REACHED', details: { maxSites: 1 } },
     })
-    expect(db.site.count).toHaveBeenLastCalledWith({ where: { workspaceId } })
+    expect(db.site.count).toHaveBeenLastCalledWith({ where: { workspaceId, deletedAt: null } })
   })
 
   it('refuses a local address in production and a platform that is not connected', async () => {
@@ -976,7 +983,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the setup of a connected site', () =>
 
     // Checked like at creation, then written as the first version of its own path.
     expect(who.fake.sourceChecks.at(-1)!.context.pinRequired).toBe(true)
-    expect(who.fake.secrets.writes.at(-1)).toMatchObject({
+    expect(accessWrites(who).at(-1)).toMatchObject({
       path: `kv/sites/${project.id}/ftp`,
       cas: 0,
       version: 1,
@@ -1030,7 +1037,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the setup of a connected site', () =>
       }),
     ).resolves.toEqual({ outcome: 'replaced' })
 
-    expect(who.fake.secrets.writes.at(-1)).toMatchObject({
+    expect(accessWrites(who).at(-1)).toMatchObject({
       path: `kv/sites/${project.id}/ssh`,
       cas: 1,
       version: 2,
@@ -1137,7 +1144,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the setup of a connected site', () =>
         input: { hostKey: OTHER_HOST_KEY },
         context: { pinRequired: true },
       })
-      expect(who.fake.secrets.writes.at(-1)!.data).toMatchObject({ hostKey: OTHER_HOST_KEY })
+      expect(accessWrites(who).at(-1)!.data).toMatchObject({ hostKey: OTHER_HOST_KEY })
       expect(
         await db.siteCodeSource.findUniqueOrThrow({ where: { siteId: project.id } }),
       ).toMatchObject({ hostKey: OTHER_HOST_KEY })
@@ -1196,7 +1203,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the setup of a connected site', () =>
         await db.siteCodeSource.findUniqueOrThrow({ where: { siteId: project.id } }),
       ).toMatchObject({ hostKey: OTHER_HOST_KEY })
       // Version 3 of the secret is in Vault, the reference names version 2.
-      expect(who.fake.secrets.writes.map(({ version }) => version)).toEqual([1, 2, 3])
+      expect(accessWrites(who).map(({ version }) => version)).toEqual([1, 2, 3])
       expect(await db.credentialRef.findMany({ where: { siteId: project.id } })).toEqual([
         expect.objectContaining({ kind: 'ssh', keyVersion: 2 }),
       ])

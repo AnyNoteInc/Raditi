@@ -22,6 +22,7 @@ import {
   turnInputSchema,
   type PreparedRun,
   type RunContext,
+  type TurnSkill,
 } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
@@ -184,6 +185,101 @@ describe('OpenCode driver: prepared files and argv', () => {
     // The reasoning level belongs to the gateway (the profile of the turn key), not to the CLI.
     const text = file(await driver.prepare(context), '.config/opencode/opencode.json')
     expect(text).not.toMatch(/reasoning_effort|variant|thinking|"high"/)
+  })
+
+  it('opens the fetch tool and the skills in the open internet, through the egress proxy', async () => {
+    const egressProxy = 'http://sandbox-gw:3128'
+    const skills: TurnSkill[] = [
+      { name: 'context7', kind: 'remote', url: 'https://mcp.context7.com/mcp' },
+      { name: 'playwright', kind: 'local' },
+      { name: 'docs', kind: 'remote', url: 'https://docs.example.org:8443/mcp' },
+    ]
+    const run = await driver.prepare({ ...context, egressProxy, internet: true, skills })
+    expect(preparedRunSchema.parse(run)).toEqual(run)
+    const value = config(run)
+    expect(value.permission).toMatchObject({
+      webfetch: 'allow',
+      // Web search sends the query to a service of the CLI's vendor: it stays off.
+      websearch: 'deny',
+      'raditi_*': 'allow',
+      'context7_*': 'allow',
+      'playwright_*': 'allow',
+      'docs_*': 'allow',
+    })
+    const servers = value.mcp as Record<string, Record<string, unknown>>
+    expect(Object.keys(servers)).toEqual(['raditi', 'context7', 'playwright', 'docs'])
+    // A remote skill gets no header, no key, no reference the CLI would substitute.
+    expect(servers.context7).toEqual({
+      type: 'remote',
+      url: 'https://mcp.context7.com/mcp',
+      enabled: true,
+      oauth: false,
+      timeout: 60_000,
+    })
+    expect(servers.docs).toMatchObject({ type: 'remote', url: 'https://docs.example.org:8443/mcp' })
+    // The browser of the image, headless, its profile in memory, through the proxy alone.
+    const browser = servers.playwright!
+    expect(browser).toMatchObject({ type: 'local', enabled: true })
+    const command = browser.command as string[]
+    expect(command.slice(0, 2)).toEqual([
+      'node',
+      '/usr/local/lib/raditi/agent-clis/node_modules/@playwright/mcp/cli.js',
+    ])
+    for (const flag of ['--headless', '--isolated', '--no-sandbox']) expect(command).toContain(flag)
+    // The model reads no pixels (N22): a screenshot answers without its image.
+    expect(command[command.indexOf('--image-responses') + 1]).toBe('omit')
+    // The snapshots the skill writes are the only files outside the inbox the agent reads.
+    expect(value.permission.external_directory).toEqual({
+      '*': 'deny',
+      [`${SANDBOX_INBOX}/*`]: 'allow',
+      [`${home}/playwright/output/*`]: 'allow',
+    })
+    expect(command[command.indexOf('--proxy-server') + 1]).toBe(egressProxy)
+    expect(command[command.indexOf('--proxy-bypass') + 1]).toBe('sandbox-gw,localhost,127.0.0.1')
+    expect(command[command.indexOf('--browser') + 1]).toBe('chromium')
+    expect(browser.environment).toEqual({
+      HOME: `${home}/playwright`,
+      TMPDIR: `${home}/playwright`,
+      PLAYWRIGHT_BROWSERS_PATH: '/opt/ms-playwright',
+    })
+    expect(run.files.map((entry) => entry.path)).toContain(`${home}/playwright/output/.keep`)
+    // Still only the two credentials are substituted.
+    expect(substitutions(file(run, '.config/opencode/opencode.json')).sort()).toEqual([
+      `{file:${SANDBOX_SECRETS_DIR}/llm}`,
+      `{file:${SANDBOX_SECRETS_DIR}/mcp}`,
+    ])
+    expect(file(run, 'run.mjs')).toContain('"internet":true')
+  })
+
+  it('keeps the fetch tool and every skill off without the open internet', async () => {
+    const value = config(
+      await driver.prepare({ ...context, egressProxy: 'http://sandbox-gw:3128' }),
+    )
+    expect(value.permission.webfetch).toBe('deny')
+    expect(Object.keys(value.mcp as Record<string, unknown>)).toEqual(['raditi'])
+    const skills: TurnSkill[] = [{ name: 'playwright', kind: 'local' }]
+    await expect(driver.prepare({ ...context, skills })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+    await expect(driver.prepare({ ...context, internet: true })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+    await expect(
+      driver.prepare({
+        ...context,
+        egressProxy: 'http://sandbox-gw:3128',
+        internet: true,
+        skills: [{ name: 'raditi', kind: 'remote', url: 'https://mcp.example.org/mcp' }],
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(
+      driver.prepare({
+        ...context,
+        egressProxy: 'http://sandbox-gw:3128',
+        internet: true,
+        skills: [{ name: 'docs', kind: 'remote', url: 'https://mcp.example.org/mcp?key=1' }],
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 
   it('gives the platform MCP server the one name its events parser takes off a tool', async () => {
@@ -525,6 +621,7 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       prompt?: string
       envValues?: Record<string, string>
       egressProxy?: string
+      internet?: true
     } = {},
     behaviour: Behaviour = {},
     before?: (paths: { home: string; secrets: string; repo: string }) => Promise<void>,
@@ -537,6 +634,7 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       ...(turn.session ? { nativeSessionId: turn.session } : {}),
       ...(turn.envValues ? { envValues: turn.envValues } : {}),
       ...(turn.egressProxy ? { egressProxy: turn.egressProxy } : {}),
+      ...(turn.internet ? { internet: true as const } : {}),
     })
     driver.command(run, { prompt: turn.prompt ?? input.prompt, attachments: [] })
     const directory = await mkdtemp(join(tmpdir(), 'raditi-opencode-wrapper-'))
@@ -1391,6 +1489,29 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       expect(result.left.secrets).toEqual([])
     })
 
+    it('gives the CLI itself the proxy in the open internet, and the shell plain HTTP through it', async () => {
+      mcpAnswer = accept
+      const result = await launch(
+        { envValues: values, egressProxy, internet: true },
+        { run: { shell: 'printf "%s|%s|%s" "$HTTP_PROXY" "$https_proxy" "$NO_PROXY"' } },
+      )
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      const [cli] = result.records as [CliRecord]
+      expect(cli.shell).toBe(`${egressProxy}|${egressProxy}|sandbox-gw,127.0.0.1,localhost`)
+      // The CLI — its fetch tool, the skills — has the proxy and what stays direct, no value.
+      expect(cli.env).toMatchObject({
+        HTTPS_PROXY: egressProxy,
+        https_proxy: egressProxy,
+        HTTP_PROXY: egressProxy,
+        http_proxy: egressProxy,
+        NO_PROXY: 'sandbox-gw,127.0.0.1,localhost',
+      })
+      expect(containsEnvValue(JSON.stringify({ ...cli, shell: '' }), Object.values(values))).toBe(
+        false,
+      )
+    })
+
     it('gives the shell the proxy alone when no value reached the turn, and nothing without either', async () => {
       mcpAnswer = accept
       const proxied = await launch(
@@ -1429,6 +1550,22 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       })
       expect(session.rows[1]!.raw).toBe(session.rows[1]!.data)
       expect(session.rows[2]).toEqual({ data: rows[2], raw: rows[2] })
+    })
+
+    it('leaves a value shorter than eight bytes in the session as it is, and the turn goes on', async () => {
+      mcpAnswer = accept
+      const short = { FLAG: '1', MODE: 'prod' }
+      const rows = [JSON.stringify({ output: 'step 1 of 1 in prod' })]
+      const result = await launch(
+        { envValues: { ...short, PAYMENT_KEY: values.PAYMENT_KEY } },
+        { run: { session: rows, shell: 'printf "%s|%s" "$FLAG" "$MODE"' } },
+      )
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      // The shell still gets the short values; the session keeps its text whole.
+      expect(result.records[0]!.shell).toBe('1|prod')
+      expect(result.left.session!.rows[0]).toEqual({ data: rows[0], raw: rows[0] })
+      expect(envVarLimits.maskMinBytes).toBe(8)
     })
 
     it('leaves no value in what a change freed in the database, nor where SQL did not reach', async () => {

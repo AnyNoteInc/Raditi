@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { plain } from '@/components/billing/testing'
 
 import type { CandidateHead, CandidateView, FileDiffView, PreviewHead } from './chat-types'
-import { PreviewPane, type PaneTab } from './preview-pane'
+import { paneTabsOf, PreviewPane, type PaneTab } from './preview-pane'
 import { CANDIDATE_ID, candidateHead, TASK_ID } from './testing'
 
 const { ticket, candidate, fileDiff } = vi.hoisted(() => ({
@@ -121,7 +121,9 @@ function showPane(props: {
   preview?: PreviewHead | null
   candidate?: CandidateHead | null
   tab?: PaneTab
+  tabs?: readonly PaneTab[]
   canReset?: boolean
+  onClose?: () => void
 }) {
   const onTab = vi.fn<(tab: PaneTab) => void>()
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -133,10 +135,12 @@ function showPane(props: {
         candidate={props.candidate === undefined ? candidateHead : props.candidate}
         tab={props.tab ?? 'preview'}
         onTab={onTab}
+        {...(props.tabs ? { tabs: props.tabs } : {})}
         visible
         canReset={props.canReset ?? true}
         onReset={onReset}
         resetting={false}
+        {...(props.onClose ? { onClose: props.onClose } : {})}
       />
     </QueryClientProvider>,
   )
@@ -162,6 +166,69 @@ beforeEach(() => {
       '-  color: red;',
       '+  color: <script>alert(1)</script>;',
     ].join('\n'),
+  })
+})
+
+describe("the tabs it has something for (owner's request of 26.10.2026)", () => {
+  it('opens only when something on the site changed, or the preview was asked for', () => {
+    expect(paneTabsOf(previewOf(), candidateHead)).toEqual([
+      'preview',
+      'files',
+      'database',
+      'checks',
+    ])
+    expect(paneTabsOf(null, null)).toEqual([])
+    // The owner, 26.10.2026: a preview of a dialog that has changed nothing is not opened by
+    // itself — only when the client asks for it (`/preview`).
+    expect(paneTabsOf(previewOf(), null)).toEqual([])
+    expect(paneTabsOf(previewOf({ status: 'building' }), null)).toEqual([])
+    expect(paneTabsOf(previewOf({ status: 'building' }), null, { previewAsked: true })).toEqual([
+      'preview',
+    ])
+    // A preview that cannot be shown, or is gone, is not in use even when asked for.
+    expect(paneTabsOf(previewOf({ status: 'unavailable' }), null, { previewAsked: true })).toEqual(
+      [],
+    )
+    expect(paneTabsOf(previewOf({ status: 'destroyed' }), null, { previewAsked: true })).toEqual([])
+    // Checks alone change nothing on the site: no preview for them.
+    expect(
+      paneTabsOf(previewOf(), {
+        ...candidateHead,
+        counts: { files: { added: 0, modified: 0, deleted: 0 }, media: 0, records: 0 },
+      }),
+    ).toEqual(['checks'])
+    // Only the files change: no tab of the records, none of the checks yet.
+    expect(
+      paneTabsOf(null, {
+        ...candidateHead,
+        counts: { files: { added: 0, modified: 1, deleted: 0 }, media: 0, records: 0 },
+        checks: { pending: 0, passed: 0, failed: 0, stale: 0 },
+      }),
+    ).toEqual(['files'])
+    expect(paneTabsOf(null, { ...candidateHead, counts: null })).toEqual(['checks'])
+  })
+
+  it('draws the tabs as icons named by their labels, the changes with their numbers', () => {
+    showPane({ tabs: ['files', 'database'], tab: 'preview' })
+    const tabs = within(screen.getByRole('tablist', { name: 'Разделы изменений' })).getAllByRole(
+      'tab',
+    )
+    expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual(['Файлы', 'База данных'])
+    expect(tabs.map((tab) => tab.getAttribute('title'))).toEqual(['Файлы', 'База данных'])
+    // Two files changed and one added, a medium besides; three records.
+    expect(tabs.map((tab) => plain(tab.textContent))).toEqual(['4', '3'])
+    // The tab asked for has nothing now: the first that has something is shown.
+    expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: 'Предпросмотр' })).toBeNull()
+  })
+})
+
+describe('closing the panel', () => {
+  it('steps aside by «Скрыть изменения»', () => {
+    const onClose = vi.fn()
+    showPane({ tabs: ['files'], tab: 'files', onClose })
+    fireEvent.click(screen.getByRole('button', { name: 'Скрыть изменения' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
 

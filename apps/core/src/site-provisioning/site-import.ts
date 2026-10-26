@@ -37,6 +37,7 @@ import { trustedGitEnvironment } from '../git-workspace/trusted-git.ts'
 import { ExactValues } from './exact-values.ts'
 import { connectionFailure, hiccup, LeaseLost, refuse, sessionFailure } from './import-failure.ts'
 import { scanForSecrets } from './import-scan.ts'
+import { fetchOriginal, publicOriginalsOf, type FetchOriginal } from './public-originals.ts'
 import { MAIN_REF, TAG_REF, type InitialVersionGit, type RemoteRefs } from './initial-version.ts'
 import type {
   ClaimedStage,
@@ -49,7 +50,10 @@ import type {
 import { readRootFile, walkSiteTree, type SkipCounts, type TakenFile } from './tree-walk.ts'
 
 /** What the import needs of the stack's adapter: no CMS name ever reaches this file. */
-export type StackImportRules = Pick<SiteAdapter, 'importRules' | 'rootMarkers' | 'configSecrets'>
+export type StackImportRules = Pick<
+  SiteAdapter,
+  'importRules' | 'rootMarkers' | 'configSecrets' | 'publicOriginals'
+>
 
 /** What the import needs of a database inspector: the access it checks and the values it hides. */
 export type DatabaseAccessRules = Pick<
@@ -77,6 +81,8 @@ export interface SiteImportDeps {
   /** null — CoreConfig.git is: the import refuses `repository_not_configured`. */
   git: SiteImportGit | null
   gitleaksBinary: string
+  /** Downloads the published original of a flagged file (`publicOriginalsOf`); tests fake it. */
+  fetchOriginal?: FetchOriginal
   /** The time of the first commit. */
   now?: () => Date
   /** The stall rule of the file walk; tests make the window short. */
@@ -569,9 +575,18 @@ async function fetchTree(
     env,
     signal,
   })
-  const taken = walk.files.filter((_, index) => !flagged.has(index))
+  // Public code the scan mistook for a secret — a release file of a plugin, a theme or the core
+  // — is taken when it is its published original byte for byte (owner's decision of 26.10.2026).
+  const vouched = await publicOriginalsOf({
+    rules,
+    files: walk.files,
+    flagged,
+    signal,
+    fetch: deps.fetchOriginal ?? fetchOriginal,
+  })
+  const taken = walk.files.filter((_, index) => !flagged.has(index) || vouched.has(index))
   const skipped: SkipCounts = { ...walk.skipped }
-  addCounts(skipped, 'secret', flagged.size)
+  addCounts(skipped, 'secret', flagged.size - vouched.size)
   if (taken.length === 0) throw refuse('source_empty')
   return { taken, skipped }
 }

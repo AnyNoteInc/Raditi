@@ -1,5 +1,5 @@
 import type { TaskStatus } from '@repo/domain'
-import { taskStatusLabel } from '@repo/domain/tasks/client-feed-labels'
+import { taskAnsweredLabel, taskStatusLabel } from '@repo/domain/tasks/client-feed-labels'
 import Box from '@mui/material/Box'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
@@ -35,14 +35,21 @@ const statusTone: Readonly<Record<TaskStatus, Tone>> = Object.freeze({
   cancelled: 'text.secondary',
 })
 
-/** The status of a dialog: a sign and its word. */
+/**
+ * The status of a dialog: a sign and its word. `answered` — the dialog waits for nothing, the
+ * agent answered (26.10.2026): it reads «Агент ответил», in the colour of a status that asks
+ * nothing.
+ */
 export function StatusMark({
   status,
   size = 'small',
+  answered = false,
 }: {
   status: TaskStatus
   size?: 'small' | 'medium'
+  answered?: boolean
 }) {
+  const idle = answered && status === 'awaiting_user'
   return (
     <Box
       component="span"
@@ -51,14 +58,14 @@ export function StatusMark({
         alignItems: 'center',
         gap: 0.75,
         minWidth: 0,
-        color: statusTone[status],
+        color: idle ? 'text.primary' : statusTone[status],
         fontSize: size === 'small' ? 13 : 14,
         fontWeight: size === 'small' ? 500 : 600,
         lineHeight: 1.3,
       }}
     >
       <AppIcon name={statusIcon[status]} size={size === 'small' ? 15 : 17} />
-      {taskStatusLabel[status]}
+      {idle ? taskAnsweredLabel : taskStatusLabel[status]}
     </Box>
   )
 }

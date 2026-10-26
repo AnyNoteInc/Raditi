@@ -372,7 +372,7 @@ export async function getUsageSummary(
   const [siteCount, bySite, history] = await Promise.all([
     // Every site of the workspace, whatever its status: the count project.create and a
     // checkout compare with the plan.
-    db.site.count({ where: { workspaceId } }),
+    db.site.count({ where: { workspaceId, deletedAt: null } }),
     chargedBySite(db, workspaceId, since),
     historyPage(db, workspaceId, since, {}),
   ])

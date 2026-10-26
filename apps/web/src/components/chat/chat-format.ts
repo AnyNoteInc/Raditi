@@ -39,8 +39,9 @@ export interface DialogGroup {
 
 /**
  * The groups of the list (feed design, «Подписи статусов»): «Ждёт вашего решения» gathers the
- * dialogs that wait for the client, then «Сегодня» and «Ранее» by the Moscow day the dialog was
- * started. Within a group the order of the server stays: the latest changed first.
+ * dialogs that wait for the client — not one whose agent answered and asked nothing (26.10.2026)
+ * —, then «Сегодня» and «Ранее» by the Moscow day the dialog was started. Within a group the order
+ * of the server stays: the latest changed first.
  */
 export function dialogGroups(items: readonly DialogListItem[], now: Date): DialogGroup[] {
   const groups: Record<DialogGroup['key'], DialogListItem[]> = {
@@ -49,7 +50,7 @@ export function dialogGroups(items: readonly DialogListItem[], now: Date): Dialo
     earlier: [],
   }
   for (const item of items) {
-    if (item.status === 'awaiting_user' || item.status === 'awaiting_approval')
+    if ((item.status === 'awaiting_user' && !item.answered) || item.status === 'awaiting_approval')
       groups.awaiting.push(item)
     else if (sameMoscowDay(item.createdAt, now)) groups.today.push(item)
     else groups.earlier.push(item)

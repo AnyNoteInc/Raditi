@@ -13,6 +13,7 @@ function dialog(id: string, status: DialogListItem['status'], createdAt: string)
     status,
     mode: 'work',
     undo: null,
+    answered: false,
     createdAt: new Date(createdAt),
     updatedAt: new Date(createdAt),
   }
@@ -44,6 +45,11 @@ describe('dialogGroups', () => {
       ['Сегодня', ['a']],
       ['Ранее', ['c']],
     ])
+  })
+
+  it('keeps a dialog whose agent only answered out of the dialogs that wait (26.10.2026)', () => {
+    const answered = { ...dialog('e', 'awaiting_user', '2026-10-17T06:00:00.000Z'), answered: true }
+    expect(dialogGroups([answered], now).map((group) => group.key)).toEqual(['today'])
   })
 
   it('leaves out an empty group', () => {

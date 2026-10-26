@@ -1,8 +1,14 @@
-import { enqueueSiteProvisioningStage, type Prisma, type PrismaClient } from '@repo/db'
+import {
+  activateSite,
+  enqueueSiteProvisioningStage,
+  type Prisma,
+  type PrismaClient,
+} from '@repo/db'
 import {
   INITIAL_SITE_TAG,
   provisioningLimits,
   provisioningStageSummarySchema,
+  siteAccessKinds,
   type DatabaseEngine,
   type GitProviderKind,
   type ProvisioningErrorCode,
@@ -432,7 +438,30 @@ export class PostgresSiteImportStore implements SiteImportStore {
         SET status = 'succeeded', finished_at = now(), step = NULL, heartbeat_at = NULL,
             error_code = NULL, updated_at = now()
         WHERE site_id = ${lease.siteId}::uuid AND stage = 'code_import'`
+      await this.#installFirstVersion(tx, lease.siteId, commitSha)
     })
+  }
+
+  /**
+   * The first version is what the hosting holds (owner's decision of 26.10.2026: «чат должен
+   * быть разблокирован»): it becomes the installed version — `v0.0.0` of the import, without a
+   * release (CHECK sites_installed_check) — and a site still `onboarding` with its repository
+   * and the reference of its file access takes tasks (`activateSite`). A site that already has
+   * an installed version, or another status, is left as it is.
+   */
+  async #installFirstVersion(tx: Transaction, siteId: string, commitSha: string): Promise<void> {
+    await tx.$executeRaw`
+      UPDATE sites
+      SET installed_version = ${INITIAL_SITE_TAG}, installed_sha = ${commitSha},
+          installed_at = now(), installed_release_id = NULL, updated_at = now()
+      WHERE id = ${siteId}::uuid AND status = 'onboarding' AND installed_version IS NULL`
+    const source = z.array(z.object({ kind: z.enum(siteAccessKinds) })).parse(
+      await tx.$queryRaw`
+          SELECT c.kind::text AS kind FROM site_code_sources s
+          JOIN credential_refs c ON c.id = s.credential_ref_id
+          WHERE s.site_id = ${siteId}::uuid`,
+    )[0]
+    if (source) await activateSite(tx, { siteId, requiredAccess: [source.kind] })
   }
 
   async fail(lease: StageLease, code: ProvisioningErrorCode): Promise<void> {

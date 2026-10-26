@@ -162,6 +162,25 @@ const address = /^[\p{P}\p{S}]*(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu
 const passwordAlphabet = /^[!-~]{8,}$/u
 const lowercase = /[a-z]/u
 const uppercase = /[A-Z]/u
+// What stands around a word in a sentence is not a character of it: quotes and brackets, `#` of
+// a hashtag and `@` of a name before it, the punctuation of the sentence after it. A symbol
+// such as `~` or `|` at an end stays: it belongs to the word.
+const around = /^[«„“‘"'([{<#@]+|[.,!?:;…»“”’"')\]}>]+$/gu
+// A character that makes a word with letters of both cases a password: a digit, or a special
+// character that does not join the parts of a name (`-`, `.`, `_`, `/`, `=`, `:`).
+const passwordMark = /[0-9!#$%&*+?^~|<>{}[\]();'"`,\\@]/u
+// A name with a number at its end, «Bitrix24», «Summer2026» — and the commonest password shape,
+// «Qwerty123»: only the message around tells one from the other.
+const lettersThenDigits = /^[A-Za-z]+[0-9]+$/u
+const nameJoiners = /[-._/=:]/gu
+// An e-mail address, a domain or a file name: dot-separated parts ending in a part of letters
+// (`Ivan.Petrov@example.ru`, `Example.ru/Page`, `Price2026.pdf`), never a password here.
+const emailAddress = /^[^@]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/u
+const dottedName = /^(?:[A-Za-z0-9_-]+\.)+[A-Za-z]{2,}(?:[/?#].*)?$/u
+// Words that say a secret is near: a password, a login, a key, a token, an access — or the
+// name of an account a password follows («admin / Qwerty123»).
+const credentialWord =
+  /^(?:парол|логин|ключ|токен|секрет|доступ|password|passwd|pass$|pwd|login|token|secret|api[-_]?key|key$|admin$|админ$|root$|user$)/u
 
 // Known formats of keys. The list is open and need not be complete: a customer may run their
 // own installations that hand out keys with prefixes of their own, and the check does not try
@@ -203,24 +222,37 @@ function hasSignedToken(word: string): boolean {
   return false
 }
 
+/** The shape of a password a word has by itself: `strong`, `weak` (letters then digits), or none. */
+function passwordShape(raw: string): 'strong' | 'weak' | null {
+  const word = raw.replace(around, '')
+  if (!passwordAlphabet.test(word) || !lowercase.test(word) || !uppercase.test(word)) return null
+  if (!passwordMark.test(word)) return null
+  if (emailAddress.test(word) || dottedName.test(word)) return null
+  return lettersThenDigits.test(word.replace(nameJoiners, '')) ? 'weak' : 'strong'
+}
+
 /**
  * True when the customer's message looks like it carries a password or a key: such a message
  * is refused before it is stored (rule 2). A check by shape, not a guarantee.
  *
- * The message is split into words by whitespace, punctuation stays with its word, and no word
- * around matters: «пароль», `password=` and the like are not looked for. It refuses:
+ * The message is split into words by whitespace; punctuation and symbols around a word are not
+ * part of it. It refuses:
  * - a word that reads as a password: only digits, Latin letters and special characters
- *   (printable ASCII), eight or more of them, with both a lowercase and an uppercase letter;
+ *   (printable ASCII), eight or more of them, with both a lowercase and an uppercase letter and
+ *   a digit or a special character — unless it is an e-mail address, a domain or a file name.
+ *   Letters then digits («Qwerty123», «Bitrix24») is the shape of a name with a number as much
+ *   as of a password: refused only when the message has a word of a secret — «пароль», «логин»,
+ *   «ключ», «токен», «доступ», `password`, `token`, `admin` and the like;
  * - a word that holds a key of a known format, and a private key block.
  *
- * Addresses are let through on purpose, whatever they hold — a key in the query, a name and a
- * password before the host: the customer takes the responsibility for what an address carries.
- * So are passwords the rule does not describe: in one case («qwerty123»), shorter than eight
- * characters, or with a letter that is not Latin («пароль: солнышко»).
- *
- * The rule is literal, so it refuses ordinary words as well: «WordPress», «JavaScript», a file
- * name such as «Price2026.pdf», an e-mail address or a bare domain written with a capital, a
- * capitalised English word that ends a sentence («Welcome!»). The tests pin these outcomes.
+ * Names of products and ordinary words are let through: letters alone are never a password
+ * («WordPress», «JavaScript», «Welcome!»), nor are `-`, `.`, `_`, `/`, `=` and `:` that join the
+ * parts of a name («Check-In», `utm_source=Yandex`) — owner's answer of 26.10.2026 «исправь как
+ * нужно» after the refusals of the literal rule of 11.10.2026. Addresses are let through on
+ * purpose, whatever they hold — a key in the query, a name and a password before the host: the
+ * customer takes the responsibility for what an address carries. So are passwords the rule does
+ * not describe: in one case («qwerty123»), shorter than eight characters, of letters alone, or
+ * with a letter that is not Latin («пароль: солнышко»).
  *
  * A text longer than FEED_REQUEST_TEXT_LIMIT after trimming is not read at all and the answer
  * is true. It cannot be stored anyway, reading it costs time that grows faster than its length
@@ -231,14 +263,22 @@ export function looksLikeSecret(text: string): boolean {
   if (text.trim().length > FEED_REQUEST_TEXT_LIMIT) return true
   const plain = text.replace(invisible, '').normalize('NFC')
   const words = plain.split(/\s+/u).filter((word) => !address.test(word))
+  // A word of a secret near a value, as the customer writes it: «Пароль:», `password=`.
+  const nearSecret = plain
+    .split(/\s+/u)
+    .some((word) => credentialWord.test(word.replace(around, '').toLowerCase()))
   return (
     // The block is read across words, with the addresses taken out.
     privateKeyBlock.test(words.join(' ')) ||
-    words.some(
-      (word) =>
-        (passwordAlphabet.test(word) && lowercase.test(word) && uppercase.test(word)) ||
+    words.some((word) => {
+      // A value glued to its label, `пароль=Qwerty123`, is read on its own as well.
+      const shapes = [word, ...word.split(/[=:]/u)].map(passwordShape)
+      return (
+        shapes.includes('strong') ||
+        (shapes.includes('weak') && nearSecret) ||
         keyPrefix.test(word) ||
-        hasSignedToken(word),
-    )
+        hasSignedToken(word)
+      )
+    })
   )
 }

@@ -19,6 +19,7 @@ import {
 import {
   browserHelpReasons,
   browserPageIdSchema,
+  browserScreenshotLimits,
   browserSessionLimits,
   browserTabSchema,
 } from './session.ts'
@@ -46,6 +47,7 @@ export const browserToolNames = [
   'web_wait',
   'web_help',
   'web_verify',
+  'web_screenshot',
 ] as const
 export type BrowserToolName = (typeof browserToolNames)[number]
 
@@ -61,6 +63,14 @@ export const browserToolLimits = Object.freeze({
   /** Objects `web_verify` reports. */
   verifyObjects: 32,
 })
+
+/** The key of a snapshot of a task's browser in the inbox bucket. */
+export const browserTaskScreenshotKey = (taskId: string, screenshotId: string): string => {
+  const ids = z.uuid()
+  if (!ids.safeParse(taskId).success || !ids.safeParse(screenshotId).success)
+    throw new DomainError('BAD_REQUEST', 'A snapshot key is built from two ids', 400)
+  return `screenshots/${taskId.toLowerCase()}/${screenshotId.toLowerCase()}.jpg`
+}
 
 // ---------------------------------------------------------------------------------------------
 // Arguments
@@ -153,6 +163,8 @@ const shapes = {
     message: z.string().min(1).max(browserSessionLimits.helpChars),
   },
   web_verify: { expect: z.enum(['publish', 'draft', 'any']).optional() },
+  /** A snapshot of the shown page for the client: attached to the dialog, never to the model. */
+  web_screenshot: {},
 } as const
 
 const tabTarget = (args: { action: string; pageId?: number }) =>
@@ -173,6 +185,7 @@ export const browserToolArgumentSchemas = {
   web_wait: z.strictObject(shapes.web_wait),
   web_help: z.strictObject(shapes.web_help),
   web_verify: z.strictObject(shapes.web_verify),
+  web_screenshot: z.strictObject(shapes.web_screenshot),
 } as const satisfies Record<BrowserToolName, z.ZodType>
 export type BrowserToolArguments<T extends BrowserToolName> = z.infer<
   (typeof browserToolArgumentSchemas)[T]
@@ -199,6 +212,7 @@ export const browserActionSchema = z.discriminatedUnion('tool', [
   z.strictObject({ tool: z.literal('web_wait'), ...shapes.web_wait }),
   z.strictObject({ tool: z.literal('web_help'), ...shapes.web_help }),
   z.strictObject({ tool: z.literal('web_verify'), ...shapes.web_verify }),
+  z.strictObject({ tool: z.literal('web_screenshot'), ...shapes.web_screenshot }),
 ])
 export type BrowserAction = z.infer<typeof browserActionSchema>
 
@@ -256,6 +270,13 @@ export const browserToolResultSchema = z.discriminatedUnion('tool', [
     tool: z.literal('web_verify'),
     objects: z.array(browserVerifiedCheckpointSchema).max(browserToolLimits.verifyObjects),
     matched: z.boolean(),
+  }),
+  /** The snapshot is attached to the dialog as its `number`-th of the task; no pixel comes back. */
+  z.strictObject({
+    tool: z.literal('web_screenshot'),
+    page: browserTabSchema,
+    attached: z.literal(true),
+    number: z.number().int().min(1).max(browserScreenshotLimits.perTask),
   }),
 ])
 export type BrowserToolResult = z.infer<typeof browserToolResultSchema>

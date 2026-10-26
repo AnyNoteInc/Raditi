@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import type { TurnSkill } from '../agent/skills.ts'
 import {
   SANDBOX_SECRET_CHARS,
   SANDBOX_SECRET_FILES,
@@ -67,6 +68,14 @@ export interface RunContext {
    * agent's shell commands reach the variables' hosts through. Absent — they have no way out.
    */
   egressProxy?: string
+  /**
+   * The open internet of the turn (NetworkPolicy.internet, owner's decision of 26.10.2026): the
+   * agent's commands and the CLI itself — its fetch tool, its skills — reach public hosts
+   * through `egressProxy`. Absent — only the variables' hosts, and only the commands.
+   */
+  internet?: true
+  /** The skills of the site's agent (MCP servers besides the platform's), with `internet` only. */
+  skills?: readonly TurnSkill[]
 }
 
 /** The values of the client's variables of a run: what the platform masks and refuses (Р13). */

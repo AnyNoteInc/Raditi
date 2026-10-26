@@ -16,6 +16,7 @@ import {
   previewUnavailableReasons,
   readFeedRow,
   siteWorkspaceRules,
+  turnSkillsOf,
   type LlmBackend,
   type PreviewAddress,
   type SiteAdapter,
@@ -95,6 +96,10 @@ function previewFactsOf(
   }
   if (preview.status === 'ready' && address)
     return { state: 'serving', origin: previewOrigin(preview.hostname, address) }
+  // Being built — the first build of the dialog, or one the start of this pass asked for after
+  // the preview stopped unused (owner's answer of 26.10.2026).
+  if (['pending', 'building', 'expired'].includes(preview.status) && address)
+    return { state: 'starting', origin: previewOrigin(preview.hostname, address) }
   return { state: 'absent' }
 }
 
@@ -124,6 +129,7 @@ export async function readPassFacts(
           url: true,
           agentNotes: true,
           workspace: { select: { dataClass: true } },
+          agentSkills: { select: { name: true, url: true, enabled: true } },
         },
       },
     },
@@ -301,6 +307,8 @@ export async function readPassFacts(
     preview: previewFactsOf(preview, deps.previews),
     egress,
     variables: agentVariables.map((variable) => variable.name),
+    // The planner gives them to a turn with the open internet only.
+    skills: turnSkillsOf(task.site.agentSkills),
     ...(adapter ? { databaseGuide: adapter.dbPlanGuide(site) } : {}),
     profile: profile ?? null,
     budget,

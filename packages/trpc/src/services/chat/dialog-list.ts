@@ -21,6 +21,12 @@ export interface DialogListItem {
    * `done` either way.
    */
   undo: 'running' | 'installed' | null
+  /**
+   * The dialog waits for nothing: the agent answered and asked no question (`awaiting_user`
+   * after a `feed.result`; owner's answer of 26.10.2026 — «ожидает ввода также не нужно», a chat
+   * like Claude Code). The client may write on, but is not asked to.
+   */
+  answered: boolean
   createdAt: Date
   updatedAt: Date
 }
@@ -55,6 +61,7 @@ export async function listDialogs(
       status: TaskStatus
       mode: TaskMode
       undo: 'running' | 'installed' | null
+      answered: boolean
       created_at: Date
       updated_at: Date
       updated_us: bigint
@@ -64,9 +71,13 @@ export async function listDialogs(
       (extract(epoch FROM updated_at) * 1000000)::bigint AS updated_us,
       (SELECT CASE WHEN bool_or(u.status = 'installed') THEN 'installed'
           WHEN bool_or(u.status NOT IN ('failed', 'rolled_back')) THEN 'running' END
-        FROM site_releases u WHERE u.task_id = tasks.id AND u.kind = 'undo') AS undo
+        FROM site_releases u WHERE u.task_id = tasks.id AND u.kind = 'undo') AS undo,
+      (tasks.status = 'awaiting_user' AND COALESCE((
+        SELECT e.type = 'feed.result' FROM task_events e
+        WHERE e.task_id = tasks.id AND e.type IN ('feed.result', 'feed.question')
+        ORDER BY e.id DESC LIMIT 1), false)) AS answered
     FROM tasks
-    WHERE site_id = ${site.id}::uuid
+    WHERE site_id = ${site.id}::uuid AND deleted_at IS NULL
       AND (${afterMicros}::bigint IS NULL
         OR (updated_at, id) < (timestamptz 'epoch' + ${afterMicros}::bigint * interval '1 microsecond', ${afterId}::uuid))
     ORDER BY updated_at DESC, id DESC
@@ -80,6 +91,7 @@ export async function listDialogs(
       status: row.status,
       mode: row.mode,
       undo: row.undo,
+      answered: row.answered,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     })),

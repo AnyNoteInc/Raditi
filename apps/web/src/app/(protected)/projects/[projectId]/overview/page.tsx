@@ -6,7 +6,7 @@ import { inSiteSetup } from '@/components/site/site-nav'
 import { SiteOverview } from '@/components/site/site-overview'
 import { SiteSetup } from '@/components/site/site-setup'
 import { UNAVAILABLE } from '@/lib/access'
-import { loadSite, loadSiteSetup } from '@/lib/site'
+import { loadSite, loadSiteHistory, loadSiteSetup } from '@/lib/site'
 
 export const metadata: Metadata = { title: 'Обзор' }
 
@@ -25,5 +25,15 @@ export default async function Page({ params }: { params: Promise<{ projectId: st
       />
     )
   }
-  return <SiteOverview site={site} />
+  const [versions, runs] = await Promise.all([
+    loadSiteHistory('versions', (caller) => caller.siteHistory.versions({ siteId: site.id })),
+    loadSiteHistory('runs', (caller) => caller.siteHistory.runs({ siteId: site.id })),
+  ])
+  return (
+    <SiteOverview
+      site={site}
+      current={versions === UNAVAILABLE ? null : (versions.find((v) => v.current) ?? null)}
+      lastRun={runs === UNAVAILABLE ? null : (runs[0] ?? null)}
+    />
+  )
 }
