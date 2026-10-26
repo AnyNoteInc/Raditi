@@ -347,11 +347,12 @@ describe('validateSnapshotArchives', () => {
     )
   })
 
-  // Compresses and inflates past the expansion limit: seconds of CPU on a loaded machine.
+  // Compresses and inflates past the expansion limit: a second here, but over 30 s on a CI
+  // runner where every package's tests run beside it (PR #14, 26.10.2026).
   it(
     'bounds expanded bytes even for an archive consisting only of compressible zero padding',
     {
-      timeout: 30_000,
+      timeout: 120_000,
     },
     async () => {
       const bomb = zstdCompressSync(Buffer.alloc(snapshotLimits.expandedBytes + 512))
