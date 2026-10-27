@@ -11,7 +11,13 @@ import { commandError } from '../docker-api.ts'
  */
 export const PREVIEW_LABEL = 'io.raditi.preview.'
 export const PREVIEW_OWNER = 'raditi'
-export const PREVIEW_PROTOCOL = '1'
+/**
+ * 2 — the preview of one container (docs/plan/58). The runtime still reads protocol 1, the
+ * preview of several containers on an internal bridge: `ensure` destroys such a preview and builds
+ * it anew, `destroy` and `list` see it, the watchdog removes it by its deadline.
+ */
+export const PREVIEW_PROTOCOL = '2'
+export const previewProtocols = ['1', PREVIEW_PROTOCOL] as const
 
 export const previewRoles = [
   'network',
@@ -19,17 +25,28 @@ export const previewRoles = [
   'files',
   'database',
   'lease',
+  'preview',
+  'files-helper',
+  'relay',
+  'browser',
+  'firewall',
+  // Protocol 1 only: the containers the preview's own replaced.
   'web',
   'db',
   'forwarder',
   'egress',
   'cli',
-  'files-helper',
-  'relay',
-  'browser',
-  'firewall',
 ] as const
 export type PreviewRole = (typeof previewRoles)[number]
+
+/** The roles of protocol 1 whose presence says the preview has to be built anew. */
+export const legacyPreviewRoles: readonly PreviewRole[] = [
+  'web',
+  'db',
+  'forwarder',
+  'egress',
+  'cli',
+]
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 export const isPreviewId = (value: unknown): value is string =>
@@ -58,26 +75,29 @@ export function previewLabels(
   }
 }
 
-/** The Docker label filter of everything of one preview, or of every preview. */
+/**
+ * The Docker label filter of everything of one preview, or of every preview, of either protocol:
+ * `ownedIdentity` then tells them apart.
+ */
 export function previewFilter(previewId?: string, role?: PreviewRole) {
   return {
     label: [
       `${PREVIEW_LABEL}owner=${PREVIEW_OWNER}`,
-      `${PREVIEW_LABEL}protocol=${PREVIEW_PROTOCOL}`,
       ...(previewId ? [`${PREVIEW_LABEL}id=${previewId}`] : []),
       ...(role ? [`${PREVIEW_LABEL}role=${role}`] : []),
     ],
   }
 }
 
-/** Ours: owner, protocol and id as asked; null for anything else. */
+/** Ours: owner, a protocol the runtime reads and id as asked; null for anything else. */
 export function ownedIdentity(
   labels: Record<string, string> | undefined,
-): (PreviewIdentity & { role: PreviewRole; deadline: number }) | null {
+): (PreviewIdentity & { role: PreviewRole; deadline: number; protocol: string }) | null {
+  const protocol = labels?.[`${PREVIEW_LABEL}protocol`]
   if (
     !labels ||
     labels[`${PREVIEW_LABEL}owner`] !== PREVIEW_OWNER ||
-    labels[`${PREVIEW_LABEL}protocol`] !== PREVIEW_PROTOCOL
+    !(previewProtocols as readonly (string | undefined)[]).includes(protocol)
   )
     return null
   const previewId = labels[`${PREVIEW_LABEL}id`]
@@ -94,7 +114,7 @@ export function ownedIdentity(
     deadline < 1
   )
     return null
-  return { previewId, siteId, taskId, role, deadline }
+  return { previewId, siteId, taskId, role, deadline, protocol: protocol! }
 }
 
 /**
@@ -119,8 +139,46 @@ export const previewNames = (previewId: string) => ({
 })
 
 /**
- * Fail closed on what Docker built, not on the options it was asked for: a preview bridge has no
- * host address at all (spec §8), so nothing on it reaches the host's services or the internet.
+ * The preview's own bridge (docs/plan/58): not internal — Docker publishes no port of an internal
+ * network, and the preview's internet is open — one container on it, no IPv6. What it reaches of
+ * the host, the private networks and the platform is closed by host-firewall.mjs before the
+ * container starts. Checked on what Docker built, not on the options it was asked for.
+ */
+export function isPreviewBridge(network: Docker.NetworkInspectInfo, bridge: string): boolean {
+  const configs = network.IPAM?.Config ?? []
+  const options = network.Options ?? {}
+  return (
+    network.Driver === 'bridge' &&
+    !network.Internal &&
+    !network.EnableIPv6 &&
+    options['com.docker.network.bridge.name'] === bridge &&
+    options['com.docker.network.bridge.enable_icc'] === 'false' &&
+    configs.length === 1
+  )
+}
+
+/** The create options of a preview's own bridge. */
+export const previewBridgeOptions = (
+  name: string,
+  bridge: string,
+  labels: Record<string, string>,
+): Docker.NetworkCreateOptions => ({
+  Name: name,
+  Driver: 'bridge',
+  Internal: false,
+  EnableIPv6: false,
+  Labels: labels,
+  Options: {
+    'com.docker.network.bridge.name': bridge,
+    // One container on it; nothing else that joins talks to it on the bridge itself.
+    'com.docker.network.bridge.enable_icc': 'false',
+  },
+})
+
+/**
+ * Fail closed on what Docker built, not on the options it was asked for: a bridge of the agent's
+ * browser has no host address at all (spec §8), so nothing on it reaches the host's services or
+ * the internet.
  */
 export function isHostlessBridge(network: Docker.NetworkInspectInfo, bridge: string): boolean {
   const configs = network.IPAM?.Config ?? []
@@ -179,6 +237,5 @@ export function subnetAddress(cidr: string, offset: number): string {
   return [24, 16, 8, 0].map((shift) => ((number + offset) >>> shift) & 255).join('.')
 }
 
-/** Offsets of the fixed addresses on the preview's network and on its browser's network. */
-export const previewAddresses = Object.freeze({ web: 2, db: 3, forwarder: 4, egress: 5 })
+/** Offsets of the fixed addresses on the network of the agent's browser. */
 export const browserAddresses = Object.freeze({ relay: 2, browser: 3 })

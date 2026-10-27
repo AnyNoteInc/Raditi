@@ -10,7 +10,8 @@ import {
   envProblems,
   envVar,
   isProduction,
-  parsePreviewWebImages,
+  parsePreviewSiteImages,
+  previewDnsServersSchema,
   previewAddressEnvShape,
   previewAddressFromEnv,
   previewAddressProblems,
@@ -163,22 +164,28 @@ export interface PreviewsConfig {
   /** core's own Docker (never in production until M10) or a runner VM. */
   executor: PreviewExecutorKind
   runtime: PreviewRuntimeKind
-  /** A web image per runtime version (PREVIEW_WEB_IMAGES); empty — no preview can run. */
-  webImages: Readonly<Record<string, string>>
+  /**
+   * The image of a preview per runtime version (PREVIEW_SITE_IMAGES, docs/plan/58): its server,
+   * its database and its gateway in one container; empty — no preview can run.
+   */
+  siteImages: Readonly<Record<string, string>>
   /** PREVIEW_*_IMAGE by role; null — not set, the part of a preview that needs it is off. */
   images: Readonly<Record<PreviewImageRole, string | null>>
-  /** Where the entry forwarders publish their ports (PREVIEW_UPSTREAM_HOST). */
+  /** Where the gateways of previews publish their ports (PREVIEW_UPSTREAM_HOST). */
   upstreamHost: string
+  /** PREVIEW_DNS_SERVERS: the resolvers of a preview's container (its internet is open). */
+  dnsServers: readonly string[]
   /** PREVIEW_GATEWAY_PORT: where the relay of the agent's browser reaches the gateway (Р21). */
   gatewayPort: number
   /**
-   * SANDBOX_EGRESS_REFUSED_SUBNETS: the platform's own subnets the egress proxy of a preview never
-   * connects to (R10, Р13), as the sandbox gateway's; empty — only addresses that are not public.
+   * SANDBOX_EGRESS_REFUSED_SUBNETS: the platform's own subnets the rules of a preview's bridge
+   * close besides every address that is not public (docs/plan/58), as the sandbox gateway's.
    */
-  egressRefusedSubnets: readonly string[]
+  refusedSubnets: readonly string[]
   /**
-   * core's own Docker for PREVIEW_EXECUTOR=local (R5c): its socket (SANDBOX_DOCKER_SOCKET) and,
-   * under runsc, the host firewall image (SANDBOX_NETWORK_GUARD_IMAGE). null with runner VMs.
+   * core's own Docker for PREVIEW_EXECUTOR=local (R5c): its socket (SANDBOX_DOCKER_SOCKET) and
+   * the host firewall image (SANDBOX_NETWORK_GUARD_IMAGE) — under both runtimes: the rules of a
+   * preview's bridge come before its container (docs/plan/58). null with runner VMs.
    */
   docker: { socketPath: string; firewallImage: string | null } | null
 }
@@ -288,12 +295,11 @@ const ownEnvSchema = z.object({
   ),
   PREVIEW_EXECUTOR: envVar(z.enum(previewExecutorKinds).optional()),
   PREVIEW_RUNTIME: envVar(z.enum(previewRuntimes).optional()),
-  PREVIEW_WEB_IMAGES: envVar(z.string().optional()),
+  PREVIEW_SITE_IMAGES: envVar(z.string().optional()),
   PREVIEW_DB_IMAGE: envVar(previewImageSchema.optional()),
-  PREVIEW_CLI_IMAGE: envVar(previewImageSchema.optional()),
   PREVIEW_FORWARDER_IMAGE: envVar(previewImageSchema.optional()),
   PREVIEW_BROWSER_IMAGE: envVar(previewImageSchema.optional()),
-  PREVIEW_EGRESS_IMAGE: envVar(previewImageSchema.optional()),
+  PREVIEW_DNS_SERVERS: envVar(previewDnsServersSchema.optional()),
   PREVIEW_UPSTREAM_HOST: envVar(
     z
       .string()
@@ -341,10 +347,8 @@ const ownEnvSchema = z.object({
 /** The PREVIEW_*_IMAGE variable of each image role. */
 const previewImageVariables = {
   db: 'PREVIEW_DB_IMAGE',
-  cli: 'PREVIEW_CLI_IMAGE',
   forwarder: 'PREVIEW_FORWARDER_IMAGE',
   browser: 'PREVIEW_BROWSER_IMAGE',
-  egress: 'PREVIEW_EGRESS_IMAGE',
 } as const satisfies Record<PreviewImageRole, string>
 
 /** The registrable domain of a host by the Public Suffix List; null for an address or a local name. */
@@ -385,7 +389,8 @@ export function loadConfig(env: Env): CoreConfig {
         'PREVIEW_GATEWAY_PORT',
         'PREVIEW_EXECUTOR',
         'PREVIEW_RUNTIME',
-        'PREVIEW_WEB_IMAGES',
+        'PREVIEW_SITE_IMAGES',
+        'PREVIEW_DNS_SERVERS',
         ...Object.values(previewImageVariables),
         'SANDBOX_EGRESS_REFUSED_SUBNETS',
         'SANDBOX_INTERNET',
@@ -567,8 +572,15 @@ export function loadConfig(env: Env): CoreConfig {
     const runtime = own.PREVIEW_RUNTIME ?? (production ? 'runsc' : 'runc')
     if (production && runtime !== 'runsc')
       problems.push('PREVIEW_RUNTIME: production previews run under gVisor (runsc)')
-    const web = parsePreviewWebImages(own.PREVIEW_WEB_IMAGES)
-    problems.push(...web.problems)
+    const site = parsePreviewSiteImages(own.PREVIEW_SITE_IMAGES)
+    problems.push(...site.problems)
+    // The rules of a preview's bridge close every address that is not public (docs/plan/58): a
+    // private or loopback resolver would answer no name there, under either runtime.
+    for (const server of own.PREVIEW_DNS_SERVERS ?? [])
+      if (isPrivateAddress(server) || isLoopbackAddress(server))
+        problems.push(
+          `PREVIEW_DNS_SERVERS: ${server} is not a public address; the rules of a preview's bridge close it`,
+        )
     if (previewAddress !== null)
       previews = {
         address: previewAddress,
@@ -576,13 +588,14 @@ export function loadConfig(env: Env): CoreConfig {
         idleMinutes: own.PREVIEW_IDLE_MINUTES,
         executor,
         runtime,
-        webImages: web.images,
+        siteImages: site.images,
         images: Object.fromEntries(
           previewImageRoles.map((role) => [role, own[previewImageVariables[role]] ?? null]),
         ) as Record<PreviewImageRole, string | null>,
         upstreamHost: own.PREVIEW_UPSTREAM_HOST,
+        dnsServers: own.PREVIEW_DNS_SERVERS ?? previewDefaults.dnsServers,
         gatewayPort: own.PREVIEW_GATEWAY_PORT,
-        egressRefusedSubnets: own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? [],
+        refusedSubnets: own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? [],
         docker:
           executor === 'local'
             ? {

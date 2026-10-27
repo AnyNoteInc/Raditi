@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { passed, proxyOutcome, table, ustar, verdict } from './probes.mjs'
+import { passed, table, ustar, verdict } from './probes.mjs'
 
 test('a blocked row passes only with a control that reached the target', () => {
   assert.equal(verdict({ expect: 'blocked', actual: 'closed', control: 'open' }), 'PASS')
@@ -53,13 +53,4 @@ test('the archive is ustar with a valid checksum and two end blocks', () => {
     sum += index >= 148 && index < 156 ? 0x20 : archive[index]
   assert.equal(parseInt(archive.subarray(148, 154).toString('latin1'), 8), sum)
   assert.ok(archive.subarray(1024).every((byte) => byte === 0))
-})
-
-test('a proxied row counts only the refusal it expects', () => {
-  assert.equal(proxyOutcome('open', 'forbidden_host'), 'open')
-  assert.equal(proxyOutcome('refused:forbidden_address', 'forbidden_address'), 'closed')
-  // The name did not resolve: the address rule was never asked.
-  assert.equal(proxyOutcome('refused:resolve', 'forbidden_address'), 'error')
-  assert.equal(proxyOutcome('closed', 'forbidden_host'), 'error')
-  assert.equal(proxyOutcome('error'), 'error')
 })

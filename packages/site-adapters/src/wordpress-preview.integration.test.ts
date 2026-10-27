@@ -13,8 +13,10 @@ import { wordpressPreviewRecipe } from './wordpress-preview.ts'
 
 // The recipe as a preview runs it: WordPress 7.1.2 of the official image, read-only, as
 // www-data, with the generated wp-config.php, the mu-plugin and Apache's configuration, a
-// settings file like the runtime's, and a disposable MariaDB on an internal network. Needs
-// Docker and the pulled images below; runs with RADITI_PREVIEW_DOCKER_TESTS=1.
+// settings file like the runtime's, and a disposable MariaDB on an internal network — the
+// recipe's files, not the container of a preview (docs/plan/58: the runtime's suite and the
+// network stand run that). Needs Docker and the pulled images below; runs with
+// RADITI_PREVIEW_DOCKER_TESTS=1.
 
 const enabled = process.env.RADITI_PREVIEW_DOCKER_TESTS === '1'
 const run = promisify(execFile)
@@ -102,7 +104,7 @@ describe.skipIf(!enabled)('a WordPress preview as the recipe runs it', () => {
   beforeAll(async () => {
     folder = mkdtempSync(join(tmpdir(), 'raditi-r5b-'))
     const settings: PreviewSettings = previewSettingsSchema.parse({
-      v: 1,
+      v: 2,
       hostname,
       origin,
       productionOrigin: site.url,
@@ -114,7 +116,6 @@ describe.skipIf(!enabled)('a WordPress preview as the recipe runs it', () => {
         user: 'preview',
         password,
       },
-      egress: { proxy: { host: 'egress', port: 3128 }, hosts: ['api.example.ru'] },
       settings: recipe.settings,
       // A name WordPress reads as its own configuration stays in the environment only.
       env: {
@@ -375,18 +376,16 @@ describe.skipIf(!enabled)('a WordPress preview as the recipe runs it', () => {
     expect(redirect.header('location')).toEqual([`${origin}/target/`])
   })
 
-  it('sends no mail, runs no cron, reaches only the hosts of the variables', async () => {
+  it('sends no mail, runs no cron, leaves the way out to the rules of its bridge', async () => {
     const check = await wp(
       'eval',
       `echo json_encode([
         'mail' => wp_mail('someone@example.com', 'Тема', 'Текст'),
-        'blocked' => (function () { $r = wp_remote_get('https://example.com/'); return is_wp_error($r) ? $r->get_error_code() : 'sent'; })(),
-        'allowed' => raditi_preview_http_request(false, array(), 'https://api.example.ru/v1'),
-        'otherPort' => is_wp_error(raditi_preview_http_request(false, array(), 'https://api.example.ru:8443/v1')),
         'cron' => wp_get_ready_cron_jobs(),
         'cronDisabled' => DISABLE_WP_CRON,
-        'proxy' => WP_PROXY_HOST . ':' . WP_PROXY_PORT,
-        'accessible' => WP_ACCESSIBLE_HOSTS,
+        'blockExternal' => defined('WP_HTTP_BLOCK_EXTERNAL'),
+        'proxy' => defined('WP_PROXY_HOST'),
+        'httpFilter' => has_filter('pre_http_request'),
         'environment' => wp_get_environment_type(),
         'fileMods' => DISALLOW_FILE_MODS,
         'home' => home_url('/'),
@@ -398,13 +397,12 @@ describe.skipIf(!enabled)('a WordPress preview as the recipe runs it', () => {
     )
     expect(JSON.parse(check)).toEqual({
       mail: false,
-      blocked: 'raditi_preview_blocked',
-      allowed: false,
-      otherPort: true,
       cron: [],
       cronDisabled: true,
-      proxy: 'egress:3128',
-      accessible: 'api.example.ru',
+      // The internet of a preview is open (owner's answer of 26.10.2026, docs/plan/58).
+      blockExternal: false,
+      proxy: false,
+      httpFilter: false,
       environment: 'staging',
       fileMods: true,
       home: `${origin}/`,

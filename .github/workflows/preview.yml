@@ -1,10 +1,12 @@
 name: Preview
 
 # Previews of a dialog (docs/plan/53-chat-preview-release.md, Р15, Р18, Р21) on a real daemon,
-# under runc: the Docker runtime of @repo/sandbox-providers, the WordPress recipe and the database
-# copier against disposable containers, the preview manager of core end to end on PostgreSQL
-# (R5c) with the export of a turn's working tree, then the network of a preview probed from
-# every side. Local fixtures only: no repository secrets, no real site.
+# under runc: the Docker runtime of @repo/sandbox-providers — a preview in one container on a
+# bridge of its own, its internet open and the host closed by the rules of that bridge
+# (docs/plan/58) —, the WordPress recipe and the database copier against disposable containers,
+# the preview manager of core end to end on PostgreSQL (R5c) with the export of a turn's working
+# tree, then the network of a preview probed from every side. Local fixtures only: no repository
+# secrets, no real site.
 on:
   pull_request:
     branches: [main]
@@ -30,7 +32,7 @@ on:
       - infra/dev/preview-verify/**
       - infra/sandbox/watchdog.mjs
       - infra/sandbox/host-firewall.mjs
-      # The egress proxy of the client's variables (Р13), built by the network stand.
+      # The egress proxy of a task's browser session (docs/plan/57-browser-tasks.md, Б11).
       - infra/sandbox/client-egress.mjs
       - infra/sandbox/Dockerfile
       # The preview manager of core end to end (R5c), the gateway its browser goes through (R6) —
@@ -110,8 +112,8 @@ jobs:
           sudo systemctl restart docker
           docker info --format '{{.DriverStatus}}' | grep -q io.containerd.snapshotter
           test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"
-      # By tag, as the suites of the recipe and the copier name them; each must be the digest
-      # .env.example and the runtime's suite pin.
+      # By tag, as the suites of the recipe and the copier name them: the base of the site image,
+      # the WP-CLI of the recipe's suite and the temporary database of a dump.
       - name: Pull the public images of previews
         run: |
           # Docker Hub rebuilds an official image under the same tag; the pinned digest stays
@@ -130,6 +132,12 @@ jobs:
             docker build -q -f infra/preview/Dockerfile --target "$target" \
               -t "raditi-preview-$target:local" infra/preview
           done
+          # A preview in one container, PHP 8.3 (docs/plan/58), and the rules of its bridge.
+          docker build -q -f infra/preview/Dockerfile --target site \
+            -t raditi-preview-site:8.3-local infra/preview
+          docker build -q -f infra/sandbox/Dockerfile --target network-guard \
+            -t raditi-network-guard:local .
+          # The egress proxy of a task's browser session.
           docker build -q -f infra/sandbox/Dockerfile --target client-egress \
             -t raditi-client-egress:local .
           # The working tree of a turn is exported by the commands of the sandbox image itself.

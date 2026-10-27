@@ -4,7 +4,6 @@ import { envVarLimits, envVarNameSchema, envVarValueSchema } from '../release/en
 import type { SiteBrowserRequest } from '../ports/site-adapter.ts'
 import type { DbAccess } from '../site-connection/access.ts'
 import { databaseEngines } from '../site-connection/kinds.ts'
-import { egressHostLimits, egressHostSchema } from './egress-hosts.ts'
 import { isPreviewPath } from './hostname.ts'
 import { previewImageSchema, previewRuntimes, type PreviewRuntimeKind } from './preview-config.ts'
 import {
@@ -188,22 +187,23 @@ export const previewRuntimeSpecSchema = z
     taskId: z.uuid(),
     runtime: z.enum(previewRuntimes),
     images: z.strictObject({
-      web: previewImageSchema,
-      db: previewImageSchema.nullable(),
-      cli: previewImageSchema,
-      forwarder: previewImageSchema,
-      /** The egress proxy; null — the preview reaches nothing outside (Р13, Р14). */
-      egress: previewImageSchema.nullable(),
+      /**
+       * The preview itself (docs/plan/58): one container with the site's server, its database and
+       * its entry gateway — the image of the recipe's runtime version (PREVIEW_SITE_IMAGES).
+       */
+      preview: previewImageSchema,
+      /** The platform's tools (PREVIEW_FORWARDER_IMAGE): the files helper and the lease. */
+      tools: previewImageSchema,
     }),
+    /** The preview runs the recipe's database (`recipe.database`) in its container. */
+    database: z.boolean(),
     recipe: previewRecipeSchema,
     limits: z.strictObject({
       cpu: z.number().positive().max(4),
       memoryMiB: z.number().int().min(256).max(8192),
       pids: z.number().int().min(64).max(4096),
     }),
-    /** `host:port` the egress proxy lets through: the union of the preview's variables. */
-    egress: z.array(egressHostSchema).max(egressHostLimits.perSite),
-    /** Where the entry forwarder publishes (PREVIEW_UPSTREAM_HOST). */
+    /** Where the entry gateway of the preview publishes (PREVIEW_UPSTREAM_HOST). */
     upstreamHost: z.string().min(1).max(253),
     /** `preview_environments.hostname`: the host the gateway serves the preview at (Р17). */
     hostname: hostnameSchema,
@@ -226,6 +226,10 @@ export const previewRuntimeSpecSchema = z
   .refine((spec) => URL.parse(spec.origin)?.hostname === spec.hostname, {
     message: 'the origin must be of the hostname',
     path: ['origin'],
+  })
+  .refine((spec) => !spec.database || spec.recipe.database !== null, {
+    message: 'a database needs the engine of the recipe',
+    path: ['database'],
   })
 export type PreviewRuntimeSpec = z.output<typeof previewRuntimeSpecSchema>
 
@@ -281,7 +285,7 @@ export const PREVIEW_SETTINGS_PATH = '/run/raditi/preview/settings.json'
  */
 export const previewDatabaseConnectionSchema = z.strictObject({
   engine: z.enum(databaseEngines),
-  /** The database container on the preview's own network. */
+  /** The database in the preview's own container: its loopback (docs/plan/58). */
   host: hostnameSchema,
   port: z.number().int().min(1).max(65_535),
   name: identifier,
@@ -296,23 +300,16 @@ export type PreviewDatabaseConnection = z.infer<typeof previewDatabaseConnection
  * `PreviewRuntimeSecrets`. The only per-preview input of the stack's generated files.
  */
 export const previewSettingsSchema = z.strictObject({
-  v: z.literal(1),
+  /**
+   * 2 since the preview of one container (docs/plan/58): its internet is open, so the settings no
+   * longer name an egress proxy and the hosts it lets through.
+   */
+  v: z.literal(2),
   hostname: hostnameSchema,
   origin: originSchema,
   productionOrigin: originSchema,
   /** null — the recipe runs without a database, or the preview has none (Р4). */
   database: previewDatabaseConnectionSchema.nullable(),
-  /**
-   * The egress proxy on the preview's network and the `host:port` it lets through (`spec.egress`,
-   * Р13): the stack sends its outgoing requests there and refuses other hosts itself as a second
-   * line. null — the preview reaches nothing outside.
-   */
-  egress: z
-    .strictObject({
-      proxy: z.strictObject({ host: hostnameSchema, port: z.number().int().min(1).max(65_535) }),
-      hosts: z.array(egressHostSchema).max(egressHostLimits.perSite),
-    })
-    .nullable(),
   settings: previewRecipeSchema.shape.settings,
   env: previewRuntimeSecretsSchema.shape.env,
 })
@@ -409,6 +406,12 @@ export interface PreviewRuntime {
    */
   extend(previewId: string, expiresAt: number): Promise<void>
   inspect(previewId: string): Promise<PreviewRuntimeState | null>
+  /**
+   * Throws when what keeps a running preview from the host and the platform is not whole — the
+   * rules of its network (docs/plan/58), which a reload of the host's firewall would take until
+   * the next build; a preview not running here passes. Its caller asks again and again.
+   */
+  checkBoundary(previewId: string): Promise<void>
   /**
    * Writes files into the docroot through a helper that mounts that volume alone. The caller
    * writes the recipe's `generatedFiles` over every tree it writes.

@@ -14,7 +14,7 @@ import {
 // (wordpress-preview-files.ts): a wp-config.php and the mu-plugin raditi-preview.php that read
 // the preview's settings file, the platform's content plugin, the configuration of Apache.
 
-/** PHP versions a WordPress preview may run on; the images come from PREVIEW_WEB_IMAGES. */
+/** PHP versions a WordPress preview may run on; the images come from PREVIEW_SITE_IMAGES. */
 const phpVersions = ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] as const
 /** A site whose PHP is unknown runs on the version WordPress recommends. */
 const DEFAULT_PHP = '8.3'
@@ -101,8 +101,9 @@ export function wordpressPreviewRecipe(site: SiteFacts): PreviewRecipe {
       DB_COLLATE: database.collation ?? '',
     },
     healthPath: '/',
-    // Apache of the official PHP images (wordpress:*-apache) as www-data on 8080. The whole
-    // configuration is preview-apache.conf; its run and lock folders are on the tmpfs /tmp.
+    // Apache of the official PHP images (wordpress:*-apache) as www-data on 127.0.0.1:8081, behind
+    // the gateway of the preview's own container (docs/plan/58). The whole configuration is
+    // preview-apache.conf; its run and lock folders are on the tmpfs /tmp.
     web: {
       command: ['apache2-foreground', '-f', `${settingsFolder}/apache2.conf`],
       env: {
@@ -110,7 +111,7 @@ export function wordpressPreviewRecipe(site: SiteFacts): PreviewRecipe {
         APACHE_LOCK_DIR: '/tmp/apache2/lock',
         APACHE_PID_FILE: '/tmp/apache2/run/apache2.pid',
       },
-      port: 8080,
+      port: 8081,
       user: '33:33',
       docroot: '/var/www/html',
       tmpfs: ['/tmp'],

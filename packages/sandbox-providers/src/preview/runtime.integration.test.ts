@@ -8,15 +8,18 @@ import Docker from 'dockerode'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { previewRuntimeLimits } from './config.ts'
+import { previewBridge } from './resources.ts'
 import { createDockerPreviewRuntime } from './runtime.ts'
 
 // Explicit opt-in (RADITI_PREVIEW_DOCKER_TESTS=1): the images of infra/preview/Dockerfile built
-// and tagged as infra/preview/README.md says — the browser's optional — and the public images
-// below present. Never pulls; only what this suite creates is removed.
+// and tagged as infra/preview/README.md says — `site` for PHP 8.3, `tools`, the browser's
+// optional — and the image of the host rules (infra/sandbox/Dockerfile, `network-guard`, or
+// SANDBOX_NETWORK_GUARD_IMAGE). Never pulls; only what this suite creates is removed. A preview
+// is one container on a bridge of its own (docs/plan/58); its network is measured from every
+// side by `pnpm verify:preview-network`, this suite reaches the internet once.
 const enabled = process.env.RADITI_PREVIEW_DOCKER_TESTS === '1'
 const socketPath = process.env.SANDBOX_DOCKER_SOCKET ?? '/var/run/docker.sock'
 const runtimeKind = process.env.PREVIEW_RUNTIME === 'runsc' ? 'runsc' : 'runc'
-const firewallImage = process.env.SANDBOX_NETWORK_GUARD_IMAGE
 const docker = new Docker({ socketPath })
 /** The digest of a local tag; null when it was not built. */
 const pinned = (tag: string) =>
@@ -28,21 +31,17 @@ const pinned = (tag: string) =>
         info.RepoDigests.find((digest) => digest.startsWith(`${tag.split(':')[0]}@`)) ?? null,
       () => null,
     )
-let tools = ''
+let images = { preview: '', tools: '' }
+let guard = ''
 let browserImage: string | null = null
-const images = {
-  web: 'wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5',
-  db: 'mariadb@sha256:70cc072b29b4a89ae07abb2d4da2c64678a7f2dfe092751bb51c87d67dc1338b',
-  cli: 'wordpress@sha256:2b5e9d4d3e51909dca1aaa4732e9f5e5bf0377c2114dbd8ff39f060bff202586',
-}
 const apache = [
   'ServerRoot "/etc/apache2"',
-  'PidFile /run/apache2/apache2.pid',
-  'Mutex file:/run/apache2 default',
+  'PidFile /tmp/apache2/apache2.pid',
+  'Mutex file:/tmp/apache2 default',
   'ErrorLog /proc/self/fd/2',
   'IncludeOptional mods-enabled/*.load',
   'IncludeOptional mods-enabled/*.conf',
-  'Listen 8080',
+  'Listen 127.0.0.1:8081',
   'ServerName localhost',
   'DocumentRoot /var/www/html',
   '<Directory /var/www/html/>',
@@ -95,15 +94,15 @@ const passwords = {
 }
 const secrets = { env: { API_KEY: 'stand-secret-value' }, database: passwords }
 
-function specOf(): PreviewRuntimeSpec {
+function specOf(database = true): PreviewRuntimeSpec {
   const hostname = `site-0f3a9c1b-chat-${randomUUID().slice(0, 6)}.localhost`
   return {
     previewId: randomUUID(),
     siteId: randomUUID(),
     taskId: randomUUID(),
     runtime: runtimeKind,
-    // The tools image is the egress slot too: it listens nowhere, a deny-all stub.
-    images: { ...images, forwarder: tools, egress: tools },
+    images,
+    database,
     recipe: {
       runtime: 'php',
       runtimeVersions: ['8.3'],
@@ -113,17 +112,16 @@ function specOf(): PreviewRuntimeSpec {
       settings: {},
       healthPath: '/',
       web: {
-        command: ['apache2', '-DFOREGROUND', '-f', '/run/raditi/preview/httpd.conf'],
-        env: {},
-        port: 8080,
+        command: ['apache2-foreground', '-f', '/run/raditi/preview/httpd.conf'],
+        env: { APACHE_RUN_DIR: '/tmp/apache2', APACHE_LOCK_DIR: '/tmp/apache2' },
+        port: 8081,
         user: '33:33',
         docroot: '/var/www/html',
-        tmpfs: ['/run/apache2', '/tmp'],
+        tmpfs: ['/tmp'],
         configFiles: [{ name: 'httpd.conf', content: apache }],
       },
     },
-    limits: { cpu: 1, memoryMiB: 1024, pids: 256 },
-    egress: ['api.example.ru:443'],
+    limits: { cpu: 2, memoryMiB: 2048, pids: 512 },
     upstreamHost: '127.0.0.1',
     hostname,
     origin: `http://${hostname}:8090`,
@@ -149,12 +147,14 @@ const get = (upstream: { host: string; port: number }, host: string, path = '/')
     outgoing.end()
   })
 
-/** The exit code of a command in a container of the preview, found by its labels. */
-async function codeIn(previewId: string, role: string, argv: string[]) {
+/** The exit code of a command in the preview's container as `user`, found by its labels. */
+async function codeIn(previewId: string, user: string, argv: string[]) {
   const [row] = await docker.listContainers({
-    filters: { label: [`io.raditi.preview.id=${previewId}`, `io.raditi.preview.role=${role}`] },
+    filters: { label: [`io.raditi.preview.id=${previewId}`, 'io.raditi.preview.role=preview'] },
   })
-  const exec = await docker.getContainer(row!.Id).exec({ Cmd: argv, AttachStdout: true })
+  const exec = await docker
+    .getContainer(row!.Id)
+    .exec({ Cmd: argv, User: user, AttachStdout: true })
   const stream = await exec.start({})
   stream.resume()
   await new Promise((resolve) => stream.on('end', resolve))
@@ -170,17 +170,28 @@ const listens = (port: number) =>
   })
 
 describe.skipIf(!enabled)('real Docker preview runtime', () => {
-  const runtime = createDockerPreviewRuntime({
-    runtime: runtimeKind,
-    socketPath,
-    gatewayPort: 8090,
-    ...(firewallImage ? { firewallImage } : {}),
-  })
+  let runtime: ReturnType<typeof createDockerPreviewRuntime>
   const owned: string[] = []
   beforeAll(async () => {
-    tools = (await pinned('raditi-preview-tools:local')) ?? ''
+    images = {
+      preview: (await pinned('raditi-preview-site:8.3-local')) ?? '',
+      tools: (await pinned('raditi-preview-tools:local')) ?? '',
+    }
     browserImage = await pinned('raditi-preview-browser:local')
-    if (!tools) throw new Error('Build raditi-preview-tools:local first (infra/preview/README.md)')
+    const firewallImage =
+      process.env.SANDBOX_NETWORK_GUARD_IMAGE ?? (await pinned('raditi-network-guard:local'))
+    guard = firewallImage ?? ''
+    if (!images.preview || !images.tools || !firewallImage)
+      throw new Error(
+        'Build raditi-preview-site:8.3-local, raditi-preview-tools:local and raditi-network-guard:local first (infra/preview/README.md)',
+      )
+    runtime = createDockerPreviewRuntime({
+      runtime: runtimeKind,
+      socketPath,
+      gatewayPort: 8090,
+      firewallImage,
+      dnsServers: ['77.88.8.8', '77.88.8.1'],
+    })
   })
   afterAll(async () => {
     for (const id of owned) await runtime.destroy(id)
@@ -196,13 +207,15 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
       passwords,
     )
     // The passwords are files of the database's tmpfs: nothing Docker keeps shows them.
-    const [dbRow] = await docker.listContainers({
+    const [row] = await docker.listContainers({
       all: true,
-      filters: { label: [`io.raditi.preview.id=${spec.previewId}`, 'io.raditi.preview.role=db'] },
+      filters: {
+        label: [`io.raditi.preview.id=${spec.previewId}`, 'io.raditi.preview.role=preview'],
+      },
     })
-    const dbInfo = JSON.stringify(await docker.getContainer(dbRow!.Id).inspect())
-    expect(dbInfo).not.toContain(passwords.user)
-    expect(dbInfo).not.toContain(passwords.root)
+    const info = JSON.stringify(await docker.getContainer(row!.Id).inspect())
+    expect(info).not.toContain(passwords.user)
+    expect(info).not.toContain(passwords.root)
     await runtime.writeFiles(spec.previewId, {
       archive: once(
         ustar([
@@ -259,9 +272,9 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
         passwords,
       ),
     ).rejects.toThrow()
-    // Where the client ran: the database container, its own /tmp.
-    expect(await codeIn(spec.previewId, 'db', ['test', '-d', '/tmp'])).toBe(0)
-    expect(await codeIn(spec.previewId, 'db', ['test', '-e', '/tmp/pwned'])).not.toBe(0)
+    // Where the client ran: the preview's container, as the database's user.
+    expect(await codeIn(spec.previewId, '999:999', ['test', '-d', '/tmp'])).toBe(0)
+    expect(await codeIn(spec.previewId, '999:999', ['test', '-e', '/tmp/pwned'])).not.toBe(0)
     // A load replaces the database even when it fails: the next build loads the seed again.
     await runtime.loadDatabase(
       spec.previewId,
@@ -269,16 +282,54 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
       passwords,
     )
 
-    // The PHP of the preview: the database and the egress slot on its network, nothing past them.
+    // The PHP of the preview: its database and its gateway on the loopback, the internet open
+    // (docs/plan/58), the database's passwords not its own.
     const probe = await runtime.exec(spec.previewId, {
       argv: [
         'php',
         '-r',
-        'foreach ([["db", 3306], ["egress", 3128], ["1.1.1.1", 443]] as [$h, $p]) { $s = @fsockopen($h, $p, $c, $m, 3); echo $s ? "open " : "closed "; }',
+        'foreach ([["127.0.0.1", 3306], ["127.0.0.1", 8080], ["1.1.1.1", 443]] as [$h, $p]) { $s = @fsockopen($h, $p, $c, $m, 5); echo $s ? "open " : "closed "; }',
       ],
       timeoutMs: 60_000,
     })
-    expect(Buffer.from(probe.stdout).toString()).toBe('open closed closed ')
+    expect(Buffer.from(probe.stdout).toString()).toBe('open open open ')
+    expect(
+      (
+        await runtime.exec(spec.previewId, {
+          argv: ['cat', '/run/raditi/db/root'],
+          timeoutMs: 30_000,
+        })
+      ).code,
+    ).not.toBe(0)
+    // A command of the platform ends with every process it started.
+    const lingering = await runtime.exec(spec.previewId, {
+      argv: ['sh', '-c', 'sleep 300 & echo started'],
+      timeoutMs: 30_000,
+    })
+    expect(lingering.code).toBe(0)
+    const sleepsOfPhp =
+      'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = sleep ] && grep -q "^Uid:[[:space:]]*33[[:space:]]" "$p/status" 2>/dev/null && exit 0; done; exit 1'
+    expect(await codeIn(spec.previewId, '0:0', ['sh', '-c', sleepsOfPhp])).not.toBe(0)
+
+    // The rules of its bridge are whole; a reload of the host's firewall that took the jump to
+    // them is seen, and the next build puts them back (docs/plan/58).
+    await runtime.checkBoundary(spec.previewId)
+    const bridge = previewBridge(spec.previewId)
+    const hostRule = await docker.createContainer({
+      Image: guard,
+      User: '0:0',
+      Entrypoint: ['/usr/sbin/iptables'],
+      Cmd: ['--wait', '5', '-D', 'DOCKER-USER', '-i', bridge, '-j', `RADITI-${bridge}`],
+      HostConfig: { NetworkMode: 'host', CapDrop: ['ALL'], CapAdd: ['NET_ADMIN'] },
+    })
+    await hostRule.start()
+    expect(((await hostRule.wait()) as { StatusCode: number }).StatusCode).toBe(0)
+    await hostRule.remove()
+    await expect(runtime.checkBoundary(spec.previewId)).rejects.toMatchObject({
+      code: 'SANDBOX_COMMAND_FAILED',
+    })
+    await runtime.ensure(spec, secrets)
+    await runtime.checkBoundary(spec.previewId)
 
     // The PHP of the preview owns its docroot and may close it, to itself too: the next build and
     // the next write still go through.
@@ -324,7 +375,7 @@ describe.skipIf(!enabled)('real Docker preview runtime', () => {
 
   it('starts a browser whose control port answers on loopback', async (context) => {
     if (!browserImage) return context.skip()
-    const spec = { ...specOf(), images: { ...specOf().images, db: null, egress: null } }
+    const spec = specOf(false)
     owned.push(spec.previewId)
     await runtime.ensure(spec, { env: {}, database: null })
     const endpoint = await runtime.startBrowser(spec.previewId, {

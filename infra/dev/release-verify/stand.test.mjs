@@ -150,6 +150,7 @@ test('every image is named by digest, and the built ones under names of the stan
   )
   // The context of the preview images is their own folder (infra/preview/Dockerfile).
   assert.equal(BUILT_IMAGES.tools.context, 'infra/preview')
+  assert.equal(BUILT_IMAGES.site.context, 'infra/preview')
   assert.equal(BUILT_IMAGES.browser.context, 'infra/preview')
 })
 
@@ -214,9 +215,12 @@ test('each process of the platform is its own role with its own AppRole, and nev
     'SANDBOX_NETWORK_GUARD_IMAGE',
     'PREVIEW_FORWARDER_IMAGE',
     'PREVIEW_BROWSER_IMAGE',
-    'PREVIEW_EGRESS_IMAGE',
   ])
     assert.match(core[name], DIGEST_REFERENCE)
+  // A preview is one container of the site image built from this tree (docs/plan/58).
+  assert.equal(core.PREVIEW_SITE_IMAGES, `8.3=${context.images.site}`)
+  for (const gone of ['PREVIEW_WEB_IMAGES', 'PREVIEW_CLI_IMAGE', 'PREVIEW_EGRESS_IMAGE'])
+    assert.equal(core[gone], undefined)
   assert.equal(core.RELEASE_API_PUBLIC_URL, 'http://127.0.0.1:40011')
   const [, llm] = roles.find(([role]) => role === 'llm')
   assert.equal(llm.LLM_BACKEND_URL_ZAI_CODING, 'https://localhost:40012')
@@ -237,17 +241,18 @@ test('the production site is a local WordPress without cron, whose application p
   assert.equal(files[NOTICE_PATH], undefined)
 })
 
-test("a query of a preview's database reads root's password from the file the product's container names", async () => {
-  // The product hands the passwords as files of the container's tmpfs (Vault, never its
-  // environment): the stand reads the file its environment names, and never an old variable.
+test("a query of a preview's database is root's on its socket, with no password anywhere", async () => {
+  // Root of a preview's database is root of its container by unix_socket (init.sh); the
+  // passwords are files of the database's tmpfs (Vault, never the container's environment).
+  const init = await readFile(new URL('../../preview/init.sh', import.meta.url), 'utf8')
+  assert.match(init, /IDENTIFIED VIA unix_socket OR mysql_native_password/)
   const containers = await readFile(
     new URL('../../../packages/sandbox-providers/src/preview/containers.ts', import.meta.url),
     'utf8',
   )
-  assert.match(containers, /`MARIADB_ROOT_PASSWORD_FILE=\$\{DATABASE_SECRET_FILES\.root\}`/)
-  assert.doesNotMatch(containers, /MARIADB_ROOT_PASSWORD=/)
-  assert.match(PREVIEW_ROOT_QUERY, /-p"\$\(cat "\$MARIADB_ROOT_PASSWORD_FILE"\)"/)
-  assert.doesNotMatch(PREVIEW_ROOT_QUERY, /\$MARIADB_ROOT_PASSWORD"/)
+  assert.doesNotMatch(containers, /MARIADB_ROOT_PASSWORD/)
+  assert.match(PREVIEW_ROOT_QUERY, /--socket=\/run\/mysqld\/mysqld\.sock --user=root /)
+  assert.doesNotMatch(PREVIEW_ROOT_QUERY, /-p|PASSWORD/)
   // The query is the script's first argument: never spliced into the command.
   assert.match(PREVIEW_ROOT_QUERY, /-e "\$1"$/)
 })

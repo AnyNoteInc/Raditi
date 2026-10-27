@@ -1,16 +1,16 @@
 <?php
 /**
- * wp-config.php of a Raditi preview (docs/plan/53-chat-preview-release.md, Р13–Р15). The same file
- * for every preview, with no secret in it: what differs per preview — its address, the address
- * of production, the database the runtime created, the egress proxy, the client's variables —
- * comes from the settings file the platform writes on a tmpfs. The platform writes this file
+ * wp-config.php of a Raditi preview (docs/plan/53-chat-preview-release.md, Р13–Р15; docs/plan/58).
+ * The same file for every preview, with no secret in it: what differs per preview — its address,
+ * the address of production, the database of its container, the client's variables — comes from
+ * the settings file the platform writes on a tmpfs. The platform writes this file
  * over every tree it writes; the site's own wp-config.php never reaches a preview.
  */
 
 $raditi_preview = (static function () {
     $raw = @file_get_contents('/run/raditi/preview/settings.json');
     $settings = is_string($raw) ? json_decode($raw, true, 32) : null;
-    if (!is_array($settings) || ($settings['v'] ?? null) !== 1 || !is_array($settings['database'] ?? null)
+    if (!is_array($settings) || ($settings['v'] ?? null) !== 2 || !is_array($settings['database'] ?? null)
         || !is_string($settings['origin'] ?? null) || !is_string($settings['productionOrigin'] ?? null)) {
         if (PHP_SAPI !== 'cli' && !headers_sent()) {
             http_response_code(503);
@@ -23,7 +23,7 @@ $raditi_preview = (static function () {
     return $settings;
 })();
 
-// The database the runtime created on the preview's own network.
+// The database of the preview's own container, on its loopback (docs/plan/58).
 $raditi_database = $raditi_preview['database'];
 define('DB_NAME', (string) $raditi_database['name']);
 define('DB_USER', (string) $raditi_database['user']);
@@ -63,32 +63,8 @@ if (is_array($raditi_origin) && isset($raditi_origin['host'])) {
     }
 }
 
-// Out of the preview: only the hosts of the client's variables, through the egress proxy (Р13).
-// The network is the boundary; WordPress refuses the rest itself, and so does the mu-plugin.
-$raditi_egress = is_array($raditi_preview['egress'] ?? null) ? $raditi_preview['egress'] : null;
-$raditi_allowed = array();
-$raditi_hosts = array();
-if ($raditi_egress !== null) {
-    foreach ((array) ($raditi_egress['hosts'] ?? array()) as $raditi_host) {
-        if (is_string($raditi_host) && preg_match('/^([a-z0-9.-]+):([1-9][0-9]{0,4})$/D', $raditi_host, $raditi_match)) {
-            $raditi_allowed[] = $raditi_host;
-            $raditi_hosts[$raditi_match[1]] = true;
-        }
-    }
-    $raditi_proxy = $raditi_egress['proxy'] ?? null;
-    if (is_array($raditi_proxy) && is_string($raditi_proxy['host'] ?? null) && is_int($raditi_proxy['port'] ?? null)) {
-        define('WP_PROXY_HOST', $raditi_proxy['host']);
-        define('WP_PROXY_PORT', (string) $raditi_proxy['port']);
-        // For code that calls curl itself: libcurl reads these when no proxy is set on a handle.
-        putenv('http_proxy=http://' . $raditi_proxy['host'] . ':' . $raditi_proxy['port']);
-        putenv('https_proxy=http://' . $raditi_proxy['host'] . ':' . $raditi_proxy['port']);
-    }
-}
-define('RADITI_PREVIEW_EGRESS', $raditi_allowed);
-define('WP_HTTP_BLOCK_EXTERNAL', true);
-if ($raditi_hosts) {
-    define('WP_ACCESSIBLE_HOSTS', implode(',', array_keys($raditi_hosts)));
-}
+// Out of the preview: the internet is open (owner's answer of 26.10.2026, docs/plan/58); the
+// host, the private networks and the platform are closed by the rules of its bridge.
 
 // A preview is a staging copy: no mail (the mu-plugin), no cron, no updates, no installs, no
 // file edits from the admin, no page cache drop-in.
@@ -129,7 +105,7 @@ foreach ((array) ($raditi_preview['env'] ?? array()) as $raditi_name => $raditi_
         define($raditi_name, $raditi_value);
     }
 }
-unset($raditi_preview, $raditi_database, $raditi_settings, $raditi_name, $raditi_origin, $raditi_egress,
-    $raditi_allowed, $raditi_hosts, $raditi_host, $raditi_match, $raditi_proxy, $raditi_value, $raditi_reserved);
+unset($raditi_preview, $raditi_database, $raditi_settings, $raditi_name, $raditi_origin, $raditi_value,
+    $raditi_reserved);
 
 require_once ABSPATH . 'wp-settings.php';

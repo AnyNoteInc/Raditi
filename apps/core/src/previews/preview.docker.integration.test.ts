@@ -57,7 +57,9 @@ import { createPreviewSiteSources } from './site-sources.ts'
 // with a database operation, synced from a turn, given a browser — which opens the preview through
 // the gateway of the `preview` app (R6), its build started as a process of its own on
 // PREVIEW_GATEWAY_PORT 18090 — and destroyed. Only synthetic data. Needs the images below, the
-// tools and browser images of infra/preview (README) and `pnpm --filter preview build`; runs with
+// site, tools and browser images of infra/preview (README), the image of the host rules
+// (infra/sandbox/Dockerfile, `network-guard`, or SANDBOX_NETWORK_GUARD_IMAGE) and
+// `pnpm --filter preview build`; runs with
 // RADITI_PREVIEW_DOCKER_TESTS=1, RADITI_GATEWAY_DB_TESTS=1 and a disposable DATABASE_URL, with
 // port 18090 free on loopback (Docker Desktop) or on the bridge of the host (Linux).
 
@@ -85,7 +87,10 @@ const digest = async (tag: string) => {
 }
 const WEB = 'wordpress:7.1.2-php8.3-apache'
 const DB = 'mariadb:11.4.13'
+// The WP-CLI of «production»; a preview has its own in its container (docs/plan/58).
 const CLI = 'wordpress:cli-php8.3'
+const SITE = 'raditi-preview-site:8.3-local'
+const GUARD = 'raditi-network-guard:local'
 const TOOLS = 'raditi-preview-tools:local'
 const BROWSER = 'raditi-preview-browser:local'
 const suffix = randomBytes(4).toString('hex')
@@ -107,10 +112,10 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
   let manager: PreviewManager
   let vault: MemoryVault
   let gateway: PreviewApp | undefined
-  const docker_ = createDockerPreviewRuntime({ runtime: 'runc', gatewayPort: 18090 })
   /** What each write of files asked: the docroot is written as a difference whenever it can. */
   const writes: Array<Omit<PreviewFilesInput, 'archive' | 'platform'> & { bytes: number }> = []
-  const runtime: PreviewRuntime = {
+  let runtime: PreviewRuntime
+  const recording = (docker_: PreviewRuntime): PreviewRuntime => ({
     ...docker_,
     writeFiles: (previewId, input, signal) => {
       const entry = { replace: input.replace, deletes: input.deletes, bytes: 0 }
@@ -129,7 +134,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
         signal,
       )
     },
-  }
+  })
   const ids = { workspace: '', site: '', task: '', preview: '', hostname: '', pageId: 0 }
   let mainSha = ''
   let candidateSha = ''
@@ -195,25 +200,33 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
 
   beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
+    const firewallImage = process.env.SANDBOX_NETWORK_GUARD_IMAGE ?? (await digest(GUARD))
     config = {
       address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
       ttlHours: 72,
       idleMinutes: 30,
       executor: 'local',
       runtime: 'runc',
-      webImages: { '8.3': await digest(WEB) },
+      siteImages: { '8.3': await digest(SITE) },
       images: {
         db: await digest(DB),
-        cli: await digest(CLI),
         forwarder: await digest(TOOLS),
         browser: await digest(BROWSER),
-        egress: null,
       },
       upstreamHost: '127.0.0.1',
+      dnsServers: ['77.88.8.8', '77.88.8.1'],
       gatewayPort: 18090,
-      egressRefusedSubnets: [],
-      docker: { socketPath: '/var/run/docker.sock', firewallImage: null },
+      refusedSubnets: [],
+      docker: { socketPath: '/var/run/docker.sock', firewallImage },
     }
+    runtime = recording(
+      createDockerPreviewRuntime({
+        runtime: 'runc',
+        gatewayPort: 18090,
+        firewallImage,
+        dnsServers: [...config.dnsServers],
+      }),
+    )
 
     // «Production»: a WordPress database on a MariaDB published on loopback.
     await docker('network', 'create', prod.network)

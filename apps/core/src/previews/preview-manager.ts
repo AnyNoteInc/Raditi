@@ -70,6 +70,12 @@ export const previewManagerTimings = Object.freeze({
    * pass.
    */
   sweepBuilds: 2,
+  /**
+   * The rules of the network of a served preview are checked again this often (docs/plan/58),
+   * at most `boundaryChecks` previews a pass: each check is a helper container on the host.
+   */
+  boundaryCheckSeconds: 120,
+  boundaryChecks: 10,
 })
 
 const SWEEP_BATCH = 50
@@ -399,6 +405,7 @@ export class PreviewManager {
       ['ttl', () => this.#extendLives()],
       ['due', () => this.#refreshDue()],
       ['idle', () => this.#stopIdleBrowsers()],
+      ['boundary', () => this.#checkBoundaries()],
       ['stale', () => markStaleCandidates(this.deps.db)],
       ['leftovers', () => this.#removeLeftovers()],
       ['staging', () => this.#removeStaging()],
@@ -510,6 +517,55 @@ export class PreviewManager {
         )
       ORDER BY p.updated_at LIMIT ${SWEEP_BATCH}`
     for (const row of rows) this.#detach(row.id, { requested: row.requested })
+  }
+
+  /** When this core last found the rules of each served preview whole. */
+  readonly #boundaryChecked = new Map<string, number>()
+
+  /**
+   * The rules of the network of every served preview (docs/plan/58): a reload of the host's
+   * firewall would leave a running preview open to the host and the platform until its next
+   * build. One whose rules are not whole stops at once and is built again as lost — the build
+   * puts the rules back before its container starts.
+   */
+  async #checkBoundaries(): Promise<void> {
+    const runtime = this.deps.runtime
+    if (!runtime) return
+    // Not one a work holds (a build, a sync, the browser) here or on another core: a build puts
+    // the rules again itself, and a check in the middle of it would stop what it is starting.
+    const rows = await this.deps.db.previewEnvironment.findMany({
+      where: {
+        status: 'ready',
+        OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: this.#stale() } }],
+      },
+      select: { id: true },
+      take: SWEEP_BATCH,
+    })
+    const served = new Set(rows.map((row) => row.id))
+    for (const id of this.#boundaryChecked.keys())
+      if (!served.has(id)) this.#boundaryChecked.delete(id)
+    const now = this.#now().getTime()
+    const due = now - previewManagerTimings.boundaryCheckSeconds * 1000
+    const next = rows
+      .filter((row) => (this.#boundaryChecked.get(row.id) ?? 0) <= due)
+      .sort(
+        (a, b) => (this.#boundaryChecked.get(a.id) ?? 0) - (this.#boundaryChecked.get(b.id) ?? 0),
+      )
+      .slice(0, previewManagerTimings.boundaryChecks)
+    for (const { id } of next) {
+      if (this.#working.has(id)) continue
+      try {
+        await runtime.checkBoundary(id)
+        this.#boundaryChecked.set(id, now)
+      } catch (error) {
+        this.#warn(`preview ${id} boundary`, logged(error))
+        this.#boundaryChecked.delete(id)
+        await runtime.stop(id).catch((stopError: unknown) => {
+          this.#warn(`preview ${id} stop`, logged(stopError))
+        })
+        this.#detach(id, { requested: true, lost: true })
+      }
+    }
   }
 
   async #stopIdleBrowsers(): Promise<void> {

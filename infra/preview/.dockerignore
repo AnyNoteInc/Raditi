@@ -5,3 +5,7 @@
 !browser-server.mjs
 !browser/package.json
 !browser/package-lock.json
+!init.sh
+!dns.mjs
+!run-as.sh
+!mariadb-release-signing-key.asc

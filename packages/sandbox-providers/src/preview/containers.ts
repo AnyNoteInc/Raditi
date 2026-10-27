@@ -9,10 +9,9 @@ import {
 } from '@repo/domain'
 import type Docker from 'dockerode'
 
-import { previewServiceLimits } from './config.ts'
+import { previewRuntimeLimits, previewServiceLimits } from './config.ts'
 import {
   browserAddresses,
-  previewAddresses,
   previewLabels,
   previewNames,
   PREVIEW_LABEL,
@@ -22,16 +21,18 @@ import {
 } from './resources.ts'
 
 /**
- * Create options of a preview's containers (docs/plan/53-chat-preview-release.md, Р18): pure, so
- * every hardening flag is visible in one place and checked by tests. The PHP, CLI, database,
- * files helper and browser containers run the preview's runtime (gVisor in production); the
- * platform's forwarders, which parse nothing, run the daemon's default like sandbox-gw.
+ * Create options of a preview's containers (docs/plan/53-chat-preview-release.md, Р18; docs/plan/58):
+ * pure, so every hardening flag is visible in one place and checked by tests. The preview itself,
+ * the files helper and the browser run the preview's runtime (gVisor in production); the
+ * platform's relay of the browser, which parses nothing, runs the daemon's default like
+ * sandbox-gw.
  */
 
 export const SETTINGS_DIR = posix.dirname(PREVIEW_SETTINGS_PATH)
 /** The tools image (infra/preview/Dockerfile, target `tools`): forwarders and the files helper. */
 export const TOOLS = '/usr/local/lib/raditi'
 export const FORWARD_PORT = 8080
+/** The egress proxy of a browser session of a task (browser-session/containers.ts). */
 export const EGRESS_PORT = 3128
 export const RELAY_PROXY_PORT = 3128
 export const BROWSER_CONTROL_PORT = 9333
@@ -41,16 +42,22 @@ export const BROWSER_READY_FILE = `${BROWSER_STATE_DIR}/ready`
 export const FORWARD_READY_FILE = '/run/raditi-forward/ready'
 /** Where the files helper mounts the docroot volume (infra/preview/files.mjs ROOT). */
 export const FILES_ROOT = '/files'
-/** The database the runtime creates: one per preview, on its own container. */
-export const PREVIEW_DATABASE = Object.freeze({ name: 'preview', user: 'preview', port: 3306 })
+/** The database the preview's container runs: one per preview, on its loopback (docs/plan/58). */
+export const PREVIEW_DATABASE = Object.freeze({
+  name: 'preview',
+  user: 'preview',
+  host: '127.0.0.1',
+  port: 3306,
+})
 /** The official MariaDB image runs as `mysql`; its data folder is that user's on first mount. */
 export const DATABASE_USER = '999:999'
 export const SERVICE_USER = '10001:10001'
-/** Names on the preview's network, from /etc/hosts: no DNS is needed under gVisor. */
-export const previewHosts = Object.freeze({ db: 'db', egress: 'egress' })
 export const CONFIG_LABEL = `${PREVIEW_LABEL}config`
-export const CLI_IMAGE_LABEL = `${PREVIEW_LABEL}cli-image`
 export const HOSTNAME_LABEL = `${PREVIEW_LABEL}hostname`
+/** The PHP user of a preview's container: the files helper writes the docroot as that user. */
+export const WEB_USER_LABEL = `${PREVIEW_LABEL}web-user`
+/** The image of the platform's tools a preview was built with: its helpers and relay take it. */
+export const TOOLS_IMAGE_LABEL = `${PREVIEW_LABEL}tools-image`
 
 /** Never the image's content in a preview's volume: dockerode types ask for more than Docker. */
 const noCopy = { NoCopy: true } as unknown as NonNullable<Docker.MountSettings['VolumeOptions']>
@@ -154,94 +161,33 @@ export const identityOf = (spec: PreviewRuntimeSpec): PreviewIdentity => ({
   taskId: spec.taskId,
 })
 
-/** /etc/hosts of the PHP and CLI containers: the database and the egress proxy, when present. */
-export function previewExtraHosts(
-  network: NetworkPlace,
-  present: { db: boolean; egress: boolean },
-): string[] {
-  return [
-    ...(present.db
-      ? [`${previewHosts.db}:${subnetAddress(network.subnet, previewAddresses.db)}`]
-      : []),
-    ...(present.egress
-      ? [`${previewHosts.egress}:${subnetAddress(network.subnet, previewAddresses.egress)}`]
-      : []),
-  ]
-}
-
 /**
- * The server starts only once `ensure` wrote its settings and configuration into the tmpfs:
- * a fixed script of the image's /bin/sh, the server's argv after it, no shell around that.
- */
-export const WAIT_FOR_SETTINGS = [
-  'i=0',
-  `while [ ! -f ${PREVIEW_SETTINGS_PATH} ]; do i=$((i+1)); if [ "$i" -gt 600 ]; then exit 70; fi; sleep 0.2; done`,
-  'exec "$@"',
-].join('; ')
-
-export function webContainer(
-  spec: PreviewRuntimeSpec,
-  network: NetworkPlace,
-  extraHosts: string[],
-): Docker.ContainerCreateOptions {
-  const web = spec.recipe.web
-  const names = previewNames(spec.previewId)
-  return labelled(
-    {
-      name: names.container('web'),
-      Image: spec.images.web,
-      User: web.user,
-      Entrypoint: ['/bin/sh', '-c', WAIT_FOR_SETTINGS, 'raditi-preview-web'],
-      Cmd: [...web.command],
-      Env: Object.entries(web.env).map(([name, value]) => `${name}=${value}`),
-      WorkingDir: web.docroot,
-      Tty: false,
-      OpenStdin: false,
-      HostConfig: {
-        ...hardened(spec.limits, spec.runtime),
-        NetworkMode: network.id,
-        ExtraHosts: extraHosts,
-        Mounts: [
-          {
-            Type: 'volume',
-            Source: names.filesVolume,
-            Target: web.docroot,
-            ReadOnly: false,
-            VolumeOptions: noCopy,
-          },
-        ],
-        Tmpfs: {
-          ...Object.fromEntries(web.tmpfs.map((path) => [path, tmpfs(web.user, '64m')])),
-          [SETTINGS_DIR]: tmpfs(web.user, '1m'),
-        },
-      },
-      NetworkingConfig: {
-        EndpointsConfig: fixedAddress(
-          network.id,
-          subnetAddress(network.subnet, previewAddresses.web),
-        ),
-      },
-    },
-    identityOf(spec),
-    'web',
-    spec.expiresAt,
-    // The CLI containers copy the rest of their options from this one.
-    { [CLI_IMAGE_LABEL]: spec.images.cli, [HOSTNAME_LABEL]: spec.hostname },
-    // The server reads its configuration at start only: another one is another container.
-    web.configFiles,
-  )
-}
-
-/**
- * The passwords of the database as files of its tmpfs (owner's answer of 19.10.2026: from Vault,
- * never in the container's environment, where `docker inspect` shows them): the image's
- * entrypoint reads them through `MARIADB_*_PASSWORD_FILE` and unsets them before the server.
+ * Where the services of the preview's container keep their state (infra/preview/init.sh,
+ * docs/plan/58, «Договор срезов»): each a tmpfs of its own user, emptied by a restart, so `ensure`
+ * writes the settings and the passwords again after one.
  */
 export const DATABASE_SECRET_DIR = '/run/raditi/db'
 export const DATABASE_SECRET_FILES = Object.freeze({
   user: `${DATABASE_SECRET_DIR}/user`,
   root: `${DATABASE_SECRET_DIR}/root`,
 })
+/**
+ * The staging database of a dump (staging.ts) runs the official MariaDB image: its entrypoint
+ * starts once both password files are in the tmpfs — a fixed script of the image's /bin/sh.
+ */
+export const WAIT_FOR_DATABASE_SECRETS = [
+  'i=0',
+  `while [ ! -f ${DATABASE_SECRET_FILES.user} ] || [ ! -f ${DATABASE_SECRET_FILES.root} ]; do i=$((i+1)); if [ "$i" -gt 600 ]; then exit 70; fi; sleep 0.2; done`,
+  'exec "$@"',
+].join('; ')
+export const READY_DIR = '/run/raditi/ready'
+/** init.sh writes it once the database answers. */
+export const DATABASE_READY_FILE = `${READY_DIR}/db`
+/** init.sh runs a command of the platform as a user: `run-as.sh <uid:gid> <seconds> -- argv…`. */
+export const RUN_AS = `${TOOLS}/run-as.sh`
+/** The capabilities init needs to start each service as its own user, and only at the start. */
+export const PREVIEW_START_CAPS = ['SETUID', 'SETGID', 'SETPCAP'] as const
+
 /**
  * Which passwords the database was made with: a hash, so that a call with others is a CONFLICT
  * at once — the users live in the volume and would refuse them — and never the passwords.
@@ -253,135 +199,95 @@ export const databaseSecretMark = (passwords: PreviewDatabasePasswords): string 
     .digest('hex')
 
 /**
- * The image's entrypoint starts once `ensure` wrote both password files into the tmpfs — at the
- * first start and after any restart, which empties it: a fixed script of the image's /bin/sh.
- */
-export const WAIT_FOR_DATABASE_SECRETS = [
-  'i=0',
-  `while [ ! -f ${DATABASE_SECRET_FILES.user} ] || [ ! -f ${DATABASE_SECRET_FILES.root} ]; do i=$((i+1)); if [ "$i" -gt 600 ]; then exit 70; fi; sleep 0.2; done`,
-  'exec "$@"',
-].join('; ')
-
-export function databaseContainer(
-  spec: PreviewRuntimeSpec,
-  network: NetworkPlace,
-  passwords: PreviewDatabasePasswords,
-): Docker.ContainerCreateOptions {
-  const names = previewNames(spec.previewId)
-  return labelled(
-    {
-      name: names.container('db'),
-      Image: spec.images.db!,
-      User: DATABASE_USER,
-      // The image's own entrypoint and command (an official MariaDB image), after the wait.
-      Entrypoint: ['/bin/sh', '-c', WAIT_FOR_DATABASE_SECRETS, 'raditi-preview-db'],
-      Cmd: ['docker-entrypoint.sh', 'mariadbd'],
-      Env: [
-        `MARIADB_DATABASE=${PREVIEW_DATABASE.name}`,
-        `MARIADB_USER=${PREVIEW_DATABASE.user}`,
-        `MARIADB_PASSWORD_FILE=${DATABASE_SECRET_FILES.user}`,
-        `MARIADB_ROOT_PASSWORD_FILE=${DATABASE_SECRET_FILES.root}`,
-        // Root only on the container's own socket: the PHP of the preview gets the user above.
-        'MARIADB_ROOT_HOST=localhost',
-      ],
-      Tty: false,
-      OpenStdin: false,
-      HostConfig: {
-        ...hardened(spec.limits, spec.runtime),
-        NetworkMode: network.id,
-        // Copied up on first mount: the data folder belongs to the image's database user.
-        Mounts: [{ Type: 'volume', Source: names.databaseVolume, Target: '/var/lib/mysql' }],
-        Tmpfs: {
-          '/run/mysqld': tmpfs(DATABASE_USER, '4m').replace('mode=0700', 'mode=0755'),
-          '/tmp': tmpfs(DATABASE_USER, '256m'),
-          [DATABASE_SECRET_DIR]: tmpfs(DATABASE_USER, '1m'),
-        },
-      },
-      NetworkingConfig: {
-        EndpointsConfig: fixedAddress(
-          network.id,
-          subnetAddress(network.subnet, previewAddresses.db),
-        ),
-      },
-    },
-    identityOf(spec),
-    'db',
-    spec.expiresAt,
-    { [DATABASE_SECRET_LABEL]: databaseSecretMark(passwords) },
-  )
-}
-
-/**
- * The entry forwarder: on the default bridge (Docker publishes no port of an internal network)
- * and on the preview's network, from PREVIEW_UPSTREAM_HOST:<random> to the PHP container. Its
- * port is the preview's only while this container lives: Docker hands it to another preview once
- * it stops, so the forwarder answers 421 to a request for any host but the preview's own
+ * The preview (docs/plan/58): one container of the site's server, its database and its entry
+ * gateway, each service under a user of its own (infra/preview/init.sh). Its own bridge, which is
+ * not internal — a port is published from it, and its internet is open (owner's answer of
+ * 26.10.2026) — with the host rules that close the host, the private networks and the platform
+ * (host-firewall.mjs) put before it starts. The port of the gateway is the preview's only while
+ * this container lives: the gateway answers 421 to a request for any host but the preview's own
  * (infra/preview/forward.mjs, `--http-host`).
  */
-export function forwarderContainer(
-  spec: PreviewRuntimeSpec,
-  network: NetworkPlace,
-): Docker.ContainerCreateOptions {
-  const target = `${subnetAddress(network.subnet, previewAddresses.web)}:${spec.recipe.web.port}`
+export function previewContainer(input: {
+  spec: PreviewRuntimeSpec
+  network: NetworkPlace
+  dnsServers: readonly string[]
+  passwords: PreviewDatabasePasswords | null
+}): Docker.ContainerCreateOptions {
+  const { spec, network } = input
+  const web = spec.recipe.web
+  const names = previewNames(spec.previewId)
+  const database = spec.database && input.passwords !== null
   return labelled(
     {
-      name: previewNames(spec.previewId).container('forwarder'),
-      Image: spec.images.forwarder,
-      User: SERVICE_USER,
-      Entrypoint: node('forward.mjs'),
-      Cmd: [`--http-host=${spec.hostname}`, `0.0.0.0:${FORWARD_PORT}=${target}`],
-      Env: [],
+      name: names.container('preview'),
+      Image: spec.images.preview,
+      // init starts each service as its own user and keeps no capability itself.
+      User: '0:0',
+      Entrypoint: ['/usr/bin/tini', '--', `${TOOLS}/init.sh`],
+      Cmd: [...web.command],
+      Env: [
+        ...Object.entries(web.env).map(([name, value]) => `${name}=${value}`),
+        `RADITI_HTTP_HOST=${spec.hostname}`,
+        `RADITI_WEB_PORT=${web.port}`,
+        `RADITI_DATABASE=${database ? '1' : '0'}`,
+        // The servers the forwarder of names inside asks (infra/preview/dns.mjs): it listens on
+        // 127.0.0.11:53, where /etc/resolv.conf points — gVisor never reaches Docker's resolver
+        // there, and a read-only root file system keeps that file as Docker wrote it (docs/plan/58).
+        `RADITI_DNS_SERVERS=${input.dnsServers.join(',')}`,
+      ],
+      WorkingDir: web.docroot,
       ExposedPorts: { [`${FORWARD_PORT}/tcp`]: {} },
       Tty: false,
       OpenStdin: false,
       HostConfig: {
-        ...hardened(previewServiceLimits.forwarder),
-        NetworkMode: 'bridge',
+        ...hardened(spec.limits, spec.runtime),
+        CapAdd: [...PREVIEW_START_CAPS],
+        NetworkMode: network.id,
+        // Under runc Docker's resolver answers at 127.0.0.11 before the forwarder: these are the
+        // servers it asks, so both runtimes resolve by the same ones.
+        Dns: [...input.dnsServers],
         PortBindings: { [`${FORWARD_PORT}/tcp`]: [{ HostIp: spec.upstreamHost, HostPort: '' }] },
-        Tmpfs: { [posix.dirname(FORWARD_READY_FILE)]: tmpfs(SERVICE_USER, '1m') },
-        Sysctls: serviceSysctls,
+        Mounts: [
+          {
+            Type: 'volume',
+            Source: names.filesVolume,
+            Target: web.docroot,
+            ReadOnly: false,
+            VolumeOptions: noCopy,
+          },
+          ...(database
+            ? [{ Type: 'volume' as const, Source: names.databaseVolume, Target: '/var/lib/mysql' }]
+            : []),
+        ],
+        Tmpfs: {
+          '/tmp': 'rw,noexec,nosuid,nodev,size=256m,mode=1777',
+          [SETTINGS_DIR]: tmpfs(web.user, previewRuntimeLimits.settingsTmpfs),
+          [DATABASE_SECRET_DIR]: tmpfs(DATABASE_USER, '1m'),
+          // The socket and the database's temporary files (init.sh: /run/mysqld/tmp, 0700).
+          '/run/mysqld': tmpfs(DATABASE_USER, '256m').replace('mode=0700', 'mode=0755'),
+          [posix.dirname(FORWARD_READY_FILE)]: tmpfs(SERVICE_USER, '1m'),
+          [READY_DIR]: 'rw,noexec,nosuid,nodev,size=1m,mode=0755',
+        },
+        Sysctls: {
+          'net.ipv6.conf.all.disable_ipv6': '1',
+          // The forwarder of names, uid 10001 with no capability, binds port 53 of its loopback.
+          'net.ipv4.ip_unprivileged_port_start': '0',
+        },
       },
     },
     identityOf(spec),
-    'forwarder',
+    'preview',
     spec.expiresAt,
-  )
-}
-
-/**
- * The egress proxy slot (Р13): its image is the allow-listing proxy (infra/sandbox/client-egress
- * .mjs, the `client-egress` target of infra/sandbox/Dockerfile, slice R10), which listens on
- * LISTEN_HOST:LISTEN_PORT of the preview's network, lets through only `ALLOWED_HOSTS` (a JSON
- * array of `host:port`) and never connects to REFUSED_SUBNETS. Its entrypoint is the image's.
- */
-export function egressContainer(
-  spec: PreviewRuntimeSpec,
-  network: NetworkPlace,
-  refusedSubnets: readonly string[] = [],
-): Docker.ContainerCreateOptions {
-  return labelled(
     {
-      name: previewNames(spec.previewId).container('egress'),
-      Image: spec.images.egress!,
-      User: SERVICE_USER,
-      Env: [
-        `LISTEN_HOST=${subnetAddress(network.subnet, previewAddresses.egress)}`,
-        `LISTEN_PORT=${EGRESS_PORT}`,
-        `ALLOWED_HOSTS=${JSON.stringify(spec.egress)}`,
-        ...(refusedSubnets.length ? [`REFUSED_SUBNETS=${refusedSubnets.join(',')}`] : []),
-      ],
-      Tty: false,
-      OpenStdin: false,
-      HostConfig: {
-        ...hardened(previewServiceLimits.forwarder),
-        NetworkMode: 'bridge',
-        Tmpfs: { '/tmp': tmpfs(SERVICE_USER, '16m') },
-        Sysctls: serviceSysctls,
-      },
+      [HOSTNAME_LABEL]: spec.hostname,
+      [WEB_USER_LABEL]: web.user,
+      [TOOLS_IMAGE_LABEL]: spec.images.tools,
+      ...(database && input.passwords
+        ? { [DATABASE_SECRET_LABEL]: databaseSecretMark(input.passwords) }
+        : {}),
     },
-    identityOf(spec),
-    'egress',
-    spec.expiresAt,
+    // The server reads its configuration at start only: another one is another container.
+    web.configFiles,
   )
 }
 
@@ -431,62 +337,6 @@ export function filesHelperContainer(input: {
     },
     input.identity,
     'files-helper',
-    input.deadline,
-  )
-}
-
-/** A CLI container: the web container's mounts, user, network and limits, the CLI image. */
-export function cliContainer(input: {
-  web: Docker.ContainerInspectInfo
-  identity: PreviewIdentity
-  deadline: number
-  image: string
-  seconds: number
-  suffix: string
-}): Docker.ContainerCreateOptions {
-  const host = input.web.HostConfig
-  const user = input.web.Config.User
-  const docroot = input.web.Mounts.find((mount) => mount.Type === 'volume')
-  if (!docroot?.Name || !host.NetworkMode) throw new Error('Preview web container is incomplete')
-  return labelled(
-    {
-      name: previewNames(input.identity.previewId).container('cli', input.suffix),
-      Image: input.image,
-      User: user,
-      Entrypoint: ['sleep', String(Math.ceil(input.seconds))],
-      Cmd: [],
-      Env: [
-        ...(input.web.Config.Env ?? []).filter((entry) => !entry.startsWith('HOME=')),
-        'HOME=/tmp',
-      ],
-      WorkingDir: docroot.Destination,
-      Tty: false,
-      OpenStdin: false,
-      HostConfig: {
-        ...hardened(
-          {
-            cpu: (host.NanoCpus ?? 1e9) / 1e9,
-            memoryMiB: Math.round((host.Memory ?? 0) / 1024 / 1024),
-            pids: host.PidsLimit ?? 256,
-          },
-          host.Runtime as PreviewRuntimeKind,
-        ),
-        NetworkMode: host.NetworkMode,
-        ExtraHosts: host.ExtraHosts ?? [],
-        Mounts: [
-          {
-            Type: 'volume',
-            Source: docroot.Name,
-            Target: docroot.Destination,
-            ReadOnly: false,
-            VolumeOptions: noCopy,
-          },
-        ],
-        Tmpfs: { '/tmp': tmpfs(user, '256m'), [SETTINGS_DIR]: tmpfs(user, '1m') },
-      },
-    },
-    input.identity,
-    'cli',
     input.deadline,
   )
 }

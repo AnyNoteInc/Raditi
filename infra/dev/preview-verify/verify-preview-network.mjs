@@ -1,14 +1,16 @@
-// The network of a preview, measured on this machine (docs/plan/53-chat-preview-release.md, Р18,
-// Р21): two previews and a browser built by the real Docker runtime (createDockerPreviewRuntime),
-// then TCP and HTTP probes from the host, from inside the PHP container, from inside the browser
-// container and from Chromium itself. Every «blocked» row has a control that reached the same
-// target — from the default bridge, or from the host for what is published on its loopback — and
-// a row that is not PASS fails the run: a probe that did not run, a name that resolves inside, a
-// target nobody could reach anyway. Reachable rows from each side prove the probes themselves
-// work. Preview A has the egress proxy of the client's variables (Р13): its rows prove that PHP
-// reaches a listed public host through it, and nothing else — not a name that is not listed, not
-// a listed name that resolves to a private, loopback or metadata address, not plain HTTP. No
-// pulls, no .env, no real site.
+// The network of a preview, measured on this machine (docs/plan/58-preview-single-container.md;
+// docs/plan/53-chat-preview-release.md, Р18, Р21): two previews — each one container on a bridge of
+// its own — and the browser of preview A, built by the real Docker runtime
+// (createDockerPreviewRuntime), then TCP and HTTP probes from the host, from inside the preview
+// (as its PHP, as root of the container), from a container on A's bridge without the preview's
+// init, from inside the browser container and from Chromium itself. A preview's internet is open
+// (owner's answer of 26.10.2026): PHP reaches a public address and a public name, while the rules
+// of its bridge (infra/sandbox/host-firewall.mjs) close the host, every address that is not public,
+// the platform's subnets and the other preview. Every «blocked» row has a control that reached the
+// same target — from the default bridge, from the host for what is published on its loopback, or
+// from the target's own side — and a row that is not PASS fails the run: a probe that did not run,
+// a target nobody could reach anyway. Reachable rows from each side prove the probes themselves
+// work. No pulls, no .env, no real site.
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
@@ -19,23 +21,13 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 import { createDockerPreviewRuntime } from '../../../packages/sandbox-providers/src/preview/runtime.ts'
-import {
-  NODE_PROBE,
-  PHP_CONNECT_PROBE,
-  PHP_FRONTED_GET_PROBE,
-  PHP_PROBE,
-  PHP_PROXIED_GET_PROBE,
-  passed,
-  proxyOutcome,
-  table,
-  ustar,
-  verdict,
-} from './probes.mjs'
+import { previewBridge } from '../../../packages/sandbox-providers/src/preview/resources.ts'
+import { NODE_PROBE, PHP_PROBE, passed, table, ustar, verdict } from './probes.mjs'
 
-const images = {
-  web: 'wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5',
-  cli: 'wordpress@sha256:2b5e9d4d3e51909dca1aaa4732e9f5e5bf0377c2114dbd8ff39f060bff202586',
-}
+/** The base of the site image (infra/preview/Dockerfile, `BASE`): wordpress:7.1.2-php8.3-apache. */
+const WORDPRESS =
+  'wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5'
+const images = {}
 const repository = fileURLToPath(new URL('../../../', import.meta.url))
 const run = randomBytes(4).toString('hex')
 const STAND_LABEL = `io.raditi.preview-verify=${run}`
@@ -70,21 +62,10 @@ function docker(argv, { allowFailure = false, timeoutMs = 120_000 } = {}) {
 const digestOf = async (tag) =>
   (await docker(['image', 'inspect', '--format', '{{index .RepoDigests 0}}', tag])).stdout
 
-/**
- * `host:port` preview A's variables lead to: one public host, and public names that resolve to
- * loopback, metadata, private and Docker bridge addresses (public wildcard DNS).
- */
-const EGRESS_LISTED = {
-  public: 'example.com:443',
-  loopback: 'localtest.me:443',
-  metadata: '169-254-169-254.nip.io:80',
-  private: '10-0-0-1.nip.io:443',
-  bridge: '172-17-0-1.nip.io:5432',
-}
-
-/** The client egress proxy (PREVIEW_EGRESS_IMAGE): infra/sandbox/Dockerfile, `client-egress`. */
-async function buildEgress() {
-  const tag = 'raditi-client-egress:local'
+/** The image of the host rules (SANDBOX_NETWORK_GUARD_IMAGE): infra/sandbox/Dockerfile. */
+async function buildGuard() {
+  if (process.env.SANDBOX_NETWORK_GUARD_IMAGE) return process.env.SANDBOX_NETWORK_GUARD_IMAGE
+  const tag = 'raditi-network-guard:local'
   if (!args.has('--no-build'))
     await docker(
       [
@@ -93,20 +74,20 @@ async function buildEgress() {
         '-f',
         'infra/sandbox/Dockerfile',
         '--target',
-        'client-egress',
+        'network-guard',
         '-t',
         tag,
         '.',
       ],
       { timeoutMs: 900_000 },
     ).catch(() => {
-      throw new Error(`docker build of the client egress image failed (run from ${repository})`)
+      throw new Error(`docker build of the network guard image failed (run from ${repository})`)
     })
   return digestOf(tag)
 }
 
-async function build(target) {
-  const tag = `raditi-preview-${target}:local`
+async function build(target, buildArgs = [], version = 'local') {
+  const tag = `raditi-preview-${target}:${version}`
   if (!args.has('--no-build'))
     await docker(
       [
@@ -116,6 +97,7 @@ async function build(target) {
         'infra/preview/Dockerfile',
         '--target',
         target,
+        ...buildArgs,
         '-t',
         tag,
         'infra/preview',
@@ -197,14 +179,14 @@ function lanAddress() {
 
 const apacheConfig = [
   'ServerRoot "/etc/apache2"',
-  'PidFile /run/apache2/apache2.pid',
-  'Mutex file:/run/apache2 default',
-  'DefaultRuntimeDir /run/apache2',
+  'PidFile /tmp/apache2/apache2.pid',
+  'Mutex file:/tmp/apache2 default',
+  'DefaultRuntimeDir /tmp/apache2',
   'ErrorLog /proc/self/fd/2',
   'LogLevel warn',
   'IncludeOptional mods-enabled/*.load',
   'IncludeOptional mods-enabled/*.conf',
-  'Listen 8080',
+  'Listen 127.0.0.1:8081',
   'ServerName localhost',
   'ServerTokens Prod',
   'ServerSignature Off',
@@ -225,41 +207,37 @@ const apacheConfig = [
   'DirectoryIndex index.php',
 ].join('\n')
 
+/** A preview of one container (docs/plan/58); A has its database, B none. */
 function specOf(name, gatewayPort) {
   const alias = name.repeat(6)
   const hostname = `site-${name.repeat(8)}-chat-${alias}.localhost`
+  const database = name === 'a'
   return {
     previewId: randomUUID(),
     siteId: randomUUID(),
     taskId: randomUUID(),
     runtime: runtimeKind,
-    images: {
-      web: images.web,
-      db: null,
-      cli: images.cli,
-      forwarder: images.tools,
-      egress: name === 'a' ? images.egress : null,
-    },
+    images: { preview: images.site, tools: images.tools },
+    database,
     recipe: {
       runtime: 'php',
       runtimeVersions: ['8.3'],
-      database: null,
+      database: database ? 'mysql' : null,
       requiredPaths: [],
       generatedFiles: [],
       settings: { STAND: name },
       healthPath: '/',
       web: {
-        command: ['apache2', '-DFOREGROUND', '-f', '/run/raditi/preview/httpd.conf'],
-        env: {},
-        port: 8080,
+        command: ['apache2-foreground', '-f', '/run/raditi/preview/httpd.conf'],
+        env: { APACHE_RUN_DIR: '/tmp/apache2', APACHE_LOCK_DIR: '/tmp/apache2' },
+        port: 8081,
         user: '33:33',
         docroot: '/var/www/html',
-        tmpfs: ['/run/apache2', '/tmp'],
+        tmpfs: ['/tmp'],
         configFiles: [{ name: 'httpd.conf', content: apacheConfig }],
       },
     },
-    limits: { cpu: 1, memoryMiB: 512, pids: 256 },
-    egress: name === 'a' ? Object.values(EGRESS_LISTED).sort() : [],
+    limits: { cpu: 2, memoryMiB: 2048, pids: 512 },
     upstreamHost: '127.0.0.1',
     hostname,
     origin: `http://${hostname}:${gatewayPort}`,
@@ -272,19 +250,19 @@ const page = (name) =>
   `<?php $s = json_decode(file_get_contents('/run/raditi/preview/settings.json'), true); ` +
   `echo 'preview-${name} ' . $s['hostname'];\n`
 
+/** A public address this run refuses as a subnet of the platform: its neighbour stays open. */
+const REFUSED = { subnet: '1.0.0.0/24', address: '1.0.0.1', port: 443 }
+const PUBLIC = { address: '1.1.1.1', port: 443 }
+
 async function main() {
-  if (runtimeKind === 'runsc' && !process.env.SANDBOX_NETWORK_GUARD_IMAGE)
-    throw new Error(
-      '--runtime=runsc needs SANDBOX_NETWORK_GUARD_IMAGE (the network guard image, pinned)',
-    )
   process.chdir(repository)
   stage = 'images'
-  for (const image of Object.values(images))
-    if ((await docker(['image', 'inspect', image], { allowFailure: true })).code !== 0)
-      throw new Error('A pinned image is missing; docker pull it first (README)')
+  if ((await docker(['image', 'inspect', WORDPRESS], { allowFailure: true })).code !== 0)
+    throw new Error('The pinned WordPress image is missing; docker pull it first (README)')
   images.tools = await build('tools')
   images.browser = await build('browser')
-  images.egress = await buildEgress()
+  images.site = await build('site', ['--build-arg', `BASE=${WORDPRESS}`], '8.3-local')
+  images.guard = await buildGuard()
 
   // The control: the default bridge, like any trusted platform container. It also tells where
   // containers see the host (`host-gateway`).
@@ -308,8 +286,9 @@ async function main() {
       '--label',
       STAND_LABEL,
       images.tools,
-      'sleep',
-      '900',
+      'node',
+      '-e',
+      "require('net').createServer((s) => s.end()).listen(7000); setTimeout(() => {}, 900000)",
     ])
   ).stdout
   const servers = []
@@ -384,14 +363,20 @@ async function measure(control, servers) {
     socketPath,
     gatewayHost,
     gatewayPort,
-    ...(runtimeKind === 'runsc' ? { firewallImage: process.env.SANDBOX_NETWORK_GUARD_IMAGE } : {}),
+    firewallImage: images.guard,
+    refusedSubnets: [REFUSED.subnet],
+    dnsServers: ['77.88.8.8', '77.88.8.1'],
   })
   const previewA = specOf('a', gatewayPort)
   const previewB = specOf('b', gatewayPort)
+  const passwords = {
+    user: randomBytes(24).toString('base64url'),
+    root: randomBytes(24).toString('base64url'),
+  }
   const rows = []
   try {
     stage = 'previews'
-    const upstreamA = await runtime.ensure(previewA, { env: {}, database: null })
+    const upstreamA = await runtime.ensure(previewA, { env: {}, database: passwords })
     const upstreamB = await runtime.ensure(previewB, { env: {}, database: null })
     for (const [spec, name] of [
       [previewA, 'a'],
@@ -410,33 +395,31 @@ async function measure(control, servers) {
     const controlPort = Number(new URL(endpoint.wsEndpoint).port)
 
     stage = 'addresses'
-    const webA = await containerOf(previewA.previewId, 'web')
-    const webB = await containerOf(previewB.previewId, 'web')
-    const forwarderA = await containerOf(previewA.previewId, 'forwarder')
-    const forwarderB = await containerOf(previewB.previewId, 'forwarder')
+    const boxA = await containerOf(previewA.previewId, 'preview')
+    const boxB = await containerOf(previewB.previewId, 'preview')
     const relay = await containerOf(previewA.previewId, 'relay')
     const browser = await containerOf(previewA.previewId, 'browser')
     const onPreview = (networks) =>
       Object.entries(networks).find(([name]) => name.startsWith('raditi-preview-'))[1].IPAddress
-    const ipWebA = onPreview(await addresses(webA))
-    const ipWebB = onPreview(await addresses(webB))
-    const ipForwarderA = (await addresses(forwarderA)).bridge.IPAddress
-    const ipForwarderAInside = onPreview(await addresses(forwarderA))
-    const ipForwarderB = (await addresses(forwarderB)).bridge.IPAddress
+    const ipA = onPreview(await addresses(boxA))
+    const ipB = onPreview(await addresses(boxB))
     const ipRelay = (await addresses(relay)).bridge.IPAddress
     const ipRelayInside = onPreview(await addresses(relay))
     const ipBrowser = onPreview(await addresses(browser))
+    const ipControl = (await addresses(control)).bridge.IPAddress
 
+    /** `php` — as the preview's PHP; `root` — as root of the preview's container. */
     const probe = async (container, kind, host, port) => {
+      const node = { browser: '/usr/bin/node', root: '/usr/local/bin/node' }[kind] ?? 'node'
       const argv =
         kind === 'php'
           ? ['exec', '-u', '33:33', container, 'php', '-r', PHP_PROBE, '--', host, String(port)]
           : [
               'exec',
               '-u',
-              '10001:10001',
+              kind === 'root' ? '0:0' : '10001:10001',
               container,
-              kind === 'browser' ? '/usr/bin/node' : '/usr/local/bin/node',
+              node,
               '-e',
               NODE_PROBE,
               host,
@@ -448,6 +431,9 @@ async function measure(control, servers) {
     const fromControl = (host, port) => probe(control, 'node', host, port)
     /** Published on the host's loopback: only the host itself can be the control. */
     const fromHost = async (port) => ((await listening('127.0.0.1', port)) ? 'open' : 'closed')
+    // A name that does not resolve inside reaches nothing, whatever its port: its control has to
+    // resolve it only. One that resolves — the resolvers of a preview answer the internet's
+    // names — must find no way, as an address does, against a control that reached it.
     const blocked = async (
       from,
       container,
@@ -456,15 +442,17 @@ async function measure(control, servers) {
       host,
       port,
       controlProbe = () => fromControl(host, port),
-    ) =>
+    ) => {
+      const actual = await probe(container, kind, host, port)
       rows.push({
         from,
         to: label,
         expect: 'blocked',
-        name: !isIP(host),
-        actual: await probe(container, kind, host, port),
+        name: !isIP(host) && actual === 'dns',
+        actual,
         control: await controlProbe(),
       })
+    }
     const reachable = async (from, container, kind, label, host, port) =>
       rows.push({
         from,
@@ -472,6 +460,11 @@ async function measure(control, servers) {
         expect: 'reachable',
         actual: await probe(container, kind, host, port),
       })
+    /** Exit 0 of a command in a container as a user: `open`, otherwise `closed`. */
+    const runsAs = async (container, user, argv) =>
+      (await docker(['exec', '-u', user, container, ...argv], { allowFailure: true })).code === 0
+        ? 'open'
+        : 'closed'
 
     stage = 'host probes'
     const hostA = `${previewA.hostname}:${gatewayPort}`
@@ -479,16 +472,16 @@ async function measure(control, servers) {
     const answer = await httpGet(upstreamA.port, hostA)
     rows.push({
       from: 'host',
-      to: `preview A via forwarder 127.0.0.1:${upstreamA.port}`,
+      to: `preview A via its gateway 127.0.0.1:${upstreamA.port}`,
       expect: 'reachable',
       actual: answer.body === `preview-a ${previewA.hostname}` ? 'open' : 'wrong answer',
     })
-    // A caller holding a stale port of another preview: the forwarder refuses the foreign Host.
+    // A caller holding a stale port of another preview: the gateway refuses the foreign Host.
     const ownB = await httpGet(upstreamB.port, hostB)
     const foreign = await httpGet(upstreamB.port, hostA)
     rows.push({
       from: 'host',
-      to: `B forwarder :${upstreamB.port} with the Host of A (421 expected)`,
+      to: `B gateway :${upstreamB.port} with the Host of A (421 expected)`,
       expect: 'blocked',
       actual: foreign.status === 421 ? 'closed' : foreign.status ? 'open' : 'error',
       control: ownB.body === `preview-b ${previewB.hostname}` ? 'open' : 'closed',
@@ -507,178 +500,192 @@ async function measure(control, servers) {
         expect: 'blocked',
         actual: (await listening(lan, controlPort)) ? 'open' : 'closed',
       })
+    // The rules of A's bridge are in place and whole, as the runtime put them (host-firewall.mjs).
+    const check = await docker(
+      [
+        'run',
+        '--rm',
+        '--runtime',
+        'runc',
+        '--network',
+        'host',
+        '--cap-drop',
+        'ALL',
+        '--cap-add',
+        'NET_ADMIN',
+        '--read-only',
+        '--tmpfs',
+        '/run',
+        '--security-opt',
+        'no-new-privileges',
+        '--label',
+        STAND_LABEL,
+        '--entrypoint',
+        'tini',
+        images.guard,
+        '--',
+        '/usr/local/bin/node',
+        '/usr/local/lib/raditi/host-firewall.mjs',
+        'check',
+        previewBridge(previewA.previewId),
+        '--refuse',
+        REFUSED.subnet,
+      ],
+      { allowFailure: true },
+    )
+    rows.push({
+      from: 'host',
+      to: `rules of A's bridge ${previewBridge(previewA.previewId)} (check)`,
+      expect: 'reachable',
+      actual: check.code === 0 ? 'open' : 'closed',
+    })
 
     stage = 'php probes'
-    // The probe works from PHP: its own server and its own entry, on the preview's network.
-    await reachable('PHP of A', webA, 'php', 'own server 127.0.0.1:8080', '127.0.0.1', 8080)
+    // Its own server and its own gateway, on the loopback and on its bridge.
+    await reachable('PHP of A', boxA, 'php', 'own server 127.0.0.1:8081', '127.0.0.1', 8081)
+    await reachable('PHP of A', boxA, 'php', 'own gateway 127.0.0.1:8080', '127.0.0.1', 8080)
+    await reachable('PHP of A', boxA, 'php', 'own database 127.0.0.1:3306', '127.0.0.1', 3306)
+    // The internet is open (owner's answer of 26.10.2026), names resolve.
     await reachable(
       'PHP of A',
-      webA,
+      boxA,
       'php',
-      `A forwarder ${ipForwarderAInside}:8080 (preview side)`,
-      ipForwarderAInside,
-      8080,
+      `internet ${PUBLIC.address}:${PUBLIC.port}`,
+      PUBLIC.address,
+      PUBLIC.port,
+    )
+    await reachable('PHP of A', boxA, 'php', 'internet example.com:443', 'example.com', 443)
+    // A subnet of the platform (--refuse), next to an open public address.
+    await blocked(
+      'PHP of A',
+      boxA,
+      'php',
+      `refused subnet ${REFUSED.address}:${REFUSED.port}`,
+      REFUSED.address,
+      REFUSED.port,
     )
     for (const port of hostPorts) {
       await blocked(
         'PHP of A',
-        webA,
+        boxA,
         'php',
         `host.docker.internal:${port}`,
         'host.docker.internal',
         port,
       )
-      await blocked('PHP of A', webA, 'php', `host ${hostAddress}:${port}`, hostAddress, port)
+      await blocked('PHP of A', boxA, 'php', `host ${hostAddress}:${port}`, hostAddress, port)
     }
     await blocked(
       'PHP of A',
-      webA,
+      boxA,
       'php',
       `gateway ${hostAddress}:${gatewayPort}`,
       hostAddress,
       gatewayPort,
     )
-    await blocked('PHP of A', webA, 'php', 'internet 1.1.1.1:443', '1.1.1.1', 443)
-    await blocked('PHP of A', webA, 'php', 'internet example.com:443', 'example.com', 443)
     await blocked(
       'PHP of A',
-      webA,
+      boxA,
       'php',
-      `B forwarder via host ${hostAddress}:${upstreamB.port}`,
+      `container on the default bridge ${ipControl}:7000`,
+      ipControl,
+      7000,
+      () => probe(control, 'node', '127.0.0.1', 7000),
+    )
+    await blocked(
+      'PHP of A',
+      boxA,
+      'php',
+      `B gateway via host ${hostAddress}:${upstreamB.port}`,
       hostAddress,
       upstreamB.port,
       () => fromHost(upstreamB.port),
     )
-    await blocked('PHP of A', webA, 'php', `B forwarder ${ipForwarderB}:8080`, ipForwarderB, 8080)
-    await blocked('PHP of A', webA, 'php', `B PHP ${ipWebB}:8080`, ipWebB, 8080, () =>
-      fromControl(ipForwarderB, 8080),
+    // B on its own bridge: its own PHP reaches it, A's does not.
+    await blocked('PHP of A', boxA, 'php', `B ${ipB}:8080`, ipB, 8080, () =>
+      probe(boxB, 'php', ipB, 8080),
+    )
+    await blocked('PHP of B', boxB, 'php', `A ${ipA}:8080`, ipA, 8080, () =>
+      probe(boxA, 'php', ipA, 8080),
     )
     await blocked(
       'PHP of A',
-      webA,
-      'php',
-      `A forwarder ${ipForwarderA}:8080 (bridge side)`,
-      ipForwarderA,
-      8080,
-    )
-    await blocked(
-      'PHP of A',
-      webA,
+      boxA,
       'php',
       `browser control via host ${hostAddress}:${controlPort}`,
       hostAddress,
       controlPort,
       () => fromHost(controlPort),
     )
-    await blocked('PHP of A', webA, 'php', `relay ${ipRelay}:9333`, ipRelay, 9333)
-    await blocked('PHP of A', webA, 'php', `browser ${ipBrowser}:9333`, ipBrowser, 9333, () =>
+    await blocked('PHP of A', boxA, 'php', `relay ${ipRelay}:9333`, ipRelay, 9333)
+    await blocked('PHP of A', boxA, 'php', `browser ${ipBrowser}:9333`, ipBrowser, 9333, () =>
       fromControl(ipRelay, 9333),
     )
 
-    stage = 'egress probes'
-    // The egress proxy of A, as wp-config reaches it: the name `egress` of /etc/hosts.
-    await reachable('PHP of A', webA, 'php', 'egress proxy egress:3128', 'egress', 3128)
-    const connect = async (target) => {
-      const { stdout } = await docker(
-        [
-          'exec',
-          '-u',
-          '33:33',
-          webA,
-          'php',
-          '-r',
-          PHP_CONNECT_PROBE,
-          '--',
-          'egress',
-          '3128',
-          target,
-        ],
-        { allowFailure: true, timeoutMs: 40_000 },
-      )
-      return stdout
-    }
+    stage = 'users inside'
+    // The services of the container are users of their own (infra/preview/init.sh).
     rows.push({
       from: 'PHP of A',
-      to: `CONNECT ${EGRESS_LISTED.public} (listed, public)`,
-      expect: 'reachable',
-      actual: proxyOutcome(await connect(EGRESS_LISTED.public)),
-    })
-    const get = async (url, tunnel) => {
-      const { stdout } = await docker(
-        [
-          'exec',
-          '-u',
-          '33:33',
-          webA,
-          'php',
-          '-r',
-          PHP_PROXIED_GET_PROBE,
-          '--',
-          url,
-          'http://egress:3128',
-          tunnel ? '1' : '0',
-        ],
-        { allowFailure: true, timeoutMs: 40_000 },
-      )
-      return Number(stdout)
-    }
-    const https = await get('https://example.com/', true)
-    rows.push({
-      from: 'PHP of A',
-      to: 'https://example.com/ through the proxy (TLS end to end)',
-      expect: 'reachable',
-      actual: https >= 200 && https < 400 ? 'open' : https ? 'closed' : 'error',
-    })
-    // The listed name with the TLS of another site: on a shared front end its address serves
-    // that site as well. The proxy opens the tunnel and closes it at the ClientHello.
-    const { stdout: fronted } = await docker(
-      [
-        'exec',
-        '-u',
-        '33:33',
-        webA,
-        'php',
-        '-r',
-        PHP_FRONTED_GET_PROBE,
-        '--',
-        'https://example.org/',
-        'http://egress:3128',
-        `example.org:443:${EGRESS_LISTED.public}`,
-      ],
-      { allowFailure: true, timeoutMs: 40_000 },
-    )
-    rows.push({
-      from: 'PHP of A',
-      to: `https://example.org/ in a tunnel to ${EGRESS_LISTED.public} (another name in TLS)`,
+      to: 'the root password of its database (/run/raditi/db/root)',
       expect: 'blocked',
-      actual: fronted.trim() === 'closed' ? 'closed' : fronted.trim() === 'open' ? 'open' : 'error',
+      actual: await runsAs(boxA, '33:33', ['cat', '/run/raditi/db/root']),
+      control: await runsAs(boxA, '999:999', ['cat', '/run/raditi/db/root']),
     })
-    const plain = await get('http://example.com/', false)
-    rows.push({
-      from: 'PHP of A',
-      to: 'http://example.com/ handed to the proxy (plain HTTP, 405 expected)',
-      expect: 'blocked',
-      actual: plain === 405 ? 'closed' : plain >= 200 && plain < 400 ? 'open' : 'error',
-    })
-    for (const [label, target, reason] of [
-      ['not listed', 'example.org:443', 'forbidden_host'],
-      ['listed host, another port', 'example.com:8443', 'forbidden_host'],
-      ['IP literal', '93.184.215.14:443', 'forbidden_host'],
-      ['host.docker.internal', 'host.docker.internal:5432', 'forbidden_host'],
-      ['listed, resolves to 127.0.0.1', EGRESS_LISTED.loopback, 'forbidden_address'],
-      ['listed, resolves to 169.254.169.254', EGRESS_LISTED.metadata, 'forbidden_address'],
-      ['listed, resolves to 10.0.0.1', EGRESS_LISTED.private, 'forbidden_address'],
-      ['listed, resolves to 172.17.0.1', EGRESS_LISTED.bridge, 'forbidden_address'],
-    ])
-      rows.push({
-        from: 'PHP of A',
-        to: `CONNECT ${target} (${label})`,
-        expect: 'blocked',
-        actual: proxyOutcome(await connect(target), reason),
+    const gatewayPid = (
+      await docker(['exec', '-u', '0:0', boxA, 'cat', '/run/raditi/ready/forward.pid'], {
+        allowFailure: true,
       })
-    // B has no variables: no proxy at all, and the name does not resolve there.
-    await blocked('PHP of B', webB, 'php', 'egress:3128 (B has none)', 'egress', 3128, () =>
-      probe(webA, 'php', 'egress', 3128),
+    ).stdout
+    rows.push({
+      from: 'PHP of A',
+      to: `a signal to its gateway (pid ${gatewayPid || '?'})`,
+      expect: 'blocked',
+      actual: /^\d+$/.test(gatewayPid)
+        ? await runsAs(boxA, '33:33', ['kill', '-0', gatewayPid])
+        : 'error',
+      control: /^\d+$/.test(gatewayPid)
+        ? await runsAs(boxA, '10001:10001', ['kill', '-0', gatewayPid])
+        : 'error',
+    })
+    const asRoot = ['mariadb', '--no-defaults', '--socket=/run/mysqld/mysqld.sock', '--user=root']
+    rows.push({
+      from: 'PHP of A',
+      to: 'root of its database on the socket',
+      expect: 'blocked',
+      actual: await runsAs(boxA, '33:33', [...asRoot, '--execute=SELECT 1']),
+      control: await runsAs(boxA, '0:0', [...asRoot, '--execute=SELECT 1']),
+    })
+
+    stage = 'root of the container'
+    // The rules are the host's: root of the preview's container is held as its PHP is.
+    await reachable(
+      'root of A',
+      boxA,
+      'root',
+      `internet ${PUBLIC.address}:${PUBLIC.port}`,
+      PUBLIC.address,
+      PUBLIC.port,
+    )
+    await blocked('root of A', boxA, 'root', `host ${hostAddress}:5432`, hostAddress, 5432)
+    await blocked(
+      'root of A',
+      boxA,
+      'root',
+      `refused subnet ${REFUSED.address}:${REFUSED.port}`,
+      REFUSED.address,
+      REFUSED.port,
+    )
+    await blocked(
+      'root of A',
+      boxA,
+      'root',
+      `container on the default bridge ${ipControl}:7000`,
+      ipControl,
+      7000,
+      () => probe(control, 'node', '127.0.0.1', 7000),
+    )
+    await blocked('root of A', boxA, 'root', `B ${ipB}:8080`, ipB, 8080, () =>
+      probe(boxB, 'php', ipB, 8080),
     )
 
     stage = 'browser probes'
@@ -707,16 +714,8 @@ async function measure(control, servers) {
     )
     await blocked('browser', browser, 'browser', 'internet 1.1.1.1:443', '1.1.1.1', 443)
     await blocked('browser', browser, 'browser', 'internet example.com:443', 'example.com', 443)
-    await blocked('browser', browser, 'browser', `A PHP ${ipWebA}:8080`, ipWebA, 8080, () =>
-      fromControl(ipForwarderA, 8080),
-    )
-    await blocked(
-      'browser',
-      browser,
-      'browser',
-      `A forwarder ${ipForwarderA}:8080`,
-      ipForwarderA,
-      8080,
+    await blocked('browser', browser, 'browser', `A ${ipA}:8080`, ipA, 8080, () =>
+      probe(boxA, 'php', ipA, 8080),
     )
     await blocked(
       'browser',
@@ -765,10 +764,10 @@ async function measure(control, servers) {
             ? 'open'
             : 'closed',
       })
-      const php = await visit(`http://${ipWebA}:8080/`)
+      const php = await visit(`http://${ipA}:8080/`)
       rows.push({
         from: 'Chromium',
-        to: `A PHP http://${ipWebA}:8080/`,
+        to: `A http://${ipA}:8080/`,
         expect: 'blocked',
         actual: php.body.startsWith('preview-a') ? 'open' : 'closed',
       })

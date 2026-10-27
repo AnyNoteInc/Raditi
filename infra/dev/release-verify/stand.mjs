@@ -20,8 +20,9 @@ export { GITEA_IMAGE, HOSTING_IMAGE, OPENBAO_IMAGE, POSTGRES_IMAGE, REDIS_IMAGE,
 export const S3_IMAGE =
   'chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882'
 /**
- * The synthetic production site and the images of its previews: the ones of `.env.example`
- * (PREVIEW_WEB_IMAGES, PREVIEW_DB_IMAGE, PREVIEW_CLI_IMAGE), by digest. Never pulled.
+ * The synthetic production site — WordPress, MariaDB and WP-CLI — and the temporary database of a
+ * dump (PREVIEW_DB_IMAGE of `.env.example`), by digest. Never pulled. The image of a preview is
+ * built from this tree (BUILT_IMAGES.site, PREVIEW_SITE_IMAGES; docs/plan/58).
  */
 export const WORDPRESS_IMAGE =
   'wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5'
@@ -58,15 +59,17 @@ export const BUILT_IMAGES = Object.freeze({
     file: 'infra/sandbox/Dockerfile',
     target: 'network-guard',
   },
-  egress: {
-    tag: 'raditi-release-verify/client-egress:local',
-    file: 'infra/sandbox/Dockerfile',
-    target: 'client-egress',
-  },
   tools: {
     tag: 'raditi-release-verify/preview-tools:local',
     file: 'infra/preview/Dockerfile',
     target: 'tools',
+    context: 'infra/preview',
+  },
+  // A preview in one container (docs/plan/58): its PHP, its database and its gateway; PHP 8.3.
+  site: {
+    tag: 'raditi-release-verify/preview-site:local',
+    file: 'infra/preview/Dockerfile',
+    target: 'site',
     context: 'infra/preview',
   },
   browser: {
@@ -414,13 +417,13 @@ export const siteDbEnvFile = (password) =>
   ].join('\n')
 
 /**
- * A query of a preview's own database as root on its socket (`sh -c <this> sh <query>` in the
- * container). The password is the file of the container's tmpfs its environment names
- * (`MARIADB_ROOT_PASSWORD_FILE`): the product keeps the passwords in Vault and never in the
- * environment of the container (owner's answer of 19.10.2026).
+ * A query of a preview's own database as root on its socket (`sh -c <this> sh <query>` as 0:0 in
+ * the preview's container). Root of the database is root of the container there, by unix_socket
+ * (infra/preview/init.sh): no password is read, none is in the container's environment — the
+ * product keeps them in Vault (owner's answer of 19.10.2026).
  */
 export const PREVIEW_ROOT_QUERY =
-  'mariadb -uroot -p"$(cat "$MARIADB_ROOT_PASSWORD_FILE")" -N -B preview -e "$1"'
+  'mariadb --no-defaults --socket=/run/mysqld/mysqld.sock --user=root -N -B preview -e "$1"'
 
 const SITE_ENV = (password) => [
   'WORDPRESS_DB_HOST=db',
@@ -615,12 +618,10 @@ export function roleEnvironment(role, context) {
         PREVIEW_EXECUTOR: 'local',
         PREVIEW_RUNTIME: 'runc',
         PREVIEW_TTL_HOURS: '72',
-        PREVIEW_WEB_IMAGES: `8.3=${WORDPRESS_IMAGE}`,
+        PREVIEW_SITE_IMAGES: `8.3=${context.images.site}`,
         PREVIEW_DB_IMAGE: MARIADB_IMAGE,
-        PREVIEW_CLI_IMAGE: WPCLI_IMAGE,
         PREVIEW_FORWARDER_IMAGE: context.images.tools,
         PREVIEW_BROWSER_IMAGE: context.images.browser,
-        PREVIEW_EGRESS_IMAGE: context.images.egress,
         PREVIEW_UPSTREAM_HOST: '127.0.0.1',
         RELEASE_API_HOST: '127.0.0.1',
         RELEASE_API_PORT: String(loopbackPort(ports.releaseApi)),

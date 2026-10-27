@@ -1,11 +1,13 @@
 // What the code of a preview and the agent's browser reach, and what they do not (plan 53, R12:
 // «атаки из PHP и JS страницы на сервисы хоста, соседний предпросмотр, порт браузера,
-// метаданные, интернет»). Every target given by address has a control that reaches it from where
-// a trusted container of the platform stands — the default bridge, the site's network or the
-// container that serves it —, and a target counts as isolated only when the packet found no way
-// (unreachable network or host, or no answer): a refusal means it reached a host, and a name
-// that does not resolve proves nothing about an address. A target no control reaches on this
-// machine is printed as not provable here, never as a PASS.
+// метаданные, интернет»). A preview is one container on a bridge of its own and its internet is
+// open (docs/plan/58, owner's answer of 26.10.2026): PHP reaches the internet when this machine
+// does, and the rules of its bridge close the host, every address that is not public and the
+// neighbours. Every target has a control that reaches it from where a trusted container of the
+// platform stands — the default bridge, the site's network or the container that serves it —,
+// and a target counts as isolated only when the packet found no way (unreachable network or host,
+// or no answer) or its name did not resolve: a refusal means it reached a host. A target no
+// control reaches on this machine is printed as not provable here, never as a PASS.
 import { randomBytes, createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { isIP } from 'node:net'
@@ -21,7 +23,9 @@ const PREVIEW_NETWORK = /^raditi-preview-[0-9a-f-]{36}$/
 const BROWSER_NETWORK = /^raditi-preview-[0-9a-f-]{36}-browser$/
 const BROWSER_CONTROL_PORT = 9333
 const RELAY_PROXY_PORT = 3128
+/** The gateway of a preview inside its container, and the web server behind it on the loopback. */
 const ENTRY_PORT = 8080
+const WEB_PORT = 8081
 
 export function isolationOf(stand) {
   const { rt, names, images, siteId } = stand
@@ -108,7 +112,9 @@ export function isolationOf(stand) {
   /**
    * A target that must not be reached. `controlBy` reaches it from elsewhere first: required —
    * a stand whose control does not reach a service it started is broken; optional — the target
-   * is not provable on this machine (no metadata service on Docker Desktop, no internet).
+   * is not provable on this machine (no metadata service on Docker Desktop, no internet). A name
+   * that does not resolve counts as isolated, one that resolves must find no way: the resolvers
+   * of a preview answer the internet's names (docs/plan/58).
    */
   const blocked = async ({
     from,
@@ -120,11 +126,11 @@ export function isolationOf(stand) {
     controlBy,
     optional = false,
   }) => {
-    const name = isIP(host) === 0
     const seen = await probe(container, kind, host, port)
     if (seen === 'open') throw new CheckFailed(`${from} reaches ${label}`)
-    const reached = name ? null : await controlBy()
-    if (!name && reached !== 'open') {
+    const isolated = seen === 'dns' || isolatedAnswer(seen)
+    const reached = await controlBy()
+    if (reached !== 'open') {
       if (!optional)
         throw new CheckFailed(
           `the control does not reach ${label} (${reached}): the stand is broken`,
@@ -132,13 +138,21 @@ export function isolationOf(stand) {
       rt.note(
         `${from} → ${label}: not provable on this machine, its control does not reach it either (control ${reached}, seen ${seen})`,
       )
-      if (!isolatedAnswer(seen)) throw new CheckFailed(`${from} → ${label}: ${seen}`)
+      if (!isolated) throw new CheckFailed(`${from} → ${label}: ${seen}`)
       return
     }
-    rt.check(
-      isolatedAnswer(seen, { name }),
-      `${from} does not reach ${label} (${seen}${name ? '' : `; control open`})`,
-    )
+    rt.check(isolated, `${from} does not reach ${label} (${seen}; control open)`)
+  }
+  /** Reached when this machine reaches it: the control first, a NOTE without it. */
+  const reachableOutside = async (container, kind, host, port, text) => {
+    const c = await ensureControl()
+    const reached = await c.probe(host, port)
+    if (reached !== 'open') {
+      rt.note(`${text}: not provable on this machine, its control does not reach it (${reached})`)
+      return
+    }
+    const seen = await probe(container, kind, host, port)
+    rt.check(seen === 'open', `${text} (${seen}; control open)`)
   }
   const reachable = async (container, kind, host, port, text) => {
     const seen = await probe(container, kind, host, port)
@@ -219,34 +233,46 @@ export function isolationOf(stand) {
     /** S2: the PHP of a preview and the agent's browser, against the host and everything around. */
     async attacks({ preview, origin, hostPorts, siteWeb }) {
       const c = await ensureControl()
-      const web = await previewContainer(preview.id, 'web')
-      const forwarder = await previewContainer(preview.id, 'forwarder')
+      const box = await previewContainer(preview.id, 'preview')
       const relay = await previewContainer(preview.id, 'relay')
       const browser = await previewContainer(preview.id, 'browser')
       const ip = {
-        web: await addressOn(web, 'preview'),
-        forwarderInside: await addressOn(forwarder, 'preview'),
-        forwarderBridge: await addressOn(forwarder, 'bridge'),
+        box: await addressOn(box, 'preview'),
         relayBridge: await addressOn(relay, 'bridge'),
         relayInside: await addressOn(relay, 'browser'),
         browser: await addressOn(browser, 'browser'),
         siteWeb: await addressOn(siteWeb, names.network),
       }
       await reachable(
-        web,
+        box,
         'php',
         '127.0.0.1',
-        ENTRY_PORT,
+        WEB_PORT,
         'PHP of the preview reaches its own server',
       )
       await reachable(
-        web,
+        box,
         'php',
-        ip.forwarderInside,
+        '127.0.0.1',
         ENTRY_PORT,
-        'PHP of the preview reaches its own entry on the preview network',
+        'PHP of the preview reaches its own gateway on the loopback',
       )
-      const fromPhp = { from: 'PHP of the preview', container: web, kind: 'php' }
+      // The internet of a preview is open (owner's answer of 26.10.2026).
+      await reachableOutside(
+        box,
+        'php',
+        '1.1.1.1',
+        443,
+        'PHP of the preview reaches the internet 1.1.1.1:443',
+      )
+      await reachableOutside(
+        box,
+        'php',
+        'example.com',
+        443,
+        'PHP of the preview reaches the internet by name example.com:443',
+      )
+      const fromPhp = { from: 'PHP of the preview', container: box, kind: 'php' }
       for (const [service, port] of Object.entries(hostPorts))
         await blocked({
           ...fromPhp,
@@ -260,13 +286,7 @@ export function isolationOf(stand) {
         label: `the host's core by name host.docker.internal`,
         host: 'host.docker.internal',
         port: hostPorts.core,
-      })
-      await blocked({
-        ...fromPhp,
-        label: `the default bridge: its own entry's other side ${ip.forwarderBridge}:${ENTRY_PORT}`,
-        host: ip.forwarderBridge,
-        port: ENTRY_PORT,
-        controlBy: () => c.probe(ip.forwarderBridge, ENTRY_PORT),
+        controlBy: () => c.probe('host.docker.internal', hostPorts.core),
       })
       await blocked({
         ...fromPhp,
@@ -275,8 +295,8 @@ export function isolationOf(stand) {
         port: 80,
         controlBy: () => c.probe(ip.siteWeb, 80),
       })
-      // The control port of the agent's browser: the relay's published side, its browser side,
-      // the browser itself.
+      // The control port of the agent's browser: the relay's side on the default bridge, its
+      // browser side, the browser itself.
       await blocked({
         ...fromPhp,
         label: `the browser's control port on the relay ${ip.relayBridge}:${BROWSER_CONTROL_PORT}`,
@@ -306,20 +326,6 @@ export function isolationOf(stand) {
         controlBy: () => c.probe('169.254.169.254', 80),
         optional: true,
       })
-      await blocked({
-        ...fromPhp,
-        label: 'the internet 1.1.1.1:443',
-        host: '1.1.1.1',
-        port: 443,
-        controlBy: () => c.probe('1.1.1.1', 443),
-        optional: true,
-      })
-      await blocked({
-        ...fromPhp,
-        label: 'the internet by name example.com:443',
-        host: 'example.com',
-        port: 443,
-      })
 
       // The agent's browser container: its relay only.
       await reachable(
@@ -340,17 +346,17 @@ export function isolationOf(stand) {
         })
       await blocked({
         ...fromBrowser,
-        label: `the PHP of its preview past the gateway ${ip.web}:${ENTRY_PORT}`,
-        host: ip.web,
+        label: `its preview past the gateway ${ip.box}:${ENTRY_PORT}`,
+        host: ip.box,
         port: ENTRY_PORT,
-        controlBy: () => probe(forwarder, 'tools', ip.web, ENTRY_PORT),
+        controlBy: () => probe(box, 'php', ip.box, ENTRY_PORT),
       })
       await blocked({
         ...fromBrowser,
-        label: `the default bridge ${ip.forwarderBridge}:${ENTRY_PORT}`,
-        host: ip.forwarderBridge,
-        port: ENTRY_PORT,
-        controlBy: () => c.probe(ip.forwarderBridge, ENTRY_PORT),
+        label: `the default bridge ${ip.relayBridge}:${BROWSER_CONTROL_PORT}`,
+        host: ip.relayBridge,
+        port: BROWSER_CONTROL_PORT,
+        controlBy: () => c.probe(ip.relayBridge, BROWSER_CONTROL_PORT),
       })
       await blocked({
         ...fromBrowser,
@@ -360,6 +366,7 @@ export function isolationOf(stand) {
         controlBy: () => c.probe('169.254.169.254', 80),
         optional: true,
       })
+      // The browser's only way is its relay to the gateway: the preview's open internet is not its.
       await blocked({
         ...fromBrowser,
         label: 'the internet 1.1.1.1:443',
@@ -433,32 +440,31 @@ export function isolationOf(stand) {
     /** S6a: two previews of one site live side by side: neither reaches the other. */
     async neighbours({ previewB, previewC, originB, originC, paths }) {
       const c = await ensureControl()
-      const webB = await previewContainer(previewB.id, 'web')
-      const webC = await previewContainer(previewC.id, 'web')
-      const forwarderB = await previewContainer(previewB.id, 'forwarder')
-      const forwarderC = await previewContainer(previewC.id, 'forwarder')
-      const ipB = await addressOn(webB, 'preview')
-      const ipC = await addressOn(webC, 'preview')
-      for (const [from, web, ip, forwarder] of [
-        ['PHP of preview B', webB, ipC, forwarderC],
-        ['PHP of preview C', webC, ipB, forwarderB],
+      const boxB = await previewContainer(previewB.id, 'preview')
+      const boxC = await previewContainer(previewC.id, 'preview')
+      const ipB = await addressOn(boxB, 'preview')
+      const ipC = await addressOn(boxC, 'preview')
+      // Each on a bridge of its own: the neighbour reaches itself there, not the other.
+      for (const [from, box, ip, other] of [
+        ['PHP of preview B', boxB, ipC, boxC],
+        ['PHP of preview C', boxC, ipB, boxB],
       ])
         await blocked({
           from,
-          container: web,
+          container: box,
           kind: 'php',
-          label: `the PHP of the neighbouring preview ${ip}:${ENTRY_PORT}`,
+          label: `the neighbouring preview ${ip}:${ENTRY_PORT}`,
           host: ip,
           port: ENTRY_PORT,
-          controlBy: () => probe(forwarder, 'tools', ip, ENTRY_PORT),
+          controlBy: () => probe(other, 'php', ip, ENTRY_PORT),
         })
-      for (const [from, web, other] of [
-        ['PHP of preview B', webB, previewC],
-        ['PHP of preview C', webC, previewB],
+      for (const [from, box, other] of [
+        ['PHP of preview B', boxB, previewC],
+        ['PHP of preview C', boxC, previewB],
       ])
         await blocked({
           from,
-          container: web,
+          container: box,
           kind: 'php',
           label: `the entry of the neighbour on the host ${c.hostAddress}:${other.upstreamPort}`,
           host: c.hostAddress,

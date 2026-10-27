@@ -17,9 +17,9 @@ export const egressHostLimits = Object.freeze({
   /** Hosts of one variable (`site_env_vars.hosts`). */
   perVariable: 16,
   /**
-   * Different hosts of all the variables of one site: the egress of a sandbox or a preview
-   * travels in one environment variable of its proxy (below the 128 KiB of one on Linux), so the
-   * form takes no more (`MAX_SANDBOX_EGRESS_HOSTS`, a preview's settings file).
+   * Different hosts of all the variables of one site: the egress of a sandbox travels in one
+   * environment variable of its proxy (below the 128 KiB of one on Linux), so the form takes no
+   * more (`MAX_SANDBOX_EGRESS_HOSTS`).
    */
   perSite: 256,
   /** `host:port` as stored. */

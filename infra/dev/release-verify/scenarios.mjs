@@ -218,9 +218,9 @@ export async function runScenarios(stand) {
   }
   /** A query of a preview's own database, as root on its socket (the copy of Р15). */
   const previewSql = async (previewId, query) => {
-    const container = await iso.previewContainer(previewId, 'db')
+    const container = await iso.previewContainer(previewId, 'preview')
     return (
-      await rt.docker(['exec', container, 'sh', '-c', PREVIEW_ROOT_QUERY, 'sh', query])
+      await rt.docker(['exec', '-u', '0:0', container, 'sh', '-c', PREVIEW_ROOT_QUERY, 'sh', query])
     ).output.trim()
   }
 
@@ -859,7 +859,9 @@ export async function runScenarios(stand) {
   const visitB = await previewVisit(dialogB.taskId, ['/', postPath])
   const footerB = await rt.docker([
     'exec',
-    await iso.previewContainer(previewB.id, 'web'),
+    '-u',
+    '33:33',
+    await iso.previewContainer(previewB.id, 'preview'),
     'cat',
     `/var/www/html/${FOOTER_PATH}`,
   ])

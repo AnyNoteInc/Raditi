@@ -828,10 +828,12 @@ describe('loadConfig — production', () => {
 
 describe('loadConfig — previews and releases', () => {
   const digest = `@sha256:${'a'.repeat(64)}`
+  const guard = `registry.raditi.ru/network-guard${digest}`
   const previewDev = (overrides: Env = {}): Env => ({
     ...devEnv,
     PREVIEW_BASE_DOMAIN: 'localhost',
     PREVIEW_PUBLIC_PORT: '8090',
+    SANDBOX_NETWORK_GUARD_IMAGE: guard,
     ...overrides,
   })
   const previewProd = (overrides: Env = {}): Env =>
@@ -849,7 +851,7 @@ describe('loadConfig — previews and releases', () => {
   it('reads previews of core with local defaults and pinned images', () => {
     const config = loadConfig(
       previewDev({
-        PREVIEW_WEB_IMAGES: `8.3=registry.raditi.ru/preview-php${digest}`,
+        PREVIEW_SITE_IMAGES: `8.3=registry.raditi.ru/preview-site${digest}`,
         PREVIEW_DB_IMAGE: `mariadb${digest}`,
         PREVIEW_TTL_HOURS: '24',
       }),
@@ -860,13 +862,39 @@ describe('loadConfig — previews and releases', () => {
       idleMinutes: 30,
       executor: 'local',
       runtime: 'runc',
-      webImages: { '8.3': `registry.raditi.ru/preview-php${digest}` },
-      images: { db: `mariadb${digest}`, cli: null, forwarder: null, browser: null, egress: null },
+      siteImages: { '8.3': `registry.raditi.ru/preview-site${digest}` },
+      images: { db: `mariadb${digest}`, forwarder: null, browser: null },
       upstreamHost: '127.0.0.1',
+      dnsServers: ['77.88.8.8', '77.88.8.1'],
       gatewayPort: 8090,
-      egressRefusedSubnets: [],
-      docker: { socketPath: '/var/run/docker.sock', firewallImage: null },
+      refusedSubnets: [],
+      docker: { socketPath: '/var/run/docker.sock', firewallImage: guard },
     })
+  })
+
+  it('asks the resolvers of a preview and the image of the rules of its bridge (plan 58)', () => {
+    expect(
+      loadConfig(previewDev({ PREVIEW_DNS_SERVERS: '1.1.1.1, 9.9.9.9' })).previews?.dnsServers,
+    ).toEqual(['1.1.1.1', '9.9.9.9'])
+    // The rules of a preview's bridge close what is not public: such a resolver answers nothing.
+    for (const server of ['10.0.0.53', '192.168.1.1', '127.0.0.53'])
+      expect(problemsOf(previewDev({ PREVIEW_DNS_SERVERS: `1.1.1.1,${server}` }))).toEqual([
+        `PREVIEW_DNS_SERVERS: ${server} is not a public address; the rules of a preview's bridge close it`,
+      ])
+    // Unset or empty — the defaults.
+    expect(loadConfig(previewDev({ PREVIEW_DNS_SERVERS: '' })).previews?.dnsServers).toEqual([
+      '77.88.8.8',
+      '77.88.8.1',
+    ])
+    for (const value of ['dns.local', '77.88.8.8,77.88.8.1,1.1.1.1,8.8.8.8', '2a02:6b8::feed:0ff'])
+      expect(problemsOf(previewDev({ PREVIEW_DNS_SERVERS: value }))[0]).toMatch(
+        /^PREVIEW_DNS_SERVERS\b/,
+      )
+    // Without the image of the rules of its bridge core starts, and no preview is built: it is
+    // not configured (previews.providers.ts), as without the images of previews.
+    expect(
+      loadConfig(previewDev({ SANDBOX_NETWORK_GUARD_IMAGE: undefined })).previews?.docker,
+    ).toEqual({ socketPath: '/var/run/docker.sock', firewallImage: null })
   })
 
   it('stops a preview no one used after PREVIEW_IDLE_MINUTES, from a minute to a day', () => {
@@ -877,14 +905,14 @@ describe('loadConfig — previews and releases', () => {
       )
   })
 
-  it("gives previews the platform's subnets the sandbox gateway refuses too (R10)", () => {
+  it("gives previews the platform's subnets the sandbox gateway refuses too (R10, plan 58)", () => {
     // On runner VMs, as production runs turns: core's own sandbox gateway is not configured.
     expect(
       loadConfig(
         previewProd({ SANDBOX_EGRESS_REFUSED_SUBNETS: '84.201.128.0/18, 2a02:6b8:c00::/40' }),
-      ).previews?.egressRefusedSubnets,
+      ).previews?.refusedSubnets,
     ).toEqual(['84.201.128.0/18', '2a02:6b8:c00::/40'])
-    expect(loadConfig(previewProd()).previews?.egressRefusedSubnets).toEqual([])
+    expect(loadConfig(previewProd()).previews?.refusedSubnets).toEqual([])
     expect(problemsOf(previewProd({ SANDBOX_EGRESS_REFUSED_SUBNETS: '84.201.128.0' }))[0]).toMatch(
       /^SANDBOX_EGRESS_REFUSED_SUBNETS\b.*CIDR/,
     )
@@ -896,17 +924,17 @@ describe('loadConfig — previews and releases', () => {
     )
     expect(local.previews).toMatchObject({
       gatewayPort: 18090,
-      docker: { socketPath: '/run/docker.sock', firewallImage: null },
+      docker: { socketPath: '/run/docker.sock', firewallImage: guard },
     })
     expect(loadConfig(previewDev({ PREVIEW_EXECUTOR: 'runner' })).previews?.docker).toBeNull()
   })
 
   it('refuses images without a digest and an upstream that is not an address', () => {
-    expect(problemsOf(previewDev({ PREVIEW_CLI_IMAGE: 'wordpress:cli' }))[0]).toMatch(
-      /^PREVIEW_CLI_IMAGE: /,
+    expect(problemsOf(previewDev({ PREVIEW_DB_IMAGE: 'mariadb:11.4' }))[0]).toMatch(
+      /^PREVIEW_DB_IMAGE: /,
     )
-    expect(problemsOf(previewDev({ PREVIEW_WEB_IMAGES: '8.3=php:8.3' }))).toEqual([
-      'PREVIEW_WEB_IMAGES: the image of 8.3 must be pinned by digest',
+    expect(problemsOf(previewDev({ PREVIEW_SITE_IMAGES: '8.3=raditi-preview-site:8.3' }))).toEqual([
+      'PREVIEW_SITE_IMAGES: the image of 8.3 must be pinned by digest',
     ])
     expect(problemsOf(previewDev({ PREVIEW_UPSTREAM_HOST: 'localhost' }))).toEqual([
       'PREVIEW_UPSTREAM_HOST: must be an IP address',

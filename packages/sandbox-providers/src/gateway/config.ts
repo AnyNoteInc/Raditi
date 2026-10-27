@@ -81,14 +81,20 @@ const gatewayEnvSchema = z
   }))
 
 /**
+ * The variables that turn the gateway on. The image of the host rules and the platform's subnets
+ * are shared with the previews and the browser sessions (docs/plan/58): set for them alone, they
+ * leave the gateway off.
+ */
+const GATEWAY_OWN = ['SANDBOX_GATEWAY_IMAGE', 'SANDBOX_LLM_UPSTREAM', 'SANDBOX_MCP_UPSTREAM']
+
+/**
  * Optional only as a complete group: gateway-mode creation fails closed without it. In production
  * the group names the platform's subnets as well: the gateway's client egress proxy sits on a
  * network of the VM, and a name a client points at a public address of the platform's own would
  * otherwise be tunnelled past the perimeter (docs/plan/53-chat-preview-release.md, Р13).
  */
 export function gatewayConfigFromEnv(env: Env): GatewayConfig | undefined {
-  const names = Object.keys(gatewayEnvSchema.in.shape)
-  if (names.every((name) => !env[name]?.trim())) return undefined
+  if (GATEWAY_OWN.every((name) => !env[name]?.trim())) return undefined
   const config = parseEnv('sandbox gateway', gatewayEnvSchema, env)
   const appEnv = appEnvSchema.safeParse(env.APP_ENV?.trim())
   if (appEnv.success && isProduction(appEnv.data) && !config.egressRefusedSubnets?.length)

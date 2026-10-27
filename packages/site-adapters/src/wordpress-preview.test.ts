@@ -94,16 +94,16 @@ describe('the preview recipe of WordPress', () => {
     )
   })
 
-  it('runs Apache unprivileged on 8080 with its configuration next to the settings file', () => {
+  it('runs Apache unprivileged on the loopback, behind the gateway of its container (plan 58)', () => {
     const { web } = wordpressPreviewRecipe(site)
-    expect(web.port).toBe(8080)
+    expect(web.port).toBe(8081)
     expect(web.user).toBe('33:33')
     const [file] = web.configFiles
     const folder = PREVIEW_SETTINGS_PATH.slice(0, PREVIEW_SETTINGS_PATH.lastIndexOf('/'))
     expect(web.command).toEqual(['apache2-foreground', '-f', `${folder}/${file?.name}`])
     const conf = file?.content ?? ''
     expect(conf).toBe(sources.previewApacheConf)
-    expect(conf).toMatch(new RegExp(`^Listen ${web.port}$`, 'm'))
+    expect(conf).toMatch(new RegExp(`^Listen 127\\.0\\.0\\.1:${web.port}$`, 'm'))
     expect(conf).toMatch(new RegExp(`^DocumentRoot ${web.docroot}$`, 'm'))
     // No .htaccess of the site is read; nothing but /tmp is written.
     expect(conf).not.toMatch(/AllowOverride (?!None)/)
