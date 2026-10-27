@@ -213,6 +213,9 @@ export async function openPreview(
   const { task } = preview
   const facts = await dialogFacts(db, task, input.userId)
   assertCommandAvailable(facts.commands, 'preview')
+  // Asked for while it is made (owner's request of 27.10.2026: `/preview` is the client's call),
+  // it is shown once ready: the frame and `/preview/open` ask again by themselves.
+  if (preview.status === 'pending' || preview.status === 'building') throw previewNotReady()
 
   if (!isPreviewServing(preview.status)) {
     // Allowed and not served: a stopped preview, opened again. A dialog that has ended keeps

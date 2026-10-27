@@ -141,9 +141,12 @@ describe('availability', () => {
     expect(verdict({ ...waiting, preview: { status: 'unavailable' } }).preview).toBe(
       'preview_unavailable',
     )
-    expect(verdict({ ...waiting, preview: { status: 'building' } }).preview).toBe(
-      'preview_not_ready',
-    )
+    // Asked for while it is made, the preview is shown once it is ready; nothing to reset in it yet.
+    expect(verdict({ ...waiting, preview: { status: 'building' } })).toMatchObject({
+      preview: null,
+      reset: 'preview_not_ready',
+    })
+    expect(verdict({ ...waiting, preview: { status: 'pending' } }).preview).toBe(null)
     expect(verdict({ ...waiting, preview: { status: 'failed' } })).toMatchObject({
       preview: 'preview_failed',
       reset: null,

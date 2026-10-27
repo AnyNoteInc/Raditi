@@ -124,9 +124,9 @@ export async function openPreviewRoute(
     if (isDomainError(error)) {
       if (error.code === 'NOT_FOUND' || error.code === 'BAD_REQUEST') return notFound()
       const refusal = refusalOf(error.details)
-      // A stopped preview asked to come back (PREVIEW_NOT_READY) and one still being built
-      // (the refusal of `/preview`, pending or building) both answer the same page, which asks
-      // again by itself until the preview serves.
+      // A preview still being built or a stopped one asked to come back (PREVIEW_NOT_READY), and
+      // one being built for a dialog that has ended (the refusal of `/preview`), answer the same
+      // page, which asks again by itself until the preview serves.
       if (error.code === 'PREVIEW_NOT_READY' || refusal === 'preview_not_ready')
         return page(
           503,

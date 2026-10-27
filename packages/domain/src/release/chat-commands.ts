@@ -279,9 +279,11 @@ function previewRefusal(
     // A reset rebuilds a broken preview; opening it does not.
     case 'failed':
       return use === 'reset' ? null : use === 'open' ? 'preview_failed' : 'preview_unavailable'
+    // The preview asked for while it is made is shown as soon as it is ready (owner's request of
+    // 27.10.2026: it is shown only when the client asks); nothing to reset in it yet.
     case 'pending':
     case 'building':
-      return 'preview_not_ready'
+      return use === 'open' ? null : 'preview_not_ready'
     case 'unavailable':
     case 'destroyed':
       return 'preview_unavailable'

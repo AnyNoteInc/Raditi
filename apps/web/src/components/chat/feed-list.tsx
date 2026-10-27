@@ -79,6 +79,7 @@ import {
   undoText,
 } from './chat-texts'
 import type { CommandVerdict, FeedRow, UndoHead } from './chat-types'
+import { offScreen } from './composer'
 import {
   feedEntries,
   type CandidateRow,
@@ -144,19 +145,6 @@ function Paragraph({ children }: { children: ReactNode }) {
   )
 }
 
-/** Read by a screen reader, not shown: the answer of the agent stands as plain text. */
-const unseen = {
-  position: 'absolute',
-  width: 1,
-  height: 1,
-  p: 0,
-  m: -1,
-  overflow: 'hidden',
-  clip: 'rect(0 0 0 0)',
-  whiteSpace: 'nowrap',
-  border: 0,
-} as const
-
 /** What the agent says: its words straight on the page, no mark and no frame around them. */
 function AgentMessage({
   title,
@@ -169,7 +157,8 @@ function AgentMessage({
 }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
-      <Typography component="h2" sx={unseen}>
+      {/* Read by a screen reader, not shown: the answer of the agent stands as plain text. */}
+      <Typography component="h2" sx={offScreen}>
         {title}
       </Typography>
       {children}

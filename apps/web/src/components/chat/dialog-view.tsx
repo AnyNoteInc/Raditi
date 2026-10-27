@@ -71,12 +71,21 @@ import {
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
 import { PaneResizer } from './pane-resizer'
-import { PreviewPane, paneTabId, paneTabsOf, type PaneTab } from './preview-pane'
+import {
+  PreviewPane,
+  paneOpensItself,
+  paneTabId,
+  paneTabsOf,
+  shownPaneTab,
+  usePreviewCalls,
+  type PaneTab,
+} from './preview-pane'
 import { ReleaseDialog } from './release-dialog'
 import { TurnActivity } from './turn-activity'
 import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
 import { useBrowserStream } from './use-browser-stream'
+import { useFeedFollow } from './use-feed-follow'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
 
@@ -107,12 +116,13 @@ function releaseProgress(head: FeedHeadState): string | null {
   return words ? releaseText.progress(feedVersionText(release.version), words) : null
 }
 
-/** «Показать изменения» of the head: the focus goes there when the panel is closed. */
+/** «Открыть панель» of the head: the focus goes there when the panel is closed. */
 const SHOW_PANE_ID = 'dialog-show-pane'
 
 /**
  * The head of a dialog (owner's request of 26.10.2026): one quiet line — its name, a release under
- * way beside it, the way to the panel of its changes when the client closed it, and its menu
+ * way beside it, the way to the panel beside it while the panel is closed (owner's request of
+ * 27.10.2026: the preview, files and records can be opened at any time), and its menu
  * («Переименовать», «Удалить»). The name is written in place of itself.
  */
 function DialogHead({
@@ -128,8 +138,8 @@ function DialogHead({
   title: string
   head: FeedHeadState | null
   onRenamed: () => void
-  /** The panel of the changes is closed and can be opened again; null — nothing to open. */
-  pane: { label: string; onOpen: () => void } | null
+  /** The panel is closed and can be opened; null — nothing to open, or it is open. */
+  pane: { label: string; hint?: string; onOpen: () => void } | null
 }) {
   // «Отменить выпуск» is offered now: deleting the dialog takes it away too.
   const undoable =
@@ -190,6 +200,7 @@ function DialogHead({
           variant="text"
           size="small"
           onClick={pane.onOpen}
+          title={pane.hint}
           startIcon={<AppIcon name="panel" size={18} />}
           sx={{
             display: { xs: 'none', lg: 'inline-flex' },
@@ -278,12 +289,18 @@ export function DialogView({
   const rows = state.rows
 
   const [view, setView] = useState<View>('dialog')
-  const [paneTab, setPaneTab] = useState<PaneTab>('preview')
+  // The tab the client chose; none — the panel opens on the first tab of the changes.
+  const [paneTab, setPaneTab] = useState<PaneTab | null>(null)
   // The panel steps aside when the client closes it, and comes back with the next changes: what
   // is kept is the changes it was closed on (`id:revision` of the candidate).
   const [closedOn, setClosedOn] = useState<string | null>(null)
-  // `/preview` asked for the preview of a dialog without changes: its tab is drawn then too.
-  const [previewAsked, setPreviewAsked] = useState(false)
+  // The client opened the panel (the button of the head, `/preview`, «Посмотреть изменения»): it
+  // stays until it is closed, with or without changes.
+  const [paneOpened, setPaneOpened] = useState(false)
+  // The client's calls for the preview (`/preview`, the button of its tab): until the first it is
+  // not shown (owner's request of 27.10.2026); a stopped one wakes only on a call made after it
+  // stopped.
+  const previewCalls = usePreviewCalls(head?.preview?.status ?? null)
   // Said to a screen reader once the server took a new level.
   const [effortNote, setEffortNote] = useState('')
   // The level chosen here, shown while the head still says the level it was chosen over.
@@ -301,6 +318,10 @@ export function DialogView({
   const [fullscreen, setFullscreen] = useState(false)
   const pane = useRef<HTMLElement | null>(null)
   const root = useRef<HTMLDivElement | null>(null)
+  // The dialog opens at its latest words and follows what arrives, as a chat does.
+  const feedArea = useRef<HTMLDivElement | null>(null)
+  const feedContent = useRef<HTMLDivElement | null>(null)
+  useFeedFollow(feedArea, feedContent)
 
   const message = useMutation(trpc.task.message.mutationOptions())
   const proceed = useMutation(trpc.task.continue.mutationOptions())
@@ -322,20 +343,19 @@ export function DialogView({
   // files with its messages, the stream while its panel is shown.
   const inBrowser = head?.task.requirements.browser === true
   const browserLive = inBrowser && sessionLive(head?.browser ?? null)
-  // The panel beside the dialog only when it has something (owner's requests of 26.10.2026: open it
-  // when something on the site has changed, not at the start): the browser of a task in the
-  // browser while the task goes on, or the tabs of the changes that hold anything — files or
-  // records of the site to change, their preview, checks. From `lg` the client may close it; it
-  // comes back by the button of the head, and by itself with the next changes.
+  // The panel beside the dialog: the browser of a task in the browser while the task goes on, or
+  // the tabs that hold anything — the preview, files or records of the site to change, checks.
+  // It opens by itself only when something on the site has changed (owner's requests of
+  // 26.10.2026), and by the button of the head at any time (owner's request of 27.10.2026). From
+  // `lg` the client may close it; it comes back by that button, and by itself with the next changes.
   const ended = head !== null && terminalTaskStatuses.includes(head.task.status)
-  const changeTabs = inBrowser
-    ? []
-    : paneTabsOf(head?.preview ?? null, head?.candidate ?? null, { previewAsked })
-  const hasPane = (inBrowser && !ended) || changeTabs.length > 0
+  const panelTabs = inBrowser ? [] : paneTabsOf(head?.preview ?? null, head?.candidate ?? null)
+  const hasPane = (inBrowser && !ended) || panelTabs.length > 0
   const candidateNow = head?.candidate ?? null
   const changesMark = candidateNow === null ? '' : `${candidateNow.id}:${candidateNow.revision}`
   const paneClosed = closedOn !== null && closedOn === changesMark
-  const paneShown = hasPane && (!wide || !paneClosed)
+  const opensItself = inBrowser || paneOpensItself(panelTabs)
+  const paneShown = hasPane && (!wide || paneOpened || (opensItself && !paneClosed))
   // Without a panel the switch has nothing to show instead of the dialog.
   const shownView: View = hasPane ? view : 'dialog'
   const paneVisible = paneShown && (wide || shownView === 'preview')
@@ -477,20 +497,26 @@ export function DialogView({
           ? taskAnsweredLabel
           : taskStatusLabel[status]
 
-  function focusPaneTab(tab: PaneTab) {
-    // A tab with nothing in it is not drawn: the first one that holds something takes its place.
-    // The preview asked for by name is drawn even before the changes.
-    const asked = tab === 'preview' && head?.preview != null
-    const tabs = asked
-      ? paneTabsOf(head.preview, head.candidate, { previewAsked: true })
-      : changeTabs
-    const target = tabs.includes(tab) ? tab : tabs[0]
-    if (target === undefined) return
-    if (asked) setPreviewAsked(true)
+  function openPane() {
     setClosedOn(null)
+    setPaneOpened(true)
+  }
+
+  /** The focus goes to a tab of the panel once it is drawn: what opened it is gone or behind. */
+  function focusTab(tab: PaneTab) {
+    window.setTimeout(() => document.getElementById(paneTabId(tab))?.focus(), 0)
+  }
+
+  function focusPaneTab(tab: PaneTab) {
+    // A tab with nothing in it is not drawn: the first tab of the changes takes its place.
+    if (panelTabs.length === 0) return
+    const target = shownPaneTab(panelTabs, tab)
+    // Only the preview asked for by name is the client's call to show it.
+    if (tab === 'preview' && target === 'preview') previewCalls.call()
+    openPane()
     setPaneTab(target)
     if (!wide) setView('preview')
-    window.setTimeout(() => document.getElementById(paneTabId(target))?.focus(), 0)
+    focusTab(target)
   }
 
   /** «Размышление» of the dialog: from the agent's next turn (`task.setEffort`). */
@@ -853,6 +879,7 @@ export function DialogView({
       ) : null}
 
       <Box
+        ref={feedArea}
         id={viewId('dialog')}
         inert={fullscreen}
         sx={{
@@ -875,6 +902,7 @@ export function DialogView({
         }}
       >
         <Box
+          ref={feedContent}
           sx={{
             flex: '1 0 auto',
             display: 'flex',
@@ -896,8 +924,16 @@ export function DialogView({
             pane={
               hasPane && !paneShown
                 ? {
-                    label: inBrowser ? browserText.view : paneText.show,
-                    onOpen: () => setClosedOn(null),
+                    ...(inBrowser
+                      ? { label: browserText.view, onOpen: openPane }
+                      : {
+                          label: paneText.open,
+                          hint: paneText.openHint,
+                          onOpen: () => {
+                            openPane()
+                            focusTab(shownPaneTab(panelTabs, paneTab))
+                          },
+                        }),
                   }
                 : null
             }
@@ -1079,15 +1115,24 @@ export function DialogView({
                 candidate={head?.candidate ?? null}
                 tab={paneTab}
                 onTab={setPaneTab}
-                tabs={changeTabs}
+                tabs={panelTabs}
                 visible={paneVisible}
+                previewCalls={previewCalls}
+                onAskPreview={() => {
+                  previewCalls.call()
+                  setPaneTab('preview')
+                  focusTab('preview')
+                }}
                 canReset={resetVerdict?.available === true}
                 onReset={() => runCommand('reset')}
                 resetting={reset.isPending}
                 onClose={
                   wide
                     ? () => {
+                        setPaneOpened(false)
                         setClosedOn(changesMark)
+                        // It comes back by itself on the first tab of the changes, not the preview.
+                        setPaneTab(null)
                         // The button goes with the panel: the focus waits on the way back to it.
                         window.setTimeout(() => document.getElementById(SHOW_PANE_ID)?.focus(), 0)
                       }
