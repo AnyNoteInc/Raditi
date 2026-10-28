@@ -2426,7 +2426,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         Object.fromEntries(feed.commands.map((command) => [command.id, command.refusal])),
       ).toEqual({
         release: null,
-        preview: 'preview_not_ready',
+        // Asked for while it is made, the preview is shown once ready (27.10.2026).
+        preview: null,
         reset: 'preview_not_ready',
         update: 'up_to_date',
         retry: 'nothing_to_retry',
@@ -2454,9 +2455,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const { taskId } = await newDialog(caller, site.id)
       const preview = await db.previewEnvironment.findUniqueOrThrow({ where: { taskId } })
 
+      // Being made: the frame asks again by itself (PREVIEW_NOT_READY), no ticket is issued.
       await expect(caller.preview.ticket({ taskId })).rejects.toMatchObject({
-        cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'preview_not_ready' } },
+        cause: { code: 'PREVIEW_NOT_READY' },
       })
+      expect(await db.previewTicket.count({ where: { previewId: preview.id } })).toBe(0)
       await db.previewEnvironment.update({ where: { id: preview.id }, data: { status: 'ready' } })
 
       const opened = await caller.preview.ticket({ taskId, to: '/contacts/?tab=map' })

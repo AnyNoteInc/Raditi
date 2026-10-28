@@ -218,7 +218,10 @@ for (const [status, label, note] of closedSites) {
           await expect(item.locator('svg')).toHaveCount(2)
           expect((await item.boundingBox())?.height).toBeGreaterThanOrEqual(44)
         }
-        await closed.filter({ hasText: 'Настройки' }).click({ force: true })
+        // The sheet slides up from below the window: the click waits until it has arrived.
+        const settings = closed.filter({ hasText: 'Настройки' })
+        await expect(settings).toBeInViewport()
+        await settings.click({ force: true })
         await expect(page).toHaveURL(overview)
         await more.getByRole('link', { name: 'К проектам' }).click()
         await expect(page).toHaveURL('/projects')

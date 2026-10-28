@@ -6,7 +6,7 @@ import {
   type UseMutationOptions,
 } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { plain, serverRefusal } from '@/components/billing/testing'
 
@@ -55,6 +55,7 @@ const calls = vi.hoisted(() => ({
   rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
   remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
   replace: vi.fn<(href: string) => void>(),
+  ticket: vi.fn(async (_input: { taskId: string }) => ({ url: '', expiresAt: new Date() })),
 }))
 
 vi.mock('next/navigation', () => ({
@@ -99,7 +100,7 @@ vi.mock('@/trpc/client', () => ({
       feed: { query: calls.feed },
       activity: { query: async () => ({ events: [], cursor: '0', more: false }) },
     },
-    preview: { ticket: { mutate: async () => ({ url: '', expiresAt: new Date() }) } },
+    preview: { ticket: { mutate: calls.ticket } },
     release: {
       prepare: { query: calls.prepare },
       undoPrepare: { mutate: calls.undoPrepare },
@@ -729,7 +730,7 @@ describe('a dialog', () => {
       }),
     )
     await screen.findByRole('textbox', { name: 'Сообщение' })
-    expect(screen.queryByRole('complementary', { name: 'Изменения диалога' })).toBeNull()
+    expect(screen.queryByRole('complementary', { name: PANE })).toBeNull()
     expect(screen.queryByRole('tablist', { name: 'Что показать' })).toBeNull()
   })
 
@@ -741,6 +742,191 @@ describe('a dialog', () => {
       expect(screen.getByRole('tab', { name: 'Изменения', selected: true })).toBeTruthy(),
     )
     expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
+  })
+})
+
+const PANE = 'Предпросмотр и изменения диалога'
+const readyPreview = {
+  status: 'ready' as const,
+  unavailableReason: null,
+  origin: 'http://site-0a1b2c3d-chat-4e5f6a.localhost:8090',
+  revision: 1,
+  dirty: false,
+}
+
+describe("the panel of a dialog (owner's request of 27.10.2026)", () => {
+  /** From `lg` the panel stands at the right edge: every media query of the layout matches. */
+  function wideLayout() {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string): MediaQueryList =>
+        ({
+          matches: true,
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }) as MediaQueryList,
+    )
+  }
+  afterEach(() => vi.unstubAllGlobals())
+
+  const started = () =>
+    feedAnswer({
+      status: 'awaiting_user',
+      task: { turnNo: 1 },
+      preview: readyPreview,
+      candidate: null,
+      events: [requestRow('1'), resultRow('2', 1)],
+      cursor: '2',
+    })
+
+  it('is opened by the button of the head before any changes, with the preview not shown yet', async () => {
+    wideLayout()
+    showDialog(started())
+    const open = await screen.findByRole('button', { name: 'Открыть панель' })
+    // Nothing has changed on the site: the panel does not open by itself.
+    expect(screen.queryByRole('complementary', { name: PANE })).toBeNull()
+    expect(open.getAttribute('title')).toBe('Предпросмотр, файлы, база данных и проверки')
+    fireEvent.click(open)
+    const pane = await screen.findByRole('complementary', { name: PANE })
+    expect(within(pane).getByRole('tab', { name: 'Предпросмотр', selected: true })).toBeTruthy()
+    expect(plain(pane.textContent)).toContain('Покажем его, когда попросите.')
+    expect(within(pane).queryByTitle('Предпросмотр сайта с изменениями диалога')).toBeNull()
+    // Closed, it gives way to the button again.
+    fireEvent.click(within(pane).getByRole('button', { name: 'Скрыть панель' }))
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: PANE })).toBeNull())
+    expect(screen.getByRole('button', { name: 'Открыть панель' })).toBeTruthy()
+  })
+
+  it('opens by itself with the changes on their files, not on the preview', async () => {
+    wideLayout()
+    showDialog(waiting({ preview: readyPreview }))
+    const pane = await screen.findByRole('complementary', { name: PANE })
+    expect(within(pane).getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
+    expect(within(pane).queryByTitle('Предпросмотр сайта с изменениями диалога')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Открыть панель' })).toBeNull()
+    expect(calls.ticket).not.toHaveBeenCalled()
+  })
+
+  it('shows the preview when the client calls for it by /preview', async () => {
+    wideLayout()
+    showDialog(started())
+    await run(/Открыть предпросмотр/)
+    const pane = await screen.findByRole('complementary', { name: PANE })
+    const tab = within(pane).getByRole('tab', { name: 'Предпросмотр', selected: true })
+    expect(within(pane).queryByRole('button', { name: 'Показать предпросмотр' })).toBeNull()
+    expect(within(pane).getByRole('link', { name: 'Открыть в новой вкладке' })).toBeTruthy()
+    await waitFor(() => expect(calls.ticket).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(document.activeElement).toBe(tab))
+  })
+
+  it('wakes a stopped preview by one /preview, whatever tab the panel was on', async () => {
+    wideLayout()
+    const stopped = { ...readyPreview, status: 'expired' as const }
+    // The panel opened by itself on the files; the preview had stopped before the call.
+    showDialog(waiting({ preview: stopped }))
+    const pane = await screen.findByRole('complementary', { name: PANE })
+    expect(within(pane).getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
+    await run(/Открыть предпросмотр/)
+    expect(within(pane).getByRole('tab', { name: 'Предпросмотр', selected: true })).toBeTruthy()
+    expect(within(pane).queryByRole('button', { name: 'Открыть предпросмотр' })).toBeNull()
+    await waitFor(() => expect(calls.ticket).toHaveBeenCalledTimes(1))
+  })
+
+  it('wakes a stopped preview by one /preview on a closed panel', async () => {
+    wideLayout()
+    showDialog(
+      feedAnswer({
+        status: 'awaiting_user',
+        task: { turnNo: 1 },
+        preview: { ...readyPreview, status: 'expired' },
+        candidate: null,
+        events: [requestRow('1'), resultRow('2', 1)],
+        cursor: '2',
+      }),
+    )
+    await run(/Открыть предпросмотр/)
+    const pane = await screen.findByRole('complementary', { name: PANE })
+    expect(within(pane).queryByRole('button', { name: 'Открыть предпросмотр' })).toBeNull()
+    await waitFor(() => expect(calls.ticket).toHaveBeenCalledTimes(1))
+  })
+
+  it('puts the focus into the panel the button of the head opened', async () => {
+    wideLayout()
+    showDialog(started())
+    fireEvent.click(await screen.findByRole('button', { name: 'Открыть панель' }))
+    const pane = await screen.findByRole('complementary', { name: PANE })
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(pane).getByRole('tab', { name: 'Предпросмотр' })),
+    )
+    // «Показать предпросмотр» goes with its button: the focus stays on the tab of the preview.
+    fireEvent.click(within(pane).getByRole('button', { name: 'Показать предпросмотр' }))
+    await waitFor(() => expect(calls.ticket).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(pane).getByRole('tab', { name: 'Предпросмотр' })),
+    )
+  })
+
+  it('does not show the preview for «Посмотреть изменения», even when it is the only tab', async () => {
+    wideLayout()
+    // Changes the platform could not count, and no checks: the preview's tab is all the panel has.
+    showDialog(
+      waiting({
+        preview: readyPreview,
+        candidate: {
+          ...candidateHead,
+          counts: null,
+          checks: { pending: 0, passed: 0, failed: 0, stale: 0 },
+        },
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Посмотреть изменения' }))
+    const pane = await screen.findByRole('complementary', { name: PANE })
+    expect(within(pane).getByRole('button', { name: 'Показать предпросмотр' })).toBeTruthy()
+    expect(calls.ticket).not.toHaveBeenCalled()
+  })
+
+  it('comes back by itself with new changes on their files, not on the preview asked before', async () => {
+    wideLayout()
+    let later!: (answer: DialogFeed) => void
+    const revised = waiting({ preview: readyPreview, candidate: { ...candidateHead, revision: 2 } })
+    calls.feed
+      .mockResolvedValueOnce(waiting({ preview: readyPreview, more: true }))
+      .mockReturnValueOnce(new Promise((resolve) => (later = resolve)))
+      .mockResolvedValue(revised)
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DialogView
+          siteId={SITE_ID}
+          siteUrl="https://kroshka.example"
+          taskId={TASK_ID}
+          title="Поменять цену капучино"
+        />
+      </QueryClientProvider>,
+    )
+    await run(/Открыть предпросмотр/)
+    const pane = await screen.findByRole('complementary', { name: PANE })
+    expect(within(pane).getByRole('tab', { name: 'Предпросмотр', selected: true })).toBeTruthy()
+    fireEvent.click(within(pane).getByRole('button', { name: 'Скрыть панель' }))
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: PANE })).toBeNull())
+    later(revised)
+    const back = await screen.findByRole('complementary', { name: PANE })
+    expect(within(back).getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
+  })
+
+  it('can be shown below the wide layout before any changes, by the switch', async () => {
+    showDialog(started())
+    await screen.findByRole('textbox', { name: 'Сообщение' })
+    fireEvent.click(screen.getByRole('tab', { name: 'Изменения' }))
+    const pane = screen.getByRole('complementary', { name: PANE })
+    expect(within(pane).getByRole('button', { name: 'Показать предпросмотр' })).toBeTruthy()
   })
 })
 
@@ -770,7 +956,7 @@ describe('a task in the browser', () => {
       'Чат',
     )
     expect(pane()).toBeTruthy()
-    expect(screen.queryByRole('complementary', { name: 'Изменения диалога' })).toBeNull()
+    expect(screen.queryByRole('complementary', { name: PANE })).toBeNull()
     const views = screen.getByRole('tablist', { name: 'Что показать' })
     expect(
       within(views)

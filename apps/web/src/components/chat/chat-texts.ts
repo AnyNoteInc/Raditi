@@ -19,11 +19,15 @@ export const viewSwitchText = Object.freeze({
 
 export const paneText = Object.freeze({
   /** The accessible name of the panel beside the dialog. */
-  label: 'Изменения диалога',
-  tabs: 'Разделы изменений',
+  label: 'Предпросмотр и изменения диалога',
+  tabs: 'Разделы панели',
   frameTitle: 'Предпросмотр сайта с изменениями диалога',
   /** The dialog has ended and its preview with it. */
   destroyed: 'Диалог закрыт, и его предпросмотр остановлен.',
+  /** The preview is shown only when the client asks for it (owner's request of 27.10.2026). */
+  ask: 'Предпросмотр — рабочая копия сайта с изменениями этого диалога. Покажем его, когда попросите.',
+  /** The client's explicit call of the preview. */
+  show: 'Показать предпросмотр',
   /** The preview of a stopped dialog is opened again. */
   reopen: 'Открыть предпросмотр',
   reset: 'Сбросить данные предпросмотра',
@@ -34,10 +38,15 @@ export const paneText = Object.freeze({
   /** A candidate that the site moved on under. */
   stale: 'Сайт изменился после того, как эти изменения были готовы. Обновите рабочую копию.',
   /** The edge of the panel that is dragged (docs/plan/57-browser-tasks.md, Б29). */
-  separator: 'Ширина панели изменений',
-  /** The panel opens by itself when the changes appear, and the client can close it. */
-  show: 'Показать изменения',
-  hide: 'Скрыть изменения',
+  separator: 'Ширина панели',
+  /**
+   * The button of the head: the panel opens by itself when the changes appear, by this button at
+   * any time (owner's request of 27.10.2026); the client can close it.
+   */
+  open: 'Открыть панель',
+  /** The hint of that button: what the panel holds. */
+  openHint: 'Предпросмотр, файлы, база данных и проверки',
+  hide: 'Скрыть панель',
 })
 
 export const filesText = Object.freeze({

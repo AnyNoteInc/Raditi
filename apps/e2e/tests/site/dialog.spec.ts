@@ -35,7 +35,8 @@ const FIELD_OFF = 'Написать можно будет, когда агент
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
 const send = (page: Page) => page.getByRole('button', { name: 'Отправить' })
 const feed = (page: Page) => page.getByRole('list', { name: 'Сообщения диалога' })
-const pane = (page: Page) => page.getByRole('complementary', { name: 'Изменения диалога' })
+const pane = (page: Page) =>
+  page.getByRole('complementary', { name: 'Предпросмотр и изменения диалога' })
 const dialogs = (page: Page) => page.getByRole('navigation', { name: 'Диалоги' })
 const back = (page: Page) => page.getByRole('link', { name: 'Назад к диалогам' })
 const commands = (page: Page) => page.getByRole('listbox', { name: 'Команды' })
@@ -224,13 +225,17 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
   })
 })
 
-test('a dialog on a phone: no switch while nothing has changed', async ({ page, signedInUser }) => {
+test('a dialog on a phone: no switch while the panel has nothing to show', async ({
+  page,
+  signedInUser,
+}) => {
   const siteId = await addConnectedSite(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await startDialog(page, siteId)
 
-  // The switch «Диалог | Изменения» comes with the first changes; until then the dialog is all.
+  // The switch «Диалог | Изменения» comes with a preview in use or the first changes (27.10.2026);
+  // this run has no previews, so until the changes the dialog is all.
   await expect(page.getByRole('tablist', { name: 'Что показать' })).toHaveCount(0)
   await expect(feed(page).getByText(FIRST_WORDS)).toBeVisible()
   await expect(pane(page)).toHaveCount(0)
