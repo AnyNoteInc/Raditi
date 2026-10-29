@@ -214,7 +214,7 @@ const network = () => new TypeError('Failed to fetch')
 const NETWORK_TEXT = 'Не удалось связаться с сервером. Проверьте подключение и попробуйте ещё раз.'
 
 describe('a dialog', () => {
-  it('reads its head and rows: one line of its name and its menu, the mode by the field', async () => {
+  it('reads its head and rows: its name, its mode in the middle, its menu', async () => {
     showDialog()
     expect(await screen.findByText('Изменения готовы')).toBeTruthy()
     expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBeTruthy()
@@ -222,9 +222,15 @@ describe('a dialog', () => {
     expect(
       screen.getByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
     ).toBeTruthy()
-    // The mode the dialog started in is said by the field, not changed there.
-    expect(plain(screen.getByTitle('Режим выбирается в начале диалога').textContent)).toContain(
-      'Работа',
+    // «Чат | Работа» over the dialog (owner's request of 29.10.2026): its own mode is marked, the
+    // other one opens «Новый диалог» in that mode — a started dialog keeps its mode.
+    const modes = within(screen.getByRole('navigation', { name: 'Режим диалога' }))
+    expect(modes.getByText('Работа').getAttribute('aria-current')).toBe('true')
+    const chat = modes.getByRole('link', { name: 'Чат' })
+    expect(chat.getAttribute('href')).toBe(`/projects/${SITE_ID}/chat/new?mode=chat`)
+    expect(chat.getAttribute('aria-describedby')).toBeTruthy()
+    expect(document.getElementById(chat.getAttribute('aria-describedby')!)?.textContent).toBe(
+      'Откроет новый диалог в режиме «Чат»: режим начатого диалога не меняется.',
     )
     expect(field().getAttribute('placeholder')).toBe('Что поправить?')
     // No standing words under the field (owner, 26.10.2026): the reminder is read aloud only.
@@ -992,9 +998,11 @@ describe('a task in the browser', () => {
       browserAnswer({ events: [requestRow('1', 'Добавьте новость о веранде')], cursor: '1' }),
     )
     expect(await screen.findByText('Добавьте новость о веранде')).toBeTruthy()
-    expect(plain(screen.getByTitle('Режим выбирается в начале диалога').textContent)).toContain(
-      'Чат',
-    )
+    expect(
+      within(screen.getByRole('navigation', { name: 'Режим диалога' }))
+        .getByText('Чат')
+        .getAttribute('aria-current'),
+    ).toBe('true')
     expect(pane()).toBeTruthy()
     expect(screen.queryByRole('complementary', { name: PANE })).toBeNull()
     const views = screen.getByRole('tablist', { name: 'Что показать' })

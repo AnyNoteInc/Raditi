@@ -11,6 +11,12 @@ const mocks = vi.hoisted(() => ({ pathname: '' }))
 vi.mock('next/navigation', () => ({ usePathname: () => mocks.pathname }))
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
+// The credits read the server: here the ring is a mark of where it stands.
+vi.mock('@/components/billing/credit-ring', () => ({
+  CreditRing: ({ placement }: { placement: string }) => (
+    <span data-testid={`credit-ring-${placement}`} />
+  ),
+}))
 
 const user = { name: 'Анна', lastName: 'Петрова', email: 'anna@example.ru' }
 const site = { id, name: 'Кофейня «Крошка»', url: 'https://kroshka.example', status: 'active' }

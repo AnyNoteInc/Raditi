@@ -7,6 +7,8 @@ import { BrandMark } from '@repo/ui/components'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
+import { CreditRing } from '@/components/billing/credit-ring'
+
 import { AppIcon } from './app-icon'
 import { applicationSurface } from './application-surface'
 import { ApplicationToolbar, type Crumb } from './application-toolbar'
@@ -96,7 +98,18 @@ export function ApplicationShell({
             </IconButton>
           </Tooltip>
         </Box>
-        <Box sx={{ mt: 'auto', pt: 2 }}>
+        {/* The credits over the account menu, as on the page of a site (29.10.2026). */}
+        <Box
+          sx={{
+            mt: 'auto',
+            pt: 2,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 0.75,
+          }}
+        >
+          <CreditRing placement="sidebar" />
           <UserMenu user={user} placement="sidebar" />
         </Box>
       </Box>

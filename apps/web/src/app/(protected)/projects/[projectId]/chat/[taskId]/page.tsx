@@ -30,6 +30,8 @@ export default async function Page({ params }: { params: Params }) {
       title={dialog.title}
       // Where the stream of a task's browser is opened (docs/plan/57-browser-tasks.md, Б12).
       browserStreamUrl={chatServices()?.browser?.streamUrl ?? null}
+      // The switch of the mode leads only to a mode the site offers (29.10.2026).
+      capabilities={site.capabilities}
     />
   )
 }
