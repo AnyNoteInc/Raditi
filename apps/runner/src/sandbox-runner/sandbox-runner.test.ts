@@ -1017,11 +1017,12 @@ describe('SandboxRunner files of the client', () => {
     const written = vi
       .mocked(side.sandbox.fs.write)
       .mock.calls.filter(([path]) => path.startsWith('/workspace/inbox/'))
-    expect(written.map(([path, data, options]) => [path, Buffer.from(data).toString(), options]))
-      .toEqual([
-        [inbox[0]!.path, files[0]!.toString(), { mode: 0o444 }],
-        [inbox[1]!.path, files[1]!.toString(), { mode: 0o444 }],
-      ])
+    expect(
+      written.map(([path, data, options]) => [path, Buffer.from(data).toString(), options]),
+    ).toEqual([
+      [inbox[0]!.path, files[0]!.toString(), { mode: 0o444 }],
+      [inbox[1]!.path, files[1]!.toString(), { mode: 0o444 }],
+    ])
   })
 
   it('fails the prepare when core does not give a file', async () => {

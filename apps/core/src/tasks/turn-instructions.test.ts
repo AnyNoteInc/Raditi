@@ -75,14 +75,7 @@ describe('turnInstructions', () => {
 describe('turnInstructions with files of the client', () => {
   const absent = { state: 'absent' } as const
   const withFiles = (inbox: { files: number; omitted: number } | null, addOnlyPaths?: string[]) =>
-    turnInstructions(
-      absent,
-      undefined,
-      '',
-      addOnlyPaths ? { addOnlyPaths } : {},
-      null,
-      inbox,
-    )
+    turnInstructions(absent, undefined, '', addOnlyPaths ? { addOnlyPaths } : {}, null, inbox)
 
   it('says where the files are, that they are data, and how one reaches the site', () => {
     const text = withFiles({ files: 2, omitted: 0 }, ['wp-content/uploads/raditi/'])

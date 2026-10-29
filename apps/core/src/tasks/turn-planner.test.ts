@@ -717,7 +717,10 @@ describe('planTurn of a repository task with files of the client', () => {
 
   it('takes the latest files, as many as one turn holds, in the order they were sent', () => {
     // A full message of ten files of 20 MiB always fits: the earlier one does not.
-    const full = [fileOf(0, 'old.pdf', MIB), ...Array.from({ length: 10 }, (_, i) => fileOf(i + 1, undefined, 20 * MIB))]
+    const full = [
+      fileOf(0, 'old.pdf', MIB),
+      ...Array.from({ length: 10 }, (_, i) => fileOf(i + 1, undefined, 20 * MIB)),
+    ]
     expect(turnInboxOf(full)).toEqual({
       paths: Array.from({ length: 10 }, (_, i) => pathOf(i + 1)),
       omitted: 1,

@@ -252,9 +252,7 @@ describe('new dialog', () => {
       screen.getAllByRole('button').map((button) => button.getAttribute('aria-label')),
     ).toEqual(['Команды', 'Добавить', 'Размышление: Высокое', 'Отправить'])
     // «Работа» gets its own copy of the files too, since 28.10.2026.
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' }).disabled).toBe(
-      false,
-    )
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' }).disabled).toBe(false)
     // The reminder of a task in the browser is not this mode's: nobody signs in here.
     expect(described(field())).not.toContain(taskWayText.noSecrets)
     expect(screen.queryByRole('radiogroup', { name: 'Как агент будет работать' })).toBeNull()

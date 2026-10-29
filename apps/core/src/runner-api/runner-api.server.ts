@@ -233,7 +233,10 @@ export class RunnerApiServer implements OnApplicationShutdown {
       string | undefined,
     ]
     if (method === 'GET' && resource === 'bundle') {
-      await sendSized(response, await this.hub.bundle(runnerId, assignmentId, binaryHeaders(request)))
+      await sendSized(
+        response,
+        await this.hub.bundle(runnerId, assignmentId, binaryHeaders(request)),
+      )
       return
     }
     if (method === 'GET' && place !== undefined) {

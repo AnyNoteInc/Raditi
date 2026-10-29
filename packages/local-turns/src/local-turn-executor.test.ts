@@ -397,8 +397,7 @@ describe('a turn without a repository on the local executor (plan 57, Б4)', () 
 })
 
 describe('files of the client on the local executor', () => {
-  const pathOf = (name: string) =>
-    `/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/${name}`
+  const pathOf = (name: string) => `/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/${name}`
   const file = (path: string, bytes: Uint8Array, sizeBytes = bytes.byteLength) => ({
     path,
     sizeBytes,
@@ -440,7 +439,10 @@ describe('files of the client on the local executor', () => {
     const f = await fixture()
     await expect(
       f.executor.prepare(
-        f.input({ bundle: f.bundle, inbox: [file(pathOf('a.pdf'), Buffer.from('abc'), sizeBytes)] }),
+        f.input({
+          bundle: f.bundle,
+          inbox: [file(pathOf('a.pdf'), Buffer.from('abc'), sizeBytes)],
+        }),
         signal,
       ),
     ).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
