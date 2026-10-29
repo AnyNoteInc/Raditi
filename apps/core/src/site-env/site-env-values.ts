@@ -1,8 +1,12 @@
+import type { PrismaClient } from '@repo/db'
 import {
+  browserSignInSchema,
   envVarNameProblem,
   envVarValueSchema,
   siteEnvVarPath,
   siteEnvVarValueOf,
+  siteSignInEnvVars,
+  type BrowserSignIn,
   type SecretStore,
 } from '@repo/domain'
 
@@ -58,4 +62,25 @@ export async function readSiteEnvValuesToRefuse(
     if (value !== null && value.length > 0) values.push(value)
   }
   return values
+}
+
+/**
+ * The site's saved sign-in to its admin pages (owner's decision of 28.10.2026, Б36): both
+ * variables of `siteSignInEnvVars` at the versions their rows name, for the browser of a task
+ * only — never the agent's commands, a preview or the model. null — either is not set.
+ */
+export async function readSiteSignIn(
+  db: Pick<PrismaClient, 'siteEnvVar'>,
+  secrets: Pick<SecretStore, 'kvRead'>,
+  siteId: string,
+): Promise<BrowserSignIn | null> {
+  const { login, password } = siteSignInEnvVars
+  const rows = await db.siteEnvVar.findMany({
+    where: { siteId, name: { in: [login, password] } },
+    select: { name: true, keyVersion: true },
+  })
+  if (rows.length < 2) return null
+  const values = await readSiteEnvValues(secrets, siteId, rows)
+  const signIn = browserSignInSchema.safeParse({ login: values[login], password: values[password] })
+  return signIn.success ? signIn.data : null
 }

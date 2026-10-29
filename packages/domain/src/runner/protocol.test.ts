@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { isDomainError, isTooLarge } from '../errors.ts'
 import { agentOutputLimits, preparedRunLimits } from '../ports/agent-driver.ts'
 import { SANDBOX_SECRETS_DIR } from '../ports/sandbox-provider.ts'
+import { turnInboxPath } from '../ports/turn-executor.ts'
 import { isSnapshotCredential } from '../ports/turn-runner.ts'
 import {
   coreStopping,
@@ -17,6 +18,7 @@ import {
   runnerFailure,
   runnerFailureCodes,
   runnerIdSchema,
+  runnerInboxPath,
   runnerKeyPath,
   runnerLimits,
   runnerPollRequestSchema,
@@ -695,7 +697,12 @@ describe('runner poll and answers', () => {
     expect(runnerCandidatePath(ids.assignment, 'patch')).toBe(
       `/runner/v1/assignments/${ids.assignment}/candidate/patch`,
     )
+    expect(runnerInboxPath(ids.assignment, 0)).toBe(
+      `/runner/v1/assignments/${ids.assignment}/inbox/0`,
+    )
     expect(() => runnerBundlePath('../poll')).toThrow()
+    expect(() => runnerInboxPath(ids.assignment, -1)).toThrow()
+    expect(() => runnerInboxPath(ids.assignment, 50)).toThrow()
   })
 })
 
@@ -735,5 +742,44 @@ describe('runner errors', () => {
     expect(isCoreStopping(coreStopping())).toBe(true)
     expect(isCoreStopping(runnerUnavailable('Core is shutting down'))).toBe(false)
     expect(isCoreStopping(new Error('CORE_STOPPING'))).toBe(false)
+  })
+})
+
+describe('runner commands with files of the client', () => {
+  const path = (index: number) =>
+    turnInboxPath(`0199a3f2-0000-7000-8000-${String(index).padStart(12, '0')}`, 'Меню.pdf')!
+  const withInbox = (inbox: unknown, change: Record<string, unknown> = {}) => ({
+    ...prepare(),
+    inbox,
+    ...change,
+  })
+
+  it('carries the files of a turn with a repository by path and size', () => {
+    const inbox = [
+      { path: path(1), sizeBytes: 1024 },
+      { path: path(2), sizeBytes: 20 * 1024 * 1024 },
+    ]
+    expect(runnerCommandSchema.parse(withInbox(inbox))).toMatchObject({ inbox })
+  })
+
+  it.each([
+    ['without a bundle', withInbox([{ path: path(1), sizeBytes: 1 }], { bundle: undefined })],
+    ['an empty list', withInbox([])],
+    ['a path twice', withInbox([1, 1].map((index) => ({ path: path(index), sizeBytes: 1 })))],
+    ['a path outside the inbox', withInbox([{ path: '/workspace/repo/a.pdf', sizeBytes: 1 }])],
+    ['a path of no attachment', withInbox([{ path: '/workspace/inbox/a.pdf', sizeBytes: 1 }])],
+    ['a file over its limit', withInbox([{ path: path(1), sizeBytes: 20 * 1024 * 1024 + 1 }])],
+    [
+      'more bytes than a turn holds',
+      withInbox(
+        Array.from({ length: 11 }, (_, index) => ({
+          path: path(index),
+          sizeBytes: 20 * 1024 * 1024,
+        })),
+      ),
+    ],
+    ['an unknown field', withInbox([{ path: path(1), sizeBytes: 1, key: 'inbox/ws/x' }])],
+  ])('refuses %s', (_label, value) => {
+    expect(runnerCommandSchema.safeParse(value).success).toBe(false)
   })
 })

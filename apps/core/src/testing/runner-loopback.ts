@@ -107,6 +107,18 @@ export function loopbackTransport(hub: RunnerHub, runnerId = 'sandbox-1'): Loopb
         yield Buffer.from(chunk)
       }
     },
+    async *inbox(assignmentId, index, fence, sizeBytes) {
+      const file = await answer('inbox', async () => {
+        transport.intercept?.('inbox')
+        return transport.hub.inboxFile(runnerId, assignmentId, index, headers(fence))
+      })
+      let sent = 0
+      for await (const chunk of file.read()) {
+        sent += chunk.byteLength
+        if (sent > sizeBytes) throw new RunnerCallError('inbox', 200)
+        yield Buffer.from(chunk)
+      }
+    },
     key: (assignmentId, purpose, fence) =>
       answer('key', async () => {
         transport.intercept?.('key')

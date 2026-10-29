@@ -127,12 +127,66 @@ const PAGES: Record<string, string> = {
   ),
 }
 
+/** The saved sign-in the site of this test takes (Б36). */
+const SAVED = { login: 'admin-test', password: 'Пароль-верный-1' }
+
+/** A form like WordPress's own: the same ids, the address to go back to in a hidden field. */
+const signInPage = (redirectTo: string, login = '', error = '', submit = true) =>
+  html(
+    'Вход',
+    `${error ? `<div id="login_error">${error}</div>` : ''}
+     <form id="loginform" method="post" action="/wp-login.php">
+       <label>Имя пользователя <input id="user_login" name="log" value="${login}"></label>
+       <label>Пароль <input type="password" id="user_pass" name="pwd"></label>
+       <input type="hidden" name="redirect_to" value="${redirectTo}">
+       ${submit ? '<input type="submit" id="wp-submit" value="Войти">' : ''}
+     </form>`,
+  )
+
+/** The sign-in of the saved form: a cookie and the address asked for, or the form again. */
+function signInAnswer(req: IncomingMessage, res: ServerResponse) {
+  let body = ''
+  req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')))
+  req.on('end', () => {
+    const form = new URLSearchParams(body)
+    const login = form.get('log') ?? ''
+    if (login === SAVED.login && form.get('pwd') === SAVED.password)
+      // No address asked for: the dashboard, which the policy closes, as WordPress does.
+      return res
+        .writeHead(302, {
+          location: form.get('redirect_to') || '/denied/dashboard',
+          'set-cookie': 'raditi_wp=1; Path=/; HttpOnly',
+        })
+        .end()
+    const page = signInPage(form.get('redirect_to') ?? '', login, 'Неверный пароль')
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)
+  })
+}
+
 /** The site: pages, a redirect to a closed page, a session cookie and a REST read behind a nonce. */
 function site(hits: string[]) {
   return (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     hits.push(`${req.method} ${url.pathname}`)
     const signedIn = (req.headers.cookie ?? '').includes('raditi_test_session=1')
+    if (url.pathname === '/wp-login.php') {
+      if (req.method === 'POST') return signInAnswer(req, res)
+      // `nosubmit`: a form whose button is not there — a step of the sign-in fails.
+      const page = signInPage(
+        url.searchParams.get('redirect_to') ?? '',
+        '',
+        '',
+        url.searchParams.get('nosubmit') !== '1',
+      )
+      return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)
+    }
+    if (url.pathname === '/admin') {
+      if (!(req.headers.cookie ?? '').includes('raditi_wp=1'))
+        return res.writeHead(302, { location: '/wp-login.php?redirect_to=%2Fadmin' }).end()
+      return res
+        .writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        .end(html('Записи', '<h1>Записи</h1>'))
+    }
     if (url.pathname === '/go-denied')
       return res.writeHead(302, { location: '/denied/users' }).end()
     if (url.pathname === '/nonce')
@@ -181,6 +235,10 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
   let server: BrowserServer
   let http: Server
   let origin = ''
+  /** Another local site of the session: the saved sign-in of the first is never its. */
+  const elsewhereHits: string[] = []
+  let elsewhereHttp: Server
+  let elsewhere = ''
   let session: CloudBrowserSession | undefined
   let events: CloudBrowserEvent[] = []
 
@@ -189,6 +247,12 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     extraHosts: [],
     requestDenied: ({ path }) => path.startsWith('/api/delete'),
     pageDenied: (path) => path.startsWith('/denied'),
+    signIn: {
+      isSignInPage: (path) => path.startsWith('/wp-login.php'),
+      login: '#loginform #user_login',
+      password: '#loginform #user_pass',
+      submit: '#loginform #wp-submit',
+    },
   }
 
   const open = async (path: string) => {
@@ -196,7 +260,7 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     session = await factory.open({
       endpoint: server.wsEndpoint(),
       allowedHosts: [],
-      localSites: [origin],
+      localSites: [origin, elsewhere],
       startUrl: `${origin}${path}`,
       viewport: { width: 1280, height: 800 },
       policy,
@@ -209,6 +273,9 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     http = createServer(site(hits))
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve))
     origin = `http://127.0.0.1:${(http.address() as { port: number }).port}`
+    elsewhereHttp = createServer(site(elsewhereHits))
+    await new Promise<void>((resolve) => elsewhereHttp.listen(0, '127.0.0.1', resolve))
+    elsewhere = `http://127.0.0.1:${(elsewhereHttp.address() as { port: number }).port}`
     server = await chromium.launchServer({
       host: '127.0.0.1',
       port: 0,
@@ -225,6 +292,7 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
   afterAll(async () => {
     await server?.close()
     await new Promise<void>((resolve) => http?.close(() => resolve()))
+    await new Promise<void>((resolve) => elsewhereHttp?.close(() => resolve()))
   })
 
   it('streams JPEG frames of the shown page, the last one to a new consumer at once', async () => {
@@ -458,6 +526,55 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
       matched: true,
     })
     expect(hits).not.toContain('POST /api/delete')
+  }, 30_000)
+
+  it('signs in with the saved sign-in on the stack’s form and lands where the site sends it', async () => {
+    const browser = await open('/admin')
+    expect(browser.tabs()[0]?.url).toContain('/wp-login.php?redirect_to=')
+    expect(await browser.signIn(SAVED)).toBe('signed_in')
+    expect(browser.tabs()[0]?.url).toBe(`${origin}/admin`)
+    expect((await browser.observe({})).tree).toContain('heading "Записи"')
+    // Not on the form any more: nothing is filled or sent.
+    const posts = hits.filter((hit) => hit === 'POST /wp-login.php').length
+    expect(await browser.signIn(SAVED)).toBe('absent')
+    expect(hits.filter((hit) => hit === 'POST /wp-login.php')).toHaveLength(posts)
+  }, 30_000)
+
+  it('goes to the start page when the site sends the signed-in browser where it may not go', async () => {
+    const browser = await open('/admin')
+    await browser.act({ tool: 'web_open', url: `${origin}/wp-login.php` })
+    expect(await browser.signIn(SAVED)).toBe('signed_in')
+    // The closed page was dropped as it committed (a redirect is not routed): the start page.
+    expect(browser.tabs()[0]?.url).toBe(`${origin}/admin`)
+    expect((await browser.observe({})).tree).toContain('heading "Записи"')
+  }, 30_000)
+
+  it('never fills the form of another host the session reaches', async () => {
+    const browser = await open('/admin')
+    await browser.act({ tool: 'web_open', url: `${elsewhere}/wp-login.php` })
+    expect(await browser.signIn(SAVED)).toBe('absent')
+    expect(elsewhereHits).not.toContain('POST /wp-login.php')
+    expect((await browser.observe({})).tree).not.toContain(SAVED.login)
+  }, 30_000)
+
+  it('empties the form when a step of the sign-in fails: no value stays for the agent', async () => {
+    const browser = await open('/wp-login.php?nosubmit=1')
+    const posts = () => hits.filter((hit) => hit === 'POST /wp-login.php').length
+    const before = posts()
+    await expect(browser.signIn(SAVED)).rejects.toBeDefined()
+    // Nothing was sent, and the login typed in is gone.
+    expect(posts()).toBe(before)
+    expect((await browser.observe({})).tree).not.toContain(SAVED.login)
+  }, 40_000)
+
+  it('empties a form that came back refused: no value of the sign-in stays for the agent', async () => {
+    const browser = await open('/admin')
+    const wrong = { login: SAVED.login, password: 'Пароль-неверный' }
+    expect(await browser.signIn(wrong)).toBe('refused')
+    const tree = (await browser.observe({})).tree
+    expect(tree).toContain('Неверный пароль')
+    expect(tree).not.toContain(SAVED.login)
+    expect(tree).not.toContain(wrong.password)
   }, 30_000)
 
   it('refuses a reference of a tree the page has navigated away from', async () => {

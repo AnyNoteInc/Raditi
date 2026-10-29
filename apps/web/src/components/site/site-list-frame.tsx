@@ -109,8 +109,7 @@ export function SiteListFrame({
           px: { md: 1.5 },
           pt: { md: 2 },
           pb: { md: 'max(16px, env(safe-area-inset-bottom))' },
-          // The column of a section: on the surface of «Чат» its own neutral side colour.
-          bgcolor: { md: 'var(--chat-side, var(--mui-palette-background-paper))' },
+          bgcolor: { md: 'var(--mui-palette-background-paper)' },
           borderRight: { md: 1 },
           borderColor: { md: 'divider' },
         }}

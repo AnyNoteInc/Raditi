@@ -322,7 +322,7 @@ export function Composer({
           p: 1.25,
           // A soft fill and no frame (owner's brief of 26.10.2026).
           borderRadius: '28px',
-          bgcolor: 'var(--chat-fill, var(--mui-palette-action-hover))',
+          bgcolor: 'var(--mui-palette-action-hover)',
           transition: 'box-shadow var(--raditi-motion-fast) var(--raditi-ease-out)',
           // One calm ring for the whole field while it is written in, none around the text.
           '&:has(textarea:focus-visible)': {
@@ -456,15 +456,15 @@ export function Composer({
               height: 44,
               flex: 'none',
               border: 0,
-              // Round and in the contrast of the page: the text colour, the arrow in the page's.
-              bgcolor: 'var(--chat-text, var(--raditi-accent))',
-              color: 'var(--chat-page, var(--raditi-on-accent))',
+              // The cabinet's vivid main action: accent fill, the arrow in its ink colour.
+              bgcolor: 'var(--raditi-accent)',
+              color: 'var(--raditi-on-accent)',
               transition:
                 'opacity var(--raditi-motion-fast) var(--raditi-ease-out), transform var(--raditi-motion-press) var(--raditi-ease-out)',
-              '&:hover': { bgcolor: 'var(--chat-text, var(--raditi-accent-hover))', opacity: 0.86 },
+              '&:hover': { bgcolor: 'var(--raditi-accent-hover)', opacity: 0.86 },
               '&.Mui-disabled': {
-                bgcolor: 'var(--chat-text, var(--mui-palette-action-disabledBackground))',
-                color: 'var(--chat-page, var(--mui-palette-action-disabled))',
+                bgcolor: 'var(--mui-palette-action-disabledBackground)',
+                color: 'var(--mui-palette-action-disabled)',
                 opacity: 0.22,
               },
               '&:active': { transform: 'scale(0.92)' },

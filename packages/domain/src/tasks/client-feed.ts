@@ -176,9 +176,12 @@ export const feedResultNexts = ['done', 'awaiting_approval', 'awaiting_user'] as
 export type FeedResultNext = (typeof feedResultNexts)[number]
 /**
  * The status a failure moved the task to: `awaiting_approval` — the dialog kept its candidate
- * and its preview, and waits (docs/plan/53, «Попробовать ещё (18.10)»).
+ * and its preview, and waits (docs/plan/53, «Попробовать ещё (18.10)»); `awaiting_user` — a
+ * dialog without one stays open: the client writes «продолжи» or anything else, and the agent
+ * goes on (owner's decision of 28.10.2026, «никогда не завершай диалог, если произошла
+ * ошибка»). `failed` — rows of before that decision.
  */
-export const feedFailureNexts = ['failed', 'awaiting_approval'] as const
+export const feedFailureNexts = ['failed', 'awaiting_approval', 'awaiting_user'] as const
 export type FeedFailureNext = (typeof feedFailureNexts)[number]
 const changeTypes = ['code', 'content', 'mixed', 'none'] as const
 const risks = ['low', 'medium', 'high'] as const
@@ -344,8 +347,8 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     text: requestText,
     attachments,
     /**
-     * The `feed.question` row this answers, or the `feed.result` that left the dialog open
-     * (`next: 'awaiting_user'`, owner's decision of 26.10.2026).
+     * The `feed.question` row this answers, or the `feed.result` or `feed.failure` that left the
+     * dialog open (`next: 'awaiting_user'`, owner's decisions of 26.10.2026 and 28.10.2026).
      */
     answersEventId: feedEventIdSchema,
   }),

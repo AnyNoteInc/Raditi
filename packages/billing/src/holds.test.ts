@@ -1591,7 +1591,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
     // A task is charged pass by pass (owner's answer of 26.10.2026): after a charge, the next
     // words or «Продолжить» open a new chain — what its caller says, and the rows agree with.
-    it('opens a new chain after a charged pass, and only then', async () => {
+    it('opens a new chain after a charged pass, and after words to a failed one', async () => {
       const { workspaceId } = await funded()
       const [taskId, given] = await tasks(workspaceId, 2)
       const notCharged = {
@@ -1622,10 +1622,20 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         '#2 tariff 45 captured',
         '#3 tariff 45 active',
       ])
-      // A chain given back without a charge before it: a retry, not a new chain after a charge.
+      // A chain given back without a charge before it: «Продолжить» is not a new chain after a
+      // charge, but the client's words are — a failure left the dialog open (28.10.2026).
       await place(workspaceId, given!)
       await release(given!)
-      expect(await refused(workspaceId, given!, { attempt: 2, follows: 'message' })).toMatchObject(
+      expect(await refused(workspaceId, given!, { attempt: 2, follows: 'continue' })).toMatchObject(
+        notCharged,
+      )
+      expect(await place(workspaceId, given!, { attempt: 2, follows: 'message' })).toMatchObject({
+        applied: true,
+        reserved: 45,
+      })
+      // A task that never held a reserve has nothing to follow.
+      const [never] = await tasks(workspaceId, 1)
+      expect(await refused(workspaceId, never!, { attempt: 2, follows: 'message' })).toMatchObject(
         notCharged,
       )
       // A retry and a new chain after a charge are not one call.

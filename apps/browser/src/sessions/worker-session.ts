@@ -47,6 +47,7 @@ import {
   type BrowserSessionRuntime,
   type BrowserSessionState,
   type BrowserSessionStatus,
+  type BrowserSignIn,
   type BrowserStreamRefusal,
   type BrowserTab,
   type BrowserTaskCode,
@@ -150,6 +151,8 @@ export interface SessionSpec {
   /** Milliseconds since the epoch: the session ends there whatever happens in it. */
   deadline: number
   checkpoints: readonly BrowserCheckpointRecord[]
+  /** The site's saved sign-in of the first `ensure` (Б36); null — none. */
+  signIn: BrowserSignIn | null
 }
 
 interface Observation {
@@ -235,6 +238,10 @@ export class WorkerSession {
   #observation: Observation | null = null
   #observationSeq = 0
   #pendingCommit: PendingCommit | null = null
+  /** The site's saved sign-in of the latest `ensure` (Б36): in memory only, never logged. */
+  #signIn: BrowserSignIn | null
+  /** A saved sign-in the site refused: not sent again until core gives another one. */
+  #signInRefused: BrowserSignIn | null = null
   #wrote = false
   #lastActivity: number
   #lastTouch = Number.NEGATIVE_INFINITY
@@ -269,6 +276,7 @@ export class WorkerSession {
     this.#spec = spec
     this.#context = context
     this.#onEnded = onEnded
+    this.#signIn = spec.signIn
     this.#lastActivity = context.now()
     for (const record of spec.checkpoints) this.#checkpoints.set(checkpointKey(record.ref), record)
   }
@@ -336,6 +344,8 @@ export class WorkerSession {
         throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
       }
       this.#browser = browser
+      // A hand-over while the browser started is told now (Б37).
+      browser.setController(this.#control.controller)
       // core closed the row meanwhile: the session is not to be.
       if (!(await store.markReady(spec.id))) throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
       this.#tabs = browser.tabs()
@@ -344,6 +354,9 @@ export class WorkerSession {
       if (shown !== null) this.#apply(browserPageShown(this.#control, shown))
       this.#publish()
       this.#syncFrames()
+      // The start page of a signed-out session is the stack's form: the saved sign-in, first in
+      // the queue of the agent's actions.
+      this.#actions = this.#actions.then(() => this.#signInIfAsked(browser))
     } catch (error) {
       this.#context.warn('browser_session_start_failed', error)
       if (this.live) await this.#end('failed', 'crashed', errorName(error))
@@ -451,6 +464,8 @@ export class WorkerSession {
       // Б16: whoever gets the browser next acts on a new tree; references read before the
       // hand-over may name what the client has changed since.
       this.#observation = null
+      // Б37: the pages' requests are judged for whoever holds the browser now.
+      browser?.setController(step.control.controller)
       const record = {
         sessionId: this.id,
         controller: step.control.controller,
@@ -856,7 +871,11 @@ export class WorkerSession {
       return false
     try {
       const target = new URL(url)
-      return !this.#spec.policy.pageDenied(`${target.pathname}${target.search}`)
+      // The client's own navigation: judged for whoever holds the browser (Б37).
+      return !this.#spec.policy.pageDenied(
+        `${target.pathname}${target.search}`,
+        this.#control.controller,
+      )
     } catch {
       return false
     }
@@ -865,6 +884,33 @@ export class WorkerSession {
   // -------------------------------------------------------------------------------------------
   // The agent
   // -------------------------------------------------------------------------------------------
+
+  /**
+   * The site's saved sign-in core read for this pass (Б36): it replaces the one held, and none
+   * forgets it. The values stay in this object: never logged, stored or answered.
+   */
+  useSignIn(credentials: BrowserSignIn | null): void {
+    this.#signIn = credentials
+  }
+
+  /**
+   * Signs in with the saved sign-in when the shown page is the stack's form and the agent holds
+   * the browser (Б36): while the client controls it, the form is theirs. One the site refused is
+   * not sent again. A failure is the operator's line; the agent sees the form and asks the client.
+   */
+  async #signInIfAsked(browser: CloudBrowserSession): Promise<void> {
+    const credentials = this.#signIn
+    if (credentials === null || !this.live || this.#control.controller !== 'agent') return
+    const refused = this.#signInRefused
+    if (refused?.login === credentials.login && refused.password === credentials.password) return
+    try {
+      if ((await browser.signIn(credentials)) !== 'refused') return
+      this.#context.warn('browser_sign_in_refused')
+    } catch (error) {
+      this.#context.warn('browser_sign_in_failed', error)
+    }
+    this.#signInRefused = credentials
+  }
 
   /** core's turn starts (`ensure` with `takeControl`, Б16): the agent takes the browser back. */
   agentTakesControl(): void {
@@ -907,6 +953,8 @@ export class WorkerSession {
             this.#context.settings.actionBudgetMs,
           )
           try {
+            // Signed out meanwhile (a session that expired on the site): the saved sign-in first.
+            if (action.tool !== 'web_help') await this.#signInIfAsked(browser)
             resolve(await this.#perform(browser, action))
           } catch (error) {
             settle(error)

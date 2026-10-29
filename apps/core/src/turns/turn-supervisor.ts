@@ -40,6 +40,7 @@ import {
 import { newTurnKeys } from '@repo/turn-keys'
 import { LeaseGuard } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
+import type { TurnInbox } from './turn-inbox.ts'
 import {
   gitNotConfigured,
   TurnAttempt,
@@ -58,6 +59,8 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   live: LiveTurns
   /** Required for replacement actions; undo completes before the sandbox is prepared. */
   contentRollback?: TurnContentRollback
+  /** Required for a plan that names files of the client (`input.attachments`). */
+  inbox?: TurnInbox
 }
 
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
@@ -209,6 +212,13 @@ export class TurnSupervisor {
           },
         }
       }
+      // The files the plan names, checked against the database again under the lease; each is
+      // read only when the executor writes it into the sandbox.
+      const inbox = request.input.attachments.length
+        ? await guard.interruptible(
+            this.deps.inbox!.files(labels.taskId, request.input.attachments),
+          )
+        : []
       const context = {
         ...keyed.context,
         ...(restore?.manifest.driver.nativeSessionId
@@ -235,6 +245,7 @@ export class TurnSupervisor {
             remainingMs: guard.remainingMs,
             ...(bundle ? { bundle } : {}),
             ...(restore ? { restore } : {}),
+            ...(inbox.length ? { inbox } : {}),
             driverId: this.deps.driver.id,
             prepared: files,
             argv,
@@ -300,6 +311,11 @@ export class TurnSupervisor {
     // not undone, and «Обновить» moves a branch it does not have.
     if (!workspace && (request.replacesTurn !== undefined || request.rebased !== undefined))
       throw badRequest('A turn without a repository neither replaces nor rebases')
+    // A task in the browser hands its files to the browser worker, never to the sandbox (Б26).
+    if (request.input.attachments.length && !workspace)
+      throw badRequest('Files of the client go only to a turn with a repository')
+    if (request.input.attachments.length && !this.deps.inbox)
+      throw badRequest('Files of the client need the inbox of core')
     if (request.replacesTurn !== undefined && request.replacesTurn !== labels.turn - 1)
       throw badRequest('Replacement must name the latest turn')
     if (request.replacesTurn !== undefined && workspace?.expectedBranchSha === undefined)

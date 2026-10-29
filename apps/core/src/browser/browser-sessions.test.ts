@@ -48,7 +48,12 @@ const state = (patch: Partial<BrowserSessionState> = {}): BrowserSessionState =>
   ...patch,
 })
 
-function given(options: { maxHours?: number } = {}) {
+function given(
+  options: {
+    maxHours?: number
+    signIn?: (siteId: string) => Promise<{ login: string; password: string } | null>
+  } = {},
+) {
   const prisma = {
     task: {
       findUnique: vi.fn(async (_query: object) => ({ siteId: SITE })),
@@ -113,6 +118,32 @@ describe('BrowserSessions.ensure', () => {
     })
     expect(db.markBrowserSessionReady).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
     expect(db.clearBrowserHelp).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
+  })
+
+  it('gives the worker the site’s saved sign-in with every ensure (Б36)', async () => {
+    const saved = { login: 'admin', password: 'Пароль-сайта-2026' }
+    const signIn = vi.fn(async (_siteId: string) => saved)
+    const g = given({ signIn })
+    const signal = new AbortController().signal
+    await g.sessions.ensure(TASK, signal)
+    expect(signIn).toHaveBeenCalledExactlyOnceWith(SITE)
+    expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
+      { sessionId: SESSION, taskId: TASK, siteId: SITE, takeControl: true, signIn: saved },
+      { signal },
+    )
+  })
+
+  it('leaves out a saved sign-in it cannot read: the client signs in by hand', async () => {
+    const g = given({
+      signIn: async () => {
+        throw new DomainError('UNAVAILABLE', 'vault sealed: Пароль-сайта-2026', 503)
+      },
+    })
+    await g.sessions.ensure(TASK, new AbortController().signal)
+    expect(g.client.ensure.mock.calls[0]?.[0]).not.toHaveProperty('signIn')
+    expect(g.logger.warn).toHaveBeenCalledExactlyOnceWith(
+      `browser_sign_in_unread site=${SITE} cause=UNAVAILABLE`,
+    )
   })
 
   it('marks a starting browser ready only later', async () => {

@@ -340,7 +340,7 @@ export function DialogView({
     resumeAgent.isPending
 
   // A task in the browser (docs/plan/57-browser-tasks.md): the browser instead of the preview,
-  // files with its messages, the stream while its panel is shown.
+  // the stream while its panel is shown.
   const inBrowser = head?.task.requirements.browser === true
   const browserLive = inBrowser && sessionLive(head?.browser ?? null)
   // The panel beside the dialog: the browser of a task in the browser while the task goes on, or
@@ -486,8 +486,11 @@ export function DialogView({
     last.next === 'awaiting_approval'
       ? last
       : null
-  // The agent answered and asked nothing: the dialog waits for no one (26.10.2026).
-  const answered = status === 'awaiting_user' && question === null
+  // The agent answered and asked nothing: the dialog waits for no one (26.10.2026). A failure
+  // that left the dialog open (28.10.2026) asks the client again: «продолжи».
+  const ending = rows.findLast((row) => row.type === 'feed.result' || row.type === 'feed.failure')
+  const answered =
+    status === 'awaiting_user' && question === null && ending?.type !== 'feed.failure'
   const announcement =
     status === undefined
       ? ''
@@ -538,7 +541,9 @@ export function DialogView({
   // these very words): they are in the dialog, and the field is cleared like after a first send.
   async function send(text: string, attachmentIds: readonly string[] = []): Promise<boolean> {
     setFieldError(null)
-    const files = inBrowser ? [...attachmentIds] : []
+    // Files go with the messages of either mode: to the browser's pages, or into the copy of
+    // the site the agent works on.
+    const files = [...attachmentIds]
     try {
       await message.mutateAsync({
         taskId,
@@ -762,21 +767,22 @@ export function DialogView({
       </Box>
     )
   } else {
-    // A question of the browser is answered in words too: they resume the agent (Б16). Without a
-    // question the dialog waits after an answer of a pass that changed nothing (26.10.2026).
+    // A question of the browser is answered in words too: they resume the agent (Б16); so is a
+    // question of the platform about credits — the words go on as «Продолжить» does (28.10.2026:
+    // «пользователь всегда должен иметь возможность ввести промпт»). Without a question the dialog
+    // waits after an answer of a pass that changed nothing (26.10.2026) or after a failure.
     const answering =
-      status === 'awaiting_user' &&
-      (question === null || question.kind === 'agent' || question.kind === 'browser')
+      (awaitingClient && question?.kind === 'ceiling') ||
+      (status === 'awaiting_user' &&
+        (question === null || question.kind === 'agent' || question.kind === 'browser'))
     const revising = status === 'awaiting_approval' && question === null
     const disabledReason = stopping
       ? composerText.stopping
-      : question?.kind === 'ceiling'
-        ? composerText.ceiling
-        : answering || revising
-          ? null
-          : releasing
-            ? composerText.releasing
-            : feedInputText.disabled
+      : answering || revising
+        ? null
+        : releasing
+          ? composerText.releasing
+          : feedInputText.disabled
     // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`).
     const working = status === 'queued' || status === 'preparing' || status === 'running'
     const cancelVerdict = commands.find((command) => command.id === 'cancel')
@@ -802,7 +808,7 @@ export function DialogView({
           onOpen: refresh,
           listed: inBrowser ? BROWSER_COMMANDS : undefined,
         }}
-        attachments={inBrowser ? attachments : undefined}
+        attachments={attachments}
         noSecrets={inBrowser ? taskWayText.noSecrets : undefined}
         {...(working
           ? {
@@ -1012,7 +1018,7 @@ export function DialogView({
               pt: 1.5,
               pb: { xs: 'max(12px, env(safe-area-inset-bottom))', sm: 2 },
               // The field stands on the page itself: what scrolls under it is hidden, never faded.
-              bgcolor: 'var(--chat-page, var(--mui-palette-background-paper))',
+              bgcolor: 'var(--mui-palette-background-paper)',
             }}
           >
             {composer}

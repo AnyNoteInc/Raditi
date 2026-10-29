@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks'
 
 import {
+  assertTurnInbox,
   badRequest,
   conflict,
   DomainError,
@@ -146,6 +147,7 @@ export class RemoteTurnExecutor implements TurnExecutor {
       snapshotHasRepository(input.restore.manifest) !== (input.bundle !== undefined)
     )
       throw badRequest('The snapshot and the bundle disagree on the repository')
+    assertTurnInbox(input.inbox ?? [], input.bundle !== undefined)
     const restore = input.restore
       ? { manifest: input.restore.manifest, parts: restoreParts(input.restore) }
       : undefined
@@ -199,6 +201,10 @@ export class RemoteTurnExecutor implements TurnExecutor {
             }
           : {}),
         ...(restore ? { restore } : {}),
+        // The paths and sizes only: the runner fetches each file from core by its place here.
+        ...(input.inbox?.length
+          ? { inbox: input.inbox.map(({ path, sizeBytes }) => ({ path, sizeBytes })) }
+          : {}),
         driverId: input.driverId,
         prepared: input.prepared,
         argv: input.argv,
@@ -213,6 +219,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
         deadline: started + input.remainingMs,
         // Served at runnerBundlePath() only when there is one: else that path is closed.
         ...(bundle ? { bundle } : {}),
+        // Served at runnerInboxPath() while the prepare is open.
+        ...(input.inbox?.length ? { inbox: input.inbox } : {}),
         ...(input.restore ? { dataKey: input.restore.dataKey } : {}),
         // These run even after the supervisor gave up: a late container is removed, and a
         // prepare that left none frees the site.

@@ -44,6 +44,8 @@ import {
   type DestroyReason,
   type ExecExit,
 } from '../ports/sandbox-provider.ts'
+import { attachmentLimits } from '../attachments/rules.ts'
+import { assertTurnInbox, turnInboxLimits, turnInboxPathSchema } from '../ports/turn-executor.ts'
 import { execLost, siteLeaseFenceSchema, snapshotHasCredential } from '../ports/turn-runner.ts'
 import { envVarValueSchema } from '../release/env-vars.ts'
 
@@ -63,6 +65,17 @@ const assignmentPath = (assignmentId: string) =>
   `${RUNNER_API_PREFIX}/assignments/${z.uuid().parse(assignmentId)}`
 /** GET: the base bundle of a prepare command that has one (a turn with a repository). */
 export const runnerBundlePath = (assignmentId: string) => `${assignmentPath(assignmentId)}/bundle`
+/**
+ * GET: the file of an open prepare at this place of its `inbox` (a turn with a repository whose
+ * task has files of the client), never more than its `sizeBytes`.
+ */
+export const runnerInboxPath = (assignmentId: string, index: number) =>
+  `${assignmentPath(assignmentId)}/inbox/${z
+    .number()
+    .int()
+    .nonnegative()
+    .lt(turnInboxLimits.files)
+    .parse(index)}`
 /** GET: 32 bytes of the data key, `no-store`; only for an open restore or seal command. */
 export const runnerKeyPath = (assignmentId: string, purpose: 'restore' | 'seal') =>
   `${assignmentPath(assignmentId)}/keys/${purpose}`
@@ -247,6 +260,22 @@ const prepareCommand = command('prepare', {
     })
     .strict()
     .optional(),
+  /**
+   * The files of the client the runner fetches from runnerInboxPath() by their place here and
+   * writes at their paths after the restore (TurnPrepareInput.inbox). Only with a bundle.
+   */
+  inbox: z
+    .array(
+      z
+        .object({
+          path: turnInboxPathSchema,
+          sizeBytes: z.number().int().positive().max(attachmentLimits.fileBytes),
+        })
+        .strict(),
+    )
+    .min(1)
+    .max(turnInboxLimits.files)
+    .optional(),
   driverId: z.enum(agentDriverIds),
   /** Checked by core (preparedRunSchema, preparedRunExposesSecret) and again by the runner. */
   prepared: preparedFilesSchema,
@@ -352,6 +381,13 @@ export const runnerCommandSchema = z
             path: ['restore', 'manifest'],
             message: 'the snapshot and the bundle disagree on the repository',
           })
+      }
+      if (cmd.inbox) {
+        try {
+          assertTurnInbox(cmd.inbox, cmd.bundle !== undefined)
+        } catch {
+          ctx.addIssue({ code: 'custom', path: ['inbox'], message: 'invalid files of the client' })
+        }
       }
     }
     if (

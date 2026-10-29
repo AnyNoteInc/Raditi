@@ -1,8 +1,15 @@
 import type { BrowserTaskPolicy } from '../ports/site-adapter.ts'
 import type { BrowserVerificationPlan, BrowserVerificationReading } from './checkpoint.ts'
-import type { BrowserChooser, BrowserDialog, BrowserTab, BrowserViewport } from './session.ts'
+import type {
+  BrowserChooser,
+  BrowserController,
+  BrowserDialog,
+  BrowserTab,
+  BrowserViewport,
+} from './session.ts'
 import type { BrowserInputEvent } from './stream-messages.ts'
 import type { BrowserAction } from './tools.ts'
+import type { BrowserSignIn } from './worker-api.ts'
 
 /**
  * Ports of the cloud browser of a task (docs/plan/57-browser-tasks.md, §2): the browser itself
@@ -65,6 +72,9 @@ export interface CloudBrowserObservation {
   page: BrowserTab
   tree: string
 }
+
+/** What `CloudBrowserSession.signIn` did. */
+export type BrowserSignInOutcome = 'signed_in' | 'refused' | 'absent'
 
 /** One JPEG of `page.screencast` of the shown page. */
 export interface CloudBrowserFrame {
@@ -156,6 +166,19 @@ export interface CloudBrowserSession {
   /** Gives files to the chooser that waits; none — cancels it. */
   setChooserFiles(chooserId: string, files: BrowserFile[]): Promise<void>
   setViewport(viewport: BrowserViewport): Promise<void>
+  /**
+   * The site's saved sign-in (Б36), when the shown page is the stack's sign-in form
+   * (`BrowserTaskPolicy.signIn`): fills the login and the password, sends them and waits for the
+   * page that comes; one the policy refuses gives way to the start page. `absent` — no form
+   * here, nothing done; `refused` — the form came back (a wrong password, a CAPTCHA) with its
+   * fields emptied, so no value stays on the page for an observation.
+   */
+  signIn(credentials: BrowserSignIn): Promise<BrowserSignInOutcome>
+  /**
+   * Who holds the browser from now on (Б15, Б37): the policy judges every later request and
+   * navigation of the pages for them — the agent's when never set.
+   */
+  setController(controller: BrowserController): void
   /**
    * Runs a read of the site with the session's own sign-in (the context's request API, no page
    * script): the plan's steps in order within `browserVerificationLimits`, then its `read`. Any

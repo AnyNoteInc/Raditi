@@ -188,6 +188,34 @@ describe('the variables of a site', () => {
     expect(set.mock.calls[0]![0]).toMatchObject({ toAgent: true, agentConsent: true })
   })
 
+  it('never gives the saved sign-in to the agent: the browser types it (Б36)', async () => {
+    showVariables()
+    fireEvent.click(await addButton())
+    type('Имя', 'CRM_TOKEN')
+    type('Значение', 'Пароль-сайта-2026')
+    fireEvent.click(screen.getByRole('switch', { name: 'Передавать агенту' }))
+    type('Имя', 'SITE_ADMIN_PASSWORD')
+    const toAgent = screen.getByRole('switch', { name: 'Передавать агенту' })
+    expect((toAgent as HTMLInputElement).checked).toBe(false)
+    expect((toAgent as HTMLInputElement).disabled).toBe(true)
+    expect(
+      screen.getByText(
+        'Логин и пароль входа в админку агенту не передаются: их вводит браузер задачи на странице входа.',
+      ),
+    ).toBeTruthy()
+    save()
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1))
+    const toPreview = screen.getByRole('switch', { name: 'Передавать предпросмотру' })
+    expect((toPreview as HTMLInputElement).checked).toBe(false)
+    expect((toPreview as HTMLInputElement).disabled).toBe(true)
+    expect(set.mock.calls[0]![0]).toMatchObject({
+      name: 'SITE_ADMIN_PASSWORD',
+      toAgent: false,
+      agentConsent: false,
+      toPreview: false,
+    })
+  })
+
   it('checks the name and the value before sending', async () => {
     showVariables()
     fireEvent.click(await addButton())
@@ -304,19 +332,39 @@ describe('helpers', () => {
   })
 
   it('names the agent only with the consent on record', () => {
-    expect(recipientsText({ toAgent: true, toPreview: true, agentConsentAt: new Date() })).toBe(
-      'Передаётся агенту и предпросмотру.',
-    )
-    expect(recipientsText({ toAgent: true, toPreview: false, agentConsentAt: new Date() })).toBe(
-      'Передаётся агенту.',
-    )
-    expect(recipientsText({ toAgent: false, toPreview: false, agentConsentAt: null })).toBe(
-      'Не передаётся ни агенту, ни предпросмотру.',
-    )
     expect(
-      recipientsText({ toAgent: true, toPreview: true, agentConsentAt: new Date() }, false),
+      recipientsText({
+        name: 'MAP_KEY',
+        toAgent: true,
+        toPreview: true,
+        agentConsentAt: new Date(),
+      }),
+    ).toBe('Передаётся агенту и предпросмотру.')
+    expect(
+      recipientsText({
+        name: 'MAP_KEY',
+        toAgent: true,
+        toPreview: false,
+        agentConsentAt: new Date(),
+      }),
+    ).toBe('Передаётся агенту.')
+    expect(
+      recipientsText({ name: 'MAP_KEY', toAgent: false, toPreview: false, agentConsentAt: null }),
+    ).toBe('Не передаётся ни агенту, ни предпросмотру.')
+    expect(
+      recipientsText(
+        { name: 'MAP_KEY', toAgent: true, toPreview: true, agentConsentAt: new Date() },
+        false,
+      ),
     ).toBe(
       'Не передаётся. Для этого сайта передавать переменные агенту пока нельзя, а без агента их не получает и предпросмотр.',
     )
+  })
+
+  it('names the saved sign-in the browser’s only, whatever its row says (Б36)', () => {
+    for (const name of ['SITE_ADMIN_LOGIN', 'SITE_ADMIN_PASSWORD'])
+      expect(
+        recipientsText({ name, toAgent: true, toPreview: true, agentConsentAt: new Date() }),
+      ).toBe('Вводится браузером задачи на странице входа в админку. Агенту не передаётся.')
   })
 })

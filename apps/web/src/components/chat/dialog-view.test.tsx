@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { plain, serverRefusal } from '@/components/billing/testing'
 
+import type * as Upload from './attachment-upload'
 import { composerText } from './chat-texts'
 import type { CandidateView, DialogFeed, FeedRow, PreparedRelease } from './chat-types'
 import { DialogView } from './dialog-view'
@@ -71,6 +72,12 @@ const query = <I, O>(path: string, fn: (input: I) => Promise<O>) => ({
   queryKey: (input?: I) => (input === undefined ? [path] : [path, input]) as QueryKey,
 })
 
+// The bytes of a chosen file reach the server at once: the upload itself is the composer's test.
+vi.mock('./attachment-upload', async (original) => ({
+  ...(await original<typeof Upload>()),
+  uploadBytes: vi.fn(async (path: string) => ({ attachmentId: path.split('/').at(-1)!, size: 16 })),
+}))
+
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
     task: {
@@ -107,7 +114,15 @@ vi.mock('@/trpc/client', () => ({
       undoPlan: { query: async () => ({ state: 'pending' }) },
     },
     browser: { streamTicket: { mutate: vi.fn() } },
-    attachment: { start: { mutate: vi.fn() }, remove: { mutate: vi.fn() } },
+    attachment: {
+      start: {
+        mutate: vi.fn(async () => ({
+          attachmentId: ATTACHMENT_ID,
+          uploadPath: `/api/attachments/${ATTACHMENT_ID}`,
+        })),
+      },
+      remove: { mutate: vi.fn() },
+    },
   }),
 }))
 
@@ -287,6 +302,24 @@ describe('a dialog', () => {
     await waitFor(() => expect(field().value).toBe(''))
   })
 
+  it('sends files with the words of a dialog on the copy of the site, as in the browser', async () => {
+    showDialog()
+    await screen.findByText('Изменения готовы')
+    fireEvent.change(screen.getByTestId('composer-files'), {
+      target: { files: [new File([new Uint8Array(16)], 'Фото.jpg', { type: 'image/jpeg' })] },
+    })
+    await screen.findByRole('list', { name: 'Файлы к сообщению' })
+    type('Поставьте это фото на главную')
+    const button = screen.getByRole<HTMLButtonElement>('button', { name: 'Отправить' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    fireEvent.click(button)
+    await waitFor(() => expect(calls.message).toHaveBeenCalledTimes(1))
+    expect(calls.message.mock.calls[0]![0]).toMatchObject({
+      text: 'Поставьте это фото на главную',
+      attachments: [ATTACHMENT_ID],
+    })
+  })
+
   it('runs `/reset` without sending its words', async () => {
     showDialog()
     await run(/Сбросить данные предпросмотра/)
@@ -373,7 +406,7 @@ describe('a dialog', () => {
     expect(screen.queryByText('Нужен ваш ответ')).toBeNull()
   })
 
-  it('offers «Продолжить» on the question about credits and keeps the field closed', async () => {
+  it('offers «Продолжить» on the question about credits and keeps the field open (28.10.2026)', async () => {
     showDialog(
       feedAnswer({
         status: 'awaiting_user',
@@ -383,7 +416,9 @@ describe('a dialog', () => {
       }),
     )
     const next = await screen.findByRole('button', { name: 'Продолжить' })
-    expect(field().disabled).toBe(true)
+    // «пользователь всегда должен иметь возможность ввести промпт»: the words go on too.
+    expect(field().disabled).toBe(false)
+    expect(field().getAttribute('placeholder')).toBe('Ваш ответ')
     fireEvent.click(next)
     await waitFor(() => expect(calls.proceed).toHaveBeenCalledTimes(1))
     expect(calls.proceed.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
@@ -971,7 +1006,7 @@ describe('a task in the browser', () => {
     ])
     expect(
       screen.getByText(
-        'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
+        'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера.',
       ),
     ).toBeTruthy()
   })

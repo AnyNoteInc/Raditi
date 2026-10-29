@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { envVarValueSchema } from '../release/env-vars.ts'
 import {
   browserCloseReasons,
   browserSessionStateSchema,
@@ -41,16 +42,29 @@ export const browserWorkerTokenSchema = z
 export const BROWSER_AGENT_NOTES_MAX_CHARS = 2000
 
 /**
+ * The site's saved sign-in (Б36) as core reads it from Vault (`siteSignInEnvVars`): values of
+ * site variables, so never logged, answered or put in an error.
+ */
+export const browserSignInSchema = z.strictObject({
+  login: envVarValueSchema,
+  password: envVarValueSchema,
+})
+export type BrowserSignIn = z.infer<typeof browserSignInSchema>
+
+/**
  * `POST /v1/sessions/ensure` (core, before a pass): the live session of the task, started when
  * there is none. `takeControl` — a turn starts: the agent takes the browser back from the client
- * (Б16). Answers the state (`browserSessionStateSchema`). The worker reads the site's address and
- * stack from the database by `siteId`: where the browser may go is never the caller's word.
+ * (Б16). `signIn` — the site's saved sign-in, which replaces what the session held; none — the
+ * session forgets it. Answers the state (`browserSessionStateSchema`). The worker reads the
+ * site's address and stack from the database by `siteId`: where the browser may go is never the
+ * caller's word.
  */
 export const browserEnsureRequestSchema = z.strictObject({
   sessionId: z.uuid(),
   taskId: z.uuid(),
   siteId: z.uuid(),
   takeControl: z.boolean(),
+  signIn: browserSignInSchema.optional(),
 })
 export type BrowserEnsureRequest = z.infer<typeof browserEnsureRequestSchema>
 export const browserEnsureResponseSchema = browserSessionStateSchema

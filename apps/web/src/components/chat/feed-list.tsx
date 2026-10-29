@@ -24,6 +24,7 @@ import {
   feedDoneSiteText,
   feedEndedSiteText,
   feedFailureKeptText,
+  feedFailureOpenText,
   feedFilesChangedText,
   feedLiveText,
   feedMediaAddedText,
@@ -911,6 +912,8 @@ function RowView({
               feedCreditsSentence(row.credits),
               // The dialog kept its candidate: the card of the changes above says what to do.
               row.next === 'awaiting_approval' ? feedFailureKeptText : null,
+              // The dialog stays open: the client writes «продолжи» (28.10.2026).
+              row.next === 'awaiting_user' ? feedFailureOpenText : null,
             ]}
           />
           <SiteObjects objects={row.objects ?? []} heading={feedObjectText.ended} />

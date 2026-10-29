@@ -32,6 +32,7 @@ import {
   type SnapshotPartName,
   type TurnAgentExec,
   type TurnBundleSource,
+  type TurnInboxFile,
   type TurnExecution,
   type TurnExecutor,
   type TurnRestoreSource,
@@ -514,6 +515,7 @@ export class SandboxRunner {
           // the working directory is made empty.
           ...(command.bundle ? { bundle: this.#bundleSource(held, fence, command.bundle) } : {}),
           ...(restore ? { restore } : {}),
+          ...(command.inbox ? { inbox: this.#inboxFiles(held, fence, command.inbox) } : {}),
           driverId: command.driverId,
           prepared: command.prepared,
           argv: command.argv,
@@ -570,6 +572,18 @@ export class SandboxRunner {
     bundle: NonNullable<Command<'prepare'>['bundle']>,
   ): TurnBundleSource {
     return { ...bundle, read: () => this.#bundle(held, fence, bundle.sizeBytes) }
+  }
+
+  /** The files of the client of a turn, each fetched from core when the executor writes it. */
+  #inboxFiles(
+    held: Held,
+    fence: RunnerCommandFence,
+    inbox: NonNullable<Command<'prepare'>['inbox']>,
+  ): TurnInboxFile[] {
+    return inbox.map((file, index) => ({
+      ...file,
+      read: () => this.#inboxFile(held, fence, index, file.sizeBytes),
+    }))
   }
 
   /**
@@ -1062,6 +1076,28 @@ export class SandboxRunner {
       held.abort.signal,
     )
     if (!read.ok) throw new Error('No base bundle')
+    const chunks = read.value
+    while (chunks.length > 0) yield chunks.pop()!
+  }
+
+  /** A file of the client, fetched whole and retried like the base bundle. */
+  async *#inboxFile(
+    held: Held,
+    fence: RunnerCommandFence,
+    index: number,
+    sizeBytes: number,
+  ): AsyncIterable<Uint8Array> {
+    const read = await this.#call(
+      held,
+      async () => {
+        const chunks: Uint8Array[] = []
+        for await (const chunk of this.deps.transport.inbox(held.id, index, fence, sizeBytes))
+          chunks.push(chunk)
+        return chunks.reverse()
+      },
+      held.abort.signal,
+    )
+    if (!read.ok) throw new Error('No file of the client')
     const chunks = read.value
     while (chunks.length > 0) yield chunks.pop()!
   }

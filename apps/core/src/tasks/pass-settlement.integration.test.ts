@@ -381,7 +381,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     ).toEqual([[{ v: 1, attempt: 1 }, false]])
   })
 
-  it('fails a pass with the client code and gives the reserve back', async () => {
+  // The owner's decision of 28.10.2026: «никогда не завершай диалог, если произошла ошибка».
+  it('keeps the dialog open after a failed pass, with the client code and the reserve given back', async () => {
     const task = await dialog()
 
     const answer = await settlement().settle(ref(task), {
@@ -392,7 +393,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     })
 
     expect(answer).toBe('moved')
-    expect(await status(task.taskId)).toBe('failed')
+    expect(await status(task.taskId)).toBe('awaiting_user')
     expect(await feed(task.taskId)).toEqual([
       [
         'feed.failure',
@@ -402,7 +403,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           code: 'forbidden_change',
           site: 'unchanged',
           credits: 'returned',
-          next: 'failed',
+          next: 'awaiting_user',
         },
       ],
     ])
@@ -659,13 +660,13 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(await status(task.taskId)).toBe('awaiting_user')
     })
 
-    it('fails a pass that changed files at once, with its reserve given back', async () => {
+    it('keeps open the dialog of a pass that changed files at once, its reserve given back', async () => {
       const task = await dialog()
       const candidates = await realBuilder(task.taskId, { [BASE]: T0, [HEAD]: T1 })
       const ends = new PassSettlement({ db, candidates, logger: quiet, now: () => NOW })
 
       expect(await ends.settle(ref(task), completed())).toBe('moved')
-      expect(await status(task.taskId)).toBe('failed')
+      expect(await status(task.taskId)).toBe('awaiting_user')
       expect(await feed(task.taskId)).toEqual([
         [
           'feed.failure',
@@ -675,7 +676,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
             code: 'unavailable',
             site: 'unchanged',
             credits: 'returned',
-            next: 'failed',
+            next: 'awaiting_user',
           },
         ],
       ])
@@ -727,18 +728,19 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     expect(await settlement().cancelWaiting(other.taskId)).toBe('skipped')
   })
 
-  it('takes the preview down when a pass fails before it opened a turn', async () => {
+  it('wakes the preview when a pass fails before it opened a turn: the dialog stays open', async () => {
     const task = await dialog('preparing')
     const watched = await preview(task.taskId)
 
     expect(await settlement().settle(ref(task), { kind: 'refused', code: 'technical' })).toBe(
       'moved',
     )
-    expect(await status(task.taskId)).toBe('failed')
+    expect(await status(task.taskId)).toBe('awaiting_user')
+    // The manager syncs a preview of an open dialog and takes down only one of a closed dialog.
     expect(await watched.synced()).toEqual([0])
   })
 
-  it('puts an orphaned pass back in the queue and fails it the third time', async () => {
+  it('puts an orphaned pass back in the queue and fails it the third time, the dialog open', async () => {
     const task = await dialog('preparing')
     const back = async () => {
       expect(await settlement().settle(ref(task), { kind: 'orphaned' })).toBe('moved')
@@ -749,7 +751,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     await db.task.update({ where: { id: task.taskId }, data: { status: 'preparing' } })
     expect((await back()).status).toBe('queued')
     await db.task.update({ where: { id: task.taskId }, data: { status: 'preparing' } })
-    expect((await back()).status).toBe('failed')
+    expect((await back()).status).toBe('awaiting_user')
     expect(
       await db.taskEvent.count({ where: { taskId: task.taskId, type: ORPHANED_PASS_EVENT } }),
     ).toBe(2)
@@ -762,7 +764,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           code: 'unavailable',
           site: 'unchanged',
           credits: 'returned',
-          next: 'failed',
+          next: 'awaiting_user',
         },
       ],
     ])
@@ -809,7 +811,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const task = await refused('750.0000000000')
 
       expect(await settlement().settle(ref(task), failedTurn)).toBe('moved')
-      expect(await status(task.taskId)).toBe('failed')
+      expect(await status(task.taskId)).toBe('awaiting_user')
       expect((await feed(task.taskId))[0]).toEqual([
         'feed.failure',
         {
@@ -818,7 +820,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           code: 'technical',
           site: 'unchanged',
           credits: 'returned',
-          next: 'failed',
+          next: 'awaiting_user',
         },
       ])
     })
@@ -1084,7 +1086,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       ])
     })
 
-    it('fails with what the site holds, tells the client to check it and closes the browser', async () => {
+    it('fails with what the site holds, tells the client to check it and keeps the browser', async () => {
       const task = await browserTask()
       await saved(task, false)
       await markBrowserSessionWrote(db, { sessionId: task.sessionId })
@@ -1092,7 +1094,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
 
       await browser.settle(ref(task), { kind: 'failed', turn: 1, journalReason: 'run_failed' })
 
-      expect(await status(task.taskId)).toBe('failed')
+      // The dialog stays open (28.10.2026): «продолжи» goes on in the same browser.
+      expect(await status(task.taskId)).toBe('awaiting_user')
       expect(await feed(task.taskId)).toEqual([
         [
           'feed.failure',
@@ -1102,13 +1105,13 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
             code: 'technical',
             site: 'check',
             credits: 'returned',
-            next: 'failed',
+            next: 'awaiting_user',
             objects: [{ kind: 'post', title: null, status: 'unconfirmed', editUrl }],
           },
         ],
       ])
       expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
-      expect(close).toHaveBeenCalledExactlyOnceWith(task.taskId, 'task_failed')
+      expect(close).not.toHaveBeenCalled()
     })
 
     it('cancels a running and a waiting task with what the site holds; nothing is deleted', async () => {
@@ -1146,7 +1149,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
 
       await settlement().settle(ref(task), { kind: 'completed', turn: 1, result: result() })
 
-      expect(await status(task.taskId)).toBe('failed')
+      // The dialog stays open (28.10.2026).
+      expect(await status(task.taskId)).toBe('awaiting_user')
       expect((await feed(task.taskId))[0]![1]).toMatchObject({ code: 'technical' })
     })
   })

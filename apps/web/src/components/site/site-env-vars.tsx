@@ -1,6 +1,11 @@
 'use client'
 
-import { envVarLimits, envVarNameProblem } from '@repo/domain/release/env-vars'
+import {
+  envVarLimits,
+  envVarNameProblem,
+  isSiteSignInEnvVar,
+  siteSignInEnvVars,
+} from '@repo/domain/release/env-vars'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -73,6 +78,11 @@ export const envText = Object.freeze({
   updated: (at: string) => `Изменена ${at}`,
   valueHidden: 'значение скрыто',
   noHosts: 'адреса не указаны',
+  /** The saved sign-in of the admin pages (Б36). */
+  signInNote: `Чтобы агент начинал работу в админке сайта уже после входа, добавьте переменные ${siteSignInEnvVars.login} с логином и ${siteSignInEnvVars.password} с паролем: браузер задачи сам введёт их на странице входа. Агенту они не передаются.`,
+  signInHelp:
+    'Логин и пароль входа в админку агенту не передаются: их вводит браузер задачи на странице входа.',
+  signInRecipients: 'Вводится браузером задачи на странице входа в админку. Агенту не передаётся.',
 })
 
 /**
@@ -80,9 +90,10 @@ export const envText = Object.freeze({
  * workspace that may not give variables to the agent (`agentAllowed`) nobody gets them.
  */
 export function recipientsText(
-  variable: Pick<SiteEnvVar, 'toAgent' | 'toPreview' | 'agentConsentAt'>,
+  variable: Pick<SiteEnvVar, 'name' | 'toAgent' | 'toPreview' | 'agentConsentAt'>,
   agentAllowed = true,
 ): string {
+  if (isSiteSignInEnvVar(variable.name)) return envText.signInRecipients
   if (!agentAllowed) return `Не передаётся. ${envText.toAgentClosed}`
   const agent = variable.toAgent && variable.agentConsentAt !== null
   if (agent && variable.toPreview) return 'Передаётся агенту и предпросмотру.'
@@ -164,6 +175,7 @@ function EnvForm({
   const [refusal, setRefusal] = useState<string | null>(null)
   const nameInput = useRef<HTMLInputElement>(null)
   const valueInput = useRef<HTMLInputElement>(null)
+  const signIn = isSiteSignInEnvVar(form.name)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -172,7 +184,8 @@ function EnvForm({
     if (problem === 'format') found.name = envText.nameFormat
     else if (problem === 'reserved') found.name = envText.nameReserved
     if (utf8Bytes(form.value) < envVarLimits.valueMinBytes) found.value = envText.valueShort
-    if (form.toAgent && !form.consent) found.consent = envText.consentNeeded
+    if (form.toAgent && !form.consent && !isSiteSignInEnvVar(form.name))
+      found.consent = envText.consentNeeded
     setErrors(found)
     if (found.name) {
       nameInput.current?.focus()
@@ -184,14 +197,16 @@ function EnvForm({
     }
     if (found.consent) return
     setRefusal(null)
+    // The saved sign-in is the browser's only: never given to the agent or a preview (Б36).
+    const toAgent = form.toAgent && !isSiteSignInEnvVar(form.name)
     try {
       await onSave({
         name: form.name,
         value: form.value,
         hosts: hostsOf(form.hosts),
-        toPreview: form.toPreview,
-        toAgent: form.toAgent,
-        agentConsent: form.toAgent && form.consent,
+        toPreview: form.toPreview && !isSiteSignInEnvVar(form.name),
+        toAgent,
+        agentConsent: toAgent && form.consent,
       })
       onSaved(form.name)
     } catch (failure) {
@@ -258,11 +273,11 @@ function EnvForm({
         <FormControlLabel
           control={
             <Switch
-              checked={form.toAgent}
+              checked={form.toAgent && !signIn}
               onChange={(_event, toAgent) =>
                 setForm({ ...form, toAgent, consent: toAgent && form.consent })
               }
-              disabled={saving || !agentAllowed}
+              disabled={saving || !agentAllowed || signIn}
               slotProps={{ input: { 'aria-describedby': agentHelpId } }}
             />
           }
@@ -270,9 +285,15 @@ function EnvForm({
           sx={{ minHeight: 44 }}
         />
         <Typography id={agentHelpId} variant="body2" color="text.secondary" sx={{ maxWidth: 640 }}>
-          {nbsp(agentAllowed ? envText.toAgentHelp : envText.toAgentClosed)}
+          {nbsp(
+            signIn
+              ? envText.signInHelp
+              : agentAllowed
+                ? envText.toAgentHelp
+                : envText.toAgentClosed,
+          )}
         </Typography>
-        {form.toAgent ? (
+        {form.toAgent && !signIn ? (
           <Box sx={{ mt: 1 }}>
             <FormControlLabel
               control={
@@ -297,9 +318,9 @@ function EnvForm({
         <FormControlLabel
           control={
             <Switch
-              checked={form.toPreview}
+              checked={form.toPreview && !signIn}
               onChange={(_event, toPreview) => setForm({ ...form, toPreview })}
-              disabled={saving}
+              disabled={saving || signIn}
             />
           }
           label={envText.toPreview}
@@ -523,6 +544,9 @@ export function SiteEnvVars({
         </Box>
         <Typography color="text.secondary" sx={{ mt: 1, maxWidth: 720 }}>
           {nbsp(envText.note)}
+        </Typography>
+        <Typography color="text.secondary" sx={{ mt: 1, maxWidth: 720 }}>
+          {nbsp(envText.signInNote)}
         </Typography>
       </Box>
       <SiteCard>

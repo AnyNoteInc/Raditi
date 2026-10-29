@@ -17,6 +17,7 @@ import {
   isDomainError,
   type BrowserCloseReason,
   type BrowserSessionState,
+  type BrowserSignIn,
   type TaskStatus,
 } from '@repo/domain'
 
@@ -34,6 +35,8 @@ export interface BrowserSessionsDependencies {
   client: BrowserWorkerClient
   /** BROWSER_SESSION_MAX_HOURS: the hard deadline of a session core opens; the db default without. */
   maxHours?: number
+  /** The site's saved sign-in (`readSiteSignIn`, Б36); none — the client signs in by hand. */
+  signIn?: (siteId: string) => Promise<BrowserSignIn | null>
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -108,6 +111,8 @@ export class BrowserSessions {
    * closes the row `lost` and refuses) is replaced by a new one once — the client signs in again
    * there, the task goes on (Б18). A worker that did not answer while the row is still open (it
    * restarts, a blip) is asked again for the same session after a pause, up to three times.
+   * The site's saved sign-in goes with every `ensure` (Б36): the worker fills the stack's form
+   * with it; one that cannot be read is left out — the client signs in by hand.
    */
   async ensure(taskId: string, signal: AbortSignal): Promise<void> {
     const { db, client, maxHours } = this.deps
@@ -116,6 +121,7 @@ export class BrowserSessions {
       // prompt of the turn (turn-planner), never through the worker.
       const task = await db.task.findUnique({ where: { id: taskId }, select: { siteId: true } })
       if (!task) throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
+      const signIn = await this.#signIn(task.siteId)
       let retries = 0
       let replaced = false
       for (;;) {
@@ -131,6 +137,7 @@ export class BrowserSessions {
               taskId,
               siteId: task.siteId,
               takeControl: true,
+              ...(signIn ? { signIn } : {}),
             },
             { signal },
           )
@@ -162,6 +169,16 @@ export class BrowserSessions {
       if (signal.aborted) throw error
       this.#logger.warn(`browser_ensure_failed task=${taskId} cause=${codeOf(error)}`)
       throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
+    }
+  }
+
+  /** The saved sign-in, or none when it is not set or cannot be read now: never thrown. */
+  async #signIn(siteId: string): Promise<BrowserSignIn | null> {
+    try {
+      return (await this.deps.signIn?.(siteId)) ?? null
+    } catch (error) {
+      this.#logger.warn(`browser_sign_in_unread site=${siteId} cause=${codeOf(error)}`)
+      return null
     }
   }
 

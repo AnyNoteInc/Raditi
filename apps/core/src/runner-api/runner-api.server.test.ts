@@ -5,12 +5,14 @@ import {
   MAX_SANDBOX_TURN_MS,
   runnerApiPaths,
   runnerBundlePath,
+  runnerInboxPath,
   runnerCandidatePath,
   runnerHeaders,
   runnerKeyPath,
   SANDBOX_SECRETS_DIR,
   snapshotLimits,
   type RunnerCommand,
+  type TurnInboxFile,
   type TurnPlan,
 } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -87,7 +89,10 @@ async function start(binding = '') {
    * A turn prepared over HTTP; `restoreKey` is served for the prepare's restore. Without a
    * repository (docs/plan/57-browser-tasks.md, Б5) the prepare carries no bundle.
    */
-  const prepare = async (restoreKey?: Uint8Array, { repository = true } = {}) => {
+  const prepare = async (
+    restoreKey?: Uint8Array,
+    { repository = true, inbox = [] as TurnInboxFile[] } = {},
+  ) => {
     const assignment = (await assignments.open({
       fence,
       sessionId: labels.sessionId,
@@ -180,6 +185,7 @@ async function start(binding = '') {
               },
             }
           : {}),
+        ...(inbox.length ? { inbox } : {}),
         driverId: sampleDriverId,
         prepared: {
           files: [],
@@ -454,6 +460,40 @@ describe('RunnerApiServer', () => {
     expect(tooLarge.status).toBe(413)
     expect((await put('patch', Buffer.from('patch'))).status).toBe(200)
     expect((await put('untracked', new Uint8Array(snapshotLimits.patchBytes + 1))).status).toBe(200)
+  })
+
+  it('serves the files of the client of a prepare by their place, and nothing else', async () => {
+    const f = await start()
+    const menu = Buffer.from('%PDF-1.7 synthetic menu')
+    const path = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Меню.pdf'
+    const { assignment, preparing, command } = await f.prepare(undefined, {
+      inbox: [
+        {
+          path,
+          sizeBytes: menu.byteLength,
+          read: async function* () {
+            yield menu.subarray(0, 3)
+            yield menu.subarray(3)
+          },
+        },
+      ],
+    })
+    // The command names the path and the size only: no key or address of the inbox.
+    expect(command).toMatchObject({ inbox: [{ path, sizeBytes: menu.byteLength }] })
+
+    const unfenced = await f.call(runnerInboxPath(assignment.id, 0))
+    expect(unfenced.status).toBe(400)
+    const served = await f.call(runnerInboxPath(assignment.id, 0), { headers: f.binary(command) })
+    expect(served.status).toBe(200)
+    expect(served.headers.get('cache-control')).toBe('no-store')
+    expect(served.headers.get('content-length')).toBe(String(menu.byteLength))
+    expect(Buffer.from(await served.arrayBuffer())).toEqual(menu)
+    const beyond = await f.call(runnerInboxPath(assignment.id, 1), { headers: f.binary(command) })
+    expect(beyond.status).toBe(410)
+    expect(await beyond.json()).toEqual({ error: 'COMMAND_CLOSED' })
+    // The prepare is never answered: closing core ends it.
+    f.hub.close()
+    await expect(preparing).rejects.toMatchObject({ code: 'CORE_STOPPING' })
   })
 
   it('closes the bundle and candidate paths of a turn without a repository (plan 57, Б5)', async () => {

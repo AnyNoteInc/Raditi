@@ -23,7 +23,7 @@ import type { RunnerAuthenticator } from './runner-auth.ts'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const ASSIGNMENT = new RegExp(
-  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(bundle|keys/(restore|seal)|candidate/(patch|untracked))$`,
+  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(bundle|keys/(restore|seal)|candidate/(patch|untracked)|inbox/(0|[1-9][0-9]?))$`,
 )
 const candidateLimits: Record<CandidatePart, number> = {
   patch: snapshotLimits.patchBytes,
@@ -33,6 +33,31 @@ const candidateLimits: Record<CandidatePart, number> = {
 const NO_STORE = { 'cache-control': 'no-store' }
 
 class TooLarge extends Error {}
+
+/**
+ * A body of the size core announced — the base bundle, a file of the client: one that differs
+ * from it is cut off, never completed.
+ */
+async function sendSized(
+  response: ServerResponse,
+  body: { sizeBytes: number; read(): AsyncIterable<Uint8Array> },
+): Promise<void> {
+  response.writeHead(200, {
+    ...NO_STORE,
+    'content-type': 'application/octet-stream',
+    'content-length': String(body.sizeBytes),
+  })
+  let sent = 0
+  for await (const chunk of body.read()) {
+    sent += chunk.byteLength
+    if (sent > body.sizeBytes) break
+    if (!response.write(chunk))
+      await Promise.race([once(response, 'drain'), once(response, 'close')])
+    if (response.destroyed) return
+  }
+  if (sent !== body.sizeBytes) response.destroy()
+  else response.end()
+}
 
 async function readBody(request: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const declared = Number(request.headers['content-length'] ?? Number.NaN)
@@ -199,31 +224,26 @@ export class RunnerApiServer implements OnApplicationShutdown {
     }
     const match = ASSIGNMENT.exec(path)
     if (!match) throw RunnerApiError.of('NOT_FOUND')
-    const [, assignmentId, resource, purpose, part] = match as unknown as [
+    const [, assignmentId, resource, purpose, part, place] = match as unknown as [
       string,
       string,
       string,
       'restore' | 'seal' | undefined,
       CandidatePart | undefined,
+      string | undefined,
     ]
     if (method === 'GET' && resource === 'bundle') {
-      const bundle = await this.hub.bundle(runnerId, assignmentId, binaryHeaders(request))
-      response.writeHead(200, {
-        ...NO_STORE,
-        'content-type': 'application/octet-stream',
-        'content-length': String(bundle.sizeBytes),
-      })
-      let sent = 0
-      for await (const chunk of bundle.read()) {
-        sent += chunk.byteLength
-        if (sent > bundle.sizeBytes) break
-        if (!response.write(chunk))
-          await Promise.race([once(response, 'drain'), once(response, 'close')])
-        if (response.destroyed) return
-      }
-      // A bundle that differs from its announced size is cut off, never completed.
-      if (sent !== bundle.sizeBytes) response.destroy()
-      else response.end()
+      await sendSized(response, await this.hub.bundle(runnerId, assignmentId, binaryHeaders(request)))
+      return
+    }
+    if (method === 'GET' && place !== undefined) {
+      const file = await this.hub.inboxFile(
+        runnerId,
+        assignmentId,
+        Number(place),
+        binaryHeaders(request),
+      )
+      await sendSized(response, file)
       return
     }
     if (method === 'GET' && purpose) {

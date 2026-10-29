@@ -395,3 +395,55 @@ describe('a turn without a repository on the local executor (plan 57, Б4)', () 
     })
   })
 })
+
+describe('files of the client on the local executor', () => {
+  const pathOf = (name: string) =>
+    `/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/${name}`
+  const file = (path: string, bytes: Uint8Array, sizeBytes = bytes.byteLength) => ({
+    path,
+    sizeBytes,
+    read: async function* () {
+      yield bytes.subarray(0, 2)
+      yield bytes.subarray(2)
+    },
+  })
+
+  it('writes each file at its path, read-only, after the bundle and before the driver files', async () => {
+    const f = await fixture()
+    const menu = Buffer.from('%PDF-1.7 synthetic menu')
+    await f.executor.prepare(
+      f.input({ bundle: f.bundle, inbox: [file(pathOf('Меню.pdf'), menu)] }),
+      signal,
+    )
+    expect(f.importBundle).toHaveBeenCalledOnce()
+    expect(f.writes).toEqual([
+      pathOf('Меню.pdf'),
+      '/agent-home/opencode/.config/opencode/opencode.json',
+    ])
+    const [, data, options] = vi.mocked(f.sandbox.fs.write).mock.calls[0]!
+    expect(Buffer.from(data).toString()).toBe(menu.toString())
+    expect(options).toEqual({ mode: 0o444 })
+  })
+
+  it('refuses files for a turn without a repository before any container', async () => {
+    const f = await fixture()
+    await expect(
+      f.executor.prepare(f.input({ inbox: [file(pathOf('a.pdf'), Buffer.from('abc'))] }), signal),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['shorter', 4],
+    ['longer', 2],
+  ])('writes no file whose body is %s than announced', async (_label, sizeBytes) => {
+    const f = await fixture()
+    await expect(
+      f.executor.prepare(
+        f.input({ bundle: f.bundle, inbox: [file(pathOf('a.pdf'), Buffer.from('abc'), sizeBytes)] }),
+        signal,
+      ),
+    ).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    expect(f.writes).toEqual([])
+  })
+})

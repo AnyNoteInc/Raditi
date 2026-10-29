@@ -322,6 +322,24 @@ describe('control of the browser', () => {
     expect(JSON.stringify([...store.sessions.values(), store.controls])).not.toContain('Пароль123')
   })
 
+  it('tells the browser who holds it on every hand-over: the policy judges for them (Б37)', async () => {
+    const { manager, ensured } = setup()
+    const { row, session, browser } = await ensured()
+    const viewer = new ViewerProbe()
+    session.attach(viewer)
+    session.message(viewer, { t: 'take' })
+    session.message(viewer, { t: 'release' })
+    session.message(viewer, { t: 'take' })
+    await manager.ensure({
+      sessionId: row.id,
+      taskId: row.taskId,
+      siteId: row.siteId,
+      takeControl: true,
+    })
+    // The start tells the browser first: the agent holds a new session.
+    expect(browser.controllers).toEqual(['agent', 'user', 'agent', 'user', 'agent'])
+  })
+
   it('lets the client act only once the agent’s running action has settled, or timed out', async () => {
     const { ensured, act } = setup({ agentActionTimeoutMs: 60 })
     const { row, session, browser } = await ensured()
@@ -987,6 +1005,79 @@ describe('the agent’s actions', () => {
         }),
       ),
     ).toBe('BROWSER_SESSION_UNAVAILABLE')
+  })
+})
+
+describe('the saved sign-in (Б36)', () => {
+  const saved = { login: 'admin', password: 'Пароль-сайта-2026' }
+
+  it('fills the stack’s form at the start and before each action of the agent', async () => {
+    const { store, warnings, ensured, act } = setup()
+    const { row, browser } = await ensured(saved)
+    await settle()
+    // The start page of a signed-out session is the form: signed in before the agent acts.
+    expect(browser.signIns).toEqual([saved])
+    await act(row, { tool: 'web_observe' })
+    // A session that expired on the site meanwhile is signed in again before the action.
+    expect(browser.signIns).toEqual([saved, saved])
+    // A request for help is the client's: no sign-in before it.
+    await act(row, { tool: 'web_help', reason: 'login', message: 'Войдите в админку' })
+    expect(browser.signIns).toHaveLength(2)
+    expect(warnings).toEqual([])
+    expect(JSON.stringify([...store.sessions.values(), store.helps])).not.toContain(saved.password)
+  })
+
+  it('sends a refused sign-in no more, until core gives another one; none forgets it', async () => {
+    const { manager, warnings, ensured, act } = setup()
+    const { row, browser } = await ensured(saved)
+    await settle()
+    browser.onSignIn = async () => 'refused'
+    await act(row, { tool: 'web_observe' })
+    expect(warnings).toEqual(['browser_sign_in_refused'])
+    await act(row, { tool: 'web_observe' })
+    expect(browser.signIns).toHaveLength(2)
+
+    const changed = { ...saved, password: 'Новый-пароль-2026' }
+    const ensure = (signIn?: typeof saved) =>
+      manager.ensure({
+        sessionId: row.id,
+        taskId: row.taskId,
+        siteId: row.siteId,
+        takeControl: true,
+        ...(signIn ? { signIn } : {}),
+      })
+    await ensure(changed)
+    await act(row, { tool: 'web_observe' })
+    expect(browser.signIns.at(-1)).toEqual(changed)
+    expect(browser.signIns).toHaveLength(3)
+
+    await ensure()
+    await act(row, { tool: 'web_observe' })
+    expect(browser.signIns).toHaveLength(3)
+  })
+
+  it('takes a failure of the browser for a refusal: the agent’s action goes on', async () => {
+    const { warnings, ensured, act } = setup()
+    const { row, browser } = await ensured(saved)
+    await settle()
+    browser.onSignIn = async () => {
+      throw new PageBrowserError('timeout')
+    }
+    expect(await act(row, { tool: 'web_observe' })).toMatchObject({ tool: 'web_observe' })
+    expect(warnings).toEqual(['browser_sign_in_failed'])
+    await act(row, { tool: 'web_observe' })
+    expect(browser.signIns).toHaveLength(2)
+  })
+
+  it('leaves the form to the client while the client controls the browser', async () => {
+    const { ensured, act } = setup()
+    const { row, session, browser } = await ensured(saved)
+    await settle()
+    const viewer = new ViewerProbe()
+    session.attach(viewer)
+    session.message(viewer, { t: 'take' })
+    expect(await codeOf(act(row, { tool: 'web_observe' }))).toBe('BROWSER_USER_IN_CONTROL')
+    expect(browser.signIns).toHaveLength(1)
   })
 })
 

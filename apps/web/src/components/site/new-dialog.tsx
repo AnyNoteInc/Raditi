@@ -160,7 +160,8 @@ const wayOfMode = { chat: 'browser', work: 'repository' } as const satisfies Rec
  * a lost answer finds the same dialog, and the screen moves to it. The mode is the way the agent
  * works (owner's request of 26.10.2026): «Работа» on a copy of the site from `main`, «Чат» without
  * the files — in the cloud browser (docs/plan/57-browser-tasks.md, Б9); a mode the site does not
- * offer cannot be chosen, and why is read aloud. «Размышление» picks how hard the model thinks
+ * offer cannot be chosen, and why is read aloud. Files go with the first words in either mode.
+ * «Размышление» picks how hard the model thinks
  * (`low`, `high`, `max`) — the same menu changes it later in the dialog. A site that takes no tasks says so on the field. Beside the list at the
  * root of the section the heading of the page is the list's, so the screen takes the level below.
  */
@@ -182,7 +183,8 @@ export function NewDialog({
   const way = chosen !== null && offer.ways.includes(chosen) ? chosen : offer.initial
   const browser = way === 'browser'
   const [effort, setEffort] = useState<ReasoningEffort>('high')
-  // Files go with a task in the browser: the agent hands them to the site's own pages (Б26).
+  // Files go with a dialog in either mode: in «Чат» the agent hands them to the site's own pages
+  // (Б26), in «Работа» they are put into its copy of the site (spec §8, «Подготовка»).
   const attachments = useAttachments(siteId)
   // One id per dialog being started: a repeat after a lost answer lands on the same one.
   const taskId = useRef<string | null>(null)
@@ -202,7 +204,7 @@ export function NewDialog({
         ...(capabilities.browser === 'ready' && way !== null
           ? { requirements: { repository: way === 'repository', browser: way === 'browser' } }
           : {}),
-        ...(browser && attachmentIds.length > 0 ? { attachments: [...attachmentIds] } : {}),
+        ...(attachmentIds.length > 0 ? { attachments: [...attachmentIds] } : {}),
         effort,
       })
       taskId.current = null
@@ -259,7 +261,7 @@ export function NewDialog({
           error={error}
           busy={create.isPending}
           onSend={start}
-          attachments={browser ? attachments : undefined}
+          attachments={attachments}
           noSecrets={browser ? taskWayText.noSecrets : undefined}
           modes={
             <>

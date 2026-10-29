@@ -570,8 +570,13 @@ export class PassSettlement {
    * owner's answer 1 of 18.10.2026; docs/plan/53, «Попробовать ещё (18.10)»): it waits in
    * `awaiting_approval` with the failure row, as with «Продолжить?» (Р8) — `/release`, «Обновить»,
    * words, «Отменить» and, when the failure allows one, «Попробовать ещё» stay open. The reserve
-   * stays and is moved on: the release is charged from it, and a retry gives it back. A dialog
-   * without a candidate ends `failed` and gives its reserve back.
+   * stays and is moved on: the release is charged from it, and a retry gives it back.
+   *
+   * A dialog without a candidate stays open as well (owner's decision of 28.10.2026: «никогда не
+   * завершай диалог, если произошла ошибка… пользователь может ввести „продолжи“»): it waits in
+   * `awaiting_user` with the failure row, and its reserve goes back — the client's next words
+   * open a new chain with a reserve of its own (`postDialogMessage`). Its preview and its browser
+   * stay for that pass; they end by their own idle limits.
    */
   async #failure(
     pass: PassRef,
@@ -618,7 +623,7 @@ export class PassSettlement {
         attempt: pass.attempt,
         expectedTurnNo: pass.turnNo,
         from: ['preparing', 'running'],
-        to: 'failed',
+        to: 'awaiting_user',
         turn,
         feed: [],
       })
@@ -637,13 +642,13 @@ export class PassSettlement {
             code,
             site,
             credits: creditsOf(returned),
-            next: 'failed',
+            next: 'awaiting_user',
             ...objectsOf(context),
           },
         },
       })
-      await this.#closePreview(tx, pass.taskId, turn)
-    }).then((answer) => this.#closeBrowser(context, answer, 'task_failed'))
+      await this.#syncPreview(tx, pass.taskId, turn)
+    })
   }
 
   async #cancelled(
@@ -685,7 +690,7 @@ export class PassSettlement {
           },
         },
       })
-      await this.#closePreview(tx, pass.taskId, turn)
+      await this.#syncPreview(tx, pass.taskId, turn)
     }).then((answer) => this.#closeBrowser(context, answer, 'task_cancelled'))
   }
 
@@ -843,11 +848,11 @@ export class PassSettlement {
   }
 
   /**
-   * The dialog is closed (`failed`, `cancelled`): the database writes of its last turn leave the
-   * plan (Р22), and the manager of previews, woken for a closed task, takes its preview down
-   * (R5c) — whether or not a turn ever ran.
+   * The last turn was refused or the dialog was closed (`cancelled`): the database writes of that
+   * turn leave the plan (Р22), and the manager of previews is woken — it takes the preview of a
+   * closed task down (R5c), whether or not a turn ever ran, and syncs an open one without them.
    */
-  async #closePreview(
+  async #syncPreview(
     tx: Prisma.TransactionClient,
     taskId: string,
     turn: number | null,
@@ -863,7 +868,7 @@ export class PassSettlement {
   async #closeBrowser(
     context: SettleContext,
     answer: SettleAnswer,
-    reason: 'task_done' | 'task_failed' | 'task_cancelled',
+    reason: 'task_done' | 'task_cancelled',
   ): Promise<SettleAnswer> {
     if (answer === 'moved' && context.requirements.browser)
       await this.deps.browser?.close(context.task.id, reason)

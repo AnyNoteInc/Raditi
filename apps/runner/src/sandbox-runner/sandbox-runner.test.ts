@@ -996,3 +996,54 @@ describe('SandboxRunner: a turn without a repository (docs/plan/57-browser-tasks
     expect(core.transport.candidate).not.toHaveBeenCalled()
   })
 })
+
+describe('SandboxRunner files of the client', () => {
+  const pathOf = (index: number, name: string) =>
+    `/workspace/inbox/0199a3f2-0000-7000-8000-00000000000${index}/${name}`
+  const files = [Buffer.from('%PDF-1.7 synthetic menu'), Buffer.from('synthetic photo')]
+  const inbox = [
+    { path: pathOf(1, 'Меню.pdf'), sizeBytes: files[0]!.byteLength },
+    { path: pathOf(2, 'Фото.jpg'), sizeBytes: files[1]!.byteLength },
+  ]
+
+  it('fetches each file from core by its place and writes it at its path, read-only', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore({ inbox: files })
+    startRunner(core.transport, side.executor)
+
+    await core.send(prepareCommand({ inbox }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    expect(core.inboxReads).toEqual([0, 1])
+    const written = vi
+      .mocked(side.sandbox.fs.write)
+      .mock.calls.filter(([path]) => path.startsWith('/workspace/inbox/'))
+    expect(written.map(([path, data, options]) => [path, Buffer.from(data).toString(), options]))
+      .toEqual([
+        [inbox[0]!.path, files[0]!.toString(), { mode: 0o444 }],
+        [inbox[1]!.path, files[1]!.toString(), { mode: 0o444 }],
+      ])
+  })
+
+  it('fails the prepare when core does not give a file', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore({ inbox: files.slice(0, 1) })
+    startRunner(core.transport, side.executor)
+
+    await core.send(prepareCommand({ inbox }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'failed']))
+    expect(core.reports.at(-1)).toMatchObject({ type: 'failed' })
+  })
+
+  it('refuses files of a turn without a repository with the command', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore({ inbox: files })
+    startRunner(core.transport, side.executor)
+
+    // Dropped as invalid: the next command is the first one carried out.
+    await core.send(prepareCommand({ inbox, bundle: undefined }))
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    expect(side.sandboxes.create).toHaveBeenCalledOnce()
+    expect(core.inboxReads).toEqual([])
+  })
+})

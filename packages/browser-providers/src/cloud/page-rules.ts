@@ -1,5 +1,6 @@
 import {
   browserNavigationAllowed,
+  type BrowserController,
   type BrowserTaskPolicy,
   type SiteBrowserRequest,
 } from '@repo/domain'
@@ -61,7 +62,10 @@ function methodsOf(method: string, headers: Readonly<Record<string, string>>): s
   return [...methods]
 }
 
-/** A request of a page: to a host of the session, and nothing the stack's policy denies. */
+/**
+ * A request of a page: to a host of the session, and nothing the stack's policy denies to who
+ * holds the browser (`by`, the agent's when absent; Б37).
+ */
 export function requestVerdict(
   rules: PageRules,
   request: {
@@ -72,15 +76,16 @@ export function requestVerdict(
     /** Its headers, names in any case; only the method overrides among them are read. */
     headers?: Readonly<Record<string, string>>
   },
+  by: BrowserController = 'agent',
 ): RequestVerdict {
   const url = URL.parse(request.url)
   if (!url || !originAllowed(url, rules)) return 'blockedbyclient'
   const path = pathOf(url)
   for (const method of methodsOf(request.method, request.headers ?? {})) {
     const asked: SiteBrowserRequest = { path, method, postData: request.postData }
-    if (denies(() => rules.policy.requestDenied(asked))) return 'accessdenied'
+    if (denies(() => rules.policy.requestDenied(asked, by))) return 'accessdenied'
   }
-  if (request.navigation && denies(() => rules.policy.pageDenied(path))) return 'accessdenied'
+  if (request.navigation && denies(() => rules.policy.pageDenied(path, by))) return 'accessdenied'
   return 'continue'
 }
 
@@ -92,16 +97,24 @@ const LOCAL_SCHEMES = new Set(['about:', 'chrome-error:', 'data:', 'blob:'])
  * not deny, or a document no site served. Anything else came by a redirect the route never saw
  * and is dropped before anyone reads it.
  */
-export function committedAllowed(rules: PageRules, address: string): boolean {
+export function committedAllowed(
+  rules: PageRules,
+  address: string,
+  by: BrowserController = 'agent',
+): boolean {
   const url = URL.parse(address)
   if (!url) return false
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return LOCAL_SCHEMES.has(url.protocol)
-  return originAllowed(url, rules) && !denies(() => rules.policy.pageDenied(pathOf(url)))
+  return originAllowed(url, rules) && !denies(() => rules.policy.pageDenied(pathOf(url), by))
 }
 
 /** Whether the agent's `web_open` or the client's `navigate` may go to an address at all. */
-export function openAllowed(rules: PageRules, address: string): boolean {
+export function openAllowed(
+  rules: PageRules,
+  address: string,
+  by: BrowserController = 'agent',
+): boolean {
   if (!browserNavigationAllowed(address, rules.allowedHosts, rules.localSites)) return false
   const url = URL.parse(address)
-  return url !== null && !denies(() => rules.policy.pageDenied(pathOf(url)))
+  return url !== null && !denies(() => rules.policy.pageDenied(pathOf(url), by))
 }

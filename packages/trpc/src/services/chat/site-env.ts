@@ -9,6 +9,7 @@ import {
   envVarNameProblem,
   envVarsMayReachAgent,
   envVarValueSchema,
+  isSiteSignInEnvVar,
   siteEnvVarPath,
   siteEnvVarSecret,
   siteEnvVarTombstone,
@@ -28,6 +29,7 @@ import {
   siteEnvNameInvalid,
   siteEnvNameReserved,
   siteEnvNotAllowed,
+  siteEnvSignInPrivate,
   siteEnvValueInvalid,
 } from './refusals.ts'
 
@@ -143,7 +145,7 @@ async function writeValue(
  * version that holds it — a row never names a value Vault does not have. Of two writers the
  * later version wins in the row as it does in Vault. The agent gets a variable only with the
  * client's consent, and in a workspace of real client data not before the gate of 152-FZ
- * (rule 1).
+ * (rule 1); the saved sign-in of the admin pages never (Б36).
  */
 export async function setSiteEnv(
   db: PrismaClient,
@@ -156,6 +158,10 @@ export async function setSiteEnv(
   if (!envVarValueSchema.safeParse(input.value).success) throw siteEnvValueInvalid()
   const hosts = egressHostListSchema.safeParse(input.hosts)
   if (!hosts.success) throw siteEnvHostsInvalid()
+  // The saved sign-in is typed by the browser of a task alone (Б36): never the agent's or a
+  // preview's, whatever the page sent.
+  if (isSiteSignInEnvVar(input.name) && (input.toAgent || input.toPreview))
+    throw siteEnvSignInPrivate()
   const site = await managedSite(db, input.userId, input.siteId)
   if (input.toAgent) {
     if (!input.agentConsent) throw siteEnvConsentRequired()

@@ -211,7 +211,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
         code: 'secret_found',
         site: 'unchanged',
         credits: 'returned',
-        next: 'failed',
+        next: 'awaiting_user',
       },
     ])
   })
