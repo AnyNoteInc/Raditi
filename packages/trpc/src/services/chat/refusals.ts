@@ -110,6 +110,13 @@ export const siteEnvConsentRequired = () =>
     'The agent gets a variable only with the consent',
     400,
   )
+/** The saved sign-in of the admin pages is the browser's only (Б36). */
+export const siteEnvSignInPrivate = () =>
+  new DomainError(
+    'SITE_ENV_SIGN_IN_PRIVATE',
+    'The saved sign-in is given neither to the agent nor to a preview',
+    400,
+  )
 export const siteEnvAgentClosed = () =>
   new DomainError(
     'SITE_ENV_AGENT_CLOSED',

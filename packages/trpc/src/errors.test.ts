@@ -833,6 +833,7 @@ describe('the refusals of a dialog, its preview and its release', () => {
     ['SITE_ENV_VALUE_INVALID', 400],
     ['SITE_ENV_HOSTS_INVALID', 400],
     ['SITE_ENV_CONSENT_REQUIRED', 400],
+    ['SITE_ENV_SIGN_IN_PRIVATE', 400],
     ['SITE_ENV_AGENT_CLOSED', 409],
     ['SITE_ENV_LIMIT', 409],
     ['SITE_ENV_HOSTS_LIMIT', 409],

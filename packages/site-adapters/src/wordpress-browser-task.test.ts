@@ -61,6 +61,45 @@ describe('wordpressAdapter.browserTaskPolicy: start and hosts', () => {
   })
 })
 
+describe('wordpressAdapter.browserTaskPolicy: the sign-in form (Б36)', () => {
+  const form = policy.signIn
+
+  it('is WordPress’s own login form, in the site’s folder or at its root', () => {
+    expect(form).toMatchObject({
+      login: '#loginform #user_login',
+      password: '#loginform #user_pass',
+      submit: '#loginform #wp-submit',
+    })
+    for (const path of [
+      '/wp-login.php',
+      '/wp-login.php?redirect_to=https%3A%2F%2Fnews.example.ru%2Fwp-admin%2Fedit.php&reauth=1',
+      '/wp-login.php?action=login',
+      '/wp-login.php?loggedout=true',
+      '/blog/wp-login.php?action=',
+      '/WP-LOGIN.PHP',
+    ])
+      expect(form?.isSignInPage(path), path).toBe(true)
+  })
+
+  it('is never another form of the same page, nor another page', () => {
+    for (const path of [
+      '/wp-login.php?action=lostpassword',
+      '/wp-login.php?action=rp&key=x',
+      '/wp-login.php?action=register',
+      '/wp-login.php?action=validate_2fa',
+      '/wp-admin/edit.php',
+      '/wp-login.php.bak',
+      '/news/wp-login',
+    ])
+      expect(form?.isSignInPage(path), path).toBe(false)
+  })
+
+  it('lets the form be sent: signing in is no action the task is refused', () => {
+    expect(policy.pageDenied('/wp-login.php?redirect_to=%2Fwp-admin%2F&reauth=1')).toBe(false)
+    expect(denied('/wp-login.php', 'POST', 'log=admin&pwd=x&wp-submit=Log+In')).toBe(false)
+  })
+})
+
 describe('wordpressAdapter.browserTaskPolicy: pages', () => {
   it.each([
     '/',
@@ -229,6 +268,65 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
       expect(policy.pageDenied(path)).toBe(true)
     },
   )
+})
+
+// The owner's decision of 28.10.2026: the client at the controls deletes a news item in person.
+describe('wordpressAdapter.browserTaskPolicy: the trash of the client at the controls (Б37)', () => {
+  const byClient = (path: string, method = 'GET', postData: string | null = null) =>
+    policy.requestDenied({ path, method, postData }, 'user')
+  const nonce = '_wpnonce=0a1b2c3d4e'
+
+  it('lets the client move a post or a page to the trash and back, never the agent', () => {
+    const trash = [
+      [`/wp-admin/post.php?post=950&action=trash&${nonce}`, 'GET'],
+      [`/wp-admin/post.php?post=950&action=untrash&${nonce}`, 'GET'],
+      [`/blog/wp-admin/post.php?post=12&action=trash&${nonce}`, 'GET'],
+      [
+        `/wp-admin/edit.php?s=&post_status=all&post_type=post&${nonce}&action=trash&m=0&cat=0&paged=1&post%5B%5D=950&post%5B%5D=951&action2=-1`,
+        'GET',
+      ],
+      [`/wp-admin/edit.php?post_type=page&action=-1&action2=trash&post%5B%5D=7&${nonce}`, 'GET'],
+      ['/wp-json/wp/v2/posts/950?_locale=user', 'DELETE'],
+      ['/?rest_route=%2Fwp%2Fv2%2Fpages%2F7&_locale=user', 'DELETE'],
+    ] as const
+    for (const [path, method] of trash) {
+      expect(byClient(path, method), path).toBe(false)
+      expect(denied(path, method), path).toBe(true)
+      expect(policy.requestDenied({ path, method, postData: null }), path).toBe(true)
+    }
+    // The block editor sends its DELETE as a POST without a body and the method in a header.
+    expect(byClient('/wp-json/wp/v2/posts/950?_locale=user', 'POST')).toBe(false)
+    expect(denied('/wp-json/wp/v2/posts/950?_locale=user', 'POST')).toBe(true)
+    expect(policy.pageDenied(`/wp-admin/post.php?post=950&action=trash&${nonce}`, 'user')).toBe(
+      false,
+    )
+    expect(policy.pageDenied(`/wp-admin/post.php?post=950&action=trash&${nonce}`)).toBe(true)
+  })
+
+  it('keeps deleting past the trash, emptying it and everything else closed to the client', () => {
+    for (const [path, method, body] of [
+      [`/wp-admin/post.php?post=950&action=delete&${nonce}`, 'GET', null],
+      [`/wp-admin/edit.php?post_status=trash&post_type=post&delete_all=1&${nonce}`, 'GET', null],
+      [`/wp-admin/edit.php?action=delete&post%5B%5D=950&${nonce}`, 'GET', null],
+      [`/wp-admin/edit.php?post_type=wp_template&action=trash&post%5B%5D=3&${nonce}`, 'GET', null],
+      [`/wp-admin/edit.php?page=fluentform_entries&action=trash&${nonce}`, 'GET', null],
+      ['/wp-json/wp/v2/posts/950?force=true', 'DELETE', null],
+      ['/wp-json/wp/v2/posts/950?status=publish', 'POST', null],
+      ['/wp-json/wp/v2/posts/950?_locale=user&author=1', 'DELETE', null],
+      ['/wp-json/wp/v2/users/2', 'DELETE', null],
+      ['/wp-json/wp/v2/media/44', 'DELETE', null],
+      ['/wp-json/wp/v2/comments/5', 'DELETE', null],
+      ['/wp-json/wp/v2/posts', 'DELETE', null],
+      ['/wp-json/wp/v2/posts/950', 'POST', '{"status":"trash"}'],
+      [`/wp-admin/users.php?action=delete&user=2&${nonce}`, 'GET', null],
+      [`/wp-admin/edit-comments.php?action=trash&c=5&${nonce}`, 'GET', null],
+      ['/wp-admin/admin-ajax.php', 'POST', 'action=trash-post&id=950'],
+    ] as const)
+      expect(byClient(path, method, body), path).toBe(true)
+    // Everything else stays as it is for the agent: the dashboard, the users.
+    expect(policy.pageDenied('/wp-admin/', 'user')).toBe(true)
+    expect(policy.pageDenied('/wp-admin/users.php', 'user')).toBe(true)
+  })
 })
 
 describe('wordpressAdapter.browserTaskPolicy: requests', () => {
@@ -792,6 +890,8 @@ describe('wordpressAdapter.browserGuide', () => {
       'BROWSER_CHECKPOINT_UNVERIFIED',
       'Submit for Review',
       'Never type or guess a login or',
+      'the platform fills the WordPress login form',
+      'Deleting is closed to you',
       'never start a second one',
       'web_screenshot',
     ])

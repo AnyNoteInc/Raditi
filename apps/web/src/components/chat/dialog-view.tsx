@@ -486,8 +486,11 @@ export function DialogView({
     last.next === 'awaiting_approval'
       ? last
       : null
-  // The agent answered and asked nothing: the dialog waits for no one (26.10.2026).
-  const answered = status === 'awaiting_user' && question === null
+  // The agent answered and asked nothing: the dialog waits for no one (26.10.2026). A failure
+  // that left the dialog open (28.10.2026) asks the client again: «продолжи».
+  const ending = rows.findLast((row) => row.type === 'feed.result' || row.type === 'feed.failure')
+  const answered =
+    status === 'awaiting_user' && question === null && ending?.type !== 'feed.failure'
   const announcement =
     status === undefined
       ? ''
@@ -762,21 +765,22 @@ export function DialogView({
       </Box>
     )
   } else {
-    // A question of the browser is answered in words too: they resume the agent (Б16). Without a
-    // question the dialog waits after an answer of a pass that changed nothing (26.10.2026).
+    // A question of the browser is answered in words too: they resume the agent (Б16); so is a
+    // question of the platform about credits — the words go on as «Продолжить» does (28.10.2026:
+    // «пользователь всегда должен иметь возможность ввести промпт»). Without a question the dialog
+    // waits after an answer of a pass that changed nothing (26.10.2026) or after a failure.
     const answering =
-      status === 'awaiting_user' &&
-      (question === null || question.kind === 'agent' || question.kind === 'browser')
+      (awaitingClient && question?.kind === 'ceiling') ||
+      (status === 'awaiting_user' &&
+        (question === null || question.kind === 'agent' || question.kind === 'browser'))
     const revising = status === 'awaiting_approval' && question === null
     const disabledReason = stopping
       ? composerText.stopping
-      : question?.kind === 'ceiling'
-        ? composerText.ceiling
-        : answering || revising
-          ? null
-          : releasing
-            ? composerText.releasing
-            : feedInputText.disabled
+      : answering || revising
+        ? null
+        : releasing
+          ? composerText.releasing
+          : feedInputText.disabled
     // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`).
     const working = status === 'queued' || status === 'preparing' || status === 'running'
     const cancelVerdict = commands.find((command) => command.id === 'cancel')

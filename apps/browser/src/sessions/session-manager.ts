@@ -120,6 +120,7 @@ export class SessionManager {
       await session.ending?.catch(() => undefined)
       throw conflict('The browser session is closed')
     }
+    session.useSignIn(request.signIn ?? null)
     if (request.takeControl) session.agentTakesControl()
     return browserEnsureResponseSchema.parse(session.state())
   }
@@ -195,6 +196,7 @@ export class SessionManager {
         startUrl: new URL(policy.startPath, site.origin).href,
         deadline,
         checkpoints: await store.checkpoints(row.taskId),
+        signIn: request.signIn ?? null,
       },
       context,
       (ended) => {

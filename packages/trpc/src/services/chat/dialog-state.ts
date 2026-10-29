@@ -105,22 +105,28 @@ export async function lastQuestion(
 }
 
 /**
- * The `feed.result` a dialog waits after — a pass that changed nothing and asked nothing leaves
- * it open for the client's next words (`next: 'awaiting_user'`, owner's decision of 26.10.2026)
- * — while nothing the client wrote or pressed, besides a command, came after it. null — none.
+ * The ending a dialog waits after — a pass that changed nothing and asked nothing (`feed.result`,
+ * owner's decision of 26.10.2026) or one that failed (`feed.failure`, owner's decision of
+ * 28.10.2026: «никогда не завершай диалог, если произошла ошибка») leaves it open for the
+ * client's next words (`next: 'awaiting_user'`) — while nothing the client wrote or pressed,
+ * besides a command, came after it. null — none.
  */
 export async function openResult(
   db: Pick<Prisma.TransactionClient, 'taskEvent'>,
   taskId: string,
 ): Promise<bigint | null> {
   const row = await db.taskEvent.findFirst({
-    where: { taskId, type: 'feed.result' },
+    where: { taskId, type: { in: ['feed.result', 'feed.failure'] } },
     orderBy: { id: 'desc' },
-    select: { id: true, payload: true },
+    select: { id: true, type: true, payload: true },
   })
   if (row === null) return null
-  const result = readFeedRow('feed.result', row.payload)
-  if (result.type !== 'feed.result' || result.next !== 'awaiting_user') return null
+  const ending = readFeedRow(row.type, row.payload)
+  if (
+    (ending.type !== 'feed.result' && ending.type !== 'feed.failure') ||
+    ending.next !== 'awaiting_user'
+  )
+    return null
   const answered = await db.taskEvent.count({
     where: { taskId, ...movingRequest, id: { gt: row.id } },
   })

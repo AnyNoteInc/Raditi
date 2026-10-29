@@ -6,9 +6,12 @@ import { committedAllowed, openAllowed, requestVerdict, type PageRules } from '.
 const policy: BrowserTaskPolicy = {
   startPath: '/wp-admin/',
   extraHosts: [],
-  requestDenied: ({ path, method }) =>
-    path.startsWith('/wp-admin/users.php') || (method === 'DELETE' && path.startsWith('/wp-json/')),
-  pageDenied: (path) => path.startsWith('/wp-admin/plugins.php'),
+  // The client at the controls may delete through the REST API; the agent may not (Б37).
+  requestDenied: ({ path, method }, by = 'agent') =>
+    path.startsWith('/wp-admin/users.php') ||
+    (method === 'DELETE' && path.startsWith('/wp-json/') && by === 'agent'),
+  pageDenied: (path, by = 'agent') =>
+    path.startsWith('/wp-admin/plugins.php') || (path.includes('action=trash') && by === 'agent'),
 }
 const rules: PageRules = {
   allowedHosts: ['example.ru:443', 'www.example.ru:443', 's.w.org:443'],
@@ -65,6 +68,30 @@ describe('the requests of a task browser', () => {
       'continue',
     )
     expect(ask(post, { method: 'POST', headers: { 'content-type': 'DELETE' } })).toBe('continue')
+  })
+
+  it('are judged for whoever holds the browser: the agent unless told otherwise (Б37)', () => {
+    const post = 'https://example.ru/wp-json/wp/v2/posts/7'
+    const override = { method: 'POST', headers: { 'X-HTTP-Method-Override': 'DELETE' } }
+    expect(ask(post, override)).toBe('accessdenied')
+    expect(
+      requestVerdict(rules, { url: post, postData: null, navigation: false, ...override }, 'user'),
+    ).toBe('continue')
+    const trash = 'https://example.ru/wp-admin/post.php?post=7&action=trash'
+    expect(ask(trash, { navigation: true })).toBe('accessdenied')
+    expect(
+      requestVerdict(
+        rules,
+        { url: trash, method: 'GET', postData: null, navigation: true },
+        'user',
+      ),
+    ).toBe('continue')
+    expect(committedAllowed(rules, trash)).toBe(false)
+    expect(committedAllowed(rules, trash, 'user')).toBe(true)
+    expect(openAllowed(rules, trash)).toBe(false)
+    expect(openAllowed(rules, trash, 'user')).toBe(true)
+    // What is closed to both stays closed to the client.
+    expect(openAllowed(rules, 'https://example.ru/wp-admin/plugins.php', 'user')).toBe(false)
   })
 
   it('are denied when the policy cannot read them', () => {

@@ -410,6 +410,8 @@ describe('nothing raw reaches the customer', () => {
   it('writes the end a failure moved the dialog to, and reads an unknown one as the old end', () => {
     expect(accepts('feed.failure', { ...failure, next: 'awaiting_approval' })).toBe(true)
     expect(accepts('feed.failure', { ...failure, next: 'failed' })).toBe(true)
+    // A dialog without a candidate stays open after a failure (28.10.2026).
+    expect(accepts('feed.failure', { ...failure, next: 'awaiting_user' })).toBe(true)
     expect(accepts('feed.failure', { ...failure, next: 'done' })).toBe(false)
     expect(readFeedRow('feed.failure', { ...failure, next: 'later' })).toEqual(
       shown('feed.failure', failure),

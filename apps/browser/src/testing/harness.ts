@@ -2,7 +2,7 @@
 // *.test.ts files (excluded from the build).
 import { randomUUID } from 'node:crypto'
 
-import type { BrowserAction } from '@repo/domain'
+import type { BrowserAction, BrowserSignIn } from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 
 import { AttachmentFiles } from '../attachments/attachments.ts'
@@ -47,14 +47,15 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
       ...settings,
     },
   })
-  /** A session core opened, ensured on the worker. */
-  const ensured = async () => {
+  /** A session core opened, ensured on the worker; with the site's saved sign-in if given. */
+  const ensured = async (signIn?: BrowserSignIn) => {
     const row = store.open()
     const state = await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
       siteId: row.siteId,
       takeControl: true,
+      ...(signIn ? { signIn } : {}),
     })
     const session = manager.session(row.id)
     if (!session) throw new Error('not held')

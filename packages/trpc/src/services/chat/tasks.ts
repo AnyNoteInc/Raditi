@@ -58,6 +58,7 @@ import {
   openCeilingQuestion,
   openResult,
   requestOf,
+  type DialogQuestion,
 } from './dialog-state.ts'
 import { insertDialogPreview, siteHasDatabase } from './previews.ts'
 import {
@@ -341,10 +342,10 @@ export interface DialogMessageInput {
  * The attempt the next pass of an open dialog runs in, and its reserve (owner's answer of
  * 26.10.2026: every completed pass is charged when it ends). A chain that is still active — a
  * pass failed and the dialog kept its candidate, or the charge of the last pass waits for its
- * usage — goes on, and its reserve is moved on. A chain that was charged is followed by a new
- * one: the next attempt, its reserve placed now (`follows` — the client's words or «Продолжить»),
- * refused as a new task would be. A task that never held a reserve — one that is not billable —
- * goes on in its attempt.
+ * usage — goes on, and its reserve is moved on. A chain that was charged, or given back after a
+ * failure that left the dialog open (28.10.2026), is followed by a new one: the next attempt,
+ * its reserve placed now (`follows` — the client's words or «Продолжить»), refused as a new task
+ * would be. A task that is not billable goes on in its attempt.
  */
 async function nextPassAttempt(
   tx: Tx,
@@ -352,15 +353,16 @@ async function nextPassAttempt(
   follows: 'message' | 'continue',
   now: Date,
 ): Promise<number> {
-  const holds = await tx.creditHold.findMany({
-    where: { taskId: task.id, status: { in: ['active', 'captured'] } },
-    select: { status: true },
-  })
-  if (holds.some((hold) => hold.status === 'active')) {
+  const active = await tx.creditHold.count({ where: { taskId: task.id, status: 'active' } })
+  if (active > 0) {
     await extendTaskHolds(tx, { taskId: task.id, expiresAt: taskHoldExpiry(now, 'waiting') })
     return task.attempt
   }
-  if (holds.length === 0) return task.attempt
+  const row = await tx.task.findUniqueOrThrow({
+    where: { id: task.id },
+    select: { billable: true },
+  })
+  if (!row.billable) return task.attempt
   const attempt = task.attempt + 1
   await placeCreditHold(tx, {
     workspaceId: task.workspaceId,
@@ -383,7 +385,9 @@ async function nextPassAttempt(
  * by «Продолжить» (`task.continue`), never by words. A repeat with the same `requestId` returns
  * the row of the first delivery. The files of the message are bound to the task with it — all of
  * them or the message is refused. Words to a task in the browser that asked the client to act
- * there answer it as well (docs/plan/57, Б16): the agent goes on.
+ * there answer it as well (docs/plan/57, Б16): the agent goes on. Words to a question of the
+ * platform about credits go on as «Продолжить» does, with the client's words for the agent
+ * (owner's decision of 28.10.2026: «пользователь всегда должен иметь возможность ввести промпт»).
  */
 export async function postDialogMessage(
   db: PrismaClient,
@@ -403,11 +407,23 @@ export async function postDialogMessage(
     if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
 
     let payload: FeedRequestPayload
-    if (task.status === 'awaiting_user') {
+    const ceiling =
+      task.status === 'awaiting_user' || task.status === 'awaiting_approval'
+        ? await openCeilingQuestion(tx, task.id)
+        : null
+    if (ceiling !== null) {
+      payload = {
+        v: 1,
+        kind: 'answer',
+        authorId: userId,
+        requestId,
+        text,
+        ...attachments,
+        answersEventId: String(ceiling.id),
+      }
+    } else if (task.status === 'awaiting_user') {
       const question = await lastQuestion(tx, task.id)
-      if (question !== null && !question.answered && question.kind === 'ceiling')
-        throw taskContinueRequired()
-      // The words answer the open question, or the result that left the dialog open.
+      // The words answer the open question, or the ending that left the dialog open.
       const answers =
         question !== null && !question.answered ? question.id : await openResult(tx, task.id)
       if (answers === null)
@@ -422,7 +438,6 @@ export async function postDialogMessage(
         answersEventId: String(answers),
       }
     } else if (task.status === 'awaiting_approval') {
-      if ((await openCeilingQuestion(tx, task.id)) !== null) throw taskContinueRequired()
       const candidate = await liveCandidate(tx, task.id)
       if (candidate === null) throw conflict('The dialog waits for approval without a candidate')
       payload = {
@@ -438,7 +453,10 @@ export async function postDialogMessage(
       throw notWaiting(task.status)
     }
 
-    const attempt = await nextPassAttempt(tx, task, 'message', now)
+    const attempt =
+      ceiling !== null
+        ? await wordsAfterCeiling(tx, task, ceiling, now)
+        : await nextPassAttempt(tx, task, 'message', now)
     await moveTo(tx, task, 'queued', attempt === task.attempt ? {} : { attempt })
     await bindMessageAttachments(tx, {
       ids: attachments.attachments ?? [],
@@ -451,6 +469,53 @@ export async function postDialogMessage(
     await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
     return { requestEventId, repeated: false }
   })
+}
+
+/**
+ * The attempt that goes on after a question of the platform about credits, its reserve placed
+ * (Р8): a continuation keeps the reserve of the attempt before; after a pass that ran out and
+ * was charged (26.10.2026) it opens a new chain (`follows: 'continue'`). A dialog that used its
+ * three attempts is not continued.
+ */
+async function continuationAttempt(
+  tx: Tx,
+  task: LockedTask,
+  question: DialogQuestion,
+  now: Date,
+): Promise<number> {
+  // The attempts of the chain: one a failure gave back is not counted (`maxTaskAttempts`).
+  const chain = await taskChainAttempts(tx, task.id)
+  if (question.reason === 'attempts' || chain.length >= maxTaskAttempts)
+    throw taskAttemptsExhausted()
+  const attempt = task.attempt + 1
+  await placeCreditHold(tx, {
+    workspaceId: task.workspaceId,
+    taskId: task.id,
+    attempt,
+    now,
+    expiresAt: taskHoldExpiry(now, 'waiting'),
+    // The pass that ran out was charged: the work goes on in a new chain.
+    ...(chain.length === 0 ? { follows: 'continue' as const } : {}),
+  })
+  return attempt
+}
+
+/**
+ * The attempt the client's words to a question about credits go on in (28.10.2026: «пользователь
+ * всегда должен иметь возможность ввести промпт»): a continuation, as «Продолжить» places it, or —
+ * once the chain has used its attempts, when «Продолжить» has nothing to offer — the next words
+ * of an open dialog, a new chain as after an answer.
+ */
+async function wordsAfterCeiling(
+  tx: Tx,
+  task: LockedTask,
+  question: DialogQuestion,
+  now: Date,
+): Promise<number> {
+  const chain = await taskChainAttempts(tx, task.id)
+  if (question.reason === 'attempts' || chain.length >= maxTaskAttempts)
+    return nextPassAttempt(tx, task, 'message', now)
+  return continuationAttempt(tx, task, question, now)
 }
 
 /**
@@ -479,22 +544,8 @@ export async function continueDialog(
     }
     const question = await openCeilingQuestion(tx, task.id)
     if (question === null) throw taskNothingToContinue()
-    // The attempts of the chain: one a failure gave back is not counted (`maxTaskAttempts`).
-    const chain = await taskChainAttempts(tx, task.id)
-    if (question.reason === 'attempts' || chain.length >= maxTaskAttempts)
-      throw taskAttemptsExhausted()
-
-    const attempt = task.attempt + 1
+    const attempt = await continuationAttempt(tx, task, question, now)
     await moveTo(tx, task, 'queued', { attempt })
-    await placeCreditHold(tx, {
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      attempt,
-      now,
-      expiresAt: taskHoldExpiry(now, 'waiting'),
-      // The pass that ran out was charged: «Продолжить» opens a new chain.
-      ...(chain.length === 0 ? { follows: 'continue' as const } : {}),
-    })
     const requestEventId = await writeRequest(tx, task.id, {
       v: 1,
       kind: 'continue',

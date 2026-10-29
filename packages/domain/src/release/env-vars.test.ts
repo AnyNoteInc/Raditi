@@ -7,7 +7,9 @@ import {
   envVarReachesPreview,
   envVarValueSchema,
   refusedEnvVarPrefixes,
+  isSiteSignInEnvVar,
   siteEnvVarInputSchema,
+  siteSignInEnvVars,
   siteEnvVarPath,
   siteEnvVarSecret,
   siteEnvVarTombstone,
@@ -83,6 +85,17 @@ describe('values and the form', () => {
     ).toBe(true)
     expect(siteEnvVarInputSchema.safeParse({ ...input, hosts: ['10.0.0.1'] }).success).toBe(false)
     expect(siteEnvVarInputSchema.safeParse({ ...input, name: 'PATH' }).success).toBe(false)
+    // The saved sign-in of the admin pages is the browser's only (Б36).
+    for (const name of [siteSignInEnvVars.login, siteSignInEnvVars.password]) {
+      expect(siteEnvVarInputSchema.safeParse({ ...input, name }).success).toBe(false)
+      const browserOnly = { ...input, name, toAgent: false, agentConsent: false }
+      expect(siteEnvVarInputSchema.safeParse({ ...browserOnly, toPreview: true }).success).toBe(
+        false,
+      )
+      expect(siteEnvVarInputSchema.safeParse({ ...browserOnly, toPreview: false }).success).toBe(
+        true,
+      )
+    }
   })
 
   it('names the one Vault path of a value', () => {
@@ -106,7 +119,13 @@ describe('the key of a variable in Vault', () => {
 
 describe('who gets the value of a client variable', () => {
   const consented = new Date('2026-10-17T12:00:00Z')
-  const variable = (toPreview: boolean, toAgent: boolean, agentConsentAt: Date | null) => ({
+  const variable = (
+    toPreview: boolean,
+    toAgent: boolean,
+    agentConsentAt: Date | null,
+    name = 'MAP_API_KEY',
+  ) => ({
+    name,
     toPreview,
     toAgent,
     agentConsentAt,
@@ -120,6 +139,16 @@ describe('who gets the value of a client variable', () => {
     expect(envVarReachesAgent(variable(true, false, consented), 'synthetic')).toBe(false)
     // Real client data: not before the gate of 152-FZ.
     expect(envVarReachesAgent(variable(true, true, consented), 'client')).toBe(false)
+  })
+
+  it('never gives the agent or a preview the saved sign-in, whatever its row says (Б36)', () => {
+    expect(isSiteSignInEnvVar('SITE_ADMIN_LOGIN')).toBe(true)
+    expect(isSiteSignInEnvVar('SITE_ADMIN_PASSWORD')).toBe(true)
+    expect(isSiteSignInEnvVar('SITE_ADMIN_TOKEN')).toBe(false)
+    for (const name of ['SITE_ADMIN_LOGIN', 'SITE_ADMIN_PASSWORD']) {
+      expect(envVarReachesAgent(variable(true, true, consented, name), 'synthetic')).toBe(false)
+      expect(envVarReachesPreview(variable(true, true, consented, name), 'synthetic')).toBe(false)
+    }
   })
 
   it('gives a preview, which runs the agent code, nothing the agent may not see', () => {

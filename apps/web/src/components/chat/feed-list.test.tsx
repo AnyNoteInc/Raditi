@@ -253,6 +253,26 @@ describe('the rows of a dialog', () => {
     expect(text(feed)).not.toContain('Повторная попытка')
   })
 
+  it('tells the client a failed dialog stays open: «продолжи» goes on (28.10.2026)', () => {
+    const rows: FeedRow[] = [
+      {
+        id: '5',
+        at: '2026-10-28T19:26:27.000Z',
+        type: 'feed.failure',
+        turn: 1,
+        code: 'technical',
+        site: 'check',
+        credits: 'returned',
+        next: 'awaiting_user',
+      },
+    ]
+    const { feed } = showFeed(rows, headOf({ status: 'awaiting_user' }))
+    expect(text(feed)).toContain(
+      'Диалог не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.',
+    )
+    expect(text(feed)).not.toContain('мы сохранили')
+  })
+
   it('offers the release on the live candidate, with its counts and the proposed number', () => {
     const row = candidateRow('6', 1)
     const head = headOf({ status: 'awaiting_approval', candidate: candidateHead })

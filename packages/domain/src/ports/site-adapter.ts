@@ -9,6 +9,7 @@ import type {
   BrowserCommitAction,
   BrowserVerificationPlan,
 } from '../browser/checkpoint.ts'
+import type { BrowserController } from '../browser/session.ts'
 import { badRequest } from '../errors.ts'
 import type {
   DatabaseCopyPolicy,
@@ -293,15 +294,32 @@ export interface BrowserTaskSite {
 /**
  * Where a task's browser starts and what of the site it may not open or send (Б21). `pageDenied`
  * is checked on every navigation of a page, `requestDenied` on every request it makes (a form, an
- * XHR of the editor); both answer true for anything the adapter cannot read.
+ * XHR of the editor); both answer true for anything the adapter cannot read. `by` — who holds the
+ * browser: the client at the controls may do a little more than the agent (owner's decision of
+ * 28.10.2026, Б37: move a post or a page to the trash); absent — the agent.
  */
 export interface BrowserTaskPolicy {
   /** Below the site's origin, with one leading `/`: `/wp-admin/`. */
   startPath: string
   /** Hosts the stack's admin pages load from besides the site: `host` or `host:port`. */
   extraHosts: readonly string[]
-  requestDenied(request: SiteBrowserRequest): boolean
-  pageDenied(path: string): boolean
+  requestDenied(request: SiteBrowserRequest, by?: BrowserController): boolean
+  pageDenied(path: string, by?: BrowserController): boolean
+  /** The stack's sign-in form, which the browser fills with the site's saved sign-in (Б36). */
+  signIn?: BrowserSignInForm
+}
+
+/**
+ * The page and the fields of a stack's sign-in form (Б36): the browser of a task fills them
+ * with the site's saved sign-in (`siteSignInEnvVars`) and sends them, never the agent. Selectors
+ * are CSS of the page's own form.
+ */
+export interface BrowserSignInForm {
+  /** The path with its query of a page that shows the form for a login and a password. */
+  isSignInPage(path: string): boolean
+  login: string
+  password: string
+  submit: string
 }
 
 /** One request of the agent's browser to its preview, as the stack's policy sees it. */

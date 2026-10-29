@@ -281,8 +281,12 @@ export interface FeedCeilingOffer {
   renewal?: { date: string; credits: number }
 }
 
-const NOT_APPLIED_IF_STOPPED =
-  'Если остановить задачу, кредиты за неё не спишутся, а изменения не будут применены.'
+/**
+ * What stopping does to the money: every pass is charged when it ends (owner's answer of
+ * 26.10.2026), so the work done up to the question stays charged, and what a task in the browser
+ * did is on the site already — the sentence promises neither a refund nor an undo (28.10.2026).
+ */
+const NOTHING_MORE_IF_STOPPED = 'Если остановить задачу, больше ничего не спишем.'
 
 /**
  * The text of the platform's question — docs/research/2026-10-credits/credits-design.md §5.2,
@@ -304,9 +308,7 @@ export function feedCeilingText(
         sentences.push(
           `Отложим ещё до ${creditsUpToText(offer.nextHold)} и спишем только то, что уйдёт на работу.`,
         )
-      sentences.push(
-        'Если остановиться, кредиты за эту задачу не спишутся, а изменения не будут применены.',
-      )
+      sentences.push('Если остановиться, больше ничего не спишем.')
       break
     case 'credits':
       sentences.push(
@@ -323,7 +325,7 @@ export function feedCeilingText(
         sentences.push(
           `Или дождитесь ${offer.renewal.date}: начислим ${creditsCountText(offer.renewal.credits)} по тарифу, и задачу можно будет продолжить.`,
         )
-      sentences.push(NOT_APPLIED_IF_STOPPED)
+      sentences.push(NOTHING_MORE_IF_STOPPED)
       break
     case 'gift':
       sentences.push(
@@ -332,14 +334,14 @@ export function feedCeilingText(
           : `Подарочные кредиты закончились посреди задачи: на неё ушли все ${groupDigits(held)}.`,
         'Работа сохранена.',
         'Выберите тариф — и продолжим с того же места.',
-        'Если остановить задачу, подарочные кредиты вернутся, а изменения не будут применены.',
+        'Если остановить задачу, больше ничего не спишем, а неистраченные подарочные кредиты вернутся.',
       )
       break
     case 'attempts':
       sentences.push(
         `Задача оказалась слишком большой: на неё уже ${spentText(spent)}.`,
         'Её лучше разбить на части или передать специалисту.',
-        NOT_APPLIED_IF_STOPPED,
+        NOTHING_MORE_IF_STOPPED,
       )
       break
   }
@@ -405,6 +407,13 @@ export const feedQuestionText = Object.freeze({
  * `next: 'awaiting_approval'`). What can be done with the changes is the candidate card's to say.
  */
 export const feedFailureKeptText = 'Изменения, готовые до этого, мы сохранили.'
+
+/**
+ * The last sentence of a failure card when the dialog stays open (`feed.failure` with `next:
+ * 'awaiting_user'`, owner's decision of 28.10.2026): the client writes, and the agent goes on.
+ */
+export const feedFailureOpenText =
+  'Диалог не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.'
 
 /**
  * The last sentence of a result that left the dialog open (`feed.result` with `next:

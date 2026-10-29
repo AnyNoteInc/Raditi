@@ -218,12 +218,20 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     await passes.run(dialog.job)
 
     expect(run).not.toHaveBeenCalled()
+    // The dialog stays open (28.10.2026): the client's next words place the reserve it lacked.
     expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
-      status: 'failed',
+      status: 'awaiting_user',
       turnNo: 0,
     })
     expect(await failure(dialog.taskId)).toEqual([
-      { v: 1, turn: null, code: 'unavailable', site: 'unchanged', credits: null, next: 'failed' },
+      {
+        v: 1,
+        turn: null,
+        code: 'unavailable',
+        site: 'unchanged',
+        credits: null,
+        next: 'awaiting_user',
+      },
     ])
   })
 
@@ -240,7 +248,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         code: 'unavailable',
         site: 'unchanged',
         credits: 'returned',
-        next: 'failed',
+        next: 'awaiting_user',
       },
     ])
     const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
@@ -265,10 +273,10 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     await Promise.all([passes.run(dialog.job), passes.run(dialog.job)])
     await passes.run(dialog.job)
 
-    // One claim, one ending: the task without a reserve failed once, with one feed row.
+    // One claim, one ending: the pass without a reserve failed once, with one feed row.
     expect(await failure(dialog.taskId)).toHaveLength(1)
     expect((await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).status).toBe(
-      'failed',
+      'awaiting_user',
     )
   })
 
@@ -406,7 +414,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
 
       expect(run).not.toHaveBeenCalled()
       expect(await failure(dialog.taskId)).toEqual([
-        expect.objectContaining({ code: 'unavailable', next: 'failed', credits: 'returned' }),
+        expect.objectContaining({
+          code: 'unavailable',
+          next: 'awaiting_user',
+          credits: 'returned',
+        }),
       ])
     })
 
@@ -519,7 +531,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
 
         expect(run).not.toHaveBeenCalled()
         expect(await failure(dialog.taskId)).toEqual([
-          expect.objectContaining({ code: 'unavailable', next: 'failed', credits: 'returned' }),
+          expect.objectContaining({
+            code: 'unavailable',
+            next: 'awaiting_user',
+            credits: 'returned',
+          }),
         ])
       })
 
@@ -536,7 +552,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         expect(run).not.toHaveBeenCalled()
         expect(browser.verify).not.toHaveBeenCalled()
         expect(await failure(dialog.taskId)).toEqual([
-          expect.objectContaining({ code: 'unavailable', next: 'failed' }),
+          expect.objectContaining({ code: 'unavailable', next: 'awaiting_user' }),
         ])
       })
     })
@@ -617,7 +633,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         })
         await passes.run(dialog.job)
         expect((await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).status).toBe(
-          'failed',
+          'awaiting_user',
         )
         expect(await db.outboxEvent.findUniqueOrThrow({ where: { dedupeKey: key } })).toMatchObject(
           {
