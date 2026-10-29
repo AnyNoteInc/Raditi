@@ -38,6 +38,8 @@ export function paletteOptions(
   verdicts: readonly CommandVerdict[],
   /** The commands this dialog has at all; absent — every command of the chat. */
   listed?: readonly ChatCommandId[],
+  /** Why a command without a verdict cannot be run here; absent — its description is shown. */
+  closedReason?: string,
 ): PaletteOption[] {
   const ids = (typed === null ? [...chatCommandIds] : matchChatCommands(typed)).filter(
     (id) => listed === undefined || listed.includes(id),
@@ -54,7 +56,13 @@ export function paletteOptions(
       {
         id,
         available,
-        reason: available ? null : refusal === null ? null : chatCommandRefusalText[refusal],
+        reason: available
+          ? null
+          : refusal !== null
+            ? chatCommandRefusalText[refusal]
+            : verdict === undefined
+              ? (closedReason ?? null)
+              : null,
       },
     ]
   })

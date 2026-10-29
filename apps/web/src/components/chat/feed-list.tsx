@@ -240,7 +240,7 @@ function Bubble({
           px: 2.5,
           py: 1.25,
           borderRadius: '24px',
-          bgcolor: 'var(--chat-fill, var(--mui-palette-action-selected))',
+          bgcolor: 'var(--mui-palette-action-selected)',
           color: 'text.primary',
         }}
       >

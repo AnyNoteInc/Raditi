@@ -45,6 +45,9 @@ function DialogLink({
         : item.answered
           ? null
           : taskStatusListHint[item.status]
+  // On the fill of the open dialog the cabinet's quiet colour falls under 4.5:1 in the dark scheme
+  // (4.4:1): its time and second line take the colour of the text.
+  const quiet = current ? 'text.primary' : 'text.secondary'
   return (
     <Box
       component={Link}
@@ -89,7 +92,7 @@ function DialogLink({
         <Typography
           component="span"
           variant="caption"
-          color="text.secondary"
+          color={quiet}
           data-dialog-time=""
           sx={{ flex: 'none', whiteSpace: 'nowrap' }}
         >
@@ -104,13 +107,13 @@ function DialogLink({
           gap: '0 6px',
           minWidth: 0,
           fontSize: 12,
-          color: 'text.secondary',
+          color: quiet,
           '& svg': { width: 13, height: 13 },
         }}
       >
-        <StatusMark status={item.status} answered={item.answered} />
+        <StatusMark status={item.status} answered={item.answered} onFill={current} />
         {hint ? (
-          <Typography component="span" variant="caption" color="text.secondary">
+          <Typography component="span" variant="caption" color={quiet}>
             {hint}
           </Typography>
         ) : null}

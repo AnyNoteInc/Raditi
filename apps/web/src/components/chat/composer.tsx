@@ -7,6 +7,9 @@ import { feedInputText, feedTooLongText } from '@repo/domain/tasks/client-feed-l
 import { FEED_REQUEST_TEXT_LIMIT, hasVisibleText } from '@repo/domain/tasks/client-feed-text'
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
+import ListItemText from '@mui/material/ListItemText'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import {
   useId,
@@ -14,6 +17,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -47,16 +51,73 @@ export const offScreen = {
   whiteSpace: 'nowrap',
 } as const
 
-/** A quiet button of the field's own row: no frame until the pointer is on it. */
+/** How far the drawn control stands in from its pressing area: 36px drawn by a finger, 32px. */
+const ROUND = { touch: '4px', fine: '6px' } as const
+const PILL = { touch: '4px 0', fine: '6px 0' } as const
+
+/**
+ * A control of the field's row, smaller to the eye than the cabinet's own (owner's request of
+ * 29.10.2026): what is pressed stays 44px tall (DESIGN.md, «область нажатия — не меньше 44px»),
+ * what is drawn — its fill, the hover, the ripple, the ring of the focus — is 32px where a
+ * pointer aims and 36px where a finger presses, inside it. `drawn` is the fill at rest.
+ */
+export function fieldControl(drawn = 'transparent', inset: { touch: string; fine: string } = PILL) {
+  const shape = { inset: inset.touch, '@media (pointer: fine)': { inset: inset.fine } }
+  return {
+    position: 'relative',
+    isolation: 'isolate',
+    height: 44,
+    flex: 'none',
+    bgcolor: 'transparent',
+    '&::before': {
+      content: '""',
+      position: 'absolute',
+      zIndex: -1,
+      ...shape,
+      borderRadius: '999px',
+      bgcolor: drawn,
+      transition: 'background-color var(--raditi-motion-fast) var(--raditi-ease-out)',
+    },
+    '&:hover': { bgcolor: 'transparent' },
+    '& .MuiTouchRipple-root': { ...shape, borderRadius: '999px' },
+    // The ring stands around what is drawn, not around the pressing area.
+    '&&:focus-visible': { outline: 'none' },
+    '&.Mui-focusVisible::before': {
+      outline: '2px solid',
+      outlineColor: 'primary.main',
+      outlineOffset: '2px',
+    },
+  } as const
+}
+
+/** A quiet round button of the field's own row: no fill until the pointer is on it. */
 const toolButton = {
-  // The pressing area of 44px everywhere (DESIGN.md, «область нажатия — не меньше 44px»).
+  ...fieldControl('transparent', ROUND),
   width: 44,
-  height: 44,
-  flex: 'none',
+  p: 0,
   color: 'text.secondary',
-  transition: 'background-color var(--raditi-motion-fast) var(--raditi-ease-out)',
-  '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+  '&:hover': { bgcolor: 'transparent', color: 'text.primary' },
+  '&:hover::before': { bgcolor: 'action.hover' },
 } as const
+
+/**
+ * The files a paste carries when the client meant files: a screenshot, a picture copied from a
+ * page, files copied in the file manager (owner's request of 29.10.2026: a pasted file goes as if
+ * it were chosen). A copy from a document — its text together with its rich copy, as office
+ * programs give, often with a picture of the cells — stays text.
+ */
+export function pastedFiles(data: Pick<DataTransfer, 'files' | 'types'> | null): File[] {
+  if (data === null || data.files.length === 0) return []
+  const types = Array.from(data.types)
+  if (types.includes('text/plain') && types.includes('text/html')) return []
+  return Array.from(data.files)
+}
+
+/** The keys that paste, as this computer names them. */
+function pasteKeys(): string {
+  const agent = typeof navigator === 'undefined' ? '' : navigator.userAgent
+  return /Mac|iPhone|iPad/.test(agent) ? '⌘V' : 'Ctrl+V'
+}
 
 export interface ComposerCommands {
   verdicts: readonly CommandVerdict[]
@@ -69,12 +130,16 @@ export interface ComposerCommands {
    * browser has only `/cancel` (docs/plan/57-browser-tasks.md): no preview, release or undo.
    */
   listed?: readonly ChatCommandId[]
+  /** Why a command the server gave no verdict on cannot be run here: on «Новый диалог». */
+  closedReason?: string
 }
 
 /**
- * The field a client writes in, with its send button and, in a dialog, the window of commands:
- * `/` at the start of the empty field — or the button beside it — opens it. Enter in the field is
- * a new line; Ctrl+Enter or ⌘+Enter sends. A text that is a command alone runs the command and
+ * The field a client writes in, the same on «Новый диалог» and in a dialog that goes on (owner's
+ * request of 29.10.2026). Its row holds, in this order, the window of commands — `/` at the start
+ * of the empty field or its button opens it —, «+» with «Загрузить файл», «Размышление», and the
+ * send button. A file pasted into the field is attached as if it were chosen. Enter in the field
+ * is a new line; Ctrl+Enter or ⌘+Enter sends. A text that is a command alone runs the command and
  * is never sent. The text stays in the field until the server has taken it.
  */
 export function Composer({
@@ -86,7 +151,7 @@ export function Composer({
   busy = false,
   onSend,
   commands,
-  modes,
+  effort,
   attachments,
   noSecrets = feedInputText.noSecrets,
   fieldRef,
@@ -109,8 +174,8 @@ export function Composer({
    */
   onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
-  /** The switch of the mode, on a new dialog. */
-  modes?: ReactNode
+  /** «Размышление»: the menu of how hard the model thinks, after «+». */
+  effort?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
   attachments?: AttachmentsControl
   /** The reminder about passwords: read aloud with the field, not shown under it. */
@@ -129,6 +194,7 @@ export function Composer({
   const listId = useId()
   const filesWaitId = useId()
   const filesHintId = useId()
+  const noFilesId = useId()
   const secretsId = useId()
   const [text, setText] = useState('')
   // The list closed by Escape stays closed until the field starts anew.
@@ -144,6 +210,9 @@ export function Composer({
   const listRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  // «+»: the menu of what can be added to the message — for now a file from the computer.
+  const addMenuId = useId()
+  const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null)
   const ownField = useRef<HTMLTextAreaElement>(null)
   const field = fieldRef ?? ownField
 
@@ -168,9 +237,9 @@ export function Composer({
     commands === undefined
       ? []
       : forced
-        ? paletteOptions(null, commands.verdicts, commands.listed)
+        ? paletteOptions(null, commands.verdicts, commands.listed, commands.closedReason)
         : typed && !disabled
-          ? paletteOptions(text, commands.verdicts, commands.listed)
+          ? paletteOptions(text, commands.verdicts, commands.listed, commands.closedReason)
           : []
   const open = options.length > 0
   const activeIndex = Math.min(active, Math.max(0, options.length - 1))
@@ -212,7 +281,12 @@ export function Composer({
     if (!next.startsWith('/')) setDismissed(false)
     setActive(0)
     if (commands && wasClosed && !disabled && next.startsWith('/') && !dismissed) {
-      const count = paletteOptions(next, commands.verdicts, commands.listed).length
+      const count = paletteOptions(
+        next,
+        commands.verdicts,
+        commands.listed,
+        commands.closedReason,
+      ).length
       if (count > 0) announceOpened(count)
     }
   }
@@ -226,9 +300,12 @@ export function Composer({
         setNotice(composerText.commandsInDialog)
         return
       }
-      const option = paletteOptions(null, commands.verdicts, commands.listed).find(
-        (item) => item.id === command,
-      )
+      const option = paletteOptions(
+        null,
+        commands.verdicts,
+        commands.listed,
+        commands.closedReason,
+      ).find((item) => item.id === command)
       if (option?.available) choose(option)
       else setNotice(option?.reason ?? composerText.commandUnavailable)
       return
@@ -267,7 +344,9 @@ export function Composer({
     }
     setForced(true)
     setActive(0)
-    announceOpened(paletteOptions(null, commands.verdicts, commands.listed).length)
+    announceOpened(
+      paletteOptions(null, commands.verdicts, commands.listed, commands.closedReason).length,
+    )
     // The list is in the document after this render: then it takes the focus.
     window.setTimeout(
       () => listRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus(),
@@ -357,6 +436,13 @@ export function Composer({
           }
           onChange={(event) => changeText(event.target.value)}
           onKeyDown={keyDown}
+          onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
+            if (!attachments) return
+            const files = pastedFiles(event.clipboardData)
+            if (files.length === 0) return
+            event.preventDefault()
+            attachments.add(files)
+          }}
           sx={{
             display: 'block',
             width: '100%',
@@ -383,21 +469,67 @@ export function Composer({
         <Box
           sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}
         >
-          <Box
-            sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, minWidth: 0 }}
-          >
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', minWidth: 0 }}>
+            {commands ? (
+              <IconButton
+                ref={buttonRef}
+                aria-label={paletteText.open}
+                aria-haspopup="listbox"
+                aria-expanded={forced}
+                aria-controls={forced ? listId : undefined}
+                onClick={openByButton}
+                sx={toolButton}
+              >
+                <AppIcon name="slash" size={18} />
+              </IconButton>
+            ) : null}
+            <IconButton
+              aria-label={composerText.add}
+              aria-haspopup="menu"
+              aria-expanded={addAnchor !== null}
+              aria-controls={addAnchor !== null ? addMenuId : undefined}
+              aria-describedby={attachments ? filesHintId : noFilesId}
+              disabled={disabled || !attachments}
+              onClick={(event) => setAddAnchor(event.currentTarget)}
+              sx={toolButton}
+            >
+              <AppIcon name="plus" />
+            </IconButton>
             {attachments ? (
               <>
-                <IconButton
-                  aria-label={attachmentText.attach}
-                  aria-describedby={filesHintId}
-                  disabled={disabled}
-                  onClick={() => fileInput.current?.click()}
-                  sx={toolButton}
+                <Menu
+                  id={addMenuId}
+                  anchorEl={addAnchor}
+                  open={addAnchor !== null}
+                  onClose={() => setAddAnchor(null)}
+                  anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  slotProps={{
+                    paper: { sx: { borderRadius: '14px', minWidth: 240, mt: -1 } },
+                    list: { 'aria-label': composerText.add },
+                  }}
                 >
-                  <AppIcon name="attach" />
-                </IconButton>
-                {/* The dialog of the system opens by the button above: the input itself is hidden. */}
+                  <MenuItem
+                    onClick={() => {
+                      setAddAnchor(null)
+                      fileInput.current?.click()
+                    }}
+                    sx={{ gap: 1.5, py: 1, alignItems: 'flex-start' }}
+                  >
+                    <Box component="span" sx={{ display: 'flex', mt: 0.25 }}>
+                      <AppIcon name="attach" size={18} />
+                    </Box>
+                    <ListItemText
+                      primary={attachmentText.upload}
+                      secondary={attachmentText.pasteHint(pasteKeys())}
+                      slotProps={{
+                        primary: { sx: { fontSize: 14, fontWeight: 500 } },
+                        secondary: { sx: { fontSize: 13 } },
+                      }}
+                    />
+                  </MenuItem>
+                </Menu>
+                {/* The dialog of the system opens from the menu above: the input itself is hidden. */}
                 <input
                   ref={fileInput}
                   type="file"
@@ -414,20 +546,7 @@ export function Composer({
                 />
               </>
             ) : null}
-            {modes}
-            {commands ? (
-              <IconButton
-                ref={buttonRef}
-                aria-label={paletteText.open}
-                aria-haspopup="listbox"
-                aria-expanded={forced}
-                aria-controls={forced ? listId : undefined}
-                onClick={openByButton}
-                sx={toolButton}
-              >
-                <AppIcon name="slash" />
-              </IconButton>
-            ) : null}
+            {effort}
           </Box>
           {filesWait !== null ? (
             <Typography
@@ -451,27 +570,24 @@ export function Composer({
             disabled={stop ? !stop.available : !canSend}
             onClick={() => (stop ? stop.onStop() : void send())}
             sx={{
-              // The pressing area of 44px everywhere, as every control of the cabinet.
+              // The cabinet's main action: the accent fill, the arrow in its ink.
+              ...fieldControl('var(--raditi-accent)', ROUND),
               width: 44,
-              height: 44,
-              flex: 'none',
+              p: 0,
               border: 0,
-              // The cabinet's vivid main action: accent fill, the arrow in its ink colour.
-              bgcolor: 'var(--raditi-accent)',
               color: 'var(--raditi-on-accent)',
               transition:
                 'opacity var(--raditi-motion-fast) var(--raditi-ease-out), transform var(--raditi-motion-press) var(--raditi-ease-out)',
-              '&:hover': { bgcolor: 'var(--raditi-accent-hover)', opacity: 0.86 },
-              '&.Mui-disabled': {
+              '&:hover::before': { bgcolor: 'var(--raditi-accent-hover)' },
+              '&.Mui-disabled': { color: 'var(--mui-palette-action-disabled)', opacity: 0.22 },
+              '&.Mui-disabled::before': {
                 bgcolor: 'var(--mui-palette-action-disabledBackground)',
-                color: 'var(--mui-palette-action-disabled)',
-                opacity: 0.22,
               },
               '&:active': { transform: 'scale(0.92)' },
               '@media (prefers-reduced-motion: reduce)': { '&:active': { transform: 'none' } },
             }}
           >
-            <AppIcon name={stop ? 'square' : 'send'} />
+            <AppIcon name={stop ? 'square' : 'send'} size={18} />
           </IconButton>
         </Box>
       </Box>
@@ -500,7 +616,12 @@ export function Composer({
         <Box id={filesHintId} sx={offScreen}>
           {attachmentHintText}
         </Box>
-      ) : null}
+      ) : (
+        // «+» is there and closed where the message takes no files: read aloud why.
+        <Box id={noFilesId} sx={offScreen}>
+          {attachmentText.none}
+        </Box>
+      )}
       <Box role="status" aria-live="polite" sx={offScreen}>
         {announcement}
       </Box>

@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { Composer } from './composer'
+import { Composer, pastedFiles } from './composer'
 import { movedIndex, paletteOptions } from './command-palette'
 import { verdicts } from './testing'
 
@@ -239,6 +239,24 @@ describe('the field', () => {
     )
   })
 
+  it('keeps its controls in one order: «/», «+», «Размышление», then «Отправить»', () => {
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={vi.fn(async () => true)}
+        commands={{ verdicts: verdicts(), onRun: vi.fn() }}
+        effort={<button type="button">Размышление: Высокое</button>}
+      />,
+    )
+    expect(
+      screen
+        .getAllByRole('button')
+        .map((button) => button.textContent || button.getAttribute('aria-label')),
+    ).toEqual(['Команды', 'Добавить', 'Размышление: Высокое', 'Отправить'])
+    // A field that takes no files has «+» all the same, closed.
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' }).disabled).toBe(true)
+  })
+
   it('stands «Остановить» in place of «Отправить» while the agent works', () => {
     const onStop = vi.fn()
     render(
@@ -267,6 +285,15 @@ describe('palette helpers', () => {
     expect(release).toEqual({ id: 'release', available: false, reason: null })
   })
 
+  it('gives a command without a verdict the reason of the place, when it has one', () => {
+    const [release] = paletteOptions('/release', [], undefined, 'Команды работают внутри диалога.')
+    expect(release).toEqual({
+      id: 'release',
+      available: false,
+      reason: 'Команды работают внутри диалога.',
+    })
+  })
+
   it('lists «Отменить выпуск» only with a verdict on it', () => {
     expect(paletteOptions('/undo', [])).toEqual([])
     expect(
@@ -279,5 +306,26 @@ describe('palette helpers', () => {
           'Отменить выпуск можно в течение 7 дней после установки. Опишите в новом диалоге, что нужно вернуть.',
       },
     ])
+  })
+})
+
+describe('pastedFiles', () => {
+  const png = new File([new Uint8Array(4)], 'image.png', { type: 'image/png' })
+  const clip = (types: string[], files: File[] = [png]) =>
+    ({ types, files }) as unknown as Pick<DataTransfer, 'files' | 'types'>
+
+  it('takes a screenshot and a picture copied from a page', () => {
+    expect(pastedFiles(clip(['Files']))).toEqual([png])
+    expect(pastedFiles(clip(['text/html', 'Files']))).toEqual([png])
+  })
+
+  it('takes files copied in the file manager, which carry their names as text', () => {
+    expect(pastedFiles(clip(['text/plain', 'Files']))).toEqual([png])
+  })
+
+  it('leaves text, and a copy from a document with a picture of it, to the field', () => {
+    expect(pastedFiles(clip(['text/plain'], []))).toEqual([])
+    expect(pastedFiles(clip(['text/plain', 'text/html', 'Files']))).toEqual([])
+    expect(pastedFiles(null)).toEqual([])
   })
 })

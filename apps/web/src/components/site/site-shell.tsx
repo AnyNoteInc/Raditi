@@ -13,6 +13,8 @@ import { ApplicationToolbar } from '@/components/application/application-toolbar
 import { SkipLink } from '@/components/application/skip-link'
 import type { ApplicationUser } from '@/components/application/user-avatar'
 import { UserMenu } from '@/components/application/user-menu'
+import { CreditRing } from '@/components/billing/credit-ring'
+
 import {
   activeSiteSection,
   closedSectionsNote,
@@ -32,7 +34,6 @@ import {
   type SiteNavEntry,
   type SiteSetup,
 } from './site-nav'
-
 import { SiteMark } from './site-mark'
 
 export type ShellSite = {
@@ -127,7 +128,14 @@ function ToolbarEnd({
         Открыть сайт
         <AppIcon name="arrow" size={16} />
       </MuiLink>
-      <Box sx={{ display: menuEverywhere ? 'block' : { xs: 'block', sm: 'none' } }}>
+      {/* Where no rail holds them, the credits and the account menu stand in the bar. */}
+      <Box
+        sx={{
+          display: menuEverywhere ? 'flex' : { xs: 'flex', sm: 'none' },
+          alignItems: 'center',
+        }}
+      >
+        <CreditRing placement="toolbar" />
         <UserMenu user={user} placement="toolbar" />
       </Box>
     </Box>
@@ -363,7 +371,18 @@ export function SiteShell({
             />
           ))}
         </Box>
-        <Box sx={{ mt: 'auto', pt: 2 }}>
+        {/* The credits over the account menu (owner's request of 29.10.2026). */}
+        <Box
+          sx={{
+            mt: 'auto',
+            pt: 2,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 0.75,
+          }}
+        >
+          <CreditRing placement="sidebar" />
           <UserMenu user={user} placement="sidebar" />
         </Box>
       </Box>

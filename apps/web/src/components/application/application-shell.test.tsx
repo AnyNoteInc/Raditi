@@ -7,6 +7,12 @@ import { ApplicationShell } from './application-shell'
 
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
+// The credits read the server: here the ring is a mark of where it stands.
+vi.mock('@/components/billing/credit-ring', () => ({
+  CreditRing: ({ placement }: { placement: string }) => (
+    <span data-testid={`credit-ring-${placement}`} />
+  ),
+}))
 
 const user = { name: 'Анна', lastName: 'Иванова', email: 'anna@example.ru' }
 
@@ -80,6 +86,14 @@ describe('application shell', () => {
 
     const sidebar = screen.getByRole('complementary', { name: 'Боковая панель' })
     expect(within(sidebar).getAllByRole('button')).toHaveLength(1)
+  })
+
+  it('puts the credits over the account menu (owner, 29.10.2026)', () => {
+    render(shell())
+    const sidebar = screen.getByRole('complementary', { name: 'Боковая панель' })
+    const ring = within(sidebar).getByTestId('credit-ring-sidebar')
+    const account = within(sidebar).getByRole('button')
+    expect(ring.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('renders the same structure on the server', () => {

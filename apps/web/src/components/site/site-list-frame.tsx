@@ -109,7 +109,7 @@ export function SiteListFrame({
           px: { md: 1.5 },
           pt: { md: 2 },
           pb: { md: 'max(16px, env(safe-area-inset-bottom))' },
-          bgcolor: { md: 'var(--mui-palette-background-paper)' },
+          bgcolor: { md: 'background.paper' },
           borderRight: { md: 1 },
           borderColor: { md: 'divider' },
         }}

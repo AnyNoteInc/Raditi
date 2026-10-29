@@ -70,6 +70,12 @@ export const RATE_PAUSE =
 /** Said beside «Сменить тариф» wherever it is offered as a way out: only a pack helps today. */
 export const PLAN_CHANGE_STARTS_LATER = 'Новый тариф начнёт действовать со следующего периода.'
 
+/**
+ * Read with the ring of the credits while a new task would not be taken (`newTask.allowed`);
+ * why — its window says, by the notice.
+ */
+export const NEW_TASK_CLOSED = 'Сейчас новую задачу начать нельзя'
+
 /** «100 кредитов за 1 990 ₽»: the pack on sale, as a notice offers it. */
 const packPrice = (pack: { credits: number; price: string }) =>
   `${formatCount(pack.credits)} ${creditsWord(pack.credits)} за ${formatRubles(pack.price)} ₽`
