@@ -36,9 +36,11 @@ ENTRYPOINT ["node"]
 FROM build AS prod
 # The workspace layout stays: packages ship TypeScript sources that Node type-strips, and it
 # refuses to strip under node_modules — so no `pnpm deploy`
+# Not --offline: a runner restores the install layer of the build stage from the build cache,
+# never the cache mount it filled, so the store may be empty here; the lockfile still decides
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     rm -rf node_modules apps/*/node_modules packages/*/node_modules \
- && pnpm install --frozen-lockfile --prod --offline --store-dir /pnpm/store
+ && pnpm install --frozen-lockfile --prod --prefer-offline --store-dir /pnpm/store
 
 FROM ${GITLEAKS_IMAGE} AS gitleaks
 
