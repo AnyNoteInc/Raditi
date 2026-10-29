@@ -44,12 +44,19 @@ export function StatusMark({
   status,
   size = 'small',
   answered = false,
+  onFill = false,
 }: {
   status: TaskStatus
   size?: 'small' | 'medium'
   answered?: boolean
+  /**
+   * The mark stands on a fill — the open dialog of the list: the quiet tone takes the colour of
+   * the text, which keeps 4.5:1 there in the dark scheme as well.
+   */
+  onFill?: boolean
 }) {
   const idle = answered && status === 'awaiting_user'
+  const tone = idle ? 'text.primary' : statusTone[status]
   return (
     <Box
       component="span"
@@ -58,7 +65,7 @@ export function StatusMark({
         alignItems: 'center',
         gap: 0.75,
         minWidth: 0,
-        color: idle ? 'text.primary' : statusTone[status],
+        color: onFill && tone === 'text.secondary' ? 'text.primary' : tone,
         fontSize: size === 'small' ? 13 : 14,
         fontWeight: size === 'small' ? 500 : 600,
         lineHeight: 1.3,

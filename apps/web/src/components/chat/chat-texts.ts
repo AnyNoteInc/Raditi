@@ -322,6 +322,8 @@ export const composerText = Object.freeze({
   /** «Работа» works on a copy of the site: a site without its files cannot take one. */
   workOff: 'Режим «Работа» недоступен: у сайта нет копии файлов.',
   modes: 'Режим диалога',
+  /** «+» of the field: what can be added to the message. */
+  add: 'Добавить',
   /** A command typed on «Новый диалог»: there is no dialog to run it in yet. */
   commandsInDialog: 'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
   /** A command typed in full that cannot be run now, and the server gave no reason. */
@@ -330,8 +332,12 @@ export const composerText = Object.freeze({
   stop: 'Остановить',
   /** The field of a dialog that has ended. */
   finished: 'Диалог завершён',
-  /** The mode of a dialog that goes on: chosen when it started. */
-  modeFixed: 'Режим выбирается в начале диалога',
+  /**
+   * The other mode on the switch of a dialog that goes on: the mode is chosen when a dialog
+   * starts, so the other one starts a new dialog.
+   */
+  otherMode: (label: string) =>
+    `Откроет новый диалог в режиме «${label}»: режим начатого диалога не меняется.`,
 })
 
 export const listText = Object.freeze({
@@ -339,11 +345,6 @@ export const listText = Object.freeze({
   more: 'Показать ещё',
   untitled: 'Диалог без названия',
   loading: 'Загружаем диалоги',
-})
-
-export const creditsText = Object.freeze({
-  title: 'Кредиты',
-  details: 'Подробнее о кредитах',
 })
 
 export const dialogText = Object.freeze({
@@ -385,7 +386,12 @@ export const activityText = Object.freeze({
 
 /** Files attached to a message (docs/plan/57-browser-tasks.md, Б26). */
 export const attachmentText = Object.freeze({
-  attach: 'Прикрепить файлы',
+  /** The item of «+» that opens the dialog of the system. */
+  upload: 'Загрузить файл',
+  /** Under it: a file can be pasted into the field as well. */
+  pasteHint: (keys: string) => `Или вставьте его в поле: ${keys}`,
+  /** «+» of a field that takes no files: in «Работа» for now, in a dialog that has ended. */
+  none: 'К этому сообщению файлы не прикрепить.',
   list: 'Файлы к сообщению',
   sent: 'Файлы сообщения',
   uploading: (percent: number) => `Загружаем… ${percent} %`,

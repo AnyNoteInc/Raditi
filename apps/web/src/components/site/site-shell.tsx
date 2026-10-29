@@ -13,6 +13,7 @@ import { ApplicationToolbar } from '@/components/application/application-toolbar
 import { SkipLink } from '@/components/application/skip-link'
 import type { ApplicationUser } from '@/components/application/user-avatar'
 import { UserMenu } from '@/components/application/user-menu'
+import { CreditRing } from '@/components/billing/credit-ring'
 
 import {
   activeSiteSection,
@@ -33,8 +34,6 @@ import {
   type SiteNavEntry,
   type SiteSetup,
 } from './site-nav'
-import { chatSurface } from '@/components/chat/chat-surface'
-
 import { SiteMark } from './site-mark'
 
 export type ShellSite = {
@@ -129,7 +128,14 @@ function ToolbarEnd({
         Открыть сайт
         <AppIcon name="arrow" size={16} />
       </MuiLink>
-      <Box sx={{ display: menuEverywhere ? 'block' : { xs: 'block', sm: 'none' } }}>
+      {/* Where no rail holds them, the credits and the account menu stand in the bar. */}
+      <Box
+        sx={{
+          display: menuEverywhere ? 'flex' : { xs: 'flex', sm: 'none' },
+          alignItems: 'center',
+        }}
+      >
+        <CreditRing placement="toolbar" />
         <UserMenu user={user} placement="toolbar" />
       </Box>
     </Box>
@@ -231,8 +237,6 @@ export function SiteShell({
   // A «list — content» section: from `md` its list column stands beside the rail, and the
   // content fills the height so that the section can place its own areas.
   const framed = hasSiteList(active)
-  // «Чат» is its own surface: the neutral palette of the brief of 26.10.2026 (chat-surface.ts).
-  const chat = active === 'chat'
   // An open item takes the whole phone screen: its back arrow leads to the list and the bar.
   const itemOpen = siteItemOpen(pathname, site.id)
   // An open dialog: from `lg` the list column gives way, and the panel of its changes stands at
@@ -367,34 +371,41 @@ export function SiteShell({
             />
           ))}
         </Box>
-        <Box sx={{ mt: 'auto', pt: 2 }}>
+        {/* The credits over the account menu (owner's request of 29.10.2026). */}
+        <Box
+          sx={{
+            mt: 'auto',
+            pt: 2,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 0.75,
+          }}
+        >
+          <CreditRing placement="sidebar" />
           <UserMenu user={user} placement="sidebar" />
         </Box>
       </Box>
 
       <Box
-        sx={[
-          {
-            ml: {
-              xs: 'env(safe-area-inset-left)',
-              sm: `calc(${RAIL}px + env(safe-area-inset-left))`,
-            },
-            mr: 'env(safe-area-inset-right)',
-            pb: {
-              xs: itemOpen
-                ? 'env(safe-area-inset-bottom)'
-                : `calc(${BOTTOM_BAR}px + env(safe-area-inset-bottom))`,
-              sm: 0,
-            },
-            minWidth: 0,
-            ...(framed && { minHeight: '100dvh', display: 'flex', flexDirection: 'column' }),
-            // An open dialog from `lg`: the page stands at the height of the window and the dialog
-            // scrolls inside itself (owner's request of 26.10.2026) — nothing below the surface.
-            ...(paned && { height: { lg: '100dvh' }, overflow: { lg: 'hidden' } }),
+        sx={{
+          ml: {
+            xs: 'env(safe-area-inset-left)',
+            sm: `calc(${RAIL}px + env(safe-area-inset-left))`,
           },
-          chat ? chatSurface : null,
-        ]}
-        {...(chat ? { 'data-chat-surface': '' } : {})}
+          mr: 'env(safe-area-inset-right)',
+          pb: {
+            xs: itemOpen
+              ? 'env(safe-area-inset-bottom)'
+              : `calc(${BOTTOM_BAR}px + env(safe-area-inset-bottom))`,
+            sm: 0,
+          },
+          minWidth: 0,
+          ...(framed && { minHeight: '100dvh', display: 'flex', flexDirection: 'column' }),
+          // An open dialog from `lg`: the page stands at the height of the window and the dialog
+          // scrolls inside itself (owner's request of 26.10.2026) — nothing below the surface.
+          ...(paned && { height: { lg: '100dvh' }, overflow: { lg: 'hidden' } }),
+        }}
       >
         <ApplicationToolbar
           label="Панель сайта"

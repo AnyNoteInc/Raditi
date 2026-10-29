@@ -92,15 +92,48 @@ beforeEach(() => {
 })
 
 describe('files of a message', () => {
-  it('opens the files of the system from its button, with the allowed types', () => {
+  it('opens the files of the system from «+» → «Загрузить файл», with the allowed types', async () => {
     show()
     const input = screen.getByTestId<HTMLInputElement>('composer-files')
     expect(input.multiple).toBe(true)
     expect(input.accept).toContain('.pdf')
     expect(input.accept).toContain('image/jpeg')
     const click = vi.spyOn(input, 'click')
-    fireEvent.click(screen.getByRole('button', { name: 'Прикрепить файлы' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+    const menu = within(await screen.findByRole('menu', { name: 'Добавить' }))
+    // One item for now (owner's request of 29.10.2026), with the hint that a paste works too.
+    expect(menu.getAllByRole('menuitem')).toHaveLength(1)
+    const upload = menu.getByRole('menuitem', { name: /Загрузить файл/ })
+    expect(upload.textContent).toMatch(/Или вставьте его в поле: (⌘V|Ctrl\+V)/)
+    fireEvent.click(upload)
     expect(click).toHaveBeenCalled()
+  })
+
+  it('attaches a file pasted into the field as if it were chosen', async () => {
+    const { pending } = show()
+    const shot = new File([new Uint8Array(8)], 'image.png', { type: 'image/png' })
+    const pasted = fireEvent.paste(field(), {
+      clipboardData: { files: [shot], types: ['Files'], getData: () => '' },
+    })
+    // The paste is taken: no name of the file lands in the text.
+    expect(pasted).toBe(false)
+    await waitFor(() => expect(pending).toHaveLength(1))
+    expect(calls.start).toHaveBeenCalledWith(expect.objectContaining({ name: 'image.png' }))
+    expect(within(files()).getByText('image.png')).toBeTruthy()
+  })
+
+  it('leaves a copy from a document to the text, though it carries a picture', () => {
+    show()
+    const cells = new File([new Uint8Array(8)], 'image.png', { type: 'image/png' })
+    const pasted = fireEvent.paste(field(), {
+      clipboardData: {
+        files: [cells],
+        types: ['text/plain', 'text/html', 'Files'],
+        getData: () => 'Капучино\t290',
+      },
+    })
+    expect(pasted).toBe(true)
+    expect(calls.start).not.toHaveBeenCalled()
   })
 
   it('shows the progress of each file and keeps the message until they are sent', async () => {

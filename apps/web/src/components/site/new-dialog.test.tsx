@@ -17,12 +17,17 @@ type CreateInput = {
   attachments?: string[]
 }
 
-const { create, push } = vi.hoisted(() => ({
+const { create, push, search } = vi.hoisted(() => ({
   create: vi.fn<(input: CreateInput) => Promise<Created>>(),
   push: vi.fn<(path: string) => void>(),
+  // The query of the address: the switch of a dialog opens this screen with `?mode=`.
+  search: { params: new URLSearchParams() },
 }))
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }))
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push }),
+  useSearchParams: () => search.params,
+}))
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
@@ -87,6 +92,7 @@ const write = (text: string) => fireEvent.change(field(), { target: { value: tex
 
 beforeEach(() => {
   vi.clearAllMocks()
+  search.params = new URLSearchParams()
   create.mockImplementation(async ({ taskId }) => ({ taskId, alias: 'a1b2c3', created: true }))
 })
 
@@ -154,11 +160,19 @@ describe('new dialog', () => {
     expect(push).not.toHaveBeenCalled()
   })
 
-  it('has no window of commands: commands belong to a dialog', () => {
+  it('has the window of commands of a dialog, which says that they work there', () => {
     showDialog()
     write('/')
-    expect(screen.queryByRole('listbox')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Команды' })).toBeNull()
+    const list = screen.getByRole('listbox', { name: 'Команды' })
+    const options = within(list).getAllByRole('option')
+    expect(options.length).toBeGreaterThan(0)
+    for (const option of options) {
+      expect(option.getAttribute('aria-disabled')).toBe('true')
+      expect(option.textContent).toContain(
+        'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
+      )
+    }
+    expect(screen.getByRole('button', { name: 'Команды' })).toBeTruthy()
   })
 
   it('never starts a dialog with the words of a command', () => {
@@ -223,11 +237,13 @@ describe('new dialog', () => {
     expect(create.mock.calls[0]![0]).toMatchObject({ effort: 'max' })
   })
 
-  it('shows no words under the field, and no files for the copy of the site', () => {
+  it('has the controls of a dialog in their order, and no files for the copy of the site', () => {
     showDialog()
-    // The level of thinking and «Отправить».
-    expect(screen.getAllByRole('button')).toHaveLength(2)
-    expect(screen.queryByRole('button', { name: 'Прикрепить файлы' })).toBeNull()
+    // «/», «+», the level of thinking and «Отправить» (owner's request of 29.10.2026).
+    expect(
+      screen.getAllByRole('button').map((button) => button.getAttribute('aria-label')),
+    ).toEqual(['Команды', 'Добавить', 'Размышление: Высокое', 'Отправить'])
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' }).disabled).toBe(true)
     expect(screen.queryByRole('radiogroup', { name: 'Как агент будет работать' })).toBeNull()
     expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
     expect(
@@ -247,11 +263,12 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
     // The server's own default: the copy of the site where it is ready.
     expect(work.checked).toBe(true)
     expect(described(modes)).toContain('сами выпускаете новую версию')
-    expect(screen.queryByRole('button', { name: 'Прикрепить файлы' })).toBeNull()
+    const add = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' })
+    expect(add().disabled).toBe(true)
     fireEvent.click(chat)
     expect(chat.checked).toBe(true)
     expect(described(modes)).toContain('без копии файлов сайта')
-    expect(screen.getByRole('button', { name: 'Прикрепить файлы' })).toBeTruthy()
+    expect(add().disabled).toBe(false)
     expect(described(field())).toContain(
       'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера.',
     )
@@ -261,6 +278,12 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
     expect(create.mock.calls[0]![0]).toMatchObject({
       requirements: { repository: false, browser: true },
     })
+  })
+
+  it('starts in the mode the switch of a dialog opened it for', () => {
+    search.params = new URLSearchParams('mode=chat')
+    showDialog({ capabilities: BOTH })
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: 'Чат' }).checked).toBe(true)
   })
 
   it('sends the copy of the site when it is chosen', async () => {

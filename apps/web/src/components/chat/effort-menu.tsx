@@ -11,6 +11,7 @@ import { useId, useState } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 
 import { effortText } from './chat-texts'
+import { fieldControl } from './composer'
 
 const hintOf: Readonly<Record<ReasoningEffort, string>> = {
   low: effortText.lowHint,
@@ -20,8 +21,9 @@ const hintOf: Readonly<Record<ReasoningEffort, string>> = {
 
 /**
  * «Размышление»: how hard the model thinks (owner's requests of 26.10.2026) — a quiet button in
- * the row of the field with the level chosen, and a menu of the three under it. The same on a new
- * dialog and in one that goes on, where the level holds from the agent's next turn.
+ * the row of the field, the brain beside the level chosen (29.10.2026), and a menu of the three
+ * under it. The same on a new dialog and in one that goes on, where the level holds from the
+ * agent's next turn.
  */
 export function EffortMenu({
   value,
@@ -45,30 +47,24 @@ export function EffortMenu({
         disabled={disabled}
         onClick={(event) => setAnchor(event.currentTarget)}
         sx={{
+          ...fieldControl(),
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 0.5,
-          // The pressing area of 44px on every width (DESIGN.md).
-          minHeight: 44,
-          px: 1.25,
+          gap: 0.75,
+          pl: 0.875,
+          pr: 1,
           borderRadius: '999px',
-          fontSize: 14,
+          fontSize: 13,
           color: 'text.secondary',
           whiteSpace: 'nowrap',
-          transition: 'background-color var(--raditi-motion-fast) var(--raditi-ease-out)',
-          '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
-          '&.Mui-focusVisible': {
-            outline: '2px solid',
-            outlineColor: 'primary.main',
-            outlineOffset: 2,
-          },
+          '&:hover': { bgcolor: 'transparent', color: 'text.primary' },
+          '&:hover::before': { bgcolor: 'action.hover' },
           '&.Mui-disabled': { opacity: 0.5 },
         }}
       >
+        <AppIcon name="brain" size={17} />
         {effortText[value]}
-        <Box component="span" sx={{ display: 'inline-flex', transform: 'rotate(90deg)' }}>
-          <AppIcon name="chevron" size={14} />
-        </Box>
+        <AppIcon name="down" size={14} />
       </ButtonBase>
       <Menu
         id={menuId}

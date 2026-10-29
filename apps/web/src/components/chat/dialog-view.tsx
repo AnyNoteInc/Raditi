@@ -9,7 +9,6 @@ import {
   feedQuestionText,
   feedStateText,
   feedVersionText,
-  taskModeLabel,
   taskAnsweredLabel,
   taskStatusLabel,
 } from '@repo/domain/tasks/client-feed-labels'
@@ -41,6 +40,7 @@ import type { SentFile } from './attachment-chips'
 import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
 import { callErrorText } from './call-error'
+import type { SiteCapabilities } from './chat-types'
 import {
   browserText,
   cancelText,
@@ -70,6 +70,7 @@ import {
   stopRequested,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
+import { ModeLinks, type DialogMode } from './mode-switch'
 import { PaneResizer } from './pane-resizer'
 import {
   PreviewPane,
@@ -123,7 +124,9 @@ const SHOW_PANE_ID = 'dialog-show-pane'
  * The head of a dialog (owner's request of 26.10.2026): one quiet line — its name, a release under
  * way beside it, the way to the panel beside it while the panel is closed (owner's request of
  * 27.10.2026: the preview, files and records can be opened at any time), and its menu
- * («Переименовать», «Удалить»). The name is written in place of itself.
+ * («Переименовать», «Удалить»). The name is written in place of itself. In the middle stands
+ * «Чат | Работа» with the dialog's own mode, as on «Новый диалог» (owner's request of 29.10.2026);
+ * on a phone the switch takes a line of its own under the name.
  */
 function DialogHead({
   siteId,
@@ -132,6 +135,7 @@ function DialogHead({
   head,
   onRenamed,
   pane,
+  closedModes,
 }: {
   siteId: string
   taskId: string
@@ -140,6 +144,8 @@ function DialogHead({
   onRenamed: () => void
   /** The panel is closed and can be opened; null — nothing to open, or it is open. */
   pane: { label: string; hint?: string; onOpen: () => void } | null
+  /** A mode the site does not offer now, and why: the switch does not lead to it. */
+  closedModes: Partial<Record<DialogMode, string>>
 }) {
   // «Отменить выпуск» is offered now: deleting the dialog takes it away too.
   const undoable =
@@ -150,76 +156,121 @@ function DialogHead({
   return (
     <Box
       component="header"
-      sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 44, minWidth: 0 }}
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: {
+          xs: 'minmax(0, 1fr) auto',
+          md: 'minmax(0, 1fr) auto minmax(0, 1fr)',
+        },
+        alignItems: 'center',
+        columnGap: 1.5,
+        rowGap: 1,
+        minHeight: 44,
+        minWidth: 0,
+      }}
     >
-      {renaming ? (
-        <RenameField
-          siteId={siteId}
-          taskId={taskId}
-          initial={head?.task.title ?? ''}
-          fontSize={15}
-          onDone={(saved) => {
-            setRenaming(false)
-            if (saved !== null) onRenamed()
-          }}
-        />
-      ) : (
-        <Box
-          sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 1.5 }}
-        >
-          <Typography
-            component="h1"
-            title={title}
+      <Box sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, display: 'flex' }}>
+        {renaming ? (
+          <RenameField
+            siteId={siteId}
+            taskId={taskId}
+            initial={head?.task.title ?? ''}
+            fontSize={15}
+            onDone={(saved) => {
+              setRenaming(false)
+              if (saved !== null) onRenamed()
+            }}
+          />
+        ) : (
+          <Box
             sx={{
+              flex: '1 1 auto',
               minWidth: 0,
-              fontSize: 15,
-              fontWeight: 500,
-              lineHeight: 1.4,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 1.5,
             }}
           >
-            {title}
-          </Typography>
-          {progress ? (
             <Typography
-              component="span"
-              variant="body2"
-              color="text.secondary"
-              sx={{ flex: 'none', fontSize: 13 }}
+              component="h1"
+              title={title}
+              sx={{
+                minWidth: 0,
+                fontSize: 15,
+                fontWeight: 500,
+                lineHeight: 1.4,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
             >
-              {nbsp(progress)}
+              {title}
             </Typography>
-          ) : null}
-        </Box>
-      )}
-      {pane ? (
-        <Button
-          id={SHOW_PANE_ID}
-          variant="text"
-          size="small"
-          onClick={pane.onOpen}
-          title={pane.hint}
-          startIcon={<AppIcon name="panel" size={18} />}
+            {progress ? (
+              <Typography
+                component="span"
+                variant="body2"
+                color="text.secondary"
+                sx={{ flex: 'none', fontSize: 13 }}
+              >
+                {nbsp(progress)}
+              </Typography>
+            ) : null}
+          </Box>
+        )}
+      </Box>
+      {head !== null ? (
+        <Box
           sx={{
-            display: { xs: 'none', lg: 'inline-flex' },
-            flex: 'none',
-            minHeight: 44,
-            color: 'text.secondary',
-            '&:hover': { color: 'text.primary' },
+            gridColumn: { xs: '1 / -1', md: 2 },
+            gridRow: { xs: 2, md: 1 },
+            justifySelf: 'center',
           }}
         >
-          {pane.label}
-        </Button>
+          <ModeLinks
+            value={head.task.mode}
+            newDialogHref={`${siteHref(siteId, 'chat')}/new`}
+            closed={closedModes}
+          />
+        </Box>
       ) : null}
-      {head !== null && !renaming ? (
-        <DialogMenuButton
-          title={title}
-          onRename={() => setRenaming(true)}
-          onRemove={() => setRemoving(true)}
-        />
-      ) : null}
+      <Box
+        sx={{
+          gridColumn: { xs: 2, md: 3 },
+          gridRow: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          gap: 0.5,
+        }}
+      >
+        {pane ? (
+          <Button
+            id={SHOW_PANE_ID}
+            variant="text"
+            size="small"
+            onClick={pane.onOpen}
+            title={pane.hint}
+            startIcon={<AppIcon name="panel" size={18} />}
+            sx={{
+              display: { xs: 'none', lg: 'inline-flex' },
+              flex: 'none',
+              minHeight: 44,
+              color: 'text.secondary',
+              '&:hover': { color: 'text.primary' },
+            }}
+          >
+            {pane.label}
+          </Button>
+        ) : null}
+        {head !== null && !renaming ? (
+          <DialogMenuButton
+            title={title}
+            onRename={() => setRenaming(true)}
+            onRemove={() => setRemoving(true)}
+          />
+        ) : null}
+      </Box>
       {removing ? (
         <RemoveDialogConfirm
           siteId={siteId}
@@ -229,32 +280,6 @@ function DialogHead({
           onClose={() => setRemoving(false)}
         />
       ) : null}
-    </Box>
-  )
-}
-
-/** The mode of a dialog that goes on: chosen when it started, said and not changed. */
-function ModeMark({ mode }: { mode: 'work' | 'chat' }) {
-  return (
-    <Box
-      component="span"
-      title={composerText.modeFixed}
-      sx={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 0.75,
-        minHeight: { xs: 44, sm: 36 },
-        px: 1.25,
-        fontSize: 14,
-        color: 'text.secondary',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      <AppIcon name={mode === 'chat' ? 'globe' : 'file'} size={16} />
-      {taskModeLabel[mode]}
-      <Box component="span" sx={offScreen}>
-        {`. ${composerText.modeFixed}`}
-      </Box>
     </Box>
   )
 }
@@ -269,6 +294,7 @@ export function DialogView({
   taskId,
   title,
   browserStreamUrl = null,
+  capabilities,
 }: {
   siteId: string
   siteUrl: string
@@ -279,6 +305,8 @@ export function DialogView({
    * docs/plan/57-browser-tasks.md, Б12); null — the platform has no browser here.
    */
   browserStreamUrl?: string | null
+  /** What the site can be worked on with now (`project.get`): the modes a new dialog has. */
+  capabilities?: SiteCapabilities
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -715,19 +743,16 @@ export function DialogView({
     effortChosen !== null && effortChosen.over === head?.task.effort
       ? effortChosen.effort
       : (head?.task.effort ?? 'high')
-  // The row of the field (owner's requests of 26.10.2026): the mode the dialog started in, and
-  // the level of thinking, which holds from the agent's next turn.
+  // «Размышление» in the row of the field (owner's requests of 26.10.2026): the level holds from
+  // the agent's next turn. The mode the dialog started in is in its head (29.10.2026).
   const settings =
     head === null ? null : (
-      <>
-        <ModeMark mode={head.task.mode} />
-        <EffortMenu
-          value={effort}
-          onChange={(next) => void changeEffort(next)}
-          // The level holds from the agent's next turn: it is changed while the dialog waits.
-          disabled={!awaitingClient || setEffort.isPending}
-        />
-      </>
+      <EffortMenu
+        value={effort}
+        onChange={(next) => void changeEffort(next)}
+        // The level holds from the agent's next turn: it is changed while the dialog waits.
+        disabled={!awaitingClient || setEffort.isPending}
+      />
     )
   let composer
   if (head === null) composer = null
@@ -744,7 +769,7 @@ export function DialogView({
             error={fieldError}
             busy={false}
             onSend={send}
-            modes={settings}
+            effort={settings}
             commands={{
               verdicts: commands,
               onRun: runCommand,
@@ -799,7 +824,7 @@ export function DialogView({
         error={fieldError}
         busy={message.isPending}
         onSend={send}
-        modes={settings}
+        effort={settings}
         commands={{
           verdicts: commands,
           onRun: runCommand,
@@ -924,6 +949,14 @@ export function DialogView({
             taskId={taskId}
             title={shownTitle}
             head={head}
+            closedModes={
+              capabilities === undefined
+                ? {}
+                : {
+                    ...(capabilities.browser === 'ready' ? {} : { chat: composerText.chatOff }),
+                    ...(capabilities.repository === 'ready' ? {} : { work: composerText.workOff }),
+                  }
+            }
             onRenamed={refresh}
             pane={
               hasPane && !paneShown
@@ -1016,7 +1049,7 @@ export function DialogView({
               pt: 1.5,
               pb: { xs: 'max(12px, env(safe-area-inset-bottom))', sm: 2 },
               // The field stands on the page itself: what scrolls under it is hidden, never faded.
-              bgcolor: 'var(--chat-page, var(--mui-palette-background-paper))',
+              bgcolor: 'var(--mui-palette-background-paper)',
             }}
           >
             {composer}

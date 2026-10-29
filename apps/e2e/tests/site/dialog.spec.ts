@@ -128,8 +128,10 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await expect(page.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Остановить' })).toBeEnabled()
     await expect(send(page)).toHaveCount(0)
-    // The mode it started in, and the level of thinking, by the field.
-    await expect(page.getByTitle('Режим выбирается в начале диалога')).toContainText('Работа')
+    // The mode it started in over the dialog (29.10.2026), the level of thinking by the field.
+    await expect(
+      page.getByRole('navigation', { name: 'Режим диалога' }).locator('[aria-current="true"]'),
+    ).toHaveText('Работа')
     // The level is changed while the dialog waits: core plans a running turn with the one it read.
     await expect(page.getByRole('button', { name: 'Размышление: Высокое' })).toBeDisabled()
   })
@@ -172,8 +174,13 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     const link = today.getByRole('link', { name: new RegExp(FIRST_WORDS) })
     await expect(link).toHaveAttribute('href', `/projects/${siteId}/chat/${taskId}`)
     await expect(link).toContainText(QUEUED)
-    // The credits of the gift stand under the list: one dialog has set some aside.
-    await expect(dialogs(page).getByRole('heading', { name: 'Кредиты' })).toBeVisible()
+    // The credits are no longer under the list: they stand over the account menu (29.10.2026).
+    await expect(dialogs(page).getByRole('heading', { name: 'Кредиты' })).toHaveCount(0)
+    await expect(
+      page
+        .getByRole('complementary', { name: 'Боковая панель сайта' })
+        .getByRole('button', { name: /^(Кредиты по тарифу|Подарочные кредиты): / }),
+    ).toBeVisible()
     await link.click()
     await expect(page).toHaveURL(`/projects/${siteId}/chat/${taskId}`)
     await expect(feed(page).getByText(FIRST_WORDS)).toBeVisible()
@@ -261,8 +268,10 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
 
   await test.step('the question to sign in, the browser beside the dialog', async () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
-    // The mode it started in stands by the field: «Чат», the dialog in the browser.
-    await expect(page.getByTitle('Режим выбирается в начале диалога')).toContainText('Чат')
+    // The mode it started in stands over the dialog: «Чат», the dialog in the browser.
+    await expect(
+      page.getByRole('navigation', { name: 'Режим диалога' }).locator('[aria-current="true"]'),
+    ).toHaveText('Чат')
     await expect(feed(page).getByRole('heading', { name: 'Нужно войти на сайт' })).toBeVisible()
     await expect(browserPane(page)).toBeVisible()
     await expect(pane(page)).toHaveCount(0)
