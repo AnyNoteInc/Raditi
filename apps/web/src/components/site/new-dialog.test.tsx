@@ -3,7 +3,9 @@ import { QueryClient, QueryClientProvider, type UseMutationOptions } from '@tans
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type * as Upload from '@/components/chat/attachment-upload'
 import { serverRefusal } from '@/components/billing/testing'
+import { taskWayText } from '@/components/chat/chat-texts'
 import { SITE_ID } from '@/components/chat/testing'
 
 import { NewDialog, newDialogWays } from './new-dialog'
@@ -29,6 +31,12 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => search.params,
 }))
 
+// The bytes of a chosen file reach the server at once: the upload itself is the composer's test.
+vi.mock('@/components/chat/attachment-upload', async (original) => ({
+  ...(await original<typeof Upload>()),
+  uploadBytes: vi.fn(async () => ({ attachmentId: ATTACHMENT, size: 16 })),
+}))
+
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
     task: {
@@ -49,7 +57,7 @@ vi.mock('@/trpc/client', () => ({
   }),
 }))
 
-const ATTACHMENT = '0199a3f2-0000-7000-8000-0000000000f1'
+const { ATTACHMENT } = vi.hoisted(() => ({ ATTACHMENT: '0199a3f2-0000-7000-8000-0000000000f1' }))
 type Capabilities = Parameters<typeof NewDialog>[0]['capabilities']
 const COPY_ONLY: Capabilities = { repository: 'ready', browser: 'not_configured' }
 const BOTH: Capabilities = { repository: 'ready', browser: 'ready' }
@@ -237,13 +245,16 @@ describe('new dialog', () => {
     expect(create.mock.calls[0]![0]).toMatchObject({ effort: 'max' })
   })
 
-  it('has the controls of a dialog in their order, and no files for the copy of the site', () => {
+  it('has the controls of a dialog in their order, with files for the copy of the site too (28.10.2026)', () => {
     showDialog()
     // «/», «+», the level of thinking and «Отправить» (owner's request of 29.10.2026).
     expect(
       screen.getAllByRole('button').map((button) => button.getAttribute('aria-label')),
     ).toEqual(['Команды', 'Добавить', 'Размышление: Высокое', 'Отправить'])
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' }).disabled).toBe(true)
+    // «Работа» gets its own copy of the files too, since 28.10.2026.
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' }).disabled).toBe(false)
+    // The reminder of a task in the browser is not this mode's: nobody signs in here.
+    expect(described(field())).not.toContain(taskWayText.noSecrets)
     expect(screen.queryByRole('radiogroup', { name: 'Как агент будет работать' })).toBeNull()
     expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
     expect(
@@ -264,7 +275,8 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
     expect(work.checked).toBe(true)
     expect(described(modes)).toContain('сами выпускаете новую версию')
     const add = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' })
-    expect(add().disabled).toBe(true)
+    // «Работа» has its own files since 28.10.2026, same as «Чат».
+    expect(add().disabled).toBe(false)
     fireEvent.click(chat)
     expect(chat.checked).toBe(true)
     expect(described(modes)).toContain('без копии файлов сайта')
@@ -277,6 +289,22 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
     expect(create.mock.calls[0]![0]).toMatchObject({
       requirements: { repository: false, browser: true },
+    })
+  })
+
+  it('sends the files of the first words in «Работа» as in «Чат» (28.10.2026)', async () => {
+    showDialog({ capabilities: BOTH })
+    fireEvent.change(screen.getByTestId('composer-files'), {
+      target: { files: [new File([new Uint8Array(16)], 'Меню.pdf', { type: 'application/pdf' })] },
+    })
+    await screen.findByRole('list', { name: 'Файлы к сообщению' })
+    write('Добавьте меню на страницу кафе')
+    await waitFor(() => expect(send().disabled).toBe(false))
+    fireEvent.click(send())
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0]![0]).toMatchObject({
+      requirements: { repository: true, browser: false },
+      attachments: [ATTACHMENT],
     })
   })
 

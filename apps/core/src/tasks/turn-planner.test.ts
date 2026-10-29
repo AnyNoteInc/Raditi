@@ -26,6 +26,7 @@ import { CONTINUE_PROMPT } from './turn-instructions.ts'
 import {
   planTurn,
   promptOf,
+  turnInboxOf,
   SANDBOX_EGRESS_PROXY_URL,
   SANDBOX_GATEWAY_URL,
   type ClientRequest,
@@ -665,6 +666,78 @@ describe('planTurn', () => {
   })
 })
 
+describe('planTurn of a repository task with files of the client', () => {
+  const MIB = 1024 * 1024
+  const fileOf = (index: number, fileName = `photo-${index}.jpg`, sizeBytes = MIB) => ({
+    id: `0199b2f4-6c1e-7a52-9f3d-${String(index).padStart(12, '0')}`,
+    fileName,
+    contentType: 'image/jpeg',
+    sizeBytes,
+  })
+  const pathOf = (index: number, fileName = `photo-${index}.jpg`) =>
+    `/workspace/inbox/0199b2f4-6c1e-7a52-9f3d-${String(index).padStart(12, '0')}/${fileName}`
+
+  it('puts the files of the task into the sandbox by path and tells the agent of them', async () => {
+    const files = [fileOf(1, 'Меню кафе.pdf'), fileOf(2)]
+    const plan = await planTurn(
+      facts({
+        attachments: files,
+        rules: { protectedPaths: [], addOnlyPaths: ['wp-content/uploads/raditi/'] },
+      }),
+      env(),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.input.attachments).toEqual([pathOf(1, 'Меню кафе.pdf'), pathOf(2)])
+    expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
+    const instructions = plan.request.context.instructions
+    expect(instructions).toContain('## Files from the client')
+    expect(instructions).toContain('they are in /workspace/inbox')
+    expect(instructions).toContain('copy it into wp-content/uploads/raditi/ under a new name')
+    expect(instructions).not.toContain('earlier files of the dialog are not here')
+    // Never a key of the inbox: only paths of the sandbox.
+    expect(JSON.stringify(plan.request)).not.toContain(`inbox/${WORKSPACE}/`)
+  })
+
+  it('says nothing of files to a turn of a task that has none', async () => {
+    const plan = await planTurn(facts(), env())
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.input.attachments).toEqual([])
+    expect(plan.request.context.instructions).not.toContain('## Files from the client')
+  })
+
+  it('tells the agent how many earlier files one turn did not take', async () => {
+    const files = Array.from({ length: 12 }, (_, index) => fileOf(index, undefined, 20 * MIB))
+    const plan = await planTurn(facts({ attachments: files }), env())
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.input.attachments).toHaveLength(10)
+    expect(plan.request.context.instructions).toContain(
+      '- 2 earlier files of the dialog are not here',
+    )
+  })
+
+  it('takes the latest files, as many as one turn holds, in the order they were sent', () => {
+    // A full message of ten files of 20 MiB always fits: the earlier one does not.
+    const full = [
+      fileOf(0, 'old.pdf', MIB),
+      ...Array.from({ length: 10 }, (_, i) => fileOf(i + 1, undefined, 20 * MIB)),
+    ]
+    expect(turnInboxOf(full)).toEqual({
+      paths: Array.from({ length: 10 }, (_, i) => pathOf(i + 1)),
+      omitted: 1,
+    })
+    const many = Array.from({ length: 60 }, (_, index) => fileOf(index, undefined, 1024))
+    const taken = turnInboxOf(many)
+    expect(taken.paths).toEqual(Array.from({ length: 50 }, (_, i) => pathOf(i + 10)))
+    expect(taken.omitted).toBe(10)
+    // A name the plan's rule refuses is left out, the rest still go.
+    expect(turnInboxOf([fileOf(1, 'a\u0007.png'), fileOf(2)])).toEqual({
+      paths: [pathOf(2)],
+      omitted: 1,
+    })
+    expect(turnInboxOf([])).toEqual({ paths: [], omitted: 0 })
+  })
+})
+
 describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md)', () => {
   const ATTACHMENT = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a70'
   const browser = {
@@ -745,7 +818,9 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
     )
     expect(open.request.context.instructions).toContain('web_help')
     expect(turn.context.instructions).not.toContain('API_TOKEN')
+    // Its files go to the browser worker, never into the sandbox (Б26).
     expect(turn.input.attachments).toEqual([])
+    expect(turn.context.instructions).not.toContain('## Files from the client')
     const prompt = turn.input.prompt
     expect(prompt.startsWith('Добавьте новость о скидках\n\n---\n')).toBe(true)
     expect(prompt).toContain('The site of this task: https://example.ru/')

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { turnSkillsSchema } from '../agent/skills.ts'
+import { attachmentLimits } from '../attachments/rules.ts'
 import { badRequest } from '../errors.ts'
 import { publicationSourceSchema, type PublicationSource } from '../git/publication.ts'
 import { snapshotIdSchema, snapshotReferenceSchema } from '../sessions/snapshot-manifest.ts'
@@ -140,6 +141,12 @@ export interface TurnPrepareInput {
    */
   bundle?: TurnBundleSource
   restore?: TurnRestoreSource
+  /**
+   * The files the client sent with the task, as the plan names them (`input.attachments`): the
+   * executor writes each at its path, read-only, after the restore. Only a turn with a bundle
+   * has them (assertTurnInbox); absent — none.
+   */
+  inbox?: readonly TurnInboxFile[]
   /** Selects the stateless event parser on the executor side. */
   driverId: AgentDriverId
   /** Already checked by core (preparedRunSchema, preparedRunExposesSecret). */
@@ -174,6 +181,18 @@ export interface TurnRestoreSource {
   parts: { home: PresignedRequest } & Partial<Record<SnapshotPartName, PresignedRequest>>
   /** The unwrapped data key; the executor zeroes it right after use. */
   dataKey(): Promise<Uint8Array>
+}
+
+/**
+ * A file the client sent with the task, as the host puts it into a turn with a repository
+ * (spec §8, «Подготовка»): at `path` (turnInboxPath), read-only for the agent. Never a key or an
+ * address of the object: core reads it from the inbox, a runner fetches it from core.
+ */
+export interface TurnInboxFile {
+  path: string
+  sizeBytes: number
+  /** The file's bytes; a body longer or shorter than `sizeBytes` is refused. */
+  read(): AsyncIterable<Uint8Array>
 }
 
 export type TurnAdoptInput = {
@@ -385,7 +404,8 @@ const httpUrl = z
     return parsed !== null && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
   }, 'expected a URL without credentials, query or fragment')
 
-const inboxPath = z
+/** A path of the plan's `input.attachments`: normalized, under SANDBOX_INBOX. */
+export const turnInboxPathSchema = z
   .string()
   .max(1024)
   .refine(
@@ -402,9 +422,70 @@ const inboxPath = z
 export const turnInputSchema = z
   .object({
     prompt: z.string().min(1).max(turnPlanLimits.prompt),
-    attachments: z.array(inboxPath).max(turnPlanLimits.attachments),
+    attachments: z.array(turnInboxPathSchema).max(turnPlanLimits.attachments),
   })
   .strict() satisfies z.ZodType<TurnInput>
+
+/**
+ * What one turn with a repository gets of the files of its task: the latest, at most this many
+ * and this many bytes together. A full message (ten files of 20 MiB) always fits, and the rest
+ * of the 512 MiB tmpfs of /workspace is left to the working copy.
+ */
+export const turnInboxLimits = Object.freeze({
+  files: 50,
+  bytes: attachmentLimits.perMessage * attachmentLimits.fileBytes,
+})
+
+const inboxId = z.uuid()
+
+/**
+ * Where the host puts a file of the client: its own folder, named by the attachment's id, holds
+ * it under the name the client gave it (already cleaned: no separator, no control character).
+ * null when the path would not pass the plan's rule.
+ */
+export function turnInboxPath(attachmentId: string, fileName: string): string | null {
+  if (!inboxId.safeParse(attachmentId).success || fileName.includes('/')) return null
+  const path = `${SANDBOX_INBOX}/${attachmentId.toLowerCase()}/${fileName}`
+  return turnInboxPathSchema.safeParse(path).success ? path : null
+}
+
+/** The attachment a path of turnInboxPath() names; null for any other path. */
+export function turnInboxAttachmentId(path: string): string | null {
+  const [id, name, ...rest] = path.startsWith(`${SANDBOX_INBOX}/`)
+    ? path.slice(SANDBOX_INBOX.length + 1).split('/')
+    : []
+  if (id === undefined || name === undefined || rest.length > 0) return null
+  return turnInboxPath(id, name) === path ? id : null
+}
+
+/**
+ * The files of a prepare, as both executors and the runner protocol take them: only a turn with
+ * a repository has them (a task in the browser hands its files to the browser worker, Б26),
+ * each at a path of turnInboxPath() once, each of a file's size, all within turnInboxLimits.
+ */
+export function assertTurnInbox(
+  files: readonly Pick<TurnInboxFile, 'path' | 'sizeBytes'>[],
+  hasRepository: boolean,
+): void {
+  if (files.length === 0) return
+  if (!hasRepository) throw badRequest('Files of the client go only to a turn with a repository')
+  if (files.length > turnInboxLimits.files) throw badRequest('Too many files for one turn')
+  let bytes = 0
+  const paths = new Set<string>()
+  for (const file of files) {
+    if (turnInboxAttachmentId(file.path) === null || paths.has(file.path))
+      throw badRequest('Invalid path of a file of the client')
+    if (
+      !Number.isSafeInteger(file.sizeBytes) ||
+      file.sizeBytes < 1 ||
+      file.sizeBytes > attachmentLimits.fileBytes
+    )
+      throw badRequest('Invalid size of a file of the client')
+    paths.add(file.path)
+    bytes += file.sizeBytes
+  }
+  if (bytes > turnInboxLimits.bytes) throw badRequest('Files of the client too large for one turn')
+}
 
 /**
  * A TurnRequest without its credentials, as turn_assignments.plan keeps it for recovery.

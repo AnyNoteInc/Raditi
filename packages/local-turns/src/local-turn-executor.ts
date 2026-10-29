@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
 
 import {
+  assertTurnInbox,
   badRequest,
   conflict,
   createLeftNothing,
@@ -43,6 +44,7 @@ import { openSnapshotParts, sealSnapshotPart } from '@repo/snapshots'
 
 import { bundleBase, importBaseBundle } from './base-bundle.ts'
 import { makeEmptyWorkdir } from './empty-workdir.ts'
+import { placeInbox } from './inbox.ts'
 import { readTurnOutput, type TurnOutputStart } from './turn-output.ts'
 import { WARM_MIN_LEFT_MS, type WarmSandboxes } from './warm-sandboxes.ts'
 import { exportSandboxWorkingTree } from './working-tree-export.ts'
@@ -102,6 +104,8 @@ export class LocalTurnExecutor implements TurnExecutor {
       snapshotHasRepository(input.restore.manifest) !== (input.bundle !== undefined)
     )
       throw badRequest('The snapshot and the bundle disagree on the repository')
+    // The client's files go only to a turn with a repository, within one turn's limits.
+    assertTurnInbox(input.inbox ?? [], input.bundle !== undefined)
     const { files, env, secrets } = parsed.data
     const parser = this.deps.parser(input.driverId)
     input.dispatched()
@@ -168,6 +172,9 @@ export class LocalTurnExecutor implements TurnExecutor {
       const { home, archives } = await this.#restoreSource(input.restore)
       await this.deps.transport.restore(sandbox, home, archives)
     }
+    // Outside the working copy: nothing of them is captured or published unless the agent
+    // copies one into the working copy.
+    if (input.inbox?.length) await placeInbox(sandbox, input.inbox, signal)
     // Secrets only after restore: an archive of an earlier turn never lands next to them. A
     // secret is read-only unless its driver rewrites it, and never open beyond its owner. The
     // agent's commands run under that same uid: what keeps a secret from them is the driver's

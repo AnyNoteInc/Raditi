@@ -33,6 +33,7 @@ import {
   type PassBudget,
   type PassFacts,
   type SavedObjectFacts,
+  type TaskAttachmentFacts,
   type WorkspaceRules,
 } from './turn-planner.ts'
 
@@ -279,6 +280,10 @@ export async function readPassFacts(
         agentNotes: task.site.agentNotes,
       })
     : undefined
+  // The files of a repository task go into the sandbox of its turn (spec §8, «Подготовка»).
+  const attachments = requirements.repository
+    ? attachmentFactsOf(await taskAttachments(deps.db, task.id))
+    : []
   return {
     task: {
       id: task.id,
@@ -290,6 +295,7 @@ export async function readPassFacts(
     },
     requirements,
     ...(browser ? { browser } : {}),
+    ...(attachments.length ? { attachments } : {}),
     repo: repository
       ? {
           provider: repository.provider,
@@ -346,6 +352,17 @@ export function savedObjectOf(checkpoint: BrowserCheckpointRecord): SavedObjectF
   }
 }
 
+/** The files bound to a task as a pass tells the agent of them: never their key. */
+const attachmentFactsOf = (
+  rows: readonly { id: string; fileName: string; contentType: string; sizeBytes: number }[],
+): TaskAttachmentFacts[] =>
+  rows.map((file) => ({
+    id: file.id,
+    fileName: file.fileName,
+    contentType: file.contentType,
+    sizeBytes: file.sizeBytes,
+  }))
+
 /**
  * What a pass in the cloud browser needs of its site: the address, the client's notes, the files
  * bound to the task, what the task saved there and the stack's guide to its admin pages — null
@@ -370,12 +387,7 @@ async function browserFactsOf(
   return {
     siteUrl: site.url,
     agentNotes: site.agentNotes,
-    attachments: attachments.map((file) => ({
-      id: file.id,
-      fileName: file.fileName,
-      contentType: file.contentType,
-      sizeBytes: file.sizeBytes,
-    })),
+    attachments: attachmentFactsOf(attachments),
     saved: checkpoints.flatMap((checkpoint) => savedObjectOf(checkpoint) ?? []),
     guide,
   }

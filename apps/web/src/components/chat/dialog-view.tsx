@@ -368,7 +368,7 @@ export function DialogView({
     resumeAgent.isPending
 
   // A task in the browser (docs/plan/57-browser-tasks.md): the browser instead of the preview,
-  // files with its messages, the stream while its panel is shown.
+  // the stream while its panel is shown.
   const inBrowser = head?.task.requirements.browser === true
   const browserLive = inBrowser && sessionLive(head?.browser ?? null)
   // The panel beside the dialog: the browser of a task in the browser while the task goes on, or
@@ -569,7 +569,9 @@ export function DialogView({
   // these very words): they are in the dialog, and the field is cleared like after a first send.
   async function send(text: string, attachmentIds: readonly string[] = []): Promise<boolean> {
     setFieldError(null)
-    const files = inBrowser ? [...attachmentIds] : []
+    // Files go with the messages of either mode: to the browser's pages, or into the copy of
+    // the site the agent works on.
+    const files = [...attachmentIds]
     try {
       await message.mutateAsync({
         taskId,
@@ -831,7 +833,7 @@ export function DialogView({
           onOpen: refresh,
           listed: inBrowser ? BROWSER_COMMANDS : undefined,
         }}
-        attachments={inBrowser ? attachments : undefined}
+        attachments={attachments}
         noSecrets={inBrowser ? taskWayText.noSecrets : undefined}
         {...(working
           ? {

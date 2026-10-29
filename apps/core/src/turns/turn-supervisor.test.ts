@@ -2750,3 +2750,79 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
     expect(f.leases.release).not.toHaveBeenCalled()
   })
 })
+
+describe.each(executorKinds)('TurnSupervisor with files of the client (%s executor)', (kind) => {
+  const path = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Меню.pdf'
+  const menu = Buffer.from('%PDF-1.7 synthetic menu')
+
+  /** The plan names one file; core's inbox gives it as the database and S3 would. */
+  function withFiles(f: Fixture) {
+    f.request.input = { ...f.request.input, attachments: [path] }
+    const files = vi.fn(async (_taskId: string, paths: readonly string[]) =>
+      paths.map((at) => ({
+        path: at,
+        sizeBytes: menu.byteLength,
+        read: async function* () {
+          yield menu.subarray(0, 4)
+          yield menu.subarray(4)
+        },
+      })),
+    )
+    f.deps.inbox = { files }
+    return files
+  }
+
+  it('reads the files the plan names under the lease and writes them after the checkout', async () => {
+    const f = turnFixture(kind)
+    const files = withFiles(f)
+    vi.mocked(f.leases.acquire).mockImplementation(async (input: { ttlMs: number }) => {
+      expect(files).not.toHaveBeenCalled()
+      return {
+        siteId: labels.siteId,
+        taskId: labels.taskId,
+        operation: 'turn',
+        epoch: 1,
+        serverNow: new Date(),
+        expiresAt: new Date(Date.now() + input.ttlMs),
+      }
+    })
+    await f.run()
+    expect(files).toHaveBeenCalledExactlyOnceWith(labels.taskId, [path])
+    const at = (step: string) => f.order.indexOf(step)
+    expect(at(`write:${path}`)).toBeGreaterThan(at('checkout'))
+    expect(at(`write:${path}`)).toBeLessThan(at(`write:${f.prepared.files[0]!.path}`))
+    const written = vi.mocked(f.sandbox.fs.write).mock.calls.find(([to]) => to === path)!
+    expect(Buffer.from(written[1]).equals(menu)).toBe(true)
+    expect(written[2]).toEqual({ mode: 0o444 })
+    // The plan recovery keeps names the path the agent was told of, nothing of the inbox.
+    expect([...f.assignments.rows.values()][0]!.plan.input.attachments).toEqual([path])
+  })
+
+  it('fails the turn when a file of the plan is no longer bound to the task', async () => {
+    const f = turnFixture(kind)
+    withFiles(f).mockRejectedValue(conflict('A file of the turn is not bound to its task'))
+    await expect(f.run()).rejects.toThrow('A file of the turn is not bound to its task')
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect([...f.assignments.rows.values()][0]!.outcome).toBe('failed')
+  })
+
+  it('refuses files without core’s inbox, and files of a turn without a repository, before the lease', async () => {
+    const plain = turnFixture(kind)
+    plain.request.input = { ...plain.request.input, attachments: [path] }
+    await expect(plain.run()).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Files of the client need the inbox of core',
+    })
+    expect(plain.leases.acquire).not.toHaveBeenCalled()
+
+    const browser = turnFixture(kind)
+    const files = withFiles(browser)
+    withoutRepository(browser)
+    await expect(browser.run()).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Files of the client go only to a turn with a repository',
+    })
+    expect(browser.leases.acquire).not.toHaveBeenCalled()
+    expect(files).not.toHaveBeenCalled()
+  })
+})

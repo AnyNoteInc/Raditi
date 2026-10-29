@@ -5,6 +5,8 @@ import {
   MAX_SANDBOX_TURN_MS,
   Money,
   SANDBOX_EGRESS_PORT,
+  turnInboxLimits,
+  turnInboxPath,
   turnPlanLimits,
   turnPlanSchema,
   withTurnCredentials,
@@ -179,6 +181,11 @@ export interface PassFacts {
   requirements: TaskRequirements
   /** Present for a task that needs the cloud browser. */
   browser?: BrowserPassFacts
+  /**
+   * The files bound to a task with a repository, in the order they were sent: the latest go
+   * into the sandbox of its turn (turnInboxOf). Absent or empty — none.
+   */
+  attachments?: readonly TaskAttachmentFacts[]
   /** The site's repository; null — the site has none yet. */
   repo: (RepoRef & { defaultBranch: string }) | null
   /** What the turn's workspace takes from the site's adapter (`siteWorkspaceRules`, R4). */
@@ -459,6 +466,33 @@ function browserContextOf(browser: BrowserPassFacts): string {
   return lines.join('\n')
 }
 
+/** The files of a task a turn with a repository gets, and how many earlier ones it does not. */
+export interface TurnInboxPlan {
+  /** Their paths under SANDBOX_INBOX, in the order they were sent. */
+  paths: string[]
+  omitted: number
+}
+
+/**
+ * The files that go into the sandbox of a turn with a repository (spec §8, «Подготовка»): the
+ * latest, as many as turnInboxLimits lets one turn hold, so that the files of the message being
+ * answered are always there; the earlier ones do not fit. A file whose path would not pass the
+ * plan's rule is left out too.
+ */
+export function turnInboxOf(files: readonly TaskAttachmentFacts[]): TurnInboxPlan {
+  const paths: string[] = []
+  let bytes = 0
+  for (const file of files.toReversed()) {
+    if (paths.length === turnInboxLimits.files || bytes + file.sizeBytes > turnInboxLimits.bytes)
+      break
+    const path = turnInboxPath(file.id, file.fileName)
+    if (path === null) continue
+    paths.push(path)
+    bytes += file.sizeBytes
+  }
+  return { paths: paths.reverse(), omitted: files.length - paths.length }
+}
+
 /** The prompt of a pass in the cloud browser: the client's words, then what the platform adds. */
 function browserPromptOf(facts: PassFacts, browser: BrowserPassFacts, since: Date | null): string {
   const context = browserContextOf(browser)
@@ -572,6 +606,9 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   const turn = task.turnNo + 1
   const sessionId = task.id
   const reasoningEffort = reasoningEffortByClass[task.modelClass]
+  // The client's files go into the sandbox of a turn with a repository; a task in the browser
+  // hands them to the browser worker instead (Б26).
+  const inbox = workspace ? turnInboxOf(facts.attachments ?? []) : null
   const request: UnkeyedTurnRequest = {
     sandbox: {
       image: env.driver.image,
@@ -617,6 +654,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
             facts.databaseGuide,
             facts.rules,
             internet ? { skills: skills.map((skill) => skill.name) } : null,
+            inbox?.paths.length ? { files: inbox.paths.length, omitted: inbox.omitted } : null,
           ),
       ...(egress.length || internet ? { egressProxy: SANDBOX_EGRESS_PROXY_URL } : {}),
       ...(internet ? { internet: true as const } : {}),
@@ -626,8 +664,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       prompt: browser
         ? browserPromptOf(facts, browser, start.since)
         : promptOf(facts.requests, start.since),
-      // The files go to the browser worker, never into the sandbox (Б26).
-      attachments: [],
+      // Their paths only: core puts the files there when the sandbox is prepared.
+      attachments: inbox?.paths ?? [],
     },
     driverVersion: env.driver.cliVersion,
     // A plan of a repository task keeps the shape it had before the requirements (Б3).

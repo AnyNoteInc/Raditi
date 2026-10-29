@@ -2,6 +2,7 @@ import type { Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { PrismaClient } from '@repo/db'
 import type {
+  ObjectStorage,
   SandboxProvider,
   SiteLeaseStore,
   TurnAssignmentStore,
@@ -16,6 +17,7 @@ import type { CoreConfig } from '../config/config.ts'
 import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { AGENT_DRIVERS } from '../drivers/drivers.tokens.ts'
 import { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
+import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
 import { SITE_LEASES, TURN_ASSIGNMENTS } from '../leases/leases.tokens.ts'
 import { TURN_CREDENTIALS } from '../llm/llm.tokens.ts'
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
@@ -24,6 +26,7 @@ import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { LiveTurns } from './live-turns.ts'
 import { PreviewTurnRollback } from './preview-turn-rollback.ts'
 import { TurnExecRecovery } from './turn-exec-recovery.ts'
+import { TaskInboxFiles } from './turn-inbox.ts'
 import { TaskEventTurnJournal } from './turn-journal.ts'
 import { TurnReconciler } from './turn-reconciler.ts'
 import { TurnRuntime } from './turn-runtime.ts'
@@ -97,6 +100,7 @@ export const turnEngineProviders: Provider[] = [
       live: LiveTurns,
       credentials: TurnCredentialSource,
       prisma: PrismaClient,
+      storage: ObjectStorage,
     ): TurnSupervisor | null => {
       const [driver] = drivers.list()
       if (!driver) return null
@@ -111,6 +115,7 @@ export const turnEngineProviders: Provider[] = [
         live,
         credentials,
         contentRollback: new PreviewTurnRollback(prisma),
+        inbox: new TaskInboxFiles(prisma, storage),
       })
     },
     inject: [
@@ -124,6 +129,7 @@ export const turnEngineProviders: Provider[] = [
       LiveTurns,
       TURN_CREDENTIALS,
       PRISMA,
+      OBJECT_STORAGE,
     ],
   },
   {

@@ -5,6 +5,7 @@ import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import {
   runnerApiPaths,
   runnerBundlePath,
+  runnerInboxPath,
   runnerCandidatePath,
   runnerConflictSchema,
   runnerErrorSchema,
@@ -42,6 +43,13 @@ export interface RunnerTransport {
   /** The base bundle of an open prepare; never more than `sizeBytes`. */
   bundle(
     assignmentId: string,
+    fence: RunnerCommandFence,
+    sizeBytes: number,
+  ): AsyncIterable<Uint8Array>
+  /** A file of the client of an open prepare, by its place in the command; exactly `sizeBytes`. */
+  inbox(
+    assignmentId: string,
+    index: number,
     fence: RunnerCommandFence,
     sizeBytes: number,
   ): AsyncIterable<Uint8Array>
@@ -185,6 +193,31 @@ export class HttpRunnerTransport implements RunnerTransport {
       }
     } catch (error) {
       throw error instanceof RunnerCallError ? error : new RunnerCallError('bundle', null)
+    } finally {
+      response.destroy()
+    }
+  }
+
+  async *inbox(
+    assignmentId: string,
+    index: number,
+    fence: RunnerCommandFence,
+    sizeBytes: number,
+  ): AsyncIterable<Uint8Array> {
+    const response = await this.#answer('inbox', 'GET', runnerInboxPath(assignmentId, index), {
+      headers: fenceHeaders(fence),
+      timeoutMs: TRANSFER_MS,
+    })
+    let total = 0
+    try {
+      for await (const chunk of response as AsyncIterable<Buffer>) {
+        total += chunk.byteLength
+        if (total > sizeBytes) throw new RunnerCallError('inbox', 200)
+        yield chunk
+      }
+      if (total !== sizeBytes) throw new RunnerCallError('inbox', 200)
+    } catch (error) {
+      throw error instanceof RunnerCallError ? error : new RunnerCallError('inbox', null)
     } finally {
       response.destroy()
     }

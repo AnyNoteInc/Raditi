@@ -4,7 +4,11 @@ import { isDomainError } from '../errors.ts'
 import type { PublicationSource } from '../git/publication.ts'
 import { BROWSER_ONLY, REPOSITORY_ONLY, requirementsOf } from '../tasks/task-requirements.ts'
 import {
+  assertTurnInbox,
   toTurnPlan,
+  turnInboxAttachmentId,
+  turnInboxLimits,
+  turnInboxPath,
   turnInputSchema,
   turnPlanSchema,
   withTurnCredentials,
@@ -372,5 +376,72 @@ describe('turn plan', () => {
     [{ prompt: 'x'.repeat(100_001), attachments: [] }],
   ])('refuses the turn input %#', (input) => {
     expect(turnInputSchema.safeParse(input).success).toBe(false)
+  })
+})
+
+describe('files of the client in a turn', () => {
+  const id = '0199a3f2-0000-7000-8000-0000000000F1'
+  const file = (index: number, sizeBytes = 1024) => ({
+    path: turnInboxPath(`0199a3f2-0000-7000-8000-${String(index).padStart(12, '0')}`, 'a.png')!,
+    sizeBytes,
+  })
+  const refusal = (run: () => void) => {
+    try {
+      run()
+    } catch (error) {
+      return isDomainError(error) ? error.code : 'other'
+    }
+    return null
+  }
+
+  it('puts each file in a folder of its id, under the name the client gave it', () => {
+    const path = turnInboxPath(id, 'Фото 1, меню.png')
+    expect(path).toBe('/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Фото 1, меню.png')
+    expect(turnInputSchema.shape.attachments.safeParse([path]).success).toBe(true)
+    expect(turnInboxAttachmentId(path!)).toBe(id.toLowerCase())
+  })
+
+  it.each([
+    ['an id that is not one', 'not-an-id', 'a.png'],
+    ['a name with a separator', id, 'a/b.png'],
+    ['a parent segment', id, '..'],
+    ['a control character', id, 'a\u0007.png'],
+  ])('refuses %s', (_label, attachmentId, name) => {
+    expect(turnInboxPath(attachmentId, name)).toBeNull()
+  })
+
+  it.each([
+    ['another folder', '/workspace/repo/a.png'],
+    ['no name', `/workspace/inbox/${id.toLowerCase()}`],
+    ['a nested name', `/workspace/inbox/${id.toLowerCase()}/a/b.png`],
+    ['an uppercase id', `/workspace/inbox/${id}/a.png`],
+  ])('names no attachment by %s', (_label, path) => {
+    expect(turnInboxAttachmentId(path)).toBeNull()
+  })
+
+  it('takes the files of a turn with a repository within the limits', () => {
+    const full = Array.from({ length: 10 }, (_, index) => file(index, 20 * 1024 * 1024))
+    expect(refusal(() => assertTurnInbox(full, true))).toBeNull()
+    expect(refusal(() => assertTurnInbox([], false))).toBeNull()
+  })
+
+  it.each([
+    ['a turn without a repository', [file(1)], false],
+    ['a path twice', [file(1), file(1)], true],
+    ['a path of no attachment', [{ path: '/workspace/inbox/x', sizeBytes: 1 }], true],
+    ['an empty file', [file(1, 0)], true],
+    ['a file over the limit of one', [file(1, 20 * 1024 * 1024 + 1)], true],
+    [
+      'more files than a turn holds',
+      Array.from({ length: turnInboxLimits.files + 1 }, (_, index) => file(index)),
+      true,
+    ],
+    [
+      'more bytes than a turn holds',
+      Array.from({ length: 11 }, (_, index) => file(index, 20 * 1024 * 1024)),
+      true,
+    ],
+  ])('refuses %s', (_label, files, hasRepository) => {
+    expect(refusal(() => assertTurnInbox(files, hasRepository))).toBe('BAD_REQUEST')
   })
 })

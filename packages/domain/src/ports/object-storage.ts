@@ -29,7 +29,8 @@ export interface PutOptions {
  * The inbox is never presigned (docs/plan/57-browser-tasks.md, Б26): a customer's file goes
  * through web, which checks the session, the consents, the size and the first bytes before it
  * writes, and confirms the stored object with stat(); the browser worker reads it with its own
- * key. No URL of an attachment reaches a browser, a sandbox or the model.
+ * key, and core for the sandbox of a turn with a repository, which a runner gets through core.
+ * No URL of an attachment reaches a browser, a runner, a sandbox or the model.
  */
 export const presignableBuckets = ['sessions', 'backups'] as const
 export type PresignableBucket = (typeof presignableBuckets)[number]
