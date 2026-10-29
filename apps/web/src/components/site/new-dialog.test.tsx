@@ -253,7 +253,7 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
     expect(described(modes)).toContain('без копии файлов сайта')
     expect(screen.getByRole('button', { name: 'Прикрепить файлы' })).toBeTruthy()
     expect(described(field())).toContain(
-      'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
+      'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера.',
     )
     write('Открой сайт и пришли скриншот')
     fireEvent.click(send())

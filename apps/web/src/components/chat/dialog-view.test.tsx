@@ -373,7 +373,45 @@ describe('a dialog', () => {
     expect(screen.queryByText('Нужен ваш ответ')).toBeNull()
   })
 
-  it('offers «Продолжить» on the question about credits and keeps the field closed', async () => {
+  it('keeps the field open after a failure and asks again, after an answer too (28.10.2026)', async () => {
+    showDialog(
+      feedAnswer({
+        status: 'awaiting_user',
+        task: { turnNo: 2 },
+        events: [
+          requestRow('1'),
+          {
+            ...resultRow('2', 1, 'Начинаю публикацию.'),
+            next: 'awaiting_user',
+            changeType: 'none',
+            needsApproval: false,
+          } as FeedRow,
+          {
+            id: '3',
+            at: '2026-10-28T19:26:27.000Z',
+            type: 'feed.failure',
+            turn: 2,
+            code: 'technical',
+            site: 'check',
+            credits: 'returned',
+            next: 'awaiting_user',
+          },
+        ],
+        cursor: '3',
+      }),
+    )
+    await screen.findByText(/Диалог не закрыт: напишите «продолжи»/)
+    // The owner: «пользователь всегда должен иметь возможность ввести промпт».
+    expect(field().disabled).toBe(false)
+    // The dialog asks: the field is that of an answer to the failure.
+    expect(field().getAttribute('placeholder')).toBe('Ваш ответ')
+    expect(
+      screen.getAllByRole('status').some((node) => node.textContent?.includes('Агент ответил')),
+    ).toBe(false)
+    expect(screen.getAllByText('Нужен ваш ответ').length).toBeGreaterThan(0)
+  })
+
+  it('offers «Продолжить» on the question about credits and keeps the field open (28.10.2026)', async () => {
     showDialog(
       feedAnswer({
         status: 'awaiting_user',
@@ -383,7 +421,9 @@ describe('a dialog', () => {
       }),
     )
     const next = await screen.findByRole('button', { name: 'Продолжить' })
-    expect(field().disabled).toBe(true)
+    // «пользователь всегда должен иметь возможность ввести промпт»: the words go on too.
+    expect(field().disabled).toBe(false)
+    expect(field().getAttribute('placeholder')).toBe('Ваш ответ')
     fireEvent.click(next)
     await waitFor(() => expect(calls.proceed).toHaveBeenCalledTimes(1))
     expect(calls.proceed.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
@@ -971,7 +1011,7 @@ describe('a task in the browser', () => {
     ])
     expect(
       screen.getByText(
-        'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера.',
+        'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера.',
       ),
     ).toBeTruthy()
   })

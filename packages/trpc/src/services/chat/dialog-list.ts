@@ -24,7 +24,8 @@ export interface DialogListItem {
   /**
    * The dialog waits for nothing: the agent answered and asked no question (`awaiting_user`
    * after a `feed.result`; owner's answer of 26.10.2026 — «ожидает ввода также не нужно», a chat
-   * like Claude Code). The client may write on, but is not asked to.
+   * like Claude Code). The client may write on, but is not asked to. A failure after the answer
+   * (28.10.2026: the dialog stays open) asks the client again: «продолжи».
    */
   answered: boolean
   createdAt: Date
@@ -74,7 +75,7 @@ export async function listDialogs(
         FROM site_releases u WHERE u.task_id = tasks.id AND u.kind = 'undo') AS undo,
       (tasks.status = 'awaiting_user' AND COALESCE((
         SELECT e.type = 'feed.result' FROM task_events e
-        WHERE e.task_id = tasks.id AND e.type IN ('feed.result', 'feed.question')
+        WHERE e.task_id = tasks.id AND e.type IN ('feed.result', 'feed.question', 'feed.failure')
         ORDER BY e.id DESC LIMIT 1), false)) AS answered
     FROM tasks
     WHERE site_id = ${site.id}::uuid AND deleted_at IS NULL

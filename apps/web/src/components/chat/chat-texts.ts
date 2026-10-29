@@ -311,8 +311,6 @@ export const composerText = Object.freeze({
   newPlaceholder: 'Что поменять на сайте?',
   revisionPlaceholder: 'Что поправить?',
   send: 'Отправить',
-  /** The field while the platform's question about credits is open. */
-  ceiling: 'Сначала ответьте на вопрос выше: продолжите работу или остановите задачу.',
   /** The field of a new dialog while the site is not connected. */
   notConnected: `${feedRetryText.siteNotConnected}.`,
   /** The field while a release is installed on the site. */
@@ -452,8 +450,12 @@ export const taskWayText = Object.freeze({
   /** The site's address is not https in production: the words of TASK_NOT_ACCEPTED browser_insecure. */
   insecure:
     'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://.',
-  /** The reminder under the field of a task in the browser. */
-  noSecrets: 'Не отправляйте в чат пароли и ключи: в админку входите сами, в окне браузера',
+  /**
+   * The reminder under the field of a task in the browser: the admin's sign-in is saved in the
+   * site's variables (Б36) or typed in the browser's own window, never in the chat.
+   */
+  noSecrets:
+    'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера',
 })
 
 /** The browser of a task beside its dialog (docs/plan/57-browser-tasks.md, Б12–Б17, Б27, Б29). */

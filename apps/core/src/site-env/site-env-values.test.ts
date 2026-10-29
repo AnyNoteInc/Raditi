@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { readSiteEnvValues, readSiteEnvValuesToRefuse } from './site-env-values.ts'
+import { readSiteEnvValues, readSiteEnvValuesToRefuse, readSiteSignIn } from './site-env-values.ts'
 
 const SITE = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61'
 
@@ -52,5 +52,54 @@ describe('the values of a site’s variables (plan 53, Р13)', () => {
       ]),
     ).toEqual(['pay-secret-0001', 'newer-value-0003'])
     expect(kvRead).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe('the site’s saved sign-in (Б36)', () => {
+  const stored: Record<string, { data: Record<string, string>; version: number }> = {
+    [`kv/sites/${SITE}/env/SITE_ADMIN_LOGIN`]: { data: { value: 'admin' }, version: 1 },
+    [`kv/sites/${SITE}/env/SITE_ADMIN_PASSWORD`]: { data: { value: 'Пароль-2026' }, version: 2 },
+  }
+  const kvRead = vi.fn(async (path: string) => stored[path] ?? null)
+  const dbWith = (rows: { name: string; keyVersion: number }[]) => ({
+    siteEnvVar: { findMany: vi.fn(async (_query: object) => rows) },
+  })
+
+  it('reads both variables at the versions their rows name', async () => {
+    const db = dbWith([
+      { name: 'SITE_ADMIN_LOGIN', keyVersion: 1 },
+      { name: 'SITE_ADMIN_PASSWORD', keyVersion: 2 },
+    ])
+    expect(await readSiteSignIn(db as never, { kvRead }, SITE)).toEqual({
+      login: 'admin',
+      password: 'Пароль-2026',
+    })
+    expect(db.siteEnvVar.findMany).toHaveBeenCalledWith({
+      where: { siteId: SITE, name: { in: ['SITE_ADMIN_LOGIN', 'SITE_ADMIN_PASSWORD'] } },
+      select: { name: true, keyVersion: true },
+    })
+  })
+
+  it('is none without either variable, or with one written after its row', async () => {
+    kvRead.mockClear()
+    expect(
+      await readSiteSignIn(
+        dbWith([{ name: 'SITE_ADMIN_LOGIN', keyVersion: 1 }]) as never,
+        { kvRead },
+        SITE,
+      ),
+    ).toBeNull()
+    // One row: Vault is not read at all.
+    expect(kvRead).not.toHaveBeenCalled()
+    expect(
+      await readSiteSignIn(
+        dbWith([
+          { name: 'SITE_ADMIN_LOGIN', keyVersion: 1 },
+          { name: 'SITE_ADMIN_PASSWORD', keyVersion: 1 },
+        ]) as never,
+        { kvRead },
+        SITE,
+      ),
+    ).toBeNull()
   })
 })

@@ -3,6 +3,7 @@ import { createHash, randomInt, randomUUID } from 'node:crypto'
 import {
   ensurePersonalWorkspaceWithGift,
   grantTariffCredits,
+  releaseTask,
   tariffCreditsOfDay,
 } from '@repo/billing'
 import { settleTaskCharge, underPrivateCreditRate } from '@repo/billing/testing'
@@ -946,6 +947,86 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       )
     })
 
+    // The owner, 28.10.2026: «никогда не завершай диалог, если произошла ошибка… пользователь
+    // может ввести "продолжи" и задача должна продолжиться».
+    it('goes on in a dialog a failed pass left open: the words answer the failure, a new reserve', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      const failureId = await db.$transaction(
+        async (tx) => {
+          // What core does when the first pass fails: the dialog waits, its reserve goes back.
+          await tx.task.update({
+            where: { id: taskId },
+            data: { status: 'awaiting_user', turnNo: 1 },
+          })
+          await releaseTask(tx, { taskId, now: new Date() })
+          // An answer of an earlier pass comes before the failure: the list asks the client again.
+          await insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.result',
+              payload: {
+                v: 1,
+                turn: 1,
+                message: 'Начинаю публикацию.',
+                site: 'unchanged',
+                next: 'awaiting_user',
+                filesChanged: 0,
+                changeType: 'none',
+                needsApproval: false,
+                risk: 'low',
+              },
+            },
+          })
+          return insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.failure',
+              payload: {
+                v: 1,
+                turn: 1,
+                code: 'technical',
+                site: 'check',
+                credits: 'returned',
+                next: 'awaiting_user',
+              },
+            },
+          })
+        },
+        { isolationLevel: 'ReadCommitted' },
+      )
+      expect(await activeHolds(taskId)).toEqual([])
+      const listed = (await caller.task.list({ siteId: site.id })).items
+      expect(listed.find((item) => item.id === taskId)).toMatchObject({
+        status: 'awaiting_user',
+        answered: false,
+      })
+
+      const posted = await caller.task.message({
+        taskId,
+        requestId: randomUUID(),
+        text: 'продолжи',
+      })
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 2,
+      })
+      expect((await feedOf(taskId)).at(-1)).toMatchObject({
+        id: BigInt(posted.requestEventId),
+        payload: { kind: 'answer', answersEventId: String(failureId) },
+      })
+      // Nothing was charged for the failed pass; the words reserve anew, as a new chain.
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([2])
+      expect(await outboxOf(taskId)).toContainEqual(
+        expect.objectContaining({
+          type: 'turn.run',
+          payload: { taskId, attempt: 2, requestEventId: posted.requestEventId },
+        }),
+      )
+    })
+
     it('starts a new pass on top of the candidate with the revision the words are about', async () => {
       const { owner, site } = await siteOwner()
       const caller = callerOf(owner)
@@ -965,15 +1046,61 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
     })
 
-    it('waits for «Продолжить» after a question about credits, and for the agent while it works', async () => {
-      const { owner, site } = await siteOwner()
+    // The owner, 28.10.2026: «пользователь всегда должен иметь возможность ввести промпт».
+    it('goes on with the words after a question about credits, as «Продолжить» does', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      await paidTariff(workspaceId)
       const caller = callerOf(owner)
       const { taskId } = await newDialog(caller, site.id)
-      const message = () => caller.task.message({ taskId, requestId: randomUUID(), text: 'Ещё' })
+      const message = () =>
+        caller.task.message({ taskId, requestId: randomUUID(), text: 'продолжи' })
 
+      // While the agent works the words wait for it.
       await expect(message()).rejects.toMatchObject({ cause: { code: 'TASK_BUSY' } })
-      await asked(taskId, { kind: 'ceiling', reason: 'step', spent: 30, held: 35, left: 5 })
-      await expect(message()).rejects.toMatchObject({ cause: { code: 'TASK_CONTINUE_REQUIRED' } })
+      const questionId = await asked(taskId, {
+        kind: 'ceiling',
+        reason: 'step',
+        spent: 30,
+        held: 35,
+        left: 5,
+      })
+      const posted = await message()
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 2,
+      })
+      expect((await feedOf(taskId)).at(-1)).toMatchObject({
+        id: BigInt(posted.requestEventId),
+        payload: { kind: 'answer', text: 'продолжи', answersEventId: String(questionId) },
+      })
+      // A continuation: the next attempt beside the reserve of the one before.
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt).sort()).toEqual([1, 2])
+      // A chain that used its attempts: the words open the next one, «Продолжить» has none.
+      const spent = await newDialog(caller, site.id)
+      await db.$transaction(
+        (tx) => settleTaskCharge(tx, { taskId: spent.taskId, credits: 5, now: new Date() }),
+        { isolationLevel: 'ReadCommitted' },
+      )
+      await asked(spent.taskId, {
+        kind: 'ceiling',
+        reason: 'attempts',
+        spent: 120,
+        held: 0,
+        left: 0,
+      })
+      await expect(
+        caller.task.continue({ taskId: spent.taskId, requestId: randomUUID() }),
+      ).rejects.toMatchObject({ cause: { code: 'TASK_ATTEMPTS_EXHAUSTED' } })
+      await caller.task.message({ taskId: spent.taskId, requestId: randomUUID(), text: 'продолжи' })
+      expect(await db.task.findUniqueOrThrow({ where: { id: spent.taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 2,
+      })
+      // Answered: «Продолжить» has nothing left to continue.
+      await expect(caller.task.continue({ taskId, requestId: randomUUID() })).rejects.toMatchObject(
+        { cause: { code: 'TASK_NOTHING_TO_CONTINUE' } },
+      )
     })
 
     it('takes the answer to a question after a reset of the preview: a command answers nothing', async () => {
@@ -1009,7 +1136,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('queued')
     })
 
-    it('still waits for «Продолжить» after a reset of the preview, and continues', async () => {
+    it('continues with «Продолжить» after a reset of the preview', async () => {
       const { owner, site, workspaceId } = await siteOwner({ database: true })
       await paidTariff(workspaceId)
       const caller = callerOf(owner)
@@ -1019,9 +1146,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
 
       await caller.preview.reset({ taskId, requestId: randomUUID() })
 
-      await expect(
-        caller.task.message({ taskId, requestId: randomUUID(), text: 'Ещё' }),
-      ).rejects.toMatchObject({ cause: { code: 'TASK_CONTINUE_REQUIRED' } })
       await expect(
         caller.task.continue({ taskId, requestId: randomUUID() }),
       ).resolves.toMatchObject({ repeated: false })
@@ -2360,6 +2484,31 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       await expect(
         callerOf(owner).siteEnv.set({ ...input, toAgent: false, agentConsent: false }),
       ).resolves.toMatchObject({ toAgent: false })
+    })
+
+    it('never gives the saved sign-in to the agent or a preview, whatever the page sent (Б36)', async () => {
+      const { owner, site } = await siteOwner()
+      const input = {
+        siteId: site.id,
+        name: 'SITE_ADMIN_PASSWORD',
+        value: 'synthetic-admin-password',
+        hosts: [],
+        toPreview: false,
+        toAgent: true,
+        agentConsent: true,
+      }
+      for (const asked of [
+        input,
+        { ...input, toAgent: false, agentConsent: false, toPreview: true },
+      ])
+        await expect(callerOf(owner).siteEnv.set(asked)).rejects.toMatchObject({
+          cause: { code: 'SITE_ENV_SIGN_IN_PRIVATE' },
+        })
+      // Refused before Vault: no value was written.
+      expect(vault.keys.has(`kv/sites/${site.id}/env/SITE_ADMIN_PASSWORD`)).toBe(false)
+      await expect(
+        callerOf(owner).siteEnv.set({ ...input, toAgent: false, agentConsent: false }),
+      ).resolves.toMatchObject({ name: 'SITE_ADMIN_PASSWORD', toAgent: false, toPreview: false })
     })
 
     it('takes no more different hosts for the variables of a site than one proxy holds (Р13)', async () => {

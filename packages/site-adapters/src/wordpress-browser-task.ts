@@ -6,7 +6,9 @@ import {
   browserVerifiedObjectSchema,
   type BrowserCheckpointRef,
   type BrowserCommitAction,
+  type BrowserController,
   type BrowserObjectStatus,
+  type BrowserSignInForm,
   type BrowserTaskPolicy,
   type BrowserTaskSite,
   type BrowserVerificationPlan,
@@ -437,15 +439,61 @@ function restDenied(request: SiteRequest): boolean | null {
   return routes.some((route) => routeDenied(route, request))
 }
 
+// ---------------------------------------------------------------------------------------------
+// The client at the controls (Б37)
+// ---------------------------------------------------------------------------------------------
+
+/** A post or a page of the REST API by its number: what the block editor moves to the trash. */
+const TRASHABLE_ROUTE = /^wp\/v2\/(?:posts|pages)\/\d{1,19}$/
+/** The fields the block editor sends with its trash: nothing that asks for more than that. */
+const TRASH_REST_FIELDS = new Set(['_locale', '_wpnonce', 'rest_route'])
+
+/**
+ * What the client at the controls may do that the agent may not (owner's decision of 28.10.2026,
+ * Б37): move a post or a page to the trash and take it back — from its list, one or those marked
+ * (`edit.php`, `post.php` with `action=trash` or `untrash`), or from the block editor (`DELETE`
+ * of the post without `force`, or the editor's own POST without a body that carries it). Deleting
+ * past the trash, emptying it, a closed kind of content and a plugin's screen stay closed; a post
+ * the list does not name by its kind (a template trashed by its number) is not told apart.
+ */
+function clientTrash(read: SiteRequest): boolean {
+  const { fields } = read
+  const admin = read.segments.indexOf('wp-admin')
+  if (admin !== -1) {
+    const page = adminScriptPath(read.segments.slice(admin + 1))
+    if (page !== 'post.php' && page !== 'edit.php') return false
+    if (CLOSED_FIELDS.some((name) => has(fields, name)) || has(fields, 'page')) return false
+    if (valuesOf(fields, 'post_type').some((type) => CLOSED_POST_TYPES.has(type))) return false
+    const actions = [...valuesOf(fields, 'action'), ...valuesOf(fields, 'action2')].filter(
+      (action) => action !== '-1',
+    )
+    return (
+      actions.length > 0 && actions.every((action) => action === 'trash' || action === 'untrash')
+    )
+  }
+  const routes = restRoutes(read)
+  return (
+    routes.length > 0 &&
+    routes.every((route) => route !== null && TRASHABLE_ROUTE.test(route)) &&
+    (read.method === 'DELETE' || (read.method === 'POST' && read.bodyless)) &&
+    fields.every(([name]) => TRASH_REST_FIELDS.has(name))
+  )
+}
+
 /**
  * Every request a page of the task's browser makes, and every address it opens (`pageDenied` is
  * this for a GET): any DELETE; the admin pages and actions above and those of the MCP policy; the
  * media library's documents; closed scripts; the REST routes above. Uploading media — the REST
- * `POST /wp/v2/media`, `async-upload.php`, `media-new.php` — passes, unlike on a preview.
+ * `POST /wp/v2/media`, `async-upload.php`, `media-new.php` — passes, unlike on a preview. The
+ * client at the controls may besides move a post or a page to the trash and back (`clientTrash`).
  */
-export function wordpressBrowserTaskRequestDenied(request: SiteBrowserRequest): boolean {
+export function wordpressBrowserTaskRequestDenied(
+  request: SiteBrowserRequest,
+  by: BrowserController = 'agent',
+): boolean {
   const read = readRequest(request)
   if (read === null) return true
+  if (by === 'user' && clientTrash(read) && !isAdminUrlDenied(request.path)) return false
   if (read.method === 'DELETE') return true
   if (isAdminUrlDenied(request.path)) return true
   if (uploadDenied(read.segments) || siteScriptDenied(read.segments, read.fields)) return true
@@ -454,13 +502,34 @@ export function wordpressBrowserTaskRequestDenied(request: SiteBrowserRequest): 
   return restDenied(read) ?? false
 }
 
+/**
+ * `…/wp-login.php`, `…/wp-login.php?redirect_to=…&reauth=1`, `…?action=login`: the form for a
+ * login and a password. Another `action` (`lostpassword`, `rp`, a two-factor plugin's own) is
+ * another form, never filled with the saved sign-in.
+ */
+export function isWordpressSignInPage(path: string): boolean {
+  const url = URL.parse(path, BASE)
+  if (url === null || plainSegment(url.pathname.split('/').at(-1)) !== 'wp-login.php') return false
+  const action = lastValue(url.searchParams, 'action')
+  return action === undefined || action === '' || action === 'login'
+}
+
+/** The fields of WordPress's own login form, the same in every language and since 2.x (Б36). */
+const SIGN_IN_FORM: BrowserSignInForm = Object.freeze({
+  isSignInPage: isWordpressSignInPage,
+  login: '#loginform #user_login',
+  password: '#loginform #user_pass',
+  submit: '#loginform #wp-submit',
+})
+
 export function wordpressBrowserTaskPolicy(site: BrowserTaskSite): BrowserTaskPolicy {
   return Object.freeze({
     startPath: startPathOf(site),
     extraHosts: EXTRA_HOSTS,
     requestDenied: wordpressBrowserTaskRequestDenied,
-    pageDenied: (path: string) =>
-      wordpressBrowserTaskRequestDenied({ path, method: 'GET', postData: null }),
+    pageDenied: (path: string, by?: BrowserController) =>
+      wordpressBrowserTaskRequestDenied({ path, method: 'GET', postData: null }, by),
+    signIn: SIGN_IN_FORM,
   })
 }
 
@@ -723,9 +792,11 @@ export function wordpressBrowserVerification(ref: BrowserCheckpointRef): Browser
 export function wordpressBrowserGuide(): string {
   return `- The site runs WordPress; its admin pages are under \`/wp-admin/\`. Interface names come in
   the site's language: Russian or English (Записи / Posts, Добавить запись / Add New Post).
-- Sign-in: a page with the WordPress login form (Имя пользователя / Username, Пароль / Password,
-  Войти / Log In), a CAPTCHA or a two-factor code is the client's. Never type or guess a login or
-  a password: call \`web_help\` (reason \`login\` or \`captcha\`) with a short request in Russian and end
+- Sign-in: when the client saved the site's sign-in, the platform fills the WordPress login form
+  itself before your actions, so you usually start signed in. A login form you still see
+  (Имя пользователя / Username, Пароль / Password, Войти / Log In) — none was saved or it was
+  refused —, a CAPTCHA or a two-factor code is the client's. Never type or guess a login or a
+  password: call \`web_help\` (reason \`login\` or \`captcha\`) with a short request in Russian and end
   the turn. The client signs in in the same browser; the next turn continues from there.
 - A new post: open \`/wp-admin/post-new.php\` once per object. Not the dashboard's Quick Draft.
 - Block editor: a welcome or pattern window over it closes with «Закрыть» / «Close». The title
@@ -750,6 +821,10 @@ export function wordpressBrowserGuide(): string {
 - Notices: «autosave … more recent» — keep the version on the screen unless the client asked
   otherwise; a post being edited by someone else («заблокирована» / «locked») — do not take it
   over: ask the client with \`web_help\` (reason \`confirm\`).
+- Deleting is closed to you: you never move a post or a page to the trash nor delete one, and
+  never offer to. When the client asks for it, say plainly that you cannot, and that they can do
+  it themselves: «Взять управление» in the browser panel, then «Удалить» under the post in the
+  list of posts (it goes to the trash, from where it can be restored).
 - Rights: the main button «Отправить на утверждение» / «Submit for Review» means the account
   cannot publish; submit only what the client asked for and tell the client plainly that the post
   waits for review. A page or action refused with \`BROWSER_ACTION_DENIED\` stays closed: tell the

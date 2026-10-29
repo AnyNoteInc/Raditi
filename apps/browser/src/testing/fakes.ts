@@ -15,6 +15,8 @@ import {
   type BrowserSessionRuntime,
   type BrowserSessionRuntimeSpec,
   type BrowserSessionStatus,
+  type BrowserSignIn,
+  type BrowserSignInOutcome,
   type BrowserTab,
   type BrowserVerificationPlan,
   type BrowserVerificationReading,
@@ -281,6 +283,23 @@ export class FakeCloudBrowser implements CloudBrowserSession {
 
   async setViewport(viewport: BrowserViewport): Promise<void> {
     this.viewports.push(viewport)
+  }
+
+  /** Who holds the browser, as the worker tells it (Б37). */
+  readonly controllers: BrowserController[] = []
+
+  setController(controller: BrowserController): void {
+    this.controllers.push(controller)
+  }
+
+  /** The sign-ins asked for, in order (Б36). */
+  readonly signIns: BrowserSignIn[] = []
+  /** What a sign-in does: `absent` unless a test puts the page on the form. */
+  onSignIn: (credentials: BrowserSignIn) => Promise<BrowserSignInOutcome> = async () => 'absent'
+
+  async signIn(credentials: BrowserSignIn): Promise<BrowserSignInOutcome> {
+    this.signIns.push(credentials)
+    return this.onSignIn(credentials)
   }
 
   async verify(plan: BrowserVerificationPlan): Promise<BrowserVerificationReading> {

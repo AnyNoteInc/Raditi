@@ -95,6 +95,20 @@ export const envVarValueSchema = z
   )
   .refine((value) => utf8Bytes(value) <= envVarLimits.valueMaxBytes, 'is too long')
 
+/**
+ * The site's saved sign-in to its admin pages (owner's decision of 28.10.2026, Б36): the browser
+ * of a task fills the stack's sign-in form with these two variables when both are set. They
+ * never reach the agent — not its commands, not a preview, not the model.
+ */
+export const siteSignInEnvVars = Object.freeze({
+  login: 'SITE_ADMIN_LOGIN',
+  password: 'SITE_ADMIN_PASSWORD',
+} as const)
+
+/** Whether a name is one of the saved sign-in (`siteSignInEnvVars`). */
+export const isSiteSignInEnvVar = (name: string): boolean =>
+  name === siteSignInEnvVars.login || name === siteSignInEnvVars.password
+
 /** What `siteEnv.set` takes; the value goes to Vault and nowhere else. */
 export const siteEnvVarInputSchema = z
   .strictObject({
@@ -109,6 +123,16 @@ export const siteEnvVarInputSchema = z
   .refine((input) => !input.toAgent || input.agentConsent, {
     message: 'the agent gets a variable only with the consent',
     path: ['agentConsent'],
+  })
+  .refine((input) => !input.toAgent || !isSiteSignInEnvVar(input.name), {
+    message: 'the saved sign-in never reaches the agent',
+    path: ['toAgent'],
+  })
+  // A preview gets only what the agent may see (`envVarReachesPreview`) — so never the saved
+  // sign-in either; said here too, so no row claims otherwise.
+  .refine((input) => !input.toPreview || !isSiteSignInEnvVar(input.name), {
+    message: 'the saved sign-in never reaches a preview',
+    path: ['toPreview'],
   })
 export type SiteEnvVarInput = z.output<typeof siteEnvVarInputSchema>
 
@@ -139,6 +163,7 @@ export const siteEnvVarValueOf = (data: Readonly<Record<string, string>>): strin
 
 /** What of a row of `site_env_vars` decides who gets the value. */
 export interface EnvVarRecipients {
+  name: string
   toPreview: boolean
   toAgent: boolean
   /** When the client agreed that the agent sees what the service returns; null — never. */
@@ -156,13 +181,18 @@ export const envVarsMayReachAgent = (dataClass: 'synthetic' | 'client'): boolean
 /**
  * Whether the agent's commands get the value (Р13): the client turned `to_agent` on and agreed,
  * and the workspace holds no real client data — until the gate of 152-FZ nothing of it reaches
- * the agent (rule 1).
+ * the agent (rule 1). The saved sign-in never does, whatever its row says (Б36).
  */
 export function envVarReachesAgent(
   variable: EnvVarRecipients,
   dataClass: 'synthetic' | 'client',
 ): boolean {
-  return variable.toAgent && variable.agentConsentAt !== null && envVarsMayReachAgent(dataClass)
+  return (
+    variable.toAgent &&
+    variable.agentConsentAt !== null &&
+    envVarsMayReachAgent(dataClass) &&
+    !isSiteSignInEnvVar(variable.name)
+  )
 }
 
 /**

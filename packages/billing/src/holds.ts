@@ -702,7 +702,9 @@ async function placementFacts(
  * `maxTaskAttempts` attempts — a continuation of a third is refused, a retry and a charged pass
  * start a new chain —, an attempt is not placed below one that has a reserve, a retry is placed
  * only after its chain was given back, a new chain after a charge only when no chain is active
- * and a charge stands, and a later attempt without an active reserve only as one of those two.
+ * and a charge stands — the client's words also after a chain a failure gave back while the
+ * dialog stayed open (28.10.2026) —, and a later attempt without an active reserve only as one
+ * of those two.
  * A refusal writes no reserve, no claim and moves no
  * balance; a workspace that had no credit accounts is left with its three empty ones, which are
  * what a placement locks.
@@ -765,7 +767,14 @@ export async function placeCreditHold(
   if (follows !== undefined && (placement === 'continuation' || placement === 'new')) {
     throw conflict('The chain of the task is not charged: its next words go on with it')
   }
-  if ((placement === 'next' || placement === 'resume') && !charged) {
+  // The client's words also follow a chain a failure gave back while the dialog stayed open
+  // (owner's decision of 28.10.2026: «пользователь может ввести „продолжи“ и задача должна
+  // продолжиться»); «Продолжить» follows a charge only.
+  const latest = Math.max(0, ...rows.map((row) => row.hold.attempt))
+  const latestRows = rows.filter((row) => row.hold.attempt === latest)
+  const givenBack =
+    latestRows.length > 0 && latestRows.every((row) => row.hold.status === 'released')
+  if ((placement === 'resume' && !charged) || (placement === 'next' && !charged && !givenBack)) {
     throw conflict('A new chain of a task follows a charge of the one before')
   }
   const continues = placement === 'continuation'
