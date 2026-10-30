@@ -56,6 +56,7 @@ import {
   movesFocus,
   toolsDot,
   toolsReducer,
+  toolsShown,
   toolTabId,
   toolTilesOf,
   type DialogTool,
@@ -83,6 +84,7 @@ import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
 import { useBrowserLaunch } from './use-browser-launch'
 import { useBrowserStream } from './use-browser-stream'
+import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
@@ -91,10 +93,10 @@ import { uuidv7 } from './uuid'
 // макетах»): its head, its rows, the live block and the field. Its tools — the browser of a task
 // in the browser (docs/plan/57-browser-tasks.md), the preview, files, records and checks of a task
 // with the repository — open beside it only when the client asks for one (docs/plan/59-dialog-
-// tools-panel.md): by «+» in the corner, «Посмотреть изменения», `/preview` and the buttons of
-// the browser in the feed; by themselves only once, when the browser of the task starts while the
-// client looks at the dialog. From `lg` they stand at the right edge; below, in place of the
-// dialog, «К диалогу» leading back to it.
+// tools-panel.md): by «+» in the corner, «Посмотреть изменения», `/preview` and «Взять
+// управление»; by themselves only once, when the browser of the task starts while the client looks
+// at the dialog. From `lg` they stand at the right edge; below, in place of the dialog, «К диалогу»
+// leading back to it.
 
 /** The one command of a task in the browser: stopping it (docs/plan/57-browser-tasks.md, Б24). */
 const BROWSER_COMMANDS: readonly ChatCommandId[] = ['cancel']
@@ -114,17 +116,18 @@ const FIELD_ROOM = '--dialog-field-room'
 const ROOM_STEP = 16
 
 /**
- * What the focus stands on that the panel takes away as it opens by itself from `lg` (docs/plan/
- * 59, И3, И4): «+» of the head, which moves to the end of the tabs, the menu it opened, which goes
- * with it, or the list of dialogs, which gives the panel its room. null — the focus stands
- * elsewhere, and the opening leaves it there.
+ * What the focus stands on that the tools take away as they open by themselves (docs/plan/59, И3,
+ * И4): «+» of the head and the menu it opened, which go; from `lg` the list of dialogs, which gives
+ * the panel its room; below `lg` the whole `dialog`, which the area of the tools takes the place
+ * of. null — the focus stands elsewhere, and the opening leaves it there.
  */
-function focusTakenByOpening(): Element | null {
+function focusTakenByOpening(dialog: Element | null): Element | null {
   const active = document.activeElement
   if (active === null || active === document.body) return null
   const taken =
     active.id === TOOLS_BUTTON_ID ||
-    active.closest(`[${TOOLS_MENU_MARK}], [data-site-list]`) !== null
+    active.closest(`[${TOOLS_MENU_MARK}]`) !== null ||
+    (dialog === null ? active.closest('[data-site-list]') !== null : dialog.contains(active))
   return taken ? active : null
 }
 
@@ -391,39 +394,42 @@ export function DialogView({
   // The stream goes while the tab of the browser is on the screen, beside the dialog or in its
   // place; a press of «Взять управление» or «Продолжить работу агента» opens it for that press alone
   // (docs/plan/59, И11). Nothing of it before the client asked for the browser.
-  const browserShown = tools.active === 'browser'
+  const shown = toolsShown(tools)
+  const browserShown = shown && tools.active === 'browser'
   const stream = useBrowserStream({
     taskId,
     streamUrl: browserStreamUrl,
     live: browserLive,
     visible: browserShown,
   })
-  // The browser of the task started while the client looks at the dialog (И2, И3): from `lg` it
-  // opens beside the dialog once, below only «+» is marked. Never by the words of the agent, and
-  // not where the cabinet cannot show the browser. Nobody pressed anything, so the focus stays
-  // where it is — unless it stood on what this very opening takes away (`focusTakenByOpening`):
-  // then «+» takes it, at the end of the tabs in the same corner (И4), and it is never dropped to
-  // the start of the page. A launch that opens nothing — spent, or below `lg` — moves nothing.
+  // The browser of the task started while the client looks at the dialog (И2, И3): it opens once,
+  // on any width — beside the dialog from `lg`, in its place below (owner's answer of 30.10.2026).
+  // Never by the words of the agent, and not where the cabinet cannot show the browser. Nobody
+  // pressed anything, so the focus stays where it is — unless it stood on what this very opening
+  // takes away (`focusTakenByOpening`): then «+» takes it, in the same corner (И4), and it is never
+  // dropped to the start of the page. A launch that opens nothing — spent — moves nothing.
   const heldAtLaunch = useRef<Element | null>(null)
   const launched = useCallback(() => {
-    const opens =
-      tools.active === null && toolsReducer(tools, { type: 'launch', wide }).active !== null
-    heldAtLaunch.current = opens ? focusTakenByOpening() : null
-    dispatchTools({ type: 'launch', wide })
+    const opens = !toolsShown(tools) && toolsShown(toolsReducer(tools, { type: 'launch' }))
+    heldAtLaunch.current = opens ? focusTakenByOpening(wide ? null : root.current) : null
+    dispatchTools({ type: 'launch' })
   }, [tools, wide])
   useEffect(() => {
     const held = heldAtLaunch.current
     heldAtLaunch.current = null
-    if (held === null || tools.active === null) return
-    // Gone with «+» of the head and its menu, or hidden with the list of dialogs.
+    if (held === null || !shown) return
+    // Gone with «+» of the head and its menu, or hidden with the list or the dialog.
     if (!held.isConnected || held.getClientRects().length === 0)
       document.getElementById(TOOLS_BUTTON_ID)?.focus()
-  }, [tools.active])
+  }, [shown])
   useBrowserLaunch(head, {
     taskId,
     enabled: inBrowser && browserStreamUrl !== null,
     onLaunch: launched,
   })
+  // The chat counts as watching the browser (И18; owner's answer of 30.10.2026): while the dialog
+  // is on the screen its browser does not close for idle, the panel open or not.
+  useBrowserWatching({ taskId, enabled: browserLive })
   const attachments = useAttachments(siteId)
   // The names of the files the messages sent: read once a message has one.
   const sentIds = rows.flatMap((row) =>
@@ -535,7 +541,7 @@ export function DialogView({
   }, [candidateMark, candidateRevision, queryClient, taskId, trpc])
   // A tab of the changes on the screen — beside the dialog or in its place — shows the client this
   // revision: «+» bears no dot for it (И13). A revision that comes after is new again.
-  const changesShown = isChangesTool(tools.active)
+  const changesShown = shown && isChangesTool(tools.active)
   const changesNow = changesMark(candidate)
   useEffect(() => {
     if (changesShown && changesNow !== null) dispatchTools({ type: 'seen', changes: changesNow })
@@ -580,16 +586,16 @@ export function DialogView({
   }
 
   /**
-   * The one way a tool opens (docs/plan/59, И9): «+», «Посмотреть изменения», `/preview`, «Открыть
-   * браузер», «Взять управление» and «Смотреть, что делает агент» — never the words of the agent. An
-   * open tool is shown again, never twice. Choosing the preview is the client's call to show it,
+   * The one way a tool opens at the client's press (docs/plan/59, И9): «+», «Посмотреть изменения»,
+   * `/preview` and «Взять управление» — never the words of the agent; the launch of the browser is
+   * an action of its own (`launched`). An open tool is shown again, never twice. Choosing the preview is the client's call to show it,
    * every time (И10). An explicit opening puts the focus on the tab of the tool, unless the action
    * keeps a place of its own and that place stays in sight: below `lg` the first tool takes the
    * place of the dialog, and the button pressed there goes out of sight with it (И14).
    */
   function openTool(tool: DialogTool, { by }: { by: ToolOpener }) {
     if (tool === 'preview') previewCalls.call()
-    const covers = !wide && tools.active === null
+    const covers = !wide && !shown
     dispatchTools({ type: 'open', tool, by })
     if (movesFocus(by, { covers })) focusSoon(toolTabId(tool))
   }
@@ -607,11 +613,22 @@ export function DialogView({
   }
 
   /**
-   * «Скрыть панель», or «К диалогу» below `lg`: every tab at once, nothing sent either; the focus
-   * back on «+» in the head, the feed back where the client read it (И14, И19).
+   * «Скрыть панель»: every tab at once, nothing sent either; the focus back on «+» in the head, the
+   * feed where the client read it (И8, И19).
    */
   function closeTools() {
     dispatchTools({ type: 'closeAll' })
+    setFullscreen(false)
+    focusSoon(TOOLS_BUTTON_ID)
+  }
+
+  /**
+   * «К диалогу» below `lg` (И14, owner's answer of 30.10.2026): the tab on the screen closes, the
+   * other open ones stay behind the dialog for «+»; the dialog comes back where the client read it,
+   * the focus on «+» in its head (И19).
+   */
+  function backToDialog() {
+    dispatchTools({ type: 'back' })
     setFullscreen(false)
     focusSoon(TOOLS_BUTTON_ID)
   }
@@ -790,7 +807,6 @@ export function DialogView({
     onShowChanges: () => {
       if (head !== null) openTool(changesToolOf(head), { by: 'changes' })
     },
-    onOpenBrowser: () => openTool('browser', { by: 'card' }),
     onTakeControl: takeControl,
     onResumeAgent: resumeWork,
     // The client holds the control of a browser that is there: a closed session holds nothing.
@@ -934,10 +950,9 @@ export function DialogView({
         sheet={!wide}
       />
     )
-  const toolsOpen = tools.active !== null
   // Below `lg` an open tool takes the place of the dialog: its head, rows and field are only
   // hidden, never unmounted — the draft, the files and the place of the reader stay (И14, И19).
-  const covered = toolsOpen && !wide
+  const covered = shown && !wide
 
   /** What the panel of a tool holds. */
   function toolContent(tool: DialogTool): ReactNode {
@@ -1042,7 +1057,7 @@ export function DialogView({
           // to edge of the dialog. While the panel is closed it stands right under the bar, «+» in
           // the corner the strip of the panel's tabs takes when it opens (docs/plan/59, И4); while
           // it is open, under «Назад к диалогам» of the list that gave the dialog its room.
-          mt: { lg: toolsOpen ? 0 : -3.5 },
+          mt: { lg: shown ? 0 : -3.5 },
           mx: { xs: -2, sm: -2.5, md: -4 },
           pl: { xs: 2, sm: 2.5, md: 4, lg: 3 },
           pr: { xs: 2, sm: 2.5, md: 4, lg: 0.75 },
@@ -1062,7 +1077,7 @@ export function DialogView({
                 }
           }
           onRenamed={refresh}
-          tools={toolsOpen ? null : menu}
+          tools={shown ? null : menu}
         />
       </Box>
 
@@ -1155,8 +1170,6 @@ export function DialogView({
                   ? {
                       controlling: head.browser?.controller === 'user' && browserLive,
                       onResume: resumeWork,
-                      onWatch: () => openTool('browser', { by: 'watch' }),
-                      onOpen: () => openTool('browser', { by: 'card' }),
                       busy,
                     }
                   : undefined
@@ -1205,16 +1218,17 @@ export function DialogView({
         {effortNote}
       </Box>
 
-      {/* Drawn only while a tool is open: no empty column, no hidden tool that reads anything. */}
+      {/* Drawn only while a tool is on the screen: no empty column, no hidden tool that reads. */}
       <ToolsPanel
         tools={tools}
         pane={pane}
         wide={wide}
         fullscreen={fullscreen}
-        menu={toolsOpen ? menu : null}
+        menu={shown ? menu : null}
         onShow={(tool) => dispatchTools({ type: 'show', tool })}
         onClose={closeTool}
         onCloseAll={closeTools}
+        onBack={backToDialog}
         content={toolContent}
       />
 

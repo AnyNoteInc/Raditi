@@ -111,8 +111,6 @@ export interface FeedActions {
   onUndo: () => void
   /** «Посмотреть изменения»: the tab of the changes beside the dialog (docs/plan/59, И10). */
   onShowChanges: () => void
-  /** «Открыть браузер»: the tab of the task's browser beside the dialog, nothing else (И12). */
-  onOpenBrowser?: () => void
   /** «Взять управление» of the task's browser (docs/plan/57-browser-tasks.md, Б15). */
   onTakeControl?: () => void
   /** «Продолжить работу агента» (Б16). */
@@ -537,21 +535,12 @@ function QuestionCard({
   )
 }
 
-/** «Открыть браузер»: shows the browser beside the dialog and does nothing else (И12). */
-function OpenBrowserButton({ onOpen }: { onOpen: () => void }) {
-  return (
-    <Button variant="outlined" onClick={onOpen} startIcon={<AppIcon name="globe" size={18} />}>
-      {browserText.open}
-    </Button>
-  )
-}
-
 /**
  * A question of a task in the browser (docs/plan/57-browser-tasks.md, Б23): the agent asks the
  * client to sign in, pass a check or confirm something there, or the platform stops the work.
- * While it is open the card offers the control of the browser, or gives it back, and the way to
- * the browser itself, whoever drives it (docs/plan/59, И12): the browser is beside the dialog only
- * when the client asks for it.
+ * While it is open the card offers the control of the browser, which opens the browser too, or
+ * gives it back. The browser itself opens from «+» and by itself as it starts (docs/plan/59, И12,
+ * owner's answer of 30.10.2026: one way to open it, as every other tool).
  */
 function BrowserQuestionCard({
   row,
@@ -592,26 +581,13 @@ function BrowserQuestionCard({
       </Button>
     )
   }
-  // Looking is no action: the browser can be opened while a press is on its way or the task is
-  // being stopped, and shows what there is — a closed session too.
-  const look =
-    open && help && actions.onOpenBrowser ? (
-      <OpenBrowserButton onOpen={actions.onOpenBrowser} />
-    ) : null
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
       <Card
         icon={row.reason === 'unconfirmed' ? 'warning' : 'globe'}
         title={feedBrowserQuestionTitle[row.reason]}
         tone={open ? 'primary.main' : 'text.primary'}
-        actions={
-          button === null && look === null ? undefined : (
-            <>
-              {button}
-              {look}
-            </>
-          )
-        }
+        actions={button ?? undefined}
       >
         <Paragraph>{nbsp(feedBrowserQuestionText[row.reason])}</Paragraph>
         {row.message ? <Paragraph>{row.message}</Paragraph> : null}
@@ -1180,15 +1156,11 @@ export function LiveBlock({
   stopping?: boolean
   /** «Ход работы» of the turn at work, as it goes (owner's decision of 26.10.2026). */
   activity?: ReactNode
-  /** A task in the browser (docs/plan/57-browser-tasks.md): who drives it, and the way to it. */
+  /** A task in the browser (docs/plan/57-browser-tasks.md): who drives it. */
   browser?: {
     /** The client controls the browser: the agent waits for «Продолжить работу агента». */
     controlling: boolean
     onResume: () => void
-    /** «Смотреть, что делает агент»: the browser beside the dialog, on any width (docs/plan/59, И12). */
-    onWatch: () => void
-    /** «Открыть браузер» of the plate «Управляете вы…» (И12). */
-    onOpen: () => void
     busy: boolean
   }
 }) {
@@ -1222,12 +1194,14 @@ export function LiveBlock({
           title = browserText.status.user
           text = browserText.controlPlate
           body = (
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              <Button variant="contained" onClick={browser.onResume} disabled={browser.busy}>
-                {feedBrowserButtons.resume}
-              </Button>
-              <OpenBrowserButton onOpen={browser.onOpen} />
-            </Box>
+            <Button
+              variant="contained"
+              onClick={browser.onResume}
+              disabled={browser.busy}
+              sx={{ alignSelf: 'flex-start' }}
+            >
+              {feedBrowserButtons.resume}
+            </Button>
           )
         } else {
           // The status and its timer say it all; no standing words (owner, 26.10.2026).
@@ -1239,16 +1213,6 @@ export function LiveBlock({
                 <Disclosure summary={activityText.title} open>
                   <Box sx={{ pt: 0.5 }}>{activity}</Box>
                 </Disclosure>
-              ) : null}
-              {browser ? (
-                <Button
-                  variant="outlined"
-                  onClick={browser.onWatch}
-                  startIcon={<AppIcon name="eye" size={18} />}
-                  sx={{ alignSelf: 'flex-start' }}
-                >
-                  {browserText.watch}
-                </Button>
               ) : null}
             </>
           )

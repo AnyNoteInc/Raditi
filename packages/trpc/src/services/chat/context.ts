@@ -6,7 +6,6 @@ import {
   type ObjectStorage,
   type PreviewAddress,
   type SecretStore,
-  type SiteStack,
 } from '@repo/domain'
 
 /**
@@ -29,14 +28,6 @@ export interface ChatContext {
    * null — the platform has no browser here: no site offers tasks in it, and no ticket is issued.
    */
   browser?: { streamUrl: string } | null
-  /**
-   * Whether a release of the site's stack replays operations of its database: the adapter of the
-   * stack declares at least one kind (`SiteAdapter.dbOperationKinds`;
-   * docs/plan/59-dialog-tools-panel.md, И6). The app asks the adapter, as core does for a release:
-   * @repo/trpc knows no adapter and compares no stack (rule 8). Absent — none does here, and no
-   * dialog offers the tool «База данных».
-   */
-  databaseOperations?: SiteDatabaseOperations
   /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
   releaseConfirmKey: Uint8Array
   /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */
@@ -56,12 +47,6 @@ export interface ChatContext {
  * the Transit key of a workspace when it is missing — never read, export or remove one.
  */
 export type SiteSecretWriter = Pick<SecretStore, 'kvWrite' | 'kvMetadata' | 'transitEnsureKey'>
-
-/**
- * Asks the adapter of a site's stack whether a release replays operations of the database: true
- * when it declares a kind, false for a stack it has no adapter for. Never throws.
- */
-export type SiteDatabaseOperations = (site: { stack: SiteStack; url: string }) => boolean
 
 /** The `info` of HKDF: a key of its own, never the secret of the sessions itself. */
 export const RELEASE_CONFIRM_KEY_INFO = 'raditi-release-confirm-v1'

@@ -17,15 +17,17 @@ import {
   toolPanelId,
   toolTabId,
   toolTabNames,
+  toolsShown,
   type DialogTool,
   type ToolsState,
 } from './dialog-tools'
 import { PaneResizer } from './pane-resizer'
 
 // The panel of the tools beside a dialog (docs/plan/59-dialog-tools-panel.md, И7, И8, И14, И20):
-// one landmark «Инструменты диалога», drawn only while a tool is open. From `lg` it stands at the
-// right edge under the bar of breadcrumbs, its edge dragged to make it wider; below it takes the
-// place of the dialog, «К диалогу» and «+» over its tabs. On its strip the tabs of the open tools —
+// one landmark «Инструменты диалога», drawn only while a tool is on the screen. From `lg` it stands
+// at the right edge under the bar of breadcrumbs, its edge dragged to make it wider; below it takes
+// the place of the dialog, «К диалогу» (which closes the tab on the screen and leaves the others
+// behind the dialog) and «+» over its tabs. On its strip the tabs of the open tools —
 // a sign and a name each, closed by the cross at its end or by Delete —, and from `lg` «Скрыть
 // панель» and «+» outside the tabs: a tablist holds its tabs alone (axe), and MUI takes every child
 // of `Tabs` for a tab.
@@ -65,6 +67,7 @@ export function ToolsPanel({
   onShow,
   onClose,
   onCloseAll,
+  onBack,
   content,
 }: {
   tools: ToolsState
@@ -80,12 +83,14 @@ export function ToolsPanel({
   onShow: (tool: DialogTool) => void
   /** The cross of a tab, or Delete on it. */
   onClose: (tool: DialogTool) => void
-  /** «Скрыть панель», «К диалогу»: every tab at once. */
+  /** «Скрыть панель»: every tab at once. */
   onCloseAll: () => void
+  /** «К диалогу» below `lg`: the tab on the screen closes, the others stay behind the dialog. */
+  onBack: () => void
   /** What the panel of a tool holds. */
   content: (tool: DialogTool) => ReactNode
 }) {
-  if (tools.active === null) return null
+  if (!toolsShown(tools)) return null
   return (
     <Box
       component="aside"
@@ -159,7 +164,7 @@ export function ToolsPanel({
             }}
           >
             <Button
-              onClick={onCloseAll}
+              onClick={onBack}
               startIcon={<AppIcon name="back" size={22} />}
               sx={{
                 minHeight: 44,

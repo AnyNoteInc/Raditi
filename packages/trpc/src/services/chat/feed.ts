@@ -16,16 +16,7 @@ import {
 
 import { accessibleTask, taskNotFound } from './access.ts'
 import { feedBrowser, type FeedBrowser } from './browser.ts'
-import type { SiteDatabaseOperations } from './context.ts'
-import {
-  candidateCountsOf,
-  dialogCommands,
-  dialogFacts,
-  dialogPreviewAndCandidate,
-  type DialogCandidate,
-  type DialogFacts,
-  type DialogPreview,
-} from './dialog-facts.ts'
+import { candidateCountsOf, dialogCommands, dialogFacts, type DialogFacts } from './dialog-facts.ts'
 import { dialogRetry, movingRequest } from './dialog-state.ts'
 
 type Tx = Prisma.TransactionClient
@@ -82,8 +73,6 @@ export async function readDialogFeed(
     /** `task_events.id` of the last row the screen has; '0' before the first. */
     after: string
     address: PreviewAddress | null
-    /** `ChatContext.databaseOperations`; null — no stack replays operations of its database. */
-    databaseOperations: SiteDatabaseOperations | null
   },
 ): Promise<DialogFeed> {
   return db.$transaction(
@@ -108,11 +97,7 @@ export async function readDialogFeed(
       })
       if (task === null) throw taskNotFound()
       const facts = await dialogFacts(tx, task, input.userId)
-      const head = await feedHead(tx, task, {
-        preview: facts.preview,
-        candidate: facts.candidate,
-        databaseOperations: input.databaseOperations,
-      })
+      const head = await feedHead(tx, task)
       const browser = await feedBrowser(tx, task)
       const page = await feedPage(tx, task.id, input.after)
       return {
@@ -152,16 +137,6 @@ export async function readDialogFeed(
   )
 }
 
-/** What the head of a dialog is read with beside its task, from the same snapshot. */
-interface HeadReading {
-  /** The preview of the dialog. */
-  preview: Pick<DialogPreview, 'status' | 'dbMode'> | null
-  /** The candidate the dialog waits with. */
-  candidate: Pick<DialogCandidate, 'facts'> | null
-  /** `ChatContext.databaseOperations`; null — no stack replays operations of its database. */
-  databaseOperations: SiteDatabaseOperations | null
-}
-
 /** The head of a dialog (`feedTaskHeadSchema`), read in the snapshot of its rows. */
 export async function feedHead(
   tx: Tx,
@@ -179,7 +154,6 @@ export async function feedHead(
     /** The database's class; one the domain does not know (`service`) reads as the default. */
     modelClass: string | null
   },
-  reading: HeadReading,
 ): Promise<FeedTaskHead> {
   const lease = await tx.siteLease.findUnique({
     where: { siteId: task.siteId },
@@ -223,32 +197,7 @@ export async function feedHead(
     requirements: { repository: task.needsRepository, browser: task.needsBrowser },
     // A task older than the classes thinks at the level of `standard` (`createDialog`'s default).
     effort: effortOfModelClass(modelClassSchema.catch('standard').parse(task.modelClass)),
-    databaseChanges: await databaseChangesOf(tx, task, reading),
   })
-}
-
-/**
- * Whether the dialog offers the tool «База данных» (docs/plan/59-dialog-tools-panel.md, И6): a
- * task with the repository whose stack replays operations of the database, while its preview
- * holds a copy of the database — `db_mode` `copy`, not `unavailable` — or its candidate already
- * has records. A plan of the database is made of the writes to that copy alone
- * (`candidate-builder.ts`), so a dialog without either has no change of records to show. The
- * stack is asked last, and only when the rest holds; read at every head, nothing is stored.
- */
-async function databaseChangesOf(
-  tx: Pick<Tx, 'site'>,
-  task: { siteId: string; needsRepository: boolean },
-  { preview, candidate, databaseOperations }: HeadReading,
-): Promise<boolean> {
-  if (databaseOperations === null || !task.needsRepository) return false
-  const copy = preview?.dbMode === 'copy' && preview.status !== 'unavailable'
-  const records = (candidateCountsOf(candidate?.facts)?.records ?? 0) > 0
-  if (!copy && !records) return false
-  const site = await tx.site.findUnique({
-    where: { id: task.siteId },
-    select: { stack: true, url: true },
-  })
-  return site !== null && databaseOperations({ stack: site.stack, url: site.url })
 }
 
 /** Rows after the cursor, at most a page of them, in the order of their ids. */
@@ -280,18 +229,10 @@ async function feedPage(
   return { events, cursor: page.length > 0 ? String(page.at(-1)!.id) : after, more }
 }
 
-/**
- * The head of one dialog with its site and alias, for `task.get`: the head `task.feed` gives, read
- * from the same rows.
- */
+/** The head of one dialog with its site and alias, for `task.get`. */
 export async function readDialogHead(
   db: PrismaClient,
-  input: {
-    userId: string
-    taskId: string
-    /** `ChatContext.databaseOperations`; null — no stack replays operations of its database. */
-    databaseOperations: SiteDatabaseOperations | null
-  },
+  input: { userId: string; taskId: string },
 ): Promise<FeedTaskHead & { siteId: string; alias: string; createdAt: Date; updatedAt: Date }> {
   return db.$transaction(
     async (tx) => {
@@ -316,12 +257,7 @@ export async function readDialogHead(
         },
       })
       if (task === null) throw taskNotFound()
-      const { preview, candidate } = await dialogPreviewAndCandidate(tx, task.id)
-      const head = await feedHead(tx, task, {
-        preview,
-        candidate,
-        databaseOperations: input.databaseOperations,
-      })
+      const head = await feedHead(tx, task)
       return {
         ...head,
         siteId: task.siteId,

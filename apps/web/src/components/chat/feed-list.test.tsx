@@ -423,91 +423,77 @@ describe('the rows of a dialog', () => {
   })
 })
 
-// docs/plan/59-dialog-tools-panel.md, И12: the browser is beside the dialog only when the client
-// asks for it, so the feed offers the way to it wherever it asks something of the client.
+// docs/plan/59-dialog-tools-panel.md, И12 and the owner's answer of 30.10.2026: the browser opens
+// as every other tool — from «+», by itself as it starts, and with «Взять управление». The feed has
+// no buttons that only show it.
 describe('the browser of a task in the feed', () => {
   const help = { reason: 'login' as const, message: null }
+  const buttonsOf = (feed: HTMLElement) =>
+    within(feed)
+      .queryAllByRole('button')
+      .map((button) => text(button))
 
   it.each(['login', 'captcha', 'confirm', 'other'] as const)(
-    'offers «Открыть браузер» beside «Взять управление» on an open request (%s)',
+    'offers «Взять управление» alone on an open request (%s)',
     (reason) => {
       const question = browserQuestionRow('2', 1, reason)
       const { feed, handlers } = showFeed(
         [requestRow('1'), question],
         browserHeadOf({ status: 'awaiting_user', browser: { help: { reason, message: null } } }),
         { question: question.id },
-        { onOpenBrowser: vi.fn(), onTakeControl: vi.fn(), browserLive: true },
+        { onTakeControl: vi.fn(), browserLive: true },
       )
-      expect(
-        within(feed)
-          .getAllByRole('button')
-          .map((button) => text(button)),
-      ).toEqual(['Взять управление', 'Открыть браузер'])
-      fireEvent.click(within(feed).getByRole('button', { name: 'Открыть браузер' }))
-      expect(handlers.onOpenBrowser).toHaveBeenCalledTimes(1)
-      expect(handlers.onTakeControl).not.toHaveBeenCalled()
+      expect(buttonsOf(feed)).toEqual(['Взять управление'])
+      fireEvent.click(within(feed).getByRole('button', { name: 'Взять управление' }))
+      expect(handlers.onTakeControl).toHaveBeenCalledTimes(1)
     },
   )
 
-  it('offers it beside «Продолжить работу агента» while the client drives', () => {
+  it('offers «Продолжить работу агента» alone while the client drives', () => {
     const question = browserQuestionRow('2', 1, 'control')
     const { feed, handlers } = showFeed(
       [requestRow('1'), question],
       browserHeadOf({ status: 'awaiting_user', browser: { controller: 'user' } }),
       { question: question.id },
-      {
-        onOpenBrowser: vi.fn(),
-        onTakeControl: vi.fn(),
-        onResumeAgent: vi.fn(),
-        controlling: true,
-        browserLive: true,
-      },
+      { onTakeControl: vi.fn(), onResumeAgent: vi.fn(), controlling: true, browserLive: true },
     )
-    expect(
-      within(feed)
-        .getAllByRole('button')
-        .map((button) => text(button)),
-    ).toEqual(['Продолжить работу агента', 'Открыть браузер'])
-    fireEvent.click(within(feed).getByRole('button', { name: 'Открыть браузер' }))
-    expect(handlers.onOpenBrowser).toHaveBeenCalledTimes(1)
-    expect(handlers.onResumeAgent).not.toHaveBeenCalled()
+    expect(buttonsOf(feed)).toEqual(['Продолжить работу агента'])
+    fireEvent.click(within(feed).getByRole('button', { name: 'Продолжить работу агента' }))
+    expect(handlers.onResumeAgent).toHaveBeenCalledTimes(1)
+    expect(handlers.onTakeControl).not.toHaveBeenCalled()
   })
 
-  it('offers it for a session that closed too: the browser shows what became of it', () => {
+  it('offers nothing for a session that closed: the browser is there from «+»', () => {
     const question = browserQuestionRow('2', 1, 'login')
     const { feed } = showFeed(
       [requestRow('1'), question],
       browserHeadOf({ status: 'awaiting_user', browser: { status: 'closed', help } }),
       { question: question.id },
-      { onOpenBrowser: vi.fn(), onTakeControl: vi.fn(), browserLive: false },
+      { onTakeControl: vi.fn(), browserLive: false },
     )
-    expect(
-      within(feed)
-        .getAllByRole('button')
-        .map((button) => text(button)),
-    ).toEqual(['Открыть браузер'])
+    expect(buttonsOf(feed)).toEqual([])
+    expect(text(feed)).not.toContain('Открыть браузер')
   })
 
-  it('offers it on no answered request, and on no warning of an unconfirmed save', () => {
+  it('offers nothing on an answered request, nor on the warning of an unconfirmed save', () => {
     const answered = browserQuestionRow('2', 1, 'login')
     const unconfirmed = browserQuestionRow('3', 1, 'unconfirmed')
     const { feed } = showFeed(
       [requestRow('1'), answered, unconfirmed],
       browserHeadOf({ status: 'awaiting_user', browser: { help } }),
       { question: unconfirmed.id },
-      { onOpenBrowser: vi.fn(), onTakeControl: vi.fn(), browserLive: true },
+      { onTakeControl: vi.fn(), browserLive: true },
     )
-    expect(within(feed).queryByRole('button', { name: 'Открыть браузер' })).toBeNull()
+    expect(buttonsOf(feed)).toEqual([])
   })
 
-  it('offers «Открыть браузер» beside «Продолжить работу агента» on the plate of the live block', () => {
-    const onOpen = vi.fn()
+  it('offers «Продолжить работу агента» alone on the plate of the live block', () => {
     const onResume = vi.fn()
     render(
       <LiveBlock
         head={browserHeadOf({ browser: { controller: 'user' } })}
         steps={[]}
-        browser={{ controlling: true, onResume, onWatch: vi.fn(), onOpen, busy: false }}
+        browser={{ controlling: true, onResume, busy: false }}
       />,
     )
     expect(screen.getByRole('heading', { name: 'Управляете вы' })).toBeTruthy()
@@ -516,24 +502,24 @@ describe('the browser of a task in the feed', () => {
       'Управляете вы. Агент ждёт. Когда закончите, нажмите «Продолжить работу агента».',
     )
     expect(text(document.body)).not.toContain('справа')
-    fireEvent.click(screen.getByRole('button', { name: 'Открыть браузер' }))
-    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByRole('button').map((button) => text(button))).toEqual([
+      'Продолжить работу агента',
+    ])
     fireEvent.click(screen.getByRole('button', { name: 'Продолжить работу агента' }))
     expect(onResume).toHaveBeenCalledTimes(1)
   })
 
-  it('offers «Смотреть, что делает агент» while the agent drives, on any width', () => {
-    const onWatch = vi.fn()
+  it('offers no button in the live block while the agent drives, on any width', () => {
     render(
       <LiveBlock
         head={browserHeadOf()}
         steps={[]}
-        browser={{ controlling: false, onResume: vi.fn(), onWatch, onOpen: vi.fn(), busy: false }}
+        browser={{ controlling: false, onResume: vi.fn(), busy: false }}
       />,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Смотреть, что делает агент' }))
-    expect(onWatch).toHaveBeenCalledTimes(1)
-    expect(screen.queryByRole('button', { name: 'Открыть браузер' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Агент работает' })).toBeTruthy()
+    expect(screen.queryAllByRole('button')).toEqual([])
+    expect(text(document.body)).not.toContain('Смотреть, что делает агент')
   })
 })
 

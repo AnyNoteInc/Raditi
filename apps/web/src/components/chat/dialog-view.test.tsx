@@ -67,6 +67,7 @@ const calls = vi.hoisted(() => ({
     vi.fn<
       (input: { taskId: string }) => Promise<{ url: string; ticket: string; sessionId: string }>
     >(),
+  watch: vi.fn(async (_input: { taskId: string }) => ({ watched: true })),
 }))
 
 vi.mock('next/navigation', () => ({
@@ -135,6 +136,7 @@ vi.mock('@/trpc/client', () => ({
       confirm: mutation(async () => ({})),
       undoConfirm: mutation(async () => ({})),
     },
+    browser: { watch: mutation(calls.watch) },
     billing: { usage: query('billing.usage', async () => null) },
   }),
   useTRPCClient: () => client,
@@ -205,8 +207,10 @@ const plus = () => screen.getByRole('button', { name: /^Инструменты/ 
 const plusName = () => plus().getAttribute('aria-label')
 const DOT = {
   changes: 'Инструменты — есть новые изменения',
-  launch: 'Инструменты — браузер запущен',
+  browser: 'Инструменты — браузер ждёт вас',
 }
+/** The words «+» said for a launched browser before the owner's answer of 30.10.2026: never now. */
+const LAUNCH_DOT = 'Инструменты — браузер запущен'
 const tabNames = () =>
   within(screen.getByRole('tablist', { name: 'Открытые инструменты' }))
     .getAllByRole('tab')
@@ -1143,7 +1147,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
 
   it('opens the tool chosen in «+» on its own tab, and one chosen again without a second tab', async () => {
     wideLayout()
-    showDialog(waiting({ preview: readyPreview, task: { turnNo: 1, databaseChanges: true } }))
+    showDialog(waiting({ preview: readyPreview }))
     await screen.findByText('Изменения готовы')
     expect(await menuTiles()).toEqual([
       'Предпросмотр',
@@ -1253,7 +1257,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     'is used from the keyboard %s: the first tile in focus, the arrows, Esc and Tab back to «+», Enter and Space',
     async (_where, wide) => {
       if (wide) wideLayout()
-      showDialog(waiting({ preview: readyPreview, task: { turnNo: 1, databaseChanges: true } }))
+      showDialog(waiting({ preview: readyPreview }))
       await screen.findByText('Изменения готовы')
       /** The key pressed where the focus is. */
       const press = (key: string) => fireEvent.keyDown(document.activeElement!, { key })
@@ -1330,7 +1334,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => plain(item.textContent)),
-    ).toEqual(['Файлы и изменения, 4', 'Проверки, 2 из 2'])
+    ).toEqual(['Файлы и изменения, 4', 'База данных, 3', 'Проверки, 2 из 2'])
     if (wide) {
       expect(screen.queryByRole('button', { name: 'Закрыть меню' })).toBeNull()
       fireEvent.keyDown(menu, { key: 'Escape' })
@@ -1465,7 +1469,6 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
           counts: { files: { added: 0, modified: 0, deleted: 0 }, media: 0, records: 3 },
           checks: { pending: 0, passed: 0, failed: 0, stale: 0 },
         },
-        task: { turnNo: 1, databaseChanges: true },
       }),
     )
     await screen.findByText('Изменения готовы')
@@ -1579,10 +1582,9 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     showDialog(
       feedAnswer({
         status: 'done',
-        // A stack that changes records, and a preview with a copy of the database, gone with the
-        // dialog: the dialog has the tool of the records and ended with nothing in it; its preview
-        // is offered no more (И6).
-        task: { databaseChanges: true },
+        // A preview with a copy of the database, gone with the dialog: its preview is offered no
+        // more, and without records among changes no «База данных» either (И6, owner's answer of
+        // 30.10.2026).
         preview: { ...readyPreview, status: 'destroyed' },
         events: [requestRow('1')],
         cursor: '1',
@@ -1599,29 +1601,17 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(screen.getByRole('textbox', { name: 'Сообщение' }).getAttribute('placeholder')).toBe(
       'Диалог завершён',
     )
-    expect(await menuTiles()).toEqual([
-      'Файлы и изменения, нет',
-      'База данных, нет',
-      'Проверки, нет',
-    ])
+    expect(await menuTiles()).toEqual(['Файлы и изменения, нет', 'Проверки, нет'])
     await choose(/^Файлы и изменения/)
     expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
       'Диалог закрыт: изменений для показа здесь нет.Выпущенные версии — в разделе «Изменения».',
-    )
-    await choose(/^База данных/)
-    expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
-      'Диалог закрыт: изменений в базе данных нет.',
     )
     await choose(/^Проверки/)
     expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
       'Диалог закрыт: проверок нет.',
     )
     // The tiles of the open tools say so; nothing was read for them.
-    expect(await menuTiles()).toEqual([
-      'Файлы и изменения, Открыто',
-      'База данных, Открыто',
-      'Проверки, Открыто',
-    ])
+    expect(await menuTiles()).toEqual(['Файлы и изменения, Открыто', 'Проверки, Открыто'])
     expect(calls.candidate).not.toHaveBeenCalled()
   })
 
@@ -1638,6 +1628,118 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Изменений пока нет.Они появятся здесь, когда агент закончит работу.',
     )
     expect(calls.candidate).not.toHaveBeenCalled()
+  })
+
+  it("offers «База данных» only once the changes hold records (owner's answer of 30.10.2026)", async () => {
+    let later!: (answer: DialogFeed) => void
+    const filesOnly = {
+      ...candidateHead,
+      counts: { files: { added: 1, modified: 2, deleted: 0 }, media: 1, records: 0 },
+    }
+    const withRecords = waiting({
+      preview: readyPreview,
+      candidate: { ...candidateHead, revision: 2 },
+      events: [
+        requestRow('1'),
+        resultRow('2', 1),
+        candidateRow('3', 1),
+        resultRow('4', 2, 'Поменял ещё и цену в меню на сайте.'),
+      ],
+      cursor: '4',
+    })
+    showAnswers(
+      waiting({ preview: readyPreview, candidate: filesOnly, more: true }),
+      new Promise<DialogFeed>((resolve) => (later = resolve)),
+      withRecords,
+    )
+    await screen.findByText('Изменения готовы')
+    // The changes touch the files alone: no tile of the records, whatever the stack could do.
+    expect(await menuTiles()).toEqual(['Предпросмотр', 'Файлы и изменения, 4', 'Проверки, 2 из 2'])
+    later(withRecords)
+    expect(await screen.findByText('Поменял ещё и цену в меню на сайте.')).toBeTruthy()
+    expect(await menuTiles()).toEqual([
+      'Предпросмотр',
+      'Файлы и изменения, 4',
+      'База данных, 3',
+      'Проверки, 2 из 2',
+    ])
+  })
+
+  it("closes only the tab on the screen by «К диалогу» below `lg`: the others wait behind the dialog (owner's answer of 30.10.2026)", async () => {
+    showDialog(waiting({ preview: readyPreview }))
+    await screen.findByText('Изменения готовы')
+    const heading = screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })
+    await choose(/^Предпросмотр/)
+    await within(pane()).findByTitle(FRAME)
+    await choose(/^Проверки/)
+    expect(tabNames()).toEqual(['Предпросмотр', 'Проверки'])
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    // The dialog again, the focus on «+» of its head; the area of the tools is put away, and
+    // nothing of it reads anything meanwhile.
+    await waitFor(() => expect(toolsPanel()).toBeNull())
+    expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBe(heading)
+    await waitFor(() => expect(document.activeElement).toBe(plus()))
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: /^Инструменты/ })).toBe(
+      plus(),
+    )
+    expect(document.querySelector('iframe')).toBeNull()
+    // «Проверки» closed, «Предпросмотр» kept behind the dialog: its tile says «Открыто».
+    expect(await menuTiles()).toEqual([
+      'Предпросмотр, Открыто',
+      'Файлы и изменения, 4',
+      'База данных, 3',
+      'Проверки, 2 из 2',
+    ])
+    // Chosen there, it is on the screen again in place of the dialog, alone on its strip.
+    await choose(/^Предпросмотр, Открыто/)
+    const tab = await screen.findByRole('tab', { name: 'Предпросмотр', selected: true })
+    expect(tabNames()).toEqual(['Предпросмотр'])
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(tab))
+    // Choosing the preview is the client's call to show it (И10).
+    await waitFor(() => expect(calls.ticket).toHaveBeenCalledTimes(2))
+    // «К диалогу» on the last tab closes the tools: nothing is kept open any more.
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    await waitFor(() => expect(toolsPanel()).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(plus()))
+    expect(await menuTiles()).toEqual([
+      'Предпросмотр',
+      'Файлы и изменения, 4',
+      'База данных, 3',
+      'Проверки, 2 из 2',
+    ])
+  })
+
+  it('marks «+» for new changes while the tabs wait behind the dialog below `lg` (И13, И14)', async () => {
+    let later!: (answer: DialogFeed) => void
+    const revised = waiting({
+      preview: readyPreview,
+      candidate: { ...candidateHead, revision: 2 },
+      events: [
+        requestRow('1'),
+        resultRow('2', 1),
+        candidateRow('3', 1),
+        resultRow('4', 2, 'Поменял ещё и цену латте.'),
+      ],
+      cursor: '4',
+    })
+    showAnswers(
+      waiting({ preview: readyPreview, more: true }),
+      new Promise<DialogFeed>((resolve) => (later = resolve)),
+      revised,
+    )
+    await screen.findByText('Изменения готовы')
+    await choose(/^Предпросмотр/)
+    await choose(/^Файлы и изменения/)
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    await waitFor(() => expect(toolsPanel()).toBeNull())
+    // The files were on the screen at these changes: no dot for them.
+    expect(plusName()).toBe('Инструменты')
+    later(revised)
+    expect(await screen.findByText('Поменял ещё и цену латте.')).toBeTruthy()
+    // The preview waits behind the dialog; the new changes mark «+», and open nothing.
+    await waitFor(() => expect(plusName()).toBe(DOT.changes))
+    expect(toolsPanel()).toBeNull()
   })
 })
 
@@ -1705,33 +1807,33 @@ describe('a task in the browser', () => {
   it.each([
     ['below `lg`, in place of the dialog', false],
     ['from `lg`, beside the dialog', true],
-  ])(
-    'opens the browser %s by «Смотреть, что делает агент», and its stream only then',
-    async (_where, wide) => {
-      if (wide) wideLayout()
-      showDialog(browserAnswer({ events: [requestRow('1')], cursor: '1' }), STREAM_URL)
-      const watch = await screen.findByRole('button', { name: 'Смотреть, что делает агент' })
-      expect(await menuTiles()).toEqual(['Браузер, Работает агент'])
-      expect(calls.streamTicket).not.toHaveBeenCalled()
-      fireEvent.click(watch)
-      const tab = await screen.findByRole('tab', { name: 'Браузер', selected: true })
-      await waitFor(() => expect(document.activeElement).toBe(tab))
-      await waitFor(() => expect(sockets).toHaveLength(1))
-      expect(calls.streamTicket).toHaveBeenCalledTimes(1)
-      expect(calls.streamTicket).toHaveBeenCalledWith({ taskId: TASK_ID })
-      expect(sockets[0]!.url).toBe(STREAM_URL)
-      // Beside the dialog from `lg`; in its place, the way back in sight, below.
-      if (wide) {
-        expect(
-          screen.getByRole('heading', { level: 1, name: 'Новость о летней веранде' }),
-        ).toBeTruthy()
-        expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
-      } else {
-        expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
-        expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
-      }
-    },
-  )
+  ])('opens the browser %s from «+», and its stream only then', async (_where, wide) => {
+    if (wide) wideLayout()
+    showDialog(browserAnswer({ events: [requestRow('1')], cursor: '1' }), STREAM_URL)
+    await screen.findByRole('heading', { name: 'Агент работает' })
+    // The live block has no way of its own to the browser (owner's answer of 30.10.2026).
+    expect(screen.queryByRole('button', { name: 'Смотреть, что делает агент' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Открыть браузер' })).toBeNull()
+    expect(await menuTiles()).toEqual(['Браузер, Работает агент'])
+    expect(calls.streamTicket).not.toHaveBeenCalled()
+    await choose(/^Браузер/)
+    const tab = await screen.findByRole('tab', { name: 'Браузер', selected: true })
+    await waitFor(() => expect(document.activeElement).toBe(tab))
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    expect(calls.streamTicket).toHaveBeenCalledTimes(1)
+    expect(calls.streamTicket).toHaveBeenCalledWith({ taskId: TASK_ID })
+    expect(sockets[0]!.url).toBe(STREAM_URL)
+    // Beside the dialog from `lg`; in its place, the way back in sight, below.
+    if (wide) {
+      expect(
+        screen.getByRole('heading', { level: 1, name: 'Новость о летней веранде' }),
+      ).toBeTruthy()
+      expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
+    } else {
+      expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+      expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+    }
+  })
 
   it('says it cannot show the browser where the platform has none, and keeps the dialog', async () => {
     showDialog(browserAnswer())
@@ -1791,7 +1893,7 @@ describe('a task in the browser', () => {
     },
   )
 
-  it('opens the browser for «Открыть браузер» on the question, and does nothing else', async () => {
+  it('offers «Взять управление» alone on the question; «+» opens the browser and does nothing else', async () => {
     showDialog(
       browserAnswer({
         status: 'awaiting_user',
@@ -1807,8 +1909,8 @@ describe('a task in the browser', () => {
       within(question)
         .getAllByRole('button')
         .map((button) => plain(button.textContent)),
-    ).toEqual(['Взять управление', 'Открыть браузер'])
-    fireEvent.click(within(question).getByRole('button', { name: 'Открыть браузер' }))
+    ).toEqual(['Взять управление'])
+    await choose(/^Браузер/)
     const tab = await screen.findByRole('tab', { name: 'Браузер', selected: true })
     await waitFor(() => expect(document.activeElement).toBe(tab))
     await waitFor(() => expect(sockets).toHaveLength(1))
@@ -1816,7 +1918,7 @@ describe('a task in the browser', () => {
     expect(sockets[0]!.sent).not.toContainEqual({ t: 'take' })
   })
 
-  it('offers «Открыть браузер» beside «Продолжить работу агента» while the client drives', async () => {
+  it('offers «Продолжить работу агента» alone while the client drives; «+» opens the browser to look', async () => {
     showDialog(
       browserAnswer({
         status: 'awaiting_user',
@@ -1827,7 +1929,13 @@ describe('a task in the browser', () => {
       STREAM_URL,
     )
     const resume = await screen.findByRole('button', { name: 'Продолжить работу агента' })
-    fireEvent.click(within(resume.parentElement!).getByRole('button', { name: 'Открыть браузер' }))
+    expect(
+      within(resume.parentElement!)
+        .getAllByRole('button')
+        .map((button) => plain(button.textContent)),
+    ).toEqual(['Продолжить работу агента'])
+    expect(screen.queryByRole('button', { name: 'Открыть браузер' })).toBeNull()
+    await choose(/^Браузер/)
     expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
     // Looking is all: the stream shows the client's own control and says nothing to the browser.
     await waitFor(() => expect(sockets).toHaveLength(1))
@@ -1866,8 +1974,9 @@ describe('a task in the browser', () => {
         browserAnswer({ browser: { controller: 'user' }, events: [requestRow('1')], cursor: '1' }),
         STREAM_URL,
       )
-      // The client drives while the turn runs: the plate offers the way to the browser.
-      fireEvent.click(await screen.findByRole('button', { name: 'Открыть браузер' }))
+      // The client drives while the turn runs, and looks at the browser from «+».
+      await screen.findByRole('heading', { name: 'Управляете вы' })
+      await choose(/^Браузер/)
       const tab = await screen.findByRole('tab', { name: 'Браузер', selected: true })
       await waitFor(() => expect(sockets).toHaveLength(1))
       const socket = sockets[0]!
@@ -1880,9 +1989,11 @@ describe('a task in the browser', () => {
       expect(socket.sent).not.toContainEqual({ t: 'release' })
       expect(calls.cancel).not.toHaveBeenCalled()
       expect(calls.resumeAgent).not.toHaveBeenCalled()
-      // The client still drives: the plate keeps «Продолжить работу агента» and the way back.
+      // The client still drives: the plate keeps «Продолжить работу агента» alone; the browser is
+      // in «+».
       expect(screen.getByRole('button', { name: 'Продолжить работу агента' })).toBeTruthy()
-      expect(screen.getByRole('button', { name: 'Открыть браузер' })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Открыть браузер' })).toBeNull()
+      expect(await menuTiles()).toEqual(['Браузер, Управляете вы'])
     },
   )
 
@@ -1948,7 +2059,8 @@ describe('a task in the browser', () => {
       asked,
     )
     mountDialog({ streamUrl: STREAM_URL })
-    fireEvent.click(await screen.findByRole('button', { name: 'Смотреть, что делает агент' }))
+    await screen.findByRole('heading', { name: 'Агент работает' })
+    await choose(/^Браузер/)
     await screen.findByRole('tab', { name: 'Браузер', selected: true })
     await waitFor(() => expect(sockets).toHaveLength(1))
     fireEvent.click(within(pane()).getByRole('button', { name: 'Скрыть панель' }))
@@ -1992,8 +2104,9 @@ describe('a task in the browser', () => {
     expect(take().disabled).toBe(true)
     expect(calls.cancel).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    // Looking is no action: the browser opens meanwhile and says the same.
-    fireEvent.click(within(question).getByRole('button', { name: 'Открыть браузер' }))
+    // Looking is no action: the browser opens from «+» meanwhile and says the same.
+    expect(within(question).queryByRole('button', { name: 'Открыть браузер' })).toBeNull()
+    await choose(/^Браузер/)
     expect(await within(pane()).findByText('Останавливаем задачу…')).toBeTruthy()
     expect(screen.getAllByText('Останавливаем задачу…')).toHaveLength(2)
   })
@@ -2013,7 +2126,7 @@ describe('a task in the browser', () => {
     expect(resume.disabled).toBe(true)
     fireEvent.click(resume)
     expect(field().disabled).toBe(true)
-    fireEvent.click(within(resume.parentElement!).getByRole('button', { name: 'Открыть браузер' }))
+    await choose(/^Браузер/)
     expect(await within(pane()).findByText('Останавливаем задачу…')).toBeTruthy()
     // «Остановить» is not offered twice.
     expect(
@@ -2336,20 +2449,40 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     expect(document.activeElement).toBe(link)
   })
 
-  it('moves no focus below `lg`, where the launch only marks «+»', async () => {
+  it.each([
+    ['«+» of the head', () => plus()],
+    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с диалогом/ })],
+    ['«Команды» of the field', () => screen.getByRole('button', { name: 'Команды' })],
+  ])(
+    'gives a focus on %s below `lg`, which the browser takes the place of, to «+» over the browser',
+    async (_what, target) => {
+      const second = later()
+      queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
+      mountDialog({ streamUrl: STREAM_URL, list: true })
+      await screen.findByText(WORDS[0]!)
+      const held = target()
+      held.focus()
+      expect(document.activeElement).toBe(held)
+      second.give(atWork({ status: 'ready' }, 2))
+      expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
+      // «+» beside «К диалогу», in the same corner, never the start of the page (И4).
+      await waitFor(() => expect(document.activeElement).toBe(plusOfTabs()))
+      expect(plusOfTabs().id).toBe('dialog-tools')
+    },
+  )
+
+  it('leaves a focus outside the dialog where it is as the browser opens below `lg`', async () => {
     const second = later()
     queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
     mountDialog({ streamUrl: STREAM_URL, list: true })
     await screen.findByText(WORDS[0]!)
-    const held = plus()
-    held.focus()
+    // Below `lg` the shell around the dialog stays: what is in it keeps the focus.
+    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    link.focus()
     second.give(atWork({ status: 'ready' }, 2))
-    expect(await screen.findByText(WORDS[1]!)).toBeTruthy()
-    await waitFor(() => expect(plusName()).toBe(DOT.launch))
+    expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
-    // The same «+», marked: the focus never left it.
-    expect(plus()).toBe(held)
-    expect(document.activeElement).toBe(held)
+    expect(document.activeElement).toBe(link)
   })
 
   it('opens nothing for a browser at work before the client came, nor for its next answers', async () => {
@@ -2439,25 +2572,45 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     },
   )
 
-  it('only marks «+» below `lg`, where «Смотреть, что делает агент» opens the browser', async () => {
+  it("opens the browser by itself below `lg` too, in place of the dialog, once and with no dot (owner's answer of 30.10.2026)", async () => {
     const second = later()
-    queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
+    const third = later()
+    queueAnswers(
+      atWork({ status: 'starting' }, 1, true),
+      second.answer,
+      third.answer,
+      atWork({ status: 'ready' }, 3),
+    )
     mountDialog({ streamUrl: STREAM_URL })
     await screen.findByText(WORDS[0]!)
+    const heading = screen.getByRole('heading', { level: 1, name: 'Новость о летней веранде' })
     expect(plusName()).toBe('Инструменты')
-    second.give(atWork({ status: 'ready' }, 2))
-    expect(await screen.findByText(WORDS[1]!)).toBeTruthy()
-    // Nothing takes the place of the dialog by itself: «+» says the browser started (И13).
-    await waitFor(() => expect(plusName()).toBe(DOT.launch))
-    expect(toolsPanel()).toBeNull()
-    expect(plus().querySelector('[data-tools-dot]')).not.toBeNull()
-    expect(calls.streamTicket).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Смотреть, что делает агент' }))
+    second.give(atWork({ status: 'ready' }, 2, true))
+    // The browser takes the place of the dialog, its stream with it; the dialog is only hidden.
     expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+    expect(heading.isConnected).toBe(true)
+    expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    // «+» over the browser has no dot: the client sees what started.
+    expect(plusName()).toBe('Инструменты')
+    // Back to the dialog: no dot «браузер запущен», and the next answer opens nothing again.
     fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
-    // The client has seen it: no dot any more.
+    expect(screen.getByRole('heading', { level: 1, name: 'Новость о летней веранде' })).toBe(
+      heading,
+    )
+    await waitFor(() => expect(document.activeElement).toBe(plus()))
     expect(plusName()).toBe('Инструменты')
+    expect(plusName()).not.toBe(LAUNCH_DOT)
+    expect(plus().querySelector('[data-tools-dot]')).toBeNull()
+    expect(sockets[0]!.closed).toBe(true)
+    third.give(atWork({ status: 'ready' }, 2, true))
+    expect(await screen.findByText(WORDS[2]!)).toBeTruthy()
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(toolsPanel()).toBeNull()
+    expect(calls.cancel).not.toHaveBeenCalled()
+    expect(calls.resumeAgent).not.toHaveBeenCalled()
   })
 
   it('opens nothing where the cabinet cannot show the browser', async () => {
@@ -2471,5 +2624,94 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     expect(await screen.findByText(WORDS[1]!)).toBeTruthy()
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
     expect(toolsPanel()).toBeNull()
+  })
+})
+
+describe('the browser kept from its idle end while the client looks at the dialog (docs/plan/59, И18)', () => {
+  it.each([
+    ['the agent drives it', { status: 'ready' as const }],
+    ['it is being started', { status: 'starting' as const }],
+    ['the client drives it', { controller: 'user' as const }],
+    ['it waits for the client', { help: { reason: 'login' as const, message: null } }],
+  ])(
+    "says the client looks at once while %s, the panel closed (owner's answer of 30.10.2026)",
+    async (_what, session) => {
+      showDialog(
+        browserAnswer({ browser: session, events: [requestRow('1')], cursor: '1' }),
+        STREAM_URL,
+      )
+      await waitFor(() => expect(calls.watch).toHaveBeenCalledTimes(1))
+      expect(calls.watch.mock.calls[0]![0]).toEqual({ taskId: TASK_ID })
+      // Looking at the dialog opens nothing, and no stream is read for it.
+      expect(toolsPanel()).toBeNull()
+      expect(calls.streamTicket).not.toHaveBeenCalled()
+      expect(sockets).toHaveLength(0)
+    },
+  )
+
+  it('says it where the cabinet cannot show the browser too: the dialog is on the screen', async () => {
+    showDialog(browserAnswer({ events: [requestRow('1')], cursor: '1' }))
+    await waitFor(() => expect(calls.watch).toHaveBeenCalledTimes(1))
+  })
+
+  it.each([
+    ['a dialog with the repository', () => waiting({ preview: readyPreview })],
+    [
+      'a task in the browser before its session',
+      () => browserAnswer({ browser: null, events: [requestRow('1')], cursor: '1' }),
+    ],
+    [
+      'a browser whose session closed',
+      () =>
+        browserAnswer({
+          status: 'awaiting_user',
+          browser: { status: 'closed', closeReason: 'idle' },
+          events: [requestRow('1')],
+          cursor: '1',
+        }),
+    ],
+    [
+      'a task in the browser that has ended',
+      () =>
+        browserAnswer({
+          status: 'done',
+          browser: { status: 'closed', closeReason: 'task_done' },
+          events: [requestRow('1')],
+          cursor: '1',
+        }),
+    ],
+  ])('says nothing for %s', async (_what, answer) => {
+    showDialog(answer(), STREAM_URL)
+    await screen.findByRole('textbox', { name: 'Сообщение' })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    showPage(true)
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(calls.watch).not.toHaveBeenCalled()
+  })
+
+  it('says it again as the page comes back into sight, and no more once the session closed', async () => {
+    let later!: (answer: DialogFeed) => void
+    const closed = browserAnswer({
+      status: 'awaiting_user',
+      browser: { status: 'closed', closeReason: 'idle' },
+      events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+      cursor: '2',
+    })
+    showAnswers(
+      browserAnswer({ events: [requestRow('1')], cursor: '1', more: true }),
+      new Promise<DialogFeed>((resolve) => (later = resolve)),
+      closed,
+    )
+    await waitFor(() => expect(calls.watch).toHaveBeenCalledTimes(1))
+    showPage(false)
+    showPage(true)
+    await waitFor(() => expect(calls.watch).toHaveBeenCalledTimes(2))
+    later(closed)
+    expect(await screen.findByText('Нужно войти на сайт')).toBeTruthy()
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    showPage(false)
+    showPage(true)
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(calls.watch).toHaveBeenCalledTimes(2)
   })
 })

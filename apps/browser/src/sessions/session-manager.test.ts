@@ -1100,6 +1100,72 @@ describe('the end of a session', () => {
     expect(runtime.stopped.sort()).toEqual([idle.row.id, watched.row.id].sort())
   })
 
+  // The chat of the task counts as watching its browser (docs/plan/59, И18; owner's answer of
+  // 30.10.2026): the cabinet records the client looking at the dialog in the session's row.
+  it('keeps a session whose dialog the client looks at, and closes it once nobody does', async () => {
+    // Idle after 10 minutes here, so that both sweeps come before the hour of the session.
+    const { store, manager, clock, ensured } = setup({ idleMinutes: 10 })
+    const { row } = await ensured()
+    clock.skew += 11 * 60_000
+    store.sessions.get(row.id)!.lastActivityAt = new Date(Date.now() + clock.skew - 60_000)
+    await manager.sweep()
+    expect(manager.session(row.id)).not.toBeNull()
+    expect(store.sessions.get(row.id)?.status).toBe('ready')
+    // The client left the dialog: ten minutes later nobody acted, watched or looked.
+    clock.skew += 11 * 60_000
+    await manager.sweep()
+    expect(store.sessions.get(row.id)).toMatchObject({ status: 'closed', closeReason: 'idle' })
+  })
+
+  it('keeps an idle session that core ensures while the sweep reads its row', async () => {
+    const { store, manager, clock, ensured } = setup()
+    const { row } = await ensured()
+    let answer = () => {}
+    const read = store.session.bind(store)
+    store.session = async (sessionId: string) => {
+      await new Promise<void>((resolve) => (answer = resolve))
+      return read(sessionId)
+    }
+    clock.skew += 31 * 60_000
+    const sweeping = manager.sweep()
+    await manager.ensure({
+      sessionId: row.id,
+      taskId: row.taskId,
+      siteId: row.siteId,
+      takeControl: true,
+    })
+    answer()
+    await sweeping
+    expect(manager.session(row.id)).not.toBeNull()
+    expect(store.sessions.get(row.id)?.status).toBe('ready')
+  })
+
+  it('closes an idle session whose row read hangs, and does not hold the sweep for it', async () => {
+    const { store, manager, clock, ensured, warnings } = setup({ activityReadMs: 20 })
+    const hanging = await ensured()
+    const other = await ensured()
+    const read = store.session.bind(store)
+    store.session = async (sessionId: string) =>
+      sessionId === hanging.row.id ? new Promise<never>(() => {}) : read(sessionId)
+    clock.skew += 31 * 60_000
+    // One sweep closes both: the read that never answers holds neither.
+    await manager.sweep()
+    for (const { row } of [hanging, other])
+      expect(store.sessions.get(row.id)).toMatchObject({ status: 'closed', closeReason: 'idle' })
+    expect(warnings).toContain('browser_activity_not_read')
+  })
+
+  it('closes an idle session when its row cannot be read, as before', async () => {
+    const { store, manager, clock, ensured } = setup()
+    const { row } = await ensured()
+    const read = store.session.bind(store)
+    store.session = async (sessionId: string) =>
+      sessionId === row.id ? Promise.reject(new Error('database is away')) : read(sessionId)
+    clock.skew += 31 * 60_000
+    await manager.sweep()
+    expect(store.sessions.get(row.id)).toMatchObject({ status: 'closed', closeReason: 'idle' })
+  })
+
   it('answers an ensure of a session still ending once its row is closed, not before', async () => {
     const { store, runtime, manager, clock, ensured } = setup()
     const { row } = await ensured()
@@ -1108,6 +1174,8 @@ describe('the end of a session', () => {
     runtime.stopGate = new Promise((resolve) => (removed = () => resolve(undefined)))
     clock.skew += 31 * 60_000
     const sweeping = manager.sweep()
+    // The sweep reads the row of the idle session first (И18), then starts to close it.
+    await settle()
     const ensuring = manager
       .ensure({
         sessionId: row.id,

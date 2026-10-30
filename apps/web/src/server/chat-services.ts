@@ -1,15 +1,7 @@
 import 'server-only'
 
-import {
-  envVar,
-  parseEnv,
-  previewDefaults,
-  type Env,
-  type ObjectStorage,
-  type SiteStack,
-} from '@repo/domain'
+import { envVar, parseEnv, previewDefaults, type Env, type ObjectStorage } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
-import { getSiteAdapter } from '@repo/site-adapters'
 import { createS3ObjectStorage } from '@repo/storage'
 import { releaseConfirmKey, type ChatContext, type SiteSecretWriter } from '@repo/trpc'
 import { createVaultSecretStore } from '@repo/vault'
@@ -44,27 +36,6 @@ function writerOf(store: ReturnType<typeof createVaultSecretStore>): SiteSecretW
   }
 }
 
-/**
- * Whether a release of the site's stack replays operations of its database
- * (docs/plan/59-dialog-tools-panel.md, И6): its adapter declares a kind, asked with the facts core
- * gives it for a release (`ReleaseSkill`). A stack without an adapter yet, or an adapter that
- * throws, has none — as core takes it there.
- */
-function databaseOperations(site: { stack: SiteStack; url: string }): boolean {
-  try {
-    return (
-      getSiteAdapter(site.stack).dbOperationKinds({
-        stack: site.stack,
-        url: site.url,
-        docroot: '/',
-        extras: {},
-      }).length > 0
-    )
-  } catch {
-    return false
-  }
-}
-
 let built: ChatContext | undefined
 let storage: ObjectStorage | undefined
 let secrets: SiteSecretWriter | undefined
@@ -74,8 +45,7 @@ const report = throttledLogger((line) => console.error(`[chat] ${line}`))
 /**
  * What the procedures of a dialog reach outside the database (docs/plan/53-chat-preview-release.md):
  * the environment, where previews are served, where the stream of a task's browser is opened
- * (docs/plan/57-browser-tasks.md), whether a stack replays operations of its database, the key of
- * release confirmations, the artifacts and Vault.
+ * (docs/plan/57-browser-tasks.md), the key of release confirmations, the artifacts and Vault.
  * Built on first use and kept for the process; the S3 and Vault clients are made only when a
  * procedure needs them. Every tRPC context asks for it: a section that does not parse
  * makes it null — the procedures of a dialog answer that dialogs are unavailable, the other
@@ -92,7 +62,6 @@ export function chatServices(): ChatContext | null {
           ? null
           : { address: web.preview, ttlHours: previewTtlHours(process.env) },
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
-      databaseOperations,
       releaseConfirmKey: releaseConfirmKey(env.auth().secret),
       storage: () => (storage ??= createS3ObjectStorage(env.storage())),
       secrets: () => (secrets ??= writerOf(createVaultSecretStore(env.vault()))),

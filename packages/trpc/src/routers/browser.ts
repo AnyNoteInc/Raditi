@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { issueStreamTicket } from '../services/chat/browser.ts'
+import { issueStreamTicket, watchBrowser } from '../services/chat/browser.ts'
 import { chatContextOf } from '../services/chat/context.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
@@ -22,5 +22,15 @@ export const browserRouter = router({
         userId: ctx.user.id,
         taskId: input.taskId,
       }),
+    ),
+  /**
+   * The client looks at the dialog of the task (docs/plan/59, И18): its open browser does not close
+   * for idle meanwhile. Sent by the page of the dialog while it is on the screen.
+   */
+  watch: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(z.strictObject({ watched: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      watchBrowser(ctx.prisma, { userId: ctx.user.id, taskId: input.taskId }),
     ),
 })

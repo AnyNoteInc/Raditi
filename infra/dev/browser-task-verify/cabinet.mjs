@@ -44,9 +44,10 @@ const TEXT = Object.freeze({
 const PANEL_SELECTOR = `aside[aria-label="${TEXT.panel}"]`
 
 /**
- * The window of the cabinet: wider than `lg` (1200 px), where the tools stand beside the dialog.
- * There alone the browser of a task opens by itself when it starts on the client's eyes, and the
- * panel has «Скрыть панель»; below `lg` a tool takes the place of the dialog (И3, И14).
+ * The window of the cabinet: wider than `lg` (1200 px), where the tools stand beside the dialog —
+ * the browser of a task that starts on the client's eyes opens beside it there, and the panel has
+ * «Скрыть панель»; below `lg` the browser opens by itself too, in place of the dialog, and «К
+ * диалогу» leads back (И3, И14, owner's answers of 30.10.2026).
  */
 const VIEWPORT = Object.freeze({ width: 1440, height: 1000 })
 

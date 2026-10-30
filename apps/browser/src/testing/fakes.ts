@@ -373,6 +373,7 @@ export class FakeStore implements BrowserWorkerStore {
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
       readyAt: input.readyAt ?? null,
+      lastActivityAt: new Date(),
     }
     this.sessions.set(row.id, row)
     this.sites.set(row.siteId, {
