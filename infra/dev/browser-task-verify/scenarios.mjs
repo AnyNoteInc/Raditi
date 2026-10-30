@@ -520,7 +520,122 @@ async function scenarioD(stand) {
       !/X-Amz-|presigned/i.test(prompts),
     'the model got the ids of the three files and the site, never a key or a link of S3',
   )
+  if (stand.cabinet) await panelOpensOnLaunch(stand)
+  else
+    rt.note(
+      'the cabinet has no browser pane in this build: the panel opening by itself as the browser of a dialog starts (И2) is not checked in this run',
+    )
   rt.end()
+}
+
+/** What the client writes in «Новый диалог» of the cabinet in scenario D. */
+const WATCHED_WORDS = 'Проверьте, открывается ли список записей в админке.'
+
+/**
+ * A dialog the client starts in «Новый диалог» of the cabinet and watches from its start
+ * (docs/plan/59-dialog-tools-panel.md, И2, И3): its browser opens beside it by itself once, when
+ * it starts — the start of the dialog speaks for its first answers, so it does not matter whether
+ * the page read the feed before the session was ready or after —, and the focus stays where it
+ * was. Hidden by the client, the panel does not come back while the turn goes on to ask for the
+ * sign-in; a reload opens nothing. The dialog is then stopped, as the client stops it.
+ */
+async function panelOpensOnLaunch(stand) {
+  const { rt, db, state } = stand
+  const cabinet = await cabinetBrowser(stand, state.owner)
+  let taskId
+  try {
+    stand.model.script('askToSignIn')
+    const tab = await cabinet.start(WATCHED_WORDS)
+    taskId = tab.taskId
+    const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+    rt.check(
+      task.siteId === state.siteId && task.needsBrowser === true && task.needsRepository === false,
+      '«Новый диалог» in the cabinet: the page started a dialog in the browser (task.create with the id it invented: needs_browser, no repository) and moved to it',
+      { needsBrowser: task.needsBrowser, needsRepository: task.needsRepository },
+    )
+    // Nothing is pressed from here on: the panel opens by itself, or not at all.
+    await tab.panel.waitFor({ timeout: 180_000 })
+    await tab.panel
+      .getByRole('tab', { name: CABINET_TEXT.browserTab, selected: true })
+      .waitFor({ timeout: 10_000 })
+    const opened = await tab.seen()
+    const session = await openSession(db, taskId)
+    const appeared = opened.panels?.[0] ?? 0
+    const ticketsBefore = tab.calls.filter(
+      (call) => call.name === 'browser.streamTicket' && call.at < appeared,
+    ).length
+    // Which way it went: the page saw the session start, or the session was ready by the first
+    // answer and the start of the dialog spoke for it (И3) — either opens the panel.
+    const firstRead = tab.calls.find((call) => call.name === 'task.feed')?.at ?? null
+    const lead =
+      session?.readyAt && firstRead !== null ? session.readyAt.getTime() - firstRead : null
+    const way =
+      lead === null
+        ? ''
+        : lead >= 0
+          ? ` — the page first read the dialog ${lead} ms before its browser was ready`
+          : ` — its browser was ready ${-lead} ms before the page first read the dialog, and the start of the dialog spoke for it`
+    rt.check(
+      opened.panels?.length === 1 &&
+        opened.focusIn === 0 &&
+        !opened.focusInPanel &&
+        session?.status === 'ready' &&
+        ticketsBefore === 0,
+      `the dialog watched from its start opened its panel «Инструменты диалога» by itself on «Браузер» once its browser was ready${way}: once, the focus never in the panel, nothing of the stream read before it (И2, И3, И11)`,
+      {
+        panels: opened.panels,
+        focusIn: opened.focusIn,
+        focusInPanel: opened.focusInPanel,
+        session: session?.status,
+        ticketsBefore,
+      },
+    )
+    // The client hides it; the turn goes on, asks for the sign-in, and the panel stays closed.
+    await tab.hidePanel()
+    await rt.until('the focus to come back to «+»', () => tab.plusFocused(), {
+      timeoutMs: 10_000,
+      intervalMs: 100,
+    })
+    await firstTurn(stand, taskId)
+    await tab.answers(2)
+    const hidden = await tab.seen()
+    const waiting = await tab.plus.getAttribute('aria-label')
+    rt.check(
+      hidden.panels?.length === 1 &&
+        (await tab.panel.count()) === 0 &&
+        waiting === CABINET_TEXT.toolsWaiting,
+      `«Скрыть панель»: the panel goes and the focus is back on «+»; the turn went on to ask for the sign-in and the panel stayed closed — «+» says «${waiting}» (И2, И8, И13)`,
+      { panels: hidden.panels, label: waiting },
+    )
+    // A reload: the browser is ready by the first answer of the new page, which opens nothing.
+    const sockets = tab.sockets
+    const calls = tab.calls.length
+    await tab.reload()
+    await tab.answers(2)
+    const reloaded = await tab.seen()
+    const label = await tab.plus.getAttribute('aria-label')
+    rt.check(
+      reloaded.panels?.length === 0 &&
+        tab.sockets === sockets &&
+        tab.called('browser.streamTicket', calls) === 0 &&
+        label === CABINET_TEXT.toolsWaiting,
+      'after a reload the panel stays closed though the browser is ready: no ticket and no socket of the stream, «+» keeps its dot (И1, И2, И11, И13)',
+      {
+        panels: reloaded.panels,
+        sockets: tab.sockets - sockets,
+        tickets: tab.called('browser.streamTicket', calls),
+        label,
+      },
+    )
+  } finally {
+    await cabinet.close()
+  }
+  // Its browser closes with it; scenario M counts its session among the closed ones.
+  await state.owner.mutate('task.cancel', { taskId, requestId: randomUUID() })
+  await waitTask(stand, taskId, ['cancelled'], {
+    what: 'the dialog started in the cabinet to close',
+    timeoutMs: 120_000,
+  })
 }
 
 // ─── B: no git ────────────────────────────────────────────────────────────────
@@ -681,15 +796,32 @@ async function scenarioC(stand) {
 }
 
 /**
- * The dialog page of the task in a real Chromium: the pane opens the stream itself, the canvas
- * draws the frames it gets (many colours, opaque) and acknowledges them, and a reload of the page
- * — a new ticket, a new connection — draws the same page again at once.
+ * The dialog page of the task in a real Chromium, as the client opens it: the chat alone — no panel
+ * and nothing of the stream read, though the browser of the task is ready
+ * (docs/plan/59-dialog-tools-panel.md, И1, И11). «+» → «Браузер» opens the panel on the browser:
+ * its stream starts, the canvas draws the frames it gets (many colours, opaque) and acknowledges
+ * them. A reload starts with the chat alone again, and the browser opened once more — a new
+ * ticket, a new connection — draws the same page at once.
  */
 async function canvasInCabinet(stand, taskId) {
   const { rt, state } = stand
   const cabinet = await cabinetBrowser(stand, state.owner)
   try {
-    const tab = await cabinet.open(taskId)
+    const tab = await cabinet.load(taskId)
+    // A dialog opened with a live browser opens nothing by itself (И2): a few answers of its feed
+    // and still no panel, no ticket and no socket.
+    await tab.answers(2)
+    const loaded = await tab.seen()
+    rt.check(
+      loaded.panels?.length === 0 && tab.sockets === 0 && tab.called('browser.streamTicket') === 0,
+      'the dialog page opens with the chat alone though the browser of the task is ready: no panel «Инструменты диалога», no ticket and no socket of the stream (И1, И11)',
+      {
+        panels: loaded.panels,
+        sockets: tab.sockets,
+        tickets: tab.called('browser.streamTicket'),
+      },
+    )
+    await tab.showBrowser()
     await rt.until(
       'the pane to get frames and acknowledge them',
       async () => tab.frames.length >= 2 && tab.acks >= 1,
@@ -707,7 +839,7 @@ async function canvasInCabinet(stand, taskId) {
     } while (Date.now() < paintedBy)
     rt.check(
       painted.colours > 20 && painted.drawn > 0.3,
-      `the cabinet's canvas is painted from real frames: ${painted.colours} colours, ${Math.round(painted.drawn * 100)}% of its ${painted.width}×${painted.height} drawn (the rest is the letterbox)`,
+      `«+» → «Браузер» opens the panel on the browser, and its canvas is painted from real frames: ${painted.colours} colours, ${Math.round(painted.drawn * 100)}% of its ${painted.width}×${painted.height} drawn (the rest is the letterbox)`,
       painted,
     )
     const seqs = tab.frames.map((frame) => frame.frameSeq)
@@ -717,22 +849,36 @@ async function canvasInCabinet(stand, taskId) {
         tab.acks >= 1,
       `the pane's own WebSocket: frames of the session with an increasing number (${seqs.slice(0, 5).join(', ')}…), each acknowledged after drawing (${tab.acks} acks)`,
     )
+    // A reload: the chat alone again, nothing of the stream until the client opens the browser.
     const sockets = tab.sockets
-    const before = tab.frames.length
-    const reloaded = Date.now()
-    await tab.page.reload({ waitUntil: 'domcontentloaded' })
-    await rt.until(
-      'a frame after the reload',
-      async () => tab.sockets > sockets && tab.frames.length > before,
+    const calls = tab.calls.length
+    const before = tab.frames.findLast((frame) => frame.socket <= sockets)
+    await tab.reload()
+    await tab.answers(2)
+    const reloaded = await tab.seen()
+    rt.check(
+      reloaded.panels?.length === 0 &&
+        tab.sockets === sockets &&
+        tab.called('browser.streamTicket', calls) === 0,
+      'after a reload of the page the panel is closed again: no ticket and no socket until the client opens the browser (И1, И11)',
       {
-        timeoutMs: 60_000,
-        intervalMs: 100,
+        panels: reloaded.panels,
+        sockets: tab.sockets - sockets,
+        tickets: tab.called('browser.streamTicket', calls),
       },
     )
-    const frame = tab.frames[before]
+    const chosen = Date.now()
+    await tab.showBrowser()
+    const frame = await rt.until(
+      'a frame of the browser opened again after the reload',
+      async () => tab.frames.find((one) => one.socket > sockets) ?? null,
+      { timeoutMs: 60_000, intervalMs: 100 },
+    )
     rt.check(
-      frame.sessionId === state.sessionF && frame.pageId === tab.frames[before - 1].pageId,
-      `the cabinet reconnected with a new ticket and drew the same page at once (${frame.at - reloaded} ms after the reload)`,
+      tab.called('browser.streamTicket', calls) >= 1 &&
+        frame.sessionId === state.sessionF &&
+        frame.pageId === before?.pageId,
+      `opened again after the reload, the browser takes a new ticket and a new connection and draws the same page at once (${frame.at - chosen} ms after «Браузер» was chosen)`,
     )
   } finally {
     await cabinet.close()
@@ -763,6 +909,20 @@ async function scenarioE(stand) {
       ? 'in the cabinet (real key events into the pane)'
       : 'over the stream'
   try {
+    if (operator.kind === 'cabinet') {
+      // «Взять управление» works with the panel closed (docs/plan/59-dialog-tools-panel.md, И12):
+      // the button of the card of the request opens the browser and takes the control there, so
+      // the client has the page to sign in on.
+      const { tab } = operator
+      await tab.hidePanel()
+      const sockets = tab.sockets
+      await tab.takeFromCard()
+      rt.check(
+        tab.holds() && tab.sockets > sockets,
+        '«Скрыть панель», then «Взять управление» on the card of the request in the feed: the panel opens again on «Браузер», on a new connection, and this tab holds the control (И8, И12)',
+        { sockets: tab.sockets - sockets, state: tab.state },
+      )
+    }
     await signIn(stand, operator, site.accounts.owner)
     const held = await db.browserSession.findUniqueOrThrow({ where: { id: state.sessionF } })
     rt.check(

@@ -29,6 +29,7 @@ import {
   TEXT,
   expectedCharge,
   themeFiles,
+  trpcProcedures,
   undoTrap,
   undoTrapPath,
   versionAbove,
@@ -2250,69 +2251,28 @@ async function readBackup(stand, key) {
   }
 }
 
-/**
- * The dialog page of web in a real Chromium: the session cookie of the owner, `/` in the field
- * opens the list of commands, and the preview's iframe opens the preview through a ticket.
- */
-async function browserOfCabinet(stand, dialog, visit) {
-  const { rt } = stand
-  const require = createRequire(join(stand.copy, 'packages/browser-providers/package.json'))
-  const { chromium } = require('playwright-core')
-  const browser = await chromium.launch({ headless: true })
-  try {
-    const context = await browser.newContext()
-    const cookies = stand.owner
-      .cookie()
-      .split('; ')
-      .filter(Boolean)
-      .map((pair) => {
-        const at = pair.indexOf('=')
-        return { name: pair.slice(0, at), value: pair.slice(at + 1), url: stand.webUrl }
-      })
-    await context.addCookies(cookies)
-    const page = await context.newPage()
-    await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
-      waitUntil: 'domcontentloaded',
-    })
-    const field = page.getByRole('textbox').first()
-    await field.waitFor({ timeout: 60_000 })
-    await field.click()
-    await field.type('/')
-    const listbox = page.getByRole('listbox')
-    await listbox.waitFor({ timeout: 15_000 })
-    const options = await listbox.getByRole('option').allTextContents()
-    rt.check(
-      options.some((text) => text.includes('/release') && text.includes('Выпустить новую версию')),
-      `the dialog page of web: «/» in the field opens the list of commands (${options.length} commands, /release among them)`,
-      options,
-    )
-    await page.keyboard.press('Escape')
-    const frame = await rt.until(
-      'the preview iframe of the dialog page',
-      async () => page.frames().find((one) => one.url().startsWith(visit.origin)) ?? null,
-      { timeoutMs: 90_000 },
-    )
-    await rt.until(
-      'the preview iframe shows the candidate',
-      async () => (await frame.content()).includes(TEXT.footer(1)),
-      { timeoutMs: 60_000 },
-    )
-    rt.passed(
-      'the iframe of the dialog page entered the preview with a ticket and shows the new footer',
-    )
-    await context.close()
-  } finally {
-    await browser.close()
-  }
-}
+/** The tools of a dialog in the cabinet (docs/plan/59-dialog-tools-panel.md, И4–И20). */
+const TOOLS = Object.freeze({
+  /** «+»: its name, then what its dot says. */
+  plus: /^Инструменты/,
+  menu: 'Инструменты',
+  /** The panel of the open tools, drawn only while one is open. */
+  panel: 'Инструменты диалога',
+})
 
 /**
- * S10 in the cabinet: the card of the failure of dialog J says the changes were kept and offers
- * «Попробовать ещё» with its hint, the field stays open, `/` lists `/retry`; then the button is
- * pressed, as the owner presses it.
+ * How long a dialog page is watched after its head is drawn — after the first answer of its feed —
+ * before the stand says nothing opened by itself: what opened by itself would open at that answer
+ * and ask for what it shows at once.
  */
-async function retryInCabinet(stand, dialog) {
-  const { rt } = stand
+const SETTLE_MS = 3000
+
+/**
+ * A Chromium of the copy's Playwright with the session cookie of the owner, its window wider than
+ * `lg` (1200 px) — the tools of a dialog stand beside it there (docs/plan/59-dialog-tools-panel.md)
+ * —, and a page whose tRPC calls are listed by procedure (`trpcProcedures`).
+ */
+async function cabinetPage(stand) {
   const require = createRequire(join(stand.copy, 'packages/browser-providers/package.json'))
   const { chromium } = require('playwright-core')
   const browser = await chromium.launch({ headless: true })
@@ -2328,6 +2288,116 @@ async function retryInCabinet(stand, dialog) {
       })
     await context.addCookies(cookies)
     const page = await context.newPage()
+    const calls = []
+    page.on('request', (request) => calls.push(...trpcProcedures(request.url())))
+    return { browser, page, calls }
+  } catch (error) {
+    await browser.close()
+    throw error
+  }
+}
+
+/** How many times the page called `name` since its `from`-th call. */
+const calledIn = (calls, name, from = 0) => calls.slice(from).filter((call) => call === name).length
+
+/** «+» → the tile of a tool (its name, then what it holds): the panel opens on that tool. */
+async function openTool(page, tile) {
+  await page.getByRole('button', { name: TOOLS.plus }).click()
+  await page.getByRole('menu', { name: TOOLS.menu }).getByRole('menuitem', { name: tile }).click()
+}
+
+/**
+ * The dialog page of web in a real Chromium, as its owner opens it: the chat alone, though the
+ * dialog has a candidate and a ready preview — no panel, no iframe, no ticket of the preview and
+ * no reading of the candidate (docs/plan/59-dialog-tools-panel.md, И1, И11); `/` in the field
+ * opens the list of commands; «+» → «Предпросмотр» opens the panel on the preview at once, its
+ * iframe entering the preview through a ticket (И10); a reload starts with the chat alone again.
+ */
+async function browserOfCabinet(stand, dialog, visit) {
+  const { rt } = stand
+  const { browser, page, calls } = await cabinetPage(stand)
+  try {
+    await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const plus = page.getByRole('button', { name: TOOLS.plus })
+    const panel = page.getByRole('complementary', { name: TOOLS.panel })
+    const drawn = async () => ({
+      panels: await panel.count(),
+      iframes: await page.locator('iframe').count(),
+    })
+    // The head of the dialog draws «+» once the first answer of its feed is in.
+    await plus.waitFor({ timeout: 60_000 })
+    await rt.pause(SETTLE_MS)
+    const loaded = await drawn()
+    rt.check(
+      loaded.panels === 0 &&
+        loaded.iframes === 0 &&
+        calledIn(calls, 'preview.ticket') === 0 &&
+        calledIn(calls, 'candidate.get') === 0 &&
+        calledIn(calls, 'candidate.fileDiff') === 0,
+      'the dialog page opens with the chat alone, though its candidate and preview are ready: no panel «Инструменты диалога», no iframe, no preview.ticket, no candidate.get or candidate.fileDiff (И1, И11)',
+      { ...loaded, calls: calls.filter((call) => call !== 'task.feed') },
+    )
+    const field = page.getByRole('textbox').first()
+    await field.waitFor({ timeout: 60_000 })
+    await field.click()
+    await field.type('/')
+    const listbox = page.getByRole('listbox')
+    await listbox.waitFor({ timeout: 15_000 })
+    const options = await listbox.getByRole('option').allTextContents()
+    rt.check(
+      options.some((text) => text.includes('/release') && text.includes('Выпустить новую версию')),
+      `the dialog page of web: «/» in the field opens the list of commands (${options.length} commands, /release among them)`,
+      options,
+    )
+    await page.keyboard.press('Escape')
+    // Choosing the preview is the call to show it: no «Показать предпросмотр» after it (И10).
+    await openTool(page, /^Предпросмотр/)
+    await panel
+      .getByRole('tab', { name: 'Предпросмотр', selected: true })
+      .waitFor({ timeout: 30_000 })
+    const frame = await rt.until(
+      'the preview iframe of the dialog page',
+      async () => page.frames().find((one) => one.url().startsWith(visit.origin)) ?? null,
+      { timeoutMs: 90_000 },
+    )
+    await rt.until(
+      'the preview iframe shows the candidate',
+      async () => (await frame.content()).includes(TEXT.footer(1)),
+      { timeoutMs: 60_000 },
+    )
+    rt.check(
+      calledIn(calls, 'preview.ticket') >= 1,
+      `«+» → «Предпросмотр»: the panel opens on the preview, its iframe entered the preview with a ticket (preview.ticket ×${calledIn(calls, 'preview.ticket')}) and shows the new footer (И10)`,
+    )
+    // A reload: the chat alone again; the preview is not asked for until the client asks.
+    const before = calls.length
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await plus.waitFor({ timeout: 60_000 })
+    await rt.pause(SETTLE_MS)
+    const reloaded = await drawn()
+    rt.check(
+      reloaded.panels === 0 &&
+        reloaded.iframes === 0 &&
+        calledIn(calls, 'preview.ticket', before) === 0,
+      'after a reload the dialog page is the chat alone again: no panel, no iframe, no new ticket of the preview (И1)',
+      { ...reloaded, calls: calls.slice(before).filter((call) => call !== 'task.feed') },
+    )
+  } finally {
+    await browser.close()
+  }
+}
+
+/**
+ * S10 in the cabinet: the card of the failure of dialog J says the changes were kept and offers
+ * «Попробовать ещё» with its hint, the field stays open, `/` lists `/retry`; then the button is
+ * pressed, as the owner presses it.
+ */
+async function retryInCabinet(stand, dialog) {
+  const { rt } = stand
+  const { browser, page } = await cabinetPage(stand)
+  try {
     await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
       waitUntil: 'domcontentloaded',
     })
@@ -2362,7 +2432,6 @@ async function retryInCabinet(stand, dialog) {
       async () => (await button.count()) === 0,
       { timeoutMs: 30_000 },
     )
-    await context.close()
   } finally {
     await browser.close()
   }
@@ -2370,35 +2439,22 @@ async function retryInCabinet(stand, dialog) {
 
 /**
  * The tab «База данных» of the panel beside a dialog, as its owner sees it in the cabinet: the
- * text of the panel once the description of the plan is shown.
+ * dialog opens with the chat alone, «+» → «База данных» opens the tab
+ * (docs/plan/59-dialog-tools-panel.md, И6), and its text is read once the description of the plan
+ * is shown.
  */
 async function databasePanelText(stand, dialog) {
-  const require = createRequire(join(stand.copy, 'packages/browser-providers/package.json'))
-  const { chromium } = require('playwright-core')
-  const browser = await chromium.launch({ headless: true })
+  const { browser, page } = await cabinetPage(stand)
   try {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
-    const cookies = stand.owner
-      .cookie()
-      .split('; ')
-      .filter(Boolean)
-      .map((pair) => {
-        const at = pair.indexOf('=')
-        return { name: pair.slice(0, at), value: pair.slice(at + 1), url: stand.webUrl }
-      })
-    await context.addCookies(cookies)
-    const page = await context.newPage()
     await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
       waitUntil: 'domcontentloaded',
     })
-    const tab = page.getByRole('tab', { name: 'База данных' })
-    await tab.waitFor({ timeout: 60_000 })
-    await tab.click()
+    // The head of the dialog draws «+» once the first answer of its feed is in.
+    await page.getByRole('button', { name: TOOLS.plus }).waitFor({ timeout: 60_000 })
+    await openTool(page, /^База данных/)
     const panel = page.locator('#dialog-pane-panel-database')
     await panel.getByText('starts_at', { exact: false }).first().waitFor({ timeout: 30_000 })
-    const text = await panel.innerText()
-    await context.close()
-    return text
+    return await panel.innerText()
   } finally {
     await browser.close()
   }
