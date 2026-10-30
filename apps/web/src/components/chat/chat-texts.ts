@@ -1,5 +1,5 @@
 import type { CandidateCheckStatus, ReleaseStatus } from '@repo/domain'
-import { feedRetryText } from '@repo/domain/tasks/client-feed-labels'
+import { feedRetryText, previewPanelText } from '@repo/domain/tasks/client-feed-labels'
 
 import { plural } from '@/lib/plural'
 
@@ -528,10 +528,14 @@ export const browserText = Object.freeze({
   helpNote: 'Нажмите «Взять управление» и сделайте это сами — прямо на этой странице.',
   helpSecret:
     'Пока управляете вы, агент не видит страницу и то, что вы вводите. Пароль не пишите в чат.',
-  /** While the client controls: the plate in the feed and the live block. */
-  controlPlate:
-    'Управляете вы. Агент ждёт. Когда закончите, нажмите «Продолжить работу агента» — справа или здесь.',
+  /**
+   * While the client controls: the plate in the feed and the live block. It names no place: the
+   * browser is beside the dialog only while the client keeps it open (docs/plan/59, И12).
+   */
+  controlPlate: 'Управляете вы. Агент ждёт. Когда закончите, нажмите «Продолжить работу агента».',
   watch: 'Смотреть, что делает агент',
+  /** On the cards of a request for help and of the control, and on the plate: shows the browser (И12). */
+  open: 'Открыть браузер',
   refused: {
     agent_in_control: 'Сейчас браузером управляет агент.',
     not_holder:
@@ -572,4 +576,83 @@ export const objectLinkText = Object.freeze({
   open: (kind: 'post' | 'page' | null) =>
     kind === 'page' ? 'Открыть страницу' : kind === 'post' ? 'Открыть запись' : 'Открыть на сайте',
   edit: 'Изменить в админке',
+})
+
+const TOOLS = 'Инструменты'
+
+/**
+ * The tools of a dialog beside it (docs/plan/59-dialog-tools-panel.md, И4–И20): «+» and its menu,
+ * the panel with the tabs of the open tools, the marks of the tiles and what a tab of the changes
+ * says before them. A tool is named by the words of its own panel — the browser's and those of the
+ * catalogue (`previewPanelText`); only the menu names the files together with their changes (И7).
+ */
+export const toolText = Object.freeze({
+  /** «+» in the head of the dialog and at the end of the tabs, and the title of its menu (И4, И5). */
+  label: TOOLS,
+  /** «+» with its dot (И13): what is new behind it, after the name. */
+  labelWith: (note: string) => `${TOOLS} — ${note}`,
+  /** Why «+» bears the dot, the most pressing first (И13). */
+  dot: Object.freeze({
+    browser: 'браузер ждёт вас',
+    launch: 'браузер запущен',
+    changes: 'есть новые изменения',
+  }),
+  /** The landmark beside the dialog (И20). */
+  panel: 'Инструменты диалога',
+  /** The strip of the tabs of the open tools (И7). */
+  tabs: 'Открытые инструменты',
+  /** The edge of the panel that is dragged (И20). */
+  separator: 'Ширина панели',
+  /** Closes every tab at once: the panel steps aside, the dialog takes the width (И8). */
+  hide: 'Скрыть панель',
+  /** Back from the area of a tool on a narrow screen: closes every tab (И14). */
+  back: 'К диалогу',
+  /** The hint of the cross of a tab; the cross itself is hidden from a screen reader (И7). */
+  closeTab: (name: string) => `Закрыть вкладку «${name}»`,
+  /** The name of a tool on its tab. */
+  tab: Object.freeze({
+    browser: browserText.view,
+    preview: previewPanelText.preview,
+    files: previewPanelText.files,
+    database: previewPanelText.database,
+    checks: previewPanelText.checks,
+  }),
+  /** The name of a tool in the menu. */
+  item: Object.freeze({
+    browser: browserText.view,
+    preview: previewPanelText.preview,
+    files: 'Файлы и изменения',
+    database: previewPanelText.database,
+    checks: previewPanelText.checks,
+  }),
+  /** The marks on the right of the tiles (И5); a browser that holds a session says who drives it. */
+  mark: Object.freeze({
+    open: 'Открыто',
+    /** The tool is the dialog's, what it shows is not there yet. */
+    notYet: 'пока нет',
+    /** The dialog has ended without it. */
+    none: 'нет',
+    /** The checks of the changes: those passed of all. */
+    checks: (passed: number, all: number) => `${passed} из ${all}`,
+    /** The browser holds no session: none yet, or it closed. */
+    browserClosed: 'Закрыт',
+  }),
+  /** What a tab of the changes says while there are none yet (И6). */
+  empty: Object.freeze({
+    files: Object.freeze({
+      title: 'Изменений пока нет.',
+      note: 'Они появятся здесь, когда агент закончит работу.',
+    }),
+    database: Object.freeze({ title: 'Изменений в базе данных пока нет.', note: null }),
+    checks: Object.freeze({ title: checksText.none, note: null }),
+  }),
+  /** What it says in a dialog that has ended without them (И6). */
+  ended: Object.freeze({
+    files: Object.freeze({
+      title: 'Диалог закрыт: изменений для показа здесь нет.',
+      note: 'Выпущенные версии — в разделе «Изменения».',
+    }),
+    database: Object.freeze({ title: 'Диалог закрыт: изменений в базе данных нет.', note: null }),
+    checks: Object.freeze({ title: 'Диалог закрыт: проверок нет.', note: null }),
+  }),
 })
