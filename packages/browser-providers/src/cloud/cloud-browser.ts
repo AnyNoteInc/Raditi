@@ -99,8 +99,11 @@ const defaults: Settings = {
 
 /** Reading a title never holds anything up for long. */
 const TITLE_TIMEOUT_MS = 2_000
-/** A refused navigation commits Chromium's error page a moment later; this much is waited. */
-const ERROR_PAGE_SETTLE_MS = 2_000
+/**
+ * A refused navigation commits Chromium's error page a moment later — on a loaded machine, seconds
+ * later —; this much is waited for it, and for a navigation such a page interrupted.
+ */
+const ERROR_PAGE_SETTLE_MS = 5_000
 
 type MouseButton = 'left' | 'middle' | 'right'
 
@@ -130,6 +133,8 @@ interface PageEntry {
   agentChooser: boolean
   /** A navigation of this page was refused, or what it committed was dropped. */
   refused: boolean
+  /** How many error pages of Chromium (`chrome-error://`) the main frame has committed. */
+  errorPages: number
   /** The empty page that replaces a dropped one, while it loads. */
   dropping: Promise<void> | null
   /** Called when a dialog opens: an action that waits gives up waiting. */
@@ -184,6 +189,15 @@ function failure(error: unknown, connected: boolean): Error {
   // A closed tab is a failed action; only a browser that is gone is `closed`.
   if (!connected) return new PageBrowserError('closed')
   return browserTaskError('BROWSER_ACTION_FAILED')
+}
+
+/**
+ * A navigation the network refused — a host nothing answers on, one the egress proxy does not
+ * serve — and not one cancelled by another: Chromium commits its own error page for it later.
+ */
+function refusedByNetwork(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : ''
+  return /net::ERR_/.test(message) && !/net::ERR_ABORTED/.test(message)
 }
 
 /** A navigation Chromium's own error page took over (`chrome-error://`), not one of the page. */
@@ -438,6 +452,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
       chooser: null,
       agentChooser: false,
       refused: false,
+      errorPages: 0,
       dropping: null,
       onDialog: new Set(),
     }
@@ -511,6 +526,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
   #navigated(entry: PageEntry, frame: Frame) {
     const main = frame === entry.page.mainFrame()
     if (main) entry.generation++
+    if (main && frame.url().startsWith('chrome-error:')) entry.errorPages++
     // A redirect is not routed: what it committed is judged here, and dropped unseen.
     if (!committedAllowed(this.#rules, frame.url(), this.#controller)) {
       entry.refused = true
@@ -615,12 +631,41 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
 
   async #goto(entry: PageEntry, url: string, deadline: Deadline) {
     const go = () => entry.page.goto(url, { waitUntil: 'commit', timeout: deadline.left() })
-    // The error page of an earlier refusal may commit only now, over this navigation.
+    // The error page of an earlier refusal may commit only now, over this navigation. The
+    // navigation it interrupted goes on and commits a moment later: it is waited for, and asked
+    // once more only if it never commits — asked at once, it would be interrupted in turn by the
+    // one it repeats.
     await go().catch(async (error: unknown) => {
       if (!interruptedByErrorPage(error)) throw error
-      await go()
+      await entry.page
+        .waitForURL(url, {
+          waitUntil: 'commit',
+          timeout: Math.min(deadline.left(), ERROR_PAGE_SETTLE_MS),
+        })
+        .catch(() => go())
     })
     await this.#settle(entry, deadline)
+  }
+
+  /**
+   * The error page a navigation the network refused leaves commits after the navigation has
+   * failed — later still on a loaded machine: the action ends only once it is in, counted from
+   * `before`, the commits of error pages when the action began. Waiting for `load` alone is not
+   * enough: it answers at once for the document already there, and the late commit then
+   * interrupts the next navigation of the agent. No error page within the action's time or
+   * `ERROR_PAGE_SETTLE_MS` — the browser goes on without it.
+   */
+  async #errorPageAfter(entry: PageEntry, error: unknown, before: number, deadline: Deadline) {
+    const timeout = Math.min(deadline.remaining(), ERROR_PAGE_SETTLE_MS)
+    if (timeout <= 0 || entry.page.isClosed() || !refusedByNetwork(error)) return
+    if (entry.errorPages > before) return
+    const mainFrame = entry.page.mainFrame()
+    await entry.page
+      .waitForEvent('framenavigated', {
+        predicate: (frame) => frame === mainFrame && frame.url().startsWith('chrome-error:'),
+        timeout,
+      })
+      .catch(() => undefined)
   }
 
   /** A click or a navigation may load a document: it is waited for within the action's time. */
@@ -643,6 +688,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     if (!this.isConnected()) throw new PageBrowserError('closed')
     await entry.dropping
     entry.refused = false
+    const errorPages = entry.errorPages
     const deadline = new Deadline(
       options.budgetMs ?? this.#settings.actionTimeoutMs,
       options.signal,
@@ -658,6 +704,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
       working.catch(() => undefined)
       await Promise.race([working, dialog])
     } catch (error) {
+      await this.#errorPageAfter(entry, error, errorPages, deadline)
       await this.#settle(entry, deadline, ERROR_PAGE_SETTLE_MS)
       if (entry.refused) {
         await entry.dropping
