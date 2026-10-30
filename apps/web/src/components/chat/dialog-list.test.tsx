@@ -7,7 +7,7 @@ import { plain } from '@/components/billing/testing'
 
 import type { DialogListItem, DialogListPage } from './chat-types'
 import { DialogList } from './dialog-list'
-import { SITE_ID } from './testing'
+import { declared, SITE_ID } from './testing'
 
 const { listPage, segment, rename, remove } = vi.hoisted(() => ({
   listPage: vi.fn<(input: { siteId: string; cursor?: string }) => Promise<DialogListPage>>(),
@@ -128,6 +128,23 @@ describe('the list of dialogs', () => {
     fireEvent.click(within(ask).getByRole('button', { name: 'Удалить' }))
     await waitFor(() => expect(remove).toHaveBeenCalledTimes(1))
     expect(remove.mock.calls[0]![0]).toEqual({ taskId: dialog('2').id })
+  })
+
+  // MUI lets a menu item shrink to its content from `sm` up by a media query of its own, which wins
+  // over a plain height: the pressing area of a finger (DESIGN.md) has to hold on every width.
+  it('keeps the items of the menu of a row 44px high on every width', async () => {
+    listPage.mockResolvedValue({ items: [dialog('1')], nextCursor: null })
+    showList()
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+    )
+    const items = [
+      await screen.findByRole('menuitem', { name: 'Переименовать' }),
+      screen.getByRole('menuitem', { name: 'Удалить' }),
+    ]
+    for (const item of items)
+      for (const width of [390, 600, 900, 1200, 1440])
+        expect(declared(item, 'min-height', width)).toBe('44px')
   })
 
   it('keeps the old name on Escape', async () => {

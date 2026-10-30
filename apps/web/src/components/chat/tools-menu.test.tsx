@@ -4,35 +4,14 @@ import { StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { ToolTile } from './dialog-tools'
+import { declared } from './testing'
 import { ToolsMenu } from './tools-menu'
 
 // The menu «+» of a dialog as a browser has it (docs/plan/59-dialog-tools-panel.md, И5, И14):
-// the first tile in focus however React mounts the menu, and the pressing area of a finger on
-// every width (DESIGN.md). MUI lets a menu item shrink to its content from `sm` up by a media
-// query, which a browser applies and jsdom does not: the rules are read here as a browser would
-// read them at a given width.
-
-/**
- * The value of `property` that the rules of the page give `element` on a screen `width` px wide:
- * of the rules whose selector matches it — at the top level, or in a media query of a `min-width`
- * the width reaches —, the last one says it, as the cascade decides between rules of one weight.
- */
-function declared(element: Element, property: string, width: number): string | null {
-  let value: string | null = null
-  const visit = (rules: CSSRuleList) => {
-    for (const rule of Array.from(rules)) {
-      if (rule instanceof CSSMediaRule) {
-        const least = /^\(min-width:\s*(\d+)px\)$/.exec(rule.media.mediaText.trim())
-        if (least !== null && Number(least[1]) <= width) visit(rule.cssRules)
-      } else if (rule instanceof CSSStyleRule) {
-        const own = rule.style.getPropertyValue(property)
-        if (own !== '' && element.matches(rule.selectorText)) value = own
-      }
-    }
-  }
-  for (const sheet of Array.from(document.styleSheets)) visit(sheet.cssRules)
-  return value
-}
+// the first tile in focus however React mounts the menu, the pressing area of a finger on every
+// width (DESIGN.md) — MUI lets a menu item shrink to its content from `sm` up by a media query,
+// which a browser applies and jsdom does not: the rules are read as a browser would read them at
+// a given width (`declared`) —, and the sheet of a phone named as the menu is.
 
 const tiles: ToolTile[] = [
   { tool: 'files', open: false, mark: 'пока нет' },
@@ -85,5 +64,15 @@ describe('the tiles of «+»', () => {
     expect(found).toHaveLength(2)
     for (const tile of found)
       for (const width of [390, 768, 1199]) expect(declared(tile, 'min-height', width)).toBe('92px')
+  })
+})
+
+describe('the sheet of «+»', () => {
+  // A temporary drawer of MUI is a modal dialog: a screen reader names it as it comes up.
+  it('is a dialog named by its title, «Инструменты», as the menu inside it is', async () => {
+    await openTiles(true)
+    const sheet = screen.getByRole('dialog', { name: 'Инструменты' })
+    expect(sheet.getAttribute('aria-modal')).toBe('true')
+    expect(within(sheet).getByRole('menu', { name: 'Инструменты' })).toBeTruthy()
   })
 })

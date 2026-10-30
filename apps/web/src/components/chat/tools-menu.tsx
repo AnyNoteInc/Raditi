@@ -36,6 +36,15 @@ import {
  */
 export const TOOLS_BUTTON_ID = 'dialog-tools'
 
+/**
+ * The mark of the card or the sheet of the menu, which stands apart from «+» in a portal: a focus
+ * inside it is a focus on the menu of «+», which goes with «+» when the panel opens by itself
+ * (`DialogView`, docs/plan/59, И3).
+ */
+export const TOOLS_MENU_MARK = 'data-tools-menu'
+/** React passes a data attribute on to the element, though the props of a paper of MUI name none. */
+const menuMark = { [TOOLS_MENU_MARK]: '' }
+
 const tileSx = {
   // MUI lets the height of a menu item go from `sm` up, by a media query of its own that wins over
   // a plain value: a value given by breakpoint comes after it and keeps the tile 52px high on every
@@ -182,7 +191,15 @@ export function ToolsMenu({
               sx={
                 sheet
                   ? { gridArea: 'name', minWidth: 0, overflowWrap: 'anywhere' }
-                  : { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }
+                  : // Beside a mark the name takes a second line rather than losing its end: two
+                    // lines of it keep the tile 52px high.
+                    {
+                      flex: '1 1 auto',
+                      minWidth: 0,
+                      whiteSpace: 'normal',
+                      overflowWrap: 'anywhere',
+                      lineHeight: 1.3,
+                    }
               }
             >
               {toolMenuNames[tool]}
@@ -271,6 +288,9 @@ export function ToolsMenu({
           slotProps={{
             transition: { onEntering: focusFirstTile },
             paper: {
+              // The sheet is a modal dialog of MUI: named by its title, as the menu in it is.
+              'aria-labelledby': titleId,
+              ...menuMark,
               sx: {
                 ...cardSx,
                 // A sheet at the bottom of a phone; no wider than a hand on a tablet.
@@ -300,6 +320,7 @@ export function ToolsMenu({
           slotProps={{
             transition: { onEntering: focusFirstTile },
             paper: {
+              ...menuMark,
               sx: {
                 ...cardSx,
                 width: tiles.length > 1 ? 500 : 300,

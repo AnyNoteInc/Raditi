@@ -6,7 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BrowserPane, type BrowserPaneProps } from './browser-pane'
 import type { BrowserState } from './browser-stream'
 import type { FeedHeadState } from './feed-state'
-import { browserAnswer, SESSION_ID, SITE_ID, TASK_ID } from './testing'
+import { browserAnswer, declared, SESSION_ID, SITE_ID, TASK_ID } from './testing'
 import type { BrowserStream } from './use-browser-stream'
 
 const VIEWER = '0199a3f2-0000-7000-8000-0000000000aa'
@@ -504,6 +504,39 @@ describe('the browser of a task', () => {
     fireEvent.click(within(toolbar()).getByRole('button', { name: 'Вкладка 1 из 2' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Медиафайлы' }))
     expect(sent(stream)).toContainEqual({ t: 'tab', pageId: 8 })
+  })
+
+  // MUI lets a menu item shrink to its content from `sm` up by a media query of its own, which wins
+  // over a plain height: the pressing area of a finger (DESIGN.md) has to hold on every width.
+  it('keeps the items of its menus 44px high on every width, where a menu item of MUI shrinks', () => {
+    const stream = holding({
+      tabs: [
+        { pageId: 7, url: 'https://kroshka.example/wp-admin/post.php', title: 'Новая запись' },
+        { pageId: 8, url: 'https://kroshka.example/wp-admin/upload.php', title: 'Медиафайлы' },
+      ],
+    })
+    show({ stream })
+    const pressable = () =>
+      screen
+        .getAllByRole('menuitem')
+        .filter((item) => item.getAttribute('aria-disabled') !== 'true')
+    // «Ещё»: «Остановить» and the sizes of the window.
+    fireEvent.click(within(toolbar()).getByRole('button', { name: 'Ещё' }))
+    const more = pressable()
+    expect(more.map((item) => item.textContent)).toEqual(
+      expect.arrayContaining(['Остановить', '1024 × 768']),
+    )
+    for (const item of more)
+      for (const width of [390, 600, 900, 1200, 1440])
+        expect(declared(item, 'min-height', width)).toBe('44px')
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    // The tabs of the page.
+    fireEvent.click(within(toolbar()).getByRole('button', { name: 'Вкладка 1 из 2' }))
+    const tabs = screen.getAllByRole('menuitem', { name: /Новая запись|Медиафайлы/ })
+    expect(tabs).toHaveLength(2)
+    for (const item of tabs)
+      for (const width of [390, 600, 900, 1200, 1440])
+        expect(declared(item, 'min-height', width)).toBe('44px')
   })
 
   it('keeps «Свернуть» while the browser is over the content, on a phone too', () => {

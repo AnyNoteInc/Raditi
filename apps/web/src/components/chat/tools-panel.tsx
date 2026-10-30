@@ -31,10 +31,10 @@ import { PaneResizer } from './pane-resizer'
 // of `Tabs` for a tab.
 
 /**
- * A tool that holds a connection of its own — the stream of the browser, the frame of the preview
- * — stays mounted while its tab is open, hidden behind another one: choosing it again spends no new
- * ticket (И11). A tab of the changes reads them only while it is on the screen; what it read stays
- * in the cache.
+ * A tool that holds a connection of its own stays mounted while its tab is open, hidden behind
+ * another one: the preview keeps its frame, so choosing it again spends no new ticket (И11); the
+ * browser keeps its last picture, its stream going only while its tab is shown. A tab of the
+ * changes reads them only while it is on the screen; what it read stays in the cache.
  */
 const keepsMounted = (tool: DialogTool): boolean => tool === 'browser' || tool === 'preview'
 
@@ -97,9 +97,11 @@ export function ToolsPanel({
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
-        // Below `lg` the area of a tool fills the window under the bar of the shell and the
-        // paddings of the content; what it holds scrolls inside it, never sideways.
-        height: { xs: 'calc(100dvh - 112px)', lg: 'auto' },
+        // Below `lg` the area of a tool takes what the window leaves under the bar of the shell —
+        // however many lines the bar takes — and the paddings of the content: the shell is as high
+        // as the window at least and hands its height down to the dialog, so the page does not
+        // scroll under the area. What it holds scrolls inside it, never sideways.
+        flex: { xs: '1 1 0', lg: 'none' },
         minHeight: { xs: 480, lg: 0 },
         position: { lg: 'fixed' },
         // Under the bar of breadcrumbs, which runs over the panel to the right edge.

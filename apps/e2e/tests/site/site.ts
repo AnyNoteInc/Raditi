@@ -151,8 +151,9 @@ export async function addBrowserTask(
  * A long dialog of «Работа» on a connected site of the signed-in user (docs/plan/59-dialog-tools-
  * panel.md, И19): `pairs` messages of the client, each answered by the agent, the last answer
  * leaving the dialog open — `awaiting_user`, so the field takes words. Nothing changed on the site:
- * no candidate, no preview, no core. The feed is long enough to scroll on any screen, and that is
- * all it is for. Everything goes with the user, as the task in the browser does.
+ * no candidate, no preview, no core. The feed is long enough to scroll on any screen, and every
+ * answer links to the page it speaks of: the keyboard has stops all along the feed. Everything goes
+ * with the user, as the task in the browser does.
  */
 export async function addLongDialog(
   userId: string,
@@ -164,7 +165,7 @@ export async function addLongDialog(
   try {
     const site = await prisma.site.findUniqueOrThrow({
       where: { id: siteId },
-      select: { workspaceId: true },
+      select: { workspaceId: true, url: true },
     })
     const task = await prisma.task.create({
       data: {
@@ -203,7 +204,7 @@ export async function addLongDialog(
           payload: {
             v: 1,
             turn,
-            message: `Ответ ${turn}. Посмотрел страницу «Меню»: напиток номер ${turn} описан в блоке «Кофе». Чтобы поменять описание, нужна правка в копии сайта — напишите, если начинать, и я подготовлю изменения для предпросмотра.`,
+            message: `Ответ ${turn}. Посмотрел [страницу «Меню»](${site.url}/menu/): напиток номер ${turn} описан в блоке «Кофе». Чтобы поменять описание, нужна правка в копии сайта — напишите, если начинать, и я подготовлю изменения для предпросмотра.`,
             site: 'unchanged',
             next: 'awaiting_user',
             filesChanged: null,

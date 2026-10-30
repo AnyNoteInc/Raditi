@@ -854,6 +854,9 @@ export function BrowserPane({
           >
             <AppIcon name="more" size={20} />
           </IconButton>
+          {/* The height of an item is given by breakpoint: MUI lets a menu item shrink to its
+              content from `sm` up by a media query of its own, which wins over a plain value — an
+              item stays 44px high, a finger's (DESIGN.md), on every width. */}
           <Menu anchorEl={menu} open={menu !== null} onClose={() => setMenu(null)}>
             {holding && live ? (
               <MenuItem
@@ -862,7 +865,7 @@ export function BrowserPane({
                   setMenu(null)
                   onStop()
                 }}
-                sx={{ minHeight: 44, color: 'error.main' }}
+                sx={{ minHeight: { xs: 44 }, color: 'error.main' }}
               >
                 {feedBrowserButtons.stop}
               </MenuItem>
@@ -883,7 +886,7 @@ export function BrowserPane({
                     if (!current)
                       stream.send({ t: 'viewport', width: size.width, height: size.height })
                   }}
-                  sx={{ minHeight: 44 }}
+                  sx={{ minHeight: { xs: 44 } }}
                 >
                   {browserText.size(size.width, size.height)}
                 </MenuItem>
@@ -920,7 +923,7 @@ export function BrowserPane({
                         setTabsMenu(null)
                         if (index !== currentTab) stream.send({ t: 'tab', pageId: tab.pageId })
                       }}
-                      sx={{ minHeight: 44, maxWidth: 360 }}
+                      sx={{ minHeight: { xs: 44 }, maxWidth: 360 }}
                     >
                       <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {tab.title || browserText.untitledTab}

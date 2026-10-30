@@ -724,6 +724,188 @@ test('a long dialog on a phone: «К диалогу» brings back the place and 
   }
 })
 
+test('a long dialog on a phone and a tablet: a tool opened at its end fits the window', async ({
+  page,
+  signedInUser,
+}) => {
+  const { siteId, taskId, title } = await addLongDialog(signedInUser.id)
+  await hideDevIndicator(page)
+  /** How far the page stands from its end, in px. */
+  const fromEnd = () =>
+    page.evaluate(() =>
+      Math.round(document.documentElement.scrollHeight - window.scrollY - window.innerHeight),
+    )
+
+  for (const [width, height] of [
+    [390, 844],
+    [768, 1024],
+  ] as const) {
+    await test.step(`${width}×${height}: the area of a tool under the bar, then «К диалогу»`, async () => {
+      await page.setViewportSize({ width, height })
+      await page.goto(`/projects/${siteId}/chat/${taskId}`)
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+      await expect(feed(page).getByRole('listitem')).toHaveCount(30)
+      await message(page).fill(DRAFT)
+      // The dialog opens at its latest words.
+      await expect.poll(fromEnd).toBeLessThanOrEqual(1)
+      await chooseTool(page, /^Файлы и изменения/)
+      await expect(pane(page)).toBeVisible()
+      // The area fits the window under the bar of the shell, whatever lines the bar takes: the
+      // page does not scroll, the bar and the whole area are in sight.
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollHeight - document.documentElement.clientHeight,
+        ),
+      ).toBeLessThanOrEqual(0)
+      await expect(page.getByRole('banner', { name: 'Панель сайта' })).toBeInViewport({
+        ratio: 1,
+      })
+      const area = await box(pane(page))
+      expect(area.y).toBeGreaterThan(0)
+      expect(area.y + area.height).toBeLessThanOrEqual(height)
+      await expectNoSidewaysScroll(page)
+      // Back at the end, where the client left the feed, the draft with it.
+      await toDialog(page).click()
+      await expectChatAlone(page)
+      await expect.poll(fromEnd).toBeLessThanOrEqual(1)
+      await expect(plus(page)).toBeFocused()
+      await expect(message(page)).toHaveValue(DRAFT)
+    })
+  }
+})
+
+// What sticks over the feed (docs/plan/59, И4, И14): below `lg` the head of the dialog keeps to
+// the top of the window — from `md` under the bar of the shell — and on every width the field
+// keeps to the bottom. Neither hides the element the keyboard lands on (WCAG 2.4.11): the rows of
+// the feed keep their room from them, as the landing keeps its anchors from under its header. A
+// window lower than 420px — a phone on its side, a page zoomed to 400% — leaves the head with the
+// page: stuck over the field there, it would leave the feed a line (WCAG 1.4.10).
+
+/**
+ * Walks the feed by the keyboard — Shift+Tab up, or Tab down — from where the focus is, and names
+ * every element of the feed it lands on that is out of sight: entirely under what sticks over the
+ * top of the window (the head, the bar of the shell) or entirely under the field at its bottom.
+ * Stops once the focus leaves the feed.
+ */
+async function walkFeed(
+  page: Page,
+  key: 'Shift+Tab' | 'Tab',
+): Promise<{ steps: number; hidden: string[] }> {
+  const hidden: string[] = []
+  let steps = 0
+  for (let press = 0; press < 60; press += 1) {
+    await page.keyboard.press(key)
+    const place = await feed(page).evaluate((list) => {
+      const active = document.activeElement
+      if (active === null || !list.contains(active)) return null
+      const stuck = (element: Element | null | undefined): Element | null => {
+        let node = element ?? null
+        while (node !== null && getComputedStyle(node).position !== 'sticky')
+          node = node.parentElement
+        return node
+      }
+      // Over the top: the head of the dialog and the bar of the shell, while they stick.
+      const top = [
+        stuck(document.querySelector('main h1')),
+        stuck(document.querySelector('header[aria-label="Панель сайта"]')),
+      ].reduce((low, band) => Math.max(low, band?.getBoundingClientRect().bottom ?? 0), 0)
+      const field = stuck(document.querySelector('textarea'))?.getBoundingClientRect().top
+      const found = active.getBoundingClientRect()
+      return {
+        name: (active.textContent ?? '').trim().slice(0, 40),
+        top: Math.round(found.top),
+        bottom: Math.round(found.bottom),
+        underTop: found.bottom <= top + 0.5,
+        underField: field !== undefined && found.top >= field - 0.5,
+      }
+    })
+    if (place === null) break
+    steps += 1
+    if (place.underTop || place.underField)
+      hidden.push(
+        `${place.name}: ${place.top}..${place.bottom}, ${place.underTop ? 'under the head' : 'under the field'}`,
+      )
+  }
+  return { steps, hidden }
+}
+
+/** Whether the head of the dialog keeps to the top of the window. */
+const headSticks = (page: Page) =>
+  page.evaluate(() => {
+    let node: Element | null = document.querySelector('main h1')
+    while (node !== null && getComputedStyle(node).position !== 'sticky') node = node.parentElement
+    return node !== null
+  })
+
+test('a long dialog: the head and the field never hide the element in focus', async ({
+  page,
+  signedInUser,
+}) => {
+  test.slow()
+  const { siteId, taskId, title } = await addLongDialog(signedInUser.id)
+  await hideDevIndicator(page)
+
+  for (const [width, height, sticks] of [
+    [390, 844, true],
+    [1000, 800, true],
+    [320, 256, false],
+  ] as const) {
+    await test.step(`${width}×${height}: Shift+Tab up the feed from the field, then Tab down`, async () => {
+      await page.setViewportSize({ width, height })
+      await page.goto(`/projects/${siteId}/chat/${taskId}`)
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+      await expect(feed(page).getByRole('listitem')).toHaveCount(30)
+      // A window lower than 420px leaves the head at the top of the dialog: at its end it is out
+      // of sight, and the feed has the window between the top and the field.
+      expect(await headSticks(page)).toBe(sticks)
+      if (sticks) await expect(plus(page)).toBeInViewport()
+      else await expect(page.getByRole('heading', { level: 1 })).not.toBeInViewport()
+      // Every answer links to its page: one stop of the keyboard each.
+      await message(page).focus()
+      const up = await walkFeed(page, 'Shift+Tab')
+      expect(up.steps).toBeGreaterThanOrEqual(15)
+      expect(up.hidden).toEqual([])
+      // Up the feed the focus left it for the head; down it goes again, to the field.
+      const down = await walkFeed(page, 'Tab')
+      expect(down.steps).toBeGreaterThanOrEqual(15)
+      expect(down.hidden).toEqual([])
+      await expect(message(page)).toBeFocused()
+    })
+  }
+})
+
+test('the names of the tools in «+» wrap instead of being cut, on a desktop', async ({
+  page,
+  signedInUser,
+}) => {
+  const { siteId, taskId, title } = await addLongDialog(signedInUser.id)
+  await hideDevIndicator(page)
+  for (const width of [1200, 1440]) {
+    await test.step(`${width}px: a name beside «пока нет» on two lines, the tile a finger high`, async () => {
+      await page.setViewportSize({ width, height: 900 })
+      await page.goto(`/projects/${siteId}/chat/${taskId}`)
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+      await plus(page).click()
+      await menuSettled(page)
+      const tiles = toolsMenu(page).getByRole('menuitem')
+      await expect(tiles).toHaveCount(2)
+      await expect(tiles.nth(0)).toHaveAccessibleName(tile('Файлы и изменения', 'пока нет'))
+      // Every part of a tile on the screen shows all its words: the name, its sign, its mark.
+      const cut = await toolsMenu(page).evaluate((menu) =>
+        [...menu.querySelectorAll('[role="menuitem"] > *')]
+          .filter((part) => getComputedStyle(part).position !== 'absolute')
+          .filter((part) => part.scrollWidth > part.clientWidth)
+          .map((part) => `${part.textContent}: ${part.scrollWidth} > ${part.clientWidth}`),
+      )
+      expect(cut).toEqual([])
+      expect(await smallTiles(page)).toEqual([])
+      await page.keyboard.press('Escape')
+      await expect(toolsMenu(page)).toHaveCount(0)
+    })
+  }
+})
+
 // A task in the browser (docs/plan/57-browser-tasks.md, Б29; docs/plan/59, И1, И11, И12, И14,
 // И17): the browser is a tool of the dialog like the others — behind «+», «Открыть браузер» and
 // «Взять управление» of the card —, never open by itself at a load. It shows the real state of
@@ -977,4 +1159,36 @@ test('a task in the browser on a phone: the browser in place of the dialog, «К
       expect(await violations(page)).toEqual([])
     })
   }
+})
+
+// In a window lower than 420px the head goes with the page (WCAG 1.4.10): «+» is out of sight
+// while the client reads further down. «К диалогу» brings the feed back where it was read and
+// gives the focus to «+» where it stands — never scrolling the page up to the head (docs/plan/59,
+// И14, И19).
+test('a task in the browser in a window lower than 420px: «К диалогу» keeps the place, not the head', async ({
+  page,
+  signedInUser,
+}) => {
+  const { siteId, taskId } = await addBrowserTask(signedInUser.id)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 320, height: 256 })
+  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+  await expect(loginCard(page)).toBeVisible()
+  // The client reads the question to sign in, the head above it out of sight.
+  const open = loginCard(page).getByRole('button', { name: 'Открыть браузер' })
+  await open.scrollIntoViewIfNeeded()
+  await expect(open).toBeInViewport()
+  await expect(plus(page)).not.toBeInViewport()
+  const place = await page.evaluate(() => Math.round(window.scrollY))
+  await open.click()
+  await expectBrowserShown(page)
+  await expect(toDialog(page)).toBeVisible()
+  await toDialog(page).click()
+  await expectChatAlone(page)
+  await expect(plus(page)).toBeFocused()
+  await expect
+    .poll(() => page.evaluate((top) => Math.abs(Math.round(window.scrollY) - top), place))
+    .toBeLessThanOrEqual(1)
+  await expect(open).toBeInViewport()
+  await expect(plus(page)).not.toBeInViewport()
 })

@@ -85,12 +85,15 @@ export function DialogMenuButton({
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
         slotProps={{ paper: { sx: { borderRadius: '12px', minWidth: 200 } } }}
       >
+        {/* The height of an item is given by breakpoint: MUI lets a menu item shrink to its
+            content from `sm` up by a media query of its own, which wins over a plain value — an
+            item stays 44px high, a finger's (DESIGN.md), on every width. */}
         <MenuItem
           onClick={() => {
             setAnchor(null)
             onRename()
           }}
-          sx={{ minHeight: 44, fontSize: 14 }}
+          sx={{ minHeight: { xs: 44 }, fontSize: 14 }}
         >
           <ListItemIcon>
             <AppIcon name="pencil" size={18} />
@@ -102,7 +105,7 @@ export function DialogMenuButton({
             setAnchor(null)
             onRemove()
           }}
-          sx={{ minHeight: 44, fontSize: 14, color: 'error.main' }}
+          sx={{ minHeight: { xs: 44 }, fontSize: 14, color: 'error.main' }}
         >
           <ListItemIcon sx={{ color: 'inherit' }}>
             <AppIcon name="trash" size={18} />

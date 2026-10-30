@@ -182,6 +182,9 @@ export function SiteListFrame({
           <Box
             component={Link}
             href={root}
+            // The browser of a task over the content covers this way back too: it leaves the tab
+            // order then, as the list does.
+            data-site-back=""
             sx={{
               display: { xs: 'inline-flex', md: 'none' },
               // From `lg` the item drawn beside its panel takes the room of the list: the way to it

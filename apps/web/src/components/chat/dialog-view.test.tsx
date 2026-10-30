@@ -1074,15 +1074,19 @@ function queueAnswers(...answers: (DialogFeed | Promise<DialogFeed>)[]) {
   else calls.feed.mockResolvedValue(last)
 }
 
-/** The dialog as its page mounts it; `strict` — under Strict Mode, as `next dev` mounts it. */
+/**
+ * The dialog as its page mounts it; `strict` — under Strict Mode, as `next dev` mounts it; `list`
+ * — beside the column of the list of dialogs, as the chat of a site draws it (`SiteListFrame`).
+ */
 function mountDialog({
   streamUrl = null,
   strict = false,
-}: { streamUrl?: string | null; strict?: boolean } = {}) {
+  list = false,
+}: { streamUrl?: string | null; strict?: boolean; list?: boolean } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
-  const dialog = (
+  const view = (
     <QueryClientProvider client={queryClient}>
       <DialogView
         siteId={SITE_ID}
@@ -1092,6 +1096,16 @@ function mountDialog({
         browserStreamUrl={streamUrl}
       />
     </QueryClientProvider>
+  )
+  const dialog = list ? (
+    <div data-site-shell="">
+      <nav data-site-list="" aria-label="Диалоги">
+        <a href={`/projects/${SITE_ID}/chat/${TASK_ID}`}>Поменять цену капучино</a>
+      </nav>
+      <main>{view}</main>
+    </div>
+  ) : (
+    view
   )
   return render(strict ? <StrictMode>{dialog}</StrictMode> : dialog)
 }
@@ -2010,7 +2024,7 @@ describe('a task in the browser', () => {
     expect(calls.resumeAgent).not.toHaveBeenCalled()
   })
 
-  it('takes the covered head, dialog, bar and list out of the tab order in full screen, until it closes', async () => {
+  it('takes the covered head, dialog, bar, list and way back out of the tab order in full screen, until it closes', async () => {
     calls.feed.mockResolvedValue(browserAnswer({ events: [requestRow('1')], cursor: '1' }))
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -2024,6 +2038,10 @@ describe('a task in the browser', () => {
           <button type="button">Новый диалог</button>
         </nav>
         <main>
+          {/* From `lg` the way back to the list stands over a dialog its panel took the room of. */}
+          <a data-site-back="" href={`/projects/${SITE_ID}/chat`}>
+            Назад к диалогам
+          </a>
           <QueryClientProvider client={queryClient}>
             <DialogView
               siteId={SITE_ID}
@@ -2042,6 +2060,7 @@ describe('a task in the browser', () => {
     const feed = screen.getByRole('list', { name: 'Сообщения диалога' })
     const bar = screen.getByRole('banner', { name: 'Панель сайта' })
     const list = screen.getByRole('navigation', { name: 'Диалоги' })
+    const back = screen.getByRole('link', { name: 'Назад к диалогам' })
     await choose(/^Браузер/)
     expect(feed.closest('[inert]')).toBeNull()
     fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
@@ -2049,6 +2068,8 @@ describe('a task in the browser', () => {
     expect(name.closest('[inert]')).not.toBeNull()
     expect(bar.hasAttribute('inert')).toBe(true)
     expect(list.hasAttribute('inert')).toBe(true)
+    // The way back to the list is under the browser too: Shift+Tab from its tabs never lands on it.
+    expect(back.hasAttribute('inert')).toBe(true)
     expect(pane().closest('[inert]')).toBeNull()
     // The status of the dialog is still said: its live region is outside the covered column.
     const live = screen
@@ -2064,15 +2085,18 @@ describe('a task in the browser', () => {
     await waitFor(() => expect(feed.closest('[inert]')).toBeNull())
     expect(bar.hasAttribute('inert')).toBe(false)
     expect(list.hasAttribute('inert')).toBe(false)
+    expect(back.hasAttribute('inert')).toBe(false)
     // The browser closed over the content leaves nothing out of reach (И17).
     fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
     await waitFor(() => expect(bar.hasAttribute('inert')).toBe(true))
+    expect(back.hasAttribute('inert')).toBe(true)
     fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     expect(feed.closest('[inert]')).toBeNull()
     expect(name.closest('[inert]')).toBeNull()
     expect(bar.hasAttribute('inert')).toBe(false)
     expect(list.hasAttribute('inert')).toBe(false)
+    expect(back.hasAttribute('inert')).toBe(false)
   })
 
   it('names the files of a later message too: the list is read again for them', async () => {
@@ -2218,6 +2242,114 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     expect(toolsPanel()).toBeNull()
     expect(calls.cancel).not.toHaveBeenCalled()
     expect(calls.resumeAgent).not.toHaveBeenCalled()
+  })
+
+  /** «+» at the end of the tabs, where it stands while the panel is open (И4). */
+  const plusOfTabs = () => within(pane()).getByRole('button', { name: /^Инструменты/ })
+
+  it('gives a focus on «+» of the head to «+» at the end of the tabs as the browser opens by itself', async () => {
+    wideLayout()
+    const second = later()
+    queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
+    mountDialog({ streamUrl: STREAM_URL })
+    await screen.findByText(WORDS[0]!)
+    // The client is on «+» of the head — where Esc of its menu leaves them, too (И5).
+    const inHead = within(screen.getByRole('banner')).getByRole('button', { name: /^Инструменты/ })
+    inHead.focus()
+    second.give(atWork({ status: 'ready' }, 2))
+    expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
+    // «+» left the head for the end of the tabs: the focus is on it there, in the same corner, never
+    // dropped to the start of the page.
+    expect(inHead.isConnected).toBe(false)
+    await waitFor(() => expect(document.activeElement).toBe(plusOfTabs()))
+  })
+
+  it('closes the menu of «+» the browser opens under, the focus on «+» at the end of the tabs', async () => {
+    wideLayout()
+    const second = later()
+    queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
+    mountDialog({ streamUrl: STREAM_URL })
+    await screen.findByText(WORDS[0]!)
+    // Opened from the keyboard: the focus on its first tile.
+    plus().focus()
+    fireEvent.click(plus())
+    const menu = await screen.findByRole('menu', { name: 'Инструменты' })
+    const tile = within(menu).getByRole('menuitem', { name: /^Браузер/ })
+    await waitFor(() => expect(document.activeElement).toBe(tile))
+    second.give(atWork({ status: 'ready' }, 2))
+    expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
+    // The menu went with «+» of the head, as Esc would close it: the focus on «+» there.
+    expect(screen.queryByRole('menu')).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(plusOfTabs()))
+    expect(plusOfTabs().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('gives a focus in the list of dialogs, which the panel takes the room of, to «+»', async () => {
+    wideLayout()
+    const second = later()
+    queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
+    mountDialog({ streamUrl: STREAM_URL, list: true })
+    await screen.findByText(WORDS[0]!)
+    // The client came from the list: its link keeps the focus. From `lg` the list gives its room
+    // to the panel, the link with it.
+    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    link.focus()
+    second.give(atWork({ status: 'ready' }, 2))
+    expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(plusOfTabs()))
+  })
+
+  it.each([
+    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с диалогом/ })],
+    ['«Команды» of the field', () => screen.getByRole('button', { name: 'Команды' })],
+  ])('leaves a focus on %s where it is as the browser opens by itself', async (_what, target) => {
+    wideLayout()
+    const second = later()
+    queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
+    mountDialog({ streamUrl: STREAM_URL, list: true })
+    await screen.findByText(WORDS[0]!)
+    const held = target()
+    held.focus()
+    second.give(atWork({ status: 'ready' }, 2))
+    expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(document.activeElement).toBe(held)
+  })
+
+  it('moves no focus for a launch that opens nothing: once the client closed the browser', async () => {
+    wideLayout()
+    const second = later()
+    queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
+    mountDialog({ streamUrl: STREAM_URL, list: true })
+    await screen.findByText(WORDS[0]!)
+    await choose(/^Браузер/)
+    closeBrowser()
+    await waitFor(() => expect(toolsPanel()).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(plus()))
+    // The client went on to the list of dialogs meanwhile.
+    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    link.focus()
+    second.give(atWork({ status: 'ready' }, 2))
+    expect(await screen.findByText(WORDS[1]!)).toBeTruthy()
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(toolsPanel()).toBeNull()
+    expect(document.activeElement).toBe(link)
+  })
+
+  it('moves no focus below `lg`, where the launch only marks «+»', async () => {
+    const second = later()
+    queueAnswers(atWork({ status: 'starting' }, 1, true), second.answer)
+    mountDialog({ streamUrl: STREAM_URL, list: true })
+    await screen.findByText(WORDS[0]!)
+    const held = plus()
+    held.focus()
+    second.give(atWork({ status: 'ready' }, 2))
+    expect(await screen.findByText(WORDS[1]!)).toBeTruthy()
+    await waitFor(() => expect(plusName()).toBe(DOT.launch))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    // The same «+», marked: the focus never left it.
+    expect(plus()).toBe(held)
+    expect(document.activeElement).toBe(held)
   })
 
   it('opens nothing for a browser at work before the client came, nor for its next answers', async () => {

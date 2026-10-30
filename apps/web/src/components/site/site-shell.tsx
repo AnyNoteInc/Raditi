@@ -419,9 +419,16 @@ export function SiteShell({
           sx={{
             ml: { ...(framed && { md: `${SITE_LIST_WIDTH}px` }) },
             // The list stays beside an open dialog, like the chats of ChatGPT and Claude (owner's
-            // request of 26.10.2026); the panel of its changes, while it is drawn, takes its room.
+            // request of 26.10.2026); the panel of its tools, while it is drawn, takes its room.
+            // Below `lg` a tool drawn in place of the dialog takes the height the window leaves
+            // under the bar, whatever lines the bar takes (docs/plan/59, И14): this box and the
+            // content pass it down.
             ...(paned && {
-              '&:has([data-site-pane])': { ml: { lg: 0 }, mr: { lg: SITE_PANE_WIDTH } },
+              '&:has([data-site-pane])': {
+                ml: { lg: 0 },
+                mr: { lg: SITE_PANE_WIDTH },
+                flex: { xs: '1 0 auto', lg: '1 1 0' },
+              },
             }),
             minWidth: 0,
             ...(framed && { flex: '1 0 auto', display: 'flex', flexDirection: 'column' }),
@@ -438,7 +445,11 @@ export function SiteShell({
               minWidth: 0,
               outline: 'none',
               ...(framed && { flex: '1 0 auto', display: 'flex', flexDirection: 'column' }),
-              ...(paned && { flex: { lg: '1 1 0' }, minHeight: { lg: 0 } }),
+              ...(paned && {
+                flex: { lg: '1 1 0' },
+                minHeight: { lg: 0 },
+                '&:has([data-site-pane])': { flex: { xs: '1 0 auto', lg: '1 1 0' } },
+              }),
             }}
           >
             {children}

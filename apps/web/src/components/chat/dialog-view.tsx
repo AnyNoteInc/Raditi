@@ -76,7 +76,7 @@ import { showsRefresh, type FeedHeadState } from './feed-state'
 import { ModeLinks, type DialogMode } from './mode-switch'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
 import { ReleaseDialog } from './release-dialog'
-import { ToolsMenu, TOOLS_BUTTON_ID } from './tools-menu'
+import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
 import { ToolsPanel } from './tools-panel'
 import { TurnActivity } from './turn-activity'
 import { UndoDialog } from './undo-dialog'
@@ -98,6 +98,35 @@ import { uuidv7 } from './uuid'
 
 /** The one command of a task in the browser: stopping it (docs/plan/57-browser-tasks.md, Б24). */
 const BROWSER_COMMANDS: readonly ChatCommandId[] = ['cancel']
+
+/**
+ * What a focused element of the feed keeps clear above it (WCAG 2.4.11): below `lg` the head of
+ * the dialog sticks to the top of the window — 96px on two lines below `md`, from `md` 44px under
+ * the bar of the shell, which sticks too — and a step of 16px, as the landing keeps its anchors
+ * from under its header (DESIGN.md, «Шапка»). The room is a margin of the rows and not a padding
+ * of the scroller: with a padding, the head itself would count as hidden, and Tab onto it would
+ * scroll the page. From `lg` the head stands over the area the feed scrolls in, never over it.
+ */
+const HEAD_ROOM = '--dialog-head-room'
+/** What a focused element of the feed keeps clear below it: the field that sticks to the bottom. */
+const FIELD_ROOM = '--dialog-field-room'
+/** The step between what sticks over the feed and an element in focus. */
+const ROOM_STEP = 16
+
+/**
+ * What the focus stands on that the panel takes away as it opens by itself from `lg` (docs/plan/
+ * 59, И3, И4): «+» of the head, which moves to the end of the tabs, the menu it opened, which goes
+ * with it, or the list of dialogs, which gives the panel its room. null — the focus stands
+ * elsewhere, and the opening leaves it there.
+ */
+function focusTakenByOpening(): Element | null {
+  const active = document.activeElement
+  if (active === null || active === document.body) return null
+  const taken =
+    active.id === TOOLS_BUTTON_ID ||
+    active.closest(`[${TOOLS_MENU_MARK}], [data-site-list]`) !== null
+  return taken ? active : null
+}
 
 /** What a press of the client sends: one id per press, kept for its repeats. */
 type Press = 'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume'
@@ -322,6 +351,23 @@ export function DialogView({
   const feedArea = useRef<HTMLDivElement | null>(null)
   const feedContent = useRef<HTMLDivElement | null>(null)
   useFeedFollow(feedArea, feedContent)
+  // The field sticks to the bottom on every width, as high as what it holds now — a draft of many
+  // lines, files, a refusal under it: the rows of the feed keep that much clear below them, so
+  // that Tab down the feed never lands under it (WCAG 2.4.11).
+  const field = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const box = field.current
+    const area = feedArea.current
+    if (box === null || area === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() =>
+      area.style.setProperty(
+        FIELD_ROOM,
+        `${Math.ceil(box.getBoundingClientRect().height) + ROOM_STEP}px`,
+      ),
+    )
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [])
 
   const message = useMutation(trpc.task.message.mutationOptions())
   const proceed = useMutation(trpc.task.continue.mutationOptions())
@@ -353,9 +399,26 @@ export function DialogView({
     visible: browserShown,
   })
   // The browser of the task started while the client looks at the dialog (И2, И3): from `lg` it
-  // opens beside the dialog once, below only «+» is marked; the focus stays where it is. Never by
-  // the words of the agent, and not where the cabinet cannot show the browser.
-  const launched = useCallback(() => dispatchTools({ type: 'launch', wide }), [wide])
+  // opens beside the dialog once, below only «+» is marked. Never by the words of the agent, and
+  // not where the cabinet cannot show the browser. Nobody pressed anything, so the focus stays
+  // where it is — unless it stood on what this very opening takes away (`focusTakenByOpening`):
+  // then «+» takes it, at the end of the tabs in the same corner (И4), and it is never dropped to
+  // the start of the page. A launch that opens nothing — spent, or below `lg` — moves nothing.
+  const heldAtLaunch = useRef<Element | null>(null)
+  const launched = useCallback(() => {
+    const opens =
+      tools.active === null && toolsReducer(tools, { type: 'launch', wide }).active !== null
+    heldAtLaunch.current = opens ? focusTakenByOpening() : null
+    dispatchTools({ type: 'launch', wide })
+  }, [tools, wide])
+  useEffect(() => {
+    const held = heldAtLaunch.current
+    heldAtLaunch.current = null
+    if (held === null || tools.active === null) return
+    // Gone with «+» of the head and its menu, or hidden with the list of dialogs.
+    if (!held.isConnected || held.getClientRects().length === 0)
+      document.getElementById(TOOLS_BUTTON_ID)?.focus()
+  }, [tools.active])
   useBrowserLaunch(head, {
     taskId,
     enabled: inBrowser && browserStreamUrl !== null,
@@ -505,10 +568,15 @@ export function DialogView({
 
   /**
    * The focus goes where the tools are drawn next — the tab of a tool, or «+» once none is open:
-   * what moved it is gone or behind.
+   * what moved it is gone or behind. «+» takes it where it stands, the page left where it is: the
+   * head keeps «+» in sight as it sticks, and in a window lower than 420px, where the head goes
+   * with the page, the feed comes back where the client read it rather than at the head (И19).
    */
   function focusSoon(id: string) {
-    window.setTimeout(() => document.getElementById(id)?.focus(), 0)
+    window.setTimeout(
+      () => document.getElementById(id)?.focus({ preventScroll: id === TOOLS_BUTTON_ID }),
+      0,
+    )
   }
 
   /**
@@ -662,12 +730,12 @@ export function DialogView({
   // Esc leaves the browser over the content — unless the page itself is being typed into.
   useEffect(() => {
     if (!fullscreen) return
-    // The bar of the shell and the list of dialogs are under the browser too: out of the tab
-    // order while it covers them (WCAG 2.4.11), as the dialog's own column is.
+    // The bar of the shell, the list of dialogs and the way back to it are under the browser too:
+    // out of the tab order while it covers them (WCAG 2.4.11), as the dialog's own column is.
     const covered = [
       ...(pane.current
         ?.closest('[data-site-shell]')
-        ?.querySelectorAll('header, [data-site-list]') ?? []),
+        ?.querySelectorAll('header, [data-site-list], [data-site-back]') ?? []),
     ].filter((element) => !root.current?.contains(element))
     for (const element of covered) element.setAttribute('inert', '')
     const leave = (event: KeyboardEvent) => {
@@ -937,6 +1005,18 @@ export function DialogView({
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
+        // What sticks over the top of the window below `lg`, as measured, and a step: the head of
+        // 96px (two lines of 44px and 8px between them), from `md` the bar of the shell and the
+        // head of one line, 44px each (`HEAD_ROOM`). Nothing over the feed from `lg`.
+        [HEAD_ROOM]: {
+          xs: `${96 + ROOM_STEP}px`,
+          md: `${SITE_TOOLBAR_HEIGHT + 44 + ROOM_STEP}px`,
+          lg: '0px',
+        },
+        // A window lower than 420px sticks no head (below): only the bar of the shell from `md`.
+        '@media (max-height: 420px)': {
+          [HEAD_ROOM]: { xs: '0px', md: `${SITE_TOOLBAR_HEIGHT + ROOM_STEP}px`, lg: '0px' },
+        },
       }}
     >
       {/* The browser over the whole area covers the head and the dialog: neither takes focus. */}
@@ -953,6 +1033,10 @@ export function DialogView({
           position: { xs: 'sticky', lg: 'static' },
           top: { xs: 0, md: SITE_TOOLBAR_HEIGHT },
           zIndex: { xs: 1, lg: 'auto' },
+          // A window lower than 420px — a phone on its side, a page zoomed to 400% — leaves the head
+          // with the page: stuck over the field, it would leave the feed a line to be read in (WCAG
+          // 1.4.10), as the landing unpins its header there (DESIGN.md, «Шапка»).
+          '@media (max-height: 420px)': { position: 'static' },
           bgcolor: 'background.paper',
           // From `lg` the head stands over the area of the feed, which scrolls under it, from edge
           // to edge of the dialog. While the panel is closed it stands right under the bar, «+» in
@@ -1019,6 +1103,14 @@ export function DialogView({
             // The feed and the field on one axis, a comfortable measure (owner's brief, 26.10.2026).
             maxWidth: 780,
             mx: 'auto',
+            // Whatever of the feed takes the focus — a link of an answer, a button of a card —, or
+            // is shown by the browser, keeps clear of what sticks over the feed: the head at the
+            // top below `lg`, the field at the bottom (WCAG 2.4.11). The field itself has no room:
+            // it is always in sight, and a room under it would scroll the page as it is focused.
+            '& :not([data-feed-field], [data-feed-field] *)': {
+              scrollMarginTop: `var(${HEAD_ROOM})`,
+              scrollMarginBottom: `var(${FIELD_ROOM}, ${140 + ROOM_STEP}px)`,
+            },
           }}
         >
           {head === null ? (
@@ -1088,6 +1180,8 @@ export function DialogView({
           ) : null}
 
           <Box
+            ref={field}
+            data-feed-field=""
             sx={{
               position: 'sticky',
               bottom: 0,
