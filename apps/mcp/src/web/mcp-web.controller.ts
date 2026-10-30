@@ -41,7 +41,7 @@ export class McpWebController {
   @Tool({
     name: 'web_open',
     description:
-      "Open a page of the client's site in the task's browser: a path of the site (the guide of its stack names its pages), or a full address on the site. Other sites and closed admin pages are refused. Answers where the page landed; call web_observe before you act on it.",
+      "Open a page of the client's site in the task's browser: a path of the site (the guide of its stack names its pages), or a full address on the site. Addresses of other sites and closed admin pages are refused; a page of the site may still take the browser on to another site (a payment, a sign-in service, an editor elsewhere): you may work there with these tools, but it is not the client's site and the platform's rules hold there too. Answers where the page landed; call web_observe before you act on it.",
     parameters: schemas.web_open,
     annotations: { ...moves, idempotentHint: true },
   })

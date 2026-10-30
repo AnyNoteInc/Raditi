@@ -67,7 +67,9 @@ import { runVerification, VERIFICATION_REPLY_BYTES, type VerificationSite } from
  * of its own; the one shown is streamed by `page.screencast` and takes the client's input; the
  * agent reads it as Playwright's `ai` tree, secret fields hidden, and acts on references of it.
  * Every request of every page is checked before it leaves and every committed page after it
- * (page-rules.ts); the egress proxy of the container is the barrier, this the second line.
+ * (page-rules.ts): the agent and the client open pages of the site only, a page of the site may
+ * take the browser on to another public https site (docs/plan/60-browser-foreign-redirects.md);
+ * the egress proxy of the container is the barrier, this the second line.
  *
  * What it never does: log, label or echo the control endpoint; answer a dialog or a file chooser
  * on its own (they wait for the agent or the client, Б27); put a page's text, an address or a
@@ -298,6 +300,8 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
   readonly #rules: PageRules
   /** Who holds the browser: the policy judges the pages' requests for them (Б37). */
   #controller: BrowserController = 'agent'
+  /** The saved sign-in is being typed: nothing leaves for another site meanwhile (Ч7). */
+  #signingIn = false
   readonly #settings: Settings
   #viewport: BrowserViewport
   readonly #pages = new Map<number, PageEntry>()
@@ -405,6 +409,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     let navigation = false
     let owner: PageEntry | undefined
     let main = false
+    let document: string | null = null
     let postData: string | null = null
     let headers: Record<string, string> = {}
     try {
@@ -412,6 +417,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
       const frame = request.frame()
       owner = this.#entries.get(frame.page())
       main = frame.parentFrame() === null
+      document = frame.page().url()
     } catch {
       // A request without a frame (a worker's): judged by its address alone.
     }
@@ -429,6 +435,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
       this.#rules,
       { url: request.url(), method: request.method(), postData, navigation, headers },
       this.#controller,
+      { main, document, siteOnly: this.#signingIn },
     )
     if (verdict === 'continue') return route.continue().catch(() => undefined)
     if (navigation && main && owner) owner.refused = true
@@ -528,7 +535,8 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     if (main) entry.generation++
     if (main && frame.url().startsWith('chrome-error:')) entry.errorPages++
     // A redirect is not routed: what it committed is judged here, and dropped unseen.
-    if (!committedAllowed(this.#rules, frame.url(), this.#controller)) {
+    const place = { main, document: entry.page.url(), siteOnly: this.#signingIn }
+    if (!committedAllowed(this.#rules, frame.url(), this.#controller, place)) {
       entry.refused = true
       entry.dropping ??= entry.page
         .goto('about:blank', { waitUntil: 'commit', timeout: this.#settings.actionTimeoutMs })
@@ -1306,24 +1314,44 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     const entry = await this.#ensureShown()
     if (!form || entry.dialog || !this.#onSignInPage(entry, form)) return 'absent'
     const { page } = entry
+    const generation = entry.generation
     let signedIn = false
+    let moved = false
+    this.#signingIn = true
     try {
       try {
         await this.#run(entry, async (deadline) => {
           // The page's own form by the stack's selectors, never a reference an agent could hold.
-          await page.locator(form.login).fill(credentials.login, { timeout: deadline.left() })
-          await page.locator(form.password).fill(credentials.password, { timeout: deadline.left() })
-          const sent = page
-            .waitForEvent('framenavigated', {
-              predicate: (frame) => frame === page.mainFrame(),
-              timeout: deadline.left(),
-            })
-            // A script of the form that keeps it (a CAPTCHA) sends nothing: read below.
-            .catch(() => undefined)
-          await page.locator(form.submit).click({ timeout: deadline.left() })
-          await sent
-          await this.#settle(entry, deadline)
+          // Elements of the very document checked above: one that went elsewhere meanwhile
+          // detaches them, and nothing of the sign-in is typed there (Ч7).
+          const fields = await Promise.all(
+            [form.login, form.password, form.submit].map((selector) =>
+              page.locator(selector).elementHandle({ timeout: deadline.left() }),
+            ),
+          )
+          try {
+            const [login, password, submit] = fields
+            if (entry.generation !== generation || !this.#onSignInPage(entry, form)) {
+              moved = true
+              return
+            }
+            await login!.fill(credentials.login, { timeout: deadline.left() })
+            await password!.fill(credentials.password, { timeout: deadline.left() })
+            const sent = page
+              .waitForEvent('framenavigated', {
+                predicate: (frame) => frame === page.mainFrame(),
+                timeout: deadline.left(),
+              })
+              // A script of the form that keeps it (a CAPTCHA) sends nothing: read below.
+              .catch(() => undefined)
+            await submit!.click({ timeout: deadline.left() })
+            await sent
+            await this.#settle(entry, deadline)
+          } finally {
+            for (const field of fields) void field.dispose().catch(() => undefined)
+          }
         })
+        if (moved) return 'absent'
       } catch (error) {
         // Signed in, then sent where the task may not go (the dashboard): the start page instead.
         if (!isPageBrowserError(error) || error.reason !== 'denied') throw error
@@ -1332,6 +1360,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
       signedIn = !this.#onSignInPage(entry, form)
       return signedIn ? 'signed_in' : 'refused'
     } finally {
+      this.#signingIn = false
       // Whatever stopped it — the form came back, a step failed —, nothing of the saved sign-in
       // stays on the page for an observation.
       if (!signedIn) await this.#forgetSignIn(entry, form)

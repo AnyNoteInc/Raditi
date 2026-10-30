@@ -57,7 +57,7 @@ describe('browser session containers', () => {
       })
   })
 
-  it('gives the egress proxy the browser as its only client and the session’s hosts', () => {
+  it('gives the egress proxy the browser as its only client, the session’s hosts and the internet', () => {
     const egress = egressOf()
     expect(egress.name).toBe(`raditi-browser-${place.identity.sessionId}-egress`)
     expect(egress.User).toBe('10001:10001')
@@ -70,6 +70,9 @@ describe('browser session containers', () => {
       'ALLOWED_HOSTS=["news.example.ru:443","www.news.example.ru:443"]',
       // Chromium's ECH with the listed host as its outer name passes (client-egress.mjs).
       'ECH_OUTER_NAME=1',
+      // Another site a page of the site goes on to: public names only (plan 60, Ч3).
+      'ALLOW_PUBLIC=1',
+      'PUBLIC_TLS_ONLY=1',
       'MAX_TUNNELS=48',
       'REFUSED_SUBNETS=84.201.128.0/18',
     ])

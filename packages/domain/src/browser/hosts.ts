@@ -94,3 +94,42 @@ export function browserNavigationAllowed(
   const target = `${url.hostname}:${url.port === '' ? 443 : url.port}`
   return allowed.some((host) => host.toLowerCase() === target)
 }
+
+/** The TLS ports of the open internet the egress proxy of a session opens (OPEN_TLS_PORTS). */
+const FOREIGN_PORTS: ReadonlySet<string> = new Set(['', '443', '8443'])
+
+/** The last two labels of a name: what a cookie of the site may be shared under. */
+const nameTail = (host: string) => host.toLowerCase().split('.').slice(-2).join('.')
+
+/**
+ * Whether a page of the session may be on another site (docs/plan/60-browser-foreign-redirects.md,
+ * Ч1, Ч4): one a page of the site sent the browser to — a redirect, a link, a form, a script (a
+ * payment, a sign-in service, an editor elsewhere). `https://` to a public DNS name — the rule of
+ * the client's variables' hosts — on a TLS port the egress proxy opens; the proxy resolves the
+ * name at every connection and refuses an address that is not public. Never a host whose last two
+ * labels are those of a host of the session (`allowed`, the local sites): another port of the
+ * site, its subdomains, its parent and their neighbours may get the site's sign-in cookie, and the
+ * stack's policy does not judge another site. Only the origin is judged. Never an address the
+ * agent or the client opens themselves: that is `browserNavigationAllowed`.
+ */
+export function browserForeignPageAllowed(
+  address: string,
+  allowed: readonly string[],
+  localSites: readonly string[],
+): boolean {
+  let url: URL
+  try {
+    url = new URL(address)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return false
+  if (!FOREIGN_PORTS.has(url.port)) return false
+  const host = parseEgressHost(url.hostname)
+  if (host === null) return false
+  const own = [
+    ...allowed.map((entry) => entry.replace(/:\d+$/, '')),
+    ...localSites.flatMap((site) => URL.parse(site)?.hostname ?? []),
+  ]
+  return !own.some((name) => nameTail(name) === nameTail(host.host))
+}

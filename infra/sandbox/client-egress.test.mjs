@@ -1195,6 +1195,26 @@ test('the open internet forwards plain HTTP of a public origin to the address it
   assert.doesNotMatch(JSON.stringify(p.logs), /guide|hello|c2VjcmV0|other\.example/)
 })
 
+test('the open internet over TLS only forwards no plain HTTP and still tunnels TLS', async () => {
+  const p = await proxy({
+    allow: [],
+    anyPublic: true,
+    publicHttp: false,
+    names: { 'docs.example.org': ['93.184.216.34'] },
+  })
+  const page = await viaProxy(p.port, 'http://docs.example.org/guide?code=1')
+  assert.equal(page.status, 405)
+  assert.equal(page.refusal, 'method')
+  const answer = await tunnel(p.port, 'docs.example.org:443')
+  assert.equal(answer.status, 200)
+  answer.socket.destroy()
+  assert.deepEqual(
+    p.dialed.map(({ port }) => port),
+    [443],
+  )
+  assert.doesNotMatch(JSON.stringify(p.logs), /guide|code=/)
+})
+
 test('the open internet is a switch of the configuration, with or without listed hosts', () => {
   const base = { LISTEN_HOST: '10.200.0.5', LISTEN_PORT: '3128' }
   const open = clientEgressConfig({ ...base, ALLOW_PUBLIC: '1' })
@@ -1211,5 +1231,16 @@ test('the open internet is a switch of the configuration, with or without listed
     false,
   )
   for (const bad of [{ ALLOW_PUBLIC: 'yes' }, { ALLOW_PUBLIC: 'true' }, { ALLOW_PUBLIC: '0' }])
+    assert.throws(() => clientEgressConfig({ ...base, ...bad }), JSON.stringify(bad))
+  // Over TLS only: plain HTTP of the open internet stays closed; never without the open internet.
+  assert.equal(open.publicHttp, true)
+  assert.equal(
+    clientEgressConfig({ ...base, ALLOW_PUBLIC: '1', PUBLIC_TLS_ONLY: '1' }).publicHttp,
+    false,
+  )
+  for (const bad of [
+    { ALLOWED_HOSTS: '["a.example.ru:443"]', PUBLIC_TLS_ONLY: '1' },
+    { ALLOW_PUBLIC: '1', PUBLIC_TLS_ONLY: 'yes' },
+  ])
     assert.throws(() => clientEgressConfig({ ...base, ...bad }), JSON.stringify(bad))
 })

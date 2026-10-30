@@ -559,7 +559,25 @@ export class WorkerSession {
     }
   }
 
+  /**
+   * Whether an address is of another site a page of the site went on to
+   * (docs/plan/60-browser-foreign-redirects.md, Ч6): no object of the task is there, and a press
+   * there saves nothing of the site. An address that does not read as a page — none known yet —
+   * is not: a save there is judged as on the site.
+   */
+  #elsewhere(url: string): boolean {
+    const page = URL.parse(url)
+    if (!page || (page.protocol !== 'https:' && page.protocol !== 'http:')) return false
+    return !browserNavigationAllowed(
+      `${page.origin}/`,
+      this.#spec.allowedHosts,
+      this.#spec.localOrigins,
+    )
+  }
+
+  /** The object of the task an address of the site edits; none on another site (Ч6). */
   #checkpointRef(url: string): BrowserCheckpointRef | null {
+    if (this.#elsewhere(url)) return null
     try {
       return this.#spec.adapter.browserCheckpointOf(url)
     } catch {
@@ -1205,16 +1223,18 @@ export class WorkerSession {
    * An action that may save or publish an object (Б22): refused while another save is
    * unconfirmed or when the task has changed as many objects as it may (Б34); after it —
    * whatever came of it, a timeout included — the object is unconfirmed until a check reads it,
-   * so an unclear outcome leaves no duplicate. With `commit` null it is an ordinary action.
+   * so an unclear outcome leaves no duplicate. With `asked` null — or on another site, which
+   * saves nothing of the site (Ч6) — it is an ordinary action.
    */
   async #commitOr(
     tool: 'web_click' | 'web_press',
     browser: CloudBrowserSession,
-    commit: BrowserCommitAction | null,
+    asked: BrowserCommitAction | null,
     action: CloudBrowserAction,
   ): Promise<BrowserToolResult> {
     const pageId = this.#control.pageId
     const before = this.#tabs.find((tab) => tab.pageId === pageId)?.url ?? ''
+    const commit = this.#elsewhere(before) ? null : asked
     if (commit !== null) {
       if (this.#blocked(pageId)) throw browserTaskError('BROWSER_CHECKPOINT_UNVERIFIED')
       if (this.#overChangeLimit(this.#checkpointRef(before)))

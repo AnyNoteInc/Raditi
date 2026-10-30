@@ -40,14 +40,18 @@ import { clearTimeout, setTimeout } from 'node:timers'
 // on an HTTP port (OPEN_HTTP_PORTS) — forwarded, one request a connection, to an address checked
 // as above. Addresses that are not public stay refused, an IP literal is never a target, and the
 // log has the host the client asked for, the result and the bytes. Off (no ALLOW_PUBLIC), the
-// proxy is exactly the list above.
+// proxy is exactly the list above. PUBLIC_TLS_ONLY=1 next to it keeps plain HTTP closed: the open
+// internet is CONNECT and TLS only — so for the browser of a task, which a page of the site may
+// take on to another site (docs/plan/60-browser-foreign-redirects.md), and whose pages open over
+// `https://` alone.
 //
 // In the open internet an Encrypted ClientHello (ECH) passes when its outer server_name is
 // exactly the host of the CONNECT: every public host being allowed there, the name hides nothing
 // the proxy guards, and Chromium — the browser skill of the agent — sends ECH in every handshake,
 // GREASE when it knows no ECH key of the site (behind a proxy it never does, resolving nothing
 // itself), with no flag to turn it off. The browser of a task (docs/plan/57-browser-tasks.md) is
-// that Chromium too, on a list of the site's hosts: ECH_OUTER_NAME=1 lets the same ClientHello
+// that Chromium too, on a list of the site's hosts and, since 30.10.2026, in the open internet
+// as well (docs/plan/60-browser-foreign-redirects.md): ECH_OUTER_NAME=1 lets the same ClientHello
 // through to a listed host (owner's decision of 26.10.2026) — its outer server_name is exactly
 // that host, the tunnel goes to an address of that host only, and the name a real ECH could hide
 // reaches no more than a Host header inside TLS already does. Everywhere else ECH is refused. The
@@ -437,7 +441,8 @@ const logJson = (entry) => console.log(JSON.stringify(entry))
  * non-public ones; `clientIp` — the only address a request is taken from (sandbox-gw: the
  * sandbox's), or null on a network only the preview's own containers share; `localRoutes` — the
  * plain-http routes of local sites (parseLocalRoutes; a stand's only, the caller checked that).
- * `anyPublic` — the open internet of the agent (ALLOW_PUBLIC, see the head of this file).
+ * `anyPublic` — the open internet of the agent (ALLOW_PUBLIC, see the head of this file);
+ * `publicHttp` — its plain HTTP too (off with PUBLIC_TLS_ONLY).
  * `echOuterName` — an ECH ClientHello whose outer name is the listed host passes (ECH_OUTER_NAME;
  * always so with `anyPublic`). `lookup` and `dial` are replaced only by tests.
  */
@@ -447,6 +452,7 @@ export function createClientEgressProxy({
   clientIp = null,
   localRoutes = new Map(),
   anyPublic = false,
+  publicHttp = true,
   echOuterName = false,
   maxTunnels = clientEgressLimits.tunnels,
   connectTimeoutMs = clientEgressLimits.connectMs,
@@ -702,7 +708,7 @@ export function createClientEgressProxy({
   const server = createServer({ maxHeaderSize: 8192 }, (req, res) => {
     const local = localRoutes.size > 0 ? localRequestOf(req, localRoutes) : null
     if (local) return forwardLocal(req, res, local)
-    const open = anyPublic ? publicRequestOf(req) : null
+    const open = anyPublic && publicHttp ? publicRequestOf(req) : null
     if (open) {
       const deny = (status, result) => {
         res.writeHead(status, { connection: 'close', 'content-length': 0, 'raditi-egress': result })
@@ -923,7 +929,8 @@ function maxTunnelsOf(text) {
  * The proxy as an environment describes it: LISTEN_HOST (an IPv4 address), LISTEN_PORT,
  * ALLOWED_HOSTS, REFUSED_SUBNETS, CLIENT_IPV4 and MAX_TUNNELS (optional), LOCAL_HTTP_ROUTES
  * (optional, outside production, with RADITI_EGRESS_LOCAL_ROUTES=1; ALLOWED_HOSTS may then be
- * `[]`), ALLOW_PUBLIC and ECH_OUTER_NAME (optional switches). Throws on anything else.
+ * `[]`), ALLOW_PUBLIC, PUBLIC_TLS_ONLY (only with ALLOW_PUBLIC) and ECH_OUTER_NAME (optional
+ * switches). Throws on anything else.
  */
 export function clientEgressConfig(env) {
   const listenHost = env.LISTEN_HOST ?? ''
@@ -936,6 +943,8 @@ export function clientEgressConfig(env) {
     throw new Error('CLIENT_IPV4 must be an IPv4 address')
   const localRoutes = localRoutesOf(env)
   const anyPublic = flagOf(env.ALLOW_PUBLIC, 'ALLOW_PUBLIC')
+  const tlsOnly = flagOf(env.PUBLIC_TLS_ONLY, 'PUBLIC_TLS_ONLY')
+  if (tlsOnly && !anyPublic) throw new Error('PUBLIC_TLS_ONLY needs ALLOW_PUBLIC=1')
   return {
     listenHost,
     listenPort,
@@ -948,6 +957,7 @@ export function clientEgressConfig(env) {
     maxTunnels: maxTunnelsOf(env.MAX_TUNNELS),
     localRoutes,
     anyPublic,
+    publicHttp: !tlsOnly,
     echOuterName: anyPublic || flagOf(env.ECH_OUTER_NAME, 'ECH_OUTER_NAME'),
   }
 }
@@ -968,6 +978,7 @@ export function listenClientEgress(config, options = {}) {
     maxTunnels: config.maxTunnels ?? clientEgressLimits.tunnels,
     localRoutes: config.localRoutes ?? new Map(),
     anyPublic: config.anyPublic ?? false,
+    publicHttp: config.publicHttp ?? true,
     echOuterName: config.echOuterName ?? false,
     ...options,
   })
@@ -988,7 +999,7 @@ if (process.argv[1]?.endsWith('/client-egress.mjs')) {
       event: 'listening',
       port: server.address().port,
       hosts: config.allow.size,
-      ...(config.anyPublic ? { open: true } : {}),
+      ...(config.anyPublic ? { open: config.publicHttp === false ? 'tls' : true } : {}),
       ...(config.localRoutes.size ? { localRoutes: config.localRoutes.size } : {}),
     })
     server.on('error', () => {

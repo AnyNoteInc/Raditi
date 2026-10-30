@@ -68,7 +68,9 @@ const START_PAGE = 'edit.php'
  * - `fonts.googleapis.com`, `fonts.gstatic.com` (fonts some themes give the editor): the editor
  *   falls back to the system fonts;
  * - statistics and advertising hosts of plugins (`stats.wp.com`, `pixel.wp.com` and the like).
- * `BROWSER_EXTRA_HOSTS` adds a host a particular installation turns out to need.
+ * `BROWSER_EXTRA_HOSTS` adds a host a particular installation turns out to need. A page of the
+ * site may still take the browser on to another site (docs/plan/60-browser-foreign-redirects.md):
+ * that is the page going there, never a load of a page of the site.
  */
 const EXTRA_HOSTS: readonly string[] = Object.freeze([])
 

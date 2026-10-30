@@ -73,10 +73,12 @@ function labelled(
  * The egress proxy (infra/sandbox/client-egress.mjs, the `client-egress` target of
  * infra/sandbox/Dockerfile): the browser's only way out. It listens on its address of the
  * session's network, takes requests of the browser's address alone, opens TLS tunnels to the
- * listed `host:port` only, with an ECH whose outer name is that host taken as its SNI, and never
- * to an address that is not public or of the platform. Local sites (outside production) are
- * plain-http routes to a fixed target; `host.docker.internal` names this host on Linux as on
- * Docker Desktop.
+ * site's `host:port` and — the open internet, for another site a page of the site goes on to
+ * (docs/plan/60-browser-foreign-redirects.md, Ч3) — to any public DNS name on a TLS port, never
+ * plain HTTP of the internet (PUBLIC_TLS_ONLY), with an
+ * ECH whose outer name is that host taken as its SNI, and never to an address that is not public
+ * or of the platform. Local sites (outside production) are plain-http routes to a fixed target;
+ * `host.docker.internal` names this host on Linux as on Docker Desktop.
  */
 export function egressContainer(input: {
   place: BrowserSessionPlace
@@ -106,6 +108,11 @@ export function egressContainer(input: {
         // Chromium sends ECH in every TLS handshake, with no flag to turn it off: a ClientHello
         // whose outer name is the listed host passes (owner's decision of 26.10.2026).
         'ECH_OUTER_NAME=1',
+        // A page of the site may take the browser on to another site: a payment, a sign-in
+        // service (owner's decision of 30.10.2026), over TLS only — its pages open over https
+        // alone. Addresses that are not public stay refused.
+        'ALLOW_PUBLIC=1',
+        'PUBLIC_TLS_ONLY=1',
         `MAX_TUNNELS=${input.maxTunnels}`,
         ...(input.refusedSubnets.length
           ? [`REFUSED_SUBNETS=${input.refusedSubnets.join(',')}`]

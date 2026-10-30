@@ -628,6 +628,31 @@ describe('the agent’s actions', () => {
     await act(row, { tool: 'web_open', url: NEW_POST })
   })
 
+  it('takes no object of the task and no save on another site a page went on to (plan 60, Ч6)', async () => {
+    const { store, ensured, act } = setup()
+    const { row, browser } = await ensured()
+    const rows = () => [...store.checkpointRows.values()]
+    // An editor elsewhere, with the very paths of the stack: not the site, no object of the task.
+    browser.go('https://editor.elsewhere.example/wp-admin/post.php?post=12&action=edit')
+    await settle()
+    expect(rows()).toEqual([])
+    expect(await act(row, { tool: 'web_observe' })).not.toHaveProperty('checkpoint')
+    // «Опубликовать» there is a click: it holds nothing, the next one and a new page go through.
+    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
+    await act(row, { tool: 'web_observe' })
+    await act(row, { tool: 'web_click', observation: 'o2', ref: 'e5' })
+    await act(row, { tool: 'web_press', key: 'Control+s' })
+    await settle()
+    expect(rows()).toEqual([])
+    await act(row, { tool: 'web_open', url: NEW_POST })
+    // Back on the site, the same press is a save again.
+    browser.go(EDIT_12)
+    await act(row, { tool: 'web_observe' })
+    expect(await act(row, { tool: 'web_click', observation: 'o3', ref: 'e5' })).toMatchObject({
+      checkpoint: { objectId: '12', state: 'unverified' },
+    })
+  })
+
   it('leaves an object as it was known when the site does not answer the check in time', async () => {
     const { manager, ensured, act } = setup({ verifyBudgetMs: 50 })
     const { row, browser } = await ensured()

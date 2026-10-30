@@ -23,8 +23,10 @@ import type { BrowserSignIn } from './worker-api.ts'
  *   protocol): never logged, labelled, put in an argument, an error or an answer;
  * - nothing of the session's sign-in leaves the browser: no profile, cookie or `storageState` is
  *   saved anywhere (Б19), keys the client presses are never logged or recorded;
- * - pages open only addresses `browserNavigationAllowed` admits and the stack's policy does not
- *   deny — the agent's actions and the client's input alike (Б21: it is the platform's browser);
+ * - the agent and the client open only addresses `browserNavigationAllowed` admits and the
+ *   stack's policy does not deny (Б21: it is the platform's browser); a page of the site may take
+ *   the browser on to another site `browserForeignPageAllowed` admits, which the policy does not
+ *   judge (docs/plan/60-browser-foreign-redirects.md, Ч1, Ч5);
  * - errors carry no address, selector, value of a field or text of a page.
  */
 
