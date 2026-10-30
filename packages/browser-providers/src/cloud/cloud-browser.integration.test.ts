@@ -189,6 +189,10 @@ function site(hits: string[]) {
     }
     if (url.pathname === '/go-denied')
       return res.writeHead(302, { location: '/denied/users' }).end()
+    // A redirect to a host nothing answers on: the navigation fails in the network, and
+    // Chromium's error page commits a moment later.
+    if (url.pathname === '/go-nowhere')
+      return res.writeHead(302, { location: 'http://127.0.0.1:1/' }).end()
     if (url.pathname === '/nonce')
       return signedIn ? res.writeHead(200).end(' nonce-123 \n') : res.writeHead(403).end('0')
     if (url.pathname === '/posts/12') {
@@ -527,6 +531,20 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     })
     expect(hits).not.toContain('POST /api/delete')
   }, 30_000)
+
+  // The error page of a navigation the network refused commits after the action has ended: the
+  // next navigation of the agent is neither interrupted by it nor by the navigation it
+  // interrupted (preview.yml on GitHub's runners, 30.10.2026; the browser of a preview had it too).
+  it('opens the next page after a navigation the network refused, every time', async () => {
+    const browser = await open('/send')
+    for (let round = 0; round < 10; round++) {
+      await expect(
+        browser.act({ tool: 'web_open', url: `${origin}/go-nowhere` }),
+      ).rejects.toBeDefined()
+      await browser.act({ tool: 'web_open', url: `${origin}/send` })
+      expect(browser.tabs()[0]?.url).toBe(`${origin}/send`)
+    }
+  }, 120_000)
 
   it('signs in with the saved sign-in on the stack’s form and lands where the site sends it', async () => {
     const browser = await open('/admin')
