@@ -17,6 +17,7 @@ import {
   type BrowserVerifyResponse,
   type SiteAdapter,
   type SiteStack,
+  withTimeout,
 } from '@repo/domain'
 
 import type { BrowserWorkerMetrics } from '../metrics/worker-metrics.ts'
@@ -24,6 +25,8 @@ import { WorkerSession, type SessionContext, type SessionSettings } from './work
 
 export interface SessionManagerSettings extends SessionSettings {
   idleMinutes: number
+  /** How long the sweep waits for the row of an idle session before it closes it anyway. */
+  activityReadMs: number
   maxHours: number
   maxSessions: number
   extraHosts: readonly string[]
@@ -39,6 +42,8 @@ export const sessionTimingDefaults = Object.freeze({
   // Within the 40 s the client gives a check.
   verifyBudgetMs: 35_000,
   touchEveryMs: 60_000,
+  // Well within the sweep (15 s): a row read that hangs never holds the closing of the others.
+  activityReadMs: 5_000,
 })
 
 export interface SessionManagerDeps extends Omit<
@@ -120,6 +125,8 @@ export class SessionManager {
       await session.ending?.catch(() => undefined)
       throw conflict('The browser session is closed')
     }
+    // A pass of the task is about to use it: an idle sweep reading its row meanwhile keeps it.
+    session.noteActivity(this.#deps.now())
     session.useSignIn(request.signIn ?? null)
     if (request.takeControl) session.agentTakesControl()
     return browserEnsureResponseSchema.parse(session.state())
@@ -265,7 +272,7 @@ export class SessionManager {
 
   /**
    * Every `sweepMs`: a session past its deadline is closed `expired`, one nobody acted in or
-   * watched for `idleMinutes` — `idle`, one whose browser is gone — lost.
+   * watched for `idleMinutes` — `idle` (`#closeIfIdle`), one whose browser is gone — lost.
    */
   async sweep(): Promise<void> {
     const { now, settings } = this.#deps
@@ -277,9 +284,34 @@ export class SessionManager {
       if (now() >= session.deadline) ends.push(session.close('expired'))
       else if (!session.connected()) ends.push(session.close('crashed'))
       else if (session.status === 'ready' && now() - session.lastActivity >= idleMs)
-        ends.push(session.close('idle'))
+        ends.push(this.#closeIfIdle(session, idleMs))
     }
     await Promise.allSettled(ends)
+  }
+
+  /**
+   * A session idle here may still be looked at: the chat of its task counts as watching its browser
+   * (owner's answer of 30.10.2026, docs/plan/59, И18), and the cabinet records the client looking at
+   * the dialog in the session's row. Closed `idle` only when the row says nobody looked either, and
+   * nothing was done here while it was read. A read that fails or hangs past `activityReadMs` counts
+   * for nothing: the session closes as it did before, and the sweep is never held by it.
+   */
+  async #closeIfIdle(session: WorkerSession, idleMs: number): Promise<unknown> {
+    const { now, store, warn, settings } = this.#deps
+    try {
+      const row = await withTimeout(
+        store.session(session.id),
+        settings.activityReadMs,
+        'the activity of a browser session was not read in time',
+      )
+      // A look recorded on a row that still holds a browser; a closed one says nothing.
+      if (row !== null && isBrowserSessionLive(row.status))
+        session.noteActivity(row.lastActivityAt.getTime())
+    } catch (error) {
+      warn('browser_activity_not_read', error)
+    }
+    if (session.status !== 'ready' || now() - session.lastActivity < idleMs) return
+    return session.close('idle')
   }
 
   /** At start: no session survives a restart, so what an earlier process left goes. */

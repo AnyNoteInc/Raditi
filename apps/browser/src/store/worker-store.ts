@@ -35,6 +35,11 @@ export interface StoredBrowserSession {
   expiresAt: Date
   /** Set once a worker started its browser: a worker that does not hold it lost it. */
   readyAt: Date | null
+  /**
+   * Its last activity as the database knows it: the worker's throttled touches, and the cabinet's
+   * while the client looks at the dialog of its task (docs/plan/59, И18).
+   */
+  lastActivityAt: Date
 }
 
 /** The site of a session as the database keeps it: where its browser goes and its stack's policy. */
@@ -122,6 +127,7 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
         status: true,
         expiresAt: true,
         readyAt: true,
+        lastActivityAt: true,
       },
     })
     return row

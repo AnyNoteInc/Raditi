@@ -1,6 +1,7 @@
 import {
   issueBrowserStreamTicket,
   openBrowserSessionOfTask,
+  touchBrowserSession,
   type Prisma,
   type PrismaClient,
 } from '@repo/db'
@@ -22,8 +23,9 @@ import { accessibleTask, taskNotFound } from './access.ts'
 import { browserStreamUrlOf, type ChatContext } from './context.ts'
 
 // The cloud browser of a task as the cabinet sees it (docs/plan/57-browser-tasks.md, Б12–Б18):
-// the state of its session beside the feed, and the one-time ticket the stream is opened with.
-// The worker and core write the session; nothing here does.
+// the state of its session beside the feed, the one-time ticket the stream is opened with, and
+// the client looking at the dialog, which keeps the session from its idle end (docs/plan/59, И18).
+// The worker and core write the session; here only the time of its last activity is.
 
 /** The session of a task in the head of its feed; null — the task has no browser, or none yet. */
 export interface FeedBrowser {
@@ -114,4 +116,25 @@ export async function issueStreamTicket(
   const issued = await issueBrowserStreamTicket(db, { sessionId: session.id, userId: input.userId })
   if (issued === null) throw taskNotFound()
   return { url, ticket: issued.ticket, sessionId: session.id }
+}
+
+/**
+ * The client looks at the dialog of a task in the browser (owner's answer of 30.10.2026, docs/plan/
+ * 59, И18): the chat counts as watching the browser, so its session does not close for idle while
+ * the page of the dialog is on the screen. Only its idle time starts again — the hard deadline of
+ * the session stays. `watched: false` — no session of the task holds a browser now; a task of
+ * someone else, and one without a browser, answer NOT_FOUND.
+ */
+export async function watchBrowser(
+  db: PrismaClient,
+  input: { userId: string; taskId: string },
+): Promise<{ watched: boolean }> {
+  const task = await db.task.findFirst({
+    where: accessibleTask(input.userId, input.taskId),
+    select: { id: true, needsBrowser: true },
+  })
+  if (task === null || !task.needsBrowser) throw taskNotFound()
+  const session = await openBrowserSessionOfTask(db, task.id)
+  if (session === null) return { watched: false }
+  return { watched: await touchBrowserSession(db, { sessionId: session.id }) }
 }

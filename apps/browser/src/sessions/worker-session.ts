@@ -506,6 +506,11 @@ export class WorkerSession {
     if (this.#viewers.size > 0) this.#lastActivity = this.#context.now()
   }
 
+  /** Activity the worker did not see itself — the client looking at the dialog (И18) — at `at`. */
+  noteActivity(at: number): void {
+    if (at > this.#lastActivity) this.#lastActivity = at
+  }
+
   /** The browser is gone without a close: the session is lost and the client signs in again. */
   connected(): boolean {
     return this.#status !== 'ready' || (this.#browser?.isConnected() ?? false)

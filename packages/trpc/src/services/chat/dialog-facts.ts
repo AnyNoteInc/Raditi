@@ -13,7 +13,6 @@ import {
   type ChatCommandFacts,
   type ChatCommandId,
   type ChatCommandRefusal,
-  type PreviewDbMode,
   type PreviewStatus,
   type ReleaseOutcome,
   type ReleaseStatus,
@@ -41,8 +40,6 @@ type Reader = Pick<
 export interface DialogPreview {
   id: string
   status: PreviewStatus
-  /** A copy of the site's database, or none (Р4): the tool «База данных» of the head needs one. */
-  dbMode: PreviewDbMode
   unavailableReason: string | null
   hostname: string
   revision: number
@@ -106,49 +103,6 @@ const noChecks = (): Record<CandidateCheckStatus, number> => ({
 })
 
 /**
- * The preview of a dialog and the candidate it waits with — its latest `current` or `stale`
- * revision, before its checks are counted: what the facts of the dialog and its head read
- * (`dialogFacts`, `feedHead`), one query at a time.
- */
-export async function dialogPreviewAndCandidate(
-  db: Pick<Reader, 'previewEnvironment' | 'taskCandidate'>,
-  taskId: string,
-): Promise<{ preview: DialogPreview | null; candidate: Omit<DialogCandidate, 'checks'> | null }> {
-  const preview = await db.previewEnvironment.findUnique({
-    where: { taskId },
-    select: {
-      id: true,
-      status: true,
-      dbMode: true,
-      unavailableReason: true,
-      hostname: true,
-      revision: true,
-      dirty: true,
-    },
-  })
-  const candidate = await db.taskCandidate.findFirst({
-    where: { taskId, status: { in: ['current', 'stale'] } },
-    orderBy: { revision: 'desc' },
-    select: {
-      id: true,
-      revision: true,
-      status: true,
-      baseSha: true,
-      proposedVersion: true,
-      proposedBump: true,
-      facts: true,
-    },
-  })
-  return {
-    preview,
-    candidate:
-      candidate === null
-        ? null
-        : { ...candidate, status: candidate.status as DialogCandidate['status'] },
-  }
-}
-
-/**
  * What the server decides the commands of a dialog by (Р34): the reader's role, the candidate
  * the dialog waits with, its preview and its latest release, read with the caller's client —
  * the snapshot of `task.feed` or the transaction of a command.
@@ -165,10 +119,30 @@ export async function dialogFacts(
 ): Promise<DialogFacts> {
   // One query at a time: the client may be an interactive transaction.
   const role = await memberRole(db, task.workspaceId, userId)
-  const { preview: previewRow, candidate: candidateRow } = await dialogPreviewAndCandidate(
-    db,
-    task.id,
-  )
+  const previewRow = await db.previewEnvironment.findUnique({
+    where: { taskId: task.id },
+    select: {
+      id: true,
+      status: true,
+      unavailableReason: true,
+      hostname: true,
+      revision: true,
+      dirty: true,
+    },
+  })
+  const candidateRow = await db.taskCandidate.findFirst({
+    where: { taskId: task.id, status: { in: ['current', 'stale'] } },
+    orderBy: { revision: 'desc' },
+    select: {
+      id: true,
+      revision: true,
+      status: true,
+      baseSha: true,
+      proposedVersion: true,
+      proposedBump: true,
+      facts: true,
+    },
+  })
   const releaseRow = await db.siteRelease.findFirst({
     where: { taskId: task.id, kind: 'release' },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -196,7 +170,11 @@ export async function dialogFacts(
       _count: { _all: true },
     })
     for (const row of counted) checks[row.status] = row._count._all
-    candidate = { ...candidateRow, checks }
+    candidate = {
+      ...candidateRow,
+      status: candidateRow.status as DialogCandidate['status'],
+      checks,
+    }
   }
   const release = releaseRow === null ? null : dialogRelease(releaseRow)
 

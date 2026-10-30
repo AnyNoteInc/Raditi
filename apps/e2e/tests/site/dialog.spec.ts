@@ -576,6 +576,43 @@ test('a dialog on a phone: the chat alone, its tools in place of it behind «+»
     await expect(plus(page)).toBeFocused()
     await expectNoSidewaysScroll(page)
   })
+
+  await test.step('with two tabs «К диалогу» closes the one on the screen, the other waits behind the dialog', async () => {
+    const items = toolsMenu(page).getByRole('menuitem')
+    await chooseTool(page, /^Файлы и изменения/)
+    await chooseTool(page, /^Проверки/)
+    await expect(openTabs(page).getByRole('tab')).toHaveCount(2)
+    await expect(tab(page, 'Проверки')).toHaveAttribute('aria-selected', 'true')
+    await toDialog(page).click()
+    // The dialog again, nothing of the tools on the screen (owner's answer of 30.10.2026).
+    await expectChatAlone(page)
+    await expect(feed(page).getByText(FIRST_WORDS)).toBeVisible()
+    await expect(plus(page)).toBeFocused()
+    // «Файлы» stayed open behind the dialog; «Проверки» closed.
+    await plus(page).click()
+    await menuSettled(page)
+    await expect(items).toHaveCount(2)
+    await expect(items.nth(0)).toHaveAccessibleName(tile('Файлы и изменения', 'Открыто'))
+    await expect(items.nth(1)).toHaveAccessibleName(tile('Проверки', 'пока нет'))
+    // Chosen there, it takes the place of the dialog again, alone on its strip.
+    await items.nth(0).click()
+    await expect(toolsMenu(page)).toHaveCount(0)
+    await expect(pane(page)).toBeVisible()
+    await expect(openTabs(page).getByRole('tab')).toHaveCount(1)
+    await expect(tab(page, 'Файлы')).toHaveAttribute('aria-selected', 'true')
+    await expect(tab(page, 'Файлы')).toBeFocused()
+    await expect(feed(page)).toBeHidden()
+    // «К диалогу» on the last tab: nothing is kept open.
+    await toDialog(page).click()
+    await expectChatAlone(page)
+    await expect(plus(page)).toBeFocused()
+    await plus(page).click()
+    await menuSettled(page)
+    await expect(items.nth(0)).toHaveAccessibleName(tile('Файлы и изменения', 'пока нет'))
+    await expect(items.nth(1)).toHaveAccessibleName(tile('Проверки', 'пока нет'))
+    await page.keyboard.press('Escape')
+    await expect(toolsMenu(page)).toHaveCount(0)
+  })
 })
 
 // The place in the feed and the draft (docs/plan/59, И19): the feed and the field stay mounted
@@ -907,10 +944,13 @@ test('the names of the tools in «+» wrap instead of being cut, on a desktop', 
 })
 
 // A task in the browser (docs/plan/57-browser-tasks.md, Б29; docs/plan/59, И1, И11, И12, И14,
-// И17): the browser is a tool of the dialog like the others — behind «+», «Открыть браузер» and
-// «Взять управление» of the card —, never open by itself at a load. It shows the real state of
-// the session: no worker runs in this stand, and the cabinet has no stream to open, so the panel
-// says it cannot show the browser — the stream itself is proven by `pnpm verify:browser-task`.
+// И17, И18): the browser is a tool of the dialog like the others — behind «+» and «Взять
+// управление» of the card, no button of the feed only shows it (owner's answer of 30.10.2026) —,
+// never open by itself at a load: no stream here, so it does not open by itself as it starts
+// either. It shows the real state of the session: no worker runs in this stand, and the cabinet
+// has no stream to open, so the panel says it cannot show the browser — the stream itself is
+// proven by `pnpm verify:browser-task`. The page says the client looks at the dialog while the
+// session holds a browser (`browser.watch`, И18).
 
 const browserBar = (page: Page) => page.getByRole('toolbar', { name: 'Управление браузером' })
 const loginCard = (page: Page) =>
@@ -945,8 +985,11 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
     await expectChatAlone(page)
     // The browser waits for the client: «+» says so, the panel stays closed (И13).
     await expect(plus(page)).toHaveAccessibleName('Инструменты — браузер ждёт вас')
+    // «Взять управление» alone: the browser itself is in «+» (owner's answer of 30.10.2026).
+    await expect(loginCard(page).getByRole('button')).toHaveCount(1)
     await expect(loginCard(page).getByRole('button', { name: 'Взять управление' })).toBeVisible()
-    await expect(loginCard(page).getByRole('button', { name: 'Открыть браузер' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Открыть браузер' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Смотреть, что делает агент' })).toHaveCount(0)
     await expect(dialogs(page)).toBeVisible()
     await expect(back(page)).toBeHidden()
     // The words of the client answer the question too.
@@ -993,8 +1036,8 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
     await expect(loginCard(page).getByRole('button', { name: 'Взять управление' })).toBeVisible()
   })
 
-  await test.step('«Открыть браузер» of the card opens it; «Скрыть панель» closes it', async () => {
-    await loginCard(page).getByRole('button', { name: 'Открыть браузер' }).click()
+  await test.step('«+» → «Браузер» opens it again; «Скрыть панель» closes it', async () => {
+    await chooseTool(page, /^Браузер/)
     await expectBrowserShown(page)
     await expect(tab(page, 'Браузер')).toBeFocused()
     await hide(page).click()
@@ -1051,6 +1094,8 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
   await test.step('looking is no action: closing never stopped the task or resumed the agent', async () => {
     // The calls are seen: the feed is read again and again.
     expect(calls).toContain('task.feed')
+    // The client looked at the dialog of a live browser: the page said so (И18).
+    expect(calls).toContain('browser.watch')
     expect(calls.filter((call) => call === 'task.cancel' || call === 'task.resumeAgent')).toEqual(
       [],
     )
@@ -1131,8 +1176,10 @@ test('a task in the browser on a phone: the browser in place of the dialog, «К
     await expect(plus(page)).toBeFocused()
   })
 
-  await test.step('«Открыть браузер» of the card opens it in place of the dialog too', async () => {
-    await loginCard(page).getByRole('button', { name: 'Открыть браузер' }).click()
+  await test.step('«Взять управление» of the card opens it in place of the dialog too, the focus on its tab', async () => {
+    await expect(loginCard(page).getByRole('button')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: 'Открыть браузер' })).toHaveCount(0)
+    await loginCard(page).getByRole('button', { name: 'Взять управление' }).click()
     await expectBrowserShown(page)
     await expect(tab(page, 'Браузер')).toBeFocused()
     await expectNoSidewaysScroll(page)
@@ -1174,8 +1221,9 @@ test('a task in the browser in a window lower than 420px: «К диалогу» 
   await page.setViewportSize({ width: 320, height: 256 })
   await page.goto(`/projects/${siteId}/chat/${taskId}`)
   await expect(loginCard(page)).toBeVisible()
-  // The client reads the question to sign in, the head above it out of sight.
-  const open = loginCard(page).getByRole('button', { name: 'Открыть браузер' })
+  // The client reads the question to sign in, the head above it out of sight; «Взять управление»
+  // of its card opens the browser (owner's answer of 30.10.2026: no button only shows it).
+  const open = loginCard(page).getByRole('button', { name: 'Взять управление' })
   await open.scrollIntoViewIfNeeded()
   await expect(open).toBeInViewport()
   await expect(plus(page)).not.toBeInViewport()

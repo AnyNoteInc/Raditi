@@ -512,9 +512,6 @@ export const browserText = Object.freeze({
    * browser is beside the dialog only while the client keeps it open (docs/plan/59, И12).
    */
   controlPlate: 'Управляете вы. Агент ждёт. Когда закончите, нажмите «Продолжить работу агента».',
-  watch: 'Смотреть, что делает агент',
-  /** On the cards of a request for help and of the control, and on the plate: shows the browser (И12). */
-  open: 'Открыть браузер',
   refused: {
     agent_in_control: 'Сейчас браузером управляет агент.',
     not_holder:
@@ -572,7 +569,6 @@ export const toolText = Object.freeze({
   /** Why «+» bears the dot, the most pressing first (И13). */
   dot: Object.freeze({
     browser: 'браузер ждёт вас',
-    launch: 'браузер запущен',
     changes: 'есть новые изменения',
   }),
   /** The landmark beside the dialog (И20). */
