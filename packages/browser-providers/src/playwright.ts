@@ -85,6 +85,21 @@ function denied(connection: PageBrowserConnection, request: Request, url: URL): 
   }
 }
 
+/**
+ * A navigation the network refused — the policy's abort, a host the gateway does not serve — and
+ * not one cancelled by another: Chromium commits its own error page for it a moment later.
+ */
+function refusedByNetwork(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : ''
+  return /net::ERR_/.test(message) && !/net::ERR_ABORTED/.test(message)
+}
+
+/**
+ * How long the error page of a refused navigation, or a navigation an error page interrupted, is
+ * waited for before the browser goes on without it.
+ */
+const SETTLE_NAVIGATION_MS = 5_000
+
 /** A navigation Chromium's own error page took over (`chrome-error://`), not one of the page. */
 function interruptedByErrorPage(error: unknown): boolean {
   const message = error instanceof Error ? error.message : ''
@@ -209,6 +224,8 @@ class PlaywrightPageBrowser implements PageBrowser {
    * dropped before anything reads it.
    */
   #deniedRedirect = false
+  /** How many error pages of Chromium (`chrome-error://`) the main frame has committed. */
+  #errorPages = 0
 
   private constructor(
     browser: Browser,
@@ -300,6 +317,9 @@ class PlaywrightPageBrowser implements PageBrowser {
       // Any request of the page, a document or not: the route saw only the first of its chain.
       if (redirected && denied(connection, request, url)) this.#deniedRedirect = true
     })
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame() && frame.url().startsWith('chrome-error:')) this.#errorPages++
+    })
     page.on('response', (response) => {
       const request = response.request()
       if (request.isNavigationRequest() && request.frame() === page.mainFrame())
@@ -328,12 +348,14 @@ class PlaywrightPageBrowser implements PageBrowser {
   async #act<T>(work: () => Promise<T>): Promise<T> {
     await this.#dropDenied()
     this.#leftOrigin = false
+    const errorPages = this.#errorPages
     let result: T
     try {
       result = await work()
     } catch (error) {
       // A refused or failed navigation commits Chromium's error page a moment later: let it,
       // or it interrupts the next action of the agent.
+      await this.#errorPageAfter(error, errorPages)
       await this.#settle()
       if (this.#leftOrigin || this.#deniedRedirect) {
         await this.#dropDenied()
@@ -371,6 +393,26 @@ class PlaywrightPageBrowser implements PageBrowser {
     }
   }
 
+  /**
+   * The error page a navigation the network refused leaves commits after the navigation has
+   * failed — later still on a loaded machine: the action ends only once it is in, counted from
+   * `before`, the commits of error pages when the action began. Waiting for `load` alone is not
+   * enough: it answers at once for the document already there — an earlier error page, as often
+   * as not —, and the late commit then interrupts the next navigation of the agent (preview.yml
+   * on GitHub's runners, 30.10.2026). No error page in `SETTLE_NAVIGATION_MS` — the browser goes
+   * on without it.
+   */
+  async #errorPageAfter(error: unknown, before: number) {
+    if (this.#page.isClosed() || !refusedByNetwork(error) || this.#errorPages > before) return
+    const mainFrame = this.#page.mainFrame()
+    await this.#page
+      .waitForEvent('framenavigated', {
+        predicate: (frame) => frame === mainFrame && frame.url().startsWith('chrome-error:'),
+        timeout: SETTLE_NAVIGATION_MS,
+      })
+      .catch(() => undefined)
+  }
+
   /** A click or a submit may start a navigation: its document is waited for, briefly. */
   async #settle() {
     if (this.#page.isClosed()) return
@@ -385,11 +427,15 @@ class PlaywrightPageBrowser implements PageBrowser {
       const before = this.#document.count
       const target = `${this.#origin.origin}${path}`
       const options = { waitUntil: waitUntil ?? 'load' }
-      // The error page of an earlier refusal may commit only now, over this navigation: it is
-      // asked once more, the page being settled by then.
+      // The error page of an earlier refusal may commit only now, over this navigation. The
+      // navigation it interrupted goes on and lands a moment later: it is waited for, and asked
+      // once more only if it never lands — asked at once, it would be interrupted in turn by the
+      // one it repeats.
       await this.#page.goto(target, options).catch(async (error: unknown) => {
         if (!interruptedByErrorPage(error)) throw error
-        await this.#page.goto(target, options)
+        await this.#page
+          .waitForURL(target, { waitUntil: options.waitUntil, timeout: SETTLE_NAVIGATION_MS })
+          .catch(() => this.#page.goto(target, options))
       })
       if (URL.parse(this.#page.url())?.origin !== this.#origin.origin)
         throw new PageBrowserError('denied')

@@ -90,37 +90,19 @@ describe.skipIf(!enabled)('Playwright page browser on a real preview browser', (
   let server: Server
   let container = ''
   let connection: PageBrowserConnection
-  let browser: PageBrowser | undefined
+  /** Where the containers reach this machine, and the port of the gateway there. */
+  let hostAddress = ''
+  let port = 0
 
-  beforeAll(async () => {
-    // Where the container reaches this machine: the address of `host-gateway` on its daemon.
-    const resolved = await docker(
-      'run',
-      '--rm',
-      '--add-host=raditi-host:host-gateway',
-      '--entrypoint',
-      'getent',
-      IMAGE,
-      'ahostsv4',
-      'raditi-host',
-    )
-    const hostAddress = resolved.split(/\s+/)[0] ?? ''
-    expect(hostAddress).toMatch(/^\d+\.\d+\.\d+\.\d+$/)
-    // On Linux that is the bridge of this host (docker0), where the server must listen; Docker
-    // Desktop's is another machine, which passes the connection on to this one's loopback.
-    server = createServer(gateway(requests))
-    const listen = (host: string) =>
-      new Promise<void>((resolve, reject) => {
-        server.once('error', reject)
-        server.listen(0, host, () => {
-          server.off('error', reject)
-          resolve()
-        })
-      })
-    await listen(hostAddress).catch(() => listen('127.0.0.1'))
-    const port = (server.address() as { port: number }).port
+  /**
+   * A browser container of the preview behind this test's gateway, ready to connect to; `limits`
+   * go to `docker run` as they are.
+   */
+  async function startBrowser(
+    limits: readonly string[] = [],
+  ): Promise<{ id: string; connection: PageBrowserConnection }> {
     const wsPath = `/${randomBytes(32).toString('base64url')}`
-    container = await docker(
+    const id = await docker(
       'run',
       '-d',
       '--rm',
@@ -134,6 +116,7 @@ describe.skipIf(!enabled)('Playwright page browser on a real preview browser', (
       'no-new-privileges',
       '--tmpfs',
       '/run/raditi/browser:uid=10001,gid=10001,mode=0700',
+      ...limits,
       '-p',
       '127.0.0.1::3000',
       IMAGE,
@@ -148,7 +131,7 @@ describe.skipIf(!enabled)('Playwright page browser on a real preview browser', (
       'exec',
       '-e',
       `RADITI_WS_PATH=${wsPath}`,
-      container,
+      id,
       'sh',
       '-c',
       'umask 077 && printf %s "$RADITI_WS_PATH" > /run/raditi/browser/ws-path',
@@ -156,7 +139,7 @@ describe.skipIf(!enabled)('Playwright page browser on a real preview browser', (
     for (let attempt = 0; ; attempt++) {
       const ready = await run('docker', [
         'exec',
-        container,
+        id,
         'test',
         '-f',
         '/run/raditi/browser/ready',
@@ -168,13 +151,48 @@ describe.skipIf(!enabled)('Playwright page browser on a real preview browser', (
       if (attempt > 120) throw new Error('The preview browser did not start')
       await new Promise((resolve) => setTimeout(resolve, 500))
     }
-    const published = (await docker('port', container, '3000/tcp')).split('\n')[0] ?? ''
-    connection = {
+    const published = (await docker('port', id, '3000/tcp')).split('\n')[0] ?? ''
+    const connection: PageBrowserConnection = {
       endpoint: { wsEndpoint: `ws://${published}${wsPath}` },
       origin: ORIGIN,
       enterUrl: `${ORIGIN}/__raditi/enter?t=${TICKET}&to=%2F`,
       denyRequest: (request) => request.path.startsWith('/wp-admin/'),
     }
+    return { id, connection }
+  }
+  let browser: PageBrowser | undefined
+
+  beforeAll(async () => {
+    // Where the container reaches this machine: the address of `host-gateway` on its daemon.
+    const resolved = await docker(
+      'run',
+      '--rm',
+      '--add-host=raditi-host:host-gateway',
+      '--entrypoint',
+      'getent',
+      IMAGE,
+      'ahostsv4',
+      'raditi-host',
+    )
+    const address = resolved.split(/\s+/)[0] ?? ''
+    expect(address).toMatch(/^\d+\.\d+\.\d+\.\d+$/)
+    // On Linux that is the bridge of this host (docker0), where the server must listen; Docker
+    // Desktop's is another machine, which passes the connection on to this one's loopback.
+    server = createServer(gateway(requests))
+    const listen = (host: string) =>
+      new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(0, host, () => {
+          server.off('error', reject)
+          resolve()
+        })
+      })
+    await listen(address).catch(() => listen('127.0.0.1'))
+    hostAddress = address
+    port = (server.address() as { port: number }).port
+    const started = await startBrowser()
+    container = started.id
+    connection = started.connection
   }, 180_000)
 
   afterAll(async () => {
@@ -262,6 +280,30 @@ describe.skipIf(!enabled)('Playwright page browser on a real preview browser', (
     expect(await opened.expect({ selector: 'h1', timeoutMs: 500 })).toEqual({ passed: false })
     expect(await opened.navigate({ path: '/about/' })).toMatchObject({ status: 200 })
   }, 60_000)
+
+  // A slow browser commits the error page of a refused navigation late — after the action that
+  // refused it has ended: the next navigation of the agent is neither interrupted by it nor by
+  // the navigation that error page interrupted (preview.yml on GitHub's runners, 30.10.2026). A
+  // quarter of a core makes it happen within a few rounds.
+  it('opens the next page after refusals on a slow browser, every time', async () => {
+    const reason = (error: unknown) => (isPageBrowserError(error) ? error.reason : error)
+    const slow = await startBrowser(['--cpus', '0.25'])
+    const opened = await createPlaywrightBrowserFactory().connect(slow.connection)
+    try {
+      await opened.navigate({ path: '/about/' })
+      for (let round = 0; round < 20; round++) {
+        expect(await opened.navigate({ path: '/wp-admin/users.php' }).catch(reason)).toBe('denied')
+        expect(await opened.navigate({ path: '/away/' }).catch(reason)).toBe('denied')
+        expect(await opened.navigate({ path: '/about/' })).toMatchObject({
+          path: '/about/',
+          status: 200,
+        })
+      }
+    } finally {
+      await opened.close()
+      await run('docker', ['rm', '-f', slow.id]).catch(() => undefined)
+    }
+  }, 240_000)
 
   it('takes no entry with a ticket the gateway refuses', async () => {
     const error = await createPlaywrightBrowserFactory()
