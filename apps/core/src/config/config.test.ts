@@ -138,13 +138,6 @@ describe('loadConfig — development', () => {
     expect(runner.sandbox).toBeNull()
   })
 
-  it('opens the internet of the agent by default and closes it with SANDBOX_INTERNET=off', () => {
-    expect(loadConfig(devEnv).sandboxInternet).toBe(true)
-    expect(loadConfig({ ...devEnv, SANDBOX_INTERNET: 'open' }).sandboxInternet).toBe(true)
-    expect(loadConfig({ ...devEnv, SANDBOX_INTERNET: 'off' }).sandboxInternet).toBe(false)
-    expect(() => loadConfig({ ...devEnv, SANDBOX_INTERNET: 'yes' })).toThrow(/SANDBOX_INTERNET/)
-  })
-
   it('keeps the container of a completed turn warm for SANDBOX_WARM_MINUTES, only in core', () => {
     expect(loadConfig(devEnv).sandboxWarmMs).toBe(10 * 60_000)
     expect(loadConfig({ ...devEnv, SANDBOX_WARM_MINUTES: '3' }).sandboxWarmMs).toBe(3 * 60_000)

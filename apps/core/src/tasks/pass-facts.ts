@@ -313,7 +313,6 @@ export async function readPassFacts(
     preview: previewFactsOf(preview, deps.previews),
     egress,
     variables: agentVariables.map((variable) => variable.name),
-    // The planner gives them to a turn with the open internet only.
     skills: turnSkillsOf(task.site.agentSkills),
     ...(adapter ? { databaseGuide: adapter.dbPlanGuide(site) } : {}),
     profile: profile ?? null,

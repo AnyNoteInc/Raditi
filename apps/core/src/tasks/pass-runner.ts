@@ -71,8 +71,6 @@ export interface PassRunnerDependencies {
   leases: Pick<SiteLeaseStore, 'inspect'>
   /** The runtime of turn sandboxes (SANDBOX_RUNTIME). */
   runtime: SandboxRuntime
-  /** SANDBOX_INTERNET=open: the open internet of a repository turn's agent; absent — closed. */
-  internet?: boolean
   previews: PreviewAddress | null
   settlement: PassSettlement
   live: LivePasses
@@ -343,7 +341,6 @@ export class PassRunner {
       driver,
       backends: this.deps.backends,
       runtime: this.deps.runtime,
-      internet: this.deps.internet ?? false,
       mainHead: () =>
         repo && git
           ? git.readBranchHead({ repo, branch: repo.defaultBranch })

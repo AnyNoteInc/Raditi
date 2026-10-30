@@ -208,8 +208,8 @@ export interface PassFacts {
   candidate: { turnNo: number; headSha: string } | null
   preview: PreviewFacts
   /**
-   * `host:port` the agent's commands may reach (plan 53, Р13): the hosts of the client's
-   * variables the agent gets, each once, sorted; absent or empty — no egress at all.
+   * `host:port` of the client's variables the agent gets (plan 53, Р13), each once, sorted: the
+   * agent is told to send their values there alone, and the egress proxy opens them on any port.
    */
   egress?: readonly string[]
   /** The names of the client's variables the agent's commands get (Р13): never a value. */
@@ -235,12 +235,6 @@ export interface PlannerEnvironment {
   driver: AgentDriver
   backends: readonly LlmBackend[]
   runtime: SandboxRuntime
-  /**
-   * SANDBOX_INTERNET=open (owner's decisions of 26.10.2026): the agent of a turn reaches the
-   * public internet through the egress proxy and gets the site's skills — a turn in the browser
-   * too, whose admin pages stay reachable through the `web` tools alone (Б20).
-   */
-  internet: boolean
   /** The head of the default branch, read on the trusted side only for a first turn. */
   mainHead: () => Promise<string | null>
   /** The head of the task branch `agent/<taskId>`, read on the trusted side for a later turn. */
@@ -561,13 +555,16 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     })
   }
 
-  // The client's variables reach the commands of a repository turn; a turn in the browser works
-  // through the `web` tools alone, and its commands reach nothing (Б20).
+  // The client's variables reach the commands of a repository turn; those of a turn in the
+  // browser get none of them, and no list of their hosts (Б20).
   const egress = requirements.repository ? (facts.egress ?? []) : []
   // One gateway variable holds them: more than it takes is no turn.
   if (egress.length > MAX_SANDBOX_EGRESS_HOSTS) return { kind: 'refused', code: 'technical' }
-  const internet = env.internet
-  const skills = internet ? (facts.skills ?? []) : []
+  // Every turn has the public internet through the egress proxy and the site's skills (owner's
+  // decisions of 26.10.2026; no switch of it since 30.10.2026) — a turn in the browser too, whose
+  // admin pages stay reachable through the `web` tools alone (Б20).
+  const skills = facts.skills ?? []
+  const internet = { skills: skills.map((skill) => skill.name) }
 
   let start: Start | StartWithoutRepository
   let workspace: PublicationSource | undefined
@@ -628,7 +625,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         mode: 'gateway',
         routes: ['llm', 'mcp'],
         ...(egress.length ? { egress: [...egress] } : {}),
-        ...(internet ? { internet: true as const } : {}),
+        internet: true,
       },
       hardTimeoutMs: MAX_SANDBOX_TURN_MS,
     },
@@ -644,20 +641,17 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       mcp: { url: `${SANDBOX_GATEWAY_URL}/mcp` },
       // Rule 8: by what the task needs, never by its stack — the adapter's guide says the rest.
       instructions: browser?.guide
-        ? browserTaskInstructions(
-            browser.guide,
-            internet ? { skills: skills.map((skill) => skill.name) } : null,
-          )
+        ? browserTaskInstructions(browser.guide, internet)
         : turnInstructions(
             facts.preview,
             { names: facts.variables ?? [], hosts: egress },
             facts.databaseGuide,
             facts.rules,
-            internet ? { skills: skills.map((skill) => skill.name) } : null,
+            internet,
             inbox?.paths.length ? { files: inbox.paths.length, omitted: inbox.omitted } : null,
           ),
-      ...(egress.length || internet ? { egressProxy: SANDBOX_EGRESS_PROXY_URL } : {}),
-      ...(internet ? { internet: true as const } : {}),
+      egressProxy: SANDBOX_EGRESS_PROXY_URL,
+      internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
     },
     input: {
